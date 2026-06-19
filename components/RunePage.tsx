@@ -1,0 +1,145 @@
+"use client";
+
+import type { RunesBlock, Pick as PickType } from "@/lib/types";
+import StatBadge, { wpaClass, wpaText, fmtSample } from "./StatBadge";
+
+function ImgWithFallback({
+  src,
+  alt,
+  className,
+}: {
+  src: string;
+  alt: string;
+  className?: string;
+}) {
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className={className}
+      onError={(e) => {
+        (e.currentTarget as HTMLImageElement).style.display = "none";
+      }}
+    />
+  );
+}
+
+interface RuneTileProps {
+  pick: PickType;
+  isKeystone?: boolean;
+  isSmall?: boolean;
+}
+
+function RuneTile({ pick, isKeystone, isSmall }: RuneTileProps) {
+  const circleBase = isKeystone
+    ? "w-16 h-16 border-2 border-teal shadow-[0_0_16px_rgba(45,212,191,0.35)]"
+    : isSmall
+    ? "w-10 h-10 border border-line"
+    : "w-13 h-13 border border-line";
+
+  const tileWidth = isKeystone ? "w-20" : isSmall ? "w-16" : "w-20";
+
+  return (
+    <div
+      className={`${tileWidth} flex flex-col items-center text-center group cursor-default`}
+      title={`${pick.name} | WPA: ${wpaText(pick.wpa)} | ${fmtSample(pick.occurrence)} picks`}
+    >
+      <div
+        className={`${circleBase} rounded-full bg-black/30 overflow-hidden flex items-center justify-center relative transition-transform group-hover:scale-105`}
+      >
+        <ImgWithFallback
+          src={pick.icon}
+          alt={pick.name}
+          className={`object-contain ${isKeystone ? "w-[108%] h-[108%]" : "w-full h-full"}`}
+        />
+      </div>
+      <div className="text-[10.5px] text-txt mt-1.5 leading-tight min-h-[28px] flex items-center justify-center">
+        {pick.name}
+      </div>
+      <div className={`font-extrabold text-[12px] ${wpaClass(pick.wpa)}`}>
+        {wpaText(pick.wpa)}
+      </div>
+      <div className="text-[9.5px] text-mut">{fmtSample(pick.occurrence)}</div>
+    </div>
+  );
+}
+
+interface ShardTileProps {
+  label: string;
+  pick: PickType;
+}
+
+function ShardTile({ label, pick }: ShardTileProps) {
+  return (
+    <div
+      className="flex flex-col items-center text-center w-16 cursor-default group"
+      title={`${pick.name} | WPA: ${wpaText(pick.wpa)} | ${fmtSample(pick.occurrence)} picks`}
+    >
+      <div className="w-10 h-10 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center transition-transform group-hover:scale-105">
+        <ImgWithFallback src={pick.icon} alt={pick.name} className="w-full h-full object-contain" />
+      </div>
+      <div className="text-[10px] text-mut mt-1 leading-tight">{label}</div>
+      <div className={`font-extrabold text-[11.5px] ${wpaClass(pick.wpa)}`}>
+        {wpaText(pick.wpa)}
+      </div>
+    </div>
+  );
+}
+
+interface TreeHeadProps {
+  icon: string;
+  name: string;
+  label: string;
+}
+
+function TreeHead({ icon, name, label }: TreeHeadProps) {
+  return (
+    <div className="flex items-center gap-2 mb-3">
+      <ImgWithFallback src={icon} alt={name} className="w-6 h-6 flex-shrink-0" />
+      <span className="font-bold text-sm text-txt">{name}</span>
+      <span className="text-[11.5px] text-mut">{label}</span>
+    </div>
+  );
+}
+
+export default function RunePage({ runes }: { runes: RunesBlock }) {
+  const { primaryTree, secondaryTree, keystone, primary, secondary, shards } = runes;
+
+  return (
+    <div>
+      <p className="text-[11px] tracking-[1.5px] uppercase text-teal font-bold mb-4">Runes</p>
+      <div className="flex gap-8 flex-wrap">
+        {/* Primary tree */}
+        <div className="flex-1 min-w-[260px]">
+          <TreeHead icon={primaryTree.icon} name={primaryTree.name} label="primary" />
+          <div className="flex flex-wrap gap-2.5 items-end">
+            <RuneTile pick={keystone} isKeystone />
+            {primary.map((p) => (
+              <RuneTile key={p.id} pick={p} />
+            ))}
+          </div>
+        </div>
+
+        {/* Secondary tree + shards */}
+        <div className="flex-1 min-w-[200px]">
+          <TreeHead icon={secondaryTree.icon} name={secondaryTree.name} label="secondary" />
+          <div className="flex flex-wrap gap-2.5 mb-5">
+            {secondary.map((p) => (
+              <RuneTile key={p.id} pick={p} />
+            ))}
+          </div>
+
+          {/* Stat shards */}
+          <div className="flex items-center gap-1.5 mb-2.5">
+            <span className="text-[11px] font-bold text-txt">Stat Shards</span>
+          </div>
+          <div className="flex gap-2">
+            <ShardTile label="Offense" pick={shards.offense} />
+            <ShardTile label="Flex" pick={shards.flex} />
+            <ShardTile label="Defense" pick={shards.defense} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,47 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0a0e14;
+  --panel: #11161f;
+  --panel2: #161d28;
+  --line: #222c3a;
+  --teal: #2dd4bf;
+  --teal-dim: #1d9c8c;
+  --txt: #e7edf5;
+  --mut: #8a97a8;
+  --good: #3ddc84;
+  --bad: #ff5d6c;
+  --neu: #9aa7b6;
+  --gold: #c8aa6e;
+}
+
+html,
+body {
+  background: radial-gradient(1200px 600px at 50% -200px, #13202b, var(--bg));
+  color: var(--txt);
+  min-height: 100vh;
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Scrollbar styling for dropdown */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--panel);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--teal-dim);
+}

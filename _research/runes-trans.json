@@ -1,0 +1,735 @@
+{
+  "8005": {
+    "Id": 8005,
+    "Name": "Press the Attack",
+    "Cooldown": "6s",
+    "Icon": "perk-images/Styles/Precision/PressTheAttack/PressTheAttack.png",
+    "RichText": "\u003Cdiv\u003EHitting an enemy champion with 3 consecutive basic attacks deals \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E40 - 160 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E) bonus adaptive damage\u003C/span\u003E and increases your damage dealt by\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E 8%\u003C/span\u003E until you exit champion combat.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8008": {
+    "Id": 8008,
+    "Name": "Lethal Tempo",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Precision/LethalTempo/LethalTempoTemp.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EBasic attacks against enemy champions grant a \u003Cspan style=\u0022color: yellow;\u0022\u003Estack\u003C/span\u003E, each providing \u003Cspan style=\u0022color: rgb(245, 238, 153);\u0022\u003E(\u003C/span\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/melee.png\u0022\u003E \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E6% | \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/range.png\u0022\u003E 4%\u003C/span\u003E\u003Cspan style=\u0022color: rgb(245, 238, 153);\u0022\u003E) bonus attack speed \u003C/span\u003Efor 6 seconds.\u003C/div\u003E\u003Cdiv\u003EAt \u003Cspan style=\u0022color: yellow;\u0022\u003E6 stacks\u003C/span\u003E, your attacks deal \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E(\u003C/span\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/melee.png\u0022\u003E \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E9 - 30 \u003C/span\u003E\u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E | \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/range.png\u0022\u003E 6 - 24 \u003C/span\u003E\u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E) bonus adaptive damage\u003C/span\u003E, increased by 1% for every \u003Cspan style=\u0022color: rgb(245, 238, 153);\u0022\u003E1% bonus attack speed\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8009": {
+    "Id": 8009,
+    "Name": "Presence of Mind",
+    "Cooldown": "8s",
+    "Icon": "perk-images/Styles/Precision/PresenceOfMind/PresenceOfMind.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EDamaging an enemy champion restores\u003Cspan style=\u0022color: rgb(27, 168, 255);\u0022\u003E (\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E6 - 44\u003C/span\u003E\u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(27, 168, 255);\u0022\u003E) mana\u003C/span\u003E or\u003Cspan style=\u0022color: rgb(245, 238, 153);\u0022\u003E 6 energy\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003ETakedowns restore 15% of your \u003Cspan style=\u0022color: rgb(27, 168, 255);\u0022\u003Emaximum mana\u003C/span\u003E or \u003Cspan style=\u0022color: rgb(245, 238, 153);\u0022\u003Eenergy\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003EThe \u003C/em\u003E\u003Cem style=\u0022color: rgb(27, 168, 255);\u0022\u003Emana \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003Erestored is \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003E80% effective\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E for ranged champions\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8010": {
+    "Id": 8010,
+    "Name": "Conqueror",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Precision/Conqueror/Conqueror.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EBasic attacks or damaging spells against enemy champions grant \u003Cspan style=\u0022color: yellow;\u0022\u003E2 stacks\u003C/span\u003E of \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003EConqueror \u003C/span\u003Efor 5 seconds, each providing \u003Cspan style=\u0022color: rgb(132, 69, 255); background-color: rgb(23, 23, 23);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218); background-color: rgb(23, 23, 23);\u0022\u003E1.8\u003C/span\u003E\u003Cspan style=\u0022color: orange; background-color: rgb(23, 23, 23);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218); background-color: rgb(23, 23, 23);\u0022\u003E- 4\u003C/span\u003E\u003Cspan style=\u0022color: rgb(223, 117, 255); background-color: rgb(23, 23, 23);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218); background-color: rgb(23, 23, 23);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255); background-color: rgb(23, 23, 23);\u0022\u003E) bonus\u003C/span\u003E\u003Cspan style=\u0022background-color: rgb(23, 23, 23);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255); background-color: rgb(23, 23, 23);\u0022\u003Eadaptive force\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003EAt \u003Cspan style=\u0022color: yellow; background-color: rgb(23, 23, 23);\u0022\u003E12 stacks\u003C/span\u003E, you \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003Eheal \u003C/span\u003Efor \u003Cspan style=\u0022color: rgb(232, 227, 227); background-color: rgb(23, 23, 23);\u0022\u003E \u003C/span\u003E(\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/melee.png\u0022\u003E \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E8% | \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/range.png\u0022\u003E 5%\u003C/span\u003E) of damage dealt to champions.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003ERanged champions\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E gain only \u003C/em\u003E\u003Cem style=\u0022color: yellow;\u0022\u003E1 stack\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E per basic attack\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8014": {
+    "Id": 8014,
+    "Name": "Coup de Grace",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Precision/CoupDeGrace/CoupDeGrace.png",
+    "RichText": "\u003Cdiv\u003EDeal 8% more damage to champions below \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E40% of their\u003C/span\u003E \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003Ecurrent health\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8017": {
+    "Id": 8017,
+    "Name": "Cut Down",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Precision/CutDown/CutDown.png",
+    "RichText": "\u003Cdiv\u003EDeal 8% more damage to champions with more than \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E60% of their maximum health\u003C/span\u003E remaining.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8021": {
+    "Id": 8021,
+    "Name": "Fleet Footwork",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Precision/FleetFootwork/FleetFootwork.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EAttacking and moving generates \u003Cspan style=\u0022color: yellow;\u0022\u003Estacks\u003C/span\u003E. \u003C/div\u003E\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EAt \u003Cspan style=\u0022color: yellow;\u0022\u003E100 stacks\u003C/span\u003E, your next basic attack becomes \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003EEnergized\u003C/span\u003E, \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003Ehealing you for (\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E10 - 130\u003C/span\u003E \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E \u003Cspan style=\u0022color: orange;\u0022\u003E\u002B10% bonus\u003C/span\u003E \u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E\u003C/span\u003E \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u002B5%\u003C/span\u003E \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E)\u003C/span\u003E and grants \u003Cspan style=\u0022color: rgb(159, 255, 77);\u0022\u003E(\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/melee.png\u0022\u003E 20% | \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/range.png\u0022\u003E 15%) bonus movement speed\u003C/span\u003E for 1 second.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(97, 244, 157);\u0022\u003EHealing \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003Eis \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003E60% effective\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E for ranged champions.\u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(97, 244, 157);\u0022\u003EHealing\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E is reduced to \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003E15% effectiveness\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E against minions\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8105": {
+    "Id": 8105,
+    "Name": "Relentless Hunter",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Domination/RelentlessHunter/RelentlessHunter.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EEarn \u003Cspan style=\u0022color: yellow;\u0022\u003Estacks \u003C/span\u003Efor the first time you score a takedown on each unique enemy champion.\u003C/div\u003E\u003Cdiv\u003EGain \u003Cspan style=\u0022color: rgb(159, 255, 77);\u0022\u003E8 bonus movement speed\u003C/span\u003E out of combat for each \u003Cspan style=\u0022color: yellow;\u0022\u003Estack\u003C/span\u003E, for a total of up to \u003Cspan style=\u0022color: rgb(159, 255, 77);\u0022\u003E40 bonus movement speed\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8106": {
+    "Id": 8106,
+    "Name": "Ultimate Hunter",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Domination/UltimateHunter/UltimateHunter.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EEarn \u003Cspan style=\u0022color: yellow;\u0022\u003Estacks \u003C/span\u003Efor the first time you score a takedown on each unique enemy champion.\u003C/div\u003E\u003Cdiv\u003EGain \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003E6 ultimate ability haste\u003C/span\u003E and another \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003E5 \u003C/span\u003Efor each \u003Cspan style=\u0022color: yellow;\u0022\u003Estack\u003C/span\u003E, for a total of up to \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003E31 ultimate ability haste\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8112": {
+    "Id": 8112,
+    "Name": "Electrocute",
+    "Cooldown": "20s",
+    "Icon": "perk-images/Styles/Domination/Electrocute/Electrocute.png",
+    "RichText": "\u003Cdiv\u003EHitting a champion with 3 separate attacks or abilities within 3s deals \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E50 - 190 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: orange;\u0022\u003E\u002B10% bonus\u003C/span\u003E \u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E\u003C/span\u003E \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u002B5%\u003C/span\u003E \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E) bonus adaptive damage\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(191, 255, 255);\u0022\u003E\u0022We called them the Thunderlords, for to speak of their lightning was to invite disaster.\u0022\u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(191, 255, 255);\u0022\u003E ~ A tribute to \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003EThunderlord\u2019s Decree\u003C/em\u003E\u003Cem style=\u0022color: rgb(191, 255, 255);\u0022\u003E, whose wrath lives on in \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003EElectrocute\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.3",
+        "Effect": 0
+      }
+    ],
+    "Stats": []
+  },
+  "8126": {
+    "Id": 8126,
+    "Name": "Cheap Shot",
+    "Cooldown": "4s",
+    "Icon": "perk-images/Styles/Domination/CheapShot/CheapShot.png",
+    "RichText": "\u003Cdiv\u003EDamaging champions with\u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003E impaired movement or actions\u003C/span\u003E deals \u003Cspan style=\u0022color: rgb(249, 150, 107);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E10 \u003C/span\u003E\u003Cspan style=\u0022color: rgb(249, 150, 107);\u0022\u003E-\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E 45 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(249, 150, 107);\u0022\u003E) bonus true damage\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003EOnly triggers on damage dealt \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003Eafter \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003Ethe \u003C/em\u003E\u003Cem style=\u0022color: rgb(204, 90, 203);\u0022\u003Eimpairment \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003Eis applied\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8128": {
+    "Id": 8128,
+    "Name": "Dark Harvest",
+    "Cooldown": "35s",
+    "Icon": "perk-images/Styles/Domination/DarkHarvest/DarkHarvest.png",
+    "RichText": "\u003Cdiv\u003EDamaging a champion below \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E50% of their maximum health\u003C/span\u003E deals \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E20 \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 43, 181);\u0022\u003E\u002B9 per soul\u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: orange;\u0022\u003E\u002B10% bonus \u003C/span\u003E\u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u002B5% \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E) adaptive damage\u003C/span\u003E and harvests their \u003Cspan style=\u0022color: rgb(255, 43, 181);\u0022\u003Esoul\u003C/span\u003E, increasing the damage of future \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003EDark Harvest\u003C/span\u003E procs. \u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003ETakedowns \u003C/em\u003E\u003Cem style=\u0022color: rgb(204, 90, 203);\u0022\u003Ereset \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003Ethe \u003C/em\u003E\u003Cem style=\u0022color: rgb(189, 255, 255);\u0022\u003Ecooldown \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003Eto 1s\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.3",
+        "Effect": 0
+      }
+    ],
+    "Stats": []
+  },
+  "8135": {
+    "Id": 8135,
+    "Name": "Treasure Hunter",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Domination/TreasureHunter/TreasureHunter.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EEach time you earn a \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003EBounty Hunter\u003C/span\u003E \u003Cspan style=\u0022color: yellow;\u0022\u003Estack\u003C/span\u003E, gain\u003Cspan style=\u0022color: rgb(197, 159, 70);\u0022\u003E bonus gold\u003C/span\u003E starting at \u003Cspan style=\u0022color: rgb(197, 159, 70);\u0022\u003E50\u003C/span\u003E, increasing by \u003Cspan style=\u0022color: rgb(197, 159, 70);\u0022\u003E20 \u003C/span\u003Efor each \u003Cspan style=\u0022color: yellow;\u0022\u003Eprevious stack\u003C/span\u003E. \u003C/div\u003E\u003Cdiv\u003ECollecting all \u003Cspan style=\u0022color: yellow;\u0022\u003E5 stacks\u003C/span\u003E grants a total of \u003Cspan style=\u0022color: rgb(197, 159, 70);\u0022\u003E450 bonus gold\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003EEarn a \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003EBounty Hunter\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E \u003C/em\u003E\u003Cem style=\u0022color: yellow;\u0022\u003Estack \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003Ethe first time you get a \u003C/em\u003E\u003Cem style=\u0022color: rgb(204, 90, 203);\u0022\u003Etakedown \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003Eon each \u003C/em\u003E\u003Cem style=\u0022color: rgb(204, 90, 203);\u0022\u003Eunique \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003Eenemy champion.\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8137": {
+    "Id": 8137,
+    "Name": "Sixth Sense",
+    "Cooldown": "250s",
+    "Icon": "perk-images/Styles/Domination/SixthSense/SixthSense.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EAutomatically \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Edetect \u003C/span\u003Ea nearby unseen and untracked ward, marking it for your team.\u003C/div\u003E\u003Cdiv\u003EAt level 11, the ward is also \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Erevealed \u003C/span\u003Efor 10 seconds.\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.5",
+        "Effect": 0
+      },
+      {
+        "Patch": "15.2",
+        "Effect": 0
+      }
+    ],
+    "Stats": []
+  },
+  "8139": {
+    "Id": 8139,
+    "Name": "Taste of Blood",
+    "Cooldown": "20s",
+    "Icon": "perk-images/Styles/Domination/TasteOfBlood/GreenTerror_TasteOfBlood.png",
+    "RichText": "\u003Cdiv\u003EDamaging an enemy champion \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003Eheals \u003C/span\u003Eyou for \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E16\u003C/span\u003E\u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E -\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E 40 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(122, 109, 255);\u0022\u003E\u002B5% \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: orange;\u0022\u003E\u002B10% bonus \u003C/span\u003E\u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E) health\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8140": {
+    "Id": 8140,
+    "Name": "Grisly Mementos",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Domination/GrislyMementos/GrislyMementos.png",
+    "RichText": "\u003Cdiv\u003ECollect \u003Cspan style=\u0022color: yellow;\u0022\u003E1 memento stack\u003C/span\u003E on champion takedown, up to a \u003Cspan style=\u0022color: yellow;\u0022\u003Emaximum of 25\u003C/span\u003E. Each \u003Cspan style=\u0022color: yellow;\u0022\u003Estack \u003C/span\u003Egrants \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003E4 trinket ability haste\u003C/span\u003E. You gain \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003E2 summoner spell haste\u003C/span\u003E instead in game modes without vision trinkets.\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.2",
+        "Effect": 0
+      }
+    ],
+    "Stats": []
+  },
+  "8141": {
+    "Id": 8141,
+    "Name": "Deep Ward",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Domination/DeepWard/DeepWard.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003EWards \u003C/span\u003Eplaced in the enemy \u003Cspan style=\u0022color: rgb(0, 143, 5);\u0022\u003Ejungle \u003C/span\u003Eare considered \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003EDeep\u003C/span\u003E, gaining \u003Cspan style=\u0022color: rgb(34, 187, 106);\u0022\u003E\u002B1 maximum health\u003C/span\u003E and (\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E30 - 45 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E\u003C/span\u003E) seconds increased duration. \u003C/div\u003E\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003ETrinket Stealth Wards\u003C/span\u003E gain (\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E30 - 120 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E\u003C/span\u003E)\u003Cstrong\u003E \u003C/strong\u003Eseconds of increased duration.\u003C/div\u003E\u003Cdiv\u003EAt level 9, wards placed in the \u003Cspan style=\u0022color: rgb(71, 203, 255);\u0022\u003Eriver \u003C/span\u003Eare also considered \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003EDeep\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.2",
+        "Effect": 1
+      }
+    ],
+    "Stats": []
+  },
+  "8143": {
+    "Id": 8143,
+    "Name": "Sudden Impact",
+    "Cooldown": "10s",
+    "Icon": "perk-images/Styles/Domination/SuddenImpact/SuddenImpact.png",
+    "RichText": "\u003Cdiv\u003EAfter using a \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Edash\u003C/span\u003E, \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Eleap\u003C/span\u003E, \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Eblink\u003C/span\u003E, \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Eteleport\u003C/span\u003E, or \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Eleaving stealth\u003C/span\u003E, your next damaging basic attack or ability within 4 seconds deals \u003Cspan style=\u0022color: rgb(249, 150, 107);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E20 \u003C/span\u003E\u003Cspan style=\u0022color: rgb(249, 150, 107);\u0022\u003E-\u003C/span\u003E \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E80 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(249, 150, 107);\u0022\u003E) bonus true damage\u003C/span\u003E to an enemy champion.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8210": {
+    "Id": 8210,
+    "Name": "Transcendence",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Sorcery/Transcendence/Transcendence.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EGain bonuses upon reaching the following levels:\u003C/div\u003E\u003Cdiv\u003E- Level 5: \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003E5 ability haste\u003C/span\u003E\u003C/div\u003E\u003Cdiv\u003E- Level 8: \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003E5 ability haste\u003C/span\u003E\u003C/div\u003E\u003Cdiv\u003E- Level 11: Champion takedowns reduce the \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003Eremaining cooldown\u003C/span\u003E of your basic abilities by \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003E20%\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8214": {
+    "Id": 8214,
+    "Name": "Summon Aery",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Sorcery/SummonAery/SummonAery.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EDamaging enemy champions with basic attacks or abilities sends \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003EAery \u003C/span\u003Eto them, dealing \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E10 \u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E-\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E 50 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(122, 109, 255);\u0022\u003E\u002B5% \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: orange;\u0022\u003E\u002B10% bonus \u003C/span\u003E\u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E) adaptive damage\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003E\u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003EShielding or empowering\u003C/span\u003E an ally sends \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003EAery \u003C/span\u003Eto them instead, \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003Eshielding \u003C/span\u003Ethem for \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E20 \u003C/span\u003E\u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E- \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E100 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(122, 109, 255);\u0022\u003E\u002B5% \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: orange;\u0022\u003E\u002B10% bonus \u003C/span\u003E\u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E)\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003EAery \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003Ecannot be sent out again until she returns to you\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "16.11",
+        "Effect": 1
+      }
+    ],
+    "Stats": []
+  },
+  "8224": {
+    "Id": 8224,
+    "Name": "Axiom Arcanist",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Sorcery/NullifyingOrb/Axiom_Arcanist.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EYour Ultimate gains increased \u003Cspan style=\u0022color: rgb(255, 51, 75);\u0022\u003Edamage\u003C/span\u003E, \u003Cspan style=\u0022color: rgb(96, 224, 143);\u0022\u003Ehealing\u003C/span\u003E, and \u003Cspan style=\u0022color: rgb(96, 224, 143);\u0022\u003Eshielding \u003C/span\u003Eeffects. \u003C/div\u003E\u003Cdiv\u003EScoring a \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Etakedown \u003C/span\u003Eon an enemy champion reduces its \u003Cspan style=\u0022color: rgb(189, 255, 255);\u0022\u003Ecurrent cooldown by 7%\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.5",
+        "Effect": 1
+      }
+    ],
+    "Stats": []
+  },
+  "8226": {
+    "Id": 8226,
+    "Name": "Manaflow Band",
+    "Cooldown": "15s",
+    "Icon": "perk-images/Styles/Sorcery/ManaflowBand/ManaflowBand.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EHitting an enemy champion with an ability \u003Cspan style=\u0022color: rgb(27, 168, 255);\u0022\u003Epermanently grants 25 maximum mana\u003C/span\u003E, up to \u003Cspan style=\u0022color: rgb(27, 168, 255);\u0022\u003E250\u003C/span\u003E. \u003C/div\u003E\u003Cdiv\u003EAfter reaching the cap, restore \u003Cspan style=\u0022color: rgb(27, 168, 255);\u0022\u003E1% of your missing mana\u003C/span\u003E every 5 seconds.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8229": {
+    "Id": 8229,
+    "Name": "Arcane Comet",
+    "Cooldown": "20s - 8s",
+    "Icon": "perk-images/Styles/Sorcery/ArcaneComet/ArcaneComet.png",
+    "RichText": "\u003Cdiv\u003EDamaging a champion with an ability launches a comet at their location, dealing \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E30 - 130 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E\u003C/span\u003E \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u002B5% \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: orange;\u0022\u003E\u002B10% bonus\u003C/span\u003E\u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E)\u003C/span\u003E \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003Eadaptive damage\u003C/span\u003E at their location.\u003C/div\u003E\u003Cdiv\u003EThe comet deals up to \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E100% increased damage\u003C/span\u003E based on distance from the target, reaching maximum bonus damage at \u003Cspan style=\u0022color: rgb(174, 179, 189);\u0022\u003E750 range\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "16.9",
+        "Effect": 2
+      }
+    ],
+    "Stats": []
+  },
+  "8230": {
+    "Id": 8230,
+    "Name": "Stormraider\u0027s Surge",
+    "Cooldown": "20s - 10s",
+    "Icon": "perk-images/Styles/Sorcery/PhaseRush/PhaseRush.png",
+    "RichText": "\u003Cdiv\u003EDealing 25% of a champion\u0027s maximum health within 3 seconds grants \u003Cspan style=\u0022color: rgb(159, 255, 77);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/melee.png\u0022\u003E 48% | \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/range.png\u0022\u003E 36%\u003C/span\u003E\u003Cspan style=\u0022color: rgb(159, 255, 77);\u0022\u003E) bonus movement speed\u003C/span\u003E and \u003Cspan style=\u0022color: rgb(0, 255, 255);\u0022\u003E50% slow resistance\u003C/span\u003E for 4 seconds.\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.22",
+        "Effect": 1
+      },
+      {
+        "Patch": "16.3",
+        "Effect": 1
+      },
+      {
+        "Patch": "16.9",
+        "Effect": 2
+      },
+      {
+        "Patch": "16.10",
+        "Effect": 0
+      }
+    ],
+    "Stats": []
+  },
+  "8232": {
+    "Id": 8232,
+    "Name": "Waterwalking",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Sorcery/Waterwalking/Waterwalking.png",
+    "RichText": "\u003Cdiv\u003EGain \u003Cspan style=\u0022color: rgb(159, 255, 77);\u0022\u003E10 bonus movement speed\u003C/span\u003E and \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E13 \u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E-\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E 30\u003C/span\u003E \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E) bonus adaptive force\u003C/span\u003E while in the \u003Cspan style=\u0022color: rgb(5, 152, 250);\u0022\u003Eriver\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(122, 222, 205);\u0022\u003EMay you be as swift as the rushing river and agile as a startled Rift Scuttler\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8233": {
+    "Id": 8233,
+    "Name": "Absolute Focus",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Sorcery/AbsoluteFocus/AbsoluteFocus.png",
+    "RichText": "\u003Cdiv\u003EWhile above \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E70% \u003C/span\u003E\u003Cspan style=\u0022background-color: rgb(23, 23, 23); color: rgb(31, 153, 92);\u0022\u003Emaximum health\u003C/span\u003E, gain an \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003Eadaptive bonus of (\u003C/span\u003E\u003Cspan style=\u0022color: orange;\u0022\u003E1.8 - 18\u003C/span\u003E\u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E|\u003C/span\u003E\u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E3 - 30\u003C/span\u003E\u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E)\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8234": {
+    "Id": 8234,
+    "Name": "Celerity",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Sorcery/Celerity/CelerityTemp.png",
+    "RichText": "\u003Cdiv\u003EAll \u003Cspan style=\u0022color: rgb(159, 255, 77);\u0022\u003Emovement speed bonuses\u003C/span\u003E are \u003Cspan style=\u0022color: rgb(159, 255, 77);\u0022\u003E7%\u003C/span\u003E more effective on you, and you gain an additional \u003Cspan style=\u0022color: rgb(159, 255, 77);\u0022\u003E1% bonus movement speed\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8236": {
+    "Id": 8236,
+    "Name": "Gathering Storm",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Sorcery/GatheringStorm/GatheringStorm.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EEvery 10 minutes, gain \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003Ebonus adaptive force\u003C/span\u003E:\u003C/div\u003E\u003Cdiv\u003E- 10 min: \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u002B8\u003C/span\u003E \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E \u003C/span\u003Eor \u003Cspan style=\u0022color: orange;\u0022\u003E\u002B5\u003C/span\u003E \u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E \u003C/span\u003E\u003C/div\u003E\u003Cdiv\u003E- 20 min: \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u002B24\u003C/span\u003E \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E \u003C/span\u003Eor \u003Cspan style=\u0022color: orange;\u0022\u003E\u002B14\u003C/span\u003E \u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E\u003C/span\u003E\u003C/div\u003E\u003Cdiv\u003E- 30 min: \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u002B48\u003C/span\u003E \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E \u003C/span\u003Eor \u003Cspan style=\u0022color: orange;\u0022\u003E\u002B29\u003C/span\u003E \u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E\u003C/span\u003E\u003C/div\u003E\u003Cdiv\u003E- 40 min: \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u002B80\u003C/span\u003E \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E \u003C/span\u003Eor \u003Cspan style=\u0022color: orange;\u0022\u003E\u002B48 \u003C/span\u003E\u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E\u003C/span\u003E\u003C/div\u003E\u003Cdiv\u003E- 50 min: \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u002B120\u003C/span\u003E \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E \u003C/span\u003Eor \u003Cspan style=\u0022color: orange;\u0022\u003E\u002B72\u003C/span\u003E \u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E\u003C/span\u003E\u003C/div\u003E\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003E- 60 min: \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u002B168\u003C/span\u003E \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E \u003C/span\u003Eor \u003Cspan style=\u0022color: orange;\u0022\u003E\u002B101\u003C/span\u003E \u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E\u003C/span\u003E\u003C/div\u003E\u003Cdiv\u003E ...and continues scaling every 10 minutes.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8237": {
+    "Id": 8237,
+    "Name": "Scorch",
+    "Cooldown": "10s",
+    "Icon": "perk-images/Styles/Sorcery/Scorch/Scorch.png",
+    "RichText": "\u003Cdiv\u003EYour next damaging ability hit sets champions on fire dealing \u003Cspan style=\u0022color: rgb(0, 176, 240);\u0022\u003E(20 - 40\u003C/span\u003E\u003Cspan style=\u0022color: rgb(248, 255, 191);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(0, 176, 240);\u0022\u003E) bonus magic damage\u003C/span\u003E after 1s.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8242": {
+    "Id": 8242,
+    "Name": "Unflinching",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Sorcery/Unflinching/Unflinching.png",
+    "RichText": "\u003Cdiv\u003EGain 10 \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 197, 76);\u0022\u003Earmor \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/armor.png\u0022\u003E\u003C/span\u003E and \u003Cspan style=\u0022color: rgb(195, 4, 195);\u0022\u003Emagic resistance \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/mr.png\u0022\u003E\u003C/span\u003E when \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Ecrowd controlled\u003C/span\u003E, and for 2 seconds afterward.\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.9",
+        "Effect": 2
+      },
+      {
+        "Patch": "15.5",
+        "Effect": 0
+      }
+    ],
+    "Stats": []
+  },
+  "8275": {
+    "Id": 8275,
+    "Name": "Nimbus Cloak",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Sorcery/NimbusCloak/6361.png",
+    "RichText": "\u003Cdiv\u003EAfter casting a \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003Esummoner spell\u003C/span\u003E, gain \u003Cspan style=\u0022color: rgb(159, 255, 77);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E15%\u003C/span\u003E\u003Cspan style=\u0022color: rgb(159, 255, 77);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E- 45%\u003C/span\u003E\u003Cspan style=\u0022color: rgb(159, 255, 77);\u0022\u003E) bonus movement speed\u003C/span\u003E that lasts for 2s and become \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Eghosted\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003EThe \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 255, 77);\u0022\u003Ebonus movement speed\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E scales with the \u003C/em\u003E\u003Cem style=\u0022color: rgb(122, 222, 205);\u0022\u003Ecooldown\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E of the used \u003C/em\u003E\u003Cem style=\u0022color: rgb(122, 222, 205);\u0022\u003Esummoner spell\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.22",
+        "Effect": 0
+      }
+    ],
+    "Stats": []
+  },
+  "8299": {
+    "Id": 8299,
+    "Name": "Last Stand",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Sorcery/LastStand/LastStand.png",
+    "RichText": "\u003Cdiv\u003EDeal 5% - 11% increased damage to champions while below \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E60% of your current health\u003C/span\u003E, scaling to the maximum bonus at 30% \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003Ecurrent health\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8304": {
+    "Id": 8304,
+    "Name": "Magical Footwear",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Inspiration/MagicalFootwear/MagicalFootwear.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EReceive \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003ESlightly Magical Footwear\u003C/span\u003E for \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Efree \u003C/span\u003Eat 12 minutes, but you \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Ecannot purchase\u003C/span\u003E boots before then. \u003C/div\u003E\u003Cdiv\u003EEach champion takedown reduces the timer by 45 seconds. \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003ESlightly Magical Footwear\u003C/span\u003E grants \u003Cspan style=\u0022color: rgb(159, 255, 77);\u0022\u003E\u002B10 bonus movement speed\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8306": {
+    "Id": 8306,
+    "Name": "Hextech Flashtraption",
+    "Cooldown": "20s",
+    "Icon": "perk-images/Styles/Inspiration/HextechFlashtraption/HextechFlashtraption.png",
+    "RichText": "\u003Cdiv\u003EWhile \u003Cspan style=\u0022color: gold;\u0022\u003EFlash \u003C/span\u003Eis on \u003Cspan style=\u0022color: rgb(189, 255, 255);\u0022\u003Ecooldown \u003C/span\u003Eit is replaced by Hexflash, which allows you to channel for 2 seconds to \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Eblink \u003C/span\u003Eto a new location.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003EGoes on a \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003E10s cooldown\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E when you enter \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003Echampion combat\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8313": {
+    "Id": 8313,
+    "Name": "Triple Tonic",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Inspiration/PerfectTiming/AlchemistCabinet.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EGain bonus elixirs as you level up.\u003C/div\u003E\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003E\u003Cspan style=\u0022color: rgb(197, 159, 70);\u0022\u003EElixir of Avarice \u003C/span\u003E(Level 3)\u003C/div\u003E\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EGrants \u003Cspan style=\u0022color: rgb(249, 150, 107);\u0022\u003E5 bonus true damage\u003C/span\u003E \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/onhit.png\u0022\u003E \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003Eon-hit\u003C/span\u003E against minions for 60 seconds. When the effect expires, gain \u003Cspan style=\u0022color: rgb(197, 159, 70);\u0022\u003E60 gold\u003C/span\u003E.\u003C/div\u003E\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003E\u003Cspan style=\u0022color: rgb(255, 38, 125);\u0022\u003EElixir of Force\u003C/span\u003E\u003Cspan style=\u0022color: rgb(197, 159, 70);\u0022\u003E \u003C/span\u003E(Level 6)\u003C/div\u003E\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EGrants \u003Cspan style=\u0022color: orange;\u0022\u003E13 \u003C/span\u003E\u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: orange;\u0022\u003Ebonus attack damage\u003C/span\u003E or \u003Cspan style=\u0022color: rgb(122, 109, 255);\u0022\u003E25 \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E\u003C/span\u003E \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003Eability power \u003C/span\u003E(adaptive) for 60 seconds.\u003C/div\u003E\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003E\u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003EElixir of Skill\u003C/span\u003E\u003Cspan style=\u0022color: rgb(197, 159, 70);\u0022\u003E \u003C/span\u003E(Level 9)\u003C/div\u003E\u003Cdiv\u003EGrants \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003E1 skill point\u003C/span\u003E (does not exceed the cap of 18).\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.22",
+        "Effect": 0
+      },
+      {
+        "Patch": "16.3",
+        "Effect": 1
+      }
+    ],
+    "Stats": []
+  },
+  "8316": {
+    "Id": 8316,
+    "Name": "Jack Of All Trades",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Inspiration/JackOfAllTrades/JackofAllTrades2.png",
+    "RichText": "\u003Cdiv\u003EGain \u003Cspan style=\u0022color: yellow;\u0022\u003E1 stack\u003C/span\u003E for each \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Eunique stat\u003C/span\u003E gained from items. Each \u003Cspan style=\u0022color: yellow;\u0022\u003Estack \u003C/span\u003Egrants \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003E1 ability haste\u003C/span\u003E. At \u003Cspan style=\u0022color: yellow;\u0022\u003E5\u003C/span\u003E and \u003Cspan style=\u0022color: yellow;\u0022\u003E10 stacks\u003C/span\u003E, gain \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E10\u003C/span\u003E and \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E25 bonus adaptive force\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003EThe following stats are eligible for granting a \u003C/em\u003E\u003Cem style=\u0022color: rgb(204, 90, 203);\u0022\u003Eunique \u003C/em\u003E\u003Cem style=\u0022color: yellow;\u0022\u003Estack\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E:\u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E-\u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: orange;\u0022\u003Eattack damage\u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E- \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/range.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003Eattack range\u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E- \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/as.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: rgb(245, 238, 153);\u0022\u003Eattack speed\u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E- \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/apen.png\u0022\u003E\u003C/span\u003E\u003Cem style=\u0022color: tomato;\u0022\u003E% armor penetration\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E, \u003C/em\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/apen.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: tomato;\u0022\u003Elethality \u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E- \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/crit.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: rgb(255, 69, 0);\u0022\u003Ecritical strike chance\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E, \u003C/em\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/critmult.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: rgb(255, 69, 0);\u0022\u003Ecritical strike damage \u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E- \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ls.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: rgb(204, 32, 81);\u0022\u003Elife steal\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E,\u003C/em\u003E\u003Cem style=\u0022color: rgb(204, 32, 81);\u0022\u003E \u003C/em\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/sv.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: rgb(204, 32, 81);\u0022\u003Eomnivamp\u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E- \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ah.png\u0022\u003E\u003C/span\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E \u003C/em\u003E\u003Cem style=\u0022color: rgb(122, 222, 205);\u0022\u003Eability haste\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E \u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E-\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E \u003C/em\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: rgb(122, 109, 255);\u0022\u003Eability power\u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E- \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/mpen.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: rgb(204, 90, 203);\u0022\u003Eflat magic penetration\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E, \u003C/em\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/mpen.png\u0022\u003E\u003C/span\u003E\u003Cem style=\u0022color: rgb(204, 90, 203);\u0022\u003E% magic penetration \u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E- \u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E \u003C/em\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/health.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: rgb(31, 153, 92);\u0022\u003Ehealth\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E, \u003C/em\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/hpregen.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: rgb(36, 181, 109);\u0022\u003Ebase health regeneration \u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E- \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/armor.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: rgb(255, 197, 76);\u0022\u003Earmor\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E,\u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 197, 76);\u0022\u003E \u003C/em\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/mr.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: rgb(195, 4, 195);\u0022\u003Emagic resistance\u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E-\u003Cspan style=\u0022color: rgb(255, 197, 76);\u0022\u003E \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/healshield.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: rgb(97, 244, 157);\u0022\u003Eheal and shield power \u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E- \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/mana.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: rgb(27, 168, 255);\u0022\u003Emana\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E, \u003C/em\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/manaregen.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: rgb(27, 168, 255);\u0022\u003Ebase mana regeneration \u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem\u003E- \u003C/em\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ms.png\u0022\u003E \u003C/span\u003E\u003Cem style=\u0022color: rgb(159, 255, 77);\u0022\u003Eflat movement speed\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E, \u003C/em\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ms.png\u0022\u003E\u003C/span\u003E\u003Cem style=\u0022color: rgb(159, 255, 77);\u0022\u003E% movement speed \u003C/em\u003E\u003Cspan style=\u0022color: rgb(159, 159, 159);\u0022\u003E \u003C/span\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E- \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/tenacity.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(170, 79, 255);\u0022\u003Etenacity\u003C/span\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E- \u003C/span\u003E\u003Cspan style=\u0022color: rgb(232, 227, 227); background-color: rgb(23, 23, 23);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/gold.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(197, 159, 70);\u0022\u003Egold generation\u003C/span\u003E\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8321": {
+    "Id": 8321,
+    "Name": "Cash Back",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Inspiration/CashBack/CashBack2.png",
+    "RichText": "\u003Cdiv\u003EGet \u003Cspan style=\u0022color: rgb(197, 159, 70);\u0022\u003E7.5% gold \u003C/span\u003Eback when you purchase \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003ELegendary \u003C/span\u003EItems.\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.22",
+        "Effect": 0
+      },
+      {
+        "Patch": "16.3",
+        "Effect": 1
+      }
+    ],
+    "Stats": []
+  },
+  "8345": {
+    "Id": 8345,
+    "Name": "Biscuit Delivery",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Inspiration/BiscuitDelivery/BiscuitDelivery.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EGain a \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003ETotal Biscuit of Everlasting Will\u003C/span\u003E every 2 minutes, up to 6 minutes.\u003C/div\u003E\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003E\u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003EConsuming \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003EBiscuits \u003C/span\u003Erestores \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E20 \u003C/span\u003E\u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E\u002B1.5% maximum \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/health.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E) health \u003C/span\u003Eand permanently increases your \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003Emaximum health\u003C/span\u003E by \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E30\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003EThe restored health is increased by up to 100% based on \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003Eyour missing health\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(204, 90, 203);\u0022\u003ESelling\u003C/em\u003E\u003Cem\u003E \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003Ea\u003C/em\u003E\u003Cem\u003E \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003EBiscuit \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003Ealso increases your \u003C/em\u003E\u003Cem style=\u0022color: rgb(31, 153, 92);\u0022\u003Emax health\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E.\u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003EMaximum restore bonus is reached at \u003C/em\u003E\u003Cem style=\u0022color: rgb(31, 153, 92);\u0022\u003E70% missing health\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E.\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.9",
+        "Effect": 2
+      },
+      {
+        "Patch": "15.22",
+        "Effect": 1
+      }
+    ],
+    "Stats": []
+  },
+  "8347": {
+    "Id": 8347,
+    "Name": "Cosmic Insight",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Inspiration/CosmicInsight/CosmicInsight.png",
+    "RichText": "\u003Cdiv\u003EGrants \u002B18 \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003Esummoner spell haste\u003C/span\u003E and \u002B10 \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003Eitem haste\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8351": {
+    "Id": 8351,
+    "Name": "Glacial Augment",
+    "Cooldown": "25s",
+    "Icon": "perk-images/Styles/Inspiration/GlacialAugment/GlacialAugment.png",
+    "RichText": "\u003Cdiv\u003E\u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003EImmobilizing \u003C/span\u003Ean enemy champion unleashes \u003C/div\u003E\u003Cdiv\u003E\u003Cspan style=\u0022color: rgb(23, 255, 255);\u0022\u003E3 glacial rays\u003C/span\u003E from them toward you and nearby allies, creating \u003Cspan style=\u0022color: rgb(23, 255, 255);\u0022\u003Efrozen zones\u003C/span\u003E that last for \u003C/div\u003E\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003E3 seconds \u002B the duration of the \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Eimmobilizing \u003C/span\u003Eeffect.\u003C/div\u003E\u003Cdiv\u003EEnemies inside the\u003Cspan style=\u0022color: rgb(23, 255, 255);\u0022\u003E frozen zones\u003C/span\u003E are \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Eslowed by (\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E20%\u003C/span\u003E \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E\u002B90%\u003C/span\u003E \u003Cspan style=\u0022color: rgb(255, 197, 76);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/healshield.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u002B6%\u003C/span\u003E \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: orange;\u0022\u003E\u002B7% bonus \u003C/span\u003E\u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003E)\u003C/span\u003E and deal \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E15% \u003C/span\u003Eless damage to your allies (excluding yourself).\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8352": {
+    "Id": 8352,
+    "Name": "Time Warp Tonic",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Inspiration/TimeWarpTonic/TimeWarpTonic.png",
+    "RichText": "\u003Cdiv\u003EConsuming a potion \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Einstantly \u003C/span\u003Erestores \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E40% of its total healing\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8360": {
+    "Id": 8360,
+    "Name": "Unsealed Spellbook",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Inspiration/UnsealedSpellbook/UnsealedSpellbook.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003E\u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003ESwap \u003C/span\u003Eone of your equipped \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003Esummoner spells\u003C/span\u003E for a\u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003E \u003C/span\u003Esingle-use alternative while out of combat.\u003C/div\u003E\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EYour\u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003E first\u003C/span\u003E \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Eswap\u003C/span\u003E becomes available at \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003E6\u003C/span\u003E minutes, with a \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003E4.5-minute cooldown\u003C/span\u003E.\u003C/div\u003E\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EEach unique \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003Esummoner spell\u003C/span\u003E you use reduces the \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Eswap \u003C/span\u003E\u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003Ecooldown\u003C/span\u003E by 25 seconds.\u003C/div\u003E\u003Cdiv\u003EAfter using a \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Eswapped \u003C/span\u003E\u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003Esummoner spell\u003C/span\u003E, you must perform 3 \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Eadditional swaps \u003C/span\u003Ebefore you can choose it again.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003ESmite\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E\u0027s damage increases after two \u003C/em\u003E\u003Cem style=\u0022color: rgb(204, 90, 203);\u0022\u003Eswaps\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.10",
+        "Effect": 0
+      },
+      {
+        "Patch": "15.14",
+        "Effect": 2
+      },
+      {
+        "Patch": "15.19",
+        "Effect": 1
+      }
+    ],
+    "Stats": []
+  },
+  "8369": {
+    "Id": 8369,
+    "Name": "First Strike",
+    "Cooldown": "25s - 15s",
+    "Icon": "perk-images/Styles/Inspiration/FirstStrike/FirstStrike.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EDamaging an enemy champion within 0.25s of entering champion combat grants \u003Cspan style=\u0022color: rgb(197, 159, 70);\u0022\u003E10 gold\u003C/span\u003E and activates \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003EFirst Strike\u003C/span\u003E for 3 seconds.\u003C/div\u003E\u003Cdiv\u003EWhile \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003EFirst Strike\u003C/span\u003E is active you deal \u003Cspan style=\u0022color: rgb(249, 150, 107);\u0022\u003E7% bonus true damage\u003C/span\u003E to champions and \u003Cspan style=\u0022color: rgb(197, 159, 70);\u0022\u003Eearn gold\u003C/span\u003E equal to \u003C/div\u003E\u003Cdiv\u003E(\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/melee.png\u0022\u003E \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E50% | \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/range.png\u0022\u003E 35%\u003C/span\u003E) of the bonus damage dealt.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8401": {
+    "Id": 8401,
+    "Name": "Shield Bash",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Resolve/MirrorShell/MirrorShell.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EGaining a \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003Eshield \u003C/span\u003Eempowers your next basic attack against a champion to deal \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E5 - 30\u003C/span\u003E \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E\u003C/span\u003E \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E\u002B2.5% bonus \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/health.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E\u002B15% of the gained shield \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 197, 76);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/healshield.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E) bonus adaptive damage\u003C/span\u003E. \u003C/div\u003E\u003Cdiv\u003EThis effect can be used up to 2 seconds after the shield expires.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8410": {
+    "Id": 8410,
+    "Name": "Approach Velocity",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Resolve/ApproachVelocity/ApproachVelocity.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EGain \u003Cspan style=\u0022color: rgb(159, 255, 77);\u0022\u003E7.5% bonus movement speed\u003C/span\u003E when moving toward nearby enemy champions affected by \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Ecrowd control\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003EThis bonus increases to \u003Cspan style=\u0022color: rgb(159, 255, 77);\u0022\u003E15%\u003C/span\u003E for enemy champions you \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Eimpair \u003C/span\u003Eyourself.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(204, 90, 203);\u0022\u003EActivation range\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E for ally \u003C/em\u003E\u003Cem style=\u0022color: rgb(204, 90, 203);\u0022\u003Ecrowd control\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E is \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003E1000 units\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8429": {
+    "Id": 8429,
+    "Name": "Conditioning",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Resolve/Conditioning/Conditioning.png",
+    "RichText": "\u003Cdiv\u003EAfter 12 minutes, gain \u003Cspan style=\u0022color: rgb(255, 197, 76);\u0022\u003E\u002B8 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/armor.png\u0022\u003E \u003C/span\u003Eand \u003Cspan style=\u0022color: rgb(195, 4, 195);\u0022\u003E\u002B8\u003C/span\u003E \u003Cspan style=\u0022color: rgb(255, 197, 76);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/mr.png\u0022\u003E\u003C/span\u003E, and increase your total resistances by 3%.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8437": {
+    "Id": 8437,
+    "Name": "Grasp of the Undying",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Resolve/GraspOfTheUndying/GraspOfTheUndying.png",
+    "RichText": "\u003Cdiv\u003EEvery 4 seconds in combat, your next basic attack against a champion deals \u003Cspan style=\u0022color: rgb(0, 176, 240);\u0022\u003Ebonus magic damage\u003C/span\u003E equal to \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E3.5% of your maximum health\u003C/span\u003E, \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003Eheals \u003C/span\u003Eyou for \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E1.3% of your maximum health\u003C/span\u003E and increases your \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003Emaximum health by 5\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003EDamage\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E, \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003Ehealing\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E, and \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003Epermanent health\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E gained are \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003E40% effective \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003Efor ranged champions\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.12",
+        "Effect": 2
+      }
+    ],
+    "Stats": []
+  },
+  "8439": {
+    "Id": 8439,
+    "Name": "Aftershock",
+    "Cooldown": "20s",
+    "Icon": "perk-images/Styles/Resolve/VeteranAftershock/VeteranAftershock.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EAfter \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Eimmobilizing \u003C/span\u003Ean enemy champion, gain \u003Cspan style=\u0022color: rgb(255, 197, 76);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E45\u003C/span\u003E\u003Cspan style=\u0022color: rgb(0, 214, 245);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 197, 76);\u0022\u003E\u002B75% bonus \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/armor.png\u0022\u003E) armor\u003C/span\u003E and \u003Cspan style=\u0022color: rgb(195, 4, 195);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E35\u003C/span\u003E\u003Cspan style=\u0022color: rgb(0, 214, 245);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(195, 4, 195);\u0022\u003E\u002B80% bonus\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 197, 76);\u0022\u003E \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/mr.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(195, 4, 195);\u0022\u003E) magic resist\u003C/span\u003E for 2.5s.\u003C/div\u003E\u003Cdiv\u003EAt the end of the duration, deal \u003Cspan style=\u0022color: rgb(0, 176, 240);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E25 - 120 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(0, 214, 245);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(34, 187, 106);\u0022\u003E\u002B8% bonus \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/health.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(0, 176, 240);\u0022\u003E) \u003C/span\u003E\u003Cspan style=\u0022color: rgb(0, 176, 240); background-color: rgb(23, 23, 23);\u0022\u003Emagic damage\u003C/span\u003E to nearby enemies.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003EAftershock \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003Ebonus resistance is capped at\u003C/em\u003E\u003Cem\u003E \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003E(80 - 150 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E)\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "16.11",
+        "Effect": 0
+      }
+    ],
+    "Stats": []
+  },
+  "8444": {
+    "Id": 8444,
+    "Name": "Second Wind",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Resolve/SecondWind/SecondWind.png",
+    "RichText": "\u003Cdiv\u003EAfter taking damage from an enemy champion, \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003Eheal \u003C/span\u003Efor \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E\u002B4% missing\u003C/span\u003E \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/health.png\u0022\u003E\u003C/span\u003E over the next 10 seconds.\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.21",
+        "Effect": 1
+      }
+    ],
+    "Stats": []
+  },
+  "8446": {
+    "Id": 8446,
+    "Name": "Demolish",
+    "Cooldown": "30s",
+    "Icon": "perk-images/Styles/Resolve/Demolish/Demolish.png",
+    "RichText": "\u003Cdiv\u003EYour third attack against towers deals \u003Cspan style=\u0022color: orange;\u0022\u003E(\u003C/span\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/melee.png\u0022\u003E \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E85 \u003C/span\u003E\u003Cspan style=\u0022color: rgb(34, 187, 106);\u0022\u003E\u002B28% maximum \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/health.png\u0022\u003E\u003C/span\u003E  | \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/range.png\u0022\u003E \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E50 \u003C/span\u003E\u003Cspan style=\u0022color: rgb(34, 187, 106);\u0022\u003E\u002B20% maximum \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/health.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: orange;\u0022\u003E)\u003C/span\u003E \u003Cspan style=\u0022color: orange;\u0022\u003Ebonus physical damage\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "16.1",
+        "Effect": 2
+      }
+    ],
+    "Stats": []
+  },
+  "8451": {
+    "Id": 8451,
+    "Name": "Overgrowth",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Resolve/Overgrowth/Overgrowth.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003E\u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003EAbsorb \u003C/span\u003Elife essence from nearby dying enemy minions or monsters, gaining \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E3 maximum health\u003C/span\u003E for every \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003E8 \u003C/span\u003Eabsorbed. \u003C/div\u003E\u003Cdiv\u003EAfter absorbing \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003E120\u003C/span\u003E, gain an \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003Eadditional 3.5% maximum health\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8453": {
+    "Id": 8453,
+    "Name": "Revitalize",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Resolve/Revitalize/Revitalize.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EGain \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E5% heal and shield power\u003C/span\u003E. \u003C/div\u003E\u003Cdiv\u003E\u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003EHeals and shields\u003C/span\u003E you cast or receive are \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E10% stronger\u003C/span\u003E on targets below \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E40% current health\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8463": {
+    "Id": 8463,
+    "Name": "Font of Life",
+    "Cooldown": "20s",
+    "Icon": "perk-images/Styles/Resolve/FontOfLife/FontOfLife.png",
+    "RichText": "\u003Cdiv\u003E\u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003EImpairing \u003C/span\u003Ethe movement of an enemy champion \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003Erestores (\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E10 - 50 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E) health\u003C/span\u003E to you and the nearby allied champion with the \u003Cspan style=\u0022color: rgb(34, 187, 106);\u0022\u003Elowest health\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(97, 244, 157);\u0022\u003EHealing \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003Eis \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 244, 218);\u0022\u003E70% effective\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E for ranged champions\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8465": {
+    "Id": 8465,
+    "Name": "Guardian",
+    "Cooldown": "75s - 40s",
+    "Icon": "perk-images/Styles/Resolve/Guardian/Guardian.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003E\u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003EGuard \u003C/span\u003Eallies within \u003Cspan style=\u0022color: rgb(163, 163, 163);\u0022\u003E350 units\u003C/span\u003E of you, and allies you target with spells, for 2.5 seconds.\u003C/div\u003E\u003Cdiv\u003EIf \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003Eyou \u003C/span\u003Eor a \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003Eguarded \u003C/span\u003Eally take more than \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E(40 - 150 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E) post-mitigation damage\u003C/span\u003E during that time, both of you gain a\u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E (\u003C/span\u003E\u003Cspan style=\u0022color: rgb(248, 255, 191);\u0022\u003E45 - 180 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(122, 109, 255);\u0022\u003E\u002B20%\u003C/span\u003E\u003Cspan style=\u0022color: rgb(248, 255, 191);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(248, 255, 191);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(34, 187, 106);\u0022\u003E\u002B6% bonus\u003C/span\u003E\u003Cspan style=\u0022color: rgb(248, 255, 191);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(34, 187, 106);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/health.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003E)\u003C/span\u003E \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003Eshield \u003C/span\u003Efor 1.5 seconds.\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.14",
+        "Effect": 2
+      },
+      {
+        "Patch": "16.11",
+        "Effect": 2
+      }
+    ],
+    "Stats": []
+  },
+  "8473": {
+    "Id": 8473,
+    "Name": "Bone Plating",
+    "Cooldown": "55s",
+    "Icon": "perk-images/Styles/Resolve/BonePlating/BonePlating.png",
+    "RichText": "\u003Cdiv\u003EAfter taking damage from an enemy champion, the next 3 spells or attacks from them deal (\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E30 - 60 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E)\u003C/span\u003E less damage for 1.5 seconds.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "8992": {
+    "Id": 8992,
+    "Name": "Deathfire Touch",
+    "Cooldown": "",
+    "Icon": "DeathfireTouch/DEATHFIRE_TOUCH_KEYSTONE.png",
+    "RichText": "\u003Cdiv\u003EDamaging a champion with an ability burns them, dealing \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E3\u003C/span\u003E \u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E-\u003C/span\u003E \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E12 \u003C/span\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E \u003Cspan style=\u0022color: orange;\u0022\u003E\u002B7% bonus\u003C/span\u003E \u003Cspan style=\u0022color: rgb(223, 117, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E\u003C/span\u003E \u003Cspan style=\u0022color: rgb(122, 109, 255);\u0022\u003E\u002B2.5%\u003C/span\u003E \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: rgb(132, 69, 255);\u0022\u003E) magic damage\u003C/span\u003E per second. If the burn persists on a target for 3 seconds, its damage doubles for the remainder of its duration.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022background-color: rgb(23, 23, 23); color: rgb(159, 159, 159);\u0022\u003EBurn Duration:\u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022background-color: rgb(23, 23, 23); color: rgb(159, 159, 159);\u0022\u003E- Single target: \u003C/em\u003E\u003Cem style=\u0022background-color: rgb(23, 23, 23); color: rgb(255, 244, 218);\u0022\u003E4s\u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022background-color: rgb(23, 23, 23); color: rgb(159, 159, 159);\u0022\u003E- Area of effect: \u003C/em\u003E\u003Cem style=\u0022background-color: rgb(23, 23, 23); color: rgb(255, 244, 218);\u0022\u003E2s\u003C/em\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022background-color: rgb(23, 23, 23); color: rgb(159, 159, 159);\u0022\u003E- Damage over time: \u003C/em\u003E\u003Cem style=\u0022background-color: rgb(23, 23, 23); color: rgb(255, 244, 218);\u0022\u003E1s\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "16.10",
+        "Effect": 1
+      },
+      {
+        "Patch": "16.11",
+        "Effect": 2
+      }
+    ],
+    "Stats": []
+  },
+  "9101": {
+    "Id": 9101,
+    "Name": "Absorb Life",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Precision/AbsorbLife/AbsorbLife.png",
+    "RichText": "\u003Cdiv\u003EKilling a target \u003Cspan style=\u0022color: rgb(97, 244, 157);\u0022\u003Eheals \u003C/span\u003Eyou for \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E(1 - 23 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E)\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "9103": {
+    "Id": 9103,
+    "Name": "Legend: Bloodline",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Precision/LegendBloodline/LegendBloodline.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EEarn up to \u003Cspan style=\u0022color: yellow;\u0022\u003E15 stacks\u003C/span\u003E through champion takedowns, epic monster takedowns, large monster kills, and minion kills.\u003C/div\u003E\u003Cdiv\u003EGain \u003Cspan style=\u0022color: rgb(204, 32, 81);\u0022\u003E0.45% life steal\u003C/span\u003E per \u003Cspan style=\u0022color: yellow;\u0022\u003Estack\u003C/span\u003E, for a total of up to\u003Cspan style=\u0022color: rgb(204, 32, 81);\u0022\u003E 6.75% life steal\u003C/span\u003E. At max stacks, gain \u003Cspan style=\u0022color: rgb(0, 138, 0);\u0022\u003E85 bonus health\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 255, 255);\u0022\u003E.\u003C/span\u003E\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.22",
+        "Effect": 0
+      },
+      {
+        "Patch": "15.24",
+        "Effect": 0
+      }
+    ],
+    "Stats": []
+  },
+  "9104": {
+    "Id": 9104,
+    "Name": "Legend: Alacrity",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Precision/LegendAlacrity/LegendAlacrity.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EEarn \u003Cspan style=\u0022color: yellow;\u0022\u003E10 stacks \u003C/span\u003Ethrough champion takedowns, epic monster takedowns, large monster kills, and minion kills.\u003C/div\u003E\u003Cdiv\u003EGain \u003Cspan style=\u0022color: rgb(245, 238, 153);\u0022\u003E3% attack speed\u003C/span\u003E plus \u003Cspan style=\u0022color: rgb(245, 238, 153);\u0022\u003E1.5%\u003C/span\u003E per \u003Cspan style=\u0022color: yellow;\u0022\u003Estack\u003C/span\u003E, for a total of up to \u003Cspan style=\u0022color: rgb(245, 238, 153);\u0022\u003E18% attack speed\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "9105": {
+    "Id": 9105,
+    "Name": "Legend: Haste",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Precision/LegendHaste/LegendHaste.png",
+    "RichText": "\u003Cdiv style=\u0022margin-bottom: 3px;\u0022\u003EEarn up to \u003Cspan style=\u0022color: yellow;\u0022\u003E10 stacks\u003C/span\u003E through champion takedowns, epic monster takedowns, large monster kills, and minion kills.\u003C/div\u003E\u003Cdiv\u003EGain \u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003E1.5 basic ability haste\u003C/span\u003E per \u003Cspan style=\u0022color: yellow;\u0022\u003Estack\u003C/span\u003E, for a total of up to\u003Cspan style=\u0022color: rgb(204, 32, 81);\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(122, 222, 205);\u0022\u003E15 basic ability haste\u003C/span\u003E.\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "9111": {
+    "Id": 9111,
+    "Name": "Triumph",
+    "Cooldown": "",
+    "Icon": "perk-images/Styles/Precision/Triumph.png",
+    "RichText": "\u003Cdiv\u003ETakedowns restore \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E5% missing health\u003C/span\u003E, \u003Cspan style=\u0022color: rgb(31, 153, 92);\u0022\u003E2.5% maximum health\u003C/span\u003E, and grant \u003Cspan style=\u0022color: rgb(197, 159, 70);\u0022\u003E20 bonus gold\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(122, 222, 205);\u0022\u003E\u201CThe most \u003C/em\u003E\u003Cem style=\u0022color: rgb(255, 69, 0);\u0022\u003Edangerous \u003C/em\u003E\u003Cem style=\u0022color: rgb(122, 222, 205);\u0022\u003Egame brings the greatest \u003C/em\u003E\u003Cem style=\u0022color: rgb(197, 159, 70);\u0022\u003Eglory\u003C/em\u003E\u003Cem style=\u0022color: rgb(122, 222, 205);\u0022\u003E.\u201D  ~Noxian Reckoner\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": null,
+    "Stats": []
+  },
+  "9923": {
+    "Id": 9923,
+    "Name": "Hail of Blades",
+    "Cooldown": "12s",
+    "Icon": "perk-images/Styles/Domination/HailOfBlades/HailOfBlades.png",
+    "RichText": "\u003Cdiv\u003EAttacking an enemy champion grants\u003Cspan style=\u0022color: rgb(245, 238, 153);\u0022\u003E (\u003C/span\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/melee.png\u0022\u003E \u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E120%\u003C/span\u003E\u003Cspan style=\u0022color: rgb(245, 238, 153);\u0022\u003E |\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/range.png\u0022\u003E 60%\u003C/span\u003E\u003Cspan style=\u0022color: rgb(245, 238, 153);\u0022\u003E)\u003C/span\u003E \u003Cspan style=\u0022color: rgb(245, 238, 153);\u0022\u003Ebonus attack speed\u003C/span\u003E and deal \u003Cspan style=\u0022color: orange;\u0022\u003E(\u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E4\u003C/span\u003E \u003Cspan style=\u0022color: orange;\u0022\u003E- \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 244, 218);\u0022\u003E20 \u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/level.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: orange;\u0022\u003E\u002B8% bonus \u003C/span\u003E\u003Cspan style=\u0022color: rgb(255, 153, 34);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ad.png\u0022\u003E \u003C/span\u003E\u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u002B5%\u003C/span\u003E \u003Cspan style=\u0022color: rgb(106, 80, 255);\u0022\u003E\u003Cimg src=\u0022https://cdn.coachless.gg/stat-icons/ap.png\u0022\u003E\u003C/span\u003E\u003Cspan style=\u0022color: orange;\u0022\u003E) \u003C/span\u003Ebonus true damage for the next \u003Cspan style=\u0022color: rgb(252, 40, 118);\u0022\u003E3 basic attacks\u003C/span\u003E, increased by \u003Cspan style=\u0022color: rgb(252, 40, 118);\u0022\u003E1\u003C/span\u003E for each basic attack \u003Cspan style=\u0022color: rgb(204, 90, 203);\u0022\u003Ereset \u003C/span\u003Eused, up to maximum of \u003Cspan style=\u0022color: rgb(252, 40, 118);\u0022\u003E5 attacks\u003C/span\u003E.\u003C/div\u003E\u003Cdiv\u003E\u003Cbr\u003E\u003C/div\u003E\u003Cdiv\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003EThis effect allows you to \u003C/em\u003E\u003Cem style=\u0022color: rgb(204, 90, 203);\u0022\u003Etemporarily exceed \u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003Ethe \u003C/em\u003E\u003Cem style=\u0022color: rgb(245, 238, 153);\u0022\u003Eattack speed\u003C/em\u003E\u003Cem style=\u0022color: rgb(159, 159, 159);\u0022\u003E cap\u003C/em\u003E\u003C/div\u003E",
+    "Changelog": [
+      {
+        "Patch": "15.3",
+        "Effect": 0
+      },
+      {
+        "Patch": "15.22",
+        "Effect": 0
+      },
+      {
+        "Patch": "16.9",
+        "Effect": 2
+      }
+    ],
+    "Stats": []
+  }
+}
