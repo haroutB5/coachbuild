@@ -3,6 +3,19 @@
 import type { ItemsBlock, Pick as PickType } from "@/lib/types";
 import { wpaClass, wpaText, fmtSample } from "./StatBadge";
 
+// Quiet, dim caution glyph for a low-sample pick — a hint to hover, not an alarm.
+function LowSampleFlag({ className = "" }: { className?: string }) {
+  return (
+    <span
+      title="Low sample size — treat this pick with caution"
+      aria-label="low sample size"
+      className={`text-gold/70 ${className}`}
+    >
+      ⚠
+    </span>
+  );
+}
+
 function ImgWithFallback({
   src,
   alt,
@@ -57,7 +70,10 @@ function ItemSlot({ label, pick, isBoots, alts }: ItemSlotProps) {
       <div className={`font-extrabold text-[12px] ${wpaClass(pick.wpa)}`}>
         {wpaText(pick.wpa)}
       </div>
-      <div className="text-[9.5px] text-mut">{fmtSample(pick.occurrence)}</div>
+      <div className="text-[9.5px] text-mut flex items-center justify-center gap-0.5">
+        {fmtSample(pick.occurrence)}
+        {pick.lowSample && <LowSampleFlag />}
+      </div>
 
       {alts && alts.length > 0 && (
         <div className="mt-2 pt-1.5 border-t border-line/60 w-full">
@@ -80,6 +96,10 @@ function ItemSlot({ label, pick, isBoots, alts }: ItemSlotProps) {
                 </div>
                 <div className={`text-[8px] font-bold leading-tight ${wpaClass(a.wpa)}`}>
                   {wpaText(a.wpa)}
+                </div>
+                <div className="text-[7px] text-mut flex items-center justify-center gap-0.5">
+                  {fmtSample(a.occurrence)}
+                  {a.lowSample && <LowSampleFlag className="text-[7px]" />}
                 </div>
               </div>
             ))}

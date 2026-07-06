@@ -2,7 +2,8 @@
 // staticData.ts — fetch + in-memory cache CDN maps; id→{name,icon} resolvers
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { ChampionRef } from "./types";
+import type { ChampionRef, RoleId } from "./types";
+import { getKeystoneData } from "./coachless";
 
 // ── CDN bases ────────────────────────────────────────────────────────────────
 
@@ -143,21 +144,136 @@ async function fetchJson<T>(url: string): Promise<T> {
 }
 
 // ── Patch resolution ─────────────────────────────────────────────────────────
+//
+// GetPatches' request shape is still unconfirmed (see HANDOFF history), so we
+// can't ask coachless "what's the current patch" directly. Instead we treat
+// ddragon's versions.json as the source of CANDIDATE patches (newest first)
+// and probe coachless itself to find which one actually has populated data:
+// coachless lags a patch or two behind live release, and some brand-new
+// patches return empty rows for every endpoint until their backend catches up.
+//
+// "Populated" is checked with a single cheap GetKeystoneData call against a
+// stable, always-played champ/role (Viktor mid — matches sampleBuild.ts and
+// the route tests). First candidate with >=1 keystone row wins.
 
-/**
- * Returns the current data patch string, e.g. "16.11".
- * Uses ddragon versions list. We use 16.11 for the API filter (last known
- * patch with data) as a stable fallback since GetPatches shape is TBD.
- */
-export async function getLatestPatch(): Promise<{
+export interface ResolvedPatch {
   major: number;
   patch: number;
   patchAdditions: number;
   label: string;
-}> {
-  // We fix to 16.11 as the verified live data patch (matches investigate.mjs).
-  // GetPatches request shape is not confirmed, so we use the known-good value.
-  return { major: 16, patch: 11, patchAdditions: 0, label: "16.11" };
+}
+
+/** Ultimate static fallback — verified-good data patch. Never remove: this is
+ *  what keeps the app from ever going patchless if ddragon AND every probe fail. */
+const STATIC_FALLBACK_PATCH: ResolvedPatch = {
+  major: 16,
+  patch: 11,
+  patchAdditions: 0,
+  label: "16.11",
+};
+
+// Champ/role used to probe candidate patches for live data. Viktor mid is
+// played in every patch at high volume, so an empty result reliably means
+// "coachless has no data for this patch yet", not "no one plays this combo".
+const PROBE_CHAMP_ID = 112; // Viktor
+const PROBE_ROLE: RoleId = 2; // Mid
+
+const MAX_PATCH_CANDIDATES = 4;
+const PATCH_CACHE_SUCCESS_TTL_MS = 6 * 60 * 60 * 1000; // 6h
+// Failures (ddragon down / every candidate probe failed) get a much shorter
+// retry window than a confirmed-good resolution, so a transient coachless
+// blip doesn't wedge the app on the static fallback for 6h once it recovers.
+const PATCH_CACHE_FAILURE_TTL_MS = 5 * 60 * 1000; // 5m
+
+let patchCache: { patch: ResolvedPatch; resolvedAt: number; ok: boolean } | null = null;
+
+/** Test-only: clear the module-level patch cache between test cases. */
+export function __resetPatchCacheForTests(): void {
+  patchCache = null;
+}
+
+/**
+ * Parse ddragon's versions.json (newest first, one entry per hotfix) down to
+ * distinct major.patch candidates, newest first, capped at MAX_PATCH_CANDIDATES.
+ * Pure + exported for direct unit testing.
+ */
+export function parseDdragonVersions(versions: string[]): ResolvedPatch[] {
+  const seen = new Set<string>();
+  const out: ResolvedPatch[] = [];
+  for (const v of versions) {
+    const parts = v.split(".");
+    if (parts.length < 2) continue;
+    const major = parseInt(parts[0], 10);
+    const patch = parseInt(parts[1], 10);
+    if (!Number.isFinite(major) || !Number.isFinite(patch)) continue;
+    const label = `${major}.${patch}`;
+    if (seen.has(label)) continue;
+    seen.add(label);
+    // patchAdditions has no known ddragon source (GetPatches shape unconfirmed);
+    // every verified-working call so far used 0, so we assume 0 for candidates too.
+    out.push({ major, patch, patchAdditions: 0, label });
+    if (out.length >= MAX_PATCH_CANDIDATES) break;
+  }
+  return out;
+}
+
+/** Probe one candidate patch against coachless; true iff it has keystone data. */
+async function candidateHasData(candidate: ResolvedPatch): Promise<boolean> {
+  try {
+    const rows = await getKeystoneData(PROBE_CHAMP_ID, PROBE_ROLE, {
+      major: candidate.major,
+      patch: candidate.patch,
+      patchAdditions: candidate.patchAdditions,
+    });
+    return Array.isArray(rows) && rows.length > 0;
+  } catch {
+    // This candidate's probe failed (network hiccup, etc) — not proof the
+    // patch is unpopulated, but we can't confirm it either. Move to the next.
+    return false;
+  }
+}
+
+/** Walk candidates newest→oldest, return the first with live coachless data. */
+async function resolveViaProbe(): Promise<ResolvedPatch | null> {
+  let candidates: ResolvedPatch[];
+  try {
+    const versions = await fetchJson<string[]>(CDN.versions);
+    candidates = parseDdragonVersions(versions);
+  } catch {
+    return null; // ddragon unreachable — caller falls back to last-known-good
+  }
+  for (const candidate of candidates) {
+    if (await candidateHasData(candidate)) return candidate;
+  }
+  return null; // nothing populated yet (or every probe failed)
+}
+
+/**
+ * Returns the current data patch, e.g. { major:16, patch:12, label:"16.12" }.
+ * Resolves to the NEWEST ddragon patch that coachless actually has populated
+ * data for (walks up to MAX_PATCH_CANDIDATES candidates newest-first), hard-
+ * caches the result in-memory, and falls back to the last known-good patch
+ * (or the static 16.11 default, if this is the very first resolution) on any
+ * failure. `now` is injectable for tests; defaults to the real clock.
+ */
+export async function getLatestPatch(
+  now: () => number = Date.now
+): Promise<ResolvedPatch> {
+  const t = now();
+  if (patchCache) {
+    const ttl = patchCache.ok ? PATCH_CACHE_SUCCESS_TTL_MS : PATCH_CACHE_FAILURE_TTL_MS;
+    if (t - patchCache.resolvedAt < ttl) return patchCache.patch;
+  }
+
+  const resolved = await resolveViaProbe();
+  if (resolved) {
+    patchCache = { patch: resolved, resolvedAt: t, ok: true };
+    return resolved;
+  }
+
+  const fallback = patchCache?.patch ?? STATIC_FALLBACK_PATCH;
+  patchCache = { patch: fallback, resolvedAt: t, ok: false };
+  return fallback;
 }
 
 // ── Loader functions (lazy, memoized) ────────────────────────────────────────

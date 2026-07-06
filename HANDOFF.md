@@ -291,3 +291,86 @@ Puppeteer smoke at localhost:3000:
 No version bump, no deploy — per instructions.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-06 19:08
+
+### engy
+
+# HANDOFF-engy — CoachBuild review-fix session (2026-07-06)
+
+Picked up from the orchestrator after `app/api/build/route.ts` recovery + `.gitignore` fix (commit `b1f8301`, 19/19 tests). Implemented all 3 remaining review fixes. Did NOT deploy, did NOT bump version (orchestrator ships).
+
+## Fix 1 (P1) — dynamic patch selection: DONE
+
+`lib/staticData.ts` `getLatestPatch()` was a hardcoded `{major:16,patch:11}` literal. Replaced with a probe-based resolver:
+
+- **Candidates**: `parseDdragonVersions()` (new, pure, exported) reads ddragon `versions.json` (already fetched via the existing `fetchJson`/`CDN.versions`), dedupes hotfix builds down to distinct `major.patch` (e.g. `16.13.1`, `16.13.1` → one `16.13` entry), newest first, capped at `MAX_PATCH_CANDIDATES = 4`.
+- **Probe**: for each candidate, one `getKeystoneData(112, 2, patch)` call (Viktor/Mid — matches `sampleBuild.ts` and the champ/role already used together in `route.test.ts`'s 200 case). First candidate with ≥1 keystone row wins. `patchAdditions` is assumed `0` for every candidate (GetPatches shape is still unconfirmed; `0` is the only verified-working value, matching the code it replaced).
+- **Caching**: module-level cache, keyed on an injectable `now: () => number` param (defaults to `Date.now`) so tests don't need fake timers. Two TTLs, not one — a deliberate asymmetry, called out in a code comment in `staticData.ts`:
+  - Successful resolution: 6h TTL (`PATCH_CACHE_SUCCESS_TTL_MS`).
+  - Failed resolution (ddragon unreachable, or every candidate's probe failed/empty): 5m TTL (`PATCH_CACHE_FAILURE_TTL_MS`) — so a transient coachless blip doesn't wedge the app on the static fallback for 6 hours once coachless recovers.
+- **Fallback chain**: probe failure → last-known-good cached patch (if any) → static `16.11` (`STATIC_FALLBACK_PATCH`, the only hardcoded value left, kept as the ultimate never-patchless floor). Each candidate's probe is individually try/caught so one candidate's network error doesn't abort the whole walk — this mattered in the live run below (16.13 returned a 403, not an empty array).
+- **Return shape unchanged**: `{major, patch, patchAdditions, label}` — `recommend.ts` needed zero changes.
+- Test-only export `__resetPatchCacheForTests()` clears the module cache between test cases (mirrors the pattern of exporting narrow test seams rather than re-deriving state).
+
+**Live proof it resolves 16.12 today** (ran the exact candidate/probe logic as a standalone script against the real `api.coachless.gg` + `ddragon.leagueoflegends.com`, not mocks):
+```
+ddragon newest versions: [ '16.13.1', '16.12.1', '16.11.1', '16.10.1', '16.9.1', '16.8.1' ]
+candidates (newest first, capped at 4): [ '16.13', '16.12', '16.11', '16.10' ]
+probe 16.13: ERROR coachless -> 403
+probe 16.12: 8 keystone rows
+
+=> RESOLVED PATCH: 16.12
+```
+
+Tests: `lib/__tests__/staticData.patch.test.ts` (9 new tests) — mocks `../coachless`'s `getKeystoneData` + `global.fetch`, covers: version-string dedup/parse/cap, newest-populated-wins (skips empty newer patches), falls back to static 16.11 on total failure (ddragon down, or ddragon fine but nothing populated), falls back to **last-known-good** (not static) on a later failure, success-TTL cache hit/miss via the injectable clock.
+
+## Fix 2 (P2) — low-sample confidence signal: DONE
+
+`components/StatBadge.tsx`'s default-export `<StatBadge>` component had zero JSX call sites (confirmed via grep — `RunePage.tsx` and `SpellRow.tsx` both imported it but never rendered it). Deleted it; kept the pure helpers (`wpaClass`, `wpaText`, `fmtSample`) which are the file's actual dependents, and added `isNegativeHeadlineWpa` (Fix 3).
+
+Wired `Pick.lowSample` (already computed by the engine, was going nowhere in the UI) into:
+- `components/ItemPath.tsx`: the core-path slot now shows the `⚠` glyph next to its sample count when `lowSample` is true; each "or" alt tile now shows its sample count (previously showed WPA only — a 1K-sample +3.43 alt had no visible caution next to a 117K-sample +0.33 core pick) plus the same glyph when low-sample.
+- `components/RunePage.tsx`: same treatment on every `RuneTile` (keystone, primary, secondary runes).
+- Kept it quiet by design: `text-gold/70`, `text-[7px]`/`text-[9.5px]`, only a `title` tooltip for detail — a caution cue, not an alarm, matching the brief.
+
+**Where the glyph lives**: not as a shared JSX export from `StatBadge.tsx`. Tried that first, but vitest 4's default `oxc` transform can't parse JSX outside its configured scope without extra plugin wiring, and `esbuild.jsx` overrides are ignored in this vitest version (confirmed by the tool's own warning: *"Both esbuild and oxc options were set. oxc options will be used and esbuild options will be ignored"*). Rather than fight the transform pipeline for one glyph, each caller (`ItemPath.tsx`, `RunePage.tsx`) defines its own tiny private `LowSampleFlag` (identical ~10-line component, noted as intentionally duplicated in a comment in each file). If a third caller ever needs it, extract to its own `LowSampleFlag.tsx` file — no logic there, so no test-import conflict.
+
+Tests: `components/__tests__/StatBadge.test.ts` (new — also required expanding `vitest.config.ts`'s `include` glob to `components/__tests__/**/*.test.ts`, previously `lib/__tests__/` only). Covers `wpaClass`/`wpaText`/`fmtSample` (previously untested despite being load-bearing for every stat tile) plus `isNegativeHeadlineWpa`.
+
+## Fix 3 (P3) — "Most played" affordance: DONE
+
+Extracted `isNegativeHeadlineWpa(wpa): boolean` (`wpa < 0`) to `StatBadge.tsx`. In `RunePage.tsx`'s `RuneTile`, when `isKeystone && isNegativeHeadlineWpa(pick.wpa)`, renders a quiet `text-[8px] uppercase text-mut/80` "Most played" label directly above the WPA number, with a `title` explaining the negative-but-popular framing (Jhin Fleet Footwork −0.10/295K games reads as "popular pick, slightly negative data" instead of a mistake). Ranking model untouched — this is display-only, the keystone shown is still whatever `pickRecommended()` in `recommend.ts` already chose.
+
+Test: `isNegativeHeadlineWpa` covered in `components/__tests__/StatBadge.test.ts` (true for -0.10, false for +0.04 and for exactly 0).
+
+## Files touched
+
+- `lib/staticData.ts` — Fix 1 (patch resolution rewrite)
+- `lib/__tests__/staticData.patch.test.ts` — new, 9 tests
+- `components/StatBadge.tsx` — Fix 2/3 (dead component removed, `isNegativeHeadlineWpa` added)
+- `components/__tests__/StatBadge.test.ts` — new, 12 tests
+- `components/ItemPath.tsx` — Fix 2 (low-sample wiring, private `LowSampleFlag`)
+- `components/RunePage.tsx` — Fix 2/3 (low-sample wiring + "Most played" label, private `LowSampleFlag`)
+- `components/SpellRow.tsx` — one-line cleanup (removed the same dead `StatBadge` default import; still uses `wpaClass`/`wpaText`)
+- `vitest.config.ts` — `include` glob widened to also run `components/__tests__/**/*.test.ts`
+
+## Gates (all run, all pass)
+
+```
+npx tsc --noEmit     -> clean, no output
+npm test (vitest)    -> 40/40 passed (19 original + 9 patch + 12 StatBadge)
+npx next lint        -> 0 errors, 5 pre-existing <img>/no-img-element warnings (unrelated, unchanged)
+npm run build        -> Compiled successfully, all routes generated
+```
+
+## Known issues / not done
+
+- `patchAdditions` is assumed `0` for every probed candidate (GetPatches request shape is still genuinely unconfirmed — this was true before my change too, just now it's an explicit assumption in a comment instead of a silent hardcode). If GetPatches' real shape surfaces later, `resolveViaProbe()`/`parseDdragonVersions()` in `lib/staticData.ts` is the place to wire it in.
+- Icon CDN version pins (`RUNE_VER = "16.11.1"`, `ASSET_VER = "16.12.1"` in `staticData.ts`) are unchanged — out of scope per the brief (only `getLatestPatch()`, the API-filter patch, was in scope). Worth flagging to the orchestrator: if the resolved API patch (now dynamic, 16.12 today) drifts far from these pinned asset versions, icons could eventually 404 on the CDN. Not observed today (16.12 asset version already matches `ASSET_VER`), but it's a latent coupling.
+- No deploy, no version bump — per the brief.
+
+

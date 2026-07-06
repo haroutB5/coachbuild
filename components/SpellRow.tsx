@@ -1,7 +1,7 @@
 "use client";
 
 import type { Pick } from "@/lib/types";
-import StatBadge, { wpaClass, wpaText } from "./StatBadge";
+import { wpaClass, wpaText } from "./StatBadge";
 
 interface SpellRowProps {
   spells: Pick[];

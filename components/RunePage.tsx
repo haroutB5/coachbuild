@@ -1,7 +1,20 @@
 "use client";
 
 import type { RunesBlock, Pick as PickType } from "@/lib/types";
-import StatBadge, { wpaClass, wpaText, fmtSample } from "./StatBadge";
+import { wpaClass, wpaText, fmtSample, isNegativeHeadlineWpa } from "./StatBadge";
+
+// Quiet, dim caution glyph for a low-sample pick — a hint to hover, not an alarm.
+function LowSampleFlag({ className = "" }: { className?: string }) {
+  return (
+    <span
+      title="Low sample size — treat this pick with caution"
+      aria-label="low sample size"
+      className={`text-gold/70 ${className}`}
+    >
+      ⚠
+    </span>
+  );
+}
 
 function ImgWithFallback({
   src,
@@ -38,6 +51,10 @@ function RuneTile({ pick, isKeystone, isSmall }: RuneTileProps) {
     : "w-13 h-13 border border-line";
 
   const tileWidth = isKeystone ? "w-20" : isSmall ? "w-16" : "w-20";
+  // Headline keystone with a negative WPA (e.g. Jhin's Fleet Footwork, -0.10 /
+  // 295K games) is still the correct adoption-weighted pick — the label just
+  // tells the reader why the red number isn't a mistake. Ranking is untouched.
+  const showMostPlayed = isKeystone && isNegativeHeadlineWpa(pick.wpa);
 
   return (
     <div
@@ -56,10 +73,21 @@ function RuneTile({ pick, isKeystone, isSmall }: RuneTileProps) {
       <div className="text-[10.5px] text-txt mt-1.5 leading-tight min-h-[28px] flex items-center justify-center">
         {pick.name}
       </div>
+      {showMostPlayed && (
+        <div
+          className="text-[8px] uppercase tracking-[0.5px] text-mut/80 leading-none mb-0.5"
+          title="Most-adopted pick — the popular choice trends slightly negative in this data."
+        >
+          Most played
+        </div>
+      )}
       <div className={`font-extrabold text-[12px] ${wpaClass(pick.wpa)}`}>
         {wpaText(pick.wpa)}
       </div>
-      <div className="text-[9.5px] text-mut">{fmtSample(pick.occurrence)}</div>
+      <div className="text-[9.5px] text-mut flex items-center justify-center gap-0.5">
+        {fmtSample(pick.occurrence)}
+        {pick.lowSample && <LowSampleFlag />}
+      </div>
     </div>
   );
 }

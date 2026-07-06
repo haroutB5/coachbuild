@@ -1,14 +1,10 @@
 "use client";
 
-import type { Pick } from "@/lib/types";
-
-interface StatBadgeProps {
-  wpa: number;
-  occurrence: number;
-  winrate?: number | null;
-  lowSample?: boolean;
-  size?: "sm" | "md";
-}
+// Shared, stateless stat-formatting helpers used by every pick tile
+// (ItemPath, RunePage, SpellRow). No JSX component is exported here on
+// purpose — a standalone <StatBadge> tile existed with zero call sites
+// (dead code) and was removed; every surface renders these inline instead
+// so the caution/"or"-row layouts can stay per-component and compact.
 
 export function wpaClass(wpa: number): string {
   if (wpa > 0.02) return "text-good";
@@ -26,27 +22,20 @@ export function fmtSample(n: number): string {
   return String(n);
 }
 
-export default function StatBadge({ wpa, occurrence, winrate, lowSample, size = "md" }: StatBadgeProps) {
-  const textSize = size === "sm" ? "text-[10px]" : "text-[12.5px]";
-  const sampleSize = size === "sm" ? "text-[9px]" : "text-[10px]";
-
-  return (
-    <div className="flex flex-col items-center gap-0.5">
-      <span
-        className={`font-extrabold ${textSize} ${wpaClass(wpa)}`}
-        title={`WPA: ${wpaText(wpa)} — Win Probability Added. Positive = adds win %.`}
-      >
-        {wpaText(wpa)}
-      </span>
-      {winrate != null && (
-        <span className={`${sampleSize} text-mut`}>{winrate.toFixed(1)}% wr</span>
-      )}
-      <span className={`${sampleSize} text-mut flex items-center gap-0.5`}>
-        {fmtSample(occurrence)}
-        {lowSample && (
-          <span title="Low sample — treat with caution" className="text-gold">⚠</span>
-        )}
-      </span>
-    </div>
-  );
+/** True when a headline (most-played/most-adopted) pick's WPA is negative —
+ *  e.g. Jhin's Fleet Footwork at -0.10 WPA / 295K games. The pick is still
+ *  correct (adoption-weighted ranking, unchanged) — this only flags the
+ *  display so a quiet "Most played" label can explain the red number as
+ *  "popular pick, slightly negative data" rather than reading like a bug. */
+export function isNegativeHeadlineWpa(wpa: number): boolean {
+  return wpa < 0;
 }
+
+// Note: no JSX component is exported from this file (deliberately — see the
+// header comment). The low-sample caution glyph is rendered inline in each
+// caller (ItemPath.tsx, RunePage.tsx) rather than as a shared <LowSampleFlag>:
+// this file's helpers are unit-tested under components/__tests__/, and
+// vitest 4's oxc transform can't parse JSX in files outside its default jsx
+// scope without extra plugin config — not worth it for one glyph. If a
+// second caller needs this exact markup, extract it into its own
+// LowSampleFlag.tsx (no logic, so no test-import conflict).
