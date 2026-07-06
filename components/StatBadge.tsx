@@ -22,13 +22,21 @@ export function fmtSample(n: number): string {
   return String(n);
 }
 
-/** True when a headline (most-played/most-adopted) pick's WPA is negative —
- *  e.g. Jhin's Fleet Footwork at -0.10 WPA / 295K games. The pick is still
- *  correct (adoption-weighted ranking, unchanged) — this only flags the
- *  display so a quiet "Most played" label can explain the red number as
- *  "popular pick, slightly negative data" rather than reading like a bug. */
+/** True when a headline (most-played/most-adopted) pick's WPA is negative
+ *  enough to actually render red — e.g. Jhin's Fleet Footwork at -0.10 WPA /
+ *  295K games. The pick is still correct (adoption-weighted ranking,
+ *  unchanged) — this only flags the display so a quiet "Most played" label
+ *  can explain the red number as "popular pick, slightly negative data"
+ *  rather than reading like a bug.
+ *
+ *  Threshold deliberately matches wpaClass's own red cutoff (wpa < -0.02),
+ *  not a bare `< 0`. Reviewer P3 (2026-07-06): a wpa of e.g. -0.01 renders
+ *  in wpaClass's neutral-gray dead zone, not red — showing "Most played"
+ *  next to a neutral number read as confusing ("what is this even
+ *  explaining?"). Aligning the two means the label only ever appears next
+ *  to a number it's actually explaining. */
 export function isNegativeHeadlineWpa(wpa: number): boolean {
-  return wpa < 0;
+  return wpa < -0.02;
 }
 
 // Note: no JSX component is exported from this file (deliberately — see the

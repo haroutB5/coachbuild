@@ -38,4 +38,25 @@ describe("isNegativeHeadlineWpa (Fix 3: 'Most played' condition)", () => {
   it("does not flag exactly zero", () => {
     expect(isNegativeHeadlineWpa(0)).toBe(false);
   });
+
+  // Reviewer P3 (2026-07-06): threshold aligned to wpaClass's own red cutoff
+  // so "Most played" never shows next to a neutral-gray number.
+  describe("aligned with wpaClass's red threshold (wpa < -0.02)", () => {
+    it("does NOT flag -0.01 (renders neutral gray in wpaClass, nothing to explain)", () => {
+      expect(isNegativeHeadlineWpa(-0.01)).toBe(false);
+    });
+    it("does NOT flag exactly -0.02 (wpaClass boundary is still neutral there)", () => {
+      expect(isNegativeHeadlineWpa(-0.02)).toBe(false);
+    });
+    it("flags -0.021, just past the boundary where wpaClass turns red", () => {
+      expect(isNegativeHeadlineWpa(-0.021)).toBe(true);
+    });
+    it("wpaClass and isNegativeHeadlineWpa agree at every sampled point", () => {
+      const samples = [-0.5, -0.03, -0.021, -0.02, -0.019, -0.01, 0, 0.01, 0.5];
+      for (const wpa of samples) {
+        const isRed = wpaClass(wpa) === "text-bad";
+        expect(isNegativeHeadlineWpa(wpa)).toBe(isRed);
+      }
+    });
+  });
 });

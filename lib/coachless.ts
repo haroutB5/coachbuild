@@ -42,13 +42,14 @@ function buildFilters(
 
 // ── Low-level fetch ──────────────────────────────────────────────────────────
 
-async function post<T>(path: string, body: unknown): Promise<T> {
+async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(BASE + path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     // Next.js fetch caching: cache for 6 h, allow stale reads for 24 h
     next: { revalidate: 21600 },
+    signal,
   });
   if (!res.ok) {
     throw new Error(`coachless ${path} → ${res.status} ${res.statusText}`);
@@ -103,15 +104,20 @@ export interface ShardsResponse {
 
 // ── Endpoint wrappers ────────────────────────────────────────────────────────
 
-/** All keystones across every tree. */
+/** All keystones across every tree. `signal` is optional — used by
+ *  staticData.ts's patch-candidate probe to cap each probe at ~4s so a
+ *  hung coachless socket can't stall patch resolution on a cold request. */
 export function getKeystoneData(
   champId: number,
   role: RoleId,
-  patch: Patch
+  patch: Patch,
+  signal?: AbortSignal
 ): Promise<RuneEntry[]> {
-  return post<RuneEntry[]>("Rune/GetKeystoneData", {
-    commonFilters: buildFilters(champId, role, patch),
-  });
+  return post<RuneEntry[]>(
+    "Rune/GetKeystoneData",
+    { commonFilters: buildFilters(champId, role, patch) },
+    signal
+  );
 }
 
 /**

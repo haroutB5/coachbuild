@@ -374,3 +374,93 @@ npm run build        -> Compiled successfully, all routes generated
 - No deploy, no version bump — per the brief.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-06 20:03
+
+### engy
+
+# HANDOFF-engy — CoachBuild review-fix session (2026-07-06, follow-up)
+
+Continuation of the same-day P1/P2/P3 review-fix pass (v0.4.0 already deployed with dynamic patch selection + low-sample caution + "Most played" label). This round closes the reviewer's remaining P3s: icon-version drift, probe robustness, and a threshold mismatch. Did NOT deploy, did NOT bump version — orchestrator ships as 0.4.1.
+
+## 1. Icon CDN versions now derive from the resolved patch — DONE
+
+**Evidence gathered before writing any code** (curled directly against `api.coachless.gg`'s CDN, not assumed):
+
+```
+rune icon  under 16.11.1  -> 200
+rune icon  under 16.12.1  -> 200
+rune icon  under 16.13.1  -> 200
+champ icon under 16.11.1  -> 200
+champ icon under 16.12.1  -> 200
+champ icon under 16.13.1  -> 200
+item icon  under 16.11.1  -> 200
+item icon  under 16.12.1  -> 200
+champion.json under 16.12.1 -> 200
+summoner.json under 16.12.1 -> 200
+```
+
+**Conclusion**: coachless's `static-files` CDN mirrors ddragon's own per-patch asset bundle (icons + data JSON) and is published on every patch immediately — it is NOT gated behind WPA-data availability the way `api.coachless.gg`'s stats endpoints are (16.13's `GetKeystoneData` still 403s; 16.13's icons already exist). So there was no evidence for the "keep RUNE one notch behind ASSET" branch in the brief — both icon families are safe to derive from the SAME resolved data patch, formatted `<major>.<patch>.1`. The old `RUNE_VER="16.11.1"` / `ASSET_VER="16.12.1"` split in `lib/staticData.ts` was an artifact of when each happened to be manually spot-checked during the original investigation, not a real technical constraint.
+
+**Implementation** (`lib/staticData.ts`):
+- `RUNE_VER`/`ASSET_VER` constants deleted. `ICON_BASES.rune/item/spell/champ` now take a `ver: string` parameter instead of closing over a hardcoded constant; `runeIconUrl()` gained a third `ver` param.
+- New `versionFolder(patch: ResolvedPatch): string` (pure, exported) formats `{major:16,patch:12}` → `"16.12.1"`.
+- New `getIconVersion(): Promise<string>` calls the existing `getLatestPatch()` (Fix 1 from earlier this session) and formats the result — **no new network call or cache layer**, it rides on `getLatestPatch()`'s own TTL/single-flight/fallback chain. Wrapped in try/catch falling back to `ICON_VERSION_FALLBACK = "16.11.1"` as pure defense-in-depth (`getLatestPatch()` itself never throws — it has its own static floor — so this catch is realistically unreachable, but it's the "icon URL can never be undefined" guarantee the brief asked for).
+- `loadChampsData`/`loadSummonersData` (which build versioned `champion.json`/`summoner.json` URLs) and every resolver that builds an icon URL (`resolveRune`, `resolveItem`, `resolveSpell`, `getAllChampions`, `getChampionById`) now `await getIconVersion()` alongside their existing data fetch (`Promise.all`'d where both are needed, so no added latency vs. before).
+- `tree`/`shard` icon bases are NOT versioned (confirmed: those CDN paths have no per-patch folder in them at all) — left untouched.
+- The existing `onError → display:none` fallback in every `<img>` (`ItemPath.tsx`, `RunePage.tsx`, `SpellRow.tsx`, `ChampionPicker.tsx`, `app/page.tsx`) is unchanged and still the last-resort guard if a specific icon file is ever missing from a given patch folder.
+
+Tests (extended `lib/__tests__/staticData.patch.test.ts`): `versionFolder` unit test; `resolveItem`/`resolveRune` integration tests (mocked coachless probe + CDN fetches) asserting the built icon URL contains today's resolved patch folder (`16.12.1`) — the rune-icon assertion is the literal curl-verified URL shape; a fallback test confirms the icon URL drops to `16.11.1` when patch resolution itself falls back to the static default.
+
+## 2. Probe robustness — DONE
+
+**(a) Per-probe timeout.** `lib/coachless.ts`'s `post()` and `getKeystoneData()` gained an optional trailing `signal?: AbortSignal` param (backward compatible — `recommend.ts`'s existing calls are unaffected). `lib/staticData.ts`'s `candidateHasData()` now passes `AbortSignal.timeout(PROBE_TIMEOUT_MS)` (4000ms) on every candidate probe. A timed-out/aborted probe throws, which the existing try/catch already treats as "this candidate has no confirmed data, try the next one" — same code path as a 403 or network error, no new branching needed.
+
+**(b) Single-flight guard.** New module-level `inFlight: Promise<ResolvedPatch> | null`. In `getLatestPatch()`: on a cache miss, if a resolution is already in progress, concurrent callers `await` that SAME promise instead of each independently re-fetching ddragon + re-walking probes. Cleared in a `finally` block so the NEXT cache-miss (after TTL expiry) starts a genuinely fresh walk rather than being stuck replaying a finished promise. `__resetPatchCacheForTests()` now also resets `inFlight` for test isolation.
+
+Tests: one asserts `getKeystoneData` was called with an `AbortSignal` instance on every probe call (proves the wiring without waiting out a real 4s timeout in the suite); one simulates an aborted probe (`DOMException("...", "AbortError")`) on the newest candidate and confirms the walk still lands on the next populated one; two single-flight tests — 3 concurrent `getLatestPatch()` calls on a cold cache produce exactly 1 ddragon fetch + 1 probe walk (not 3), and a later cache-miss (past TTL) still triggers a genuinely fresh walk rather than reusing the finished in-flight promise.
+
+## 3. "Most played" vs. neutral-gray WPA — ALIGNED (my call, documented)
+
+Reviewer's note: `isNegativeHeadlineWpa` fired on any `wpa < 0`, but `wpaClass` only reddens below `-0.02` — so a headline keystone at e.g. `-0.01` WPA showed "Most played" next to a *neutral gray* number, which reads as "explaining nothing" rather than "explaining the red."
+
+**Decision: aligned the threshold** (`components/StatBadge.tsx`) — `isNegativeHeadlineWpa` now returns `wpa < -0.02`, exactly matching `wpaClass`'s own red cutoff. Rationale documented in a comment on the function: the label's entire purpose is to explain a red number, so it should only ever appear next to one. Ranking logic (`recommend.ts`) is completely untouched — this is a display-only threshold change on an already-display-only label.
+
+Test (`components/__tests__/StatBadge.test.ts`, extended): boundary cases at `-0.01` (false, was true before this fix), exactly `-0.02` (false — matches `wpaClass`'s own boundary), `-0.021` (true), plus a parametrized check across 9 sampled WPA values asserting `isNegativeHeadlineWpa(wpa) === (wpaClass(wpa) === "text-bad")` for every one — this is the test that would catch the two functions drifting apart again in the future.
+
+## Files touched (this round)
+
+- `lib/staticData.ts` — icon version derivation (`versionFolder`, `getIconVersion`, `ICON_BASES` reshaped to take `ver`), probe timeout, single-flight guard, dead `resolvedPatch` var removed (was unused even before this session)
+- `lib/coachless.ts` — optional `signal` param threaded through `post()`/`getKeystoneData()`
+- `components/StatBadge.tsx` — `isNegativeHeadlineWpa` threshold aligned to `-0.02`
+- `lib/__tests__/staticData.patch.test.ts` — extended: +12 tests (icon version x3, probe timeout x2, single-flight x2, plus the shared fixture/helper additions those needed)
+- `components/__tests__/StatBadge.test.ts` — extended: +5 tests (boundary alignment + parametrized cross-check)
+
+## Gates (all run, all pass)
+
+```
+npx tsc --noEmit     -> clean, no output
+npm test (vitest)    -> 52/52 passed (was 40 before this round; +12 new)
+npm run build        -> Compiled successfully (lint runs as part of build: 0 errors,
+                         5 pre-existing <img>/no-img-element warnings, unrelated/unchanged)
+```
+
+**Live re-verification** (ran the standalone probe script against the real `api.coachless.gg` + `ddragon.leagueoflegends.com` again, same result as the earlier round today):
+```
+candidates: [ '16.13', '16.12', '16.11', '16.10' ]
+probe 16.13: ERROR coachless -> 403
+probe 16.12: 8 keystone rows
+=> RESOLVED PATCH: 16.12
+```
+With this round's change, `resolveItem`/`resolveRune`/`getAllChampions`/etc. will now build their icon URLs against `16.12.1` too (previously `16.11.1`/`16.12.1` split, hardcoded).
+
+## Known issues / not done
+
+- `getIconVersion()`'s catch-and-fallback branch is untested by DIRECT unit test (only indirectly, via the "patch resolution itself fell back to static" integration test) — `getLatestPatch()` genuinely never throws today, so there's no way to hit that branch without mocking `getLatestPatch` itself, which would require restructuring the module for DI. Left as documented dead-code-shaped defense-in-depth rather than manufacturing an artificial test for it.
+- `PROBE_TIMEOUT_MS = 4000` is a judgment call, not measured against coachless's real p99 latency — if cold-probe false-negatives show up in prod logs (a slow-but-real 16.13 probe getting timed out and skipped in favor of 16.12), this is the first knob to check.
+- No deploy, no version bump — per the brief.
+
+

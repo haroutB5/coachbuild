@@ -32,3 +32,5 @@ Thumbs.db
 [Oo]bj/
 artifacts/
 .claude/worktrees/
+
+.vercel
