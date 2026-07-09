@@ -88,7 +88,7 @@ export default function ProGamesSection({
       {state.status === "ok" && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {state.games.map((game) => (
-            <ProGameCard key={game.id} game={game} />
+            <ProGameCard key={game.id} game={game} championDisplayName={championName} />
           ))}
         </div>
       )}

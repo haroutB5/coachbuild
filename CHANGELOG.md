@@ -2,6 +2,13 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.7.4] — 2026-07-10
+### Fixed
+- Champion display names on pro-game cards (Wukong, not Riot's internal MonkeyKing).
+### Added
+- SoloQ account riot ID shown small on each game card (pros have several accounts — now you can tell which one played).
+- Bin (BLG) tracked via his active KR account — 20 current games with full build order.
+
 ## [0.7.3] — 2026-07-10
 ### Changed
 - **Accounts now follow the player's pro-team region** (T1/LCK → KR, G2/LEC → EUW, etc. — curated tier-1 team map; unmapped/ex-pro teams keep all accounts). Off-region bootcamp smurfs no longer feed match history.

@@ -25,6 +25,9 @@ const { getSql } = await import("../lib/pro/db.ts");
 
 const KNOWN_MAINS = [
   { slug: "faker", gameName: "Hide on bush", tagLine: "KR1", region: "KR", regional: "asia" },
+  // Bin (BLG top) — user-verified 2026-07-10 from dpm.lol's PRO-tagged profile
+  // screenshot: active KR grind account (Master 1047 LP, 242 games this split).
+  { slug: "bin", gameName: "빈 스토리", tagLine: "KR1", region: "KR", regional: "asia" },
 ];
 
 async function main() {

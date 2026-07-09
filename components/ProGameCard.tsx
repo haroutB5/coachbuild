@@ -120,9 +120,13 @@ interface ProGameCardProps {
   /** Absolute champion icon URL, resolved by the parent (proAssets'
    *  getChampionIconMap() in player mode, or the already-selected
    *  ChampionRef.icon in champion mode). Optional — the champion name
-   *  always renders from game.championName regardless, so the card never
-   *  loses champion identity even if icon resolution is skipped/fails. */
+   *  always renders regardless, so the card never loses champion identity
+   *  even if icon resolution is skipped/fails. */
   championIcon?: string;
+  /** Proper display name ("Wukong") — game.championName is Riot's INTERNAL
+   *  id name from match-v5 ("MonkeyKing", "FiddleSticks"), which is wrong to
+   *  show users. Falls back to the internal name when unresolved. */
+  championDisplayName?: string;
 }
 
 // Lane the game was actually played in — matters on the "auto" (all-lanes)
@@ -135,7 +139,7 @@ const GAME_LANE_LABEL: Record<number, string> = {
   4: "Support",
 };
 
-export default function ProGameCard({ game, championIcon }: ProGameCardProps) {
+export default function ProGameCard({ game, championIcon, championDisplayName }: ProGameCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [hideConsumables, setHideConsumables] = useState(true);
   const ver = versionFromPatch(game.patch);
@@ -160,16 +164,16 @@ export default function ProGameCard({ game, championIcon }: ProGameCardProps) {
             {championIcon && (
               <span
                 className="w-5 h-5 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
-                title={game.championName}
+                title={championDisplayName ?? game.championName}
               >
                 <ImgWithFallback
                   src={championIcon}
-                  alt={game.championName}
+                  alt={championDisplayName ?? game.championName}
                   className="w-full h-full object-cover"
                 />
               </span>
             )}
-            <span className="truncate">{game.championName}</span>
+            <span className="truncate">{championDisplayName ?? game.championName}</span>
             <span className="text-mut font-normal">·</span>
             <span className="truncate">{game.player.name}</span>
             {game.player.team && (
@@ -199,6 +203,14 @@ export default function ProGameCard({ game, championIcon }: ProGameCardProps) {
             )}
             <span>·</span>
             <span className="tabular-nums">{relativeTime(game.gameCreation)}</span>
+            {game.account.riotId && (
+              <>
+                <span>·</span>
+                <span className="truncate max-w-[160px] opacity-75" title={game.account.riotId}>
+                  {game.account.riotId}
+                </span>
+              </>
+            )}
           </div>
         </div>
 

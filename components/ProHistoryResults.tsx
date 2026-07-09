@@ -67,10 +67,11 @@ export default function ProHistoryResults({
     };
   }, [mode, playerId, championId, role, limit, source]);
 
-  // Player mode: results can span multiple champions, so resolve the shared
-  // id->icon map once (cheap after the first call — module-level cached).
+  // Both modes need the id->name/icon map: player mode for icons across
+  // champions, and EVERY mode for display names — match-v5 stores Riot's
+  // internal championName ("MonkeyKing"), not the display name ("Wukong").
+  // Cheap after the first call — module-level cached.
   useEffect(() => {
-    if (mode !== "player") return;
     let cancelled = false;
     getChampionIconMap().then((map) => {
       if (!cancelled) setIconMap(map);
@@ -78,7 +79,7 @@ export default function ProHistoryResults({
     return () => {
       cancelled = true;
     };
-  }, [mode]);
+  }, []);
 
   const sourceFilterRow = (
     <div className="flex justify-end mb-3 px-1">
@@ -136,6 +137,7 @@ export default function ProHistoryResults({
             key={game.id}
             game={game}
             championIcon={mode === "champion" ? championIcon : iconMap?.get(game.championId)?.icon}
+            championDisplayName={iconMap?.get(game.championId)?.name}
           />
         ))}
       </div>
