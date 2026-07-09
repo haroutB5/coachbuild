@@ -1,0 +1,156 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// lib/pro/extract.ts — turn a Riot match + timeline into a stored pro_matches
+// row / ProGame shape. Pure functions, no I/O — easy to unit test.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { roleFromTeamPosition, SKILL_SLOT_LABEL } from "./roleMap";
+import type {
+  ProGamePurchase,
+  ProGameRunes,
+  RiotMatch,
+  RiotParticipant,
+  RiotTimeline,
+  RiotTimelineEvent,
+} from "./types";
+
+export interface ExtractedMatch {
+  matchId: string;
+  puuid: string;
+  championId: number;
+  championName: string;
+  role: 0 | 1 | 2 | 3 | 4;
+  patch: string;
+  win: boolean;
+  kills: number;
+  deaths: number;
+  assists: number;
+  gameCreation: string; // ISO
+  gameDurationSec: number;
+  spells: [number, number];
+  finalItems: number[];
+  trinket: number | null;
+  purchaseOrder: ProGamePurchase[];
+  skillOrder: string[];
+  runes: ProGameRunes;
+}
+
+/** Patch "16.13" from gameVersion "16.13.567.1234". */
+export function patchFromGameVersion(gameVersion: string): string {
+  const parts = gameVersion.split(".");
+  return parts.slice(0, 2).join(".");
+}
+
+/** Build order for one participant: undo-adjusted, chronological, consumables
+ *  and wards included. ITEM_UNDO removes the most recent matching purchase
+ *  (searching from the end) rather than assuming it's always the last event —
+ *  a defensive choice in case of out-of-order timeline entries.
+ *
+ *  `ts` is emitted in SECONDS into the game (Riot's raw timeline timestamp is
+ *  ms — converted here). Contract note: the original spec didn't pin a unit;
+ *  seconds was chosen to match fronty's already-built purchase-timeline UI
+ *  (components/ProGameCard.tsx's formatMinuteStamp(sec) + its fixtures use
+ *  second-scale values like 65/420/1850) rather than leave a live mismatch. */
+export function buildPurchaseOrder(timeline: RiotTimeline, participantId: number): ProGamePurchase[] {
+  const order: ProGamePurchase[] = [];
+  for (const frame of timeline.info.frames) {
+    for (const ev of frame.events) {
+      if (ev.participantId !== participantId) continue;
+      if (ev.type === "ITEM_PURCHASED" && typeof ev.itemId === "number") {
+        order.push({ itemId: ev.itemId, ts: Math.round(ev.timestamp / 1000) });
+      } else if (ev.type === "ITEM_UNDO" && typeof ev.beforeId === "number") {
+        const idx = findLastIndex(order, (p) => p.itemId === ev.beforeId);
+        if (idx >= 0) order.splice(idx, 1);
+      }
+      // ITEM_SOLD is intentionally NOT applied here — purchaseOrder is a
+      // purchase log (build order), not a live inventory snapshot. Final
+      // inventory (post-sells) comes from participant.item0-6 instead.
+    }
+  }
+  return order;
+}
+
+function findLastIndex<T>(arr: T[], pred: (v: T) => boolean): number {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (pred(arr[i])) return i;
+  }
+  return -1;
+}
+
+/** Skill order ["Q","W","E",...] for one participant. Dedupes exact-duplicate
+ *  SKILL_LEVEL_UP events (known bug since ~patch 15.17: identical events fire
+ *  twice) on (participantId, skillSlot, levelUpType, timestamp), then caps at
+ *  18 entries (max level) as a second safety net against any residual dupes. */
+export function buildSkillOrder(timeline: RiotTimeline, participantId: number): string[] {
+  const seen = new Set<string>();
+  const events: RiotTimelineEvent[] = [];
+  for (const frame of timeline.info.frames) {
+    for (const ev of frame.events) {
+      if (ev.type !== "SKILL_LEVEL_UP" || ev.participantId !== participantId) continue;
+      if (typeof ev.skillSlot !== "number") continue;
+      const key = `${ev.participantId}:${ev.skillSlot}:${ev.levelUpType ?? ""}:${ev.timestamp}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      events.push(ev);
+    }
+  }
+  events.sort((a, b) => a.timestamp - b.timestamp);
+  return events
+    .slice(0, 18)
+    .map((ev) => SKILL_SLOT_LABEL[ev.skillSlot as number])
+    .filter((label): label is string => Boolean(label));
+}
+
+export function extractRunes(participant: RiotParticipant): ProGameRunes {
+  const { perks } = participant;
+  const primary = perks.styles.find((s) => s.description === "primaryStyle") ?? perks.styles[0];
+  const secondary = perks.styles.find((s) => s.description === "subStyle") ?? perks.styles[1];
+  const [keystoneSel, ...primaryRest] = primary?.selections ?? [];
+  return {
+    primaryTree: primary?.style ?? 0,
+    keystone: keystoneSel?.perk ?? 0,
+    primary: primaryRest.map((s) => s.perk),
+    secondaryTree: secondary?.style ?? 0,
+    secondary: (secondary?.selections ?? []).map((s) => s.perk),
+    shards: [perks.statPerks.offense, perks.statPerks.flex, perks.statPerks.defense],
+  };
+}
+
+/** Returns null (caller must skip+log) when the participant's role can't be
+ *  mapped — never store a row with a guessed role. */
+export function extractMatch(match: RiotMatch, timeline: RiotTimeline, puuid: string): ExtractedMatch | null {
+  const participant = match.info.participants.find((p) => p.puuid === puuid);
+  if (!participant) return null;
+  const role = roleFromTeamPosition(participant.teamPosition);
+  if (role === null) return null;
+
+  const finalItems = [
+    participant.item0,
+    participant.item1,
+    participant.item2,
+    participant.item3,
+    participant.item4,
+    participant.item5,
+  ].filter((id) => id !== 0);
+  const trinket = participant.item6 && participant.item6 !== 0 ? participant.item6 : null;
+
+  return {
+    matchId: match.metadata.matchId,
+    puuid,
+    championId: participant.championId,
+    championName: participant.championName,
+    role,
+    patch: patchFromGameVersion(match.info.gameVersion),
+    win: participant.win,
+    kills: participant.kills,
+    deaths: participant.deaths,
+    assists: participant.assists,
+    gameCreation: new Date(match.info.gameCreation).toISOString(),
+    gameDurationSec: match.info.gameDuration,
+    spells: [participant.summoner1Id, participant.summoner2Id],
+    finalItems,
+    trinket,
+    purchaseOrder: buildPurchaseOrder(timeline, participant.participantId),
+    skillOrder: buildSkillOrder(timeline, participant.participantId),
+    runes: extractRunes(participant),
+  };
+}

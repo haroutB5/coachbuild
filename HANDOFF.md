@@ -464,3 +464,167 @@ With this round's change, `resolveItem`/`resolveRune`/`getAllChampions`/etc. wil
 - No deploy, no version bump — per the brief.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-09 18:40
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+# HANDOFF — fronty (Pro Games UI, Phase 1)
+
+## Files added (all `components/**`, scope-clean vs engy's `lib/pro/**`, `app/api/**`, `migrations/**`, `scripts/**`)
+
+- `components/proGames.types.ts` — local `ProGame`/`ProGamesApiResponse` types, mirroring the `/api/pros` contract exactly. Deliberately NOT imported from `lib/types.ts` (kept local per dispatch brief, since backend contract was still in flight).
+- `components/proAssets.ts` — icon URL helpers for the section. Mostly pure functions (item/spell/tree/shard icons are id+version only, no fetch). The one async piece is `resolveRuneDisplay(id, ver)`, which lazily fetches coachless's rune-translations JSON (module-level cache, one fetch shared by every card on the page) to get a keystone/primary/secondary perk's name + icon path — mirrors `lib/staticData.ts`'s pattern but is a standalone copy, not an import (per brief: don't couple to the file engy might also touch).
+- `components/proGames.fixtures.ts` — 3 realistic fixtures (`FIXTURE_GAME_WIN`, `FIXTURE_GAME_LOSS`, `FIXTURE_GAME_EVENTFUL`) for dev verification. All item/rune/shard ids in these were spot-checked against the live coachless CDN (see "CDN gotcha" below) so the fixtures render clean.
+- `components/ProGameCard.tsx` — single game card: header (player/team/region/patch/relative-time/win-loss pill/KDA/game length), runes+spells row (keystone prominent, primary tree + minor primary runes, secondary tree + minor secondary runes, shards, 2 summoner spells), items row (final items + trinket), and an expandable detail panel (chevron button, `aria-expanded`/`aria-controls`) with a purchase-order timeline (horizontally scrollable, minute-stamped, "Hide consumables" checkbox toggle) and a skill-order strip (R highlighted teal).
+- `components/ProGamesSection.tsx` — fetches `/api/pros?championId&role&limit=20` client-side on `[championId, role]` change (abort-safe via a `cancelled` flag), renders loading skeleton / quiet error / friendly empty state / 2-col grid of `ProGameCard`.
+
+## Integration point
+
+`app/page.tsx`:
+- Added import for `ProGamesSection`.
+- Inside the `fetchState.status === "ok"` branch, after the `displayBuilds.map(...)` block, renders:
+  ```tsx
+  {champ && (
+    <ProGamesSection
+      championId={champ.id}
+      championName={champ.name}
+      role={displayBuilds[0].role}
+    />
+  )}
+  ```
+  Uses `displayBuilds[0].role` (always 0-4, resolved) rather than the page's own `role` state, because that state can be `5` ("auto") and `/api/pros` only accepts 0-4 per the contract. This also naturally satisfies "only visible when a champion+role result is shown" — it's nested inside the same conditional as the build cards.
+
+## CDN gotcha found while verifying (not a bug in this code — pre-existing coachless CDN gap)
+
+While visually verifying with fixture data via puppeteer, found that **some coachless CDN assets 403 regardless of patch version**:
+- Rune icon for keystone id `8230` (Phase Rush / "Stormraider's Surge") — 403 on `16.11.1`, `16.12.1`, AND `16.13.1`.
+- Stat shard icon `magicresist.png` (shard id `5003`, Magic Resist) — 403.
+
+Both are asset-URL-construction-correct (verified the JSON map entries exist and my code derives the exact path `lib/staticData.ts`'s own pattern would produce) — the assets themselves are just missing/blocked on coachless's CDN. Swapped those two ids out of the fixtures to avoid a blank-icon false alarm in the demo. **This is a pre-existing gap that also affects the main build-recommendation UI** (`RunePage.tsx`/`BuildCard.tsx` use the identical `SHARD_ICON` map from `lib/staticData.ts` — any live build whose defense shard resolves to Magic Resist, or whose keystone is Phase Rush, will show the same blank circle). Flagging for awareness, not fixing — out of scope (`lib/staticData.ts` wasn't mine to touch) and the existing `ImgWithFallback` pattern already degrades gracefully (blank circle, no broken-image icon, no crash).
+
+## Verification performed
+
+- `npm run typecheck` — clean (before engy's parallel `lib/pro/**` landed; see below).
+- `npm run build` — clean, only pre-existing `<img>` lint warnings (same pattern as every other component in the repo, no new ones from my files).
+- `npm test` — 52/52 passing, no regressions.
+- Browser-verified via puppeteer/chrome-devtools MCP at 1200px width: temporarily wired `ProGamesSection` to fall back to the fixtures on fetch failure (since `/api/pros` doesn't exist yet), screenshotted full page + expanded-timeline state, checked console for errors/hydration warnings (none), then **reverted the fixture fallback** before finishing — production code always hits the real `/api/pros` route, no dev-only branching left in.
+- No dev server left running (killed the process explicitly after verification).
+
+## Known gap at handoff time
+
+`npm run typecheck` / `npm run build` currently fail — but the failure is 100% in engy's in-flight `lib/pro/db.ts` (`Cannot find module '@neondatabase/serverless'`), confirmed via `git status`: only `lib/pro/**`, `app/api/ingest/**`, `migrations/**`, `scripts/**` are implicated (all his scope, all untracked/in-progress). My files (`components/Pro*`, `proAssets.ts`, `proGames.types.ts`, `proGames.fixtures.ts`, and the `app/page.tsx` diff) typechecked and built clean on their own before his commit landed mid-session. Nothing for me to fix here — `package.json` (where the missing dep would get added) is explicitly out of my scope. Re-run `verify-fix.sh` once engy's `npm install` for `@neondatabase/serverless` lands.
+
+## Nothing else touched
+
+Did not touch `lib/pro/**`, `app/api/**`, `migrations/**`, `scripts/**`, `lib/types.ts`, or `package.json`, per scope.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-09 18:47
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+# HANDOFF — engy (Pro Soloq Match History backend, Phase 1)
+
+## Summary
+
+Built the full backend for pro-player soloQ match history: lolpros.gg roster resolver + PUUID fallback chain, Riot match/timeline ingest with a shared rate-pacer, Neon Postgres schema (`coachbuild` schema, migration applied to the live DB), and the `GET /api/pros` read API exactly per contract (one deviation, see below — reconciled, not left open). Everything degrades gracefully with no `RIOT_API_KEY` / no `DATABASE_URL`, matching the brief.
+
+## Files touched (all new, per scope)
+
+- `lib/pro/types.ts` — `ProGame`/`ProsResponse` contract types + lolpros/Riot raw shapes + DB row shapes.
+- `lib/pro/errors.ts` — `RiotUnavailableError`, `DbUnavailableError`.
+- `lib/pro/regionMap.ts` — lolpros server string -> Riot platform/regional routing.
+- `lib/pro/roleMap.ts` — `teamPosition` -> role (0-4) and lolpros `position` -> role (0-4).
+- `lib/pro/pacer.ts` — process-wide serialized queue for every Riot call (1.3s min gap, ~46 req/min, safely under both 20/s and 100/2min).
+- `lib/pro/lolpros.ts` — ladder + profile client (see "Live-verified facts" below — the real shapes differ from the brief's assumption).
+- `lib/pro/riot.ts` — account-v1, match-v5 ids/detail/timeline, all paced.
+- `lib/pro/puuidResolve.ts` — the 3-tier resolution chain (lolpros puuid probe -> by-riot-id fallback -> unresolved).
+- `lib/pro/db.ts` — memoized `neon()` client (HTTP driver, works in serverless + plain Node scripts).
+- `lib/pro/extract.ts` — match+timeline -> stored row (patch parsing, undo-adjusted purchase order, skill-order dedupe, rune extraction, role mapping).
+- `lib/pro/auth.ts` — `Authorization: Bearer <CRON_SECRET>` guard.
+- `lib/pro/ingestRoster.ts`, `lib/pro/ingestMatches.ts` — shared core logic used by both the scripts and the routes.
+- `migrations/0001_init.sql` + `scripts/db-migrate.mjs` — schema + idempotent runner (tracks applied files in `coachbuild._migrations`).
+- `scripts/_env.mjs`, `scripts/ingest-roster.mjs`, `scripts/ingest-matches.mjs` — local runners (run via `npx tsx`, imports the TS core directly).
+- `app/api/ingest/roster/route.ts`, `app/api/ingest/matches/route.ts` — guarded (401 without bearer token), chunked match ingest (`?cursor=&batch=`).
+- `app/api/pros/route.ts` — THE CONTRACT endpoint.
+- `vercel.json` — daily cron on `/api/ingest/matches` (Hobby-plan max frequency; finer cadence needs an external pinger looping the cursor, documented in the route file).
+- `package.json` — added `@neondatabase/serverless` (dep), `tsx` (devDep), `db:migrate`/`ingest:roster`/`ingest:matches` scripts.
+- `.env.local` (gitignored, verified via `git status` — not tracked) — `DATABASE_URL` copied from matchday; `RIOT_API_KEY`/`CRON_SECRET` left commented, not set (none available this session).
+- Tests: `lib/__tests__/pro-extract.test.ts`, `pro-maps.test.ts`, `pro-puuidResolve.test.ts`, `pro-pros-route.test.ts`.
+
+## Live-verified facts (probed before building — don't trust the brief blindly)
+
+1. **lolpros `/es/profiles/{slug}` shape is NOT `{ accounts: [...] }` at the top level** as the brief's endpoint description implied. Real shape: `{ uuid, name, slug, country, league_player: { position, accounts: [...] } }`. `lib/pro/lolpros.ts` is written against the real shape (confirmed live 2026-07-09).
+2. **`/es/ladder?page=N` empirically only returns EUW accounts** — probed pages 1 through 300 (ladder ends ~page 300, 20/page), every entry's `account.server === "EUW"`. No working region filter param was found (`?server=`, `?region=` both silently ignored, `?server=KR` alone 404s). This is a real limitation of the public ladder endpoint, not a bug in the client — documented in `lib/pro/lolpros.ts`'s file header. Non-EUW pros ARE still reachable once you have a slug (e.g. via a profile's `accounts[]`, which can span regions/smurfs), so the region-routing code is still fully exercised and correct — it's specifically the *discovery* step (ladder paging) that's EUW-skewed today. If broader region coverage is wanted later, it needs either a different lolpros endpoint or a seed list of known non-EUW pro slugs.
+3. Ladder entries carry gamename/tagline directly (`account.gamename`, `account.tagline`) in addition to `summoner_name` — used those directly instead of string-splitting `"Name#Tag"` where available (more reliable).
+
+## Contract deviation (found + reconciled, not left open)
+
+**`purchaseOrder[].ts` unit.** The original brief spec'd `{ itemId: number, ts: number }[]` with no unit. I initially assumed milliseconds (Riot's raw timeline timestamp). Cross-checking fronty's already-integrated UI (`components/ProGameCard.tsx`'s `formatMinuteStamp(sec: number)` + `components/proGames.fixtures.ts`'s second-scale values like `65`, `420`, `1850`) showed fronty built against **seconds**. Changed `lib/pro/extract.ts::buildPurchaseOrder` to emit `Math.round(timestamp / 1000)` (seconds into the game) instead of raw ms, and updated the type doc comment in `lib/pro/types.ts`. No fronty changes needed — their side was already correct, mine was the one that would've broken on integration. Flagging here so urgot/fronty don't need to re-derive this — nothing further to do.
+
+## Migration status — APPLIED to the live DB
+
+```
+$ node scripts/db-migrate.mjs
+apply 0001_init.sql ...
+done  0001_init.sql
+```
+Schema `coachbuild` created with `pros`, `pro_accounts`, `pro_matches`, `_migrations` tables + indexes (see `migrations/0001_init.sql`). Verified via a live query — only `coachbuild.*` was touched, `public` schema untouched.
+
+**Also live-smoke-tested the roster pipeline end-to-end** (real lolpros API + real DB, no Riot key):
+```
+$ npx tsx scripts/ingest-roster.mjs 3
+{ "pagesFetched": 1, "prosSeen": 3, "prosUpserted": 3, "accountsUpserted": 0, "accountsUnresolved": 10, "errors": [] }
+```
+Confirmed via direct query: 3 real pros (NattyNatt/jungle, Kaori/adc, BROHAN/mid) + 13 accounts stored correctly, all `active=false` (no key to validate against) — exactly the documented no-key degrade path. **This is real seed data sitting in the live `coachbuild` schema right now** — harmless (matches the feature's own purpose), not cleaned up.
+
+`ingest-matches` was smoke-tested for its error path only (no `RIOT_API_KEY` available this session): confirmed `RiotUnavailableError` surfaces as a clean one-line message from the script and would map to a 503 from `/api/ingest/matches` (verified via the route logic + a direct dev-server curl, see below). **The full match-detail/timeline extraction path (extract.ts) is covered by unit tests with realistic fixtures, but has NOT been exercised against a real Riot match payload** — no key was available. First real run needs a `RIOT_API_KEY` in `.env.local`; recommend running `npx tsx scripts/ingest-matches.mjs 2 5` (small batch) first and checking `errors: []` before a full backfill.
+
+## Test / build status
+
+```
+npx tsc --noEmit        -> clean, no output
+npx vitest run           -> 8 files, 88 tests passed (was 52 before this session; +36 new, 0 regressions
+                             in fronty's or the original build/route/staticData suites)
+npx next lint            -> 0 errors, 6 pre-existing <img> warnings (fronty's/original components, untouched)
+npx next build            -> Compiled successfully; 3 new routes present:
+                             /api/ingest/matches, /api/ingest/roster, /api/pros (all ƒ dynamic, 0B)
+```
+
+**Live dev-server smoke test** (`next start -p 3911`, killed cleanly after):
+```
+GET /api/pros?championId=112&role=2          -> 200 {"games":[]}   (real DB, no matches ingested yet)
+GET /api/pros                                 -> 400 missing params
+GET /api/ingest/roster (no auth header)       -> 401 Unauthorized
+GET /api/ingest/matches (no auth header)      -> 401 Unauthorized
+GET /api/build?champ=112&role=2 (regression)  -> 200, unchanged, still works
+```
+
+## Known gaps / not done
+
+- No `CRON_SECRET` set — the cron endpoint and manual pings will 401 until urgot/user sets one in Vercel env + `.env.local`.
+- No `RIOT_API_KEY` this session — match ingest is unit-tested but not live-exercised. First live run should be a small batch (see above) before a full backfill, since the timeline event field names (`beforeId`/`afterId`/`levelUpType`) are transcribed from the brief, not independently re-verified against a live payload the way the lolpros shapes were.
+- lolpros ladder discovery is EUW-skewed (see "Live-verified facts" #2) — fine for Phase 1 personal use, worth knowing if "100 pros" was expected to mean global coverage.
+- `next lint`/`tsc` were run standalone; did not re-run `verify-fix.sh` (project-specific wrapper) — didn't see it in this repo's `scripts/`, may be an urgot-orchestrator-level script rather than per-project. Ran the equivalent commands individually instead.
+
+
