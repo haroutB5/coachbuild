@@ -11,6 +11,7 @@ import { DbUnavailableError } from "./errors";
 import { getLadderPage, getProfile } from "./lolpros";
 import { resolveAccount } from "./puuidResolve";
 import { roleFromLolProsPosition } from "./roleMap";
+import { decideAccountRegionActivation, type AccountForRegionRule } from "./teamRegions";
 import type { LolProsLadderEntry } from "./types";
 
 const MAX_PAGES = 400; // real ladder ends well before this (empirically ~300) — hard safety cap
@@ -32,6 +33,11 @@ export interface RosterIngestResult {
   accountsUpserted: number;
   accountsUnresolved: number;
   errors: string[];
+  /** Directive 1 (2026-07-09): team-region activation rule, applied at the
+   *  end of each pro's account upsert. */
+  accountsRegionActivated: number;
+  accountsRegionDeactivated: number;
+  unmappedTeams: string[];
 }
 
 export async function runRosterIngest(opts: RosterIngestOptions = {}): Promise<RosterIngestResult> {
@@ -48,6 +54,9 @@ export async function runRosterIngest(opts: RosterIngestOptions = {}): Promise<R
     accountsUpserted: 0,
     accountsUnresolved: 0,
     errors: [],
+    accountsRegionActivated: 0,
+    accountsRegionDeactivated: 0,
+    unmappedTeams: [],
   };
 
   const seenSlugs = new Set<string>();
@@ -83,7 +92,14 @@ export async function runRosterIngest(opts: RosterIngestOptions = {}): Promise<R
   return result;
 }
 
-async function ingestOnePro(
+/** Exported so a targeted single-slug script (e.g. scripts/upsert-pro.mjs)
+ *  can upsert one pro without paging the whole ladder — same account-
+ *  resolution + team-region-rule path as the full roster sweep, no
+ *  duplicated logic. `entry.uuid` is used as-is for the pros.id upsert key —
+ *  callers targeting an EXISTING pro must pass that pro's real id (not a
+ *  freshly-generated one), and callers targeting a brand-new pro must pass
+ *  the lolpros-profile-confirmed uuid. */
+export async function ingestOnePro(
   sql: NonNullable<ReturnType<typeof getSql>>,
   entry: LolProsLadderEntry,
   result: RosterIngestResult,
@@ -134,5 +150,41 @@ async function ingestOnePro(
     } else {
       result.accountsUnresolved += 1;
     }
+  }
+
+  await applyRegionRuleToPro(sql, entry.uuid, team, result, log);
+}
+
+/** Directive 1 (2026-07-09): deactivate a pro's off-region accounts against
+ *  their PRO TEAM's expected platform region (Faker/T1/LCK -> KR is the
+ *  motivating case — his EUW bootcamp accounts were polluting "recent
+ *  games"). Reads the pro's FULL current account set (not just the ones
+ *  upserted this round) — a pro can carry accounts from an earlier ingest
+ *  that no longer appear in today's lolpros profile response, and those
+ *  still need the same region check. See lib/pro/teamRegions.ts for the
+ *  full rule (region/unreachable/unmapped/none) and its tradeoffs. */
+export async function applyRegionRuleToPro(
+  sql: NonNullable<ReturnType<typeof getSql>>,
+  proId: string,
+  team: string | null,
+  result: RosterIngestResult,
+  log: (msg: string) => void
+): Promise<void> {
+  const accounts = (await sql`
+    SELECT puuid, region, active FROM coachbuild.pro_accounts WHERE pro_id = ${proId}
+  `) as unknown as AccountForRegionRule[];
+  if (accounts.length === 0) return;
+
+  const { decisions, unmappedTeam } = decideAccountRegionActivation(team, accounts);
+  if (unmappedTeam) {
+    log(`pro ${proId}: team "${unmappedTeam}" not in curated teamRegions map — accounts left unchanged`);
+    if (!result.unmappedTeams.includes(unmappedTeam)) result.unmappedTeams.push(unmappedTeam);
+  }
+
+  for (const decision of decisions) {
+    if (!decision.changed) continue;
+    await sql`UPDATE coachbuild.pro_accounts SET active = ${decision.active} WHERE puuid = ${decision.puuid}`;
+    if (decision.active) result.accountsRegionActivated += 1;
+    else result.accountsRegionDeactivated += 1;
   }
 }

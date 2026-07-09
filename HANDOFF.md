@@ -1114,3 +1114,119 @@ No version bump, no deploy — not requested this round.
 <!-- merged into HANDOFF.md 2026-07-09 20:46:34Z; previous content preserved there. Append new rounds below. -->
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-09 23:01
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-09 20:46:35Z; previous content preserved there. Append new rounds below. -->
+
+## Pro-team region enforcement (Directive 1) + Bwipo (Directive 2) — 2026-07-09, round 4
+
+### Summary
+
+Re-checked disk state first (v0.7.2 confirmed live: `lib/pro/fresh.ts` 90-day window,
+`scripts/ingest-player.mjs` reusing an exported `ingestOneAccount`). Implemented and ran,
+in order:
+
+1. `lib/pro/teamRegions.ts` — curated tier-1 team -> expected-region map + a pure
+   `decideAccountRegionActivation` decision function.
+2. Wired the rule into `lib/pro/ingestRoster.ts` (new exported `applyRegionRuleToPro`,
+   called at the end of every `ingestOnePro`) AND ran it as a one-off backfill
+   (`scripts/apply-team-regions.mjs`) against all 869 pros currently on file: **47 accounts
+   activated, 47 deactivated, 43 distinct unmapped team names logged** (never guessed),
+   zero errors.
+3. Faker's real KR main was missing (only EUW bootcamp accounts on file, which the
+   backfill correctly deactivated, per the brief's prediction, leaving him at 0 active
+   accounts). Resolved `Hide on bush#KR1` live via Riot account-v1/by-riot-id (asia
+   routing) using `scripts/resolve-known-mains.mjs` (deliberately Faker-only — no Chovy
+   entry, per the brief's own fallback instruction, since I had no independently-confirmed
+   riot_id/tag for him this round).
+4. `npx tsx scripts/ingest-player.mjs faker 20` — **landed 20 real, fresh KR games**
+   (2026-07-06/07, e.g. `KR_8289696389` Sylas, `KR_8289663732` Vi), confirmed via a direct
+   DB read. His 4 EUW accounts are deactivated, so future refetches won't touch them.
+5. Directive 2 (Bwipo): already existed in our data (team="Witchcraft", 4 EUW accounts,
+   already resolved) — re-ran the upsert path anyway per instructions
+   (`scripts/upsert-pro.mjs bwipo`, new script, reuses the now-exported `ingestOnePro`).
+   "Witchcraft" isn't a tier-1 team, so it's correctly logged as unmapped and left
+   untouched — matches "ex-pro -> no team constraint -> all accounts active" for free,
+   no special-casing needed. `npx tsx scripts/ingest-player.mjs bwipo 20` — **landed 20
+   fresh EUW games** (2026-06-27, e.g. `EUW1_7901546123` Garen).
+
+### Design notes / tradeoffs (see also code comments)
+
+- **Team-name grounding**: verified the curated map against LIVE roster data before
+  building it (`SELECT DISTINCT team FROM pros WHERE team ILIKE ...`), not just the brief's
+  list — caught that the brief's "MAD Lions KOI" is actually "Movistar KOI" in current
+  data (real 2026 sponsor rebrand) and that "Gen.G Esports" appears as bare "Gen.G" too.
+  Both forms are in the map (rebrand names are genuinely different strings, not just
+  Esports-suffix noise); the suffix noise itself is handled for free by
+  `normalizeTeamName` stripping a trailing "esports"/"e-sports" token before comparison.
+- **Academy/challenger rosters deliberately excluded** (e.g. "Karmine Corp Blue", "G2
+  Hel", "Movistar KOI Fénix" — all observed live) even though they'd trivially match a
+  parent-org substring — the brief scopes this to tier-1 teams; those pros fall through to
+  "unmapped" (logged, untouched), not guessed into their parent's region.
+- **null/unmapped team does NOT force-reactivate accounts.** The brief says such pros
+  "keep ALL accounts active" — I read this as "the region rule never touches them" (leaves
+  whatever `active` state already exists), not "force every account to active=true
+  regardless of why it was inactive." An account marked inactive by `puuidResolve.ts`
+  (Riot rejected the puuid/riotId — a different concern entirely) staying inactive when its
+  pro has no team on file seemed like the safer reading. Documented as an explicit judgment
+  call in `teamRegions.ts`'s doc comment in case that reading is wrong.
+- **Region-match CAN reactivate a puuid-invalid account** for a pro WITH a known team,
+  since the brief states the rule as a flat `active = (region == expected)` assignment.
+  Accepted tradeoff, not fixed — a reactivated-but-invalid account just fails again on its
+  next ingest attempt (`RiotRequestError`, caught+skipped in `ingestOneAccount`), so this
+  self-corrects rather than silently corrupting anything. Documented in
+  `decideAccountRegionActivation`'s doc comment.
+- **Never deletes rows** — every step is a flag flip (`pro_accounts.active`), fully
+  reversible, matching the brief's hard rule.
+
+### Files Touched
+
+- `lib/pro/teamRegions.ts` (new) — curated map + pure decision function.
+- `lib/pro/ingestRoster.ts` (modified) — exported `ingestOnePro` (was private) for reuse by
+  the single-slug script; added `applyRegionRuleToPro` (new export) wired in at the end of
+  every pro's account upsert; extended `RosterIngestResult` with
+  `accountsRegionActivated`/`accountsRegionDeactivated`/`unmappedTeams`.
+- `scripts/apply-team-regions.mjs` (new) — one-off backfill pass over every pro on file.
+- `scripts/resolve-known-mains.mjs` (new) — resolves the curated `KNOWN_MAINS` list
+  (Faker only this round) via Riot account-v1.
+- `scripts/upsert-pro.mjs` (new) — targeted single-slug upsert (used for Bwipo; reusable
+  for any future one-off addition).
+- `lib/__tests__/pro-teamRegions.test.ts` (new) — map + pure decision function coverage
+  (region match/mismatch, unreachable with/without KR, unmapped, none, Faker's exact
+  scenario, academy-roster exclusion).
+- `lib/__tests__/pro-ingestRoster.test.ts` (new) — `applyRegionRuleToPro` DB-orchestration
+  coverage (mocked sql): no-op on zero accounts, only-changed-rows get UPDATEs, unmapped
+  team logging + dedup, null-team no-op, LPL-with/without-KR branches.
+
+### Tests
+
+`npx tsc --noEmit`, `npx vitest run` (189/189, up from 165), `npx next lint` (clean, only
+pre-existing `<img>` warnings in files I didn't touch) — all clean per the brief's Gates
+line.
+
+### Known Issues
+
+- The unmapped-team list surfaced 43 distinct team names this backfill pass (mostly
+  amateur/academy/challenger orgs, e.g. "Skillcamp", "Karmine Corp Blue", "Witchcraft") —
+  none require action, this is the map working as designed (log, don't guess), but it's a
+  large list if anyone wants to eyeball it for a genuinely-missed tier-1 team; full list is
+  in the backfill script's stdout (not persisted anywhere — re-run
+  `scripts/apply-team-regions.mjs` to regenerate).
+- `scripts/upsert-pro.mjs` fetches the lolpros profile TWICE (once to determine the
+  correct `uuid` before constructing the ladder-entry-shaped object, once again inside the
+  reused `ingestOnePro`) — accepted minor inefficiency to avoid duplicating the upsert
+  logic; this is a rarely-run one-off script, not a hot path.
+- Chovy (and any other KR pro) intentionally NOT added to `KNOWN_MAINS` — needs a
+  Leaguepedia SoloqueueIds lookup to confirm the exact riot_id/tag with confidence, and
+  the Leaguepedia limiter is burned this session (no Leaguepedia calls were made this
+  round, per the brief).
+
+No version bump, no deploy — per instructions (orchestrator ships).
+
+
