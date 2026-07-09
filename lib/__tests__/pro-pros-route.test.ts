@@ -128,3 +128,51 @@ describe("GET /api/pros validation", () => {
     expect(JSON.stringify(body)).not.toContain("secret");
   });
 });
+
+const PRO_ID = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
+
+describe("GET /api/pros proId matrix", () => {
+  beforeEach(() => {
+    mockSql.mockReset();
+    vi.mocked(getSql).mockReturnValue(mockSql as never);
+  });
+
+  it("400 when both championId and proId are given", async () => {
+    const res = await GET(req(`?championId=112&role=2&proId=${PRO_ID}`));
+    expect(res.status).toBe(400);
+  });
+
+  it("400 when neither championId nor proId are given", async () => {
+    const res = await GET(req("?role=2"));
+    expect(res.status).toBe(400);
+  });
+
+  it("400 on malformed proId", async () => {
+    const res = await GET(req("?proId=not-a-uuid"));
+    expect(res.status).toBe(400);
+  });
+
+  it("proId happy path — role optional, defaults to all lanes", async () => {
+    mockSql.mockResolvedValueOnce([ROW]);
+    const res = await GET(req(`?proId=${PRO_ID}`));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.games).toHaveLength(1);
+    const [strings] = mockSql.mock.calls[0];
+    expect(strings.join("")).toContain("pm.pro_id");
+    expect(strings.join("")).not.toContain("pm.champion_id =");
+  });
+
+  it("proId + role filters by lane", async () => {
+    mockSql.mockResolvedValueOnce([ROW]);
+    const res = await GET(req(`?proId=${PRO_ID}&role=2`));
+    expect(res.status).toBe(200);
+    const values = mockSql.mock.calls[0].slice(1);
+    expect(values).toContain(2);
+  });
+
+  it("400 on invalid role alongside proId", async () => {
+    const res = await GET(req(`?proId=${PRO_ID}&role=9`));
+    expect(res.status).toBe(400);
+  });
+});

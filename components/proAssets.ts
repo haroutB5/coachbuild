@@ -210,3 +210,50 @@ export async function resolveRuneDisplay(id: number, ver: string): Promise<Resol
     return { id, name: `Rune #${id}`, icon: "" };
   }
 }
+
+// ── Champion icon map (id -> {name, icon}) ──────────────────────────────────
+//
+// ProGame only carries championId + championName (a display name, e.g.
+// "Lee Sin" with a space — not the CDN's key form "LeeSin"), so it can't
+// build an icon URL on its own. /api/champions already returns the full
+// ChampionRef[] (id, key, name, icon) that ChampionPicker consumes, so we
+// reuse THAT as the source of truth for icons instead of guessing at a
+// name->key transform. Module-level cache, fetched once per session —
+// same pattern as the rune map above.
+
+export interface ChampionIconEntry {
+  name: string;
+  icon: string;
+}
+
+let championIconMapCache: Map<number, ChampionIconEntry> | null = null;
+let championIconMapInFlight: Promise<Map<number, ChampionIconEntry>> | null = null;
+
+export async function getChampionIconMap(): Promise<Map<number, ChampionIconEntry>> {
+  if (championIconMapCache) return championIconMapCache;
+  if (championIconMapInFlight) return championIconMapInFlight;
+  championIconMapInFlight = fetch("/api/champions")
+    .then((res) => {
+      if (!res.ok) throw new Error(`champions fetch ${res.status}`);
+      return res.json() as Promise<{ id: number; name: string; icon: string }[]>;
+    })
+    .then((list) => {
+      const map = new Map<number, ChampionIconEntry>();
+      if (Array.isArray(list)) {
+        for (const c of list) map.set(c.id, { name: c.name, icon: c.icon });
+      }
+      championIconMapCache = map;
+      return map;
+    })
+    .catch((err) => {
+      // Icons here are decorative (ProGameCard already falls back to plain
+      // text when no icon is available) — never throw into the caller.
+      console.error("[proAssets] champion icon map fetch failed:", err);
+      const empty = new Map<number, ChampionIconEntry>();
+      return empty;
+    })
+    .finally(() => {
+      championIconMapInFlight = null;
+    });
+  return championIconMapInFlight;
+}

@@ -2,6 +2,16 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.6.0] — 2026-07-09
+### Added
+- **Pro History tab** (`/history`) — search by pro player name or champion name; games are shown only after a selection. Player mode: debounced typeahead over tracked pros (team, lane, game count). Champion mode: the familiar champion picker + optional lane filter. Player-mode cards show the champion icon + name.
+- Tab navigation (Builds | Pro History) on both pages.
+- `GET /api/players?q=` — player typeahead search (wildcard-escaped, game counts included).
+- `GET /api/pros?proId=` — all recent games by one player (role optional; exactly one of proId/championId required).
+### Fixed
+- Champion-icon slot no longer renders as an empty circle on cards without a resolved icon.
+- Player search: selecting a result now invalidates in-flight searches (stale-list race).
+
 ## [0.5.0] — 2026-07-09
 ### Added
 - **Pro Games section** — recent solo-queue games by tracked pro players for the selected champion (+lane when a concrete lane is picked; the default "auto" view shows all lanes with a per-card lane label). Each card: player/team, region, result, KDA, patch, game length, final items + trinket, full rune page (keystone, minors, shards), summoner spells, and an expandable detail with the undo-adjusted item purchase timeline and skill order.

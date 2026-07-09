@@ -628,3 +628,90 @@ GET /api/build?champ=112&role=2 (regression)  -> 200, unchanged, still works
 - `next lint`/`tsc` were run standalone; did not re-run `verify-fix.sh` (project-specific wrapper) — didn't see it in this repo's `scripts/`, may be an urgot-orchestrator-level script rather than per-project. Ran the equivalent commands individually instead.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-09 19:28
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-09 17:47:45Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-09 — Pro History backend (player search + proId lookup)
+
+Shipped the backend half for the "Pro History" tab (fronty owns UI against these contracts).
+
+**New: `GET /api/players?q=`** (`app/api/players/route.ts`)
+- Typeahead over `coachbuild.pros` LEFT JOIN `coachbuild.pro_matches` (grouped, `COUNT(pm.match_id)::int` so 0-game pros still return — cast to `::int` avoids the Neon driver's bigint-as-string coercion for COUNT).
+- `q`: required, trimmed to 1-40 chars, else 400. `%`/`_`/`\` escaped via `escapeLikePattern()` before wrapping in `%…%` — Postgres's default LIKE/ILIKE escape char is already backslash so no explicit `ESCAPE` clause needed.
+- Order gameCount DESC, name ASC, LIMIT 10. Same DB-absent/500-no-leak/cache-header conventions as `/api/pros`.
+- Added `Player` / `PlayersResponse` to `lib/pro/types.ts`.
+
+**Extended: `GET /api/pros`** (`app/api/pros/route.ts`)
+- Now accepts `proId` (lolpros uuid) as an alternative to `championId` — exactly one required (400 on both/neither). `proId` validated against a standard UUID regex (`UUID_RE`), 400 if malformed.
+- `role` is REQUIRED with `championId` (unchanged) but OPTIONAL with `proId` — absent defaults to the existing `role=5` "all lanes" sentinel, so the two branches share one role-parsing block.
+- Two near-duplicate tagged-template queries (`WHERE pm.pro_id = …` vs `WHERE pm.champion_id = …`) instead of one dynamically-composed query — kept per the neon tagged-template pattern already in use in this file (the `@neondatabase/serverless` HTTP client's `sql` export doesn't support safely composing partial WHERE fragments into one template without dropping to `sql.query(text, params)`, which would've broken the existing tagged-template mock convention in the test file). If a third filter dimension gets added later, worth revisiting with `sql.query()` + a query-builder to kill the duplication.
+- `ProGame[]` response shape is byte-identical for both paths — no contract change there.
+
+**Tests:** extended `lib/__tests__/pro-pros-route.test.ts` with a `proId matrix` describe block (both/neither 400, malformed-uuid 400, proId happy path incl. asserting the SQL template text contains `pm.pro_id` not `pm.champion_id =`, proId+role filter asserts `2` is among the bound values, invalid role+proId 400). New `lib/__tests__/pro-players-route.test.ts` covers q validation (missing/empty/whitespace/41-char/40-char-boundary), the `%`/`_` escape (asserts the bound pattern is `%100\%\_win%`), Player shape mapping, empty-result, gameCount-0-not-filtered, no-DB fallback, 500-no-leak.
+
+**Gates:** `tsc --noEmit` clean, `vitest run` 106/106 (16 new), `next lint` clean (only pre-existing `<img>`→`next/image` warnings, none in touched files), `next build` clean — both routes listed as `ƒ` dynamic.
+
+**No contract deviations** from the brief. Files touched: `app/api/players/route.ts` (new), `app/api/pros/route.ts`, `lib/pro/types.ts`, `lib/__tests__/pro-pros-route.test.ts`, `lib/__tests__/pro-players-route.test.ts`. Did not touch `components/**`, `app/page.tsx`, `app/history/**`, `package.json`, `app/globals.css` per scope.
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-09 19:36
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-09 17:40:17Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-09 — Pro History tab (frontend half)
+
+Built `/history` — search-then-reveal pro match history by player or champion. Backend half (`/api/players`, `/api/pros?proId=`) was in-flight with engy in parallel; built entirely against the contract in the dispatch brief, verified in-browser with temporary fixture wiring (reverted before finishing — `grep -rn "TEMP-DEV-FIXTURE-WIRING"` returns clean).
+
+**New files (my scope only, no overlap with engy's `app/api/**`/`lib/**`):**
+- `app/history/page.tsx` — new route, client component (no `metadata` export needed — mirrors `app/page.tsx`'s existing pattern of relying on root layout metadata).
+- `components/proHistory.types.ts` — local `PlayerRef`/`PlayersApiResponse` mirroring `/api/players`, same "don't import the in-flight backend contract" discipline as `proGames.types.ts`.
+- `components/proHistory.fixtures.ts` — dev fixtures, unwired (same pattern as `proGames.fixtures.ts` — not imported by any shipped component).
+- `components/PlayerPicker.tsx` — debounced (250ms, 2-char floor) ARIA combobox typeahead against `/api/players?q=`. Race-guards stale responses via a bumped request-id ref. gameCount-0 entries render greyed but stay selectable per spec.
+- `components/SegmentedControl.tsx` — generic 2-option pill toggle (Player|Champion), reusable.
+- `components/LanePillRow.tsx` — 6-pill lane filter (All/Top/Jungle/Mid/Bot/Support) for Champion mode; `RoleSelector` couldn't be reused as-is since it has no "All"(=5) option.
+- `components/TabNav.tsx` — Builds|Pro History nav, `aria-current="page"` on active tab, `usePathname()`-driven.
+- `components/ProGamesSkeleton.tsx` — extracted from `ProGamesSection.tsx` (was inline) so `ProHistoryResults.tsx` can reuse the same skeleton without duplicating it.
+- `components/ProHistoryResults.tsx` — fetches `/api/pros?proId=` (player mode) or `?championId=&role=` (champion mode); player mode resolves per-game champion icons via `proAssets.getChampionIconMap()` since games can span multiple champions.
+
+**Edited (minimal, in-scope):**
+- `app/page.tsx` — nav-only: added `<TabNav />` inside the existing header, no restructuring.
+- `components/ProGameCard.tsx` — added optional `championIcon?: string` prop; header row now always shows champion identity (icon badge + `game.championName` text) in both champion-filtered (home page) and player-mode (new /history) views. Icon degrades to an empty placeholder box (no CLS, fixed w-5 h-5) if unresolved — name text is never optional so identity never disappears.
+- `components/ProGamesSection.tsx` — swapped its inline skeleton for the extracted `ProGamesSkeleton` import, no behavior change.
+- `components/proAssets.ts` — added `getChampionIconMap()`: fetches `/api/champions` once (module-level cache, same pattern as the existing rune-map cache), returns `Map<id, {name, icon}>`. Chose this over guessing a `championName -> CDN key` transform because `ProGame.championName` is a *display* name (e.g. "Lee Sin" with a space) and the CDN icon URL needs the *key* form ("LeeSin") — `/api/champions` already carries both plus the resolved icon URL, so reusing it sidesteps the transform entirely.
+
+**Decisions / deviations from the brief:**
+- Skipped the URL-state nice-to-have (`?player=`/`?champ=` sync) — brief explicitly allowed skipping if it added complexity, and syncing would need a slug→player resolution round-trip through the search API with no guaranteed exact match, which is real complexity for a "nice to have."
+- Mode toggle preserves each mode's own selection independently (switching Player→Champion→Player doesn't lose your player pick) — small UX call, not spec'd either way.
+
+**Verification:** `npm run typecheck` / `npm test` (106/106) / `npm run build` all clean from project root — confirmed both before AND after the temp fixture wiring was reverted. Browser-verified via chrome-devtools MCP at 1280px and 390px: prompt state, player-mode typeahead + race-safe debounce, player-mode results (champion icon correctly resolved against the REAL `/api/champions` endpoint, not fixtures), champion-mode results (icon passed straight from the picked `ChampionRef`), clear (×) resetting to prompt state, and the home page (`/`) re-verified for zero regressions (TabNav renders, existing champion-mode Pro Games section still uses the real `/api/pros`, unaffected by the temp fixture wiring which only ever touched `PlayerPicker.tsx`/`ProHistoryResults.tsx`). Did not empirically screenshot the error/empty states on `/history` — logic is line-for-line the same pattern as the already-shipped `ProGamesSection`, low risk.
+
+**Known gotcha hit + resolved:** orphaned `next dev -p 3919` background process locked `.next/trace` (`EPERM`) on the post-revert `npm run build` — matches the existing memory `bash-bg-dev-server-gotcha`. Killed via PowerShell `Get-CimInstance`/`Stop-Process` (bash `kill` doesn't reach Windows PIDs spawned this way), confirmed port free, build then succeeded clean.
+
+

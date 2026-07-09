@@ -7,6 +7,7 @@ import ChampionPicker from "@/components/ChampionPicker";
 import RoleSelector from "@/components/RoleSelector";
 import BuildCard from "@/components/BuildCard";
 import ProGamesSection from "@/components/ProGamesSection";
+import TabNav from "@/components/TabNav";
 
 function ImgWithFallback({
   src,
@@ -147,6 +148,7 @@ export default function HomePage() {
       <div className="max-w-[1080px] mx-auto px-4 sm:px-6">
         {/* ── Top bar ── */}
         <header className="pt-8 pb-5 border-b border-line mb-6">
+          <TabNav />
           <div className="flex items-center justify-center gap-4 mb-4">
             {champ && (
               <div className="relative flex-shrink-0">

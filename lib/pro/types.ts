@@ -62,6 +62,21 @@ export interface ProsResponse {
   games: ProGame[];
 }
 
+/** THE CONTRACT — GET /api/players response element (typeahead search). */
+export interface Player {
+  id: string; // lolpros uuid
+  name: string;
+  slug: string;
+  team: string | null;
+  role: ProRoleId | null;
+  country: string | null;
+  gameCount: number;
+}
+
+export interface PlayersResponse {
+  players: Player[];
+}
+
 // ── lolpros.gg raw shapes (partial + defensive — undocumented API) ──────────
 // Verified live 2026-07-09. Ladder entries carry ONE (main) account; profiles
 // carry the FULL account list under league_player.accounts.
