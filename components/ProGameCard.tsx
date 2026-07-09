@@ -140,6 +140,12 @@ export default function ProGameCard({ game, championIcon }: ProGameCardProps) {
   const [hideConsumables, setHideConsumables] = useState(true);
   const ver = versionFromPatch(game.patch);
   const detailId = `pro-game-detail-${game.id}`;
+  const isProstage = game.source === "prostage";
+  // Prostage never ships purchase/skill data, so there's nothing to expand —
+  // guard `expanded` itself (not just the toggle button) so a stale true
+  // value can never render the panel for this source.
+  const showExpandToggle = !isProstage;
+  const showDetailPanel = expanded && !isProstage;
 
   const timeline = hideConsumables
     ? game.purchaseOrder.filter((p) => !CONSUMABLE_ITEM_IDS.has(p.itemId))
@@ -170,16 +176,27 @@ export default function ProGameCard({ game, championIcon }: ProGameCardProps) {
               <span className="text-mut font-normal text-[11.5px] truncate">{game.player.team}</span>
             )}
           </div>
-          <div className="text-[10.5px] text-mut flex items-center gap-1.5 mt-0.5">
-            <span className="uppercase tracking-[0.5px]">{game.account.region}</span>
+          <div className="text-[10.5px] text-mut flex items-center gap-1.5 mt-0.5 flex-wrap">
+            {isProstage && (
+              <span className="inline-flex items-center px-1.5 py-[1px] rounded text-[9px] font-bold uppercase tracking-[0.5px] bg-gold/15 text-gold border border-gold/30">
+                Pro Play
+              </span>
+            )}
+            <span className="uppercase tracking-[0.5px]">
+              {isProstage ? game.tournament : game.account.region}
+            </span>
             {GAME_LANE_LABEL[game.role] && (
               <>
                 <span>·</span>
                 <span>{GAME_LANE_LABEL[game.role]}</span>
               </>
             )}
-            <span>·</span>
-            <span className="tabular-nums">{game.patch}</span>
+            {game.patch && (
+              <>
+                <span>·</span>
+                <span className="tabular-nums">{game.patch}</span>
+              </>
+            )}
             <span>·</span>
             <span className="tabular-nums">{relativeTime(game.gameCreation)}</span>
           </div>
@@ -190,13 +207,19 @@ export default function ProGameCard({ game, championIcon }: ProGameCardProps) {
           <span className="text-[12.5px] font-semibold text-txt tabular-nums">
             {game.kills}/{game.deaths}/{game.assists}
           </span>
-          <span className="text-[11px] text-mut tabular-nums">{formatGameLength(game.gameDurationSec)}</span>
+          {game.gameDurationSec > 0 && (
+            <span className="text-[11px] text-mut tabular-nums">{formatGameLength(game.gameDurationSec)}</span>
+          )}
         </div>
       </div>
 
-      {/* Runes + Spells row */}
+      {/* Runes + Spells row — hidden entirely when the source carries neither
+          (possible on pro-stage rows where Leaguepedia omits rune/spell data),
+          so data-less cards don't show a strip of empty rings. */}
+      {(game.runes.keystone > 0 || game.spells.some(Boolean)) && (
       <div className="flex items-center gap-4 px-4 py-3 border-b border-dashed border-line flex-wrap">
         {/* Runes */}
+        {game.runes.keystone > 0 && (
         <div className="flex items-center gap-1.5">
           <RunePerkIcon runeId={game.runes.keystone} ver={ver} size="lg" />
           <div className="flex items-center gap-1">
@@ -232,8 +255,10 @@ export default function ProGameCard({ game, championIcon }: ProGameCardProps) {
             ))}
           </div>
         </div>
+        )}
 
         {/* Spells */}
+        {game.spells.some(Boolean) && (
         <div className="flex items-center gap-1 ml-auto">
           {game.spells.map((id, i) => (
             <div
@@ -245,7 +270,9 @@ export default function ProGameCard({ game, championIcon }: ProGameCardProps) {
             </div>
           ))}
         </div>
+        )}
       </div>
+      )}
 
       {/* Items row */}
       <div className="flex items-center gap-1.5 px-4 py-3 flex-wrap">
@@ -270,27 +297,30 @@ export default function ProGameCard({ game, championIcon }: ProGameCardProps) {
           </>
         )}
 
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          aria-expanded={expanded}
-          aria-controls={detailId}
-          className="ml-auto flex items-center gap-1 text-[11px] text-mut hover:text-teal transition-colors px-2 py-1 rounded-md active:scale-95"
-        >
-          {expanded ? "Hide timeline" : "Show timeline"}
-          <span
-            className={`inline-block transition-transform duration-200 ease-out motion-reduce:transition-none ${
-              expanded ? "rotate-180" : ""
-            }`}
-            aria-hidden="true"
+        {showExpandToggle && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+            aria-controls={detailId}
+            className="ml-auto flex items-center gap-1 text-[11px] text-mut hover:text-teal transition-colors px-2 py-1 rounded-md active:scale-95"
           >
-            ▾
-          </span>
-        </button>
+            {expanded ? "Hide timeline" : "Show timeline"}
+            <span
+              className={`inline-block transition-transform duration-200 ease-out motion-reduce:transition-none ${
+                expanded ? "rotate-180" : ""
+              }`}
+              aria-hidden="true"
+            >
+              ▾
+            </span>
+          </button>
+        )}
       </div>
 
-      {/* Expandable detail: purchase order + skill order */}
-      {expanded && (
+      {/* Expandable detail: purchase order + skill order — no-op for prostage
+          (no purchase/skill data exists to show). */}
+      {showDetailPanel && (
         <div id={detailId} className="px-4 pb-4 pt-1 border-t border-line/60 bg-black/10">
           <div className="flex items-center justify-between mb-2 mt-2">
             <p className="text-[10.5px] tracking-[1px] uppercase text-teal font-bold">Purchase Order</p>

@@ -146,8 +146,76 @@ export const FIXTURE_GAME_EVENTFUL: ProGame = {
   },
 };
 
+/** Prostage, full runes — everything present except purchase/skill data. */
+export const FIXTURE_GAME_PROSTAGE_FULL: ProGame = {
+  id: "fixture-prostage-full-1",
+  source: "prostage",
+  tournament: "MSI 2026",
+  player: { name: "Faker", team: "T1", role: 2, country: "KR" },
+  account: { riotId: "", region: "MSI 2026" },
+  championId: 112,
+  championName: "Viktor",
+  role: 2,
+  patch: "16.13",
+  win: true,
+  kills: 6,
+  deaths: 1,
+  assists: 10,
+  gameCreation: hoursAgo(48),
+  gameDurationSec: 1980, // 33:00
+  spells: [4, 14],
+  finalItems: [6653, 3020, 3157, 3089, 3135, 4645],
+  trinket: 3364,
+  purchaseOrder: [],
+  skillOrder: [],
+  runes: {
+    primaryTree: 8200,
+    keystone: 8229, // Arcane Comet
+    primary: [8226, 8210, 8237],
+    secondaryTree: 8100,
+    secondary: [8126, 8143],
+    shards: [5008, 5008, 5011],
+  },
+};
+
+/** Prostage, keystone-only runes + unknown game length — exercises the
+ *  "hide length when 0", "hide empty patch", and "no empty rune circles"
+ *  degradation paths. */
+export const FIXTURE_GAME_PROSTAGE_PARTIAL: ProGame = {
+  id: "fixture-prostage-partial-1",
+  source: "prostage",
+  tournament: "LCK Summer 2026",
+  player: { name: "Chovy", team: "Gen.G", role: 2, country: "KR" },
+  account: { riotId: "", region: "LCK Summer 2026" },
+  championId: 112,
+  championName: "Viktor",
+  role: 2,
+  patch: "",
+  win: false,
+  kills: 3,
+  deaths: 4,
+  assists: 5,
+  gameCreation: hoursAgo(72),
+  gameDurationSec: 0, // unknown — hide length
+  spells: [4, 12],
+  finalItems: [6653, 3020, 3157],
+  trinket: null,
+  purchaseOrder: [],
+  skillOrder: [],
+  runes: {
+    primaryTree: 8200,
+    keystone: 8214, // Summon Aery
+    primary: [],
+    secondaryTree: 8400,
+    secondary: [],
+    shards: [],
+  },
+};
+
 export const FIXTURE_PRO_GAMES: ProGame[] = [
   FIXTURE_GAME_WIN,
   FIXTURE_GAME_LOSS,
   FIXTURE_GAME_EVENTFUL,
+  FIXTURE_GAME_PROSTAGE_FULL,
+  FIXTURE_GAME_PROSTAGE_PARTIAL,
 ];

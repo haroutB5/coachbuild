@@ -275,6 +275,18 @@ export default function HomePage() {
         <footer className="mt-10 pt-4 border-t border-line text-center text-[11px] text-mut space-y-1">
           <p>Build data and icons © coachless.gg / Riot Games. For personal use.</p>
           <p>Not endorsed by Riot Games.</p>
+          <p>
+            Pro-play match data from{" "}
+            <a
+              href="https://lol.fandom.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-teal hover:underline"
+            >
+              Leaguepedia
+            </a>{" "}
+            (CC BY-SA).
+          </p>
           {process.env.NEXT_PUBLIC_APP_VERSION && (
             <p className="text-mut">v{process.env.NEXT_PUBLIC_APP_VERSION}</p>
           )}

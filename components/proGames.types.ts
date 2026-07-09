@@ -33,27 +33,56 @@ export interface ProGameRunes {
 
 export interface ProGame {
   id: string;
-  source: "soloq";
+  source: "soloq" | "prostage";
+  /** Prostage only — e.g. "MSI 2026", "LCK Summer 2026". */
+  tournament?: string;
   player: ProGamePlayer;
   account: ProGameAccount;
   championId: number;
   championName: string;
   role: number;
-  patch: string; // "16.13"
+  patch: string; // "16.13" — may be empty for prostage
   win: boolean;
   kills: number;
   deaths: number;
   assists: number;
   gameCreation: string; // ISO
-  gameDurationSec: number;
+  gameDurationSec: number; // 0 = unknown (prostage only) — hide in UI
   spells: [number, number];
   finalItems: number[];
   trinket: number | null;
-  purchaseOrder: ProGamePurchase[];
-  skillOrder: string[]; // ["Q","W","E","Q",...]
-  runes: ProGameRunes;
+  purchaseOrder: ProGamePurchase[]; // [] for prostage (no purchase data)
+  skillOrder: string[]; // ["Q","W","E","Q",...] — [] for prostage
+  runes: ProGameRunes; // primary/secondary/shards may be [] for prostage
 }
 
 export interface ProGamesApiResponse {
   games: ProGame[];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Source filter — shared "All | Solo Queue | Pro Play" control used on both
+// the home page Pro Games section and /history results.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ProGameSource = "all" | "soloq" | "prostage";
+
+export const SOURCE_FILTER_OPTIONS: { value: ProGameSource; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "soloq", label: "Solo Queue" },
+  { value: "prostage", label: "Pro Play" },
+];
+
+/** Filter-aware empty-state title, e.g. "No pro-play games tracked yet for Faker". */
+export function proGamesEmptyTitle(source: ProGameSource, subjectName: string): string {
+  if (source === "prostage") return `No pro-play games tracked yet for ${subjectName}`;
+  if (source === "soloq") return `No solo queue games tracked yet for ${subjectName}`;
+  return `No tracked games yet for ${subjectName}`;
+}
+
+/** Filter-aware empty-state subtext. */
+export function proGamesEmptySub(source: ProGameSource): string {
+  if (source === "prostage") return "Check back after their next official match.";
+  if (source === "soloq") return "Check back after their next solo queue session.";
+  return "Check back after their next tracked game.";
 }

@@ -5,13 +5,31 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** 0=TOP 1=JUNGLE 2=MIDDLE 3=BOTTOM 4=UTILITY — same numbering as app RoleId,
- *  minus the 5=auto sentinel (pro match data always has a concrete role). */
+ *  minus the 5=auto sentinel (pro match data always has a concrete role).
+ *  Kept intentionally NARROW (no -1 here) — lib/pro/extract.ts and
+ *  lib/pro/roleMap.ts's soloQ path is guaranteed a concrete role by
+ *  construction (TEAM_POSITION_MAP only ever produces 0-4) and that
+ *  guarantee is worth keeping visible in the type. See DisplayRoleId below
+ *  for the field that needs to tolerate "unresolved." */
 export type ProRoleId = 0 | 1 | 2 | 3 | 4;
+
+/** ProRoleId plus -1=UNKNOWN, added for Phase 2 (prostage): Leaguepedia's
+ *  Role text can fail to resolve (missing, or a vocabulary variant
+ *  lib/prostage/roleMap.ts doesn't recognize yet), and those rows are still
+ *  stored/served rather than dropped — components/ProGameCard.tsx's
+ *  GAME_LANE_LABEL lookup already tolerates any unmapped numeric key by
+ *  simply omitting the lane label, so -1 renders as "no lane shown," never a
+ *  crash or a wrong label. Used ONLY on the outward ProGame/ProGamePlayer
+ *  contract, which both sources (soloq, always concrete; prostage,
+ *  sometimes unresolved) share — soloQ's own internal types stay on the
+ *  narrower ProRoleId since a plain ProRoleId value is always assignable to
+ *  DisplayRoleId. */
+export type DisplayRoleId = ProRoleId | -1;
 
 export interface ProGamePlayer {
   name: string;
   team: string | null;
-  role: ProRoleId;
+  role: DisplayRoleId;
   country: string | null;
 }
 
@@ -34,28 +52,36 @@ export interface ProGamePurchase {
   ts: number; // seconds into the game (converted from Riot's raw ms timeline timestamp)
 }
 
-/** THE CONTRACT — GET /api/pros response element. */
+/** THE CONTRACT — GET /api/pros response element.
+ *  Phase 2 (prostage): source is a REAL discriminant, not a hardcoded literal
+ *  — "prostage" rows come from Leaguepedia Cargo (official esports games) and
+ *  carry `tournament`; "soloq" rows never set it. prostage rows have no Riot
+ *  match timeline, so purchaseOrder/skillOrder are always [] and
+ *  gameDurationSec is always 0 for them — the frontend hides duration/build-
+ *  timeline UI when gameDurationSec === 0 (coordinate any change here with
+ *  fronty's consumer). */
 export interface ProGame {
-  id: string; // matchId
-  source: "soloq";
+  id: string; // matchId (soloq) or Leaguepedia GameId (prostage)
+  source: "soloq" | "prostage";
   player: ProGamePlayer;
   account: ProGameAccount;
   championId: number;
   championName: string;
-  role: ProRoleId;
-  patch: string; // "16.13"
+  role: DisplayRoleId;
+  patch: string; // "16.13"; may be "" for prostage rows where Patch wasn't resolvable
   win: boolean;
   kills: number;
   deaths: number;
   assists: number;
   gameCreation: string; // ISO
-  gameDurationSec: number;
+  gameDurationSec: number; // 0 for prostage (unknown — Cargo doesn't expose it)
   spells: [number, number];
   finalItems: number[]; // item0-5, 0s filtered out
   trinket: number | null; // item6
-  purchaseOrder: ProGamePurchase[]; // undo-adjusted, chronological
-  skillOrder: string[]; // ["Q","W","E","Q",...]
+  purchaseOrder: ProGamePurchase[]; // undo-adjusted, chronological; always [] for prostage
+  skillOrder: string[]; // ["Q","W","E","Q",...]; always [] for prostage
   runes: ProGameRunes;
+  tournament?: string; // prostage only — tournament_display, e.g. "LEC 2026 Summer"
 }
 
 export interface ProsResponse {

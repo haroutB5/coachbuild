@@ -3,6 +3,10 @@
     {
       "path": "/api/ingest/matches",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/ingest/prostage",
+      "schedule": "0 7 * * *"
     }
   ]
 }

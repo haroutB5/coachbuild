@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { ProGame, ProGamesApiResponse } from "./proGames.types";
+import type { ProGame, ProGamesApiResponse, ProGameSource } from "./proGames.types";
+import { SOURCE_FILTER_OPTIONS, proGamesEmptyTitle, proGamesEmptySub } from "./proGames.types";
 import ProGameCard from "./ProGameCard";
 import ProGamesSkeleton from "./ProGamesSkeleton";
+import SegmentedControl from "./SegmentedControl";
 
 interface ProGamesSectionProps {
   championId: number;
@@ -25,12 +27,13 @@ export default function ProGamesSection({
   limit = 20,
 }: ProGamesSectionProps) {
   const [state, setState] = useState<ProGamesState>({ status: "loading" });
+  const [source, setSource] = useState<ProGameSource>("all");
 
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
 
-    fetch(`/api/pros?championId=${championId}&role=${role}&limit=${limit}`)
+    fetch(`/api/pros?championId=${championId}&role=${role}&limit=${limit}&source=${source}`)
       .then(async (res) => {
         if (!res.ok) throw new Error(`pros fetch ${res.status}`);
         const data: ProGamesApiResponse = await res.json();
@@ -45,15 +48,24 @@ export default function ProGamesSection({
     return () => {
       cancelled = true;
     };
-  }, [championId, role, limit]);
+  }, [championId, role, limit, source]);
 
   return (
     <section className="mt-8">
-      <div className="flex items-baseline gap-2 mb-3 px-1">
+      <div className="flex items-center gap-2 mb-3 px-1 flex-wrap">
         <h2 className="text-[11px] tracking-[1.5px] uppercase text-teal font-bold">Pro Games</h2>
         {state.status === "ok" && (
           <span className="text-[11px] text-mut tabular-nums">{state.games.length} tracked</span>
         )}
+        <div className="ml-auto">
+          <SegmentedControl
+            ariaLabel="Filter pro games by source"
+            value={source}
+            onChange={setSource}
+            options={SOURCE_FILTER_OPTIONS}
+            size="sm"
+          />
+        </div>
       </div>
 
       {state.status === "loading" && <ProGamesSkeleton />}
@@ -67,9 +79,9 @@ export default function ProGamesSection({
       {state.status === "empty" && (
         <div className="bg-gradient-to-b from-panel to-[#0d121a] border border-line rounded-2xl px-5 py-6 text-center">
           <div className="text-[13px] text-txt font-medium mb-1">
-            No tracked pro games yet for {championName}
+            {proGamesEmptyTitle(source, championName)}
           </div>
-          <div className="text-[11.5px] text-mut">Check back after their next solo queue session.</div>
+          <div className="text-[11.5px] text-mut">{proGamesEmptySub(source)}</div>
         </div>
       )}
 

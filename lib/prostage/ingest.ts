@@ -1,0 +1,158 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// lib/prostage/ingest.ts — per-tournament pro-stage backfill/incremental
+// ingest. Chunked by design: process ONE tournament (one ScoreboardPlayers
+// Cargo call) per invocation, return the next cursor — mirrors
+// lib/pro/ingestMatches.ts's shape so app/api/ingest/prostage/route.ts and
+// scripts/ingest-prostage.mjs both drive it the same way.
+//
+// Serverless timing note: 7 tournaments x 30s Cargo pacing floor is ~3.5min,
+// which exceeds a route's 60s maxDuration — hence one-tournament-per-call.
+// The full-drain LOOP (all cursors back to back) only happens in the local
+// script; the route is meant to be walked by an external pinger using the
+// returned nextCursor, same pattern as /api/ingest/matches.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { getSql } from "@/lib/pro/db";
+import { DbUnavailableError } from "@/lib/pro/errors";
+import { cargoQueryWithRetry } from "./cargo";
+import { getDdragonMaps } from "./ddragon";
+import { extractProstageRow } from "./extract";
+import { orderByStaleness, resolveActiveTournaments } from "./tournaments";
+import type { CargoScoreboardPlayerRow } from "./types";
+
+const SCOREBOARD_PLAYERS_FIELDS =
+  "Link, Champion, Items, Trinket, Runes, KeystoneRune, PrimaryTree, SecondaryTree, " +
+  "SummonerSpells, Kills, Deaths, Assists, Team, Role, GameId, DateTime_UTC, OverviewPage, PlayerWin, Patch";
+
+export interface ProstageIngestOptions {
+  cursor?: number;
+  tournaments?: string[]; // override — skips resolveActiveTournaments AND staleness reordering (used by tests; the script resolves once itself, see scripts/ingest-prostage.mjs)
+  onProgress?: (msg: string) => void;
+  /** See CargoRetryOptions.fastFail in lib/prostage/cargo.ts. Pass true from
+   *  the route (60s maxDuration can't afford the ~4.5min cooldown); leave
+   *  false (default) for the script (long-running, no timeout). */
+  fastFailOnRatelimit?: boolean;
+}
+
+export interface ProstageIngestResult {
+  tournament: string | null;
+  rowsSeen: number;
+  rowsUpserted: number;
+  nextCursor: number | null;
+  errors: string[];
+}
+
+interface ProNameRow {
+  id: string;
+  name: string;
+}
+
+async function loadProNameIndex(sql: NonNullable<ReturnType<typeof getSql>>): Promise<Map<string, string>> {
+  const rows = (await sql`SELECT id, name FROM coachbuild.pros`) as unknown as ProNameRow[];
+  const index = new Map<string, string>();
+  for (const row of rows) index.set(row.name.trim().toLowerCase(), row.id);
+  return index;
+}
+
+export async function runProstageIngest(opts: ProstageIngestOptions = {}): Promise<ProstageIngestResult> {
+  const sql = getSql();
+  if (!sql) throw new DbUnavailableError();
+
+  const log = opts.onProgress ?? (() => {});
+  const cursor = opts.cursor ?? 0;
+  const fastFailOnRatelimit = opts.fastFailOnRatelimit ?? false;
+
+  // Staleness reordering ONLY applies to a fresh resolution — an explicit
+  // `opts.tournaments` override (tests, and the script's own once-per-run
+  // resolve+loop-every-cursor) is respected verbatim. This is what makes a
+  // cursorless cron hit a DIFFERENT (the least-recently-ingested) tournament
+  // on each invocation instead of the same DateStart-DESC head forever — see
+  // orderByStaleness's doc comment in lib/prostage/tournaments.ts.
+  const tournaments = opts.tournaments
+    ? opts.tournaments
+    : await orderByStaleness(sql, await resolveActiveTournaments({ log, fastFailOnRatelimit }));
+
+  const result: ProstageIngestResult = {
+    tournament: null,
+    rowsSeen: 0,
+    rowsUpserted: 0,
+    nextCursor: null,
+    errors: [],
+  };
+
+  if (cursor < 0 || cursor >= tournaments.length) {
+    return result; // nextCursor stays null -> caller knows the drain is done (or list was empty)
+  }
+
+  const overviewPage = tournaments[cursor];
+  result.tournament = overviewPage;
+  result.nextCursor = cursor + 1 < tournaments.length ? cursor + 1 : null;
+
+  try {
+    const [maps, proByName, rows] = await Promise.all([
+      getDdragonMaps(),
+      loadProNameIndex(sql),
+      cargoQueryWithRetry<CargoScoreboardPlayerRow>(
+        {
+          tables: "ScoreboardPlayers",
+          fields: SCOREBOARD_PLAYERS_FIELDS,
+          where: `OverviewPage="${overviewPage.replace(/"/g, '\\"')}"`,
+          orderBy: "DateTime_UTC DESC",
+          limit: 500,
+        },
+        { fastFail: fastFailOnRatelimit }
+      ),
+    ]);
+
+    result.rowsSeen = rows.length;
+
+    let extractedCount = 0;
+    let nullRoleCount = 0;
+
+    for (const raw of rows) {
+      const extracted = extractProstageRow(raw, maps, log);
+      if (!extracted) continue;
+      extractedCount += 1;
+      if (extracted.role === null) nullRoleCount += 1;
+      const proId = proByName.get(extracted.playerLink.trim().toLowerCase()) ?? null;
+      try {
+        const inserted = (await sql`
+          INSERT INTO coachbuild.prostage_matches (
+            game_id, player_link, overview_page, tournament_display, team,
+            champion_id, champion_name, role, win, kills, deaths, assists,
+            game_datetime, patch, spells, final_items, trinket, runes, pro_id
+          ) VALUES (
+            ${extracted.gameId}, ${extracted.playerLink}, ${extracted.overviewPage}, ${extracted.tournamentDisplay}, ${extracted.team},
+            ${extracted.championId}, ${extracted.championName}, ${extracted.role}, ${extracted.win}, ${extracted.kills}, ${extracted.deaths}, ${extracted.assists},
+            ${extracted.gameDatetime}, ${extracted.patch},
+            ${JSON.stringify(extracted.spells)}::jsonb, ${JSON.stringify(extracted.finalItems)}::jsonb, ${extracted.trinket},
+            ${JSON.stringify(extracted.runes)}::jsonb, ${proId}
+          )
+          ON CONFLICT (game_id, player_link) DO NOTHING
+          RETURNING game_id
+        `) as unknown as { game_id: string }[];
+        if (inserted.length > 0) result.rowsUpserted += 1;
+      } catch (err) {
+        result.errors.push(`game ${extracted.gameId} player ${extracted.playerLink}: ${(err as Error).message}`);
+      }
+    }
+
+    // >50% unresolved role is a vocab-mismatch SIGNAL, not a per-row problem
+    // (a handful of coach/analyst rows with no lane is normal and expected).
+    // If Leaguepedia's real Role text differs from lib/prostage/roleMap.ts's
+    // assumed vocabulary (e.g. "AD Carry" instead of "ADC"), ingest still
+    // succeeds and stores every row (role nullable, never a skip reason) —
+    // this warning is the only signal an operator gets that the map itself
+    // needs a new alias, since a green ingest run alone won't reveal it.
+    if (extractedCount > 0 && nullRoleCount / extractedCount > 0.5) {
+      log(
+        `tournament ${overviewPage}: ${nullRoleCount}/${extractedCount} rows have unresolved role — ` +
+          `possible Role vocabulary mismatch, check lib/prostage/roleMap.ts`
+      );
+    }
+  } catch (err) {
+    result.errors.push(`tournament ${overviewPage}: ${(err as Error).message}`);
+  }
+
+  return result;
+}

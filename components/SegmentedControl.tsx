@@ -14,6 +14,9 @@ interface SegmentedControlProps<T extends string> {
   value: T;
   onChange: (value: T) => void;
   ariaLabel: string;
+  /** "sm" for compact inline placements (e.g. a filter row next to a section
+   *  header) — same visual language, smaller footprint. Default "md". */
+  size?: "md" | "sm";
 }
 
 export default function SegmentedControl<T extends string>({
@@ -21,10 +24,13 @@ export default function SegmentedControl<T extends string>({
   value,
   onChange,
   ariaLabel,
+  size = "md",
 }: SegmentedControlProps<T>) {
+  const trackClass = size === "sm" ? "p-0.5 gap-0.5" : "p-1 gap-1";
+  const btnClass = size === "sm" ? "px-2.5 py-1 text-[11.5px]" : "px-4 py-1.5 text-[13px]";
   return (
     <div
-      className="inline-flex p-1 bg-panel2 border border-line rounded-xl gap-1"
+      className={`inline-flex ${trackClass} bg-panel2 border border-line rounded-xl`}
       role="group"
       aria-label={ariaLabel}
     >
@@ -35,7 +41,7 @@ export default function SegmentedControl<T extends string>({
             key={opt.value}
             type="button"
             onClick={() => onChange(opt.value)}
-            className={`px-4 py-1.5 rounded-lg text-[13px] font-semibold transition-all active:scale-95 ${
+            className={`${btnClass} rounded-lg font-semibold transition-all active:scale-95 ${
               active
                 ? "bg-teal text-bg shadow-[0_0_8px_rgba(45,212,191,0.4)]"
                 : "text-mut hover:text-txt"

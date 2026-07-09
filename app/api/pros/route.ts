@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
-import type { ProGame, ProGamePurchase, ProGameRunes, ProRoleId, ProsResponse } from "@/lib/pro/types";
+import type { DisplayRoleId, ProGame, ProGamePurchase, ProGameRunes, ProRoleId, ProsResponse } from "@/lib/pro/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -84,6 +84,99 @@ function rowToProGame(row: ProGameRow): ProGame {
   };
 }
 
+interface ProstageGameRow {
+  game_id: string;
+  player_link: string;
+  team: string | null;
+  champion_id: number;
+  champion_name: string;
+  role: number | null;
+  win: boolean;
+  kills: number;
+  deaths: number;
+  assists: number;
+  game_datetime: string | Date;
+  patch: string | null;
+  spells: unknown;
+  final_items: unknown;
+  trinket: number | null;
+  runes: unknown;
+  tournament_display: string;
+  pro_name: string | null;
+  pro_team: string | null;
+  pro_role: number | null;
+  pro_country: string | null;
+}
+
+/** Returns null for structurally-incomplete rows (missing identity fields or
+ *  an unparseable datetime) rather than throwing — a row this shape-
+ *  mismatched should never reach a real query result, but a defensive skip
+ *  here is cheap insurance against driver-version drift / test-mock
+ *  misconfiguration, matching this file's existing asJson() posture toward
+ *  jsonb columns.
+ *
+ *  Role is NOT a drop reason (fixed post-audit — a prior version returned
+ *  null here whenever role was unresolved, which silently blackholed EVERY
+ *  such row from EVERY query, including role=5/no-filter, behind a clean
+ *  ingest log showing nothing wrong): an unresolved role maps to the -1
+ *  sentinel (see ProRoleId in lib/pro/types.ts) rather than being dropped.
+ *  A CONCRETE lane filter (role=0-4) still excludes these rows correctly at
+ *  the SQL level (`pm.role = ${role}` is false/unknown against a NULL
+ *  column) — only the all-lanes path (role=5) surfaces them, which is
+ *  correct: an unknown lane can't satisfy "was this game played top," but it
+ *  can satisfy "show me all this champion's games." */
+function prostageRowToProGame(row: ProstageGameRow): ProGame | null {
+  if (!row?.game_id || !row.player_link || typeof row.champion_id !== "number") return null;
+  const gameCreation = new Date(row.game_datetime);
+  if (Number.isNaN(gameCreation.getTime())) return null;
+  const roleValue = ((row.pro_role ?? row.role) ?? -1) as DisplayRoleId;
+
+  return {
+    id: row.game_id,
+    source: "prostage",
+    player: {
+      name: row.pro_name ?? row.player_link,
+      team: row.pro_team ?? row.team,
+      role: roleValue,
+      country: row.pro_country ?? null,
+    },
+    account: { riotId: "", region: row.tournament_display },
+    championId: row.champion_id,
+    championName: row.champion_name,
+    role: roleValue,
+    patch: row.patch ?? "",
+    win: row.win,
+    kills: row.kills,
+    deaths: row.deaths,
+    assists: row.assists,
+    gameCreation: gameCreation.toISOString(),
+    gameDurationSec: 0,
+    spells: asJson<[number, number]>(row.spells, [0, 0]),
+    finalItems: asJson<number[]>(row.final_items, []),
+    trinket: row.trinket ?? null,
+    purchaseOrder: [],
+    skillOrder: [],
+    runes: asJson<ProGameRunes>(row.runes, {
+      primaryTree: 0,
+      keystone: 0,
+      primary: [],
+      secondaryTree: 0,
+      secondary: [],
+      shards: [],
+    }),
+    tournament: row.tournament_display,
+  };
+}
+
+const VALID_SOURCES = new Set(["all", "soloq", "prostage"]);
+
+/** Coerces a query result to an array — defensive against a mock/driver
+ *  returning undefined for a call it wasn't explicitly configured for (or
+ *  any unexpected non-array shape), rather than crashing the whole merge. */
+function asRows<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const champParam = searchParams.get("championId");
@@ -143,6 +236,14 @@ export async function GET(req: NextRequest) {
     limit = Math.min(parseInt(limitParam, 10), 100);
   }
 
+  const sourceParam = searchParams.get("source");
+  if (sourceParam && !VALID_SOURCES.has(sourceParam)) {
+    return NextResponse.json({ error: "Invalid source param" }, { status: 400 });
+  }
+  const source = sourceParam ?? "all";
+  const wantSoloq = source === "all" || source === "soloq";
+  const wantProstage = source === "all" || source === "prostage";
+
   const sql = getSql();
   if (!sql) {
     // No DB configured — the app must still build and run locally.
@@ -151,37 +252,82 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const rows = proId
-      ? ((await sql`
-          SELECT
-            pm.match_id, pm.champion_id, pm.champion_name, pm.role, pm.patch, pm.win,
-            pm.kills, pm.deaths, pm.assists, pm.game_creation, pm.game_duration_sec,
-            pm.spells, pm.final_items, pm.trinket, pm.purchase_order, pm.skill_order, pm.runes,
-            p.name AS pro_name, p.team AS pro_team, p.role AS pro_role, p.country AS pro_country,
-            pa.riot_id, pa.region
-          FROM coachbuild.pro_matches pm
-          JOIN coachbuild.pros p ON p.id = pm.pro_id
-          JOIN coachbuild.pro_accounts pa ON pa.puuid = pm.puuid
-          WHERE pm.pro_id = ${proId} AND (${role} = 5 OR pm.role = ${role})
-          ORDER BY pm.game_creation DESC
-          LIMIT ${limit}
-        `) as unknown as ProGameRow[])
-      : ((await sql`
-          SELECT
-            pm.match_id, pm.champion_id, pm.champion_name, pm.role, pm.patch, pm.win,
-            pm.kills, pm.deaths, pm.assists, pm.game_creation, pm.game_duration_sec,
-            pm.spells, pm.final_items, pm.trinket, pm.purchase_order, pm.skill_order, pm.runes,
-            p.name AS pro_name, p.team AS pro_team, p.role AS pro_role, p.country AS pro_country,
-            pa.riot_id, pa.region
-          FROM coachbuild.pro_matches pm
-          JOIN coachbuild.pros p ON p.id = pm.pro_id
-          JOIN coachbuild.pro_accounts pa ON pa.puuid = pm.puuid
-          WHERE pm.champion_id = ${championId} AND (${role} = 5 OR pm.role = ${role})
-          ORDER BY pm.game_creation DESC
-          LIMIT ${limit}
-        `) as unknown as ProGameRow[]);
+    // Each side is capped at `limit` — the top `limit` of the MERGED set can
+    // never need more than `limit` rows from either individual source, so
+    // fetching `limit` from each and merge-sorting is sufficient (never
+    // fetch-then-discard more than needed, never under-fetch and miss a
+    // newer row from the source with fewer total games).
+    const [soloqRows, prostageRows] = await Promise.all([
+      wantSoloq
+        ? proId
+          ? sql`
+              SELECT
+                pm.match_id, pm.champion_id, pm.champion_name, pm.role, pm.patch, pm.win,
+                pm.kills, pm.deaths, pm.assists, pm.game_creation, pm.game_duration_sec,
+                pm.spells, pm.final_items, pm.trinket, pm.purchase_order, pm.skill_order, pm.runes,
+                p.name AS pro_name, p.team AS pro_team, p.role AS pro_role, p.country AS pro_country,
+                pa.riot_id, pa.region
+              FROM coachbuild.pro_matches pm
+              JOIN coachbuild.pros p ON p.id = pm.pro_id
+              JOIN coachbuild.pro_accounts pa ON pa.puuid = pm.puuid
+              WHERE pm.pro_id = ${proId} AND (${role} = 5 OR pm.role = ${role})
+              ORDER BY pm.game_creation DESC
+              LIMIT ${limit}
+            `
+          : sql`
+              SELECT
+                pm.match_id, pm.champion_id, pm.champion_name, pm.role, pm.patch, pm.win,
+                pm.kills, pm.deaths, pm.assists, pm.game_creation, pm.game_duration_sec,
+                pm.spells, pm.final_items, pm.trinket, pm.purchase_order, pm.skill_order, pm.runes,
+                p.name AS pro_name, p.team AS pro_team, p.role AS pro_role, p.country AS pro_country,
+                pa.riot_id, pa.region
+              FROM coachbuild.pro_matches pm
+              JOIN coachbuild.pros p ON p.id = pm.pro_id
+              JOIN coachbuild.pro_accounts pa ON pa.puuid = pm.puuid
+              WHERE pm.champion_id = ${championId} AND (${role} = 5 OR pm.role = ${role})
+              ORDER BY pm.game_creation DESC
+              LIMIT ${limit}
+            `
+        : Promise.resolve([]),
+      wantProstage
+        ? proId
+          ? sql`
+              SELECT
+                pm.game_id, pm.player_link, pm.team, pm.champion_id, pm.champion_name, pm.role,
+                pm.win, pm.kills, pm.deaths, pm.assists, pm.game_datetime, pm.patch,
+                pm.spells, pm.final_items, pm.trinket, pm.runes, pm.tournament_display,
+                p.name AS pro_name, p.team AS pro_team, p.role AS pro_role, p.country AS pro_country
+              FROM coachbuild.prostage_matches pm
+              JOIN coachbuild.pros p ON p.id = pm.pro_id
+              WHERE pm.pro_id = ${proId} AND (${role} = 5 OR pm.role = ${role})
+              ORDER BY pm.game_datetime DESC
+              LIMIT ${limit}
+            `
+          : sql`
+              SELECT
+                pm.game_id, pm.player_link, pm.team, pm.champion_id, pm.champion_name, pm.role,
+                pm.win, pm.kills, pm.deaths, pm.assists, pm.game_datetime, pm.patch,
+                pm.spells, pm.final_items, pm.trinket, pm.runes, pm.tournament_display,
+                p.name AS pro_name, p.team AS pro_team, p.role AS pro_role, p.country AS pro_country
+              FROM coachbuild.prostage_matches pm
+              LEFT JOIN coachbuild.pros p ON p.id = pm.pro_id
+              WHERE pm.champion_id = ${championId} AND (${role} = 5 OR pm.role = ${role})
+              ORDER BY pm.game_datetime DESC
+              LIMIT ${limit}
+            `
+        : Promise.resolve([]),
+    ]);
 
-    const body: ProsResponse = { games: rows.map(rowToProGame) };
+    const soloqGames = asRows<ProGameRow>(soloqRows).map(rowToProGame);
+    const prostageGames = asRows<ProstageGameRow>(prostageRows)
+      .map(prostageRowToProGame)
+      .filter((g): g is ProGame => g !== null);
+
+    const games = [...soloqGames, ...prostageGames]
+      .sort((a, b) => new Date(b.gameCreation).getTime() - new Date(a.gameCreation).getTime())
+      .slice(0, limit);
+
+    const body: ProsResponse = { games };
     return NextResponse.json(body, {
       headers: { "Cache-Control": "s-maxage=1800, stale-while-revalidate=3600" },
     });

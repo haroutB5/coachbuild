@@ -715,3 +715,294 @@ Built `/history` — search-then-reveal pro match history by player or champion.
 **Known gotcha hit + resolved:** orphaned `next dev -p 3919` background process locked `.next/trace` (`EPERM`) on the post-revert `npm run build` — matches the existing memory `bash-bg-dev-server-gotcha`. Killed via PowerShell `Get-CimInstance`/`Stop-Process` (bash `kill` doesn't reach Windows PIDs spawned this way), confirmed port free, build then succeeded clean.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-09 20:02
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-09 18:36:24Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-09 — Phase 2: Pro Play (prostage) source filter + card variant
+
+Frontend half of the Leaguepedia prostage integration, parallel with engy's backend (`lib/prostage/**`, `app/api/ingest/prostage/**`, `migrations/0002_prostage.sql`). No file overlap — confirmed via `git status` before and after.
+
+**Files changed:**
+- `components/proGames.types.ts` — `ProGame.source` widened to `"soloq" | "prostage"`, added optional `tournament?: string`. New shared exports: `ProGameSource` type, `SOURCE_FILTER_OPTIONS` (All/Solo Queue/Pro Play), `proGamesEmptyTitle(source, name)` + `proGamesEmptySub(source)` — filter-aware empty-state copy shared by both surfaces.
+- `components/SegmentedControl.tsx` — added optional `size?: "md" | "sm"` prop (compact variant for inline filter placements). Backward compatible; existing `/history` Player|Champion toggle stays default `"md"`.
+- `components/ProGamesSection.tsx` (home page) — added `source` state (default `"all"`), SegmentedControl (`size="sm"`) placed right of the "PRO GAMES" header via `ml-auto`, `&source=` appended to the `/api/pros` fetch, empty state uses the new filter-aware copy helpers.
+- `components/ProHistoryResults.tsx` — same `source` state + filter row, but rendered **above the grid in every state** (loading/error/empty/ok) so the control never shifts position (CLS discipline). New required prop `subjectLabel: string` (player or champion display name) drives the empty-state copy — wired from `app/history/page.tsx` (`player!.name` / `champ!.name`).
+- `components/ProGameCard.tsx` — prostage variant: `isProstage = game.source === "prostage"`. Gold `bg-gold/15 text-gold border-gold/30` "Pro Play" badge in the meta row; shows `game.tournament` instead of `game.account.region`; patch hidden when falsy; game length hidden when `gameDurationSec === 0`; expand/timeline button (`showExpandToggle`) and detail panel (`showDetailPanel = expanded && !isProstage`) both gated off — no disabled control rendered, and `expanded` itself is guarded so a stale `true` can never leak the panel. Rune row needed **zero changes** — the existing `.map()` over `primary`/`secondary`/`shards` already renders nothing for empty arrays, satisfying "no empty rune circles" for free.
+- `components/proGames.fixtures.ts` — added `FIXTURE_GAME_PROSTAGE_FULL` (all runes present) and `FIXTURE_GAME_PROSTAGE_PARTIAL` (keystone-only runes, `patch: ""`, `gameDurationSec: 0`, `trinket: null`), both appended to `FIXTURE_PRO_GAMES`.
+- `app/page.tsx`, `app/history/page.tsx` — footer attribution line added: "Pro-play match data from Leaguepedia (CC BY-SA)." linking to `lol.fandom.com`, same styling as the existing coachless/Riot line.
+
+**Gates:** `tsc --noEmit` clean. `npm test` — 128/129 passing; the 1 failure (`lib/__tests__/prostage-cargo.test.ts`, an unhandled `CargoRateLimitedError` rejection) is in engy's untracked in-flight backend file, not touched by this round — confirmed via `git status`. `npm run build` clean (same pre-existing `<img>`-vs-`next/image` warnings as before, no new ones).
+
+**Browser verification (fixtures temporarily wired into `ProGamesSection`/`ProHistoryResults`, reverted before finishing — confirmed no `TEMP-VERIFY` markers left in `git grep`):**
+- Home page: segmented control renders compact next to "PRO GAMES 5 tracked"; "Pro Play" filter → 2 tracked (Faker/Chovy prostage cards only); "Solo Queue" filter → 3 tracked, soloQ cards pixel-identical to before (verified "Show timeline" expand/collapse still works, no regression).
+- Prostage card (Faker, MSI 2026, full runes): gold "PRO PLAY" badge + "MSI 2026" replacing region, patch `16.13` shown, length `33:00` shown, no "Show timeline" control at all.
+- Prostage card (Chovy, LCK Summer 2026, partial): badge + tournament shown, patch hidden (was `""`), length hidden (`gameDurationSec: 0`), rune row degrades to keystone + secondary-tree icon only (no empty circles), trinket omitted (was `null`), no timeline control.
+- `/history`: champion mode (Viktor) — filter row sits directly under "Showing recent games on Viktor — All lanes", correctly filters. Player mode (Faker, real player via live `/api/players` — that route already works) — filter row present even while empty; "All" → "No tracked games yet for Faker"; "Pro Play" → "No pro-play games tracked yet for Faker / Check back after their next official match." — subjectLabel + filter-aware copy confirmed live.
+- Dev server killed after verification (no orphaned `next dev` process; PIDs 12928/41492 `taskkill /F`'d).
+
+**Not done:** did not touch `lib/**`, `app/api/**`, `migrations/**`, `scripts/**`, `vercel.json`, `package.json` per scope. Did not attempt to fix the `prostage-cargo.test.ts` rate-limit test failure — that's engy's file and out of my lane.
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-09 20:50
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-09 18:28:24Z; previous content preserved there. Append new rounds below. -->
+
+## Phase 2 (prostage): Leaguepedia official-esports ingest — 2026-07-09
+
+Built `lib/prostage/**` (new), extended `lib/pro/types.ts`, `migrations/0002_prostage.sql`
+(new), `scripts/ingest-prostage.mjs` (new), `app/api/ingest/prostage/route.ts` (new),
+extended `app/api/pros/route.ts`, added a `vercel.json` cron entry. Did not touch
+components/**, app/page.tsx, app/history/**, app/layout.tsx, scripts/seed-crossregion.mjs,
+package.json — confirmed via `git status` before finishing.
+
+### DATA-QUALITY PROBE verdict: INCONCLUSIVE (external rate-limit, not a code issue)
+
+Every live Cargo call this session hit `ratelimited`, including the mandated one retry
+each (wait ~4.5min, retry once). Timeline: probe call 1 ratelimited immediately (~19:50Z);
+retried after the 4.5min cooldown per the hard rule — ratelimited again (~19:57Z, in
+`cargoQueryWithRetry`, which correctly propagated the second failure rather than looping).
+Later, the real ingest run's `Tournaments` lookup DID succeed (rate limit had cleared by
+then) and returned 7 real OverviewPages — but all 7 subsequent `ScoreboardPlayers` calls
+(each with its own retry) were ratelimited again. Net: 0 real ScoreboardPlayers rows were
+ever observed this session, so **Items/Runes/SummonerSpells field-shape (text names vs
+ids, comma-separated format, whether Runes includes the keystone) is UNVERIFIED against
+live data** — this machine's IP appears to have a much longer/stickier limiter window than
+the "3+ minutes" the brief described (spanned at least 20-30 min across this session).
+
+**What this does NOT block**: the ingest pipeline's mechanics — pacing, retry-once
+protocol, per-tournament error isolation, DB idempotency, no ratelimit ever cached as
+"no data" — are all verified end-to-end via the real run below (it hit the exact same
+condition and handled it cleanly).
+
+**What's unverified and needs a follow-up run** (when the rate limit is clear, e.g. from a
+different network or after a longer cooldown): confirm `extractProstageRow`'s assumptions
+in `lib/prostage/extract.ts` against a real row. The code is defensively hedged either way
+— every name field (Champion/Items/Trinket/SummonerSpells/KeystoneRune/PrimaryTree/
+SecondaryTree) accepts a bare numeric id OR a text name (see `resolveIdOrName` in
+extract.ts), so it should work regardless of which convention a given tournament era used,
+but this hedge itself is unverified against a real payload. Also unverified: whether
+`Runes` includes the keystone rune (code excludes a rune matching the resolved keystone id
+from primary/secondary, so it's fine either way) and whether `PlayerWin` is really `1`/``
+(code also accepts `Yes`/`true`/`Win`, case-insensitive).
+
+**Confirmed live** (from the successful `Tournaments` query): `OverviewPage` values use
+slash-hierarchical names, e.g. `"LCK Academy Series/2026 Season/2nd Championship
+Playoffs"`, `"LEC/2026 Season/Summer Playoffs"`, `"2026 Season World Championship"`. My
+`tournamentDisplayFromOverviewPage()` (extract.ts) turns these into e.g. "LCK Academy
+Series 2026 Season 2nd Championship Playoffs" — functional but a bit clunky (only strips a
+segment that's *exactly* "Season", not "2026 Season"). Low-priority polish candidate for
+fronty/urgot if the display reads oddly in the UI — not fixed this round since it's
+cosmetic and untouched real data was the priority.
+
+### Design deviations from the brief (both intentional, reasons below)
+
+1. **`pro_id` column type is `text`, not `uuid`.** `coachbuild.pros.id` (migration
+   0001) is `text PRIMARY KEY` (a lolpros uuid *string*, not a real Postgres uuid column) —
+   matched the existing FK type rather than the brief's literal wording.
+2. **Tournament resolution filters `OverviewPage LIKE '%LEC%'` etc., not `League IN (...)`.**
+   Leaguepedia's `Tournaments.League` enumeration values weren't independently confirmed
+   before probe budget ran out (and then ran into the ratelimit wall). LIKE-on-OverviewPage
+   is a softer match against the human-readable page-naming convention and turned out to
+   work correctly against live data (see confirmed OverviewPages above) — validates the
+   choice. `PROSTAGE_TOURNAMENT_SEED` env var remains as an override escape hatch if this
+   ever needs to be bypassed. Full rationale in `lib/prostage/tournaments.ts`'s header
+   comment.
+
+### Environment fix: `scripts/db-migrate.mjs` (pre-existing file, not prostage-scoped, but blocked ALL migrations)
+
+`node scripts/db-migrate.mjs` was completely broken in this environment before my changes
+— `Pool.connect()` from `@neondatabase/serverless` requires a `WebSocket` global (Node 22+)
+or the `ws` package as polyfill; neither exists here (Node 20.20.2, `ws` isn't a
+dependency, and I can't add one — package.json is out of scope). Fixed by: (1) setting
+`neonConfig.poolQueryViaFetch = true` and (2) switching every `client.query()` to
+`pool.query()` directly (no `.connect()`/session — `poolQueryViaFetch` only covers the
+no-checked-out-client path), which routes everything over the same fetch transport
+`lib/pro/db.ts`'s `neon()` client already uses successfully. That surfaced a second
+pre-existing gap: the fetch transport executes each call as a single prepared statement
+and rejects a semicolon-batched multi-statement string ("cannot insert multiple commands
+into a prepared statement") — added a comment-stripping statement splitter so each
+CREATE/INSERT in a migration file runs individually. Verified idempotent (`skip` on
+re-run). This was blocking BOTH migrations 0001 and 0002, not just prostage's — worth
+carrying forward as a fixed foundation, not just a workaround for this ticket.
+
+### Gates
+
+- `npx tsc --noEmit`: clean (also re-verified clean after fronty's merge landed).
+- `npx vitest run`: 150/150 passing (also re-verified after fronty's merge — same count,
+  fronty's changes were to existing component files, no new test files added on their
+  side this round). New test files: `prostage-cargo.test.ts` (field-helper +
+  ratelimit-retry contract, mocked fetch + fake timers — fixed a
+  vi.useFakeTimers-vs-promise-rejection ordering gotcha that caused 4 spurious "unhandled
+  rejection" warnings on first pass, see the `assertion = expect(...).rejects...` pattern
+  in that file), `prostage-ddragon.test.ts` (name→id resolution, mocked fetch),
+  `prostage-extract.test.ts` (row extraction incl. numeric-id hedge, rune tree-splitting,
+  skip/log paths), `prostage-roleMap.test.ts`, `prostage-tournaments.test.ts` (resolution
+  priority + TTL cache), `pro-pros-route-prostage.test.ts` (source param matrix + merge
+  ordering — kept as a SEPARATE file from the existing `pro-pros-route.test.ts`, which
+  needed zero edits: the route defensively coerces a not-explicitly-mocked second query
+  call to `[]` via `asRows()`, so the original single-query-mock tests still pass under the
+  new dual-query default).
+- `npx next lint`: clean (only pre-existing `<img>` warnings in files I didn't touch).
+- `npx next build`: clean, `/api/ingest/prostage` and updated `/api/pros` both compile.
+
+### Migration + real ingest run
+
+`node scripts/db-migrate.mjs`: applied `0002_prostage.sql` successfully (after the
+environment fix above), confirmed idempotent on re-run (`skip 0002_prostage.sql (already
+applied)`).
+
+`npx tsx scripts/ingest-prostage.mjs` (real run): resolved 7 tournaments live (see
+"Confirmed live" above), then all 7 `ScoreboardPlayers` calls (each with its mandated
+retry) hit `ratelimited` — final stats `totalSeen: 0, totalUpserted: 0, errors: 7` (one per
+tournament, all "You've exceeded your rate limit"), exit code 1 (correct — the script sets
+`process.exitCode = 1` when `errors.length > 0`, by design). Verified
+`coachbuild.prostage_matches` has 0 rows post-run (no partial/corrupt writes, consistent
+with "never cache a ratelimited response as no data" — nothing WAS written, nothing was
+falsely recorded as confirmed-empty either). No servers left running (one-shot script).
+
+**Recommended follow-up**: re-run `npx tsx scripts/ingest-prostage.mjs` from a
+different network/session once the rate limit clears, to (a) get real ingested rows and
+(b) validate the Items/Runes/SummonerSpells field-shape assumptions above against a real
+payload. If a specific-tournament re-probe is wanted first, `PROSTAGE_TOURNAMENT_SEED`
+can target one page directly, e.g. `PROSTAGE_TOURNAMENT_SEED="MSI 2026"`.
+
+### Contract addition for fronty
+
+`ProGame.source` is now `"soloq" | "prostage"` (real discriminant) and `ProGame.tournament?:
+string` was added (prostage only, `tournament_display`). prostage rows always have
+`gameDurationSec: 0`, `purchaseOrder: []`, `skillOrder: []` (Cargo has no timeline data) —
+the frontend should hide duration/build-timeline UI when `gameDurationSec === 0`, per the
+comment on `ProGame` in `lib/pro/types.ts`. `GET /api/pros` now takes an optional
+`?source=all|soloq|prostage` (default `all`, merges both sources sorted by
+`gameCreation` desc, limit applied post-merge).
+
+### Housekeeping
+
+`scripts/_probe-temp.mjs` is a leftover diagnostic script (untracked, harmless, not part
+of the deliverable) — its deletion was BLOCKED by the safety-gate hook (file-deletion
+detection) so I left it in place rather than route around the gate. Exact command for
+approval if wanted: `rm "C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/scripts/_probe-temp.mjs"`.
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-09 21:15
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-09 19:50:59Z; previous content preserved there. Append new rounds below. -->
+
+## Phase 2 (prostage) audit fixes — 2026-07-09, round 2
+
+Addressed all 3 audit findings before v0.7.0. Confirmed `scripts/_probe-temp.mjs` was
+user-approved and deleted (no longer present).
+
+**P1-1 — cron always hit cursor=0 (same tournament forever).** Added
+`orderByStaleness(sql, pages)` in `lib/prostage/tournaments.ts`: queries
+`coachbuild.prostage_matches` via `unnest(${pages}::text[])` LEFT JOINed to compute
+`COALESCE(max(ingested_at), 'epoch')` per tournament, returns pages ordered stalest-first
+— mirrors `pro_accounts.last_fetched_at ASC NULLS FIRST`. Wired into
+`runProstageIngest` (`lib/prostage/ingest.ts`): applied ONLY when tournaments are resolved
+fresh (no `opts.tournaments` override) — an explicit override (tests, and the script's
+own once-per-run resolve+loop) is respected verbatim. **Verified the actual SQL against
+the live DB** (not just the mocked unit test — a mock can't catch a real Postgres syntax
+error): ran the exact `unnest(...)::text[]` query directly, confirmed it executes and
+returns `epoch` for never-ingested pages. Unit tests in
+`lib/__tests__/prostage-tournaments.test.ts` (`orderByStaleness` describe block) and
+`lib/__tests__/prostage-ingest.test.ts` (composition — staleness applied vs bypassed).
+
+**Known accepted gap** (documented in `orderByStaleness`'s doc comment, no migration this
+round per the fix brief): a tournament with genuinely zero real games forever (e.g. an
+unstarted bracket) can never accumulate a `prostage_matches` row, so it never advances
+past `epoch` and would keep winning cursor=0 indefinitely — reintroducing the same
+starvation bug for the REST of the list. A dedicated "last attempted" tracking column
+(separate from "last successfully wrote a row") would close this; flagged as a follow-up
+if observed in practice, not built speculatively now.
+
+**P1-2 — null-role prostage rows were invisible under every query.**
+(a) `app/api/pros/route.ts`'s `prostageRowToProGame` no longer returns `null` when role is
+unresolved — maps to a new `-1` sentinel instead. Added `DisplayRoleId = ProRoleId | -1` to
+`lib/pro/types.ts` rather than widening `ProRoleId` itself (my first attempt widened
+`ProRoleId` directly and broke `lib/pro/extract.ts`'s typecheck — that file is OUT of my
+scope and its soloQ role is guaranteed concrete by construction, so I backed out and added
+a narrower additive type instead, used only on `ProGamePlayer.role`/`ProGame.role`).
+Confirmed `components/ProGameCard.tsx`'s `GAME_LANE_LABEL` is `Record<number, string>` and
+already guards `{GAME_LANE_LABEL[game.role] && (...)}` — a `-1` key naturally omits the
+lane label, no crash, no fronty change needed. A concrete lane filter (role=0-4) still
+excludes null-role rows correctly at the SQL level (unchanged, `pm.role = ${role}` is
+false against NULL) — only role=5/no-filter now surfaces them, which is correct.
+(b) Added `"adcarry"` to `lib/prostage/roleMap.ts`'s `CARGO_ROLE_MAP` and changed
+`roleFromCargoRole`'s normalization from trim+lowercase to trim+lowercase+strip-all-
+whitespace, so `"AD Carry"` / `"ad carry"` / `"adcarry"` all resolve through one key.
+(c) `runProstageIngest` now tracks `nullRoleCount`/`extractedCount` per tournament and logs
+a warning via `onProgress` when >50% of a batch's extracted rows have unresolved role —
+the vocab-mismatch signal an operator wouldn't otherwise get from a green ingest run.
+Tests: `lib/__tests__/pro-pros-route-prostage.test.ts` (route no longer drops null-role,
+concrete-lane filter still excludes it), `lib/__tests__/prostage-roleMap.test.ts` (adcarry
+aliases), `lib/__tests__/prostage-ingest.test.ts` (>50% warning fires / doesn't fire at
+33%).
+
+**P2 — the 270s cooldown was dead code under the route's maxDuration=60.** Added
+`CargoRetryOptions.fastFail` to `cargoQueryWithRetry` (`lib/prostage/cargo.ts`): when true,
+a ratelimited response propagates immediately with NO wait/retry. Threaded through
+`resolveActiveTournaments` (new `fastFailOnRatelimit` option) and `runProstageIngest` (same
+option name, defaults `false`). `app/api/ingest/prostage/route.ts` now passes
+`fastFailOnRatelimit: true` — the cron's next scheduled invocation acts as the retry
+instead of blocking mid-request toward a guaranteed timeout. `scripts/ingest-prostage.mjs`
+is unchanged (still defaults to `false`, keeps the full cooldown — appropriate for a
+long-running local script). Tests: `lib/__tests__/prostage-cargo.test.ts` (fastFail skips
+both wait and retry, verified with no fake-timer advance needed), `prostage-tournaments.test.ts`
+and `prostage-ingest.test.ts` (threading).
+
+**Gates**: `tsc --noEmit`, `vitest run` (165/165 passing, up from 151 — added
+`lib/__tests__/prostage-ingest.test.ts` and expanded 3 existing prostage test files),
+`next lint`, `next build` — all clean.
+
+**Housekeeping**: `lib/__tests__/zzz-debug.test.ts` is a leftover scratch file from
+debugging the P1-2c warning test (found that `extract.ts` imports `normalizeName` from
+`./ddragon` directly, so a full-replacement `vi.mock` of that module — rather than
+`importOriginal`-based partial mock — breaks extraction with a cryptic "no export"
+error; that's now documented in `prostage-ingest.test.ts`'s ddragon mock). Neutralized to
+a single trivial passing test (vitest errors on a zero-test file) rather than deleted —
+deletion is blocked by the safety-gate hook. Exact command for approval:
+`rm "C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/lib/__tests__/zzz-debug.test.ts"`.
+
+No version bump, no deploy — per instructions.
+
+
