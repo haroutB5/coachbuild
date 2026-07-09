@@ -32,7 +32,10 @@ export interface CargoScoreboardPlayerRow {
   GameId?: string;
   OverviewPage?: string;
   PlayerWin?: string; // Cargo boolean serialization varies ("1"/""/"Yes"/"No")
-  Patch?: string; // not confirmed present on ScoreboardPlayers — best-effort
+  // NO Patch field — confirmed absent from ScoreboardPlayers' real Cargo
+  // schema (Module:CargoDeclare/ScoreboardPlayers). Requesting it caused a
+  // live MWException on every call that got past the rate limiter; removed
+  // from the query, not represented here.
   [key: string]: string | undefined; // tolerate the space-vs-underscore twin key
 }
 

@@ -20,9 +20,22 @@ import { extractProstageRow } from "./extract";
 import { orderByStaleness, resolveActiveTournaments } from "./tournaments";
 import type { CargoScoreboardPlayerRow } from "./types";
 
+// ROOT CAUSE (2026-07-09, post-ship): every ScoreboardPlayers call that got
+// PAST the rate limiter (3/3 in the real ingest run) failed with a
+// MediaWiki-level `MWException`, not a clean "unknown field" JSON error —
+// meaning the query itself was malformed, not just rate-limited. Confirmed
+// via the LIVE schema (fetched as a normal wiki page, not the Cargo API, so
+// it costs zero rate-limit budget):
+//   https://lol.fandom.com/wiki/Module:CargoDeclare/ScoreboardPlayers?action=raw
+// Cross-checked every requested field against that declaration — ALL of them
+// are real EXCEPT "Patch", which was never confirmed and is genuinely absent
+// from this table's schema (I'd flagged this exact risk in my own original
+// comment). Removed. Every other field (Trinket/PlayerWin/GameId/
+// KeystoneRune/PrimaryTree/SecondaryTree included — all were "prime
+// suspects" in the fix brief) is confirmed present and correctly named.
 const SCOREBOARD_PLAYERS_FIELDS =
   "Link, Champion, Items, Trinket, Runes, KeystoneRune, PrimaryTree, SecondaryTree, " +
-  "SummonerSpells, Kills, Deaths, Assists, Team, Role, GameId, DateTime_UTC, OverviewPage, PlayerWin, Patch";
+  "SummonerSpells, Kills, Deaths, Assists, Team, Role, GameId, DateTime_UTC, OverviewPage, PlayerWin";
 
 export interface ProstageIngestOptions {
   cursor?: number;

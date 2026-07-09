@@ -2,6 +2,10 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.7.1] — 2026-07-09
+### Fixed
+- Pro-play ingest MWException: `Patch` is not a column on Leaguepedia's `ScoreboardPlayers` (verified against the table's CargoDeclare schema) — removed from the query; pro-stage `patch` is now always null (icon URLs fall back to a pinned version).
+
 ## [0.7.0] — 2026-07-09
 ### Added
 - **Official pro-play (on-stage) games** via Leaguepedia (CC BY-SA, attributed): final build, runes, spells, result per player per game, in a new `coachbuild.prostage_matches` table with name→id resolution through ddragon. No purchase/skill order — that data does not exist in any free source for stage games.

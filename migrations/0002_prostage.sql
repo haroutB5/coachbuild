@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS coachbuild.prostage_matches (
   deaths integer NOT NULL,
   assists integer NOT NULL,
   game_datetime timestamptz NOT NULL,
-  patch text,                           -- nullable: not confirmed present on ScoreboardPlayers
+  patch text,                           -- always NULL: confirmed absent from ScoreboardPlayers'
+                                         -- real Cargo schema (live-verified 2026-07-09); kept
+                                         -- nullable in case a future schema adds patch tracking
   spells jsonb NOT NULL,
   final_items jsonb NOT NULL,
   trinket integer,

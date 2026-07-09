@@ -200,7 +200,13 @@ export function extractProstageRow(
     deaths: parseCargoInt(cargoField(raw, "Deaths")),
     assists: parseCargoInt(cargoField(raw, "Assists")),
     gameDatetime: datetime,
-    patch: cargoField(raw, "Patch") ?? null,
+    // ScoreboardPlayers has NO Patch field — confirmed via the live Cargo
+    // schema declaration (Module:CargoDeclare/ScoreboardPlayers), fetched as
+    // a plain wiki page on 2026-07-09. Requesting it was the root cause of a
+    // real MWException on every ScoreboardPlayers call that got past the
+    // rate limiter. Always null now — column stays nullable in the DB in
+    // case a future Cargo schema change adds patch tracking to this table.
+    patch: null,
     spells,
     finalItems,
     trinket,

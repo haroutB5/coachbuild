@@ -1006,3 +1006,111 @@ deletion is blocked by the safety-gate hook. Exact command for approval:
 No version bump, no deploy — per instructions.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-09 21:46
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-09 20:15:05Z; previous content preserved there. Append new rounds below. -->
+
+## Phase 2 (prostage) MWException root-cause fix — 2026-07-09, round 3
+
+### Root cause: found, high confidence, NOT yet live-confirmed (rate limit)
+
+Fetched the REAL ScoreboardPlayers Cargo schema as a plain wiki page (zero rate-limit
+cost, per the fix brief): `curl -A "CoachBuild/0.7 ..." "https://lol.fandom.com/wiki/Module:CargoDeclare/ScoreboardPlayers?action=raw"`
+→ 200 OK, full field declaration list. Cross-checked all 19 requested fields one by one:
+
+- **18 of 19 are genuinely valid**, INCLUDING every field the fix brief flagged as a
+  "prime suspect" — `Trinket`, `PlayerWin`, `GameId`, `KeystoneRune`, `PrimaryTree`,
+  `SecondaryTree` are all real, correctly-named columns on this table.
+- **`Patch` does not exist on ScoreboardPlayers at all.** This is the one field I'd
+  ALREADY flagged in my own original code comment as "not confirmed present — best-effort"
+  (see the original `lib/prostage/types.ts` comment from round 1) — it turned out to be a
+  real bug, not just a hedge.
+- This cleanly explains the coordinator's evidence: requesting a genuinely nonexistent
+  field trips a MediaWiki-level exception (`MWException`, opaque hash) when Cargo's query
+  builder tries to resolve it to a column — NOT a clean structured "unknown field" JSON
+  error, and NOT a rate-limit response. That matches "3/3 non-ratelimited calls failed this
+  way" exactly: the 4 that got blocked by the limiter never reached the query builder to
+  hit the bug; the 3 that got past it all hit the same malformed-field wall.
+
+**Fix applied**: removed `Patch` from `SCOREBOARD_PLAYERS_FIELDS` in `lib/prostage/ingest.ts`;
+`lib/prostage/extract.ts`'s `patch` field is now always `null` (was `cargoField(raw,
+"Patch") ?? null`, which could never have resolved to anything else anyway — the field
+literally isn't in the API response). Updated `lib/prostage/types.ts`'s
+`CargoScoreboardPlayerRow` comment and `migrations/0002_prostage.sql`'s `patch text` column
+comment (comment-only edit, no re-migration needed — the column stays nullable text). No
+`Runes`/`Items`/`SummonerSpells` field-name changes were needed (all confirmed correct
+against the live schema) — the earlier "field-shape unverified" caveat from round 1's
+handoff narrows down to just this one field, now fixed.
+
+### Live confirmation: INCONCLUSIVE — limiter still hostile
+
+Per the fix brief: waited until 21:45 local (>=10min after 21:35), then ran exactly ONE
+confirmation probe (`cargoQuery`, no retry — a single plain call, not
+`cargoQueryWithRetry`, to burn as little budget as possible per the brief's spirit) against
+`ScoreboardPlayers OverviewPage="2026 Season World Championship"` limit=3 with the
+corrected (Patch-free) field list. Result: `CargoRateLimitedError` — blocked by the rate
+limiter itself, BEFORE reaching the query builder. This means the probe could NOT
+distinguish "field fix worked" from "field fix didn't work" — it never got far enough to
+tell. Per the brief's explicit stop condition ("If the limiter is still hostile, stop after
+the single probe and report"), did **NOT** proceed to the full
+`npx tsx scripts/ingest-prostage.mjs` run — running it now would just burn more calls into
+the same wall with no new information, and the brief was explicit about not burning Cargo
+calls speculatively.
+
+**Confidence assessment**: the field-level fix itself is HIGH confidence (definitive
+source — the actual schema declaration, not inference from symptoms), but it remains
+UNVERIFIED against a live response. The data-quality verdict from round 1's handoff
+(Items/Runes/SummonerSpells actual content shape) is STILL OPEN — this round didn't add
+new evidence either way, since no row was ever returned.
+
+**Recommended next step**: re-run the same single-probe pattern from a fresh session once
+enough time has passed (this machine/IP's limiter has now been hostile across THREE
+separate sessions spanning at least an hour+ of wall time today — worth trying from a
+different network if another same-network attempt fails too). If the probe succeeds, that
+IS the answer to both open questions at once (field fix confirmed + data-quality verdict) —
+no need to run the full ingest first, a 3-row probe response settles both.
+
+### Gates
+
+`npx tsc --noEmit` and `npx vitest run` (165/165) — both clean, per the brief's Gates line
+(tsc/vitest only requested this round, not lint/build — ran anyway is unnecessary scope
+creep so skipped per the explicit instruction).
+
+### Housekeeping
+
+`scripts/_probe-fixed.mjs` — one-shot confirmation-probe script, neutralized (not deleted,
+same safety-gate block as prior rounds) to a stub with the exact `rm` command noted inside
+for approval.
+
+No version bump, no deploy — not requested this round.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-09 21:46
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-09 20:46:34Z; previous content preserved there. Append new rounds below. -->
+
+
