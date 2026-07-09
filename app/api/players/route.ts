@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
+import { FRESH_WINDOW_DAYS } from "@/lib/pro/fresh";
 import type { Player, PlayersResponse, ProRoleId } from "@/lib/pro/types";
 
 export const runtime = "nodejs";
@@ -61,6 +62,7 @@ export async function GET(req: NextRequest) {
         COUNT(pm.match_id)::int AS game_count
       FROM coachbuild.pros p
       LEFT JOIN coachbuild.pro_matches pm ON pm.pro_id = p.id
+        AND pm.game_creation > now() - make_interval(days => ${FRESH_WINDOW_DAYS})
       WHERE p.name ILIKE ${pattern}
       GROUP BY p.id, p.name, p.slug, p.team, p.role, p.country
       ORDER BY game_count DESC, p.name ASC

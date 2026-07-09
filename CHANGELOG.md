@@ -2,6 +2,11 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.7.2] — 2026-07-10
+### Fixed
+- **Freshness window (90 days)** on all pro-game queries, player game counts, and match ingest (Riot startTime filter). Stale bootcamp history (e.g. Faker's Oct-2024 Worlds EUW games) no longer serves as "recent" — builds are patch-relative and months-old games are misleading.
+- New scripts/ingest-player.mjs <name> — targeted on-demand fill for one player (jumps the backfill queue).
+
 ## [0.7.1] — 2026-07-09
 ### Fixed
 - Pro-play ingest MWException: `Patch` is not a column on Leaguepedia's `ScoreboardPlayers` (verified against the table's CargoDeclare schema) — removed from the query; pro-stage `patch` is now always null (icon URLs fall back to a pinned version).

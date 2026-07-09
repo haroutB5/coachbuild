@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
+import { FRESH_WINDOW_DAYS } from "@/lib/pro/fresh";
 import type { DisplayRoleId, ProGame, ProGamePurchase, ProGameRunes, ProRoleId, ProsResponse } from "@/lib/pro/types";
 
 export const runtime = "nodejs";
@@ -271,6 +272,7 @@ export async function GET(req: NextRequest) {
               JOIN coachbuild.pros p ON p.id = pm.pro_id
               JOIN coachbuild.pro_accounts pa ON pa.puuid = pm.puuid
               WHERE pm.pro_id = ${proId} AND (${role} = 5 OR pm.role = ${role})
+                AND pm.game_creation > now() - make_interval(days => ${FRESH_WINDOW_DAYS})
               ORDER BY pm.game_creation DESC
               LIMIT ${limit}
             `
@@ -285,6 +287,7 @@ export async function GET(req: NextRequest) {
               JOIN coachbuild.pros p ON p.id = pm.pro_id
               JOIN coachbuild.pro_accounts pa ON pa.puuid = pm.puuid
               WHERE pm.champion_id = ${championId} AND (${role} = 5 OR pm.role = ${role})
+                AND pm.game_creation > now() - make_interval(days => ${FRESH_WINDOW_DAYS})
               ORDER BY pm.game_creation DESC
               LIMIT ${limit}
             `
@@ -300,6 +303,7 @@ export async function GET(req: NextRequest) {
               FROM coachbuild.prostage_matches pm
               JOIN coachbuild.pros p ON p.id = pm.pro_id
               WHERE pm.pro_id = ${proId} AND (${role} = 5 OR pm.role = ${role})
+                AND pm.game_datetime > now() - make_interval(days => ${FRESH_WINDOW_DAYS})
               ORDER BY pm.game_datetime DESC
               LIMIT ${limit}
             `
@@ -312,6 +316,7 @@ export async function GET(req: NextRequest) {
               FROM coachbuild.prostage_matches pm
               LEFT JOIN coachbuild.pros p ON p.id = pm.pro_id
               WHERE pm.champion_id = ${championId} AND (${role} = 5 OR pm.role = ${role})
+                AND pm.game_datetime > now() - make_interval(days => ${FRESH_WINDOW_DAYS})
               ORDER BY pm.game_datetime DESC
               LIMIT ${limit}
             `

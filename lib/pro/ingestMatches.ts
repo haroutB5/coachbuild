@@ -9,6 +9,7 @@
 import { getSql } from "./db";
 import { DbUnavailableError, RiotUnavailableError } from "./errors";
 import { extractMatch } from "./extract";
+import { freshStartTimeEpochSec } from "./fresh";
 import { routingForServer } from "./regionMap";
 import { getMatch, getMatchIdsByPuuid, getMatchTimeline, RiotRequestError } from "./riot";
 
@@ -72,7 +73,7 @@ export async function runMatchIngest(opts: MatchIngestOptions = {}): Promise<Mat
   return result;
 }
 
-async function ingestOneAccount(
+export async function ingestOneAccount(
   sql: NonNullable<ReturnType<typeof getSql>>,
   account: AccountRow,
   matchesPerAccount: number,
@@ -88,6 +89,7 @@ async function ingestOneAccount(
     queue: 420,
     start: 0,
     count: matchesPerAccount,
+    startTime: freshStartTimeEpochSec(),
   });
 
   let existing = new Set<string>();

@@ -52,11 +52,14 @@ export function getAccountByRiotId(
 export function getMatchIdsByPuuid(
   regional: string,
   puuid: string,
-  opts: { queue?: number; start?: number; count?: number } = {}
+  opts: { queue?: number; start?: number; count?: number; startTime?: number } = {}
 ): Promise<string[]> {
-  const { queue = 420, start = 0, count = 20 } = opts;
+  const { queue = 420, start = 0, count = 20, startTime } = opts;
+  // startTime (epoch seconds) keeps stale bootcamp/history games out of the
+  // id list entirely — cheaper than fetching then discarding at extract time.
+  const startTimeParam = startTime != null ? `&startTime=${startTime}` : "";
   return riotFetch<string[]>(
-    `https://${regional}.api.riotgames.com/lol/match/v5/matches/by-puuid/${puuid}/ids?queue=${queue}&start=${start}&count=${count}`
+    `https://${regional}.api.riotgames.com/lol/match/v5/matches/by-puuid/${puuid}/ids?queue=${queue}&start=${start}&count=${count}${startTimeParam}`
   );
 }
 
