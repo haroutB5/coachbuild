@@ -17,7 +17,6 @@ import {
   type ResolvedRuneDisplay,
 } from "./proAssets";
 import {
-  ImgWithFallback,
   relativeTime,
   formatGameLength,
   formatMinuteStamp,
@@ -25,9 +24,12 @@ import {
   WinLossPill,
   GAME_LANE_LABEL,
 } from "./ProGameCard";
+import { IconWithFallback } from "./IconWithFallback";
 import ItemDetailPopover from "./ItemDetailPopover";
+import EntityDetailPopover, { type EntityKind } from "./EntityDetailPopover";
 import { buildSkillOrderGrid, SKILL_ROWS, SKILL_GRID_COLUMNS, type SkillLetter } from "./skillOrderGrid";
 import { useProstageTimeline } from "./prostageTimeline";
+import { trapTabKey } from "./focusTrap";
 
 // Delay before actually unmounting after close — must be >= the longest
 // `duration-*` class used on the backdrop/panel exit transition below (150ms
@@ -51,10 +53,12 @@ function RunePerkTile({
   runeId,
   ver,
   size,
+  onOpenDetail,
 }: {
   runeId: number;
   ver: string;
   size: "lg" | "sm";
+  onOpenDetail: (kind: EntityKind, id: number) => void;
 }) {
   const [rune, setRune] = useState<ResolvedRuneDisplay | null>(null);
 
@@ -76,14 +80,19 @@ function RunePerkTile({
   const label = rune ? rune.name : `Rune #${runeId}`;
 
   return (
-    <div className="flex flex-col items-center gap-1 w-16 flex-shrink-0">
+    <button
+      type="button"
+      onClick={() => onOpenDetail("rune", runeId)}
+      aria-label={`View details for rune ${label}`}
+      className="flex flex-col items-center gap-1 w-16 flex-shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel rounded-md active:scale-95 transition-transform"
+    >
       <div
         className={`${dim} ${ring} rounded-full bg-black/30 overflow-hidden flex items-center justify-center flex-shrink-0`}
       >
-        <ImgWithFallback src={rune?.icon ?? ""} alt={label} className="w-full h-full object-contain" />
+        <IconWithFallback src={rune?.icon ?? ""} alt={label} fallbackGlyph={label} className="w-full h-full object-contain" />
       </div>
       <span className="text-[9.5px] text-mut text-center leading-tight line-clamp-2">{label}</span>
-    </div>
+    </button>
   );
 }
 
@@ -92,7 +101,12 @@ function TreeTile({ treeId, size }: { treeId: number; size: "lg" | "sm" }) {
   return (
     <div className="flex flex-col items-center gap-1 w-16 flex-shrink-0">
       <div className={`${dim} rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0`}>
-        <ImgWithFallback src={treeIconUrl(treeId)} alt={treeName(treeId)} className="w-full h-full object-contain p-1.5" />
+        <IconWithFallback
+          src={treeIconUrl(treeId)}
+          alt={treeName(treeId)}
+          fallbackGlyph={treeName(treeId)}
+          className="w-full h-full object-contain p-1.5"
+        />
       </div>
       <span className="text-[9.5px] text-teal text-center leading-tight">{treeName(treeId)}</span>
     </div>
@@ -123,8 +137,19 @@ function SkillGridRow({ letter, levels }: { letter: SkillLetter; levels: (number
           className={`aspect-square min-w-0 rounded-[3px] flex items-center justify-center text-[8px] font-bold tabular-nums leading-none ${
             level
               ? isUlt
-                ? "bg-teal text-bg"
-                : "bg-panel2 border border-line text-txt"
+                ? // Ult (R) row — the vivid, solid-fill treatment. Deliberately
+                  // the brightest cell on the grid; Q/W/E below stay one step
+                  // down so R still reads as "the hero ability."
+                  "bg-teal text-bg"
+                : // Q/W/E filled cells — bg-panel2 (#202329) here was only
+                  // ~1.07:1 against the sheet's own bg-panel (#1a1d21), i.e.
+                  // functionally invisible as a "filled" indicator even
+                  // though the number text inside it was legible. Swapped to
+                  // a translucent teal-dim tint + solid teal-dim border: a
+                  // real hue shift (not just a lightness bump) reads as
+                  // clearly "filled" against the neutral sheet bg, while
+                  // staying visually one step down from R's solid fill.
+                  "bg-teal-dim/25 border border-teal-dim text-teal-hover"
               : "bg-black/10 border border-line/30"
           }`}
         >
@@ -213,7 +238,7 @@ function ItemBuildOrderSection({
                     title={`Item #${p.itemId} — ${formatMinuteStamp(p.ts)}`}
                     className="w-11 h-11 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform hover:border-teal-dim active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
                   >
-                    <ImgWithFallback src={itemIconUrl(p.itemId, ver)} alt={`Item #${p.itemId}`} className="w-full h-full object-contain" />
+                    <IconWithFallback src={itemIconUrl(p.itemId, ver)} alt={`Item #${p.itemId}`} className="w-full h-full object-contain" />
                   </button>
                 ))}
               </div>
@@ -346,15 +371,21 @@ export default function GameDetailSheet({
   const [rendered, setRendered] = useState(false);
   const [visible, setVisible] = useState(false);
   const [hideConsumables, setHideConsumables] = useState(true);
-  // `activeItemId` (null = closed) drives the popover's `open` prop.
-  // `lastItemId` is deliberately NOT cleared on close — ItemDetailPopover
-  // stays mounted through its own exit transition (same decoupled
-  // rendered/visible pattern this sheet uses for itself), so it needs an
-  // itemId to keep showing while it fades out, not undefined.
-  const [activeItemId, setActiveItemId] = useState<number | null>(null);
-  const [lastItemId, setLastItemId] = useState<number>(0);
+  // One unified "which detail popover is open" tracker for items, runes,
+  // shards, AND summoner spells — `activeDetail` (null = closed) drives the
+  // popover's `open` prop. `lastDetail` is deliberately NOT cleared on
+  // close — the popover stays mounted through its own exit transition (same
+  // decoupled rendered/visible pattern this sheet uses for itself), so it
+  // needs a kind+id to keep showing while it fades out, not undefined. The
+  // sheet's own item/rune/shard/spell tap buttons are all covered by the
+  // backdrop while a popover is open, so `lastDetail.kind` can never change
+  // mid-open — only one popover is ever live at a time.
+  type DetailRef = { kind: "item" | EntityKind; id: number };
+  const [activeDetail, setActiveDetail] = useState<DetailRef | null>(null);
+  const [lastDetail, setLastDetail] = useState<DetailRef | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const triggerFocusRef = useRef<Element | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const ver = versionFromPatch(game.patch);
   // Local const (not the raw `game.trinket` property access) so TS's null
@@ -366,12 +397,15 @@ export default function GameDetailSheet({
 
   const skillGrid = buildSkillOrderGrid(game.skillOrder);
 
-  function openItemPopover(id: number) {
-    setLastItemId(id);
-    setActiveItemId(id);
+  function openDetail(kind: "item" | EntityKind, id: number) {
+    setLastDetail({ kind, id });
+    setActiveDetail({ kind, id });
   }
-  function closeItemPopover() {
-    setActiveItemId(null);
+  function openItemPopover(id: number) {
+    openDetail("item", id);
+  }
+  function closeDetail() {
+    setActiveDetail(null);
   }
 
   // Mount/unmount is decoupled from `open` so the exit transition can
@@ -402,35 +436,69 @@ export default function GameDetailSheet({
   }, [open, rendered]);
 
   // Lock body scroll + compensate for the vanished scrollbar so the page
-  // behind doesn't shift width while the sheet is up.
+  // behind doesn't shift width while the sheet is up. Plain
+  // `overflow:hidden` on body does NOT stop iOS Safari's rubber-band scroll
+  // from bleeding the page behind through underneath the sheet (verified on
+  // device) — the standard fix is pinning body to `position:fixed` at its
+  // current scroll offset, then restoring both the inline styles AND the
+  // scroll position on cleanup.
   useEffect(() => {
     if (!rendered) return;
+    const scrollY = window.scrollY;
     const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
-    const prevOverflow = document.body.style.overflow;
-    const prevPaddingRight = document.body.style.paddingRight;
-    document.body.style.overflow = "hidden";
-    if (scrollbarWidth > 0) document.body.style.paddingRight = `${scrollbarWidth}px`;
+    const body = document.body;
+    const prev = {
+      position: body.style.position,
+      top: body.style.top,
+      left: body.style.left,
+      right: body.style.right,
+      width: body.style.width,
+      overflow: body.style.overflow,
+      paddingRight: body.style.paddingRight,
+    };
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.left = "0";
+    body.style.right = "0";
+    body.style.width = "100%";
+    body.style.overflow = "hidden";
+    if (scrollbarWidth > 0) body.style.paddingRight = `${scrollbarWidth}px`;
     return () => {
-      document.body.style.overflow = prevOverflow;
-      document.body.style.paddingRight = prevPaddingRight;
+      body.style.position = prev.position;
+      body.style.top = prev.top;
+      body.style.left = prev.left;
+      body.style.right = prev.right;
+      body.style.width = prev.width;
+      body.style.overflow = prev.overflow;
+      body.style.paddingRight = prev.paddingRight;
+      window.scrollTo(0, scrollY);
     };
   }, [rendered]);
 
   useEffect(() => {
     if (!rendered) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key !== "Escape") return;
-      // First Escape closes the item popover only (if open); second press
-      // (popover already gone) closes the sheet itself.
-      if (activeItemId !== null) {
-        closeItemPopover();
+      if (e.key === "Escape") {
+        // First Escape closes whichever detail popover is open (item, rune,
+        // shard, or spell); second press (popover already gone) closes the
+        // sheet itself.
+        if (activeDetail !== null) {
+          closeDetail();
+          return;
+        }
+        onClose();
         return;
       }
-      onClose();
+      // Tab trap for the sheet's own dialog — only while no popover is on
+      // top of it; a popover open traps Tab within ITSELF instead (see
+      // DetailPopover's own listener), so the sheet stays out of the way.
+      if (e.key === "Tab" && activeDetail === null && panelRef.current) {
+        trapTabKey(panelRef.current, e);
+      }
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [rendered, onClose, activeItemId]);
+  }, [rendered, onClose, activeDetail]);
 
   if (!rendered || typeof document === "undefined") return null;
 
@@ -458,6 +526,7 @@ export default function GameDetailSheet({
 
       {/* Panel — full-screen sheet on mobile, centered modal on desktop */}
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label={`Game detail — ${championDisplayName ?? game.championName}, ${game.player.name}`}
@@ -471,9 +540,10 @@ export default function GameDetailSheet({
         <div className="flex items-start gap-3 px-5 pt-5 pb-4 border-b border-line flex-shrink-0">
           {championIcon && (
             <span className="w-12 h-12 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
-              <ImgWithFallback
+              <IconWithFallback
                 src={championIcon}
                 alt={championDisplayName ?? game.championName}
+                fallbackGlyph={championDisplayName ?? game.championName}
                 className="w-full h-full object-cover"
               />
             </span>
@@ -539,11 +609,11 @@ export default function GameDetailSheet({
               <div className="flex items-start gap-4 flex-wrap">
                 {game.runes.keystone > 0 && (
                   <div className="flex items-start gap-2">
-                    <RunePerkTile runeId={game.runes.keystone} ver={ver} size="lg" />
+                    <RunePerkTile runeId={game.runes.keystone} ver={ver} size="lg" onOpenDetail={openDetail} />
                     {game.runes.primary.length > 0 && (
                       <div className="flex items-start gap-2 pt-1">
                         {game.runes.primary.map((id, i) => (
-                          <RunePerkTile key={`p-${id}-${i}`} runeId={id} ver={ver} size="sm" />
+                          <RunePerkTile key={`p-${id}-${i}`} runeId={id} ver={ver} size="sm" onOpenDetail={openDetail} />
                         ))}
                       </div>
                     )}
@@ -553,19 +623,30 @@ export default function GameDetailSheet({
                   <div className="flex items-start gap-2">
                     <TreeTile treeId={game.runes.secondaryTree} size="sm" />
                     {game.runes.secondary.map((id, i) => (
-                      <RunePerkTile key={`s-${id}-${i}`} runeId={id} ver={ver} size="sm" />
+                      <RunePerkTile key={`s-${id}-${i}`} runeId={id} ver={ver} size="sm" onOpenDetail={openDetail} />
                     ))}
                   </div>
                 )}
                 {game.runes.shards.length > 0 && (
                   <div className="flex items-start gap-2">
                     {game.runes.shards.map((id, i) => (
-                      <div key={`shard-${id}-${i}`} className="flex flex-col items-center gap-1 w-16 flex-shrink-0">
+                      <button
+                        key={`shard-${id}-${i}`}
+                        type="button"
+                        onClick={() => openDetail("shard", id)}
+                        aria-label={`View details for stat shard ${shardName(id)}`}
+                        className="flex flex-col items-center gap-1 w-16 flex-shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel rounded-md active:scale-95 transition-transform"
+                      >
                         <div className="w-7 h-7 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
-                          <ImgWithFallback src={shardIconUrl(id)} alt={shardName(id)} className="w-full h-full object-contain p-1" />
+                          <IconWithFallback
+                            src={shardIconUrl(id)}
+                            alt={shardName(id)}
+                            fallbackGlyph={shardName(id)}
+                            className="w-full h-full object-contain p-1"
+                          />
                         </div>
                         <span className="text-[9.5px] text-mut text-center leading-tight">{shardName(id)}</span>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 )}
@@ -581,12 +662,23 @@ export default function GameDetailSheet({
                 {game.spells.map(
                   (id, i) =>
                     id > 0 && (
-                      <div key={`spell-${id}-${i}`} className="flex flex-col items-center gap-1">
+                      <button
+                        key={`spell-${id}-${i}`}
+                        type="button"
+                        onClick={() => openDetail("spell", id)}
+                        aria-label={`View details for summoner spell ${spellName(id)}`}
+                        className="flex flex-col items-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel rounded-md active:scale-95 transition-transform"
+                      >
                         <div className="w-10 h-10 rounded-[8px] bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
-                          <ImgWithFallback src={spellIconUrl(id, ver)} alt={spellName(id)} className="w-full h-full object-contain" />
+                          <IconWithFallback
+                            src={spellIconUrl(id, ver)}
+                            alt={spellName(id)}
+                            fallbackGlyph={spellName(id)}
+                            className="w-full h-full object-contain"
+                          />
                         </div>
                         <span className="text-[10px] text-mut">{spellName(id)}</span>
-                      </div>
+                      </button>
                     )
                 )}
               </div>
@@ -606,7 +698,11 @@ export default function GameDetailSheet({
                   title={`Item #${id}`}
                   className="w-11 h-11 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform hover:border-teal-dim active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
                 >
-                  <ImgWithFallback src={itemIconUrl(id, ver)} alt={`Item #${id}`} className="w-full h-full object-contain" />
+                  <IconWithFallback
+                    src={itemIconUrl(id, ver)}
+                    alt={`Item #${id}`}
+                    className="w-full h-full object-contain"
+                  />
                 </button>
               ))}
               {trinketId && (
@@ -617,7 +713,12 @@ export default function GameDetailSheet({
                   title={`Trinket #${trinketId}`}
                   className="w-11 h-11 rounded-full bg-black/30 border border-teal-dim overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform hover:border-teal active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
                 >
-                  <ImgWithFallback src={itemIconUrl(trinketId, ver)} alt="Trinket" className="w-full h-full object-contain" />
+                  <IconWithFallback
+                    src={itemIconUrl(trinketId, ver)}
+                    alt="Trinket"
+                    fallbackGlyph="Trinket"
+                    className="w-full h-full object-contain"
+                  />
                 </button>
               )}
             </div>
@@ -663,17 +764,21 @@ export default function GameDetailSheet({
         </div>
       </div>
 
-      {/* Always mounted (once an item has ever been opened) so its own
-          rendered/visible exit transition — same decoupled pattern as this
-          sheet's own — gets to play out on close instead of being yanked
-          from the tree mid-fade. `lastItemId` intentionally persists across
-          close; only `open` toggles. */}
-      {lastItemId !== 0 && (
-        <ItemDetailPopover
-          itemId={lastItemId}
+      {/* Always mounted (once any item/rune/shard/spell has ever been
+          opened) so its own rendered/visible exit transition — same
+          decoupled pattern as this sheet's own — gets to play out on close
+          instead of being yanked from the tree mid-fade. `lastDetail`
+          intentionally persists across close; only `open` toggles. */}
+      {lastDetail && lastDetail.kind === "item" && (
+        <ItemDetailPopover itemId={lastDetail.id} ver={ver} open={activeDetail !== null} onClose={closeDetail} />
+      )}
+      {lastDetail && lastDetail.kind !== "item" && (
+        <EntityDetailPopover
+          kind={lastDetail.kind}
+          id={lastDetail.id}
           ver={ver}
-          open={activeItemId !== null}
-          onClose={closeItemPopover}
+          open={activeDetail !== null}
+          onClose={closeDetail}
         />
       )}
     </div>,

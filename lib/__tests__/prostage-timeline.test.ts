@@ -154,6 +154,47 @@ describe("teamsMatch", () => {
     expect(teamsMatch(["T1", "Gen.G"], evTeams)).toBe(false);
     expect(teamsMatch(["T1", "G2 Esports"], [{ name: "T1" }])).toBe(false);
   });
+
+  // Real-world naming-drift cases (live-verified 2026-07-10 — root cause of
+  // 26 prostage games wrongly marked "unavailable" before containment matching).
+  it("matches sponsor-name drift: 'Team Liquid' (Leaguepedia) vs 'Team Liquid Alienware'/'TLAW' (lolesports)", () => {
+    const ev = [
+      { name: "T1", code: "T1" },
+      { name: "Team Liquid Alienware", code: "TLAW" },
+    ];
+    expect(teamsMatch(["T1", "Team Liquid"], ev)).toBe(true);
+  });
+  it("matches sponsor-name drift: 'Deep Cross Gaming' vs 'Relove Deep Cross Gaming'/'DCG'", () => {
+    const ev = [
+      { name: "Team Liquid Alienware", code: "TLAW" },
+      { name: "Relove Deep Cross Gaming", code: "DCG" },
+    ];
+    expect(teamsMatch(["Deep Cross Gaming", "Team Liquid"], ev)).toBe(true);
+  });
+  it("matches legal-entity/suffix drift: 'Gen.G' vs 'Gen.G Esports'/'GEN'", () => {
+    const ev = [
+      { name: "T1", code: "T1" },
+      { name: "Gen.G Esports", code: "GEN" },
+    ];
+    expect(teamsMatch(["Gen.G", "T1"], ev)).toBe(true);
+  });
+  it("matches a Leaguepedia disambiguation suffix: 'LYON (2024 American Team)' vs plain 'LYON'", () => {
+    const ev = [
+      { name: "FURIA", code: "FUR" },
+      { name: "LYON", code: "LYON" },
+    ];
+    expect(teamsMatch(["FURIA", "LYON (2024 American Team)"], ev)).toBe(true);
+  });
+  it("does not let containment cause a false match when the DB token is under the length floor", () => {
+    // "T1"/"G2" (2 chars) are under MIN_CONTAINMENT_LEN — must rely on exact
+    // match only, never spuriously substring-match an unrelated long name/code
+    // that happens to embed the same two characters.
+    const ev = [
+      { name: "Totally1Unrelated", code: "TOU" },
+      { name: "Giant2Org", code: "GNT" },
+    ];
+    expect(teamsMatch(["T1", "G2"], ev)).toBe(false);
+  });
 });
 
 // ── resolveChampionKey ──────────────────────────────────────────────────────

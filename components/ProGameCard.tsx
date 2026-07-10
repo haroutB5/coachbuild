@@ -11,6 +11,7 @@ import {
   type ResolvedRuneDisplay,
 } from "./proAssets";
 import GameDetailSheet from "./GameDetailSheet";
+import { IconWithFallback } from "./IconWithFallback";
 
 export function ImgWithFallback({
   src,
@@ -21,17 +22,7 @@ export function ImgWithFallback({
   alt: string;
   className?: string;
 }) {
-  if (!src) return <div className={className} aria-hidden="true" />;
-  return (
-    <img
-      src={src}
-      alt={alt}
-      className={className}
-      onError={(e) => {
-        (e.currentTarget as HTMLImageElement).style.display = "none";
-      }}
-    />
-  );
+  return <IconWithFallback src={src} alt={alt} className={className} />;
 }
 
 /** Compute a client-only relative-time string. This section only ever

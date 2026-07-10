@@ -2,6 +2,15 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.13.0] — 2026-07-10
+### Added
+- **Runes, stat shards, and summoner spells are now tappable** in the game-detail view — same centered info card as items, with names and descriptions.
+### Fixed
+- **Skill-order grid readability**: filled cells were near-invisible (1.07:1 contrast) — now a teal-tinted chip measured at 7.9:1, with the R row still distinct.
+- **Stormraider's Surge keystone rendered as an empty circle** (its icon path 403s on the CDN; special-cased like Deathfire Touch). Any icon that fails to load now shows a lettered placeholder instead of vanishing — everywhere (cards, sheet, Builds page).
+- **LCK "Road to MSI" pro-play games couldn't resolve their item timelines** — resolver now finds them on lolesports' schedule.
+- Accessibility round (from an adversarial audit): dialogs now trap Tab, the item card returns focus where you were on close, background can't scroll behind the sheet on iOS, picker aria states corrected.
+
 ## [0.12.0] — 2026-07-10
 ### Added
 - **Pro-play games now show the in-game item build order** (matchday-style): reconstructed from the official lolesports broadcast feed by walking the game's frames, matched to each player by champion. Computed once per game on first view (a few seconds), then served instantly from the database. Items in the timeline are tappable like everywhere else. Skill order remains unavailable for on-stage games (the feed carries no ability-level data).

@@ -2374,3 +2374,87 @@ shape, resolveEsportsGameId (happy/no-league/no-match/no-game#/transient/out-of-
   hits feed.lolesports.com — don't parallelize).
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-10 22:50
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-10 20:48:50Z; previous content preserved there. Append new rounds below. -->
+
+## Round 2026-07-10 — GameDetailSheet: skill-grid contrast, rune/shard/spell tap-to-detail, Stormraider's Surge icon fix
+
+### Summary
+
+Fixed all three prod v0.12.0 bugs reported from the game-detail sheet, plus folded in a mid-round audit's overlapping findings (one audit claim was investigated and **rejected with evidence** — see below).
+
+**1. Skill-order grid contrast.** Filled Q/W/E cells were `bg-panel2` (#202329) on `bg-panel` (#1a1d21) — measured **1.07:1**, functionally invisible as a "filled" indicator (only R read because it's solid teal). Fixed to `bg-teal-dim/25 border border-teal-dim text-teal-hover`: text-vs-chip contrast is now **7.9:1** (Q/W/E) and **11.6:1** (R, unchanged), and the chip's own opaque border reads **5.93:1** against the sheet bg (exceeds WCAG 1.4.11's 3:1 non-text/UI-component threshold) — the translucent fill alone is a real *hue* shift (blue-cyan vs neutral gray), not just a lightness bump, so it reads as filled at a glance even though the raw luminance-only ratio of the translucent fill vs sheet bg is a modest 1.53:1. R keeps its solid opaque `bg-teal text-bg` treatment so it stays visually the brightest/hero cell. All contrast numbers computed live in the running app via `getComputedStyle` + a WCAG luminance function, not eyeballed. Live-verified at 390×844: `components/GameDetailSheet.tsx` `SkillGridRow`.
+
+**2. Rune/shard/summoner-spell tap-to-detail.** Extended the existing item-popover pattern instead of forking it:
+- `components/DetailPopover.tsx` (new) — extracted the shared chrome (backdrop, centering, mount/exit transition, close button, focus mgmt, Tab trap) out of the old `ItemDetailPopover`, so it exists exactly once.
+- `components/ItemDetailPopover.tsx` — refactored to a thin item-data wrapper around `DetailPopover` (unchanged behavior, verified live: Hextech Rocketbelt gold+description still renders).
+- `components/EntityDetailPopover.tsx` (new) — same shell, three data sources by `kind`: rune → `runeDetail.ts` (below) + `proAssets.resolveRuneDisplay` for icon; shard → new `shardDetail.ts` static map (9 ids, ddragon has no shard data at all); spell → `summonerDetail.ts` (below).
+- `components/runeDetail.ts` (new) — fetches `runesReforged.json` from the same coachless CDN mirror/version pattern as `itemDetail.ts`, flattens style→slot→rune, strips ddragon markup **and** unresolved `@Variable@` placeholders (e.g. Absorb Life's `@HealAmount@`) to `…` rather than leaving raw garbage. Prefers `shortDesc`, falls back to `longDesc`.
+- `components/summonerDetail.ts` (new) — fetches `summoner.json`, flattens by numeric `key` (ProGame only carries numeric spell ids), uses the `description` field (already plain text, no `{{ }}` template vars unlike `tooltip`) + `cooldown[0]`.
+- `GameDetailSheet.tsx` — unified `activeItemId`/`lastItemId` into one `activeDetail`/`lastDetail` tracker (`{kind: "item"|"rune"|"shard"|"spell", id}`) so Escape-ordering and which-popover-to-render logic is DRY across all four tap targets. Rune/shard/spell tiles now `<button>`s with aria-labels; touch target is the full icon+label column (well over 44×44) not just the icon.
+- Live-verified all four paths on Faker's MSI Galio game + a solo-queue Sylas game: keystone (Stormraider's Surge), a minor rune (via the same button), a stat shard (Adaptive Force → "+9 Adaptive Force (5.4 AD or 9 AP)", matches the brief's own example verbatim), a summoner spell (Teleport → "300s cooldown" + description), and the item popover (still works, unchanged).
+
+**3. Stormraider's Surge invisible icon.** Root cause confirmed two ways: (a) direct CDN HEAD checks — the coachless bundle's Icon path for rune id 8230 (`.../PhaseRush/PhaseRush.webp`) 403s at both 16.11.1 and 16.13.1; the correct current path is `.../PhaseRush/StormraidersSurgeRuneIcon2.webp` (200). (b) **Audited all 62 entries** in the bundle against the CDN (scripted HEAD sweep) — only ids **8230** (Stormraider's Surge) and **8992** (Deathfire Touch, already special-cased) 403; every other rune's bundled Icon resolves fine. Added a second special case in `proAssets.ts::resolveRuneDisplay` (`STORMRAIDERS_SURGE_ID = 8230`) mirroring the existing Deathfire Touch pattern. Live-verified: icon renders correctly in Faker's MSI Galio game (the exact repro from the ticket).
+
+Also added a real fallback for the "invisible icon" failure mode itself, not just this one rune: `components/IconWithFallback.tsx` (new) — on `<img>` error, shows a bordered glyph tile (first letter of the resolved name) instead of ProGameCard's existing `ImgWithFallback`, which sets `display:none` (invisible gap). Applied to every icon in `GameDetailSheet.tsx` + both detail popovers (champion header, runes, tree, shards, spells, final-build items, trinket, purchase-order items). **Live-verified** by dispatching a synthetic `error` event on a real `<img>` in the running page — it correctly swapped to a visible "I" glyph tile instead of vanishing.
+
+### Mid-round audit correction — investigated and REJECTED (with evidence)
+
+The audit's claim "id 8230 is actually Phase Rush, not Stormraider's Surge — coachless mirror is wrong, only `ddragon.leagueoflegends.com` returns 200" does not hold up:
+- Fetched **`https://ddragon.leagueoflegends.com/cdn/16.13.1/data/en_US/runesReforged.json`** directly (the real, authoritative Riot CDN, not the coachless mirror) — id 8230's `name` field is **"Stormraider's Surge"**, `icon` is `.../PhaseRush/StormraidersSurgeRuneIcon2.png`. The internal `key` staying `"PhaseRush"` while the display name changed is the normal Riot pattern for a rune rework that keeps its id.
+- Also live-curled `ddragon.leagueoflegends.com/cdn/img/perk-images/Styles/Sorcery/PhaseRush/StormraidersSurgeRuneIcon2.png` → 200, so ddragon proper serves the current-name asset too, not just the legacy `PhaseRush.png` filename the audit found.
+- Kept the implementation as originally built (name "Stormraider's Surge", icon path `StormraidersSurgeRuneIcon2.webp`) — verified correct against the primary source, not just the mirror.
+
+### Other audit findings folded in (verified legitimate, in files I already own)
+
+- **P1-1 (Tab trap missing)** — `components/focusTrap.ts` (new, shared `trapTabKey` helper). Wired into both `GameDetailSheet.tsx`'s own dialog (only active while no popover is on top — a popover open traps Tab within itself instead, guarded by `activeDetail === null`) and `DetailPopover.tsx`'s dialog.
+- **P1-2 (no focus-restore in ItemDetailPopover)** — fixed at the shell level in `DetailPopover.tsx` (mirrors `GameDetailSheet`'s own `triggerFocusRef` pattern exactly), so it now covers items AND runes/shards/spells for free. Live-verified: closing the item popover with Escape returns focus visibly to the item button that opened it.
+- **P1-4 (`ImgWithFallback` `display:none` persists across src changes)** — fixed in my **new** `IconWithFallback.tsx` (`useEffect` resets `failed` on `src` change). Declined to touch `ProGameCard.tsx`'s copy or `RunePage.tsx`'s duplicate — both are explicitly out of my scope per this round's brief ("Do NOT touch ... ProGameCard"). Flagging for engy/a follow-up round.
+- **GameDetailSheet iOS rubber-band scroll** — fixed: body scroll-lock now uses `position:fixed` pinned at the current scroll offset (+ restore) instead of plain `overflow:hidden`, which iOS Safari ignores for touch scroll.
+
+### Audit findings NOT applied (out of scope or contradicted by evidence)
+
+- **`proAssets.ts` `ICON_VERSION_FALLBACK` bump** — declined. `lib/staticData.ts` (backend-owned) pins the SAME fallback (`"16.11.1"`) deliberately, backed by its own passing test (`lib/__tests__/staticData.patch.test.ts`, "icon URL falls back to 16.11.1..."). `proAssets.ts`'s copy exists specifically to mirror that choice (see its own comment). Bumping only my copy would desync the two and contradicts an existing backend test/decision — needs to happen in `lib/staticData.ts` first, in coordination with engy, if at all.
+- **ProHistoryResults.tsx display-name fallback, PlayerPicker/ChampionPicker aria fixes, app/layout.tsx meta tag** — all outside this round's file scope (pickers are explicitly excluded; the other two are different surfaces entirely). Not touched — flagging for a follow-up round rather than scope-creeping this one.
+
+### Files Touched
+
+- `components/GameDetailSheet.tsx` — skill-grid contrast fix, unified detail-popover state, rune/shard/spell tap buttons, iOS scroll-lock fix, Tab trap wiring, `IconWithFallback` everywhere.
+- `components/ItemDetailPopover.tsx` — refactored onto `DetailPopover` shell (behavior unchanged).
+- `components/proAssets.ts` — added `STORMRAIDERS_SURGE_ID` special case in `resolveRuneDisplay`.
+- `components/DetailPopover.tsx` (new) — shared popover shell + Tab trap + focus-restore.
+- `components/EntityDetailPopover.tsx` (new) — rune/shard/spell detail card.
+- `components/IconWithFallback.tsx` (new) — visible-fallback icon component.
+- `components/focusTrap.ts` (new) — shared Tab-trap helper.
+- `components/runeDetail.ts` (new) — rune description data fetch/cache.
+- `components/summonerDetail.ts` (new) — summoner spell data fetch/cache.
+- `components/shardDetail.ts` (new) — static stat-shard name+text map.
+
+Untouched (per scope): `lib/prostage/`, `app/api/prostage/`, `scripts/`, pickers, `ProGameCard.tsx`, favorites files.
+
+### Tests
+
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — 274/274 passed (baseline was 269; engy added 5 concurrently — no conflicts).
+- `npx next lint` — clean (only pre-existing `no-img-element` warnings, same pattern as the file's siblings; `IconWithFallback.tsx` picks up the same expected warning).
+- `npm run build` — succeeded.
+- Live browser verification via chrome-devtools MCP at 390×844×2, mobile+touch, against a local dev server (port 4177, backgrounded, killed after): Faker → Pro Play → the exact Galio MSI game from the ticket, plus a solo-queue Sylas game for the skill grid. Screenshots + computed-style/contrast checks captured for all three fixes; simulated an `error` event on a live `<img>` to confirm the fallback-glyph path.
+
+### Known Issues
+
+- `ProGameCard.tsx`'s `ImgWithFallback` and `RunePage.tsx`'s duplicate still have the `display:none`-on-error (invisible) + stale-across-prop-change bugs — out of my scope this round (explicitly excluded / not part of the sheet). Worth a follow-up.
+- Stat-shard stat text (`shardDetail.ts`) uses long-stable baseline tuning values, not a live per-patch API (ddragon has no shard data source at all) — treat as "close enough for a glance card," not a balance-verified reference.
+- Skill order grid fix and rune/shard/spell tap-to-detail were NOT re-verified against automated a11y tooling (axe/lighthouse) beyond the Tab-trap/focus-restore manual checks above — worth a pass if an a11y audit round happens later.
+
+
+

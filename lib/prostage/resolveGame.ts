@@ -95,15 +95,47 @@ function eventTeamTokens(t: { name?: string; code?: string }): Set<string> {
   return s;
 }
 
-/** True when the two DB team names (normalized) are exactly the two schedule-
- *  event teams (order-independent). Each DB team must match one distinct event
- *  team via its name OR code. Pure. */
+// Minimum normalized-token length before a containment (substring) match is
+// trusted — keeps short 2-3 letter codes (T1, G2, KC) on EXACT match only;
+// containment on something that short risks matching an unrelated team whose
+// name happens to embed those letters.
+const MIN_CONTAINMENT_LEN = 4;
+
+/** True when two normalized name/code tokens denote the same team: an exact
+ *  match, or (for tokens long enough to be unambiguous) one contains the
+ *  other. Live-verified 2026-07-10 against 26 real prostage games that a
+ *  strict-equality match wrongly marked "unavailable" — three recurring
+ *  Leaguepedia<->lolesports naming-drift shapes, ALL fixed by containment
+ *  alone (no separate stripping step needed, since the drift always nests one
+ *  name inside the other):
+ *    - sponsor-name drift: "Team Liquid" (Leaguepedia) vs lolesports' current
+ *      "Team Liquid Alienware"/"TLAW"; "Deep Cross Gaming" vs "Relove Deep
+ *      Cross Gaming".
+ *    - legal-entity/suffix drift: "Gen.G" vs lolesports "Gen.G Esports" /
+ *      code "GEN" ("geng".includes("gen") — the containment even catches the
+ *      code case here, not just the full name).
+ *    - Leaguepedia disambiguation suffixes: "LYON (2024 American Team)" (added
+ *      when multiple historical orgs share a short name) vs lolesports' plain
+ *      "LYON" — the parenthetical always TRAILS the real name, so
+ *      "lyon2024americanteam".includes("lyon") already holds.
+ */
+function tokensEquivalent(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (a.length < MIN_CONTAINMENT_LEN || b.length < MIN_CONTAINMENT_LEN) return false;
+  return a.includes(b) || b.includes(a);
+}
+
+/** True when the two DB team names correspond to the two schedule-event teams
+ *  (order-independent). Each DB team must match one distinct event team via
+ *  its name OR code, per tokensEquivalent above. Pure. */
 export function teamsMatch(dbTeams: [string, string], eventTeams: Array<{ name?: string; code?: string }>): boolean {
   if (eventTeams.length !== 2) return false;
   const db = [normalizeName(dbTeams[0]), normalizeName(dbTeams[1])];
   const tok = eventTeams.map(eventTeamTokens);
+  const oneMatches = (dbNorm: string, tokens: Set<string>): boolean =>
+    Array.from(tokens).some((t) => tokensEquivalent(dbNorm, t));
   // Try both pairings.
-  const matches = (i: number, j: number) => tok[i].has(db[0]) && tok[j].has(db[1]);
+  const matches = (i: number, j: number) => oneMatches(db[0], tok[i]) && oneMatches(db[1], tok[j]);
   return matches(0, 1) || matches(1, 0);
 }
 

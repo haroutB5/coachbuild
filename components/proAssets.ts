@@ -29,6 +29,24 @@ const DEATHFIRE_TOUCH_ID = 8992;
 const DEATHFIRE_TOUCH_ICON =
   "perk-images/Styles/Sorcery/DeathfireTouch/DEATHFIRE_TOUCH_KEYSTONE.webp";
 
+// Stormraider's Surge (id 8230) is the reworked/renamed Phase Rush keystone —
+// same id, same "PhaseRush" key, but the asset filename changed with the
+// rework. The coachless rune bundle (CDN_RUNES_URL below) still has the OLD
+// filename ("PhaseRush.png" -> ...PhaseRush.webp), which 403s; verified live
+// 2026-07-10 against the current static-files CDN. Same failure shape as
+// Deathfire Touch above (a stale Icon path in that specific bundle) — special
+// case it the same way rather than trusting the bundle's Icon field.
+const STORMRAIDERS_SURGE_ID = 8230;
+const STORMRAIDERS_SURGE_ICON =
+  "perk-images/Styles/Sorcery/PhaseRush/StormraidersSurgeRuneIcon2.webp";
+
+// Audited the FULL coachless rune bundle against the CDN 2026-07-10 (62
+// entries, HEAD-checked at 16.13.1): only these two ids 403 — every other
+// rune's bundled Icon path resolves fine. If a future patch renames another
+// rune's asset the same way, it'll show as a broken image (now with a
+// visible fallback glyph instead of vanishing, see IconWithFallback) rather
+// than a silent gap — add its id here when spotted.
+
 /** Static fallback icon/data version — matches staticData.ts's own fallback. */
 const ICON_VERSION_FALLBACK = "16.11.1";
 
@@ -199,6 +217,9 @@ export interface ResolvedRuneDisplay {
 export async function resolveRuneDisplay(id: number, ver: string): Promise<ResolvedRuneDisplay> {
   if (id === DEATHFIRE_TOUCH_ID) {
     return { id, name: "Deathfire Touch", icon: RUNE_ICON_BASE(ver) + DEATHFIRE_TOUCH_ICON };
+  }
+  if (id === STORMRAIDERS_SURGE_ID) {
+    return { id, name: "Stormraider's Surge", icon: RUNE_ICON_BASE(ver) + STORMRAIDERS_SURGE_ICON };
   }
   try {
     const map = await loadRuneMap();

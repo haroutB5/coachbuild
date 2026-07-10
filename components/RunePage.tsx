@@ -3,6 +3,7 @@
 import type { RunesBlock, Pick as PickType } from "@/lib/types";
 import { wpaText, fmtSample, isNegativeHeadlineWpa } from "./StatBadge";
 import AnimatedWpa from "./AnimatedWpa";
+import { IconWithFallback } from "./IconWithFallback";
 
 // Quiet, dim caution glyph for a low-sample pick — a hint to hover, not an alarm.
 function LowSampleFlag({ className = "" }: { className?: string }) {
@@ -26,16 +27,7 @@ function ImgWithFallback({
   alt: string;
   className?: string;
 }) {
-  return (
-    <img
-      src={src}
-      alt={alt}
-      className={className}
-      onError={(e) => {
-        (e.currentTarget as HTMLImageElement).style.display = "none";
-      }}
-    />
-  );
+  return <IconWithFallback src={src} alt={alt} className={className} />;
 }
 
 interface RuneTileProps {
