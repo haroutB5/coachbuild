@@ -82,6 +82,7 @@ export interface ProGame {
   skillOrder: string[]; // ["Q","W","E","Q",...]; always [] for prostage
   runes: ProGameRunes;
   tournament?: string; // prostage only — tournament_display, e.g. "LEC 2026 Summer"
+  playerLink?: string; // prostage only — prostage_matches.player_link, the `player` param for /api/prostage/timeline
 }
 
 export interface ProsResponse {

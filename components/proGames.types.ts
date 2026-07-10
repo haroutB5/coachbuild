@@ -54,6 +54,16 @@ export interface ProGame {
   purchaseOrder: ProGamePurchase[]; // [] for prostage (no purchase data)
   skillOrder: string[]; // ["Q","W","E","Q",...] — [] for prostage
   runes: ProGameRunes; // primary/secondary/shards may be [] for prostage
+  /** Leaguepedia player-slug identifier for prostage rows — required by
+   *  GET /api/prostage/timeline?gameId=&player=. NOT YET on the backend
+   *  contract: app/api/pros/route.ts's prostageRowToProGame() reads
+   *  `row.player_link` for row validation but never puts it on the
+   *  returned ProGame, and lib/pro/types.ts's ProGame (the real contract)
+   *  has no such field either — see HANDOFF-fronty.md, flagged for engy to
+   *  add a passthrough. Optional here so this file still compiles against
+   *  today's actual API response; components read `game.playerLink`
+   *  defensively (undefined -> treated as "unavailable", no crash). */
+  playerLink?: string;
 }
 
 export interface ProGamesApiResponse {

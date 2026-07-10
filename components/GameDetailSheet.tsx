@@ -27,6 +27,7 @@ import {
 } from "./ProGameCard";
 import ItemDetailPopover from "./ItemDetailPopover";
 import { buildSkillOrderGrid, SKILL_ROWS, SKILL_GRID_COLUMNS, type SkillLetter } from "./skillOrderGrid";
+import { useProstageTimeline } from "./prostageTimeline";
 
 // Delay before actually unmounting after close — must be >= the longest
 // `duration-*` class used on the backdrop/panel exit transition below (150ms
@@ -151,6 +152,185 @@ function groupByMinute(purchases: ProGamePurchase[]): { minute: number; items: P
   return groups;
 }
 
+/** The minute-grouped, wrapping item-purchase timeline — the SAME component
+ *  path for soloq (fed `game.purchaseOrder` directly) and prostage (fed the
+ *  fetched timeline once `/api/prostage/timeline` resolves `status: "ok"`).
+ *  Owns the consumables filter + minute bucketing; the hide-consumables
+ *  checkbox state itself lives in the parent sheet (one toggle, shared by
+ *  whichever source is active for a given game). */
+function ItemBuildOrderSection({
+  purchases,
+  ver,
+  hideConsumables,
+  onToggleHideConsumables,
+  onItemClick,
+}: {
+  purchases: ProGamePurchase[];
+  ver: string;
+  hideConsumables: boolean;
+  onToggleHideConsumables: (v: boolean) => void;
+  onItemClick: (id: number) => void;
+}) {
+  const timeline = hideConsumables ? purchases.filter((p) => !CONSUMABLE_ITEM_IDS.has(p.itemId)) : purchases;
+  const minuteGroups = groupByMinute(timeline);
+
+  return (
+    <section className="mb-6">
+      <div className="flex items-center justify-between mb-2.5">
+        <SectionLabel>Item Build Order</SectionLabel>
+        <label className="flex items-center gap-1.5 text-[10.5px] text-mut cursor-pointer select-none -mt-2.5">
+          <input
+            type="checkbox"
+            checked={hideConsumables}
+            onChange={(e) => onToggleHideConsumables(e.target.checked)}
+            className="accent-teal w-3 h-3"
+          />
+          Hide consumables
+        </label>
+      </div>
+      {minuteGroups.length === 0 ? (
+        <p className="text-[11px] text-mut py-2">No items to show.</p>
+      ) : (
+        // Groups flow with wrapping — the sheet scrolls vertically only,
+        // never horizontally. Each group is a single self-contained flex
+        // item (label + its items + its own hairline border) so wrapping
+        // never splits a label away from its items, and the group separator
+        // still reads cleanly no matter where a row break lands.
+        <div className="flex flex-wrap gap-2.5">
+          {minuteGroups.map((g, gi) => (
+            <div
+              key={`${g.minute}-${gi}`}
+              className="flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg bg-black/15 border border-line/60"
+            >
+              <span className="text-[10px] text-mut tabular-nums">{g.minute}&apos;</span>
+              <div className="flex items-center gap-1.5">
+                {g.items.map((p, i) => (
+                  <button
+                    key={`${p.itemId}-${p.ts}-${i}`}
+                    type="button"
+                    onClick={() => onItemClick(p.itemId)}
+                    aria-label={`View details for item #${p.itemId}, bought at ${formatMinuteStamp(p.ts)}`}
+                    title={`Item #${p.itemId} — ${formatMinuteStamp(p.ts)}`}
+                    className="w-11 h-11 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform hover:border-teal-dim active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
+                  >
+                    <ImgWithFallback src={itemIconUrl(p.itemId, ver)} alt={`Item #${p.itemId}`} className="w-full h-full object-contain" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** Loading placeholder for the prostage build-order fetch — sized to match
+ *  ItemBuildOrderSection's real minute-group boxes (same w-11 h-11 icon
+ *  slots) so resolving the fetch never shifts layout (CLS). */
+function ItemBuildOrderSkeleton() {
+  return (
+    <div className="flex flex-wrap gap-2.5" aria-hidden="true">
+      {[0, 1, 2].map((gi) => (
+        <div
+          key={gi}
+          className="flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg bg-black/15 border border-line/60"
+        >
+          <span className="block h-[10px] w-4 rounded-sm bg-panel2 animate-pulse motion-reduce:animate-none" />
+          <div className="flex items-center gap-1.5">
+            {[0, 1].map((ii) => (
+              <span
+                key={ii}
+                className="w-11 h-11 rounded-md bg-panel2 border border-line animate-pulse motion-reduce:animate-none"
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Pro-play item build order: fetches GET /api/prostage/timeline (via the
+ *  useProstageTimeline hook — polls while "pending", never throws) and
+ *  renders one of: loading skeleton, the real ItemBuildOrderSection (same
+ *  component soloq uses), or a muted fallback note. Skill order has no
+ *  livestats source and is never shown for prostage — the note text below
+ *  changes depending on whether the timeline itself came through. */
+function ProstageBuildOrder({
+  game,
+  ver,
+  hideConsumables,
+  onToggleHideConsumables,
+  onItemClick,
+}: {
+  game: ProGame;
+  ver: string;
+  hideConsumables: boolean;
+  onToggleHideConsumables: (v: boolean) => void;
+  onItemClick: (id: number) => void;
+}) {
+  const { state, retry } = useProstageTimeline(game.id, game.playerLink);
+
+  if (state.status === "loading") {
+    return (
+      <section className="mb-6">
+        <SectionLabel>Item Build Order</SectionLabel>
+        <ItemBuildOrderSkeleton />
+      </section>
+    );
+  }
+
+  if (state.status === "ok") {
+    return (
+      <>
+        <ItemBuildOrderSection
+          purchases={state.purchaseOrder}
+          ver={ver}
+          hideConsumables={hideConsumables}
+          onToggleHideConsumables={onToggleHideConsumables}
+          onItemClick={onItemClick}
+        />
+        <p className="text-[11.5px] text-mut italic">Skill order detail isn&apos;t available for on-stage games.</p>
+      </>
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <p className="text-[11.5px] text-mut italic">
+        Couldn&apos;t load item build order.{" "}
+        <button
+          type="button"
+          onClick={retry}
+          className="underline hover:text-txt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal rounded-sm"
+        >
+          Try again
+        </button>
+        . Skill order detail isn&apos;t available for on-stage games.
+      </p>
+    );
+  }
+
+  if (state.status === "pending-timeout") {
+    return (
+      <p className="text-[11.5px] text-mut italic">
+        Item build order isn&apos;t ready yet — check back later. Skill order detail isn&apos;t available for
+        on-stage games.
+      </p>
+    );
+  }
+
+  // state.status === "unavailable" (backend-permanent, or no player
+  // identifier at all) — same combined note the sheet always showed for
+  // prostage games before this feature existed.
+  return (
+    <p className="text-[11.5px] text-mut italic">
+      Purchase and skill order detail isn&apos;t available for on-stage games.
+    </p>
+  );
+}
+
 function prefersReducedMotion(): boolean {
   if (typeof window === "undefined" || !window.matchMedia) return false;
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -184,10 +364,6 @@ export default function GameDetailSheet({
   const hasFullRunes = game.runes.primary.length > 0 || game.runes.secondary.length > 0;
   const hasAnyRunes = game.runes.keystone > 0 || hasFullRunes || game.runes.shards.length > 0;
 
-  const timeline = hideConsumables
-    ? game.purchaseOrder.filter((p) => !CONSUMABLE_ITEM_IDS.has(p.itemId))
-    : game.purchaseOrder;
-  const minuteGroups = groupByMinute(timeline);
   const skillGrid = buildSkillOrderGrid(game.skillOrder);
 
   function openItemPopover(id: number) {
@@ -448,60 +624,22 @@ export default function GameDetailSheet({
           </section>
 
           {isProstage ? (
-            <p className="text-[11.5px] text-mut italic">
-              Purchase and skill order detail isn&apos;t available for on-stage games.
-            </p>
+            <ProstageBuildOrder
+              game={game}
+              ver={ver}
+              hideConsumables={hideConsumables}
+              onToggleHideConsumables={setHideConsumables}
+              onItemClick={openItemPopover}
+            />
           ) : (
             <>
-              {/* Item build order */}
-              <section className="mb-6">
-                <div className="flex items-center justify-between mb-2.5">
-                  <SectionLabel>Item Build Order</SectionLabel>
-                  <label className="flex items-center gap-1.5 text-[10.5px] text-mut cursor-pointer select-none -mt-2.5">
-                    <input
-                      type="checkbox"
-                      checked={hideConsumables}
-                      onChange={(e) => setHideConsumables(e.target.checked)}
-                      className="accent-teal w-3 h-3"
-                    />
-                    Hide consumables
-                  </label>
-                </div>
-                {minuteGroups.length === 0 ? (
-                  <p className="text-[11px] text-mut py-2">No items to show.</p>
-                ) : (
-                  // Groups flow with wrapping — the sheet scrolls vertically
-                  // only, never horizontally. Each group is a single
-                  // self-contained flex item (label + its items + its own
-                  // hairline border) so wrapping never splits a label away
-                  // from its items, and the group separator still reads
-                  // cleanly no matter where a row break lands.
-                  <div className="flex flex-wrap gap-2.5">
-                    {minuteGroups.map((g, gi) => (
-                      <div
-                        key={`${g.minute}-${gi}`}
-                        className="flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg bg-black/15 border border-line/60"
-                      >
-                        <span className="text-[10px] text-mut tabular-nums">{g.minute}&apos;</span>
-                        <div className="flex items-center gap-1.5">
-                          {g.items.map((p, i) => (
-                            <button
-                              key={`${p.itemId}-${p.ts}-${i}`}
-                              type="button"
-                              onClick={() => openItemPopover(p.itemId)}
-                              aria-label={`View details for item #${p.itemId}, bought at ${formatMinuteStamp(p.ts)}`}
-                              title={`Item #${p.itemId} — ${formatMinuteStamp(p.ts)}`}
-                              className="w-11 h-11 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform hover:border-teal-dim active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
-                            >
-                              <ImgWithFallback src={itemIconUrl(p.itemId, ver)} alt={`Item #${p.itemId}`} className="w-full h-full object-contain" />
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
+              <ItemBuildOrderSection
+                purchases={game.purchaseOrder}
+                ver={ver}
+                hideConsumables={hideConsumables}
+                onToggleHideConsumables={setHideConsumables}
+                onItemClick={openItemPopover}
+              />
 
               {/* Skill order — classic per-ability Q/W/E/R rows × 18 level
                   columns. Fixed to a CSS grid with `fr` cell columns (not

@@ -136,6 +136,7 @@ function prostageRowToProGame(row: ProstageGameRow): ProGame | null {
   return {
     id: row.game_id,
     source: "prostage",
+    playerLink: row.player_link,
     player: {
       name: row.pro_name ?? row.player_link,
       team: row.pro_team ?? row.team,

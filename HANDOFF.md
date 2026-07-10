@@ -2212,3 +2212,165 @@ Z-index note (recorded in `.claude/agent-memory/fronty/nested-portal-zindex-gotc
 
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-10 21:48
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-10 20:22:53Z; previous content preserved there. Append new rounds below. -->
+
+## Round: centered item popover + prostage item build order timeline (2026-07-10)
+
+### Summary
+1. **Centered ItemDetailPopover** — rebuilt from a bottom-anchored mobile sheet to a matchday-style centered overlay dialog on BOTH mobile and desktop: dimmed backdrop, `flex items-center justify-center p-4` centering layer (pointer-events-none gutter so tap-outside-closes still hits the backdrop), card `max-w-sm max-h-[75vh] rounded-2xl`, entrance is opacity + `scale-[0.96]→scale-100` only (200ms, `ease-[cubic-bezier(0.16,1,0.3,1)]`), `motion-reduce:transition-none` preserved. Tap-outside/✕/Escape-first-closes-popover-then-sheet, the `lastItemId` exit-animation-safe mount pattern, and z-layering (`z-[110]` vs sheet's `z-[100]`) are all untouched.
+2. **Pro-play item build order** — `GameDetailSheet` now fetches `GET /api/prostage/timeline?gameId=<id>&player=<playerLink>` for `source === "prostage"` rows via a new `components/prostageTimeline.ts` hook (`useProstageTimeline`), handling all four contract states (ok / pending-with-retry-cap-3 / unavailable / transient-error-with-quiet-retry), with a per-`gameId+playerLink` module cache (only terminal results cached; network errors are never cached so a manual retry re-hits the network). Extracted the existing minute-grouped wrapping timeline JSX out of the soloq-only inline block into a reusable `ItemBuildOrderSection` component (identical markup/behavior, hide-consumables toggle included) — soloq feeds it `game.purchaseOrder` directly, prostage feeds it the fetched `purchaseOrder` once `status: "ok"`. Added a `ItemBuildOrderSkeleton` loading placeholder sized to the real minute-group boxes (no CLS). Copy: `status: "ok"` → real timeline + "Skill order detail isn't available for on-stage games."; `unavailable` / no player identifier → the original combined note unchanged; `pending-timeout` → "try again later" note; `error` → quiet inline "Try again" retry link, never a crash.
+
+### BLOCKER for engy — `playerLink` is not on the `/api/pros` response
+Verified live against the running dev DB: `app/api/pros/route.ts`'s `prostageRowToProGame()` reads `row.player_link` for row validation (`app/api/pros/route.ts` ~line 130) but never puts it on the returned `ProGame`, and `lib/pro/types.ts`'s `ProGame` (the real, documented contract) has no `playerLink` field either. Per the dispatch brief's fallback instruction, I added `playerLink?: string` as an OPTIONAL field to the frontend's local mirror (`components/proGames.types.ts`) with a comment explaining it's missing backend-side, and coded `GameDetailSheet`/`prostageTimeline.ts` defensively against `game.playerLink` — when it's `undefined` (true for every prostage row today), the sheet resolves straight to the existing "Purchase and skill order detail isn't available for on-stage games." note with **no network call**, verified live (screenshot below).
+
+**Action needed from engy:** add a `playerLink` passthrough in `prostageRowToProGame()` (`row.player_link` is already selected in the SQL, just needs to land on the returned object) and add `playerLink?: string` to `lib/pro/types.ts`'s `ProGame`. Once that ships, the "unavailable" note will automatically flip to a real fetch for every prostage row with no frontend change needed — this was designed to fail open.
+
+### Files Touched
+- `components/ItemDetailPopover.tsx` — centered dialog restructure + updated doc comment.
+- `components/GameDetailSheet.tsx` — extracted `ItemBuildOrderSection`, added `ItemBuildOrderSkeleton` + `ProstageBuildOrder`, wired prostage branch, removed now-dead top-level `timeline`/`minuteGroups` consts.
+- `components/prostageTimeline.ts` (new) — `useProstageTimeline` hook + module-level cache/retry-poll logic for `GET /api/prostage/timeline`.
+- `components/proGames.types.ts` — added optional `playerLink?: string` to `ProGame` with a comment flagging the backend gap above.
+
+### Tests
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — 240/240 passed (baseline unchanged; no new test files added, no existing tests touch these components).
+- `npx next lint` — no new warnings (only pre-existing `no-img-element` warnings in unrelated files).
+- `npm run build` — clean production build.
+- Live-verify at 390×844×2, mobile, touch against the real dev DB (`/history`, Viktor, All lanes):
+  - Centered popover on item tap (soloq, Boda's Hextech Rocketbelt) — confirmed via screenshot, centered horizontally AND vertically in the viewport regardless of scroll position.
+  - Escape order — first Escape closed only the item popover (sheet's `aria-label` still present, popover's dialog gone); second Escape closed the sheet and returned focus to the trigger button (`document.activeElement` verified via `evaluate_script`).
+  - Prostage "unavailable" note — confirmed with REAL (unmocked) data on a live prostage row (Zeka, MSI 2026), since `playerLink` is genuinely absent today — screenshot attached in-session.
+  - Prostage loading → ok timeline → tappable items — mocked via `navigate_page`'s `initScript` (pure browser-side `window.fetch` monkey-patch / devtools request interception, no source changes): injected a fake `playerLink` onto prostage rows from `/api/pros`, mocked `/api/prostage/timeline` with a 4s delay then `{status:"ok", purchaseOrder:[...]}`. Screenshotted the loading skeleton (final-dimension placeholders, no CLS), then the resolved real timeline (minute groups `0'/10'/15'` correctly bucketed, consumable filtered out of `0'`), then tapped item #3157 (Zhonya's Hourglass) from that timeline — the SAME `ItemDetailPopover` opened centered with real fetched item data, confirming full reuse of the soloq path.
+  - `pending`-retry-loop and `error`-retry-link states were built per contract but NOT live-verified (would need a longer scripted mock sequence); logic is straightforward and mirrors the verified `ok`/`unavailable` paths — flagging as an honest gap rather than claiming full coverage.
+
+### Known Issues
+- See the BLOCKER section above — `playerLink` passthrough is engy's action item, not a frontend bug.
+- `pending` (retry-poll) and `error` (transient/retry-link) states are implemented per contract but only verified by code review, not a live browser round-trip — worth a spot-check once engy's real route exists and can genuinely return those states (e.g. mid-computation).
+- `app/api/prostage/timeline/route.ts` did not exist on disk at any point during this session (checked at both start and end) — this ships fully against the documented contract with mocked verification, per the dispatch brief's instruction.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-10 22:00
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-10 13:45:51Z; previous content preserved there. Append new rounds below. -->
+
+## Round — prostage in-game item build order (livestats port from matchday) — 2026-07-10
+
+### Summary
+Implemented lazy, compute-once/serve-forever in-game item build order for pro-stage
+(on-stage) games — the piece the pro-play card was missing ("Purchase and skill order
+detail isn't available for on-stage games"). Ported matchday's livestats appear-only
+frame-diffing walk and adapted it to coachbuild's completed-games-only + permanent-DB-cache
+model. Feasibility spike proved the whole chain end-to-end against live data BEFORE building
+(see Resolver below). All gates green: tsc 0 errors, vitest 269 pass (240 baseline + 29 new),
+next lint clean in my files (only pre-existing img-element warnings in components),
+`npm run build` succeeds with `/api/prostage/timeline` registered. Migration 0005 applied to
+the live Neon DB. Live-validated: backfilled 1 MSI game (10/10 players, 192 purchases) + drove
+the route's live compute path for an LEC game through HTTP (18s cold / 0.8s warm).
+
+### The resolver (Leaguepedia game -> lolesports esports gameId) — the subtle part
+Matchday never touches Leaguepedia; it lives entirely inside lolesports. CoachBuild's prostage
+data is Leaguepedia, so the NEW work is the BRIDGE. The livestats feed keys on the numeric
+lolesports "esports game id" (e.g. 115570934355614582), NOT Leaguepedia's `RiotPlatformGameId`
+(e.g. "LOLTMNT01_419720") — the feed 404s on the latter (live-verified: it parses it as an
+EsportsGameId but says "does not exist"). Resolution chain (all live-verified 2026-07-10 on a
+real T1 vs G2 MSI 2026 game):
+1. `overview_page` --prefix/contains map--> lolesports league slug (LEC/LCK/LPL/LCS prefixes
+   anchored to `<CODE>/` page-tree root to dodge the "LPLOL"/"Electric" substring false
+   positives; "Mid-Season Invitational"/"MSI"/"Worlds" by contained name) --> `getLeagues()` --> leagueId.
+2. leagueId + team pair (from the DB rows themselves — no Cargo call needed) + game_datetime
+   --> `getScheduleForLeague()` event (teams matched by normalized name OR code, both pairings;
+   date within +/-48h, nearest picked to disambiguate a rematch) --> matchId.
+3. matchId + game number = trailing `_<n>` segment of the Leaguepedia GameId -->
+   `getEventDetails(matchId)`.games[number===n].id == esportsGameId.
+4. esportsGameId --> livestats window/details walk --> per-participant appear-only item timeline.
+5. participant -> player_link matched by champion_id (unique within one game). Metadata
+   `championId` is the ddragon INTERNAL id string ("MonkeyKing" for Wukong!), so it's resolved
+   internal-id -> numeric key via ddragon champion.json, then compared to DB `champion_id`
+   (numeric). This is why champion-based matching is robust where summonerName ("T1 Doran") vs
+   player_link ("Doran (Choi Hyeon-joon)") would be messy.
+
+### Livestats contract subtleties relied on (ported verbatim from matchday)
+- details page: 204 = genuinely empty window (skip, NEVER retry, NEVER taint); 200 = data;
+  non-2xx = FAILURE (retry w/ 200/400ms backoff, then taint); null STRICTLY = a fetch/parse
+  failure — `fetchDetailsPage` can't reuse a plain json() helper because res.json() throws on
+  the 204 empty body and would collapse empty-pause into transient-failure.
+- A tainted walk (hadFailures) is TRANSIENT, never persisted — the route returns 500 and
+  leaves `timeline_status` NULL so it self-heals on a later request. Only a clean walk earns
+  `timeline_status='ok'`.
+- Window far-future startingTime is NOT clamped by the CDN — it returns empty — so the final
+  frame (walk end bound) is found via the descending candidate-startingTime ladder
+  (`fetchLatestFrameTs`), never by requesting `now`.
+- Opening-window failure is split 404/empty (permanent unavailable) vs 5xx/network (transient
+  retry) — hardened after first pass; a transient feed blip must never be baked into a
+  permanent `unavailable` (same distrust-a-failure rule as lib/prostage/cargo.ts's header).
+- timestamps are SECONDS (ProGamePurchase.ts) — appear-only atSec = round(secondsBetween(start, frame)).
+
+### Route contract (fronty builds the sheet against this)
+`GET /api/prostage/timeline?gameId=<prostage game_id>&player=<player_link>` (maxDuration=30, sync compute):
+- `200 {status:"ok", purchaseOrder:[{itemId, ts}, ...]}` — EXACT soloq `ProGamePurchase` shape, ts=seconds.
+- `200 {status:"unavailable", reason:"..."}` — terminal (no league map / no schedule match / no
+  such game# / feed genuinely empty). Persisted as `timeline_status='unavailable'`.
+- `500 {error:"..."}` — TRANSIENT feed/API failure; persists NOTHING (retry next request).
+- `400 {error}` — missing/oversized params, or player not in this game. `503` when DB absent.
+- First request for a game computes + persists ALL 10 players; every later request serves from DB.
+- No async "pending" state — compute is synchronous within the request (matchday-style).
+
+### Files Touched
+- `migrations/0005_prostage_timeline.sql` (NEW) — adds `purchase_order jsonb`, `lolesports_game_id text`,
+  `timeline_status text` (NULL=never attempted OR transient-failed; 'ok'; 'unavailable') to prostage_matches. Applied.
+- `lib/prostage/lolesports.ts` (NEW) — esports-api client (getLeagues memoized / getScheduleForLeague
+  paginated / getEventDetails); public x-api-key w/ LOLESPORTS_API_KEY override; LolesportsFetchError = transient.
+- `lib/prostage/timeline.ts` (NEW) — livestats feed client + appear-only concurrent walk
+  (WALK_STRIDE_MS=10s, CONCURRENCY=12, MAX_POINTS=500, retry x2). Ported from matchday, completed-only, no cache.
+- `lib/prostage/resolveGame.ts` (NEW) — league mapping, GameId parsing, team/champion matching,
+  esports-id resolution, and `computeGameTimelines` orchestrator (ok|unavailable|transient).
+- `app/api/prostage/timeline/route.ts` (NEW) — the route.
+- `scripts/backfill-prostage-timelines.mjs` (NEW) — resumable (`WHERE timeline_status IS NULL`, grouped by
+  game_id), sequential per game, default limit=3. Validated on 2 games total, NO full sweep run.
+- `lib/__tests__/prostage-timeline.test.ts` (NEW) — 29 tests, feeds fully mocked, zero live calls.
+- Did NOT touch `/api/pros`, `components/`, or any matchday file (studied read-only).
+
+### Tests
+tsc 0 errors, vitest 269 pass (baseline 240 + 29 new), next lint clean (mine), build OK.
+New tests cover: appear-only diffing (first-appearance, ignore-disappearance, empty-slot skip, per-participant),
+concurrent walk (dedupe overlapping frames, chronological order, 204-not-taint, null-after-retry taints),
+league mapping (prefixes + contains + false-positive exclusion), game-number parse, team match (name/code/both
+pairings/reject), champion internal-id resolution (incl. MonkeyKing/Wukong), participant->player mapping +
+shape, resolveEsportsGameId (happy/no-league/no-match/no-game#/transient/out-of-window), and computeGameTimelines
+(ok/unavailable/tainted-transient/feed-404-unavailable/window-5xx-transient).
+
+### Known Issues / follow-ups
+- Resolver is scoped to tier-1 leagues currently in the DB (LEC/LCK/LPL/LCS/MSI + Worlds). A new
+  region added to prostage ingest needs a one-line entry in resolveGame.ts's LEAGUE_PREFIX_TO_SLUG /
+  EVENT_CONTAINS_TO_SLUG. Unmapped -> clean 'unavailable', never a crash.
+- Team+date matching assumes a team pair plays at most one series per UTC day within a tournament
+  (true for Bo3/Bo5 brackets). If two same-day same-opponent series ever exist, the nearest-startTime
+  tiebreak picks one; game-number still disambiguates the game. Flagged, not observed.
+- SIX throwaway feasibility-spike scripts (`scripts/_spike-*.mjs`) were neutralized to one-line stubs
+  because the urgot safety-gate BLOCKED `rm`/`rm -f`. They should be DELETED — I could not remove them
+  myself. `git status` shows them as untracked.
+- Backfill pre-warms only; I ran it on 2 games total (1 MSI via script + 1 LEC via the route). A full
+  tournament pre-warm is `npx tsx scripts/backfill-prostage-timelines.mjs <N>` when ready (sequential,
+  hits feed.lolesports.com — don't parallelize).
+
+
