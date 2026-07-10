@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ProGame, ProGamePurchase } from "./proGames.types";
 import {
@@ -25,6 +25,8 @@ import {
   WinLossPill,
   GAME_LANE_LABEL,
 } from "./ProGameCard";
+import ItemDetailPopover from "./ItemDetailPopover";
+import { buildSkillOrderGrid, SKILL_ROWS, SKILL_GRID_COLUMNS, type SkillLetter } from "./skillOrderGrid";
 
 // Delay before actually unmounting after close — must be >= the longest
 // `duration-*` class used on the backdrop/panel exit transition below (150ms
@@ -100,6 +102,38 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return <p className="text-[10.5px] tracking-[1px] uppercase text-teal font-bold mb-2.5">{children}</p>;
 }
 
+/** One Q/W/E/R row of the skill-order grid: a label cell + SKILL_GRID_COLUMNS
+ *  level cells, emitted as a `Fragment` (no wrapper element) so they land as
+ *  direct children of the parent `grid` and CSS Grid's row-major auto-flow
+ *  places them correctly — a wrapper div here would break into its own grid
+ *  item instead of 19 individual cells. */
+function SkillGridRow({ letter, levels }: { letter: SkillLetter; levels: (number | null)[] }) {
+  const isUlt = letter === "R";
+  return (
+    <Fragment>
+      <div
+        className={`flex items-center justify-center text-[10px] font-bold ${isUlt ? "text-teal" : "text-mut"}`}
+      >
+        {letter}
+      </div>
+      {levels.map((level, ci) => (
+        <div
+          key={ci}
+          className={`aspect-square min-w-0 rounded-[3px] flex items-center justify-center text-[8px] font-bold tabular-nums leading-none ${
+            level
+              ? isUlt
+                ? "bg-teal text-bg"
+                : "bg-panel2 border border-line text-txt"
+              : "bg-black/10 border border-line/30"
+          }`}
+        >
+          {level ?? ""}
+        </div>
+      ))}
+    </Fragment>
+  );
+}
+
 /** Purchases bucketed by in-game minute — consecutive buys in the same
  *  minute render as one group with a single minute label, so the timeline
  *  reads as "what did they buy at minute N" rather than a flat list. */
@@ -132,10 +166,20 @@ export default function GameDetailSheet({
   const [rendered, setRendered] = useState(false);
   const [visible, setVisible] = useState(false);
   const [hideConsumables, setHideConsumables] = useState(true);
+  // `activeItemId` (null = closed) drives the popover's `open` prop.
+  // `lastItemId` is deliberately NOT cleared on close — ItemDetailPopover
+  // stays mounted through its own exit transition (same decoupled
+  // rendered/visible pattern this sheet uses for itself), so it needs an
+  // itemId to keep showing while it fades out, not undefined.
+  const [activeItemId, setActiveItemId] = useState<number | null>(null);
+  const [lastItemId, setLastItemId] = useState<number>(0);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const triggerFocusRef = useRef<Element | null>(null);
 
   const ver = versionFromPatch(game.patch);
+  // Local const (not the raw `game.trinket` property access) so TS's null
+  // narrowing survives into the onClick closure below.
+  const trinketId = game.trinket;
   const isProstage = game.source === "prostage";
   const hasFullRunes = game.runes.primary.length > 0 || game.runes.secondary.length > 0;
   const hasAnyRunes = game.runes.keystone > 0 || hasFullRunes || game.runes.shards.length > 0;
@@ -144,6 +188,15 @@ export default function GameDetailSheet({
     ? game.purchaseOrder.filter((p) => !CONSUMABLE_ITEM_IDS.has(p.itemId))
     : game.purchaseOrder;
   const minuteGroups = groupByMinute(timeline);
+  const skillGrid = buildSkillOrderGrid(game.skillOrder);
+
+  function openItemPopover(id: number) {
+    setLastItemId(id);
+    setActiveItemId(id);
+  }
+  function closeItemPopover() {
+    setActiveItemId(null);
+  }
 
   // Mount/unmount is decoupled from `open` so the exit transition can
   // actually play before the sheet leaves the DOM.
@@ -190,11 +243,18 @@ export default function GameDetailSheet({
   useEffect(() => {
     if (!rendered) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      // First Escape closes the item popover only (if open); second press
+      // (popover already gone) closes the sheet itself.
+      if (activeItemId !== null) {
+        closeItemPopover();
+        return;
+      }
+      onClose();
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [rendered, onClose]);
+  }, [rendered, onClose, activeItemId]);
 
   if (!rendered || typeof document === "undefined") return null;
 
@@ -362,21 +422,27 @@ export default function GameDetailSheet({
             <SectionLabel>Final Build</SectionLabel>
             <div className="flex items-center gap-2 flex-wrap">
               {game.finalItems.map((id, i) => (
-                <div
+                <button
                   key={`item-${id}-${i}`}
-                  className="w-11 h-11 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
+                  type="button"
+                  onClick={() => openItemPopover(id)}
+                  aria-label={`View details for item #${id}`}
                   title={`Item #${id}`}
+                  className="w-11 h-11 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform hover:border-teal-dim active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
                 >
                   <ImgWithFallback src={itemIconUrl(id, ver)} alt={`Item #${id}`} className="w-full h-full object-contain" />
-                </div>
+                </button>
               ))}
-              {game.trinket && (
-                <div
-                  className="w-11 h-11 rounded-full bg-black/30 border border-teal-dim overflow-hidden flex items-center justify-center flex-shrink-0"
-                  title={`Trinket #${game.trinket}`}
+              {trinketId && (
+                <button
+                  type="button"
+                  onClick={() => openItemPopover(trinketId)}
+                  aria-label={`View details for trinket #${trinketId}`}
+                  title={`Trinket #${trinketId}`}
+                  className="w-11 h-11 rounded-full bg-black/30 border border-teal-dim overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform hover:border-teal active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
                 >
-                  <ImgWithFallback src={itemIconUrl(game.trinket, ver)} alt="Trinket" className="w-full h-full object-contain" />
-                </div>
+                  <ImgWithFallback src={itemIconUrl(trinketId, ver)} alt="Trinket" className="w-full h-full object-contain" />
+                </button>
               )}
             </div>
           </section>
@@ -404,51 +470,53 @@ export default function GameDetailSheet({
                 {minuteGroups.length === 0 ? (
                   <p className="text-[11px] text-mut py-2">No items to show.</p>
                 ) : (
-                  <div className="overflow-x-auto -mx-1 px-1 pb-1">
-                    <div className="flex items-stretch gap-3 min-w-max">
-                      {minuteGroups.map((g, gi) => (
-                        <div key={`${g.minute}-${gi}`} className="flex items-center gap-3">
-                          {gi > 0 && <div className="w-px self-stretch bg-line/60" aria-hidden="true" />}
-                          <div className="flex flex-col items-center gap-1">
-                            <span className="text-[10px] text-mut tabular-nums">{g.minute}&apos;</span>
-                            <div className="flex items-center gap-1.5">
-                              {g.items.map((p, i) => (
-                                <div
-                                  key={`${p.itemId}-${p.ts}-${i}`}
-                                  className="w-10 h-10 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
-                                  title={`Item #${p.itemId} — ${formatMinuteStamp(p.ts)}`}
-                                >
-                                  <ImgWithFallback src={itemIconUrl(p.itemId, ver)} alt={`Item #${p.itemId}`} className="w-full h-full object-contain" />
-                                </div>
-                              ))}
-                            </div>
-                          </div>
+                  // Groups flow with wrapping — the sheet scrolls vertically
+                  // only, never horizontally. Each group is a single
+                  // self-contained flex item (label + its items + its own
+                  // hairline border) so wrapping never splits a label away
+                  // from its items, and the group separator still reads
+                  // cleanly no matter where a row break lands.
+                  <div className="flex flex-wrap gap-2.5">
+                    {minuteGroups.map((g, gi) => (
+                      <div
+                        key={`${g.minute}-${gi}`}
+                        className="flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg bg-black/15 border border-line/60"
+                      >
+                        <span className="text-[10px] text-mut tabular-nums">{g.minute}&apos;</span>
+                        <div className="flex items-center gap-1.5">
+                          {g.items.map((p, i) => (
+                            <button
+                              key={`${p.itemId}-${p.ts}-${i}`}
+                              type="button"
+                              onClick={() => openItemPopover(p.itemId)}
+                              aria-label={`View details for item #${p.itemId}, bought at ${formatMinuteStamp(p.ts)}`}
+                              title={`Item #${p.itemId} — ${formatMinuteStamp(p.ts)}`}
+                              className="w-11 h-11 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform hover:border-teal-dim active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
+                            >
+                              <ImgWithFallback src={itemIconUrl(p.itemId, ver)} alt={`Item #${p.itemId}`} className="w-full h-full object-contain" />
+                            </button>
+                          ))}
                         </div>
-                      ))}
-                    </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </section>
 
-              {/* Skill order */}
+              {/* Skill order — classic per-ability Q/W/E/R rows × 18 level
+                  columns. Fixed to a CSS grid with `fr` cell columns (not
+                  fixed pixel widths) so all 18 columns always fit the
+                  sheet's width with zero horizontal scroll, down to 390px. */}
               {game.skillOrder.length > 0 && (
                 <section>
                   <SectionLabel>Skill Order</SectionLabel>
-                  <div className="overflow-x-auto -mx-1 px-1 pb-1">
-                    <div className="flex items-end gap-1 min-w-max">
-                      {game.skillOrder.map((skill, i) => (
-                        <div key={`${skill}-${i}`} className="flex flex-col items-center gap-0.5">
-                          <span
-                            className={`w-6 h-6 flex items-center justify-center rounded-md text-[10.5px] font-bold tabular-nums ${
-                              skill === "R" ? "bg-teal text-bg" : "bg-panel2 border border-line text-mut"
-                            }`}
-                          >
-                            {skill}
-                          </span>
-                          <span className="text-[8.5px] text-mut/70 tabular-nums">{i + 1}</span>
-                        </div>
-                      ))}
-                    </div>
+                  <div
+                    className="grid gap-[3px]"
+                    style={{ gridTemplateColumns: `18px repeat(${SKILL_GRID_COLUMNS}, minmax(0, 1fr))` }}
+                  >
+                    {SKILL_ROWS.map((letter, ri) => (
+                      <SkillGridRow key={letter} letter={letter} levels={skillGrid[ri]} />
+                    ))}
                   </div>
                 </section>
               )}
@@ -456,6 +524,20 @@ export default function GameDetailSheet({
           )}
         </div>
       </div>
+
+      {/* Always mounted (once an item has ever been opened) so its own
+          rendered/visible exit transition — same decoupled pattern as this
+          sheet's own — gets to play out on close instead of being yanked
+          from the tree mid-fade. `lastItemId` intentionally persists across
+          close; only `open` toggles. */}
+      {lastItemId !== 0 && (
+        <ItemDetailPopover
+          itemId={lastItemId}
+          ver={ver}
+          open={activeItemId !== null}
+          onClose={closeItemPopover}
+        />
+      )}
     </div>,
     document.body
   );

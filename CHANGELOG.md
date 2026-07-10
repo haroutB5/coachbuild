@@ -2,6 +2,13 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.11.0] — 2026-07-10
+### Added
+- **Tap an item for details**: every item in the game-detail view (final build + build order) opens a mini-sheet with the item's name, gold cost, and stats/passive description, version-matched to the game's patch.
+### Changed
+- **Item build order wraps into rows** — no more sideways scrolling; each minute group is a self-contained card.
+- **Skill order is a per-ability grid**: Q/W/E/R each on their own row across 18 level columns, R row highlighted — fits phone width with no scrolling.
+
 ## [0.10.0] — 2026-07-10
 ### Added
 - **Favorite players**: star a player from search results or after selecting them — favorites appear as chips under the search box for one-tap reuse (stored on-device, newest first, up to 12).

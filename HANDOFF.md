@@ -2159,3 +2159,56 @@ None. Files are CRLF (converted post-write via a node one-off to match repo conv
 - Did not bump version or deploy, per instructions — orchestrator ships.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-10 21:22
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-10 17:22:05Z; previous content preserved there. Append new rounds below. -->
+
+## GameDetailSheet: item-detail popover + build-order wrap + skill grid (2026-07-10)
+
+### Summary
+
+Three UI asks on `components/GameDetailSheet.tsx`, all shipped and browser-verified at 390px (mobile) and 1440px (desktop):
+
+1. **Tap an item → item details.** Every item icon in FINAL BUILD and ITEM BUILD ORDER is now a `<button>` that opens `ItemDetailPopover` — a bottom-anchored mini-sheet (icon, name, total gold, sanitized stats/passive text). Data comes from `components/itemDetail.ts`, which fetches `https://cdn.coachless.gg/static-files/{ver}/{ver}/data/en_US/item.json` — the **same coachless CDN mirror `proAssets.itemIconUrl()` already reads icons from**, keyed by the same `ver = versionFromPatch(game.patch)` so item data always matches the icon set a game was rendered with. I deliberately did NOT hit `ddragon.leagueoflegends.com` directly: this app's patch labels (e.g. `16.13.1`) only resolve against coachless's CDN, not upstream ddragon (verified live — real ddragon has no `16.13.1` folder). Confirmed live 2026-07-10: `cdn.coachless.gg/static-files/16.12.1/16.12.1/data/en_US/item.json` and the `16.13.1` variant both return 200 with `Access-Control-Allow-Origin: *` and the exact `{type,version,data:{...}}` envelope ddragon's own item.json uses (same `gold.total`, `description` HTML-ish markup, `image`, `stats`). `stripItemDescriptionHtml()` strips ddragon's `<mainText>/<stats>/<passive>/<attention>/<physicalDamage>/<status>/<OnHit>` tags, converts `<br>` to newlines, unescapes the handful of entities ddragon emits — result is rendered as plain text (`whitespace-pre-line`), never `dangerouslySetInnerHTML`. Unknown item id or fetch failure → `detail === null` → "Details unavailable." (never a crash). Module-level in-memory cache per version + best-effort versioned localStorage cache (`coachbuild:itemdata:v1:{ver}`).
+2. **ITEM BUILD ORDER now wraps, no h-scroll.** Replaced the `overflow-x-auto` + `min-w-max` row with `flex flex-wrap`. Each minute-group is a single self-contained bordered/rounded card (label + its items together) so a group never splits across a wrap boundary, and the group divider (previously a shared `<div>` between items) is now baked into each card's own border so it still reads cleanly regardless of where a row breaks. Hide-consumables toggle unchanged.
+3. **SKILL ORDER is now a Q/W/E/R × 18-level grid.** New pure helper `components/skillOrderGrid.ts` (`buildSkillOrderGrid`) turns the flat `skillOrder: string[]` into a 4×18 grid of level numbers. Rendered via CSS Grid with `fr` cell columns (not fixed px), so it always fits — verified zero horizontal overflow at 390px (`document.documentElement.scrollWidth === clientWidth === 390` via evaluate_script). R row highlighted in the existing `teal` accent, matching the old R-chip treatment.
+
+Escape-key semantics: first press closes the item popover only (if open); second press closes the sheet. Verified live via `press_key Escape` twice — popover closed on press 1 (dialog for the sheet still present), sheet closed + focus returned to the triggering card on press 2. Popover's own X button and its own backdrop-click both close only the popover (game-detail dialog confirmed still in DOM after either).
+
+Popover lifecycle gotcha I had to fix: initially conditionally-mounted `<ItemDetailPopover>` on `activeItemId !== null`, which killed its own exit-fade animation (React unmounts before the CSS transition can play). Fixed by splitting state into `activeItemId` (drives `open`) and `lastItemId` (persists across close, only set on open) — `ItemDetailPopover` stays mounted through its own decoupled rendered/visible exit transition, same pattern `GameDetailSheet` already uses for itself.
+
+Z-index note (recorded in `.claude/agent-memory/fronty/nested-portal-zindex-gotcha.md`): `ItemDetailPopover` does its own `createPortal(..., document.body)` call, so it's a DOM sibling of `GameDetailSheet`'s portaled panel, not a descendant — its `z-[110]` is set on its own root, not inherited from a wrapper.
+
+### Files Touched
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/GameDetailSheet.tsx` — tappable item buttons (Final Build, trinket, Item Build Order), wrapped build-order layout, Q/W/E/R skill grid, popover state + Escape-key precedence, popover mount at end of the portaled tree.
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/ItemDetailPopover.tsx` — new. Bottom-anchored mini-sheet, own `createPortal`, own decoupled mount/exit-animation lifecycle.
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/itemDetail.ts` — new. `getItemDetail(id, ver)` (never throws, resolves `null` on failure) + `stripItemDescriptionHtml()` (pure, exported, unit-tested) + module cache + localStorage cache.
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/skillOrderGrid.ts` — new. `buildSkillOrderGrid()` pure transform, `SKILL_ROWS`, `SKILL_GRID_COLUMNS`.
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/__tests__/itemDetail.test.ts` — new, 7 tests for `stripItemDescriptionHtml` (real Blade of the Ruined King markup, entity unescape, newline collapse, trim).
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/__tests__/skillOrderGrid.test.ts` — new, 8 tests for `buildSkillOrderGrid` (grid shape, level placement, truncation at 18, unrecognized-letter skip).
+
+### Tests
+- `npx tsc --noEmit` — clean. Two real type errors surfaced and fixed along the way: (1) `Map.entries()` iteration needs `downlevelIteration`/ES2015 target this repo doesn't set — switched to `map.forEach`; (2) `game.trinket: number | null` doesn't narrow inside an inline `onClick` closure off a raw property access — hoisted to a local `const trinketId = game.trinket` before the JSX.
+- `npx vitest run` — 240/240 passed (225 baseline + 15 new: 7 itemDetail, 8 skillOrderGrid).
+- `npx next lint` — clean, only pre-existing `no-img-element` warnings in unrelated files (ChampionPicker, ItemPath, ProGameCard, RunePage, SpellRow, app/page.tsx) — none new.
+- `npm run build` — succeeds, all routes generate.
+- Browser-verified on `next dev -p 3210` (avoided the stale `:4000` listener) via chrome-devtools MCP against `/history` → search "Faker" → Solo Queue filter → opened a soloq Sylas game:
+  - 390×844×2 mobile/touch: item popover opens with name/gold/description (Hextech Rocketbelt, 2,650 gold, stripped stats+passive text), build-order groups wrap into rounded cards across 4 rows with zero h-scroll, Q/W/E/R skill grid renders all 18 columns with R row in teal, `document.documentElement.scrollWidth === clientWidth === 390` (no overflow) confirmed via `evaluate_script`. Escape×2 (popover then sheet) and focus-return both confirmed via snapshot diffs.
+  - 1440×900: centered game-detail modal + item popover both render correctly on a prostage (Pro Play) game too (item popover works regardless of prostage/soloq since Final Build is always shown); popover X-button close leaves the game dialog mounted (confirmed via DOM query).
+  - `list_console_messages` — zero errors; only a pre-existing PWA meta deprecation warning unrelated to this change.
+- Did NOT run an axe/full a11y sweep — out of scope for this ticket per the brief's boundaries, but new buttons all carry `aria-label`, `focus-visible` rings, and the popover has `role="dialog" aria-modal aria-label`.
+
+### Known Issues
+- None outstanding. `lastItemId !== 0` gates the popover's first mount (0 is never a real item id), so it never renders until a user taps an item — verified via snapshot (no `[role="dialog"]` for item details until first tap).
+
+
+
