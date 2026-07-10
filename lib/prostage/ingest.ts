@@ -15,6 +15,7 @@
 import { getSql } from "@/lib/pro/db";
 import { DbUnavailableError } from "@/lib/pro/errors";
 import { cargoQueryWithRetry } from "./cargo";
+import type { CargoQueryOptions } from "./cargo";
 import { getDdragonMaps } from "./ddragon";
 import { extractProstageRow } from "./extract";
 import { orderByStaleness, resolveActiveTournaments } from "./tournaments";
@@ -45,6 +46,15 @@ export interface ProstageIngestOptions {
    *  the route (60s maxDuration can't afford the ~4.5min cooldown); leave
    *  false (default) for the script (long-running, no timeout). */
   fastFailOnRatelimit?: boolean;
+  /** Overrides how the ScoreboardPlayers rows are fetched — defaults to
+   *  cargoQueryWithRetry (api.php) paced/retried per fastFailOnRatelimit
+   *  above. Pass cargoExportQuery (see lib/prostage/cargo.ts) to route the
+   *  ScoreboardPlayers fetch through Special:CargoExport instead, which is
+   *  NOT subject to api.php's punishing rate limit (live-verified
+   *  2026-07-10) — used by scripts/ingest-prostage.mjs's --via-export flag.
+   *  The route (app/api/ingest/prostage/route.ts) is intentionally left on
+   *  the default api.php path; only the script opts in. */
+  queryFn?: (opts: CargoQueryOptions) => Promise<CargoScoreboardPlayerRow[]>;
 }
 
 export interface ProstageIngestResult {
@@ -74,6 +84,9 @@ export async function runProstageIngest(opts: ProstageIngestOptions = {}): Promi
   const log = opts.onProgress ?? (() => {});
   const cursor = opts.cursor ?? 0;
   const fastFailOnRatelimit = opts.fastFailOnRatelimit ?? false;
+  const queryFn: (qopts: CargoQueryOptions) => Promise<CargoScoreboardPlayerRow[]> =
+    opts.queryFn ??
+    ((qopts) => cargoQueryWithRetry<CargoScoreboardPlayerRow>(qopts, { fastFail: fastFailOnRatelimit }));
 
   // Staleness reordering ONLY applies to a fresh resolution — an explicit
   // `opts.tournaments` override (tests, and the script's own once-per-run
@@ -105,16 +118,13 @@ export async function runProstageIngest(opts: ProstageIngestOptions = {}): Promi
     const [maps, proByName, rows] = await Promise.all([
       getDdragonMaps(),
       loadProNameIndex(sql),
-      cargoQueryWithRetry<CargoScoreboardPlayerRow>(
-        {
-          tables: "ScoreboardPlayers",
-          fields: SCOREBOARD_PLAYERS_FIELDS,
-          where: `OverviewPage="${overviewPage.replace(/"/g, '\\"')}"`,
-          orderBy: "DateTime_UTC DESC",
-          limit: 500,
-        },
-        { fastFail: fastFailOnRatelimit }
-      ),
+      queryFn({
+        tables: "ScoreboardPlayers",
+        fields: SCOREBOARD_PLAYERS_FIELDS,
+        where: `OverviewPage="${overviewPage.replace(/"/g, '\\"')}"`,
+        orderBy: "DateTime_UTC DESC",
+        limit: 500,
+      }),
     ]);
 
     result.rowsSeen = rows.length;

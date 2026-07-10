@@ -5,18 +5,74 @@
 // (see lib/prostage/tournaments.ts's cache note) since a single script run
 // already holds the list in memory. Run via tsx:
 //   npx tsx scripts/ingest-prostage.mjs
+//
+// --via-export: routes BOTH the Tournaments resolution and the
+// ScoreboardPlayers fetch through Special:CargoExport instead of api.php's
+// action=cargoquery. Live-verified 2026-07-10: CargoExport is NOT subject to
+// api.php's punishing rate limit (which trips most Vercel-side ingest calls),
+// paced only 5s apart vs api.php's 30s floor. No-flag behavior is unchanged
+// (still api.php via cargoQueryWithRetry, 30s pacing, ratelimit-cooldown-
+// retry-once). See lib/prostage/cargo.ts's header comment for the full
+// CargoExport contract (JSON-array response, no `where` -> Cloudflare
+// challenge, `order+by` param).
+//
+// --via-export ALSO uses a curl-subprocess transport (scripts/_curl-
+// transport.mjs), not Node's fetch, for the CargoExport calls specifically —
+// live-verified 2026-07-10 that Node's own networking stack gets
+// Cloudflare-403'd against this endpoint in at least one environment where
+// curl succeeds reliably (see cargo.ts's P0-follow-up comment). This script
+// can shell out; app/route code can't, so it stays on cargoExportQuery's
+// default fetch transport (unaffected either way — the route never calls
+// cargoExportQuery at all).
 import { loadEnvLocal } from "./_env.mjs";
+import { curlTransport } from "./_curl-transport.mjs";
 
 loadEnvLocal();
 
 const { runProstageIngest } = await import("../lib/prostage/ingest.ts");
-const { resolveActiveTournaments } = await import("../lib/prostage/tournaments.ts");
+const { resolveActiveTournaments, buildTournamentsQuerySpec, MAX_TOURNAMENTS } = await import(
+  "../lib/prostage/tournaments.ts"
+);
+const { cargoExportQuery, cargoField } = await import("../lib/prostage/cargo.ts");
+
+const viaExport = process.argv.includes("--via-export");
+
+/** cargoExportQuery, but always through the curl transport — a single place
+ *  both the Tournaments resolution and the ScoreboardPlayers queryFn route
+ *  through, so a future transport swap only touches this one line. */
+function cargoExportViaCurl(opts) {
+  return cargoExportQuery(opts, curlTransport);
+}
+
+/** Same WHERE semantics as resolveActiveTournaments (buildTournamentsQuerySpec
+ *  is the shared single source of truth), run through cargoExportQuery
+ *  instead of the api.php path — no ratelimit-retry needed since CargoExport
+ *  isn't subject to api.php's limiter. */
+async function resolveTournamentsViaExport() {
+  const spec = buildTournamentsQuerySpec();
+  const rows = await cargoExportViaCurl(spec);
+  const seen = new Set();
+  const pages = [];
+  for (const row of rows) {
+    const page = cargoField(row, "OverviewPage");
+    if (page && !seen.has(page)) {
+      seen.add(page);
+      pages.push(page);
+    }
+  }
+  return pages.slice(0, MAX_TOURNAMENTS);
+}
 
 async function main() {
-  const tournaments = await resolveActiveTournaments({
-    log: (msg) => console.log(`  [tournaments] ${msg}`),
-  });
-  console.log(`resolved ${tournaments.length} tournament(s): ${tournaments.join(", ") || "(none)"}`);
+  const tournaments = viaExport
+    ? await resolveTournamentsViaExport()
+    : await resolveActiveTournaments({
+        log: (msg) => console.log(`  [tournaments] ${msg}`),
+      });
+  console.log(
+    `resolved ${tournaments.length} tournament(s) via ${viaExport ? "CargoExport" : "api.php"}: ` +
+      `${tournaments.join(", ") || "(none)"}`
+  );
   if (tournaments.length === 0) {
     console.log("nothing to ingest — set PROSTAGE_TOURNAMENT_SEED to override tournament resolution");
     return;
@@ -33,6 +89,7 @@ async function main() {
       cursor,
       tournaments,
       onProgress: (msg) => console.log(`  ${msg}`),
+      ...(viaExport ? { queryFn: cargoExportViaCurl } : {}),
     });
     totalSeen += result.rowsSeen;
     totalUpserted += result.rowsUpserted;

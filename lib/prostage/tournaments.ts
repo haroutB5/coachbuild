@@ -26,7 +26,7 @@ const TIER1_PATTERNS = ["LEC", "LCK", "LPL", "LCS", "MSI", "World Championship",
 // resolve to tournaments with no ScoreboardPlayers data — live-verified
 // 2026-07-10 (see DATA-QUALITY PROBE in HANDOFF-engy.md).
 const EXCLUDE_PATTERNS = ["Academy"];
-const MAX_TOURNAMENTS = 7; // caps Cargo calls per ScoreboardPlayers ingest pass
+export const MAX_TOURNAMENTS = 7; // caps Cargo calls per ScoreboardPlayers ingest pass; exported for scripts/ingest-prostage.mjs's --via-export path
 
 // A cron-drained serverless route calls resolveActiveTournaments() fresh on
 // EVERY invocation (one tournament per invocation, cursor-paginated — see
@@ -42,6 +42,39 @@ let cache: { pages: string[]; expiresAt: number } | null = null;
 
 function dedupe(arr: string[]): string[] {
   return Array.from(new Set(arr));
+}
+
+export interface TournamentsQuerySpec {
+  tables: "Tournaments";
+  fields: string;
+  where: string;
+  orderBy: string;
+  limit: number;
+}
+
+/** Builds the Tournaments Cargo query (WHERE clause + fields/order/limit)
+ *  resolveActiveTournaments runs through cargoQueryWithRetry (api.php).
+ *  Exported as a single source of truth so scripts/ingest-prostage.mjs's
+ *  --via-export flag can run the IDENTICAL tier-1/Academy-exclusion/
+ *  date-window filter logic through cargoExportQuery instead — the WHERE
+ *  semantics must stay in lockstep between both transports. */
+export function buildTournamentsQuerySpec(withinDays = 90): TournamentsQuerySpec {
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - withinDays * 86_400_000).toISOString().slice(0, 10);
+  const today = now.toISOString().slice(0, 10);
+  const likeClauses = TIER1_PATTERNS.map((p) => `OverviewPage LIKE "%${p}%"`).join(" OR ");
+  const excludeClauses = EXCLUDE_PATTERNS.map((p) => `OverviewPage NOT LIKE "%${p}%"`).join(" AND ");
+  return {
+    tables: "Tournaments",
+    fields: "OverviewPage, League, DateStart, Date",
+    // Upper-bounded by `today` so future/unplayed tournaments (next Worlds,
+    // unstarted playoffs) don't crowd out the DateStart-DESC-ordered,
+    // MAX_TOURNAMENTS-capped result ahead of tournaments that actually have
+    // ScoreboardPlayers data right now (live-verified 2026-07-10).
+    where: `(${likeClauses}) AND ${excludeClauses} AND DateStart >= "${cutoff}" AND DateStart <= "${today}"`,
+    orderBy: "DateStart DESC",
+    limit: 20,
+  };
 }
 
 export interface ResolveTournamentsOptions {
@@ -77,28 +110,10 @@ export async function resolveActiveTournaments(opts: ResolveTournamentsOptions =
   if (cache && cache.expiresAt > Date.now()) return cache.pages;
 
   const withinDays = opts.withinDays ?? 90;
-  const now = new Date();
-  const cutoff = new Date(now.getTime() - withinDays * 86_400_000).toISOString().slice(0, 10);
-  const today = now.toISOString().slice(0, 10);
-  const likeClauses = TIER1_PATTERNS.map((p) => `OverviewPage LIKE "%${p}%"`).join(" OR ");
-  const excludeClauses = EXCLUDE_PATTERNS.map((p) => `OverviewPage NOT LIKE "%${p}%"`).join(" AND ");
+  const spec = buildTournamentsQuerySpec(withinDays);
 
   try {
-    const rows = await cargoQueryWithRetry<CargoTournamentRow>(
-      {
-        tables: "Tournaments",
-        fields: "OverviewPage, League, DateStart, Date",
-        // Upper-bounded by `today` so future/unplayed tournaments (next
-        // Worlds, unstarted playoffs) don't crowd out the DateStart-DESC-
-        // ordered, MAX_TOURNAMENTS-capped result ahead of tournaments that
-        // actually have ScoreboardPlayers data right now (live-verified
-        // 2026-07-10).
-        where: `(${likeClauses}) AND ${excludeClauses} AND DateStart >= "${cutoff}" AND DateStart <= "${today}"`,
-        orderBy: "DateStart DESC",
-        limit: 20,
-      },
-      { fastFail: opts.fastFailOnRatelimit }
-    );
+    const rows = await cargoQueryWithRetry<CargoTournamentRow>(spec, { fastFail: opts.fastFailOnRatelimit });
     const pages = rows
       .map((r) => cargoField(r, "OverviewPage"))
       .filter((p): p is string => Boolean(p));

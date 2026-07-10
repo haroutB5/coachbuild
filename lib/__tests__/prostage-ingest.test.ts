@@ -134,6 +134,25 @@ describe("runProstageIngest", () => {
     ).toBe(true);
   });
 
+  it("uses a caller-supplied queryFn for the ScoreboardPlayers fetch instead of cargoQueryWithRetry", async () => {
+    // Regression for the 2026-07-10 CargoExport follow-up: scripts/ingest-
+    // prostage.mjs's --via-export flag passes cargoExportQuery here to route
+    // around api.php's rate limit. cargoQueryWithRetry must NOT be called
+    // when an override is supplied.
+    vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
+    vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce([]); // pro-name index
+    const queryFn = vi.fn().mockResolvedValue([scoreboardRow({ GameId: "g1", Role: "Top" })]);
+
+    const result = await runProstageIngest({ cursor: 0, queryFn });
+
+    expect(queryFn).toHaveBeenCalledTimes(1);
+    const [calledOpts] = queryFn.mock.calls[0];
+    expect(calledOpts).toMatchObject({ tables: "ScoreboardPlayers", where: 'OverviewPage="A"' });
+    expect(cargoQueryWithRetry).not.toHaveBeenCalled();
+    expect(result.rowsSeen).toBe(1);
+  });
+
   it("does NOT warn when unresolved role is at or below 50%", async () => {
     vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
     vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
