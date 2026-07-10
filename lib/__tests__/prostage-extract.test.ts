@@ -162,6 +162,52 @@ describe("extractProstageRow", () => {
     expect(extractProstageRow({ ...BASE_ROW, PlayerWin: "" }, makeMaps())!.win).toBe(false);
     expect(extractProstageRow({ ...BASE_ROW, PlayerWin: "Yes" }, makeMaps())!.win).toBe(true);
   });
+
+  describe("CargoExport transport shapes (live-verified 2026-07-10)", () => {
+    // One real ScoreboardPlayers row via Special:CargoExport (LCK/2026
+    // Season/Road to MSI) came back with Items and SummonerSpells as JSON
+    // ARRAYS (not delimiter-joined strings like api.php) and Kills/Deaths/
+    // Assists as JSON NUMBERS (not numeric strings). This is the regression
+    // that crashed a live backfill with "raw.split is not a function" before
+    // parseList()/parseCargoInt() were taught to accept both shapes.
+    it("accepts array-typed Items/SummonerSpells/Runes (CargoExport shape) identically to delimited strings", () => {
+      const row = extractProstageRow(
+        {
+          ...BASE_ROW,
+          Items: ["Riftmaker", "Boots of Speed"],
+          SummonerSpells: ["Flash", "Ignite"],
+          Runes: ["Electrocute", "Sudden Impact", "Cheap Shot", "Manaflow Band", "Transcendence"],
+        },
+        makeMaps()
+      );
+      expect(row).not.toBeNull();
+      expect(row!.finalItems).toEqual([6653, 1001]);
+      expect(row!.spells).toEqual([4, 14]);
+      expect(row!.runes.primary.sort()).toEqual([8126, 8138].sort());
+      expect(row!.runes.secondary.sort()).toEqual([8210, 8226].sort());
+    });
+
+    it("accepts number-typed Kills/Deaths/Assists (CargoExport shape) identically to numeric strings", () => {
+      const row = extractProstageRow({ ...BASE_ROW, Kills: 5, Deaths: 2, Assists: 7 }, makeMaps());
+      expect(row).not.toBeNull();
+      expect(row!.kills).toBe(5);
+      expect(row!.deaths).toBe(2);
+      expect(row!.assists).toBe(7);
+    });
+
+    it("does not split an array element on comma/semicolon (an array entry is already a whole token)", () => {
+      // Regression guard: naively running an array through the OLD
+      // string-only .split(/[,;]/) path would have been a silent-corruption
+      // bug even after fixing the immediate crash, if a champion/item name
+      // ever legitimately contained a comma or semicolon.
+      const row = extractProstageRow(
+        { ...BASE_ROW, Items: ["Riftmaker"], SummonerSpells: ["Flash", "Ignite"] },
+        makeMaps()
+      );
+      expect(row!.finalItems).toEqual([6653]);
+      expect(row!.spells).toEqual([4, 14]);
+    });
+  });
 });
 
 describe("tournamentDisplayFromOverviewPage", () => {

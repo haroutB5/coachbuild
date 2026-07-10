@@ -22,20 +22,28 @@ function parseCargoBool(raw: string | undefined): boolean {
   return v === "1" || v === "yes" || v === "true" || v === "win";
 }
 
-function parseCargoInt(raw: string | undefined): number {
-  if (!raw) return 0;
+/** Kills/Deaths/Assists: a plain numeric string via api.php, but a real JSON
+ *  number via CargoExport (live-verified 2026-07-10 — see types.ts's header
+ *  note). Handle both without assuming either. */
+function parseCargoInt(raw: string | number | undefined): number {
+  if (raw === undefined || raw === null) return 0;
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : 0;
   const n = parseInt(raw.trim(), 10);
   return Number.isNaN(n) ? 0 : n;
 }
 
-/** Split a Cargo delimited-list field into trimmed, non-empty tokens.
- *  Leaguepedia typically uses commas; tolerate stray semicolons too. */
-function parseList(raw: string | undefined): string[] {
+/** Normalizes a Cargo "List" field into trimmed, non-empty tokens. Two
+ *  live-verified shapes for the SAME logical field (2026-07-10, see
+ *  types.ts's header note): api.php returns a delimiter-joined STRING
+ *  (comma is Leaguepedia's typical delimiter; tolerate stray semicolons
+ *  too), CargoExport returns a real JSON ARRAY of strings directly — no
+ *  delimiter to split on, and splitting an array element on `,`/`;` would
+ *  be wrong (an item/spell NAME could itself contain either character).
+ *  `null`/`undefined`/anything else -> []. */
+function parseList(raw: string | string[] | undefined | null): string[] {
   if (!raw) return [];
-  return raw
-    .split(/[,;]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const tokens = Array.isArray(raw) ? raw : raw.split(/[,;]/);
+  return tokens.map((s) => s.trim()).filter(Boolean);
 }
 
 /** Resolves one text token to a numeric id: bare digits pass through as-is,
@@ -57,7 +65,7 @@ export function tournamentDisplayFromOverviewPage(overviewPage: string): string 
 }
 
 function resolveRunes(
-  runesRaw: string | undefined,
+  runesRaw: string | string[] | undefined,
   keystoneRaw: string | undefined,
   primaryTreeRaw: string | undefined,
   secondaryTreeRaw: string | undefined,
@@ -150,7 +158,7 @@ export function extractProstageRow(
   const championName = maps.championNameById.get(championId) ?? championRaw;
 
   const finalItems: number[] = [];
-  for (const token of parseList(cargoField(raw, "Items"))) {
+  for (const token of parseList(cargoField<string | string[]>(raw, "Items"))) {
     const id = resolveIdOrName(token, maps.itemByName);
     if (id === null) {
       log(`game ${gameId} player ${playerLink}: unresolved item "${token}", skipping item`);
@@ -166,7 +174,7 @@ export function extractProstageRow(
     if (trinket === null) log(`game ${gameId} player ${playerLink}: unresolved trinket "${trinketRaw}"`);
   }
 
-  const spellTokens = parseList(cargoField(raw, "SummonerSpells"));
+  const spellTokens = parseList(cargoField<string | string[]>(raw, "SummonerSpells"));
   const spells: [number, number] = [0, 0];
   spellTokens.slice(0, 2).forEach((token, i) => {
     const id = resolveIdOrName(token, maps.summonerByName);
@@ -178,7 +186,7 @@ export function extractProstageRow(
   });
 
   const runes = resolveRunes(
-    cargoField(raw, "Runes"),
+    cargoField<string | string[]>(raw, "Runes"),
     cargoField(raw, "KeystoneRune"),
     cargoField(raw, "PrimaryTree"),
     cargoField(raw, "SecondaryTree"),
@@ -196,9 +204,9 @@ export function extractProstageRow(
     championName,
     role: roleFromCargoRole(cargoField(raw, "Role")),
     win: parseCargoBool(cargoField(raw, "PlayerWin")),
-    kills: parseCargoInt(cargoField(raw, "Kills")),
-    deaths: parseCargoInt(cargoField(raw, "Deaths")),
-    assists: parseCargoInt(cargoField(raw, "Assists")),
+    kills: parseCargoInt(cargoField<string | number>(raw, "Kills")),
+    deaths: parseCargoInt(cargoField<string | number>(raw, "Deaths")),
+    assists: parseCargoInt(cargoField<string | number>(raw, "Assists")),
     gameDatetime: datetime,
     // ScoreboardPlayers has NO Patch field — confirmed via the live Cargo
     // schema declaration (Module:CargoDeclare/ScoreboardPlayers), fetched as

@@ -13,20 +13,36 @@ import type { ProGameRunes, ProRoleId } from "@/lib/pro/types";
 // keyed with a SPACE ("DateTime UTC") in the JSON response — verified in a
 // sister project. Always read through lib/prostage/cargo.ts's cargoField()
 // helper, never index these interfaces directly by the underscore key.
+//
+// TRANSPORT-SHAPE QUIRK (live-verified 2026-07-10, one real row of
+// LCK/2026 Season/Road to MSI via Special:CargoExport): Cargo "List" type
+// fields come back as genuine JSON ARRAYS via CargoExport, not the
+// delimiter-joined strings api.php returns for the SAME fields — confirmed
+// for Items (List (;) of String) and SummonerSpells (List (,) of String).
+// Numeric-typed fields (Kills/Deaths/Assists) also came back as JSON NUMBERS
+// via CargoExport, vs strings via api.php. Runes and PlayerWin were BOTH
+// still plain strings via CargoExport in the probed row (Runes is a single
+// comma-joined String field, not an actual Cargo List type) — typed as
+// `string | string[]` / `string | number` here anyway as a cheap hedge in
+// case a future/different tournament's data differs, since
+// lib/prostage/extract.ts's parseList()/parseCargoInt() already normalize
+// both shapes for free. Always read Items/SummonerSpells/Kills/Deaths/
+// Assists via cargoField<T>() with an explicit type param (e.g.
+// `cargoField<string | string[]>(raw, "Items")`) — see extract.ts.
 
 export interface CargoScoreboardPlayerRow {
   Link?: string;
   Champion?: string;
-  Items?: string; // comma-separated; NAME or numeric-id form, both handled
+  Items?: string | string[]; // "List (;) of String" via api.php; a real JSON array via CargoExport
   Trinket?: string;
-  Runes?: string; // comma-separated rune names; may be absent/empty
+  Runes?: string | string[]; // comma-separated string in practice; array-typed defensively (see header note)
   KeystoneRune?: string;
   PrimaryTree?: string;
   SecondaryTree?: string;
-  SummonerSpells?: string; // comma-separated
-  Kills?: string;
-  Deaths?: string;
-  Assists?: string;
+  SummonerSpells?: string | string[]; // "List (,) of String" via api.php; a real JSON array via CargoExport
+  Kills?: string | number;
+  Deaths?: string | number;
+  Assists?: string | number;
   Team?: string;
   Role?: string;
   GameId?: string;
@@ -36,7 +52,7 @@ export interface CargoScoreboardPlayerRow {
   // schema (Module:CargoDeclare/ScoreboardPlayers). Requesting it caused a
   // live MWException on every call that got past the rate limiter; removed
   // from the query, not represented here.
-  [key: string]: string | undefined; // tolerate the space-vs-underscore twin key
+  [key: string]: string | number | string[] | undefined; // tolerate the space-vs-underscore twin key + the shapes above
 }
 
 export interface CargoTournamentRow {

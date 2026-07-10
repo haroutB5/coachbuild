@@ -107,6 +107,39 @@ describe("resolveActiveTournaments", () => {
     const where = (queryArgs as { where: string }).where;
     expect(where).toContain('OverviewPage NOT LIKE "%Academy%"');
   });
+
+  it("anchors league codes as a PREFIX match, not a bare substring (excludes false positives)", async () => {
+    // Regression for a live backfill run (2026-07-10): a bare "%LPL%"/"%LEC%"
+    // substring matched "LPLOL/2026 Season/..." (a Brazilian league, not
+    // LPL) and "Schneider Electric PowerShield Cup 2026" (via "El*ec*tric").
+    vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([]);
+    await resolveActiveTournaments();
+    const [queryArgs] = vi.mocked(cargoQueryWithRetry).mock.calls[0];
+    const where = (queryArgs as { where: string }).where;
+    for (const code of ["LEC", "LCK", "LPL", "LCS"]) {
+      expect(where).toContain(`OverviewPage LIKE "${code}/%"`);
+      expect(where).not.toContain(`OverviewPage LIKE "%${code}%"`);
+    }
+  });
+
+  it("keeps event names (MSI/Worlds) as contains-matches, including the real MSI page name", async () => {
+    // Live-verified 2026-07-10: the real 2026 MSI page is literally
+    // "2026 Mid-Season Invitational" (League: "Mid-Season Invitational") —
+    // it does NOT contain the substring "MSI" at all, so a bare "%MSI%"
+    // pattern alone would silently never match the actual event page (only
+    // sub-bracket pages like "LCK/2026 Season/Road to MSI" happen to).
+    vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([
+      { OverviewPage: "2026 Mid-Season Invitational" },
+    ] as never);
+    const pages = await resolveActiveTournaments();
+    const [queryArgs] = vi.mocked(cargoQueryWithRetry).mock.calls[0];
+    const where = (queryArgs as { where: string }).where;
+    expect(where).toContain('OverviewPage LIKE "%Mid-Season Invitational%"');
+    expect(where).toContain('OverviewPage LIKE "%MSI%"');
+    expect(where).toContain('OverviewPage LIKE "%World Championship%"');
+    expect(where).toContain('OverviewPage LIKE "%Worlds%"');
+    expect(pages).toEqual(["2026 Mid-Season Invitational"]);
+  });
 });
 
 describe("orderByStaleness", () => {

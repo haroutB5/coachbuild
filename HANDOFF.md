@@ -1368,3 +1368,69 @@ Ran the REAL `cargoExportQuery` code path (not a mock) with `curlTransport` inje
 Tried `rm` on both individually this round; `.claude/hooks/safety-gate.sh` blocks every file-deletion pattern unconditionally in this environment (same as round 2). Left in place per "don't route around a safety block." Orchestrator: approve `rm scripts/_probe-curl-transport.mjs` and `rm scripts/_probe-via-export.mjs` (write to `data/approved.txt`) or delete directly — both are safe, unreferenced scratch files. (Unrelated, pre-existing, NOT from this work: two untracked root-level files `_diag-prostage.mjs` / `_diag-prostage2.mjs` showed up in `git status` — did not create these, didn't touch them, flagging only because they're sitting there.)
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-10 10:39
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-10 09:23:24Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-10 (round 4) — 3 fixes from a real backfill run: CargoExport array/number shapes, false-positive league matches, script-side retry
+
+**Files:** `lib/prostage/cargo.ts`, `lib/prostage/extract.ts`, `lib/prostage/tournaments.ts`, `lib/prostage/types.ts`, `scripts/ingest-prostage.mjs`. **Tests:** `lib/__tests__/prostage-extract.test.ts`, `lib/__tests__/prostage-tournaments.test.ts`.
+
+### Fix 1 — `raw.split is not a function`: CargoExport returns List/numeric fields as real JSON types
+
+Live-probed ONE real ScoreboardPlayers row (`LCK/2026 Season/Road to MSI`, limit=1) via CargoExport with the curl transport:
+
+**Fields confirmed as arrays via CargoExport (were delimiter strings via api.php):**
+- `Items` → `["The Collector","Hexdrinker","Lord Dominik's Regards", ...]` (a real JSON array, not `"The Collector,Hexdrinker,..."`)
+- `SummonerSpells` → `["Cleanse","Flash"]`
+
+**Fields confirmed as JSON numbers via CargoExport (were numeric strings via api.php) — this was NOT in the original brief's guess-list, and is a second landmine that would have crashed the pipeline one line further down once the Items/split bug was fixed:**
+- `Kills`, `Deaths`, `Assists` → `4`, `3`, `1` (JSON numbers). The old `parseCargoInt` called `raw.trim()` unconditionally — would have thrown `raw.trim is not a function` immediately after the Items fix landed, on the SAME row, since extraction order in `extractProstageRow` reaches Items/split before it ever touches Kills.
+
+**Fields confirmed to STAY plain strings (brief's "possibly Runes" did not pan out):**
+- `Runes` → `"Lethal Tempo,Presence of Mind,Legend: Bloodline,..."` — a single comma-joined STRING, not an array (it's a Cargo String field with commas in the value, not an actual List-type field). Typed `string | string[]` in `types.ts` anyway as a cheap hedge (parseList already normalizes both shapes for free) in case a different tournament/era's data differs, per the "distrust whole readings" principle — but the live-verified fact is it's currently a string.
+- `Trinket`, `KeystoneRune`, `PrimaryTree`, `SecondaryTree`, `Team`, `Role`, `GameId`, `DateTime UTC` (space-keyed, unchanged), `OverviewPage`, `PlayerWin` — all plain strings, unchanged.
+
+**Fix:**
+- `lib/prostage/cargo.ts`: `cargoField` is now generic (`cargoField<T = string>(row: Record<string, unknown>, name): T | undefined`) — decouples the return type from the row's static type instead of hard-coding `string | undefined`, so a caller can say `cargoField<string | string[]>(raw, "Items")`. Every existing string-only call site (the vast majority) is unaffected — `T` defaults to `string`.
+- `lib/prostage/types.ts`: widened `CargoScoreboardPlayerRow.Items`/`.SummonerSpells`/`.Runes` to `string | string[]`, `.Kills`/`.Deaths`/`.Assists` to `string | number`, and the index signature to match. Documented the live-verified shapes in a header comment so the next reader doesn't have to re-probe.
+- `lib/prostage/extract.ts`: `parseList()` now does `Array.isArray(raw) ? raw : raw.split(/[,;]/)` before the trim/filter — an array is used AS-IS (never re-split on `,`/`;`, since an array entry is already a whole token and could legitimately contain either character in a name). `parseCargoInt()` now short-circuits `typeof raw === "number"` before ever calling `.trim()`. Call sites for `Items`/`SummonerSpells`/`Runes`/`Kills`/`Deaths`/`Assists` now pass explicit `cargoField<...>` type params; `resolveRunes`'s `runesRaw` param widened to match.
+- Tests: 3 new cases in `prostage-extract.test.ts` — array-typed Items/SummonerSpells/Runes resolve identically to delimited strings, number-typed Kills/Deaths/Assists resolve identically to numeric strings, and an explicit guard that an array entry is never re-split on comma/semicolon.
+
+### Fix 2 — false-positive tournament matches: anchor league codes as a PREFIX, not a bare substring
+
+Live backfill evidence: `%LPL%` matched `"LPLOL/2026 Season/..."` (a Brazilian league, unrelated to LPL) and `%LEC%` matched `"Schneider Electric PowerShield Cup 2026"` (via "El**ec**tric"). Also probed Tournaments for real Season pages May–Jul 2026 to pin the actual MSI 2026 page name — it's **`"2026 Mid-Season Invitational"`** (League: `"Mid-Season Invitational"`), which does **NOT** contain the substring `"MSI"` at all; only sub-bracket pages like `"LCK/2026 Season/Road to MSI"` happen to.
+
+**Fix in `lib/prostage/tournaments.ts`** (in `buildTournamentsQuerySpec`, the single shared spot both transports already ran through since round 2's refactor — no duplication needed):
+- `LEAGUE_PREFIX_PATTERNS = ["LEC", "LCK", "LPL", "LCS"]` rendered as `OverviewPage LIKE "LCK/%"` etc. (prefix-anchored — Leaguepedia's real tier-1 pages all live under an `"<CODE>/..."` page-tree root).
+- `EVENT_CONTAINS_PATTERNS = ["MSI", "Mid-Season Invitational", "World Championship", "Worlds"]` stays as `%contains%` matches (no shared page-tree root for event names) — added `"Mid-Season Invitational"` per the live finding above; kept `"MSI"` too since some sub-bracket pages do contain it literally.
+- Academy exclusion (`OverviewPage NOT LIKE "%Academy%"`) unchanged, per brief.
+- Live-reprobed with the fixed spec (`buildTournamentsQuerySpec()` + curl transport): resolved exactly `["2026 Mid-Season Invitational", "LCK/2026 Season/Road to MSI", "LPL/2026 Season/Split 2 Playoffs", "LCS/2026 Season/Spring Playoffs", "LEC/2026 Season/Spring Playoffs"]` — **zero false positives**, confirmed no `LPLOL`/`Schneider Electric` matches across 3 live attempts.
+- Tests: 2 new cases in `prostage-tournaments.test.ts` — asserts the WHERE clause uses `"<CODE>/%"` (prefix) and NOT `"%<CODE>%"` (bare substring) for all 4 league codes, and a second test pinning the real `"2026 Mid-Season Invitational"` page name plus all 4 event-contains patterns present in the WHERE.
+
+### Fix 3 — script-side retry-once on a transient CargoExport challenge
+
+Live backfill evidence: 2 of 7 cursors got `CargoRequestError: CargoExport returned a non-JSON response` on the first attempt; an immediate retry cleared it both times (consistent with round 3's finding that even curl occasionally hits a transient Cloudflare challenge, just far less often than Node's own stack). `cargoExportQuery` itself deliberately still has NO retry (unchanged contract, documented in cargo.ts). The retry now lives in `scripts/ingest-prostage.mjs`'s `cargoExportViaCurl` wrapper: on `CargoRequestError`, waits ~10s and retries EXACTLY once; a second `CargoRequestError` (or any other error) propagates unchanged. Both call sites (`resolveTournamentsViaExport` and the `queryFn` passed to `runProstageIngest`) already routed through this one wrapper function, so both got the retry for free. Route path untouched (never called `cargoExportQuery` in the first place).
+
+**Live-verified working, not just theorized:** re-ran the real resolver (`buildTournamentsQuerySpec()` + `cargoExportQuery` + curl transport, wrapped in the same try/retry logic) 3 times back-to-back. Attempt 2 hit the transient Cloudflare challenge, logged `retrying once in 3s` (shortened for the manual probe; real code uses 10s), and the retry succeeded — same 5 correct tournaments, no crash. This is the retry logic actually firing on a real transient failure, not a simulated one.
+
+### Test results
+
+`npx tsc --noEmit` — clean. `npx vitest run` — 19 files, **206/206 passed** (201 prior + 5 new: 3 in `prostage-extract.test.ts` for the array/number CargoExport shapes, 2 in `prostage-tournaments.test.ts` for prefix-anchoring + the real MSI page name).
+
+### Housekeeping
+
+Reused the existing leftover scratch file `scripts/_probe-curl-transport.mjs` for both of this round's live probes (ScoreboardPlayers field-shape probe + Tournaments WHERE-clause/retry probe) instead of creating new ones — still can't delete it (`rm` unconditionally blocked by `safety-gate.sh` in this environment, same as rounds 2/3). `scripts/_probe-via-export.mjs` (round 2) is also still sitting there. Orchestrator: approve/run `rm scripts/_probe-curl-transport.mjs` and `rm scripts/_probe-via-export.mjs` whenever convenient — both are inert scratch files, not imported by anything, not part of any diff. (The two root-level `_diag-prostage.mjs`/`_diag-prostage2.mjs` files noted in round 3 are still there too, still not mine.)
+
+

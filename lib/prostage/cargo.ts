@@ -287,10 +287,22 @@ export async function cargoQueryWithRetry<T = Record<string, string | undefined>
  *  directions — some deployments key the JSON by the requested field name
  *  verbatim, others substitute spaces for underscores (observed live in a
  *  sister project on DateTime_UTC specifically; applied generically here
- *  since it costs nothing and protects any other underscored field). */
-export function cargoField(
-  row: Record<string, string | undefined>,
+ *  since it costs nothing and protects any other underscored field).
+ *
+ *  Generic over the field's expected shape (default `string`, the common
+ *  case) — `row` is deliberately typed as `Record<string, unknown>` rather
+ *  than tied to `T`, because different Cargo TRANSPORTS return different
+ *  runtime shapes for the SAME logical field (List-type fields are
+ *  delimiter-joined strings via api.php but real JSON arrays via
+ *  CargoExport; numeric fields are strings via api.php but JSON numbers via
+ *  CargoExport — live-verified 2026-07-10, see types.ts's header note). The
+ *  caller is expected to know (and normalize) the actual field's possible
+ *  shapes — e.g. `cargoField<string | string[]>(raw, "Items")` — this
+ *  helper only handles the key-lookup quirk, not shape normalization. */
+export function cargoField<T = string>(
+  row: Record<string, unknown>,
   name: string
-): string | undefined {
-  return row[name] ?? row[name.replace(/_/g, " ")] ?? row[name.replace(/ /g, "_")];
+): T | undefined {
+  const value = row[name] ?? row[name.replace(/_/g, " ")] ?? row[name.replace(/ /g, "_")];
+  return value as T | undefined;
 }

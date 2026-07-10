@@ -21,8 +21,25 @@ import type { getSql } from "@/lib/pro/db";
 import { cargoField, cargoQueryWithRetry } from "./cargo";
 import type { CargoTournamentRow } from "./types";
 
-const TIER1_PATTERNS = ["LEC", "LCK", "LPL", "LCS", "MSI", "World Championship", "Worlds"];
-// Academy pages (e.g. "LCK Academy Series") LIKE-match TIER1_PATTERNS but
+// LEAGUE CODES: matched as a PREFIX (`"LCK/%"`), not a bare substring.
+// Live backfill (2026-07-10) showed a bare `%LPL%`/`%LEC%` substring match
+// pulls in false positives that merely CONTAIN the code as a substring of an
+// unrelated name — "LPLOL/2026 Season/..." (a Brazilian-league page, not
+// LPL) matched `%LPL%`, and "Schneider Electric PowerShield Cup 2026"
+// matched `%LEC%` (via "El*ec*tric"). Leaguepedia's real tier-1 league pages
+// all live under an `"<CODE>/..."` page-tree root (e.g.
+// "LCK/2026 Season/Road to MSI"), so anchoring to that prefix excludes both
+// false positives while still matching every real sub-bracket/round page.
+const LEAGUE_PREFIX_PATTERNS = ["LEC", "LCK", "LPL", "LCS"];
+// EVENT NAMES: kept as CONTAINS matches (no shared page-tree root to anchor
+// a prefix to). "Mid-Season Invitational" added 2026-07-10 — live-verified
+// the REAL 2026 MSI page is "2026 Mid-Season Invitational" (League field:
+// "Mid-Season Invitational"), which does NOT contain the substring "MSI" at
+// all; "MSI" is kept too since some sub-bracket pages DO contain it literally
+// (e.g. "LCK/2026 Season/Road to MSI", already covered by the LCK/ prefix
+// above, but other regions' "Road to MSI" pages may not share that prefix).
+const EVENT_CONTAINS_PATTERNS = ["MSI", "Mid-Season Invitational", "World Championship", "Worlds"];
+// Academy pages (e.g. "LCK Academy Series") LIKE-match the LCK/ prefix but
 // resolve to tournaments with no ScoreboardPlayers data — live-verified
 // 2026-07-10 (see DATA-QUALITY PROBE in HANDOFF-engy.md).
 const EXCLUDE_PATTERNS = ["Academy"];
@@ -62,7 +79,9 @@ export function buildTournamentsQuerySpec(withinDays = 90): TournamentsQuerySpec
   const now = new Date();
   const cutoff = new Date(now.getTime() - withinDays * 86_400_000).toISOString().slice(0, 10);
   const today = now.toISOString().slice(0, 10);
-  const likeClauses = TIER1_PATTERNS.map((p) => `OverviewPage LIKE "%${p}%"`).join(" OR ");
+  const prefixClauses = LEAGUE_PREFIX_PATTERNS.map((p) => `OverviewPage LIKE "${p}/%"`);
+  const containsClauses = EVENT_CONTAINS_PATTERNS.map((p) => `OverviewPage LIKE "%${p}%"`);
+  const likeClauses = [...prefixClauses, ...containsClauses].join(" OR ");
   const excludeClauses = EXCLUDE_PATTERNS.map((p) => `OverviewPage NOT LIKE "%${p}%"`).join(" AND ");
   return {
     tables: "Tournaments",
