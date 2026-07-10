@@ -52,6 +52,11 @@ export const FIXTURE_GAME_WIN: ProGame = {
     secondary: [8126, 8143], // Cheap Shot, Sudden Impact
     shards: [5008, 5008, 5011], // Adaptive, Adaptive, Health
   },
+  // Backfilled comp — includes the player's own champion (112, Viktor) among
+  // its 4 allies, so CardCompStrip/SheetTeamsSection have a case to
+  // highlight against a full 5-a-side roster.
+  allyChampionIds: [112, 64, 555, 104, 43], // Viktor, Lee Sin, Pyke, Graves, Karma
+  enemyChampionIds: [238, 875, 887, 51, 40], // Zed, Sett, Gwen, Caitlyn, Janna
 };
 
 /** A loss — same champ, fewer final items (game ended early), different pro. */
@@ -176,6 +181,8 @@ export const FIXTURE_GAME_PROSTAGE_FULL: ProGame = {
     secondary: [8126, 8143],
     shards: [5008, 5008, 5011],
   },
+  allyChampionIds: [112, 64, 555, 104, 43],
+  enemyChampionIds: [238, 875, 887, 51, 40],
 };
 
 /** Prostage, keystone-only runes + unknown game length — exercises the

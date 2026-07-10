@@ -26,6 +26,8 @@ interface ProGameRow {
   purchase_order: unknown;
   skill_order: unknown;
   runes: unknown;
+  ally_champion_ids: unknown;
+  enemy_champion_ids: unknown;
   pro_name: string;
   pro_team: string | null;
   pro_role: number | null;
@@ -46,6 +48,20 @@ function asJson<T>(v: unknown, fallback: T): T {
     }
   }
   return v as T;
+}
+
+/** Both ally_champion_ids/enemy_champion_ids are jsonb NULL until
+ *  scripts/backfill-team-comps.mjs walks a historical row, or absent for a
+ *  match that never resolved a clean 5v5 split (see extractTeamComps) — in
+ *  either case emit NEITHER field (spreading {} adds no keys) rather than a
+ *  partial side. */
+function soloqComps(row: ProGameRow): Pick<ProGame, "allyChampionIds" | "enemyChampionIds"> | Record<string, never> {
+  const ally = asJson<number[] | null>(row.ally_champion_ids, null);
+  const enemy = asJson<number[] | null>(row.enemy_champion_ids, null);
+  if (ally && enemy && ally.length === 5 && enemy.length === 5) {
+    return { allyChampionIds: ally, enemyChampionIds: enemy };
+  }
+  return {};
 }
 
 function rowToProGame(row: ProGameRow): ProGame {
@@ -82,6 +98,7 @@ function rowToProGame(row: ProGameRow): ProGame {
       secondary: [],
       shards: [],
     }),
+    ...soloqComps(row),
   };
 }
 
@@ -126,7 +143,10 @@ interface ProstageGameRow {
  *  column) — only the all-lanes path (role=5) surfaces them, which is
  *  correct: an unknown lane can't satisfy "was this game played top," but it
  *  can satisfy "show me all this champion's games." */
-function prostageRowToProGame(row: ProstageGameRow): ProGame | null {
+function prostageRowToProGame(
+  row: ProstageGameRow,
+  comps: Pick<ProGame, "allyChampionIds" | "enemyChampionIds"> | Record<string, never> = {}
+): ProGame | null {
   if (!row?.game_id || !row.player_link || typeof row.champion_id !== "number") return null;
   const gameCreation = new Date(row.game_datetime);
   if (Number.isNaN(gameCreation.getTime())) return null;
@@ -168,7 +188,53 @@ function prostageRowToProGame(row: ProstageGameRow): ProGame | null {
       shards: [],
     }),
     tournament: row.tournament_display,
+    ...comps,
   };
+}
+
+/** Groups a batch of raw coachbuild.prostage_matches (game_id, team,
+ *  champion_id) rows — fetched for the specific game_ids already present in
+ *  this response's prostage results — into game_id -> team -> championIds[].
+ *  Rows with a null team or champion_id are excluded by the caller's SQL
+ *  WHERE clause, never here. */
+function buildProstageCompsMap(
+  rows: { game_id: string; team: string; champion_id: number }[]
+): Map<string, Map<string, number[]>> {
+  const map = new Map<string, Map<string, number[]>>();
+  for (const r of rows) {
+    let byTeam = map.get(r.game_id);
+    if (!byTeam) {
+      byTeam = new Map();
+      map.set(r.game_id, byTeam);
+    }
+    const arr = byTeam.get(r.team) ?? [];
+    arr.push(r.champion_id);
+    byTeam.set(r.team, arr);
+  }
+  return map;
+}
+
+/** ALLY = the game row's own team string; ENEMY = the one other team present
+ *  for that game_id. Returns {} (never a partial side) unless: the row has a
+ *  non-null team, that team has exactly 5 champions, and there is EXACTLY
+ *  ONE other team for the game with exactly 5 champions — i.e. a clean 10-row
+ *  5v5 split. Some prostage rows have a null team (see prostageRowToProGame's
+ *  header comment) and simply never get comps. */
+function compsForGame(
+  compsByGame: Map<string, Map<string, number[]>>,
+  gameId: string,
+  ownTeam: string | null
+): Pick<ProGame, "allyChampionIds" | "enemyChampionIds"> | Record<string, never> {
+  if (!ownTeam) return {};
+  const byTeam = compsByGame.get(gameId);
+  if (!byTeam) return {};
+  const ally = byTeam.get(ownTeam);
+  if (!ally || ally.length !== 5) return {};
+  const otherTeams = Array.from(byTeam.entries()).filter(([team]) => team !== ownTeam);
+  if (otherTeams.length !== 1) return {};
+  const [, enemy] = otherTeams[0];
+  if (enemy.length !== 5) return {};
+  return { allyChampionIds: ally, enemyChampionIds: enemy };
 }
 
 const VALID_SOURCES = new Set(["all", "soloq", "prostage"]);
@@ -268,6 +334,7 @@ export async function GET(req: NextRequest) {
                 pm.match_id, pm.champion_id, pm.champion_name, pm.role, pm.patch, pm.win,
                 pm.kills, pm.deaths, pm.assists, pm.game_creation, pm.game_duration_sec,
                 pm.spells, pm.final_items, pm.trinket, pm.purchase_order, pm.skill_order, pm.runes,
+                pm.ally_champion_ids, pm.enemy_champion_ids,
                 p.name AS pro_name, p.team AS pro_team, p.role AS pro_role, p.country AS pro_country,
                 pa.riot_id, pa.region
               FROM coachbuild.pro_matches pm
@@ -283,6 +350,7 @@ export async function GET(req: NextRequest) {
                 pm.match_id, pm.champion_id, pm.champion_name, pm.role, pm.patch, pm.win,
                 pm.kills, pm.deaths, pm.assists, pm.game_creation, pm.game_duration_sec,
                 pm.spells, pm.final_items, pm.trinket, pm.purchase_order, pm.skill_order, pm.runes,
+                pm.ally_champion_ids, pm.enemy_champion_ids,
                 p.name AS pro_name, p.team AS pro_team, p.role AS pro_role, p.country AS pro_country,
                 pa.riot_id, pa.region
               FROM coachbuild.pro_matches pm
@@ -326,8 +394,28 @@ export async function GET(req: NextRequest) {
     ]);
 
     const soloqGames = asRows<ProGameRow>(soloqRows).map(rowToProGame);
-    const prostageGames = asRows<ProstageGameRow>(prostageRows)
-      .map(prostageRowToProGame)
+
+    const prostageRowsArr = asRows<ProstageGameRow>(prostageRows);
+    // Team comps for prostage rows: one extra grouped query (batched over
+    // every distinct game_id already in this response's prostage results) —
+    // NOT a per-row N+1 query. Only fired when there's actually a prostage
+    // row to enrich.
+    const gameIds = Array.from(new Set(prostageRowsArr.map((r) => r.game_id)));
+    const compsRawRows =
+      gameIds.length > 0
+        ? await sql`
+            SELECT game_id, team, champion_id
+            FROM coachbuild.prostage_matches
+            WHERE game_id = ANY(${gameIds}::text[])
+              AND team IS NOT NULL AND champion_id IS NOT NULL
+          `
+        : [];
+    const compsByGame = buildProstageCompsMap(
+      asRows<{ game_id: string; team: string; champion_id: number }>(compsRawRows)
+    );
+
+    const prostageGames = prostageRowsArr
+      .map((row) => prostageRowToProGame(row, compsForGame(compsByGame, row.game_id, row.team)))
       .filter((g): g is ProGame => g !== null);
 
     const games = [...soloqGames, ...prostageGames]

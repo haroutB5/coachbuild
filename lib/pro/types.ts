@@ -83,6 +83,14 @@ export interface ProGame {
   runes: ProGameRunes;
   tournament?: string; // prostage only — tournament_display, e.g. "LEC 2026 Summer"
   playerLink?: string; // prostage only — prostage_matches.player_link, the `player` param for /api/prostage/timeline
+  /** Per-game ALLY + ENEMY team compositions (dpm.lol-style champ icon rows).
+   *  Both fields are ALWAYS emitted together, or BOTH omitted — never one
+   *  without the other. Emitted only when there are exactly 5 champion ids
+   *  per side; absent = frontend renders nothing for this row.
+   *  allyChampionIds INCLUDES the player's own champion (matches `championId`
+   *  above) so the frontend can highlight self by id match within the row. */
+  allyChampionIds?: number[];
+  enemyChampionIds?: number[];
 }
 
 export interface ProsResponse {

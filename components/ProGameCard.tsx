@@ -12,6 +12,7 @@ import {
 } from "./proAssets";
 import GameDetailSheet from "./GameDetailSheet";
 import { IconWithFallback } from "./IconWithFallback";
+import { CardCompStrip } from "./TeamComp";
 
 export function ImgWithFallback({
   src,
@@ -306,6 +307,16 @@ export default function ProGameCard({
             </span>
           </div>
         </div>
+
+        {/* Ally/enemy comp strip — its own thin line (not squeezed into the
+            wrapping row above) so a 10-icon comp never competes for space
+            with identity/KDA/items on narrow viewports. Renders nothing
+            until the game's comp ids are backfilled. */}
+        <CardCompStrip
+          allyChampionIds={game.allyChampionIds}
+          enemyChampionIds={game.enemyChampionIds}
+          selfChampionId={game.championId}
+        />
       </div>
 
       <GameDetailSheet

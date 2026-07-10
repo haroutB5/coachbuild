@@ -2,54 +2,74 @@
 // runeDetail.ts — rune DATA (name + description) for the tap-to-detail popover
 // in GameDetailSheet, mirroring itemDetail.ts's pattern one module over.
 //
-// Fetches runesReforged.json — ddragon-shaped, same coachless CDN mirror and
-// same versioned folder itemDetail.ts and proAssets.ts already read from —
-// keyed per-game by proAssets.versionFromPatch(game.patch).
+// SOURCE: CommunityDragon's perks.json (the in-client tooltip text feed),
+// NOT ddragon's runesReforged.json. Verified live 2026-07-10: ddragon's
+// shortDesc/longDesc for many runes never resolve their `@Variable@`
+// templates (e.g. Unflinching's shortDesc is literally "Gain Armor and Magic
+// Resist when receiving crowd control." — no numbers, ever). CommunityDragon
+// bakes the current-patch numeric values directly into the text instead:
+//   perks.json id 8242 (Unflinching) longDesc =
+//     "Gain 10 Armor and Magic Resist when crowd controlled and for 2
+//     seconds after."
+// Audited the full 103-entry feed 2026-07-10: only 1 rune (Unsealed
+// Spellbook, id 8360) has any leftover `@Variable@` placeholder in longDesc,
+// and even that one keeps its OTHER real numbers (25s, 6 mins) intact — the
+// placeholder pass below degrades that single value to an ellipsis rather
+// than losing the whole description.
 //
-// This is a SEPARATE dataset from proAssets.ts's rune map (fetched from a
-// different bundle, rune-translations-v2, which only carries Name+Icon and no
-// description). Icon resolution stays on proAssets.resolveRuneDisplay(); this
-// module only adds shortDesc/longDesc text for the detail card body.
+// perks.json is a flat array (not ddragon's style/slot tree) and is NOT
+// versioned per-patch (CDragon serves "latest" only) — so unlike
+// itemDetail.ts/proAssets.ts, this module caches ONE global map, not one per
+// `ver`. The `ver` parameter on getRuneDetail() is kept for call-site
+// compatibility with EntityDetailPopover (which also needs `ver` for
+// proAssets.resolveRuneDisplay's icon lookup) but is unused here.
+//
+// Icon resolution is UNCHANGED — still proAssets.resolveRuneDisplay() against
+// the coachless rune-translations bundle. This module only supplies
+// description text.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface RuneDetail {
   id: number;
   name: string;
-  /** Sanitized, human-readable description — ddragon's rune markup (plain
-   *  tags plus League's own <lol-uikit-tooltipped-keyword> wrapper) stripped,
-   *  <br> converted to newlines, and unresolved `@Variable@` template
-   *  placeholders (ddragon leaves these unsubstituted — there is no per-rank
-   *  numeric to fill in) replaced with an ellipsis rather than left as raw
-   *  "@HealAmount@" text. Safe to render as plain text (never HTML). */
+  /** Sanitized, human-readable description with real numeric values —
+   *  CommunityDragon's tooltip markup (`<br>`, `<li>`, `<hr>`, `<b>`,
+   *  `<lol-uikit-tooltipped-keyword>`, `<font color=...>`, `<rules>`, `<i>`,
+   *  scaling-tag wrappers like `<scaleAD>`) stripped to plain text, list
+   *  items (`<li>`) turned into their own bulleted line, and any leftover
+   *  unresolved `@Variable@` template (rare — see module header) replaced
+   *  with an ellipsis. Safe to render as plain text (never HTML). */
   descriptionText: string;
 }
 
-const RUNES_DATA_URL = (ver: string) =>
-  `https://cdn.coachless.gg/static-files/${ver}/${ver}/data/en_US/runesReforged.json`;
+const RUNES_TEXT_URL =
+  "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/perks.json";
 
-const LOCALSTORAGE_PREFIX = "coachbuild:runedata:v1:";
+// Bumped from v1 -> v2: the cached shape/source changed (ddragon
+// runesReforged.json -> CDragon perks.json flat array), and v1 entries would
+// carry the old placeholder-riddled shortDesc text forever otherwise.
+const LOCALSTORAGE_KEY = "coachbuild:runedata:v2";
 
-interface RawRuneEntry {
+interface RawPerkEntry {
   id: number;
   name?: string;
   shortDesc?: string;
   longDesc?: string;
 }
 
-interface RawRuneStyle {
-  slots?: { runes?: RawRuneEntry[] }[];
-}
-
 /**
- * Strip ddragon's rune description markup down to plain, readable text. Same
- * treatment as itemDetail.ts's stripItemDescriptionHtml, plus the
- * `@Variable@` placeholder pass runes need that items don't. Pure + exported
- * for direct unit testing.
+ * Strip CommunityDragon's rune tooltip markup down to plain, readable text.
+ * `<br>`/`<hr>` -> newline, `<li>` -> its own bulleted line, every other tag
+ * dropped but its text content kept, unresolved `@Variable@` templates
+ * replaced with an ellipsis. Pure + exported for direct unit testing.
  */
 export function stripRuneDescriptionHtml(raw: string | undefined | null): string {
   if (!raw) return "";
   return raw
     .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<hr\s*\/?>/gi, "\n")
+    .replace(/<li>/gi, "\n• ")
+    .replace(/<\/li>/gi, "")
     .replace(/<[^>]+>/g, "")
     .replace(/@\w+@/g, "…")
     .replace(/&nbsp;/gi, " ")
@@ -61,13 +81,13 @@ export function stripRuneDescriptionHtml(raw: string | undefined | null): string
     .trim();
 }
 
-const memCache = new Map<string, Map<number, RuneDetail>>();
-const inFlight = new Map<string, Promise<Map<number, RuneDetail>>>();
+let memCache: Map<number, RuneDetail> | null = null;
+let inFlight: Promise<Map<number, RuneDetail>> | null = null;
 
-function readLocalStorageCache(ver: string): Map<number, RuneDetail> | null {
+function readLocalStorageCache(): Map<number, RuneDetail> | null {
   try {
     if (typeof window === "undefined" || !window.localStorage) return null;
-    const raw = window.localStorage.getItem(LOCALSTORAGE_PREFIX + ver);
+    const raw = window.localStorage.getItem(LOCALSTORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Record<string, RuneDetail>;
     const map = new Map<number, RuneDetail>();
@@ -78,72 +98,71 @@ function readLocalStorageCache(ver: string): Map<number, RuneDetail> | null {
   }
 }
 
-function writeLocalStorageCache(ver: string, map: Map<number, RuneDetail>): void {
+function writeLocalStorageCache(map: Map<number, RuneDetail>): void {
   try {
     if (typeof window === "undefined" || !window.localStorage) return;
     const obj: Record<string, RuneDetail> = {};
     map.forEach((entry, id) => {
       obj[id] = entry;
     });
-    window.localStorage.setItem(LOCALSTORAGE_PREFIX + ver, JSON.stringify(obj));
+    window.localStorage.setItem(LOCALSTORAGE_KEY, JSON.stringify(obj));
   } catch {
     // best-effort only — quota exceeded / storage disabled never breaks the app
   }
 }
 
-async function loadRuneDataMap(ver: string): Promise<Map<number, RuneDetail>> {
-  const cached = memCache.get(ver);
-  if (cached) return cached;
-  const pending = inFlight.get(ver);
-  if (pending) return pending;
+async function loadRuneDataMap(): Promise<Map<number, RuneDetail>> {
+  if (memCache) return memCache;
+  if (inFlight) return inFlight;
 
   const promise = (async () => {
-    const fromStorage = readLocalStorageCache(ver);
+    const fromStorage = readLocalStorageCache();
     if (fromStorage && fromStorage.size > 0) {
-      memCache.set(ver, fromStorage);
+      memCache = fromStorage;
       return fromStorage;
     }
-    const res = await fetch(RUNES_DATA_URL(ver));
+    const res = await fetch(RUNES_TEXT_URL);
     if (!res.ok) throw new Error(`rune data fetch ${res.status}`);
-    const json = (await res.json()) as RawRuneStyle[];
+    const json = (await res.json()) as RawPerkEntry[];
     const map = new Map<number, RuneDetail>();
-    for (const style of json ?? []) {
-      for (const slot of style.slots ?? []) {
-        for (const rune of slot.runes ?? []) {
-          if (!Number.isFinite(rune.id)) continue;
-          // Prefer shortDesc (cleaner, no changelog/flavor text) — fall back
-          // to longDesc when a rune has no shortDesc at all.
-          const raw = (rune.shortDesc && rune.shortDesc.trim()) || rune.longDesc || "";
-          map.set(rune.id, {
-            id: rune.id,
-            name: rune.name || `Rune #${rune.id}`,
-            descriptionText: stripRuneDescriptionHtml(raw),
-          });
-        }
-      }
+    for (const entry of json ?? []) {
+      if (!Number.isFinite(entry.id)) continue;
+      // Prefer longDesc — CDragon's longDesc has real resolved numbers baked
+      // in (see module header); shortDesc is the flavor-only summary ddragon
+      // also serves, with no numeric values. Fall back to shortDesc only if
+      // a rune has no longDesc at all.
+      const raw = (entry.longDesc && entry.longDesc.trim()) || entry.shortDesc || "";
+      map.set(entry.id, {
+        id: entry.id,
+        name: entry.name || `Rune #${entry.id}`,
+        descriptionText: stripRuneDescriptionHtml(raw),
+      });
     }
-    memCache.set(ver, map);
-    writeLocalStorageCache(ver, map);
+    memCache = map;
+    writeLocalStorageCache(map);
     return map;
   })();
 
-  inFlight.set(ver, promise);
+  inFlight = promise;
   try {
     return await promise;
   } finally {
-    inFlight.delete(ver);
+    inFlight = null;
   }
 }
 
 /**
- * Resolve a single rune's detail (name, sanitized shortDesc/longDesc) for the
- * given data version. Never throws — unknown rune id or any fetch failure
- * resolves to `null` so the caller can degrade to "details unavailable"
- * instead of crashing.
+ * Resolve a single rune's detail (name, sanitized value-bearing description)
+ * from CommunityDragon's perks.json. `ver` is accepted but unused — kept so
+ * EntityDetailPopover's call site (which also needs `ver` for the icon
+ * lookup) doesn't need a special case for this one function. Never throws —
+ * unknown rune id or any fetch failure resolves to `null` so the caller can
+ * degrade to "details unavailable" instead of crashing.
  */
 export async function getRuneDetail(id: number, ver: string): Promise<RuneDetail | null> {
+  void ver;
   try {
-    const map = await loadRuneDataMap(ver);
+    const map = await loadRuneDataMap();
     return map.get(id) ?? null;
   } catch {
     return null;

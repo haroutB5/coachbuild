@@ -91,11 +91,14 @@ describe("GET /api/pros source param", () => {
     expect(body.games[0].source).toBe("soloq");
   });
 
-  it("source=prostage issues exactly one query against prostage_matches", async () => {
-    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]);
+  it("source=prostage issues the prostage query plus one batched team-comps query", async () => {
+    // Phase 3 (team comps): a non-empty prostage result triggers exactly one
+    // extra grouped query (batched over distinct game_ids), never a per-row
+    // N+1 — see app/api/pros/route.ts's compsForGame/buildProstageCompsMap.
+    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce([]);
     const res = await GET(req("?championId=103&role=2&source=prostage"));
     expect(res.status).toBe(200);
-    expect(mockSql).toHaveBeenCalledTimes(1);
+    expect(mockSql).toHaveBeenCalledTimes(2);
     const [strings] = mockSql.mock.calls[0];
     expect(strings.join("")).toContain("prostage_matches");
     const body = await res.json();
@@ -110,11 +113,12 @@ describe("GET /api/pros source param", () => {
   });
 
   it("default (no source param) merges both sources, newest first", async () => {
-    // soloq query resolves first (call order matches code: soloq then prostage)
-    mockSql.mockResolvedValueOnce([SOLOQ_ROW]).mockResolvedValueOnce([PROSTAGE_ROW]);
+    // soloq query resolves first, then prostage, then the team-comps query
+    // (call order matches code: soloq then prostage then comps).
+    mockSql.mockResolvedValueOnce([SOLOQ_ROW]).mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce([]);
     const res = await GET(req("?championId=103&role=2"));
     expect(res.status).toBe(200);
-    expect(mockSql).toHaveBeenCalledTimes(2);
+    expect(mockSql).toHaveBeenCalledTimes(3);
     const body = await res.json();
     expect(body.games).toHaveLength(2);
     // PROSTAGE_ROW's game_datetime (2026-07-08) is newer than SOLOQ_ROW's
@@ -124,15 +128,15 @@ describe("GET /api/pros source param", () => {
   });
 
   it("source=all is equivalent to the default (explicit form)", async () => {
-    mockSql.mockResolvedValueOnce([SOLOQ_ROW]).mockResolvedValueOnce([PROSTAGE_ROW]);
+    mockSql.mockResolvedValueOnce([SOLOQ_ROW]).mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce([]);
     const res = await GET(req("?championId=103&role=2&source=all"));
-    expect(mockSql).toHaveBeenCalledTimes(2);
+    expect(mockSql).toHaveBeenCalledTimes(3);
     const body = await res.json();
     expect(body.games).toHaveLength(2);
   });
 
   it("respects limit AFTER merging (not per-source)", async () => {
-    mockSql.mockResolvedValueOnce([SOLOQ_ROW]).mockResolvedValueOnce([PROSTAGE_ROW]);
+    mockSql.mockResolvedValueOnce([SOLOQ_ROW]).mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce([]);
     const res = await GET(req("?championId=103&role=2&limit=1"));
     const body = await res.json();
     expect(body.games).toHaveLength(1);
@@ -144,7 +148,8 @@ describe("GET /api/pros source param", () => {
     // every query (including all-lanes), invisible behind a green ingest.
     mockSql
       .mockResolvedValueOnce([SOLOQ_ROW])
-      .mockResolvedValueOnce([{ ...PROSTAGE_ROW, role: null, pro_role: null }]);
+      .mockResolvedValueOnce([{ ...PROSTAGE_ROW, role: null, pro_role: null }])
+      .mockResolvedValueOnce([]);
     const res = await GET(req("?championId=103&role=5")); // role=5 (all lanes) lets the null-role row past the SQL filter
     const body = await res.json();
     expect(body.games).toHaveLength(2);
@@ -161,5 +166,71 @@ describe("GET /api/pros source param", () => {
     const body = await res.json();
     expect(body.games).toHaveLength(1);
     expect(body.games[0].source).toBe("soloq");
+    // No prostage rows -> no game_ids -> the team-comps query never fires.
+    expect(mockSql).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("GET /api/pros prostage team comps (Phase 3)", () => {
+  beforeEach(() => {
+    mockSql.mockReset();
+    vi.mocked(getSql).mockReturnValue(mockSql as never);
+  });
+
+  // A clean 10-row game: 5 on the row's own team (T1, including the row's
+  // own champion_id 103) + 5 on the one other team (GEN).
+  const CLEAN_GAME_ROWS = [
+    { game_id: "LEC_2026_Summer_1_1", team: "T1", champion_id: 103 },
+    { game_id: "LEC_2026_Summer_1_1", team: "T1", champion_id: 1 },
+    { game_id: "LEC_2026_Summer_1_1", team: "T1", champion_id: 2 },
+    { game_id: "LEC_2026_Summer_1_1", team: "T1", champion_id: 3 },
+    { game_id: "LEC_2026_Summer_1_1", team: "T1", champion_id: 4 },
+    { game_id: "LEC_2026_Summer_1_1", team: "GEN", champion_id: 5 },
+    { game_id: "LEC_2026_Summer_1_1", team: "GEN", champion_id: 6 },
+    { game_id: "LEC_2026_Summer_1_1", team: "GEN", champion_id: 7 },
+    { game_id: "LEC_2026_Summer_1_1", team: "GEN", champion_id: 8 },
+    { game_id: "LEC_2026_Summer_1_1", team: "GEN", champion_id: 9 },
+  ];
+
+  it("emits allyChampionIds (incl. own champion) + enemyChampionIds for a clean 10-row 5v5 game", async () => {
+    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce(CLEAN_GAME_ROWS);
+    const res = await GET(req("?championId=103&role=2&source=prostage"));
+    const body = await res.json();
+    expect(body.games).toHaveLength(1);
+    expect(body.games[0].allyChampionIds).toEqual([103, 1, 2, 3, 4]);
+    expect(body.games[0].enemyChampionIds).toEqual([5, 6, 7, 8, 9]);
+  });
+
+  it("omits both fields when the game doesn't have a clean 5/5 split (e.g. a row missing)", async () => {
+    const incompleteGame = CLEAN_GAME_ROWS.slice(0, 9); // only 4 on GEN
+    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce(incompleteGame);
+    const res = await GET(req("?championId=103&role=2&source=prostage"));
+    const body = await res.json();
+    expect(body.games[0].allyChampionIds).toBeUndefined();
+    expect(body.games[0].enemyChampionIds).toBeUndefined();
+  });
+
+  it("omits both fields when the row's own team is null", async () => {
+    mockSql.mockResolvedValueOnce([{ ...PROSTAGE_ROW, team: null }]).mockResolvedValueOnce(CLEAN_GAME_ROWS);
+    const res = await GET(req("?championId=103&role=2&source=prostage"));
+    const body = await res.json();
+    expect(body.games[0].allyChampionIds).toBeUndefined();
+    expect(body.games[0].enemyChampionIds).toBeUndefined();
+  });
+
+  it("omits both fields when a third team is present (data too messy to call ally/enemy)", async () => {
+    const threeTeamGame = [
+      ...CLEAN_GAME_ROWS.slice(0, 5), // T1 x5 (incl. row's own champion 103)
+      { game_id: "LEC_2026_Summer_1_1", team: "GEN", champion_id: 5 },
+      { game_id: "LEC_2026_Summer_1_1", team: "GEN", champion_id: 6 },
+      { game_id: "LEC_2026_Summer_1_1", team: "GEN", champion_id: 7 },
+      { game_id: "LEC_2026_Summer_1_1", team: "FNC", champion_id: 8 },
+      { game_id: "LEC_2026_Summer_1_1", team: "FNC", champion_id: 9 },
+    ];
+    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce(threeTeamGame);
+    const res = await GET(req("?championId=103&role=2&source=prostage"));
+    const body = await res.json();
+    expect(body.games[0].allyChampionIds).toBeUndefined();
+    expect(body.games[0].enemyChampionIds).toBeUndefined();
   });
 });

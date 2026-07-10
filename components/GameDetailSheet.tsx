@@ -25,6 +25,7 @@ import {
   GAME_LANE_LABEL,
 } from "./ProGameCard";
 import { IconWithFallback } from "./IconWithFallback";
+import { SheetTeamsSection } from "./TeamComp";
 import ItemDetailPopover from "./ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "./EntityDetailPopover";
 import { buildSkillOrderGrid, SKILL_ROWS, SKILL_GRID_COLUMNS, type SkillLetter } from "./skillOrderGrid";
@@ -602,6 +603,15 @@ export default function GameDetailSheet({
 
         {/* Scrollable body */}
         <div className="overflow-y-auto px-5 py-4 flex-1">
+          {/* Teams — ally/enemy comps, right after the header since it's
+              read-only context for the whole game (same reading order
+              dpm.lol uses). Renders nothing until backfilled. */}
+          <SheetTeamsSection
+            allyChampionIds={game.allyChampionIds}
+            enemyChampionIds={game.enemyChampionIds}
+            selfChampionId={game.championId}
+          />
+
           {/* Runes */}
           {hasAnyRunes && (
             <section className="mb-6">

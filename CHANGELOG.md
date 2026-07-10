@@ -2,6 +2,12 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.14.0] — 2026-07-11
+### Added
+- **Ally + enemy team comps on every game** (dpm.lol-style): tiny 5v5 champion icon strips on game cards (your pro's champ highlighted) and a Teams section in the game detail view. Pro-play games have comps immediately; solo-queue games fill in as the backfill completes.
+### Changed
+- **Rune info cards now show real numbers** — descriptions come from the in-client tooltip data (e.g. Second Wind: "heal for 4% of your missing health over 10s") instead of Riot's placeholder-stripped public text. Item cards verified across all 706 items: every armor/MR stat line already renders.
+
 ## [0.13.0] — 2026-07-10
 ### Added
 - **Runes, stat shards, and summoner spells are now tappable** in the game-detail view — same centered info card as items, with names and descriptions.

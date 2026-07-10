@@ -64,6 +64,16 @@ export interface ProGame {
    *  today's actual API response; components read `game.playerLink`
    *  defensively (undefined -> treated as "unavailable", no crash). */
   playerLink?: string;
+  /** Ally + enemy team comps (5 champion ids each) for the dpm.lol-style
+   *  comp strip on the card + the sheet's Teams section. allyChampionIds
+   *  INCLUDES the player's own champion (== championId) — used to highlight
+   *  it among its 4 teammates. Mirrors engy's concurrent addition to the
+   *  backend ProGame contract (lib/pro/types.ts) — both fields are absent
+   *  until backfill covers a given game, so components must render NOTHING
+   *  (no skeleton, no placeholder gap) when either is undefined, not just
+   *  when the array is empty. */
+  allyChampionIds?: number[];
+  enemyChampionIds?: number[];
 }
 
 export interface ProGamesApiResponse {

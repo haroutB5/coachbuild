@@ -36,6 +36,8 @@ export interface ExtractedMatch {
   damageChampions: number;
   teamKills: number; // sum of kills across the player's own team (score.ts kill-participation input)
   gold: number;
+  allyChampionIds: number[] | null; // null unless the match has a clean 5v5 split; see extractTeamComps
+  enemyChampionIds: number[] | null;
 }
 
 /** Patch "16.13" from gameVersion "16.13.567.1234". */
@@ -148,6 +150,29 @@ export function extractGameStats(match: RiotMatch, puuid: string): ExtractedGame
   };
 }
 
+export interface ExtractedTeamComps {
+  allyChampionIds: number[]; // includes the tracked player's own champion
+  enemyChampionIds: number[];
+}
+
+/** Splits a match's participants by teamId into the tracked player's ally
+ *  side (own team, INCLUDING self) and the enemy side, by championId. Order
+ *  within each array is source (participant array) order — cheap and stable,
+ *  not role-sorted since teamPosition can be "" and this must stay total.
+ *  Returns null unless BOTH sides have exactly 5 champions — queue=420
+ *  (ranked solo/duo, the only queue lib/pro/ingestMatches.ts ingests) is
+ *  always 5v5, so this should always succeed in practice, but a truncated
+ *  fetch or a remake with missing participants must never store a partial
+ *  side (dpm.lol-style comps rows are all-or-nothing on the frontend). */
+export function extractTeamComps(match: RiotMatch, puuid: string): ExtractedTeamComps | null {
+  const participant = match.info.participants.find((p) => p.puuid === puuid);
+  if (!participant) return null;
+  const ally = match.info.participants.filter((p) => p.teamId === participant.teamId).map((p) => p.championId);
+  const enemy = match.info.participants.filter((p) => p.teamId !== participant.teamId).map((p) => p.championId);
+  if (ally.length !== 5 || enemy.length !== 5) return null;
+  return { allyChampionIds: ally, enemyChampionIds: enemy };
+}
+
 /** Returns null (caller must skip+log) when the participant's role can't be
  *  mapped — never store a row with a guessed role. */
 export function extractMatch(match: RiotMatch, timeline: RiotTimeline, puuid: string): ExtractedMatch | null {
@@ -168,6 +193,8 @@ export function extractMatch(match: RiotMatch, timeline: RiotTimeline, puuid: st
 
   const stats = extractGameStats(match, puuid);
   if (!stats) return null; // unreachable given the participant lookup above already succeeded, but keeps this function total
+
+  const comps = extractTeamComps(match, puuid);
 
   return {
     matchId: match.metadata.matchId,
@@ -192,5 +219,7 @@ export function extractMatch(match: RiotMatch, timeline: RiotTimeline, puuid: st
     damageChampions: stats.damageChampions,
     teamKills: stats.teamKills,
     gold: stats.gold,
+    allyChampionIds: comps?.allyChampionIds ?? null,
+    enemyChampionIds: comps?.enemyChampionIds ?? null,
   };
 }

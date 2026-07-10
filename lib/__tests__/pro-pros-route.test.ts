@@ -112,6 +112,24 @@ describe("GET /api/pros validation", () => {
     });
   });
 
+  it("includes allyChampionIds/enemyChampionIds when both are present as 5-element arrays", async () => {
+    mockSql.mockResolvedValueOnce([
+      { ...ROW, ally_champion_ids: [112, 1, 2, 3, 4], enemy_champion_ids: [5, 6, 7, 8, 9] },
+    ]);
+    const res = await GET(req("?championId=112&role=2"));
+    const body = await res.json();
+    expect(body.games[0].allyChampionIds).toEqual([112, 1, 2, 3, 4]);
+    expect(body.games[0].enemyChampionIds).toEqual([5, 6, 7, 8, 9]);
+  });
+
+  it("omits both fields when the columns are null (not yet backfilled)", async () => {
+    mockSql.mockResolvedValueOnce([{ ...ROW, ally_champion_ids: null, enemy_champion_ids: null }]);
+    const res = await GET(req("?championId=112&role=2"));
+    const body = await res.json();
+    expect(body.games[0].allyChampionIds).toBeUndefined();
+    expect(body.games[0].enemyChampionIds).toBeUndefined();
+  });
+
   it("empty array when the query returns no rows", async () => {
     mockSql.mockResolvedValueOnce([]);
     const res = await GET(req("?championId=999&role=0"));

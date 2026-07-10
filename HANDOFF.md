@@ -2458,3 +2458,204 @@ Untouched (per scope): `lib/prostage/`, `app/api/prostage/`, `scripts/`, pickers
 
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-10 23:39
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-10 21:50:20Z; previous content preserved there. Append new rounds below. -->
+
+## Round 2026-07-10 (real rune/item numbers + ally/enemy comps)
+
+## Summary
+
+**1. Real numbers in rune popover.** Switched `components/runeDetail.ts`'s
+description source from ddragon's `runesReforged.json` (shortDesc/longDesc
+never resolve `@Variable@` templates — verified live: Unflinching's shortDesc
+is literally "Gain Armor and Magic Resist when receiving crowd control.", no
+numbers, ever) to CommunityDragon's `perks.json`
+(`https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/perks.json`).
+Audited the full 103-entry feed live 2026-07-10: `longDesc` bakes real
+resolved values directly into the text for 102/103 entries (e.g. id 8242
+Unflinching longDesc = "Gain 10 Armor and Magic Resist when crowd controlled
+and for 2 seconds after."). Only 1 rune (Unsealed Spellbook, id 8360) has any
+leftover `@Variable@` placeholder, and even that one keeps its other real
+numbers intact. Switched the sanitizer's preference from shortDesc-first to
+**longDesc-first** (opposite of the old ddragon-era preference, which existed
+specifically because ddragon's longDesc/shortDesc were both placeholder-only
+for many runes — CDragon inverts that). Also had to teach
+`stripRuneDescriptionHtml` two new tag shapes CDragon's markup uses that
+ddragon's never did: `<li>` (3 uses, e.g. Grasp of the Undying) → its own
+bulleted `\n• ` line, and `<hr>` (2 uses, both a flavor-quote divider) →
+newline. CDragon is NOT versioned per-patch (`/latest/` only) — this module
+now caches ONE global map instead of one per `ver`; `getRuneDetail(id, ver)`
+keeps the `ver` param for call-site compatibility with
+`EntityDetailPopover.tsx` (which still needs `ver` for the icon lookup via
+`proAssets.resolveRuneDisplay`) but it's unused here. Bumped the localStorage
+cache key `coachbuild:runedata:v1:` → `coachbuild:runedata:v2` so existing
+users' stale placeholder-laden cache entries get invalidated automatically.
+Live-verified 2026-07-10 against a real Faker MSI game: Second Wind popover
+now reads "After taking damage from an enemy champion, heal for 4% of your
+missing health over 10s." (real numbers, matches CDragon's longDesc exactly).
+
+**Items required NO changes.** Verified live against a real item.json fetch
+(706 items, patch 16.13.1): every item with `FlatArmorMod`/`FlatSpellBlockMod`
+in its structured `stats` object already carries that value inside its
+`description`'s `<stats>` block in plain numeric form (checked programmatically
+— 0/706 items had a non-zero armor or MR stat missing from the description
+text). `itemDetail.ts`'s existing `stripItemDescriptionHtml` already survives
+this correctly (Plated Steelcaps → "25 Armor", Thornmail → "75 Armor",
+Frozen Heart → "75 Armor", etc. all verified). Live-confirmed 2026-07-10:
+Mercury's Treads popover on a real Faker game shows "20 Magic Resist / 45
+Move Speed / 30% Tenacity". No supplementing-from-`stats` fallback was
+needed — did not add one to avoid dead code for a path that never fires.
+
+**2. Ally + enemy comps, dpm.lol-style.** Added `allyChampionIds?: number[]`
+/ `enemyChampionIds?: number[]` to `components/proGames.types.ts`'s `ProGame`
+mirroring engy's concurrent backend contract addition. New shared module
+`components/TeamComp.tsx` exports:
+- `CardCompStrip` — dense icon-only row for `ProGameCard`'s collapsed card:
+  5 ally icons (player's own champ ring-highlighted in teal, other 4 dimmed
+  to `opacity-55`) + a "vs" label + 5 enemy icons, in its OWN thin line below
+  the main content row (`border-t border-line/60`), not squeezed into the
+  existing `flex-wrap` row — 10× 20px icons + gaps + label comes to ~250px,
+  comfortably under a 390px card's content width, verified via
+  `document.documentElement.scrollWidth` (390 === clientWidth, zero overflow)
+  and visually via screenshot.
+- `SheetTeamsSection` — labeled "TEAMS" section in `GameDetailSheet`, placed
+  right after the header (before Runes) with two rows (Ally/Enemy), larger
+  (36px) icons + champion name underneath each, same teal-ring highlight
+  convention as `RunePerkTile`'s keystone tile.
+Both resolve icons/names via `proAssets.getChampionIconMap()` (same
+module-cached `/api/champions` fetch `ProHistoryResults` already uses) and
+render `null` when EITHER array is `undefined` — checked explicitly
+(`!allyChampionIds || !enemyChampionIds`), not just "array empty", per the
+contract that both fields are absent (not `[]`) until backfill covers a
+game. Wired into `ProGameCard.tsx` and `GameDetailSheet.tsx`.
+
+Live integration turned out to be available immediately, not just mocked:
+engy's backfill had already landed on prostage rows by the time I tested —
+`GET /api/pros?proId=<Faker's real id>&source=all` returned 11/20 games (all
+11 prostage rows) with both `allyChampionIds`/`enemyChampionIds` populated,
+0/9 soloq rows (not yet backfilled). Verified BOTH paths on real data: a real
+2026 MSI Faker/Galio game renders the full comp strip + Teams section with
+real champion names (Wukong/Galio[ring]/Olaf/Caitlyn/Lux vs
+Viktor/Ashe/Kled/Xin Zhao/Karma); a real Faker Solo Queue game (fields
+absent) renders nothing after the card's metadata line — no gap, no
+skeleton, confirmed by screenshot diff between the two filtered views.
+
+Also added `allyChampionIds`/`enemyChampionIds` to two `proGames.fixtures.ts`
+entries (`FIXTURE_GAME_WIN`, `FIXTURE_GAME_PROSTAGE_FULL`) for dev-time
+reference; left `FIXTURE_GAME_LOSS`/`FIXTURE_GAME_EVENTFUL` without them so
+the fixture set itself exercises both the present/absent paths. These
+fixtures aren't wired into any live page (grepped — no importer), so this is
+inert reference data, not a functional change.
+
+## Files Touched
+
+- `components/runeDetail.ts` — CommunityDragon source swap, longDesc-first
+  preference, `<li>`/`<hr>` handling, single global cache (no per-`ver` key),
+  localStorage key bumped to v2.
+- `components/__tests__/runeDetail.test.ts` — new, 10 pure-function tests for
+  `stripRuneDescriptionHtml` against real perks.json fixture text (Unflinching,
+  Electrocute, Grasp of the Undying's `<li>`s, Triumph's `<hr>`, Unsealed
+  Spellbook's placeholder).
+- `components/proGames.types.ts` — added `allyChampionIds?`/`enemyChampionIds?`
+  to `ProGame`.
+- `components/TeamComp.tsx` — new. `CardCompStrip` + `SheetTeamsSection`.
+- `components/ProGameCard.tsx` — imports + renders `CardCompStrip` as a new
+  thin line below the main content row.
+- `components/GameDetailSheet.tsx` — imports + renders `SheetTeamsSection` at
+  the top of the scrollable body, before Runes.
+- `components/proGames.fixtures.ts` — added comp ids to 2 of 5 fixtures
+  (dev-reference only, not wired to any page).
+- `components/itemDetail.ts` — **untouched** (verified live, no bug found —
+  see Summary).
+
+## Tests
+
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — 295 passed (295 files across 24 test files; baseline 274
+  + engy's concurrent additions + my 10 new runeDetail tests + engy's other
+  additions this round — no regressions, no flake on rerun).
+- `npx next lint` — clean (same 5 pre-existing `no-img-element` warnings as
+  before, unrelated to this change, no new warnings).
+- `npm run build` — clean production build, `/history` route unaffected in
+  size class (15.7 kB).
+- Live browser verify (chrome-devtools MCP, 390x844x2 mobile/touch, fresh dev
+  server on port 3917, killed after): confirmed all of the above against
+  REAL `/api/pros` data for Faker (not just fixtures) — Second Wind rune
+  popover shows real numbers, Mercury's Treads item popover shows real MR/MS/
+  Tenacity, comp strip + Teams section render correctly on a real MSI game,
+  comp strip renders NOTHING on a real not-yet-backfilled Solo Queue game,
+  zero horizontal overflow (`scrollWidth === clientWidth === 390`), no new
+  console errors/warnings (the one console error logged was from my own
+  manual invalid-proId fetch probe, not app code).
+
+## Known Issues
+
+- None outstanding. Backend soloq comp backfill is still in progress per
+  engy (0/9 Faker soloq games had comp ids at verification time) — that's
+  expected per the dispatch brief ("prostage comes free, soloq backfilling
+  immediately") and the component contract already handles it (renders
+  nothing, confirmed live).
+- No version bump / deploy performed, per instructions.
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-11 00:02
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-10 21:00:58Z; previous content preserved there. Append new rounds below. -->
+
+## Summary (2026-07-11) — per-game ALLY/ENEMY team comps
+
+Added `ProGame.allyChampionIds?`/`enemyChampionIds?` (both optional, both-or-neither) to the `/api/pros` contract per the fronty-facing spec: 5 champion ids per side, ally INCLUDES the player's own champion, emitted only when both sides have exactly 5.
+
+**SoloQ:** migration `0006_team_comps.sql` adds `pro_matches.ally_champion_ids`/`enemy_champion_ids` (jsonb, nullable). `lib/pro/extract.ts` gained `extractTeamComps(match, puuid)` — splits `match.info.participants` by `teamId`, returns `null` unless both sides are exactly 5 (never stores a partial side). Wired into `extractMatch()` so every new ingest populates both columns. `ingestMatches.ts` INSERT extended. `scripts/backfill-team-comps.mjs` (resumable `WHERE ally_champion_ids IS NULL` cursor, mirrors `backfill-game-stats.mjs`) ran to completion: **1134/1134 rows now have comps** (1129 on the first pass, 2 hit transient Riot 429s and were skipped, both cleaned up on a 2-row re-run — 0 errors, 0 rows remaining).
+
+**Prostage:** no new ingest/migration — `app/api/pros/route.ts` derives comps from the existing `prostage_matches` rows via **one extra batched grouped query** (not per-row N+1): after the main prostage SELECT resolves, collect the distinct `game_id`s in that response and run a single `SELECT game_id, team, champion_id FROM prostage_matches WHERE game_id = ANY(...) AND team IS NOT NULL AND champion_id IS NOT NULL`, group into `game_id -> team -> championIds[]` (`buildProstageCompsMap`), then for each row: ally = the row's own `team`'s 5 champs, enemy = the ONE other team present with exactly 5 champs (`compsForGame` — returns `{}` on anything messier: null own-team, wrong counts, 3+ teams). This query only fires when `wantProstage && gameIds.length > 0`.
+
+**Route-level contract discipline:** both `rowToProGame` (soloq) and `prostageRowToProGame` (prostage) spread a computed `{}` when comps aren't valid, so the fields are truly *absent* (not `undefined`-valued keys) — kept the pre-existing `toEqual` exact-object test in `pro-pros-route.test.ts` passing unmodified.
+
+## Files Touched
+
+- `migrations/0006_team_comps.sql` (new) — applied to live DB via `node scripts/db-migrate.mjs`.
+- `lib/pro/extract.ts` — `extractTeamComps()` + `ExtractedTeamComps`, wired into `extractMatch()`/`ExtractedMatch`.
+- `lib/pro/types.ts` — `ProGame.allyChampionIds?`/`enemyChampionIds?`.
+- `lib/pro/ingestMatches.ts` — INSERT extended with the two new columns.
+- `scripts/backfill-team-comps.mjs` (new) — run to completion, 1134/1134 covered.
+- `app/api/pros/route.ts` — soloq SELECT + `soloqComps()`; prostage `buildProstageCompsMap()`/`compsForGame()` + the one extra batched query; `rowToProGame`/`prostageRowToProGame` both spread comps conditionally.
+- Tests: `lib/__tests__/pro-extract.test.ts` (extractTeamComps + extractMatch integration, 5 new cases), `lib/__tests__/pro-pros-route.test.ts` (2 new soloq comps cases), `lib/__tests__/pro-pros-route-prostage.test.ts` (updated 4 pre-existing `mockSql` call-count assertions from N to N+1 to reflect the new batched comps query — a legitimate contract change, not a regression — plus 4 new dedicated comps tests: clean split, incomplete split, null own-team, 3-team data).
+
+## Tests
+
+- `npx tsc --noEmit` — clean (had to swap two `[...iterable]` spreads for `Array.from(...)` in route.ts; this repo's `tsconfig.json` has no explicit `target`, defaults below ES2015 iteration support).
+- `npx vitest run` — **295/295 passed** (baseline 274 + 21 new; re-ran after the full backfill + dev-server validation to confirm nothing regressed from fronty's concurrent `components/` work — still 295/295).
+- `npx next lint` — clean (only the 5 pre-existing `no-img-element` warnings, unrelated to this change).
+- Live route validation on a dev server (port 3901, then 3902 after a restart — see Known Issues): soloq game `KR_8292607815` (championId 236) returned `ally=[150,28,238,236,201]` (own champion 236 included) `enemy=[92,950,245,800,111]`; prostage MSI game `LCK/2026 Season/Road to MSI_Round 4_1_5` returned `ally=[15,950,13,518,79]` (T1's exact roster) `enemy=[58,76,4,21,526]` (Gen.G's exact roster) — both hand-verified against direct DB queries of the underlying rows.
+- Did NOT run `npm run build` per brief (fronty editing `components/` concurrently — their transient failures aren't mine to chase).
+
+## Known Issues
+
+- Hit the documented dev-server gotcha mid-validation: after the ~25min backfill wait, port 3901's `next dev` started 404-ing `/api/pros` (routed to `/_not-found` instead) with no error in its own log — likely HMR/route-cache confusion from sitting idle while fronty's concurrent `components/` edits triggered rebuilds in the same `.next/` dir. Killed that process (`taskkill //F //PID <n>`, confirmed dead via `netstat`) and started fresh on port 3902, which threw a one-time `EPERM: ... .next/trace` on startup (matches the known "orphaned next-dev worker locks .next/trace" gotcha — another dev-server process, presumably fronty's, was holding the trace file) but still came up `Ready` and served correctly. Both dev servers were killed by process end; nothing left listening.
+- Left 5 debug scratch scripts in `scripts/` (`_tmp-check-fresh.mjs`, `_tmp-check-row.mjs`, `_tmp-count-check.mjs`, `_tmp-fill-one-fresh.mjs`, `_tmp-find-test-games.mjs`) — harmless, not imported anywhere, don't affect tsc/vitest/lint/build, but the safety-gate hook blocked `rm -f` on them (treats `-f` as forced deletion) and I didn't want to escalate for a non-destructive cleanup mid-ship. Safe to delete whenever convenient; none are part of the shipped feature.
+- `extractTeamComps`/`compsForGame` are deliberately conservative (return null/`{}` on anything short of a clean 5v5 or 5/5 split) — this matches the brief's "emit ONLY when exactly 5 per side" contract, but means any future non-Summoner's-Rift game mode ingest (arena, etc.) would silently omit comps rather than error. Fine today since `ingestMatches.ts` only pulls `queue: 420` (ranked solo/duo, always 5v5).
+- Did not touch `components/` or `lib/prostage/` per brief boundary — fronty is building the UI against this contract concurrently (visible in `git status`: `GameDetailSheet.tsx`, `ProGameCard.tsx`, new `TeamComp.tsx`, `proGames.fixtures.ts`/`.types.ts` all mid-edit).
+
+
+

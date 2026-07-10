@@ -11,6 +11,7 @@ import {
   extractRunes,
   extractMatch,
   extractGameStats,
+  extractTeamComps,
 } from "../pro/extract";
 import type { RiotMatch, RiotParticipant, RiotTimeline } from "../pro/types";
 
@@ -218,6 +219,74 @@ describe("extractMatch", () => {
     expect(row?.damageChampions).toBe(22000);
     expect(row?.gold).toBe(13500);
     expect(row?.teamKills).toBe(8); // 5 (self) + 3 (teammate), enemy's 9 excluded
+  });
+});
+
+describe("extractTeamComps", () => {
+  function fullTenParticipants(): RiotParticipant[] {
+    // puuid-1 (self, championId 112) + 4 allies on teamId 100, 5 enemies on teamId 200.
+    return [
+      participant(), // puuid-1, teamId 100, championId 112
+      participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2 }),
+      participant({ puuid: "ally-3", participantId: 3, teamId: 100, championId: 3 }),
+      participant({ puuid: "ally-4", participantId: 4, teamId: 100, championId: 4 }),
+      participant({ puuid: "ally-5", participantId: 5, teamId: 100, championId: 5 }),
+      participant({ puuid: "enemy-1", participantId: 6, teamId: 200, championId: 6 }),
+      participant({ puuid: "enemy-2", participantId: 7, teamId: 200, championId: 7 }),
+      participant({ puuid: "enemy-3", participantId: 8, teamId: 200, championId: 8 }),
+      participant({ puuid: "enemy-4", participantId: 9, teamId: 200, championId: 9 }),
+      participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10 }),
+    ];
+  }
+
+  it("splits a clean 5v5 match into ally (incl. self) + enemy champion ids, in source order", () => {
+    const m = match({}, fullTenParticipants());
+    expect(extractTeamComps(m, "puuid-1")).toEqual({
+      allyChampionIds: [112, 2, 3, 4, 5],
+      enemyChampionIds: [6, 7, 8, 9, 10],
+    });
+  });
+
+  it("returns null when the puuid isn't in the match", () => {
+    const m = match({}, fullTenParticipants());
+    expect(extractTeamComps(m, "someone-else")).toBeNull();
+  });
+
+  it("returns null when either side doesn't have exactly 5 champions (never store a partial side)", () => {
+    const short = fullTenParticipants().slice(0, 9); // only 4 enemies
+    const m = match({}, short);
+    expect(extractTeamComps(m, "puuid-1")).toBeNull();
+  });
+});
+
+describe("extractMatch team comps integration", () => {
+  function fullTenParticipants(): RiotParticipant[] {
+    return [
+      participant(),
+      participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2 }),
+      participant({ puuid: "ally-3", participantId: 3, teamId: 100, championId: 3 }),
+      participant({ puuid: "ally-4", participantId: 4, teamId: 100, championId: 4 }),
+      participant({ puuid: "ally-5", participantId: 5, teamId: 100, championId: 5 }),
+      participant({ puuid: "enemy-1", participantId: 6, teamId: 200, championId: 6 }),
+      participant({ puuid: "enemy-2", participantId: 7, teamId: 200, championId: 7 }),
+      participant({ puuid: "enemy-3", participantId: 8, teamId: 200, championId: 8 }),
+      participant({ puuid: "enemy-4", participantId: 9, teamId: 200, championId: 9 }),
+      participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10 }),
+    ];
+  }
+
+  it("populates allyChampionIds/enemyChampionIds on a full 5v5 row", () => {
+    const m = match({}, fullTenParticipants());
+    const row = extractMatch(m, timeline(), "puuid-1");
+    expect(row?.allyChampionIds).toEqual([112, 2, 3, 4, 5]);
+    expect(row?.enemyChampionIds).toEqual([6, 7, 8, 9, 10]);
+  });
+
+  it("nulls both fields when the match isn't a clean 5v5 (e.g. only 1 participant)", () => {
+    const m = match({}, [participant()]);
+    const row = extractMatch(m, timeline(), "puuid-1");
+    expect(row?.allyChampionIds).toBeNull();
+    expect(row?.enemyChampionIds).toBeNull();
   });
 });
 
