@@ -46,6 +46,33 @@ const KNOWN_MAINS = [
   // separator); tried trimmed ("Peyz") first per the fix brief, only fall
   // back to the space-preserved form if account-v1 404s the trimmed one.
   { slug: "peyz", gameName: "Peyz", tagLine: "KR11", region: "KR", regional: "asia" }, // T1
+  // --- round 7 (2026-07-10): zero-live-accounts follow-up. Leaguepedia
+  // SoloqueueIds via CargoExport for the pros round-6's staleness sweep +
+  // round-7's stale-puuid fix left with zero active accounts. Same rule as
+  // round 5: UNVERIFIED until getAccountByRiotId() confirms it; a 404 drops
+  // the entry, never guess an alternative tag/spelling. Multi-account pros
+  // get one entry per candidate account (both upsert if both resolve).
+  { slug: "berserker", gameName: "LYON", tagLine: "09012", region: "KR", regional: "asia" }, // Lyon Gaming
+  { slug: "berserker", gameName: "qaxu", tagLine: "KR1", region: "KR", regional: "asia" }, // Lyon Gaming
+  { slug: "corejj", gameName: "리퀴드 코어장전", tagLine: "KR1", region: "KR", regional: "asia" }, // Team Liquid — gameName has an internal space, preserved
+  { slug: "corejj", gameName: "From Iron", tagLine: "1123", region: "NA", regional: "americas" }, // Team Liquid — gameName has an internal space, preserved
+  { slug: "delight", gameName: "플레이리스트겨울", tagLine: "KR1", region: "KR", regional: "asia" }, // Hanwha Life Esports
+  { slug: "doran", gameName: "어리고싶다", tagLine: "KR1", region: "KR", regional: "asia" }, // T1
+  { slug: "duro", gameName: "Duro", tagLine: "Gen", region: "KR", regional: "asia" }, // Gen.G
+  { slug: "impact", gameName: "TL IMPACT", tagLine: "XDDD", region: "NA", regional: "americas" }, // Sentinels — gameName has an internal space, preserved
+  { slug: "jojopyun", gameName: "KOIIIIIIIII", tagLine: "1234", region: "NA", regional: "americas" }, // Movistar KOI
+  { slug: "jojopyun", gameName: "jjjjjjjjjjjj", tagLine: "1234", region: "KR", regional: "asia" }, // Movistar KOI
+  { slug: "kellin", gameName: "댕청잇", tagLine: "kr123", region: "KR", regional: "asia" }, // BNK FEARX
+  { slug: "kellin", gameName: "참새크면비둘기", tagLine: "kr1", region: "KR", regional: "asia" }, // BNK FEARX
+  // Massu — wiki markup had a space before the tag separator on the KR
+  // entry ("하쿠지 #3636"); try trimmed first per the fix brief, only fall
+  // back to the space-preserved form if account-v1 404s the trimmed one.
+  { slug: "massu", gameName: "KaiGyt", tagLine: "0187", region: "NA", regional: "americas" }, // FlyQuest
+  { slug: "massu", gameName: "하쿠지", tagLine: "3636", region: "KR", regional: "asia" }, // FlyQuest
+  { slug: "peanut", gameName: "Peanut", tagLine: "kr11", region: "KR", regional: "asia" }, // Hanwha Life Esports
+  { slug: "viper", gameName: "Blue", tagLine: "KR33", region: "KR", regional: "asia" }, // Hanwha Life Esports
+  { slug: "zeka", gameName: "suis", tagLine: "kr7", region: "KR", regional: "asia" }, // Hanwha Life Esports
+  { slug: "zeka", gameName: "Kiruru", tagLine: "kr7", region: "KR", regional: "asia" }, // Hanwha Life Esports
 ];
 
 async function main() {
