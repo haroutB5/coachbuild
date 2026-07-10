@@ -1560,3 +1560,76 @@ Every single wiki-sourced riot ID resolved on the first try via Riot account-v1 
 Reused the same leftover scratch file (`scripts/_probe-curl-transport.mjs`) one more time, this round for the `coachbuild.pros` existence check — still can't `rm` it (blocked unconditionally by `safety-gate.sh` in this environment, same as every prior round). It now sits there with round-5 content (pros-existence probe), superseding the round-4 content that was in it before. Along with `scripts/_probe-via-export.mjs` (round 2) and the two pre-existing root-level `_diag-prostage*.mjs` files (not mine, flagged in round 3), these 4 scratch files are the full list of untracked cleanup items across all 5 rounds — orchestrator can batch-approve `rm` for all of them whenever convenient.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-10 13:04
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-10 11:37:35Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-10 (round 6) — new scripts/audit-accounts.mjs (stale-account detector) + Bwipo/Zeus resolved
+
+**Files:** `scripts/audit-accounts.mjs` (new), `migrations/0003_account_audit.sql` (new, applied). No `lib/` code changed — no decision logic was extracted, so no new unit tests per the brief's conditional (item 5).
+
+### Root cause confirmed
+
+`lib/pro/teamRegions.ts`'s activation rule only fires when a pro's `team` string maps to a curated tier-1 team. Bwipo's team is `"Witchcraft"` (ex-pro/unmapped) — confirmed live via `upsert-pro.mjs bwipo`'s own log line (`team "Witchcraft" not in curated teamRegions map — accounts left unchanged`) — so NOTHING has ever deactivated his stale accounts; all 4 EUW accounts have sat `active=true` since day one regardless of whether they're still played. This is a genuinely separate failure mode from the region-mismatch bug teamRegions.ts fixes: staleness, not wrong-region.
+
+### `scripts/audit-accounts.mjs` — design
+
+For every `active=true` `pro_accounts` row (or just one pro's via `--pro "<name>"`): ONE paced `getMatchIdsByPuuid(regional, puuid, { queue: 420, count: 1, startTime: freshStartTimeEpochSec() })` call — reuses `lib/pro/pacer.ts`'s existing 1.3s process-wide pacer (already wired through `riot.ts`, no new pacer needed) and `lib/pro/fresh.ts`'s `FRESH_WINDOW_DAYS`/`freshStartTimeEpochSec()` per the brief. `queue: 420` deliberately matches `ingestOneAccount()`'s own filter — the audit's LIVE/DEAD verdict is meant to predict "would a real ingest pass find anything here," and real ingest only ever looks at ranked solo queue; auditing without that filter would misclassify an ARAM-only account as LIVE while it stays permanently empty under actual ingest.
+
+- **LIVE** (≥1 id back): `last_audited_at = now()`, `last_match_ts = GREATEST(existing, now())`. Caveat documented in the script's header and worth restating here: a bare ids call has no `game_creation` — getting a REAL timestamp needs a second `getMatch` call per account, which would double the ~30-60min fleet estimate the brief itself gives for a single-call design. `now()` is an intentional approximation ("confirmed active as of this audit", not "this exact game's time") — grepped for readers of `last_match_ts` first (only `ingestMatches.ts`'s own monotonic `GREATEST` update and an internal row type — never surfaced via any API response or UI), so the approximation is harmless and gets overwritten with a precise value the next time a real ingest pass touches that account.
+- **DEAD** (0 ids back): `active = false`, `last_audited_at = now()`.
+- **A Riot error (404/429/5xx/network) is NEVER treated as DEAD** — caught separately (`RiotRequestError`), logged to the error list, account left untouched. Matches this codebase's standing rule (see `lib/prostage/cargo.ts`'s header) that an error response must never be recorded as "no data."
+- **Zero-live-accounts reporting:** accounts are grouped by `pro_id` before processing; after a pro's whole group is done, if none came back LIVE, the pro (name, team, all riot_ids just processed) is pushed to `zeroLiveAccountsPros` and printed in a final human-readable list — per the brief, the dead accounts are STILL deactivated even though this leaves the pro with nothing tracked (never leave a known-dead account active just to avoid an empty state).
+- **`--pro "<name>"`** matches `p.name ILIKE` or `p.slug ILIKE` and — deliberate design choice — ALWAYS re-checks regardless of `last_audited_at` (a small, deliberate, user-requested check shouldn't silently no-op because a fleet sweep touched it earlier today).
+- **Resumability (fleet-wide/no-flag mode only):** new `last_audited_at` column (migration below), query filters `WHERE active = true AND (last_audited_at IS NULL OR last_audited_at < date_trunc('day', now()))`, ordered `last_audited_at ASC NULLS FIRST` — same shape as the existing `last_fetched_at` pattern in `ingestMatches.ts`. Safe to Ctrl-C and re-run the same day without re-spending Riot budget on already-checked accounts.
+- **Output:** one streaming progress line per account (`[n/total] <pro> (<riot_id>, <region>): LIVE|DEAD -> deactivated|unmapped region, skipping|ERROR <status>`) + a final JSON summary (`totalChecked/live/dead/deactivated/skippedUnmapped/zeroLiveAccountsPros/errors`).
+
+**Migration `0003_account_audit.sql`** (applied via `node scripts/db-migrate.mjs` — cheap, single `ALTER TABLE ADD COLUMN IF NOT EXISTS` + an index): adds `pro_accounts.last_audited_at timestamptz` + `pro_accounts_last_audited_idx (last_audited_at ASC NULLS FIRST)`.
+
+### Bwipo — audited, gotcha found and fixed mid-round, final state accurate
+
+1. First audit (`--pro "Bwipo"`, 4 accounts): `I will trade#NA1` → **LIVE** (a queue-420 game on 2026-06-27, 13 days old, inside the 90-day window). The other 3 (`for her sake#78797`, `Chongus#EUW`, `everything to me#EUW`) → **DEAD**, deactivated.
+2. Re-fetched his lolpros profile (`npx tsx scripts/upsert-pro.mjs bwipo`) per the brief's step 2 — **no new accounts** surfaced (lolpros still only lists these same 4). **Gotcha caught live:** the re-fetch's `ingestOnePro` upsert unconditionally writes `active = EXCLUDED.active` from `resolveAccount()` (which only checks "does this puuid resolve against our key," with no concept of staleness) — this SILENTLY REACTIVATED the 3 accounts I'd just deactivated. Confirmed via a DB read showing all 4 back to `active=true` after the upsert-pro run.
+3. Re-ran the audit (`--pro "Bwipo"` again) — exactly as the brief's own step 2 anticipated ("then audit again") — which correctly re-deactivated the same 3 dead accounts. **This ordering gotcha (lolpros refetch can silently undo an audit) is worth flagging as a standing operational rule: any `upsert-pro.mjs`/roster-refetch on a pro must be followed by a re-audit if that pro has ever had a dead-account deactivation, since the refetch has no memory of staleness.**
+4. `npx tsx scripts/ingest-player.mjs bwipo` → **+0 matches** (the one live account's June 27 game was already ingested in the 2026-07-09 run — nothing new to pull, not an error).
+5. Verified historical-data safety directly: queried `pro_matches` grouped by Bwipo's 4 accounts — the 3 now-deactivated ones have **0 historical matches ever** (nothing to lose), and the live one still carries its full 20 matches, active.
+
+**Bwipo verdict:** 1 live account (`I will trade#NA1`, EUW — his real recent activity, last confirmed game 2026-06-27), 3 genuinely dead accounts now deactivated. No hidden EUW account exists in lolpros's data as of this refetch — the user's "might be playing EUW now" hunch didn't surface a NEW account, but the fix (deactivating the 3 truly-dead ones) makes the tracked-account set accurately reflect only what's real, which is the actual ask ("accurate account data for every player"). Not investigated further (explicitly out of scope): whether Bwipo plays non-ranked-solo queues more actively — this pipeline only ever looks at queue 420.
+
+### Zeus — confirms the coordinator's hypothesis exactly
+
+`--pro "Zeus"`: his round-5 KR main `Spring#bomm` → **DEAD** (0 queue-420 games in 90 days) → deactivated. His other 2 accounts (`Pom Michutda#EUW`, `Zimmer#god`) were ALREADY inactive (correctly deactivated earlier by the team-region rule, since Hanwha Life Esports IS in `LCK_TEAMS` → KR). **Result: Zeus now has ZERO live accounts** — flagged in `zeroLiveAccountsPros`. Confirms the coordinator's hypothesis precisely: `Spring#bomm` resolved as a genuine, valid Riot account via account-v1 (round 5), but it is NOT the account Zeus currently grinds ranked solo queue on — same stale-account class as Bwipo's dead 3, just via a different path (bad SoloqueueIds wiki data vs. a genuinely-retired account). Zeus is now correctly queued for the "SoloqueueIds re-lookup" the brief describes as the next step for this list — not attempted this round (out of scope; Leaguepedia CargoExport lookup + re-verification via account-v1 is a separate task).
+
+### Item 4 — active=false semantics verified safe, no code changes needed
+
+Read `app/api/pros/route.ts` and `app/api/players/route.ts` closely: neither ever filters by `pa.active` — `/api/pros` joins `pro_accounts` purely to pull `riot_id`/`region` DISPLAY fields onto each already-ingested `pro_matches` row (which is keyed by `match_id`+`puuid`, permanently independent of the account's current active flag); `/api/players`'s `game_count` comes from `pro_matches` directly, no `pro_accounts` join at all. `active` is read in exactly two places in the whole codebase: `ingestMatches.ts`'s account-selection `WHERE active = true` (ingest TARGETING — this is the intended effect) and `ingestRoster.ts`'s region-rule writer. Confirmed empirically too (see Bwipo section above): deactivating an account never touches `pro_matches`, and the 3 deactivated accounts' `match_count` came back `0` either way. **No adjustment needed anywhere — this was already the correct, safe semantics.**
+
+### Gates
+
+`npx tsc --noEmit` — clean. `npx vitest run` — 19 files, **206/206 passed** (unchanged — no `lib/` TS touched this round; the audit script's decision logic (live/dead classification, zero-live-accounts grouping) was kept inline in the `.mjs` script rather than extracted into `lib/`, matching how `resolve-known-mains.mjs` and other one-off ops scripts already work in this repo, so no new tests were warranted per the brief's own conditional).
+
+### Full fleet run — NOT started, per instruction
+
+Did not run the unscoped (~1-2k account, 30-60min) sweep. Command for the coordinator to launch in the background:
+```
+npx tsx scripts/audit-accounts.mjs
+```
+Resumable — safe to interrupt and re-run same-day (skips anything with `last_audited_at` from today).
+
+### Housekeeping
+
+Reused the same leftover scratch file (`scripts/_probe-curl-transport.mjs`) again this round for the Bwipo/Zeus DB-state checks — still blocked from `rm` (`safety-gate.sh`, same as every prior round). Along with `scripts/_probe-via-export.mjs` (round 2) and the two pre-existing root-level `_diag-prostage*.mjs` (not mine), still the same 4-file cleanup batch flagged across rounds 2-6.
+
+
