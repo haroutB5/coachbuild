@@ -6,7 +6,6 @@ import { ROLE_LABEL } from "@/lib/types";
 import ChampionPicker from "@/components/ChampionPicker";
 import RoleSelector from "@/components/RoleSelector";
 import BuildCard from "@/components/BuildCard";
-import ProGamesSection from "@/components/ProGamesSection";
 import TabNav from "@/components/TabNav";
 
 function ImgWithFallback({
@@ -256,18 +255,6 @@ export default function HomePage() {
                 <BuildCard build={b} />
               </section>
             ))}
-
-            {/* Pro Games — recent tracked soloQ games on this champion+role.
-                NOTE: displayBuilds[0].role echoes the REQUEST role verbatim
-                (lib/recommend.ts does not resolve auto), so this is 5 after
-                every champion pick. /api/pros treats 5 as "all lanes". */}
-            {champ && (
-              <ProGamesSection
-                championId={champ.id}
-                championName={champ.name}
-                role={displayBuilds[0].role}
-              />
-            )}
           </>
         )}
 

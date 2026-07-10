@@ -1434,3 +1434,129 @@ Live backfill evidence: 2 of 7 cursors got `CargoRequestError: CargoExport retur
 Reused the existing leftover scratch file `scripts/_probe-curl-transport.mjs` for both of this round's live probes (ScoreboardPlayers field-shape probe + Tournaments WHERE-clause/retry probe) instead of creating new ones — still can't delete it (`rm` unconditionally blocked by `safety-gate.sh` in this environment, same as rounds 2/3). `scripts/_probe-via-export.mjs` (round 2) is also still sitting there. Orchestrator: approve/run `rm scripts/_probe-curl-transport.mjs` and `rm scripts/_probe-via-export.mjs` whenever convenient — both are inert scratch files, not imported by anything, not part of any diff. (The two root-level `_diag-prostage.mjs`/`_diag-prostage2.mjs` files noted in round 3 are still there too, still not mine.)
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-10 11:42
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-09 19:02:25Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-10 — Remove inline Pro Games section from home/builds page
+
+**Removed** (`app/page.tsx` only):
+- `import ProGamesSection from "@/components/ProGamesSection"` (line 9)
+- The `{champ && <ProGamesSection championId={...} championName={...} role={...} />}` render block that sat below the build recommendation `.map()`, including its NOTE comment about role-5 handling in `/api/pros`.
+
+No other state/props existed solely to feed the section — `champ` and `displayBuilds` are both still fully used by the build-recommendation flow (header, ChampionPicker/RoleSelector, BuildCard map), so nothing else to trace/delete. There was no champion-icon-map fetch or source-filter state local to page.tsx for this section.
+
+**Kept untouched (intentional):**
+- `components/ProGamesSection.tsx`, `components/ProGameCard.tsx`, `components/ProGamesSkeleton.tsx` — still consumed by `app/history/` (Pro History tab).
+- `app/history/` and all `/api/pros`, `/api/players` routes — not touched.
+- `lib/pro/*`, `scripts/` — not touched (engy's in-flight territory), never opened.
+- `TabNav` — Pro History tab already links from the home header (shipped v0.6.0); no new nav/CTA added per brief.
+
+**Tests:** grepped for any test asserting `ProGamesSection` renders on the home page — none exist (all existing tests are lib-level pro-data-pipeline tests under `lib/__tests__/`, unrelated to `page.tsx` rendering). No test changes needed.
+
+**Gates — all clean:**
+- `npx tsc --noEmit` — no output, clean.
+- `npx next lint` — 0 errors; only pre-existing `<img>`-vs-`next/image` warnings (unrelated to this change, present before it too).
+- `npx vitest run` — 19 test files / 206 tests passed.
+- `npm run build` — compiled successfully, static prerender of `/` and `/history` both succeeded. `/` First Load JS dropped to 100 kB (no longer pulling ProGamesSection's client JS); `/history` unaffected at 102 kB.
+
+No version bump, no deploy (per brief — orchestrator ships).
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-10 12:37
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-10 09:39:10Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-10 (round 5, final) — 9 KR mains added via KNOWN_MAINS, resolved + ingested
+
+**File:** `scripts/resolve-known-mains.mjs` only. `lib/pro/teamRegions.ts` was read but NOT touched — reviewed the 3 teams involved (Gen.G, Hanwha Life Esports, T1) and all 3 already exist in `LCK_TEAMS` → `KR`, so no map changes were needed for these pros' region-based account activation.
+
+### Step 0 — verified against coachbuild.pros before touching KNOWN_MAINS
+
+Checked all 10 candidate names against the DB first, per the brief:
+
+| Name | Result |
+|---|---|
+| Chovy, Zeus, Canyon, Gumayusi, Kanavi, Keria, Kiin, Oner, Peyz | FOUND (slug matches name lowercased) |
+| **Ruler** | **NOT FOUND** — no row in `coachbuild.pros` at all. Double-checked with a broader `ILIKE '%ruler%'` (zero rows) and pulled the full Gen.G roster on file: only `chovy`, `kiin`, `canyon`, `duro` exist for Gen.G — Ruler isn't one of our tracked pros. **Skipped entirely** — nothing to link a riot_id to; did not add a KNOWN_MAINS entry, did not attempt resolution. |
+
+### Step 1 — KNOWN_MAINS entries added (9)
+
+Matched the existing Faker/Bin shape exactly (`{ slug, gameName, tagLine, region: "KR", regional: "asia" }`), riot IDs parsed as given:
+
+| slug | gameName | tagLine | note |
+|---|---|---|---|
+| chovy | 허거덩 | 0303 | |
+| zeus | Spring | bomm | |
+| canyon | JUGKlNG | kr | |
+| gumayusi | T1 Gumayusi | KR1 | space in gameName preserved |
+| kanavi | vinaka | KR1 | |
+| keria | 역천괴 | ker3 | |
+| kiin | kiin | KR1 | |
+| oner | 오 너 | 111 | space in gameName preserved |
+| peyz | Peyz | KR11 | tried trimmed (wiki had "Peyz #KR11") — resolved on first try, no fallback needed |
+
+**UTF-8 check:** read the file back after editing (per the brief's caution) — all 4 Hangul entries (허거덩, 역천괴, 오 너, and the pre-existing 빈 스토리) render as correct glyphs, not mojibake.
+
+**Self-caught bug:** my first edit of the file accidentally dropped the `loadEnvLocal()` call and the two dynamic `import()` lines (`getAccountByRiotId`, `getSql`) that sit between the header comment and `const KNOWN_MAINS = [...]` — the old_string/new_string replacement boundary ate them. Caught immediately on the first run (`getSql is not defined`), fixed with a follow-up edit restoring those 3 lines, re-read the whole file to confirm structure before re-running. Flagging so nobody wonders why there were two edits to the same region.
+
+**Also hardened the loop:** the original Faker/Bin-only script had no try/catch around `getAccountByRiotId` — fine when every entry was pre-verified, but this round explicitly expected some of 9 UNVERIFIED wiki entries to 404. Wrapped that call in a per-entry try/catch keyed on `RiotRequestError.status === 404` (vs. any other error) so one bad entry logs-and-continues instead of aborting every entry after it in the array. `results` now carries a `status: "resolved" | "404" | "error"` field per entry.
+
+### Step 2 — resolution result: 9/9 resolved, ZERO 404s
+
+Every single wiki-sourced riot ID resolved on the first try via Riot account-v1 — no drops needed, no fallback spellings required (including Peyz's trimmed form). Puuids upserted into `coachbuild.pro_accounts` (active=true), same as Faker/Bin.
+
+### Step 3 — serial per-player ingest (`npx tsx scripts/ingest-player.mjs <slug>`)
+
+| slug | riot id | matches upserted |
+|---|---|---|
+| chovy | 허거덩#0303 | +20 |
+| zeus | Spring#bomm | **+0** |
+| canyon | JUGKlNG#kr | +20 |
+| gumayusi | T1 Gumayusi#KR1 | +6 |
+| kanavi | vinaka#KR1 | +20 |
+| keria | 역천괴#ker3 | +3 |
+| kiin | kiin#KR1 | +20 |
+| oner | 오 너#111 | +20 |
+| peyz | Peyz#KR11 | +20 |
+
+**Total: 129 matches landed across 9 pros.** Zeus's account resolved cleanly via account-v1 (a real, valid Riot account) but the match-id lookup (queue 420 / solo queue, per `ingestOneAccount`'s default filter) returned zero games for that account — not an error, just an account with no recent ranked history under the filtered queue. Not investigated further (out of scope — flagging in case a future session wants to check whether "Spring#bomm" is genuinely Zeus's active grind account or a stale/alt one).
+
+### Gates
+
+`npx tsc --noEmit` — clean (this round touched no `.ts` files). `npx vitest run` — 19 files, **206/206 passed** (unchanged from round 4 — no lib/ code changed this round).
+
+### Versioning / deploy
+
+**No bump needed and none done.** `KNOWN_MAINS` lives entirely in `scripts/resolve-known-mains.mjs` — a one-off operational script, not under `lib/`, not imported by any `app/`/`pages/` route, so it never enters the Next.js build bundle. Per the coordinator's own carve-out ("if it lives in lib/ and ships in the bundle, say so") — it doesn't, so this stays a data-only, no-deploy change.
+
+### Housekeeping
+
+Reused the same leftover scratch file (`scripts/_probe-curl-transport.mjs`) one more time, this round for the `coachbuild.pros` existence check — still can't `rm` it (blocked unconditionally by `safety-gate.sh` in this environment, same as every prior round). It now sits there with round-5 content (pros-existence probe), superseding the round-4 content that was in it before. Along with `scripts/_probe-via-export.mjs` (round 2) and the two pre-existing root-level `_diag-prostage*.mjs` files (not mine, flagged in round 3), these 4 scratch files are the full list of untracked cleanup items across all 5 rounds — orchestrator can batch-approve `rm` for all of them whenever convenient.
+
+

@@ -9,18 +9,23 @@
 // Deliberately conservative: only entries we can state with confidence go in
 // KNOWN_MAINS — a wrong riot_id here would silently attach the WRONG
 // player's games to a pro's history, worse than leaving an account missing.
-// Chovy and other KR pros are NOT included — their exact riot_id/tag wasn't
-// independently confirmed this round (a Leaguepedia SoloqueueIds lookup
-// would confirm them, but the Leaguepedia rate limiter is burned this
-// session per the fix brief) — add them here only once confirmed, never
-// guessed.
+//
+// 2026-07-10 (round 5): 9 KR mains added from Leaguepedia's Players table
+// SoloqueueIds field, pulled via CargoExport (no api.php calls spent).
+// SoloqueueIds is Leaguepedia's own words "manually maintained, may be
+// extremely incomplete or inaccurate" — every entry below is UNVERIFIED wiki
+// data until getAccountByRiotId() below confirms it against Riot account-v1;
+// a 404 there means DROP the entry, never guess an alternative tag/spelling.
+// Ruler (Gen.G ADC) was on the candidate list but has NO row in
+// coachbuild.pros at all (checked: chovy/kiin/canyon/duro are Gen.G's only
+// pros on file) — skipped entirely, nothing to link a riot_id to.
 //
 // Run via tsx: npx tsx scripts/resolve-known-mains.mjs
 import { loadEnvLocal } from "./_env.mjs";
 
 loadEnvLocal();
 
-const { getAccountByRiotId } = await import("../lib/pro/riot.ts");
+const { getAccountByRiotId, RiotRequestError } = await import("../lib/pro/riot.ts");
 const { getSql } = await import("../lib/pro/db.ts");
 
 const KNOWN_MAINS = [
@@ -28,6 +33,19 @@ const KNOWN_MAINS = [
   // Bin (BLG top) — user-verified 2026-07-10 from dpm.lol's PRO-tagged profile
   // screenshot: active KR grind account (Master 1047 LP, 242 games this split).
   { slug: "bin", gameName: "빈 스토리", tagLine: "KR1", region: "KR", regional: "asia" },
+  // --- round 5 (2026-07-10): Leaguepedia SoloqueueIds via CargoExport, all UNVERIFIED until getAccountByRiotId() below resolves them ---
+  { slug: "chovy", gameName: "허거덩", tagLine: "0303", region: "KR", regional: "asia" }, // Gen.G
+  { slug: "zeus", gameName: "Spring", tagLine: "bomm", region: "KR", regional: "asia" }, // Hanwha Life Esports
+  { slug: "canyon", gameName: "JUGKlNG", tagLine: "kr", region: "KR", regional: "asia" }, // Gen.G
+  { slug: "gumayusi", gameName: "T1 Gumayusi", tagLine: "KR1", region: "KR", regional: "asia" }, // Hanwha Life Esports — gameName has an internal space, preserved
+  { slug: "kanavi", gameName: "vinaka", tagLine: "KR1", region: "KR", regional: "asia" }, // Hanwha Life Esports
+  { slug: "keria", gameName: "역천괴", tagLine: "ker3", region: "KR", regional: "asia" }, // T1
+  { slug: "kiin", gameName: "kiin", tagLine: "KR1", region: "KR", regional: "asia" }, // Gen.G
+  { slug: "oner", gameName: "오 너", tagLine: "111", region: "KR", regional: "asia" }, // T1 — gameName has an internal space, preserved
+  // Peyz — wiki markup literally had "Peyz #KR11" (space before the tag
+  // separator); tried trimmed ("Peyz") first per the fix brief, only fall
+  // back to the space-preserved form if account-v1 404s the trimmed one.
+  { slug: "peyz", gameName: "Peyz", tagLine: "KR11", region: "KR", regional: "asia" }, // T1
 ];
 
 async function main() {
@@ -43,9 +61,28 @@ async function main() {
       continue;
     }
     const proId = pro[0].id;
-
-    const acc = await getAccountByRiotId(known.regional, known.gameName, known.tagLine);
     const riotId = `${known.gameName}#${known.tagLine}`;
+
+    // Every wiki-sourced entry (round 5, 2026-07-10) is UNVERIFIED until this
+    // call succeeds — a 404 (or any other Riot error) must be caught and
+    // logged PER ENTRY, not left to crash the whole loop, since we expect
+    // some of these 9 to legitimately not resolve (wiki data is "manually
+    // maintained, may be extremely incomplete or inaccurate") and still want
+    // every other entry's result reported.
+    let acc;
+    try {
+      acc = await getAccountByRiotId(known.regional, known.gameName, known.tagLine);
+    } catch (err) {
+      if (err instanceof RiotRequestError && err.status === 404) {
+        console.error(`${known.slug}: 404 — riot id "${riotId}" not found, dropping (no guess)`);
+        results.push({ slug: known.slug, riotId, status: "404" });
+      } else {
+        console.error(`${known.slug}: riot lookup failed for "${riotId}": ${err.message}`);
+        results.push({ slug: known.slug, riotId, status: "error", error: err.message });
+      }
+      continue;
+    }
+
     await sql`
       INSERT INTO coachbuild.pro_accounts (puuid, pro_id, region, riot_id, active, created_at)
       VALUES (${acc.puuid}, ${proId}, ${known.region}, ${riotId}, true, now())
@@ -57,7 +94,7 @@ async function main() {
     `;
     const line = `${known.slug}: upserted ${riotId} (${known.region}) puuid=${acc.puuid}`;
     console.log(line);
-    results.push({ slug: known.slug, riotId, region: known.region, puuid: acc.puuid });
+    results.push({ slug: known.slug, riotId, region: known.region, puuid: acc.puuid, status: "resolved" });
   }
   console.log(JSON.stringify(results, null, 2));
 }
