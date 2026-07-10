@@ -83,6 +83,30 @@ describe("resolveActiveTournaments", () => {
     const [, retryOpts] = vi.mocked(cargoQueryWithRetry).mock.calls[0];
     expect(retryOpts).toEqual({ fastFail: true });
   });
+
+  it("bounds the Cargo query's WHERE clause to DateStart <= today, excluding future/unplayed tournaments", async () => {
+    // Regression for the 2026-07-10 live-verified bug: DateStart >= cutoff
+    // alone also matches future tournaments (next Worlds, unstarted
+    // playoffs), which — ordered DateStart DESC — crowd out every
+    // tournament that actually has ScoreboardPlayers data right now.
+    vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([{ OverviewPage: "MSI 2026" }] as never);
+    await resolveActiveTournaments();
+    const [queryArgs] = vi.mocked(cargoQueryWithRetry).mock.calls[0];
+    const where = (queryArgs as { where: string }).where;
+    const today = new Date().toISOString().slice(0, 10);
+    expect(where).toContain(`DateStart <= "${today}"`);
+    expect(where).toContain("DateStart >=");
+  });
+
+  it("excludes Academy pages from the Cargo query's WHERE clause", async () => {
+    // Regression: "%LCK%" LIKE-matches "LCK Academy Series/..." pages, which
+    // resolve but carry no ScoreboardPlayers data (live-verified 2026-07-10).
+    vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([{ OverviewPage: "MSI 2026" }] as never);
+    await resolveActiveTournaments();
+    const [queryArgs] = vi.mocked(cargoQueryWithRetry).mock.calls[0];
+    const where = (queryArgs as { where: string }).where;
+    expect(where).toContain('OverviewPage NOT LIKE "%Academy%"');
+  });
 });
 
 describe("orderByStaleness", () => {

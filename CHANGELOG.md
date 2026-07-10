@@ -2,6 +2,10 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.7.5] — 2026-07-10
+### Fixed
+- **Pro-play tournament resolver no longer selects unplayed tournaments.** The 90-day window matched future events (next Worlds, unstarted playoffs), which filled all 7 ingest slots ahead of tournaments with real scoreboard data (MSI, LEC Summer, LPL) — the pro-play table stayed empty since v0.7.0. Resolver now requires DateStart <= today and excludes Academy pages (they match tier-1 name patterns but carry no scoreboard rows).
+
 ## [0.7.4] — 2026-07-10
 ### Fixed
 - Champion display names on pro-game cards (Wukong, not Riot's internal MonkeyKing).

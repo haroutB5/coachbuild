@@ -22,6 +22,10 @@ import { cargoField, cargoQueryWithRetry } from "./cargo";
 import type { CargoTournamentRow } from "./types";
 
 const TIER1_PATTERNS = ["LEC", "LCK", "LPL", "LCS", "MSI", "World Championship", "Worlds"];
+// Academy pages (e.g. "LCK Academy Series") LIKE-match TIER1_PATTERNS but
+// resolve to tournaments with no ScoreboardPlayers data — live-verified
+// 2026-07-10 (see DATA-QUALITY PROBE in HANDOFF-engy.md).
+const EXCLUDE_PATTERNS = ["Academy"];
 const MAX_TOURNAMENTS = 7; // caps Cargo calls per ScoreboardPlayers ingest pass
 
 // A cron-drained serverless route calls resolveActiveTournaments() fresh on
@@ -73,15 +77,23 @@ export async function resolveActiveTournaments(opts: ResolveTournamentsOptions =
   if (cache && cache.expiresAt > Date.now()) return cache.pages;
 
   const withinDays = opts.withinDays ?? 90;
-  const cutoff = new Date(Date.now() - withinDays * 86_400_000).toISOString().slice(0, 10);
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - withinDays * 86_400_000).toISOString().slice(0, 10);
+  const today = now.toISOString().slice(0, 10);
   const likeClauses = TIER1_PATTERNS.map((p) => `OverviewPage LIKE "%${p}%"`).join(" OR ");
+  const excludeClauses = EXCLUDE_PATTERNS.map((p) => `OverviewPage NOT LIKE "%${p}%"`).join(" AND ");
 
   try {
     const rows = await cargoQueryWithRetry<CargoTournamentRow>(
       {
         tables: "Tournaments",
         fields: "OverviewPage, League, DateStart, Date",
-        where: `(${likeClauses}) AND DateStart >= "${cutoff}"`,
+        // Upper-bounded by `today` so future/unplayed tournaments (next
+        // Worlds, unstarted playoffs) don't crowd out the DateStart-DESC-
+        // ordered, MAX_TOURNAMENTS-capped result ahead of tournaments that
+        // actually have ScoreboardPlayers data right now (live-verified
+        // 2026-07-10).
+        where: `(${likeClauses}) AND ${excludeClauses} AND DateStart >= "${cutoff}" AND DateStart <= "${today}"`,
         orderBy: "DateStart DESC",
         limit: 20,
       },

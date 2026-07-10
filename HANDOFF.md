@@ -1230,3 +1230,38 @@ line.
 No version bump, no deploy — per instructions (orchestrator ships).
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-10 09:52
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-09 22:01:33Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-10 — resolveActiveTournaments: fix future-tournament crowd-out + Academy exclusion
+
+**File:** `lib/prostage/tournaments.ts`. **Tests:** `lib/__tests__/prostage-tournaments.test.ts`.
+
+Root cause (live-verified by orchestrator before dispatch): the Cargo WHERE clause was `(${likeClauses}) AND DateStart >= "${cutoff}"`, ordered `DateStart DESC`, capped at `MAX_TOURNAMENTS=7`. `DateStart >= cutoff` also matches future/unplayed tournaments (2026 Worlds in October, LCK/LEC playoffs Aug-Sep, unplayed Academy brackets). Sorted DESC, those future rows sort ahead of anything with real ScoreboardPlayers data and fill all 7 slots — every resolved tournament returned 0 rows.
+
+Changes:
+1. Added `today = now.toISOString().slice(0, 10)` alongside the existing `cutoff`, computed from the same `now` (previously `Date.now()` was called twice — now called once and reused, so cutoff/today can't drift a few ms apart).
+2. WHERE clause gained `AND DateStart <= "${today}"` — excludes future-dated tournaments while the existing `>= cutoff` still keeps the 90-day recency window.
+3. Added `EXCLUDE_PATTERNS = ["Academy"]` next to `TIER1_PATTERNS`, rendered as `AND OverviewPage NOT LIKE "%Academy%"` in the WHERE. Academy pages LIKE-match tier-1 patterns (e.g. "LCK Academy Series") but carry no ScoreboardPlayers data.
+4. Two new tests assert the generated `where` string directly (inspecting `cargoQueryWithRetry`'s mock call args) rather than re-deriving cargo's query semantics: one pins `DateStart <= "<today>"` is present alongside the existing `>=` bound, the other pins `OverviewPage NOT LIKE "%Academy%"` is present. Followed the existing file's mocking style (mock `cargoQueryWithRetry`, inspect `mock.calls[0]`) — same pattern the existing `fastFailOnRatelimit` test already used.
+
+**Test results:** `npx tsc --noEmit` clean (no output). `npx vitest run` — 19 files, 191/191 passed (189 baseline + 2 new).
+
+**Not touched:** cargo.ts pacing, ingest.ts, the route, versioning/deploy — orchestrator ships per brief.
+
+**Surprise:** none structurally — the fix was exactly the two-clause change the brief specified. The only judgment call was computing `today` from the same `now` Date object as `cutoff` instead of a fresh `Date.now()` call, to avoid a (extremely unlikely but free-to-avoid) sub-millisecond boundary mismatch between the two bounds.
+
+
