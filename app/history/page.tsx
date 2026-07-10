@@ -8,6 +8,8 @@ import PlayerPicker from "@/components/PlayerPicker";
 import ChampionPicker from "@/components/ChampionPicker";
 import LanePillRow from "@/components/LanePillRow";
 import ProHistoryResults from "@/components/ProHistoryResults";
+import FavoritePlayerChips from "@/components/FavoritePlayerChips";
+import FavoriteStarButton from "@/components/FavoriteStarButton";
 import type { PlayerRef } from "@/components/proHistory.types";
 
 type Mode = "player" | "champion";
@@ -90,6 +92,12 @@ export default function HistoryPage() {
               </>
             )}
           </div>
+
+          {/* Favorite players — quick re-select without searching again.
+              Player mode only, and only while nothing is selected yet (once
+              a player is picked, the summary line below carries its own
+              favorite star). */}
+          {mode === "player" && player === null && <FavoritePlayerChips onSelect={setPlayer} />}
         </header>
 
         {/* ── Main content ── */}
@@ -102,6 +110,10 @@ export default function HistoryPage() {
                 {mode === "player" ? (
                   <>
                     Showing recent games by <span className="font-semibold">{player!.name}</span>
+                    <FavoriteStarButton
+                      player={{ id: player!.id, name: player!.name, team: player!.team }}
+                      className="ml-1 -mb-0.5 align-middle"
+                    />
                   </>
                 ) : (
                   <>

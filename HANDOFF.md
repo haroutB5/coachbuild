@@ -2068,3 +2068,94 @@ Gate results are reported two ways because a **concurrent engo session is active
 - Did not bump version or deploy, per instructions — orchestrator ships.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-10 18:00
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-10 16:17:32Z; previous content preserved there. Append new rounds below. -->
+
+## Summary
+Built the favorites data layer (`lib/favorites.ts`) for "favorite pro players" per the fixed contract fronty is coding against concurrently. localStorage-backed (`coachbuild:favPlayers:v1`), SSR-safe (every export guards `typeof window === "undefined"`), hardened against corrupted/non-array JSON, malformed entries, and `setItem` throwing (Safari private-mode quota). Add goes to the front of the list (newest-first); remove doesn't reorder the rest; dedupe by `id`; add silently no-ops once `MAX_FAVORITES` (12) is reached, still returning the current list.
+
+## Files Touched
+- `lib/favorites.ts` (new) — contract: `FavoritePlayer`, `MAX_FAVORITES`, `getFavorites()`, `isFavorite(id)`, `toggleFavorite(p)`. Exact exports/signatures fronty was briefed against — did not rename or add anything beyond spec.
+- `lib/__tests__/favorites.test.ts` (new) — 16 tests, vitest, node env.
+- No other files touched (confirmed via `git status --short` — only these two are new).
+
+## Tests
+- `npx tsc --noEmit` — clean, no errors.
+- `npx vitest run` — 225 passed (225) across 20 files. Baseline was 209 + 16 new here = matches exactly.
+- Coverage: round-trip add/remove, newest-first ordering, isFavorite membership, dedupe-by-id (second toggle removes, doesn't duplicate), no-reorder-on-remove (removing the middle entry), MAX_FAVORITES cap (silent no-op add, still-allows-removal-at-cap), corrupted-JSON recovery, non-array-value recovery, malformed-entry filtering, missing/non-string-team coercion to null, setItem-throws resilience, and 4 SSR/no-window tests (getFavorites/isFavorite/toggleFavorite all no-op cleanly, plus a sanity check that `window` really is undefined in the node test env).
+- Did NOT run `npm run build` per brief (fronty's concurrent WIP on components could transiently fail it — not in scope here).
+
+## Known Issues
+None. Files are CRLF (converted post-write via a node one-off to match repo convention — `Write` tool emits LF by default; verified 0 bare LF in both files before running gates).
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-10 18:22
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-10 16:24:28Z; previous content preserved there. Append new rounds below. -->
+
+## Round: typing-hint suppression + favorite players + game detail sheet (2026-07-10)
+
+### Summary
+
+**1. Typing hint removed (PlayerPicker only).** ChampionPicker never had one (it filters a locally-cached list, no min-char floor). PlayerPicker's dropdown wrapper now only renders once `query.trim().length >= 2` (`components/PlayerPicker.tsx:173`) — below that, nothing renders below the input at all (verified: 1-char query shows a bare input, no box). "Searching…" / error / "No players found" rows are unchanged and still show once a real search resolves.
+
+**2. Favorite players**, built against engo's `lib/favorites.ts` (landed before I finished, contract matched exactly — no edits made to that file or its test):
+- `components/favoritesSync.ts` (new) — wraps `toggleFavorite` with a `window` custom event (`coachbuild:favorites-changed`) so every star/chip on the page stays live-synced without prop drilling; also listens to the native `storage` event for cross-tab sync.
+- `components/FavoriteStarButton.tsx` (new) — reusable star toggle, `aria-pressed` + `aria-label`, gold when favorited (the `gold` token now aliases `lavender` per the existing rebrand, so this doesn't clash with WPA good/bad color language). Reads localStorage only after mount (`mounted` flag) to dodge any SSR mismatch, though in practice every render site here is already post-interaction. Stops propagation on `onPointerDown`/`onMouseDown`/`onClick` so starring never also fires a parent row's select handler — verified live via chrome-devtools MCP: starring a search result kept it in "unselected" state and did not populate the input.
+- `components/FavoritePlayerChips.tsx` (new) — the chip row, one chip per favorite, tap = instant select via a synthesized `PlayerRef` (`{id, name, slug:"", team, role:null, country:null, gameCount:0}` — verified nothing downstream consumes those placeholder fields once a player is selected). Small unstar button, 28px hit target (WCAG 2.5.8 AA minimum met). Renders `null` until mounted (this row DOES render unconditionally on first paint in player mode with no selection, so it's the one genuinely at hydration-mismatch risk — guarded per the brief).
+- `components/PlayerPicker.tsx` — star added to each result row, restructured `<li>` from a single full-width `<button>` to `<button className="flex-1">` + sibling `FavoriteStarButton` (avoids nesting a button inside a button, which is invalid HTML/ARIA). Also broadened the existing "sync query text from `value` prop" effect to fire on selection too, not just clearing — needed so a favorites-chip tap (which sets `value` directly, bypassing this component's own `select()`) still updates the input text to "Name — Team" like an in-dropdown pick would.
+- `app/history/page.tsx` — `FavoritePlayerChips` rendered under the search controls, gated on `mode === "player" && player === null`. `FavoriteStarButton` added next to the "Showing recent games by X" name (player mode only) — **found and fixed a layout bug here during my own verification**: the button's `flex` utility (`display:flex`, block-level) forced it onto its own line when placed inside a text-flow `<p>`; switched to `inline-flex` in `FavoriteStarButton.tsx` so it sits inline with the text everywhere it's used. Caught via screenshot, not code reading.
+
+**3. Game detail sheet** — the big one. `ProGameCard.tsx`'s old inline "Details" expandable is gone entirely; the whole card is now the trigger (`role="button" tabIndex={0}`, Enter/Space activates, `focus-visible` ring, `aria-label` summarizing champion/player/result). Formatting helpers (`ImgWithFallback`, `relativeTime`, `formatGameLength`, `formatMinuteStamp`, `kdaRatioText`, `WinLossPill`, `RunePerkIcon`, `GAME_LANE_LABEL`) are now `export`ed from `ProGameCard.tsx` and reused by the new `components/GameDetailSheet.tsx` rather than duplicated.
+- `GameDetailSheet.tsx` (new) — `createPortal`'d to `document.body`, full-screen on mobile / `max-w-2xl` centered modal on `sm:`+ desktop. Mount/unmount is decoupled from the `open` prop (`rendered` + `visible` state) so the exit transition (150ms, ease-accel) actually plays before `createPortal` stops rendering; entrance is 200ms ease-out-quint. Global CSS already collapses transitions under `prefers-reduced-motion: reduce` (`app/globals.css:51-60`), and the JS unmount delay is additionally shrunk to 0 under that media query rather than relying on CSS alone.
+- Body scroll lock while open, with scrollbar-width compensation (`padding-right`) so the page behind doesn't shift when the vertical scrollbar disappears.
+- Focus management: opening moves focus to the close button; closing (Escape, backdrop tap, or the close button) returns focus to whichever card triggered it (`document.activeElement` captured on open). Verified via snapshot: after Escape/close, the originating "View details" button shows `focused` in the a11y tree.
+- Runes "in detail": new `RunePerkTile` (icon + visible name label, not just a tooltip) reuses `proAssets.resolveRuneDisplay`'s existing cached fetch — no new fetches added. Keystone rendered large, primary minors + secondary tree + secondary minors + stat shards all rendered with real names where the data resolves them (everything does, in practice — items are the one thing with no name source in `proAssets.ts`, so those stay icon + "Item #id" tooltip only, matching what was already there).
+- Item build order: purchases grouped by in-game minute (`groupByMinute()` — consecutive same-minute buys collapse under one minute label + hairline divider between groups), bigger icons (40px vs the old 32px inline), "Hide consumables" toggle carried over unchanged.
+- Skill order: upgraded to a genuine per-level readout — each of up to 18 columns gets its own level-number caption (1-18) under the Q/W/E/R pill, R still highlighted teal. Wrapped in its own `overflow-x-auto` container (bleed pattern) — confirmed via `document.documentElement.scrollWidth === window.innerWidth` at a genuine 390px emulated viewport that this never causes page-level horizontal scroll, even though the 18-column row itself is wider than the viewport and does scroll internally.
+- Prostage rows: header + runes + spells + final build render same as soloq; purchase-order and skill-order sections are replaced with a single muted italic note ("Purchase and skill order detail isn't available for on-stage games"); PRO PLAY gold badge + tournament name in the header in place of the soloq riot ID line.
+- No score/grade/CS-per-min/KP anywhere — confirmed, never referenced them (that feature was already removed from the shared `ProGame` type before I started).
+- `ProGamesSection.tsx` (the home-page consumer of `ProGameCard`) needed zero changes — same prop contract, same click-to-open behavior now applies there too, verified live (Viktor champion-mode games open the sheet correctly, including a "Deathfire Touch" keystone which hits `proAssets.ts`'s special-cased rune-id branch).
+
+### Files Touched
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/PlayerPicker.tsx` — hint removal, star-per-row, external-selection query sync
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/favoritesSync.ts` (new)
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/FavoriteStarButton.tsx` (new)
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/FavoritePlayerChips.tsx` (new)
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/app/history/page.tsx` — chip row + selected-player star wiring
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/ProGameCard.tsx` — full rewrite: card-is-the-trigger, expandable panel removed, helpers exported
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/GameDetailSheet.tsx` (new)
+- Not touched (per scope): `lib/favorites.ts`, `lib/__tests__/favorites.test.ts`, `ChampionPicker.tsx` (no hint to remove), `proGames.fixtures.ts` (existing fixtures already covered every case needed — win/loss/eventful/prostage-full/prostage-partial), `ProHistoryResults.tsx`, `ProGamesSection.tsx` (both consume `ProGameCard` unchanged, no wiring edits needed since the prop contract didn't change)
+
+### Tests
+- `npx tsc --noEmit` — clean, 0 errors.
+- `npx vitest run` — 225/225 passed (20 files) — same count before and after this round, no assertions touched (no existing tests covered PlayerPicker/ChampionPicker/ProGameCard).
+- `npx next lint` — clean, only pre-existing `no-img-element` warnings (one is now `ProGameCard.tsx:26`, the exported `ImgWithFallback`, same warning that existed pre-rewrite).
+- `npm run build` — succeeds. `/history` route: 11 kB / 105 kB First Load JS.
+- Live verification via chrome-devtools MCP against `next dev -p 4020` (port 4000 was pre-occupied per the known gotcha):
+  - **390x844 (genuine viewport via `emulate`, not just `resize_page` which silently no-op'd — see Known Issues):** typed 1 char, nothing renders below input; typed "fak", Faker result row with star; starred Faker without selecting (row stayed a search result, input stayed "fak"); chip row appeared live under the input; tapped chip, instant-selected, input synced to "Faker — T1", games loaded; opened a prostage card (note shown, no purchase/skill sections) and a soloq card (full item-build-order + skill-order, both horizontally scrollable within their own row, confirmed `document.documentElement.scrollWidth === window.innerWidth` with the sheet open — no page-level overflow).
+  - **1440x900 desktop:** centered `max-w-2xl` modal, backdrop-tap-close verified (dispatched a click at the backdrop element, sheet closed, grid behind unchanged/no shift), Tab+Enter keyboard-activates a card and moves focus to the sheet's close button (visible focus ring), Escape closes and returns focus to the originating card, Champion mode selection + a Viktor game with Deathfire Touch keystone all rendered correctly.
+  - Confirmed favorite persists across a full page reload (localStorage, no hydration-mismatch console errors observed).
+
+### Known Issues
+- `mcp__chrome-devtools__resize_page` silently no-op'd on this environment (reported success but `window.innerWidth` stayed at whatever the underlying OS window was, ~501px) — switched to `mcp__chrome-devtools__emulate` with an explicit `viewport` string (`390x844x3,mobile,touch` / `1440x900x1`), which worked correctly and is what all 390px/desktop claims above are based on. Worth a general note for future browser-verification sessions on this machine.
+- Item icons have no name source in `proAssets.ts` (only rune/spell/tree/shard names are resolvable) — final-build and purchase-timeline items stay icon + "Item #id" tooltip, same as the pre-existing dense-row treatment. Did not add a new fetch/API route to resolve item names, per the brief's explicit "no new fetches beyond asset CDNs already in use."
+- Did not bump version or deploy, per instructions — orchestrator ships.
+
+

@@ -2,6 +2,14 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.10.0] — 2026-07-10
+### Added
+- **Favorite players**: star a player from search results or after selecting them — favorites appear as chips under the search box for one-tap reuse (stored on-device, newest first, up to 12).
+- **Game detail view**: tap any game card for a full breakdown — runes with names (keystone prominent), summoner spells, final build, item build order as a minute-by-minute timeline, and a per-level 1–18 skill order. Full-screen on mobile, modal on desktop. Pro-play games show what on-stage data allows, with a note.
+### Changed
+- The inline "Details" expander on game cards is gone — the whole card opens the detail view.
+- Player search no longer shows a "type at least 2 characters" hint while typing.
+
 ## [0.9.0] — 2026-07-10
 ### Removed
 - **CoachBuild Score removed** (user preference): the per-game 0-100 score, S–D grade chip, and CS/min + KP micro-stats are gone from the Pro's page and the /api/pros response. The underlying stats columns and ingest stay (data keeps accumulating, nothing shown).

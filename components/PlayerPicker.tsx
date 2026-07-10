@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import type { PlayerRef, PlayersApiResponse } from "./proHistory.types";
 import { PRO_ROLE_LABEL } from "./proHistory.types";
+import FavoriteStarButton from "./FavoriteStarButton";
 
 interface PlayerPickerProps {
   value: PlayerRef | null;
@@ -37,10 +38,12 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
   // faster, more recent one (classic typeahead race).
   const reqIdRef = useRef(0);
 
-  // If the parent clears the selection (e.g. the page-level "Clear
-  // selection" ✕), reflect that by emptying the input back to placeholder.
+  // Reflect external value changes in the input text: the page-level "Clear
+  // selection" ✕ clears it back to placeholder, and a favorites-chip tap
+  // (which sets `value` directly, bypassing this component's own `select()`)
+  // needs the same "Name — Team" text a normal in-dropdown pick would show.
   useEffect(() => {
-    if (value === null) setQuery("");
+    setQuery(value ? playerLabel(value) : "");
   }, [value]);
 
   // Debounced live search — fires ~250ms after the user stops typing, only
@@ -164,7 +167,10 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
         className="w-full min-w-[220px] bg-panel2 border border-line hover:border-teal-dim rounded-xl px-4 py-2.5 text-sm text-txt placeholder:text-mut outline-none transition-colors focus:border-teal-dim focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
       />
 
-      {open && (
+      {/* Nothing renders below the input until there's actually something to
+          show — no "type N characters" hint while the user is still under
+          the search floor. */}
+      {open && query.trim().length >= MIN_CHARS && (
         <div className="absolute z-50 top-full mt-1.5 left-0 w-[min(300px,90vw)] bg-panel border border-line rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden">
           <ul
             ref={listRef}
@@ -173,18 +179,13 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
             aria-label="Player results"
             className="max-h-[260px] overflow-y-auto divide-y divide-line/40"
           >
-            {query.trim().length < MIN_CHARS && (
-              <li className="px-4 py-3 text-[12px] text-mut">
-                Type at least {MIN_CHARS} characters…
-              </li>
-            )}
-            {query.trim().length >= MIN_CHARS && search.status === "loading" && (
+            {search.status === "loading" && (
               <li className="px-4 py-3 text-[12px] text-mut">Searching…</li>
             )}
-            {query.trim().length >= MIN_CHARS && search.status === "error" && (
+            {search.status === "error" && (
               <li className="px-4 py-3 text-[12px] text-bad">Couldn&apos;t search right now.</li>
             )}
-            {query.trim().length >= MIN_CHARS && search.status === "ok" && results.length === 0 && (
+            {search.status === "ok" && results.length === 0 && (
               <li className="px-4 py-3 text-[12px] text-mut">No players found</li>
             )}
             {search.status === "ok" &&
@@ -203,13 +204,14 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
                     data-idx={i}
                     role="option"
                     aria-selected={isActive}
+                    className="flex items-center"
                   >
                     <button
                       type="button"
                       tabIndex={-1}
                       onClick={() => select(player)}
                       onMouseEnter={() => setActiveIndex(i)}
-                      className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors ${
+                      className={`flex-1 min-w-0 flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors ${
                         isActive ? "bg-teal/15" : ""
                       } ${isSelected ? "text-teal font-semibold" : noGames ? "text-mut" : "text-txt"}`}
                     >
@@ -223,6 +225,10 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
                         {player.gameCount} games
                       </span>
                     </button>
+                    <FavoriteStarButton
+                      player={{ id: player.id, name: player.name, team: player.team }}
+                      className="mr-2"
+                    />
                   </li>
                 );
               })}
