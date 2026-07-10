@@ -2,6 +2,14 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.14.1] — 2026-07-11
+### Fixed
+All four findings from the 18/20 anchored review (path to 20):
+- Rune-tooltip cache now self-refreshes (10-day TTL) — returning users can't keep stale rune numbers across patch rebalances.
+- Item buttons announce real item names to screen readers ("Rabadon's Deathcap", not "item #3152") across final build and build order.
+- Modern `mobile-web-app-capable` meta emitted (console deprecation warning gone); search inputs carry stable id/name for autofill association.
+- Removed the dead "pending" retry branch from the pro-play timeline client (server never returns it) — state machine simplified to loading/ok/unavailable/error.
+
 ## [0.14.0] — 2026-07-11
 ### Added
 - **Ally + enemy team comps on every game** (dpm.lol-style): tiny 5v5 champion icon strips on game cards (your pro's champ highlighted) and a Teams section in the game detail view. Pro-play games have comps immediately; solo-queue games fill in as the backfill completes.

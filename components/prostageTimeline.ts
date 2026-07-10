@@ -5,12 +5,12 @@
 // pro-play item build order timeline. Mirrors itemDetail.ts's module-level
 // cache + in-flight dedup pattern.
 //
-// Contract (engy, in-flight — see HANDOFF-fronty.md for the exact shape this
-// was built against):
+// Contract (engy — see HANDOFF-fronty.md for the exact shape this was built
+// against; server route computes synchronously and never returns "pending",
+// so this module no longer has a retry-poll branch for it — see 2026-07-11
+// P3 fix, removed rather than kept as unreachable forward-compat):
 //   200 {"status":"ok","purchaseOrder":[...]}          — same element shape
 //     as soloq `purchaseOrder` (ProGamePurchase[]; ts in SECONDS)
-//   200 {"status":"pending"}                            — compute in progress,
-//     retry after ~2s, capped
 //   200 {"status":"unavailable","reason":...}            — permanent, show a
 //     muted note
 //   network / non-2xx / unexpected body                 — transient, offer a
@@ -24,21 +24,12 @@ export type ProstageTimelineState =
   | { status: "loading" }
   | { status: "ok"; purchaseOrder: ProGamePurchase[] }
   | { status: "unavailable"; reason?: string }
-  /** Gave up after MAX_PENDING_RETRIES straight "pending" responses — not a
-   *  permanent unavailable (the compute may still land later), so callers
-   *  should render "try again later" copy rather than the flat unavailable
-   *  note. */
-  | { status: "pending-timeout" }
   /** Network failure / non-2xx / malformed body — transient, never cached,
    *  so a manual retry re-hits the network. */
   | { status: "error" };
 
-const PENDING_RETRY_MS = 2000;
-const MAX_PENDING_RETRIES = 3;
-
 type FetchResult =
   | { kind: "ok"; purchaseOrder: ProGamePurchase[] }
-  | { kind: "pending" }
   | { kind: "unavailable"; reason?: string }
   | { kind: "error" };
 
@@ -52,7 +43,6 @@ async function fetchOnce(gameId: string, playerLink: string): Promise<FetchResul
     if (json?.status === "ok" && Array.isArray(json.purchaseOrder)) {
       return { kind: "ok", purchaseOrder: json.purchaseOrder as ProGamePurchase[] };
     }
-    if (json?.status === "pending") return { kind: "pending" };
     if (json?.status === "unavailable") {
       return { kind: "unavailable", reason: typeof json.reason === "string" ? json.reason : undefined };
     }
@@ -64,31 +54,29 @@ async function fetchOnce(gameId: string, playerLink: string): Promise<FetchResul
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function resolveTimeline(gameId: string, playerLink: string): Promise<ProstageTimelineState> {
-  for (let attempt = 0; ; attempt++) {
-    const result = await fetchOnce(gameId, playerLink);
-    if (result.kind === "ok") return { status: "ok", purchaseOrder: result.purchaseOrder };
-    if (result.kind === "unavailable") return { status: "unavailable", reason: result.reason };
-    if (result.kind === "error") return { status: "error" };
-    // "pending" — retry up to MAX_PENDING_RETRIES more times, ~2s apart.
-    if (attempt >= MAX_PENDING_RETRIES) return { status: "pending-timeout" };
-    await sleep(PENDING_RETRY_MS);
-  }
+  const result = await fetchOnce(gameId, playerLink);
+  if (result.kind === "ok") return { status: "ok", purchaseOrder: result.purchaseOrder };
+  if (result.kind === "unavailable") return { status: "unavailable", reason: result.reason };
+  return { status: "error" };
 }
 
 // Keyed by `${gameId}::${playerLink}`. Only TERMINAL, non-transient results
-// are cached (ok / unavailable / pending-timeout) so reopening the sheet for
-// the same game doesn't refetch or re-spam the retry-poll loop. A network
-// "error" is deliberately never cached — a later manual retry should hit the
-// network again once connectivity/backend recovers, not stay stuck.
+// are cached (ok / unavailable) so reopening the sheet for the same game
+// doesn't refetch. A network "error" is deliberately never cached — a later
+// manual retry should hit the network again once connectivity/backend
+// recovers, not stay stuck.
 const resultCache = new Map<string, ProstageTimelineState>();
 const inFlight = new Map<string, Promise<ProstageTimelineState>>();
 
-async function loadProstageTimeline(gameId: string, playerLink: string): Promise<ProstageTimelineState> {
+/**
+ * Resolves (and caches) one gameId+playerLink's timeline fetch. Exported —
+ * not just `useProstageTimeline` — so the fetch/cache/dedup logic itself is
+ * directly unit-testable (mock `fetch`, no React/jsdom needed), same
+ * convention as itemDetail.ts's `getItemDetail` / runeDetail.ts's
+ * `getRuneDetail`.
+ */
+export async function loadProstageTimeline(gameId: string, playerLink: string): Promise<ProstageTimelineState> {
   const key = `${gameId}::${playerLink}`;
   const cached = resultCache.get(key);
   if (cached) return cached;
@@ -109,11 +97,11 @@ async function loadProstageTimeline(gameId: string, playerLink: string): Promise
 }
 
 /**
- * Fetches (and retry-polls while `status: "pending"`) a pro-play game's item
- * build order timeline. `playerLink` is required by the route contract but
- * may be absent on today's actual `/api/pros` response (see
- * proGames.types.ts's `ProGame.playerLink` comment) — when missing, this
- * resolves straight to `unavailable` with no network call, never throws.
+ * Fetches a pro-play game's item build order timeline. `playerLink` is
+ * required by the route contract but may be absent on today's actual
+ * `/api/pros` response (see proGames.types.ts's `ProGame.playerLink`
+ * comment) — when missing, this resolves straight to `unavailable` with no
+ * network call, never throws.
  */
 export function useProstageTimeline(
   gameId: string,

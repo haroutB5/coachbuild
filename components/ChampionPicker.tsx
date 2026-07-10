@@ -129,6 +129,8 @@ export default function ChampionPicker({ value, onChange }: ChampionPickerProps)
         )}
         <input
           ref={inputRef}
+          id="champion-search"
+          name="champion-search"
           type="text"
           value={query}
           onChange={(e) => {

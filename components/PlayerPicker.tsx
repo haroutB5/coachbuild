@@ -148,6 +148,8 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
     <div ref={containerRef} className="relative">
       <input
         ref={inputRef}
+        id="pro-player-search"
+        name="pro-player-search"
         type="text"
         value={query}
         onChange={(e) => {

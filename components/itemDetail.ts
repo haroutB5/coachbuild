@@ -147,3 +147,23 @@ export async function getItemDetail(id: number, ver: string): Promise<ItemDetail
     return null;
   }
 }
+
+/**
+ * Batch-resolve every item's name for the given version in one call — used
+ * by GameDetailSheet to thread real item names into its build-order/
+ * final-build button aria-labels (instead of "item #3152") without a
+ * per-button fetch. Reuses `loadItemDataMap`'s same module-level mem +
+ * localStorage cache `getItemDetail` already populates — no duplicate
+ * fetch/cache machinery. Never throws — any fetch failure resolves to an
+ * empty map so callers degrade to the id-based label instead of crashing.
+ */
+export async function getItemNameMap(ver: string): Promise<Map<number, string>> {
+  try {
+    const map = await loadItemDataMap(ver);
+    const names = new Map<number, string>();
+    map.forEach((entry, id) => names.set(id, entry.name));
+    return names;
+  } catch {
+    return new Map();
+  }
+}

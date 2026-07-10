@@ -20,6 +20,14 @@ export const metadata: Metadata = {
     statusBarStyle: "black-translucent",
     title: "CoachBuild",
   },
+  // Standard (non-Apple-prefixed) mobile-web-app-capable meta tag — Chrome
+  // deprecated bare reliance on `apple-mobile-web-app-capable` and logs a
+  // console warning without this one present too. `metadata.other` is the
+  // App Router's escape hatch for meta tags the typed `Metadata` fields
+  // don't cover; the apple-prefixed tag above stays for iOS Safari.
+  other: {
+    "mobile-web-app-capable": "yes",
+  },
   icons: {
     icon: "/icon-192.png",
     apple: "/icon-192.png",

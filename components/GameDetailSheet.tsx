@@ -28,6 +28,7 @@ import { IconWithFallback } from "./IconWithFallback";
 import { SheetTeamsSection } from "./TeamComp";
 import ItemDetailPopover from "./ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "./EntityDetailPopover";
+import { getItemNameMap } from "./itemDetail";
 import { buildSkillOrderGrid, SKILL_ROWS, SKILL_GRID_COLUMNS, type SkillLetter } from "./skillOrderGrid";
 import { useProstageTimeline } from "./prostageTimeline";
 import { trapTabKey } from "./focusTrap";
@@ -118,6 +119,15 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return <p className="text-[10.5px] tracking-[1px] uppercase text-teal font-bold mb-2.5">{children}</p>;
 }
 
+/** Real item name when the sheet's batch name-map fetch (getItemNameMap) has
+ *  resolved; degrades to the id form when it hasn't (or failed) — runes/
+ *  spells/shards already announce real names via proAssets, this is the item
+ *  buttons' equivalent (P3 a11y fix — "item #3152" was the only remaining
+ *  id-only accessible name in the sheet). */
+function itemLabelFrom(names: Map<number, string> | null, id: number): string {
+  return names?.get(id) ?? `Item #${id}`;
+}
+
 /** One Q/W/E/R row of the skill-order grid: a label cell + SKILL_GRID_COLUMNS
  *  level cells, emitted as a `Fragment` (no wrapper element) so they land as
  *  direct children of the parent `grid` and CSS Grid's row-major auto-flow
@@ -187,12 +197,14 @@ function groupByMinute(purchases: ProGamePurchase[]): { minute: number; items: P
 function ItemBuildOrderSection({
   purchases,
   ver,
+  itemNames,
   hideConsumables,
   onToggleHideConsumables,
   onItemClick,
 }: {
   purchases: ProGamePurchase[];
   ver: string;
+  itemNames: Map<number, string> | null;
   hideConsumables: boolean;
   onToggleHideConsumables: (v: boolean) => void;
   onItemClick: (id: number) => void;
@@ -230,18 +242,21 @@ function ItemBuildOrderSection({
             >
               <span className="text-[10px] text-mut tabular-nums">{g.minute}&apos;</span>
               <div className="flex items-center gap-1.5">
-                {g.items.map((p, i) => (
-                  <button
-                    key={`${p.itemId}-${p.ts}-${i}`}
-                    type="button"
-                    onClick={() => onItemClick(p.itemId)}
-                    aria-label={`View details for item #${p.itemId}, bought at ${formatMinuteStamp(p.ts)}`}
-                    title={`Item #${p.itemId} — ${formatMinuteStamp(p.ts)}`}
-                    className="w-11 h-11 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform hover:border-teal-dim active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
-                  >
-                    <IconWithFallback src={itemIconUrl(p.itemId, ver)} alt={`Item #${p.itemId}`} className="w-full h-full object-contain" />
-                  </button>
-                ))}
+                {g.items.map((p, i) => {
+                  const label = itemLabelFrom(itemNames, p.itemId);
+                  return (
+                    <button
+                      key={`${p.itemId}-${p.ts}-${i}`}
+                      type="button"
+                      onClick={() => onItemClick(p.itemId)}
+                      aria-label={`View details for ${label}, bought at ${formatMinuteStamp(p.ts)}`}
+                      title={`${label} — ${formatMinuteStamp(p.ts)}`}
+                      className="w-11 h-11 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform hover:border-teal-dim active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
+                    >
+                      <IconWithFallback src={itemIconUrl(p.itemId, ver)} alt={label} className="w-full h-full object-contain" />
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ))}
@@ -278,20 +293,22 @@ function ItemBuildOrderSkeleton() {
 }
 
 /** Pro-play item build order: fetches GET /api/prostage/timeline (via the
- *  useProstageTimeline hook — polls while "pending", never throws) and
- *  renders one of: loading skeleton, the real ItemBuildOrderSection (same
- *  component soloq uses), or a muted fallback note. Skill order has no
- *  livestats source and is never shown for prostage — the note text below
- *  changes depending on whether the timeline itself came through. */
+ *  useProstageTimeline hook, never throws) and renders one of: loading
+ *  skeleton, the real ItemBuildOrderSection (same component soloq uses), or
+ *  a muted fallback note. Skill order has no livestats source and is never
+ *  shown for prostage — the note text below changes depending on whether the
+ *  timeline itself came through. */
 function ProstageBuildOrder({
   game,
   ver,
+  itemNames,
   hideConsumables,
   onToggleHideConsumables,
   onItemClick,
 }: {
   game: ProGame;
   ver: string;
+  itemNames: Map<number, string> | null;
   hideConsumables: boolean;
   onToggleHideConsumables: (v: boolean) => void;
   onItemClick: (id: number) => void;
@@ -313,6 +330,7 @@ function ProstageBuildOrder({
         <ItemBuildOrderSection
           purchases={state.purchaseOrder}
           ver={ver}
+          itemNames={itemNames}
           hideConsumables={hideConsumables}
           onToggleHideConsumables={onToggleHideConsumables}
           onItemClick={onItemClick}
@@ -334,15 +352,6 @@ function ProstageBuildOrder({
           Try again
         </button>
         . Skill order detail isn&apos;t available for on-stage games.
-      </p>
-    );
-  }
-
-  if (state.status === "pending-timeout") {
-    return (
-      <p className="text-[11.5px] text-mut italic">
-        Item build order isn&apos;t ready yet — check back later. Skill order detail isn&apos;t available for
-        on-stage games.
       </p>
     );
   }
@@ -372,6 +381,12 @@ export default function GameDetailSheet({
   const [rendered, setRendered] = useState(false);
   const [visible, setVisible] = useState(false);
   const [hideConsumables, setHideConsumables] = useState(true);
+  // Batch-resolved once per sheet-open (not once per button) via
+  // itemDetail.ts's getItemNameMap — real item names for the FINAL BUILD /
+  // ITEM BUILD ORDER buttons' aria-labels instead of "item #3152" (P3 a11y
+  // fix). null until resolved (or on fetch failure); every read-site
+  // degrades to the id form via itemLabelFrom rather than blocking render.
+  const [itemNames, setItemNames] = useState<Map<number, string> | null>(null);
   // One unified "which detail popover is open" tracker for items, runes,
   // shards, AND summoner spells — `activeDetail` (null = closed) drives the
   // popover's `open` prop. `lastDetail` is deliberately NOT cleared on
@@ -397,6 +412,23 @@ export default function GameDetailSheet({
   const hasAnyRunes = game.runes.keystone > 0 || hasFullRunes || game.runes.shards.length > 0;
 
   const skillGrid = buildSkillOrderGrid(game.skillOrder);
+
+  // Fetch the sheet's item name map only once it actually opens (this
+  // component is always mounted per-card with `open` toggling visibility —
+  // fetching on mount instead would kick off an item.json fetch for every
+  // card on the page, not just the one the user taps). Keyed on `ver` too:
+  // a stale name map from a previous patch's icon set would mislabel this
+  // game's items.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    getItemNameMap(ver).then((names) => {
+      if (!cancelled) setItemNames(names);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, ver]);
 
   function openDetail(kind: "item" | EntityKind, id: number) {
     setLastDetail({ kind, id });
@@ -699,33 +731,32 @@ export default function GameDetailSheet({
           <section className="mb-6">
             <SectionLabel>Final Build</SectionLabel>
             <div className="flex items-center gap-2 flex-wrap">
-              {game.finalItems.map((id, i) => (
-                <button
-                  key={`item-${id}-${i}`}
-                  type="button"
-                  onClick={() => openItemPopover(id)}
-                  aria-label={`View details for item #${id}`}
-                  title={`Item #${id}`}
-                  className="w-11 h-11 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform hover:border-teal-dim active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
-                >
-                  <IconWithFallback
-                    src={itemIconUrl(id, ver)}
-                    alt={`Item #${id}`}
-                    className="w-full h-full object-contain"
-                  />
-                </button>
-              ))}
+              {game.finalItems.map((id, i) => {
+                const label = itemLabelFrom(itemNames, id);
+                return (
+                  <button
+                    key={`item-${id}-${i}`}
+                    type="button"
+                    onClick={() => openItemPopover(id)}
+                    aria-label={`View details for ${label}`}
+                    title={label}
+                    className="w-11 h-11 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform hover:border-teal-dim active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
+                  >
+                    <IconWithFallback src={itemIconUrl(id, ver)} alt={label} className="w-full h-full object-contain" />
+                  </button>
+                );
+              })}
               {trinketId && (
                 <button
                   type="button"
                   onClick={() => openItemPopover(trinketId)}
-                  aria-label={`View details for trinket #${trinketId}`}
-                  title={`Trinket #${trinketId}`}
+                  aria-label={`View details for trinket ${itemNames?.get(trinketId) ?? `#${trinketId}`}`}
+                  title={itemNames?.get(trinketId) ?? "Trinket"}
                   className="w-11 h-11 rounded-full bg-black/30 border border-teal-dim overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform hover:border-teal active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
                 >
                   <IconWithFallback
                     src={itemIconUrl(trinketId, ver)}
-                    alt="Trinket"
+                    alt={itemNames?.get(trinketId) ?? "Trinket"}
                     fallbackGlyph="Trinket"
                     className="w-full h-full object-contain"
                   />
@@ -738,6 +769,7 @@ export default function GameDetailSheet({
             <ProstageBuildOrder
               game={game}
               ver={ver}
+              itemNames={itemNames}
               hideConsumables={hideConsumables}
               onToggleHideConsumables={setHideConsumables}
               onItemClick={openItemPopover}
@@ -747,6 +779,7 @@ export default function GameDetailSheet({
               <ItemBuildOrderSection
                 purchases={game.purchaseOrder}
                 ver={ver}
+                itemNames={itemNames}
                 hideConsumables={hideConsumables}
                 onToggleHideConsumables={setHideConsumables}
                 onItemClick={openItemPopover}

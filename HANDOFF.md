@@ -2659,3 +2659,46 @@ Added `ProGame.allyChampionIds?`/`enemyChampionIds?` (both optional, both-or-nei
 
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-11 00:42
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-10 22:39:21Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-11 — v0.14.0 -> 20/20: 4 reviewer fixes (rune TTL, item-name a11y, metadata, timeline dead-branch)
+
+### Summary
+Implemented all 4 fixes from the anchored 18/20 review, nothing else. No version bump/deploy — orchestrator ships.
+
+1. **P2 — Rune cache TTL** (`components/runeDetail.ts`): the `coachbuild:runedata:v2` localStorage payload is now wrapped `{ fetchedAt, entries }` instead of a bare id->entry map. Added exported pure predicate `isFreshRuneCachePayload(payload, now)` — type-guards + freshness-checks a parsed payload in one pass (rejects non-object, missing/non-finite `fetchedAt` — this is what makes the OLD pre-TTL cache shape a clean miss instead of a crash — missing `entries`, or anything older than `CACHE_TTL_MS` = 10 days). `readLocalStorageCache`/`writeLocalStorageCache` both take an optional `now` param (defaults `Date.now()`) for testability. Corrupt JSON still caught by the existing try/catch.
+2. **P3 — Item name aria-labels** (`components/itemDetail.ts` + `components/GameDetailSheet.tsx`): added `getItemNameMap(ver)` to itemDetail.ts — reuses `loadItemDataMap`'s existing mem+localStorage cache (no duplicate fetch machinery), returns `Map<id, name>`. GameDetailSheet fetches it once via `useEffect` keyed on `[open, ver]` (only when the sheet actually opens — it's always-mounted per card with `open` toggling visibility, so fetching on mount would hit item.json for every card on the page). New `itemLabelFrom(names, id)` helper degrades to `Item #${id}` when unresolved/failed. Threaded into FINAL BUILD buttons, the trinket button (degrades to "Trinket" specifically, not "Item #id"), and `ItemBuildOrderSection`'s per-purchase buttons (now takes an `itemNames` prop, passed through `ProstageBuildOrder` too). `ItemDetailPopover` needed no change — same cache means the popover's own name resolve is already warm from the sheet's batch fetch.
+3. **P3 — Metadata/form polish**: `app/layout.tsx` adds `metadata.other: { "mobile-web-app-capable": "yes" }` alongside the existing `appleWebApp` block. `components/PlayerPicker.tsx` input gets `id="pro-player-search" name="pro-player-search"`; `components/ChampionPicker.tsx` input gets `id="champion-search" name="champion-search"`. Both pages mount their picker exactly once (verified via grep on app/page.tsx + app/history/page.tsx) so no duplicate-id risk.
+4. **P3 — Timeline dead-branch removal** (`components/prostageTimeline.ts`): deleted the `"pending"` retry-poll branch entirely (`PENDING_RETRY_MS`, `MAX_PENDING_RETRIES`, `sleep()`, the pending-counting loop in `resolveTimeline`) and the `pending-timeout` state — chose removal over "document as forward-compat" per the brief. State machine is now `loading | ok | unavailable | error`. A hypothetical stray `{status:"pending"}` response now falls through to the generic `error` bucket via the existing "unrecognized 2xx body" path, not a crash. Removed the matching `pending-timeout` branch from `GameDetailSheet.tsx`'s `ProstageBuildOrder`. Exported `loadProstageTimeline` (was module-private) so the fetch/cache/dedup logic is directly unit-testable, same convention as `getItemDetail`/`getRuneDetail`.
+
+### Files Touched
+- `components/runeDetail.ts` — TTL wrapper + `isFreshRuneCachePayload` export
+- `components/__tests__/runeDetail.test.ts` — extended: `isFreshRuneCachePayload` unit tests + `getRuneDetail` end-to-end (fresh hit / expired-refetch / missing-timestamp-miss / corrupt-miss) via `vi.stubGlobal` + `vi.resetModules` (no jsdom needed — module only touches `window`/`fetch` as plain globals)
+- `components/itemDetail.ts` — added `getItemNameMap(ver)`
+- `components/GameDetailSheet.tsx` — `itemNames` state + fetch effect, `itemLabelFrom` helper, threaded through Final Build / trinket / `ItemBuildOrderSection` / `ProstageBuildOrder`; removed dead `pending-timeout` render branch
+- `app/layout.tsx` — `metadata.other["mobile-web-app-capable"]`
+- `components/PlayerPicker.tsx`, `components/ChampionPicker.tsx` — input `id`/`name`
+- `components/prostageTimeline.ts` — removed pending-poll branch/state, exported `loadProstageTimeline`
+- `components/__tests__/prostageTimeline.test.ts` — new file: ok/unavailable/error/network-throw, dead-branch behavior (stray "pending" -> error, single fetch, no retry loop), terminal-result caching, error-never-cached, concurrent in-flight dedup
+
+### Tests
+- Baseline 295 -> 314 (19 net new; runeDetail.test.ts added ~12, prostageTimeline.test.ts is a new file with 8). All green.
+- `npx tsc --noEmit` clean. `npx next lint` — only pre-existing `<img>` LCP warnings (unrelated files), no new warnings/errors. `npm run build` succeeds (routes unchanged).
+- Live-verified on local dev (port 31700, killed after) at 390x844x2,mobile,touch via chrome-devtools MCP: `/history` -> searched "Faker" -> opened a Pro Play game sheet -> FINAL BUILD + ITEM BUILD ORDER buttons show real names in a11y snapshot (e.g. "View details for Hextech Rocketbelt", "View details for Doran's Ring, bought at 0'") instead of ids; trinket button "View details for trinket Oracle Lens"; opened a rune popover (Stormraider's Surge) — description text still carries real numbers ("25%... 48% Move Speed... Cooldown: 20s - 10s"); `document.querySelectorAll('meta')` confirms both `mobile-web-app-capable` and `apple-mobile-web-app-capable` present; `list_console_messages` empty (no deprecation warning) on both `/` and `/history`; confirmed via `evaluate_script` that both search inputs render the new `id`/`name` attrs in the live DOM.
+
+### Known Issues
+- None found. Did not touch `lib/`, `app/api/`, dynamic patch resolution, `/api/pros` validation/batched comps, or favorites — all out of scope per the brief and left untouched (verified via git diff scope before finishing).
+
+
+

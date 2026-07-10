@@ -4,9 +4,38 @@
  * the rune-detail popover. No JSX rendering, no network — plain function.
  * Fixtures below are lifted verbatim from a live perks.json fetch
  * (2026-07-10) so the tests exercise real tag shapes, not guessed ones.
+ *
+ * Also covers the localStorage TTL cache (P2 fix, 2026-07-11): a returning
+ * user must refetch CDragon's perks.json (which only ever serves /latest/)
+ * once the cached copy is older than ~10 days, instead of carrying stale
+ * numeric values across patch rebalances forever. No jsdom/RTL in this
+ * repo's harness, but the caching module only touches `window.localStorage`
+ * and `fetch` as plain globals — `vi.stubGlobal` + `vi.resetModules` (fresh
+ * module instance per test, since `memCache`/`inFlight` are module
+ * singletons) exercises the real fetch/cache code path without needing a DOM.
  */
-import { describe, it, expect } from "vitest";
-import { stripRuneDescriptionHtml } from "../runeDetail";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { stripRuneDescriptionHtml, isFreshRuneCachePayload } from "../runeDetail";
+
+const LOCALSTORAGE_KEY = "coachbuild:runedata:v2";
+
+function makeFakeLocalStorage(initial: Record<string, string> = {}) {
+  const store = new Map<string, string>(Object.entries(initial));
+  return {
+    getItem: (k: string) => (store.has(k) ? (store.get(k) as string) : null),
+    setItem: (k: string, v: string) => {
+      store.set(k, v);
+    },
+    removeItem: (k: string) => {
+      store.delete(k);
+    },
+    _store: store,
+  };
+}
+
+function fakePerksResponse(entries: { id: number; name: string; longDesc: string }[]) {
+  return { ok: true, json: async () => entries };
+}
 
 describe("stripRuneDescriptionHtml", () => {
   it("returns empty string for undefined/null/empty input", () => {
@@ -80,5 +109,146 @@ describe("stripRuneDescriptionHtml", () => {
 
   it("trims leading/trailing whitespace", () => {
     expect(stripRuneDescriptionHtml("<br>  Hello  <br>")).toBe("Hello");
+  });
+});
+
+describe("isFreshRuneCachePayload", () => {
+  const now = 1_800_000_000_000; // fixed reference instant
+
+  it("accepts a well-shaped payload fetched moments ago", () => {
+    expect(isFreshRuneCachePayload({ fetchedAt: now - 1000, entries: { "1": {} } }, now)).toBe(true);
+  });
+
+  it("rejects a payload older than the ~10 day TTL", () => {
+    const elevenDaysMs = 11 * 24 * 60 * 60 * 1000;
+    expect(isFreshRuneCachePayload({ fetchedAt: now - elevenDaysMs, entries: { "1": {} } }, now)).toBe(false);
+  });
+
+  it("accepts a payload just under the TTL boundary", () => {
+    const nineDaysMs = 9 * 24 * 60 * 60 * 1000;
+    expect(isFreshRuneCachePayload({ fetchedAt: now - nineDaysMs, entries: { "1": {} } }, now)).toBe(true);
+  });
+
+  it("rejects the old pre-TTL cache shape (flat id->entry map, no fetchedAt)", () => {
+    expect(isFreshRuneCachePayload({ "8242": { id: 8242, name: "Unflinching" } }, now)).toBe(false);
+  });
+
+  it("rejects non-object / null / undefined payloads", () => {
+    expect(isFreshRuneCachePayload(null, now)).toBe(false);
+    expect(isFreshRuneCachePayload(undefined, now)).toBe(false);
+    expect(isFreshRuneCachePayload("a string", now)).toBe(false);
+    expect(isFreshRuneCachePayload(42, now)).toBe(false);
+  });
+
+  it("rejects a payload with a non-finite fetchedAt", () => {
+    expect(isFreshRuneCachePayload({ fetchedAt: NaN, entries: {} }, now)).toBe(false);
+    expect(isFreshRuneCachePayload({ fetchedAt: "yesterday", entries: {} }, now)).toBe(false);
+  });
+
+  it("rejects a payload missing entries", () => {
+    expect(isFreshRuneCachePayload({ fetchedAt: now }, now)).toBe(false);
+  });
+});
+
+describe("rune data cache TTL (getRuneDetail end-to-end)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.unstubAllGlobals();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("fresh cache hit — resolves from localStorage without hitting the network", async () => {
+    const cached = {
+      fetchedAt: Date.now() - 1000, // 1s ago, well inside the TTL
+      entries: {
+        "8242": { id: 8242, name: "Unflinching", descriptionText: "Gain 10 Armor and Magic Resist." },
+      },
+    };
+    vi.stubGlobal("window", { localStorage: makeFakeLocalStorage({ [LOCALSTORAGE_KEY]: JSON.stringify(cached) }) });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getRuneDetail } = await import("../runeDetail");
+    const detail = await getRuneDetail(8242, "16.13.1");
+
+    expect(detail?.name).toBe("Unflinching");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("expired cache (>10 days old) — refetches from CDragon and overwrites with a fresh timestamp", async () => {
+    const elevenDaysMs = 11 * 24 * 60 * 60 * 1000;
+    const stale = {
+      fetchedAt: Date.now() - elevenDaysMs,
+      entries: {
+        "8242": { id: 8242, name: "Unflinching (stale)", descriptionText: "old pre-rebalance text" },
+      },
+    };
+    const ls = makeFakeLocalStorage({ [LOCALSTORAGE_KEY]: JSON.stringify(stale) });
+    vi.stubGlobal("window", { localStorage: ls });
+    const fetchMock = vi.fn().mockResolvedValue(
+      fakePerksResponse([
+        {
+          id: 8242,
+          name: "Unflinching",
+          longDesc: "Gain 10 Armor and Magic Resist when crowd controlled and for 2 seconds after.",
+        },
+      ])
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getRuneDetail } = await import("../runeDetail");
+    const detail = await getRuneDetail(8242, "16.13.1");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(detail?.name).toBe("Unflinching");
+    expect(detail?.descriptionText).toContain("10 Armor");
+
+    const written = JSON.parse(ls._store.get(LOCALSTORAGE_KEY) as string);
+    expect(written.fetchedAt).toBeGreaterThan(Date.now() - 5000);
+    expect(written.entries["8242"].name).toBe("Unflinching");
+  });
+
+  it("missing-timestamp shape (old pre-TTL cache format) is a miss — refetches instead of trusting it forever", async () => {
+    const oldShapeCache = {
+      "8242": { id: 8242, name: "Unflinching (old shape)", descriptionText: "x" },
+    };
+    vi.stubGlobal("window", { localStorage: makeFakeLocalStorage({ [LOCALSTORAGE_KEY]: JSON.stringify(oldShapeCache) }) });
+    const fetchMock = vi.fn().mockResolvedValue(
+      fakePerksResponse([
+        {
+          id: 8242,
+          name: "Unflinching",
+          longDesc: "Gain 10 Armor and Magic Resist when crowd controlled and for 2 seconds after.",
+        },
+      ])
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getRuneDetail } = await import("../runeDetail");
+    const detail = await getRuneDetail(8242, "16.13.1");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(detail?.name).toBe("Unflinching");
+  });
+
+  it("corrupt (unparseable) cache entry is a miss, never throws", async () => {
+    vi.stubGlobal("window", { localStorage: makeFakeLocalStorage({ [LOCALSTORAGE_KEY]: "{not valid json" }) });
+    const fetchMock = vi.fn().mockResolvedValue(
+      fakePerksResponse([
+        {
+          id: 8242,
+          name: "Unflinching",
+          longDesc: "Gain 10 Armor and Magic Resist when crowd controlled and for 2 seconds after.",
+        },
+      ])
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getRuneDetail } = await import("../runeDetail");
+    await expect(getRuneDetail(8242, "16.13.1")).resolves.not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -47,14 +47,47 @@ const RUNES_TEXT_URL =
 
 // Bumped from v1 -> v2: the cached shape/source changed (ddragon
 // runesReforged.json -> CDragon perks.json flat array), and v1 entries would
-// carry the old placeholder-riddled shortDesc text forever otherwise.
+// carry the old placeholder-riddled shortDesc text forever otherwise. Still
+// v2 for the TTL wrapper below (a wrapped-but-expired v2 entry is just
+// another "miss" path, not a shape change) — no key bump needed.
 const LOCALSTORAGE_KEY = "coachbuild:runedata:v2";
+
+// CDragon's perks.json serves /latest/ only (see module header) — a cached
+// copy can never be patch-keyed, so a returning user would otherwise carry
+// stale numeric values across every future patch rebalance forever. ~10 days
+// bounds that staleness window to roughly "one patch cycle" without
+// re-fetching (a fairly large, static-ish payload) on every single page load.
+const CACHE_TTL_MS = 10 * 24 * 60 * 60 * 1000;
 
 interface RawPerkEntry {
   id: number;
   name?: string;
   shortDesc?: string;
   longDesc?: string;
+}
+
+/** On-disk shape written to localStorage: the resolved id->RuneDetail map
+ *  plus the timestamp it was fetched at, so a stale copy can be detected
+ *  without CDragon ever having to serve a per-patch version. */
+interface RuneCachePayload {
+  fetchedAt: number;
+  entries: Record<string, RuneDetail>;
+}
+
+/**
+ * Type-guards + freshness-checks a parsed localStorage payload in one pass.
+ * Returns false (a cache MISS) for: not an object, missing/non-finite
+ * `fetchedAt` (covers the old pre-TTL cache shape — a flat id->entry map has
+ * no `fetchedAt` key at all — and any other corrupt/unexpected shape), a
+ * missing/non-object `entries`, or a `fetchedAt` older than `CACHE_TTL_MS`.
+ * Pure + exported for direct unit testing (no fetch/localStorage needed).
+ */
+export function isFreshRuneCachePayload(payload: unknown, now: number): payload is RuneCachePayload {
+  if (!payload || typeof payload !== "object") return false;
+  const p = payload as Partial<RuneCachePayload>;
+  if (typeof p.fetchedAt !== "number" || !Number.isFinite(p.fetchedAt)) return false;
+  if (!p.entries || typeof p.entries !== "object") return false;
+  return now - p.fetchedAt < CACHE_TTL_MS;
 }
 
 /**
@@ -84,28 +117,32 @@ export function stripRuneDescriptionHtml(raw: string | undefined | null): string
 let memCache: Map<number, RuneDetail> | null = null;
 let inFlight: Promise<Map<number, RuneDetail>> | null = null;
 
-function readLocalStorageCache(): Map<number, RuneDetail> | null {
+function readLocalStorageCache(now: number = Date.now()): Map<number, RuneDetail> | null {
   try {
     if (typeof window === "undefined" || !window.localStorage) return null;
     const raw = window.localStorage.getItem(LOCALSTORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Record<string, RuneDetail>;
+    const parsed: unknown = JSON.parse(raw);
+    // Corrupt JSON shape, missing-timestamp (old pre-TTL cache), or expired
+    // -> all treated as a plain miss, never a crash.
+    if (!isFreshRuneCachePayload(parsed, now)) return null;
     const map = new Map<number, RuneDetail>();
-    for (const [id, entry] of Object.entries(parsed)) map.set(Number(id), entry);
+    for (const [id, entry] of Object.entries(parsed.entries)) map.set(Number(id), entry);
     return map;
   } catch {
     return null;
   }
 }
 
-function writeLocalStorageCache(map: Map<number, RuneDetail>): void {
+function writeLocalStorageCache(map: Map<number, RuneDetail>, now: number = Date.now()): void {
   try {
     if (typeof window === "undefined" || !window.localStorage) return;
-    const obj: Record<string, RuneDetail> = {};
+    const entries: Record<string, RuneDetail> = {};
     map.forEach((entry, id) => {
-      obj[id] = entry;
+      entries[id] = entry;
     });
-    window.localStorage.setItem(LOCALSTORAGE_KEY, JSON.stringify(obj));
+    const payload: RuneCachePayload = { fetchedAt: now, entries };
+    window.localStorage.setItem(LOCALSTORAGE_KEY, JSON.stringify(payload));
   } catch {
     // best-effort only — quota exceeded / storage disabled never breaks the app
   }
