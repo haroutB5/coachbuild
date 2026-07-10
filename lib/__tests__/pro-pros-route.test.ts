@@ -12,13 +12,10 @@ vi.mock("@/lib/pro/db", () => ({
 
 import { GET } from "@/app/api/pros/route";
 import { getSql } from "@/lib/pro/db";
-import { computeCsPerMin, computeGameScore, computeKillParticipation } from "@/lib/pro/score";
 
 const req = (qs: string) =>
   ({ url: `http://localhost/api/pros${qs}` }) as unknown as Parameters<typeof GET>[0];
 
-// cs/damage_champions/team_kills/gold null — pre-migration-0004 row (never
-// backfilled), exercises the degraded KDA+win-only score path.
 const ROW = {
   match_id: "EUW1_1",
   champion_id: 112,
@@ -37,27 +34,12 @@ const ROW = {
   purchase_order: [{ itemId: 1054, ts: 65 }],
   skill_order: ["Q", "W", "E"],
   runes: { primaryTree: 8200, keystone: 8210, primary: [8226, 8210, 8237], secondaryTree: 8300, secondary: [8345, 8347], shards: [5008, 5008, 5001] },
-  cs: null,
-  damage_champions: null,
-  team_kills: null,
-  gold: null,
   pro_name: "SomePro",
   pro_team: "Some Team",
   pro_role: 2,
   pro_country: "DE",
   riot_id: "SomePro#EUW1",
   region: "EUW",
-};
-
-// Same game, but with the migration-0004 stats populated — exercises the
-// blended score path + non-null csPerMin/kp pass-through.
-const ROW_WITH_STATS = {
-  ...ROW,
-  match_id: "EUW1_2",
-  cs: 200,
-  damage_champions: 22000,
-  team_kills: 15,
-  gold: 13500,
 };
 
 describe("GET /api/pros validation", () => {
@@ -100,22 +82,12 @@ describe("GET /api/pros validation", () => {
     expect(await res.json()).toEqual({ games: [] });
   });
 
-  it("200 with mapped ProGame shape on success (no cs/team_kills -> degraded score, null csPerMin/kp)", async () => {
+  it("200 with mapped ProGame shape on success", async () => {
     mockSql.mockResolvedValueOnce([ROW]);
     const res = await GET(req("?championId=112&role=2"));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.games).toHaveLength(1);
-    const { score, grade } = computeGameScore({
-      kills: 5,
-      deaths: 2,
-      assists: 7,
-      win: true,
-      gameDurationSec: 1800,
-      cs: null,
-      damageChampions: null,
-      teamKills: null,
-    });
     expect(body.games[0]).toEqual({
       id: "EUW1_1",
       source: "soloq",
@@ -137,37 +109,6 @@ describe("GET /api/pros validation", () => {
       purchaseOrder: [{ itemId: 1054, ts: 65 }],
       skillOrder: ["Q", "W", "E"],
       runes: { primaryTree: 8200, keystone: 8210, primary: [8226, 8210, 8237], secondaryTree: 8300, secondary: [8345, 8347], shards: [5008, 5008, 5001] },
-      score,
-      grade,
-      csPerMin: null,
-      kp: null,
-    });
-  });
-
-  it("200 with score blended from cs/team_kills when present (csPerMin/kp non-null)", async () => {
-    mockSql.mockResolvedValueOnce([ROW_WITH_STATS]);
-    const res = await GET(req("?championId=112&role=2"));
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.games).toHaveLength(1);
-    const { score, grade } = computeGameScore({
-      kills: 5,
-      deaths: 2,
-      assists: 7,
-      win: true,
-      gameDurationSec: 1800,
-      cs: 200,
-      damageChampions: 22000,
-      teamKills: 15,
-    });
-    const expectedCsPerMin = Math.round(computeCsPerMin(200, 1800) * 10) / 10;
-    const expectedKp = Math.round(computeKillParticipation(5, 7, 15) * 100) / 100;
-    expect(body.games[0]).toMatchObject({
-      id: "EUW1_2",
-      score,
-      grade,
-      csPerMin: expectedCsPerMin,
-      kp: expectedKp,
     });
   });
 

@@ -82,18 +82,6 @@ export interface ProGame {
   skillOrder: string[]; // ["Q","W","E","Q",...]; always [] for prostage
   runes: ProGameRunes;
   tournament?: string; // prostage only — tournament_display, e.g. "LEC 2026 Summer"
-  // score/grade are OMITTED (not present) for prostage rows — Leaguepedia
-  // Cargo exposes no CS/team-kill data, so a prostage game would always score
-  // on the degraded KDA+win-only formula while every soloq row (fully
-  // backfilled as of migration 0004) scores on the full blended formula.
-  // Surfacing the degraded prostage score next to a full-formula soloq score
-  // in the same list read as a real performance difference when it was only
-  // a data-availability artifact — see app/api/pros/route.ts's
-  // prostageRowToProGame() and ScoreChip.ts's hasScoreData() render guard.
-  score?: number; // 0-100 "CoachBuild Score" — see lib/pro/score.ts computeGameScore(); soloq only
-  grade?: "S" | "A" | "B" | "C" | "D"; // soloq only
-  csPerMin: number | null; // null when cs/gameDuration isn't computable (legacy soloq row, or any prostage row)
-  kp: number | null; // kill participation 0-1, null when team_kills isn't computable
 }
 
 export interface ProsResponse {
@@ -184,7 +172,7 @@ export interface RiotPerks {
 export interface RiotParticipant {
   puuid: string;
   participantId: number;
-  teamId: number; // 100 | 200 — used to sum team_kills (score.ts kill-participation input)
+  teamId: number; // 100 | 200 — used to sum team_kills for the raw game-stats extraction
   championId: number;
   championName: string;
   teamPosition: string; // "TOP" | "JUNGLE" | "MIDDLE" | "BOTTOM" | "UTILITY" | ""

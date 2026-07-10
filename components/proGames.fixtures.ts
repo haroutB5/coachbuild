@@ -52,10 +52,6 @@ export const FIXTURE_GAME_WIN: ProGame = {
     secondary: [8126, 8143], // Cheap Shot, Sudden Impact
     shards: [5008, 5008, 5011], // Adaptive, Adaptive, Health
   },
-  score: 91,
-  grade: "S",
-  csPerMin: 8.9,
-  kp: 0.74,
 };
 
 /** A loss — same champ, fewer final items (game ended early), different pro. */
@@ -95,10 +91,6 @@ export const FIXTURE_GAME_LOSS: ProGame = {
     secondary: [8446, 8429], // Demolish, Conditioning
     shards: [5008, 5008, 5011],
   },
-  score: 38,
-  grade: "D",
-  csPerMin: 6.1,
-  kp: 0.42,
 };
 
 /** Eventful purchase order — potions, control wards, and a trinket upgrade
@@ -152,10 +144,6 @@ export const FIXTURE_GAME_EVENTFUL: ProGame = {
     secondary: [8306, 8321], // Hextech Flashtraption, Future's Market
     shards: [5008, 5008, 5002], // Adaptive, Adaptive, Armor
   },
-  score: 76,
-  grade: "A",
-  csPerMin: 7.4,
-  kp: 0.68,
 };
 
 /** Prostage, full runes — everything present except purchase/skill data. */
@@ -188,12 +176,6 @@ export const FIXTURE_GAME_PROSTAGE_FULL: ProGame = {
     secondary: [8126, 8143],
     shards: [5008, 5008, 5011],
   },
-  // prostage: Leaguepedia Cargo has no CS/team-kill data, score always
-  // degrades to KDA+win only, csPerMin/kp always null.
-  score: 84,
-  grade: "A",
-  csPerMin: null,
-  kp: null,
 };
 
 /** Prostage, keystone-only runes + unknown game length — exercises the
@@ -228,10 +210,6 @@ export const FIXTURE_GAME_PROSTAGE_PARTIAL: ProGame = {
     secondary: [],
     shards: [],
   },
-  score: 47,
-  grade: "C",
-  csPerMin: null,
-  kp: null,
 };
 
 export const FIXTURE_PRO_GAMES: ProGame[] = [

@@ -20,6 +20,10 @@ const optId = (i: number) => `player-opt-${i}`;
 const MIN_CHARS = 2;
 const DEBOUNCE_MS = 250;
 
+function playerLabel(player: PlayerRef): string {
+  return player.team ? `${player.name} — ${player.team}` : player.name;
+}
+
 export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -32,6 +36,12 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
   // Bumped on every new query so a slow, stale response can't clobber a
   // faster, more recent one (classic typeahead race).
   const reqIdRef = useRef(0);
+
+  // If the parent clears the selection (e.g. the page-level "Clear
+  // selection" ✕), reflect that by emptying the input back to placeholder.
+  useEffect(() => {
+    if (value === null) setQuery("");
+  }, [value]);
 
   // Debounced live search — fires ~250ms after the user stops typing, only
   // once the query clears the 2-char floor.
@@ -94,22 +104,24 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
       ?.scrollIntoView({ block: "nearest" });
   }, [activeIndex, open]);
 
-  function openMenu() {
-    setOpen(true);
-    setTimeout(() => inputRef.current?.focus(), 50);
-  }
-
   function select(player: PlayerRef) {
     reqIdRef.current++; // invalidate any in-flight search so it can't repopulate after selection
     onChange(player);
-    setQuery("");
-    setSearch({ status: "idle" });
+    setQuery(playerLabel(player));
     setOpen(false);
+  }
+
+  function onInputFocus(e: React.FocusEvent<HTMLInputElement>) {
+    setOpen(true);
+    // Highlight any existing selection text so the first keystroke replaces
+    // it outright — tapping in and typing immediately re-filters.
+    e.target.select();
   }
 
   function onInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
+      if (!open) setOpen(true);
       setActiveIndex((i) => Math.min(i + 1, results.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
@@ -131,48 +143,29 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
 
   return (
     <div ref={containerRef} className="relative">
-      <button
-        type="button"
-        onClick={() => (open ? setOpen(false) : openMenu())}
-        className="flex items-center gap-2.5 bg-panel2 border border-line hover:border-teal-dim rounded-xl px-4 py-2.5 transition-colors text-left min-w-[220px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-        aria-haspopup="listbox"
+      <input
+        ref={inputRef}
+        type="text"
+        value={query}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setActiveIndex(0);
+          if (!open) setOpen(true);
+        }}
+        onFocus={onInputFocus}
+        onKeyDown={onInputKeyDown}
+        placeholder="Search a pro player…"
+        aria-label="Search a pro player"
+        role="combobox"
         aria-expanded={open}
         aria-controls={LISTBOX_ID}
-      >
-        {value ? (
-          <span className="flex items-center gap-1.5 min-w-0">
-            <span className="font-semibold text-txt truncate">{value.name}</span>
-            {value.team && <span className="text-mut text-[12px] truncate">{value.team}</span>}
-          </span>
-        ) : (
-          <span className="text-mut">Search a pro player…</span>
-        )}
-        <span className="ml-auto text-mut text-xs">▾</span>
-      </button>
+        aria-autocomplete="list"
+        aria-activedescendant={open && results[activeIndex] ? optId(activeIndex) : undefined}
+        className="w-full min-w-[220px] bg-panel2 border border-line hover:border-teal-dim rounded-xl px-4 py-2.5 text-sm text-txt placeholder:text-mut outline-none transition-colors focus:border-teal-dim focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+      />
 
       {open && (
-        <div className="absolute z-50 top-full mt-1.5 left-0 w-[300px] bg-panel border border-line rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden">
-          <div className="p-2 border-b border-line">
-            <input
-              ref={inputRef}
-              type="text"
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                setActiveIndex(0);
-              }}
-              onKeyDown={onInputKeyDown}
-              placeholder="Type a player name…"
-              role="combobox"
-              aria-expanded={open}
-              aria-controls={LISTBOX_ID}
-              aria-autocomplete="list"
-              aria-activedescendant={
-                open && results[activeIndex] ? optId(activeIndex) : undefined
-              }
-              className="w-full bg-panel2 border border-line rounded-lg px-3 py-1.5 text-sm text-txt placeholder:text-mut outline-none focus:border-teal-dim"
-            />
-          </div>
+        <div className="absolute z-50 top-full mt-1.5 left-0 w-[min(300px,90vw)] bg-panel border border-line rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden">
           <ul
             ref={listRef}
             id={LISTBOX_ID}

@@ -42,6 +42,12 @@ export default function ChampionPicker({ value, onChange }: ChampionPickerProps)
       .catch(() => {/* stay on fallback */});
   }, []);
 
+  // If the parent clears the selection (e.g. the page-level "Clear
+  // selection" ×), reflect that by emptying the input back to placeholder.
+  useEffect(() => {
+    if (value === null) setQuery("");
+  }, [value]);
+
   // Close on outside click or Escape
   useEffect(() => {
     function onDown(e: MouseEvent) {
@@ -75,22 +81,25 @@ export default function ChampionPicker({ value, onChange }: ChampionPickerProps)
       ?.scrollIntoView({ block: "nearest" });
   }, [activeIndex, open]);
 
-  function openMenu() {
+  function select(champ: ChampionRef) {
+    onChange(champ);
+    setQuery(champ.name);
+    setOpen(false);
+  }
+
+  function onInputFocus(e: React.FocusEvent<HTMLInputElement>) {
     setOpen(true);
     const i = value ? filtered.findIndex((c) => c.id === value.id) : 0;
     setActiveIndex(i >= 0 ? i : 0);
-    setTimeout(() => inputRef.current?.focus(), 50);
-  }
-
-  function select(champ: ChampionRef) {
-    onChange(champ);
-    setQuery("");
-    setOpen(false);
+    // Highlight any existing selection text so the first keystroke replaces
+    // it outright — tapping in and typing immediately re-filters.
+    e.target.select();
   }
 
   function onInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
+      if (!open) setOpen(true);
       setActiveIndex((i) => Math.min(i + 1, filtered.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
@@ -105,53 +114,47 @@ export default function ChampionPicker({ value, onChange }: ChampionPickerProps)
       e.preventDefault();
       const champ = filtered[activeIndex];
       if (champ) select(champ);
+    } else if (e.key === "Escape") {
+      setOpen(false);
     }
   }
 
   return (
     <div ref={containerRef} className="relative">
-      <button
-        type="button"
-        onClick={() => (open ? setOpen(false) : openMenu())}
-        className="flex items-center gap-2.5 bg-panel2 border border-line hover:border-teal-dim rounded-xl px-4 py-2.5 transition-colors text-left min-w-[200px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={LISTBOX_ID}
-      >
-        {value ? (
-          <>
-            <ChampIcon icon={value.icon} name={value.name} size={28} />
-            <span className="font-semibold text-txt">{value.name}</span>
-          </>
-        ) : (
-          <span className="text-mut">Pick a champion…</span>
+      <div className="relative flex items-center min-w-[200px]">
+        {value && (
+          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 flex items-center pointer-events-none">
+            <ChampIcon icon={value.icon} name={value.name} size={22} />
+          </span>
         )}
-        <span className="ml-auto text-mut text-xs">▾</span>
-      </button>
+        <input
+          ref={inputRef}
+          type="text"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setActiveIndex(0);
+            if (!open) setOpen(true);
+          }}
+          onFocus={onInputFocus}
+          onKeyDown={onInputKeyDown}
+          placeholder="Search champion…"
+          aria-label="Search champion"
+          role="combobox"
+          aria-expanded={open}
+          aria-controls={LISTBOX_ID}
+          aria-autocomplete="list"
+          aria-activedescendant={
+            open && filtered[activeIndex] ? optId(activeIndex) : undefined
+          }
+          className={`w-full bg-panel2 border border-line hover:border-teal-dim rounded-xl py-2.5 text-sm text-txt placeholder:text-mut outline-none transition-colors focus:border-teal-dim focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
+            value ? "pl-10 pr-3" : "pl-4 pr-3"
+          }`}
+        />
+      </div>
 
       {open && (
-        <div className="absolute z-50 top-full mt-1.5 left-0 w-[280px] bg-panel border border-line rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden">
-          <div className="p-2 border-b border-line">
-            <input
-              ref={inputRef}
-              type="text"
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                setActiveIndex(0);
-              }}
-              onKeyDown={onInputKeyDown}
-              placeholder="Search champion…"
-              role="combobox"
-              aria-expanded={open}
-              aria-controls={LISTBOX_ID}
-              aria-autocomplete="list"
-              aria-activedescendant={
-                open && filtered[activeIndex] ? optId(activeIndex) : undefined
-              }
-              className="w-full bg-panel2 border border-line rounded-lg px-3 py-1.5 text-sm text-txt placeholder:text-mut outline-none focus:border-teal-dim"
-            />
-          </div>
+        <div className="absolute z-50 top-full mt-1.5 left-0 w-[min(280px,90vw)] bg-panel border border-line rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden">
           <ul
             ref={listRef}
             id={LISTBOX_ID}

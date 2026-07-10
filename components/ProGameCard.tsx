@@ -15,7 +15,6 @@ import {
   CONSUMABLE_ITEM_IDS,
   type ResolvedRuneDisplay,
 } from "./proAssets";
-import { SCORE_CHIP_TITLE, scoreGradeClasses, hasScoreData, formatCsPerMin, formatKp } from "./ScoreChip";
 
 function ImgWithFallback({
   src,
@@ -128,22 +127,6 @@ function WinLossPill({ win }: { win: boolean }) {
   );
 }
 
-/** CoachBuild Score chip — grade letter + score number, color-graded
- *  green (S) -> red (D) per scoreGradeClasses. Renders nothing when the game
- *  is missing score/grade data (see hasScoreData's header comment). */
-function ScoreChip({ score, grade }: { score: number | null | undefined; grade: string | null | undefined }) {
-  if (!hasScoreData(score, grade)) return null;
-  return (
-    <span
-      className={`inline-flex items-center justify-center gap-0.5 px-1.5 h-7 rounded-md text-[11px] font-bold tabular-nums border flex-shrink-0 ${scoreGradeClasses(grade)}`}
-      title={SCORE_CHIP_TITLE}
-    >
-      {grade}
-      <span className="opacity-90 font-semibold">{score}</span>
-    </span>
-  );
-}
-
 function Divider() {
   return <span className="w-px h-5 bg-line flex-shrink-0 hidden sm:block" aria-hidden="true" />;
 }
@@ -188,8 +171,6 @@ export default function ProGameCard({
   const showExpandToggle = !isProstage;
   const showDetailPanel = expanded && !isProstage;
   const hasFullRunes = game.runes.primary.length > 0 || game.runes.secondary.length > 0;
-  const csText = formatCsPerMin(game.csPerMin);
-  const kpText = formatKp(game.kp);
 
   const timeline = hideConsumables
     ? game.purchaseOrder.filter((p) => !CONSUMABLE_ITEM_IDS.has(p.itemId))
@@ -237,7 +218,6 @@ export default function ProGameCard({
           <span className="text-[10.5px] text-mut tabular-nums">
             {kdaRatioText(game.kills, game.deaths, game.assists)}
           </span>
-          <ScoreChip score={game.score} grade={game.grade} />
         </div>
 
         <Divider />
@@ -347,12 +327,6 @@ export default function ProGameCard({
           no-op for prostage (no purchase/skill data exists to show). */}
       {showDetailPanel && (
         <div id={detailId} className="px-4 pb-4 pt-3 border-t border-line/60 bg-black/10">
-          {(csText || kpText) && (
-            <div className="flex items-center gap-3 text-[10.5px] text-mut mb-3">
-              {csText && <span className="tabular-nums">{csText}</span>}
-              {kpText && <span className="tabular-nums">{kpText}</span>}
-            </div>
-          )}
           {hasFullRunes && (
             <>
               <p className="text-[10.5px] tracking-[1px] uppercase text-teal font-bold mb-2">Runes</p>

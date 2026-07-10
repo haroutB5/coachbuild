@@ -2,6 +2,13 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.9.0] — 2026-07-10
+### Removed
+- **CoachBuild Score removed** (user preference): the per-game 0-100 score, S–D grade chip, and CS/min + KP micro-stats are gone from the Pro's page and the /api/pros response. The underlying stats columns and ingest stay (data keeps accumulating, nothing shown).
+### Changed
+- **Pickers are direct-type**: the player and champion search fields are now real inputs — tap, keyboard opens, type, results appear. No more second box opening to type into.
+- "Pro History" renamed to **"Pro's"** (tab + page heading).
+
 ## [0.8.0] — 2026-07-10
 ### Added
 - **CoachBuild Score**: every solo-queue pro game now carries a 0-100 performance score and S/A/B/C/D grade (blended KDA curve + CS/min pace + kill participation + win bonus — formula documented in `lib/pro/score.ts`). Rendered as a color-graded chip in the Pro History game row; CS/min and KP micro-stats in the expandable panel. All 1134 historical games backfilled with the stats the formula needs (migration 0004: cs, damage to champions, team kills, gold). Pro-play (on-stage) games deliberately show no score — Leaguepedia data can't feed the full formula, and a degraded score next to a full one read as a real performance gap.

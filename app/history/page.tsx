@@ -59,7 +59,7 @@ export default function HistoryPage() {
 
           <div className="text-center mb-4">
             <h1 className="text-3xl font-extrabold tracking-tight text-balance">
-              Pro <span className="text-teal">History</span>
+              Pro<span className="text-teal">&apos;s</span>
             </h1>
             <p className="text-mut text-sm mt-1">
               Recent games from tracked pros — search a player or champion.

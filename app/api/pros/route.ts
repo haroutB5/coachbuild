@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
 import { FRESH_WINDOW_DAYS } from "@/lib/pro/fresh";
-import { computeCsPerMin, computeGameScore, computeKillParticipation } from "@/lib/pro/score";
 import type { DisplayRoleId, ProGame, ProGamePurchase, ProGameRunes, ProRoleId, ProsResponse } from "@/lib/pro/types";
 
 export const runtime = "nodejs";
@@ -27,51 +26,12 @@ interface ProGameRow {
   purchase_order: unknown;
   skill_order: unknown;
   runes: unknown;
-  cs: number | null; // null for rows ingested before migration 0004, until backfill-game-stats.mjs runs
-  damage_champions: number | null;
-  team_kills: number | null;
-  gold: number | null;
   pro_name: string;
   pro_team: string | null;
   pro_role: number | null;
   pro_country: string | null;
   riot_id: string;
   region: string;
-}
-
-/** score/grade/csPerMin/kp are the same derivation for both soloq and
- *  prostage rows — soloq rows may still be missing cs/team_kills pre-backfill
- *  (degrades to KDA+win only, same as prostage always does since Leaguepedia
- *  Cargo doesn't expose CS/team-kill data). */
-function deriveScoreFields(
-  kills: number,
-  deaths: number,
-  assists: number,
-  win: boolean,
-  gameDurationSec: number,
-  cs: number | null | undefined,
-  damageChampions: number | null | undefined,
-  teamKills: number | null | undefined
-): { score: number; grade: ProGame["grade"]; csPerMin: number | null; kp: number | null } {
-  const { score, grade } = computeGameScore({
-    kills,
-    deaths,
-    assists,
-    win,
-    gameDurationSec,
-    cs,
-    damageChampions,
-    teamKills,
-  });
-  if (cs !== null && cs !== undefined && teamKills !== null && teamKills !== undefined) {
-    return {
-      score,
-      grade,
-      csPerMin: Math.round(computeCsPerMin(cs, gameDurationSec) * 10) / 10,
-      kp: Math.round(computeKillParticipation(kills, assists, teamKills) * 100) / 100,
-    };
-  }
-  return { score, grade, csPerMin: null, kp: null };
 }
 
 /** jsonb columns generally come back pre-parsed from the neon driver, but
@@ -89,16 +49,6 @@ function asJson<T>(v: unknown, fallback: T): T {
 }
 
 function rowToProGame(row: ProGameRow): ProGame {
-  const { score, grade, csPerMin, kp } = deriveScoreFields(
-    row.kills,
-    row.deaths,
-    row.assists,
-    row.win,
-    row.game_duration_sec,
-    row.cs,
-    row.damage_champions,
-    row.team_kills
-  );
   return {
     id: row.match_id,
     source: "soloq",
@@ -132,10 +82,6 @@ function rowToProGame(row: ProGameRow): ProGame {
       secondary: [],
       shards: [],
     }),
-    score,
-    grade,
-    csPerMin,
-    kp,
   };
 }
 
@@ -185,16 +131,7 @@ function prostageRowToProGame(row: ProstageGameRow): ProGame | null {
   const gameCreation = new Date(row.game_datetime);
   if (Number.isNaN(gameCreation.getTime())) return null;
   const roleValue = ((row.pro_role ?? row.role) ?? -1) as DisplayRoleId;
-  // prostage rows have no gameDurationSec (always 0, see field comment below)
-  // and no cs/team_kills (Leaguepedia Cargo doesn't expose them). Rather than
-  // deriving a degraded KDA+win-only score (as this used to), score/grade are
-  // OMITTED entirely for prostage — all soloq rows are now fully backfilled
-  // onto the full blended formula (migration 0004), so showing a degraded
-  // prostage score next to a full-formula soloq score in the same list read
-  // as a real performance gap when it was only missing data (audit P1). The
-  // frontend's ScoreChip renders nothing when score/grade are absent (see
-  // ScoreChip.ts's hasScoreData()). csPerMin/kp stay null for the same
-  // Cargo-data-availability reason.
+  // prostage rows have no gameDurationSec — always 0, see field comment below.
 
   return {
     id: row.game_id,
@@ -230,9 +167,6 @@ function prostageRowToProGame(row: ProstageGameRow): ProGame | null {
       shards: [],
     }),
     tournament: row.tournament_display,
-    // score/grade intentionally omitted — see comment above.
-    csPerMin: null,
-    kp: null,
   };
 }
 
@@ -333,7 +267,6 @@ export async function GET(req: NextRequest) {
                 pm.match_id, pm.champion_id, pm.champion_name, pm.role, pm.patch, pm.win,
                 pm.kills, pm.deaths, pm.assists, pm.game_creation, pm.game_duration_sec,
                 pm.spells, pm.final_items, pm.trinket, pm.purchase_order, pm.skill_order, pm.runes,
-                pm.cs, pm.damage_champions, pm.team_kills, pm.gold,
                 p.name AS pro_name, p.team AS pro_team, p.role AS pro_role, p.country AS pro_country,
                 pa.riot_id, pa.region
               FROM coachbuild.pro_matches pm
@@ -349,7 +282,6 @@ export async function GET(req: NextRequest) {
                 pm.match_id, pm.champion_id, pm.champion_name, pm.role, pm.patch, pm.win,
                 pm.kills, pm.deaths, pm.assists, pm.game_creation, pm.game_duration_sec,
                 pm.spells, pm.final_items, pm.trinket, pm.purchase_order, pm.skill_order, pm.runes,
-                pm.cs, pm.damage_champions, pm.team_kills, pm.gold,
                 p.name AS pro_name, p.team AS pro_team, p.role AS pro_role, p.country AS pro_country,
                 pa.riot_id, pa.region
               FROM coachbuild.pro_matches pm
