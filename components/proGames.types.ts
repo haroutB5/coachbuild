@@ -54,6 +54,15 @@ export interface ProGame {
   purchaseOrder: ProGamePurchase[]; // [] for prostage (no purchase data)
   skillOrder: string[]; // ["Q","W","E","Q",...] — [] for prostage
   runes: ProGameRunes; // primary/secondary/shards may be [] for prostage
+  /** CoachBuild Score — 0-100 int, always present (server derives it from
+   *  KDA + win at minimum, even without cs/team_kills). */
+  score: number;
+  grade: ProGameGrade;
+  /** null until the migration-0004 backfill reaches this row (soloq) or
+   *  always null (prostage — Leaguepedia Cargo has no CS/team-kill data).
+   *  Must keep rendering nothing when null, not a dash/zero. */
+  csPerMin: number | null;
+  kp: number | null;
 }
 
 export interface ProGamesApiResponse {
@@ -66,6 +75,12 @@ export interface ProGamesApiResponse {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type ProGameSource = "all" | "soloq" | "prostage";
+
+/** CoachBuild Score grade letter — mirrors lib/pro/score.ts's CoachBuildGrade
+ *  (this file stays independent of lib/pro/types.ts by design, see header
+ *  comment). S is best, D is worst — see components/ScoreChip.ts for the
+ *  grade -> color mapping. */
+export type ProGameGrade = "S" | "A" | "B" | "C" | "D";
 
 export const SOURCE_FILTER_OPTIONS: { value: ProGameSource; label: string }[] = [
   { value: "all", label: "All" },

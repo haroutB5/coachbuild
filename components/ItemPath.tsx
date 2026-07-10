@@ -2,6 +2,7 @@
 
 import type { ItemsBlock, Pick as PickType } from "@/lib/types";
 import { wpaClass, wpaText, fmtSample } from "./StatBadge";
+import AnimatedWpa from "./AnimatedWpa";
 
 // Quiet, dim caution glyph for a low-sample pick — a hint to hover, not an alarm.
 function LowSampleFlag({ className = "" }: { className?: string }) {
@@ -67,10 +68,8 @@ function ItemSlot({ label, pick, isBoots, alts }: ItemSlotProps) {
       <div className="text-[10.5px] text-txt mt-1.5 leading-tight min-h-[28px] flex items-center justify-center">
         {pick.name}
       </div>
-      <div className={`font-extrabold text-[12px] ${wpaClass(pick.wpa)}`}>
-        {wpaText(pick.wpa)}
-      </div>
-      <div className="text-[9.5px] text-mut flex items-center justify-center gap-0.5">
+      <AnimatedWpa wpa={pick.wpa} className="font-extrabold text-[12px]" />
+      <div className="text-[9.5px] text-mut tabular-nums flex items-center justify-center gap-0.5">
         {fmtSample(pick.occurrence)}
         {pick.lowSample && <LowSampleFlag />}
       </div>
@@ -94,10 +93,10 @@ function ItemSlot({ label, pick, isBoots, alts }: ItemSlotProps) {
                     className="w-full h-full object-contain"
                   />
                 </div>
-                <div className={`text-[8px] font-bold leading-tight ${wpaClass(a.wpa)}`}>
+                <div className={`text-[8px] font-bold leading-tight tabular-nums ${wpaClass(a.wpa)}`}>
                   {wpaText(a.wpa)}
                 </div>
-                <div className="text-[7px] text-mut flex items-center justify-center gap-0.5">
+                <div className="text-[7px] text-mut tabular-nums flex items-center justify-center gap-0.5">
                   {fmtSample(a.occurrence)}
                   {a.lowSample && <LowSampleFlag className="text-[7px]" />}
                 </div>

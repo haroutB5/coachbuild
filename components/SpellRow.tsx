@@ -1,7 +1,8 @@
 "use client";
 
 import type { Pick } from "@/lib/types";
-import { wpaClass, wpaText } from "./StatBadge";
+import { wpaText } from "./StatBadge";
+import AnimatedWpa from "./AnimatedWpa";
 
 interface SpellRowProps {
   spells: Pick[];
@@ -42,9 +43,7 @@ export default function SpellRow({ spells }: SpellRowProps) {
             </div>
             <div>
               <div className="text-txt text-sm font-medium leading-none mb-1">{spell.name}</div>
-              <div className={`text-xs font-bold ${wpaClass(spell.wpa)}`}>
-                {wpaText(spell.wpa)}
-              </div>
+              <AnimatedWpa wpa={spell.wpa} className="text-xs font-bold" />
             </div>
           </div>
         ))}

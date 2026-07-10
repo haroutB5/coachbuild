@@ -1,37 +1,65 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ── Design tokens (dpm.lol-derived palette) ──────────────────────────────
+   Single source of truth for color — tailwind.config.ts extends `colors`
+   from these hex values directly (Tailwind's opacity modifiers, e.g.
+   bg-teal/15, work fine against plain hex). CSS vars exist here too for the
+   few places raw CSS needs them (glass-card, body bg gradient, scrollbar). */
 :root {
-  --bg: #0a0e14;
-  --panel: #11161f;
-  --panel2: #161d28;
-  --line: #222c3a;
-  --teal: #2dd4bf;
-  --teal-dim: #1d9c8c;
-  --txt: #e7edf5;
-  --mut: #8a97a8;
-  --good: #3ddc84;
-  --bad: #ff5d6c;
-  --neu: #9aa7b6;
-  --gold: #c8aa6e;
+  --bg: #131619;
+  --panel: #1a1d21; /* opaque fallback — dropdown menus, skeleton blocks */
+  --panel-glass: rgba(26, 29, 33, 0.55); /* translucent card surface */
+  --panel2: #202329; /* inputs, pill tracks — one step up */
+  --line: rgba(255, 255, 255, 0.08); /* hairline border on dark */
+  --cyan: #82dbf7;
+  --cyan-hover: #a1e4f9;
+  --cyan-dim: #4fa3c4;
+  --lavender: #deccfb;
+  --txt: #e8e8e8;
+  --mut: #9099a3;
+  --good: #4ade80; /* WPA / winrate / performance numbers ONLY */
+  --bad: #f87171; /* WPA / winrate / performance numbers ONLY */
 }
 
 html,
 body {
-  background: radial-gradient(1200px 600px at 50% -200px, #13202b, var(--bg));
+  background: radial-gradient(1200px 600px at 50% -200px, #1a2226, var(--bg));
   color: var(--txt);
   min-height: 100vh;
-  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-sans), system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+  font-feature-settings: "tnum" 0; /* opt-in per-element via .tabular-nums, not global */
 }
 
 * {
   box-sizing: border-box;
 }
 
-/* Scrollbar styling for dropdown */
+/* Glassy panel — the dpm.lol card language. Applied via `panel-glass`
+   utility class (see tailwind.config.ts) on cards that sit over the page
+   background; opaque `bg-panel` stays for chrome that must occlude content
+   behind it (dropdown menus, skeletons). */
+.glass-card {
+  background: var(--panel-glass);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--line);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Scrollbar styling for dropdowns */
 ::-webkit-scrollbar {
   width: 6px;
 }
@@ -43,5 +71,5 @@ body {
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--teal-dim);
+  background: var(--cyan-dim);
 }

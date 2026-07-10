@@ -1,7 +1,8 @@
 "use client";
 
 import type { RunesBlock, Pick as PickType } from "@/lib/types";
-import { wpaClass, wpaText, fmtSample, isNegativeHeadlineWpa } from "./StatBadge";
+import { wpaText, fmtSample, isNegativeHeadlineWpa } from "./StatBadge";
+import AnimatedWpa from "./AnimatedWpa";
 
 // Quiet, dim caution glyph for a low-sample pick — a hint to hover, not an alarm.
 function LowSampleFlag({ className = "" }: { className?: string }) {
@@ -45,7 +46,7 @@ interface RuneTileProps {
 
 function RuneTile({ pick, isKeystone, isSmall }: RuneTileProps) {
   const circleBase = isKeystone
-    ? "w-16 h-16 border-2 border-teal shadow-[0_0_16px_rgba(45,212,191,0.35)]"
+    ? "w-16 h-16 border-2 border-teal shadow-[0_0_16px_rgba(130,219,247,0.35)]"
     : isSmall
     ? "w-10 h-10 border border-line"
     : "w-13 h-13 border border-line";
@@ -81,10 +82,8 @@ function RuneTile({ pick, isKeystone, isSmall }: RuneTileProps) {
           Most played
         </div>
       )}
-      <div className={`font-extrabold text-[12px] ${wpaClass(pick.wpa)}`}>
-        {wpaText(pick.wpa)}
-      </div>
-      <div className="text-[9.5px] text-mut flex items-center justify-center gap-0.5">
+      <AnimatedWpa wpa={pick.wpa} className="font-extrabold text-[12px]" />
+      <div className="text-[9.5px] text-mut tabular-nums flex items-center justify-center gap-0.5">
         {fmtSample(pick.occurrence)}
         {pick.lowSample && <LowSampleFlag />}
       </div>
@@ -107,9 +106,7 @@ function ShardTile({ label, pick }: ShardTileProps) {
         <ImgWithFallback src={pick.icon} alt={pick.name} className="w-full h-full object-contain" />
       </div>
       <div className="text-[10px] text-mut mt-1 leading-tight">{label}</div>
-      <div className={`font-extrabold text-[11.5px] ${wpaClass(pick.wpa)}`}>
-        {wpaText(pick.wpa)}
-      </div>
+      <AnimatedWpa wpa={pick.wpa} className="font-extrabold text-[11.5px]" />
     </div>
   );
 }

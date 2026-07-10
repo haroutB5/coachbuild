@@ -19,7 +19,7 @@ export default function TabNav() {
             key={tab.href}
             href={tab.href}
             aria-current={active ? "page" : undefined}
-            className={`px-3.5 py-1.5 rounded-lg text-[13px] font-semibold transition-colors border active:scale-95 ${
+            className={`px-3.5 py-1.5 rounded-lg text-[13px] font-semibold transition-colors border active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
               active
                 ? "bg-teal text-bg border-teal"
                 : "bg-panel2 text-mut border-line hover:border-teal-dim hover:text-txt"

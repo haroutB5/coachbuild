@@ -11,7 +11,7 @@ interface BuildCardProps {
 
 export default function BuildCard({ build }: BuildCardProps) {
   return (
-    <div className="bg-gradient-to-b from-panel to-[#0d121a] border border-line rounded-2xl overflow-hidden shadow-[0_8px_30px_rgba(0,0,0,0.35)] mt-6">
+    <div className="glass-card rounded-2xl overflow-hidden shadow-[0_8px_30px_rgba(0,0,0,0.35)] mt-6">
       {/* Card header */}
       <div className="flex items-center gap-4 px-5 py-4 border-b border-line bg-gradient-to-r from-teal/10 to-transparent">
         <div>

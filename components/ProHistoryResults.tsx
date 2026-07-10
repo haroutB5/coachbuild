@@ -106,7 +106,7 @@ export default function ProHistoryResults({
     return (
       <>
         {sourceFilterRow}
-        <div className="bg-gradient-to-b from-panel to-[#0d121a] border border-line rounded-2xl p-10 text-center">
+        <div className="glass-card rounded-2xl p-10 text-center">
           <div className="text-4xl mb-3 opacity-40">⚠️</div>
           <div className="text-txt font-semibold mb-1">Couldn&apos;t load games — try again</div>
           <div className="text-mut text-sm">Check your connection and refresh.</div>
@@ -119,7 +119,7 @@ export default function ProHistoryResults({
     return (
       <>
         {sourceFilterRow}
-        <div className="bg-gradient-to-b from-panel to-[#0d121a] border border-line rounded-2xl px-5 py-10 text-center">
+        <div className="glass-card rounded-2xl px-5 py-10 text-center">
           <div className="text-4xl mb-3 opacity-40">📊</div>
           <div className="text-txt font-semibold mb-1">{proGamesEmptyTitle(source, subjectLabel)}</div>
           <div className="text-mut text-sm">{proGamesEmptySub(source)}</div>

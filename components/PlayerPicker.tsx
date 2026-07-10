@@ -134,7 +134,7 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
       <button
         type="button"
         onClick={() => (open ? setOpen(false) : openMenu())}
-        className="flex items-center gap-2.5 bg-panel2 border border-line hover:border-teal-dim rounded-xl px-4 py-2.5 transition-colors text-left min-w-[220px]"
+        className="flex items-center gap-2.5 bg-panel2 border border-line hover:border-teal-dim rounded-xl px-4 py-2.5 transition-colors text-left min-w-[220px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={LISTBOX_ID}

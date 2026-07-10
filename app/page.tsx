@@ -32,7 +32,7 @@ function ImgWithFallback({
 // Loading skeleton — mimics the card layout
 function LoadingSkeleton() {
   return (
-    <div className="bg-gradient-to-b from-panel to-[#0d121a] border border-line rounded-2xl overflow-hidden shadow-[0_8px_30px_rgba(0,0,0,0.35)] mt-6 p-5 animate-pulse">
+    <div className="glass-card rounded-2xl overflow-hidden shadow-[0_8px_30px_rgba(0,0,0,0.35)] mt-6 p-5 animate-pulse">
       <div className="h-4 w-1/3 bg-line rounded mb-6" />
       <div className="flex gap-8 mb-6">
         <div className="flex-1 space-y-3">
@@ -64,7 +64,7 @@ function LoadingSkeleton() {
 // Empty state when API returns no data for a champ+role combo
 function EmptyState({ champ, role }: { champ: string; role: string }) {
   return (
-    <div className="mt-6 bg-gradient-to-b from-panel to-[#0d121a] border border-line rounded-2xl p-10 text-center">
+    <div className="mt-6 glass-card rounded-2xl p-10 text-center">
       <div className="text-4xl mb-3 opacity-40">📊</div>
       <div className="text-txt font-semibold mb-1">
         Not enough data for {champ} {role}
@@ -154,12 +154,12 @@ export default function HomePage() {
                 <ImgWithFallback
                   src={champ.icon}
                   alt={champ.name}
-                  className="w-16 h-16 rounded-xl border-2 border-teal-dim shadow-[0_0_24px_rgba(45,212,191,0.25)] object-cover"
+                  className="w-16 h-16 rounded-xl border-2 border-teal-dim shadow-[0_0_24px_rgba(130,219,247,0.25)] object-cover"
                 />
               </div>
             )}
             <div className="text-center">
-              <h1 className="text-3xl font-extrabold tracking-tight">
+              <h1 className="text-3xl font-extrabold tracking-tight text-balance">
                 {champ ? (
                   <>
                     {champ.name}
@@ -222,7 +222,7 @@ export default function HomePage() {
         )}
 
         {fetchState.status === "error" && (
-          <div className="mt-6 bg-gradient-to-b from-panel to-[#0d121a] border border-line rounded-2xl p-10 text-center">
+          <div className="mt-6 glass-card rounded-2xl p-10 text-center">
             <div className="text-4xl mb-3 opacity-40">⚠️</div>
             <div className="text-txt font-semibold mb-1">
               Couldn&apos;t load — try again
@@ -244,7 +244,7 @@ export default function HomePage() {
             {displayBuilds.map((b, i) => (
               <section key={`${b.champion.id}-${b.runes.secondaryTree.id}-${i}`} className="mt-6">
                 <div className="flex items-baseline gap-3 mb-2 px-1">
-                  <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-teal text-[#06231f] font-extrabold text-sm">
+                  <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-teal text-bg font-extrabold text-sm">
                     {b.rank ?? i + 1}
                   </span>
                   <span className="font-bold text-txt">{b.label ?? `Option ${i + 1}`}</span>

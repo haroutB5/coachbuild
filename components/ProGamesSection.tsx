@@ -77,7 +77,7 @@ export default function ProGamesSection({
       )}
 
       {state.status === "empty" && (
-        <div className="bg-gradient-to-b from-panel to-[#0d121a] border border-line rounded-2xl px-5 py-6 text-center">
+        <div className="glass-card rounded-2xl px-5 py-6 text-center">
           <div className="text-[13px] text-txt font-medium mb-1">
             {proGamesEmptyTitle(source, championName)}
           </div>

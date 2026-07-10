@@ -1727,3 +1727,225 @@ Total: **220 matches ingested** across 11 pros.
 
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-10 15:43
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+# HANDOFF — engo
+
+## Scope shipped: CoachBuild Score (per-game 0-100 grade) + the stats it needs
+
+### Files changed/added
+- `migrations/0004_game_stats.sql` (new) — `pro_matches.{cs,damage_champions,team_kills,gold}`, all nullable int. **Applied to live Neon DB** via `node scripts/db-migrate.mjs` (confirmed via `information_schema.columns`).
+- `lib/pro/types.ts` — `RiotParticipant` gained `teamId`, `totalMinionsKilled`, `neutralMinionsKilled`, `totalDamageDealtToChampions`, `goldEarned` (all required — always present in real match-v5 responses). `ProGame` contract gained `score: number`, `grade: "S"|"A"|"B"|"C"|"D"`, `csPerMin: number | null`, `kp: number | null`. **No existing field names/shapes changed.**
+- `lib/pro/extract.ts` — new `ExtractedGameStats`/`extractGameStats(match, puuid)` pure export (cs/damage/teamKills/gold from a match detail response, no timeline needed). `extractMatch`'s `ExtractedMatch` now carries `cs`, `damageChampions`, `teamKills`, `gold`, computed via the shared `extractGameStats`.
+- `lib/pro/ingestMatches.ts` — INSERT extended with the 4 new columns; every NEW ingest populates them from here on.
+- `lib/pro/score.ts` (new) — `computeGameScore`, plus exported `computeCsPerMin`/`computeKillParticipation` helpers (reused by the API route to avoid duplicating the formula). Full formula writeup is in the file's header comment.
+- `app/api/pros/route.ts` — extended `ProGameRow` with `cs`/`damage_champions`/`team_kills`/`gold` (nullable), SELECT queries now fetch those 4 columns for soloq rows, `deriveScoreFields()` helper computes `score`/`grade`/`csPerMin`/`kp` for both soloq and prostage rows (prostage always degrades — no CS/team-kill data in Leaguepedia Cargo, `gameDurationSec` is always 0 for prostage per the existing contract note). **No JSX/styling touched**, only the response payload — did not touch anything under `app/**/*.tsx` or `components/`.
+- `scripts/backfill-game-stats.mjs` (new) — resumable (`WHERE cs IS NULL` cursor, re-run picks up where it left off), 1 Riot call/match (match detail only, no timeline needed), single process, paced by the existing shared `lib/pro/pacer.ts` (no separate throttle needed — `getMatch()` already routes through it). Streaming per-match progress line + final JSON summary. `limit` arg (default 3) caps spend — **full backfill NOT run**, 1131 rows still `cs IS NULL` after the 3-match validation.
+- Tests: `lib/__tests__/pro-score.test.ts` (new, 18 tests), `lib/__tests__/pro-extract.test.ts` (+3 tests: multi-participant teamKills isolation, `extractGameStats` null-guard + parity with `extractMatch`), `lib/__tests__/pro-pros-route.test.ts` (updated the one exact-equality assertion that broke from the new ProGame fields + added a blended-score test case).
+
+### Formula summary (full version in `lib/pro/score.ts` header)
+1. `kda = deaths>0 ? (K+A)/D : K+A+2` (flawless-game bonus instead of div-by-zero).
+2. `kdaComponent = 100*(1-e^(-kda/4.33))` — saturating curve, kda=3→~50, kda=6→~75, kda=10→~90.
+3. `winBonus = win ? +8 : -4` (flat add, asymmetric on purpose).
+4. When `cs` AND `teamKills` are both non-null: blend in `csComponent` (CS/min ÷ 8 elite-pace, clamped 0-100) and `kpComponent` ((K+A)/teamKills × 100) at 50/50, then `score = clamp(kdaComponent*0.6 + statBlend*0.4 + winBonus, 0, 100)`. `damage_champions`/`gold` are stored but **not yet part of the formula** (documented as future-use in the header comment).
+5. Degraded mode (no cs/teamKills — every legacy row pre-backfill, every prostage row): `score = clamp(kdaComponent + winBonus, 0, 100)`.
+6. Grades: S≥90, A≥75, B≥60, C≥40, D<40.
+
+### Migration + validation
+- **Migration applied**: yes, confirmed live (`cs`, `damage_champions`, `team_kills`, `gold` — all `integer`, `is_nullable = YES`).
+- **3-match backfill validation**: ran `npx tsx scripts/backfill-game-stats.mjs 3` — all 3 succeeded, values sanity-checked against `computeGameScore` (scores 72-87, grades B/A, csPerMin ~9.8-10.4, kp 0.29-0.54 — all in plausible ranges for the underlying KDA lines). DB confirmed via direct query: 3 rows now `cs IS NOT NULL`, 1131 remain `NULL` (1134 total − 3). **Full backfill was intentionally NOT run** — Riot budget is shared, orchestrator's call on when/how to run the remaining 1131 (`npx tsx scripts/backfill-game-stats.mjs <bigger-limit>`, re-runnable/resumable any number of times).
+
+### Gates
+- `npx tsc --noEmit`: clean.
+- `npx vitest run`: **228/228 passing** (20 files) — includes the new `pro-score.test.ts` (18 tests) and the extended `pro-extract.test.ts`/`pro-pros-route.test.ts`.
+
+### Housekeeping note (flagging, not auto-resolving)
+Two throwaway verification scripts (`scripts/_tmp-checkcols.mjs`, `scripts/_tmp-scorecheck.mjs`) are still on disk, untracked — used to confirm the migration landed and sanity-check score output against real backfilled rows. The safety-gate hook blocked my `rm` of them (file-deletion detection) — per protocol I'm surfacing this rather than routing around it. They're harmless (git-untracked, `_tmp-` prefixed, no code depends on them) but should be deleted before commit if the orchestrator wants a clean `git status`.
+
+### Known simplifications (documented in code, repeating here for visibility)
+- CS/min elite-pace constant (8) has no role adjustment — junglers/supports will read lower on `csComponent` than laners for equivalent skill. Accepted per brief ("sensible transparent heuristic"), not hidden.
+- `damage_champions`/`gold` are captured on every new/backfilled row but not yet used in the score formula — available for a future iteration without another migration.
+- prostage rows always get the degraded (KDA+win-only) score — no schema change to `prostage_matches` was in scope here.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-10 16:05
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-10 10:42:27Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-10 — dpm.lol reskin (fronty solo, FE surfaces)
+
+Reskinned CoachBuild to dpm.lol's design language: warm charcoal `#131619` base, off-white `#E8E8E8` text, glassy translucent cards, cyan primary `#82DBF7` / lavender secondary `#DECCFB` accents, Plus Jakarta Sans, WPA count-up motion, and a full density rework of the Pro History game row.
+
+**Design tokens (single source of truth):**
+- `app/globals.css` — new `:root` CSS vars (`--bg`, `--panel`, `--panel-glass`, `--panel2`, `--line`, `--cyan*`, `--lavender`, `--txt`, `--mut`, `--good`/`--bad` — WPA/winrate-only per the brief's color-discipline rule) + `.glass-card` utility (`rgba(26,29,33,.55)` + `backdrop-blur(20px)` + hairline border) + a `prefers-reduced-motion` global kill-switch.
+- `tailwind.config.ts` — kept the existing color KEY NAMES (`teal`, `teal-dim`, `gold`, `good`, `bad`, `bg`, `panel`, `panel2`, `line`, `txt`, `mut`) and repointed their VALUES to the new palette, deliberately, rather than renaming ~20 files' worth of `text-teal`/`bg-gold`/etc call sites. Added `lavender` as the forward-looking token name (`gold` now aliases it). `teal` = cyan `#82DBF7`, `teal-dim` = `#4FA3C4`. `fontFamily.sans` now resolves through `var(--font-sans)`.
+- `app/layout.tsx` — swapped the `@import` Inter web font for `next/font/google` `Plus_Jakarta_Sans` (weights 300–800, `display: swap`, `--font-sans` var). `viewport.themeColor` → `#131619`.
+- `public/manifest.webmanifest` — `background_color`/`theme_color` → `#131619`.
+- 10x `bg-gradient-to-b from-panel to-[#0d121a] border border-line` occurrences (BuildCard, ProGameCard, ProGamesSkeleton, ProHistoryResults ×2, ProGamesSection, app/page.tsx ×3, app/history/page.tsx) → `glass-card` utility class.
+- 6x hardcoded `rgba(45,212,191,…)` teal glow shadows → `rgba(130,219,247,…)` (the new cyan, as RGB) across ProGameCard, SegmentedControl, RunePage, LanePillRow, RoleSelector, app/page.tsx.
+- 2x hardcoded `text-[#06231f]` (dark-on-teal-fill text) → `text-bg` token, for the R-skill pill and the build-rank badge.
+
+**ProGameCard.tsx — full density rewrite (item 3):** collapsed row is now a single `flex flex-wrap` line — champion icon+name, player+team, result chip, `K/D/A` + a new `(kills+assists)/deaths` ratio to 1 decimal (`"Perfect"` when deaths=0; deliberately **neutral-colored, not good/bad** — KDA ratio isn't a WPA/winrate/performance-score signal, and that color language is reserved strictly for those per the brief), 2 summoner-spell icons + keystone icon, full 6-item + trinket build, then duration/patch/time-ago/source badge pinned right. On desktop (≥md, 2-col grid) it reads as one line; on mobile it wraps to 2–3 lines gracefully — verified live at 390px and 1024px, no horizontal overflow, no CLS (icon boxes are fixed-size). The **full rune breakdown** (primary tree, secondary tree, shards) that used to always render moved into the expandable "Details" panel alongside purchase order + skill order — nothing was dropped, just relocated behind progressive disclosure so the collapsed row could hit the brief's "keystone icon" (singular) density target.
+
+**Score chip slot (per brief, NOT wired):** `ProGameCardProps.score?: { value: number; grade: string }` — a new, purely additive optional prop (not read off `game`, since the API doesn't return it yet and `ProGame` in `components/proGames.types.ts` mirrors the live API contract). Renders nothing when `score` is undefined (default state today). When engy/engo's `computeGameScore` lands and `/api/pros` starts returning it, the wire-up is: pass `score={computeGameScore(game)}` from the parent — no ProGameCard changes needed.
+
+**Count-up motion (item 5):** `components/useCountUp.ts` (rAF, ease-out-quint, 400ms, `prefers-reduced-motion` → returns the final value with zero animation frames — verified via code path, not live-emulated; chrome-devtools MCP's `emulate` tool has no reduced-motion axis) + `components/AnimatedWpa.tsx` (formats through the existing `wpaClass`/`wpaText` helpers, `tabular-nums` mandatory). Wired into every WPA headline number: RunePage (keystone/primary/secondary tiles, stat shards), ItemPath (main picks only — the small "or"-row alt picks stay static, intentionally, to keep the motion to one tasteful read rather than 40+ concurrent count-ups), SpellRow. Confirmed one-shot (no loop), transform/opacity-adjacent (text-only, tabular-nums keeps string width stable frame-to-frame so no layout thrash) via the `fixing-motion-performance` skill — reduced default duration from an initial 550ms to 400ms to respect the standing ~400ms entrance-motion cap.
+
+**Deslop gate (ran all three per standing rule):**
+- `fixing-accessibility` → added `focus-visible:ring-2 focus-visible:ring-teal` (+ offset) to every pill/button that had none: SegmentedControl, RoleSelector, LanePillRow, TabNav, ProGameCard's Details toggle, ChampionPicker/PlayerPicker trigger buttons, history page's Clear-selection button. Pre-existing gap (relied on unstyled browser default), not something I introduced, but in-scope since I was already touching these files for tokens.
+- `baseline-ui` → added `tabular-nums` to sample-count (`fmtSample`) displays in RunePage/ItemPath that were missing it, added `text-balance` to both page `<h1>`s.
+- `fixing-motion-performance` → see count-up note above.
+
+**Contrast (computed, not just eyeballed):** `#E8E8E8`/`#9099A3`/`#82DBF7`/`#DECCFB` text on `#131619` bg all exceed 6:1 (well past AA 4.5:1 for normal text). WPA `good`/`bad` (`#4ADE80`/`#F87171`) also exceed 6:1.
+
+**Verification:** `tsc --noEmit` clean, `vitest run` 228/228 green (up from 206 baseline — the 22 new tests came from engo's parallel `lib/pro/score.ts` work landing mid-session, not mine; StatBadge's existing tests needed zero changes since the neutral WPA gray was left untouched), `next lint` clean (only pre-existing `no-img-element` warnings, unrelated to this change), `next build` clean (100kB/102kB First Load JS, +~50B from the count-up components — no new deps, `next/font` is build-time only). Live-verified via chrome-devtools MCP against the real `/api/pros` (Faker's real match history) and `/api/build` (Viktor Mid) at 390px and 1024/1280px: item path wraps cleanly with no overflow, dense ProGameCard row reads correctly, expandable rune/purchase/skill panel works, focus ring renders on keyboard nav, zero console errors.
+
+**Not verified:** reduced-motion path only checked via code review + the `fixing-motion-performance` skill pass, not a live browser emulation (chrome-devtools MCP's `emulate` tool doesn't expose a reduced-motion axis) — the logic is a straightforward `matchMedia` check gating whether any rAF is scheduled at all, low risk. No score-chip visual to check since it's an unwired slot by design.
+
+**Files touched:** `app/globals.css`, `app/layout.tsx`, `app/page.tsx`, `app/history/page.tsx`, `tailwind.config.ts`, `public/manifest.webmanifest`, `components/BuildCard.tsx`, `components/RunePage.tsx`, `components/ItemPath.tsx`, `components/SpellRow.tsx`, `components/ProGameCard.tsx`, `components/ProGamesSection.tsx`, `components/ProGamesSkeleton.tsx`, `components/ProHistoryResults.tsx`, `components/SegmentedControl.tsx`, `components/RoleSelector.tsx`, `components/LanePillRow.tsx`, `components/TabNav.tsx`, `components/ChampionPicker.tsx`, `components/PlayerPicker.tsx`. New: `components/useCountUp.ts`, `components/AnimatedWpa.tsx`. Did not touch `lib/pro/score.ts`, `migrations/`, `scripts/` (engo's scope).
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-10 16:14
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-10 15:05:29Z; previous content preserved there. Append new rounds below. -->
+
+### fronty — CoachBuild Score wired into Pro History game row (2026-07-10)
+
+## Summary
+
+Wired the per-game CoachBuild Score (`score` 0-100, `grade` S/A/B/C/D) into
+`ProGameCard.tsx`'s dense row as a color-graded chip, and added CS/min + KP
+micro-stats to the expandable panel — both null-safe against the
+migration-0004 backfill still running in the background.
+
+The dense-row chip slot (`ScoreChip`) already existed as an unwired
+placeholder (lavender, ad-hoc `{value, grade}` prop) from the earlier reskin
+pass — replaced it with the real grade-graded version reading straight off
+`game.score`/`game.grade` instead of a separate prop, since those fields are
+now part of the `ProGame` contract itself, not a bolt-on.
+
+## Files Touched
+
+- `components/proGames.types.ts` — added `ProGameGrade` type + `score: number`,
+  `grade: ProGameGrade`, `csPerMin: number | null`, `kp: number | null` to the
+  frontend's own `ProGame` interface (this file is deliberately independent of
+  `lib/pro/types.ts`, see its own header comment — mirrored the shape, didn't
+  import it).
+- `components/proGames.fixtures.ts` — added score/grade/csPerMin/kp to all 5
+  fixtures (S/D/A/A/C spread, prostage fixtures get `csPerMin: null, kp: null`
+  since Leaguepedia Cargo never has that data) so the file stays type-valid.
+- `components/ScoreChip.ts` (new) — pure logic, no JSX (same discipline as
+  the existing `StatBadge.tsx`, whose header explains why: vitest 4's oxc
+  transform can't parse JSX outside its default scope without extra plugin
+  config, and this repo has no jsdom/RTL harness). Exports:
+  - `scoreGradeClasses(grade)` — S strong green (`#10b981`, distinct from A so
+    the two tiers don't blur together), A `good` green, B neutral `mut` gray,
+    C amber (`#f59e0b`), D `bad` red. Deliberately reuses the WPA/winrate
+    color language (`--good`/`--bad` tokens, "performance numbers ONLY" per
+    their `globals.css` comment) — never the cyan/teal or lavender decorative
+    accents.
+  - `hasScoreData(score, grade)` — type-guards `grade` to `ProGameGrade`;
+    guards against a stale SW-cached `/api/pros` payload or any runtime value
+    not matching its compile-time type crossing the JSON boundary.
+  - `formatCsPerMin(csPerMin)` / `formatKp(kp)` — return `null` (never a dash
+    or a zero) when the input is `null`, so the caller's `&&` guard renders
+    nothing.
+  - `SCORE_CHIP_TITLE` — the exact copy from the brief.
+- `components/ProGameCard.tsx`:
+  - Dense row: `ScoreChip` now renders `{grade}{score}` (e.g. "S 91") inside
+    a graded pill next to the KDA ratio text, `title` = `SCORE_CHIP_TITLE`.
+    Removed the old placeholder `score?: {value, grade}` prop from
+    `ProGameCardProps` (grep confirmed zero other callers passed it).
+  - Expandable panel: new muted micro-stat row ("CS/min 7.3" · "KP 62%") at
+    the top of the panel, before the Runes block — renders only the fields
+    that are non-null (a game with CS backfilled but no team-kill data, or
+    vice versa, would show just one; in practice they're always ingested
+    together per `lib/pro/score.ts`'s own header comment, so that split never
+    happens today, but the guard is independent per-field defensively).
+    Never renders for prostage rows (panel itself is gated off for
+    `source === "prostage"`, and prostage always has both fields null anyway
+    — belt and suspenders, not redundant-looking in the UI).
+
+## Tests
+
+New `components/__tests__/ScoreChip.test.ts` (23 cases, pure-function only,
+no DOM): `hasScoreData` truth table (valid pair / 0-score edge case / each of
+score-undefined, score-null, grade-undefined, grade-null, empty-string-grade,
+NaN-score, both-missing all → false) — this is the "chip renders with
+score+grade, renders nothing when undefined" case from the brief, expressed
+against the guard function itself since there's no JSX-rendering harness in
+this repo (see `StatBadge.test.ts`'s own header for why, same pattern I
+followed). `scoreGradeClasses` per-grade color assertions (S is NOT the same
+green as A, B has no good/bad tint, none of the 5 grades touch the
+teal/lavender decorative tokens). `formatCsPerMin`/`formatKp` decimal/percent
+formatting + null passthrough.
+
+```
+npx tsc --noEmit   -> clean
+npx vitest run     -> 251/251 passing (228 baseline + 23 new, 0 failures)
+npx next lint      -> clean (only the 6 pre-existing <img> warnings noted in
+                       prior HANDOFF rounds, none in files I touched beyond
+                       ProGameCard.tsx which already had that warning)
+npm run build      -> Compiled successfully, /history + / both render,
+                       /api/pros unchanged at 0 B (dynamic)
+```
+
+No browser/puppeteer smoke run this round — real DB rows depend on the
+migration-0004 backfill (`scripts/backfill-game-stats.mjs`) still running per
+the brief, so a live screenshot would show `csPerMin`/`kp` as null on most
+rows regardless of correctness. Fixture-driven visual state is exercised by
+`components/proGames.fixtures.ts` (not wired to a page — same "not imported
+by any shipped component" discipline as `proHistory.fixtures.ts`) if a future
+round wants a dev-only fixture page to screenshot the 5 fixtures'
+score/grade/CS/KP combinations directly.
+
+## Known Issues
+
+- None found. `csPerMin`/`kp` correctly degrade to `null` (not 0/dash) for
+  every pre-backfill soloq row and every prostage row, matching the brief's
+  "null must keep rendering nothing" requirement — verified via the API
+  route's existing `deriveScoreFields` (backend-owned, `app/api/pros/route.ts`,
+  not touched this round) which I read but did not modify.
+- Did not add a `B`-grade fixture (only S/A/A/C/D are represented across the
+  5 existing fixtures) — not a gap in the color-mapping logic (tested
+  directly in `ScoreChip.test.ts`), just noting for whoever next touches
+  `proGames.fixtures.ts` that a `B` case isn't visually exercised via
+  fixtures.
+
+## Deploy
+
+None — orchestrator ships, no version bump requested this round.
+
+

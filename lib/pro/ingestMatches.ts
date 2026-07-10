@@ -118,13 +118,15 @@ export async function ingestOneAccount(
         INSERT INTO coachbuild.pro_matches (
           match_id, puuid, pro_id, champion_id, champion_name, role, patch, win,
           kills, deaths, assists, game_creation, game_duration_sec,
-          spells, final_items, trinket, purchase_order, skill_order, runes
+          spells, final_items, trinket, purchase_order, skill_order, runes,
+          cs, damage_champions, team_kills, gold
         ) VALUES (
           ${row.matchId}, ${row.puuid}, ${account.pro_id}, ${row.championId}, ${row.championName},
           ${row.role}, ${row.patch}, ${row.win}, ${row.kills}, ${row.deaths}, ${row.assists},
           ${row.gameCreation}, ${row.gameDurationSec},
           ${JSON.stringify(row.spells)}::jsonb, ${JSON.stringify(row.finalItems)}::jsonb, ${row.trinket},
-          ${JSON.stringify(row.purchaseOrder)}::jsonb, ${JSON.stringify(row.skillOrder)}::jsonb, ${JSON.stringify(row.runes)}::jsonb
+          ${JSON.stringify(row.purchaseOrder)}::jsonb, ${JSON.stringify(row.skillOrder)}::jsonb, ${JSON.stringify(row.runes)}::jsonb,
+          ${row.cs}, ${row.damageChampions}, ${row.teamKills}, ${row.gold}
         )
         ON CONFLICT (match_id, puuid) DO NOTHING
       `;

@@ -41,9 +41,9 @@ export default function SegmentedControl<T extends string>({
             key={opt.value}
             type="button"
             onClick={() => onChange(opt.value)}
-            className={`${btnClass} rounded-lg font-semibold transition-all active:scale-95 ${
+            className={`${btnClass} rounded-lg font-semibold transition-all active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
               active
-                ? "bg-teal text-bg shadow-[0_0_8px_rgba(45,212,191,0.4)]"
+                ? "bg-teal text-bg shadow-[0_0_8px_rgba(130,219,247,0.4)]"
                 : "text-mut hover:text-txt"
             }`}
             aria-pressed={active}

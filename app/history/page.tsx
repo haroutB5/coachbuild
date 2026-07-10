@@ -23,7 +23,7 @@ const LANE_LABEL: Record<number, string> = {
 
 function PromptState() {
   return (
-    <div className="mt-6 bg-gradient-to-b from-panel to-[#0d121a] border border-line rounded-2xl p-12 text-center">
+    <div className="mt-6 glass-card rounded-2xl p-12 text-center">
       <div className="text-4xl mb-3 opacity-40" aria-hidden="true">
         🔍
       </div>
@@ -58,7 +58,7 @@ export default function HistoryPage() {
           <TabNav />
 
           <div className="text-center mb-4">
-            <h1 className="text-3xl font-extrabold tracking-tight">
+            <h1 className="text-3xl font-extrabold tracking-tight text-balance">
               Pro <span className="text-teal">History</span>
             </h1>
             <p className="text-mut text-sm mt-1">
@@ -113,7 +113,7 @@ export default function HistoryPage() {
               <button
                 type="button"
                 onClick={clearSelection}
-                className="ml-auto flex items-center justify-center w-6 h-6 rounded-md text-mut hover:text-txt hover:bg-panel2 transition-colors active:scale-95"
+                className="ml-auto flex items-center justify-center w-6 h-6 rounded-md text-mut hover:text-txt hover:bg-panel2 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
                 aria-label="Clear selection"
               >
                 ×

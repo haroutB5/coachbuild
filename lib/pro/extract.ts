@@ -32,6 +32,10 @@ export interface ExtractedMatch {
   purchaseOrder: ProGamePurchase[];
   skillOrder: string[];
   runes: ProGameRunes;
+  cs: number; // totalMinionsKilled + neutralMinionsKilled
+  damageChampions: number;
+  teamKills: number; // sum of kills across the player's own team (score.ts kill-participation input)
+  gold: number;
 }
 
 /** Patch "16.13" from gameVersion "16.13.567.1234". */
@@ -115,6 +119,35 @@ export function extractRunes(participant: RiotParticipant): ProGameRunes {
   };
 }
 
+export interface ExtractedGameStats {
+  cs: number;
+  damageChampions: number;
+  teamKills: number;
+  gold: number;
+}
+
+/** Pure extraction of just the migration-0004 stat columns from a match
+ *  detail response — no timeline needed. Shared by extractMatch (new
+ *  ingest) AND scripts/backfill-game-stats.mjs (historical rows: re-fetches
+ *  match detail only, 1 call/match, no timeline re-fetch needed since these
+ *  4 fields don't come from the timeline). Returns null when the puuid
+ *  isn't in the match, mirroring extractMatch's own guard. */
+export function extractGameStats(match: RiotMatch, puuid: string): ExtractedGameStats | null {
+  const participant = match.info.participants.find((p) => p.puuid === puuid);
+  if (!participant) return null;
+  // Sum of kills across every participant on the same team (including this
+  // one) — the denominator for kill participation in lib/pro/score.ts.
+  const teamKills = match.info.participants
+    .filter((p) => p.teamId === participant.teamId)
+    .reduce((sum, p) => sum + p.kills, 0);
+  return {
+    cs: participant.totalMinionsKilled + participant.neutralMinionsKilled,
+    damageChampions: participant.totalDamageDealtToChampions,
+    teamKills,
+    gold: participant.goldEarned,
+  };
+}
+
 /** Returns null (caller must skip+log) when the participant's role can't be
  *  mapped — never store a row with a guessed role. */
 export function extractMatch(match: RiotMatch, timeline: RiotTimeline, puuid: string): ExtractedMatch | null {
@@ -132,6 +165,9 @@ export function extractMatch(match: RiotMatch, timeline: RiotTimeline, puuid: st
     participant.item5,
   ].filter((id) => id !== 0);
   const trinket = participant.item6 && participant.item6 !== 0 ? participant.item6 : null;
+
+  const stats = extractGameStats(match, puuid);
+  if (!stats) return null; // unreachable given the participant lookup above already succeeded, but keeps this function total
 
   return {
     matchId: match.metadata.matchId,
@@ -152,5 +188,9 @@ export function extractMatch(match: RiotMatch, timeline: RiotTimeline, puuid: st
     purchaseOrder: buildPurchaseOrder(timeline, participant.participantId),
     skillOrder: buildSkillOrder(timeline, participant.participantId),
     runes: extractRunes(participant),
+    cs: stats.cs,
+    damageChampions: stats.damageChampions,
+    teamKills: stats.teamKills,
+    gold: stats.gold,
   };
 }

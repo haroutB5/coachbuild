@@ -107,6 +107,15 @@ describe("GET /api/pros source param", () => {
     expect(body.games[0].purchaseOrder).toEqual([]);
     expect(body.games[0].skillOrder).toEqual([]);
     expect(body.games[0].player.name).toBe("Faker"); // falls back to player_link when pro_name is null (unlinked)
+    // Post-audit fix (P1): prostage games carry NO score/grade — Leaguepedia
+    // Cargo has no CS/team-kill data, so a prostage score would always be the
+    // degraded KDA+win-only formula next to fully-backfilled soloq rows on
+    // the full blended formula. Omitted (not null), matching the frontend's
+    // hasScoreData() render-nothing guard.
+    expect(body.games[0]).not.toHaveProperty("score");
+    expect(body.games[0]).not.toHaveProperty("grade");
+    expect(body.games[0].csPerMin).toBeNull();
+    expect(body.games[0].kp).toBeNull();
   });
 
   it("default (no source param) merges both sources, newest first", async () => {

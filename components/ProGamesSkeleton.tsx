@@ -7,7 +7,7 @@ export default function ProGamesSkeleton() {
       {[0, 1].map((i) => (
         <div
           key={i}
-          className="bg-gradient-to-b from-panel to-[#0d121a] border border-line rounded-2xl p-4 h-[168px]"
+          className="glass-card rounded-2xl p-4 h-[168px]"
         >
           <div className="h-3 w-1/3 bg-line rounded mb-3" />
           <div className="flex gap-2 mb-4">

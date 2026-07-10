@@ -10,6 +10,7 @@ import {
   buildSkillOrder,
   extractRunes,
   extractMatch,
+  extractGameStats,
 } from "../pro/extract";
 import type { RiotMatch, RiotParticipant, RiotTimeline } from "../pro/types";
 
@@ -17,6 +18,7 @@ function participant(overrides: Partial<RiotParticipant> = {}): RiotParticipant 
   return {
     puuid: "puuid-1",
     participantId: 1,
+    teamId: 100,
     championId: 112,
     championName: "Viktor",
     teamPosition: "MIDDLE",
@@ -24,6 +26,10 @@ function participant(overrides: Partial<RiotParticipant> = {}): RiotParticipant 
     kills: 5,
     deaths: 2,
     assists: 7,
+    totalMinionsKilled: 180,
+    neutralMinionsKilled: 20,
+    totalDamageDealtToChampions: 22000,
+    goldEarned: 13500,
     item0: 6655,
     item1: 4645,
     item2: 3020,
@@ -190,6 +196,47 @@ describe("extractMatch", () => {
       patch: "16.13",
       spells: [4, 14],
       win: true,
+    });
+  });
+
+  it("computes cs/damage/gold from the participant and teamKills from same-team participants only", () => {
+    const teammate = participant({
+      puuid: "puuid-2",
+      participantId: 2,
+      teamId: 100,
+      kills: 3,
+    });
+    const enemy = participant({
+      puuid: "puuid-3",
+      participantId: 3,
+      teamId: 200,
+      kills: 9, // must NOT count toward puuid-1's teamKills
+    });
+    const m = match({}, [participant(), teammate, enemy]);
+    const row = extractMatch(m, timeline(), "puuid-1");
+    expect(row?.cs).toBe(200); // 180 + 20
+    expect(row?.damageChampions).toBe(22000);
+    expect(row?.gold).toBe(13500);
+    expect(row?.teamKills).toBe(8); // 5 (self) + 3 (teammate), enemy's 9 excluded
+  });
+});
+
+describe("extractGameStats (shared by extractMatch and scripts/backfill-game-stats.mjs)", () => {
+  it("returns null when the puuid isn't in the match — used standalone by the backfill script, so this guard is directly reachable there (unlike inside extractMatch, where the caller already resolved the same puuid)", () => {
+    const m = match();
+    expect(extractGameStats(m, "someone-else")).toBeNull();
+  });
+
+  it("matches extractMatch's own cs/damage/teamKills/gold for the same input", () => {
+    const teammate = participant({ puuid: "puuid-2", participantId: 2, teamId: 100, kills: 3 });
+    const m = match({}, [participant(), teammate]);
+    const stats = extractGameStats(m, "puuid-1");
+    const row = extractMatch(m, timeline(), "puuid-1");
+    expect(stats).toEqual({
+      cs: row?.cs,
+      damageChampions: row?.damageChampions,
+      teamKills: row?.teamKills,
+      gold: row?.gold,
     });
   });
 });

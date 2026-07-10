@@ -15,6 +15,7 @@ import {
   CONSUMABLE_ITEM_IDS,
   type ResolvedRuneDisplay,
 } from "./proAssets";
+import { SCORE_CHIP_TITLE, scoreGradeClasses, hasScoreData, formatCsPerMin, formatKp } from "./ScoreChip";
 
 function ImgWithFallback({
   src,
@@ -62,6 +63,15 @@ function formatMinuteStamp(sec: number): string {
   return `${Math.floor(sec / 60)}'`;
 }
 
+/** (kills+assists)/deaths to 1 decimal — "Perfect" (no ratio to divide by)
+ *  when deaths is 0. Deliberately neutral-colored, never good/bad — KDA
+ *  ratio is not a WPA/winrate/performance-score signal, and that color
+ *  language is reserved strictly for those. */
+function kdaRatioText(kills: number, deaths: number, assists: number): string {
+  if (deaths === 0) return "Perfect";
+  return `${((kills + assists) / deaths).toFixed(1)} KDA`;
+}
+
 /** Resolves a rune perk's name + icon asynchronously (shared module-level
  *  cache in proAssets.ts). Degrades to a plain circle with no crash if the
  *  rune bundle fetch fails. */
@@ -72,7 +82,7 @@ function RunePerkIcon({
 }: {
   runeId: number;
   ver: string;
-  size: "lg" | "sm";
+  size: "lg" | "sm" | "xs";
 }) {
   const [rune, setRune] = useState<ResolvedRuneDisplay | null>(null);
 
@@ -86,8 +96,11 @@ function RunePerkIcon({
     };
   }, [runeId, ver]);
 
-  const dim = size === "lg" ? "w-11 h-11" : "w-6 h-6";
-  const ring = size === "lg" ? "border-2 border-teal shadow-[0_0_10px_rgba(45,212,191,0.3)]" : "border border-line";
+  const dim = size === "lg" ? "w-11 h-11" : size === "sm" ? "w-6 h-6" : "w-5 h-5";
+  const ring =
+    size === "lg"
+      ? "border-2 border-teal shadow-[0_0_10px_rgba(130,219,247,0.3)]"
+      : "border border-line";
 
   return (
     <div
@@ -106,13 +119,33 @@ function RunePerkIcon({
 function WinLossPill({ win }: { win: boolean }) {
   return (
     <span
-      className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10.5px] font-bold uppercase tracking-[0.5px] ${
+      className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-[0.5px] flex-shrink-0 ${
         win ? "bg-good/15 text-good border border-good/30" : "bg-bad/15 text-bad border border-bad/30"
       }`}
     >
       {win ? "Win" : "Loss"}
     </span>
   );
+}
+
+/** CoachBuild Score chip — grade letter + score number, color-graded
+ *  green (S) -> red (D) per scoreGradeClasses. Renders nothing when the game
+ *  is missing score/grade data (see hasScoreData's header comment). */
+function ScoreChip({ score, grade }: { score: number | null | undefined; grade: string | null | undefined }) {
+  if (!hasScoreData(score, grade)) return null;
+  return (
+    <span
+      className={`inline-flex items-center justify-center gap-0.5 px-1.5 h-7 rounded-md text-[11px] font-bold tabular-nums border flex-shrink-0 ${scoreGradeClasses(grade)}`}
+      title={SCORE_CHIP_TITLE}
+    >
+      {grade}
+      <span className="opacity-90 font-semibold">{score}</span>
+    </span>
+  );
+}
+
+function Divider() {
+  return <span className="w-px h-5 bg-line flex-shrink-0 hidden sm:block" aria-hidden="true" />;
 }
 
 interface ProGameCardProps {
@@ -139,7 +172,11 @@ const GAME_LANE_LABEL: Record<number, string> = {
   4: "Support",
 };
 
-export default function ProGameCard({ game, championIcon, championDisplayName }: ProGameCardProps) {
+export default function ProGameCard({
+  game,
+  championIcon,
+  championDisplayName,
+}: ProGameCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [hideConsumables, setHideConsumables] = useState(true);
   const ver = versionFromPatch(game.patch);
@@ -150,191 +187,210 @@ export default function ProGameCard({ game, championIcon, championDisplayName }:
   // value can never render the panel for this source.
   const showExpandToggle = !isProstage;
   const showDetailPanel = expanded && !isProstage;
+  const hasFullRunes = game.runes.primary.length > 0 || game.runes.secondary.length > 0;
+  const csText = formatCsPerMin(game.csPerMin);
+  const kpText = formatKp(game.kp);
 
   const timeline = hideConsumables
     ? game.purchaseOrder.filter((p) => !CONSUMABLE_ITEM_IDS.has(p.itemId))
     : game.purchaseOrder;
 
   return (
-    <div className="bg-gradient-to-b from-panel to-[#0d121a] border border-line rounded-2xl overflow-hidden shadow-[0_6px_24px_rgba(0,0,0,0.3)]">
-      {/* Header row */}
-      <div className="flex items-center gap-2.5 px-4 py-3 border-b border-line flex-wrap">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-sm font-semibold text-txt leading-tight">
-            {championIcon && (
-              <span
-                className="w-5 h-5 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
-                title={championDisplayName ?? game.championName}
-              >
-                <ImgWithFallback
-                  src={championIcon}
-                  alt={championDisplayName ?? game.championName}
-                  className="w-full h-full object-cover"
-                />
-              </span>
-            )}
-            <span className="truncate">{championDisplayName ?? game.championName}</span>
-            <span className="text-mut font-normal">·</span>
-            <span className="truncate">{game.player.name}</span>
-            {game.player.team && (
-              <span className="text-mut font-normal text-[11.5px] truncate">{game.player.team}</span>
-            )}
-          </div>
-          <div className="text-[10.5px] text-mut flex items-center gap-1.5 mt-0.5 flex-wrap">
-            {isProstage && (
-              <span className="inline-flex items-center px-1.5 py-[1px] rounded text-[9px] font-bold uppercase tracking-[0.5px] bg-gold/15 text-gold border border-gold/30">
-                Pro Play
-              </span>
-            )}
-            <span className="uppercase tracking-[0.5px]">
-              {isProstage ? game.tournament : game.account.region}
+    <div className="glass-card rounded-2xl overflow-hidden shadow-[0_6px_24px_rgba(0,0,0,0.3)]">
+      {/* Dense collapsed row — identity, result, KDA, spells + keystone,
+          items, and timing/source metadata all inline (wraps on narrow
+          viewports; icon boxes are fixed-size so rows never jitter). */}
+      <div className="flex items-center gap-2.5 px-4 py-3 flex-wrap">
+        {/* Identity: champion + player */}
+        <div className="flex items-center gap-1.5 min-w-0 flex-shrink-0">
+          {championIcon && (
+            <span
+              className="w-7 h-7 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
+              title={championDisplayName ?? game.championName}
+            >
+              <ImgWithFallback
+                src={championIcon}
+                alt={championDisplayName ?? game.championName}
+                className="w-full h-full object-cover"
+              />
             </span>
-            {GAME_LANE_LABEL[game.role] && (
-              <>
-                <span>·</span>
-                <span>{GAME_LANE_LABEL[game.role]}</span>
-              </>
-            )}
-            {game.patch && (
-              <>
-                <span>·</span>
-                <span className="tabular-nums">{game.patch}</span>
-              </>
-            )}
-            <span>·</span>
-            <span className="tabular-nums">{relativeTime(game.gameCreation)}</span>
-            {game.account.riotId && (
-              <>
-                <span>·</span>
-                <span className="truncate max-w-[160px] opacity-75" title={game.account.riotId}>
-                  {game.account.riotId}
-                </span>
-              </>
-            )}
-          </div>
+          )}
+          <span className="text-sm font-semibold text-txt truncate max-w-[110px]">
+            {championDisplayName ?? game.championName}
+          </span>
+        </div>
+        <div className="flex items-center gap-1 min-w-0 flex-shrink text-[12px]">
+          <span className="text-txt font-medium truncate max-w-[100px]">{game.player.name}</span>
+          {game.player.team && (
+            <span className="text-mut truncate max-w-[70px]">{game.player.team}</span>
+          )}
         </div>
 
-        <div className="ml-auto flex items-center gap-2.5">
+        <Divider />
+
+        {/* Result + KDA */}
+        <div className="flex items-center gap-2 flex-shrink-0">
           <WinLossPill win={game.win} />
           <span className="text-[12.5px] font-semibold text-txt tabular-nums">
             {game.kills}/{game.deaths}/{game.assists}
           </span>
-          {game.gameDurationSec > 0 && (
-            <span className="text-[11px] text-mut tabular-nums">{formatGameLength(game.gameDurationSec)}</span>
-          )}
+          <span className="text-[10.5px] text-mut tabular-nums">
+            {kdaRatioText(game.kills, game.deaths, game.assists)}
+          </span>
+          <ScoreChip score={game.score} grade={game.grade} />
         </div>
-      </div>
 
-      {/* Runes + Spells row — hidden entirely when the source carries neither
-          (possible on pro-stage rows where Leaguepedia omits rune/spell data),
-          so data-less cards don't show a strip of empty rings. */}
-      {(game.runes.keystone > 0 || game.spells.some(Boolean)) && (
-      <div className="flex items-center gap-4 px-4 py-3 border-b border-dashed border-line flex-wrap">
-        {/* Runes */}
-        {game.runes.keystone > 0 && (
-        <div className="flex items-center gap-1.5">
-          <RunePerkIcon runeId={game.runes.keystone} ver={ver} size="lg" />
-          <div className="flex items-center gap-1">
-            {game.runes.primary.map((id, i) => (
-              <RunePerkIcon key={`p-${id}-${i}`} runeId={id} ver={ver} size="sm" />
-            ))}
+        <Divider />
+
+        {/* Spells + keystone */}
+        {(game.spells.some(Boolean) || game.runes.keystone > 0) && (
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {game.spells.map(
+              (id, i) =>
+                id > 0 && (
+                  <div
+                    key={`spell-${id}-${i}`}
+                    className="w-5 h-5 rounded-[5px] bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
+                    title={spellName(id)}
+                  >
+                    <ImgWithFallback
+                      src={spellIconUrl(id, ver)}
+                      alt={spellName(id)}
+                      className="w-full h-full object-contain"
+                    />
+                  </div>
+                )
+            )}
+            {game.runes.keystone > 0 && (
+              <RunePerkIcon runeId={game.runes.keystone} ver={ver} size="sm" />
+            )}
           </div>
-          <span className="text-mut mx-0.5">/</span>
-          <div
-            className="w-6 h-6 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
-            title={treeName(game.runes.secondaryTree)}
-          >
-            <ImgWithFallback
-              src={treeIconUrl(game.runes.secondaryTree)}
-              alt={treeName(game.runes.secondaryTree)}
-              className="w-full h-full object-contain"
-            />
-          </div>
-          <div className="flex items-center gap-1">
-            {game.runes.secondary.map((id, i) => (
-              <RunePerkIcon key={`s-${id}-${i}`} runeId={id} ver={ver} size="sm" />
-            ))}
-          </div>
-          <div className="flex items-center gap-0.5 ml-1">
-            {game.runes.shards.map((id, i) => (
-              <div
-                key={`shard-${id}-${i}`}
-                className="w-4 h-4 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
-                title={shardName(id)}
-              >
-                <ImgWithFallback src={shardIconUrl(id)} alt={shardName(id)} className="w-full h-full object-contain" />
-              </div>
-            ))}
-          </div>
-        </div>
         )}
 
-        {/* Spells */}
-        {game.spells.some(Boolean) && (
-        <div className="flex items-center gap-1 ml-auto">
-          {game.spells.map((id, i) => (
+        <Divider />
+
+        {/* Full item build — 6 slots + trinket, small squares, fixed size */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {game.finalItems.map((id, i) => (
             <div
-              key={`spell-${id}-${i}`}
+              key={`item-${id}-${i}`}
               className="w-7 h-7 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
-              title={spellName(id)}
+              title={`Item #${id}`}
             >
-              <ImgWithFallback src={spellIconUrl(id, ver)} alt={spellName(id)} className="w-full h-full object-contain" />
+              <ImgWithFallback src={itemIconUrl(id, ver)} alt={`Item #${id}`} className="w-full h-full object-contain" />
             </div>
           ))}
-        </div>
-        )}
-      </div>
-      )}
-
-      {/* Items row */}
-      <div className="flex items-center gap-1.5 px-4 py-3 flex-wrap">
-        {game.finalItems.map((id, i) => (
-          <div
-            key={`item-${id}-${i}`}
-            className="w-9 h-9 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
-            title={`Item #${id}`}
-          >
-            <ImgWithFallback src={itemIconUrl(id, ver)} alt={`Item #${id}`} className="w-full h-full object-contain" />
-          </div>
-        ))}
-        {game.trinket && (
-          <>
-            <span className="w-px h-6 bg-line mx-1" aria-hidden="true" />
+          {game.trinket && (
             <div
-              className="w-9 h-9 rounded-full bg-black/30 border border-teal-dim overflow-hidden flex items-center justify-center flex-shrink-0"
+              className="w-7 h-7 rounded-full bg-black/30 border border-teal-dim overflow-hidden flex items-center justify-center flex-shrink-0"
               title={`Trinket #${game.trinket}`}
             >
               <ImgWithFallback src={itemIconUrl(game.trinket, ver)} alt="Trinket" className="w-full h-full object-contain" />
             </div>
-          </>
-        )}
+          )}
+        </div>
 
-        {showExpandToggle && (
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            aria-expanded={expanded}
-            aria-controls={detailId}
-            className="ml-auto flex items-center gap-1 text-[11px] text-mut hover:text-teal transition-colors px-2 py-1 rounded-md active:scale-95"
-          >
-            {expanded ? "Hide timeline" : "Show timeline"}
-            <span
-              className={`inline-block transition-transform duration-200 ease-out motion-reduce:transition-none ${
-                expanded ? "rotate-180" : ""
-              }`}
-              aria-hidden="true"
-            >
-              ▾
+        {/* Timing + source metadata, pinned right */}
+        <div className="ml-auto flex items-center gap-1.5 text-[10.5px] text-mut flex-wrap justify-end">
+          {isProstage && (
+            <span className="inline-flex items-center px-1.5 py-[1px] rounded text-[9px] font-bold uppercase tracking-[0.5px] bg-gold/15 text-gold border border-gold/30">
+              Pro Play
             </span>
-          </button>
-        )}
+          )}
+          <span className="uppercase tracking-[0.5px]">
+            {isProstage ? game.tournament : game.account.region}
+          </span>
+          {GAME_LANE_LABEL[game.role] && (
+            <>
+              <span>·</span>
+              <span>{GAME_LANE_LABEL[game.role]}</span>
+            </>
+          )}
+          {game.patch && (
+            <>
+              <span>·</span>
+              <span className="tabular-nums">{game.patch}</span>
+            </>
+          )}
+          {game.gameDurationSec > 0 && (
+            <>
+              <span>·</span>
+              <span className="tabular-nums">{formatGameLength(game.gameDurationSec)}</span>
+            </>
+          )}
+          <span>·</span>
+          <span className="tabular-nums">{relativeTime(game.gameCreation)}</span>
+
+          {showExpandToggle && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+              aria-controls={detailId}
+              className="flex items-center gap-1 text-mut hover:text-teal transition-colors px-1.5 py-1 rounded-md active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
+            >
+              {expanded ? "Hide" : "Details"}
+              <span
+                className={`inline-block transition-transform duration-200 ease-out motion-reduce:transition-none ${
+                  expanded ? "rotate-180" : ""
+                }`}
+                aria-hidden="true"
+              >
+                ▾
+              </span>
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Expandable detail: purchase order + skill order — no-op for prostage
-          (no purchase/skill data exists to show). */}
+      {/* Expandable detail: full rune page, purchase order, skill order —
+          no-op for prostage (no purchase/skill data exists to show). */}
       {showDetailPanel && (
-        <div id={detailId} className="px-4 pb-4 pt-1 border-t border-line/60 bg-black/10">
-          <div className="flex items-center justify-between mb-2 mt-2">
+        <div id={detailId} className="px-4 pb-4 pt-3 border-t border-line/60 bg-black/10">
+          {(csText || kpText) && (
+            <div className="flex items-center gap-3 text-[10.5px] text-mut mb-3">
+              {csText && <span className="tabular-nums">{csText}</span>}
+              {kpText && <span className="tabular-nums">{kpText}</span>}
+            </div>
+          )}
+          {hasFullRunes && (
+            <>
+              <p className="text-[10.5px] tracking-[1px] uppercase text-teal font-bold mb-2">Runes</p>
+              <div className="flex items-center gap-1.5 mb-3 flex-wrap">
+                <RunePerkIcon runeId={game.runes.keystone} ver={ver} size="lg" />
+                {game.runes.primary.map((id, i) => (
+                  <RunePerkIcon key={`p-${id}-${i}`} runeId={id} ver={ver} size="sm" />
+                ))}
+                <span className="text-mut mx-0.5" aria-hidden="true">
+                  /
+                </span>
+                <div
+                  className="w-6 h-6 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
+                  title={treeName(game.runes.secondaryTree)}
+                >
+                  <ImgWithFallback
+                    src={treeIconUrl(game.runes.secondaryTree)}
+                    alt={treeName(game.runes.secondaryTree)}
+                    className="w-full h-full object-contain"
+                  />
+                </div>
+                {game.runes.secondary.map((id, i) => (
+                  <RunePerkIcon key={`s-${id}-${i}`} runeId={id} ver={ver} size="sm" />
+                ))}
+                {game.runes.shards.map((id, i) => (
+                  <div
+                    key={`shard-${id}-${i}`}
+                    className="w-4 h-4 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0 ml-1"
+                    title={shardName(id)}
+                  >
+                    <ImgWithFallback src={shardIconUrl(id)} alt={shardName(id)} className="w-full h-full object-contain" />
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          <div className="flex items-center justify-between mb-2">
             <p className="text-[10.5px] tracking-[1px] uppercase text-teal font-bold">Purchase Order</p>
             <label className="flex items-center gap-1.5 text-[10.5px] text-mut cursor-pointer select-none">
               <input
@@ -370,7 +426,7 @@ export default function ProGameCard({ game, championIcon, championDisplayName }:
                 key={`${skill}-${i}`}
                 className={`w-6 h-6 flex items-center justify-center rounded-md text-[10.5px] font-bold tabular-nums ${
                   skill === "R"
-                    ? "bg-teal text-[#06231f]"
+                    ? "bg-teal text-bg"
                     : "bg-panel2 border border-line text-mut"
                 }`}
               >
