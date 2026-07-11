@@ -84,7 +84,15 @@ export function CardCompStrip({ allyChampionIds, enemyChampionIds, selfChampionI
   if (!allyChampionIds || !enemyChampionIds) return null;
 
   return (
-    <div className="flex items-center gap-2 px-4 py-2 border-t border-line/60 overflow-hidden">
+    // NOTE: was `border-line/60` — since `line` is already an rgba() token,
+    // Tailwind's opacity modifier can't compose with its baked-in alpha and
+    // silently resolved to solid white at 60% opacity instead of a faint
+    // hairline (measured: rgba(255,255,255,0.6), ~7.5x brighter than
+    // intended). That bright seam is what made the strip read as a bolted-on
+    // "orphan" row rather than the bottom of the same card — fixed by using
+    // a plain (non-token) white with an arbitrary alpha, which Tailwind CAN
+    // compose correctly, at roughly the card border's own faintness.
+    <div className="flex items-center gap-2 px-4 py-2 border-t border-white/[0.08] overflow-hidden">
       <MiniCompRow
         championIds={allyChampionIds}
         selfChampionId={selfChampionId}

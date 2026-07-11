@@ -3661,3 +3661,56 @@ Doc sync only (no code changes, no version bump, no deploy), bringing `CLAUDE.md
 — engo
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-11 23:50
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-11 16:43:40Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-11 — Pro's game-list card visibility (v0.20.0 → v0.20.1)
+
+**Request:** "Make each game more visible" (Pro's page, `/history`, screenshot of Bwipo's game list) — cards were bleeding into the page bg and into each other; the comp strip sub-row read as a stray/orphan element.
+
+**Root cause found before styling:** the comp-strip's bottom divider (`CardCompStrip` in `components/TeamComp.tsx`) used `border-line/60`. `line` is already an `rgba()` string token (`rgba(255,255,255,0.08)`); Tailwind's `/60` opacity modifier can't compose with a color that's already rgba(), so it silently discarded the baked-in 0.08 alpha and rendered solid white at 60% opacity (`rgba(255,255,255,0.6)`, measured via `getComputedStyle` — ~7.5x brighter than the 8% hairline intended). That bright seam is what made the strip look bolted-on rather than the bottom of the same card. **Gotcha for future work:** never apply a Tailwind opacity modifier (`/NN`) to a color token that's already defined as an `rgba()`/`hsla()` string in `tailwind.config.ts` (only plain hex/named tokens compose correctly with modifiers) — `teal-dim` etc. are hex and work fine; `line` is the one rgba-string token in this palette.
+
+**Changes:**
+- `app/globals.css` — added scoped `.game-card` class (brighter fill `rgba(32,36,41,0.74)` + border `rgba(255,255,255,0.14)` vs. base `.glass-card`'s `rgba(26,29,33,0.55)` / `rgba(255,255,255,0.08)`), declared after `.glass-card` so it wins via source order (both single-class selectors, same specificity). Deliberately NOT a change to `.glass-card` itself — scoped to game cards only, so Builds hero card / empty states / skeletons keep their original (already-shipped, unaudited-by-this-pass) treatment.
+- `components/ProGameCard.tsx` — outer card div now carries `glass-card game-card`, plus a win/loss accent edge: a 3px inset box-shadow stripe (`inset 3px 0 0 0 rgba(74,222,128,.7)` win / `rgba(248,113,113,.7)` loss) merged into the existing drop-shadow's arbitrary `shadow-[...]` value (comma-separated, so it still composes with the focus-visible ring via Tailwind's shared `--tw-shadow` chain). Zero layout cost (box-shadow, not border-width), clipped to rounded corners by the existing `overflow-hidden`. Uses the same `--good`/`--bad` tokens `WinLossPill` already uses for this exact signal — not a new decorative color.
+- `components/TeamComp.tsx` — `CardCompStrip`'s divider fixed from the broken `border-line/60` to `border-white/[0.08]` (a plain white token, which DOES compose with Tailwind's opacity modifier) — now a true faint hairline matching the card border's own weight.
+- `components/ProHistoryResults.tsx` + `components/ProGamesSection.tsx` — grid gap `gap-4` → `gap-5` (16px → 20px) for more inter-card breathing room. Note: `ProGamesSection.tsx` is NOT currently imported by `app/page.tsx` (verified via browser — Builds page has no Pro Games section rendered) — this edit is inert on the live Builds page today but kept for whenever that component is wired back in, since it shares `ProGameCard`.
+
+**Verified:** local `npm run dev`, puppeteer/chrome-devtools at 390×844 mobile (matching the user's screenshot — searched Bwipo, same 40-game list) and 1440×900 desktop. Before/after screenshots:
+- `C:/Users/Harout/AppData/Local/Temp/claude/.../scratchpad/before-mobile.png`
+- `C:/Users/Harout/AppData/Local/Temp/claude/.../scratchpad/after-mobile.png` (top of list, win cards)
+- `C:/Users/Harout/AppData/Local/Temp/claude/.../scratchpad/after-mobile-loss.png` (loss cards, red edge)
+- `C:/Users/Harout/AppData/Local/Temp/claude/.../scratchpad/after-desktop.png` (2-col grid)
+
+Also confirmed the Builds page (`/`) still renders correctly end-to-end (scrolled full page, no Pro Games section present there today, so no visual regression to check for from the `.game-card`/gap change on that surface).
+
+`bash scripts/verify-fix.sh` — ALL GREEN (tsc, lint, 437 tests, build, SW version check, manifest) after killing a stray `next dev` process that was locking `.next/trace` (gotcha (i) in this repo's `CLAUDE.md` — first `verify-fix.sh` run failed on `build errored EPERM` until I killed PIDs for `npm run dev` / `next dev` / `next-server` left over from my own dev-server smoke test).
+
+**Version:** 0.20.0 → **0.20.1**, `CHANGELOG.md` updated. SW cache name auto-follows via `?v=` registration param (no direct `sw.js` edit needed) — the unversioned `coachbuild-icons-v1` side cache was untouched.
+
+**Not deployed** — urgot ships after review, per dispatch brief.
+
+**Files touched:**
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/app/globals.css`
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/ProGameCard.tsx`
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/TeamComp.tsx`
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/ProHistoryResults.tsx`
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/ProGamesSection.tsx`
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/package.json`
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/CHANGELOG.md`
+
+

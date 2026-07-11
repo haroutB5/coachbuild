@@ -48,6 +48,21 @@ body {
   border: 1px solid var(--line);
 }
 
+/* Per-game card in the Pro's/Builds game lists (ProGameCard) — a visibly
+   brighter fill + border than the base .glass-card so each game reads as a
+   distinct, scannable unit instead of blurring into the page bg and its
+   neighbors (v0.20.1, "make each game more visible"). Layered on top of
+   .glass-card (which still supplies the blur), NOT a replacement for it —
+   scoped to this one class so every other .glass-card surface (Builds hero
+   card, empty states, skeletons) keeps its original, already-shipped
+   treatment untouched. Property-level override relies on source order (this
+   rule is declared after .glass-card) since both selectors are single
+   classes of equal specificity. */
+.game-card {
+  background: rgba(32, 36, 41, 0.74);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

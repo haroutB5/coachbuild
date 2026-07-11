@@ -200,6 +200,17 @@ export default function ProGameCard({
     }
   }
 
+  // Win/loss accent edge — a 3px inset stripe (not a border-width addition,
+  // so it costs zero layout) using the same good/bad tokens WinLossPill
+  // already uses for this exact signal, composed into the card's one
+  // box-shadow value alongside the drop shadow so it still layers correctly
+  // with the focus-visible ring (Tailwind's ring utilities compose via the
+  // same --tw-shadow chain). Clipped to the card's rounded corners by the
+  // existing `overflow-hidden`.
+  const resultEdge = game.win
+    ? "shadow-[0_6px_20px_rgba(0,0,0,0.35),inset_3px_0_0_0_rgba(74,222,128,0.7)]"
+    : "shadow-[0_6px_20px_rgba(0,0,0,0.35),inset_3px_0_0_0_rgba(248,113,113,0.7)]";
+
   return (
     <>
       <div
@@ -210,7 +221,7 @@ export default function ProGameCard({
         aria-label={`View details — ${championDisplayName ?? game.championName}, ${
           cleanedPlayerName ?? game.player.name
         }, ${game.win ? "win" : "loss"}`}
-        className="glass-card rounded-2xl overflow-hidden shadow-[0_6px_24px_rgba(0,0,0,0.3)] cursor-pointer transition-colors hover:border-teal-dim/60 active:scale-[0.995] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+        className={`glass-card game-card rounded-2xl overflow-hidden ${resultEdge} cursor-pointer transition-colors hover:border-teal-dim/60 active:scale-[0.995] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg`}
       >
         {/* Dense collapsed row — identity, result, KDA, spells + keystone,
             items, and timing/source metadata all inline (wraps on narrow

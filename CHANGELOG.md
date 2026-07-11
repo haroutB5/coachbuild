@@ -2,6 +2,11 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.20.1] — 2026-07-11
+### Fixed
+- **Game cards on the Pro's list are visibly distinct now** — each card gets a brighter surface + clearer border than the page bg (scoped to the game list; other glass surfaces unchanged), a bigger gap between cards, and a win/loss accent edge (green/red, matching the WIN/LOSS pill) so results scan at a glance without reading every card.
+- **Fixed a real bug**, not just a tweak: the ally/enemy comp strip at the bottom of each card had an unintentional 60%-opacity white divider (a Tailwind opacity-modifier-on-an-rgba-token gotcha) — ~7.5x brighter than the 8% hairline it was meant to be — which made the strip read as a bolted-on, disconnected element rather than the bottom of the same card. Now a matching faint hairline, so the whole card reads as one unit.
+
 ## [0.20.0] — 2026-07-11
 ### Added
 - **Back returns to where you were**: the Pro's page now integrates with browser history — jump from a game sheet to another player's games, swipe back, and you land on the sheet you came from; back again walks to the previous view. Closing a sheet with ✕ never leaves ghost entries.
