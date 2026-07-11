@@ -3051,3 +3051,202 @@ Documentation sync for coachbuild v0.16.0 — no code changes, no version bump, 
 - Confirmed `AI/coachbuild-debugwt/` exists on disk (`test -d` succeeded) but did not open it or read its `.env.local` copy — out of scope, and it's a credential-bearing directory the brief said is pending user-approved removal.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-11 14:32
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-11 10:41:48Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-11 — Per-player team data (`allyPlayers`/`enemyPlayers`) for `/api/pros`
+
+Added `TeamCompPlayer` (championId/name/items/trinket/role) to `lib/pro/types.ts`,
+and `allyPlayers?`/`enemyPlayers?: TeamCompPlayer[]` to `ProGame` (both-or-neither,
+5/5-only, role-ordered, same degrade contract as `allyChampionIds`/`enemyChampionIds`
+— see the doc comment on `ProGame` for the full contract note fronty is coding
+against).
+
+**Probe before build:** confirmed the real Riot match-v5 participant field names
+live (RIOT_API_KEY in `.env.local`) rather than guessing — `riotIdGameName` /
+`riotIdTagline` are current, `summonerName` comes back `""` (empty string, not
+absent) for real accounts post-privacy-change. `RiotParticipant` in
+`lib/pro/types.ts` now documents this; `lib/pro/extract.ts`'s
+`riotParticipantName()` treats an empty/whitespace string the same as missing.
+
+**Shared ordering, not duplicated:** generalized the existing role-sort into
+`orderByRole<T extends {role}>()` (`lib/pro/extract.ts`) and reimplemented
+`orderChampionIdsByRole` on top of it (identical behavior, all existing tests
+pass unchanged) — new code (`extractTeamPlayers` for soloq,
+`app/api/pros/route.ts`'s `compsForGame` for prostage) calls the SAME helper so
+the champion-id strip and the full player array can never disagree on slot
+order for a given row. In `compsForGame`, both arrays are now derived from one
+`orderByRole()` call each side (`allyOrdered`/`enemyOrdered`), not two
+independent calls, so `allyPlayers[i]` and `allyChampionIds[i]` are
+structurally guaranteed to describe the same slot.
+
+**Soloq:** `extractTeamPlayers()` (sibling to `extractTeamComps`, same 5v5
+guard) — `lib/pro/ingestMatches.ts` INSERT extended; migration
+`0007_team_players.sql` adds `pro_matches.ally_players`/`enemy_players` jsonb
+(independently nullable from migration 0006's champion-id columns — route's
+`soloqPlayers()` checks its own 5/5 guard separately from `soloqComps()`, per
+brief: "do not derive one from the other in the response").
+
+**Prostage:** no new data needed — extended the existing batched (non-N+1)
+comps query in `app/api/pros/route.ts` to also pull `player_link`,
+`final_items`, `trinket`, and `p.name AS pro_name` (LEFT JOIN pros per
+comp-row, not just the response row's own pro). `name` = `pro_name ??
+player_link` (prefers a tracked pro's real name, falls back to the raw
+Leaguepedia link for unlinked players in the same game).
+
+**Backfill:** `scripts/backfill-team-comps.mjs` gained a `--players` mode
+(`WHERE ally_players IS NULL` cursor — no separate cursor *file* needed here,
+unlike `--reorder`: a freshly-nullable column already gives natural
+resumability since a row only drops out of the WHERE clause once its UPDATE
+actually lands). Validated on 3 real rows first (`npx tsx
+scripts/backfill-team-comps.mjs 3 --players` — real player names/items/roles
+confirmed via a probe query against the DB), then ran the full backfill
+(1131 remaining rows) to completion in this session — see run output below.
+
+**Tests:** `lib/__tests__/pro-extract.test.ts` gained `orderByRole` +
+`extractTeamPlayers` coverage (role-order, degrade-to-source-order on a
+duplicate role, items 0-filtering, name fallback chain incl. both-empty ->
+null, extractMatch integration in lockstep with `allyChampionIds`). New file
+`lib/__tests__/pro-pros-route-team-players.test.ts` covers the route mapping
+for both sources (soloq: both-or-neither/5-or-omit, independent from the
+champion-id pair; prostage: name preference, item 0-filtering, lockstep
+ordering with `allyChampionIds`, omit-all-four on an unclean split).
+
+Gates: `tsc --noEmit` clean. `npx vitest run`: 361 passed (342 baseline + 19
+new), 1 pre-existing unrelated failure (`components/__tests__/TeamComp.test.ts`
+— a vite/JSX parse error in fronty's concurrently-edited `components/TeamComp.tsx`,
+not touched by me, not present in my file set). `next lint`: clean (only
+pre-existing `<img>` warnings elsewhere). `next build`: succeeds.
+
+Scratch: `scripts/_probe.mjs` used for the live-field probe and the
+post-backfill spot-check, emptied back to its one-line header before
+finishing.
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-11 14:37
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-11 07:22:23Z; previous content preserved there. Append new rounds below. -->
+
+## Round: GameDetailSheet Teams section — boxed per-player redesign (2026-07-11)
+
+### Summary
+Replaced the two flat icon-strip roster rows in the sheet's Teams section with two
+glass-panel boxes (Ally / Enemy), matching the matchday-style per-player scoreboard
+reference. Mirrored engy's concurrent `allyPlayers`/`enemyPlayers`/`TeamCompPlayer`
+contract addition into `components/proGames.types.ts` — confirmed byte-identical
+field shape against the landed `lib/pro/types.ts` (`championId`, `name`, `items`,
+`trinket`, `role`) and `app/api/pros/route.ts` (`allyPlayers`/`enemyPlayers`, both-or-
+neither, 5-per-side, ordered) after engy's mid-session tsc fix (`orderChampionIdsByRole`)
+landed. Each box now shows: title (real team name when the backend ever adds one —
+none exists on the contract today, so it currently always falls back to "Ally team —
+<tracked player's team>" / "Enemy team") + a WIN/LOSS chip (good/bad tokens, ONLY use
+of those tokens here — no full-box red/blue accent) + either 5 per-player rows (champ
+icon + role abbr, preferring the `role` field over position + name when non-null +
+tappable ~23px final-item icons + trinket, reusing the existing `ItemDetailPopover`
+open callback and `getItemNameMap` names) or, per side independently, the original
+icon-only roster when that side's `*Players` array is absent/short (old cached rows,
+partial backfill) — never an empty box. `CardCompStrip` (the collapsed-card comp
+strip) is untouched.
+
+### Files Touched
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/proGames.types.ts` — added `TeamCompPlayer` + `allyPlayers?`/`enemyPlayers?` on `ProGame`, mirrored verbatim from `lib/pro/types.ts`.
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/TeamComp.tsx` — `SheetTeamsSection` rewritten around a new `TeamBox`/`PlayerRow`/`LegacyRosterBody` structure; `CardCompStrip`/`MiniCompRow` untouched.
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/teamCompDisplay.ts` — **new**, pure helpers (`roleAbbrForPlayer`, `teamBoxTitle`, `isSelfInAlly`) extracted out of TeamComp.tsx into a JSX-free module so Vitest can import them directly (see Known Issues — this repo's harness has no React/JSX transform; TeamComp.tsx is the first "use client" component with real JSX to ever get a `.test.ts` written against it, and importing JSX-bearing .tsx straight into a test file breaks vite's import-analysis lexer). TeamComp.tsx re-exports all three so any other `./TeamComp` import site is unaffected.
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/GameDetailSheet.tsx` — wires `win`, `trackedPlayerTeam` (`game.player.team`), `ver`, `itemNames`, `onItemClick={openItemPopover}` into `SheetTeamsSection`; added a local `ProGameTeamNames` defensive-cast interface (`allyTeamName?`/`enemyTeamName?`) for a real-team-name field that does NOT exist on the contract yet — confirmed via grep, see Known Issues.
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/proGames.fixtures.ts` — added `allyPlayers`/`enemyPlayers` to `FIXTURE_GAME_WIN` (soloq) and `FIXTURE_GAME_PROSTAGE_FULL` (prostage); `FIXTURE_GAME_LOSS`/`FIXTURE_GAME_EVENTFUL`/`FIXTURE_GAME_PROSTAGE_PARTIAL` deliberately left without the new fields to keep exercising the fallback path.
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/__tests__/teamCompDisplay.test.ts` — **new**, 13 tests for the three pure helpers (role-field-over-index precedence, standard-length-only positional fallback, title fallback chain, self-in-ally derivability).
+
+### Tests
+- `npx tsc --noEmit` — clean (0 errors; the 2 errors seen mid-session were engy's in-flight `app/api/pros/route.ts`, resolved once `orderChampionIdsByRole` landed).
+- `npx vitest run` — **373 passed** (342 baseline + engy's 18 new prostage-comp tests + my 13 teamCompDisplay tests), 0 failed.
+- `npx next lint` — clean, only the 5 pre-existing `no-img-element` warnings (not in my files).
+- `npm run build` — succeeds.
+- Live-verified at 390×844×2,mobile,touch via a puppeteer `chrome-devtools` session against a fresh `next dev` port (4137, killed afterward) with `/api/pros`/`/api/players`/`/api/champions` intercepted via `navigate_page`'s `initScript` (the live route doesn't emit `allyPlayers`/`enemyPlayers` yet — needs deploy + a data backfill engy hasn't run):
+  - **Boxed per-player state** (mocked game with `allyPlayers`/`enemyPlayers`): both boxes render, ally box highlighted-ring on Caps' row with role "MID" even though he's array-index 0 (proves role-field-over-index precedence), null name (Pyke) and null trinket render correctly with no name cell / no 4th icon, WIN/LOSS chips render only on box headers using good/bad tokens, tapped an item icon inside a Teams-box row and got the real `ItemDetailPopover` with the resolved name "Liandry's Torment" (not "Item #6653") — confirms `getItemNameMap`/`onItemClick` wiring.
+  - **Fallback state** (second mocked game, `allyPlayers`/`enemyPlayers` omitted): same boxed chrome (title, WIN/LOSS chip correctly inverted for the loss) renders the original icon-only roster instead of an empty box.
+  - `document.documentElement.scrollWidth === clientWidth === 390` in both states — no horizontal overflow.
+  - `list_console_messages` — zero errors/warnings in either state.
+
+### Known Issues
+- **No real ally/enemy team-name field exists on the contract yet.** Grepped the whole repo (`allyTeamName`/`enemyTeamName`/`teamName` in any casing) — nothing, confirmed again after engy's session landed. `teamBoxTitle()`'s "real name" branch is therefore dead code today; the ally box always shows "Ally team — <player.team>" and the enemy box always shows plain "Enemy team" in production right now. If a future backend change adds real team names, wire the actual field name into `GameDetailSheet.tsx`'s `ProGameTeamNames` cast (currently a placeholder guess) rather than assuming it matches.
+- **The live `/api/pros` route doesn't emit `allyPlayers`/`enemyPlayers` yet** even though the route code now supports it (engy's session) — needs a deploy plus `backfill-team-comps.mjs`-style data backfill before real prostage/soloq rows carry these fields. Until then every production row hits the fallback icon-strip path inside the new boxed chrome, which is the intended and tested degrade.
+- **Vitest harness gap (worth fixing generally, not scoped to me):** this repo's `vitest.config.ts` has no `@vitejs/plugin-react`, so any `.test.ts` that imports a `.tsx` file containing REAL JSX will fail to parse (misleading `jsx: preserve` error from vite's import-analysis, unrelated to the actual cause). Every previously-tested `.tsx`/`.ts` module happened to contain zero JSX tags, so this never surfaced before now. Worked around it for this task by moving the pure helpers into `teamCompDisplay.ts`; flagging in case a future task wants to unit-test a component that only exposes JSX-entangled logic — that will need either the same extraction pattern or adding the plugin to `vitest.config.ts`.
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-11 15:00
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-11 13:32:42Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-11 (round 2) — team-players backfill completed to 100%
+
+`npx tsx scripts/backfill-team-comps.mjs 1200 --players` ran to completion:
+`{"processed":1131,"updated":1114,"skipped":0,"errors":[17 "fetch failed" —
+transient network blips, none from Riot 4xx/5xx]}`. The 17 transient failures
+left `ally_players IS NULL` on their rows (by design — `--players` mode relies
+on the `WHERE ally_players IS NULL` filter for resumability, no cursor file
+needed); a follow-up `npx tsx scripts/backfill-team-comps.mjs 30 --players`
+picked up exactly those 17 and cleared all of them with zero further errors.
+Verified via direct DB query: `SELECT count(*) FROM coachbuild.pro_matches
+WHERE ally_players IS NULL` → **0**. Every soloq row in the table now has
+`ally_players`/`enemy_players` populated (or permanently null only for rows
+where `extractTeamPlayers` itself can't produce a clean 5v5 — none observed
+in this run).
+
+**End-to-end live validation** (real DB, no mocks — invoked `GET` from
+`app/api/pros/route.ts` directly against production data):
+- soloq: `?championId=164&role=5&source=soloq&limit=1` → `allyPlayers`/
+  `enemyPlayers` len 5/5, real in-game names (e.g. a teammate's Korean IGN),
+  items 0-filtered, trinket set.
+- prostage: `?championId=15&role=5&source=prostage&limit=1` against
+  `tournament_display ILIKE '%MSI%'` (resolved to "LCK 2026 Season Road to
+  MSI" — the actual MSI main event isn't in the DB yet this early in the
+  season) → 5/5 real pro names (Pun/Hizto/Dire/Eddie/Bie), role-ordered
+  0-4, items 0-filtered.
+
+Final gate re-run after the backfill: `tsc --noEmit` clean, `vitest run` —
+**373/373 passed** (fronty's `components/TeamComp.tsx` parse issue from
+earlier in the session is gone, so the full suite is green with no
+exclusions), `next lint` clean, `next build` succeeds.
+
+`scripts/_probe.mjs` used for the live probe, the DB spot-check, and this
+final live-route validation — emptied back to its one-line header (verified
+via `git status`, no other scratch files left tracked).
+
+
+

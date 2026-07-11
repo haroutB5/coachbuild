@@ -12,7 +12,9 @@ import {
   extractMatch,
   extractGameStats,
   extractTeamComps,
+  extractTeamPlayers,
   orderChampionIdsByRole,
+  orderByRole,
 } from "../pro/extract";
 import type { RiotMatch, RiotParticipant, RiotTimeline } from "../pro/types";
 
@@ -389,6 +391,135 @@ describe("extractMatch team comps integration", () => {
     const row = extractMatch(m, timeline(), "puuid-1");
     expect(row?.allyChampionIds).toBeNull();
     expect(row?.enemyChampionIds).toBeNull();
+  });
+});
+
+describe("orderByRole (generic form backing orderChampionIdsByRole)", () => {
+  it("reorders arbitrary entries by role and preserves the rest of the shape", () => {
+    const entries = [
+      { championId: 1, role: 2, tag: "mid" },
+      { championId: 2, role: 0, tag: "top" },
+    ];
+    expect(orderByRole(entries)).toEqual([
+      { championId: 2, role: 0, tag: "top" },
+      { championId: 1, role: 2, tag: "mid" },
+    ]);
+  });
+
+  it("falls back to input order (a shallow copy, not the same array reference) on a degrade condition", () => {
+    const entries = [
+      { championId: 1, role: 0 },
+      { championId: 2, role: null },
+    ];
+    const result = orderByRole(entries);
+    expect(result).toEqual(entries);
+    expect(result).not.toBe(entries);
+  });
+});
+
+describe("extractTeamPlayers", () => {
+  function fullTenParticipants(overrides: Partial<RiotParticipant>[] = []): RiotParticipant[] {
+    const base = [
+      participant(), // puuid-1, teamId 100, championId 112, MIDDLE
+      participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2, teamPosition: "TOP" }),
+      participant({ puuid: "ally-3", participantId: 3, teamId: 100, championId: 3, teamPosition: "JUNGLE" }),
+      participant({ puuid: "ally-4", participantId: 4, teamId: 100, championId: 4, teamPosition: "BOTTOM" }),
+      participant({ puuid: "ally-5", participantId: 5, teamId: 100, championId: 5, teamPosition: "UTILITY" }),
+      participant({ puuid: "enemy-1", participantId: 6, teamId: 200, championId: 6, teamPosition: "TOP" }),
+      participant({ puuid: "enemy-2", participantId: 7, teamId: 200, championId: 7, teamPosition: "JUNGLE" }),
+      participant({ puuid: "enemy-3", participantId: 8, teamId: 200, championId: 8, teamPosition: "MIDDLE" }),
+      participant({ puuid: "enemy-4", participantId: 9, teamId: 200, championId: 9, teamPosition: "BOTTOM" }),
+      participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10, teamPosition: "UTILITY" }),
+    ];
+    return base.map((p, i) => ({ ...p, ...(overrides[i] ?? {}) }));
+  }
+
+  it("returns null when the puuid isn't in the match", () => {
+    const m = match({}, fullTenParticipants());
+    expect(extractTeamPlayers(m, "someone-else")).toBeNull();
+  });
+
+  it("returns null when either side doesn't have exactly 5 champions", () => {
+    const m = match({}, fullTenParticipants().slice(0, 9));
+    expect(extractTeamPlayers(m, "puuid-1")).toBeNull();
+  });
+
+  it("role-orders each side (Top/Jungle/Mid/Bot/Support), the tracked player's own slot included", () => {
+    const m = match({}, fullTenParticipants());
+    const players = extractTeamPlayers(m, "puuid-1");
+    expect(players?.allyPlayers.map((p) => p.championId)).toEqual([2, 3, 112, 4, 5]); // top jgl MID bot sup
+    expect(players?.allyPlayers[2].championId).toBe(112);
+    expect(players?.allyPlayers[2].role).toBe(2);
+    expect(players?.enemyPlayers.map((p) => p.championId)).toEqual([6, 7, 8, 9, 10]);
+  });
+
+  it("falls back to source order when a side's roles don't resolve to 5 distinct known roles", () => {
+    const m = match(
+      {},
+      fullTenParticipants([{}, { teamPosition: "TOP" }, { teamPosition: "TOP" }]) // ally-2 and ally-3 both TOP -> dup
+    );
+    const players = extractTeamPlayers(m, "puuid-1");
+    expect(players?.allyPlayers.map((p) => p.championId)).toEqual([112, 2, 3, 4, 5]); // source order preserved
+  });
+
+  it("filters 0s out of items and nulls an empty trinket slot per player", () => {
+    const m = match(
+      {},
+      fullTenParticipants([{ item3: 0, item4: 0, item5: 0, item6: 0 }])
+    );
+    const players = extractTeamPlayers(m, "puuid-1");
+    const self = players?.allyPlayers.find((p) => p.championId === 112);
+    expect(self?.items).toEqual([6655, 4645, 3020]);
+    expect(self?.trinket).toBeNull();
+  });
+
+  it("resolves name from riotIdGameName when present", () => {
+    const m = match({}, fullTenParticipants([{ riotIdGameName: "Faker", riotIdTagline: "KR1" }]));
+    const players = extractTeamPlayers(m, "puuid-1");
+    const self = players?.allyPlayers.find((p) => p.championId === 112);
+    expect(self?.name).toBe("Faker");
+  });
+
+  it("falls back to summonerName when riotIdGameName is absent/empty", () => {
+    const m = match({}, fullTenParticipants([{ riotIdGameName: "", summonerName: "OldStyleName" }]));
+    const players = extractTeamPlayers(m, "puuid-1");
+    const self = players?.allyPlayers.find((p) => p.championId === 112);
+    expect(self?.name).toBe("OldStyleName");
+  });
+
+  it("resolves to null when neither riotIdGameName nor summonerName is available (both empty/absent)", () => {
+    const m = match({}, fullTenParticipants([{ riotIdGameName: "", summonerName: "" }]));
+    const players = extractTeamPlayers(m, "puuid-1");
+    const self = players?.allyPlayers.find((p) => p.championId === 112);
+    expect(self?.name).toBeNull();
+  });
+});
+
+describe("extractMatch team players integration", () => {
+  it("populates allyPlayers/enemyPlayers on a full 5v5 row, in lockstep with allyChampionIds/enemyChampionIds", () => {
+    const participants = [
+      participant(), // puuid-1, teamId 100, championId 112
+      participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2 }),
+      participant({ puuid: "ally-3", participantId: 3, teamId: 100, championId: 3 }),
+      participant({ puuid: "ally-4", participantId: 4, teamId: 100, championId: 4 }),
+      participant({ puuid: "ally-5", participantId: 5, teamId: 100, championId: 5 }),
+      participant({ puuid: "enemy-1", participantId: 6, teamId: 200, championId: 6 }),
+      participant({ puuid: "enemy-2", participantId: 7, teamId: 200, championId: 7 }),
+      participant({ puuid: "enemy-3", participantId: 8, teamId: 200, championId: 8 }),
+      participant({ puuid: "enemy-4", participantId: 9, teamId: 200, championId: 9 }),
+      participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10 }),
+    ];
+    const m = match({}, participants);
+    const row = extractMatch(m, timeline(), "puuid-1");
+    expect(row?.allyPlayers?.map((p) => p.championId)).toEqual(row?.allyChampionIds);
+    expect(row?.enemyPlayers?.map((p) => p.championId)).toEqual(row?.enemyChampionIds);
+  });
+
+  it("nulls both fields when the match isn't a clean 5v5", () => {
+    const m = match({}, [participant()]);
+    const row = extractMatch(m, timeline(), "puuid-1");
+    expect(row?.allyPlayers).toBeNull();
+    expect(row?.enemyPlayers).toBeNull();
   });
 });
 

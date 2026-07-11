@@ -11,6 +11,7 @@ import type {
   RiotParticipant,
   RiotTimeline,
   RiotTimelineEvent,
+  TeamCompPlayer,
 } from "./types";
 
 export interface ExtractedMatch {
@@ -38,6 +39,8 @@ export interface ExtractedMatch {
   gold: number;
   allyChampionIds: number[] | null; // null unless the match has a clean 5v5 split; see extractTeamComps
   enemyChampionIds: number[] | null;
+  allyPlayers: TeamCompPlayer[] | null; // null unless the match has a clean 5v5 split; see extractTeamPlayers
+  enemyPlayers: TeamCompPlayer[] | null;
 }
 
 /** Patch "16.13" from gameVersion "16.13.567.1234". */
@@ -164,19 +167,31 @@ export interface ExtractedTeamComps {
  *  complete," never a partial/reordered-lie array. Shared by both team-comps
  *  producers: lib/pro/extract.ts's extractTeamComps (soloq, teamPosition ->
  *  role) and app/api/pros/route.ts's prostage comps (Cargo role column). */
-export function orderChampionIdsByRole(
-  entries: { championId: number; role: number | null | undefined }[]
-): number[] {
+/** Generic form of the role-ordering rule above: reorders ANY array of
+ *  entries carrying a `role` field into role-slot order (0=Top..4=Support),
+ *  falling back to input (source) order under the exact same degrade
+ *  condition (not exactly 5 entries, or not exactly 5 DISTINCT known roles).
+ *  orderChampionIdsByRole (below) and lib/pro/extract.ts's extractTeamPlayers
+ *  both delegate here so the champion-id strip and the full per-player
+ *  TeamCompPlayer array can NEVER disagree on ordering for the same row —
+ *  one degrade rule, one implementation, two call sites. */
+export function orderByRole<T extends { role: number | null | undefined }>(entries: T[]): T[] {
   const roles = entries.map((e) => (typeof e.role === "number" && e.role >= 0 && e.role <= 4 ? e.role : null));
   const knownCount = roles.filter((r) => r !== null).length;
   const distinctKnown = new Set(roles.filter((r): r is number => r !== null));
   if (knownCount !== entries.length || distinctKnown.size !== entries.length) {
-    return entries.map((e) => e.championId);
+    return entries.slice();
   }
   return entries
-    .map((e, i) => ({ championId: e.championId, role: roles[i] as number }))
+    .map((e, i) => ({ entry: e, role: roles[i] as number }))
     .sort((a, b) => a.role - b.role)
-    .map((e) => e.championId);
+    .map((x) => x.entry);
+}
+
+export function orderChampionIdsByRole(
+  entries: { championId: number; role: number | null | undefined }[]
+): number[] {
+  return orderByRole(entries).map((e) => e.championId);
 }
 
 /** Splits a match's participants by teamId into the tracked player's ally
@@ -206,6 +221,54 @@ export function extractTeamComps(match: RiotMatch, puuid: string): ExtractedTeam
   };
 }
 
+/** Riot ID display name for a participant, or null when unresolvable.
+ *  riotIdGameName is the current field (see RiotParticipant's doc comment in
+ *  types.ts); summonerName is a legacy fallback that frequently comes back ""
+ *  post-privacy-change, so an empty/whitespace string is treated the same as
+ *  absent rather than trusted at face value. */
+function riotParticipantName(p: RiotParticipant): string | null {
+  if (p.riotIdGameName && p.riotIdGameName.trim().length > 0) return p.riotIdGameName;
+  if (p.summonerName && p.summonerName.trim().length > 0) return p.summonerName;
+  return null;
+}
+
+function participantToTeamCompPlayer(p: RiotParticipant): TeamCompPlayer {
+  const items = [p.item0, p.item1, p.item2, p.item3, p.item4, p.item5].filter((id) => id !== 0);
+  return {
+    championId: p.championId,
+    name: riotParticipantName(p),
+    items,
+    trinket: p.item6 && p.item6 !== 0 ? p.item6 : null,
+    role: roleFromTeamPosition(p.teamPosition),
+  };
+}
+
+export interface ExtractedTeamPlayers {
+  allyPlayers: TeamCompPlayer[];
+  enemyPlayers: TeamCompPlayer[];
+}
+
+/** Sibling to extractTeamComps — same identity/5v5 guard, same
+ *  orderByRole degrade rule, but returns full per-player TeamCompPlayer data
+ *  (name/items/trinket/role) instead of just champion ids, for the frontend's
+ *  per-player build sheet. Deliberately NOT folded into extractTeamComps
+ *  itself: extractTeamComps's narrower ExtractedTeamComps shape is still what
+ *  scripts/backfill-team-comps.mjs's plain (non---players) mode writes, and
+ *  callers that only need champion ids shouldn't have to thread the heavier
+ *  shape through. Returns null unless BOTH sides have exactly 5 champions —
+ *  same all-or-nothing contract as extractTeamComps. */
+export function extractTeamPlayers(match: RiotMatch, puuid: string): ExtractedTeamPlayers | null {
+  const participant = match.info.participants.find((p) => p.puuid === puuid);
+  if (!participant) return null;
+  const allies = match.info.participants.filter((p) => p.teamId === participant.teamId);
+  const enemies = match.info.participants.filter((p) => p.teamId !== participant.teamId);
+  if (allies.length !== 5 || enemies.length !== 5) return null;
+  return {
+    allyPlayers: orderByRole(allies.map(participantToTeamCompPlayer)),
+    enemyPlayers: orderByRole(enemies.map(participantToTeamCompPlayer)),
+  };
+}
+
 /** Returns null (caller must skip+log) when the participant's role can't be
  *  mapped — never store a row with a guessed role. */
 export function extractMatch(match: RiotMatch, timeline: RiotTimeline, puuid: string): ExtractedMatch | null {
@@ -228,6 +291,7 @@ export function extractMatch(match: RiotMatch, timeline: RiotTimeline, puuid: st
   if (!stats) return null; // unreachable given the participant lookup above already succeeded, but keeps this function total
 
   const comps = extractTeamComps(match, puuid);
+  const players = extractTeamPlayers(match, puuid);
 
   return {
     matchId: match.metadata.matchId,
@@ -254,5 +318,7 @@ export function extractMatch(match: RiotMatch, timeline: RiotTimeline, puuid: st
     gold: stats.gold,
     allyChampionIds: comps?.allyChampionIds ?? null,
     enemyChampionIds: comps?.enemyChampionIds ?? null,
+    allyPlayers: players?.allyPlayers ?? null,
+    enemyPlayers: players?.enemyPlayers ?? null,
   };
 }

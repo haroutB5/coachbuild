@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
 import { FRESH_WINDOW_DAYS } from "@/lib/pro/fresh";
-import { orderChampionIdsByRole } from "@/lib/pro/extract";
-import type { DisplayRoleId, ProGame, ProGamePurchase, ProGameRunes, ProRoleId, ProsResponse } from "@/lib/pro/types";
+import { orderByRole } from "@/lib/pro/extract";
+import type {
+  DisplayRoleId,
+  ProGame,
+  ProGamePurchase,
+  ProGameRunes,
+  ProRoleId,
+  ProsResponse,
+  TeamCompPlayer,
+} from "@/lib/pro/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,6 +37,8 @@ interface ProGameRow {
   runes: unknown;
   ally_champion_ids: unknown;
   enemy_champion_ids: unknown;
+  ally_players: unknown;
+  enemy_players: unknown;
   pro_name: string;
   pro_team: string | null;
   pro_role: number | null;
@@ -61,6 +71,21 @@ function soloqComps(row: ProGameRow): Pick<ProGame, "allyChampionIds" | "enemyCh
   const enemy = asJson<number[] | null>(row.enemy_champion_ids, null);
   if (ally && enemy && ally.length === 5 && enemy.length === 5) {
     return { allyChampionIds: ally, enemyChampionIds: enemy };
+  }
+  return {};
+}
+
+/** ally_players/enemy_players (migration 0007) are independently nullable
+ *  jsonb columns from ally_champion_ids/enemy_champion_ids above — a row
+ *  can have one backfilled and not the other (e.g. mid-way through a
+ *  scripts/backfill-team-comps.mjs --players run) — so this checks its OWN
+ *  5/5 guard rather than piggybacking on soloqComps's. Both fields still
+ *  emit together or neither, per the same both-or-neither contract. */
+function soloqPlayers(row: ProGameRow): Pick<ProGame, "allyPlayers" | "enemyPlayers"> | Record<string, never> {
+  const ally = asJson<TeamCompPlayer[] | null>(row.ally_players, null);
+  const enemy = asJson<TeamCompPlayer[] | null>(row.enemy_players, null);
+  if (ally && enemy && ally.length === 5 && enemy.length === 5) {
+    return { allyPlayers: ally, enemyPlayers: enemy };
   }
   return {};
 }
@@ -100,6 +125,7 @@ function rowToProGame(row: ProGameRow): ProGame {
       shards: [],
     }),
     ...soloqComps(row),
+    ...soloqPlayers(row),
   };
 }
 
@@ -146,7 +172,9 @@ interface ProstageGameRow {
  *  can satisfy "show me all this champion's games." */
 function prostageRowToProGame(
   row: ProstageGameRow,
-  comps: Pick<ProGame, "allyChampionIds" | "enemyChampionIds"> | Record<string, never> = {}
+  comps:
+    | Pick<ProGame, "allyChampionIds" | "enemyChampionIds" | "allyPlayers" | "enemyPlayers">
+    | Record<string, never> = {}
 ): ProGame | null {
   if (!row?.game_id || !row.player_link || typeof row.champion_id !== "number") return null;
   const gameCreation = new Date(row.game_datetime);
@@ -199,20 +227,33 @@ interface ProstageCompRow {
   champion_id: number;
   role: number | null; // Cargo Role column, 0-4, nullable
   pro_role: number | null; // pros-table fallback role, same resolution as prostageRowToProGame's roleValue
+  player_link: string; // prostage identity field — NOT NULL on the table, always present
+  final_items: unknown; // jsonb — this row's own final items (Phase 4 per-player data)
+  trinket: number | null;
+  pro_name: string | null; // pros-table name when THIS row links to a tracked pro, else null
 }
 
-interface CompEntry {
-  championId: number;
-  role: number | null; // resolved (pro_role ?? role), fed straight into orderChampionIdsByRole
-}
+/** Carries everything needed to build BOTH the champion-id-only strip
+ *  (allyChampionIds/enemyChampionIds) and the full per-player sheet
+ *  (allyPlayers/enemyPlayers) from one grouped row — deliberately shaped as
+ *  TeamCompPlayer itself (lib/pro/types.ts) rather than a narrower
+ *  champion-id-only type, so orderByRole (lib/pro/extract.ts, shared with
+ *  the soloq pipeline's extractTeamPlayers) can reorder the whole entry in
+ *  one pass and both response arrays are derived from that SAME ordered
+ *  array — never two independent orderings that could disagree. */
+type CompEntry = TeamCompPlayer;
 
 /** Groups a batch of raw coachbuild.prostage_matches (game_id, team,
- *  champion_id, role) rows — fetched for the specific game_ids already
- *  present in this response's prostage results — into
- *  game_id -> team -> {championId, role}[]. Rows with a null team or
- *  champion_id are excluded by the caller's SQL WHERE clause, never here.
- *  Role resolution mirrors prostageRowToProGame's roleValue (pro_role ??
- *  role, unresolved stays null rather than guessed). */
+ *  champion_id, role, player_link, final_items, trinket, pro_name) rows —
+ *  fetched for the specific game_ids already present in this response's
+ *  prostage results — into game_id -> team -> TeamCompPlayer[]. Rows with a
+ *  null team or champion_id are excluded by the caller's SQL WHERE clause,
+ *  never here. Role resolution mirrors prostageRowToProGame's roleValue
+ *  (pro_role ?? role, unresolved stays null rather than guessed). name
+ *  prefers pro_name (this row links to a tracked pro) over the raw
+ *  player_link. items defensively filters 0s even though Cargo's Items list
+ *  shouldn't contain placeholder zeros (lib/prostage/extract.ts only pushes
+ *  resolved item ids). */
 function buildProstageCompsMap(rows: ProstageCompRow[]): Map<string, Map<string, CompEntry[]>> {
   const map = new Map<string, Map<string, CompEntry[]>>();
   for (const r of rows) {
@@ -222,7 +263,13 @@ function buildProstageCompsMap(rows: ProstageCompRow[]): Map<string, Map<string,
       map.set(r.game_id, byTeam);
     }
     const arr = byTeam.get(r.team) ?? [];
-    arr.push({ championId: r.champion_id, role: r.pro_role ?? r.role ?? null });
+    arr.push({
+      championId: r.champion_id,
+      role: r.pro_role ?? r.role ?? null,
+      name: r.pro_name ?? r.player_link,
+      items: asJson<number[]>(r.final_items, []).filter((id) => id !== 0),
+      trinket: r.trinket ?? null,
+    });
     byTeam.set(r.team, arr);
   }
   return map;
@@ -233,14 +280,20 @@ function buildProstageCompsMap(rows: ProstageCompRow[]): Map<string, Map<string,
  *  non-null team, that team has exactly 5 champions, and there is EXACTLY
  *  ONE other team for the game with exactly 5 champions — i.e. a clean 10-row
  *  5v5 split. Some prostage rows have a null team (see prostageRowToProGame's
- *  header comment) and simply never get comps. Each side is role-ordered via
- *  orderChampionIdsByRole (lib/pro/extract.ts) — degrades to source order
- *  when the 5 rows don't carry exactly 5 distinct known roles. */
+ *  header comment) and simply never get comps. Each side is role-ordered ONCE
+ *  via orderByRole (lib/pro/extract.ts) — degrades to source order when the
+ *  5 rows don't carry exactly 5 distinct known roles — and both the
+ *  champion-id strip and the full player array are derived from that same
+ *  ordered result, so allyPlayers[i]/enemyPlayers[i] always describe the same
+ *  slot as allyChampionIds[i]/enemyChampionIds[i]. All four fields are
+ *  emitted together or all four omitted — never a subset. */
 function compsForGame(
   compsByGame: Map<string, Map<string, CompEntry[]>>,
   gameId: string,
   ownTeam: string | null
-): Pick<ProGame, "allyChampionIds" | "enemyChampionIds"> | Record<string, never> {
+):
+  | Pick<ProGame, "allyChampionIds" | "enemyChampionIds" | "allyPlayers" | "enemyPlayers">
+  | Record<string, never> {
   if (!ownTeam) return {};
   const byTeam = compsByGame.get(gameId);
   if (!byTeam) return {};
@@ -250,9 +303,13 @@ function compsForGame(
   if (otherTeams.length !== 1) return {};
   const [, enemy] = otherTeams[0];
   if (enemy.length !== 5) return {};
+  const allyOrdered = orderByRole(ally);
+  const enemyOrdered = orderByRole(enemy);
   return {
-    allyChampionIds: orderChampionIdsByRole(ally),
-    enemyChampionIds: orderChampionIdsByRole(enemy),
+    allyChampionIds: allyOrdered.map((p) => p.championId),
+    enemyChampionIds: enemyOrdered.map((p) => p.championId),
+    allyPlayers: allyOrdered,
+    enemyPlayers: enemyOrdered,
   };
 }
 
@@ -353,7 +410,7 @@ export async function GET(req: NextRequest) {
                 pm.match_id, pm.champion_id, pm.champion_name, pm.role, pm.patch, pm.win,
                 pm.kills, pm.deaths, pm.assists, pm.game_creation, pm.game_duration_sec,
                 pm.spells, pm.final_items, pm.trinket, pm.purchase_order, pm.skill_order, pm.runes,
-                pm.ally_champion_ids, pm.enemy_champion_ids,
+                pm.ally_champion_ids, pm.enemy_champion_ids, pm.ally_players, pm.enemy_players,
                 p.name AS pro_name, p.team AS pro_team, p.role AS pro_role, p.country AS pro_country,
                 pa.riot_id, pa.region
               FROM coachbuild.pro_matches pm
@@ -369,7 +426,7 @@ export async function GET(req: NextRequest) {
                 pm.match_id, pm.champion_id, pm.champion_name, pm.role, pm.patch, pm.win,
                 pm.kills, pm.deaths, pm.assists, pm.game_creation, pm.game_duration_sec,
                 pm.spells, pm.final_items, pm.trinket, pm.purchase_order, pm.skill_order, pm.runes,
-                pm.ally_champion_ids, pm.enemy_champion_ids,
+                pm.ally_champion_ids, pm.enemy_champion_ids, pm.ally_players, pm.enemy_players,
                 p.name AS pro_name, p.team AS pro_team, p.role AS pro_role, p.country AS pro_country,
                 pa.riot_id, pa.region
               FROM coachbuild.pro_matches pm
@@ -423,7 +480,8 @@ export async function GET(req: NextRequest) {
     const compsRawRows =
       gameIds.length > 0
         ? await sql`
-            SELECT pm.game_id, pm.team, pm.champion_id, pm.role, p.role AS pro_role
+            SELECT pm.game_id, pm.team, pm.champion_id, pm.role, p.role AS pro_role,
+                   pm.player_link, pm.final_items, pm.trinket, p.name AS pro_name
             FROM coachbuild.prostage_matches pm
             LEFT JOIN coachbuild.pros p ON p.id = pm.pro_id
             WHERE pm.game_id = ANY(${gameIds}::text[])

@@ -57,6 +57,26 @@ export const FIXTURE_GAME_WIN: ProGame = {
   // highlight against a full 5-a-side roster.
   allyChampionIds: [112, 64, 555, 104, 43], // Viktor, Lee Sin, Pyke, Graves, Karma
   enemyChampionIds: [238, 875, 887, 51, 40], // Zed, Sett, Gwen, Caitlyn, Janna
+  // Per-player roster detail — engy's concurrent contract addition. `role`
+  // fields are deliberately NOT index-matched (e.g. index 0/Viktor carries
+  // role 2, not 0) to exercise TeamComp's "prefer the role field over
+  // position" rule. One null trinket (index 2) and one null name (index 2)
+  // exercise their own degrade paths (no trinket icon rendered; name cell
+  // omitted rather than falling back to the champion name).
+  allyPlayers: [
+    { championId: 112, name: "Caps", items: [6653, 3020, 3157, 3089], trinket: 3364, role: 2 },
+    { championId: 64, name: "Yike", items: [3078, 3071, 3053], trinket: 3364, role: 1 },
+    { championId: 555, name: null, items: [3814, 6693, 3153], trinket: null, role: 4 },
+    { championId: 104, name: "Flakked", items: [6673, 3031, 3072, 3006], trinket: 3363, role: 3 },
+    { championId: 43, name: "Targamas", items: [3853, 3011, 3222], trinket: 3364, role: 0 },
+  ],
+  enemyPlayers: [
+    { championId: 238, name: "Razork", items: [6701, 3142, 3814], trinket: 3340, role: 1 },
+    { championId: 875, name: "Erberk", items: [3078, 3053, 3071, 3111], trinket: 3364, role: 0 },
+    { championId: 887, name: "Larssen", items: [3020, 3157, 3089], trinket: 3364, role: 2 },
+    { championId: 51, name: null, items: [3072, 3031, 3006, 3033], trinket: 3363, role: 3 },
+    { championId: 40, name: "Mikyx", items: [3222, 3011, 3853], trinket: 3364, role: 4 },
+  ],
 };
 
 /** A loss — same champ, fewer final items (game ended early), different pro. */
@@ -183,6 +203,24 @@ export const FIXTURE_GAME_PROSTAGE_FULL: ProGame = {
   },
   allyChampionIds: [112, 64, 555, 104, 43],
   enemyChampionIds: [238, 875, 887, 51, 40],
+  // Prostage per-player detail — real team names aren't on the contract yet
+  // (see GameDetailSheet's defensive ProGameTeamNames cast), so this fixture
+  // exercises the "Ally team — <tracked player's team>" / "Enemy team"
+  // fallback header text, not a real-name header.
+  allyPlayers: [
+    { championId: 112, name: "Faker", items: [6653, 3020, 3157, 3089], trinket: 3364, role: 2 },
+    { championId: 64, name: "Oner", items: [3078, 3071, 3053], trinket: 3364, role: 1 },
+    { championId: 555, name: "Zeus", items: [3814, 6693, 3153], trinket: 3364, role: 0 },
+    { championId: 104, name: "Gumayusi", items: [6673, 3031, 3072, 3006], trinket: 3363, role: 3 },
+    { championId: 43, name: "Keria", items: [3853, 3011, 3222], trinket: 3364, role: 4 },
+  ],
+  enemyPlayers: [
+    { championId: 238, name: null, items: [6701, 3142, 3814], trinket: null, role: 1 },
+    { championId: 875, name: "Kingen", items: [3078, 3053, 3071, 3111], trinket: 3364, role: 0 },
+    { championId: 887, name: "Chovy", items: [3020, 3157, 3089], trinket: 3364, role: 2 },
+    { championId: 51, name: "Peyz", items: [3072, 3031, 3006, 3033], trinket: 3363, role: 3 },
+    { championId: 40, name: "Delight", items: [3222, 3011, 3853], trinket: 3364, role: 4 },
+  ],
 };
 
 /** Prostage, keystone-only runes + unknown game length — exercises the

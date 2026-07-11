@@ -102,6 +102,29 @@ export interface ProGame {
    *  case — it just renders index order and highlights self by championId. */
   allyChampionIds?: number[];
   enemyChampionIds?: number[];
+  /** Per-player team data (added 2026-07-11) — full per-slot detail so the
+   *  frontend sheet can render each player's items, not just a champ-icon
+   *  strip. Same both-or-neither / 5-or-omit / role-ordered contract as
+   *  allyChampionIds/enemyChampionIds above (index 0=Top..4=Support, degrades
+   *  to source order on a non-5-distinct-role side) — producers share the
+   *  SAME ordering helper (orderByRole in lib/pro/extract.ts) so the two
+   *  arrays are never out of sync with each other for a given row.
+   *  allyPlayers[i] and allyChampionIds[i] always describe the same slot.
+   *  name is the display name when resolvable: soloq uses the Riot match's
+   *  riotIdGameName (falls back to summonerName, then null — summonerName is
+   *  frequently "" post-privacy-change, see lib/pro/extract.ts); prostage uses
+   *  the tracked pros.name when that row links to a known pro, else the raw
+   *  Leaguepedia player_link. */
+  allyPlayers?: TeamCompPlayer[];
+  enemyPlayers?: TeamCompPlayer[];
+}
+
+export interface TeamCompPlayer {
+  championId: number;
+  name: string | null;
+  items: number[]; // final items, 0s filtered, order preserved
+  trinket: number | null;
+  role: number | null; // 0-4, null when unknown
 }
 
 export interface ProsResponse {
@@ -196,6 +219,16 @@ export interface RiotParticipant {
   championId: number;
   championName: string;
   teamPosition: string; // "TOP" | "JUNGLE" | "MIDDLE" | "BOTTOM" | "UTILITY" | ""
+  // Player display name for teammate/opponent rows (TeamCompPlayer.name).
+  // Verified live 2026-07-11 against a real match-v5 response: riotIdGameName
+  // is the current field (Riot ID display name, post-Riot-ID-migration);
+  // summonerName still exists on the DTO but comes back "" (empty string) for
+  // real accounts now — privacy change, NOT reliably absent/undefined, so
+  // treat an empty string the same as missing rather than trusting truthiness
+  // alone at the call site.
+  riotIdGameName?: string;
+  riotIdTagline?: string;
+  summonerName?: string;
   win: boolean;
   kills: number;
   deaths: number;

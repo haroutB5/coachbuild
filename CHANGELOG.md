@@ -2,6 +2,10 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.17.0] — 2026-07-11
+### Added
+- **Teams section redesigned, matchday-style**: each team sits in its own highlighted panel (WIN/LOSS chip in the header) with five per-player rows — champion, role, player name, and their full final build as tappable item icons with the usual info cards. Solo-queue games backfilled with per-player data (1,131 games); pro-play games derive it from the tracked rows. Games without the data keep the compact strip.
+
 ## [0.16.0] — 2026-07-11
 ### Added
 - **Favorite champions**: star a champion from the search results on the Pro's page — starred champions appear as chips (with icons) under the search box for one-tap reuse. Same on-device storage and 12-champ cap as player favorites, fully independent of them.

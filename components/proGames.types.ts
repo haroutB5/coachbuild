@@ -31,6 +31,21 @@ export interface ProGameRunes {
   shards: number[]; // 3 ids
 }
 
+/** One roster slot in the sheet's per-player Teams boxes — engy's concurrent
+ *  contract addition, mirrored here verbatim (see dispatch brief in
+ *  HANDOFF-fronty.md). `items`/`trinket` are the player's FINAL build for
+ *  that game, not a purchase timeline. `role` is the same 0-4 ProRoleId
+ *  vocabulary used elsewhere on ProGame — null when unresolved (prostage-only
+ *  possibility, mirrors the top-level `role: -1` sentinel pattern but as
+ *  null since this is a per-slot field, not the outward DisplayRoleId). */
+export interface TeamCompPlayer {
+  championId: number;
+  name: string | null;
+  items: number[];
+  trinket: number | null;
+  role: number | null;
+}
+
 export interface ProGame {
   id: string;
   source: "soloq" | "prostage";
@@ -74,6 +89,15 @@ export interface ProGame {
    *  when the array is empty. */
   allyChampionIds?: number[];
   enemyChampionIds?: number[];
+  /** Per-player roster detail (champion/name/items/trinket/role) for the
+   *  sheet's boxed Teams section — exactly 5 entries each, role-ordered as
+   *  delivered (never reordered client-side), `allyPlayers` includes the
+   *  tracked player. Absent together with (or independently of, during a
+   *  partial backfill) allyChampionIds/enemyChampionIds until backfill
+   *  covers this game — components must render the existing icon-strip
+   *  fallback (never an empty section) when either is undefined. */
+  allyPlayers?: TeamCompPlayer[];
+  enemyPlayers?: TeamCompPlayer[];
 }
 
 export interface ProGamesApiResponse {

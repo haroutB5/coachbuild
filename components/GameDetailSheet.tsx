@@ -384,6 +384,21 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+// Real ally/enemy team names are NOT yet on the ProGame contract (per the
+// dispatch brief: "for prostage use the REAL team names — data will carry
+// them; until then/when absent, fall back to 'Ally team'/'Enemy team'").
+// Defensive read of a not-yet-landed field, same pattern as `playerLink`
+// above — grepped the repo 2026-07-11 and confirmed neither name exists
+// anywhere yet (see HANDOFF-fronty.md). Read via this local extension cast
+// rather than editing proGames.types.ts's real contract, so a future engy
+// addition under a DIFFERENT name doesn't silently collide — if engy lands
+// these under different keys, update this cast, not the fallback logic in
+// TeamComp.tsx's teamBoxTitle.
+interface ProGameTeamNames {
+  allyTeamName?: string | null;
+  enemyTeamName?: string | null;
+}
+
 export default function GameDetailSheet({
   game,
   championIcon,
@@ -654,7 +669,16 @@ export default function GameDetailSheet({
           <SheetTeamsSection
             allyChampionIds={game.allyChampionIds}
             enemyChampionIds={game.enemyChampionIds}
+            allyPlayers={game.allyPlayers}
+            enemyPlayers={game.enemyPlayers}
             selfChampionId={game.championId}
+            win={game.win}
+            trackedPlayerTeam={game.player.team}
+            allyTeamName={(game as ProGame & ProGameTeamNames).allyTeamName}
+            enemyTeamName={(game as ProGame & ProGameTeamNames).enemyTeamName}
+            ver={ver}
+            itemNames={itemNames}
+            onItemClick={openItemPopover}
           />
 
           {/* Runes */}

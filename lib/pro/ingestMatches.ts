@@ -119,7 +119,8 @@ export async function ingestOneAccount(
           match_id, puuid, pro_id, champion_id, champion_name, role, patch, win,
           kills, deaths, assists, game_creation, game_duration_sec,
           spells, final_items, trinket, purchase_order, skill_order, runes,
-          cs, damage_champions, team_kills, gold, ally_champion_ids, enemy_champion_ids
+          cs, damage_champions, team_kills, gold, ally_champion_ids, enemy_champion_ids,
+          ally_players, enemy_players
         ) VALUES (
           ${row.matchId}, ${row.puuid}, ${account.pro_id}, ${row.championId}, ${row.championName},
           ${row.role}, ${row.patch}, ${row.win}, ${row.kills}, ${row.deaths}, ${row.assists},
@@ -128,7 +129,9 @@ export async function ingestOneAccount(
           ${JSON.stringify(row.purchaseOrder)}::jsonb, ${JSON.stringify(row.skillOrder)}::jsonb, ${JSON.stringify(row.runes)}::jsonb,
           ${row.cs}, ${row.damageChampions}, ${row.teamKills}, ${row.gold},
           ${row.allyChampionIds ? JSON.stringify(row.allyChampionIds) : null}::jsonb,
-          ${row.enemyChampionIds ? JSON.stringify(row.enemyChampionIds) : null}::jsonb
+          ${row.enemyChampionIds ? JSON.stringify(row.enemyChampionIds) : null}::jsonb,
+          ${row.allyPlayers ? JSON.stringify(row.allyPlayers) : null}::jsonb,
+          ${row.enemyPlayers ? JSON.stringify(row.enemyPlayers) : null}::jsonb
         )
         ON CONFLICT (match_id, puuid) DO NOTHING
       `;

@@ -29,6 +29,21 @@
 // rows, so a later re-run starts a fresh full pass rather than silently
 // no-op'ing forever.
 //
+// --players (2026-07-11): backfills the migration-0007 columns (ally_players,
+// enemy_players — full per-player TeamCompPlayer[5], see lib/pro/types.ts)
+// via lib/pro/extract.ts's extractTeamPlayers (1 call/match, same match
+// detail already used for the champion-id columns — no extra Riot call vs.
+// the plain mode). Uses the SAME `WHERE ally_players IS NULL` cursor style as
+// the plain (non---reorder) mode above, NOT the --reorder file-based cursor:
+// a freshly-added nullable column already gives natural resumability (a row
+// only drops out of the WHERE clause once its UPDATE actually lands), so a
+// row that errors mid-run simply stays NULL and gets retried by the very next
+// invocation — no separate cursor file needed. This is the same
+// distrust-a-partial-write discipline as --reorder's cursorFrozen latch, just
+// expressed via the NULL filter instead of a persisted pointer, since here
+// (unlike --reorder, which unconditionally re-walks already-non-NULL rows)
+// there's a NULL to filter on in the first place.
+//
 // Pacing: lib/pro/riot.ts's getMatch() already routes every call through the
 // shared lib/pro/pacer.ts queue (1.3s min interval, process-wide) — this
 // script doesn't need its own throttle, sequential awaits are enough.
@@ -39,9 +54,10 @@
 // alongside any other Riot API consumer.
 //
 // Usage:
-//   npx tsx scripts/backfill-team-comps.mjs [limit]              # plain: only NULL rows
-//   npx tsx scripts/backfill-team-comps.mjs [limit] --reorder     # re-walk ALL rows, resumable
+//   npx tsx scripts/backfill-team-comps.mjs [limit]              # plain: only NULL champion-id rows
+//   npx tsx scripts/backfill-team-comps.mjs [limit] --reorder     # re-walk ALL rows, resumable (champion ids)
 //   npx tsx scripts/backfill-team-comps.mjs [limit] --force       # same as --reorder
+//   npx tsx scripts/backfill-team-comps.mjs [limit] --players     # plain: only NULL ally_players/enemy_players rows
 // `limit` (default 3) caps how many rows this run touches — pass a larger
 // limit explicitly (or re-run repeatedly) once ready to spend that budget.
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
@@ -54,15 +70,21 @@ loadEnvLocal();
 const { getSql } = await import("../lib/pro/db.ts");
 const { routingForServer } = await import("../lib/pro/regionMap.ts");
 const { getMatch, RiotRequestError } = await import("../lib/pro/riot.ts");
-const { extractTeamComps } = await import("../lib/pro/extract.ts");
+const { extractTeamComps, extractTeamPlayers } = await import("../lib/pro/extract.ts");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CURSOR_FILE = path.join(__dirname, ".backfill-team-comps-reorder-cursor.json");
 
 const args = process.argv.slice(2);
 const reorder = args.includes("--reorder") || args.includes("--force");
+const playersMode = args.includes("--players");
 const limitArg = args.find((a) => /^\d+$/.test(a));
 const limit = Number(limitArg) || 3;
+
+if (reorder && playersMode) {
+  console.error("backfill-team-comps: --reorder and --players are mutually exclusive");
+  process.exit(1);
+}
 
 function readCursor() {
   if (!existsSync(CURSOR_FILE)) return null;
@@ -109,18 +131,26 @@ async function main() {
           ORDER BY pm.match_id ASC
           LIMIT ${limit}
         `
-    : await sql`
-        SELECT pm.match_id, pm.puuid, pa.region
-        FROM coachbuild.pro_matches pm
-        JOIN coachbuild.pro_accounts pa ON pa.puuid = pm.puuid
-        WHERE pm.ally_champion_ids IS NULL
-        ORDER BY pm.match_id ASC
-        LIMIT ${limit}
-      `;
+    : playersMode
+      ? await sql`
+          SELECT pm.match_id, pm.puuid, pa.region
+          FROM coachbuild.pro_matches pm
+          JOIN coachbuild.pro_accounts pa ON pa.puuid = pm.puuid
+          WHERE pm.ally_players IS NULL
+          ORDER BY pm.match_id ASC
+          LIMIT ${limit}
+        `
+      : await sql`
+          SELECT pm.match_id, pm.puuid, pa.region
+          FROM coachbuild.pro_matches pm
+          JOIN coachbuild.pro_accounts pa ON pa.puuid = pm.puuid
+          WHERE pm.ally_champion_ids IS NULL
+          ORDER BY pm.match_id ASC
+          LIMIT ${limit}
+        `;
 
-  console.log(
-    `backfill-team-comps${reorder ? " --reorder" : ""}: ${rows.length} row(s) to process (limit=${limit})`
-  );
+  const modeLabel = reorder ? " --reorder" : playersMode ? " --players" : "";
+  console.log(`backfill-team-comps${modeLabel}: ${rows.length} row(s) to process (limit=${limit})`);
 
   let updated = 0;
   let skipped = 0;
@@ -145,6 +175,25 @@ async function main() {
     }
     try {
       const match = await getMatch(routing.regional, row.match_id);
+      if (playersMode) {
+        const players = extractTeamPlayers(match, row.puuid);
+        if (!players) {
+          console.log(`  ${row.match_id}: puuid ${row.puuid} not in refetched match or not a clean 5v5, skipping`);
+          skipped += 1;
+          continue;
+        }
+        await sql`
+          UPDATE coachbuild.pro_matches
+          SET ally_players = ${JSON.stringify(players.allyPlayers)}::jsonb,
+              enemy_players = ${JSON.stringify(players.enemyPlayers)}::jsonb
+          WHERE match_id = ${row.match_id} AND puuid = ${row.puuid}
+        `;
+        updated += 1;
+        console.log(
+          `  ${row.match_id}: allyPlayers=[${players.allyPlayers.map((p) => p.championId).join(",")}] enemyPlayers=[${players.enemyPlayers.map((p) => p.championId).join(",")}]`
+        );
+        continue;
+      }
       const comps = extractTeamComps(match, row.puuid);
       if (!comps) {
         console.log(`  ${row.match_id}: puuid ${row.puuid} not in refetched match or not a clean 5v5, skipping`);
@@ -188,7 +237,14 @@ async function main() {
     console.log("backfill-team-comps --reorder: reached end of table, cursor cleared");
   }
 
-  const summary = { processed: rows.length, updated, skipped, errors, reorder, resumeCursor: lastMatchId };
+  const summary = {
+    processed: rows.length,
+    updated,
+    skipped,
+    errors,
+    mode: reorder ? "reorder" : playersMode ? "players" : "plain",
+    resumeCursor: lastMatchId,
+  };
   console.log(JSON.stringify(summary, null, 2));
   if (errors.length > 0) process.exitCode = 1;
 }
