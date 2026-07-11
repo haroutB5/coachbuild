@@ -1,19 +1,21 @@
-## Current state — 2026-07-11 (v0.16.0)
+## Current state — 2026-07-11 (v0.20.0)
 
-**Shipped and live:** v0.16.0 is deployed at coachbuild.vercel.app. Rated 20/20 as of v0.14.1 (all 4 findings from the anchored review fixed that release); nothing since has regressed it structurally, but the score hasn't been re-verified against 0.15.0/0.15.1/0.16.0's changes. 342/342 vitest tests green across 27 files (`npx vitest run`), confirmed clean at doc-sync time (2026-07-11) with zero code changes.
+**Shipped and live:** v0.20.0 is deployed at coachbuild.vercel.app. Rated 20/20 at v0.14.1 (all 4 findings from that anchored review fixed); 0.15.0–0.20.0 have not been re-run through a fresh anchored review, but each shipped behind its own audit/verify pass (see CHANGELOG.md for the per-release detail). 437/437 vitest tests green across 32 files (`npx vitest run`), reconfirmed at this doc-sync pass (2026-07-11) with zero code changes.
 
-**Backfills — all complete.** Team comps (`ally_champion_ids`/`enemy_champion_ids`, migration 0006): 1134/1134 solo-queue games role-ordered (Top→Jungle→Mid→Bot→Support); pro-play comps ordered from tracked roles at read-time (no backfill table needed there — computed per-response in `app/api/pros/route.ts`). Pro-play item-build timelines (migration 0005, `scripts/backfill-prostage-timelines.mjs`): essentially all tournaments walked. Game stats (migration 0004, cs/damage/team_kills/gold): backfilled for the CoachBuild-Score-era rows (score itself was later removed per user preference, v0.9.0, but the underlying columns/backfill stay — data keeps accumulating unused).
+**Backfills — all complete.** Team comps (`ally_champion_ids`/`enemy_champion_ids`, migration 0006): 1134/1134 solo-queue games role-ordered (Top→Jungle→Mid→Bot→Support). Per-player team builds (`ally_players`/`enemy_players`, migration 0007): 1131/1131 solo-queue rows backfilled (`backfill-team-comps.mjs --players`); prostage side derives both projections at read-time from tracked roles (no backfill table needed — computed per-response, shared between `app/api/pros/route.ts` and `app/api/pros/team-players/route.ts` via `lib/prostage/teamComps.ts`). Prostage `pro_id` repair: 213 pro-play rows whose link to a tracked pro had silently broken on Leaguepedia's real-name disambiguator (`player_link` "Zeka (Kim Geon-woo)" vs. `pros.name` "Zeka") — fixed at ingest (`cleanLeaguepediaName`) and repaired live. Pro-play item-build timelines (migration 0005, `scripts/backfill-prostage-timelines.mjs`): essentially all tournaments walked. Game stats (migration 0004, cs/damage/team_kills/gold): backfilled for the CoachBuild-Score-era rows (score itself was later removed per user preference, v0.9.0, but the underlying columns/backfill stay — data keeps accumulating unused).
+
+**Repo state:** pristine — the scratch stub (`scripts/_probe.mjs`) and the credential-bearing `AI/coachbuild-debugwt/` debug worktree that were open cleanup items as of v0.16.0 have both been removed (user-approved); `git status` is clean and neither path exists on disk (verified at this doc-sync pass).
 
 **In flight:** nothing. No open implementation work, no mid-ship state.
 
 **Known open items, roughly by priority:**
-- **Cross-project P1 (untriaged):** matchday should be audited for the SAME Neon-HTTP-driver + Next-patched-fetch caching landmine that caused coachbuild's v0.15.1 P0 (see `CLAUDE.md` Gotcha (a)) — if matchday's DB layer (if any) uses the same `@neondatabase/serverless` pattern without `fetchOptions: { cache: "no-store" }`, it's exposed to the identical cached-empty-result-replay bug. Nobody has checked yet.
-- **Cleanup, no functional impact:** `scripts/_probe.mjs` is a one-line scratch stub (`// scratch probe file, reused across sessions — intentionally empty between uses`), intentionally tracked in git rather than deleted because a prior session's safety gate blocked `rm` on it mid-ship. Harmless, but worth batching into a housekeeping pass along with any other stray scratch files.
-- **Disk cleanup, pending user approval:** `AI/coachbuild-debugwt/` is a temporary git worktree still on disk (confirmed present 2026-07-11) from an earlier debug session. It contains a copy of `.env.local` (real `DATABASE_URL`/`RIOT_API_KEY`/`CRON_SECRET`) — do not just `rm -rf` it without the user approving, both for the safety-gate protocol and because it's a credential-bearing directory, not just scratch code. Safe to remove once approved.
+- **Prostage cron gap (untriaged root cause):** the daily pro-play ingest cron (`vercel.json`, `/api/ingest/prostage` at 07:00 UTC) has never landed data in production, despite being correctly configured and the route itself working under manual invocation. Freshness currently depends on manually running `npx tsx scripts/ingest-prostage.mjs --via-export` to top up fresh games — the prostage table is NOT self-refreshing the way solo-queue is. Needs investigation (Vercel cron logs, not yet checked).
 - **P2 — CargoExport >500-row tournament truncation:** `lib/prostage/cargo.ts`'s `cargoExportQuery` (and `cargoQuery`) default to `limit: 500` with no pagination. A tournament with more than 500 `ScoreboardPlayers` rows (a long best-of-series playoff bracket, a full-season league page) would silently truncate rather than page through. Not yet hit in practice (no known tournament has tripped it) but the query layer has no defense if one does.
 - **P2 — `scripts/ingest-player.mjs` has no transient-retry wrapper.** It calls `ingestOneAccount` directly per account and exits 1 on the first thrown error (a network blip, a transient Riot 5xx) rather than retrying — unlike the pacer/cargo layers underneath it, which do have retry/backoff built in for their own call-level failures. A flaky run currently means re-invoking the script by hand.
+- **Gap — `RunePage` has no vitest coverage.** The project's test harness is pure-function-only (no JSX rendering — see `CLAUDE.md` test conventions); `RunePage` is one of the few UI-bearing modules with meaningful branching logic (tree/keystone selection) that has never been split out into a testable pure-helper shape the way `StatBadge`/others were. Not blocking, but flagged so it isn't assumed covered.
+- **Cross-project P1 (untriaged, carried from v0.16.0):** matchday should be audited for the SAME Neon-HTTP-driver + Next-patched-fetch caching landmine that caused coachbuild's v0.15.1 P0 (see `CLAUDE.md` Gotcha (a)) — if matchday's DB layer (if any) uses the same `@neondatabase/serverless` pattern without `fetchOptions: { cache: "no-store" }`, it's exposed to the identical cached-empty-result-replay bug. Nobody has checked yet.
 
-**Not open items (verified during this doc pass, noting so they don't get re-litigated):** the Neon no-store fix (Gotcha a) and the empty-response no-cache fix (Gotcha b) are both confirmed present in the current `lib/pro/db.ts` and `app/api/pros/route.ts` — these were the two P0/near-P0 fixes in 0.15.1 and both are still in place, not regressed by 0.16.0's favorite-champions change (which only touched `lib/favorites.ts` + `components/`).
+**Not open items (verified during this doc pass, noting so they don't get re-litigated):** the Neon no-store fix (Gotcha a), the empty-response no-cache fix (Gotcha b), the unversioned icon side-cache exclusion in `public/sw.js` (Gotcha k), and the `NavHistoryState` back/forward integration in `app/history/page.tsx` (Gotcha n) are all confirmed present and correct in the current code as of this doc-sync pass.
 
 ---
 
@@ -3620,5 +3622,42 @@ Full flow via chrome-devtools MCP against LIVE Neon data (real Viktor/Gumayusi/D
 - Did not verify the Builds page's OWN `ProGamesSection` UI directly in-browser (its default sample-build render never surfaced a Pro Games section in this session's quick check) — verified the underlying `sessionStorage` stash/consume contract directly instead, which is the actual mechanism `ProGamesSection`'s `GameDetailSheet` instance relies on (that code path is unchanged by this ship).
 - Did not test `prefers-reduced-motion` or keyboard-only (Tab/Enter) navigation of the new history flow specifically — the sheet's existing focus-trap/Escape handling was reused as-is (only re-routed through the new `onDismiss` prop), not modified.
 - No version bump / deploy, per dispatch brief.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-11 18:02
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-11 13:23:07Z; previous content preserved there. Append new rounds below. -->
+
+## Summary
+
+Doc sync only (no code changes, no version bump, no deploy), bringing `CLAUDE.md`/`FEATURES.md`/`HANDOFF.md` from their v0.16.0-era state up to v0.20.0. Verified every claim against real code (not just CHANGELOG.md) before writing:
+
+- **CLAUDE.md** — added `GET /api/pros/team-players` and `GET /api/pros?player=<player_link>` to the API contracts section; added `lib/prostage/teamComps.ts` + `displayName.ts` to the data pipeline map; added migration `0007_team_players.sql`; added 6 new gotchas (j)–(o) covering the list-payload trim + Leaguepedia disambiguator bug, the unversioned `coachbuild-icons-v1` side cache, prostage `game_id` being per-match not per-player, `IconWithFallback` as the mandatory single img sink, `NavHistoryState` back/forward integration on `/history`, and the prostage cron gap; bumped the stale test count (342/27 → 437/32, reverified live).
+- **FEATURES.md** — rewrote the Teams-section bullet to describe the matchday-style boxed per-player panels (all 10 players tappable including untracked pros, which lock to a Pro Play view), added the pro-play matchup line to the game-card bullet, added a back-gesture-navigation bullet and a performance-characteristics bullet (lazy images, on-device icon cache, trimmed payloads), and extended the "what shipped" release-history paragraph through 0.17.0–0.20.0.
+- **HANDOFF.md** — replaced the v0.16.0-era "Current state" section with a fresh v0.20.0 one: 20/20 rating provenance, 437/437 tests, all backfills (team comps 1134/1134, team players 1131/1131, prostage `pro_id` repair 213) confirmed complete, repo-pristine confirmation (debugwt worktree + scratch stub both gone from disk, verified directly), and the current open-items list (prostage cron gap promoted to top priority, CargoExport truncation P2, ingest-player.mjs retry P2, new RunePage vitest-coverage gap flagged, matchday cross-project P1 carried forward).
+
+## Files Touched
+
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/CLAUDE.md`
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/FEATURES.md`
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/HANDOFF.md`
+
+## Tests
+
+`npx vitest run` — 437/437 green across 32 files, run twice (before and after the doc edits) to confirm zero drift. No code was touched, so this was a sanity re-check rather than a regression gate.
+
+## Known Issues
+
+- Verified `AI/coachbuild-debugwt/` and `scripts/_probe.mjs` are actually gone from disk (not just claimed) before writing the repo-pristine line — `ls`/`git status` both confirm.
+- Could not verify the "prostage cron has never landed data" claim against repo code — `vercel.json` and the route/script both look correctly configured; this is Vercel-cron-execution-history knowledge that lives outside the repo, so I carried it into the docs as stated in the brief rather than inventing a code-level root cause. Flagged as "untriaged root cause" in HANDOFF.md rather than asserting a mechanism.
+- Did not re-run the full 20/20 anchored review against 0.15.0–0.20.0's cumulative changes (out of scope for a doc-only pass) — HANDOFF.md now says explicitly that the score is provenance-from-0.14.1, not freshly re-verified, so this isn't overclaimed.
+
+— engo
 
 
