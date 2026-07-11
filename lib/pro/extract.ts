@@ -232,7 +232,17 @@ function riotParticipantName(p: RiotParticipant): string | null {
   return null;
 }
 
-function participantToTeamCompPlayer(p: RiotParticipant): TeamCompPlayer {
+/** trackedPuuid/trackedProId: the CALLER already knows which participant is
+ *  the tracked pro (it's the account this whole ingest run is for) and that
+ *  pro's own coachbuild.pros.id — "cheap" per the proId contract's doc
+ *  comment in lib/pro/types.ts, since neither requires a lookup. Every OTHER
+ *  participant (teammates/opponents) is a random ranked player we don't
+ *  track and never fuzzy-match by name, so proId stays undefined for them. */
+function participantToTeamCompPlayer(
+  p: RiotParticipant,
+  trackedPuuid?: string,
+  trackedProId?: string
+): TeamCompPlayer {
   const items = [p.item0, p.item1, p.item2, p.item3, p.item4, p.item5].filter((id) => id !== 0);
   return {
     championId: p.championId,
@@ -240,6 +250,7 @@ function participantToTeamCompPlayer(p: RiotParticipant): TeamCompPlayer {
     items,
     trinket: p.item6 && p.item6 !== 0 ? p.item6 : null,
     role: roleFromTeamPosition(p.teamPosition),
+    ...(trackedProId !== undefined && p.puuid === trackedPuuid ? { proId: trackedProId } : {}),
   };
 }
 
@@ -257,21 +268,34 @@ export interface ExtractedTeamPlayers {
  *  callers that only need champion ids shouldn't have to thread the heavier
  *  shape through. Returns null unless BOTH sides have exactly 5 champions —
  *  same all-or-nothing contract as extractTeamComps. */
-export function extractTeamPlayers(match: RiotMatch, puuid: string): ExtractedTeamPlayers | null {
+export function extractTeamPlayers(
+  match: RiotMatch,
+  puuid: string,
+  trackedProId?: string
+): ExtractedTeamPlayers | null {
   const participant = match.info.participants.find((p) => p.puuid === puuid);
   if (!participant) return null;
   const allies = match.info.participants.filter((p) => p.teamId === participant.teamId);
   const enemies = match.info.participants.filter((p) => p.teamId !== participant.teamId);
   if (allies.length !== 5 || enemies.length !== 5) return null;
   return {
-    allyPlayers: orderByRole(allies.map(participantToTeamCompPlayer)),
-    enemyPlayers: orderByRole(enemies.map(participantToTeamCompPlayer)),
+    allyPlayers: orderByRole(allies.map((p) => participantToTeamCompPlayer(p, puuid, trackedProId))),
+    enemyPlayers: orderByRole(enemies.map((p) => participantToTeamCompPlayer(p, puuid, trackedProId))),
   };
 }
 
 /** Returns null (caller must skip+log) when the participant's role can't be
- *  mapped — never store a row with a guessed role. */
-export function extractMatch(match: RiotMatch, timeline: RiotTimeline, puuid: string): ExtractedMatch | null {
+ *  mapped — never store a row with a guessed role. `proId` is OPTIONAL and
+ *  only used to stamp the tracked player's own slot in allyPlayers with his
+ *  own known coachbuild.pros.id (see participantToTeamCompPlayer's doc
+ *  comment) — omit it and every TeamCompPlayer.proId in the result is simply
+ *  absent, same as before this field existed. */
+export function extractMatch(
+  match: RiotMatch,
+  timeline: RiotTimeline,
+  puuid: string,
+  proId?: string
+): ExtractedMatch | null {
   const participant = match.info.participants.find((p) => p.puuid === puuid);
   if (!participant) return null;
   const role = roleFromTeamPosition(participant.teamPosition);
@@ -291,7 +315,7 @@ export function extractMatch(match: RiotMatch, timeline: RiotTimeline, puuid: st
   if (!stats) return null; // unreachable given the participant lookup above already succeeded, but keeps this function total
 
   const comps = extractTeamComps(match, puuid);
-  const players = extractTeamPlayers(match, puuid);
+  const players = extractTeamPlayers(match, puuid, proId);
 
   return {
     matchId: match.metadata.matchId,

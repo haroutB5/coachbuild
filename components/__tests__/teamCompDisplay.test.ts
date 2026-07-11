@@ -11,7 +11,7 @@
  * vitest's node environment.
  */
 import { describe, it, expect } from "vitest";
-import { roleAbbrForPlayer, teamBoxTitle, isSelfInAlly } from "../teamCompDisplay";
+import { roleAbbrForPlayer, teamBoxTitle, isSelfInAlly, matchupLabel } from "../teamCompDisplay";
 
 describe("roleAbbrForPlayer", () => {
   it("prefers a valid role field over position", () => {
@@ -75,5 +75,22 @@ describe("isSelfInAlly", () => {
 
   it("is false against an empty roster", () => {
     expect(isSelfInAlly([], 112)).toBe(false);
+  });
+});
+
+describe("matchupLabel", () => {
+  it("joins both cleaned team names with ' vs '", () => {
+    expect(matchupLabel("LYON", "HLE")).toBe("LYON vs HLE");
+  });
+
+  it("is null when either side is missing", () => {
+    expect(matchupLabel(undefined, "HLE")).toBeNull();
+    expect(matchupLabel("LYON", undefined)).toBeNull();
+    expect(matchupLabel(null, null)).toBeNull();
+  });
+
+  it("is null when either side is an empty string", () => {
+    expect(matchupLabel("", "HLE")).toBeNull();
+    expect(matchupLabel("LYON", "")).toBeNull();
   });
 });

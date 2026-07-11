@@ -109,7 +109,7 @@ export async function ingestOneAccount(
     try {
       const match = await getMatch(routing.regional, matchId);
       const timeline = await getMatchTimeline(routing.regional, matchId);
-      const row = extractMatch(match, timeline, account.puuid);
+      const row = extractMatch(match, timeline, account.puuid, account.pro_id);
       if (!row) {
         log(`match ${matchId}: unresolvable role/participant, skipping`);
         continue;

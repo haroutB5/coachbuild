@@ -91,14 +91,16 @@ describe("GET /api/pros source param", () => {
     expect(body.games[0].source).toBe("soloq");
   });
 
-  it("source=prostage issues the prostage query plus one batched team-comps query", async () => {
+  it("source=prostage issues the prostage query plus one batched team-comps query plus one pros name-index query", async () => {
     // Phase 3 (team comps): a non-empty prostage result triggers exactly one
     // extra grouped query (batched over distinct game_ids), never a per-row
     // N+1 — see app/api/pros/route.ts's compsForGame/buildProstageCompsMap.
-    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce([]);
+    // A pros (id, name) name-index query rides alongside it (2026-07-11,
+    // proId fallback matching — see buildProstageCompsMap's doc comment).
+    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const res = await GET(req("?championId=103&role=2&source=prostage"));
     expect(res.status).toBe(200);
-    expect(mockSql).toHaveBeenCalledTimes(2);
+    expect(mockSql).toHaveBeenCalledTimes(3);
     const [strings] = mockSql.mock.calls[0];
     expect(strings.join("")).toContain("prostage_matches");
     const body = await res.json();
@@ -109,16 +111,20 @@ describe("GET /api/pros source param", () => {
     expect(body.games[0].gameDurationSec).toBe(0);
     expect(body.games[0].purchaseOrder).toEqual([]);
     expect(body.games[0].skillOrder).toEqual([]);
-    expect(body.games[0].player.name).toBe("Faker"); // falls back to player_link when pro_name is null (unlinked)
+    expect(body.games[0].player.name).toBe("Faker"); // falls back to CLEANED player_link when pro_name is null (unlinked); "Faker" has no trailing parenthetical to strip
   });
 
   it("default (no source param) merges both sources, newest first", async () => {
-    // soloq query resolves first, then prostage, then the team-comps query
-    // (call order matches code: soloq then prostage then comps).
-    mockSql.mockResolvedValueOnce([SOLOQ_ROW]).mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce([]);
+    // soloq query resolves first, then prostage, then the team-comps query,
+    // then the pros name-index query (call order matches code).
+    mockSql
+      .mockResolvedValueOnce([SOLOQ_ROW])
+      .mockResolvedValueOnce([PROSTAGE_ROW])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
     const res = await GET(req("?championId=103&role=2"));
     expect(res.status).toBe(200);
-    expect(mockSql).toHaveBeenCalledTimes(3);
+    expect(mockSql).toHaveBeenCalledTimes(4);
     const body = await res.json();
     expect(body.games).toHaveLength(2);
     // PROSTAGE_ROW's game_datetime (2026-07-08) is newer than SOLOQ_ROW's
@@ -128,15 +134,23 @@ describe("GET /api/pros source param", () => {
   });
 
   it("source=all is equivalent to the default (explicit form)", async () => {
-    mockSql.mockResolvedValueOnce([SOLOQ_ROW]).mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce([]);
+    mockSql
+      .mockResolvedValueOnce([SOLOQ_ROW])
+      .mockResolvedValueOnce([PROSTAGE_ROW])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
     const res = await GET(req("?championId=103&role=2&source=all"));
-    expect(mockSql).toHaveBeenCalledTimes(3);
+    expect(mockSql).toHaveBeenCalledTimes(4);
     const body = await res.json();
     expect(body.games).toHaveLength(2);
   });
 
   it("respects limit AFTER merging (not per-source)", async () => {
-    mockSql.mockResolvedValueOnce([SOLOQ_ROW]).mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce([]);
+    mockSql
+      .mockResolvedValueOnce([SOLOQ_ROW])
+      .mockResolvedValueOnce([PROSTAGE_ROW])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
     const res = await GET(req("?championId=103&role=2&limit=1"));
     const body = await res.json();
     expect(body.games).toHaveLength(1);
@@ -149,6 +163,7 @@ describe("GET /api/pros source param", () => {
     mockSql
       .mockResolvedValueOnce([SOLOQ_ROW])
       .mockResolvedValueOnce([{ ...PROSTAGE_ROW, role: null, pro_role: null }])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
     const res = await GET(req("?championId=103&role=5")); // role=5 (all lanes) lets the null-role row past the SQL filter
     const body = await res.json();
@@ -166,7 +181,9 @@ describe("GET /api/pros source param", () => {
     const body = await res.json();
     expect(body.games).toHaveLength(1);
     expect(body.games[0].source).toBe("soloq");
-    // No prostage rows -> no game_ids -> the team-comps query never fires.
+    // No prostage rows -> no game_ids -> the team-comps query never fires,
+    // and the pros name-index query (gated on the SAME game_ids check) never
+    // fires either.
     expect(mockSql).toHaveBeenCalledTimes(2);
   });
 });
@@ -266,5 +283,106 @@ describe("GET /api/pros prostage team comps (Phase 3)", () => {
     const body = await res.json();
     expect(body.games[0].allyChampionIds).toBeUndefined();
     expect(body.games[0].enemyChampionIds).toBeUndefined();
+  });
+});
+
+describe("GET /api/pros prostage cleaned display names + proId (2026-07-11)", () => {
+  beforeEach(() => {
+    mockSql.mockReset();
+    vi.mocked(getSql).mockReturnValue(mockSql as never);
+  });
+
+  // Mirrors the real LYON-vs-HLE MSI 2026 game this fix shipped for: a
+  // wiki-disambiguated team name on one side, and player_links carrying a
+  // real-name disambiguator for two of the five HLE players.
+  const LYON_HLE_GAME_ROW = {
+    ...PROSTAGE_ROW,
+    game_id: "MSI_2026_Bracket_Round_4_2_3",
+    player_link: "Zeka (Kim Geon-woo)",
+    team: "Hanwha Life Esports",
+  };
+
+  const LYON_HLE_COMPS = [
+    { game_id: "MSI_2026_Bracket_Round_4_2_3", team: "Hanwha Life Esports", champion_id: 68, player_link: "Zeus", pro_id: "pro-zeus", pro_name: "Zeus" },
+    { game_id: "MSI_2026_Bracket_Round_4_2_3", team: "Hanwha Life Esports", champion_id: 254, player_link: "Kanavi", pro_id: "pro-kanavi", pro_name: "Kanavi" },
+    { game_id: "MSI_2026_Bracket_Round_4_2_3", team: "Hanwha Life Esports", champion_id: 777, player_link: "Zeka (Kim Geon-woo)", pro_id: null, pro_name: null },
+    { game_id: "MSI_2026_Bracket_Round_4_2_3", team: "Hanwha Life Esports", champion_id: 96, player_link: "Gumayusi", pro_id: "pro-gumayusi", pro_name: "Gumayusi" },
+    { game_id: "MSI_2026_Bracket_Round_4_2_3", team: "Hanwha Life Esports", champion_id: 117, player_link: "Delight", pro_id: "pro-delight", pro_name: "Delight" },
+    { game_id: "MSI_2026_Bracket_Round_4_2_3", team: "LYON (2024 American Team)", champion_id: 112, player_link: "Saint (Kang Sung-in)", pro_id: null, pro_name: null },
+    { game_id: "MSI_2026_Bracket_Round_4_2_3", team: "LYON (2024 American Team)", champion_id: 887, player_link: "Dhokla", pro_id: null, pro_name: null },
+    { game_id: "MSI_2026_Bracket_Round_4_2_3", team: "LYON (2024 American Team)", champion_id: 72, player_link: "Inspired", pro_id: null, pro_name: null },
+    { game_id: "MSI_2026_Bracket_Round_4_2_3", team: "LYON (2024 American Team)", champion_id: 902, player_link: "Isles", pro_id: null, pro_name: null },
+    { game_id: "MSI_2026_Bracket_Round_4_2_3", team: "LYON (2024 American Team)", champion_id: 236, player_link: "Berserker (Kim Min-cheol)", pro_id: null, pro_name: null },
+  ];
+
+  it("emits cleaned allyTeamName/enemyTeamName (RAW player.team stays untouched)", async () => {
+    mockSql.mockResolvedValueOnce([LYON_HLE_GAME_ROW]).mockResolvedValueOnce(LYON_HLE_COMPS).mockResolvedValueOnce([]);
+    const res = await GET(req("?championId=103&role=2&source=prostage"));
+    const body = await res.json();
+    expect(body.games[0].allyTeamName).toBe("Hanwha Life Esports"); // no trailing group to strip
+    expect(body.games[0].enemyTeamName).toBe("LYON"); // "(2024 American Team)" stripped
+    expect(body.games[0].player.team).toBe("Hanwha Life Esports"); // raw field untouched
+  });
+
+  it("cleans TeamCompPlayer.name for unlinked players, keeps tracked pros.name as-is", async () => {
+    mockSql.mockResolvedValueOnce([LYON_HLE_GAME_ROW]).mockResolvedValueOnce(LYON_HLE_COMPS).mockResolvedValueOnce([]);
+    const res = await GET(req("?championId=103&role=2&source=prostage"));
+    const body = await res.json();
+    const ally = body.games[0].allyPlayers as { name: string | null; proId?: string | null }[];
+    const enemy = body.games[0].enemyPlayers as { name: string | null; proId?: string | null }[];
+    // Zeka resolved via pm.pro_id (pro_name present) -> already clean.
+    expect(ally.find((p) => p.proId === "pro-kanavi")?.name).toBe("Kanavi");
+    // Zeka's OWN entry has pro_id null in this fixture (pre-backfill shape)
+    // but its RAW player_link carries the real-name suffix -> must still
+    // read as the cleaned "Zeka" via the fallback name-match (see next test)
+    // or at minimum never show the parenthetical raw form.
+    const zekaEntry = [...ally, ...enemy].find((p) => p.name === "Zeka");
+    expect(zekaEntry).toBeDefined();
+    // Unlinked LYON players show the CLEANED player_link, never the raw form.
+    expect(enemy.some((p) => p.name === "Saint")).toBe(true);
+    expect(enemy.some((p) => p.name?.includes("("))).toBe(false);
+  });
+
+  it("falls back to a conservative name-match for proId when pm.pro_id is null (RAW then CLEANED player_link)", async () => {
+    mockSql.mockResolvedValueOnce([LYON_HLE_GAME_ROW]).mockResolvedValueOnce(LYON_HLE_COMPS).mockResolvedValueOnce([
+      { id: "pro-zeus", name: "Zeus" },
+      { id: "pro-kanavi", name: "Kanavi" },
+      { id: "pro-zeka", name: "Zeka" }, // tracked pro's CLEAN name — Zeka's row.player_link is "Zeka (Kim Geon-woo)"
+      { id: "pro-gumayusi", name: "Gumayusi" },
+      { id: "pro-delight", name: "Delight" },
+    ]);
+    const res = await GET(req("?championId=103&role=2&source=prostage"));
+    const body = await res.json();
+    const ally = body.games[0].allyPlayers as { name: string | null; proId?: string | null }[];
+    const enemy = body.games[0].enemyPlayers as { name: string | null; proId?: string | null }[];
+    const zekaEntry = [...ally, ...enemy].find((p) => p.name === "Zeka");
+    expect(zekaEntry?.proId).toBe("pro-zeka"); // matched via the CLEANED-form fallback, not pm.pro_id (null in this fixture)
+    // LYON players (Saint, Dhokla, Inspired, Isles, Berserker) are untracked
+    // -> proId stays null even with the name-index present (no fuzzy match).
+    const saintEntry = [...ally, ...enemy].find((p) => p.name === "Saint");
+    expect(saintEntry?.proId ?? null).toBeNull();
+  });
+
+  it("player.name (top-level, not just comps) is cleaned when pro_name is null", async () => {
+    mockSql
+      .mockResolvedValueOnce([{ ...LYON_HLE_GAME_ROW, pro_name: null, pro_team: null, pro_role: null, pro_country: null }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    const res = await GET(req("?championId=103&role=2&source=prostage"));
+    const body = await res.json();
+    expect(body.games[0].player.name).toBe("Zeka"); // cleaned from "Zeka (Kim Geon-woo)"
+    expect(body.games[0].playerLink).toBe("Zeka (Kim Geon-woo)"); // RAW stays on playerLink (the timeline API key)
+  });
+
+  it("omits allyTeamName/enemyTeamName when a third team is present (same ambiguity guard as champion comps)", async () => {
+    const threeTeamComps = [
+      ...LYON_HLE_COMPS,
+      { game_id: "MSI_2026_Bracket_Round_4_2_3", team: "A Third Team", champion_id: 1, player_link: "X", pro_id: null, pro_name: null },
+    ];
+    mockSql.mockResolvedValueOnce([LYON_HLE_GAME_ROW]).mockResolvedValueOnce(threeTeamComps).mockResolvedValueOnce([]);
+    const res = await GET(req("?championId=103&role=2&source=prostage"));
+    const body = await res.json();
+    expect(body.games[0].allyTeamName).toBeUndefined();
+    expect(body.games[0].enemyTeamName).toBeUndefined();
   });
 });

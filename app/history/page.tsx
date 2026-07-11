@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ChampionRef } from "@/lib/types";
 import TabNav from "@/components/TabNav";
 import SegmentedControl from "@/components/SegmentedControl";
@@ -14,6 +14,7 @@ import FavoriteStarButton from "@/components/FavoriteStarButton";
 import { isFavorite, isFavoriteChampion } from "@/lib/favorites";
 import { FAVORITES_CHANGED_EVENT, CHAMPION_FAVORITES_CHANGED_EVENT, toggleFavoritePlayer, toggleFavoriteChampion } from "@/components/favoritesSync";
 import type { PlayerRef } from "@/components/proHistory.types";
+import { consumePendingPlayerSelect, type PendingPlayerSelect } from "@/components/playerSelectHandoff";
 
 // Module-level (stable references) so FavoriteStarButton's subscribe effect
 // doesn't re-run on every page re-render.
@@ -59,6 +60,28 @@ export default function HistoryPage() {
     if (mode === "player") setPlayer(null);
     else setChamp(null);
   }
+
+  /** Builds a PlayerRef from just id/name/team — the same minimal shape
+   *  FavoritePlayerChips already selects with (role/country/gameCount are
+   *  dropdown-row decoration only, never consumed once a player is picked;
+   *  ProHistoryResults fetches games by proId alone). Shared by both entry
+   *  points below: the same-page Teams-box tap, and the cross-page
+   *  sessionStorage handoff consumed on mount. */
+  function selectPlayer(ref: PendingPlayerSelect) {
+    setMode("player");
+    setPlayer({ id: ref.id, name: ref.name, slug: "", team: ref.team, role: null, country: null, gameCount: 0 });
+  }
+
+  // Cross-page handoff: a Teams-box tap on the Builds page (ProGamesSection)
+  // has no callback to call directly (different page/state tree) — it
+  // stashes the pick in sessionStorage and navigates here instead. Consume
+  // once on mount; a same-page tap (via selectPlayer below, passed straight
+  // to ProHistoryResults) never touches this path at all.
+  useEffect(() => {
+    const pending = consumePendingPlayerSelect();
+    if (pending) selectPlayer(pending);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="min-h-screen pb-16">
@@ -156,7 +179,12 @@ export default function HistoryPage() {
             </div>
 
             {mode === "player" ? (
-              <ProHistoryResults mode="player" playerId={player!.id} subjectLabel={player!.name} />
+              <ProHistoryResults
+                mode="player"
+                playerId={player!.id}
+                subjectLabel={player!.name}
+                onSelectPlayer={selectPlayer}
+              />
             ) : (
               <ProHistoryResults
                 mode="champion"
@@ -164,6 +192,7 @@ export default function HistoryPage() {
                 championIcon={champ!.icon}
                 role={lane}
                 subjectLabel={champ!.name}
+                onSelectPlayer={selectPlayer}
               />
             )}
           </>

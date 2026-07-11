@@ -102,6 +102,21 @@ export interface ProGame {
    *  case — it just renders index order and highlights self by championId. */
   allyChampionIds?: number[];
   enemyChampionIds?: number[];
+  /** Cleaned (wiki-disambiguation stripped) team display names — prostage
+   *  ONLY, always emitted together or both omitted (soloq never sets these;
+   *  soloq team strings come from lolpros/Riot and never carry a Leaguepedia
+   *  parenthetical). allyTeamName is the TRACKED side (this row's own
+   *  `player.team`); enemyTeamName is the one other team present in the same
+   *  game. Omitted when the row's own team is null or the opposing team
+   *  can't be resolved to exactly one other team for the game_id (same
+   *  ambiguity guard as allyChampionIds/enemyChampionIds, computed from the
+   *  same batched comps query — see app/api/pros/route.ts's
+   *  teamNamesForGame). The RAW (uncleaned) team string is still what
+   *  `player.team` carries, and what's stored in the DB / used as the
+   *  comps-grouping join key — cleaning happens ONLY at this display field,
+   *  via lib/prostage/displayName.ts's cleanLeaguepediaName(). */
+  allyTeamName?: string | null;
+  enemyTeamName?: string | null;
   /** Per-player team data (added 2026-07-11) — full per-slot detail so the
    *  frontend sheet can render each player's items, not just a champ-icon
    *  strip. Same both-or-neither / 5-or-omit / role-ordered contract as
@@ -121,10 +136,29 @@ export interface ProGame {
 
 export interface TeamCompPlayer {
   championId: number;
+  /** DISPLAY name — for prostage, wiki-disambiguation-stripped (see
+   *  lib/prostage/displayName.ts's cleanLeaguepediaName()) when this falls
+   *  back to the raw player_link; when it resolves to a tracked pro, pros.name
+   *  is already clean. For soloq, the Riot-derived name (see
+   *  lib/pro/extract.ts's riotParticipantName) needs no cleaning. */
   name: string | null;
   items: number[]; // final items, 0s filtered, order preserved
   trinket: number | null;
   role: number | null; // 0-4, null when unknown
+  /** coachbuild.pros.id UUID when this participant resolves to a TRACKED pro,
+   *  else null. Prostage: resolved via prostage_matches.pro_id (set at
+   *  ingest — see lib/prostage/ingest.ts) with a conservative name-match
+   *  fallback (pros.name against the RAW player_link, then against the
+   *  cleaned form) applied in app/api/pros/route.ts's buildProstageCompsMap
+   *  for any row that fallback still missed at ingest time (e.g. a pro
+   *  tracked AFTER this row was ingested). SoloQ participants are always
+   *  null EXCEPT the tracked player's own slot, which carries his own known
+   *  proId (cheap — already known from the request context, see
+   *  lib/pro/extract.ts's participantToTeamCompPlayer) — teammates/opponents
+   *  in a soloq game are random ranked players we don't track and never
+   *  fuzzy-match by name. Optional field: absent means "not attempted /
+   *  not applicable," same as null for consumers. */
+  proId?: string | null;
 }
 
 export interface ProsResponse {

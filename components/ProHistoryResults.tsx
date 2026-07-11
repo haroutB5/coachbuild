@@ -7,6 +7,7 @@ import ProGameCard from "./ProGameCard";
 import ProGamesSkeleton from "./ProGamesSkeleton";
 import SegmentedControl from "./SegmentedControl";
 import { getChampionIconMap, type ChampionIconEntry } from "./proAssets";
+import type { PendingPlayerSelect } from "./playerSelectHandoff";
 
 interface ProHistoryResultsProps {
   mode: "player" | "champion";
@@ -20,6 +21,11 @@ interface ProHistoryResultsProps {
   /** Display name for the selected player/champion — drives the filter-aware
    *  empty-state copy ("No pro-play games tracked yet for X"). */
   subjectLabel: string;
+  /** Threaded straight through to each ProGameCard/GameDetailSheet — see
+   *  GameDetailSheet's doc comment for the same-page-callback vs.
+   *  cross-page-navigation split. /history passes its own "switch to Player
+   *  mode + select" handler here; nothing else renders this component. */
+  onSelectPlayer?: (player: PendingPlayerSelect) => void;
 }
 
 type ResultsState =
@@ -36,6 +42,7 @@ export default function ProHistoryResults({
   role = 5,
   limit = 20,
   subjectLabel,
+  onSelectPlayer,
 }: ProHistoryResultsProps) {
   const [state, setState] = useState<ResultsState>({ status: "loading" });
   const [iconMap, setIconMap] = useState<Map<number, ChampionIconEntry> | null>(null);
@@ -138,6 +145,7 @@ export default function ProHistoryResults({
             game={game}
             championIcon={mode === "champion" ? championIcon : iconMap?.get(game.championId)?.icon}
             championDisplayName={iconMap?.get(game.championId)?.name}
+            onSelectPlayer={onSelectPlayer}
           />
         ))}
       </div>

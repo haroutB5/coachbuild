@@ -493,6 +493,24 @@ describe("extractTeamPlayers", () => {
     const self = players?.allyPlayers.find((p) => p.championId === 112);
     expect(self?.name).toBeNull();
   });
+
+  it("stamps ONLY the tracked player's own slot with the caller-supplied proId — teammates/opponents stay unset (2026-07-11, 'cheap' proId case)", () => {
+    const m = match({}, fullTenParticipants());
+    const players = extractTeamPlayers(m, "puuid-1", "pro-self-id");
+    const self = players?.allyPlayers.find((p) => p.championId === 112);
+    expect(self?.proId).toBe("pro-self-id");
+    for (const p of [...(players?.allyPlayers ?? []), ...(players?.enemyPlayers ?? [])]) {
+      if (p.championId === 112) continue;
+      expect(p.proId).toBeUndefined();
+    }
+  });
+
+  it("omits proId entirely (no key) when no proId is supplied — backward compatible with pre-2026-07-11 callers", () => {
+    const m = match({}, fullTenParticipants());
+    const players = extractTeamPlayers(m, "puuid-1");
+    const self = players?.allyPlayers.find((p) => p.championId === 112);
+    expect(self && "proId" in self).toBe(false);
+  });
 });
 
 describe("extractMatch team players integration", () => {
@@ -513,6 +531,27 @@ describe("extractMatch team players integration", () => {
     const row = extractMatch(m, timeline(), "puuid-1");
     expect(row?.allyPlayers?.map((p) => p.championId)).toEqual(row?.allyChampionIds);
     expect(row?.enemyPlayers?.map((p) => p.championId)).toEqual(row?.enemyChampionIds);
+  });
+
+  it("threads extractMatch's optional 4th proId param through to the tracked player's own allyPlayers slot", () => {
+    const participants = [
+      participant(), // puuid-1, teamId 100, championId 112
+      participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2 }),
+      participant({ puuid: "ally-3", participantId: 3, teamId: 100, championId: 3 }),
+      participant({ puuid: "ally-4", participantId: 4, teamId: 100, championId: 4 }),
+      participant({ puuid: "ally-5", participantId: 5, teamId: 100, championId: 5 }),
+      participant({ puuid: "enemy-1", participantId: 6, teamId: 200, championId: 6 }),
+      participant({ puuid: "enemy-2", participantId: 7, teamId: 200, championId: 7 }),
+      participant({ puuid: "enemy-3", participantId: 8, teamId: 200, championId: 8 }),
+      participant({ puuid: "enemy-4", participantId: 9, teamId: 200, championId: 9 }),
+      participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10 }),
+    ];
+    const m = match({}, participants);
+    const row = extractMatch(m, timeline(), "puuid-1", "pro-self-id");
+    const self = row?.allyPlayers?.find((p) => p.championId === 112);
+    expect(self?.proId).toBe("pro-self-id");
+    const teammate = row?.allyPlayers?.find((p) => p.championId === 2);
+    expect(teammate && "proId" in teammate).toBe(false);
   });
 
   it("nulls both fields when the match isn't a clean 5v5", () => {

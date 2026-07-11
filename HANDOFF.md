@@ -3250,3 +3250,177 @@ via `git status`, no other scratch files left tracked).
 
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-11 16:11
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-11 14:00:13Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-11 round: LYON-vs-HLE data audit + cleaned team/player names + proId links
+
+Scope: `lib/pro/`, `lib/prostage/`, `app/api/pros/route.ts`, `scripts/`, tests. Did NOT touch `components/` (fronty concurrent). Mid-round scope addition from the coordinator (player display-name cleaning, folded in — see below).
+
+### 1. Data correctness audit — verdict table
+
+Investigated the user's red flag directly: game `2026 Mid-Season Invitational_Bracket Round 4_2_3`, LYON vs Hanwha Life Esports, Saint's Viktor, `game_datetime` 2026-07-11T10:03Z.
+
+| Field class | Verdict | Evidence |
+|---|---|---|
+| Keystone "Deathfire Touch" (id 8992) on Saint's Viktor | **VERIFIED CORRECT — not a bug** | Live CargoExport query (curl transport, per gotcha (c)) confirms Leaguepedia's raw `KeystoneRune` field for this exact row literally says `"Deathfire Touch"`, not a numeric id. Live ddragon (`v16.13.1`, the app's real "latest") confirms id **8992 IS currently named "Deathfire Touch"** under the Sorcery tree in the live rune data this app resolves against — it is NOT the real-world removed rune the same name refers to; in this app's tracked patch it's a real, currently-valid keystone. `components/proAssets.ts` + `lib/staticData.ts` already special-case its icon path correctly (audited 2026-07-10 per existing code comment). The user's "red flag" was a stale real-world assumption, not a pipeline defect — resolution, storage, and display are all correct end-to-end. |
+| Same keystone appearing on nearly every other Viktor game in the MSI 2026 dataset | **VERIFIED CORRECT** | Not a fallback/default bug — it's real per-game Cargo data (checked 10 Viktor games across MSI 2026); reflects a genuine patch-level meta convergence (Deathfire Touch dominant on Viktor), not a code path always returning the same id. One Viktor game (Dire, Team Secret Whales) correctly shows a different keystone (8229, Arcane Comet), proving the resolution is per-row, not hardcoded. |
+| Champion id/name, roles, items, spells across LPL/LEC spot-checks | **VERIFIED CORRECT** | Spot-checked 6 rows from `LPL/2026 Season/Split 2 Playoffs_Finals_1_3` (Pantheon/Senna/Seraphine/Wukong/Hwei/Sion) — champion ids, roles, varied keystones per champion archetype (Conqueror on top/jungle bruisers, Grasp on Sion top, Summon Aery on supports) all check out as internally consistent, no systematic mis-mapping found. |
+| `prostage_matches.pro_id` — **FOUND WRONG, FIXED AT SOURCE** | **Real bug, fixed + repaired** | Leaguepedia's `player_link` carries a real-name disambiguator for some players (`"Zeka (Kim Geon-woo)"`) that `coachbuild.pros.name` never does (`"Zeka"`). The ingest's exact-match-only lookup (`lib/prostage/ingest.ts`) silently left `pro_id` NULL for every such row — INCLUDING already-tracked pros. Live-audited: 400/1870 rows carry a trailing parenthetical in `player_link`; 0 of those 400 had `pro_id` set BEFORE this fix (this specific game: Zeka's own row had `pro_id: null` despite Zeka being tracked — his history page was silently missing this game and 18 others). |
+
+No hand-patched single rows anywhere — the rune finding needed no fix (verified correct), and the `pro_id` finding got a source-level ingest fix + a table-wide repair script (see below), never a one-off UPDATE on this one game.
+
+### 2. Fixes shipped
+
+**`pro_id` resolution (root cause + repair):**
+- `lib/prostage/ingest.ts`: pro-name matching now tries the RAW `player_link` first, then the CLEANED form (strips one trailing `"(...)"` group), against `pros.name`. Exact/case-insensitive only, never fuzzy.
+- New `lib/prostage/displayName.ts`: `cleanLeaguepediaName()` — the shared conservative strip, used by ingest's match, the route's comps fallback match, and every display-name cleaning below. Doc comment spells out the "RAW stays untouched everywhere it's a key" invariant.
+- New `scripts/backfill-prostage-proid.mjs`: one-time, idempotent, pure-DB repair (`UPDATE ... WHERE pro_id IS NULL AND (raw or cleaned player_link) = pros.name`) for rows ingested before the fix. **Ran it live**: 1308 → 1095 NULL rows (213 repaired), re-run confirmed idempotent (0 more matched, count unchanged). Zeka's HLE row (and Berserker's LYON row, also a tracked pro) now correctly link.
+- `app/api/pros/route.ts`'s comps query (`buildProstageCompsMap`) ALSO applies the same raw-then-cleaned fallback in JS (using a small `pros(id,name)` index fetched alongside the batched comps query — same query-count discipline, gated on `gameIds.length > 0`, never a per-row N+1) — covers any row a future pro gets tracked for AFTER ingest, without needing another backfill run.
+
+**Team display names (`allyTeamName`/`enemyTeamName` on `ProGame`, prostage only):** computed in a new `teamNamesForGame()` in route.ts, sibling to `compsForGame` but a looser gate (only needs "exactly one other team for this game_id," not a full 5-champion side) — reuses the same batched `compsByGame` map, no extra query. RAW `player.team` / DB / comps-grouping key are all untouched; cleaning happens only at this new field.
+
+**Player display names (mid-round addition):** `player.name` (top-level `ProGame`) and `TeamCompPlayer.name` now emit the CLEANED form when falling back to `player_link` (tracked pros' `pros.name` was already clean). RAW `playerLink` (the `/api/prostage/timeline` key) and DB storage are untouched.
+
+**`TeamCompPlayer.proId`:** new optional field, prostage resolves via `pm.pro_id` + the raw/cleaned name-match fallback above. SoloQ stays null for teammates/opponents (untracked randoms, never fuzzy-matched); the tracked player's OWN slot in `allyPlayers` now carries his known `proId` "for free" — threaded `account.pro_id` through `lib/pro/ingestMatches.ts` → `extractMatch(..., proId)` → `extractTeamPlayers(..., proId)` → `participantToTeamCompPlayer` (only stamps the participant matching the tracked puuid; everyone else's `proId` key is simply absent). This only applies going forward for NEW soloq ingests — did NOT backfill `pro_matches.ally_players`/`enemy_players` jsonb (would need re-deriving from raw Riot match data per row, not "cheap" — scoped decision, flagging it rather than silently skipping).
+
+All contract additions documented in `lib/pro/types.ts` (`ProGame.allyTeamName/enemyTeamName`, `TeamCompPlayer.proId`, `TeamCompPlayer.name`'s cleaning note).
+
+### 3. Live validation on the exact LYON-HLE game (not just tests)
+
+Ran the actual `GET` route handler (via `tsx`, no mocks) against the real DB for `proId=<Zeka's id>&source=prostage`, found the target game, confirmed in the real response:
+- `player.name: "Zeka"` (cleaned), `playerLink: "Zeka (Kim Geon-woo)"` (raw, untouched)
+- `allyTeamName: "Hanwha Life Esports"`, `enemyTeamName: "LYON"` (cleaned from `"LYON (2024 American Team)"`)
+- `allyPlayers`: Zeus/Kanavi/Zeka/Gumayusi/Delight all carry their real `proId` UUIDs
+- `enemyPlayers`: Saint shows `name: "Saint"` (cleaned, `proId: null` — untracked), Berserker shows a real `proId` (also tracked, LYON side)
+
+### 4. Gates
+
+- `tsc --noEmit`: clean.
+- `vitest run`: **411 passed** (baseline 373 + 38 new: `prostage-displayName.test.ts` x9, `pro-pros-route-prostage.test.ts` +5 new/19 total, `prostage-ingest.test.ts` +2, `pro-extract.test.ts` +3, plus updated call-count expectations on 5 pre-existing tests for the new batched pros-name-index query).
+- `next lint`: clean (only pre-existing `<img>`/LCP warnings, unrelated to this diff).
+- `npm run build`: **BLOCKED** — an orphaned/concurrent `next dev` process (pid 384/24816, port 4153, started 16:03:24 same session) holds `.next/trace`, EPERM-ing the build (this repo's own gotcha (i)). Started right around when this dispatch began — almost certainly fronty's concurrent dev server for this same task, so did NOT kill it (out of scope, and destructive to a sibling agent's live work). tsc+vitest+lint are all clean and the route was live-validated directly against real data (section 3), so I'm confident in the change, but the orchestrator should run `verify-fix.sh`/`next build` once fronty's dev server exits (or from a separate checkout) before shipping.
+
+### Files touched
+`lib/prostage/displayName.ts` (new), `lib/pro/types.ts`, `lib/prostage/ingest.ts`, `lib/pro/extract.ts`, `lib/pro/ingestMatches.ts`, `app/api/pros/route.ts`, `scripts/backfill-prostage-proid.mjs` (new, already run), `lib/__tests__/prostage-displayName.test.ts` (new), `lib/__tests__/pro-pros-route-prostage.test.ts`, `lib/__tests__/prostage-ingest.test.ts`, `lib/__tests__/pro-extract.test.ts`. `scripts/_probe.mjs` emptied back to its scratch stub.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-11 16:15
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-11 13:37:36Z; previous content preserved there. Append new rounds below. -->
+
+## Round: Teams-box tap-to-view-player + pro-play matchup line + player-name cleanup (2026-07-11)
+
+### Summary
+Two user asks on the pro-play game-detail sheet, plus a mid-round scope addition (player-name cleanup) folded in before completing.
+
+**1. Tap a player in the Teams box → view their games.** `TeamCompPlayer` gained
+`proId?: string | null` (mirrored from engy's concurrent `lib/pro/types.ts`
+addition). In `TeamComp.tsx`'s `PlayerRow`, when `proId` is non-null the
+identity cluster (icon + role + name — NOT the item/trinket buttons, which
+keep their own popover taps) becomes a `<button>`: underline-dotted name +
+subtle `›` chevron, `aria-label="View <name>'s games"`, hit-slop via
+padding+negative-margin (same technique as the existing item-icon buttons).
+Null-`proId` rows render exactly as before — plain text, no affordance.
+Wired through `SheetTeamsSection` → `GameDetailSheet`'s new
+`onSelectPlayer?` prop → `ProGameCard` → `ProHistoryResults` → `/history`'s
+own `selectPlayer()` handler (switches to Player mode + selects, same
+minimal `{id, name, slug:"", team, role:null, country:null, gameCount:0}`
+shape `FavoritePlayerChips` already uses — `ProHistoryResults` only ever
+needs `id`+`name`). Sheet always closes first (`onClose()`).
+
+Because `GameDetailSheet`/`ProGameCard` are ALSO mounted from the Builds
+page's `ProGamesSection` (a different page/state tree, out of my scope to
+edit), a tap there has no same-page callback to call. New
+`components/playerSelectHandoff.ts` (pure, sessionStorage-backed, reuses
+`lib/favorites.ts`'s `FavoritePlayer` shape) covers that path: stash the
+pick + `router.push("/history")` (via `next/navigation`'s `useRouter`,
+already used elsewhere in this repo — e.g. `TabNav.tsx`'s `usePathname`);
+`/history` consumes-and-clears it once on mount. Both paths converge on the
+same `selectPlayer()`/`selectPlayer(ref)` logic in `app/history/page.tsx`.
+
+**2. Pro-play matchup line ("LYON vs HLE").** `ProGame` gained
+`allyTeamName?`/`enemyTeamName?: string | null` (mirrored from engy's
+concurrent addition — this REPLACES the defensive `ProGameTeamNames` local
+cast a prior round of mine had in `GameDetailSheet.tsx`, since the real
+field landed this session). New `matchupLabel()` pure helper in
+`teamCompDisplay.ts` (null unless both names present — every render site's
+existing fallback keeps working unchanged when absent). Wired into: (a) the
+sheet header's Pro Play line, next to the tournament name; (b) the Teams-box
+titles (`teamBoxTitle()` already preferred a real name over the
+"Ally team — X" fallback from a prior round — now it actually gets one);
+(c) the collapsed card's tournament row — matchup is a `flex-shrink-0`
+never-truncated prefix, tournament name truncates with ellipsis
+(`min-w-0 max-w-[62vw] sm:max-w-[280px]` wrapper) if the pair doesn't fit at
+390px, never the reverse.
+
+**3. Mid-round scope addition — player-name cleanup (folded in before
+completing, per coordinator message).** New `components/playerName.ts`,
+one `cleanPlayerName()` helper (overloaded so a non-null input always
+returns non-null): strips a SINGLE trailing `(...)` group
+("Saint (Kang Sung-in)" → "Saint"), leaves anything else alone (parens not
+at the end, more than one trailing group only strips the last one). This is
+a defensive client-side belt — engy is cleaning `TeamCompPlayer.name` and
+the top-level `ProGamePlayer.name` at the API layer, but a stale cached
+`/api/pros` response (edge cache, see CLAUDE.md gotcha (b)) could still
+serve an unstripped name. Applied at every render site that shows a player
+name: sheet header (name line + dialog aria-label), `ProGameCard` (card
+identity + aria-label), and `TeamComp.tsx`'s `PlayerRow` (name text + the
+new tap-target's aria-label all use the CLEANED name, per the ask).
+
+### Files Touched
+- `components/proGames.types.ts` — `TeamCompPlayer.proId?`, `ProGame.allyTeamName?`/`enemyTeamName?`.
+- `components/playerName.ts` — **new**, `cleanPlayerName()`.
+- `components/playerSelectHandoff.ts` — **new**, `stashPendingPlayerSelect`/`consumePendingPlayerSelect` (sessionStorage, reuses `lib/favorites.ts`'s `FavoritePlayer` type).
+- `components/teamCompDisplay.ts` — added `matchupLabel()`.
+- `components/TeamComp.tsx` — `PlayerRow` tap-target + cleaned name; props threaded (`onSelectPlayer`) through `SheetTeamsSection`/`TeamBox`.
+- `components/GameDetailSheet.tsx` — dropped the local `ProGameTeamNames` cast (real fields now on contract); `onSelectPlayer` prop + `handleSelectPlayer()` (callback-or-stash+navigate split); matchup line in the header; cleaned player name (header + dialog aria-label).
+- `components/ProGameCard.tsx` — cleaned name (card + aria-label); matchup+truncated-tournament row; `onSelectPlayer` passthrough to `GameDetailSheet`.
+- `components/ProHistoryResults.tsx` — `onSelectPlayer` passthrough to `ProGameCard`.
+- `app/history/page.tsx` — `selectPlayer()` handler (passed to both player-mode and champion-mode `ProHistoryResults`), mount-time `consumePendingPlayerSelect()` effect for the cross-page path.
+- `components/proGames.fixtures.ts` — `FIXTURE_GAME_PROSTAGE_FULL` gained `allyTeamName`/`enemyTeamName`, `proId` on 2 ally + 1 enemy player (rest left untouched to exercise the no-affordance degrade on the SAME roster), and a raw parenthetical name on Gumayusi to fixture the defensive-strip case too (in addition to the mock I used live).
+- New tests: `components/__tests__/playerName.test.ts` (8), `components/__tests__/playerSelectHandoff.test.ts` (7, SSR + browser-env sessionStorage-shim blocks, same pattern as `lib/__tests__/favorites.test.ts`), `components/__tests__/teamCompDisplay.test.ts` (+3 for `matchupLabel`).
+
+### Tests
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — **411/411 passed** (373 baseline + engy's concurrent additions + my 18 new). Mid-session: 10 failures surfaced in `lib/__tests__/pro-pros-route*.test.ts` while engy's `app/api/pros/route.ts` was mid-edit (confirmed via `git status` — those files were `M` under engy's ownership, not touched by me; `npx vitest run components` was 91/91 green throughout). Re-ran after engy's session landed — full suite green, 0 exclusions.
+- `npx next lint` — clean, only the 5 pre-existing `no-img-element` warnings (none in my files).
+- `npm run build` — succeeds.
+- **Live-verified** at 390×844×2,mobile,touch via `chrome-devtools` puppeteer against `next dev` (ports 4153 then 4159 after the first server's static chunks 404'd mid-session — restarted clean; both killed after):
+  - Mocked `/api/pros`/`/api/players` via `navigate_page`'s `initScript` (route doesn't emit `proId`/`allyTeamName`/`enemyTeamName` on prod yet at session start; confirmed it DOES by session end — see below).
+  - Champion search → Viktor → Pro Play card: header shows `LYON vs HLE` (bold, matchup) `·` `2026 Mid-Season Invitational` (truncated with `…`) in the tournament row; player name renders "Saint" (not "Saint (Kang Sung-in)") end to end from the mocked stale-cache name.
+  - Sheet: Teams-box titles "LYON"/"HLE" (real names, not "Ally team — X"); PRO PLAY line shows "LYON vs HLE · 2026 Mid-Season Invitational"; Saint/Gumayusi/Chovy rows (proId set) render underlined name + `›` chevron + `aria-label="View <Name>'s games"`; Clozer/Doran/Delight/Zeus/Peyz/Delight2 (no proId) render plain, no affordance; the null-name enemy jungler row shows no name cell at all (unaffected).
+  - `elementFromPoint` hit-test on Gumayusi's tap target: 169.7×40px box, center + all 4 corners resolve to the button itself (no overlap with the adjacent item-icon buttons).
+  - Tapped Gumayusi's row → sheet closed, mode switched to Player, search box + subject line show "Gumayusi", his game loaded via `/api/pros?proId=...` (mocked).
+  - Cross-page handoff verified independently (simulating a Builds-page tap): stashed a pending selection via `sessionStorage` in an `initScript` (so it's present before the app's own mount effect runs), navigated fresh → `/history` auto-selected "Chovy", fetched by `proId`, storage key cleared after consume. `wait_for` gotcha: don't OR-match on `"Search a pro player"` — that's the combobox's STATIC `aria-label`/placeholder, present whether or not a player is selected, and gave a false "not working" read the first time before I switched to matching the actual state-dependent text.
+  - `document.documentElement.scrollWidth === clientWidth === 390` — no horizontal overflow.
+  - `list_console_messages` — zero errors/warnings across every state tested.
+  - End-of-session real-route spot check (no mock): `GET /api/pros?championId=112&role=5` on the dev server against the real DB now returns `allyTeamName`/`enemyTeamName`/`proId` — engy's backend landed and matches my mirrored types exactly (`grep` on `lib/pro/types.ts` confirms identical field names/shapes).
+
+### Known Issues
+- **Dev-server flake, not a product bug:** mid-session the first `next dev` instance (port 4153) started 404-ing every `_next/static/chunks/*` after several rapid `initScript`-navigate/reload cycles — a fresh `next dev` on a new port (4159) fixed it immediately. Not investigated further (matches the general "don't run two next processes / stale `.next` lock" gotcha class in CLAUDE.md, though I never had two processes up at once here — more likely rapid HMR recompiles racing). Worth a note for future puppeteer sessions against this repo: if chunks start 404ing, restart the dev server rather than debugging further.
+- **PlayerPicker fires an extra live `/api/players?q=<name>` search on programmatic selection** (both the Teams-box tap and the pre-existing `FavoritePlayerChips` tap) — its `useEffect` that syncs `query` to `playerLabel(value)` shares the same `query` state as its OWN debounced-search effect, so setting `value` externally also re-triggers a search fetch for that name. Pre-existing behavior (same mechanism `FavoritePlayerChips` already exercises), not something I introduced or was asked to touch — flagging since it showed up in this session's network logs and could look like a symptom of my change at first glance.
+- Did not touch `app/page.tsx`/`ProGamesSection.tsx` (Builds page) per scope — the cross-page sessionStorage-handoff fallback in `GameDetailSheet` means a Teams-box tap there already lands correctly on `/history` with the right player selected, without needing any Builds-page edit; verified that fallback path directly (see Tests) rather than via the real Builds-page UI.
+
+

@@ -44,6 +44,13 @@ export interface TeamCompPlayer {
   items: number[];
   trinket: number | null;
   role: number | null;
+  /** pros.id UUID when this roster slot is a TRACKED pro player — engy's
+   *  concurrent contract addition, mirrored here verbatim (see
+   *  HANDOFF-fronty.md). Null for an untracked/unlinked slot (common on
+   *  soloq teammates, or a prostage player never matched to a `pros` row).
+   *  Drives the Teams-box tap-to-view-that-player's-games affordance — a
+   *  row is only tappable when this is non-null. */
+  proId?: string | null;
 }
 
 export interface ProGame {
@@ -98,6 +105,15 @@ export interface ProGame {
    *  fallback (never an empty section) when either is undefined. */
   allyPlayers?: TeamCompPlayer[];
   enemyPlayers?: TeamCompPlayer[];
+  /** Cleaned pro-play team names ("LYON", "HLE" — no more
+   *  "(2024 American Team)"-style suffix), engy's concurrent contract
+   *  addition mirrored verbatim. Prostage-only; absent for soloq (no
+   *  organized "team" concept for a solo queue game) and absent for a
+   *  prostage row not yet backfilled/resolved — components must degrade to
+   *  the existing fallback title ("Ally team — <player.team>" / "Enemy
+   *  team") rather than rendering an empty/undefined string. */
+  allyTeamName?: string | null;
+  enemyTeamName?: string | null;
 }
 
 export interface ProGamesApiResponse {

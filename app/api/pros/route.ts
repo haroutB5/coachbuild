@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
 import { FRESH_WINDOW_DAYS } from "@/lib/pro/fresh";
 import { orderByRole } from "@/lib/pro/extract";
+import { cleanLeaguepediaName } from "@/lib/prostage/displayName";
 import type {
   DisplayRoleId,
   ProGame,
@@ -173,7 +174,10 @@ interface ProstageGameRow {
 function prostageRowToProGame(
   row: ProstageGameRow,
   comps:
-    | Pick<ProGame, "allyChampionIds" | "enemyChampionIds" | "allyPlayers" | "enemyPlayers">
+    | Pick<
+        ProGame,
+        "allyChampionIds" | "enemyChampionIds" | "allyPlayers" | "enemyPlayers" | "allyTeamName" | "enemyTeamName"
+      >
     | Record<string, never> = {}
 ): ProGame | null {
   if (!row?.game_id || !row.player_link || typeof row.champion_id !== "number") return null;
@@ -187,7 +191,11 @@ function prostageRowToProGame(
     source: "prostage",
     playerLink: row.player_link,
     player: {
-      name: row.pro_name ?? row.player_link,
+      // pro_name (a tracked pros.name) is already clean; the raw player_link
+      // fallback carries Leaguepedia's real-name disambiguator ("Saint (Kang
+      // Sung-in)") and must be cleaned for display — the RAW value stays on
+      // `playerLink` above (the /api/prostage/timeline key).
+      name: row.pro_name ?? cleanLeaguepediaName(row.player_link),
       team: row.pro_team ?? row.team,
       role: roleValue,
       country: row.pro_country ?? null,
@@ -231,6 +239,7 @@ interface ProstageCompRow {
   final_items: unknown; // jsonb — this row's own final items (Phase 4 per-player data)
   trinket: number | null;
   pro_name: string | null; // pros-table name when THIS row links to a tracked pro, else null
+  pro_id: string | null; // prostage_matches.pro_id — null when ingest's own name-match missed (see buildProstageCompsMap's fallback)
 }
 
 /** Carries everything needed to build BOTH the champion-id-only strip
@@ -244,17 +253,30 @@ interface ProstageCompRow {
 type CompEntry = TeamCompPlayer;
 
 /** Groups a batch of raw coachbuild.prostage_matches (game_id, team,
- *  champion_id, role, player_link, final_items, trinket, pro_name) rows —
- *  fetched for the specific game_ids already present in this response's
- *  prostage results — into game_id -> team -> TeamCompPlayer[]. Rows with a
- *  null team or champion_id are excluded by the caller's SQL WHERE clause,
- *  never here. Role resolution mirrors prostageRowToProGame's roleValue
- *  (pro_role ?? role, unresolved stays null rather than guessed). name
- *  prefers pro_name (this row links to a tracked pro) over the raw
- *  player_link. items defensively filters 0s even though Cargo's Items list
- *  shouldn't contain placeholder zeros (lib/prostage/extract.ts only pushes
- *  resolved item ids). */
-function buildProstageCompsMap(rows: ProstageCompRow[]): Map<string, Map<string, CompEntry[]>> {
+ *  champion_id, role, player_link, final_items, trinket, pro_name, pro_id)
+ *  rows — fetched for the specific game_ids already present in this
+ *  response's prostage results — into game_id -> team -> TeamCompPlayer[].
+ *  Rows with a null team or champion_id are excluded by the caller's SQL
+ *  WHERE clause, never here. Role resolution mirrors prostageRowToProGame's
+ *  roleValue (pro_role ?? role, unresolved stays null rather than guessed).
+ *  name prefers pro_name (this row links to a tracked pro, already clean)
+ *  over the CLEANED player_link (strips Leaguepedia's real-name
+ *  disambiguator, e.g. "Zeka (Kim Geon-woo)" -> "Zeka" — see
+ *  lib/prostage/displayName.ts). items defensively filters 0s even though
+ *  Cargo's Items list shouldn't contain placeholder zeros
+ *  (lib/prostage/extract.ts only pushes resolved item ids).
+ *
+ *  proId prefers the row's own pm.pro_id (set at ingest — see
+ *  lib/prostage/ingest.ts); when that's null, falls back to `proByName`
+ *  (coachbuild.pros name -> id, lowercased, passed in by the caller) matched
+ *  first against the RAW player_link, then the CLEANED form — covers rows
+ *  ingested before lib/prostage/ingest.ts's own cleaned-form match existed,
+ *  or a pro tracked only AFTER this row was first ingested. Never fuzzy —
+ *  exact (case-insensitive) match only. */
+function buildProstageCompsMap(
+  rows: ProstageCompRow[],
+  proByName: Map<string, string>
+): Map<string, Map<string, CompEntry[]>> {
   const map = new Map<string, Map<string, CompEntry[]>>();
   for (const r of rows) {
     let byTeam = map.get(r.game_id);
@@ -262,13 +284,24 @@ function buildProstageCompsMap(rows: ProstageCompRow[]): Map<string, Map<string,
       byTeam = new Map();
       map.set(r.game_id, byTeam);
     }
+    // player_link is NOT NULL on the real table, but defend against a
+    // driver/test-mock row shaped without it (matches this file's existing
+    // defensive posture toward every other field here) rather than crashing
+    // the whole merge over one malformed row.
+    const playerLink = r.player_link ?? "";
+    const proId =
+      r.pro_id ??
+      (playerLink ? proByName.get(playerLink.trim().toLowerCase()) : undefined) ??
+      (playerLink ? proByName.get(cleanLeaguepediaName(playerLink).toLowerCase()) : undefined) ??
+      null;
     const arr = byTeam.get(r.team) ?? [];
     arr.push({
       championId: r.champion_id,
       role: r.pro_role ?? r.role ?? null,
-      name: r.pro_name ?? r.player_link,
+      name: r.pro_name ?? (playerLink ? cleanLeaguepediaName(playerLink) : null),
       items: asJson<number[]>(r.final_items, []).filter((id) => id !== 0),
       trinket: r.trinket ?? null,
+      proId,
     });
     byTeam.set(r.team, arr);
   }
@@ -310,6 +343,32 @@ function compsForGame(
     enemyChampionIds: enemyOrdered.map((p) => p.championId),
     allyPlayers: allyOrdered,
     enemyPlayers: enemyOrdered,
+  };
+}
+
+/** Cleaned ally/enemy TEAM NAME strip, sibling to compsForGame but with a
+ *  looser gate: team identity doesn't need a full 5-champion side to be
+ *  known, only that the row's own team is non-null and EXACTLY ONE other
+ *  team is present for the game_id (reuses the same batched byTeam map, no
+ *  extra query) — so this can resolve even for a game whose comps don't
+ *  qualify for allyChampionIds/enemyChampionIds (e.g. a side missing a
+ *  player row). Same both-or-neither contract as every other paired field
+ *  here. Cleaning via lib/prostage/displayName.ts's cleanLeaguepediaName —
+ *  the RAW team string is untouched everywhere else (DB, `player.team`, the
+ *  byTeam grouping key itself). */
+function teamNamesForGame(
+  compsByGame: Map<string, Map<string, CompEntry[]>>,
+  gameId: string,
+  ownTeam: string | null
+): Pick<ProGame, "allyTeamName" | "enemyTeamName"> | Record<string, never> {
+  if (!ownTeam) return {};
+  const byTeam = compsByGame.get(gameId);
+  if (!byTeam || !byTeam.has(ownTeam)) return {};
+  const otherTeams = Array.from(byTeam.keys()).filter((team) => team !== ownTeam);
+  if (otherTeams.length !== 1) return {};
+  return {
+    allyTeamName: cleanLeaguepediaName(ownTeam),
+    enemyTeamName: cleanLeaguepediaName(otherTeams[0]),
   };
 }
 
@@ -477,21 +536,43 @@ export async function GET(req: NextRequest) {
     // NOT a per-row N+1 query. Only fired when there's actually a prostage
     // row to enrich.
     const gameIds = Array.from(new Set(prostageRowsArr.map((r) => r.game_id)));
-    const compsRawRows =
+    // The pros name-index (id, name) is fetched ONLY alongside the comps
+    // query (same gate: nothing to enrich when there's no prostage row) —
+    // used by buildProstageCompsMap's proId name-match fallback (see its doc
+    // comment) for rows whose pm.pro_id is null. Small table (tracked pros
+    // only), one extra batched call, never a per-row query.
+    const [compsRawRows, prosNameRows] =
       gameIds.length > 0
-        ? await sql`
-            SELECT pm.game_id, pm.team, pm.champion_id, pm.role, p.role AS pro_role,
-                   pm.player_link, pm.final_items, pm.trinket, p.name AS pro_name
-            FROM coachbuild.prostage_matches pm
-            LEFT JOIN coachbuild.pros p ON p.id = pm.pro_id
-            WHERE pm.game_id = ANY(${gameIds}::text[])
-              AND pm.team IS NOT NULL AND pm.champion_id IS NOT NULL
-          `
-        : [];
-    const compsByGame = buildProstageCompsMap(asRows<ProstageCompRow>(compsRawRows));
+        ? await Promise.all([
+            sql`
+              SELECT pm.game_id, pm.team, pm.champion_id, pm.role, p.role AS pro_role,
+                     pm.player_link, pm.final_items, pm.trinket, p.name AS pro_name, pm.pro_id
+              FROM coachbuild.prostage_matches pm
+              LEFT JOIN coachbuild.pros p ON p.id = pm.pro_id
+              WHERE pm.game_id = ANY(${gameIds}::text[])
+                AND pm.team IS NOT NULL AND pm.champion_id IS NOT NULL
+            `,
+            sql`SELECT id, name FROM coachbuild.pros`,
+          ])
+        : [[], []];
+    // Defensive against a malformed/mismatched mock or driver row (a test
+    // fixture or future schema drift returning something without a string
+    // `name`) — same posture as this file's other row parsing, never crash
+    // the whole merge over a fallback-index row.
+    const proByName = new Map(
+      asRows<{ id: string; name: string }>(prosNameRows)
+        .filter((p): p is { id: string; name: string } => typeof p?.name === "string" && typeof p?.id === "string")
+        .map((p) => [p.name.trim().toLowerCase(), p.id])
+    );
+    const compsByGame = buildProstageCompsMap(asRows<ProstageCompRow>(compsRawRows), proByName);
 
     const prostageGames = prostageRowsArr
-      .map((row) => prostageRowToProGame(row, compsForGame(compsByGame, row.game_id, row.team)))
+      .map((row) =>
+        prostageRowToProGame(row, {
+          ...compsForGame(compsByGame, row.game_id, row.team),
+          ...teamNamesForGame(compsByGame, row.game_id, row.team),
+        })
+      )
       .filter((g): g is ProGame => g !== null);
 
     const games = [...soloqGames, ...prostageGames]

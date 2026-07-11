@@ -153,6 +153,45 @@ describe("runProstageIngest", () => {
     expect(result.rowsSeen).toBe(1);
   });
 
+  it("resolves pro_id against a CLEANED player_link when the raw form (with Leaguepedia's real-name disambiguator) doesn't exact-match pros.name", async () => {
+    // Regression for the 2026-07-11 fix: player_link "Zeka (Kim Geon-woo)"
+    // must still resolve to the tracked pro named "Zeka" — the exact-match-
+    // only lookup this replaces silently left pro_id NULL for every such row
+    // (~400 rows found live, see scripts/backfill-prostage-proid.mjs).
+    vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
+    vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce([{ id: "pro-zeka", name: "Zeka" }]); // pro-name index
+    vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([
+      scoreboardRow({ GameId: "g1", Link: "Zeka (Kim Geon-woo)", Role: "Mid" }),
+    ] as never);
+
+    await runProstageIngest({ cursor: 0 });
+
+    const insertCall = mockSql.mock.calls[1]; // [0] = pro-name index, [1] = the row INSERT
+    const proIdArg = insertCall[insertCall.length - 1]; // pro_id is the LAST value bound in the INSERT
+    expect(proIdArg).toBe("pro-zeka");
+  });
+
+  it("prefers an exact RAW player_link match over the cleaned form when both happen to resolve", async () => {
+    vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
+    vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    // A pro literally named with the raw (undisambiguated) form should win
+    // over a coincidental match on the cleaned form.
+    mockSql.mockResolvedValueOnce([
+      { id: "pro-raw-exact", name: "Zeka (Kim Geon-woo)" },
+      { id: "pro-cleaned", name: "Zeka" },
+    ]);
+    vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([
+      scoreboardRow({ GameId: "g1", Link: "Zeka (Kim Geon-woo)", Role: "Mid" }),
+    ] as never);
+
+    await runProstageIngest({ cursor: 0 });
+
+    const insertCall = mockSql.mock.calls[1];
+    const proIdArg = insertCall[insertCall.length - 1];
+    expect(proIdArg).toBe("pro-raw-exact");
+  });
+
   it("does NOT warn when unresolved role is at or below 50%", async () => {
     vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
     vi.mocked(orderByStaleness).mockResolvedValue(["A"]);

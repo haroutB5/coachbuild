@@ -16,6 +16,7 @@ import { getSql } from "@/lib/pro/db";
 import { DbUnavailableError } from "@/lib/pro/errors";
 import { cargoQueryWithRetry } from "./cargo";
 import type { CargoQueryOptions } from "./cargo";
+import { cleanLeaguepediaName } from "./displayName";
 import { getDdragonMaps } from "./ddragon";
 import { extractProstageRow } from "./extract";
 import { orderByStaleness, resolveActiveTournaments } from "./tournaments";
@@ -137,7 +138,19 @@ export async function runProstageIngest(opts: ProstageIngestOptions = {}): Promi
       if (!extracted) continue;
       extractedCount += 1;
       if (extracted.role === null) nullRoleCount += 1;
-      const proId = proByName.get(extracted.playerLink.trim().toLowerCase()) ?? null;
+      // Exact match on the RAW player_link first (covers the common case, and
+      // the rare tracked pro whose pros.name itself legitimately ends in a
+      // parenthetical), then on the CLEANED form — Leaguepedia's player_link
+      // often carries a real-name disambiguator ("Zeka (Kim Geon-woo)") that
+      // pros.name never does ("Zeka"), which silently left every such row's
+      // pro_id null pre-fix (found 2026-07-11: ~400 existing rows across the
+      // table, incl. tracked pros like Zeka — see
+      // scripts/backfill-prostage-proid.mjs for the one-time repair of rows
+      // ingested before this fix).
+      const proId =
+        proByName.get(extracted.playerLink.trim().toLowerCase()) ??
+        proByName.get(cleanLeaguepediaName(extracted.playerLink).toLowerCase()) ??
+        null;
       try {
         const inserted = (await sql`
           INSERT INTO coachbuild.prostage_matches (

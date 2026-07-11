@@ -32,6 +32,8 @@ import { getChampionIconMap, itemIconUrl, type ChampionIconEntry } from "./proAs
 import { IconWithFallback } from "./IconWithFallback";
 import { WinLossPill } from "./ProGameCard";
 import type { TeamCompPlayer } from "./proGames.types";
+import { cleanPlayerName } from "./playerName";
+import type { PendingPlayerSelect } from "./playerSelectHandoff";
 import {
   ROSTER_ROLE_LABELS,
   STANDARD_ROSTER_LENGTH,
@@ -163,6 +165,12 @@ interface SheetTeamsSectionProps extends TeamCompProps {
   /** Opens the SAME item-detail popover the Final Build / Item Build Order
    *  sections already use (GameDetailSheet's openItemPopover). */
   onItemClick: (id: number) => void;
+  /** Tap-to-view-their-games — fired from a per-player row whose `proId` is
+   *  non-null. Owned by GameDetailSheet (see its header comment for the
+   *  same-page-callback vs. cross-page-navigation split); undefined here
+   *  would mean no rows are tappable, but GameDetailSheet always supplies
+   *  it. */
+  onSelectPlayer?: (player: PendingPlayerSelect) => void;
 }
 
 /** Boxed Ally/Enemy Teams section for the detail sheet. Each side is its own
@@ -183,6 +191,7 @@ export function SheetTeamsSection({
   ver,
   itemNames,
   onItemClick,
+  onSelectPlayer,
 }: SheetTeamsSectionProps) {
   const iconMap = useChampionIconMap();
   if (!allyChampionIds || !enemyChampionIds) return null;
@@ -203,6 +212,7 @@ export function SheetTeamsSection({
           ver={ver}
           itemNames={itemNames}
           onItemClick={onItemClick}
+          onSelectPlayer={onSelectPlayer}
         />
         <TeamBox
           title={teamBoxTitle("enemy", enemyTeamName)}
@@ -214,6 +224,7 @@ export function SheetTeamsSection({
           ver={ver}
           itemNames={itemNames}
           onItemClick={onItemClick}
+          onSelectPlayer={onSelectPlayer}
         />
       </div>
     </section>
@@ -230,6 +241,7 @@ function TeamBox({
   ver,
   itemNames,
   onItemClick,
+  onSelectPlayer,
 }: {
   title: string;
   /** undefined = not derivable, don't render a chip. */
@@ -241,6 +253,7 @@ function TeamBox({
   ver: string;
   itemNames: Map<number, string> | null;
   onItemClick: (id: number) => void;
+  onSelectPlayer?: (player: PendingPlayerSelect) => void;
 }) {
   // Border/label emphasis only — deliberately no red/blue full-box accent
   // color per the dispatch brief (that fights the token discipline; good/bad
@@ -264,6 +277,7 @@ function TeamBox({
               ver={ver}
               itemNames={itemNames}
               onItemClick={onItemClick}
+              onSelectPlayer={onSelectPlayer}
             />
           ))}
         </div>
@@ -347,6 +361,7 @@ function PlayerRow({
   ver,
   itemNames,
   onItemClick,
+  onSelectPlayer,
 }: {
   player: TeamCompPlayer;
   index: number;
@@ -356,17 +371,19 @@ function PlayerRow({
   ver: string;
   itemNames: Map<number, string> | null;
   onItemClick: (id: number) => void;
+  onSelectPlayer?: (player: PendingPlayerSelect) => void;
 }) {
   const entry = iconMap?.get(player.championId);
   const champName = entry?.name ?? `Champion #${player.championId}`;
   const roleAbbr = roleAbbrForPlayer(player.role, index, rosterLength);
+  const displayName = cleanPlayerName(player.name);
+  // Tappable identity area only when this slot is a TRACKED pro (proId
+  // non-null) — an untracked slot (common on soloq teammates) renders
+  // exactly as before, no dead-looking affordance.
+  const isViewable = player.proId != null;
 
-  return (
-    <div
-      className={`flex items-center gap-1.5 flex-wrap rounded-lg px-1.5 py-1 ${
-        isSelf ? "ring-1 ring-teal bg-teal/5" : ""
-      }`}
-    >
+  const identityContent = (
+    <>
       <span
         className={`w-7 h-7 rounded-full bg-black/30 overflow-hidden flex items-center justify-center flex-shrink-0 ${
           isSelf ? "border-2 border-teal" : "border border-line opacity-80"
@@ -388,10 +405,52 @@ function PlayerRow({
           {roleAbbr}
         </span>
       )}
-      {player.name && (
-        <span className="text-[11px] text-txt truncate min-w-[36px] flex-1" title={player.name}>
-          {player.name}
+      {displayName && (
+        <span
+          className={`text-[11px] truncate min-w-[36px] flex-1 ${
+            isViewable
+              ? "text-txt underline decoration-dotted decoration-mut/60 underline-offset-2 group-hover:text-teal group-hover:decoration-teal-dim"
+              : "text-txt"
+          }`}
+          title={displayName}
+        >
+          {displayName}
         </span>
+      )}
+      {isViewable && (
+        <span
+          aria-hidden="true"
+          className="text-[10px] text-mut flex-shrink-0 leading-none group-hover:text-teal transition-colors"
+        >
+          ›
+        </span>
+      )}
+    </>
+  );
+
+  return (
+    <div
+      className={`flex items-center gap-1.5 flex-wrap rounded-lg px-1.5 py-1 ${
+        isSelf ? "ring-1 ring-teal bg-teal/5" : ""
+      }`}
+    >
+      {isViewable ? (
+        <button
+          type="button"
+          onClick={() =>
+            onSelectPlayer?.({ id: player.proId as string, name: displayName ?? champName, team: null })
+          }
+          aria-label={`View ${displayName ?? champName}'s games`}
+          // Hit-slop via padding + equal negative margin (same technique as
+          // the item-icon buttons below) — a few extra px of vertical tap
+          // area without growing the row's visual footprint or jittering the
+          // 5-row list. `group` drives the name/chevron hover color above.
+          className="group flex items-center gap-1.5 min-w-0 flex-1 py-1.5 -my-1.5 rounded-md transition-transform active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-1 focus-visible:ring-offset-panel"
+        >
+          {identityContent}
+        </button>
+      ) : (
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">{identityContent}</div>
       )}
       <div className="flex items-center gap-1 flex-wrap justify-end flex-shrink-0 ml-auto">
         {player.items.map((id, i) => {

@@ -13,6 +13,9 @@ import {
 import GameDetailSheet from "./GameDetailSheet";
 import { IconWithFallback } from "./IconWithFallback";
 import { CardCompStrip } from "./TeamComp";
+import { matchupLabel } from "./teamCompDisplay";
+import { cleanPlayerName } from "./playerName";
+import type { PendingPlayerSelect } from "./playerSelectHandoff";
 
 export function ImgWithFallback({
   src,
@@ -131,6 +134,10 @@ interface ProGameCardProps {
    *  id name from match-v5 ("MonkeyKing", "FiddleSticks"), which is wrong to
    *  show users. Falls back to the internal name when unresolved. */
   championDisplayName?: string;
+  /** Threaded straight through to GameDetailSheet's own prop of the same
+   *  name — see its doc comment for the same-page-callback vs.
+   *  cross-page-navigation split. */
+  onSelectPlayer?: (player: PendingPlayerSelect) => void;
 }
 
 // Lane the game was actually played in — matters on the "auto" (all-lanes)
@@ -147,10 +154,17 @@ export default function ProGameCard({
   game,
   championIcon,
   championDisplayName,
+  onSelectPlayer,
 }: ProGameCardProps) {
   const [open, setOpen] = useState(false);
   const ver = versionFromPatch(game.patch);
   const isProstage = game.source === "prostage";
+  const cleanedPlayerName = cleanPlayerName(game.player.name);
+  // "LYON vs HLE" — see GameDetailSheet's identical computation; null when
+  // either cleaned team name is missing (soloq, or a not-yet-backfilled
+  // prostage row), which degrades this whole card back to its pre-existing
+  // rendering.
+  const matchup = isProstage ? matchupLabel(game.allyTeamName, game.enemyTeamName) : null;
 
   function openSheet() {
     setOpen(true);
@@ -170,9 +184,9 @@ export default function ProGameCard({
         tabIndex={0}
         onClick={openSheet}
         onKeyDown={onCardKeyDown}
-        aria-label={`View details — ${championDisplayName ?? game.championName}, ${game.player.name}, ${
-          game.win ? "win" : "loss"
-        }`}
+        aria-label={`View details — ${championDisplayName ?? game.championName}, ${
+          cleanedPlayerName ?? game.player.name
+        }, ${game.win ? "win" : "loss"}`}
         className="glass-card rounded-2xl overflow-hidden shadow-[0_6px_24px_rgba(0,0,0,0.3)] cursor-pointer transition-colors hover:border-teal-dim/60 active:scale-[0.995] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
       >
         {/* Dense collapsed row — identity, result, KDA, spells + keystone,
@@ -198,7 +212,9 @@ export default function ProGameCard({
             </span>
           </div>
           <div className="flex items-center gap-1 min-w-0 flex-shrink text-[12px]">
-            <span className="text-txt font-medium truncate max-w-[100px]">{game.player.name}</span>
+            <span className="text-txt font-medium truncate max-w-[100px]">
+              {cleanedPlayerName ?? game.player.name}
+            </span>
             {game.player.team && (
               <span className="text-mut truncate max-w-[70px]">{game.player.team}</span>
             )}
@@ -274,9 +290,30 @@ export default function ProGameCard({
                 Pro Play
               </span>
             )}
-            <span className="uppercase tracking-[0.5px]">
-              {isProstage ? game.tournament : game.account.region}
-            </span>
+            {isProstage ? (
+              // Matchup is a fixed-priority, never-truncated prefix — only
+              // the tournament name gives way (ellipsis) when the pair
+              // doesn't fit. `min-w-0` on the wrapper is required for the
+              // child's `truncate` to actually clip inside this flex-wrap
+              // parent instead of forcing the row to overflow/wrap.
+              <span className="inline-flex items-center gap-1 min-w-0 max-w-[62vw] sm:max-w-[280px]">
+                {matchup && (
+                  <span className="uppercase tracking-[0.5px] text-txt font-semibold flex-shrink-0">
+                    {matchup}
+                  </span>
+                )}
+                {matchup && game.tournament && (
+                  <span aria-hidden="true" className="flex-shrink-0">
+                    ·
+                  </span>
+                )}
+                {game.tournament && (
+                  <span className="uppercase tracking-[0.5px] truncate min-w-0">{game.tournament}</span>
+                )}
+              </span>
+            ) : (
+              <span className="uppercase tracking-[0.5px]">{game.account.region}</span>
+            )}
             {GAME_LANE_LABEL[game.role] && (
               <>
                 <span>·</span>
@@ -325,6 +362,7 @@ export default function ProGameCard({
         championDisplayName={championDisplayName}
         open={open}
         onClose={() => setOpen(false)}
+        onSelectPlayer={onSelectPlayer}
       />
     </>
   );

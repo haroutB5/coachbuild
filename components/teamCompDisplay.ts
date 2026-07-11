@@ -62,3 +62,17 @@ export function teamBoxTitle(
 export function isSelfInAlly(allyChampionIds: number[], selfChampionId: number): boolean {
   return allyChampionIds.includes(selfChampionId);
 }
+
+/** "LYON vs HLE"-style matchup label for a pro-play game — used on the sheet
+ *  header (near the tournament line) and the collapsed card's tournament
+ *  row. Only produced when BOTH cleaned team names are present; either
+ *  missing (soloq games, or a prostage row not yet backfilled/resolved)
+ *  degrades to null so every render site's existing fallback (no matchup
+ *  line at all) keeps working unchanged. */
+export function matchupLabel(
+  allyTeamName: string | null | undefined,
+  enemyTeamName: string | null | undefined
+): string | null {
+  if (!allyTeamName || !enemyTeamName) return null;
+  return `${allyTeamName} vs ${enemyTeamName}`;
+}

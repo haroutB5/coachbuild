@@ -2,6 +2,14 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.18.0] — 2026-07-11
+### Added
+- **Tap a player in the Teams boxes to jump to their games** — any tracked pro in either team is a link (name underlined with a chevron); works from the Pro's page and cross-page.
+- **Pro-play matchup on top**: "LYON vs HLE"-style line in the game sheet header and on the game cards before the tournament name.
+### Fixed
+- **Data audit round**: 213 pro-play rows had silently-broken links to their tracked pros (Leaguepedia writes "Zeka (Kim Geon-woo)", roster says "Zeka") — matching fixed at ingest + repaired live. Keystone naming verified correct across tournaments (including Deathfire Touch, a valid 2026 Sorcery keystone).
+- **In-game names only**: player names no longer show real-name parentheticals; team names no longer show wiki disambiguation suffixes ("LYON", not "LYON (2024 American Team)").
+
 ## [0.17.0] — 2026-07-11
 ### Added
 - **Teams section redesigned, matchday-style**: each team sits in its own highlighted panel (WIN/LOSS chip in the header) with five per-player rows — champion, role, player name, and their full final build as tappable item icons with the usual info cards. Solo-queue games backfilled with per-player data (1,131 games); pro-play games derive it from the tracked rows. Games without the data keep the compact strip.

@@ -2,7 +2,11 @@
 
 import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useRouter } from "next/navigation";
 import type { ProGame, ProGamePurchase } from "./proGames.types";
+import { cleanPlayerName } from "./playerName";
+import { matchupLabel } from "./teamCompDisplay";
+import { stashPendingPlayerSelect, type PendingPlayerSelect } from "./playerSelectHandoff";
 import {
   versionFromPatch,
   itemIconUrl,
@@ -45,6 +49,13 @@ interface GameDetailSheetProps {
   championDisplayName?: string;
   open: boolean;
   onClose: () => void;
+  /** Same-page fast path for the Teams-box "view this player's games" tap —
+   *  supplied by /history (which owns the mode/player state directly and can
+   *  just call this instead of navigating). When absent (this sheet is
+   *  mounted from the Builds page's ProGamesSection instead), the tap falls
+   *  back to stashing the pick + a real `router.push("/history")` — see
+   *  playerSelectHandoff.ts. */
+  onSelectPlayer?: (player: PendingPlayerSelect) => void;
 }
 
 /** Rune perk tile with a visible name label (not just an icon + tooltip) —
@@ -384,28 +395,15 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-// Real ally/enemy team names are NOT yet on the ProGame contract (per the
-// dispatch brief: "for prostage use the REAL team names — data will carry
-// them; until then/when absent, fall back to 'Ally team'/'Enemy team'").
-// Defensive read of a not-yet-landed field, same pattern as `playerLink`
-// above — grepped the repo 2026-07-11 and confirmed neither name exists
-// anywhere yet (see HANDOFF-fronty.md). Read via this local extension cast
-// rather than editing proGames.types.ts's real contract, so a future engy
-// addition under a DIFFERENT name doesn't silently collide — if engy lands
-// these under different keys, update this cast, not the fallback logic in
-// TeamComp.tsx's teamBoxTitle.
-interface ProGameTeamNames {
-  allyTeamName?: string | null;
-  enemyTeamName?: string | null;
-}
-
 export default function GameDetailSheet({
   game,
   championIcon,
   championDisplayName,
   open,
   onClose,
+  onSelectPlayer,
 }: GameDetailSheetProps) {
+  const router = useRouter();
   const [rendered, setRendered] = useState(false);
   const [visible, setVisible] = useState(false);
   const [hideConsumables, setHideConsumables] = useState(true);
@@ -467,6 +465,19 @@ export default function GameDetailSheet({
   }
   function closeDetail() {
     setActiveDetail(null);
+  }
+
+  /** Teams-box row tap ("view this player's games"). Always closes this
+   *  sheet first, then either hands off to the parent's same-page callback
+   *  or stashes + navigates cross-page — see the `onSelectPlayer` prop doc. */
+  function handleSelectPlayer(player: PendingPlayerSelect) {
+    onClose();
+    if (onSelectPlayer) {
+      onSelectPlayer(player);
+    } else {
+      stashPendingPlayerSelect(player);
+      router.push("/history");
+    }
   }
 
   // Mount/unmount is decoupled from `open` so the exit transition can
@@ -563,11 +574,19 @@ export default function GameDetailSheet({
 
   if (!rendered || typeof document === "undefined") return null;
 
+  const cleanedPlayerName = cleanPlayerName(game.player.name);
+  // "LYON vs HLE" — only when both cleaned team names resolved; null on
+  // soloq or a not-yet-backfilled prostage row degrades to the pre-existing
+  // Pro Play badge + tournament line, unchanged.
+  const matchup = matchupLabel(game.allyTeamName, game.enemyTeamName);
+
   const accountLine = isProstage ? (
-    <span className="inline-flex items-center gap-1.5">
+    <span className="inline-flex items-center gap-1.5 flex-wrap">
       <span className="inline-flex items-center px-1.5 py-[1px] rounded text-[9px] font-bold uppercase tracking-[0.5px] bg-gold/15 text-gold border border-gold/30">
         Pro Play
       </span>
+      {matchup && <span className="text-txt font-semibold">{matchup}</span>}
+      {matchup && game.tournament && <span aria-hidden="true" className="text-mut/50">·</span>}
       {game.tournament && <span className="text-mut">{game.tournament}</span>}
     </span>
   ) : (
@@ -590,7 +609,7 @@ export default function GameDetailSheet({
         ref={panelRef}
         role="dialog"
         aria-modal="true"
-        aria-label={`Game detail — ${championDisplayName ?? game.championName}, ${game.player.name}`}
+        aria-label={`Game detail — ${championDisplayName ?? game.championName}, ${cleanedPlayerName ?? game.player.name}`}
         className={`absolute inset-0 sm:inset-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:w-full sm:max-w-2xl sm:max-h-[85vh] sm:rounded-2xl flex flex-col bg-panel border-0 sm:border sm:border-line shadow-[0_20px_60px_rgba(0,0,0,0.6)] transition-[opacity,transform] motion-reduce:transition-none ${
           visible
             ? "opacity-100 translate-y-0 sm:-translate-y-1/2 duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]"
@@ -617,7 +636,7 @@ export default function GameDetailSheet({
               <WinLossPill win={game.win} />
             </div>
             <p className="text-[13px] text-txt mt-0.5 truncate">
-              {game.player.name}
+              {cleanedPlayerName ?? game.player.name}
               {game.player.team && <span className="text-mut"> — {game.player.team}</span>}
             </p>
             <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-mut mt-1.5">
@@ -674,11 +693,12 @@ export default function GameDetailSheet({
             selfChampionId={game.championId}
             win={game.win}
             trackedPlayerTeam={game.player.team}
-            allyTeamName={(game as ProGame & ProGameTeamNames).allyTeamName}
-            enemyTeamName={(game as ProGame & ProGameTeamNames).enemyTeamName}
+            allyTeamName={game.allyTeamName}
+            enemyTeamName={game.enemyTeamName}
             ver={ver}
             itemNames={itemNames}
             onItemClick={openItemPopover}
+            onSelectPlayer={handleSelectPlayer}
           />
 
           {/* Runes */}

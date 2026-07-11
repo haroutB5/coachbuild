@@ -203,21 +203,28 @@ export const FIXTURE_GAME_PROSTAGE_FULL: ProGame = {
   },
   allyChampionIds: [112, 64, 555, 104, 43],
   enemyChampionIds: [238, 875, 887, 51, 40],
-  // Prostage per-player detail — real team names aren't on the contract yet
-  // (see GameDetailSheet's defensive ProGameTeamNames cast), so this fixture
-  // exercises the "Ally team — <tracked player's team>" / "Enemy team"
-  // fallback header text, not a real-name header.
+  // Real, cleaned team names — engy's concurrent contract addition. Exercises
+  // teamBoxTitle()'s "real name" branch (not the "Ally team — <player.team>"
+  // fallback) plus the sheet-header/card matchup line ("T1 vs GEN").
+  allyTeamName: "T1",
+  enemyTeamName: "GEN",
+  // Prostage per-player detail. `proId` is set on two rows (one ally, one
+  // enemy) to exercise the Teams-box tap-to-view affordance; the rest are
+  // left null/undefined to exercise the "untracked slot, no affordance"
+  // degrade path on the SAME roster. One raw parenthetical name
+  // ("Kang Sung-in"-style) simulates a stale pre-cleanup cached API response,
+  // exercising the client-side cleanPlayerName() belt.
   allyPlayers: [
-    { championId: 112, name: "Faker", items: [6653, 3020, 3157, 3089], trinket: 3364, role: 2 },
+    { championId: 112, name: "Faker", items: [6653, 3020, 3157, 3089], trinket: 3364, role: 2, proId: "8f14e45f-ceea-4a9a-9c05-100000000001" },
     { championId: 64, name: "Oner", items: [3078, 3071, 3053], trinket: 3364, role: 1 },
     { championId: 555, name: "Zeus", items: [3814, 6693, 3153], trinket: 3364, role: 0 },
-    { championId: 104, name: "Gumayusi", items: [6673, 3031, 3072, 3006], trinket: 3363, role: 3 },
+    { championId: 104, name: "Gumayusi (Lee Min-hyeong)", items: [6673, 3031, 3072, 3006], trinket: 3363, role: 3, proId: "8f14e45f-ceea-4a9a-9c05-100000000002" },
     { championId: 43, name: "Keria", items: [3853, 3011, 3222], trinket: 3364, role: 4 },
   ],
   enemyPlayers: [
     { championId: 238, name: null, items: [6701, 3142, 3814], trinket: null, role: 1 },
     { championId: 875, name: "Kingen", items: [3078, 3053, 3071, 3111], trinket: 3364, role: 0 },
-    { championId: 887, name: "Chovy", items: [3020, 3157, 3089], trinket: 3364, role: 2 },
+    { championId: 887, name: "Chovy", items: [3020, 3157, 3089], trinket: 3364, role: 2, proId: "8f14e45f-ceea-4a9a-9c05-100000000003" },
     { championId: 51, name: "Peyz", items: [3072, 3031, 3006, 3033], trinket: 3363, role: 3 },
     { championId: 40, name: "Delight", items: [3222, 3011, 3853], trinket: 3364, role: 4 },
   ],
