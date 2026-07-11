@@ -3,7 +3,13 @@
 import { useState, useRef, useEffect } from "react";
 import type { PlayerRef, PlayersApiResponse } from "./proHistory.types";
 import { PRO_ROLE_LABEL } from "./proHistory.types";
+import { isFavorite } from "@/lib/favorites";
 import FavoriteStarButton from "./FavoriteStarButton";
+import { FAVORITES_CHANGED_EVENT, toggleFavoritePlayer } from "./favoritesSync";
+
+// Module-level (stable reference) so FavoriteStarButton's subscribe effect
+// doesn't re-run on every PlayerPicker re-render (e.g. each keystroke).
+const checkPlayerFavorited = (id: string | number) => isFavorite(String(id));
 
 interface PlayerPickerProps {
   value: PlayerRef | null;
@@ -228,7 +234,13 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
                       </span>
                     </button>
                     <FavoriteStarButton
-                      player={{ id: player.id, name: player.name, team: player.team }}
+                      id={player.id}
+                      name={player.name}
+                      changedEvent={FAVORITES_CHANGED_EVENT}
+                      checkFavorited={checkPlayerFavorited}
+                      onToggle={() =>
+                        toggleFavoritePlayer({ id: player.id, name: player.name, team: player.team })
+                      }
                       className="mr-2"
                     />
                   </li>

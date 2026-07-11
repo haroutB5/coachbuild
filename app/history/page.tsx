@@ -9,8 +9,16 @@ import ChampionPicker from "@/components/ChampionPicker";
 import LanePillRow from "@/components/LanePillRow";
 import ProHistoryResults from "@/components/ProHistoryResults";
 import FavoritePlayerChips from "@/components/FavoritePlayerChips";
+import FavoriteChampionChips from "@/components/FavoriteChampionChips";
 import FavoriteStarButton from "@/components/FavoriteStarButton";
+import { isFavorite, isFavoriteChampion } from "@/lib/favorites";
+import { FAVORITES_CHANGED_EVENT, CHAMPION_FAVORITES_CHANGED_EVENT, toggleFavoritePlayer, toggleFavoriteChampion } from "@/components/favoritesSync";
 import type { PlayerRef } from "@/components/proHistory.types";
+
+// Module-level (stable references) so FavoriteStarButton's subscribe effect
+// doesn't re-run on every page re-render.
+const checkPlayerFavorited = (id: string | number) => isFavorite(String(id));
+const checkChampionFavorited = (id: string | number) => isFavoriteChampion(Number(id));
 
 type Mode = "player" | "champion";
 
@@ -87,17 +95,18 @@ export default function HistoryPage() {
               <PlayerPicker value={player} onChange={setPlayer} />
             ) : (
               <>
-                <ChampionPicker value={champ} onChange={setChamp} />
+                <ChampionPicker value={champ} onChange={setChamp} withFavorites />
                 <LanePillRow value={lane} onChange={setLane} />
               </>
             )}
           </div>
 
-          {/* Favorite players — quick re-select without searching again.
-              Player mode only, and only while nothing is selected yet (once
-              a player is picked, the summary line below carries its own
-              favorite star). */}
+          {/* Favorite players/champions — quick re-select without searching
+              again. Each is scoped to its own mode, and only while nothing
+              is selected yet (once something's picked, the summary line
+              below carries its own favorite star). */}
           {mode === "player" && player === null && <FavoritePlayerChips onSelect={setPlayer} />}
+          {mode === "champion" && champ === null && <FavoriteChampionChips onSelect={setChamp} />}
         </header>
 
         {/* ── Main content ── */}
@@ -111,13 +120,27 @@ export default function HistoryPage() {
                   <>
                     Showing recent games by <span className="font-semibold">{player!.name}</span>
                     <FavoriteStarButton
-                      player={{ id: player!.id, name: player!.name, team: player!.team }}
+                      id={player!.id}
+                      name={player!.name}
+                      changedEvent={FAVORITES_CHANGED_EVENT}
+                      checkFavorited={checkPlayerFavorited}
+                      onToggle={() =>
+                        toggleFavoritePlayer({ id: player!.id, name: player!.name, team: player!.team })
+                      }
                       className="ml-1 -mb-0.5 align-middle"
                     />
                   </>
                 ) : (
                   <>
                     Showing recent games on <span className="font-semibold">{champ!.name}</span>
+                    <FavoriteStarButton
+                      id={champ!.id}
+                      name={champ!.name}
+                      changedEvent={CHAMPION_FAVORITES_CHANGED_EVENT}
+                      checkFavorited={checkChampionFavorited}
+                      onToggle={() => toggleFavoriteChampion({ id: champ!.id, name: champ!.name })}
+                      className="ml-1 -mb-0.5 align-middle"
+                    />
                     <span className="text-mut"> — {LANE_LABEL[lane]}</span>
                   </>
                 )}

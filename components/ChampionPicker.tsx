@@ -2,6 +2,13 @@
 
 import { useState, useRef, useEffect } from "react";
 import type { ChampionRef } from "@/lib/types";
+import { isFavoriteChampion } from "@/lib/favorites";
+import FavoriteStarButton from "./FavoriteStarButton";
+import { CHAMPION_FAVORITES_CHANGED_EVENT, toggleFavoriteChampion } from "./favoritesSync";
+
+// Module-level (stable reference) so FavoriteStarButton's subscribe effect
+// doesn't re-run on every ChampionPicker re-render (e.g. each keystroke).
+const checkChampionFavorited = (id: string | number) => isFavoriteChampion(Number(id));
 
 const FALLBACK_CHAMPIONS: ChampionRef[] = [
   { id: 112, key: "Viktor", name: "Viktor", icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/Viktor.webp" },
@@ -15,12 +22,16 @@ const FALLBACK_CHAMPIONS: ChampionRef[] = [
 interface ChampionPickerProps {
   value: ChampionRef | null;
   onChange: (champ: ChampionRef) => void;
+  /** Shows a favorite star on each dropdown option. Opt-in (default false)
+   *  so the Builds page's ChampionPicker instance is unaffected — only the
+   *  /history champion picker passes this. */
+  withFavorites?: boolean;
 }
 
 const LISTBOX_ID = "champ-listbox";
 const optId = (i: number) => `champ-opt-${i}`;
 
-export default function ChampionPicker({ value, onChange }: ChampionPickerProps) {
+export default function ChampionPicker({ value, onChange, withFavorites = false }: ChampionPickerProps) {
   const [champions, setChampions] = useState<ChampionRef[]>(FALLBACK_CHAMPIONS);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -176,19 +187,30 @@ export default function ChampionPicker({ value, onChange }: ChampionPickerProps)
                   data-idx={i}
                   role="option"
                   aria-selected={isActive}
+                  className="flex items-center"
                 >
                   <button
                     type="button"
                     tabIndex={-1}
                     onClick={() => select(champ)}
                     onMouseEnter={() => setActiveIndex(i)}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-colors ${
+                    className={`flex-1 min-w-0 flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-colors ${
                       isActive ? "bg-teal/15" : ""
                     } ${isSelected ? "text-teal font-semibold" : "text-txt"}`}
                   >
                     <ChampIcon icon={champ.icon} name={champ.name} size={24} />
                     {champ.name}
                   </button>
+                  {withFavorites && (
+                    <FavoriteStarButton
+                      id={champ.id}
+                      name={champ.name}
+                      changedEvent={CHAMPION_FAVORITES_CHANGED_EVENT}
+                      checkFavorited={checkChampionFavorited}
+                      onToggle={() => toggleFavoriteChampion({ id: champ.id, name: champ.name })}
+                      className="mr-2"
+                    />
+                  )}
                 </li>
               );
             })}

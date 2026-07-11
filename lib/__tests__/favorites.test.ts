@@ -11,10 +11,15 @@ import {
   isFavorite,
   toggleFavorite,
   MAX_FAVORITES,
+  getFavoriteChampions,
+  isFavoriteChampion,
+  toggleFavoriteChampion,
   type FavoritePlayer,
+  type FavoriteChampion,
 } from "../favorites";
 
 const STORAGE_KEY = "coachbuild:favPlayers:v1";
+const CHAMPION_STORAGE_KEY = "coachbuild:favChampions:v1";
 
 function makeLocalStorageShim() {
   const store = new Map<string, string>();
@@ -187,5 +192,156 @@ describe("favorites — SSR / no window", () => {
   it("toggleFavorite no-ops without crashing when window is undefined", () => {
     expect(() => toggleFavorite(faker)).not.toThrow();
     expect(toggleFavorite(faker)).toEqual([]);
+  });
+});
+
+// ── Favorite CHAMPIONS — parallel store, same coverage as players above ────
+
+const viktor: FavoriteChampion = { id: 112, name: "Viktor" };
+const ahri: FavoriteChampion = { id: 103, name: "Ahri" };
+const garen: FavoriteChampion = { id: 86, name: "Garen" };
+
+describe("favorite champions — browser env", () => {
+  beforeEach(() => {
+    (globalThis as unknown as { window: unknown }).window = {
+      localStorage: makeLocalStorageShim(),
+    };
+  });
+
+  afterEach(() => {
+    delete (globalThis as { window?: unknown }).window;
+  });
+
+  it("round-trips add then remove via toggleFavoriteChampion", () => {
+    expect(getFavoriteChampions()).toEqual([]);
+
+    const afterAdd = toggleFavoriteChampion(viktor);
+    expect(afterAdd).toEqual([viktor]);
+    expect(getFavoriteChampions()).toEqual([viktor]);
+
+    const afterRemove = toggleFavoriteChampion(viktor);
+    expect(afterRemove).toEqual([]);
+    expect(getFavoriteChampions()).toEqual([]);
+  });
+
+  it("adds newest-first — most recently starred appears at index 0", () => {
+    toggleFavoriteChampion(viktor);
+    const list = toggleFavoriteChampion(ahri);
+    expect(list).toEqual([ahri, viktor]);
+  });
+
+  it("isFavoriteChampion reflects current membership", () => {
+    expect(isFavoriteChampion(112)).toBe(false);
+    toggleFavoriteChampion(viktor);
+    expect(isFavoriteChampion(112)).toBe(true);
+    toggleFavoriteChampion(viktor);
+    expect(isFavoriteChampion(112)).toBe(false);
+  });
+
+  it("dedupes by id — a second toggle removes rather than duplicating", () => {
+    toggleFavoriteChampion(viktor);
+    toggleFavoriteChampion({ ...viktor, name: "Viktor (renamed)" });
+    expect(getFavoriteChampions()).toEqual([]);
+  });
+
+  it("removing an existing favorite does not reorder the rest", () => {
+    toggleFavoriteChampion(viktor); // [viktor]
+    toggleFavoriteChampion(ahri); // [ahri, viktor]
+    toggleFavoriteChampion(garen); // [garen, ahri, viktor]
+
+    const list = toggleFavoriteChampion(ahri); // remove middle -> [garen, viktor]
+    expect(list).toEqual([garen, viktor]);
+  });
+
+  it("caps at MAX_FAVORITES — silently no-ops the add and returns the unchanged list", () => {
+    for (let i = 0; i < MAX_FAVORITES; i++) {
+      toggleFavoriteChampion({ id: i, name: `Champ ${i}` });
+    }
+    const before = getFavoriteChampions();
+    expect(before.length).toBe(MAX_FAVORITES);
+
+    const after = toggleFavoriteChampion({ id: 9999, name: "Overflow" });
+    expect(after).toEqual(before);
+    expect(getFavoriteChampions().length).toBe(MAX_FAVORITES);
+    expect(isFavoriteChampion(9999)).toBe(false);
+  });
+
+  it("still allows removal even while at MAX_FAVORITES", () => {
+    for (let i = 0; i < MAX_FAVORITES; i++) {
+      toggleFavoriteChampion({ id: i, name: `Champ ${i}` });
+    }
+    const list = toggleFavoriteChampion({ id: 0, name: "Champ 0" });
+    expect(list.length).toBe(MAX_FAVORITES - 1);
+    expect(isFavoriteChampion(0)).toBe(false);
+  });
+
+  it("recovers from corrupted JSON in storage — treats as empty, never throws", () => {
+    window.localStorage.setItem(CHAMPION_STORAGE_KEY, "{not valid json");
+    expect(() => getFavoriteChampions()).not.toThrow();
+    expect(getFavoriteChampions()).toEqual([]);
+  });
+
+  it("recovers from a non-array stored value — treats as empty", () => {
+    window.localStorage.setItem(
+      CHAMPION_STORAGE_KEY,
+      JSON.stringify({ id: 112, name: "Viktor" })
+    );
+    expect(getFavoriteChampions()).toEqual([]);
+  });
+
+  it("filters out malformed entries while keeping well-shaped ones", () => {
+    window.localStorage.setItem(
+      CHAMPION_STORAGE_KEY,
+      JSON.stringify([
+        { id: 112, name: "Viktor" },
+        { id: "103" }, // id wrong type -> dropped
+        { name: "No Id" }, // missing id -> dropped
+        "not an object",
+        null,
+        42,
+      ])
+    );
+    expect(getFavoriteChampions()).toEqual([{ id: 112, name: "Viktor" }]);
+  });
+
+  it("is resilient to setItem throwing (Safari private-mode quota) — still returns the computed list", () => {
+    (globalThis as unknown as { window: unknown }).window = {
+      localStorage: {
+        getItem: () => null,
+        setItem: () => {
+          throw new DOMException("QuotaExceededError");
+        },
+        removeItem: () => {},
+        clear: () => {},
+      },
+    };
+
+    expect(() => toggleFavoriteChampion(viktor)).not.toThrow();
+    const list = toggleFavoriteChampion(viktor);
+    expect(list).toEqual([viktor]);
+  });
+
+  it("champion store is independent of the player store (different keys)", () => {
+    toggleFavorite(faker);
+    toggleFavoriteChampion(viktor);
+    expect(getFavorites()).toEqual([faker]);
+    expect(getFavoriteChampions()).toEqual([viktor]);
+  });
+});
+
+describe("favorite champions — SSR / no window", () => {
+  it("getFavoriteChampions returns [] without crashing when window is undefined", () => {
+    expect(() => getFavoriteChampions()).not.toThrow();
+    expect(getFavoriteChampions()).toEqual([]);
+  });
+
+  it("isFavoriteChampion returns false without crashing when window is undefined", () => {
+    expect(() => isFavoriteChampion(112)).not.toThrow();
+    expect(isFavoriteChampion(112)).toBe(false);
+  });
+
+  it("toggleFavoriteChampion no-ops without crashing when window is undefined", () => {
+    expect(() => toggleFavoriteChampion(viktor)).not.toThrow();
+    expect(toggleFavoriteChampion(viktor)).toEqual([]);
   });
 });

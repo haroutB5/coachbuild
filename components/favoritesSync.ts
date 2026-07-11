@@ -11,15 +11,33 @@
 // multiple tabs stay in sync too.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { toggleFavorite, type FavoritePlayer } from "@/lib/favorites";
+import {
+  toggleFavorite,
+  toggleFavoriteChampion as toggleFavoriteChampionStore,
+  type FavoritePlayer,
+  type FavoriteChampion,
+} from "@/lib/favorites";
 
 export const FAVORITES_CHANGED_EVENT = "coachbuild:favorites-changed";
+// Separate event name from the player one above — a champion star/chip
+// shouldn't force every player-favorite consumer on the page to re-render
+// (and vice versa), even though both fire from the same user gesture shape.
+export const CHAMPION_FAVORITES_CHANGED_EVENT = "coachbuild:champion-favorites-changed";
 
 /** Toggle a player's favorite state and notify every listening component. */
 export function toggleFavoritePlayer(p: FavoritePlayer): FavoritePlayer[] {
   const next = toggleFavorite(p);
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event(FAVORITES_CHANGED_EVENT));
+  }
+  return next;
+}
+
+/** Toggle a champion's favorite state and notify every listening component. */
+export function toggleFavoriteChampion(c: FavoriteChampion): FavoriteChampion[] {
+  const next = toggleFavoriteChampionStore(c);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(CHAMPION_FAVORITES_CHANGED_EVENT));
   }
   return next;
 }
