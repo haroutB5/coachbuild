@@ -196,7 +196,9 @@ function prostageRowToProGame(
       // Sung-in)") and must be cleaned for display — the RAW value stays on
       // `playerLink` above (the /api/prostage/timeline key).
       name: row.pro_name ?? cleanLeaguepediaName(row.player_link),
-      team: row.pro_team ?? row.team,
+      // row.team is a raw Leaguepedia string ("LYON (2024 American Team)") —
+      // display-only here, so clean it; pros.team is already clean.
+      team: row.pro_team ?? (row.team ? cleanLeaguepediaName(row.team) : row.team),
       role: roleValue,
       country: row.pro_country ?? null,
     },
