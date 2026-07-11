@@ -441,8 +441,16 @@ export async function GET(req: NextRequest) {
       .slice(0, limit);
 
     const body: ProsResponse = { games };
+    // Empty results are never CDN-cached: an empty set is either genuinely
+    // sparse data (cheap to recompute) or a degraded/error condition coerced
+    // to [] — caching it pins "No games" on users for 30-60 min (the exact
+    // amplifier in the 2026-07-11 prostage incident, see lib/pro/db.ts).
+    // Only non-empty responses earn the long s-maxage.
     return NextResponse.json(body, {
-      headers: { "Cache-Control": "s-maxage=1800, stale-while-revalidate=3600" },
+      headers: {
+        "Cache-Control":
+          games.length > 0 ? "s-maxage=1800, stale-while-revalidate=3600" : "no-store",
+      },
     });
   } catch (err) {
     console.error("[/api/pros] Unexpected error:", err);

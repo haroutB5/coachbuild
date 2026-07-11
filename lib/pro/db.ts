@@ -16,7 +16,16 @@ export function getSql(): NeonQueryFunction<false, false> | null {
   const url = process.env.DATABASE_URL;
   if (!url) return null;
   if (!cached || cachedUrl !== url) {
-    cached = neon(url);
+    // cache:'no-store' is LOAD-BEARING (prod incident 2026-07-11): on Vercel,
+    // Next.js patches fetch with its persistent Data-Cache-aware version and
+    // the driver's POSTs to the Neon HTTP endpoint were being CACHED — a
+    // {rows:[]} response recorded while a table was still empty kept being
+    // replayed for the exact (query bytes + params) cache key, across
+    // deployments, while byte-different variants of the same query returned
+    // live rows. Symptom: /api/pros prostage empty for some (champion, limit)
+    // combos while soloq worked in the same response. no-store opts every
+    // driver call out of the fetch data cache.
+    cached = neon(url, { fetchOptions: { cache: "no-store" } });
     cachedUrl = url;
   }
   return cached;

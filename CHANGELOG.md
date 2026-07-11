@@ -2,6 +2,11 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.15.1] — 2026-07-11
+### Fixed
+- **Pro Play intermittently showing "No pro-play games tracked yet" despite tracked games** (P0, prod-only). Root cause: on Vercel, the Neon HTTP driver's query POSTs went through Next.js's patched, Data-Cache-aware `fetch`; a `{rows:[]}` response cached while `prostage_matches` was still being backfilled kept being replayed — keyed on the exact query bytes + params, persisting across deployments — while byte-different variants of the same query (e.g. a different `limit`) returned live rows. The Neon client now opts every driver call out of the fetch data cache (`fetchOptions: { cache: "no-store" }`, lib/pro/db.ts).
+- **Empty `/api/pros` responses are no longer CDN-cached**: previously an empty (or degraded-to-empty) result was pinned by `s-maxage=1800` for 30-60 min per URL, amplifying any upstream glitch into a user-visible outage. Empty responses are now `no-store`; only non-empty responses keep the long cache.
+
 ## [0.15.0] — 2026-07-11
 ### Changed
 - **Team comps are role-ordered**: both strips read Top → Jungle → Mid → Bot → Support, so a mid-laner's champion sits in the middle slot (all 1,134 solo-queue games re-backfilled; pro-play ordered from tracked roles; falls back to source order when a side's roles don't cleanly resolve). Sheet roster rows carry positional hints.
