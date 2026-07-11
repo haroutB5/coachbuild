@@ -73,6 +73,15 @@ const KNOWN_MAINS = [
   { slug: "viper", gameName: "Blue", tagLine: "KR33", region: "KR", regional: "asia" }, // Hanwha Life Esports
   { slug: "zeka", gameName: "suis", tagLine: "kr7", region: "KR", regional: "asia" }, // Hanwha Life Esports
   { slug: "zeka", gameName: "Kiruru", tagLine: "kr7", region: "KR", regional: "asia" }, // Hanwha Life Esports
+  // --- round 8 (2026-07-11): Bwipo's Estral-era BR grind account, user-requested.
+  // Discovery chain: Leaguepedia SoloqueueIds listed BR "Still Beating#1810" but
+  // account-v1 shows it 0 games/90d (wiki lag); his signature #1810 tag on the
+  // user's guessed name resolved "EST Bwipo#1810" on americas — account-v1
+  // verified, BR1 platform, 75 ranked games in 90d (very live). lolpros does
+  // NOT know this account (EUW-centric), so a profile refetch would not have
+  // found it. Estral Esports is unmapped in teamRegions.ts → no region-rule
+  // deactivation applies.
+  { slug: "bwipo", gameName: "EST Bwipo", tagLine: "1810", region: "BR", regional: "americas" }, // Estral Esports
 ];
 
 async function main() {
