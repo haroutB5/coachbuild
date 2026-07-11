@@ -19,22 +19,53 @@
 // Reuses lib/favorites.ts's FavoritePlayer shape (id/name/team) rather than
 // declaring a duplicate — same fields, same semantics (proId-as-id, display
 // name, org/team string or null).
+//
+// PendingPlayerSelect is a union of that tracked shape PLUS LinkPlayerSelect
+// (playerLink/name) — an untracked prostage player tapped from a Teams-box
+// row that has no `pros` row at all. Both same-page (/history's onSelectPlayer
+// callback) and cross-page (this file's stash/consume) paths carry either
+// kind through unchanged; consumers discriminate structurally (`"id" in ref`).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { FavoritePlayer } from "@/lib/favorites";
 
-export type PendingPlayerSelect = FavoritePlayer;
+/** Untracked prostage player (Teams-box tap on a roster slot with no `pros`
+ *  row, i.e. no `proId` — only a raw Leaguepedia `playerLink`). Deliberately
+ *  NOT tagged with an explicit `kind` field — the two arms of
+ *  PendingPlayerSelect are distinguished structurally (tracked always has
+ *  `id`, link never does) so a plain `{id, name, team}` object literal
+ *  (what every existing call site and test already constructs) keeps
+ *  matching the tracked arm without change. */
+export interface LinkPlayerSelect {
+  playerLink: string;
+  name: string;
+}
+
+export type PendingPlayerSelect = FavoritePlayer | LinkPlayerSelect;
 
 const KEY = "coachbuild:pendingPlayerSelect:v1";
 
-function isPendingPlayerSelectShape(v: unknown): v is PendingPlayerSelect {
-  if (typeof v !== "object" || v === null) return false;
-  const o = v as Record<string, unknown>;
+// Plain booleans (not nested type predicates) — a type predicate's parameter
+// type must be assignable to the type it narrows to, which a plain interface
+// without an index signature (FavoritePlayer/LinkPlayerSelect) never is
+// against `Record<string, unknown>`. The outer function below is the only
+// one that needs an actual `is` predicate.
+function hasTrackedShape(o: Record<string, unknown>): boolean {
   return (
     typeof o.id === "string" &&
     typeof o.name === "string" &&
     (o.team === null || typeof o.team === "string")
   );
+}
+
+function hasLinkShape(o: Record<string, unknown>): boolean {
+  return typeof o.playerLink === "string" && typeof o.name === "string";
+}
+
+function isPendingPlayerSelectShape(v: unknown): v is PendingPlayerSelect {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return hasTrackedShape(o) || hasLinkShape(o);
 }
 
 /** Stash the tapped player right before navigating away to /history.

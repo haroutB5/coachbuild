@@ -50,6 +50,17 @@ interface GameDetailSheetProps {
   championDisplayName?: string;
   open: boolean;
   onClose: () => void;
+  /** Fired ONLY from an explicit user dismissal — the ✕ button, Escape, or a
+   *  backdrop click — never from the cross-player-jump path (handleSelectPlayer
+   *  below always calls `onClose` alone, whether or not this prop is set).
+   *  /history's history-navigation wiring (app/history/page.tsx) passes this
+   *  to pop the sheet's own back-stack entry (`window.history.back()`) so
+   *  dismissing never leaves a ghost entry; a cross-player jump instead pushes
+   *  a NEW forward entry and leaves this sheet's entry in the stack to be
+   *  restored later. Falls back to `onClose` when absent (Builds page's
+   *  ProGamesSection, via ProGameCard's uncontrolled mode) — unchanged
+   *  behavior there. */
+  onDismiss?: () => void;
   /** Same-page fast path for the Teams-box "view this player's games" tap —
    *  supplied by /history (which owns the mode/player state directly and can
    *  just call this instead of navigating). When absent (this sheet is
@@ -405,6 +416,7 @@ export default function GameDetailSheet({
   championDisplayName,
   open,
   onClose,
+  onDismiss,
   onSelectPlayer,
 }: GameDetailSheetProps) {
   const router = useRouter();
@@ -574,7 +586,10 @@ export default function GameDetailSheet({
           closeDetail();
           return;
         }
-        onClose();
+        // Explicit user dismissal — see onDismiss's doc comment for why this
+        // is kept distinct from the plain onClose() call handleSelectPlayer
+        // makes when navigating away instead.
+        (onDismiss ?? onClose)();
         return;
       }
       // Tab trap for the sheet's own dialog — only while no popover is on
@@ -586,7 +601,7 @@ export default function GameDetailSheet({
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [rendered, onClose, activeDetail]);
+  }, [rendered, onClose, onDismiss, activeDetail]);
 
   if (!rendered || typeof document === "undefined") return null;
 
@@ -613,7 +628,7 @@ export default function GameDetailSheet({
     <div className="fixed inset-0 z-[100]" role="presentation">
       {/* Backdrop */}
       <div
-        onClick={onClose}
+        onClick={() => (onDismiss ?? onClose)()}
         aria-hidden="true"
         className={`absolute inset-0 bg-black/70 backdrop-blur-sm transition-opacity motion-reduce:transition-none ${
           visible ? "opacity-100 duration-200 ease-[cubic-bezier(0.2,0,0,1)]" : "opacity-0 duration-150 ease-[cubic-bezier(0.3,0,0.8,0.15)]"
@@ -687,7 +702,7 @@ export default function GameDetailSheet({
           <button
             ref={closeButtonRef}
             type="button"
-            onClick={onClose}
+            onClick={() => (onDismiss ?? onClose)()}
             aria-label="Close game detail"
             className="flex items-center justify-center w-8 h-8 rounded-md text-mut hover:text-txt hover:bg-panel2 transition-colors active:scale-95 flex-shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
           >

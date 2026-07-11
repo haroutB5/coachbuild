@@ -126,6 +126,18 @@ function Divider() {
   return <span className="w-px h-5 bg-line flex-shrink-0 hidden sm:block" aria-hidden="true" />;
 }
 
+/** /history-only back-gesture history integration (app/history/page.tsx) —
+ *  when supplied, this card's sheet visibility is DRIVEN by `isOpen` instead
+ *  of local state, and open/dismiss actions report through `onOpen`/
+ *  `onDismiss` instead of the card managing state internally. Absent on the
+ *  Builds page (ProGamesSection never passes it) — ProGameCard keeps its
+ *  original fully-local `open` state there, zero behavior change. */
+export interface HistorySheetControl {
+  isOpen: boolean;
+  onOpen: () => void;
+  onDismiss: () => void;
+}
+
 interface ProGameCardProps {
   game: ProGame;
   /** Absolute champion icon URL, resolved by the parent (proAssets'
@@ -142,6 +154,8 @@ interface ProGameCardProps {
    *  name — see its doc comment for the same-page-callback vs.
    *  cross-page-navigation split. */
   onSelectPlayer?: (player: PendingPlayerSelect) => void;
+  /** See HistorySheetControl doc comment above. */
+  historySheet?: HistorySheetControl;
 }
 
 // Lane the game was actually played in — matters on the "auto" (all-lanes)
@@ -159,8 +173,12 @@ export default function ProGameCard({
   championIcon,
   championDisplayName,
   onSelectPlayer,
+  historySheet,
 }: ProGameCardProps) {
-  const [open, setOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  // Controlled (historySheet present, /history only) vs. fully local
+  // (Builds page) — see HistorySheetControl's doc comment.
+  const open = historySheet ? historySheet.isOpen : localOpen;
   const ver = versionFromPatch(game.patch);
   const isProstage = game.source === "prostage";
   const cleanedPlayerName = cleanPlayerName(game.player.name);
@@ -171,7 +189,8 @@ export default function ProGameCard({
   const matchup = isProstage ? matchupLabel(game.allyTeamName, game.enemyTeamName) : null;
 
   function openSheet() {
-    setOpen(true);
+    if (historySheet) historySheet.onOpen();
+    else setLocalOpen(true);
   }
 
   function onCardKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
@@ -367,7 +386,14 @@ export default function ProGameCard({
         championIcon={championIcon}
         championDisplayName={championDisplayName}
         open={open}
-        onClose={() => setOpen(false)}
+        // In controlled (/history) mode this is only ever reached via the
+        // cross-player-jump path (handleSelectPlayer calls onClose() then
+        // onSelectPlayer) — updating localOpen is inert there (open reads
+        // from historySheet.isOpen instead), and the page's own selection
+        // push resets openGameId to null right after. Uncontrolled (Builds
+        // page) mode: unchanged, this IS the real close.
+        onClose={() => setLocalOpen(false)}
+        onDismiss={historySheet?.onDismiss}
         onSelectPlayer={onSelectPlayer}
       />
     </>

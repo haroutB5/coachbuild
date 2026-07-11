@@ -269,25 +269,43 @@ function asRows<T>(v: unknown): T[] {
   return Array.isArray(v) ? (v as T[]) : [];
 }
 
+// player param cap (added 2026-07-11, untracked-player lookup) — Leaguepedia
+// player_links are short wiki page-title slugs; 64 is generous headroom over
+// any real one seen in the data while still bounding the SQL param.
+const PLAYER_MAX_LEN = 64;
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const champParam = searchParams.get("championId");
   const proIdParam = searchParams.get("proId");
+  const playerParam = searchParams.get("player");
   const roleParam = searchParams.get("role");
   const limitParam = searchParams.get("limit");
 
-  // Exactly one of championId / proId — never both, never neither.
-  if ((champParam && proIdParam) || (!champParam && !proIdParam)) {
+  // Exactly one of championId / proId / player — never zero, never two+.
+  const providedCount = [champParam, proIdParam, playerParam].filter((v) => v !== null).length;
+  if (providedCount !== 1) {
     return NextResponse.json(
-      { error: "Provide exactly one of championId or proId" },
+      { error: "Provide exactly one of championId, proId, or player" },
       { status: 400 }
     );
   }
 
   let championId: number | null = null;
   let proId: string | null = null;
+  let playerLinkParam: string | null = null;
 
-  if (proIdParam) {
+  if (playerParam !== null) {
+    // Exact match only, parameterized as always — no % wildcards (this isn't
+    // a LIKE search), non-empty, length-capped. See the `player=` doc comment
+    // on the prostage query below for the lookup semantics.
+    if (playerParam.length === 0 || playerParam.length > PLAYER_MAX_LEN || playerParam.includes("%")) {
+      return NextResponse.json({ error: "Invalid player param" }, { status: 400 });
+    }
+    playerLinkParam = playerParam;
+    // role is OPTIONAL on the player path — absent means all lanes, same as
+    // the proId path below.
+  } else if (proIdParam) {
     if (!UUID_RE.test(proIdParam)) {
       return NextResponse.json({ error: "Invalid proId param" }, { status: 400 });
     }
@@ -333,7 +351,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Invalid source param" }, { status: 400 });
   }
   const source = sourceParam ?? "all";
-  const wantSoloq = source === "all" || source === "soloq";
+  // player= lookups are PROSTAGE ONLY — an untracked prostage player (no
+  // `pros` row) has no soloq identity to join against at all, so the soloq
+  // query is skipped ENTIRELY on this path regardless of `source`. If the
+  // caller explicitly passes source=soloq alongside player=, wantProstage
+  // is also false (matches the existing source-gating below), so the result
+  // is an empty games: [] — documented here rather than a special-cased
+  // error, since "you asked for a source with no data on this path" isn't
+  // a malformed request.
+  const wantSoloq = !playerLinkParam && (source === "all" || source === "soloq");
   const wantProstage = source === "all" || source === "prostage";
 
   const sql = getSql();
@@ -396,8 +422,29 @@ export async function GET(req: NextRequest) {
             `
         : Promise.resolve([]),
       wantProstage
-        ? proId
-          ? sql`
+        ? playerLinkParam
+          ? // Untracked-player lookup (added 2026-07-11): finds games by the raw
+            // Leaguepedia player_link directly, with NO join requirement on
+            // coachbuild.pros — this is exactly the path an untracked player
+            // (e.g. LYON's Dhokla/Inspired/Isles, who have prostage_matches
+            // rows but no `pros` row) needs. LEFT JOIN so a tracked pro on this
+            // player_link still gets pro_name/pro_team/etc enrichment when
+            // available, same as the championId path below.
+            sql`
+              SELECT
+                pm.game_id, pm.player_link, pm.team, pm.champion_id, pm.champion_name, pm.role,
+                pm.win, pm.kills, pm.deaths, pm.assists, pm.game_datetime, pm.patch,
+                pm.spells, pm.final_items, pm.trinket, pm.runes, pm.tournament_display,
+                p.name AS pro_name, p.team AS pro_team, p.role AS pro_role, p.country AS pro_country
+              FROM coachbuild.prostage_matches pm
+              LEFT JOIN coachbuild.pros p ON p.id = pm.pro_id
+              WHERE pm.player_link = ${playerLinkParam} AND (${role} = 5 OR pm.role = ${role})
+                AND pm.game_datetime > now() - make_interval(days => ${FRESH_WINDOW_DAYS})
+              ORDER BY pm.game_datetime DESC
+              LIMIT ${limit}
+            `
+          : proId
+            ? sql`
               SELECT
                 pm.game_id, pm.player_link, pm.team, pm.champion_id, pm.champion_name, pm.role,
                 pm.win, pm.kills, pm.deaths, pm.assists, pm.game_datetime, pm.patch,
@@ -410,7 +457,7 @@ export async function GET(req: NextRequest) {
               ORDER BY pm.game_datetime DESC
               LIMIT ${limit}
             `
-          : sql`
+            : sql`
               SELECT
                 pm.game_id, pm.player_link, pm.team, pm.champion_id, pm.champion_name, pm.role,
                 pm.win, pm.kills, pm.deaths, pm.assists, pm.game_datetime, pm.patch,

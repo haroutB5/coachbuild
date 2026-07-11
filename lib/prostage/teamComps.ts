@@ -100,6 +100,13 @@ export function buildProstageCompsMap(
       items: asJson<number[]>(r.final_items, []).filter((id) => id !== 0),
       trinket: r.trinket ?? null,
       proId,
+      // RAW player_link — set for every prostage entry regardless of proId
+      // (this is what makes an UNTRACKED player, e.g. LYON's Dhokla, navigable
+      // via GET /api/pros?player=<playerLink>; see lib/pro/types.ts's
+      // TeamCompPlayer.playerLink doc comment). null rather than "" for the
+      // defensive-fallback case above (a driver/test-mock row missing the
+      // field entirely) — never emit an empty-string identity.
+      playerLink: playerLink || null,
     });
     byTeam.set(r.team, arr);
   }

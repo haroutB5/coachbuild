@@ -163,6 +163,17 @@ export interface TeamCompPlayer {
    *  fuzzy-match by name. Optional field: absent means "not attempted /
    *  not applicable," same as null for consumers. */
   proId?: string | null;
+  /** RAW Leaguepedia player_link (added 2026-07-11 — makes an UNTRACKED
+   *  prostage player, e.g. LYON's Dhokla/Inspired/Isles who have no `pros`
+   *  row, navigable from a teammate/opponent row: the frontend can hit
+   *  GET /api/pros?player=<playerLink> to view their games even though they
+   *  have no proId). Set for every prostage entry (lib/prostage/teamComps.ts's
+   *  buildProstageCompsMap — both tracked and untracked prostage players get
+   *  it; proId stays exactly as before, so a tracked pro gets BOTH). null for
+   *  every soloq entry (lib/pro/extract.ts's participantToTeamCompPlayer never
+   *  sets it — soloq has no player_link identity model at all). Optional:
+   *  absent is equivalent to null for consumers, same posture as proId. */
+  playerLink?: string | null;
 }
 
 export interface ProsResponse {

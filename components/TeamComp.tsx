@@ -427,10 +427,12 @@ function PlayerRow({
   const champName = entry?.name ?? `Champion #${player.championId}`;
   const roleAbbr = roleAbbrForPlayer(player.role, index, rosterLength);
   const displayName = cleanPlayerName(player.name);
-  // Tappable identity area only when this slot is a TRACKED pro (proId
-  // non-null) — an untracked slot (common on soloq teammates) renders
-  // exactly as before, no dead-looking affordance.
-  const isViewable = player.proId != null;
+  // Tappable identity area when this slot is a TRACKED pro (proId non-null)
+  // OR an untracked prostage player we can still look up by raw Leaguepedia
+  // link (playerLink non-null) — a soloq teammate/opponent with neither
+  // (the common case there) renders exactly as before, no dead-looking
+  // affordance.
+  const isViewable = player.proId != null || player.playerLink != null;
 
   const identityContent = (
     <>
@@ -488,9 +490,17 @@ function PlayerRow({
       {isViewable ? (
         <button
           type="button"
-          onClick={() =>
-            onSelectPlayer?.({ id: player.proId as string, name: displayName ?? champName, team: null })
-          }
+          onClick={() => {
+            // Tracked pro wins when a row somehow has both (never happens in
+            // practice — a tracked prostage entry's proId comes from the same
+            // ingest that sets playerLink — but proId is the richer/queryable
+            // identity, so prefer it defensively).
+            if (player.proId != null) {
+              onSelectPlayer?.({ id: player.proId, name: displayName ?? champName, team: null });
+            } else if (player.playerLink != null) {
+              onSelectPlayer?.({ playerLink: player.playerLink, name: displayName ?? champName });
+            }
+          }}
           aria-label={`View ${displayName ?? champName}'s games`}
           // Hit-slop via padding + equal negative margin (same technique as
           // the item-icon buttons below) — a few extra px of vertical tap

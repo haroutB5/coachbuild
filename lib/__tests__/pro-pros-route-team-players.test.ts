@@ -94,6 +94,11 @@ describe("GET /api/pros/team-players source=soloq", () => {
     const body = await res.json();
     expect(body.allyPlayers).toEqual(allyPlayers);
     expect(body.enemyPlayers).toEqual(enemyPlayers);
+    // soloq entries never carry playerLink (no player_link identity model at
+    // all) — SOLOQ_PLAYER's fixture never sets it, and the route just
+    // forwards the stored jsonb verbatim, so it stays absent (equivalent to
+    // null for consumers, see lib/pro/types.ts's TeamCompPlayer.playerLink).
+    expect(body.allyPlayers.every((p: { playerLink?: string | null }) => p.playerLink == null)).toBe(true);
     expect(res.headers.get("Cache-Control")).toBe("s-maxage=86400, stale-while-revalidate=604800");
     // Exactly one query: match_id + champion_id identify the row directly.
     expect(mockSql).toHaveBeenCalledTimes(1);
@@ -154,8 +159,23 @@ describe("GET /api/pros/team-players source=prostage", () => {
     expect(faker.name).toBe("Faker");
     expect(faker.items).toEqual([6653]); // 0 filtered
     expect(faker.proId).toBe("pro-faker");
+    expect(faker.playerLink).toBe("Faker"); // 2026-07-11: RAW player_link, tracked pros get BOTH proId and playerLink
     expect(res.headers.get("Cache-Control")).toBe("s-maxage=86400, stale-while-revalidate=604800");
     expect(mockSql).toHaveBeenCalledTimes(3);
+  });
+
+  it("emits playerLink for an UNTRACKED prostage player (no proId) — this is what makes them navigable (2026-07-11)", async () => {
+    // Oner (championId 2) has pro_name: null, pro_id: null in PROSTAGE_COMPS_5V5
+    // — an untracked player, same shape as LYON's Dhokla/Inspired/Isles.
+    mockSql
+      .mockResolvedValueOnce([{ team: "T1" }])
+      .mockResolvedValueOnce(PROSTAGE_COMPS_5V5)
+      .mockResolvedValueOnce([]);
+    const res = await GET(req("?source=prostage&gameId=LEC_2026_Summer_1_1&player=Faker"));
+    const body = await res.json();
+    const oner = body.allyPlayers.find((p: { championId: number }) => p.championId === 2);
+    expect(oner.proId).toBeNull(); // untracked — no proId
+    expect(oner.playerLink).toBe("Oner"); // but STILL carries the raw player_link, navigable via GET /api/pros?player=Oner
   });
 
   it("null/null + no-store when the requested (gameId, player) row doesn't exist", async () => {

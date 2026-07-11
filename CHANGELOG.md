@@ -2,6 +2,11 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.20.0] — 2026-07-11
+### Added
+- **Back returns to where you were**: the Pro's page now integrates with browser history — jump from a game sheet to another player's games, swipe back, and you land on the sheet you came from; back again walks to the previous view. Closing a sheet with ✕ never leaves ghost entries.
+- **Every player in the Teams boxes is clickable** — including pros not in the tracked roster (their pro-play games load via their Leaguepedia identity; the view locks to Pro Play since they have no tracked solo queue).
+
 ## [0.19.0] — 2026-07-11
 ### Changed
 Performance release, driven by a measured audit (the Builds page measured excellent and was untouched):

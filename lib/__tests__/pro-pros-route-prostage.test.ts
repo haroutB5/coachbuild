@@ -370,3 +370,135 @@ describe("GET /api/pros prostage cleaned display names + proId (2026-07-11)", ()
     expect(body.games[0].enemyTeamName).toBeUndefined();
   });
 });
+
+const PLAYER_PRO_ID = "b2c3d4e5-f6a7-4901-bcde-f12345678901";
+
+// An UNTRACKED prostage player row — same shape as the real LYON players
+// (Dhokla/Inspired/Isles) this feature ships for: prostage_matches has the
+// row, but there's no coachbuild.pros row (pro_name/pro_team/pro_role/
+// pro_country all null, LEFT JOIN just doesn't match).
+const UNTRACKED_PROSTAGE_ROW = {
+  ...PROSTAGE_ROW,
+  game_id: "MSI_2026_Bracket_1",
+  player_link: "Dhokla",
+  team: "LYON (2024 American Team)",
+  pro_name: null,
+  pro_team: null,
+  pro_role: null,
+  pro_country: null,
+};
+
+describe("GET /api/pros player param (untracked prostage player lookup, 2026-07-11)", () => {
+  beforeEach(() => {
+    mockSql.mockReset();
+    vi.mocked(getSql).mockReturnValue(mockSql as never);
+  });
+
+  // ── param validation matrix ────────────────────────────────────────────
+  it("400 when player and proId are both given", async () => {
+    const res = await GET(req(`?player=Dhokla&proId=${PLAYER_PRO_ID}`));
+    expect(res.status).toBe(400);
+    expect(mockSql).not.toHaveBeenCalled();
+  });
+
+  it("400 when player and championId are both given", async () => {
+    const res = await GET(req("?player=Dhokla&championId=103&role=2"));
+    expect(res.status).toBe(400);
+    expect(mockSql).not.toHaveBeenCalled();
+  });
+
+  it("400 when all three (player, proId, championId) are given", async () => {
+    const res = await GET(req(`?player=Dhokla&proId=${PLAYER_PRO_ID}&championId=103&role=2`));
+    expect(res.status).toBe(400);
+  });
+
+  it("400 on an empty player value", async () => {
+    expect((await GET(req("?player="))).status).toBe(400);
+  });
+
+  it("400 on a player value over the length cap", async () => {
+    const long = "x".repeat(65);
+    expect((await GET(req(`?player=${long}`))).status).toBe(400);
+  });
+
+  it("a player value exactly at the length cap (64) is accepted", async () => {
+    const exact = "x".repeat(64);
+    mockSql.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const res = await GET(req(`?player=${exact}`));
+    expect(res.status).toBe(200);
+  });
+
+  it("400 on a player value containing a % wildcard (exact match only, never a LIKE search)", async () => {
+    const res = await GET(req(`?player=${encodeURIComponent("Dho%kla")}`));
+    expect(res.status).toBe(400);
+    expect(mockSql).not.toHaveBeenCalled();
+  });
+
+  it("400 on invalid role alongside player", async () => {
+    expect((await GET(req("?player=Dhokla&role=9"))).status).toBe(400);
+  });
+
+  // ── happy path: prostage-only, filtered by player_link ─────────────────
+  it("200: looks up by pm.player_link, prostage-only (no soloq query at all), role optional (defaults to all lanes)", async () => {
+    // call order: prostageRows, prosNameRows (top-level Promise.all), then
+    // the gameIds-dependent comps query (sequential) — same shape as every
+    // other prostage-only path in this file.
+    mockSql.mockResolvedValueOnce([UNTRACKED_PROSTAGE_ROW]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const res = await GET(req("?player=Dhokla"));
+    expect(res.status).toBe(200);
+    expect(mockSql).toHaveBeenCalledTimes(3);
+
+    const [strings, ...values] = mockSql.mock.calls[0];
+    expect(strings.join("")).toContain("pm.player_link =");
+    expect(strings.join("")).toContain("prostage_matches");
+    expect(strings.join("")).toContain("make_interval(days =>"); // same FRESH_WINDOW_DAYS freshness gate as every other path
+    expect(values).toContain("Dhokla");
+
+    const body = await res.json();
+    expect(body.games).toHaveLength(1);
+    expect(body.games[0].source).toBe("prostage");
+    expect(body.games[0].playerLink).toBe("Dhokla");
+    expect(body.games[0].player.name).toBe("Dhokla"); // no pro_name -> cleaned player_link fallback; "Dhokla" has no parenthetical to strip
+  });
+
+  it("player + role filters by lane", async () => {
+    mockSql.mockResolvedValueOnce([UNTRACKED_PROSTAGE_ROW]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const res = await GET(req("?player=Dhokla&role=1"));
+    expect(res.status).toBe(200);
+    const values = mockSql.mock.calls[0].slice(1);
+    expect(values).toContain(1);
+  });
+
+  it("empty array when the player_link matches no rows", async () => {
+    mockSql.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const res = await GET(req("?player=NobodyEverHeardOf"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ games: [] });
+  });
+
+  // ── documented cross-param behavior ─────────────────────────────────────
+  it("source=soloq combined with player returns empty games (documented: player lookups are prostage-only, soloq is skipped entirely)", async () => {
+    const res = await GET(req("?player=Dhokla&source=soloq"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ games: [] });
+    expect(mockSql).not.toHaveBeenCalled(); // wantSoloq false (player set) AND wantProstage false (source=soloq) -> zero queries
+  });
+
+  it("source=prostage combined with player behaves the same as no source param (both are prostage-only here)", async () => {
+    mockSql.mockResolvedValueOnce([UNTRACKED_PROSTAGE_ROW]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const res = await GET(req("?player=Dhokla&source=prostage"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.games).toHaveLength(1);
+  });
+
+  it("source=all combined with player is still prostage-only (soloq skipped regardless of source)", async () => {
+    mockSql.mockResolvedValueOnce([UNTRACKED_PROSTAGE_ROW]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const res = await GET(req("?player=Dhokla&source=all"));
+    expect(res.status).toBe(200);
+    expect(mockSql).toHaveBeenCalledTimes(3); // never 4 — soloq never queried on this path
+    const body = await res.json();
+    expect(body.games).toHaveLength(1);
+    expect(body.games[0].source).toBe("prostage");
+  });
+});

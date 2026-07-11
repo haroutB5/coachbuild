@@ -3515,3 +3515,110 @@ Files touched: `components/IconWithFallback.tsx`, `components/ProGameCard.tsx`, 
 
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-11 17:25
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-11 15:58:11Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-11 — untracked prostage players now viewable (2 contract changes)
+
+Goal: every player in a pro-play game viewable, not just tracked pros (e.g. LYON's Dhokla/Inspired/Isles — in `prostage_matches` via `player_link`, no `pros` row). Two API contract changes, both consumed concurrently by fronty:
+
+**1. `GET /api/pros?player=<player_link>`** (`app/api/pros/route.ts`)
+- Extended the existing exactly-one-of validation to three params: `championId` / `proId` / `player` (`providedCount` check replaces the old pairwise check). `player` validated: non-empty, ≤64 chars, rejects `%` (exact match only, still fully parameterized).
+- **Prostage-only, by construction**: `wantSoloq = !playerLinkParam && (source === "all" || source === "soloq")` — the soloq query is skipped entirely whenever `player` is set, regardless of `source`. If a caller passes `source=soloq&player=X`, `wantProstage` is also false (existing source-gating), so the result is `{games: []}` — no special-cased error, documented in a code comment at the `wantSoloq` line.
+- New prostage SQL branch: `WHERE pm.player_link = ${playerLinkParam}`, `LEFT JOIN coachbuild.pros` (so a tracked pro on that player_link still gets enrichment), same `FRESH_WINDOW_DAYS` freshness gate, same `LIMIT`/`ORDER BY` shape as the existing championId/proId branches. `role` is optional on this path (defaults to 5/all-lanes, same as proId). Comps/teamName enrichment (`compsForGame`/`teamNamesForGame`) needed zero changes — they're keyed off `row.game_id`/`row.team`, agnostic to which query populated the row.
+
+**2. `TeamCompPlayer.playerLink?: string | null`** (`lib/pro/types.ts`)
+- New optional field, RAW Leaguepedia `player_link` for prostage entries, `null`/absent for soloq (soloq has no player_link identity model — verified via a new test in `pro-extract.test.ts` that `participantToTeamCompPlayer` never sets it).
+- Emitted in `lib/prostage/teamComps.ts`'s `buildProstageCompsMap` — `playerLink: playerLink || null` (reuses the existing `playerLink` local, already computed as `r.player_link ?? ""`; `""` collapses to `null` rather than an empty-string identity). This one function feeds BOTH `/api/pros/team-players`'s prostage path and `/api/pros`'s champion-id-only `compsForGame` projection (which doesn't use the field) — no separate wiring needed in the team-players route itself, it was "already selected in the grouped query" as briefed.
+- `proId` stays exactly as before — a tracked pro now carries both `proId` and `playerLink`; an untracked one carries only `playerLink` (proId null). This is the field that makes an untracked teammate/opponent row navigable: `GET /api/pros?player=<playerLink>`.
+
+**Tests added** (437 total, up from baseline 421, all green):
+- `pro-pros-route-prostage.test.ts`: new `describe("GET /api/pros player param...")` — validation matrix (player+proId conflict, player+championId conflict, empty/overlong/`%`-containing values, invalid role), happy path (SQL text asserts `pm.player_link =` + freshness clause present, prostage-only call count), `source=soloq&player=` → empty games + zero `mockSql` calls, `source=prostage`/`source=all` combined with `player` behave identically (still prostage-only).
+- `pro-pros-route-team-players.test.ts`: `playerLink` assertions added to the existing tracked-pro (Faker) prostage test + a new untracked-player (Oner: `proId: null`, `playerLink: "Oner"`) test; soloq happy-path test now asserts every entry's `playerLink` is `null`/absent.
+- `pro-extract.test.ts`: new test confirming `extractTeamPlayers` never sets `playerLink` on any participant.
+
+**Gates**: `npx tsc --noEmit` clean. `npx vitest run` 437/437 green. `npx eslint` on all touched files clean (exit 0). `npm run build` succeeded (only pre-existing unrelated `<img>`-element warnings in `app/page.tsx`/`components/*` — not touched this round). No version bump, no deploy (per brief).
+
+**Scope discipline**: did not touch `components/` (fronty's concurrent surface). Found two pre-existing untracked dirs `.next-corrupt-bak-1783785077/` and `.next-corrupt-bak-2/` at session start (mtimes predate this round) — left untouched, not created by this work. No stray scratch files added.
+
+Files touched: `app/api/pros/route.ts`, `lib/pro/types.ts`, `lib/prostage/teamComps.ts`, `lib/__tests__/pro-pros-route-prostage.test.ts`, `lib/__tests__/pro-pros-route-team-players.test.ts`, `lib/__tests__/pro-extract.test.ts`.
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-11 17:43
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-11 16:01:27Z; previous content preserved there. Append new rounds below. -->
+
+# HANDOFF-fronty.md — round 2026-07-11 (/history back-gesture + link-only Teams-box tap)
+
+## Status: DONE
+
+## Summary
+
+Two asks, both shipped:
+1. **Back-gesture history integration on `/history`.** Selection changes (player/champion pick, cross-player jump from a sheet) and sheet-open both push `history.pushState` entries; a `popstate` handler restores mode/subject/lane/open-sheet from a single self-sufficient state object. Explicit dismiss (✕/Escape/backdrop) calls `history.back()` to consume its own entry (no ghost accumulation); a cross-player jump instead pushes a NEW entry on top, leaving the sheet-open entry in the stack to be restored later.
+2. **Every Teams-box player row is now tappable**, not just tracked pros. `TeamCompPlayer.playerLink` (engy's concurrent contract addition, already live in `lib/pro/types.ts`) is mirrored into `components/proGames.types.ts`. A row is tappable when `proId` OR `playerLink` is set. Link-only taps land on `/history` with source locked to Pro Play (no soloq toggle shown — a locked "Pro Play only — no solo queue data" pill instead) and no favorite star (favorites store stays tracked-pros-only).
+
+## Files touched
+
+| File | Change |
+|---|---|
+| `app/history/page.tsx` | Full rewrite: `PlayerSubject` union (tracked/link), `NavHistoryState` wire shape, `pushState`/`popstate`/`replaceState` wiring, `restoringRef` guard, mount-time handoff-or-resume seeding. |
+| `components/proGames.types.ts` | `TeamCompPlayer.playerLink?: string \| null` mirrored from `lib/pro/types.ts`. |
+| `components/playerSelectHandoff.ts` | `PendingPlayerSelect` widened to `FavoritePlayer \| LinkPlayerSelect` (structural discrimination via `"id" in ref`, NOT a `kind` tag — keeps existing tests' plain `{id,name,team}` literals matching unchanged). |
+| `components/TeamComp.tsx` | `PlayerRow.isViewable` now `proId != null \|\| playerLink != null`; tap handler builds the right `PendingPlayerSelect` variant. |
+| `components/GameDetailSheet.tsx` | New optional `onDismiss` prop, fired only from ✕/Escape/backdrop (falls back to `onClose` when absent — Builds-page/ProGamesSection path unchanged). `onClose` alone still covers the cross-player-jump-inside-`handleSelectPlayer` path. |
+| `components/ProGameCard.tsx` | New optional `historySheet: {isOpen, onOpen, onDismiss}` prop (exported `HistorySheetControl` type). Controlled-open mode when present (drives `open` from `historySheet.isOpen`); fully unchanged local `useState` behavior when absent (Builds page). |
+| `components/ProHistoryResults.tsx` | New `playerLink`, `openGameId`, `onOpenGame`, `onDismissGame` props threaded to each `ProGameCard`. Link-only mode (`playerId` absent + `playerLink` set) forces `source=prostage` and shows a locked filter pill instead of the Solo Queue/Pro Play/All toggle. |
+
+`app/api/` and `lib/` were not touched (engy's lane) — `GET /api/pros?player=<link>` already existed live by the time I browser-tested (engy shipped it concurrently); frontend was built against the documented contract regardless.
+
+## Tests
+
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — 437/437 passed, 32 files (baseline was 421/427 before engy's concurrent churn landed; re-ran fresh, all green, no regressions).
+- `npx next lint` — clean except 5 pre-existing `<img>`-vs-`next/image` warnings (unrelated to this change, present before it).
+- `npm run build` — clean, `/history` route compiles (17.1 kB / 114 kB First Load JS).
+
+## Browser verification (390×844×2, mobile, touch — dev server on a scratch port, killed after)
+
+Full flow via chrome-devtools MCP against LIVE Neon data (real Viktor/Gumayusi/Dhokla pro-play games, 2026 MSI):
+- Champion mode → Viktor → open sheet (Saint/LYON vs Hanwha) → tap **Gumayusi** (tracked) in Teams box → lands on Gumayusi's player-mode list, sheet closed cleanly. **Caught and fixed a real bug here**: the pushed history entry correctly reset `openGameId: null`, but the LIVE `openGameId` React state wasn't cleared alongside it — since prostage `game.id` is per-MATCH not per-player, Gumayusi's row for the *same match* shared Viktor's just-opened game id, so his sheet auto-opened on arrival. Fixed by resetting `openGameId` state synchronously inside `pushSelectionState`, not just the pushed payload.
+- **BACK** → correctly restores "sheet open on Viktor" (Saint/LYON vs Hanwha reappears, full Teams boxes, runes, item timeline).
+- **BACK** again → Viktor's plain list, sheet closed, champion picker/lane pills back.
+- Re-opened the sheet, tapped **Dhokla** (untracked, `playerLink`-only) → landed on `/history` showing "Showing recent games by Dhokla", no favorite star, "Pro Play only — no solo queue data" locked pill, real prostage-only games (confirms `GET /api/pros?player=` is live and task 2 works end-to-end).
+- **BACK** from Dhokla's list → sheet-on-Viktor restored again (same entry-preservation behavior).
+- Dismissed that sheet via the **✕** button → confirmed the pushed sheet-open entry was consumed (`history.back()` fired internally): **BACK** once more from there landed directly on the pre-selection prompt state (no ghost entry — one user action, one stack pop).
+- Verified the Builds-page cross-page `sessionStorage` handoff still round-trips: stashed a tracked-player payload, navigated to `/history`, confirmed it was consumed once, cleared from storage, and folded into the seeded initial `history.state` (not pushed as an extra entry) — a plain `{id,name,team}` payload (Builds page's actual shape, unchanged) parses correctly against the widened `PendingPlayerSelect` union.
+- Zero console errors/warnings across the whole run.
+
+## Known gaps / not verified
+
+- Did not verify the Builds page's OWN `ProGamesSection` UI directly in-browser (its default sample-build render never surfaced a Pro Games section in this session's quick check) — verified the underlying `sessionStorage` stash/consume contract directly instead, which is the actual mechanism `ProGamesSection`'s `GameDetailSheet` instance relies on (that code path is unchanged by this ship).
+- Did not test `prefers-reduced-motion` or keyboard-only (Tab/Enter) navigation of the new history flow specifically — the sheet's existing focus-trap/Escape handling was reused as-is (only re-routed through the new `onDismiss` prop), not modified.
+- No version bump / deploy, per dispatch brief.
+
+

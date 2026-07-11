@@ -49,8 +49,18 @@ export interface TeamCompPlayer {
    *  HANDOFF-fronty.md). Null for an untracked/unlinked slot (common on
    *  soloq teammates, or a prostage player never matched to a `pros` row).
    *  Drives the Teams-box tap-to-view-that-player's-games affordance — a
-   *  row is only tappable when this is non-null. */
+   *  row is only tappable when this OR `playerLink` is non-null. */
   proId?: string | null;
+  /** RAW Leaguepedia player_link — engy's concurrent contract addition,
+   *  mirrored here verbatim from lib/pro/types.ts's TeamCompPlayer. Set for
+   *  every prostage roster entry (tracked AND untracked); null for every
+   *  soloq entry (no player_link identity model there). Makes an UNTRACKED
+   *  prostage player (no `proId`, e.g. a teammate with no `pros` row)
+   *  navigable too — the row is tappable via this field alone, fetching
+   *  GET /api/pros?player=<playerLink>&source=prostage (forced Pro Play,
+   *  no soloq data exists for a player with no tracked account). Optional:
+   *  absent is equivalent to null for consumers, same posture as `proId`. */
+  playerLink?: string | null;
 }
 
 export interface ProGame {

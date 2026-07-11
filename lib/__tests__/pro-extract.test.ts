@@ -511,6 +511,14 @@ describe("extractTeamPlayers", () => {
     const self = players?.allyPlayers.find((p) => p.championId === 112);
     expect(self && "proId" in self).toBe(false);
   });
+
+  it("never sets playerLink — soloq has no player_link identity model (2026-07-11, prostage-only field)", () => {
+    const m = match({}, fullTenParticipants());
+    const players = extractTeamPlayers(m, "puuid-1", "pro-self-id");
+    for (const p of [...(players?.allyPlayers ?? []), ...(players?.enemyPlayers ?? [])]) {
+      expect(p.playerLink === undefined || p.playerLink === null).toBe(true);
+    }
+  });
 });
 
 describe("extractMatch team players integration", () => {
