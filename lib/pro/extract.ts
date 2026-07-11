@@ -155,10 +155,36 @@ export interface ExtractedTeamComps {
   enemyChampionIds: number[];
 }
 
+/** Reorders a side's champion ids into role-slot order (0=Top 1=Jungle
+ *  2=Mid 3=Bot/ADC 4=Support) so a mid-laner's champion always renders in
+ *  the middle slot of the strip, regardless of participant/row fetch order.
+ *  Falls back to the input (source) order whenever the 5 entries don't carry
+ *  exactly 5 DISTINCT known roles (0-4) — a role-less or duplicate-role
+ *  shape (remake/AFK/unresolved-role edge cases) must degrade to "wrong but
+ *  complete," never a partial/reordered-lie array. Shared by both team-comps
+ *  producers: lib/pro/extract.ts's extractTeamComps (soloq, teamPosition ->
+ *  role) and app/api/pros/route.ts's prostage comps (Cargo role column). */
+export function orderChampionIdsByRole(
+  entries: { championId: number; role: number | null | undefined }[]
+): number[] {
+  const roles = entries.map((e) => (typeof e.role === "number" && e.role >= 0 && e.role <= 4 ? e.role : null));
+  const knownCount = roles.filter((r) => r !== null).length;
+  const distinctKnown = new Set(roles.filter((r): r is number => r !== null));
+  if (knownCount !== entries.length || distinctKnown.size !== entries.length) {
+    return entries.map((e) => e.championId);
+  }
+  return entries
+    .map((e, i) => ({ championId: e.championId, role: roles[i] as number }))
+    .sort((a, b) => a.role - b.role)
+    .map((e) => e.championId);
+}
+
 /** Splits a match's participants by teamId into the tracked player's ally
- *  side (own team, INCLUDING self) and the enemy side, by championId. Order
- *  within each array is source (participant array) order — cheap and stable,
- *  not role-sorted since teamPosition can be "" and this must stay total.
+ *  side (own team, INCLUDING self) and the enemy side, by championId,
+ *  ROLE-ORDERED (see orderChampionIdsByRole) — a mid-laner's champion always
+ *  lands at index 2. Falls back to source (participant array) order when a
+ *  side's teamPosition values don't resolve to exactly 5 distinct known
+ *  roles (teamPosition can be "" on remade/edge-case games).
  *  Returns null unless BOTH sides have exactly 5 champions — queue=420
  *  (ranked solo/duo, the only queue lib/pro/ingestMatches.ts ingests) is
  *  always 5v5, so this should always succeed in practice, but a truncated
@@ -167,10 +193,17 @@ export interface ExtractedTeamComps {
 export function extractTeamComps(match: RiotMatch, puuid: string): ExtractedTeamComps | null {
   const participant = match.info.participants.find((p) => p.puuid === puuid);
   if (!participant) return null;
-  const ally = match.info.participants.filter((p) => p.teamId === participant.teamId).map((p) => p.championId);
-  const enemy = match.info.participants.filter((p) => p.teamId !== participant.teamId).map((p) => p.championId);
-  if (ally.length !== 5 || enemy.length !== 5) return null;
-  return { allyChampionIds: ally, enemyChampionIds: enemy };
+  const allies = match.info.participants.filter((p) => p.teamId === participant.teamId);
+  const enemies = match.info.participants.filter((p) => p.teamId !== participant.teamId);
+  if (allies.length !== 5 || enemies.length !== 5) return null;
+  return {
+    allyChampionIds: orderChampionIdsByRole(
+      allies.map((p) => ({ championId: p.championId, role: roleFromTeamPosition(p.teamPosition) }))
+    ),
+    enemyChampionIds: orderChampionIdsByRole(
+      enemies.map((p) => ({ championId: p.championId, role: roleFromTeamPosition(p.teamPosition) }))
+    ),
+  };
 }
 
 /** Returns null (caller must skip+log) when the participant's role can't be

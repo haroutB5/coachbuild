@@ -135,6 +135,15 @@ export function SheetTeamsSection({ allyChampionIds, enemyChampionIds, selfChamp
   );
 }
 
+// Positional role labels for the sheet's Teams rows ONLY — engy's concurrent
+// backend change is shipping allyChampionIds/enemyChampionIds as
+// role-ordered arrays (0=Top, 1=Jungle, 2=Mid, 3=Bot, 4=Support). This is a
+// display-only hint by array index (never a reorder — the array order is
+// left exactly as the API returns it) and only applies to the standard
+// 5-length roster; an unexpected length degrades to no role hint rather than
+// guessing.
+const ROSTER_ROLE_LABELS = ["Top", "Jungle", "Mid", "Bot", "Support"] as const;
+
 function TeamRosterRow({
   label,
   championIds,
@@ -154,8 +163,14 @@ function TeamRosterRow({
           const entry = iconMap?.get(champId);
           const name = entry?.name ?? `Champion #${champId}`;
           const isSelf = champId === selfChampionId;
+          const role = championIds.length === ROSTER_ROLE_LABELS.length ? ROSTER_ROLE_LABELS[i] : undefined;
+          const title = role ? `${role} — ${name}` : name;
           return (
-            <div key={`${champId}-${i}`} className="flex flex-col items-center gap-1 w-12 flex-shrink-0">
+            <div
+              key={`${champId}-${i}`}
+              className="flex flex-col items-center gap-1 w-12 flex-shrink-0"
+              title={title}
+            >
               <div
                 className={`w-9 h-9 rounded-full bg-black/30 overflow-hidden flex items-center justify-center flex-shrink-0 ${
                   isSelf

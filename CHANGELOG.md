@@ -2,6 +2,11 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.15.0] — 2026-07-11
+### Changed
+- **Team comps are role-ordered**: both strips read Top → Jungle → Mid → Bot → Support, so a mid-laner's champion sits in the middle slot (all 1,134 solo-queue games re-backfilled; pro-play ordered from tracked roles; falls back to source order when a side's roles don't cleanly resolve). Sheet roster rows carry positional hints.
+- **Item build order redesigned** to matchday's density: 28px icons, minute labels tight to their items, no per-group card chrome — roughly a third of the previous height, same tappable items with named labels and consumables toggle.
+
 ## [0.14.1] — 2026-07-11
 ### Fixed
 All four findings from the 18/20 anchored review (path to 20):

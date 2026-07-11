@@ -2702,3 +2702,148 @@ Implemented all 4 fixes from the anchored 18/20 review, nothing else. No version
 
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-11 07:03
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-10 23:42:03Z; previous content preserved there. Append new rounds below. -->
+
+## Round: ITEM BUILD ORDER density pass (matchday reference)
+
+### Summary
+Studied `matchday/components/MatchDetail/PlayerInsightPanel.tsx` (`ItemsSection`/`ItemTile`) per the brief — its build-order timeline uses no per-group card chrome at all: 28-30px icons flowing in one `flex-wrap` row, each carrying its own tiny mono timestamp, hit-slop via padding+negative-margin instead of a big tap box. Translated (not copied) that density/cleanliness language into CoachBuild's `ItemBuildOrderSection` while keeping CoachBuild's own minute-grouping model (one label per group, not per item) since the brief asked to keep grouping, just lighten it.
+
+Changes to `ItemBuildOrderSection` (components/GameDetailSheet.tsx):
+- Dropped the bordered/bg-tinted rounded-lg card per minute group entirely — no more `bg-black/15 border border-line/60 px-2 py-1.5`.
+- Icon size 44px → 28px (`w-11 h-11` → `w-7 h-7`), radius `rounded-md` kept (reads clean at 28px, matches matchday's own radius:6 at a near-identical icon size).
+- Minute label: `text-[10px]` centered-above → `text-[9px] text-mut/80` left-aligned, `gap-0.5` tight to its icon row (was `gap-1` inside a padded card).
+- Groups now separated by a subtle `·` glyph (reusing the same divider glyph already used in the sheet's own header stat-line, e.g. `KDA · Mid · patch`) instead of a border — glyph lives INSIDE the same flex child as its preceding group so it can never orphan alone at the start of a wrapped row.
+- Hit-slop technique borrowed directly from matchday's `ItemTile`: button is `p-[3px] -m-[3px]` (visually near-invisible extra tap area) wrapping an inner `w-7 h-7` visual box that carries the bg/border/hover styling — keeps the icon visually tiny while giving a slightly larger real tap target than the raw 28px would offer. Documented as a deliberate, brief-directed exception to the usual ≥44px touch-target rule (this section specifically, not a general precedent).
+- `ItemBuildOrderSkeleton` resized in lockstep (9px label placeholder, 28px icon placeholders, no card wrapper) — CLS-safe, matches the real render's dimensions exactly.
+- No changes to `ProstageBuildOrder`, `groupByMinute`, consumables filtering, `onItemClick`/popover wiring, or aria-label text — all pass straight through into the new markup unchanged.
+
+Also (tiny, per brief): `TeamComp.tsx`'s `TeamRosterRow` (used only by `SheetTeamsSection`, i.e. the sheet's "Teams" rows — NOT `CardCompStrip`/`MiniCompRow`, which are untouched) now adds a `title="<Role> — <name>"` hint by array index (`ROSTER_ROLE_LABELS = [Top, Jungle, Mid, Bot, Support]`), gated to `championIds.length === 5` so an unexpected array length degrades to the plain name rather than guessing a role. Attribute-only — no layout/DOM-shape change, ready for engy's role-ordered array contract whenever it lands.
+
+### Measured result (live DOM, both real games)
+- Prostage Faker/Sylas (MSI, 12 minute-groups / 13 items): `ItemBuildOrderSection` height 123.75px (was a multi-row bordered-card layout well over 2x that at 44px icons).
+- Soloq Faker/Sylas (41-min game, 20 minute-groups / 26 items with consumables hidden, 34 with them shown): section height 221.75px for the hide-consumables state — 20 groups now fit in 4 wrapped rows at 390px width with zero horizontal scroll.
+- Both comfortably clear the "roughly half the old vertical space" target; the reduction is larger for longer builds since more groups now fit per row.
+
+### Files Touched
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/GameDetailSheet.tsx` — `ItemBuildOrderSection` + `ItemBuildOrderSkeleton` rewritten (density pass).
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/components/TeamComp.tsx` — `TeamRosterRow` gets a positional `title` hint (attribute-only).
+
+### Tests
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — 314/314 passed (baseline held, no regressions from engy's concurrent work either).
+- `npx next lint` — clean (only pre-existing `<img>`-vs-`next/image` warnings in unrelated files: app/page.tsx, ChampionPicker.tsx, IconWithFallback.tsx, ItemPath.tsx, SpellRow.tsx).
+- `npm run build` — succeeds, all routes compile/prerender.
+- Live-verified via chrome-devtools MCP at 390x844x2,mobile,touch on a clean `next dev` instance (port 3418 — first attempt on 3417 hit a stale-`.next`-cache 404 on `/` after a prior `npm run build` had written prod artifacts into the same `.next/` dir; killed and restarted clean, see Known Issues):
+  - Opened prostage Faker/Sylas game (`/history` → search "Faker" → Sylas win, MSI) — Item Build Order renders compact, 12 groups, tappable items open the centered `ItemDetailPopover` with the real name ("Hextech Rocketbelt") and correct minute in the title.
+  - Opened soloq Faker/Sylas game (`/history` → Solo Queue filter → Sylas win, 41:11) — 20 minute-groups render in 4 wrapped rows, no horizontal overflow; toggled "Hide consumables" off and confirmed item count went 26→34 (consumables reappear), toggle still fully functional.
+  - Confirmed via DOM query: 11 `·` separator glyphs render for the 12-group prostage game (dots present, deliberately subtle per the "lighter treatment" brief).
+  - Screenshots taken at each state (full sheet, build-order section cropped, open popover) — all confirm no CLS, no layout shift, aria-labels intact ("View details for X, bought at N'").
+
+### Known Issues
+- Dev-server gotcha (not a code bug): running `npm run build` (prod) and then `next dev` against the SAME `.next/` directory can leave a stale routes-manifest that 404s `/` under dev — hit this on first verification attempt (port 3417), fixed by killing the process and starting `next dev` fresh on a new port (3418). No code change needed; just don't reuse a `.next/` dir across build/dev without a restart if you hit an unexpected 404 on a route that demonstrably exists.
+- Did not touch `ProGameCard.tsx`'s collapsed row or `CardCompStrip`/`MiniCompRow` in TeamComp.tsx — out of scope per the brief, confirmed untouched.
+- No version bump, no deploy — per instructions.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-11 07:16
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-10 23:02:44Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-11 — Role-ordered team comps (allyChampionIds/enemyChampionIds)
+
+### Summary
+
+`allyChampionIds`/`enemyChampionIds` on `/api/pros` `ProGame` rows are now
+ROLE-ORDERED: index 0=Top 1=Jungle 2=Mid 3=Bot/ADC 4=Support, for both soloq
+and prostage sources. Both producers degrade to source order (never a
+partial/reordered-lie array) whenever a side's 5 entries don't resolve to
+exactly 5 *distinct* known roles — duplicate role, unresolved/empty role, or
+a non-5-entry side.
+
+- **soloq** (`lib/pro/extract.ts`'s `extractTeamComps`): sorts each side by
+  `roleFromTeamPosition(teamPosition)` via a new shared helper
+  `orderChampionIdsByRole`.
+- **prostage** (`app/api/pros/route.ts`'s `compsForGame`/
+  `buildProstageCompsMap`): the batched team-comps query now also selects
+  `pm.role` and a `p.role AS pro_role` fallback (LEFT JOIN `coachbuild.pros`),
+  resolved the same way `prostageRowToProGame` resolves the per-row display
+  role (`pro_role ?? role`), then reuses the same `orderChampionIdsByRole`
+  helper imported from `lib/pro/extract.ts`.
+- Contract comment on `ProGame.allyChampionIds`/`enemyChampionIds` in
+  `lib/pro/types.ts` updated to document the ordering + fallback guarantee.
+- `scripts/backfill-team-comps.mjs` gained `--reorder` (alias `--force`):
+  re-walks ALL `pro_matches` rows (drops the `ally_champion_ids IS NULL`
+  filter) and unconditionally overwrites both columns via the updated
+  `extractTeamComps`. Resumable via a local JSON cursor file
+  (`scripts/.backfill-team-comps-reorder-cursor.json`, gitignored — added to
+  `.gitignore`) keyed on `match_id` (same `ORDER BY match_id ASC` convention
+  the plain mode already uses), since there's no spare DB column to mark
+  "already re-done."
+- **RAN THE FULL REORDER TO COMPLETION** against the live DB: all 1134
+  `pro_matches` rows now have role-ordered `ally_champion_ids`/
+  `enemy_champion_ids`. Verified post-run:
+  `{ total: 1134, withComps: 1134, nullComps: 0 }`.
+
+### Bug found + fixed in my own `--reorder` implementation before it fully
+landed: the first cut advanced the persisted resume cursor to whichever row
+was processed most recently, even after an earlier row in the same batch hit
+a transient (non-Riot, e.g. network/DB) error — so a later successful row
+would silently push the cursor past the failed one, and that failed
+match_id would never get retried on a future resume. Fixed by freezing the
+cursor (`cursorFrozen` flag) at the first transient error in a run; rows
+after it still get best-effort processed in the same run (safe — the UPDATE
+is idempotent) but the persisted cursor stops advancing until a clean resume
+starts from that point. This fix landed in the file *after* the real full
+run had already started (child process had the old code loaded), so:
+- The full run hit 22 transient "fetch failed" / DB-connection errors
+  (network blips, all against the same Neon endpoint — nothing content- or
+  region-specific) and, because it ran the pre-fix code, cleared its cursor
+  at end-of-table without leaving those 22 bookmarked.
+- I collected the 22 match_ids from the run log and did a direct targeted
+  retry (ad hoc, via the probe file) — all 22 succeeded on retry (0 errors),
+  confirming these were transient, not persistent per-match failures.
+
+### Files Touched
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/lib/pro/extract.ts` — `orderChampionIdsByRole` (new, exported) + `extractTeamComps` now role-orders both sides.
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/lib/pro/types.ts` — `ProGame.allyChampionIds`/`enemyChampionIds` contract comment updated.
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/app/api/pros/route.ts` — prostage comps query + `buildProstageCompsMap`/`compsForGame` now carry/resolve role and role-order via the shared helper.
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/scripts/backfill-team-comps.mjs` — `--reorder`/`--force` mode, resumable cursor file, `cursorFrozen` fix.
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/.gitignore` — ignore the new cursor scratch file.
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/lib/__tests__/pro-extract.test.ts` — new tests: proper 5-role sort (mid at index 2), duplicate-role fallback, unknown-position fallback, direct `orderChampionIdsByRole` unit tests.
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/lib/__tests__/pro-pros-route-prostage.test.ts` — new tests: prostage role-order (Faker-style mid at index 2 via `pro_role` fallback), fallback to row order when roles don't resolve.
+- `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/scripts/_probe.mjs` — reused scratch probe (per instruction, not rm'd). Currently emptied to a one-line comment. Flagging per your ask: this file is untracked (`??` in git status) and will show up in `git add` — leave it out of any commit, or `git rm --cached` it if you'd rather it not exist in the tree at all.
+
+### Tests
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — **322/322 passed** (314 baseline + 8 new: 3 extract.ts fallback/ordering cases + 3 `orderChampionIdsByRole` unit tests + 2 route.ts prostage cases).
+- `npx next lint` — clean except 5 pre-existing `<img>`-vs-`next/image` warnings (unrelated, pre-dates this change).
+- `npm run build` — green (first attempt hit the known EPERM-on-`.next/trace` transient from a concurrent dev-server lock per project convention; retry succeeded, all routes compiled/typechecked/prerendered).
+- **Real-data validation** (via a since-emptied probe against the live DB + live Riot API re-fetch):
+  - soloq, pro "Phantasm" role=MID(2), champion Hwei, match `EUN1_3932695378`: `allyChampionIds` = `[6,122,910,18,89]` → champion 910 (Hwei) at **index 2**. ✓
+  - soloq, pro "Vladi" role=BOT/ADC(3), champion Camille, match `EUW1_7098520773`: `allyChampionIds` = `[92,876,161,164,111]` → champion 164 (Camille) at **index 3**. ✓ (confirms it's genuinely role-indexed, not hardcoded to mid)
+  - prostage, 2026 Mid-Season Invitational, Zeka (Hanwha Life Esports) role=MID(2), champion Aurora, game `2026 Mid-Season Invitational_Bracket Round 4_1_4`: `allyChampionIds` = `[904,254,893,110,111]` → champion 893 (Aurora) at **index 2**. ✓
+
+### Known Issues
+- None outstanding on the shipped surface. The 22 transient backfill errors were retried and resolved (0 errors on retry) — see above.
+- `scripts/_probe.mjs` is new and untracked; left emptied per instruction rather than removed (safety gate blocks `rm`).
+- Did not touch `components/` or `lib/prostage/` runtime code, per scope.
+
+

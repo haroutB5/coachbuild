@@ -32,5 +32,6 @@ Thumbs.db
 [Oo]bj/
 artifacts/
 .claude/worktrees/
+scripts/.backfill-team-comps-reorder-cursor.json
 
 .vercel

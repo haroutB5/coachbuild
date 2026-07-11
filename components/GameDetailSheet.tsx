@@ -231,33 +231,48 @@ function ItemBuildOrderSection({
       ) : (
         // Groups flow with wrapping — the sheet scrolls vertically only,
         // never horizontally. Each group is a single self-contained flex
-        // item (label + its items + its own hairline border) so wrapping
-        // never splits a label away from its items, and the group separator
-        // still reads cleanly no matter where a row break lands.
-        <div className="flex flex-wrap gap-2.5">
+        // item (label + its items + its own trailing separator glyph) so
+        // wrapping never splits a label away from its items, and the "·"
+        // divider (the same glyph the header stat-line above already uses
+        // between stats) never ends up orphaned at the start of a wrapped
+        // row. No card chrome (bg/border) per group — density over
+        // decoration, ~half the vertical footprint of the old bordered-card
+        // treatment.
+        <div className="flex flex-wrap items-start gap-x-1 gap-y-2.5">
           {minuteGroups.map((g, gi) => (
-            <div
-              key={`${g.minute}-${gi}`}
-              className="flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg bg-black/15 border border-line/60"
-            >
-              <span className="text-[10px] text-mut tabular-nums">{g.minute}&apos;</span>
-              <div className="flex items-center gap-1.5">
-                {g.items.map((p, i) => {
-                  const label = itemLabelFrom(itemNames, p.itemId);
-                  return (
-                    <button
-                      key={`${p.itemId}-${p.ts}-${i}`}
-                      type="button"
-                      onClick={() => onItemClick(p.itemId)}
-                      aria-label={`View details for ${label}, bought at ${formatMinuteStamp(p.ts)}`}
-                      title={`${label} — ${formatMinuteStamp(p.ts)}`}
-                      className="w-11 h-11 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform hover:border-teal-dim active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
-                    >
-                      <IconWithFallback src={itemIconUrl(p.itemId, ver)} alt={label} className="w-full h-full object-contain" />
-                    </button>
-                  );
-                })}
+            <div key={`${g.minute}-${gi}`} className="flex items-center">
+              <div className="flex flex-col items-start gap-0.5">
+                <span className="text-[9px] text-mut/80 tabular-nums leading-none">{g.minute}&apos;</span>
+                <div className="flex items-center gap-1.5">
+                  {g.items.map((p, i) => {
+                    const label = itemLabelFrom(itemNames, p.itemId);
+                    return (
+                      <button
+                        key={`${p.itemId}-${p.ts}-${i}`}
+                        type="button"
+                        onClick={() => onItemClick(p.itemId)}
+                        aria-label={`View details for ${label}, bought at ${formatMinuteStamp(p.ts)}`}
+                        title={`${label} — ${formatMinuteStamp(p.ts)}`}
+                        // Hit-slop via padding + equal negative margin (same
+                        // technique as matchday's PlayerInsightPanel ItemTile):
+                        // the visible icon shrinks to 28px for density, but the
+                        // actual tap target stays a few px larger on each side
+                        // without pushing neighboring icons apart.
+                        className="p-[3px] -m-[3px] flex-shrink-0 rounded-[8px] block leading-none transition-transform active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
+                      >
+                        <span className="w-7 h-7 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center transition-colors hover:border-teal-dim">
+                          <IconWithFallback src={itemIconUrl(p.itemId, ver)} alt={label} className="w-full h-full object-contain" />
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
+              {gi < minuteGroups.length - 1 && (
+                <span aria-hidden="true" className="text-mut/40 text-[11px] px-1.5 self-center">
+                  ·
+                </span>
+              )}
             </div>
           ))}
         </div>
@@ -267,22 +282,20 @@ function ItemBuildOrderSection({
 }
 
 /** Loading placeholder for the prostage build-order fetch — sized to match
- *  ItemBuildOrderSection's real minute-group boxes (same w-11 h-11 icon
- *  slots) so resolving the fetch never shifts layout (CLS). */
+ *  ItemBuildOrderSection's real minute-group layout (same w-7 h-7 icon
+ *  slots, same label height) so resolving the fetch never shifts layout
+ *  (CLS). */
 function ItemBuildOrderSkeleton() {
   return (
-    <div className="flex flex-wrap gap-2.5" aria-hidden="true">
+    <div className="flex flex-wrap items-start gap-x-1 gap-y-2.5" aria-hidden="true">
       {[0, 1, 2].map((gi) => (
-        <div
-          key={gi}
-          className="flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg bg-black/15 border border-line/60"
-        >
-          <span className="block h-[10px] w-4 rounded-sm bg-panel2 animate-pulse motion-reduce:animate-none" />
+        <div key={gi} className="flex flex-col items-start gap-0.5">
+          <span className="block h-[9px] w-4 rounded-sm bg-panel2 animate-pulse motion-reduce:animate-none" />
           <div className="flex items-center gap-1.5">
             {[0, 1].map((ii) => (
               <span
                 key={ii}
-                className="w-11 h-11 rounded-md bg-panel2 border border-line animate-pulse motion-reduce:animate-none"
+                className="w-7 h-7 rounded-md bg-panel2 border border-line animate-pulse motion-reduce:animate-none"
               />
             ))}
           </div>

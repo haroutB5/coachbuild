@@ -218,6 +218,40 @@ describe("GET /api/pros prostage team comps (Phase 3)", () => {
     expect(body.games[0].enemyChampionIds).toBeUndefined();
   });
 
+  it("role-orders each side (Top/Jungle/Mid/Bot/Support) when the comp rows carry a resolvable role", async () => {
+    // T1: Faker (103, own champion) is MID(2); rest scrambled across roles.
+    // GEN: also a clean 5-role set, scrambled.
+    const roleOrderedGame = [
+      { game_id: "LEC_2026_Summer_1_1", team: "T1", champion_id: 1, role: 0, pro_role: null }, // top
+      { game_id: "LEC_2026_Summer_1_1", team: "T1", champion_id: 2, role: 1, pro_role: null }, // jungle
+      { game_id: "LEC_2026_Summer_1_1", team: "T1", champion_id: 103, role: null, pro_role: 2 }, // Faker, mid, via pro_role fallback
+      { game_id: "LEC_2026_Summer_1_1", team: "T1", champion_id: 3, role: 3, pro_role: null }, // bot
+      { game_id: "LEC_2026_Summer_1_1", team: "T1", champion_id: 4, role: 4, pro_role: null }, // support
+      { game_id: "LEC_2026_Summer_1_1", team: "GEN", champion_id: 9, role: 4, pro_role: null }, // support
+      { game_id: "LEC_2026_Summer_1_1", team: "GEN", champion_id: 8, role: 3, pro_role: null }, // bot
+      { game_id: "LEC_2026_Summer_1_1", team: "GEN", champion_id: 7, role: 2, pro_role: null }, // mid
+      { game_id: "LEC_2026_Summer_1_1", team: "GEN", champion_id: 6, role: 1, pro_role: null }, // jungle
+      { game_id: "LEC_2026_Summer_1_1", team: "GEN", champion_id: 5, role: 0, pro_role: null }, // top
+    ];
+    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce(roleOrderedGame);
+    const res = await GET(req("?championId=103&role=2&source=prostage"));
+    const body = await res.json();
+    expect(body.games[0].allyChampionIds).toEqual([1, 2, 103, 3, 4]); // top, jungle, MID (Faker) at index 2, bot, support
+    expect(body.games[0].allyChampionIds[2]).toBe(103);
+    expect(body.games[0].enemyChampionIds).toEqual([5, 6, 7, 8, 9]); // top, jungle, mid, bot, support
+  });
+
+  it("falls back to the query's row order when a side's roles don't resolve to 5 distinct known roles", async () => {
+    const noRoleGame = CLEAN_GAME_ROWS.map((r) => ({ ...r, role: null, pro_role: null }));
+    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce(noRoleGame);
+    const res = await GET(req("?championId=103&role=2&source=prostage"));
+    const body = await res.json();
+    // CLEAN_GAME_ROWS is already listed in (row) order [103,1,2,3,4] / [5,6,7,8,9] —
+    // with no resolvable role, the fallback is that same source order.
+    expect(body.games[0].allyChampionIds).toEqual([103, 1, 2, 3, 4]);
+    expect(body.games[0].enemyChampionIds).toEqual([5, 6, 7, 8, 9]);
+  });
+
   it("omits both fields when a third team is present (data too messy to call ally/enemy)", async () => {
     const threeTeamGame = [
       ...CLEAN_GAME_ROWS.slice(0, 5), // T1 x5 (incl. row's own champion 103)

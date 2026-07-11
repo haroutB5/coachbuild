@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
 import { FRESH_WINDOW_DAYS } from "@/lib/pro/fresh";
+import { orderChampionIdsByRole } from "@/lib/pro/extract";
 import type { DisplayRoleId, ProGame, ProGamePurchase, ProGameRunes, ProRoleId, ProsResponse } from "@/lib/pro/types";
 
 export const runtime = "nodejs";
@@ -192,15 +193,28 @@ function prostageRowToProGame(
   };
 }
 
+interface ProstageCompRow {
+  game_id: string;
+  team: string;
+  champion_id: number;
+  role: number | null; // Cargo Role column, 0-4, nullable
+  pro_role: number | null; // pros-table fallback role, same resolution as prostageRowToProGame's roleValue
+}
+
+interface CompEntry {
+  championId: number;
+  role: number | null; // resolved (pro_role ?? role), fed straight into orderChampionIdsByRole
+}
+
 /** Groups a batch of raw coachbuild.prostage_matches (game_id, team,
- *  champion_id) rows — fetched for the specific game_ids already present in
- *  this response's prostage results — into game_id -> team -> championIds[].
- *  Rows with a null team or champion_id are excluded by the caller's SQL
- *  WHERE clause, never here. */
-function buildProstageCompsMap(
-  rows: { game_id: string; team: string; champion_id: number }[]
-): Map<string, Map<string, number[]>> {
-  const map = new Map<string, Map<string, number[]>>();
+ *  champion_id, role) rows — fetched for the specific game_ids already
+ *  present in this response's prostage results — into
+ *  game_id -> team -> {championId, role}[]. Rows with a null team or
+ *  champion_id are excluded by the caller's SQL WHERE clause, never here.
+ *  Role resolution mirrors prostageRowToProGame's roleValue (pro_role ??
+ *  role, unresolved stays null rather than guessed). */
+function buildProstageCompsMap(rows: ProstageCompRow[]): Map<string, Map<string, CompEntry[]>> {
+  const map = new Map<string, Map<string, CompEntry[]>>();
   for (const r of rows) {
     let byTeam = map.get(r.game_id);
     if (!byTeam) {
@@ -208,7 +222,7 @@ function buildProstageCompsMap(
       map.set(r.game_id, byTeam);
     }
     const arr = byTeam.get(r.team) ?? [];
-    arr.push(r.champion_id);
+    arr.push({ championId: r.champion_id, role: r.pro_role ?? r.role ?? null });
     byTeam.set(r.team, arr);
   }
   return map;
@@ -219,9 +233,11 @@ function buildProstageCompsMap(
  *  non-null team, that team has exactly 5 champions, and there is EXACTLY
  *  ONE other team for the game with exactly 5 champions — i.e. a clean 10-row
  *  5v5 split. Some prostage rows have a null team (see prostageRowToProGame's
- *  header comment) and simply never get comps. */
+ *  header comment) and simply never get comps. Each side is role-ordered via
+ *  orderChampionIdsByRole (lib/pro/extract.ts) — degrades to source order
+ *  when the 5 rows don't carry exactly 5 distinct known roles. */
 function compsForGame(
-  compsByGame: Map<string, Map<string, number[]>>,
+  compsByGame: Map<string, Map<string, CompEntry[]>>,
   gameId: string,
   ownTeam: string | null
 ): Pick<ProGame, "allyChampionIds" | "enemyChampionIds"> | Record<string, never> {
@@ -234,7 +250,10 @@ function compsForGame(
   if (otherTeams.length !== 1) return {};
   const [, enemy] = otherTeams[0];
   if (enemy.length !== 5) return {};
-  return { allyChampionIds: ally, enemyChampionIds: enemy };
+  return {
+    allyChampionIds: orderChampionIdsByRole(ally),
+    enemyChampionIds: orderChampionIdsByRole(enemy),
+  };
 }
 
 const VALID_SOURCES = new Set(["all", "soloq", "prostage"]);
@@ -404,15 +423,14 @@ export async function GET(req: NextRequest) {
     const compsRawRows =
       gameIds.length > 0
         ? await sql`
-            SELECT game_id, team, champion_id
-            FROM coachbuild.prostage_matches
-            WHERE game_id = ANY(${gameIds}::text[])
-              AND team IS NOT NULL AND champion_id IS NOT NULL
+            SELECT pm.game_id, pm.team, pm.champion_id, pm.role, p.role AS pro_role
+            FROM coachbuild.prostage_matches pm
+            LEFT JOIN coachbuild.pros p ON p.id = pm.pro_id
+            WHERE pm.game_id = ANY(${gameIds}::text[])
+              AND pm.team IS NOT NULL AND pm.champion_id IS NOT NULL
           `
         : [];
-    const compsByGame = buildProstageCompsMap(
-      asRows<{ game_id: string; team: string; champion_id: number }>(compsRawRows)
-    );
+    const compsByGame = buildProstageCompsMap(asRows<ProstageCompRow>(compsRawRows));
 
     const prostageGames = prostageRowsArr
       .map((row) => prostageRowToProGame(row, compsForGame(compsByGame, row.game_id, row.team)))

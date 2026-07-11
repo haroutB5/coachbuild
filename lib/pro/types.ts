@@ -88,7 +88,18 @@ export interface ProGame {
    *  without the other. Emitted only when there are exactly 5 champion ids
    *  per side; absent = frontend renders nothing for this row.
    *  allyChampionIds INCLUDES the player's own champion (matches `championId`
-   *  above) so the frontend can highlight self by id match within the row. */
+   *  above) so the frontend can highlight self by id match within the row.
+   *
+   *  ROLE-ORDERED (added 2026-07-11): index 0=Top 1=Jungle 2=Mid 3=Bot/ADC
+   *  4=Support, per side — so a mid-laner's champion always renders in the
+   *  middle slot of the strip, not wherever the source fetch happened to put
+   *  it. Both producers (lib/pro/extract.ts's extractTeamComps for soloq,
+   *  app/api/pros/route.ts's compsForGame for prostage) degrade to SOURCE
+   *  ORDER whenever a side's 5 entries don't carry exactly 5 distinct known
+   *  roles (0-4) — a role-less/duplicate-role shape (remake/AFK/unresolved
+   *  Cargo role) yields a wrong-but-complete strip rather than a
+   *  reordered lie. The frontend does not need to special-case either
+   *  case — it just renders index order and highlights self by championId. */
   allyChampionIds?: number[];
   enemyChampionIds?: number[];
 }

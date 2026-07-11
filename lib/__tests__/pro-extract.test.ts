@@ -12,6 +12,7 @@ import {
   extractMatch,
   extractGameStats,
   extractTeamComps,
+  orderChampionIdsByRole,
 } from "../pro/extract";
 import type { RiotMatch, RiotParticipant, RiotTimeline } from "../pro/types";
 
@@ -256,6 +257,107 @@ describe("extractTeamComps", () => {
     const short = fullTenParticipants().slice(0, 9); // only 4 enemies
     const m = match({}, short);
     expect(extractTeamComps(m, "puuid-1")).toBeNull();
+  });
+
+  it("role-sorts each side into Top/Jungle/Mid/Bot/Support order regardless of source order — the mid-laner's champion lands at index 2", () => {
+    const participants = [
+      participant({ puuid: "ally-jgl", participantId: 2, teamId: 100, championId: 21, teamPosition: "JUNGLE" }),
+      participant({ teamPosition: "MIDDLE" }), // self, puuid-1, championId 112 (default)
+      participant({ puuid: "ally-top", participantId: 3, teamId: 100, championId: 23, teamPosition: "TOP" }),
+      participant({ puuid: "ally-sup", participantId: 4, teamId: 100, championId: 24, teamPosition: "UTILITY" }),
+      participant({ puuid: "ally-bot", participantId: 5, teamId: 100, championId: 25, teamPosition: "BOTTOM" }),
+      participant({ puuid: "enemy-sup", participantId: 6, teamId: 200, championId: 34, teamPosition: "UTILITY" }),
+      participant({ puuid: "enemy-top", participantId: 7, teamId: 200, championId: 31, teamPosition: "TOP" }),
+      participant({ puuid: "enemy-jgl", participantId: 8, teamId: 200, championId: 32, teamPosition: "JUNGLE" }),
+      participant({ puuid: "enemy-bot", participantId: 9, teamId: 200, championId: 35, teamPosition: "BOTTOM" }),
+      participant({ puuid: "enemy-mid", participantId: 10, teamId: 200, championId: 33, teamPosition: "MIDDLE" }),
+    ];
+    const m = match({}, participants);
+    const comps = extractTeamComps(m, "puuid-1");
+    expect(comps?.allyChampionIds).toEqual([23, 21, 112, 25, 24]); // TOP JUNGLE MID BOT SUPPORT
+    expect(comps?.allyChampionIds?.[2]).toBe(112); // self (mid) at index 2
+    expect(comps?.enemyChampionIds).toEqual([31, 32, 33, 35, 34]);
+  });
+
+  it("falls back to source order when a side has a duplicate role (never a reordered lie)", () => {
+    const participants = [
+      participant({ teamPosition: "MIDDLE" }), // self, championId 112
+      participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2, teamPosition: "MIDDLE" }), // dup MID
+      participant({ puuid: "ally-3", participantId: 3, teamId: 100, championId: 3, teamPosition: "TOP" }),
+      participant({ puuid: "ally-4", participantId: 4, teamId: 100, championId: 4, teamPosition: "BOTTOM" }),
+      participant({ puuid: "ally-5", participantId: 5, teamId: 100, championId: 5, teamPosition: "UTILITY" }),
+      participant({ puuid: "enemy-1", participantId: 6, teamId: 200, championId: 6, teamPosition: "TOP" }),
+      participant({ puuid: "enemy-2", participantId: 7, teamId: 200, championId: 7, teamPosition: "JUNGLE" }),
+      participant({ puuid: "enemy-3", participantId: 8, teamId: 200, championId: 8, teamPosition: "MIDDLE" }),
+      participant({ puuid: "enemy-4", participantId: 9, teamId: 200, championId: 9, teamPosition: "BOTTOM" }),
+      participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10, teamPosition: "UTILITY" }),
+    ];
+    const m = match({}, participants);
+    const comps = extractTeamComps(m, "puuid-1");
+    expect(comps?.allyChampionIds).toEqual([112, 2, 3, 4, 5]); // source order preserved, not reordered
+    expect(comps?.enemyChampionIds).toEqual([6, 7, 8, 9, 10]); // enemy side is a clean 5-role set -> role sorted (already in source==role order here)
+  });
+
+  it("falls back to source order when a side has an unresolved (empty) teamPosition", () => {
+    const participants = [
+      participant({ teamPosition: "" }), // self, championId 112, unresolved role
+      participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2, teamPosition: "JUNGLE" }),
+      participant({ puuid: "ally-3", participantId: 3, teamId: 100, championId: 3, teamPosition: "TOP" }),
+      participant({ puuid: "ally-4", participantId: 4, teamId: 100, championId: 4, teamPosition: "BOTTOM" }),
+      participant({ puuid: "ally-5", participantId: 5, teamId: 100, championId: 5, teamPosition: "UTILITY" }),
+      participant({ puuid: "enemy-1", participantId: 6, teamId: 200, championId: 6, teamPosition: "TOP" }),
+      participant({ puuid: "enemy-2", participantId: 7, teamId: 200, championId: 7, teamPosition: "JUNGLE" }),
+      participant({ puuid: "enemy-3", participantId: 8, teamId: 200, championId: 8, teamPosition: "MIDDLE" }),
+      participant({ puuid: "enemy-4", participantId: 9, teamId: 200, championId: 9, teamPosition: "BOTTOM" }),
+      participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10, teamPosition: "UTILITY" }),
+    ];
+    const m = match({}, participants);
+    const comps = extractTeamComps(m, "puuid-1");
+    expect(comps?.allyChampionIds).toEqual([112, 2, 3, 4, 5]); // source order — self's role unresolved
+    expect(comps?.enemyChampionIds).toEqual([6, 7, 8, 9, 10]); // clean 5-role enemy side, unaffected
+  });
+});
+
+describe("orderChampionIdsByRole", () => {
+  it("sorts entries by role 0-4 when exactly 5 distinct known roles are present", () => {
+    expect(
+      orderChampionIdsByRole([
+        { championId: 1, role: 2 },
+        { championId: 2, role: 0 },
+        { championId: 3, role: 4 },
+        { championId: 4, role: 1 },
+        { championId: 5, role: 3 },
+      ])
+    ).toEqual([2, 4, 1, 5, 3]);
+  });
+
+  it("falls back to input order when any role is null/undefined", () => {
+    expect(
+      orderChampionIdsByRole([
+        { championId: 1, role: 0 },
+        { championId: 2, role: null },
+        { championId: 3, role: 2 },
+      ])
+    ).toEqual([1, 2, 3]);
+    expect(
+      orderChampionIdsByRole([
+        { championId: 1, role: 0 },
+        { championId: 2, role: undefined },
+        { championId: 3, role: 2 },
+      ])
+    ).toEqual([1, 2, 3]);
+  });
+
+  it("falls back to input order on a duplicate role", () => {
+    expect(
+      orderChampionIdsByRole([
+        { championId: 1, role: 0 },
+        { championId: 2, role: 0 },
+        { championId: 3, role: 2 },
+        { championId: 4, role: 3 },
+        { championId: 5, role: 4 },
+      ])
+    ).toEqual([1, 2, 3, 4, 5]);
   });
 });
 
