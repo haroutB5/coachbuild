@@ -1,0 +1,106 @@
+# CoachBuild — technical reference
+
+League of Legends coaching companion. Next.js 14 (App Router) + TypeScript + Tailwind, Vercel (prod: `coachbuild.vercel.app`, personal account). Serverless throughout — no server processes besides Vercel functions + two daily crons. `package.json` version is the single source of truth for the app version (`NEXT_PUBLIC_APP_VERSION`, injected by `next.config.mjs`, shown in both pages' footers; SW cache name is version-tied). Read this file before exploring source; it's the map, not a substitute for reading the actual code before changing it.
+
+## The two surfaces
+
+**Builds page (`/`, `app/page.tsx`)** — the original app. Pick a champion + lane, get the WPA-ranked (Win Probability Added) recommended runes/shards/items/spells, sourced live from coachless.gg's deep-learning stats API (`lib/coachless.ts`, a thin proxy — no local key/auth needed, it's a public endpoint). `lib/recommend.ts` ("THE ENGINE") evaluates every primary tree and every secondary tree, not just the most-played pairing, and returns up to 3 confidence-weighted variants (`buildRecommendations`). Route: `app/api/build/route.ts` → 200 with `BuildResponse[]`, 404 (`error: "no_data"` / `"not_enough_data"`) when the champ+role combo lacks data (`NotPlayedInRoleError`), 500 with no detail leak on genuine failure. Icon/data CDN URLs and the "what patch is live" resolution both live in `lib/staticData.ts` — see Gotchas.
+
+**Pro's page (`/history`, `app/history/page.tsx`)** — search a tracked pro player or a champion, see recent games. Two independent data sources feeding one unified response shape:
+- **Solo queue** — `lib/pro/**`. Roster from lolpros.gg, matches from Riot match-v5 + timeline, stored in `coachbuild.pro_matches`/`pro_accounts`/`pros`.
+- **Pro play (on-stage)** — `lib/prostage/**`. Official esports games from Leaguepedia (lol.fandom.com Cargo tables), stored in `coachbuild.prostage_matches`. Item build order for these is reconstructed on first view from lolesports' free livestats feed and persisted (`lib/prostage/resolveGame.ts` + `timeline.ts`), served instantly from Postgres thereafter.
+
+Both sources are merged by `app/api/pros/route.ts` (`GET /api/pros`) into one `ProGame[]` — see **API contracts** below. `GET /api/players?q=` is player typeahead search. `GET /api/prostage/timeline?player=...` computes/serves a pro-play game's item build order on demand.
+
+## Data pipeline map
+
+```
+lib/pro/                       — solo-queue pipeline
+  types.ts                       THE CONTRACT (see below) + raw Riot/lolpros shapes + DB row shapes
+  db.ts                          Neon client (getSql()) — see Gotcha (a)
+  riot.ts, pacer.ts               Riot API client, paced 1.3s/call (20/s + 100/2min budget)
+  lolpros.ts, puuidResolve.ts     roster ingest: lolpros.gg profiles → PUUID (fallback via Riot account-v1)
+  teamRegions.ts, regionMap.ts    tier-1 team → home region map (accounts follow the player's pro-team region)
+  roleMap.ts                     Riot/lolpros role vocab → ProRoleId (0-4)
+  ingestRoster.ts, ingestMatches.ts, seedCrossregion.ts   ingest orchestration
+  extract.ts                      RiotMatch+RiotTimeline → ProGame fields (purchaseOrder, skillOrder, team comps)
+  fresh.ts                        FRESH_WINDOW_DAYS = 90 (freshness window, shared by ingest + queries)
+  auth.ts                         Bearer CRON_SECRET guard for /api/ingest/*
+  errors.ts                       DbUnavailableError, RiotUnavailableError
+
+lib/prostage/                  — pro-play (Leaguepedia) pipeline
+  cargo.ts                        Cargo API client (api.php) + CargoExport client — see Gotcha (c)
+  tournaments.ts                  resolves + staleness-orders active tournaments for daily rotation
+  extract.ts                      CargoScoreboardPlayerRow → prostage row fields
+  roleMap.ts                      Leaguepedia's OWN role vocab ("Top"/"Jungle"/... prose-cased) → ProRoleId | null
+  ddragon.ts                      champion/patch name resolution for prostage rows
+  ingest.ts                       runProstageIngest() — one tournament per invocation (route timing)
+  timeline.ts                     lolesports livestats feed client + appear-only frame-diff walk
+  resolveGame.ts                  Leaguepedia game row → lolesports numeric game id → walked timeline → per-player builds
+  types.ts                        CargoScoreboardPlayerRow etc.
+
+migrations/                    — see file list below, run via `node scripts/db-migrate.mjs`
+  0001_init.sql                   coachbuild schema, pros / pro_accounts / pro_matches (solo queue)
+  0002_prostage.sql               prostage_matches (pro play), separate identity model (game_id, player_link) — no puuid
+  0003_account_audit.sql          last_audited_at (scripts/audit-accounts.mjs resumability)
+  0004_game_stats.sql             cs / damage_champions / team_kills / gold (nullable, backfilled)
+  0005_prostage_timeline.sql      purchase_order / lolesports_game_id / timeline_status on prostage_matches
+  0006_team_comps.sql             ally_champion_ids / enemy_champion_ids (nullable, backfilled) on pro_matches
+
+scripts/                        — key ones only, see directory listing for the rest
+  db-migrate.mjs                  idempotent migration runner (coachbuild._migrations tracking table)
+  ingest-roster.mjs, ingest-matches.mjs   cron-driven daily ingest (also runnable standalone)
+  ingest-player.mjs               targeted on-demand fill for ONE player (jumps the backfill queue) — see Gotcha (i)
+  ingest-prostage.mjs             pro-play ingest; `--via-export` flag routes through CargoExport+curl — see Gotcha (c)
+  backfill-game-stats.mjs         resumable: WHERE cs IS NULL cursor, fills migration 0004's columns on old rows
+  backfill-team-comps.mjs         resumable: WHERE ally_champion_ids IS NULL cursor, fills migration 0006's columns
+  backfill-prostage-timelines.mjs resumable: walks prostage_matches WHERE timeline_status IS NULL
+  audit-accounts.mjs              resumable account-liveness sweep (round 6, ~30-60min, ~1-2k accounts)
+  seed-crossregion.mjs            one-time seeding of ~40 famous non-EUW pros via lolpros
+  _curl-transport.mjs             curl child-process HTTP transport for cargoExportQuery (see Gotcha (c))
+  _env.mjs                        loadEnvLocal() + REPO_ROOT — shared by every script above
+  _probe.mjs                      scratch one-line stub, intentionally empty between uses — see Known Issues
+```
+
+Component-side helpers worth knowing about: `components/proAssets.ts` (icon URL builders, standalone from `lib/staticData.ts` by design — Pro's page derives locally rather than importing backend-parallel lib code), `components/itemDetail.ts` / `runeDetail.ts` / `shardDetail.ts` / `summonerDetail.ts` (tap-to-detail popover data, CommunityDragon-sourced for runes — see Gotcha (f)), `components/favoritesSync.ts` (cross-component favorite-toggle event bus), `components/focusTrap.ts` (dialog Tab-trapping), `lib/favorites.ts` (localStorage-backed favorite players + favorite champions, two independent stores, 12-item cap each).
+
+## API contracts
+
+**`lib/pro/types.ts` is THE CONTRACT** for `GET /api/pros` (`ProGame`/`ProsResponse`) and `GET /api/players` (`Player`/`PlayersResponse`). Any change to these shapes must be coordinated with whoever's building the consuming UI — do not diverge one side without updating the other. Key fields to know before touching this:
+- `source: "soloq" | "prostage"` is a real discriminant. prostage rows always have `purchaseOrder: []`, `skillOrder: []`, `gameDurationSec: 0` (Cargo doesn't expose game length or ability-level data) and carry `tournament` + `playerLink`; soloq rows never set those.
+- `role: DisplayRoleId` (`0-4 | -1`) — `-1` means "unresolved," used only on the outward contract (prostage roles can fail to map). soloQ-internal code stays on the narrower `ProRoleId` (`0-4`, always concrete by construction).
+- `allyChampionIds`/`enemyChampionIds` are always emitted TOGETHER or both omitted, role-ordered (Top→Jungle→Mid→Bot→Support) when a side resolves cleanly, else omitted entirely — never a partial or a "wrong but silent" side.
+
+Ingest/cron routes (`app/api/ingest/{roster,matches,prostage}/route.ts`) all gate on `lib/pro/auth.ts`'s `isAuthorized()`: `Authorization: Bearer <CRON_SECRET>`, and an unset `CRON_SECRET` NEVER authorizes (fails closed). Vercel cron (`vercel.json`) hits `/api/ingest/matches` at 06:00 and `/api/ingest/prostage` at 07:00 daily; the prostage route processes one tournament per invocation and returns `nextCursor` for an external pinger to walk to `null`.
+
+## Test conventions
+
+Vitest, pure-function-only — **no JSX rendering harness** (no jsdom/RTL configured). Component test files (`components/__tests__/*.test.ts`, note the `.ts` not `.tsx`) import and test the exported pure helper functions from a component module (e.g. `StatBadge.test.ts` imports `wpaClass`/`wpaText`/`fmtSample` from `../StatBadge`), never render JSX. 342 tests / 27 files as of v0.16.0, all green (`npx vitest run`). Every lib module that touches an external feed (Cargo, Riot, lolesports livestats, ddragon) is designed with injectable `deps`/`transport` params specifically so its retry/taint/classification logic can be unit-tested without a network call — follow that pattern for new integrations rather than reaching for a mocking library.
+
+## Hard-won gotchas
+
+**(a) Neon HTTP driver + Next's patched `fetch` — cache:"no-store" is load-bearing.** On Vercel, Next.js patches the global `fetch` with a Data-Cache-aware version, and the `@neondatabase/serverless` driver's query POSTs go through it like any other fetch call. This caused a real P0 (v0.15.1): a `{rows:[]}` response cached while `prostage_matches` was still mid-backfill kept being replayed for the exact (query bytes + params) cache key **across deployments**, while byte-different variants of the same query (different `limit`, etc.) returned live rows — so pro-play intermittently showed "no games" for some (champion, limit) combos. Fix in `lib/pro/db.ts`: `neon(url, { fetchOptions: { cache: "no-store" } })`. Never remove this — any future driver/client re-init must keep it.
+
+**(b) Never CDN-cache an empty API response.** Same incident class as (a): `app/api/pros/route.ts` sets `Cache-Control: no-store` when `games.length === 0` and only lets non-empty responses earn the long `s-maxage=1800`. An empty result cached at the edge would pin "No games" on users for 30-60 minutes, amplifying any transient upstream/DB glitch into a visible outage. Apply the same rule to any new route serving possibly-sparse data.
+
+**(c) Leaguepedia (lol.fandom.com) rate limiting.** The `api.php` `action=cargoquery` endpoint's anonymous rate limit is punishing — can trip after ONE call and stay sticky 3+ minutes — so every caller is serialized through one process-wide pacer (`lib/prostage/cargo.ts`, 30s floor) and a ratelimited response is retried at most once after a ~4.5min cooldown, never in a tight loop, and never silently coerced to `[]`. **Never run two concurrent Leaguepedia consumers** (script + route, or two scripts) — they'd fight over the same sticky limit. `Special:CargoExport` (a wiki page, not the api.php action) serves the same data with a much lighter limit (5s floor) and no retry contract, but Node's own fetch gets Cloudflare-403'd against it in this environment (a TLS/JA3-fingerprint-level block, not a header problem) — the script path (`scripts/ingest-prostage.mjs --via-export`) shells out to curl instead (`scripts/_curl-transport.mjs`); the prod route stays on api.php since a serverless function can't shell out. Field values from Cargo use a space/underscore quirk in both directions (`cargoField()` in `cargo.ts` handles it) — expect this when adding new fields.
+
+**(d) Riot API key budget is shared across every process that calls it.** `lib/pro/pacer.ts` serializes ALL Riot calls (roster ingest, match ingest, targeted `ingest-player.mjs` runs, audits) through one process-wide 1.3s-interval queue — but that's only within a single process. Running two ingest processes concurrently (e.g. the cron route firing while a local backfill script is also mid-run) will contend for the same 20/s-and-100/2min key budget. Don't parallelize Riot-calling scripts.
+
+**(e) Rune icon special cases.** Two rune ids have stale/wrong `Icon` paths in coachless's bundled rune-translations JSON and 403 if trusted verbatim: Deathfire Touch (`8992`) and Stormraider's Surge (`8230`, the reworked/renamed Phase Rush keystone — same id, changed asset filename). Both are special-cased with a hardcoded icon path in `lib/staticData.ts` (`runeIconUrl`) AND independently in `components/proAssets.ts` (`resolveRuneDisplay`) — these two modules deliberately don't share code (see module header comments), so a third such rename needs updating in **both** places. `IconWithFallback` (`components/IconWithFallback.tsx`) is the generic safety net for any icon URL that 403s/404s for any other reason — it swaps to a lettered placeholder tile instead of leaving an invisible gap, and should wrap every icon `<img>` in new UI.
+
+**(f) Rune tooltip numbers come from CommunityDragon, not ddragon.** ddragon's `runesReforged.json` `shortDesc`/`longDesc` never resolve their `@Variable@` templates for many runes (e.g. Unflinching's shortDesc has no numbers, ever). `components/runeDetail.ts` fetches CommunityDragon's `perks.json` instead (`raw.communitydragon.org/latest/...`, serves "latest" only — not patch-keyed) and strips its tooltip HTML to plain text. Client-cached in localStorage with a **10-day TTL** (`isFreshRuneCachePayload`) specifically so a returning user's rune numbers self-refresh across patch rebalances instead of going stale forever (CDragon has no per-patch version to key off). Item tooltip numbers, by contrast, come from the coachless items bundle directly and don't need this treatment.
+
+**(g) `purchaseOrder[].ts` (and prostage item-timeline `ts`) is SECONDS into the game, not milliseconds.** Riot's raw timeline timestamps are ms; `lib/pro/extract.ts` converts. This was a deliberate contract choice (the spec didn't pin a unit) made to match the frontend's already-built purchase-timeline UI (`formatMinuteStamp(sec)`). Keep both producers (`lib/pro/extract.ts` for soloq, `lib/prostage/timeline.ts`'s `atSec` for prostage) in seconds if you touch either.
+
+**(h) prostage rows have structural gaps soloq rows don't, by upstream design.** `gameDurationSec` is always `0` and `purchaseOrder`/`skillOrder` are always `[]` for `source: "prostage"` — Leaguepedia's Cargo tables don't expose game length or per-ability skill-order data for on-stage games (build order for these instead comes separately from the lolesports livestats reconstruction, see `resolveGame.ts`). `role` can be the `-1` "unresolved" sentinel when Leaguepedia's free-text `Role` column doesn't match `lib/prostage/roleMap.ts`'s known vocabulary — **this must never cause a row to be dropped** (`app/api/pros/route.ts`'s `prostageRowToProGame` fixed a real bug where an unresolved role silently blackholed every such row from EVERY query, including the no-filter role=5 path, behind a clean-looking ingest log). A concrete lane filter (role 0-4) correctly excludes `-1` rows at the SQL level; only the all-lanes path surfaces them.
+
+**(i) Don't run two `next build`/`next dev` processes against one checkout.** An orphaned background `next dev` process locks `.next/trace`, which then `EPERM`s a subsequent `npm run build` in the same checkout (matches the general Next.js gotcha, not specific to this repo). If a build hangs or fails with a trace/lock error, check for a stray `next dev`/`next build` process before assuming a code problem — kill it, confirm the port/lock is free, then rebuild. `scripts/ingest-player.mjs` (Gotcha (i) header note above is (d), this is a separate build-tooling caution) has no transient-retry wrapper of its own — a mid-run network blip just fails the whole invocation (P2, see HANDOFF known items).
+
+## Environment
+
+`DATABASE_URL` (Neon, `coachbuild` schema on a **shared instance — never touch `public` or any other schema**), `RIOT_API_KEY`, `CRON_SECRET`. The app degrades to a friendly empty state without any of these (Pro's page shows no games; ingest/cron routes 503 via `DbUnavailableError`/`RiotUnavailableError`); the Builds page needs none of them (coachless.gg + ddragon/CDN are keyless).
+
+## Deploy
+
+`npx vercel --prod --archive=tgz` (plain upload stalls headless, per the personal-account deploy recipe). Commit author must be `harout_b5@live.com` (Vercel blocks work-email-authored commits). No separate worker/infra component — the whole app is one Next.js deployment plus two Vercel crons.

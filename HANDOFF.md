@@ -1,3 +1,22 @@
+## Current state — 2026-07-11 (v0.16.0)
+
+**Shipped and live:** v0.16.0 is deployed at coachbuild.vercel.app. Rated 20/20 as of v0.14.1 (all 4 findings from the anchored review fixed that release); nothing since has regressed it structurally, but the score hasn't been re-verified against 0.15.0/0.15.1/0.16.0's changes. 342/342 vitest tests green across 27 files (`npx vitest run`), confirmed clean at doc-sync time (2026-07-11) with zero code changes.
+
+**Backfills — all complete.** Team comps (`ally_champion_ids`/`enemy_champion_ids`, migration 0006): 1134/1134 solo-queue games role-ordered (Top→Jungle→Mid→Bot→Support); pro-play comps ordered from tracked roles at read-time (no backfill table needed there — computed per-response in `app/api/pros/route.ts`). Pro-play item-build timelines (migration 0005, `scripts/backfill-prostage-timelines.mjs`): essentially all tournaments walked. Game stats (migration 0004, cs/damage/team_kills/gold): backfilled for the CoachBuild-Score-era rows (score itself was later removed per user preference, v0.9.0, but the underlying columns/backfill stay — data keeps accumulating unused).
+
+**In flight:** nothing. No open implementation work, no mid-ship state.
+
+**Known open items, roughly by priority:**
+- **Cross-project P1 (untriaged):** matchday should be audited for the SAME Neon-HTTP-driver + Next-patched-fetch caching landmine that caused coachbuild's v0.15.1 P0 (see `CLAUDE.md` Gotcha (a)) — if matchday's DB layer (if any) uses the same `@neondatabase/serverless` pattern without `fetchOptions: { cache: "no-store" }`, it's exposed to the identical cached-empty-result-replay bug. Nobody has checked yet.
+- **Cleanup, no functional impact:** `scripts/_probe.mjs` is a one-line scratch stub (`// scratch probe file, reused across sessions — intentionally empty between uses`), intentionally tracked in git rather than deleted because a prior session's safety gate blocked `rm` on it mid-ship. Harmless, but worth batching into a housekeeping pass along with any other stray scratch files.
+- **Disk cleanup, pending user approval:** `AI/coachbuild-debugwt/` is a temporary git worktree still on disk (confirmed present 2026-07-11) from an earlier debug session. It contains a copy of `.env.local` (real `DATABASE_URL`/`RIOT_API_KEY`/`CRON_SECRET`) — do not just `rm -rf` it without the user approving, both for the safety-gate protocol and because it's a credential-bearing directory, not just scratch code. Safe to remove once approved.
+- **P2 — CargoExport >500-row tournament truncation:** `lib/prostage/cargo.ts`'s `cargoExportQuery` (and `cargoQuery`) default to `limit: 500` with no pagination. A tournament with more than 500 `ScoreboardPlayers` rows (a long best-of-series playoff bracket, a full-season league page) would silently truncate rather than page through. Not yet hit in practice (no known tournament has tripped it) but the query layer has no defense if one does.
+- **P2 — `scripts/ingest-player.mjs` has no transient-retry wrapper.** It calls `ingestOneAccount` directly per account and exits 1 on the first thrown error (a network blip, a transient Riot 5xx) rather than retrying — unlike the pacer/cargo layers underneath it, which do have retry/backoff built in for their own call-level failures. A flaky run currently means re-invoking the script by hand.
+
+**Not open items (verified during this doc pass, noting so they don't get re-litigated):** the Neon no-store fix (Gotcha a) and the empty-response no-cache fix (Gotcha b) are both confirmed present in the current `lib/pro/db.ts` and `app/api/pros/route.ts` — these were the two P0/near-P0 fixes in 0.15.1 and both are still in place, not regressed by 0.16.0's favorite-champions change (which only touched `lib/favorites.ts` + `components/`).
+
+---
+
 ## Latest dispatch -- 2026-06-14 12:42
 
 > ⚠️ DELIVERABLE WARNINGS for fronty
@@ -2999,5 +3018,36 @@ stays on the `withFavorites=false` default, unchanged behavior/markup).
 - **Fleet-wide landmine:** any other Next-on-Vercel app using `@neondatabase/serverless` without `fetchOptions: { cache: "no-store" }` (or equivalent) has the same latent bug — matchday is the obvious one to audit.
 - The intermediate debug deployments (with CRON_SECRET-gated diagnostics) are inert but still listed in `vercel ls`; current prod alias points at the clean build.
 - `scripts/_probe.mjs` (untracked) is not mine — presumably the favorites agent's scratch.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-11 14:23
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-10 17:00:48Z; previous content preserved there. Append new rounds below. -->
+
+## Summary
+
+Documentation sync for coachbuild v0.16.0 — no code changes, no version bump, no deploy, per brief. Read the real code (not just HANDOFF/CHANGELOG claims) before writing every gotcha and contract note. Produced two new docs and prepended a fresh state section to the existing HANDOFF.md.
+
+## Files Touched
+
+- `CLAUDE.md` (new) — technical reference: stack, the two surfaces (Builds via `lib/staticData.ts`/`lib/recommend.ts`; Pro's via `lib/pro/**` soloq + `lib/prostage/**` pro-play), full `lib/`/`migrations/`/`scripts/` map, the `lib/pro/types.ts` API contract (`ProGame`/`ProsResponse`/`Player`), the Bearer-`CRON_SECRET` ingest auth model, test conventions (vitest pure-function-only, `.ts` not `.tsx` component tests), and a 9-item hard-won gotchas section (a-i): Neon `cache:"no-store"` (verified live in `lib/pro/db.ts`, matches the v0.15.1 P0 comment verbatim), never-cache-empty-responses (verified in `app/api/pros/route.ts`'s `Cache-Control` logic), Leaguepedia rate-limit + CargoExport/curl transport (verified in `lib/prostage/cargo.ts`), Riot key budget shared per-process (verified in `lib/pro/pacer.ts`/`riot.ts`), the two rune-icon special cases 8992/8230 (verified in both `lib/staticData.ts` AND `components/proAssets.ts` — confirmed they're independently maintained, not shared), CommunityDragon rune-tooltip sourcing + 10-day TTL (verified in `components/runeDetail.ts`), purchaseOrder `ts` is SECONDS (verified in `lib/pro/extract.ts`'s comment), prostage's structural gaps + the role -1 sentinel fix (verified in `lib/pro/types.ts` + `app/api/pros/route.ts`'s `prostageRowToProGame`), and the general concurrent-next-build `.next`/trace lock caution (this one is a general Next.js operational note, not a coachbuild-specific citation I could find in HANDOFF.md — flagged as such in the text rather than overclaiming a specific incident).
+- `FEATURES.md` (new) — product documentation for both surfaces (Builds, Pro's), organized as CURRENT state first, then a compressed "what shipped, by release" walk of CHANGELOG.md 0.1.0→0.16.0 for context. Verified the a11y/UI claims (focus trap, tab-order, skill-grid contrast fix, real-name aria-labels, role-ordered comp strips) directly against `components/GameDetailSheet.tsx` and `components/ProHistoryResults.tsx` rather than transcribing CHANGELOG prose.
+- `HANDOFF.md` — prepended `## Current state — 2026-07-11 (v0.16.0)` at the top via `cat prepend.md HANDOFF.md > HANDOFF.md.new && mv`, since the file is 269KB (over the Read tool's 256KB cap) and I didn't want to truncate it by reading+rewriting through the Edit/Write tools. Verified the prepend by `head`/`wc -l`: original 3003 lines → 3022 lines, existing content starts intact right after the new section's `---` separator (`## Latest dispatch -- 2026-06-14 12:42` is still the next line). Section covers: shipped/live state, backfill completion status, in-flight (none), 4 known open items ranked by priority (matchday cross-project P1, `_probe.mjs` stub, `coachbuild-debugwt/` worktree pending rm approval, CargoExport 500-row truncation P2, `ingest-player.mjs` no-retry P2), and an explicit "verified NOT open" note for the two v0.15.1 fixes (checked they're still in the code, not regressed by 0.16.0).
+
+## Tests
+
+`npx vitest run` — 342/342 passing, 27/27 files, both before touching anything (baseline) and again after all three docs were written (confirms zero code was touched). No `.ts`/`.tsx` file was edited this session — only `CLAUDE.md`, `FEATURES.md`, `HANDOFF.md` (docs).
+
+## Known Issues
+
+- Couldn't find a coachbuild-specific citation for "two concurrent `next build`s corrupt `.next`" in HANDOFF.md — the closest hit was an orphaned `next dev` process locking `.next/trace` (EPERM on a subsequent build), which I used as the basis for gotcha (i) instead, phrased generically rather than inventing a specific incident that didn't happen here.
+- Did not independently re-verify the "20/20 at v0.14.1" rating claim beyond what CHANGELOG.md already states — noted in the new HANDOFF section that it hasn't been re-checked against 0.15.0/0.15.1/0.16.0's changes, since re-running that audit was out of scope for a docs-only pass.
+- Confirmed `AI/coachbuild-debugwt/` exists on disk (`test -d` succeeded) but did not open it or read its `.env.local` copy — out of scope, and it's a credential-bearing directory the brief said is pending user-approved removal.
 
 
