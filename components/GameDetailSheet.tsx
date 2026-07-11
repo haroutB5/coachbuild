@@ -35,6 +35,7 @@ import EntityDetailPopover, { type EntityKind } from "./EntityDetailPopover";
 import { getItemNameMap } from "./itemDetail";
 import { buildSkillOrderGrid, SKILL_ROWS, SKILL_GRID_COLUMNS, type SkillLetter } from "./skillOrderGrid";
 import { useProstageTimeline } from "./prostageTimeline";
+import { useTeamPlayers } from "./teamPlayers";
 import { trapTabKey } from "./focusTrap";
 
 // Delay before actually unmounting after close — must be >= the longest
@@ -86,6 +87,7 @@ function RunePerkTile({
   }, [runeId, ver]);
 
   const dim = size === "lg" ? "w-14 h-14" : "w-9 h-9";
+  const pxSize = size === "lg" ? 56 : 36;
   const ring =
     size === "lg"
       ? "border-2 border-teal shadow-[0_0_12px_rgba(130,219,247,0.35)]"
@@ -102,7 +104,7 @@ function RunePerkTile({
       <div
         className={`${dim} ${ring} rounded-full bg-black/30 overflow-hidden flex items-center justify-center flex-shrink-0`}
       >
-        <IconWithFallback src={rune?.icon ?? ""} alt={label} fallbackGlyph={label} className="w-full h-full object-contain" />
+        <IconWithFallback src={rune?.icon ?? ""} alt={label} fallbackGlyph={label} className="w-full h-full object-contain" size={pxSize} />
       </div>
       <span className="text-[9.5px] text-mut text-center leading-tight line-clamp-2">{label}</span>
     </button>
@@ -111,6 +113,7 @@ function RunePerkTile({
 
 function TreeTile({ treeId, size }: { treeId: number; size: "lg" | "sm" }) {
   const dim = size === "lg" ? "w-10 h-10" : "w-8 h-8";
+  const pxSize = size === "lg" ? 40 : 32;
   return (
     <div className="flex flex-col items-center gap-1 w-16 flex-shrink-0">
       <div className={`${dim} rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0`}>
@@ -119,6 +122,7 @@ function TreeTile({ treeId, size }: { treeId: number; size: "lg" | "sm" }) {
           alt={treeName(treeId)}
           fallbackGlyph={treeName(treeId)}
           className="w-full h-full object-contain p-1.5"
+          size={pxSize}
         />
       </div>
       <span className="text-[9.5px] text-teal text-center leading-tight">{treeName(treeId)}</span>
@@ -272,7 +276,7 @@ function ItemBuildOrderSection({
                         className="p-[3px] -m-[3px] flex-shrink-0 rounded-[8px] block leading-none transition-transform active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
                       >
                         <span className="w-7 h-7 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center transition-colors hover:border-teal-dim">
-                          <IconWithFallback src={itemIconUrl(p.itemId, ver)} alt={label} className="w-full h-full object-contain" />
+                          <IconWithFallback src={itemIconUrl(p.itemId, ver)} alt={label} className="w-full h-full object-contain" size={28} />
                         </span>
                       </button>
                     );
@@ -438,6 +442,18 @@ export default function GameDetailSheet({
   const hasAnyRunes = game.runes.keystone > 0 || hasFullRunes || game.runes.shards.length > 0;
 
   const skillGrid = buildSkillOrderGrid(game.skillOrder);
+
+  // Per-player Teams-box roster — fetched separately from GET
+  // /api/pros/team-players once the sheet opens (engy's concurrent contract
+  // change moved allyPlayers/enemyPlayers off GET /api/pros so a card list's
+  // initial fetch doesn't carry full 10-player rosters for every game). An
+  // "error" degrades exactly like "unavailable" (undefined players) — the
+  // Teams boxes fall back to the icon-only roster strip rather than getting
+  // stuck on a loading skeleton.
+  const teamPlayersState = useTeamPlayers(game, open);
+  const teamPlayersLoading = teamPlayersState.status === "loading";
+  const allyPlayers = teamPlayersState.status === "ok" ? teamPlayersState.allyPlayers ?? undefined : undefined;
+  const enemyPlayers = teamPlayersState.status === "ok" ? teamPlayersState.enemyPlayers ?? undefined : undefined;
 
   // Fetch the sheet's item name map only once it actually opens (this
   // component is always mounted per-card with `open` toggling visibility —
@@ -625,6 +641,7 @@ export default function GameDetailSheet({
                 alt={championDisplayName ?? game.championName}
                 fallbackGlyph={championDisplayName ?? game.championName}
                 className="w-full h-full object-cover"
+                size={48}
               />
             </span>
           )}
@@ -688,8 +705,9 @@ export default function GameDetailSheet({
           <SheetTeamsSection
             allyChampionIds={game.allyChampionIds}
             enemyChampionIds={game.enemyChampionIds}
-            allyPlayers={game.allyPlayers}
-            enemyPlayers={game.enemyPlayers}
+            allyPlayers={allyPlayers}
+            enemyPlayers={enemyPlayers}
+            teamPlayersLoading={teamPlayersLoading}
             selfChampionId={game.championId}
             win={game.win}
             trackedPlayerTeam={game.player.team}
@@ -742,6 +760,7 @@ export default function GameDetailSheet({
                             alt={shardName(id)}
                             fallbackGlyph={shardName(id)}
                             className="w-full h-full object-contain p-1"
+                            size={28}
                           />
                         </div>
                         <span className="text-[9.5px] text-mut text-center leading-tight">{shardName(id)}</span>
@@ -774,6 +793,7 @@ export default function GameDetailSheet({
                             alt={spellName(id)}
                             fallbackGlyph={spellName(id)}
                             className="w-full h-full object-contain"
+                            size={40}
                           />
                         </div>
                         <span className="text-[10px] text-mut">{spellName(id)}</span>
@@ -799,7 +819,7 @@ export default function GameDetailSheet({
                     title={label}
                     className="w-11 h-11 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform hover:border-teal-dim active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
                   >
-                    <IconWithFallback src={itemIconUrl(id, ver)} alt={label} className="w-full h-full object-contain" />
+                    <IconWithFallback src={itemIconUrl(id, ver)} alt={label} className="w-full h-full object-contain" size={44} />
                   </button>
                 );
               })}
@@ -816,6 +836,7 @@ export default function GameDetailSheet({
                     alt={itemNames?.get(trinketId) ?? "Trinket"}
                     fallbackGlyph="Trinket"
                     className="w-full h-full object-contain"
+                    size={44}
                   />
                 </button>
               )}

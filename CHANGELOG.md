@@ -2,6 +2,14 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.19.0] — 2026-07-11
+### Changed
+Performance release, driven by a measured audit (the Builds page measured excellent and was untouched):
+- **Images lazy-load** across the Pro's page — selecting a player no longer decodes 400+ icons at once (initial requests 414 → 117); all icons carry explicit dimensions so layout never waits on them.
+- **Game list payload cut ~53%**: per-player team builds now load on demand when a game's detail sheet opens (new team-players endpoint, day-long cache), instead of shipping with every list.
+- **Icons cache on-device**: the icon CDN sends no cache headers, so the service worker now serves repeat visits from a local cache (measured 364ms → 2.4ms per icon).
+- Combined-sources game queries overlap their database round-trips (faster first view).
+
 ## [0.18.1] — 2026-07-11
 ### Fixed
 - Sheet/card header identity line no longer shows the raw team suffix ("Saint — LYON", not "Saint — LYON (2024 American Team)") — the last uncleaned team field.

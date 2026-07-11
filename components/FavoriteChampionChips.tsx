@@ -91,6 +91,7 @@ export default function FavoriteChampionChips({ onSelect }: FavoriteChampionChip
                 src={icon}
                 alt={c.name}
                 className="w-5 h-5 rounded-sm object-cover flex-shrink-0"
+                size={20}
               />
               <span className="truncate max-w-[100px]">{c.name}</span>
             </button>

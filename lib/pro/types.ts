@@ -1,7 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // lib/pro/types.ts — Phase 1 pro-match-history types.
-// THE CONTRACT for GET /api/pros lives on ProGame/ProsResponse — fronty builds
-// against this exactly. Do not diverge without updating both sides.
+// THE CONTRACT for GET /api/pros lives on ProGame/ProsResponse, and for
+// GET /api/pros/team-players on TeamPlayersResponse — fronty builds against
+// these exactly. Do not diverge without updating both sides.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** 0=TOP 1=JUNGLE 2=MIDDLE 3=BOTTOM 4=UTILITY — same numbering as app RoleId,
@@ -117,21 +118,24 @@ export interface ProGame {
    *  via lib/prostage/displayName.ts's cleanLeaguepediaName(). */
   allyTeamName?: string | null;
   enemyTeamName?: string | null;
-  /** Per-player team data (added 2026-07-11) — full per-slot detail so the
-   *  frontend sheet can render each player's items, not just a champ-icon
-   *  strip. Same both-or-neither / 5-or-omit / role-ordered contract as
-   *  allyChampionIds/enemyChampionIds above (index 0=Top..4=Support, degrades
-   *  to source order on a non-5-distinct-role side) — producers share the
-   *  SAME ordering helper (orderByRole in lib/pro/extract.ts) so the two
-   *  arrays are never out of sync with each other for a given row.
-   *  allyPlayers[i] and allyChampionIds[i] always describe the same slot.
-   *  name is the display name when resolvable: soloq uses the Riot match's
-   *  riotIdGameName (falls back to summonerName, then null — summonerName is
-   *  frequently "" post-privacy-change, see lib/pro/extract.ts); prostage uses
-   *  the tracked pros.name when that row links to a known pro, else the raw
-   *  Leaguepedia player_link. */
-  allyPlayers?: TeamCompPlayer[];
-  enemyPlayers?: TeamCompPlayer[];
+}
+
+/** THE CONTRACT — GET /api/pros/team-players response shape (added
+ *  2026-07-11, moved off the GET /api/pros list response as a P1 perf fix:
+ *  allyPlayers+enemyPlayers were 23.5kB of a 44.7kB list payload, consumed
+ *  ONLY by the game-detail sheet on open). Fetched on demand, one game at a
+ *  time, when the sheet opens:
+ *    soloq:    ?source=soloq&gameId=<matchId>&championId=<n>
+ *    prostage: ?source=prostage&gameId=<game_id>&player=<player_link>
+ *  200 {allyPlayers:[...5], enemyPlayers:[...5]} — same TeamCompPlayer shape
+ *  as before, role-ordered, cleaned names, proId. Both-or-neither.
+ *  200 {allyPlayers:null, enemyPlayers:null} when unavailable (no row / no
+ *  clean 5v5 split) — never a partial side. 400 on bad params, 500 on error.
+ *  Cacheable long-term once non-null (the underlying match/game data is
+ *  immutable once backfilled) — see app/api/pros/team-players/route.ts. */
+export interface TeamPlayersResponse {
+  allyPlayers: TeamCompPlayer[] | null;
+  enemyPlayers: TeamCompPlayer[] | null;
 }
 
 export interface TeamCompPlayer {

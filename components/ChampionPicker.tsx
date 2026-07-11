@@ -135,7 +135,7 @@ export default function ChampionPicker({ value, onChange, withFavorites = false 
       <div className="relative flex items-center min-w-[200px]">
         {value && (
           <span className="absolute left-2.5 top-1/2 -translate-y-1/2 flex items-center pointer-events-none">
-            <ChampIcon icon={value.icon} name={value.name} size={22} />
+            <ChampIcon icon={value.icon} name={value.name} size={22} eager />
           </span>
         )}
         <input
@@ -221,7 +221,21 @@ export default function ChampionPicker({ value, onChange, withFavorites = false 
   );
 }
 
-function ChampIcon({ icon, name, size }: { icon: string; name: string; size: number }) {
+function ChampIcon({
+  icon,
+  name,
+  size,
+  eager,
+}: {
+  icon: string;
+  name: string;
+  size: number;
+  /** The combobox's own selected-value crest is always visible the instant
+   *  this component mounts (it sits inline in the input, never off-screen) —
+   *  lazy-loading it would just delay showing something already on screen,
+   *  so it opts out of the dropdown rows' default lazy behavior. */
+  eager?: boolean;
+}) {
   return (
     <span
       className="flex-shrink-0 rounded-md overflow-hidden bg-black/20"
@@ -232,6 +246,8 @@ function ChampIcon({ icon, name, size }: { icon: string; name: string; size: num
         alt={name}
         width={size}
         height={size}
+        loading={eager ? "eager" : "lazy"}
+        decoding="async"
         className="w-full h-full object-cover"
         onError={(e) => {
           (e.currentTarget as HTMLImageElement).style.display = "none";

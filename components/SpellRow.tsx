@@ -8,12 +8,26 @@ interface SpellRowProps {
   spells: Pick[];
 }
 
-function ImgWithFallback({ src, alt, className }: { src: string; alt: string; className?: string }) {
+function ImgWithFallback({
+  src,
+  alt,
+  className,
+  size,
+}: {
+  src: string;
+  alt: string;
+  className?: string;
+  size?: number;
+}) {
   return (
     <img
       src={src}
       alt={alt}
       className={className}
+      width={size}
+      height={size}
+      loading="lazy"
+      decoding="async"
       onError={(e) => {
         (e.currentTarget as HTMLImageElement).style.display = "none";
       }}
@@ -39,6 +53,7 @@ export default function SpellRow({ spells }: SpellRowProps) {
                 src={spell.icon}
                 alt={spell.name}
                 className="w-full h-full object-contain"
+                size={36}
               />
             </div>
             <div>

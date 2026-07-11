@@ -10,6 +10,14 @@ interface IconWithFallbackProps {
    *  name) — falls back to `alt` when omitted. Only the first character is
    *  used. */
   fallbackGlyph?: string;
+  /** Intrinsic pixel size (both width and height — every icon here is a
+   *  square box) for the `<img>`'s `width`/`height` attributes. Callers know
+   *  their own fixed-size box (e.g. a `w-7 h-7` container -> `size={28}`) —
+   *  measured perf audit (v0.18.1, /history) found 0 of 414 icon `<img>`s had
+   *  these, so the browser couldn't reserve layout space before decode.
+   *  Optional so existing callers keep compiling; new/touched call sites
+   *  should always pass it. */
+  size?: number;
 }
 
 /**
@@ -21,7 +29,7 @@ interface IconWithFallbackProps {
  * a failure is always visible. Used in GameDetailSheet + the detail popovers,
  * and both ImgWithFallback wrappers (ProGameCard, RunePage) delegate here.
  */
-export function IconWithFallback({ src, alt, className, fallbackGlyph }: IconWithFallbackProps) {
+export function IconWithFallback({ src, alt, className, fallbackGlyph, size }: IconWithFallbackProps) {
   const [failed, setFailed] = useState(false);
 
   // Reset on every `src` change — this component's callers reuse the same
@@ -52,6 +60,10 @@ export function IconWithFallback({ src, alt, className, fallbackGlyph }: IconWit
       src={src}
       alt={alt}
       className={className}
+      width={size}
+      height={size}
+      loading="lazy"
+      decoding="async"
       onError={() => setFailed(true)}
     />
   );

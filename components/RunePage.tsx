@@ -22,12 +22,14 @@ function ImgWithFallback({
   src,
   alt,
   className,
+  size,
 }: {
   src: string;
   alt: string;
   className?: string;
+  size?: number;
 }) {
-  return <IconWithFallback src={src} alt={alt} className={className} />;
+  return <IconWithFallback src={src} alt={alt} className={className} size={size} />;
 }
 
 interface RuneTileProps {
@@ -42,6 +44,7 @@ function RuneTile({ pick, isKeystone, isSmall }: RuneTileProps) {
     : isSmall
     ? "w-10 h-10 border border-line"
     : "w-13 h-13 border border-line";
+  const pxSize = isKeystone ? 64 : isSmall ? 40 : 52;
 
   const tileWidth = isKeystone ? "w-20" : isSmall ? "w-16" : "w-20";
   // Headline keystone with a negative WPA (e.g. Jhin's Fleet Footwork, -0.10 /
@@ -61,6 +64,7 @@ function RuneTile({ pick, isKeystone, isSmall }: RuneTileProps) {
           src={pick.icon}
           alt={pick.name}
           className={`object-contain ${isKeystone ? "w-[108%] h-[108%]" : "w-full h-full"}`}
+          size={pxSize}
         />
       </div>
       <div className="text-[10.5px] text-txt mt-1.5 leading-tight min-h-[28px] flex items-center justify-center">
@@ -95,7 +99,7 @@ function ShardTile({ label, pick }: ShardTileProps) {
       title={`${pick.name} | WPA: ${wpaText(pick.wpa)} | ${fmtSample(pick.occurrence)} picks`}
     >
       <div className="w-10 h-10 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center transition-transform group-hover:scale-105">
-        <ImgWithFallback src={pick.icon} alt={pick.name} className="w-full h-full object-contain" />
+        <ImgWithFallback src={pick.icon} alt={pick.name} className="w-full h-full object-contain" size={40} />
       </div>
       <div className="text-[10px] text-mut mt-1 leading-tight">{label}</div>
       <AnimatedWpa wpa={pick.wpa} className="font-extrabold text-[11.5px]" />
@@ -112,7 +116,7 @@ interface TreeHeadProps {
 function TreeHead({ icon, name, label }: TreeHeadProps) {
   return (
     <div className="flex items-center gap-2 mb-3">
-      <ImgWithFallback src={icon} alt={name} className="w-6 h-6 flex-shrink-0" />
+      <ImgWithFallback src={icon} alt={name} className="w-6 h-6 flex-shrink-0" size={24} />
       <span className="font-bold text-sm text-txt">{name}</span>
       <span className="text-[11.5px] text-mut">{label}</span>
     </div>

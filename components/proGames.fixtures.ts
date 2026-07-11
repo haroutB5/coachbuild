@@ -5,6 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { ProGame } from "./proGames.types";
+import type { TeamPlayersResponse } from "./teamPlayers";
 
 const now = Date.now();
 const hoursAgo = (h: number) => new Date(now - h * 60 * 60 * 1000).toISOString();
@@ -57,26 +58,6 @@ export const FIXTURE_GAME_WIN: ProGame = {
   // highlight against a full 5-a-side roster.
   allyChampionIds: [112, 64, 555, 104, 43], // Viktor, Lee Sin, Pyke, Graves, Karma
   enemyChampionIds: [238, 875, 887, 51, 40], // Zed, Sett, Gwen, Caitlyn, Janna
-  // Per-player roster detail — engy's concurrent contract addition. `role`
-  // fields are deliberately NOT index-matched (e.g. index 0/Viktor carries
-  // role 2, not 0) to exercise TeamComp's "prefer the role field over
-  // position" rule. One null trinket (index 2) and one null name (index 2)
-  // exercise their own degrade paths (no trinket icon rendered; name cell
-  // omitted rather than falling back to the champion name).
-  allyPlayers: [
-    { championId: 112, name: "Caps", items: [6653, 3020, 3157, 3089], trinket: 3364, role: 2 },
-    { championId: 64, name: "Yike", items: [3078, 3071, 3053], trinket: 3364, role: 1 },
-    { championId: 555, name: null, items: [3814, 6693, 3153], trinket: null, role: 4 },
-    { championId: 104, name: "Flakked", items: [6673, 3031, 3072, 3006], trinket: 3363, role: 3 },
-    { championId: 43, name: "Targamas", items: [3853, 3011, 3222], trinket: 3364, role: 0 },
-  ],
-  enemyPlayers: [
-    { championId: 238, name: "Razork", items: [6701, 3142, 3814], trinket: 3340, role: 1 },
-    { championId: 875, name: "Erberk", items: [3078, 3053, 3071, 3111], trinket: 3364, role: 0 },
-    { championId: 887, name: "Larssen", items: [3020, 3157, 3089], trinket: 3364, role: 2 },
-    { championId: 51, name: null, items: [3072, 3031, 3006, 3033], trinket: 3363, role: 3 },
-    { championId: 40, name: "Mikyx", items: [3222, 3011, 3853], trinket: 3364, role: 4 },
-  ],
 };
 
 /** A loss — same champ, fewer final items (game ended early), different pro. */
@@ -208,26 +189,6 @@ export const FIXTURE_GAME_PROSTAGE_FULL: ProGame = {
   // fallback) plus the sheet-header/card matchup line ("T1 vs GEN").
   allyTeamName: "T1",
   enemyTeamName: "GEN",
-  // Prostage per-player detail. `proId` is set on two rows (one ally, one
-  // enemy) to exercise the Teams-box tap-to-view affordance; the rest are
-  // left null/undefined to exercise the "untracked slot, no affordance"
-  // degrade path on the SAME roster. One raw parenthetical name
-  // ("Kang Sung-in"-style) simulates a stale pre-cleanup cached API response,
-  // exercising the client-side cleanPlayerName() belt.
-  allyPlayers: [
-    { championId: 112, name: "Faker", items: [6653, 3020, 3157, 3089], trinket: 3364, role: 2, proId: "8f14e45f-ceea-4a9a-9c05-100000000001" },
-    { championId: 64, name: "Oner", items: [3078, 3071, 3053], trinket: 3364, role: 1 },
-    { championId: 555, name: "Zeus", items: [3814, 6693, 3153], trinket: 3364, role: 0 },
-    { championId: 104, name: "Gumayusi (Lee Min-hyeong)", items: [6673, 3031, 3072, 3006], trinket: 3363, role: 3, proId: "8f14e45f-ceea-4a9a-9c05-100000000002" },
-    { championId: 43, name: "Keria", items: [3853, 3011, 3222], trinket: 3364, role: 4 },
-  ],
-  enemyPlayers: [
-    { championId: 238, name: null, items: [6701, 3142, 3814], trinket: null, role: 1 },
-    { championId: 875, name: "Kingen", items: [3078, 3053, 3071, 3111], trinket: 3364, role: 0 },
-    { championId: 887, name: "Chovy", items: [3020, 3157, 3089], trinket: 3364, role: 2, proId: "8f14e45f-ceea-4a9a-9c05-100000000003" },
-    { championId: 51, name: "Peyz", items: [3072, 3031, 3006, 3033], trinket: 3363, role: 3 },
-    { championId: 40, name: "Delight", items: [3222, 3011, 3853], trinket: 3364, role: 4 },
-  ],
 };
 
 /** Prostage, keystone-only runes + unknown game length — exercises the
@@ -271,3 +232,57 @@ export const FIXTURE_PRO_GAMES: ProGame[] = [
   FIXTURE_GAME_PROSTAGE_FULL,
   FIXTURE_GAME_PROSTAGE_PARTIAL,
 ];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Team-players fixtures — GET /api/pros/team-players response shape (see
+// teamPlayers.ts), keyed by game id. Used to be inline on the FIXTURE_GAME_*
+// objects above until engy's concurrent contract change moved allyPlayers/
+// enemyPlayers off GET /api/pros and onto this dedicated endpoint (2026-07-11
+// perf fix — the sheet now fetches this only on open instead of every card's
+// initial /api/pros response carrying full 10-player rosters).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const FIXTURE_TEAM_PLAYERS: Record<string, TeamPlayersResponse> = {
+  // `role` fields are deliberately NOT index-matched (e.g. index 0/Viktor
+  // carries role 2, not 0) to exercise TeamComp's "prefer the role field over
+  // position" rule. One null trinket (index 2) and one null name (index 2)
+  // exercise their own degrade paths (no trinket icon rendered; name cell
+  // omitted rather than falling back to the champion name).
+  "fixture-win-1": {
+    allyPlayers: [
+      { championId: 112, name: "Caps", items: [6653, 3020, 3157, 3089], trinket: 3364, role: 2 },
+      { championId: 64, name: "Yike", items: [3078, 3071, 3053], trinket: 3364, role: 1 },
+      { championId: 555, name: null, items: [3814, 6693, 3153], trinket: null, role: 4 },
+      { championId: 104, name: "Flakked", items: [6673, 3031, 3072, 3006], trinket: 3363, role: 3 },
+      { championId: 43, name: "Targamas", items: [3853, 3011, 3222], trinket: 3364, role: 0 },
+    ],
+    enemyPlayers: [
+      { championId: 238, name: "Razork", items: [6701, 3142, 3814], trinket: 3340, role: 1 },
+      { championId: 875, name: "Erberk", items: [3078, 3053, 3071, 3111], trinket: 3364, role: 0 },
+      { championId: 887, name: "Larssen", items: [3020, 3157, 3089], trinket: 3364, role: 2 },
+      { championId: 51, name: null, items: [3072, 3031, 3006, 3033], trinket: 3363, role: 3 },
+      { championId: 40, name: "Mikyx", items: [3222, 3011, 3853], trinket: 3364, role: 4 },
+    ],
+  },
+  // `proId` set on two rows (one ally, one enemy) to exercise the Teams-box
+  // tap-to-view affordance; the rest are left null/undefined to exercise the
+  // "untracked slot, no affordance" degrade path on the SAME roster. One raw
+  // parenthetical name ("Kang Sung-in"-style) simulates a stale pre-cleanup
+  // cached API response, exercising the client-side cleanPlayerName() belt.
+  "fixture-prostage-full-1": {
+    allyPlayers: [
+      { championId: 112, name: "Faker", items: [6653, 3020, 3157, 3089], trinket: 3364, role: 2, proId: "8f14e45f-ceea-4a9a-9c05-100000000001" },
+      { championId: 64, name: "Oner", items: [3078, 3071, 3053], trinket: 3364, role: 1 },
+      { championId: 555, name: "Zeus", items: [3814, 6693, 3153], trinket: 3364, role: 0 },
+      { championId: 104, name: "Gumayusi (Lee Min-hyeong)", items: [6673, 3031, 3072, 3006], trinket: 3363, role: 3, proId: "8f14e45f-ceea-4a9a-9c05-100000000002" },
+      { championId: 43, name: "Keria", items: [3853, 3011, 3222], trinket: 3364, role: 4 },
+    ],
+    enemyPlayers: [
+      { championId: 238, name: null, items: [6701, 3142, 3814], trinket: null, role: 1 },
+      { championId: 875, name: "Kingen", items: [3078, 3053, 3071, 3111], trinket: 3364, role: 0 },
+      { championId: 887, name: "Chovy", items: [3020, 3157, 3089], trinket: 3364, role: 2, proId: "8f14e45f-ceea-4a9a-9c05-100000000003" },
+      { championId: 51, name: "Peyz", items: [3072, 3031, 3006, 3033], trinket: 3363, role: 3 },
+      { championId: 40, name: "Delight", items: [3222, 3011, 3853], trinket: 3364, role: 4 },
+    ],
+  },
+};

@@ -101,7 +101,7 @@ export default function EntityDetailPopover({ kind, id, ver, open, onClose }: En
           <div
             className={`w-12 h-12 ${iconShape} bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0`}
           >
-            <IconWithFallback src={icon} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" />
+            <IconWithFallback src={icon} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={48} />
           </div>
           <div className="min-w-0 flex-1 pt-0.5">
             <h3 className="text-[14px] font-bold text-txt leading-tight">{name}</h3>

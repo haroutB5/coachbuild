@@ -21,12 +21,14 @@ export function ImgWithFallback({
   src,
   alt,
   className,
+  size,
 }: {
   src: string;
   alt: string;
   className?: string;
+  size?: number;
 }) {
-  return <IconWithFallback src={src} alt={alt} className={className} />;
+  return <IconWithFallback src={src} alt={alt} className={className} size={size} />;
 }
 
 /** Compute a client-only relative-time string. This section only ever
@@ -87,6 +89,7 @@ export function RunePerkIcon({
   }, [runeId, ver]);
 
   const dim = size === "lg" ? "w-11 h-11" : size === "sm" ? "w-6 h-6" : "w-5 h-5";
+  const pxSize = size === "lg" ? 44 : size === "sm" ? 24 : 20;
   const ring =
     size === "lg"
       ? "border-2 border-teal shadow-[0_0_10px_rgba(130,219,247,0.3)]"
@@ -101,6 +104,7 @@ export function RunePerkIcon({
         src={rune?.icon ?? ""}
         alt={rune?.name ?? `Rune #${runeId}`}
         className="w-full h-full object-contain"
+        size={pxSize}
       />
     </div>
   );
@@ -204,6 +208,7 @@ export default function ProGameCard({
                   src={championIcon}
                   alt={championDisplayName ?? game.championName}
                   className="w-full h-full object-cover"
+                  size={28}
                 />
               </span>
             )}
@@ -250,6 +255,7 @@ export default function ProGameCard({
                         src={spellIconUrl(id, ver)}
                         alt={spellName(id)}
                         className="w-full h-full object-contain"
+                        size={20}
                       />
                     </div>
                   )
@@ -270,7 +276,7 @@ export default function ProGameCard({
                 className="w-7 h-7 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
                 title={`Item #${id}`}
               >
-                <ImgWithFallback src={itemIconUrl(id, ver)} alt={`Item #${id}`} className="w-full h-full object-contain" />
+                <ImgWithFallback src={itemIconUrl(id, ver)} alt={`Item #${id}`} className="w-full h-full object-contain" size={28} />
               </div>
             ))}
             {game.trinket && (
@@ -278,7 +284,7 @@ export default function ProGameCard({
                 className="w-7 h-7 rounded-full bg-black/30 border border-teal-dim overflow-hidden flex items-center justify-center flex-shrink-0"
                 title={`Trinket #${game.trinket}`}
               >
-                <ImgWithFallback src={itemIconUrl(game.trinket, ver)} alt="Trinket" className="w-full h-full object-contain" />
+                <ImgWithFallback src={itemIconUrl(game.trinket, ver)} alt="Trinket" className="w-full h-full object-contain" size={28} />
               </div>
             )}
           </div>

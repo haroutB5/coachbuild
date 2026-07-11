@@ -21,16 +21,22 @@ function ImgWithFallback({
   src,
   alt,
   className,
+  size,
 }: {
   src: string;
   alt: string;
   className?: string;
+  size?: number;
 }) {
   return (
     <img
       src={src}
       alt={alt}
       className={className}
+      width={size}
+      height={size}
+      loading="lazy"
+      decoding="async"
       onError={(e) => {
         (e.currentTarget as HTMLImageElement).style.display = "none";
       }}
@@ -63,6 +69,7 @@ function ItemSlot({ label, pick, isBoots, alts }: ItemSlotProps) {
           src={pick.icon}
           alt={pick.name}
           className="w-full h-full object-contain"
+          size={52}
         />
       </div>
       <div className="text-[10.5px] text-txt mt-1.5 leading-tight min-h-[28px] flex items-center justify-center">
@@ -91,6 +98,7 @@ function ItemSlot({ label, pick, isBoots, alts }: ItemSlotProps) {
                     src={a.icon}
                     alt={a.name}
                     className="w-full h-full object-contain"
+                    size={26}
                   />
                 </div>
                 <div className={`text-[8px] font-bold leading-tight tabular-nums ${wpaClass(a.wpa)}`}>

@@ -132,7 +132,7 @@ function MiniCompRow({
             }`}
             title={name}
           >
-            <IconWithFallback src={entry?.icon ?? ""} alt={name} className="w-full h-full object-cover" />
+            <IconWithFallback src={entry?.icon ?? ""} alt={name} className="w-full h-full object-cover" size={20} />
           </span>
         );
       })}
@@ -147,6 +147,16 @@ function MiniCompRow({
 interface SheetTeamsSectionProps extends TeamCompProps {
   allyPlayers?: TeamCompPlayer[];
   enemyPlayers?: TeamCompPlayer[];
+  /** True while GameDetailSheet's team-players fetch (GET
+   *  /api/pros/team-players, fired on sheet open) is in flight. Renders a
+   *  fixed-height skeleton sized to match the eventual 5-row player list
+   *  instead of the shorter icon-only LegacyRosterBody strip — upgrading
+   *  from the short strip straight to the tall row list would shift the
+   *  sections below it inside the sheet; skeleton-at-final-height avoids
+   *  that regardless of whether the shift would count against the page's
+   *  CLS metric (it's a post-interaction shift, likely exempt, but a visible
+   *  jump reads as janky either way). */
+  teamPlayersLoading: boolean;
   /** game.win — whose box gets the WIN chip is derived from this + which
    *  box the tracked player's champion is in (always ally, by contract). */
   win: boolean;
@@ -183,6 +193,7 @@ export function SheetTeamsSection({
   enemyChampionIds,
   allyPlayers,
   enemyPlayers,
+  teamPlayersLoading,
   selfChampionId,
   win,
   trackedPlayerTeam,
@@ -207,6 +218,7 @@ export function SheetTeamsSection({
           resultChip={showResult ? win : undefined}
           championIds={allyChampionIds}
           players={allyPlayers}
+          loading={teamPlayersLoading}
           selfChampionId={selfChampionId}
           iconMap={iconMap}
           ver={ver}
@@ -219,6 +231,7 @@ export function SheetTeamsSection({
           resultChip={showResult ? !win : undefined}
           championIds={enemyChampionIds}
           players={enemyPlayers}
+          loading={teamPlayersLoading}
           selfChampionId={null}
           iconMap={iconMap}
           ver={ver}
@@ -231,11 +244,43 @@ export function SheetTeamsSection({
   );
 }
 
+/** Fixed-height stand-in for one PlayerRow while the team-players fetch is in
+ *  flight — same icon size (28px)/padding/gap as the real row so the box's
+ *  total height doesn't change when the real rows swap in. */
+function PlayerRowSkeleton() {
+  return (
+    <div className="flex items-center gap-1.5 rounded-lg px-1.5 py-1" aria-hidden="true">
+      <span className="w-7 h-7 rounded-full bg-panel2 border border-line animate-pulse motion-reduce:animate-none flex-shrink-0" />
+      <span className="w-6 h-[8.5px] rounded-sm bg-panel2 animate-pulse motion-reduce:animate-none flex-shrink-0" />
+      <span className="h-[8.5px] flex-1 min-w-[36px] rounded-sm bg-panel2 animate-pulse motion-reduce:animate-none" />
+      <div className="flex items-center gap-1 flex-shrink-0 ml-auto">
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <span
+            key={i}
+            className="w-[23px] h-[23px] rounded-[5px] bg-panel2 border border-line animate-pulse motion-reduce:animate-none"
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TeamBoxSkeleton() {
+  return (
+    <div className="space-y-1.5">
+      {Array.from({ length: STANDARD_ROSTER_LENGTH }, (_, i) => (
+        <PlayerRowSkeleton key={i} />
+      ))}
+    </div>
+  );
+}
+
 function TeamBox({
   title,
   resultChip,
   championIds,
   players,
+  loading,
   selfChampionId,
   iconMap,
   ver,
@@ -248,6 +293,8 @@ function TeamBox({
   resultChip: boolean | undefined;
   championIds: number[];
   players: TeamCompPlayer[] | undefined;
+  /** See SheetTeamsSectionProps.teamPlayersLoading. */
+  loading: boolean;
   selfChampionId: number | null;
   iconMap: Map<number, ChampionIconEntry> | null;
   ver: string;
@@ -264,7 +311,9 @@ function TeamBox({
         <p className="text-[9.5px] uppercase tracking-[0.5px] text-mut truncate min-w-0">{title}</p>
         {resultChip !== undefined && <WinLossPill win={resultChip} />}
       </div>
-      {players && players.length === STANDARD_ROSTER_LENGTH ? (
+      {loading ? (
+        <TeamBoxSkeleton />
+      ) : players && players.length === STANDARD_ROSTER_LENGTH ? (
         <div className="space-y-1.5" role="group" aria-label={title}>
           {players.map((p, i) => (
             <PlayerRow
@@ -335,6 +384,7 @@ function LegacyRosterBody({
                 alt={name}
                 fallbackGlyph={name}
                 className="w-full h-full object-cover"
+                size={36}
               />
             </div>
             <span className="text-[9px] text-mut text-center leading-tight truncate w-full">{name}</span>
@@ -395,6 +445,7 @@ function PlayerRow({
           alt={champName}
           fallbackGlyph={champName}
           className="w-full h-full object-cover"
+          size={28}
         />
       </span>
       {roleAbbr && (
@@ -464,7 +515,7 @@ function PlayerRow({
               title={label}
               className="w-[23px] h-[23px] rounded-[5px] bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform active:scale-95 hover:border-teal-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-1 focus-visible:ring-offset-panel"
             >
-              <IconWithFallback src={itemIconUrl(id, ver)} alt={label} className="w-full h-full object-contain" />
+              <IconWithFallback src={itemIconUrl(id, ver)} alt={label} className="w-full h-full object-contain" size={23} />
             </button>
           );
         })}
@@ -481,6 +532,7 @@ function PlayerRow({
               alt={itemNames?.get(player.trinket) ?? "Trinket"}
               fallbackGlyph="Trinket"
               className="w-full h-full object-contain"
+              size={23}
             />
           </button>
         )}

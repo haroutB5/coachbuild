@@ -96,15 +96,6 @@ export interface ProGame {
    *  when the array is empty. */
   allyChampionIds?: number[];
   enemyChampionIds?: number[];
-  /** Per-player roster detail (champion/name/items/trinket/role) for the
-   *  sheet's boxed Teams section — exactly 5 entries each, role-ordered as
-   *  delivered (never reordered client-side), `allyPlayers` includes the
-   *  tracked player. Absent together with (or independently of, during a
-   *  partial backfill) allyChampionIds/enemyChampionIds until backfill
-   *  covers this game — components must render the existing icon-strip
-   *  fallback (never an empty section) when either is undefined. */
-  allyPlayers?: TeamCompPlayer[];
-  enemyPlayers?: TeamCompPlayer[];
   /** Cleaned pro-play team names ("LYON", "HLE" — no more
    *  "(2024 American Team)"-style suffix), engy's concurrent contract
    *  addition mirrored verbatim. Prostage-only; absent for soloq (no

@@ -91,12 +91,15 @@ describe("GET /api/pros source param", () => {
     expect(body.games[0].source).toBe("soloq");
   });
 
-  it("source=prostage issues the prostage query plus one batched team-comps query plus one pros name-index query", async () => {
+  it("source=prostage issues the prostage query plus one pros name-index query plus one batched team-comps query", async () => {
     // Phase 3 (team comps): a non-empty prostage result triggers exactly one
     // extra grouped query (batched over distinct game_ids), never a per-row
-    // N+1 — see app/api/pros/route.ts's compsForGame/buildProstageCompsMap.
-    // A pros (id, name) name-index query rides alongside it (2026-07-11,
-    // proId fallback matching — see buildProstageCompsMap's doc comment).
+    // N+1 — see app/api/pros/route.ts's compsForGame/lib/prostage/teamComps.ts's
+    // buildProstageCompsMap. The pros (id, name) name-index query (proId
+    // fallback matching) rides in the TOP-level Promise.all alongside
+    // prostageRows (2026-07-11 P2 perf fix: it doesn't depend on gameIds, so
+    // it no longer waits for a second sequential round-trip) — call order is
+    // now prostageRows, prosNameRows, THEN the gameIds-dependent comps query.
     mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const res = await GET(req("?championId=103&role=2&source=prostage"));
     expect(res.status).toBe(200);
@@ -115,8 +118,9 @@ describe("GET /api/pros source param", () => {
   });
 
   it("default (no source param) merges both sources, newest first", async () => {
-    // soloq query resolves first, then prostage, then the team-comps query,
-    // then the pros name-index query (call order matches code).
+    // call order: soloqRows, prostageRows, prosNameRows (all three in the
+    // top-level Promise.all), then the gameIds-dependent comps query
+    // (sequential, 2026-07-11 P2 fix — see app/api/pros/route.ts).
     mockSql
       .mockResolvedValueOnce([SOLOQ_ROW])
       .mockResolvedValueOnce([PROSTAGE_ROW])
@@ -176,15 +180,17 @@ describe("GET /api/pros source param", () => {
   it("a concrete lane filter (role=0-4) still excludes a null-role prostage row (SQL-level, unaffected by the -1 mapping fix)", async () => {
     mockSql
       .mockResolvedValueOnce([SOLOQ_ROW])
-      .mockResolvedValueOnce([]); // role=2 filter means the DB query itself would never return the null-role row
+      .mockResolvedValueOnce([]) // role=2 filter means the DB query itself would never return the null-role row
+      .mockResolvedValueOnce([]); // pros name-index — fires unconditionally when wantProstage (2026-07-11 P2 perf fix), regardless of whether any prostage row came back
     const res = await GET(req("?championId=103&role=2"));
     const body = await res.json();
     expect(body.games).toHaveLength(1);
     expect(body.games[0].source).toBe("soloq");
-    // No prostage rows -> no game_ids -> the team-comps query never fires,
-    // and the pros name-index query (gated on the SAME game_ids check) never
-    // fires either.
-    expect(mockSql).toHaveBeenCalledTimes(2);
+    // No prostage rows -> no game_ids -> the gameIds-dependent team-comps
+    // query never fires. The pros name-index query DOES still fire (it rides
+    // in the top-level Promise.all alongside soloq/prostage, gated only on
+    // wantProstage, not on gameIds) -> 3 calls total, not 2.
+    expect(mockSql).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -210,7 +216,10 @@ describe("GET /api/pros prostage team comps (Phase 3)", () => {
   ];
 
   it("emits allyChampionIds (incl. own champion) + enemyChampionIds for a clean 10-row 5v5 game", async () => {
-    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce(CLEAN_GAME_ROWS);
+    // call order: prostageRows, pros name-index (rides alongside it in the
+    // top-level Promise.all — 2026-07-11 P2 fix), then the gameIds-dependent
+    // comps query (sequential, needs prostageRows' game_ids).
+    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce([]).mockResolvedValueOnce(CLEAN_GAME_ROWS);
     const res = await GET(req("?championId=103&role=2&source=prostage"));
     const body = await res.json();
     expect(body.games).toHaveLength(1);
@@ -220,7 +229,7 @@ describe("GET /api/pros prostage team comps (Phase 3)", () => {
 
   it("omits both fields when the game doesn't have a clean 5/5 split (e.g. a row missing)", async () => {
     const incompleteGame = CLEAN_GAME_ROWS.slice(0, 9); // only 4 on GEN
-    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce(incompleteGame);
+    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce([]).mockResolvedValueOnce(incompleteGame);
     const res = await GET(req("?championId=103&role=2&source=prostage"));
     const body = await res.json();
     expect(body.games[0].allyChampionIds).toBeUndefined();
@@ -228,7 +237,10 @@ describe("GET /api/pros prostage team comps (Phase 3)", () => {
   });
 
   it("omits both fields when the row's own team is null", async () => {
-    mockSql.mockResolvedValueOnce([{ ...PROSTAGE_ROW, team: null }]).mockResolvedValueOnce(CLEAN_GAME_ROWS);
+    mockSql
+      .mockResolvedValueOnce([{ ...PROSTAGE_ROW, team: null }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(CLEAN_GAME_ROWS);
     const res = await GET(req("?championId=103&role=2&source=prostage"));
     const body = await res.json();
     expect(body.games[0].allyChampionIds).toBeUndefined();
@@ -250,7 +262,7 @@ describe("GET /api/pros prostage team comps (Phase 3)", () => {
       { game_id: "LEC_2026_Summer_1_1", team: "GEN", champion_id: 6, role: 1, pro_role: null }, // jungle
       { game_id: "LEC_2026_Summer_1_1", team: "GEN", champion_id: 5, role: 0, pro_role: null }, // top
     ];
-    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce(roleOrderedGame);
+    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce([]).mockResolvedValueOnce(roleOrderedGame);
     const res = await GET(req("?championId=103&role=2&source=prostage"));
     const body = await res.json();
     expect(body.games[0].allyChampionIds).toEqual([1, 2, 103, 3, 4]); // top, jungle, MID (Faker) at index 2, bot, support
@@ -260,7 +272,7 @@ describe("GET /api/pros prostage team comps (Phase 3)", () => {
 
   it("falls back to the query's row order when a side's roles don't resolve to 5 distinct known roles", async () => {
     const noRoleGame = CLEAN_GAME_ROWS.map((r) => ({ ...r, role: null, pro_role: null }));
-    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce(noRoleGame);
+    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce([]).mockResolvedValueOnce(noRoleGame);
     const res = await GET(req("?championId=103&role=2&source=prostage"));
     const body = await res.json();
     // CLEAN_GAME_ROWS is already listed in (row) order [103,1,2,3,4] / [5,6,7,8,9] —
@@ -278,7 +290,7 @@ describe("GET /api/pros prostage team comps (Phase 3)", () => {
       { game_id: "LEC_2026_Summer_1_1", team: "FNC", champion_id: 8 },
       { game_id: "LEC_2026_Summer_1_1", team: "FNC", champion_id: 9 },
     ];
-    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce(threeTeamGame);
+    mockSql.mockResolvedValueOnce([PROSTAGE_ROW]).mockResolvedValueOnce([]).mockResolvedValueOnce(threeTeamGame);
     const res = await GET(req("?championId=103&role=2&source=prostage"));
     const body = await res.json();
     expect(body.games[0].allyChampionIds).toBeUndefined();
@@ -315,52 +327,24 @@ describe("GET /api/pros prostage cleaned display names + proId (2026-07-11)", ()
     { game_id: "MSI_2026_Bracket_Round_4_2_3", team: "LYON (2024 American Team)", champion_id: 236, player_link: "Berserker (Kim Min-cheol)", pro_id: null, pro_name: null },
   ];
 
+  // NOTE: allyPlayers/enemyPlayers (the full per-player sheet, incl. the
+  // name-cleaning + proId-fallback coverage this LYON/HLE fixture was built
+  // for) moved off this route's response to GET /api/pros/team-players
+  // (2026-07-11 P1 perf fix) — that coverage now lives in
+  // lib/__tests__/pro-pros-route-team-players.test.ts, exercised against the
+  // new endpoint via lib/prostage/teamComps.ts's shared buildProstageCompsMap.
+  // This describe block keeps only what GET /api/pros itself still emits:
+  // allyTeamName/enemyTeamName + the top-level player.name cleaning.
+
   it("emits cleaned allyTeamName/enemyTeamName (RAW player.team stays untouched)", async () => {
-    mockSql.mockResolvedValueOnce([LYON_HLE_GAME_ROW]).mockResolvedValueOnce(LYON_HLE_COMPS).mockResolvedValueOnce([]);
+    // call order: prostageRows, pros name-index (top-level Promise.all),
+    // then the gameIds-dependent comps query (sequential) — 2026-07-11 P2 fix.
+    mockSql.mockResolvedValueOnce([LYON_HLE_GAME_ROW]).mockResolvedValueOnce([]).mockResolvedValueOnce(LYON_HLE_COMPS);
     const res = await GET(req("?championId=103&role=2&source=prostage"));
     const body = await res.json();
     expect(body.games[0].allyTeamName).toBe("Hanwha Life Esports"); // no trailing group to strip
     expect(body.games[0].enemyTeamName).toBe("LYON"); // "(2024 American Team)" stripped
     expect(body.games[0].player.team).toBe("Hanwha Life Esports"); // raw field untouched
-  });
-
-  it("cleans TeamCompPlayer.name for unlinked players, keeps tracked pros.name as-is", async () => {
-    mockSql.mockResolvedValueOnce([LYON_HLE_GAME_ROW]).mockResolvedValueOnce(LYON_HLE_COMPS).mockResolvedValueOnce([]);
-    const res = await GET(req("?championId=103&role=2&source=prostage"));
-    const body = await res.json();
-    const ally = body.games[0].allyPlayers as { name: string | null; proId?: string | null }[];
-    const enemy = body.games[0].enemyPlayers as { name: string | null; proId?: string | null }[];
-    // Zeka resolved via pm.pro_id (pro_name present) -> already clean.
-    expect(ally.find((p) => p.proId === "pro-kanavi")?.name).toBe("Kanavi");
-    // Zeka's OWN entry has pro_id null in this fixture (pre-backfill shape)
-    // but its RAW player_link carries the real-name suffix -> must still
-    // read as the cleaned "Zeka" via the fallback name-match (see next test)
-    // or at minimum never show the parenthetical raw form.
-    const zekaEntry = [...ally, ...enemy].find((p) => p.name === "Zeka");
-    expect(zekaEntry).toBeDefined();
-    // Unlinked LYON players show the CLEANED player_link, never the raw form.
-    expect(enemy.some((p) => p.name === "Saint")).toBe(true);
-    expect(enemy.some((p) => p.name?.includes("("))).toBe(false);
-  });
-
-  it("falls back to a conservative name-match for proId when pm.pro_id is null (RAW then CLEANED player_link)", async () => {
-    mockSql.mockResolvedValueOnce([LYON_HLE_GAME_ROW]).mockResolvedValueOnce(LYON_HLE_COMPS).mockResolvedValueOnce([
-      { id: "pro-zeus", name: "Zeus" },
-      { id: "pro-kanavi", name: "Kanavi" },
-      { id: "pro-zeka", name: "Zeka" }, // tracked pro's CLEAN name — Zeka's row.player_link is "Zeka (Kim Geon-woo)"
-      { id: "pro-gumayusi", name: "Gumayusi" },
-      { id: "pro-delight", name: "Delight" },
-    ]);
-    const res = await GET(req("?championId=103&role=2&source=prostage"));
-    const body = await res.json();
-    const ally = body.games[0].allyPlayers as { name: string | null; proId?: string | null }[];
-    const enemy = body.games[0].enemyPlayers as { name: string | null; proId?: string | null }[];
-    const zekaEntry = [...ally, ...enemy].find((p) => p.name === "Zeka");
-    expect(zekaEntry?.proId).toBe("pro-zeka"); // matched via the CLEANED-form fallback, not pm.pro_id (null in this fixture)
-    // LYON players (Saint, Dhokla, Inspired, Isles, Berserker) are untracked
-    // -> proId stays null even with the name-index present (no fuzzy match).
-    const saintEntry = [...ally, ...enemy].find((p) => p.name === "Saint");
-    expect(saintEntry?.proId ?? null).toBeNull();
   });
 
   it("player.name (top-level, not just comps) is cleaned when pro_name is null", async () => {
@@ -379,7 +363,7 @@ describe("GET /api/pros prostage cleaned display names + proId (2026-07-11)", ()
       ...LYON_HLE_COMPS,
       { game_id: "MSI_2026_Bracket_Round_4_2_3", team: "A Third Team", champion_id: 1, player_link: "X", pro_id: null, pro_name: null },
     ];
-    mockSql.mockResolvedValueOnce([LYON_HLE_GAME_ROW]).mockResolvedValueOnce(threeTeamComps).mockResolvedValueOnce([]);
+    mockSql.mockResolvedValueOnce([LYON_HLE_GAME_ROW]).mockResolvedValueOnce([]).mockResolvedValueOnce(threeTeamComps);
     const res = await GET(req("?championId=103&role=2&source=prostage"));
     const body = await res.json();
     expect(body.games[0].allyTeamName).toBeUndefined();

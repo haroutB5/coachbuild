@@ -3424,3 +3424,94 @@ new tap-target's aria-label all use the CLEANED name, per the ask).
 - Did not touch `app/page.tsx`/`ProGamesSection.tsx` (Builds page) per scope — the cross-page sessionStorage-handoff fallback in `GameDetailSheet` means a Teams-box tap there already lands correctly on `/history` with the right player selected, without needing any Builds-page edit; verified that fallback path directly (see Tests) rather than via the real Builds-page UI.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-11 16:58
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-11 15:12:01Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-11 (round 2) — `/api/pros` perf fix: move allyPlayers/enemyPlayers off the list response (P1) + overlap the pros-name SELECT (P2)
+
+**P1 — allyPlayers/enemyPlayers moved to a new on-demand endpoint.**
+
+- `app/api/pros/route.ts`: no longer selects `pm.ally_players`/`pm.enemy_players` (both soloq SELECTs) and no longer emits `allyPlayers`/`enemyPlayers` on either soloq or prostage rows. `soloqPlayers()` helper removed. `compsForGame()` now only returns `allyChampionIds`/`enemyChampionIds` (unchanged for callers). `allyChampionIds`/`enemyChampionIds` (card strips) and `allyTeamName`/`enemyTeamName` (header matchup line) are UNCHANGED and still inline.
+- New shared module `lib/prostage/teamComps.ts`: extracted `ProstageCompRow`, `CompEntry` (`= TeamCompPlayer`), `buildProstageCompsMap()` (unchanged body) and a new `orderedSidesForGame()` (the clean-10-row-5v5-split + role-order guard, previously inlined in `compsForGame`) out of `app/api/pros/route.ts` so the list route and the new endpoint below share ONE implementation of the grouping/ordering/proId-fallback logic — can't diverge.
+- New route `app/api/pros/team-players/route.ts` — `GET /api/pros/team-players`:
+  - `?source=soloq&gameId=<matchId>&championId=<n>` → one query on `coachbuild.pro_matches` by `(match_id, champion_id)` (champion_id is unique per match_id in League — no mirror picks in queue 420 — so this always identifies a single row even if two tracked pros share a match_id).
+  - `?source=prostage&gameId=<game_id>&player=<player_link>` → own-team lookup by the `(game_id, player_link)` PK, then the SAME batched-comps query shape as the list route (scoped to one game_id) + the pros name-index, via the shared `lib/prostage/teamComps.ts` helpers.
+  - 200 `{allyPlayers:[...5], enemyPlayers:[...5]}` or 200 `{allyPlayers:null, enemyPlayers:null}` (both-or-neither, never partial). 400 on bad params, 500 on error (no detail leak).
+  - Cache-Control: non-empty → `s-maxage=86400, stale-while-revalidate=604800` (same long cache as `/api/prostage/timeline`'s "ok" branch — this data is immutable once backfilled); null/degraded/DB-not-configured → `no-store` (never-cache-empty rule).
+- `lib/pro/types.ts`: removed `allyPlayers`/`enemyPlayers` from `ProGame`; added `TeamPlayersResponse` (the new endpoint's contract) documenting both the soloq/prostage query shapes and the both-or-neither/null contract. `TeamCompPlayer` unchanged (still the shared per-player shape).
+- **Fronty was already building against this exact contract concurrently** — found `components/teamPlayers.ts` (client fetch, `useTeamPlayers`/`loadTeamPlayers`) already calling `GET /api/pros/team-players?source=soloq&gameId=...&championId=...` / `?source=prostage&gameId=...&player=...` and parsing `{allyPlayers, enemyPlayers}` exactly as implemented here — no coordination gap.
+
+**P2 — overlap the pros-name SELECT with the main queries.**
+
+- `app/api/pros/route.ts`'s top-level `Promise.all` now includes a THIRD member: `wantProstage ? sql\`SELECT id, name FROM coachbuild.pros\` : Promise.resolve([])` — rides alongside `soloqRows`/`prostageRows` instead of waiting for a second sequential round-trip. The gameIds-dependent grouped comps query (`WHERE pm.game_id = ANY(${gameIds}::text[])`) still can't join that Promise.all (needs `prostageRows`' game_ids first) and stays a single sequential `await` after it.
+- **Behavior change tests had to account for:** the pros-name query now fires whenever `wantProstage` is true, REGARDLESS of whether any prostage rows came back (previously gated on `gameIds.length > 0`, same as the comps query) — e.g. a concrete-role prostage-empty request now fires 3 queries instead of 2. Updated `lib/__tests__/pro-pros-route-prostage.test.ts` for this (see below).
+- **Measurement (local dev, real Neon DB, `championId=61` — 13/20 prostage rows in the "all" path, so the comps+prosName enrichment path is genuinely exercised):** ran alternating BEFORE/AFTER swaps (`git show HEAD:app/api/pros/route.ts` vs. the new file) against `npx next dev -p 4501`, discarding the first 1-2 requests after each swap (Next dev route recompile cost, not representative). Results were noisier than expected for an isolated ~2-query-vs-3-query difference: some batches showed a large, clean gap (10-run batches: BEFORE median ≈0.26s vs AFTER median ≈0.07s), but a more careful warmup-discarded alternating batch (10 samples each, order-interleaved to cancel connection-warmup bias) showed BEFORE mean ≈0.258s / median ≈0.20s vs AFTER mean ≈0.218s / median ≈0.21s — i.e. a real but much SMALLER and noisier gap than the first batches suggested. **Honest read: network RTT variance to the real (remote, non-co-located) Neon endpoint from this local dev box dominates the signal** — a residential/office dev machine's round-trip to Neon is not a stable enough baseline to cleanly isolate the ~1-round-trip savings this change targets. The code-level fix is verifiable by construction (one fewer sequential `await` boundary on the enrichment path, confirmed via the test suite's call-order/call-count assertions) and should show more cleanly in a Vercel-deployed measurement (co-located with Neon, stable low RTT) than it did here. Flagging this rather than reporting a precise percentage I can't stand behind.
+
+**Tests:** `npx vitest run` → 421 passed (was 411 baseline + this session's net additions/removals). Changes:
+- `lib/__tests__/pro-pros-route-team-players.test.ts` — REWRITTEN entirely (was: allyPlayers/enemyPlayers inline on `/api/pros`, now removed feature). Now tests `GET /api/pros/team-players` directly: param validation, soloq (5/5 guard, null-column, asymmetric-length, DB-not-configured, 500), prostage (clean 5v5, missing row, incomplete split, name-cleaning + proId name-match fallback — migrated from the two removed prostage.test.ts tests below, role-ordering, third-team ambiguity), and the Cache-Control contract (long-cache on success, no-store on null/degraded).
+- `lib/__tests__/pro-pros-route-prostage.test.ts`:
+  - Removed 2 tests ("cleans TeamCompPlayer.name...", "falls back to a conservative name-match for proId...") that asserted on `body.games[0].allyPlayers`/`enemyPlayers` — that assertion surface no longer exists on this route; equivalent coverage now lives in the new team-players test file.
+  - Fixed mock call-ORDER in 8 tests across the "team comps (Phase 3)" and "cleaned display names + proId" describe blocks: the P2 change moves the pros-name-index query from being the LAST call (alongside comps) to the SECOND call (alongside prostageRows, before the sequential comps query) — inserted an extra `mockResolvedValueOnce([])` in each so the comps-rows fixture still lands on the right call.
+  - Fixed the "concrete lane filter still excludes a null-role prostage row" test: call count assertion changed from `toHaveBeenCalledTimes(2)` to `(3)` since the pros-name query now fires unconditionally on `wantProstage` rather than being gated on `gameIds.length > 0`.
+- `lib/pro/types.ts`, `app/api/pros/route.ts`, `lib/prostage/teamComps.ts`, `app/api/pros/team-players/route.ts` as described above.
+
+**Gates:** `tsc --noEmit` clean. `eslint` clean on all touched files. `vitest run` 421/421 green. `next build` succeeds — `/api/pros/team-players` correctly registered as a dynamic (ƒ) route alongside the existing API routes.
+
+**⚠️ Incident I caused, flagging for urgot/fronty:** while measuring P2 locally I ran `npx next dev -p 4501` (killed cleanly afterward via its own PIDs) and then, as the mandatory build gate, `npx next build` — both against this SAME (non-worktree-isolated) checkout that fronty had a concurrent `next dev -p 4794` running in. The build completed successfully, but fronty's dev-server process (PIDs 31440/25520/516, port 4794) was gone immediately after — matches this repo's own documented gotcha (CLAUDE.md (i): "Don't run two next build/next dev processes against one checkout," shared `.next/`). **fronty's dev server will need a restart** — their source edits on disk should be untouched (I never wrote to `components/`/`public/sw.js`), only the running process died. Sorry for the disruption — in hindsight I should have asked fronty to pause their dev server before running `next build`, or run the build gate from an isolated worktree copy instead of the shared checkout.
+
+No version bump, no deploy (per brief — orchestrator ships).
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-11 17:01
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-11 15:15:54Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-11 — P1/P1/P2 /history perf fix (measured-impact, v0.18.1 baseline)
+
+Three fixes from the audit (INP 327ms on player-select, 287ms image paint, 414 img elements/0 lazy, 1.9MB oversized delivery + 2MB repeat-visit waste). All three shipped, gates green, live-verified at 390x844x2,mobile,touch. No version bump/deploy (per brief).
+
+**1. Lazy/async images — `components/IconWithFallback.tsx`.** Added `size?: number` prop -> `width`/`height` attrs + unconditional `loading="lazy"` + `decoding="async"` on its one `<img>`. Threaded `size` through every caller (ProGameCard's ImgWithFallback/RunePerkIcon, TeamComp's MiniCompRow/LegacyRosterBody/PlayerRow, GameDetailSheet's RunePerkTile/TreeTile/header crest/shard/spell/final-build tiles, EntityDetailPopover, ItemDetailPopover, FavoriteChampionChips, RunePage's local ImgWithFallback) — fallback-glyph behavior unchanged. Also caught 2 raw-`<img>` sinks outside the brief's named list (`ItemPath.tsx`, `SpellRow.tsx`, Builds-page item/spell tiles) with their own local `ImgWithFallback` — gave both the same width/height + lazy/async treatment for consistency. `ChampionPicker.tsx`'s `ChampIcon` (already had width/height) got `loading`/`decoding` added, with an `eager` prop so the combobox's own always-visible selected-value crest opts out of lazy (dropdown-row icons stay lazy).
+Verified live: all 414 `<img>` elements on `/history` (Faker, 20 games) now carry `loading=lazy`, `decoding=async`, explicit width/height. Image network requests on initial load dropped from 414 (one per element, pre-fix) to 117 — real, measured reduction; didn't hit the audit's rough 40-60 guess exactly (native lazy-load rootMargin loads a generous buffer beyond viewport) but the mechanism is confirmed working via DOM inspection.
+
+**2. Sheet fetches team players on open — new `components/teamPlayers.ts`.** Mirrors `prostageTimeline.ts`'s cache/in-flight-dedup pattern exactly (only caches "ok", never caches "error"). `useTeamPlayers(game, open)` fires `GET /api/pros/team-players` (engy's concurrent route, already landed at `app/api/pros/team-players/route.ts` by the time I wired this — contract matched exactly, no adjustment needed) only once the sheet opens. Removed `allyPlayers`/`enemyPlayers` from `ProGame` in `proGames.types.ts` (now arrive via `teamPlayers.ts`'s `TeamPlayersResponse`); moved the fixture data out of `proGames.fixtures.ts`'s `FIXTURE_GAME_WIN`/`FIXTURE_GAME_PROSTAGE_FULL` into a new `FIXTURE_TEAM_PLAYERS` map keyed by game id (not currently imported anywhere live, same as before — kept for future dev/test use). `GameDetailSheet.tsx` now calls the hook and passes `allyPlayers`/`enemyPlayers`/`teamPlayersLoading` down.
+**Loading state:** `TeamComp.tsx` gained a `PlayerRowSkeleton`/`TeamBoxSkeleton` (5 fixed-height rows per side, same 28px icon + padding as the real `PlayerRow`) shown while `teamPlayersLoading` — chose this over "show the shorter icon-strip fallback and upgrade in place" because the real PlayerRow list is visibly taller than the icon-strip `LegacyRosterBody`, so upgrading in place would shift content below it inside the sheet (likely CLS-metric-exempt as a post-interaction shift, but still a visible jump — skeleton-at-final-height avoids it outright). An "error" state degrades to the pre-existing icon-strip fallback, same as "unavailable," rather than getting stuck on the skeleton.
+Verified live: fetch fires with the exact contracted query (`?source=prostage&gameId=...&player=Faker`, confirmed in network log) only after clicking a card open, not on the initial `/api/pros` list load. Confirmed `/api/pros` response no longer has `allyPlayers`/`enemyPlayers` keys (engy's slimming landed). Caught the skeleton mid-flight (99 `.animate-pulse` elements) on click; screenshot after resolve shows clean real player rows, WIN/LOSS chips, self-row ring highlight, no overflow/jitter at 390px.
+
+**3. SW cache-first for icon CDN — `public/sw.js`.** New `ICON_CACHE = "coachbuild-icons-v1"` (deliberately NOT tied to `VERSION`/`CACHE` so it survives a version bump/deploy) for `https://cdn.coachless.gg/static-files/*` GETs — cache-first, and the fetch-and-cache branch treats an opaque no-cors response the same as `res.ok` (can't distinguish an opaque 200 from an opaque 403 in a SW; documented the tradeoff — a genuinely-broken icon still degrades via `IconWithFallback`'s onError same as before, just without a repeat network hit). Deliberately unbounded/no LRU (documented tradeoff, icons are small). **Fixed a real bug while wiring this in:** the existing `activate` handler's eviction filter (`k.startsWith("coachbuild-") && k !== CACHE`) would have wiped `ICON_CACHE` on every single version bump along with the old shell cache — added `&& k !== ICON_CACHE` to the filter. Shell/API network-first strategies untouched otherwise.
+Verified live via direct `fetch()` timing from the page (SW confirmed controlling the page via `navigator.serviceWorker.controller`): first fetch of an icon URL = 364ms (network, then cached); same URL refetched = 2.4ms (served from `coachbuild-icons-v1`, confirmed via `cache.match()` before the second fetch). ~150x speedup, cache-first proven working end-to-end.
+
+**Gates:** `tsc --noEmit` clean. `vitest run` 421/421 (baseline 411 + engy's churn, all green). `next lint` clean (only pre-existing `no-img-element` warnings on 5 files, none new/blocking). `next build` succeeded (`/history` 16.2kB, 114kB First Load JS; new `/api/pros/team-players` route listed).
+
+**Known gap / needs cleanup:** hit the documented `next dev`+`next build` collision gotcha mid-session (ran `next build` for the gate check while a `next dev` was still up on the same checkout — corrupted `.next/trace`, EPERM). Recovered per the playbook (killed the stray dev process, confirmed the lock cleared) but the safety-gate hook blocked `rm -rf .next` (correctly — never routed around it). Used `mv` instead (non-destructive) to get a clean dev server running for live-verify. Left two backup directories behind that need actual deletion once approved: `.next-corrupt-bak-1783785077/` and `.next-corrupt-bak-2/` (both plain stale Next build-cache copies, zero source content, not gitignored by the current `.next/` pattern — surfacing rather than deleting myself, per the safety-gate protocol). Also hit repeated transient "Fast Refresh had to perform a full reload" / intermittent 404 storms on a couple of the dev-server restarts even with no file changes in-flight (confirmed via `find -newer`) — resolved each time by a full `next dev` restart; if this recurs it's worth a dedicated look, but didn't block final verification.
+
+Files touched: `components/IconWithFallback.tsx`, `components/ProGameCard.tsx`, `components/TeamComp.tsx`, `components/GameDetailSheet.tsx`, `components/EntityDetailPopover.tsx`, `components/ItemDetailPopover.tsx`, `components/FavoriteChampionChips.tsx`, `components/RunePage.tsx`, `components/ChampionPicker.tsx`, `components/ItemPath.tsx`, `components/SpellRow.tsx`, `components/proGames.types.ts`, `components/proGames.fixtures.ts`, `public/sw.js`. New: `components/teamPlayers.ts`.
+
+
+

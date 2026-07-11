@@ -48,6 +48,7 @@ export default function ItemDetailPopover({ itemId, ver, open, onClose }: ItemDe
               alt={name}
               fallbackGlyph={name}
               className="w-full h-full object-contain"
+              size={48}
             />
           </div>
           <div className="min-w-0 flex-1 pt-0.5">
