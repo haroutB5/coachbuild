@@ -119,6 +119,12 @@ interface ChampDataEntry {
   id: string; // "Viktor"
   key: string; // "112" (numeric string)
   name: string; // "Viktor"
+  /** Present ONLY for entries gap-filled from ddragon (coachless's static
+   *  bundle doesn't have this champion yet — see "Champion gap-fill from
+   *  ddragon" below). When set, icon resolution uses THIS absolute ddragon
+   *  CDN URL directly instead of the coachless-derived ICON_BASES.champ()
+   *  path, since coachless has no asset for this key at all. */
+  ddragonIconUrl?: string;
 }
 
 interface SummonerDataEntry {
@@ -369,9 +375,96 @@ export async function loadChampsData(): Promise<ChampDataEntry[]> {
     const raw = await fetchJson<{
       data: Record<string, ChampDataEntry>;
     }>(CDN.champs(ver));
-    champsMap = Object.values(raw.data);
+    const coachless = Object.values(raw.data);
+    const existingIds = new Set(coachless.map((c) => parseInt(c.key, 10)));
+    // Gap-fill any champion coachless's bundle doesn't have yet — see
+    // "Champion gap-fill from ddragon" below. Coachless stays primary: this
+    // only ADDS entries for ids coachless is missing, never overrides one it
+    // already has.
+    const gaps = await loadDdragonChampionGaps(existingIds);
+    champsMap = gaps.length ? [...coachless, ...gaps] : coachless;
   }
   return champsMap;
+}
+
+/** Test-only: clear the module-level champion cache between test cases. */
+export function __resetChampsCacheForTests(): void {
+  champsMap = null;
+}
+
+// ── Champion gap-fill from ddragon ───────────────────────────────────────────
+//
+// coachless's static-files bundle is pinned to whatever data patch got
+// resolved for stats (see "Patch resolution" above) and does NOT necessarily
+// carry every champion that's live in real games on that patch — a
+// brand-new champion (e.g. Locke, id 805, shipped 16.13.1) can appear in
+// real match data before coachless's champion.json bundle has a row for it.
+// Verified live 2026-07-11/12: Bwipo's Locke games reference id 805, which
+// coachless's 172-champion 16.12.1 bundle doesn't have, so the comp
+// strips/Teams boxes fell back to a grey "Champion #805" tile and Locke's
+// OWN card showed the name (from game.championName) but no portrait.
+//
+// Fix: after loading coachless's champion list, fetch ddragon's OWN latest
+// champion.json (independent of the coachless-resolved patch — ddragon
+// ships new champions same-day, coachless lags) and fill in any numeric id
+// coachless doesn't have, sourcing name + an absolute ddragon icon URL.
+// Coachless stays authoritative for every id it already has; ddragon only
+// plugs genuine gaps. Degrades to zero gap-fill (today's exact behavior) on
+// any ddragon failure — this is decorative, never load-bearing.
+
+const DDRAGON_CHAMPION_JSON = (ver: string) =>
+  `https://ddragon.leagueoflegends.com/cdn/${ver}/data/en_US/champion.json`;
+const DDRAGON_CHAMPION_ICON = (ver: string, key: string) =>
+  `https://ddragon.leagueoflegends.com/cdn/${ver}/img/champion/${key}.png`;
+
+interface DdragonChampionRaw {
+  key: string; // numeric string, e.g. "805"
+  id: string; // "Locke" (CDN key form)
+  name: string; // "Locke" (display name)
+}
+
+/** Pure merge logic — given the set of champion ids coachless already has,
+ *  plus raw ddragon champion.json data + the ddragon version it came from,
+ *  returns ChampDataEntry rows ONLY for ids missing from `existingIds`.
+ *  Directly unit-testable against injected fixtures, no network. */
+export function findChampionGaps(
+  existingIds: Set<number>,
+  ddragonVersion: string,
+  ddragonChampions: Record<string, DdragonChampionRaw>
+): ChampDataEntry[] {
+  const gaps: ChampDataEntry[] = [];
+  for (const entry of Object.values(ddragonChampions)) {
+    const id = parseInt(entry.key, 10);
+    if (!Number.isFinite(id) || existingIds.has(id)) continue;
+    gaps.push({
+      id: entry.id,
+      key: entry.key,
+      name: entry.name,
+      ddragonIconUrl: DDRAGON_CHAMPION_ICON(ddragonVersion, entry.id),
+    });
+  }
+  return gaps;
+}
+
+/** Network wrapper around findChampionGaps: fetches ddragon's latest version
+ *  + champion.json. Swallows ANY failure (ddragon down, malformed response,
+ *  empty versions list) and returns [] — the caller then behaves exactly as
+ *  it did before this feature existed (coachless-only list, grey fallback
+ *  tile for an unresolved id). Not memoized separately: it only runs at all
+ *  when loadChampsData's own champsMap cache is cold, so it already inherits
+ *  that once-per-instance cadence. */
+async function loadDdragonChampionGaps(existingIds: Set<number>): Promise<ChampDataEntry[]> {
+  try {
+    const versions = await fetchJson<string[]>(CDN.versions);
+    const ver = versions[0];
+    if (!ver) return [];
+    const raw = await fetchJson<{ data: Record<string, DdragonChampionRaw> }>(
+      DDRAGON_CHAMPION_JSON(ver)
+    );
+    return findChampionGaps(existingIds, ver, raw.data);
+  } catch {
+    return [];
+  }
 }
 
 export async function loadSummonersData(): Promise<SummonerDataEntry[]> {
@@ -471,7 +564,10 @@ export async function getAllChampions(): Promise<ChampionRef[]> {
       id: parseInt(c.key, 10),
       key: c.id,
       name: c.name,
-      icon: ICON_BASES.champ(c.id, ver),
+      // ddragon-sourced gap-fill entries carry their own absolute icon URL
+      // (coachless has no asset for them at all); every coachless-sourced
+      // entry keeps using the coachless CDN as before.
+      icon: c.ddragonIconUrl ?? ICON_BASES.champ(c.id, ver),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -487,7 +583,7 @@ export async function getChampionById(
     id,
     key: c.id,
     name: c.name,
-    icon: ICON_BASES.champ(c.id, ver),
+    icon: c.ddragonIconUrl ?? ICON_BASES.champ(c.id, ver),
   };
 }
 

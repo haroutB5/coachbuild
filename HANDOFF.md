@@ -3714,3 +3714,56 @@ Also confirmed the Builds page (`/`) still renders correctly end-to-end (scrolle
 - `C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/CHANGELOG.md`
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-12 02:15
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-11 17:03:00Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-12 — v0.20.1 → v0.20.2: new-champion ddragon gap-fill (P2 fix)
+
+**Bug (verified live before fix):** `GET /api/champions` (backed by `lib/staticData.ts`'s `getAllChampions`/`getChampionById`) is pinned to whatever data patch coachless's static-files champion.json bundle last shipped (172 champions, 16.12.1). Champion 805 "Locke" shipped in 16.13.1 (ddragon has 173) and coachless's bundle doesn't have it yet. Real games referencing id 805 (e.g. Bwipo's Locke games) rendered a grey "Champion #805" tile in comp strips (`TeamComp.tsx`'s `MiniCompRow`/`CardCompStrip`) and Teams boxes (`LegacyRosterBody`), and Locke's own `ProGameCard` showed the name (from `game.championName`) but no portrait (icon only renders `if (championIcon)`).
+
+**Fix — class-level, not a one-off patch for Locke.** `lib/staticData.ts`:
+- New: `findChampionGaps(existingIds, ddragonVersion, ddragonChampions)` — pure merge logic (exported, directly unit-tested): given the numeric ids coachless already has, returns ChampDataEntry rows ONLY for ids ddragon has that coachless doesn't.
+- New: `loadDdragonChampionGaps(existingIds)` — network wrapper. Fetches ddragon's OWN latest version (`versions.json` → `[0]`, independent of the coachless-resolved stats patch — ddragon ships same-day, coachless lags) + that version's `champion.json`, then calls `findChampionGaps`. Wrapped in try/catch → `[]` on ANY failure (ddragon down, malformed response) — decorative, never load-bearing, degrades to exactly prior behavior.
+- `loadChampsData()` now calls this after loading coachless's list and appends any gaps (coachless-primary: only fills ids coachless is missing, never overrides one it has).
+- `ChampDataEntry` gained an optional `ddragonIconUrl` field, set ONLY on gap-filled entries. `getAllChampions()`/`getChampionById()` now resolve icon as `c.ddragonIconUrl ?? ICON_BASES.champ(c.id, ver)` — gap-filled champions get an absolute `ddragon.leagueoflegends.com/cdn/<ver>/img/champion/<Key>.png` URL; every coachless-sourced champion is unaffected (still the coachless CDN URL as before).
+- New test-only reset: `__resetChampsCacheForTests()` (champsMap is memoized module-level like the other loaders — once per instance lifetime, no separate TTL, matching the existing pattern).
+- `MiniCompRow`'s fallback tooltip/glyph (`components/TeamComp.tsx`) needed NO code change — it already does `entry?.name ?? "Champion #${champId}"`, so once the merged map has an entry for 805 the fallback text naturally stops firing. Same for `LegacyRosterBody`/`PlayerRow`'s equivalent fallbacks.
+- `/api/champions`'s route (`app/api/champions/route.ts`) and its `Cache-Control: s-maxage=86400, stale-while-revalidate=604800` are unchanged — champsMap's existing once-per-instance in-memory cache already governs the merge's cost; no new cache layer needed.
+
+**Consumers fixed (both, confirmed via code trace — same underlying map):**
+- `components/proAssets.ts`'s `getChampionIconMap()` (fetches `/api/champions`, used by `TeamComp.tsx`'s comp strips/Teams boxes) — gets the merged list automatically.
+- `app/history/page.tsx` line ~184 (`championIcon={mode === "champion" ? championIcon : iconMap?.get(game.championId)?.icon}`) — same `getChampionIconMap()` instance, so `ProGameCard`'s subject-champion portrait resolves too. Champion-picker mode (`champ!.icon` from the same `/api/champions` list) also covered.
+
+**Tests:** new file `lib/__tests__/staticData.champions.test.ts`, 9 tests — pure `findChampionGaps` (gap-only, non-numeric-key skip, no-gap case), `getAllChampions`/`getChampionById` integration (gap-fill picks up Locke/805 with ddragon icon, coachless-primary precedence when an id exists in both — ddragon's duplicate name never surfaces, full ddragon-versions.json failure degrades to coachless-only AND correctly falls patch resolution back to 16.11.1 static default too since that's shared plumbing, isolated champion.json-only failure degrades to coachless-only while patch resolution still succeeds normally). 437 → 446 tests, all green.
+
+**Live verify (local dev, port 3057, real coachless + ddragon network calls — not mocked):**
+```
+GET /api/champions -> 173 champions total (was 172 before this fix)
+Locke (805): {"id":805,"key":"Locke","name":"Locke","icon":"https://ddragon.leagueoflegends.com/cdn/16.13.1/img/champion/Locke.png"}
+Viktor (112, sanity — coachless CDN unaffected): {"id":112,"key":"Viktor","name":"Viktor","icon":"https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/Viktor.webp"}
+```
+Confirmed the Locke icon URL itself resolves live: `curl -o /dev/null -w "%{http_code}"` → 200. Dev server (PID confirmed via `netstat`) killed cleanly after verification, port 3057 freed — no orphaned process left behind (per Gotcha (i), never leave a stray `next dev` locking `.next/trace`).
+
+**Gate:** `bash scripts/verify-fix.sh coachbuild` — ALL GREEN (tsc clean, lint 0 warnings, 446 tests, build clean, sw versioning + icon-cache exclusion intact, manifest present).
+
+**Version:** `package.json` 0.20.1 → 0.20.2, CHANGELOG entry added. NOT deployed — per dispatch brief, urgot ships.
+
+**Files touched:** `lib/staticData.ts`, `lib/__tests__/staticData.champions.test.ts` (new), `package.json`, `CHANGELOG.md`.
+
+**Not touched / no action needed:** `components/proAssets.ts` (deliberately standalone from `lib/staticData.ts` per its own header comment — it doesn't duplicate the champion-icon-map logic, it just consumes `/api/champions`, so it inherits the fix for free without any edit). `components/TeamComp.tsx` (fallback text already correct by construction, see above).
+
+
+

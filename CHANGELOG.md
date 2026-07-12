@@ -2,6 +2,10 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.20.2] — 2026-07-12
+### Fixed
+- **New champions no longer show as a grey "Champion #id" tile the moment they ship** — coachless's static champion bundle is pinned to its own data patch and can lag ddragon by a patch (verified live: Locke, id 805, shipped 16.13.1, missing from coachless's 172-champion 16.12.1 bundle; Bwipo's Locke games rendered blank comp-strip tiles and no portrait on Locke's own card). `getAllChampions`/`getChampionById` (`lib/staticData.ts`, backing `GET /api/champions`) now gap-fill any id missing from coachless with ddragon's own latest champion.json (name + an absolute ddragon icon URL) — coachless stays primary/authoritative for every id it already has, and any ddragon failure degrades to exactly today's behavior (no crash, fallback tile).
+
 ## [0.20.1] — 2026-07-11
 ### Fixed
 - **Game cards on the Pro's list are visibly distinct now** — each card gets a brighter surface + clearer border than the page bg (scoped to the game list; other glass surfaces unchanged), a bigger gap between cards, and a win/loss accent edge (green/red, matching the WIN/LOSS pill) so results scan at a glance without reading every card.
