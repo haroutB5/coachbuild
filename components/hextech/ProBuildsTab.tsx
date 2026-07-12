@@ -10,6 +10,14 @@ import ProBuildRow from "./ProBuildRow";
 interface ProBuildsTabProps {
   champ: ChampionRef;
   lane: LaneId;
+  /** Back-gesture history integration (app/page.tsx) — the game id whose
+   *  sheet should be forced open, plus the open/dismiss reporters. Forwarded
+   *  straight through to every ProBuildRow as its historySheet prop. See
+   *  ProHistoryResults' identical props (app/history/page.tsx's original
+   *  wiring) for the full contract. */
+  openGameId?: string | null;
+  onOpenGame?: (gameId: string) => void;
+  onDismissGame?: () => void;
 }
 
 type State =
@@ -22,7 +30,7 @@ function RowSkeleton() {
   return <div className="h-[52px] bg-panel border border-line rounded-xl animate-pulse" />;
 }
 
-export default function ProBuildsTab({ champ, lane }: ProBuildsTabProps) {
+export default function ProBuildsTab({ champ, lane, openGameId, onOpenGame, onDismissGame }: ProBuildsTabProps) {
   const [state, setState] = useState<State>({ status: "loading" });
   const [championMap, setChampionMap] = useState<Map<number, ChampionIconEntry> | null>(null);
 
@@ -98,6 +106,15 @@ export default function ProBuildsTab({ champ, lane }: ProBuildsTabProps) {
             championIcon={champ.icon}
             championDisplayName={champ.name}
             enemyLaner={enemyLaner}
+            historySheet={
+              openGameId !== undefined
+                ? {
+                    isOpen: openGameId === game.id,
+                    onOpen: () => onOpenGame?.(game.id),
+                    onDismiss: () => onDismissGame?.(),
+                  }
+                : undefined
+            }
           />
         );
       })}

@@ -7,6 +7,7 @@ import { IconWithFallback } from "@/components/IconWithFallback";
 import { cleanPlayerName } from "@/components/playerName";
 import GameDetailSheet from "@/components/GameDetailSheet";
 import type { ChampionIconEntry } from "@/components/proAssets";
+import type { HistorySheetControl } from "@/components/ProGameCard";
 
 function formatShortDate(iso: string): string {
   try {
@@ -25,79 +26,118 @@ interface ProBuildRowProps {
    *  ProBuildsTab. Undefined when the game has no role-ordered comp data
    *  (renders no "vs" — never a guessed opponent). */
   enemyLaner?: ChampionIconEntry;
+  /** Back-gesture history integration (app/page.tsx's home PRO BUILDS tab,
+   *  wired via the same useSheetBackNav hook /history uses) — see
+   *  ProGameCard's HistorySheetControl doc comment for the controlled-vs-
+   *  local-state split. Absent falls back to fully local `open` state,
+   *  unchanged prior behavior. */
+  historySheet?: HistorySheetControl;
 }
 
-export default function ProBuildRow({ game, championIcon, championDisplayName, enemyLaner }: ProBuildRowProps) {
-  const [open, setOpen] = useState(false);
+export default function ProBuildRow({ game, championIcon, championDisplayName, enemyLaner, historySheet }: ProBuildRowProps) {
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = historySheet ? historySheet.isOpen : localOpen;
   const ver = versionFromPatch(game.patch);
   const cleanedName = cleanPlayerName(game.player.name);
   const items = game.finalItems.slice(0, 4);
+
+  function openSheet() {
+    if (historySheet) historySheet.onOpen();
+    else setLocalOpen(true);
+  }
+
+  const kda = (
+    <>
+      {game.kills}/{game.deaths}/{game.assists}
+    </>
+  );
 
   return (
     <>
       <div
         role="button"
         tabIndex={0}
-        onClick={() => setOpen(true)}
+        onClick={openSheet}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            setOpen(true);
+            openSheet();
           }
         }}
         aria-label={`View details — ${cleanedName ?? game.player.name}, vs ${enemyLaner?.name ?? "opponent"}, ${
           game.win ? "win" : "loss"
         }`}
-        className="flex items-center gap-3 px-4 py-3 bg-panel border border-line rounded-xl hover:border-line-gold transition-colors cursor-pointer active:scale-[0.995] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-teal"
+        // Desktop keeps the original single-row layout. At <=sm the two
+        // inner wrappers below switch from `flex` to `sm:contents` (they
+        // stop generating their own box and hand their children straight to
+        // this flex-col container as siblings), so mobile gets two stacked
+        // rows — badge/identity/KDA, then vs/items/league+date — while every
+        // datum stays visible (nothing drops behind `hidden sm:block`
+        // anymore) instead of overflowing the 390px card horizontally.
+        className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 px-4 py-3 bg-panel border border-line rounded-xl hover:border-line-gold transition-colors cursor-pointer active:scale-[0.995] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-teal"
       >
-        {/* W/L badge */}
-        <span
-          className={`flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center text-[11px] font-bold ${
-            game.win ? "bg-win text-black/80" : "bg-loss text-white"
-          }`}
-          aria-hidden="true"
-        >
-          {game.win ? "W" : "L"}
-        </span>
+        {/* Row 1 (mobile) — badge, identity, KDA. Dissolves into the outer
+            flex row at sm+. */}
+        <div className="flex items-center gap-3 sm:contents">
+          {/* W/L badge */}
+          <span
+            className={`flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center text-[11px] font-bold ${
+              game.win ? "bg-win text-black/80" : "bg-loss text-white"
+            }`}
+            aria-hidden="true"
+          >
+            {game.win ? "W" : "L"}
+          </span>
 
-        {/* Player identity */}
-        <div className="min-w-0 w-[130px] flex-shrink-0">
-          <div className="text-[13px] font-semibold text-txt truncate">{cleanedName ?? game.player.name}</div>
-          <div className="text-[11px] text-mut truncate">{game.player.team ?? "—"}</div>
+          {/* Player identity */}
+          <div className="min-w-0 flex-1 sm:w-[130px] sm:flex-shrink-0">
+            <div className="text-[13px] font-semibold text-txt truncate">{cleanedName ?? game.player.name}</div>
+            <div className="text-[11px] text-mut truncate">{game.player.team ?? "—"}</div>
+          </div>
+
+          {/* KDA — mobile position (row 1, right edge). Desktop shows the
+              second copy below instead. */}
+          <div className="flex-shrink-0 sm:hidden text-[12.5px] font-semibold text-txt tabular-nums">{kda}</div>
         </div>
 
-        {/* vs opponent */}
-        <div className="flex items-center gap-1.5 min-w-0 w-[140px] flex-shrink-0 text-[12px] text-mut">
-          <span>vs</span>
-          {enemyLaner && (
-            <span className="w-5 h-5 rounded-full bg-black/30 overflow-hidden flex items-center justify-center flex-shrink-0">
-              <IconWithFallback src={enemyLaner.icon} alt={enemyLaner.name} className="w-full h-full object-cover" size={20} />
-            </span>
-          )}
-          <span className="truncate text-txt/90">{enemyLaner?.name ?? "—"}</span>
-        </div>
+        {/* Row 2 (mobile) — vs opponent, items, league+date. Dissolves into
+            the outer flex row at sm+, landing in the original column order
+            (vs, KDA, items, league). */}
+        <div className="flex items-center gap-2 sm:gap-3 sm:contents">
+          {/* vs opponent */}
+          <div className="flex items-center gap-1.5 min-w-0 flex-1 sm:w-[140px] sm:flex-shrink-0 text-[12px] text-mut">
+            <span>vs</span>
+            {enemyLaner && (
+              <span className="w-5 h-5 rounded-full bg-black/30 overflow-hidden flex items-center justify-center flex-shrink-0">
+                <IconWithFallback src={enemyLaner.icon} alt={enemyLaner.name} className="w-full h-full object-cover" size={20} />
+              </span>
+            )}
+            <span className="truncate text-txt/90">{enemyLaner?.name ?? "—"}</span>
+          </div>
 
-        {/* KDA */}
-        <div className="w-[64px] flex-shrink-0 text-[12.5px] font-semibold text-txt tabular-nums">
-          {game.kills}/{game.deaths}/{game.assists}
-        </div>
+          {/* KDA — desktop position (between vs and items). */}
+          <div className="hidden sm:block w-[64px] flex-shrink-0 text-[12.5px] font-semibold text-txt tabular-nums">{kda}</div>
 
-        {/* Final items */}
-        <div className="flex items-center gap-1 flex-shrink-0">
-          {items.map((id, i) => (
-            <span
-              key={`${id}-${i}`}
-              className="w-6 h-6 rounded bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
-            >
-              <IconWithFallback src={itemIconUrl(id, ver)} alt="" className="w-full h-full object-contain" size={24} />
-            </span>
-          ))}
-        </div>
+          {/* Final items */}
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {items.map((id, i) => (
+              <span
+                key={`${id}-${i}`}
+                className="w-6 h-6 rounded bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
+              >
+                <IconWithFallback src={itemIconUrl(id, ver)} alt="" className="w-full h-full object-contain" size={24} />
+              </span>
+            ))}
+          </div>
 
-        {/* League + date, right-aligned */}
-        <div className="ml-auto text-right flex-shrink-0 hidden sm:block">
-          <div className="text-[11.5px] text-txt/85 truncate max-w-[140px]">{game.tournament ?? "—"}</div>
-          <div className="text-[10.5px] text-mut tabular-nums">{formatShortDate(game.gameCreation)}</div>
+          {/* League + date, right-aligned — visible at every width now
+              (previously `hidden sm:block` dropped it entirely at 390px);
+              tighter max-width on mobile keeps the tournament name from
+              pushing items off-row. */}
+          <div className="ml-auto text-right flex-shrink-0">
+            <div className="text-[11.5px] text-txt/85 truncate max-w-[92px] sm:max-w-[140px]">{game.tournament ?? "—"}</div>
+            <div className="text-[10.5px] text-mut tabular-nums">{formatShortDate(game.gameCreation)}</div>
+          </div>
         </div>
       </div>
 
@@ -106,7 +146,13 @@ export default function ProBuildRow({ game, championIcon, championDisplayName, e
         championIcon={championIcon}
         championDisplayName={championDisplayName}
         open={open}
-        onClose={() => setOpen(false)}
+        // Controlled (historySheet present, home PRO BUILDS tab) mode: this
+        // is only ever reached via the cross-player-jump path inside the
+        // sheet — updating localOpen is inert there (open reads from
+        // historySheet.isOpen instead). Uncontrolled mode: unchanged, this
+        // IS the real close. Same split as ProGameCard's onClose.
+        onClose={() => setLocalOpen(false)}
+        onDismiss={historySheet?.onDismiss}
       />
     </>
   );

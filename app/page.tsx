@@ -7,6 +7,7 @@ import ChampionHero from "@/components/hextech/ChampionHero";
 import HextechTabs, { type HextechTab } from "@/components/hextech/HextechTabs";
 import BuildTabContent from "@/components/hextech/BuildTabContent";
 import ProBuildsTab from "@/components/hextech/ProBuildsTab";
+import { useSheetBackNav } from "@/components/useSheetBackNav";
 import {
   LANE_ORDER,
   STATIC_FALLBACK_LANE_CHAMPIONS,
@@ -58,6 +59,17 @@ export default function HomePage() {
 
   const champ = laneChampions[activeLane];
 
+  // Back-gesture history integration for the home PRO BUILDS tab's
+  // game-detail sheet — same useSheetBackNav hook /history uses (extracted
+  // from its original pushState/popstate machinery in v0.21.1). No
+  // selection concept here (S = null): opening a sheet just needs its own
+  // back-stack entry so browser/iOS back-swipe closes it instead of
+  // navigating away from the page. Lives at this top-level page component
+  // (not inside ProBuildsTab) so its popstate listener stays registered
+  // across a BUILD<->PRO BUILDS tab switch, not just while the tab is
+  // mounted.
+  const sheetNav = useSheetBackNav<null>();
+
   const handleLaneChange = useCallback((lane: LaneId) => {
     setActiveLane(lane);
   }, []);
@@ -99,7 +111,13 @@ export default function HomePage() {
           {tab === "build" ? (
             <BuildTabContent champ={champ} lane={activeLane} onPatchResolved={setPatch} />
           ) : (
-            <ProBuildsTab champ={champ} lane={activeLane} />
+            <ProBuildsTab
+              champ={champ}
+              lane={activeLane}
+              openGameId={sheetNav.openGameId}
+              onOpenGame={(gameId) => sheetNav.openGame(gameId, null)}
+              onDismissGame={sheetNav.dismissGame}
+            />
           )}
 
           <footer className="mt-10 pt-4 border-t border-line text-center text-[11px] text-mut space-y-1">

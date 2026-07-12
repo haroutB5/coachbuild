@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { ChampionRef } from "@/lib/types";
 import TabNav from "@/components/TabNav";
 import SegmentedControl from "@/components/SegmentedControl";
@@ -15,6 +15,7 @@ import { isFavorite, isFavoriteChampion } from "@/lib/favorites";
 import { FAVORITES_CHANGED_EVENT, CHAMPION_FAVORITES_CHANGED_EVENT, toggleFavoritePlayer, toggleFavoriteChampion } from "@/components/favoritesSync";
 import type { PlayerRef } from "@/components/proHistory.types";
 import { consumePendingPlayerSelect, type PendingPlayerSelect } from "@/components/playerSelectHandoff";
+import { useSheetBackNav } from "@/components/useSheetBackNav";
 
 // Module-level (stable references) so FavoriteStarButton's subscribe effect
 // doesn't re-run on every page re-render.
@@ -36,22 +37,27 @@ const LANE_LABEL: Record<number, string> = {
 // Back-gesture history integration.
 //
 // Selection (player/champion pick) and sheet-open are both invisible client
-// state today — a back gesture just leaves the page entirely. This wires
-// `window.history.pushState`/`popstate` so back steps through: sheet-open ->
-// the selection it was opened on -> the selection before that -> ... ->
-// wherever the user came from (no extra entry for the initial load, so the
-// LAST back always exits correctly).
+// state today — a back gesture just leaves the page entirely. The actual
+// pushState/popstate mechanics live in the shared `useSheetBackNav` hook
+// (components/useSheetBackNav.ts, extracted here in v0.21.1 so the home
+// page's PRO BUILDS tab could reuse the identical contract instead of a
+// hand-rolled fork) so back steps through: sheet-open -> the selection it
+// was opened on -> the selection before that -> ... -> wherever the user
+// came from (no extra entry for the initial load, so the LAST back always
+// exits correctly).
 //
 // Every entry is SELF-SUFFICIENT (full mode/subject/lane + which game's sheet
 // is open, if any) rather than a delta — popstate only ever hands back a
 // single state object for the entry landed on, never a diff from the
 // previous one, so each entry must carry everything needed to repaint the
-// page from scratch.
+// page from scratch. This page owns the WireSelection shape (below) and
+// hands it to the hook as its generic `S`; the hook owns openGameId +
+// pushState/popstate/replaceState wiring.
 //
 // Two distinct "closing a sheet" paths, deliberately NOT unified:
 //  - Explicit dismiss (✕ / Escape / backdrop) -> GameDetailSheet's onDismiss
-//    -> history.back(), POPPING the sheet-open entry so the stack never
-//    accumulates ghosts.
+//    -> the hook's dismissGame() -> history.back(), POPPING the sheet-open
+//    entry so the stack never accumulates ghosts.
 //  - Cross-player jump from inside the sheet (tap a Teams-box row) -> the
 //    sheet closes visually, but its history entry is left in the stack
 //    un-popped, and a NEW selection entry is pushed on top — so backing out
@@ -93,20 +99,6 @@ type WireSelection =
       championIcon: string;
       lane: number;
     };
-
-/** The full `history.pushState`/`replaceState` payload for this page.
- *  `v: 1` lets a future shape change tell an old (already-in-the-user's-
- *  back-stack) entry apart from a new one instead of guessing from field
- *  presence. */
-interface NavHistoryState {
-  v: 1;
-  selection: WireSelection | null;
-  openGameId: string | null;
-}
-
-function isNavHistoryState(v: unknown): v is NavHistoryState {
-  return typeof v === "object" && v !== null && (v as { v?: unknown }).v === 1;
-}
 
 function toWirePlayerSubject(p: PlayerSubject): WirePlayerSubject {
   if (p.kind === "tracked") {
@@ -161,13 +153,6 @@ export default function HistoryPage() {
   const [player, setPlayer] = useState<PlayerSubject | null>(null);
   const [champ, setChamp] = useState<ChampionRef | null>(null);
   const [lane, setLane] = useState<number>(5);
-  const [openGameId, setOpenGameId] = useState<string | null>(null);
-  // True while a popstate-driven restore is applying state — guards the push
-  // helpers below from ever re-entrantly pushing a NEW entry while we're in
-  // the middle of restoring an OLD one (they aren't wired to fire from that
-  // path today, but this is cheap, direct insurance against a future wiring
-  // change accidentally looping back->push->back).
-  const restoringRef = useRef(false);
 
   const selected = mode === "player" ? player !== null : champ !== null;
 
@@ -187,24 +172,10 @@ export default function HistoryPage() {
       : null;
   }
 
-  /** Pushes a brand-new SELECTION entry (player picked / champion picked /
-   *  cross-player jump) — always with openGameId reset to null, so a fresh
-   *  selection made while a sheet was open "replaces sensibly" (the sheet
-   *  belonged to the OLD selection's game list; the new selection starts
-   *  clean, no sheet forced open). Resets the LIVE `openGameId` state too,
-   *  not just the pushed entry's field — prostage `game.id` is per-MATCH,
-   *  not per-player, so a cross-player jump to a teammate/opponent from the
-   *  SAME match would otherwise leave the stale id matching that player's
-   *  own row for it and auto-open their sheet on arrival. */
-  function pushSelectionState(selection: WireSelection | null) {
-    setOpenGameId(null);
-    if (restoringRef.current) return;
-    const state: NavHistoryState = { v: 1, selection, openGameId: null };
-    window.history.pushState(state, "");
-  }
-
-  function applyHistoryState(state: NavHistoryState | null) {
-    const selection = state?.selection ?? null;
+  /** Repaints mode/player/champ/lane from a landed-on entry's selection —
+   *  handed to useSheetBackNav as `onApplySelection`, fired on mount-resume
+   *  and every popstate. The hook owns `openGameId` itself. */
+  function restoreSelection(selection: WireSelection | null) {
     if (!selection) {
       setMode("player");
       setPlayer(null);
@@ -224,8 +195,28 @@ export default function HistoryPage() {
       });
       setLane(selection.lane);
     }
-    setOpenGameId(state?.openGameId ?? null);
   }
+
+  /** Cross-page handoff (a Teams-box tap on the Builds page, stashed via
+   *  sessionStorage + a real navigation — see playerSelectHandoff.ts),
+   *  consumed once on mount by useSheetBackNav when there's no already-
+   *  seeded entry to resume. Applies its own side effects AND returns the
+   *  wire-shape selection to embed in the seeded entry. */
+  function seedInitialSelection(): WireSelection | null {
+    const pending = consumePendingPlayerSelect();
+    if (!pending) return null;
+    const subject = toPlayerSubject(pending);
+    setMode("player");
+    setChamp(null);
+    setPlayer(subject);
+    return { mode: "player", subject: toWirePlayerSubject(subject) };
+  }
+
+  const sheetNav = useSheetBackNav<WireSelection>({
+    onApplySelection: restoreSelection,
+    seedInitialSelection,
+  });
+  const openGameId = sheetNav.openGameId;
 
   function clearSelection() {
     if (mode === "player") setPlayer(null);
@@ -233,20 +224,20 @@ export default function HistoryPage() {
   }
 
   function choosePlayer(ref: PlayerRef) {
-    if (restoringRef.current) return;
+    if (sheetNav.isRestoring()) return;
     setMode("player");
     setChamp(null);
     const subject: PlayerSubject = { kind: "tracked", ref };
     setPlayer(subject);
-    pushSelectionState({ mode: "player", subject: toWirePlayerSubject(subject) });
+    sheetNav.pushSelection({ mode: "player", subject: toWirePlayerSubject(subject) });
   }
 
   function chooseChampion(c: ChampionRef) {
-    if (restoringRef.current) return;
+    if (sheetNav.isRestoring()) return;
     setMode("champion");
     setPlayer(null);
     setChamp(c);
-    pushSelectionState({
+    sheetNav.pushSelection({
       mode: "champion",
       championId: c.id,
       championKey: c.key,
@@ -257,82 +248,29 @@ export default function HistoryPage() {
   }
 
   /** Cross-player jump from inside a game-detail sheet (tap a Teams-box row)
-   *  — same-page fast path passed to ProHistoryResults as onSelectPlayer.
-   *  Also doubles as the pure "apply this pick" step for the mount-time
-   *  cross-page handoff below (that path pushes nothing — see the mount
-   *  effect's own reasoning). */
+   *  — same-page fast path passed to ProHistoryResults as onSelectPlayer. */
   function handleSelectPlayerFromSheet(ref: PendingPlayerSelect) {
-    if (restoringRef.current) return;
+    if (sheetNav.isRestoring()) return;
     const subject = toPlayerSubject(ref);
     setMode("player");
     setChamp(null);
     setPlayer(subject);
-    pushSelectionState({ mode: "player", subject: toWirePlayerSubject(subject) });
+    sheetNav.pushSelection({ mode: "player", subject: toWirePlayerSubject(subject) });
   }
 
   /** User tapped a card to open its sheet — pushes a SHEET-OPEN entry on top
    *  of the current selection (selection itself is unchanged). */
   function handleOpenGame(gameId: string) {
-    setOpenGameId(gameId);
-    if (restoringRef.current) return;
-    const state: NavHistoryState = { v: 1, selection: currentWireSelection(), openGameId: gameId };
-    window.history.pushState(state, "");
+    sheetNav.openGame(gameId, currentWireSelection());
   }
 
   /** Explicit dismiss (✕ / Escape / backdrop) — pop the sheet-open entry so
    *  the back stack never accumulates a ghost. The resulting popstate event
-   *  (handled below) is what actually clears `openGameId` — single source
-   *  of truth, no double-update. */
+   *  (handled inside the hook) is what actually clears `openGameId` — single
+   *  source of truth, no double-update. */
   function handleDismissGame() {
-    window.history.back();
+    sheetNav.dismissGame();
   }
-
-  // Mount: either resume an already-seeded entry (a same-tab refresh — the
-  // browser retains history.state for the CURRENT entry across a reload) or
-  // seed one fresh. Cross-page handoff (a Teams-box tap on the Builds page,
-  // stashed via sessionStorage + a real navigation — see
-  // playerSelectHandoff.ts) is consumed here, once, and folds into the
-  // SEEDED initial state via replaceState rather than a push: this is the
-  // page's starting point, not a "change," so back from here correctly
-  // exits to wherever the user came from (no extra entry).
-  useEffect(() => {
-    const existing = window.history.state;
-    if (isNavHistoryState(existing)) {
-      applyHistoryState(existing);
-      return;
-    }
-
-    const pending = consumePendingPlayerSelect();
-    let initialSelection: WireSelection | null = null;
-    if (pending) {
-      const subject = toPlayerSubject(pending);
-      setMode("player");
-      setChamp(null);
-      setPlayer(subject);
-      initialSelection = { mode: "player", subject: toWirePlayerSubject(subject) };
-    }
-    const seeded: NavHistoryState = { v: 1, selection: initialSelection, openGameId: null };
-    window.history.replaceState(seeded, "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Back/forward: repaint from whatever entry the browser landed on. Scroll
-  // position is left to the browser's own default (restoring to the top
-  // reads fine here and avoids an extra scrollTo jump) — see dispatch notes.
-  useEffect(() => {
-    function onPopState(e: PopStateEvent) {
-      restoringRef.current = true;
-      applyHistoryState(isNavHistoryState(e.state) ? e.state : null);
-      // Released on the next microtask — after this synchronous batch of
-      // state updates has been scheduled, so a genuinely new user action
-      // right after a restore is never mistaken for part of it.
-      queueMicrotask(() => {
-        restoringRef.current = false;
-      });
-    }
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, []);
 
   return (
     <div className="min-h-screen pb-16">

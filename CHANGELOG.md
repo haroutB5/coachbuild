@@ -2,6 +2,11 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.21.1] — 2026-07-12
+### Fixed
+- **PRO BUILDS rows no longer overflow sideways on mobile** — the Hextech redesign's row kept its desktop horizontal layout at 390px (content ~530px wide inside a 356px card), pushing the whole page into horizontal scroll and clipping KDA, the 4 item icons, and league+date off-screen. The row now reflows into two stacked lines at `<=sm` (badge/identity/KDA, then vs/items/league+date) — every datum stays visible, nothing drops behind a `hidden sm:block` anymore. The BUILD tab was already clean and is unchanged.
+- **Opening a game sheet from the home PRO BUILDS tab now integrates with browser/iOS back-gesture**, same as the Pro's page (`/history`, v0.20.0) — previously it pushed no history entry, so a back-swipe navigated away from the app instead of closing the sheet. The pushState/popstate machinery /history originally hand-rolled is now a shared hook (`components/useSheetBackNav.ts`); both pages consume the identical contract instead of a second hand-rolled copy.
+
 ## [0.20.2] — 2026-07-12
 ### Fixed
 - **New champions no longer show as a grey "Champion #id" tile the moment they ship** — coachless's static champion bundle is pinned to its own data patch and can lag ddragon by a patch (verified live: Locke, id 805, shipped 16.13.1, missing from coachless's 172-champion 16.12.1 bundle; Bwipo's Locke games rendered blank comp-strip tiles and no portrait on Locke's own card). `getAllChampions`/`getChampionById` (`lib/staticData.ts`, backing `GET /api/champions`) now gap-fill any id missing from coachless with ddragon's own latest champion.json (name + an absolute ddragon icon URL) — coachless stays primary/authoritative for every id it already has, and any ddragon failure degrades to exactly today's behavior (no crash, fallback tile).

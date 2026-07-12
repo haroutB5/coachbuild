@@ -3944,3 +3944,66 @@ chrome-devtools MCP against the live dev server, both 1280px and 390px:
 - `getLaneDefaults()`'s live sweep can reportedly take up to 20s on a stone-cold serverless instance (engo's own flag, not something I can fix from the frontend) — did not attempt to simulate a cold-start in this dev-server pass; my UI seeds with the static fallback and swaps in the resolved result whenever it lands, so it degrades gracefully either way, but the actual cold-start latency wasn't measured here.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-12 19:47
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-12 17:43:44Z; previous content preserved there. Append new rounds below. -->
+
+## v0.21.0 -> v0.21.1 — surgical audit-fix round (2026-07-12)
+
+Two findings from the Hextech redesign's pixel/UX audit, fixed, both verified in-browser (no code-only claims).
+
+### Fix 1 (P1) — PRO BUILDS rows overflowed at 390px
+`components/hextech/ProBuildRow.tsx` kept its desktop single-row flex layout at mobile widths — the row measured ~530px inside a 356px card, so the whole document scrolled sideways and KDA/items/league+date clipped off-screen.
+
+Reflowed to two stacked rows at `<=sm` using a `flex sm:contents` trick on two inner wrapper divs (they dissolve at `sm:` and hand their children straight to the outer `flex-col sm:flex-row` container as siblings, landing in the original desktop column order): row 1 = badge + identity + KDA, row 2 = vs opponent + items + league/date. The league+date block was previously `hidden sm:block` (silently dropped at mobile, not just clipped) — now visible at every width with a tighter `max-w` on the tournament name.
+
+**Proof** (puppeteer-core, 390x844 @2x, localhost:4173, PRO BUILDS tab on Ahri/Mid):
+- `document.scrollingElement.scrollWidth === window.innerWidth === 390` (no page-level horizontal scroll).
+- First row's KDA (`10/2/8`, right edge 357), enemy-laner icon + all 4 item icons (rightmost item right edge 256), and league+date (`2026 Mid-Season Invitational` / `Jul 11`, right edge 357) all measured on-screen (`offscreenLeft`/`offscreenRight` false for every element).
+- Screenshot confirmed visually — clean two-line cards, Hextech look intact, BUILD tab untouched.
+
+### Fix 2 (P2) — sheet back-gesture parity on home PRO BUILDS tab
+Opening `GameDetailSheet` from the redesigned home tab pushed no history entry, so back-swipe navigated away instead of closing the sheet. `/history` already had this right (v0.20.0) but the mechanics were hand-rolled inline in `app/history/page.tsx`.
+
+**Extracted the machinery into a shared hook**, `components/useSheetBackNav.ts` (generic over a selection payload `S`; the home tab uses `S = null` since it has no selection concept, just the sheet). Owns `openGameId` + pushState/popstate/replaceState wiring, with `onApplySelection`/`seedInitialSelection` callbacks for callers (like `/history`) that also need to restore a selection. `/history`'s `app/history/page.tsx` was refactored to consume this hook instead of its original inline `NavHistoryState`/`applyHistoryState`/`pushSelectionState` — behavior-preserving, not a rewrite (same wire shape, same two dismiss-paths, same restoringRef guard now exposed as `isRestoring()`).
+
+Wired the home tab through the same `HistorySheetControl` contract `ProGameCard.tsx` already exports (`isOpen`/`onOpen`/`onDismiss`) — `app/page.tsx` owns the hook (lives at the top-level page component, not inside `ProBuildsTab`, so its popstate listener survives a BUILD<->PRO BUILDS tab switch instead of unmounting with the tab) and threads `openGameId`/`onOpenGame`/`onDismissGame` through `ProBuildsTab` to each `ProBuildRow`, mirroring `ProHistoryResults` -> `ProGameCard` exactly.
+
+**Proof** (puppeteer-core, real `window.history.back()` calls — see note below):
+- Home: `history.length` 2 -> 3 on sheet-open (push confirmed), dialog rendered. After back: `history.length` unchanged (3, correct — back moves the cursor, not the length), dialog closed, still on PRO BUILDS tab, `history.state.openGameId === null`.
+- `/history` (searched Bwipo, opened a game): `history.length` +1 on open, dialog rendered; after back: dialog closed, `path === "/history"` (didn't leave the page), `history.state.openGameId === null`. Clean, isolated measurement — the harness issue that blocked a prior audit's `/history` measurement was puppeteer's own `page.goBack()` (see below), not the app.
+
+**Harness note for future runs:** `page.goBack({waitUntil:'domcontentloaded'})` reliably threw `Execution context was destroyed` against this app's same-document pushState transitions in headless Chrome (confirmed via `framenavigated`/`load` event logging — no real navigation event fires for these transitions, `page.goBack()` still throws). Driving `page.evaluate(() => window.history.back())` instead is the faithful, reliable way to simulate a real back-gesture here (native `history.back()` is exactly what a browser back-button / iOS swipe-back invokes). Also: PlayerPicker's autocomplete options are `<li role="option">` wrapping the actual `<button onClick={() => select(player)}>` — querying `[role=option],button` and clicking whichever matches first picks the non-interactive `<li>` in DOM order and silently no-ops; query `button` only.
+
+### Files
+- `components/useSheetBackNav.ts` — new, shared hook (also has a small pure-function test: `components/__tests__/useSheetBackNav.test.ts` covering `isNavSheetState`'s type guard; the hook itself isn't covered — no JSX/hook rendering harness in this repo, see CLAUDE.md's Test conventions).
+- `app/history/page.tsx` — refactored to consume the shared hook (no behavior change; `NavHistoryState`/`isNavHistoryState`/`applyHistoryState`/`pushSelectionState` removed, replaced by `restoreSelection`/`seedInitialSelection` + `sheetNav.*` calls).
+- `app/page.tsx` — owns a `useSheetBackNav<null>()` instance at the top-level page component, passes `openGameId`/`onOpenGame`/`onDismissGame` to `ProBuildsTab`.
+- `components/hextech/ProBuildsTab.tsx` — threads the three props through to each `ProBuildRow`.
+- `components/hextech/ProBuildRow.tsx` — mobile reflow (Fix 1) + `historySheet` prop / controlled-vs-local `open` split (Fix 2), same pattern as `ProGameCard.tsx`.
+- `package.json` 0.21.0 -> 0.21.1, `CHANGELOG.md` entry added.
+
+### Gates
+- `verify-fix.sh coachbuild`: **ALL GREEN** — tsc clean, lint clean (0 warnings), 480 tests passed (was 437 pre-round, +7 from `useSheetBackNav.test.ts`, none removed), build clean, sw/manifest fine.
+- Local dev verified on port 4173 (non-default), both fixes driven live in a real browser per the proof above.
+
+### Known limitation (not fixed, out of scope for this round)
+If a user opens a sheet on the home PRO BUILDS tab then switches to the BUILD tab WITHOUT closing it first, `ProBuildsTab` unmounts (the sheet disappears) but the pushed history entry is left un-popped — one extra silent back-press is needed before backing out of the page for real. `/history` doesn't have this edge case since its results component never unmounts independently of the sheet. Didn't fix — the brief scoped this to sheet-open/close parity, not full tab-switch history integration, and it's a pre-existing category of gap (tab switches were never history-integrated at all before this round).
+
+### Cleanup note
+Two throwaway verification screenshots were left untracked at `Design/redesign-2026-07/_verify-mobile-probuilds.png` and `_verify-mobile-sheet.png` (safety-gate declined a plain `rm` without an approval round-trip for something this trivial — left for urgot/user to delete at will, not committed).
+
+
