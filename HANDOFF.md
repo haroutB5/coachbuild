@@ -4007,3 +4007,57 @@ If a user opens a sheet on the home PRO BUILDS tab then switches to the BUILD ta
 Two throwaway verification screenshots were left untracked at `Design/redesign-2026-07/_verify-mobile-probuilds.png` and `_verify-mobile-sheet.png` (safety-gate declined a plain `rm` without an approval round-trip for something this trivial — left for urgot/user to delete at will, not committed).
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-12 22:54
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-12 18:47:22Z; previous content preserved there. Append new rounds below. -->
+
+## v0.22.0 — CHAMPIONS/PROS sidebar search toggle (fronty solo, 2026-07-12)
+
+User request: "search should depend on if I'm searching champions or pro players, under the champions/pros tab." Delivered a two-mode toggle on the Hextech sidebar search — CHAMPIONS (unchanged behavior) and PROS (new: search a tracked pro player, selecting one swaps the whole main content to a player view).
+
+**Toggle design (Hextech vocabulary used):** two small uppercase-tracked (`0.08em`) tabs sitting directly above the search input, gold underline on the active tab — the exact same visual language as the page's `HextechTabs` (BUILD/PRO BUILDS), just scaled down (10px vs 13px) so it reads as this field's own header rather than a bolted-on control. Confirmed via screenshot at 1280px and 390px — reads as one attached unit, not two separate boxes.
+
+**State model:** `searchMode: "champions" | "pros"` and `selectedPlayer: PlayerRef | null` live in `app/page.tsx` (useState), lifted there (not in `SidebarChampionSearch`) because both `Sidebar` renders (collapsed mobile bar + full desktop column, always both mounted) must share one mode. Transitions are pure functions in the new `components/hextech/homeSearch.ts` (unit-tested, `components/__tests__/homeSearch.test.ts`, 7 tests):
+- `deriveMainView(mode, champ, lane, selectedPlayer)` → `{kind:"champion",...} | {kind:"player",...}` — PROS mode with no player picked yet still shows the champion view (the toggle alone carries nothing to show).
+- `modeAfterLaneChange()` / `modeAfterChampionSelect()` → always `"champions"` (tapping a lane or picking a champion exits player mode).
+- `modeAfterPlayerSelect()` → always `"pros"`.
+- Neither `laneChampions`/`activeLane` nor `selectedPlayer` is ever cleared by a mode toggle — toggling back to CHAMPIONS trivially restores the last champion because that state was never touched. Verified live: pick Darius/Top → PROS → search Bwipo → toggle back to CHAMPIONS → Darius/Top is back, unchanged.
+
+**Files:**
+- `components/hextech/homeSearch.ts` (new) — pure state-transition module, see above.
+- `components/__tests__/homeSearch.test.ts` (new) — 7 tests.
+- `components/hextech/SidebarChampionSearch.tsx` (rewritten) — now takes `mode`/`onModeChange`/`onSelectChampion`/`onSelectPlayer`. Internally split into `ChampionSearchField` (byte-identical logic to the pre-v0.22.0 component, just renamed) and `PlayerSearchField` (new — same debounced-typeahead conventions as `PlayerPicker.tsx`: 250ms debounce, 2-char floor, request-id race guard, hits the same `GET /api/players?q=`), plus a `ModeToggle` tab pair.
+- `components/hextech/Sidebar.tsx` — threads `searchMode`/`onSearchModeChange`/`onPlayerSelect` through to both `SidebarChampionSearch` call sites.
+- `components/hextech/PlayerHero.tsx` (new) — champion-hero-equivalent for a player: gold serif display name, team + fresh gameCount sub-line, no splash (no headshot data exists anywhere in this app's pipeline) — a subtle dark radial gradient + lettered avatar tile instead, same fallback-glyph treatment `IconWithFallback` already uses app-wide.
+- `components/hextech/PlayerGamesSection.tsx` (new) — fetches `GET /api/pros?proId=<id>&role=5&limit=20` (champion-agnostic, matches `/history`'s player-mode convention), renders rows via `ProBuildRow`. Shares the page-level `useSheetBackNav` instance with `ProBuildsTab` (only one of the two is ever mounted at a time — PROS mode replaces the whole main content area, it isn't a third tab).
+- `components/hextech/ProBuildRow.tsx` — added optional `showOwnChampion` prop (default off, `ProBuildsTab` unaffected). **Real gap I caught, not in the original brief:** `ProBuildRow` was built assuming one fixed champion per list (announced once by the page's `ChampionHero`), so it never rendered the row's own champion — fine for PRO BUILDS, but a player's games span many champions, so every row read identically ("Bwipo · Estral Esports … vs X") with no way to tell which champion was played short of opening the sheet. Added a small champion icon + name badge, gated behind the new prop so `ProBuildsTab`'s existing rows render byte-identical.
+- `app/page.tsx` — wires the above; `mainView = deriveMainView(...)` decides which whole content block renders (champion hero+tabs+BuildTabContent/ProBuildsTab, or player hero+PlayerGamesSection).
+
+**Tests:** 477 → 484 (7 new, all in `homeSearch.test.ts`). No existing test touched or broken.
+
+**Browser verify (chrome-devtools MCP, local dev, ports 4178→4179 after a `.next/trace` EPERM from an orphaned `next dev` process — see gotcha (i), killed via `Stop-Process` before rebuilding):**
+- 1280px: CHAMPIONS↔PROS toggle renders correctly; PROS + "Bwipo" → hero (BWIPO / ESTRAL ESPORTS / 40 GAMES) + 20 rows, each showing Bwipo's own champion (Swain/Locke/Ornn/Yorick/...) + opponent + KDA + items. Row tap opens `GameDetailSheet`; `history.state` confirmed the `{v:1, openGameId: ...}` push. Browser back closes the sheet (`openGameId` → `null` in `history.state`) while the player view itself persists — verified with a `window.__CANARY` probe that no remount occurred (first back-test showed a full remount back to defaults, traced to a stale Fast-Refresh artifact from the dev-server restart mid-session, not a real bug — re-tested clean on the fresh 4179 session with the canary and it held).
+- 390px: toggle + rows reflow correctly (two-line stacked row layout from v0.21.1's mobile fix still applies, own-champion icon fits on line 1), no horizontal overflow, hero unchanged.
+- Champion mode (BUILD/PRO BUILDS, Ahri/Garen) confirmed unaffected at both widths.
+- Lane tap while in player view (Top→Garen) correctly exits to CHAMPIONS mode showing Garen/Top.
+- Screenshots: `01-champions-mode-1280.png`, `02-player-view-1280.png`, `03-player-view-with-champion-badge-1280.png`, `04-sheet-open-1280.png`, `05-player-view-390.png`, `06-toggle-collapsed-390.png` in the session scratchpad (not committed to the repo — final-state screenshots only, per the browser-smoke convention).
+
+**Gate:** `verify-fix.sh` ALL GREEN (tsc/lint/tests/build/sw/manifest). Version `0.21.1` → `0.22.0` (package.json; `package-lock.json`'s top-level version field is already stale at 0.20.0 pre-existing this change — not touched, consistent with prior releases). CHANGELOG entry added. Did NOT deploy — per brief, urgot ships.
+
+**Not done:** did not add favorites support to the sidebar's player search (PlayerPicker's favorite-star affordance) — out of scope, `/history` already owns favorites management. Did not add a source filter (All/Solo Queue/Pro Play) to the player view — matches `ProBuildsTab`'s existing no-filter posture, `/api/pros` defaults to `source=all` already.
+
+
+

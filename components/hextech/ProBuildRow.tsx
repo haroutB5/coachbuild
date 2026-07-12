@@ -26,6 +26,16 @@ interface ProBuildRowProps {
    *  ProBuildsTab. Undefined when the game has no role-ordered comp data
    *  (renders no "vs" — never a guessed opponent). */
   enemyLaner?: ChampionIconEntry;
+  /** v0.22.0 (PlayerGamesSection): ProBuildsTab's rows all share ONE fixed
+   *  champion (announced once by the page's ChampionHero above the list), so
+   *  the row itself never needed to name it. A player's recent games span
+   *  many different champions — without this, every row here would read
+   *  identically ("Bwipo · Estral Esports … vs X") with no way to tell which
+   *  champion was played except opening the sheet. Renders `championIcon`/
+   *  `championDisplayName` (already-forwarded-to-the-sheet props, reused
+   *  rather than duplicated) as a small badge next to the player identity.
+   *  False by default so ProBuildsTab's rows render byte-identical. */
+  showOwnChampion?: boolean;
   /** Back-gesture history integration (app/page.tsx's home PRO BUILDS tab,
    *  wired via the same useSheetBackNav hook /history uses) — see
    *  ProGameCard's HistorySheetControl doc comment for the controlled-vs-
@@ -34,7 +44,14 @@ interface ProBuildRowProps {
   historySheet?: HistorySheetControl;
 }
 
-export default function ProBuildRow({ game, championIcon, championDisplayName, enemyLaner, historySheet }: ProBuildRowProps) {
+export default function ProBuildRow({
+  game,
+  championIcon,
+  championDisplayName,
+  enemyLaner,
+  showOwnChampion,
+  historySheet,
+}: ProBuildRowProps) {
   const [localOpen, setLocalOpen] = useState(false);
   const open = historySheet ? historySheet.isOpen : localOpen;
   const ver = versionFromPatch(game.patch);
@@ -64,9 +81,9 @@ export default function ProBuildRow({ game, championIcon, championDisplayName, e
             openSheet();
           }
         }}
-        aria-label={`View details — ${cleanedName ?? game.player.name}, vs ${enemyLaner?.name ?? "opponent"}, ${
-          game.win ? "win" : "loss"
-        }`}
+        aria-label={`View details — ${cleanedName ?? game.player.name}${
+          showOwnChampion ? ` on ${championDisplayName ?? game.championName}` : ""
+        }, vs ${enemyLaner?.name ?? "opponent"}, ${game.win ? "win" : "loss"}`}
         // Desktop keeps the original single-row layout. At <=sm the two
         // inner wrappers below switch from `flex` to `sm:contents` (they
         // stop generating their own box and hand their children straight to
@@ -89,10 +106,31 @@ export default function ProBuildRow({ game, championIcon, championDisplayName, e
             {game.win ? "W" : "L"}
           </span>
 
+          {/* Own champion — only in player-view mode (PlayerGamesSection),
+              where rows span many different champions and would otherwise
+              be indistinguishable without opening the sheet. ProBuildsTab
+              never sets showOwnChampion (its rows already share one
+              champion, announced once by the page's ChampionHero). */}
+          {showOwnChampion && (
+            <span
+              className="flex-shrink-0 w-6 h-6 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center"
+              title={championDisplayName ?? game.championName}
+            >
+              <IconWithFallback
+                src={championIcon ?? ""}
+                alt={championDisplayName ?? game.championName}
+                className="w-full h-full object-cover"
+                size={24}
+              />
+            </span>
+          )}
+
           {/* Player identity */}
           <div className="min-w-0 flex-1 sm:w-[130px] sm:flex-shrink-0">
             <div className="text-[13px] font-semibold text-txt truncate">{cleanedName ?? game.player.name}</div>
-            <div className="text-[11px] text-mut truncate">{game.player.team ?? "—"}</div>
+            <div className="text-[11px] text-mut truncate">
+              {showOwnChampion ? championDisplayName ?? game.championName : game.player.team ?? "—"}
+            </div>
           </div>
 
           {/* KDA — mobile position (row 1, right edge). Desktop shows the

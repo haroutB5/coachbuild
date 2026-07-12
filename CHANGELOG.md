@@ -2,6 +2,11 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.22.0] — 2026-07-12
+### Added
+- **Search for a pro player, not just a champion**: the sidebar search now has a CHAMPIONS/PROS toggle (two small uppercase tabs sitting directly on top of the search field, same underline vocabulary as the BUILD/PRO BUILDS tabs). PROS mode searches tracked pros via the same typeahead `/history` uses; picking one swaps the whole main content to a player view — a hero (gold serif name, team, total fresh-game count — no invented imagery, since there's no headshot data anywhere in this app) followed by their recent games across every champion they've played, using the same row/sheet components PRO BUILDS already uses. Opening a game's detail sheet integrates with the same back-gesture history hook, so a back-swipe closes it here too. Switching modes never loses your champion pick — tapping a lane while browsing a player's games exits back to CHAMPIONS for that lane, same as picking a champion from search.
+- **Rows now show their own champion** when they can vary game-to-game (`ProBuildRow`'s new `showOwnChampion` prop, opt-in — PRO BUILDS' fixed-champion rows are unaffected): the player view's games span many champions, so each row now carries a small icon + name for the champion actually played, not just the opponent.
+
 ## [0.21.1] — 2026-07-12
 ### Fixed
 - **PRO BUILDS rows no longer overflow sideways on mobile** — the Hextech redesign's row kept its desktop horizontal layout at 390px (content ~530px wide inside a 356px card), pushing the whole page into horizontal scroll and clipping KDA, the 4 item icons, and league+date off-screen. The row now reflows into two stacked lines at `<=sm` (badge/identity/KDA, then vs/items/league+date) — every datum stays visible, nothing drops behind a `hidden sm:block` anymore. The BUILD tab was already clean and is unchanged.

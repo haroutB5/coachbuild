@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import type { ChampionRef } from "@/lib/types";
+import type { PlayerRef } from "@/components/proHistory.types";
 import { LANE_ORDER, LANE_LABEL, type LaneId } from "./heroContracts";
+import type { SearchMode } from "./homeSearch";
 import SidebarChampionSearch from "./SidebarChampionSearch";
 
 interface SidebarProps {
@@ -10,6 +12,13 @@ interface SidebarProps {
   onLaneChange: (lane: LaneId) => void;
   laneChampions: Record<LaneId, ChampionRef>;
   onSearchSelect: (champ: ChampionRef) => void;
+  /** v0.22.0: CHAMPIONS/PROS search-mode toggle, lifted to the page level
+   *  (app/page.tsx) so both Sidebar renders (collapsed mobile bar, full
+   *  desktop column — both always mounted, see the two call sites below)
+   *  share one mode instead of drifting independently across a resize. */
+  searchMode: SearchMode;
+  onSearchModeChange: (mode: SearchMode) => void;
+  onPlayerSelect: (player: PlayerRef) => void;
   /** e.g. "16.12" — shown in the footer once the first build response
    *  resolves; null renders "Patch —" rather than a guessed value. */
   patch: string | null;
@@ -23,6 +32,9 @@ export default function Sidebar({
   onLaneChange,
   laneChampions,
   onSearchSelect,
+  searchMode,
+  onSearchModeChange,
+  onPlayerSelect,
   patch,
   collapsed = false,
 }: SidebarProps) {
@@ -44,14 +56,24 @@ export default function Sidebar({
 
         {collapsed && (
           <div className="flex-1 max-w-[240px]">
-            <SidebarChampionSearch onSelect={onSearchSelect} />
+            <SidebarChampionSearch
+              mode={searchMode}
+              onModeChange={onSearchModeChange}
+              onSelectChampion={onSearchSelect}
+              onSelectPlayer={onPlayerSelect}
+            />
           </div>
         )}
       </div>
 
       {!collapsed && (
         <div className="mt-4">
-          <SidebarChampionSearch onSelect={onSearchSelect} />
+          <SidebarChampionSearch
+            mode={searchMode}
+            onModeChange={onSearchModeChange}
+            onSelectChampion={onSearchSelect}
+            onSelectPlayer={onPlayerSelect}
+          />
         </div>
       )}
 
