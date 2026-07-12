@@ -77,6 +77,11 @@ export default function Sidebar({
         </div>
       )}
 
+      {/* v0.22.1 (user request): LANES is champion-oriented chrome — hide the
+          whole section while the search is in PROS mode (both breakpoints).
+          Switching back to CHAMPIONS restores it, and the CHAMPIONS tab remains
+          the way out of a player view now that lane-tap-exit is hidden with it. */}
+      {searchMode === "champions" && (
       <div className={collapsed ? "mt-3 -mx-4 px-4 overflow-x-auto" : "mt-6"}>
         <p className="text-[10px] tracking-[0.14em] uppercase text-mut font-semibold mb-2 px-0.5">
           Lanes
@@ -113,6 +118,7 @@ export default function Sidebar({
           })}
         </nav>
       </div>
+      )}
 
       {!collapsed && (
         <div className="mt-auto pt-6 space-y-1">
