@@ -2,6 +2,12 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.23.0] — 2026-07-12
+### Added
+- **Back on the home page now walks your view trail** — champion → search a pro (player view) → back returns to the champion you were on; player view → open a game sheet → back closes the sheet (still the player view) → back again returns to the previous champion. Lane taps and champion search picks each get their own back-gesture step; the BUILD/PRO BUILDS tab does not (it's sub-state of a champion view, not a page of its own — switching tabs updates the current step in place instead of adding one). Same `useSheetBackNav` hook `/history` (v0.20.0) and the home PRO BUILDS sheet (v0.21.1) already use, now instantiated with the actual champion/player selection instead of nothing. A same-tab reload preserves whatever view you were on; a fresh tab/hard reload still lands on the default champion (no URL/query-param involvement — see app/page.tsx's design note for why a query-param design was evaluated and not used).
+### Fixed
+- **Switching tabs while a game sheet was open no longer strands a "ghost" back-stack entry** (previously documented as a known gap: `ProBuildsTab`/`BuildTabContent` unmount on a tab switch, silently orphaning the sheet's history entry, so one extra silent back-press was needed before the page would actually navigate). Tab switches now explicitly close an open sheet via a real back-navigation instead of leaving it behind. The same fix incidentally covers champion/lane/player changes made while a sheet was open, which had the identical gap.
+
 ## [0.22.0] — 2026-07-12
 ### Added
 - **Search for a pro player, not just a champion**: the sidebar search now has a CHAMPIONS/PROS toggle (two small uppercase tabs sitting directly on top of the search field, same underline vocabulary as the BUILD/PRO BUILDS tabs). PROS mode searches tracked pros via the same typeahead `/history` uses; picking one swaps the whole main content to a player view — a hero (gold serif name, team, total fresh-game count — no invented imagery, since there's no headshot data anywhere in this app) followed by their recent games across every champion they've played, using the same row/sheet components PRO BUILDS already uses. Opening a game's detail sheet integrates with the same back-gesture history hook, so a back-swipe closes it here too. Switching modes never loses your champion pick — tapping a lane while browsing a player's games exits back to CHAMPIONS for that lane, same as picking a champion from search.

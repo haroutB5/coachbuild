@@ -61,6 +61,17 @@ export interface UseSheetBackNavResult<S> {
    *  unchanged) — pass the caller's current selection (or `null` when the
    *  caller has none) so the entry stays self-sufficient. */
   openGame: (gameId: string, currentSelection: S | null) => void;
+  /** Replace the CURRENT top-of-stack entry's selection in place — no push,
+   *  no navigation, no popstate. For a sub-state change that shouldn't count
+   *  as its own back-gesture step (e.g. the home page's BUILD/PRO BUILDS tab,
+   *  v0.23.0: switching tabs doesn't change "which page" you're on, so it
+   *  updates the existing entry rather than adding one). Only call this while
+   *  no sheet is open (openGameId === null) — it does not touch openGameId,
+   *  so replacing over a sheet-open entry would silently strip its sheet.
+   *  Callers that need to change selection AND close an open sheet at once
+   *  should dismissGame() first (a real back()) and let the resulting
+   *  popstate drive the restore instead. */
+  replaceSelection: (selection: S | null) => void;
   /** Explicit dismiss (✕ / Escape / backdrop) — pop the sheet-open entry.
    *  The resulting popstate is what actually clears `openGameId` — single
    *  source of truth, no double-update. */
@@ -94,6 +105,12 @@ export function useSheetBackNav<S>({
 
   function dismissGame() {
     window.history.back();
+  }
+
+  function replaceSelection(selection: S | null) {
+    if (restoringRef.current) return;
+    const state: NavSheetState<S> = { v: 1, selection, openGameId: null };
+    window.history.replaceState(state, "");
   }
 
   // Mount: either resume an already-seeded entry (a same-tab refresh — the
@@ -140,6 +157,7 @@ export function useSheetBackNav<S>({
     pushSelection,
     openGame,
     dismissGame,
+    replaceSelection,
     isRestoring: () => restoringRef.current,
   };
 }

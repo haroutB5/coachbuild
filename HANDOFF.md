@@ -4061,3 +4061,51 @@ User request: "search should depend on if I'm searching champions or pro players
 
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-13 00:01
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-12 21:54:46Z; previous content preserved there. Append new rounds below. -->
+
+## v0.23.0 (2026-07-12/13) — Home page back-gesture history integration
+
+**User request** (their words): "when I go back it should take me to the previous page I was in." Previously only the game-detail sheet participated in browser history (`useSheetBackNav`, v0.21.1) — champion↔player and champion→different-champion changes were pure client state, so back/forward left the app or landed nowhere useful.
+
+**Design chosen: extended `useSheetBackNav<S>` (NOT URL query params).** The brief's preferred design was `?c=/&lane=/&p=` query params via `useSearchParams`+`router.push`. Evaluated and deliberately deviated: that would mean composing TWO independent history-mutation systems (Next's router-driven history + this hook's raw `window.history.pushState` for the sheet) — exactly the kind of composition risk the brief itself flagged ("verify the tab-switch ghost doesn't get worse"). `/history` (v0.20.0, CLAUDE.md gotcha (n)) already proves the "wrap a real selection type in `useSheetBackNav<S>`" pattern end-to-end for this identical shape of problem (selection + sheet nested on top). Reused it: `components/hextech/homeSearch.ts` now exports `WireMainView` (`{view: MainView, tab: HextechTab}`), `applyWireMainView` (pure wire→state mapping), `wireViewForChampion`/`wireViewForPlayer` (pure state→wire builders) — `app/page.tsx`'s `sheetNav` is `useSheetBackNav<WireMainView>` instead of `<null>`.
+- Consequence (documented, accepted): no deep-linking/shareable player-view URLs; a reload on a FRESH tab still lands on the default champion. A SAME-TAB reload DOES preserve the current view (the hook's mount effect resumes `history.state` for the current entry — verified live).
+
+**Push/replace policy:**
+| Action | push or replace | why |
+|---|---|---|
+| Lane tap (`handleLaneChange`) | push | changes which champion is shown — an identity change, "a page" |
+| Champion search pick (`handleChampionSelect`) | push | same |
+| Player search pick (`handlePlayerSelect`) | push | champion→player is the user's own example |
+| CHAMPIONS/PROS mode toggle alone (no pick yet) | neither (raw `setSearchMode`) | toggle carries no content of its own (matches `/history`'s mode-toggle precedent — also un-pushed there) |
+| BUILD/PRO BUILDS tab (`handleTabChange`) | replace (`sheetNav.replaceSelection`) | sub-state of an already-selected champion view, not a page — "previous page" means champion/player identity, not tab. Verified live: pushing Lee Sin→PRO BUILDS via replace kept `history.length` unchanged, and one back-press from there skipped straight to the prior champion (no extra step for the tab flip). |
+| Game sheet open/dismiss | unchanged (existing `openGame`/`dismissGame`) | already correct from v0.21.1 |
+
+**Bonus fix, verified: stale-seed race on cold load.** The seeded initial history entry is captured synchronously at mount (`seedInitialSelection`), before `getLaneDefaultChampions()`'s async live sweep resolves — so on a fresh load where the live default diverges from `STATIC_FALLBACK_LANE_CHAMPIONS` (verified live: default resolved to Ahri/mid, not the Viktor/mid static fallback — expected per heroContracts.ts's documented divergence), a "back past everything" press would have restored the stale fallback instead of what the page actually showed. Fixed with a `hasInteractedRef` guard in `app/page.tsx`: if the live sweep resolves before the user has touched anything, it `replaceSelection`s the still-current seeded entry too. **Verified live**: fresh load → showed Ahri (live default) → picked Garen(top) → searched Bwipo → opened a sheet → back×3 → landed on Ahri/mid (not Viktor) at both desktop and 390px.
+
+**Known gap NOT fixable via the mouse, verified live (not just reasoned):** `handleTabChange` has a branch that calls `dismissGame()` instead of `replaceSelection()` when a sheet is open, intended to close the HANDOFF-documented "tab-switch-while-sheet-open leaves an un-popped entry" gap. Attempted to reproduce live: `GameDetailSheet`'s backdrop is `fixed inset-0 z-[100]` covering the ENTIRE viewport (including the tab bar) while open — a real click physically cannot reach the BUILD/PRO BUILDS tabs while the sheet is open (confirmed: clicking the tab bar's prior on-screen coordinates while the sheet was open did nothing at all — not even the backdrop's own dismiss fired, meaning the click landed on neither element). So this specific interaction is unreachable via primary pointer input in the current UI; the guard is defensively-correct dead code today, not a verified fix of a reproduced bug. Left in (harmless, cheap, correct if ever reachable via some other input path) but flagged here so it isn't mistaken for a verified fix.
+
+**Files:** `app/page.tsx` (sheetNav wiring, restoreMainView, 4 handlers, hasInteractedRef fix), `components/hextech/homeSearch.ts` (WireMainView/applyWireMainView/wireViewForChampion/wireViewForPlayer, all pure), `components/useSheetBackNav.ts` (new `replaceSelection` method, backward-compatible — `/history` untouched, still uses `pushSelection`/`openGame`/`dismissGame` only).
+
+**Tests:** `components/__tests__/homeSearch.test.ts` — 6 new cases covering `wireViewForChampion`/`wireViewForPlayer`/`applyWireMainView` including a round-trip test reproducing the user's exact Viktor(mid)→Bwipo→back scenario. 489 tests total (was 484), all green. `verify-fix.sh`: ALL PASS (tsc, lint, build, tests, sw, manifest).
+
+**Browser verification (both desktop 1280px and mobile 390px):** drove the exact trail live via chrome-devtools MCP — champion(Garen/top) → player(Bwipo) → open sheet → back → back → back landed on the live-resolved default champion, not the stale static fallback. Confirmed `/history` renders unaffected (v0.23.0 footer, prompt state, untouched). Confirmed same-tab reload preserves the current view (Lee Sin/jungle/PRO BUILDS survived a reload). Confirmed forward navigation works.
+
+**Not done:** did not attempt to make the tab-switch-while-sheet-open path reachable/testable (see gap above) — would require either moving the sheet's dismiss trigger or restructuring the modal, out of scope for this request. Version bumped 0.22.1 → 0.23.0, CHANGELOG updated. Did not deploy per instructions (urgot ships).
+
+
+

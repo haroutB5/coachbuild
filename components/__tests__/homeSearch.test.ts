@@ -4,6 +4,9 @@ import {
   modeAfterLaneChange,
   modeAfterChampionSelect,
   modeAfterPlayerSelect,
+  applyWireMainView,
+  wireViewForChampion,
+  wireViewForPlayer,
 } from "../hextech/homeSearch";
 import type { ChampionRef } from "@/lib/types";
 import type { PlayerRef } from "@/components/proHistory.types";
@@ -78,5 +81,59 @@ describe("modeAfterChampionSelect", () => {
 describe("modeAfterPlayerSelect", () => {
   it("always lands in PROS mode", () => {
     expect(modeAfterPlayerSelect()).toBe("pros");
+  });
+});
+
+// v0.23.0: back-gesture history integration (the wire<->state mapping
+// app/page.tsx's useSheetBackNav<WireMainView> instance uses to push/replace
+// entries and restore from them).
+describe("wireViewForChampion", () => {
+  it("wraps a champion+lane pick with the given tab", () => {
+    expect(wireViewForChampion(VIKTOR, "mid", "build")).toEqual({
+      view: { kind: "champion", champ: VIKTOR, lane: "mid" },
+      tab: "build",
+    });
+  });
+});
+
+describe("wireViewForPlayer", () => {
+  it("wraps a player pick with the given tab", () => {
+    expect(wireViewForPlayer(BWIPO, "proBuilds")).toEqual({
+      view: { kind: "player", player: BWIPO },
+      tab: "proBuilds",
+    });
+  });
+});
+
+describe("applyWireMainView", () => {
+  it("maps a champion-kind wire to CHAMPIONS mode + activeLane/champ, omitting selectedPlayer entirely", () => {
+    const applied = applyWireMainView(wireViewForChampion(DARIUS, "top", "proBuilds"));
+    expect(applied).toEqual({ searchMode: "champions", tab: "proBuilds", activeLane: "top", champ: DARIUS });
+    expect(applied.selectedPlayer).toBeUndefined();
+    expect("selectedPlayer" in applied).toBe(false);
+  });
+
+  it("maps a player-kind wire to PROS mode + selectedPlayer, omitting activeLane/champ entirely", () => {
+    const applied = applyWireMainView(wireViewForPlayer(BWIPO, "build"));
+    expect(applied).toEqual({ searchMode: "pros", tab: "build", selectedPlayer: BWIPO });
+    expect(applied.activeLane).toBeUndefined();
+    expect(applied.champ).toBeUndefined();
+  });
+
+  it("round-trips the full user-reported trail: Viktor(mid) -> pick Bwipo -> back restores Viktor(mid) untouched", () => {
+    // Seeded entry at mount (app/page.tsx's seedInitialSelection).
+    const seeded = wireViewForChampion(VIKTOR, "mid", "build");
+    // Pushed when the player search fires (handlePlayerSelect).
+    const pushed = wireViewForPlayer(BWIPO, "build");
+    // A back-press pops back to the seeded entry -- applyWireMainView(seeded)
+    // must reproduce the exact original champion/lane, not something derived
+    // from the player entry in between.
+    expect(applyWireMainView(pushed)).toEqual({ searchMode: "pros", tab: "build", selectedPlayer: BWIPO });
+    expect(applyWireMainView(seeded)).toEqual({
+      searchMode: "champions",
+      tab: "build",
+      activeLane: "mid",
+      champ: VIKTOR,
+    });
   });
 });
