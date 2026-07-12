@@ -3767,3 +3767,180 @@ Confirmed the Locke icon URL itself resolves live: `curl -o /dev/null -w "%{http
 
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-12 17:57
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-12 01:15:31Z; previous content preserved there. Append new rounds below. -->
+
+## Data-layer support for the champion-centric redesign (parallel with fronty) — 2026-07-12
+
+**Scope:** three new lib modules + two new API routes + tests, per the split brief. Touched ONLY `lib/`, `lib/__tests__/`, `app/api/hero-stats/`, `app/api/lane-defaults/`. Zero touches to `app/page.tsx`, `app/history/page.tsx`, `components/`, `globals.css`, `tailwind.config.ts` — verified with `git status` equivalent before finishing (see file list below).
+
+### ⚠️ PROMINENT DEVIATION — lane defaults do NOT match the mockup's champion picks, and this is expected/correct per spec
+
+The redesign screenshots show Darius/Lee Sin/Viktor/Jinx/Thresh as the sidebar defaults. I implemented `getLaneDefaults()` to **genuinely compute** "most played per lane" from live coachless occurrence data (per the brief: "compute, don't hardcode"). Live-verified today (16.12, high-elo) against a representative per-lane shortlist (NOT the full ~172-champion pool — see cost note below):
+
+| Lane | Mockup shows | **Live computed winner** | Runner-up (mockup's pick) |
+|---|---|---|---|
+| Top | Darius | **Garen** (225,202 games) | Darius (183,315) |
+| Jungle | Lee Sin | **Lee Sin** (338,433) ✅ matches | — |
+| Mid | Viktor | **Ahri** (260,518) | Viktor (246,675) |
+| Bot | Jinx | **Ezreal** (416,892) | Jinx (304,604, 4th of 5 tried) |
+| Support | Thresh | **Thresh** (363,356) ✅ matches | — |
+
+3 of 5 lanes disagree with the mockup. This means: if fronty (or urgot) expects the running app to pixel-match the screenshot's champion choices, `getLaneDefaults()` as shipped will NOT do that — it'll show Garen/Lee Sin/Ahri/Ezreal/Thresh instead. I built it this way because the brief was explicit ("compute, don't hardcode... static map only if the data can't answer it") and the mockup's picks read like artist-chosen "iconic" champions rather than literal current pick-rate leaders. **This is a real product decision for urgot, not a bug** — flagging before fronty locks anything to the specific mockup champions. If the intent was actually "use these 5 specific champions," that's a one-line static map, not this module — say the word and I'll swap it.
+
+Also note: my live-verification shortlist per lane (6-7 candidates, chosen to be plausible flagship picks) is **not exhaustive** — e.g. top lane wasn't checked against Mordekaiser/Sett/Ornn/Trundle, mid wasn't checked against Akali/Katarina/Azir/LeBlanc, bot wasn't checked against Kalista/Draven/Xayah. The real production sweep (full champion pool, shipped code) could turn up a DIFFERENT winner than my shortlist did for any given lane. I did not run the full ~860-call sweep live (see cost note) — treat my shortlist numbers as "proof the selection logic is correct against real data," not as "these are definitely the production winners."
+
+### 1. `lib/heroStats.ts` — `getHeroStats(championId: number, lane: string) → Promise<{winRatePct: number|null, gamesCount: number|null}>`
+
+coachless has **no champion-level winrate field anywhere** — probed live, confirmed `RuneEntry` (keystone data) only carries `wpaOverall`+`occurrence`, no winrate at all; item/spell `winrateObserved` is per-item (win rate of games where THAT item was bought), not champion-overall. No tier-list/overview endpoint exists either (see below). So:
+- **`gamesCount`** = sum of `occurrence` across `Rune/GetKeystoneData` rows for the champ+lane — same "total games" definition `recommend.ts`'s `totalGames` already uses (internally consistent with the Builds page).
+- **`winRatePct`** = occurrence-weighted average of `winrateObserved` across every STARTER item (`itemType=6`) for that champ+lane. Defensible because ~every game buys exactly one starter, so starter-occurrence sum ≈ total games (verified: Viktor mid keystone-sum 246,675 vs. starter-sum 246,447, 99.9% match).
+- Real live values (16.12, high-elo, verified via a standalone probe script running the actual endpoints, before writing the module):
+  - **Viktor MID: 50.30% WIN · 246,675 GAMES**
+  - Lee Sin JUNGLE: 48.87% WIN · 338,433 GAMES
+  - Locke TOP (id 805, brand-new champ): **both null** — coachless has zero WPA rows for it yet (confirms the "null when unavailable" contract works for real, not just in theory).
+- Never throws — degrades to `{winRatePct: null, gamesCount: null}` on any upstream failure or unknown lane string.
+- Caching: relies entirely on `coachless.ts`'s existing `post()` helper, which already opts every call into Next's `{ next: { revalidate: 21600 } }` (6h) fetch data-cache — no separate cache layer added, "consistent with the repo's existing caching of coachless data" per brief.
+
+### 2. `lib/laneDefaults.ts` — `getLaneDefaults() → Promise<Record<LaneKey, {championId, championName}>>`
+
+No champion-overview/tier-list endpoint exists on coachless's API — I live-probed ~12 plausible endpoint names (`GetChampionsTierList`, `GetChampionOverview`, `GetChampionPool`, `GetMostPlayed`, etc.), **all 404**. Also confirmed `championIds: []` does NOT give a per-champion breakdown — it returns one role-wide AGGREGATE across every champion. So "most played per lane" genuinely requires one `GetKeystoneData` call per champion per lane — up to **172 champs × 5 lanes = 860 calls** for a full cold sweep.
+
+Implementation: concurrency-limited (12 in flight), per-call `AbortSignal.timeout` (5s), overall wall-clock `SWEEP_BUDGET_MS` (20s) — any lane not resolved by the deadline falls back to a static per-lane default rather than hanging the caller. Result memoized in-process for 6h with a single-flight guard (mirrors `staticData.ts`'s `getLatestPatch` pattern exactly). Static fallback (used only on total failure or an unresolved lane) is the mockup's own picks: Darius/Lee Sin/Viktor/Jinx/Thresh.
+
+**Flagged, not fixed (out of lib-module scope):** a stone-cold serverless instance hitting `/api/lane-defaults` first has to do the full sweep synchronously (up to 20s budget) since in-memory caches don't survive across Vercel instances/cold starts. Recommend urgot/devy point a warm-up cron hit at this route, same pattern as the existing prostage-ingest external pinger (repo Gotcha (o)) — noted in both the module header and the route file, not built here since it's an infra decision.
+
+`pickMostPlayed()` is exported as a pure function (candidates + occurrence map → winner) specifically so the selection logic is unit-testable without network, per the repo's Test Conventions.
+
+### 3. `lib/splash.ts` — `getSplashUrl(championKey: string): string | null`
+
+Pure/synchronous, no network — matches the app's existing `IconWithFallback` architecture (URLs built optimistically, 403/404 handled at render time, not pre-flighted). Live-verified:
+- `Viktor_0.jpg`, `LeeSin_0.jpg`, `Jinx_0.jpg` → 200
+- `Locke_0.jpg` (brand-new champ, id 805, 16.13.1) → **200** — ddragon splash art is NOT version-folder-gated the way `ICON_BASES.champ()` icons are, ships same-day, ahead of coachless's champion.json lag
+- `Wukong_0.jpg` → **403** (ddragon's real key is `MonkeyKing`, not `Wukong`) — and a fully made-up key also came back 403, not 404. **Fronty: the render-layer fallback must trigger on any non-200, not assume 404 specifically.**
+- Expects `championKey` to be `ChampionRef.key` (the ddragon CDN key form, e.g. "Viktor", "LeeSin") — same field the champion map already carries, so no name normalization needed at the call site.
+
+### API routes
+
+Both added — client components (the Builds page and presumably the redesigned page) can't call coachless directly (no CORS header, verified in `_research/PLAN.md`), so a proxy route is required, same as `/api/build`/`/api/champions`.
+
+- **`GET /api/hero-stats?champ=<id>&lane=<top|jungle|mid|bot|support>`** → `HeroStats` JSON. 400 on missing/invalid params. `Cache-Control: s-maxage=21600, stale-while-revalidate=86400` (matches `/api/build`'s cadence).
+- **`GET /api/lane-defaults`** (no params) → `Record<LaneKey, LaneDefault>` JSON. `Cache-Control: s-maxage=86400, stale-while-revalidate=604800` (matches `/api/champions`).
+- **`getSplashUrl` needs NO route** — pure/sync, safe to import directly into a client component; the resulting URL is used in an `<img src>` (not `fetch()`), so there's no CORS concern for display (CORS only blocks script-initiated cross-origin reads).
+
+### Tests + verification
+
+- `lib/__tests__/heroStats.test.ts` (6 tests), `lib/__tests__/laneDefaults.test.ts` (7 tests), `lib/__tests__/splash.test.ts` (6 tests) — 19 new tests, all following the repo's existing `vi.mock("../coachless")`/`vi.mock("../staticData")` + injectable-clock pattern (see `staticData.patch.test.ts`).
+- `npx tsc --noEmit` → clean, zero errors.
+- `npx vitest run` → **465 passed (465)**, 36 files (was 446 tests / 33 files before this round — matches 19 added).
+- Live-verified (real network, standalone probe scripts, not the shipped test mocks) BEFORE writing the modules: Viktor-mid hero stats, Lee Sin-jungle hero stats, Locke-top null case, ddragon splash 200s + the Wukong 403 case, and the lane-defaults shortlist sweep table above. Did NOT run the full 860-call lane-defaults sweep live (see cost note) — a deliberate scope cut for API politeness/dev-loop speed, documented in the module and here.
+
+### Files touched (exact list, for fronty's overlap-check)
+
+- `lib/heroStats.ts` (new)
+- `lib/laneDefaults.ts` (new)
+- `lib/splash.ts` (new)
+- `app/api/hero-stats/route.ts` (new)
+- `app/api/lane-defaults/route.ts` (new)
+- `lib/__tests__/heroStats.test.ts` (new)
+- `lib/__tests__/laneDefaults.test.ts` (new)
+- `lib/__tests__/splash.test.ts` (new)
+
+No existing files modified. No `verify-fix.sh`/`next build` run (shared-checkout discipline, per brief) — gates were `tsc --noEmit` + `vitest run` only, both green.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-12 18:43
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-11 22:50:18Z; previous content preserved there. Append new rounds below. -->
+
+# HANDOFF-fronty.md — round 2026-07-12 (Hextech redesign — champion-centric page)
+
+## Scope
+
+Full visual redesign of the main app (`/`) to match `Design/redesign-2026-07/build-tab.png` and `pro-builds-tab.png` — sidebar + champion hero + BUILD/PRO BUILDS tabs, replacing the old dpm.lol-era layout. Consumed engo's concurrently-landed contract (`lib/heroStats.ts`, `lib/laneDefaults.ts`, `lib/splash.ts` + `/api/hero-stats`, `/api/lane-defaults`) — wired to the REAL modules, not a stub (they landed mid-session; see "Contract status" below).
+
+## Files added (all new — `components/hextech/`)
+
+- `Sidebar.tsx` + `SidebarChampionSearch.tsx` — wordmark, champion search (chromeless combobox, own component rather than a ChampionPicker variant — kept `ChampionPicker.tsx` untouched), 5 lane rows, footer (patch/attribution/`Pro players` link to `/history`). Responsive: `collapsed` prop renders a horizontal top-bar (search + scrollable lane row + compact patch/link line) below `lg` (1024px); both variants render simultaneously, gated by Tailwind `hidden lg:flex` / `lg:hidden` (no JS breakpoint detection, no hydration risk).
+- `ChampionHero.tsx` — splash banner (`getSplashUrl`), gold-bordered icon, serif champion name, `LANE · WIN% · GAMES` subline (green win%, muted lane/games, renders `—` when `getHeroStats` returns null rather than guessing).
+- `HextechTabs.tsx` — BUILD/PRO BUILDS underline tabs.
+- `BuildTabContent.tsx` + `RunesSummonersCard.tsx` + `StartingCard.tsx` + `CoreBuildOrderCard.tsx` + `SituationalCard.tsx` (+ `situational.ts`, pure `flattenSituational` split out for oxc-JSX-in-.ts-test-file testability, same pattern as `StatBadge.tsx`) — fetches `/api/build?champ=&role=`, renders the #1 ranked build only (spec has no variant switcher, unlike the legacy 3-variant Builds page).
+- `ProBuildsTab.tsx` + `ProBuildRow.tsx` — fetches `/api/pros?championId=&role=&limit=20&source=prostage` (deliberately `source=prostage`, not `all` — the spec's rows all carry a league name + date, which only pro-play rows have; not a user-toggleable filter). Enemy laner resolved via `game.enemyChampionIds[roleIndex]` + a champion-id map (`proAssets.ts`'s `getChampionIconMap`) — no new backend field needed. Row click opens the existing `GameDetailSheet` (uncontrolled `open` state, same pattern as the legacy `ProGameCard` on the old Builds page) — verified live, teams/items/runes all render correctly.
+- `heroContracts.ts` — the ONE file every hextech component imports engo's contract through (`getHeroStats`, `getSplashUrl` re-export, `getLaneDefaultChampions`, lane/role maps). Was written as a typed stub first (per brief), then swapped to the real `lib/heroStats.ts`/`lib/laneDefaults.ts`/`lib/splash.ts` + their API routes once engo's HANDOFF entry landed mid-session — see "Contract status."
+- `wpaFormat.ts` — **UNUSED**, could not `rm` (repo's safety gate blocks file deletion without user approval). See "Fidelity deviations" below for why it was abandoned; left on disk with a doc-comment explaining the status, zero imports left.
+
+## Files modified
+
+- `app/page.tsx` — full rewrite: Sidebar + ChampionHero + HextechTabs + tab content, replacing the old champ/role picker layout. Lane state seeded from `STATIC_FALLBACK_LANE_CHAMPIONS` (mockup's own Darius/Lee Sin/Viktor/Jinx/Thresh) for first paint, then overwritten per-lane by the async `getLaneDefaultChampions()` once it resolves — guarded by an `overriddenLanesRef` so a live resolution never clobbers a manual search pick that happened first.
+- `app/layout.tsx` — added `Cinzel` (next/font/google) as `--font-display` for the gold serif headings/wordmark; `viewport.themeColor` updated to `#0a0d0b`.
+- `app/globals.css`, `tailwind.config.ts` — repointed the EXISTING token names (`teal`→gold `#c8aa6e`, `bg`→near-black-green `#0a0d0b`, `txt`/`mut`/`good`/`bad` retuned) rather than introducing new ones, same pattern the prior cyan→lavender reskin used — every untouched legacy surface (`/history`, `RunePage`, `TabNav`, etc.) inherits the new Hextech palette for free, zero code changes there. Added `sidebar`, `line-gold`, `win`, `loss` as genuinely new tokens (no prior equivalent). `fontFamily.display` added.
+- `public/manifest.webmanifest` — `background_color`/`theme_color` → `#0a0d0b`.
+
+## Contract status (engo's `lib/heroStats.ts` / `laneDefaults.ts` / `splash.ts`)
+
+**Landed and wired to the real thing, not the stub.** Mid-session, engo's HANDOFF entry ("Data-layer support for the champion-centric redesign") landed with a real deviation worth restating here since it changes what the running app shows:
+
+- `getLaneDefaults()` **genuinely computes** "most played per lane" from live coachless data (per its own brief) rather than hardcoding the mockup's picks. Live-verified 3 of 5 lanes diverge from the mockup screenshot (Top: Garen not Darius; Mid: Ahri not Viktor; Bot: Senna-ish not Jinx — exact winner drifts with live data). **This is expected, not a bug** — confirmed live in my own browser pass (screenshots show Ahri/Garen, not Viktor/Darius). The static mockup picks are used only as first-paint seed + total-failure fallback.
+- `getHeroStats` had no direct source field for champion-level winrate — engo derived it (occurrence-weighted starter-item winrate, documented in `lib/heroStats.ts`). Verified live: Viktor MID showed 50.3%, matches engo's own probe number.
+
+## Fidelity deviations from the spec screenshots (self-assessed, full list)
+
+1. **WPA number format is NOT `%`-scaled.** The mockup shows `+1.8%`-style numbers. I initially built this literally (`×100` + `%`, `wpaFormat.ts`) but live-tested it against real `/api/build` data and it broke badly: `Pick.wpa` is not a bounded probability fraction — `lib/sampleBuild.ts`'s own fixtures range 0.0 to 1.68+, and live Viktor-mid data showed item WPAs up to 3.3, so `×100` produced `+331.3%`. Reverted to the app's existing `wpaText()` format (`components/StatBadge.tsx`, raw signed 2-decimal, no `%`) — the SAME format every other WPA display in the app already uses. Visually this reads as e.g. `+0.70` instead of the mockup's `+1.8%` — a deliberate, tested correction, not an oversight.
+2. **STARTING card shows one item, not two.** The mockup shows a ring + a potion. `ItemsBlock` only carries a single `starter: Pick` field on the wire — there's no second starting-item slot to render honestly. Documented in `StartingCard.tsx`'s own comment.
+3. **`Pro players` link/patch line is a single compact row on mobile**, not the desktop's 3-line footer block (`WPA data · coachless.gg` dropped from the mobile row for space) — attribution still present in the page's own bottom footer either way.
+4. **RUNES & SUMMONERS' small icon row** (secondary tree icon+name, 3 shard dots, 2 spell icons) is my best-effort reconstruction from the screenshot's small icons — verified it renders sensible real data (tree/shards/spells all resolve to correct real assets) rather than blindly guessing further at exact mockup icon meanings.
+5. **Legacy `/history` page and its components are untouched** except for inheriting the new color tokens automatically (same mechanism as #6 below) — its own layout (search bar, PlayerPicker, ProHistoryResults, GameDetailSheet chrome) was explicitly out of scope per the brief.
+6. **Global color tokens changed, so `/history` now reads Hextech-gold too**, not just the new page. This was a deliberate call (see "Files modified" above) rather than maintaining two clashing themes — flagging in case that wasn't the intent.
+
+## Known non-regression (not fixed, pre-existing)
+
+Saw one transient `500` on `/api/pros?...&source=prostage` in the dev console, immediately followed by a `200` on identical params (React StrictMode double-effect in dev, or the documented Leaguepedia sticky-rate-limit behavior in `CLAUDE.md` Gotcha (c)). Self-recovered, not something my components introduced — flagging for awareness, not treating as a P0.
+
+## Build discipline honored
+
+- Did **not** run `verify-fix.sh` or `next build` (shared checkout with engo). Gates run: `npx tsc --noEmit` (clean) and `npx vitest run` (473/473 passed, up from 446 at session start — added `components/__tests__/situational.test.ts`, 5 tests for the pure `flattenSituational` dedup/sort logic; `wpaFormat.test.ts` also exists, still valid, tests an unused-but-correct function — see file-deletion note above).
+- Dev server run on port 3123 (non-default), killed cleanly at the end (`taskkill`, confirmed port free via `netstat`) — no orphaned process left for engo's/urgot's build gate.
+- Did not touch any file under engo's exclusive ownership (`lib/heroStats.ts`, `lib/laneDefaults.ts`, `lib/splash.ts`, `app/api/hero-stats/`, `app/api/lane-defaults/`).
+
+## Browser verification performed
+
+chrome-devtools MCP against the live dev server, both 1280px and 390px:
+- Desktop BUILD tab (Viktor→Ahri after live lane-defaults resolved, then Zed via search) — full page + viewport screenshots, a11y snapshot.
+- Desktop PRO BUILDS tab — row list renders correctly (W/L badge, player+team, vs+enemy champ icon+name, KDA, 4 item icons, league+date), clicked a row and confirmed `GameDetailSheet` opens with full Teams/runes/items/build-order content intact, closed cleanly.
+- Mobile 390px: collapsed sidebar (horizontal lane scroll + search + compact patch/link row), BUILD tab full-page screenshot, PRO BUILDS empty state (searched to a champion with no tracked pro-play games — clean empty state, no layout break).
+- Champion search: typed "Zed", filtered list showed exactly one match, selected it, confirmed it assigned to the currently-active lane (Mid) and the hero/build/tabs all re-fetched correctly.
+- Console: one transient 500→200 pair noted above; otherwise clean, no hydration warnings, no React errors.
+
+## Not verified (honest gaps)
+
+- Did not test the BUILD tab's empty/error states live (no champion+lane combo with zero coachless data was tried) — code path is a direct restyle of the pre-existing `app/page.tsx` empty/error branches, low risk, but not screenshot-verified this round.
+- Did not run a full accessibility audit (`fixing-accessibility` skill) or motion-performance pass on this round — the redesign's motion surface is minimal (tab underline, hover states, no new animated components beyond what already existed via `AnimatedWpa`/`IconWithFallback`), but this wasn't explicitly swept.
+- `getLaneDefaults()`'s live sweep can reportedly take up to 20s on a stone-cold serverless instance (engo's own flag, not something I can fix from the frontend) — did not attempt to simulate a cold-start in this dev-server pass; my UI seeds with the static fallback and swaps in the resolved result whenever it lands, so it degrades gracefully either way, but the actual cold-start latency wasn't measured here.
+
+
