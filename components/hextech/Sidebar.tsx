@@ -85,13 +85,20 @@ export default function Sidebar({
           Switching back to CHAMPIONS restores it, and the CHAMPIONS tab remains
           the way out of a player view now that lane-tap-exit is hidden with it. */}
       {searchMode === "champions" && (
-      <div className={collapsed ? "mt-3 -mx-4 px-4 overflow-x-auto" : "mt-6"}>
+      <div className={collapsed ? "mt-3" : "mt-6"}>
         <p className="text-[10px] tracking-[0.14em] uppercase text-mut font-semibold mb-2 px-0.5">
           Lanes
         </p>
         <nav
           aria-label="Lanes"
-          className={collapsed ? "flex gap-2" : "flex flex-col gap-1"}
+          /* v0.27.0 (user request): collapsed (mobile top-bar) lanes were
+             overflow-x-auto with a 92px-min-width row, forcing ~492px of
+             content into ~358px of available width at 390px, so Support
+             scrolled off-screen. All 5 lanes are pure lane selectors
+             (v0.26.0), not champion picks, so a fixed 5-column grid that
+             actually fits the viewport beats a scroll strip nobody could
+             tell was scrollable. Desktop keeps its vertical list untouched. */
+          className={collapsed ? "grid grid-cols-5 gap-1.5" : "flex flex-col gap-1"}
         >
           {LANE_ORDER.map((lane) => {
             const active = lane === activeLane;
@@ -102,15 +109,21 @@ export default function Sidebar({
                 onClick={() => onLaneChange(lane)}
                 aria-pressed={active}
                 aria-label={active ? `${LANE_LABEL[lane]} — ${champ.name} (current)` : `${champ.name} ${LANE_LABEL[lane]}`}
-                className={`text-left rounded-lg transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-teal focus-visible:ring-offset-1 focus-visible:ring-offset-sidebar ${
-                  collapsed ? "flex-shrink-0 min-w-[92px] px-3 py-2" : "px-3 py-2"
+                className={`rounded-lg transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-teal focus-visible:ring-offset-1 focus-visible:ring-offset-sidebar ${
+                  collapsed
+                    ? "flex flex-col items-center justify-center px-1 py-2 text-center"
+                    : "text-left px-3 py-2"
                 } ${
                   active
                     ? "bg-panel2 border border-line-gold shadow-[0_2px_10px_rgba(0,0,0,0.35)]"
                     : "border border-transparent hover:bg-panel2/60"
                 }`}
               >
-                <div className={`text-[12.5px] font-medium ${active ? "text-txt" : "text-txt/85"}`}>
+                <div
+                  className={`font-medium whitespace-nowrap ${collapsed ? "text-[11px]" : "text-[12.5px]"} ${
+                    active ? "text-txt" : "text-txt/85"
+                  }`}
+                >
                   {LANE_LABEL[lane]}
                 </div>
                 {/* v0.26.0 (issue 2): lanes select a LANE for the current
@@ -119,10 +132,16 @@ export default function Sidebar({
                     would jump to a different champion than Mid). Only the
                     ACTIVE row names the champion now, as a "you are viewing
                     X here" reminder; a non-breaking space on the other rows
-                    keeps every row the same height (no layout jump on tap). */}
-                <div className="text-[11px] text-mut truncate leading-tight mt-0.5">
+                    keeps every row the same height (no layout jump on tap).
+                    v0.27.0: dropped entirely on the collapsed mobile bar -- it was
+                    competing for the 5-column width budget in ~358px for a fact
+                    ChampionHero already states one scroll below; desktop keeps it,
+                    plenty of room there. */}
+                {!collapsed && (
+                  <div className="text-[11px] text-mut truncate leading-tight mt-0.5">
                   {active ? champ.name : " "}
-                </div>
+                  </div>
+                )}
               </button>
             );
           })}

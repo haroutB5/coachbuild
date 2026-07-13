@@ -8,6 +8,7 @@ import RunesSummonersCard from "./RunesSummonersCard";
 import StartingCard from "./StartingCard";
 import CoreBuildOrderCard from "./CoreBuildOrderCard";
 import SituationalCard from "./SituationalCard";
+import ProConsensusCard from "./ProConsensusCard";
 import { versionFromPatch } from "@/components/proAssets";
 import ItemDetailPopover from "@/components/ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "@/components/EntityDetailPopover";
@@ -196,6 +197,17 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
         </div>
       </div>
       <SituationalCard items={build.items} onItemClick={openItemPopover} />
+
+      {/* v0.27.0 (user request: "pro players seem to build Rocketbelt on
+          Viktor — create another builds and runes space based on what pro
+          players are often building"). Complements the WPA recommendation
+          above with a plain pick-rate count over the same champion-scoped
+          pro-games feed PRO BUILDS lists — own fetch, own loading/hidden
+          states (components/hextech/ProConsensusCard.tsx), refetches on
+          champ/lane change same as everything else on this tab. Reuses this
+          tab's own popover plumbing (openDetail) rather than standing up a
+          second popover/scroll-lock instance. */}
+      <ProConsensusCard champ={champ} lane={lane} ver={ver} onOpenDetail={openDetail} />
 
       {/* Always mounted (once any item/rune/shard/spell has ever been
           opened) so its own rendered/visible exit transition — DetailPopover's

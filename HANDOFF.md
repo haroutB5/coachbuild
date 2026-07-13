@@ -4263,3 +4263,40 @@ User request: "search should depend on if I'm searching champions or pro players
 - `lib/laneDefaults.ts`'s expensive per-lane sweep (`getLaneDefaults()`) is now consumed nowhere in the app (its `heroContracts.ts` wrapper too) — left in place per instruction, but genuinely orphaned; worth a follow-up decision (delete vs. find a new use) in a future session.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-13 10:54
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-13 08:04:41Z; previous content preserved there. Append new rounds below. -->
+
+## v0.27.0 — 2026-07-13 (solo, mobile lane fit + Pro Consensus card)
+
+Two independent user requests on `app/page.tsx`'s Hextech shell, both shipped solo (no engy/engo split needed — scope stayed ≤4 files/1 surface... actually landed at 4 files touched + 1 new component + 1 new module, still one visual surface: the BUILD tab + the collapsed sidebar).
+
+**1. Mobile lane strip (`components/hextech/Sidebar.tsx`).** The collapsed (mobile top-bar, `<1024px`) LANES row was `overflow-x-auto` with `flex-shrink-0 min-w-[92px]` buttons — 5×92px + 4×8px gaps = 492px crammed into ~358px of available width at 390px, so Support scrolled off-screen with no visual affordance that it was scrollable. Fixed: `grid grid-cols-5 gap-1.5` on the collapsed nav (desktop's `flex flex-col` vertical list is untouched), buttons switched from fixed-min-width+left-aligned to `flex flex-col items-center justify-center text-center`, label font dropped to `text-[11px]` on collapsed only. Dropped the per-lane "you are viewing X here" champion-name subtitle entirely on the collapsed bar (kept on desktop) — it was fighting the 5-column width budget for information the hero card right below already states. Verified via `chrome-devtools` MCP `emulate` (`390x844x2,mobile,touch` — plain `resize_page` alone reported a scaled 495px/501px viewport in this environment, not the real 390px; `emulate`'s explicit DPR pin is what actually produces `document.documentElement.scrollWidth === clientWidth === 390`) + an `elementFromPoint` edge-scan confirming all 5 collapsed lane buttons hit-test to themselves (rightmost edge 374px, inside 390) — no overflow-clipped hit area. Live-clicked Support and Top to confirm the lane switch + refetch still works (Support: real "not enough data" empty state; Top: real BUILD data, zero pro games so the new consensus card correctly renders nothing).
+
+**2. Pro Consensus card** (user: "pro players seem to build Rocketbelt on Viktor — create another builds and runes space based on what pro players are often building"). New pure aggregation module `components/hextech/proConsensus.ts` (`aggregateProConsensus`, 12 unit tests in `components/__tests__/proConsensus.test.ts`) over the same `GET /api/pros?championId=&role=&source=all` payload PRO BUILDS already consumes — no backend change, own independent fetch (always `source=all`, `limit=100`, decoupled from whatever All/Solo/Pro filter the user has picked for the PRO BUILDS list). Key design calls, in case a future change touches this:
+- **Items**: pick-rate = games containing the item at least once (deduped per game via a `Set`, so a game can't double-count), consumables excluded via the EXISTING `CONSUMABLE_ITEM_IDS` list from `components/proAssets.ts` (reused, not forked), boots counted like any other item (real build choice). Top 6, sorted count desc then itemId asc for determinism.
+- **Keystone vs secondary tree get SEPARATE sample-size denominators** (`runesSampleSize` vs `secondaryTreeSampleSize`), not one shared "has rune data" counter — caught by this module's own tests before it shipped: `lib/prostage/extract.ts`'s `resolveRunes` resolves `KeystoneRune`/`PrimaryTree`/`SecondaryTree` as three INDEPENDENT Cargo fields, so a prostage row can have a keystone but no tree (or vice versa). Sharing one denominator silently mis-stated whichever fraction borrowed the wrong sample.
+- **Spell pairs are canonicalized** (sorted ascending by id) before counting — Flash-on-D and Flash-on-F are the same combo, not two.
+- N=0 -> card renders nothing (verified live: Viktor Top, essentially unplayed by pros, shows zero skeleton/error/empty-box, just absent). N<3 -> card renders WITH an explicit "Low sample size" caution line rather than implying full confidence. Fetch error -> same as N=0 (silent hide; this is a supplementary card, not worth an error box competing with the real BUILD content).
+- **Display** (`components/hextech/ProConsensusCard.tsx`): items as icon+name+"N/M" tiles (`flex-wrap`, deliberately NOT `overflow-x-auto` — matches `CoreBuildOrderCard`/`SituationalCard`'s existing no-h-scroll convention on this tab, caught and fixed after an initial scroll-strip draft looked inconsistent at 390px), keystone/spell tiles are tap-for-detail through the SAME `openDetail` callback `BuildTabContent.tsx` already threads to every other card (no second popover/scroll-lock instance), secondary tree is display-only (no tree-kind popover exists anywhere in the app — matches `RunesSummonersCard`'s own non-interactive `TreeLabel`). Icon/data version (`ver`) is the SAME one `BuildTabContent` already resolved from the BUILD response's patch, not a second independent resolution.
+- **Live-verified real data (Viktor Mid, patch 16.12, 39-game sample: 31 pro play + 8 solo queue across 5 tournaments incl. 2026 MSI/LPL/LCS)**: Hextech Rocketbelt 35/39 (90%) — CONFIRMS the user's Rocketbelt observation, tied with Blackfire Torch at 35/39. Keystone Deathfire Touch 38/39, secondary tree Resolve 20/39, spells Flash+Teleport 39/39. Both the item popover (Hextech Rocketbelt, 2650g, real passive text) and the keystone popover (Deathfire Touch, full tooltip incl. the Gotcha (e) hardcoded-icon special case) opened correctly with real content, screenshotted.
+- Placement: below SITUATIONAL, above the shared popover mount, inside `BuildTabContent.tsx`. Refetches on champ/lane change like every other card on the tab.
+
+**Gates**: `npx tsc --noEmit` clean, `npx eslint` clean on touched files, `npx vitest run` 522/522 (510 existing + 12 new), `verify-fix.sh` ALL GREEN, browser-verified 1280px + 390px via chrome-devtools MCP (dev server on port 3411, non-default per policy), zero console errors/warnings. Version 0.26.0 -> 0.27.0, CHANGELOG updated. Did NOT deploy (urgot ships).
+
+**Files**: `components/hextech/Sidebar.tsx` (lane grid), `components/hextech/proConsensus.ts` (new), `components/hextech/ProConsensusCard.tsx` (new), `components/hextech/BuildTabContent.tsx` (wiring), `components/__tests__/proConsensus.test.ts` (new), `package.json`, `CHANGELOG.md`.
+
+
