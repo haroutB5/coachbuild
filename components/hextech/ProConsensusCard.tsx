@@ -155,9 +155,18 @@ function BootsStackTile({
             <span className="w-5 h-5 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
               <IconWithFallback src={icon(b.itemId)} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={20} />
             </span>
-            <span className="text-left leading-tight min-w-0">
-              <span className="block text-[9px] text-txt line-clamp-1">{name}</span>
-              <span className="block text-[8.5px] tabular-nums">
+            <span className="text-left leading-tight min-w-0 flex-1">
+              {/* flex-1 (not just min-w-0) gives this span a definite width
+                  before line-clamp is evaluated — without it, Chromium's
+                  -webkit-line-clamp height computation inside a flex row goes
+                  wrong (measured: button rendered ~44px tall for ~22px of
+                  real content) and the name clips mid-word with no ellipsis
+                  ("Spellslinge Shoes" for Spellslinger's Shoes). line-clamp-2
+                  + break-words matches ItemTile's own two-line name treatment
+                  instead of a single-line clamp that has no room to work with
+                  in this narrow icon+text column. */}
+              <span className="block text-[9px] text-txt leading-tight line-clamp-2 break-words">{name}</span>
+              <span className="block text-[8.5px] tabular-nums mt-0.5">
                 <span className="font-bold text-teal">{pct}</span>
                 <span className="text-mut/60"> · {b.count}/{denom}</span>
               </span>
