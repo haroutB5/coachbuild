@@ -36,7 +36,9 @@ type FetchState =
   | { status: "loading" }
   | { status: "ok"; model: ProConsensusModel; itemMeta: Map<number, ItemDetail> }
   | { status: "hidden" } // N=0 by design (e.g. Viktor Support) — genuinely nothing to show
-  | { status: "error" }; // fetch failed — distinct from N=0 (v0.27.2, see below)
+  | { status: "error"; reason: string }; // fetch failed — distinct from N=0 (v0.27.2); reason
+// surfaces IN the line (v0.27.4) because a live iOS-only persistent failure
+// could not be diagnosed from screenshots that all read the same generic text.
 
 interface RuneDisplay {
   name: string;
@@ -204,13 +206,19 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
     // excluded that round (see isBuildItem's "unknown item -> exclude"
     // default), never that an unverified item slips through.
     const attempt = (attemptsLeft: number) => {
+      // v0.27.4: cache-busting param on retries only (first attempt stays the
+      // clean URL so normal loads keep any legitimate intermediary caching) —
+      // defeats a poisoned SW/edge cache entry along a specific device's path.
+      const bust = attemptsLeft < 2 ? `&r=${Date.now()}` : "";
       Promise.all([
-        fetch(`/api/pros?championId=${champ.id}&role=${role}&limit=${AGGREGATION_LIMIT}&source=all`).then(async (res) => {
-          if (!res.ok) throw new Error(`pros fetch ${res.status}`);
+        fetch(`/api/pros?championId=${champ.id}&role=${role}&limit=${AGGREGATION_LIMIT}&source=all${bust}`).then(async (res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data: ProGamesApiResponse = await res.json();
           return Array.isArray(data?.games) ? data.games : [];
         }),
-        getItemDetailMap(ver),
+        // Belt-and-braces despite getItemDetailMap's own internal catch: the
+        // item map must NEVER be able to sink the whole card.
+        getItemDetailMap(ver).catch(() => new Map<number, ItemDetail>()),
       ])
         .then(([games, itemMeta]: [ProGame[], Map<number, ItemDetail>]) => {
           if (cancelled) return;
@@ -220,7 +228,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
           }
           setState({ status: "ok", model: aggregateProConsensus(games, itemMeta), itemMeta });
         })
-        .catch(() => {
+        .catch((err: unknown) => {
           if (cancelled) return;
           // v0.27.3 (live user report): a SINGLE transient failure (network
           // blip, cold /api/pros invocation, the SW's empty-cache fallback
@@ -236,8 +244,11 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
             return;
           }
           // v0.27.2: distinct from "hidden" (genuine N=0) — a real, visible,
-          // muted signal instead of silent nothing. See the render branch.
-          setState({ status: "error" });
+          // muted signal instead of silent nothing. v0.27.4: carry the reason
+          // into the line — "HTTP 500" means the server, "Load failed" /
+          // "Failed to fetch" means the device's network/SW layer.
+          const reason = err instanceof Error ? err.message : String(err);
+          setState({ status: "error", reason: reason.slice(0, 60) });
         });
     };
     attempt(2);
@@ -291,7 +302,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
   if (state.status === "error") {
     return (
       <p className="text-[10.5px] text-mut/50 px-0.5" role="status">
-        Pro consensus data couldn&apos;t load.{" "}
+        Pro consensus data couldn&apos;t load ({state.reason}).{" "}
         <button
           type="button"
           onClick={() => {
