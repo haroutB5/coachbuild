@@ -207,19 +207,34 @@ const STARTING_ITEM_ALLOWLIST = new Set<number>([
 /** Boots special case — see module header (b). A tier-2 boot (e.g.
  *  Sorcerer's Shoes) still has an `into` pointing at its optional tier-3
  *  enchant, so it fails the plain empty-into check even though "stopped at
- *  tier 2" is a completely normal final build state. */
+ *  tier 2" is a completely normal final build state.
+ *
+ *  Defensive against a malformed `meta`: this ultimately reads from
+ *  JSON.parse'd localStorage (components/itemDetail.ts), and a real prod
+ *  incident (v0.27.2 hotfix) showed a stale pre-v0.27.1 cache entry can
+ *  arrive here with `tags`/`from` undefined even though ItemDetail's TYPE
+ *  says they're always arrays — itemDetail.ts now normalizes on read/write,
+ *  but this guards independently so a future shape change degrades instead
+ *  of throwing (`Cannot read properties of undefined (reading 'includes')`). */
 function isBootsFinal(meta: ItemDetail): boolean {
-  return meta.tags.includes("Boots") && meta.from.length > 0;
+  return Array.isArray(meta.tags) && meta.tags.includes("Boots") && Array.isArray(meta.from) && meta.from.length > 0;
 }
 
 /** True when `itemId` belongs in the aggregated items list — a real build
- *  choice, not a mid-build component. Exported for direct unit testing. */
+ *  choice, not a mid-build component. Exported for direct unit testing.
+ *
+ *  Guards `meta.into` the same defensive way isBootsFinal guards
+ *  `tags`/`from` — see that function's comment for why. */
 export function isBuildItem(itemId: number, meta: ItemDetail | undefined): boolean {
   if (STARTING_ITEM_ALLOWLIST.has(itemId)) return true;
   if (!meta) return false; // unknown item data — exclude rather than assume
   if (meta.purchasable === false) return false;
   if (isBootsFinal(meta)) return true;
-  return meta.into.length === 0;
+  // Array.isArray guard (not just `meta.into.length === 0`): a malformed/
+  // legacy meta with `into` missing entirely is unknown, not "finished" —
+  // same "never assume, never invent" posture as the `!meta` branch above,
+  // so it's excluded rather than defaulting to true.
+  return Array.isArray(meta.into) && meta.into.length === 0;
 }
 
 function bump<K extends string | number>(map: Map<K, number>, key: K): void {

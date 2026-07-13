@@ -123,6 +123,29 @@ describe("isBuildItem", () => {
   it("excludes an item id with no metadata and no allowlist entry", () => {
     expect(isBuildItem(424242, undefined)).toBe(false);
   });
+
+  it("real prod regression: a legacy-shape meta object (pre-v0.27.1 cache entry missing into/from/tags/purchasable) never throws", () => {
+    // Reproduces the reported "Pro consensus data couldn't load (undefined is
+    // not an object (evaluating 'D.tags.includes'))" crash — a device with a
+    // stale localStorage cache from before v0.27.1 added into/from/tags/
+    // purchasable to ItemDetail returned an entry missing those fields.
+    // itemDetail.ts now normalizes the cache on read (v1->v2 prefix bump +
+    // defensive coercion), but isBuildItem must also degrade gracefully on
+    // its own, since `meta` is only a TYPE guarantee, not a runtime one, for
+    // any value that ultimately came from JSON.parse.
+    const legacyMeta = {
+      id: SORCERERS_SHOES,
+      name: "Sorcerer's Shoes",
+      goldTotal: 1100,
+      descriptionText: "",
+      // into/from/tags/purchasable intentionally omitted — legacy shape
+    } as unknown as ItemDetail;
+    expect(() => isBuildItem(SORCERERS_SHOES, legacyMeta)).not.toThrow();
+    expect(typeof isBuildItem(SORCERERS_SHOES, legacyMeta)).toBe("boolean");
+    // Boots special case can't confirm (tags missing) and into is undefined
+    // (not an empty array) -> falls through to "exclude, don't assume".
+    expect(isBuildItem(SORCERERS_SHOES, legacyMeta)).toBe(false);
+  });
 });
 
 describe("aggregateProConsensus", () => {

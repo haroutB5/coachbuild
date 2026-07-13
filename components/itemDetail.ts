@@ -42,7 +42,19 @@ export interface ItemDetail {
 const ITEM_DATA_URL = (ver: string) =>
   `https://cdn.coachless.gg/static-files/${ver}/${ver}/data/en_US/item.json`;
 
-const LOCALSTORAGE_PREFIX = "coachbuild:itemdata:v1:";
+// v2 (was "coachbuild:itemdata:v1:" through v0.27.0) — bumped because v0.27.1
+// added into/from/tags/purchasable to ItemDetail WITHOUT bumping this prefix,
+// so a device holding a pre-v0.27.1 v1 cache entry replayed an object missing
+// those fields verbatim (readLocalStorageCache trusted the parsed JSON's
+// shape blindly). components/hextech/proConsensus.ts's isBuildItem() then hit
+// `meta.tags.includes(...)` on an undefined `tags` -> real prod crash ("Pro
+// consensus data couldn't load", reported from an iOS PWA holding a stale
+// cache). Fixed two ways: (1) this prefix bump so no old-shape entry is ever
+// read as v2, (2) readLocalStorageCache below now normalizes every entry
+// defensively anyway, so a FUTURE shape change degrades instead of crashing
+// the same way. Old v1:* keys are swept best-effort in writeLocalStorageCache.
+const LOCALSTORAGE_PREFIX = "coachbuild:itemdata:v2:";
+const LEGACY_LOCALSTORAGE_PREFIX = "coachbuild:itemdata:v1:";
 
 interface RawItemEntry {
   name?: string;
@@ -55,6 +67,26 @@ interface RawItemEntry {
 
 interface RawItemJson {
   data?: Record<string, RawItemEntry>;
+}
+
+/** Coerce one parsed localStorage record into a well-shaped ItemDetail,
+ *  defaulting any missing/wrong-typed field instead of trusting the cache
+ *  blindly. Cheap insurance against exactly the class of bug the v1->v2
+ *  prefix bump above fixed — a stored entry from an older ItemDetail shape
+ *  (or any future one) degrades to sane defaults rather than crashing a
+ *  consumer like proConsensus.ts's isBuildItem() on `undefined.includes(...)`. */
+function normalizeCachedItemDetail(id: number, entry: unknown): ItemDetail {
+  const e = (entry && typeof entry === "object" ? entry : {}) as Partial<ItemDetail>;
+  return {
+    id,
+    name: typeof e.name === "string" ? e.name : `Item #${id}`,
+    goldTotal: typeof e.goldTotal === "number" ? e.goldTotal : 0,
+    descriptionText: typeof e.descriptionText === "string" ? e.descriptionText : "",
+    into: Array.isArray(e.into) ? e.into : [],
+    from: Array.isArray(e.from) ? e.from : [],
+    tags: Array.isArray(e.tags) ? e.tags : [],
+    purchasable: typeof e.purchasable === "boolean" ? e.purchasable : true,
+  };
 }
 
 /**
@@ -87,9 +119,11 @@ function readLocalStorageCache(ver: string): Map<number, ItemDetail> | null {
     if (typeof window === "undefined" || !window.localStorage) return null;
     const raw = window.localStorage.getItem(LOCALSTORAGE_PREFIX + ver);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Record<string, ItemDetail>;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
     const map = new Map<number, ItemDetail>();
-    for (const [id, entry] of Object.entries(parsed)) map.set(Number(id), entry);
+    for (const [id, entry] of Object.entries(parsed)) {
+      map.set(Number(id), normalizeCachedItemDetail(Number(id), entry));
+    }
     return map;
   } catch {
     return null;
@@ -104,6 +138,16 @@ function writeLocalStorageCache(ver: string, map: Map<number, ItemDetail>): void
       obj[id] = entry;
     });
     window.localStorage.setItem(LOCALSTORAGE_PREFIX + ver, JSON.stringify(obj));
+    // Best-effort cleanup of any lingering pre-v2 cache entries — they'll
+    // never be read again (readLocalStorageCache only ever looks under the
+    // current LOCALSTORAGE_PREFIX) but there's no reason to leave stale data
+    // occupying a user's localStorage quota indefinitely.
+    for (let i = window.localStorage.length - 1; i >= 0; i--) {
+      const key = window.localStorage.key(i);
+      if (key && key.startsWith(LEGACY_LOCALSTORAGE_PREFIX)) {
+        window.localStorage.removeItem(key);
+      }
+    }
   } catch {
     // best-effort only — quota exceeded / storage disabled never breaks the app
   }
