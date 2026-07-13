@@ -5,9 +5,26 @@
  * ProGame[] + a fake item-metadata Map in, ProConsensusModel out.
  */
 import { describe, it, expect } from "vitest";
-import { aggregateProConsensus, isBuildItem, formatSharePct } from "../hextech/proConsensus";
+import { aggregateProConsensus, isBuildItem, formatSharePct, resolvePrimaryTree } from "../hextech/proConsensus";
 import type { ProGame, ProGameRunes } from "../proGames.types";
 import type { ItemDetail } from "../itemDetail";
+
+// Real rune tree + rune ids, used by the v0.29.0 tree-conditioning tests so
+// the fixtures read like an actual rune page.
+const SORCERY = 8200;
+const PRECISION = 8000;
+// Sorcery: keystone Deathfire Touch (8992), minors Manaflow Band (8226),
+// Celerity (8234), Transcendence (8210).
+const DEATHFIRE_TOUCH = 8992;
+const MANAFLOW_BAND = 8226;
+const CELERITY = 8234;
+const TRANSCENDENCE = 8210;
+// Precision: keystone Press the Attack (8005), minors Presence of Mind (8009),
+// Triumph (9111), Coup de Grace (8014).
+const PRESS_THE_ATTACK = 8005;
+const PRESENCE_OF_MIND = 8009;
+const TRIUMPH = 9111;
+const COUP_DE_GRACE = 8014;
 
 const NO_RUNES: ProGameRunes = {
   primaryTree: 0,
@@ -155,6 +172,8 @@ describe("aggregateProConsensus", () => {
     expect(model.items).toEqual([]);
     expect(model.boots).toEqual([]);
     expect(model.keystone).toBeNull();
+    expect(model.primaryTree).toBeNull();
+    expect(model.primaryTreeSampleSize).toBe(0);
     expect(model.secondaryTree).toBeNull();
     expect(model.spellPair).toBeNull();
     expect(model.tournaments).toEqual({ names: [], soloqCount: 0, prostageCount: 0 });
@@ -253,14 +272,16 @@ describe("aggregateProConsensus", () => {
     expect(model.runesSampleSize).toBe(0);
   });
 
-  it("computes secondary tree frequency the same way, independent of keystone resolution", () => {
+  it("computes secondary tree over the page sample, independent of keystone resolution within that sample (v0.29.0)", () => {
     const games = [
-      game({ runes: { ...NO_RUNES, keystone: 8229, secondaryTree: 8100 } }),
-      game({ runes: { ...NO_RUNES, keystone: 0, secondaryTree: 8100 } }), // keystone missing, tree still known
-      game({ runes: { ...NO_RUNES, keystone: 0, secondaryTree: 0 } }), // fully missing
+      game({ runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, secondaryTree: 8100 } }),
+      game({ runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: 0, secondaryTree: 8100 } }), // keystone missing, tree still known
+      game({ runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: 0, secondaryTree: 0 } }), // secondary missing
     ];
     const model = aggregateProConsensus(games, itemMeta());
-    expect(model.secondaryTreeSampleSize).toBe(2);
+    expect(model.primaryTree).toBe(SORCERY);
+    expect(model.primaryTreeSampleSize).toBe(3);
+    expect(model.secondaryTreeSampleSize).toBe(2); // the secondaryTree:0 row is excluded from the denominator
     expect(model.secondaryTree).toEqual({ treeId: 8100, count: 2, share: 1 });
   });
 
@@ -305,9 +326,9 @@ describe("aggregateProConsensus", () => {
 
   it("aggregates primary-tree minors per-slot-group, denominator = games with a non-empty primary[]", () => {
     const games = [
-      game({ runes: { ...NO_RUNES, primary: [8226, 8210, 8237] } }),
-      game({ runes: { ...NO_RUNES, primary: [8226, 8210, 8237] } }),
-      game({ runes: { ...NO_RUNES, primary: [] } }), // prostage row, keystone-only — must not dilute
+      game({ runes: { ...NO_RUNES, primaryTree: SORCERY, primary: [8226, 8210, 8237] } }),
+      game({ runes: { ...NO_RUNES, primaryTree: SORCERY, primary: [8226, 8210, 8237] } }),
+      game({ runes: { ...NO_RUNES, primaryTree: SORCERY, primary: [] } }), // prostage row, keystone-only — must not dilute
     ];
     const model = aggregateProConsensus(games, itemMeta());
     expect(model.primaryMinors.sampleSize).toBe(2);
@@ -316,7 +337,9 @@ describe("aggregateProConsensus", () => {
   });
 
   it("caps primary minors at 3 and secondary picks at 2", () => {
-    const games = [game({ runes: { ...NO_RUNES, primary: [1, 2, 3, 4], secondary: [5, 6, 7] } })];
+    const games = [
+      game({ runes: { ...NO_RUNES, primaryTree: SORCERY, primary: [1, 2, 3, 4], secondaryTree: PRECISION, secondary: [5, 6, 7] } }),
+    ];
     const model = aggregateProConsensus(games, itemMeta());
     expect(model.primaryMinors.entries).toHaveLength(3);
     expect(model.secondaryPicks.entries).toHaveLength(2);
@@ -324,11 +347,12 @@ describe("aggregateProConsensus", () => {
 
   it("a prostage row without minors doesn't dilute the primary-minors sample (per-slot denominator independence)", () => {
     const games = [
-      game({ source: "soloq", runes: { ...NO_RUNES, keystone: 8229, primary: [8226, 8210, 8237] } }),
-      game({ source: "prostage", tournament: "LCK", runes: { ...NO_RUNES, keystone: 8229 } }), // keystone-only, no minors
+      game({ source: "soloq", runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, primary: [8226, 8210, 8237] } }),
+      game({ source: "prostage", tournament: "LCK", runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH } }), // keystone-only, no minors
     ];
     const model = aggregateProConsensus(games, itemMeta());
     expect(model.runesSampleSize).toBe(2); // keystone resolved on both
+    expect(model.primaryTreeSampleSize).toBe(2); // both ran the primary tree
     expect(model.primaryMinors.sampleSize).toBe(1); // only the soloq row carried minors
     expect(model.primaryMinors.soloqCount).toBe(1);
     expect(model.primaryMinors.prostageCount).toBe(0);
@@ -348,7 +372,9 @@ describe("aggregateProConsensus", () => {
   });
 
   it("secondary picks dedupe within a single game (defensive — a real page never repeats a pick)", () => {
-    const games = [game({ runes: { ...NO_RUNES, secondary: [8009, 8009, 8014] } })];
+    const games = [
+      game({ runes: { ...NO_RUNES, primaryTree: SORCERY, secondaryTree: PRECISION, secondary: [8009, 8009, 8014] } }),
+    ];
     const model = aggregateProConsensus(games, itemMeta());
     expect(model.secondaryPicks.entries.find((e) => e.runeId === 8009)?.count).toBe(1);
   });
@@ -416,6 +442,169 @@ describe("aggregateProConsensus", () => {
     const meta = itemMeta(item(ROCKETBELT, { from: ["x"] }));
     const model = aggregateProConsensus([game({ finalItems: [ROCKETBELT] })], meta);
     expect(model.boots).toEqual([]);
+  });
+});
+
+// ── v0.29.0: tree-conditioned rune page ─────────────────────────────────────
+
+describe("aggregateProConsensus — tree conditioning (v0.29.0)", () => {
+  // Sorcery page: Deathfire Touch keystone + Sorcery minors + Precision secondary.
+  const sorceryGame = (overrides: Partial<ProGame> = {}) =>
+    game({
+      runes: {
+        primaryTree: SORCERY,
+        keystone: DEATHFIRE_TOUCH,
+        primary: [MANAFLOW_BAND, CELERITY, TRANSCENDENCE],
+        secondaryTree: PRECISION,
+        secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE],
+        shards: [],
+      },
+      ...overrides,
+    });
+  // Precision page: Press the Attack keystone + Precision minors + Sorcery
+  // secondary. These are the games that leaked into the old flat aggregate:
+  // their Precision minor Presence of Mind polluted the minors row, and their
+  // Sorcery secondary (Manaflow/Celerity) duplicated the primary minors.
+  const precisionGame = (overrides: Partial<ProGame> = {}) =>
+    game({
+      runes: {
+        primaryTree: PRECISION,
+        keystone: PRESS_THE_ATTACK,
+        primary: [PRESENCE_OF_MIND, TRIUMPH, COUP_DE_GRACE],
+        secondaryTree: SORCERY,
+        secondary: [MANAFLOW_BAND, CELERITY],
+        shards: [],
+      },
+      ...overrides,
+    });
+
+  it("reproduces the screenshot shape (16 Sorcery + 14 Precision) and shows ONLY the tree-A-conditioned page", () => {
+    const games = [
+      ...Array.from({ length: 16 }, () => sorceryGame()),
+      ...Array.from({ length: 14 }, () => precisionGame()),
+    ];
+    const model = aggregateProConsensus(games, itemMeta());
+
+    // Keystone stays modal over ALL keystone games — the honest 16/30.
+    expect(model.keystone).toEqual({ keystoneId: DEATHFIRE_TOUCH, count: 16, share: 16 / 30 });
+    expect(model.runesSampleSize).toBe(30);
+
+    // Page conditioned on Sorcery (the modal keystone's tree).
+    expect(model.primaryTree).toBe(SORCERY);
+    expect(model.primaryTreeSampleSize).toBe(16);
+
+    // Minors are ALL Sorcery — Presence of Mind (Precision) never leaks in.
+    const minorIds = [...model.primaryMinors.entries.map((e) => e.runeId)].sort((a, b) => a - b);
+    expect(minorIds).toEqual([TRANSCENDENCE, MANAFLOW_BAND, CELERITY].sort((a, b) => a - b));
+    expect(minorIds).not.toContain(PRESENCE_OF_MIND);
+    expect(model.primaryMinors.sampleSize).toBe(16);
+
+    // Secondary is the modal non-primary tree (Precision), picks all Precision.
+    expect(model.secondaryTree?.treeId).toBe(PRECISION);
+    const pickIds = [...model.secondaryPicks.entries.map((e) => e.runeId)].sort((a, b) => a - b);
+    expect(pickIds).toEqual([PRESENCE_OF_MIND, COUP_DE_GRACE].sort((a, b) => a - b));
+    expect(model.secondaryPicks.sampleSize).toBe(16);
+  });
+
+  it("INVARIANT: no rune id appears in both primaryMinors and secondaryPicks", () => {
+    const games = [
+      ...Array.from({ length: 16 }, () => sorceryGame()),
+      ...Array.from({ length: 14 }, () => precisionGame()),
+    ];
+    const model = aggregateProConsensus(games, itemMeta());
+    const minors = new Set(model.primaryMinors.entries.map((e) => e.runeId));
+    const overlap = model.secondaryPicks.entries.filter((e) => minors.has(e.runeId));
+    expect(overlap).toEqual([]);
+  });
+
+  it("INVARIANT: secondaryTree is never equal to primaryTree (impossible-in-game rows dropped)", () => {
+    const games = [
+      ...Array.from({ length: 3 }, () => sorceryGame()),
+      // Contaminant: a Sorcery page whose secondaryTree is ALSO Sorcery — an
+      // impossible in-game page. Must be excluded from the secondary sample.
+      ...Array.from({ length: 2 }, () =>
+        sorceryGame({
+          runes: {
+            primaryTree: SORCERY,
+            keystone: DEATHFIRE_TOUCH,
+            primary: [MANAFLOW_BAND],
+            secondaryTree: SORCERY,
+            secondary: [CELERITY],
+            shards: [],
+          },
+        })
+      ),
+    ];
+    const model = aggregateProConsensus(games, itemMeta());
+    expect(model.primaryTree).toBe(SORCERY);
+    expect(model.secondaryTree?.treeId).toBe(PRECISION); // Sorcery-on-Sorcery rows dropped
+    expect(model.secondaryTree?.treeId).not.toBe(model.primaryTree);
+    expect(model.secondaryTreeSampleSize).toBe(3); // only the 3 Precision-secondary rows count
+  });
+
+  it("a game with a different-tree keystone contributes NOTHING to minors/secondary aggregation", () => {
+    const games = [sorceryGame(), sorceryGame(), precisionGame()];
+    const model = aggregateProConsensus(games, itemMeta());
+    expect(model.primaryTree).toBe(SORCERY);
+    expect(model.primaryTreeSampleSize).toBe(2); // the Precision game is excluded
+    // Precision minors never appear.
+    const minorIds = model.primaryMinors.entries.map((e) => e.runeId);
+    expect(minorIds).not.toContain(PRESENCE_OF_MIND);
+    expect(minorIds).not.toContain(TRIUMPH);
+    // Secondary picks are the Sorcery games' Precision secondary — NOT the
+    // excluded Precision game's Sorcery secondary (Manaflow/Celerity).
+    const pickIds = model.secondaryPicks.entries.map((e) => e.runeId);
+    expect(pickIds).not.toContain(MANAFLOW_BAND);
+    expect(pickIds).not.toContain(CELERITY);
+  });
+
+  it("denominators equal the conditioned sample sizes, not gamesTotal", () => {
+    const games = [
+      ...Array.from({ length: 16 }, () => sorceryGame()),
+      ...Array.from({ length: 14 }, () => precisionGame()),
+    ];
+    const model = aggregateProConsensus(games, itemMeta());
+    expect(model.gamesTotal).toBe(30);
+    expect(model.primaryMinors.sampleSize).toBe(16);
+    expect(model.secondaryTreeSampleSize).toBe(16);
+    expect(model.secondaryPicks.sampleSize).toBe(16);
+    // keystone denominator stays the FULL keystone sample (unchanged), not N_page.
+    expect(model.runesSampleSize).toBe(30);
+  });
+
+  it("degrades to no rune page (null primaryTree, empty conditioned rows) when no game carries tree data", () => {
+    const games = [game({ runes: { ...NO_RUNES, keystone: DEATHFIRE_TOUCH } })]; // keystone but no primaryTree
+    const model = aggregateProConsensus(games, itemMeta());
+    expect(model.keystone?.keystoneId).toBe(DEATHFIRE_TOUCH); // keystone still shows
+    expect(model.primaryTree).toBeNull();
+    expect(model.primaryMinors.entries).toEqual([]);
+    expect(model.secondaryTree).toBeNull();
+    expect(model.secondaryPicks.entries).toEqual([]);
+  });
+});
+
+describe("resolvePrimaryTree", () => {
+  it("prefers the tree the modal keystone actually ran under", () => {
+    const games = [
+      game({ runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH } }),
+      game({ runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH } }),
+      game({ runes: { ...NO_RUNES, primaryTree: PRECISION, keystone: PRESS_THE_ATTACK } }),
+    ];
+    expect(resolvePrimaryTree(games, DEATHFIRE_TOUCH)).toBe(SORCERY);
+  });
+
+  it("falls back to the sample-wide modal primary tree when the modal keystone's games lack tree data", () => {
+    const games = [
+      game({ runes: { ...NO_RUNES, keystone: DEATHFIRE_TOUCH } }), // keystone but primaryTree 0
+      game({ runes: { ...NO_RUNES, primaryTree: PRECISION } }),
+      game({ runes: { ...NO_RUNES, primaryTree: PRECISION } }),
+    ];
+    expect(resolvePrimaryTree(games, DEATHFIRE_TOUCH)).toBe(PRECISION);
+  });
+
+  it("returns 0 when no game carries any primary tree data", () => {
+    const games = [game({ runes: NO_RUNES }), game({ runes: NO_RUNES })];
+    expect(resolvePrimaryTree(games, 0)).toBe(0);
   });
 });
 

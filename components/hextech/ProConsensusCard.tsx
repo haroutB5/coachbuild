@@ -406,8 +406,12 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
   // (minors/picks/shards each carry their OWN denominator, see proConsensus.ts
   // module header) instead of three repeated "from N games" lines — still
   // honest per-slot, just one line instead of three.
+  // v0.29.0: minors/picks are now conditioned on the primary tree, so the
+  // caption names it ("minors from 18 games running Sorcery") — reflecting the
+  // conditioning honestly rather than implying a flat all-games aggregate.
+  const treeCtx = model.primaryTree ? ` running ${treeName(model.primaryTree)}` : "";
   const additionalRuneNotes = [
-    model.primaryMinors.entries.length > 0 ? `minors ${slotSampleNote(model.primaryMinors)}` : null,
+    model.primaryMinors.entries.length > 0 ? `minors ${slotSampleNote(model.primaryMinors)}${treeCtx}` : null,
     model.secondaryPicks.entries.length > 0 ? `picks ${slotSampleNote(model.secondaryPicks)}` : null,
     model.shards.entries.length > 0 ? `shards ${slotSampleNote(model.shards)}` : null,
   ].filter((n): n is string => Boolean(n));
@@ -483,7 +487,27 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
         <div className="grid grid-cols-1 md:grid-cols-[1.5fr_1.1fr_auto] gap-x-8 gap-y-5 mb-1">
           {hasPrimaryCol && (
             <div>
-              <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2.5">Primary</p>
+              {/* v0.29.0: the page is now conditioned on the modal keystone's
+                  TREE, so show that tree as the PRIMARY header (icon + name),
+                  mirroring the secondary tree header — the data is already at
+                  hand (model.primaryTree). Falls back to the plain "Primary"
+                  label when the tree couldn't be resolved from the sample. */}
+              {model.primaryTree ? (
+                <div className="flex items-center gap-2 mb-2.5">
+                  <span className="w-5 h-5 rounded-full bg-black/20 overflow-hidden flex items-center justify-center flex-shrink-0">
+                    <IconWithFallback
+                      src={treeIconUrl(model.primaryTree)}
+                      alt={treeName(model.primaryTree)}
+                      fallbackGlyph={treeName(model.primaryTree)}
+                      className="w-full h-full object-contain"
+                      size={20}
+                    />
+                  </span>
+                  <span className="text-[11.5px] text-txt font-semibold">{treeName(model.primaryTree)}</span>
+                </div>
+              ) : (
+                <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2.5">Primary</p>
+              )}
               <div className="flex flex-wrap items-end gap-2.5">
                 {keystone && (
                   <ConsensusRuneTile

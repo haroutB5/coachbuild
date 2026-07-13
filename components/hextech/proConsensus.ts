@@ -70,6 +70,50 @@
 // breakdown also reports its own soloq/prostage split, so the UI can render
 // an honest "from N solo-queue games" note instead of a bare fraction that
 // implies the same coverage a keystone fraction has.
+//
+// ── Tree-conditioned rune page (v0.29.0) ────────────────────────────────────
+// BUG THIS FIXES (live user report on a champion with a modal-only keystone —
+// e.g. Deathfire Touch 16/30): before v0.29.0 primaryMinors/secondaryPicks/
+// secondaryTree were FLAT frequency aggregates over ALL games regardless of
+// each game's primary tree. When the top keystone is only modal (16 of 30
+// games), the OTHER 14 games run different primary trees, so THEIR primary[]
+// runes leaked into the minors row and THEIR secondary trees/picks leaked into
+// the secondary column — producing an impossible in-game page: minors mixing
+// two trees, and a "secondary tree" equal to the primary tree, and a rune
+// appearing as BOTH a primary minor AND a secondary pick.
+//
+// FIX: condition the whole displayed page on the top keystone's TREE.
+//   1. Top keystone stays modal over ALL games with a resolved keystone
+//      (unchanged — the "16/30" fraction the card shows is honest).
+//   2. Resolve the page's PRIMARY TREE from the game data itself — every game
+//      carries runes.primaryTree (set by lib/pro/extract.ts from Riot's perk
+//      styles, and lib/prostage/extract.ts from Leaguepedia's PrimaryTree
+//      column), so NO hardcoded keystone→tree table is needed. We prefer the
+//      tree the modal keystone actually ran under (resolvePrimaryTree below).
+//   3. PAGE SAMPLE = games whose runes.primaryTree === that tree. Within a
+//      game, primary[] is already tree-consistent (both extract paths bucket
+//      by parent tree), so the incoherence came ONLY from mixing games with
+//      different primary trees — conditioning the sample removes it at the
+//      source.
+//   4. primaryMinors aggregate primary[] ONLY over the page sample (keystone
+//      ids filtered defensively — both extract paths already drop them).
+//   5. secondaryTree = modal secondaryTree over the page sample EXCLUDING the
+//      primary tree (a page can never run its own primary tree as secondary).
+//      secondaryPicks aggregate secondary[] only over page-sample games whose
+//      secondaryTree equals that modal tree — so every pick belongs to the
+//      displayed secondary tree and, being a different tree from the primary,
+//      can never share a rune id with a primary minor.
+//   6. Every conditioned breakdown's sampleSize reflects its OWN conditioned
+//      sample (the per-slot-denominator honesty pattern is preserved).
+//   7. shards + spell pair + items/boots are tree-INDEPENDENT and stay
+//      aggregated over every game, exactly as before.
+// Residual data-quality edge (documented, not a regression): prostage's
+// resolveRunes has a `parentStyleId === 0` best-guess fallback that files a
+// bare-id rune of unknown parent into primary[]; if such a rune truly belonged
+// to the secondary tree it could, in theory, still cross rows. That path is
+// rare (Leaguepedia usually resolves parent styles) and out of scope for a
+// per-game tree conditioning fix — the invariant holds for all
+// parent-resolved data, which is the overwhelming majority.
 
 import type { ProGame } from "@/components/proGames.types";
 import { CONSUMABLE_ITEM_IDS } from "@/components/proAssets";
@@ -169,22 +213,39 @@ export interface ProConsensusModel {
    *  rows doesn't silently dilute the fraction shown for the ones that do
    *  have data. */
   runesSampleSize: number;
+  /** v0.29.0 — the page's PRIMARY tree id (8000 Precision … 8400 Resolve),
+   *  resolved from the game data itself (each game's runes.primaryTree),
+   *  preferring the tree the modal keystone ran under. Null when NO game in
+   *  the sample carried resolved tree data (conditioning then yields an empty
+   *  page sample — an honest "no tree data" state, not a fabricated page). The
+   *  whole rune page (minors + secondaryTree + secondaryPicks) is conditioned
+   *  on games that ran THIS tree so it reads as one coherent in-game page. */
+  primaryTree: number | null;
+  /** v0.29.0 — N_page: how many games ran `primaryTree`. This is the
+   *  conditioned page sample every minor / secondary row is aggregated over
+   *  (each slot's own sampleSize is a subset of this — games that also
+   *  carried a non-empty slot array). */
+  primaryTreeSampleSize: number;
   secondaryTree: TreeFrequency | null;
-  /** Denominator for secondaryTree.share — games with a resolved
-   *  (non-zero) secondary tree. Tracked SEPARATELY from runesSampleSize:
-   *  Leaguepedia can populate KeystoneRune without PrimaryTree/SecondaryTree
-   *  or vice versa (resolveRunes in lib/prostage/extract.ts resolves each
-   *  field independently), so a game can count toward one denominator and
-   *  not the other — sharing one counter would silently over- or
-   *  under-state whichever fraction borrowed the wrong sample size (caught
-   *  by this module's own tests before it ever left proConsensus.ts). */
+  /** Denominator for secondaryTree.share — v0.29.0: page-sample games (games
+   *  that ran `primaryTree`) with a resolved secondary tree that ISN'T the
+   *  primary tree. Conditioned on the page sample so a champion whose OTHER
+   *  keystones ran different trees can't leak an impossible-in-game secondary
+   *  (e.g. the same tree as primary) into this fraction. */
   secondaryTreeSampleSize: number;
-  /** v0.27.1 — top 3 primary-tree minor runes by frequency (a real page has
-   *  exactly 3 minor rows below the keystone), flat-aggregated per the
-   *  module header note. */
+  /** v0.29.0 — top 3 primary-tree minor runes, aggregated over the PAGE
+   *  SAMPLE only (games whose runes.primaryTree === `primaryTree`), keystone
+   *  ids filtered defensively. A real page has exactly 3 minor rows below the
+   *  keystone, all in the primary tree — conditioning guarantees these all
+   *  belong to `primaryTree` and never mix trees. Flat-aggregated within that
+   *  sample per the module header note (row order isn't reliably preserved
+   *  across both sources). */
   primaryMinors: RuneSlotBreakdown;
-  /** v0.27.1 — top 2 secondary-tree picks by frequency (a real page has
-   *  exactly 2). */
+  /** v0.29.0 — top 2 secondary-tree picks, aggregated over page-sample games
+   *  whose secondaryTree === the modal `secondaryTree` above. Because that
+   *  tree is guaranteed ≠ `primaryTree`, these ids can NEVER duplicate a
+   *  primaryMinors id (a rune belongs to exactly one tree). A real page has
+   *  exactly 2. */
   secondaryPicks: RuneSlotBreakdown;
   /** v0.27.1 — top 3 stat shards by frequency. Structurally soloq-only
    *  today (see module header) — soloqCount/prostageCount on the breakdown
@@ -306,6 +367,33 @@ class RuneSlotAccumulator {
   }
 }
 
+/** Resolve the page's primary tree from the game data itself — NO hardcoded
+ *  keystone→tree table. Each game carries `runes.primaryTree`, set by
+ *  lib/pro/extract.ts (Riot perk styles) and lib/prostage/extract.ts
+ *  (Leaguepedia's PrimaryTree column). Prefers the tree the MODAL keystone
+ *  actually ran under (games whose keystone === modalKeystoneId) so the tree
+ *  matches the keystone the card displays; falls back to the sample-wide modal
+ *  primary tree when those games never carried a resolved primaryTree, and
+ *  finally 0 when no game has tree data at all (conditioning then yields an
+ *  empty page sample — an honest "no tree data" state, not a fabricated page).
+ *  Exported for direct unit testing. */
+export function resolvePrimaryTree(games: ProGame[], modalKeystoneId: number): number {
+  const modalTreeAmong = (predicate: (g: ProGame) => boolean): number => {
+    const counts = new Map<number, number>();
+    for (const g of games) {
+      if (!predicate(g)) continue;
+      const pt = g.runes?.primaryTree ?? 0;
+      if (pt > 0) bump(counts, pt);
+    }
+    return sortEntries(counts)[0]?.[0] ?? 0;
+  };
+  if (modalKeystoneId > 0) {
+    const tiedToKeystone = modalTreeAmong((g) => (g.runes?.keystone ?? 0) === modalKeystoneId);
+    if (tiedToKeystone > 0) return tiedToKeystone;
+  }
+  return modalTreeAmong(() => true);
+}
+
 export function aggregateProConsensus(
   games: ProGame[],
   itemMeta: Map<number, ItemDetail>
@@ -314,16 +402,14 @@ export function aggregateProConsensus(
 
   const itemCounts = new Map<number, number>();
   const keystoneCounts = new Map<number, number>();
-  const secondaryTreeCounts = new Map<number, number>();
   const spellPairCounts = new Map<string, number>();
   const spellPairValue = new Map<string, [number, number]>();
 
-  const primaryMinors = new RuneSlotAccumulator();
-  const secondaryPicks = new RuneSlotAccumulator();
+  // shards are tree-INDEPENDENT (stat runes belong to no tree), so they
+  // aggregate over EVERY game — unlike the tree-conditioned minors/picks below.
   const shards = new RuneSlotAccumulator();
 
   let runesSampleSize = 0;
-  let secondaryTreeSampleSize = 0;
   let spellSampleSize = 0;
 
   const tournamentNames: string[] = [];
@@ -331,6 +417,11 @@ export function aggregateProConsensus(
   let soloqCount = 0;
   let prostageCount = 0;
 
+  // ── Phase A: tree-INDEPENDENT aggregates over every game ───────────────────
+  // items, keystone, shards, spells, source/tournament split. The
+  // tree-CONDITIONED rune rows (minors, secondary tree, secondary picks) can't
+  // be computed until the modal keystone — and therefore the page's primary
+  // tree — is known, so they run in Phase B over a filtered page sample.
   for (const game of games) {
     const seenItems = new Set<number>();
     for (const itemId of game.finalItems ?? []) {
@@ -345,14 +436,7 @@ export function aggregateProConsensus(
       runesSampleSize += 1;
       bump(keystoneCounts, keystone);
     }
-    const secondaryTree = game.runes?.secondaryTree ?? 0;
-    if (secondaryTree > 0) {
-      secondaryTreeSampleSize += 1;
-      bump(secondaryTreeCounts, secondaryTree);
-    }
 
-    primaryMinors.add(game.runes?.primary ?? [], game.source);
-    secondaryPicks.add(game.runes?.secondary ?? [], game.source);
     shards.add(game.runes?.shards ?? [], game.source);
 
     const [s1, s2] = game.spells ?? [0, 0];
@@ -399,10 +483,56 @@ export function aggregateProConsensus(
     ? { keystoneId: topKeystone[0], count: topKeystone[1], share: topKeystone[1] / runesSampleSize }
     : null;
 
+  // ── Phase B: tree-conditioned rune page (v0.29.0) ─────────────────────────
+  // Resolve the page's primary tree from the game data itself, then condition
+  // minors + secondary tree + secondary picks on games that actually ran that
+  // tree — see the module header for the incoherence bug this fixes.
+  const primaryTreeId = resolvePrimaryTree(games, keystone?.keystoneId ?? 0);
+  const pageSample =
+    primaryTreeId > 0 ? games.filter((g) => (g.runes?.primaryTree ?? 0) === primaryTreeId) : [];
+  const primaryTreeSampleSize = pageSample.length;
+
+  // primaryMinors: primary[] over the page sample only, keystone ids filtered
+  // defensively (both extract paths already drop them, but a future data shape
+  // shouldn't be able to leak a keystone into the minors row).
+  const primaryMinors = new RuneSlotAccumulator();
+  for (const game of pageSample) {
+    const ownKeystone = game.runes?.keystone ?? 0;
+    const minors = (game.runes?.primary ?? []).filter(
+      (id) => id > 0 && id !== ownKeystone && id !== keystone?.keystoneId
+    );
+    primaryMinors.add(minors, game.source);
+  }
+
+  // secondaryTree: modal secondary tree over the page sample, EXCLUDING the
+  // primary tree (impossible in-game). Denominator is page-sample games with a
+  // resolved secondary tree that isn't the primary tree.
+  const secondaryTreeCounts = new Map<number, number>();
+  let secondaryTreeSampleSize = 0;
+  for (const game of pageSample) {
+    const st = game.runes?.secondaryTree ?? 0;
+    if (st > 0 && st !== primaryTreeId) {
+      secondaryTreeSampleSize += 1;
+      bump(secondaryTreeCounts, st);
+    }
+  }
   const topSecondary = sortEntries(secondaryTreeCounts)[0];
   const secondaryTree: TreeFrequency | null = topSecondary
     ? { treeId: topSecondary[0], count: topSecondary[1], share: topSecondary[1] / secondaryTreeSampleSize }
     : null;
+
+  // secondaryPicks: secondary[] only from page-sample games whose secondary
+  // tree IS the modal secondary tree — every pick then belongs to the
+  // displayed secondary tree and can never duplicate a primary minor.
+  const secondaryPicks = new RuneSlotAccumulator();
+  if (secondaryTree) {
+    for (const game of pageSample) {
+      if ((game.runes?.secondaryTree ?? 0) !== secondaryTree.treeId) continue;
+      const ownKeystone = game.runes?.keystone ?? 0;
+      const picks = (game.runes?.secondary ?? []).filter((id) => id > 0 && id !== ownKeystone);
+      secondaryPicks.add(picks, game.source);
+    }
+  }
 
   const topSpellKey = Array.from(spellPairCounts.entries()).sort((a, b) => {
     if (b[1] !== a[1]) return b[1] - a[1];
@@ -424,6 +554,8 @@ export function aggregateProConsensus(
     boots,
     keystone,
     runesSampleSize,
+    primaryTree: primaryTreeId > 0 ? primaryTreeId : null,
+    primaryTreeSampleSize,
     secondaryTree,
     secondaryTreeSampleSize,
     primaryMinors: primaryMinors.finalize(TOP_PRIMARY_MINORS_LIMIT),
