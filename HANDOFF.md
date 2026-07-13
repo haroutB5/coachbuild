@@ -4300,3 +4300,156 @@ Two independent user requests on `app/page.tsx`'s Hextech shell, both shipped so
 **Files**: `components/hextech/Sidebar.tsx` (lane grid), `components/hextech/proConsensus.ts` (new), `components/hextech/ProConsensusCard.tsx` (new), `components/hextech/BuildTabContent.tsx` (wiring), `components/__tests__/proConsensus.test.ts` (new), `package.json`, `CHANGELOG.md`.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-13 11:42
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-13 09:54:37Z; previous content preserved there. Append new rounds below. -->
+
+## v0.27.1 — Pro Consensus card refinements (fronty, solo)
+
+User feedback on the live card (Viktor Mid screenshot: Blackfire Torch 35/39, Dark Seal 11/39, Swiftmarch 11/39, **Needlessly Large Rod 10/39**, Deathfire Touch 38/39, Resolve 20/39 — no percentages anywhere, no additional runes beyond keystone+tree name).
+
+**1. Percentages.** Every fraction on the card (items, keystone, secondary tree, spells, and the new additional-runes rows) now shows a rounded whole-percent alongside the fraction — percentage bold/teal (primary), fraction muted. New pure `formatSharePct(share)` in `components/hextech/proConsensus.ts`.
+
+**2. Additional runes.** New `primaryMinors`/`secondaryPicks`/`shards` fields on `ProConsensusModel`, each a `RuneSlotBreakdown { entries, sampleSize, soloqCount, prostageCount }`. Flat-frequency aggregation (top 3 / top 2 / top 3), NOT positional-slot reconstruction — traced `lib/pro/extract.ts` (soloq: row-ordered, from Riot's `perks.styles[n].selections`) vs `lib/prostage/extract.ts` (prostage: bucketed by parent-tree membership from a free-text Cargo list, no row guarantee) and concluded claiming "row 1 pick" would overstate what prostage data actually carries. Each slot group gets its own sample-size denominator (games where that array was non-empty) — verified live: shards on Viktor Mid are `from 8 solo-queue games` (8/53 total sample) since Leaguepedia's `resolveRunes` hardcodes `shards: []` for every prostage row — the card's `slotSampleNote()` detects when a breakdown is single-source and labels it honestly instead of implying full-sample coverage.
+
+**3. Completed-item filter (Needlessly Large Rod case).** Extended `ItemDetail` (`components/itemDetail.ts`) with `into`/`from`/tags/`purchasable` — same ddragon fetch that already resolved name/gold, zero extra network cost — plus a new `getItemDetailMap(ver)` export. New `isBuildItem(itemId, meta)` in `proConsensus.ts`:
+- **Completed** = `purchasable !== false` AND `into.length === 0` (real recipe-tree leaf).
+- **Boots carve-out**: the 2026 boot-mastery rework added a tier-2→tier-3 enchant step (verified live against 16.13.1 item.json: Sorcerer's Shoes id 3020 has `into:["3175"]`, `from:["1001"]`, depth 2) — a tier-2 boot still has a populated `into` even though "stopped at tier 2, never bought the enchant" is a completely normal final build state. Rule: `tags.includes("Boots") && from.length > 0` counts regardless of `into`. Raw tier-1 "Boots" (1001, `from: []`) correctly stays excluded.
+- **Explicit starting-item allowlist**: Doran's Shield/Blade/Ring (1054/1055/1056), Dark Seal (1082), Cull (1083), Tear of the Goddess (3070), World Atlas (3865), Guardian's Amulet/Shroud (2049/2050). Verified against real data which of these actually NEED the allowlist vs. already pass the empty-into rule on their own: only **Dark Seal** (`into:["3041"]`, Mejai's) and **Tear of the Goddess** (`into`: 4 mana items) have a real upgrade path — everything else in the list is already empty-into today and is pinned defensively per the brief's explicit ask.
+- **Unknown item id (no metadata, not allowlisted) → excluded**, not assumed. Needlessly Large Rod (1058, `into`: 6 core mage items, not allowlisted) is excluded — verified both in the new test suite and live on Viktor Mid (no longer appears; Blackfire Torch/Rocketbelt/Zhonya's/Crimson Lucidity/Rabadon's/Spellslinger's Shoes now fill the 6 slots).
+
+**Architecture note**: `aggregateProConsensus(games, itemMeta)` gained a required second param (`Map<number, ItemDetail>`). `ProConsensusCard.tsx`'s first effect now `Promise.all`s the games fetch + `getItemDetailMap(ver)` together (both must resolve before the model can be computed — item filtering needs recipe data DURING aggregation, not as a display-only afterthought). This incidentally eliminated the card's old second item-name fetch (`getItemNameMap`) — item names now come free from the same `itemMeta` map already fetched for filtering. The second effect (unchanged in shape) now also resolves primary-minor/secondary-pick rune display via `resolveRuneDisplay`, same CDN rune-map cache the keystone lookup already used.
+
+**Tests**: `components/__tests__/proConsensus.test.ts` — 20 new/changed cases (29 total in file): `isBuildItem` unit tests (Needlessly Large Rod exclusion, Rocketbelt/Swiftmarch inclusion, tier-2-boots-with-into inclusion, raw-tier-1-boots exclusion, allowlist-wins-over-no-metadata, non-purchasable exclusion, unknown-id exclusion), aggregation-level regression for the Rod case, per-slot-denominator independence (a prostage keystone-only row doesn't dilute the primary-minors sample), shards-are-structurally-soloq-only, secondary-pick in-game dedup, malformed-payload no-throw, `formatSharePct` rounding.
+
+**Verified live** (dev on port 4173, Viktor Mid, real coachless/Leaguepedia data, patch 16.12/16.13):
+- 1280px: items row shows 6 completed items (Blackfire Torch 85%, Rocketbelt 77%, Zhonya's 33%, Crimson Lucidity 33%, Rabadon's 31%, Spellslinger's Shoes 25%) — no components. Keystone Deathfire Touch 90%/91% (48/53), Secondary Resolve 51-52% (27/53), Spells Flash+Teleport 100%. Additional Runes: primary minors Manaflow Band 100%/Scorch 94%/Celerity 81% (from 53 games, 8 solo queue + 45 pro play); secondary picks Cut Down 44-45%/Bone Plating 42%; shards Attack Speed 100%/Health 75%/Move Speed 63% (from 8 solo-queue games).
+- 390px: `document.documentElement.scrollWidth === clientWidth` confirmed via `chrome-devtools emulate` (390x844x3,mobile,touch — plain `resize_page` didn't land the real viewport, had to use `emulate` instead, see gotcha below). No h-scroll; items wrap to 2 rows of 3, additional-runes rows wrap cleanly.
+- Tap-through confirmed on real DOM: item tile (Blackfire Torch) opens `ItemDetailPopover` with real gold/stats/passives; rune mini-row (Manaflow Band) opens `EntityDetailPopover` with real CommunityDragon tooltip text. Both close cleanly, no stuck scroll-lock.
+
+**Gate**: `verify-fix.sh` ALL GREEN post-bump (tsc, lint 0 warnings, 543 tests, build, sw/manifest).
+
+**Version**: 0.27.0 → 0.27.1 (`package.json`, `CHANGELOG.md`). Not deployed — per dispatch brief, urgot ships.
+
+**Files touched**: `components/hextech/proConsensus.ts` (rewritten), `components/hextech/ProConsensusCard.tsx` (rewritten), `components/itemDetail.ts` (extended `ItemDetail` + new `getItemDetailMap`), `components/__tests__/proConsensus.test.ts` (rewritten), `package.json`, `CHANGELOG.md`.
+
+**Gotcha for future fronty sessions**: `mcp__chrome-devtools__resize_page` did NOT reliably set the real viewport in this environment (requested 390x844, `window.innerWidth` came back 501/495 — some OS-chrome/DPI mismatch on this Windows box). `mcp__chrome-devtools__emulate({ viewport: "390x844x3,mobile,touch" })` worked correctly (`window.innerWidth === 390` confirmed via `evaluate_script`) — use `emulate`, not `resize_page`, for mobile-width verification here going forward.
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-13 11:52
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-12 16:57:29Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-13 — Pro Consensus sample-size growth (Viktor mid 39 -> 83 games)
+
+**User ask**: grow the pro-game pool `/api/pros?championId=&role=&source=all&limit=100` draws from — Viktor mid was stuck at 39 (31 prostage + 8 soloq). Target ~100.
+
+### Diagnosis (probed the real DB before touching code, per the brief's hypothesis-vs-reality warning)
+
+The 39-game number was **not** a route-side cap bug — `app/api/pros/route.ts` was already correctly fetching up to `limit` (100) per source and merge-sorting; Viktor mid genuinely only had 39 fresh (90-day-window) rows in `coachbuild.prostage_matches`/`pro_matches`. The real lever, exactly as the brief suspected, was the ingested tournament pool: only 5 tournaments were ever in the DB (MSI 2026, LCK Road to MSI, LPL Split 2 Playoffs, LCS/LEC Spring Playoffs) — all **playoff/bracket** stages, no regular-season splits.
+
+Two separate real bugs found along the way:
+
+1. **`lib/prostage/tournaments.ts`'s `resolveActiveTournaments` filters on the *tournament's own* `Tournaments.DateStart`, not per-game dates.** A regular-season page like `LEC/2026 Season/Spring Season` (DateStart 2026-03-28) ages out of the 90-day discovery window forever once >90 days have passed since IT started — even while a good chunk of its individual games (`ScoreboardPlayers.DateTime_UTC`) still fall inside `/api/pros`'s own 90-day freshness filter. Combined with gotcha (o) ("the daily cron has never landed data in production"), this meant these pages were **never manually or automatically ingested at all** — not a regression, just a page nobody ever ran the script against while its DateStart was still fresh enough to be discovered. Did not touch `resolveActiveTournaments`'s filter itself (used an explicit tournament-list seed instead, see below) — the DateStart-based design is otherwise sound for its actual job (bounding the cron's per-run cost) and reworking it wasn't asked for.
+2. **The >500-row Cargo truncation P2 flagged in the brief is real and already live**: `LPL/2026 Season/Split 2 Playoffs` has 680 real `ScoreboardPlayers` rows; the original unpaginated `limit=500` ingest call silently captured only 500 (no error, no warning — verified live via a manual `offset=500` CargoExport probe, confirmed the missing 180 exist). `2026 Mid-Season Invitational` (already at 580 rows pre-fix) had this masked by luck — repeated ingest runs on different days happened to catch different top-500-by-date windows as the tournament grew, accumulating >500 distinct rows over time. A brand-new full-season page ingested in ONE pass would not get that luck.
+
+### Changes
+
+- **`app/api/pros/route.ts`** — raised the `limit` query-param cap from 100 to 150 (`Math.min(parseInt(limitParam, 10), 150)`, comment explains why). Verified this isn't cosmetic: Renekton top (a genuinely deep pool) returns exactly 100 at `limit=100` and the true 115 at `limit=150`+ — the old cap really was truncating a popular champion's real sample. No other route logic changed (per-source `LIMIT ${limit}` + merge-sort + slice was already correct).
+- **`lib/prostage/cargo.ts`** — added `offset?: number` to `CargoQueryOptions`, threaded through both `cargoQuery` (api.php, `offset` param) and `cargoExportQuery` (CargoExport, same param name — verified live it's honored identically to api.php's). No behavior change when `offset` is omitted (existing callers/tests unaffected).
+- **`lib/prostage/ingest.ts`** — added `paginate?: boolean` (default `false`) to `ProstageIngestOptions`. New internal `fetchScoreboardRows` helper: when `paginate` is true, walks `offset` in `PAGE_SIZE=500` steps until a page returns <500 rows (safety-capped at `MAX_PAGES=10` = 5000 rows against a pathological always-full response). Default-false path is byte-identical to the pre-change single unpaginated call (verified via the existing `queryFn` test's `toMatchObject` assertion, which still passes unmodified) — **the route (`app/api/ingest/prostage/route.ts`) was NOT touched and does not opt in** (its 60s `maxDuration` + api.php's 30s pacing floor can't afford extra pages; the script path's 5s CargoExport pacing can). This is a deliberate scope boundary, not an oversight — flagging as a known follow-up if a single future tournament's regular season ever needs the cron itself to paginate.
+- **`scripts/ingest-prostage-seed.mjs`** (new) — one-off backfill runner, explicit `SEED_TOURNAMENTS` list (see header comment for why an explicit list was necessary instead of the normal discovery path), `--via-export` + curl transport + `paginate: true` on every tournament. Ran once live (see results below). Documented in its own header as a short-lived/deletable tool, but I left it in the repo since it's genuinely reusable for the next manual top-up round (see "what's NOT automated" below) rather than deleting it.
+
+### Ingest results (live run, 2026-07-13, 0 errors)
+
+| Tournament | rows seen | rows upserted |
+|---|---|---|
+| LEC/2026 Season/Spring Season | 1110 | 1110 |
+| LCS/2026 Season/Spring Season | 690 | 690 |
+| LPL/2026 Season/Split 2 | 1710 | 1710 |
+| LCK/2026 Season/Rounds 1-2 | 2040 | 2040 |
+| LEC/2026 Season/Spring Playoffs | 300 | 0 (already fully ingested) |
+| LCS/2026 Season/Spring Playoffs | 290 | 0 (already fully ingested) |
+| LPL/2026 Season/Split 2 Playoffs | 680 | **180** (the truncation-bug backfill — exactly the missing tail) |
+| LCK/2026 Season/Road to MSI | 200 | 0 (already fully ingested) |
+| 2026 Mid-Season Invitational | 710 | 130 (new games since last manual ingest) |
+
+Total: 7,730 rows seen, 5,860 new rows upserted, 0 errors. `prostage_matches` total 1,870 -> 7,730. Ran `scripts/backfill-prostage-proid.mjs` afterward (idempotent pro_id repair) — 0 additional matches needed (the ingest-time fix already resolves pro_id inline for every new row; that script only ever mattered for pre-2026-07-11 rows).
+
+### Before/after numbers (live DB + live route, `source=all`, 90-day freshness window — unchanged)
+
+| Champion + role | Before | After (fresh, 90d) | All-time in DB |
+|---|---|---|---|
+| Viktor mid | 39 (31 prostage + 8 soloq) | **83** (75 prostage + 8 soloq) | 94 prostage + 10 soloq |
+| Ahri mid | — | **99** (81 prostage + 18 soloq) | — |
+| Renekton top | — | **115** (110 prostage + 5 soloq) — `limit=100` truncates to 100, `limit=150` returns the real 115 | — |
+| Jax top | — | 27 (all prostage) | — |
+| Aatrox top | — | 16 (7 prostage + 9 soloq) | — |
+
+**Honest framing for the user**: Viktor mid grew ~2.1x (39 -> 83) but isn't at 100 — that's a real ceiling of how much pro Viktor mid has actually been played across every 2026 tournament currently reachable on Leaguepedia within the 90-day freshness window, not a remaining cap/bug. Ahri mid (a much more commonly picked champion) landed at 99, right at the target. Every currently-active/started 2026 tier-1 tournament (LEC/LCK/LPL/LCS, regular season + playoffs, both splits/rounds structures) that has any game inside the 90-day window is now ingested — there is no further "big lever" to pull without either (a) widening `FRESH_WINDOW_DAYS` past 90 (out of scope, a deliberate existing design choice, not touched), or (b) waiting for the Summer 2026 splits to start (LPL Split 3 2026-07-22, LEC/LCS Summer Season 2026-07-24/25, LCK Rounds 3-4 2026-07-29 — all confirmed via live Leaguepedia `Tournaments` query, none have started yet as of today 2026-07-13, so there's nothing to ingest for them).
+
+### End-to-end verification
+
+Tested the route directly via `tsx` importing `GET` from `app/api/pros/route.ts` against the real (post-ingest) DB — **deliberately did NOT run `next dev`/`next build`** (fronty is concurrently building in this same checkout; gotcha (i) + the brief's explicit ban). `tsx` resolves the `@/` tsconfig path alias natively, so this exercises the real route code with zero Next.js server involved:
+```
+Viktor mid limit=100:  200, games=83,  Cache-Control: s-maxage=1800, stale-while-revalidate=3600
+Viktor mid limit=150:  200, games=83  (same — 83 IS the full fresh pool, not truncated)
+Ahri mid limit=100:    200, games=99
+Renekton top limit=100: 200, games=100  (truncated — proves the old 100 cap was real)
+Renekton top limit=150: 200, games=115 (the raised cap surfaces the missing 15)
+Renekton top limit=200: 200, games=115 (still correctly caps at 150, doesn't overshoot)
+```
+
+### Tests
+
+Added 4 new tests to `lib/__tests__/prostage-ingest.test.ts` covering the new `paginate` option: default-false makes exactly one call with no `offset` key (regression guard for the byte-identical-default-behavior claim above), a 2-page (500+180) walk stops on the short page, a single short page doesn't waste a second call, and the `MAX_PAGES=10` safety backstop against a pathological always-full mock. `npx tsc --noEmit`: clean. `npx vitest run`: 543/543 passing (was 522 before this round — 4 mine + fronty's concurrent additions).
+
+### Files touched (all outside fronty's `components/hextech/*` / `components/__tests__/*` lane, per the scope split)
+
+- `app/api/pros/route.ts` — limit cap 100 -> 150
+- `lib/prostage/cargo.ts` — `offset` param support
+- `lib/prostage/ingest.ts` — `paginate` option + `fetchScoreboardRows`
+- `lib/__tests__/prostage-ingest.test.ts` — 4 new tests
+- `scripts/ingest-prostage-seed.mjs` (new) — reusable manual backfill tool, kept intentionally
+
+**Did NOT touch**: `package.json`, `CHANGELOG.md`, `verify-fix.sh`, `next build`/`next dev`, or anything under `components/` — all per the brief's concurrency constraint. Urgot/user still needs to bump the version + CHANGELOG entry for this change when ready to ship (not done here by design).
+
+### Cleanup note for urgot/user
+
+I created scratch probe scripts (`scripts/_probe.mjs` through `_probe8.mjs`, untracked) to diagnose the DB and verify the route live — the repo convention (per a prior commit "chore: remove tracked probe stub") is these stay untracked/deleted between uses. I could NOT delete them myself: the safety-gate hook blocks `rm` (even non-recursive, non-forced single-file `rm`) and requires user-approved entries in `data/approved.txt`. They're harmless (untracked, gitignored-equivalent, no code depends on them) but should be deleted before the next commit sweep. Exact commands, if approved:
+```
+rm scripts/_probe.mjs scripts/_probe2.mjs scripts/_probe3.mjs scripts/_probe4.mjs scripts/_probe5.mjs scripts/_probe6.mjs scripts/_probe7.mjs scripts/_probe8.mjs
+```
+
+### What's NOT automated (flagging, not fixing — out of scope for this round)
+
+The daily cron (`/api/ingest/prostage`) still has gotcha (o)'s known issue (never landed data in prod) AND, even if that's fixed, `resolveActiveTournaments`'s DateStart-based discovery will never pick up a regular-season page once >90 days have passed since ITS OWN start — only playoff-stage pages (which start later, closer to "now") get naturally rediscovered. Practical implication: when the Summer 2026 splits' regular seasons age past ~90 days from their own start (roughly mid-to-late October), the same gap that hit Viktor mid this round will recur unless someone re-runs `scripts/ingest-prostage-seed.mjs` (updated with the new season's page names) before then, or `ingest-prostage.mjs`'s normal discovery is run periodically WHILE each split is still within its own 90-day discovery window (not just once at the end).
+
+— engo
+
+

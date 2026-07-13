@@ -1,4 +1,4 @@
-// Pure aggregation over ProGame[] — "what do pros actually build" for the new
+// Pure aggregation over ProGame[] — "what do pros actually build" for the
 // PRO CONSENSUS card (v0.27.0 user request: "pro players seem to build
 // Rocketbelt on Viktor — create another builds and runes space based on what
 // pro players are often building"). Complements the WPA-ranked recommendation
@@ -9,9 +9,71 @@
 // No JSX in this file (vitest 4's oxc transform can't parse JSX outside its
 // default scope — same constraint runesPage.ts documents) so it stays
 // importable from a plain .ts test file.
+//
+// v0.27.1 — three refinements on the live card (user feedback on a Viktor Mid
+// screenshot): percentages alongside every fraction, the FULL aggregated rune
+// picture (not just keystone + secondary tree name), and a real completed-
+// item filter (Needlessly Large Rod, a component, was showing up next to
+// Blackfire Torch).
+//
+// ── Completed-item rule (requirement #3) ────────────────────────────────────
+// An item id counts as a real "build" entry — not a discardable mid-build
+// component — when EITHER:
+//   1. It's in STARTING_ITEM_ALLOWLIST below (a short, explicit list of
+//      items pros commonly finish a game holding even though they're not
+//      "complete" in the recipe-tree sense — Dark Seal and Tear of the
+//      Goddess both have a real `into` upgrade path, so the empty-into rule
+//      alone would wrongly exclude them). A few allowlist entries (Doran's
+//      x3, Cull, World Atlas, the Guardian's starters) are ALREADY empty-
+//      into today and would pass rule 2 on their own — they're pinned here
+//      too as an explicit, patch-proof guarantee per the brief's request for
+//      "an explicit STARTING-item allowlist," not because today's data needs
+//      it for those specific ids.
+//   2. Its real ddragon item data (passed in via `itemMeta`, sourced from
+//      components/itemDetail.ts's getItemDetailMap — same CDN mirror the
+//      icons/tooltips already use) says `purchasable !== false` AND either:
+//        (a) it has NO further `into` upgrade (a true recipe-tree leaf —
+//            covers Blackfire Torch, Rocketbelt, Zhonya's, tier-3 boot
+//            enchants like Swiftmarch, and every other "final" item), OR
+//        (b) it carries the "Boots" tag and has a non-empty `from` (the
+//            2026 boot-mastery rework added a THIRD boots tier — a tier-2
+//            boot like Sorcerer's Shoes still has an `into` pointing at its
+//            optional tier-3 enchant, so the plain empty-into rule would
+//            wrongly treat a very common real build state — "never bought
+//            the enchant" — as an unfinished component. Any boots item built
+//            from something (i.e. not the raw tier-1 "Boots") is a
+//            legitimate final boots choice regardless of whether a further
+//            enchant exists).
+// An item id with NO metadata in `itemMeta` (fetch failed, or a genuinely
+// unknown/legacy id) is excluded by default UNLESS it's in the allowlist —
+// same "never assume, never invent" posture the rest of this module already
+// applies to rune sample sizes. Verified against a live 16.13.1 item.json
+// pull (2026-07-13): Needlessly Large Rod (1058) has `into` populated (6
+// core mage items) and is not allowlisted → excluded, matching the brief.
+//
+// ── Rune slot aggregation (requirement #2) ──────────────────────────────────
+// `ProGameRunes.primary`/`secondary` are NOT reliably row-ordered across both
+// sources: lib/pro/extract.ts (soloq, from Riot's perks.styles[n].selections)
+// preserves row order, but lib/prostage/extract.ts (pro play, from
+// Leaguepedia's free-text "Runes" list) buckets by parent tree with no row
+// guarantee — see that module's resolveRunes(). Reconstructing "row 1 pick"
+// vs "row 2 pick" would silently overclaim structure the data doesn't
+// reliably carry. Instead this aggregates FLAT frequency, same pattern as
+// items/keystone: every id that appears anywhere in a game's primary[] (resp.
+// secondary[]/shards[]) counts once per game, ranked by count. Each slot
+// group gets its OWN sample-size denominator — games where that specific
+// array was non-empty — never gamesTotal, so a champion with lots of
+// keystone-only prostage rows doesn't dilute the fraction shown for games
+// that DID carry a full page. `shards` in particular is structurally
+// soloq-only today (lib/prostage/extract.ts's resolveRunes always returns
+// `shards: []` — Leaguepedia has no shard data at all), which is why each
+// breakdown also reports its own soloq/prostage split, so the UI can render
+// an honest "from N solo-queue games" note instead of a bare fraction that
+// implies the same coverage a keystone fraction has.
 
 import type { ProGame } from "@/components/proGames.types";
 import { CONSUMABLE_ITEM_IDS } from "@/components/proAssets";
+import type { ItemDetail } from "@/components/itemDetail";
 
 export interface ItemFrequency {
   itemId: number;
@@ -40,6 +102,26 @@ export interface SpellPairFrequency {
   share: number; // count / spellSampleSize
 }
 
+export interface RuneSlotFrequency {
+  runeId: number;
+  count: number;
+  share: number; // count / the owning RuneSlotBreakdown.sampleSize
+}
+
+export interface RuneSlotBreakdown {
+  /** Top picks for this slot group, sorted count desc then runeId asc. */
+  entries: RuneSlotFrequency[];
+  /** Denominator for every entry's share — games whose payload carried at
+   *  least one id in this slot group, NOT gamesTotal (see module header). */
+  sampleSize: number;
+  /** Of sampleSize, how many came from each source — lets the UI render an
+   *  honest "from N solo-queue games" note when a slot is structurally
+   *  soloq-only (shards, today) instead of implying prostage coverage that
+   *  was never there. */
+  soloqCount: number;
+  prostageCount: number;
+}
+
 export interface TournamentBreakdown {
   /** Unique prostage `tournament` strings seen in the sample, most-frequent
    *  first (ties broken by first-seen order — stable, no invented ranking). */
@@ -53,11 +135,15 @@ export interface ProConsensusModel {
    *  denominator ("From N pro games"). */
   gamesTotal: number;
   /** Top items by pick rate (present at least once in a game's finalItems),
-   *  consumables/trinket-slot noise excluded, boots included (a real build
-   *  choice players care about). Deduplicated per game — a game that somehow
-   *  lists the same id twice only counts once, so this is a true "N of M
-   *  games" pick rate, not a raw occurrence tally. Sorted by count desc, then
-   *  itemId asc for a deterministic tie order. */
+   *  filtered to completed items + the starting-item allowlist (see module
+   *  header) — components like Needlessly Large Rod never appear here.
+   *  Consumables/trinket-slot noise excluded via the existing
+   *  CONSUMABLE_ITEM_IDS. Deduplicated per game — a game that somehow lists
+   *  the same id twice only counts once, so this is a true "N of M games"
+   *  pick rate, not a raw occurrence tally. Sorted by count desc, then
+   *  itemId asc for a deterministic tie order. share is against gamesTotal
+   *  (unchanged denominator — filtering removes disqualified items, it
+   *  doesn't shrink the sample). */
   items: ItemFrequency[];
   /** Null when no game in the sample carries a resolved keystone (id 0 is
    *  the "unresolved/missing" sentinel — real for prostage rows Leaguepedia
@@ -78,6 +164,17 @@ export interface ProConsensusModel {
    *  under-state whichever fraction borrowed the wrong sample size (caught
    *  by this module's own tests before it ever left proConsensus.ts). */
   secondaryTreeSampleSize: number;
+  /** v0.27.1 — top 3 primary-tree minor runes by frequency (a real page has
+   *  exactly 3 minor rows below the keystone), flat-aggregated per the
+   *  module header note. */
+  primaryMinors: RuneSlotBreakdown;
+  /** v0.27.1 — top 2 secondary-tree picks by frequency (a real page has
+   *  exactly 2). */
+  secondaryPicks: RuneSlotBreakdown;
+  /** v0.27.1 — top 3 stat shards by frequency. Structurally soloq-only
+   *  today (see module header) — soloqCount/prostageCount on the breakdown
+   *  make that visible rather than asserted. */
+  shards: RuneSlotBreakdown;
   spellPair: SpellPairFrequency | null;
   /** Denominator for spellPair.share — games with BOTH spell slots resolved
    *  (neither id is the 0 sentinel). */
@@ -86,6 +183,44 @@ export interface ProConsensusModel {
 }
 
 const TOP_ITEMS_LIMIT = 6;
+const TOP_PRIMARY_MINORS_LIMIT = 3;
+const TOP_SECONDARY_PICKS_LIMIT = 2;
+const TOP_SHARDS_LIMIT = 3;
+
+/** Explicit starting-item allowlist (requirement #3) — see the module header
+ *  comment for which entries are load-bearing today (Dark Seal, Tear of the
+ *  Goddess — both have a real `into` upgrade path) vs. pinned defensively
+ *  (everything else here is already empty-into and would pass the general
+ *  completed-item rule on its own). */
+const STARTING_ITEM_ALLOWLIST = new Set<number>([
+  1054, // Doran's Shield
+  1055, // Doran's Blade
+  1056, // Doran's Ring
+  1082, // Dark Seal — upgrades into Mejai's Soulstealer; still a real build choice
+  1083, // Cull
+  3070, // Tear of the Goddess — upgrades into Manamune/Archangel's/Winter's Approach/Whispering Circlet
+  3865, // World Atlas (support starter)
+  2049, // Guardian's Amulet (support starter)
+  2050, // Guardian's Shroud (support starter)
+]);
+
+/** Boots special case — see module header (b). A tier-2 boot (e.g.
+ *  Sorcerer's Shoes) still has an `into` pointing at its optional tier-3
+ *  enchant, so it fails the plain empty-into check even though "stopped at
+ *  tier 2" is a completely normal final build state. */
+function isBootsFinal(meta: ItemDetail): boolean {
+  return meta.tags.includes("Boots") && meta.from.length > 0;
+}
+
+/** True when `itemId` belongs in the aggregated items list — a real build
+ *  choice, not a mid-build component. Exported for direct unit testing. */
+export function isBuildItem(itemId: number, meta: ItemDetail | undefined): boolean {
+  if (STARTING_ITEM_ALLOWLIST.has(itemId)) return true;
+  if (!meta) return false; // unknown item data — exclude rather than assume
+  if (meta.purchasable === false) return false;
+  if (isBootsFinal(meta)) return true;
+  return meta.into.length === 0;
+}
 
 function bump<K extends string | number>(map: Map<K, number>, key: K): void {
   map.set(key, (map.get(key) ?? 0) + 1);
@@ -98,7 +233,40 @@ function sortEntries<K extends number>(map: Map<K, number>): [K, number][] {
   return Array.from(map.entries()).sort((a, b) => (b[1] !== a[1] ? b[1] - a[1] : a[0] - b[0]));
 }
 
-export function aggregateProConsensus(games: ProGame[]): ProConsensusModel {
+/** Accumulator for one rune slot group (primary minors / secondary picks /
+ *  shards) — bump() once per distinct id seen in a game's slot array, plus
+ *  the sample-size + source-split counters, then finalize() into the public
+ *  RuneSlotBreakdown shape. */
+class RuneSlotAccumulator {
+  private counts = new Map<number, number>();
+  sampleSize = 0;
+  soloqCount = 0;
+  prostageCount = 0;
+
+  add(ids: number[], source: ProGame["source"]): void {
+    if (ids.length === 0) return;
+    this.sampleSize += 1;
+    if (source === "soloq") this.soloqCount += 1;
+    else this.prostageCount += 1;
+    new Set(ids).forEach((id) => bump(this.counts, id));
+  }
+
+  finalize(limit: number): RuneSlotBreakdown {
+    const entries: RuneSlotFrequency[] = sortEntries(this.counts)
+      .slice(0, limit)
+      .map(([runeId, count]) => ({
+        runeId,
+        count,
+        share: this.sampleSize > 0 ? count / this.sampleSize : 0,
+      }));
+    return { entries, sampleSize: this.sampleSize, soloqCount: this.soloqCount, prostageCount: this.prostageCount };
+  }
+}
+
+export function aggregateProConsensus(
+  games: ProGame[],
+  itemMeta: Map<number, ItemDetail>
+): ProConsensusModel {
   const gamesTotal = games.length;
 
   const itemCounts = new Map<number, number>();
@@ -106,6 +274,10 @@ export function aggregateProConsensus(games: ProGame[]): ProConsensusModel {
   const secondaryTreeCounts = new Map<number, number>();
   const spellPairCounts = new Map<string, number>();
   const spellPairValue = new Map<string, [number, number]>();
+
+  const primaryMinors = new RuneSlotAccumulator();
+  const secondaryPicks = new RuneSlotAccumulator();
+  const shards = new RuneSlotAccumulator();
 
   let runesSampleSize = 0;
   let secondaryTreeSampleSize = 0;
@@ -120,6 +292,7 @@ export function aggregateProConsensus(games: ProGame[]): ProConsensusModel {
     const seenItems = new Set<number>();
     for (const itemId of game.finalItems ?? []) {
       if (!itemId || CONSUMABLE_ITEM_IDS.has(itemId)) continue;
+      if (!isBuildItem(itemId, itemMeta.get(itemId))) continue;
       seenItems.add(itemId);
     }
     seenItems.forEach((itemId) => bump(itemCounts, itemId));
@@ -134,6 +307,10 @@ export function aggregateProConsensus(games: ProGame[]): ProConsensusModel {
       secondaryTreeSampleSize += 1;
       bump(secondaryTreeCounts, secondaryTree);
     }
+
+    primaryMinors.add(game.runes?.primary ?? [], game.source);
+    secondaryPicks.add(game.runes?.secondary ?? [], game.source);
+    shards.add(game.runes?.shards ?? [], game.source);
 
     const [s1, s2] = game.spells ?? [0, 0];
     if (s1 > 0 && s2 > 0) {
@@ -190,6 +367,9 @@ export function aggregateProConsensus(games: ProGame[]): ProConsensusModel {
     runesSampleSize,
     secondaryTree,
     secondaryTreeSampleSize,
+    primaryMinors: primaryMinors.finalize(TOP_PRIMARY_MINORS_LIMIT),
+    secondaryPicks: secondaryPicks.finalize(TOP_SECONDARY_PICKS_LIMIT),
+    shards: shards.finalize(TOP_SHARDS_LIMIT),
     spellPair,
     spellSampleSize,
     tournaments: {
@@ -212,4 +392,12 @@ function tournamentNamesSortedByFrequency(games: ProGame[], firstSeenOrder: stri
     }
   }
   return [...firstSeenOrder].sort((a, b) => (freq.get(b) ?? 0) - (freq.get(a) ?? 0));
+}
+
+/** Formats a 0-1 share as a whole-percent string ("90%") — rounds, never
+ *  shows a decimal (fractions here are already low-precision pick-rate
+ *  counts, a decimal would imply false precision). Exported so the card
+ *  never hand-rolls its own rounding. */
+export function formatSharePct(share: number): string {
+  return `${Math.round(share * 100)}%`;
 }

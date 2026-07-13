@@ -56,6 +56,47 @@ export interface ProstageIngestOptions {
    *  The route (app/api/ingest/prostage/route.ts) is intentionally left on
    *  the default api.php path; only the script opts in. */
   queryFn?: (opts: CargoQueryOptions) => Promise<CargoScoreboardPlayerRow[]>;
+  /** When true, walks queryFn with increasing `offset` (PAGE_SIZE=500 per
+   *  call) until a page returns fewer than PAGE_SIZE rows, instead of the
+   *  single unpaginated 500-row call. Closes a real truncation bug
+   *  (live-verified 2026-07-13): a full-season/playoff bracket can exceed
+   *  Cargo's 500-row-per-call cap, and a plain limit=500 call silently
+   *  drops the remainder with no error — e.g. LPL/2026 Season/Split 2
+   *  Playoffs has 680 real ScoreboardPlayers rows, only 500 of which a
+   *  single call ever returned. Capped at MAX_PAGES (10 = 5000 rows) as a
+   *  safety backstop against a pathological/looping response, not because
+   *  any real tournament is expected to approach it. Defaults to false —
+   *  the route (60s maxDuration, api.php's 30s-per-call pacing) can't afford
+   *  extra pages; only the script (long-running, 5s CargoExport pacing)
+   *  opts in. */
+  paginate?: boolean;
+}
+
+const PAGE_SIZE = 500;
+const MAX_PAGES = 10; // safety backstop (5000 rows) — see `paginate` doc comment above
+
+/** Fetches ALL ScoreboardPlayers rows for one tournament by walking
+ *  `offset` in PAGE_SIZE steps until a short page signals the end. A single
+ *  unpaginated call (paginate=false, the default) is just the paginate=true
+ *  loop with MAX_PAGES effectively 1 — kept as a separate non-looping path
+ *  so the default route behavior's call shape (exactly one queryFn
+ *  invocation, no `offset` key at all) is byte-identical to before this
+ *  option existed, matching the existing test's `toMatchObject` assertion. */
+async function fetchScoreboardRows(
+  queryFn: (opts: CargoQueryOptions) => Promise<CargoScoreboardPlayerRow[]>,
+  baseOpts: Omit<CargoQueryOptions, "offset">,
+  paginate: boolean
+): Promise<CargoScoreboardPlayerRow[]> {
+  if (!paginate) return queryFn(baseOpts);
+
+  const all: CargoScoreboardPlayerRow[] = [];
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const offset = page * PAGE_SIZE;
+    const rows = await queryFn(offset > 0 ? { ...baseOpts, offset } : baseOpts);
+    all.push(...rows);
+    if (rows.length < PAGE_SIZE) break; // short page = last page
+  }
+  return all;
 }
 
 export interface ProstageIngestResult {
@@ -119,13 +160,17 @@ export async function runProstageIngest(opts: ProstageIngestOptions = {}): Promi
     const [maps, proByName, rows] = await Promise.all([
       getDdragonMaps(),
       loadProNameIndex(sql),
-      queryFn({
-        tables: "ScoreboardPlayers",
-        fields: SCOREBOARD_PLAYERS_FIELDS,
-        where: `OverviewPage="${overviewPage.replace(/"/g, '\\"')}"`,
-        orderBy: "DateTime_UTC DESC",
-        limit: 500,
-      }),
+      fetchScoreboardRows(
+        queryFn,
+        {
+          tables: "ScoreboardPlayers",
+          fields: SCOREBOARD_PLAYERS_FIELDS,
+          where: `OverviewPage="${overviewPage.replace(/"/g, '\\"')}"`,
+          orderBy: "DateTime_UTC DESC",
+          limit: PAGE_SIZE,
+        },
+        opts.paginate ?? false
+      ),
     ]);
 
     result.rowsSeen = rows.length;

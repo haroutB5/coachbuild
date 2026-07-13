@@ -1,12 +1,13 @@
 /**
  * Pure-logic tests for aggregateProConsensus (components/hextech/proConsensus.ts)
  * — the "what do pros actually build" frequency aggregation backing the new
- * PRO CONSENSUS card (v0.27.0). No JSX, no network — plain ProGame[] in,
- * ProConsensusModel out.
+ * PRO CONSENSUS card (v0.27.0, refined v0.27.1). No JSX, no network — plain
+ * ProGame[] + a fake item-metadata Map in, ProConsensusModel out.
  */
 import { describe, it, expect } from "vitest";
-import { aggregateProConsensus } from "../hextech/proConsensus";
+import { aggregateProConsensus, isBuildItem, formatSharePct } from "../hextech/proConsensus";
 import type { ProGame, ProGameRunes } from "../proGames.types";
+import type { ItemDetail } from "../itemDetail";
 
 const NO_RUNES: ProGameRunes = {
   primaryTree: 0,
@@ -43,60 +44,165 @@ function game(overrides: Partial<ProGame> = {}): ProGame {
   };
 }
 
+/** Fake item-metadata factory — mirrors the real ddragon-shaped fields
+ *  itemDetail.ts's getItemDetailMap resolves (into/from/tags/purchasable),
+ *  with sane "completed item" defaults so tests only need to override what
+ *  they're exercising. */
+function item(id: number, overrides: Partial<ItemDetail> = {}): [number, ItemDetail] {
+  return [
+    id,
+    {
+      id,
+      name: `Item #${id}`,
+      goldTotal: 3000,
+      descriptionText: "",
+      into: [],
+      from: [],
+      tags: [],
+      purchasable: true,
+      ...overrides,
+    },
+  ];
+}
+
+function itemMeta(...entries: [number, ItemDetail][]): Map<number, ItemDetail> {
+  return new Map(entries);
+}
+
+// Real ids from a live 16.13.1 item.json pull (2026-07-13), used across
+// several tests below so the fixtures read like the actual champion cards.
+const ROCKETBELT = 3152; // completed — from:[...], into:[] (empty)
+const NEEDLESSLY_LARGE_ROD = 1058; // component — into: 6 core mage items
+const DARK_SEAL = 1082; // allowlisted starting item — into:["3041"] (Mejai's)
+const TEAR_OF_THE_GODDESS = 3070; // allowlisted starting item — into: 4 mana items
+const DORANS_RING = 1056; // allowlisted + already empty-into
+const SORCERERS_SHOES = 3020; // tier-2 boots — into:["3175"], from:["1001"], tags:["Boots",...]
+const RAW_BOOTS = 1001; // tier-1 boots — into: many, from: [] — must NOT count
+const SWIFTMARCH = 3170; // tier-3 boots enchant — from:["3009"], into:[] — completed either way
+
+describe("isBuildItem", () => {
+  it("excludes a component with a populated `into` (Needlessly Large Rod)", () => {
+    const meta = itemMeta(item(NEEDLESSLY_LARGE_ROD, { into: ["3157", "4645", "3089", "3102", "3128", "4403"], tags: ["SpellDamage"] }));
+    expect(isBuildItem(NEEDLESSLY_LARGE_ROD, meta.get(NEEDLESSLY_LARGE_ROD))).toBe(false);
+  });
+
+  it("includes a completed item with an empty `into` (Rocketbelt)", () => {
+    const meta = itemMeta(item(ROCKETBELT, { from: ["3145", "3108", "1028"], tags: ["Health", "SpellDamage"] }));
+    expect(isBuildItem(ROCKETBELT, meta.get(ROCKETBELT))).toBe(true);
+  });
+
+  it("includes a tier-2 boot even though it still has an `into` (Sorcerer's Shoes)", () => {
+    const meta = itemMeta(item(SORCERERS_SHOES, { into: ["3175"], from: ["1001"], tags: ["Boots", "MagicPenetration"] }));
+    expect(isBuildItem(SORCERERS_SHOES, meta.get(SORCERERS_SHOES))).toBe(true);
+  });
+
+  it("excludes raw tier-1 Boots (no `from`, so not a boots final)", () => {
+    const meta = itemMeta(item(RAW_BOOTS, { into: ["3005", "3020"], from: [], tags: ["Boots"] }));
+    expect(isBuildItem(RAW_BOOTS, meta.get(RAW_BOOTS))).toBe(false);
+  });
+
+  it("includes a tier-3 boots enchant (Swiftmarch)", () => {
+    const meta = itemMeta(item(SWIFTMARCH, { from: ["3009"], into: [], tags: ["Boots"] }));
+    expect(isBuildItem(SWIFTMARCH, meta.get(SWIFTMARCH))).toBe(true);
+  });
+
+  it("includes an allowlisted starting item even though it has a real `into` (Dark Seal)", () => {
+    const meta = itemMeta(item(DARK_SEAL, { into: ["3041"], tags: ["Health", "SpellDamage", "Lane"] }));
+    expect(isBuildItem(DARK_SEAL, meta.get(DARK_SEAL))).toBe(true);
+  });
+
+  it("includes an allowlisted starting item with no metadata at all (allowlist wins over unknown-data exclusion)", () => {
+    expect(isBuildItem(TEAR_OF_THE_GODDESS, undefined)).toBe(true);
+  });
+
+  it("excludes a non-purchasable item (quest-root / legacy id) even with empty into", () => {
+    const meta = itemMeta(item(9999, { into: [], purchasable: false }));
+    expect(isBuildItem(9999, meta.get(9999))).toBe(false);
+  });
+
+  it("excludes an item id with no metadata and no allowlist entry", () => {
+    expect(isBuildItem(424242, undefined)).toBe(false);
+  });
+});
+
 describe("aggregateProConsensus", () => {
   it("returns an empty model for N=0", () => {
-    const model = aggregateProConsensus([]);
+    const model = aggregateProConsensus([], itemMeta());
     expect(model.gamesTotal).toBe(0);
     expect(model.items).toEqual([]);
     expect(model.keystone).toBeNull();
     expect(model.secondaryTree).toBeNull();
     expect(model.spellPair).toBeNull();
     expect(model.tournaments).toEqual({ names: [], soloqCount: 0, prostageCount: 0 });
+    expect(model.primaryMinors).toEqual({ entries: [], sampleSize: 0, soloqCount: 0, prostageCount: 0 });
+    expect(model.secondaryPicks).toEqual({ entries: [], sampleSize: 0, soloqCount: 0, prostageCount: 0 });
+    expect(model.shards).toEqual({ entries: [], sampleSize: 0, soloqCount: 0, prostageCount: 0 });
   });
 
   it("counts item pick rate against gamesTotal, excluding consumables", () => {
+    const meta = itemMeta(
+      item(ROCKETBELT, { from: ["x"] }),
+      item(3020, { into: ["3175"], from: ["1001"], tags: ["Boots"] }) // Sorc Shoes
+    );
     const games = [
-      game({ finalItems: [3152, 2003, 3020] }), // Rocketbelt, Health Potion, Sorc Shoes
-      game({ finalItems: [3152, 3020] }),
-      game({ finalItems: [4645] }),
+      game({ finalItems: [ROCKETBELT, 2003, 3020] }), // Rocketbelt, Health Potion, Sorc Shoes
+      game({ finalItems: [ROCKETBELT, 3020] }),
+      game({ finalItems: [4645] }), // no metadata at all -> excluded
     ];
-    const model = aggregateProConsensus(games);
+    const model = aggregateProConsensus(games, meta);
     expect(model.gamesTotal).toBe(3);
-    const rocketbelt = model.items.find((i) => i.itemId === 3152);
-    expect(rocketbelt).toEqual({ itemId: 3152, count: 2, share: 2 / 3 });
+    const rocketbelt = model.items.find((i) => i.itemId === ROCKETBELT);
+    expect(rocketbelt).toEqual({ itemId: ROCKETBELT, count: 2, share: 2 / 3 });
     // Health Potion (2003) is a consumable — must never appear in item counts.
     expect(model.items.find((i) => i.itemId === 2003)).toBeUndefined();
     const sorcShoes = model.items.find((i) => i.itemId === 3020);
     expect(sorcShoes?.count).toBe(2);
+    // 4645 has no metadata and isn't allowlisted -> excluded, not just "unnamed".
+    expect(model.items.find((i) => i.itemId === 4645)).toBeUndefined();
+  });
+
+  it("real-data regression: Needlessly Large Rod never appears even when frequently bought as a component", () => {
+    const meta = itemMeta(
+      item(ROCKETBELT, { from: ["x"] }),
+      item(NEEDLESSLY_LARGE_ROD, { into: ["3157", "4645", "3089", "3102", "3128", "4403"], tags: ["SpellDamage"] })
+    );
+    const games = Array.from({ length: 5 }, () => game({ finalItems: [ROCKETBELT, NEEDLESSLY_LARGE_ROD] }));
+    const model = aggregateProConsensus(games, meta);
+    expect(model.items.find((i) => i.itemId === NEEDLESSLY_LARGE_ROD)).toBeUndefined();
+    expect(model.items.find((i) => i.itemId === ROCKETBELT)?.count).toBe(5);
   });
 
   it("dedupes an item that appears twice in the same game's finalItems", () => {
-    const games = [game({ finalItems: [3152, 3152, 3020] })];
-    const model = aggregateProConsensus(games);
-    const rocketbelt = model.items.find((i) => i.itemId === 3152);
+    const meta = itemMeta(item(ROCKETBELT, { from: ["x"] }), item(3020, { into: [], from: ["1001"], tags: ["Boots"] }));
+    const games = [game({ finalItems: [ROCKETBELT, ROCKETBELT, 3020] })];
+    const model = aggregateProConsensus(games, meta);
+    const rocketbelt = model.items.find((i) => i.itemId === ROCKETBELT);
     expect(rocketbelt?.count).toBe(1);
   });
 
   it("caps the item list at 6, sorted by count desc then itemId asc", () => {
+    const ids = [1, 2, 3, 4, 5, 6, 7, 8];
+    const meta = itemMeta(...ids.map((id) => item(id, { from: ["x"] })));
     // 8 distinct items, each in exactly one game except item 1 (in all 5) —
     // exercises both the top-6 cap and the deterministic tie order.
     const games = [
-      game({ finalItems: [1, 2, 3, 4, 5, 6, 7, 8] }),
+      game({ finalItems: ids }),
       game({ finalItems: [1] }),
       game({ finalItems: [1] }),
       game({ finalItems: [1] }),
       game({ finalItems: [1] }),
     ];
-    const model = aggregateProConsensus(games);
+    const model = aggregateProConsensus(games, meta);
     expect(model.items).toHaveLength(6);
     expect(model.items[0]).toEqual({ itemId: 1, count: 5, share: 1 });
     // Remaining 7 items are tied at count=1 — itemId asc breaks the tie.
     expect(model.items.slice(1).map((i) => i.itemId)).toEqual([2, 3, 4, 5, 6]);
   });
 
-  it("boots count like any other item (not excluded)", () => {
+  it("boots count like any other completed item once past tier 1", () => {
+    const meta = itemMeta(item(3020, { into: ["3175"], from: ["1001"], tags: ["Boots"] }));
     const games = [game({ finalItems: [3020] }), game({ finalItems: [3020] })];
-    const model = aggregateProConsensus(games);
+    const model = aggregateProConsensus(games, meta);
     expect(model.items.find((i) => i.itemId === 3020)).toEqual({ itemId: 3020, count: 2, share: 1 });
   });
 
@@ -107,7 +213,7 @@ describe("aggregateProConsensus", () => {
       game({ runes: { ...NO_RUNES, keystone: 8112 } }), // Electrocute
       game({ runes: NO_RUNES }), // no rune data (prostage row Leaguepedia never filled)
     ];
-    const model = aggregateProConsensus(games);
+    const model = aggregateProConsensus(games, itemMeta());
     expect(model.gamesTotal).toBe(4);
     expect(model.runesSampleSize).toBe(3); // the keystone:0 row is excluded from the denominator
     expect(model.keystone).toEqual({ keystoneId: 8229, count: 2, share: 2 / 3 });
@@ -115,7 +221,7 @@ describe("aggregateProConsensus", () => {
 
   it("keystone is null when every game lacks rune data", () => {
     const games = [game({ runes: NO_RUNES }), game({ runes: NO_RUNES })];
-    const model = aggregateProConsensus(games);
+    const model = aggregateProConsensus(games, itemMeta());
     expect(model.keystone).toBeNull();
     expect(model.runesSampleSize).toBe(0);
   });
@@ -126,7 +232,7 @@ describe("aggregateProConsensus", () => {
       game({ runes: { ...NO_RUNES, keystone: 0, secondaryTree: 8100 } }), // keystone missing, tree still known
       game({ runes: { ...NO_RUNES, keystone: 0, secondaryTree: 0 } }), // fully missing
     ];
-    const model = aggregateProConsensus(games);
+    const model = aggregateProConsensus(games, itemMeta());
     expect(model.secondaryTreeSampleSize).toBe(2);
     expect(model.secondaryTree).toEqual({ treeId: 8100, count: 2, share: 1 });
   });
@@ -137,16 +243,17 @@ describe("aggregateProConsensus", () => {
       game({ spells: [14, 4] }), // Ignite, Flash — same combo, swapped keybind
       game({ spells: [4, 0] }), // unresolved second slot — excluded entirely
     ];
-    const model = aggregateProConsensus(games);
+    const model = aggregateProConsensus(games, itemMeta());
     expect(model.spellSampleSize).toBe(2);
     expect(model.spellPair).toEqual({ spells: [4, 14], count: 2, share: 1 });
   });
 
   it("low-N (<3) still returns real fractions — the UI decides how to flag it", () => {
-    const games = [game({ finalItems: [3152] })];
-    const model = aggregateProConsensus(games);
+    const meta = itemMeta(item(ROCKETBELT, { from: ["x"] }));
+    const games = [game({ finalItems: [ROCKETBELT] })];
+    const model = aggregateProConsensus(games, meta);
     expect(model.gamesTotal).toBe(1);
-    expect(model.items[0]).toEqual({ itemId: 3152, count: 1, share: 1 });
+    expect(model.items[0]).toEqual({ itemId: ROCKETBELT, count: 1, share: 1 });
   });
 
   it("counts soloq/prostage source split and unique prostage tournaments, most-frequent first", () => {
@@ -156,7 +263,7 @@ describe("aggregateProConsensus", () => {
       game({ source: "prostage", tournament: "LEC 2026 Summer" }),
       game({ source: "prostage", tournament: "LCK Summer 2026" }),
     ];
-    const model = aggregateProConsensus(games);
+    const model = aggregateProConsensus(games, itemMeta());
     expect(model.tournaments.soloqCount).toBe(1);
     expect(model.tournaments.prostageCount).toBe(3);
     expect(model.tournaments.names).toEqual(["LEC 2026 Summer", "LCK Summer 2026"]);
@@ -164,6 +271,72 @@ describe("aggregateProConsensus", () => {
 
   it("never crashes on missing/undefined finalItems or spells arrays", () => {
     const malformed = { ...game(), finalItems: undefined, spells: undefined } as unknown as ProGame;
-    expect(() => aggregateProConsensus([malformed])).not.toThrow();
+    expect(() => aggregateProConsensus([malformed], itemMeta())).not.toThrow();
+  });
+
+  // ── v0.27.1: additional-runes aggregation ─────────────────────────────────
+
+  it("aggregates primary-tree minors per-slot-group, denominator = games with a non-empty primary[]", () => {
+    const games = [
+      game({ runes: { ...NO_RUNES, primary: [8226, 8210, 8237] } }),
+      game({ runes: { ...NO_RUNES, primary: [8226, 8210, 8237] } }),
+      game({ runes: { ...NO_RUNES, primary: [] } }), // prostage row, keystone-only — must not dilute
+    ];
+    const model = aggregateProConsensus(games, itemMeta());
+    expect(model.primaryMinors.sampleSize).toBe(2);
+    expect(model.primaryMinors.entries).toHaveLength(3);
+    expect(model.primaryMinors.entries[0]).toEqual({ runeId: 8210, count: 2, share: 1 }); // 8210 < 8226 < 8237 asc tiebreak
+  });
+
+  it("caps primary minors at 3 and secondary picks at 2", () => {
+    const games = [game({ runes: { ...NO_RUNES, primary: [1, 2, 3, 4], secondary: [5, 6, 7] } })];
+    const model = aggregateProConsensus(games, itemMeta());
+    expect(model.primaryMinors.entries).toHaveLength(3);
+    expect(model.secondaryPicks.entries).toHaveLength(2);
+  });
+
+  it("a prostage row without minors doesn't dilute the primary-minors sample (per-slot denominator independence)", () => {
+    const games = [
+      game({ source: "soloq", runes: { ...NO_RUNES, keystone: 8229, primary: [8226, 8210, 8237] } }),
+      game({ source: "prostage", tournament: "LCK", runes: { ...NO_RUNES, keystone: 8229 } }), // keystone-only, no minors
+    ];
+    const model = aggregateProConsensus(games, itemMeta());
+    expect(model.runesSampleSize).toBe(2); // keystone resolved on both
+    expect(model.primaryMinors.sampleSize).toBe(1); // only the soloq row carried minors
+    expect(model.primaryMinors.soloqCount).toBe(1);
+    expect(model.primaryMinors.prostageCount).toBe(0);
+  });
+
+  it("shards are structurally soloq-only when prostage rows never populate them, and the breakdown says so", () => {
+    const games = [
+      game({ source: "soloq", runes: { ...NO_RUNES, shards: [5008, 5005, 5013] } }),
+      game({ source: "soloq", runes: { ...NO_RUNES, shards: [5008, 5005, 5013] } }),
+      game({ source: "prostage", tournament: "MSI", runes: { ...NO_RUNES, shards: [] } }),
+    ];
+    const model = aggregateProConsensus(games, itemMeta());
+    expect(model.shards.sampleSize).toBe(2);
+    expect(model.shards.soloqCount).toBe(2);
+    expect(model.shards.prostageCount).toBe(0);
+    expect(model.shards.entries[0]).toEqual({ runeId: 5005, count: 2, share: 1 }); // 5005 < 5008 < 5013 asc tiebreak
+  });
+
+  it("secondary picks dedupe within a single game (defensive — a real page never repeats a pick)", () => {
+    const games = [game({ runes: { ...NO_RUNES, secondary: [8009, 8009, 8014] } })];
+    const model = aggregateProConsensus(games, itemMeta());
+    expect(model.secondaryPicks.entries.find((e) => e.runeId === 8009)?.count).toBe(1);
+  });
+
+  it("never crashes when runes.primary/secondary/shards are missing entirely (malformed payload)", () => {
+    const malformed = { ...game(), runes: { ...NO_RUNES, primary: undefined, secondary: undefined, shards: undefined } } as unknown as ProGame;
+    expect(() => aggregateProConsensus([malformed], itemMeta())).not.toThrow();
+  });
+});
+
+describe("formatSharePct", () => {
+  it("rounds to a whole-percent string", () => {
+    expect(formatSharePct(35 / 39)).toBe("90%");
+    expect(formatSharePct(11 / 39)).toBe("28%");
+    expect(formatSharePct(1)).toBe("100%");
+    expect(formatSharePct(0)).toBe("0%");
   });
 });

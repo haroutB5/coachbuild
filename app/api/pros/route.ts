@@ -343,7 +343,13 @@ export async function GET(req: NextRequest) {
     if (!/^\d+$/.test(limitParam) || parseInt(limitParam, 10) <= 0) {
       return NextResponse.json({ error: "Invalid limit param" }, { status: 400 });
     }
-    limit = Math.min(parseInt(limitParam, 10), 100);
+    // Cap raised 100 -> 150 (2026-07-13, pro-consensus sample-size request):
+    // each side (soloq/prostage) is still fetched at exactly `limit` rows and
+    // merge-sorted (see the Promise.all block below), so this only changes
+    // the ceiling a caller can ask for — never fetches more than requested.
+    // 150 is a sane ceiling for a single page load, not a claim that every
+    // champion+role has that much fresh data (most don't).
+    limit = Math.min(parseInt(limitParam, 10), 150);
   }
 
   const sourceParam = searchParams.get("source");

@@ -25,6 +25,18 @@ export interface ItemDetail {
    *  (<mainText>, <stats>, <passive>, <attention>, <status>, etc.) stripped,
    *  <br> converted to newlines. Safe to render as plain text (never HTML). */
   descriptionText: string;
+  /** v0.27.1 — raw ddragon recipe/tag fields, added for
+   *  components/hextech/proConsensus.ts's completed-item filter (component
+   *  exclusion, e.g. Needlessly Large Rod). `into`: ids this item upgrades
+   *  into — non-empty means "not finished yet." `from`: ids it was built
+   *  from — empty means a base/starting item with no recipe. `tags`: raw
+   *  ddragon tag list, used to special-case "Boots" (see proConsensus.ts's
+   *  module comment for why tier-2 boots need their own carve-out).
+   *  `purchasable`: false marks non-buyable/quest-root/legacy ids. */
+  into: string[];
+  from: string[];
+  tags: string[];
+  purchasable: boolean;
 }
 
 const ITEM_DATA_URL = (ver: string) =>
@@ -35,7 +47,10 @@ const LOCALSTORAGE_PREFIX = "coachbuild:itemdata:v1:";
 interface RawItemEntry {
   name?: string;
   description?: string;
-  gold?: { total?: number };
+  gold?: { total?: number; purchasable?: boolean };
+  into?: string[];
+  from?: string[];
+  tags?: string[];
 }
 
 interface RawItemJson {
@@ -118,6 +133,10 @@ async function loadItemDataMap(ver: string): Promise<Map<number, ItemDetail>> {
         name: entry.name || `Item #${id}`,
         goldTotal: entry.gold?.total ?? 0,
         descriptionText: stripItemDescriptionHtml(entry.description),
+        into: Array.isArray(entry.into) ? entry.into : [],
+        from: Array.isArray(entry.from) ? entry.from : [],
+        tags: Array.isArray(entry.tags) ? entry.tags : [],
+        purchasable: entry.gold?.purchasable ?? true,
       });
     }
     memCache.set(ver, map);
@@ -163,6 +182,23 @@ export async function getItemNameMap(ver: string): Promise<Map<number, string>> 
     const names = new Map<number, string>();
     map.forEach((entry, id) => names.set(id, entry.name));
     return names;
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * Full per-item detail map (name + gold + recipe/tag fields) for the given
+ * version — same underlying fetch/cache as getItemDetail/getItemNameMap, no
+ * extra network cost. v0.27.1: backs components/hextech/proConsensus.ts's
+ * completed-item filter, which needs into/from/tags/purchasable alongside
+ * the name it already needed. Never throws — a failed fetch resolves to an
+ * empty map so callers degrade (proConsensus's aggregator treats an unknown
+ * item id as "don't show it," never as "assume it's finished").
+ */
+export async function getItemDetailMap(ver: string): Promise<Map<number, ItemDetail>> {
+  try {
+    return await loadItemDataMap(ver);
   } catch {
     return new Map();
   }

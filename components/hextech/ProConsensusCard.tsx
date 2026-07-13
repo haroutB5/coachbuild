@@ -4,11 +4,11 @@ import { useEffect, useState } from "react";
 import type { ChampionRef } from "@/lib/types";
 import type { ProGame, ProGamesApiResponse } from "@/components/proGames.types";
 import type { EntityKind } from "@/components/EntityDetailPopover";
-import { itemIconUrl, spellIconUrl, spellName, treeIconUrl, treeName, resolveRuneDisplay } from "@/components/proAssets";
-import { getItemNameMap } from "@/components/itemDetail";
+import { itemIconUrl, spellIconUrl, spellName, treeIconUrl, treeName, resolveRuneDisplay, shardIconUrl, shardName } from "@/components/proAssets";
+import { getItemDetailMap, type ItemDetail } from "@/components/itemDetail";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import { LANE_TO_ROLE_ID, type LaneId } from "./heroContracts";
-import { aggregateProConsensus, type ProConsensusModel } from "./proConsensus";
+import { aggregateProConsensus, formatSharePct, type ProConsensusModel, type RuneSlotBreakdown } from "./proConsensus";
 
 // Sample size below which the fraction shown is more noise than signal — the
 // card still renders (a real user request, "Rocketbelt shows up a lot," can
@@ -34,12 +34,19 @@ interface ProConsensusCardProps {
 
 type FetchState =
   | { status: "loading" }
-  | { status: "ok"; model: ProConsensusModel }
+  | { status: "ok"; model: ProConsensusModel; itemMeta: Map<number, ItemDetail> }
   | { status: "hidden" }; // N=0 or fetch failed — this card is supplementary, never shows an error box
+
+interface RuneDisplay {
+  name: string;
+  icon: string;
+}
 
 interface DisplayNames {
   items: Map<number, string>;
-  keystone: { name: string; icon: string } | null;
+  keystone: RuneDisplay | null;
+  primaryMinors: Map<number, RuneDisplay>;
+  secondaryPicks: Map<number, RuneDisplay>;
 }
 
 function CardHeader({ children }: { children: React.ReactNode }) {
@@ -61,6 +68,20 @@ function ConsensusSkeleton() {
   );
 }
 
+/** Fraction + percentage — "35/39 · 90%", percentage primary (bold/teal),
+ *  fraction muted. Shared by every stat row on this card (requirement #1:
+ *  every fraction — items, keystone, secondary tree, spells, additional
+ *  runes — gets the same treatment). */
+function FractionPct({ count, denom, className = "" }: { count: number; denom: number; className?: string }) {
+  const pct = denom > 0 ? formatSharePct(count / denom) : "0%";
+  return (
+    <span className={`tabular-nums ${className}`}>
+      <span className="font-bold text-teal">{pct}</span>
+      <span className="text-mut/70"> · {count}/{denom}</span>
+    </span>
+  );
+}
+
 function ItemTile({
   itemId,
   count,
@@ -76,27 +97,85 @@ function ItemTile({
   icon: string;
   onClick: () => void;
 }) {
+  const pct = formatSharePct(denom > 0 ? count / denom : 0);
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-label={`View details for ${name} — built in ${count} of ${denom} pro games`}
+      aria-label={`View details for ${name} — built in ${count} of ${denom} pro games (${pct})`}
       className="flex flex-col items-center text-center w-[72px] flex-shrink-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
     >
       <span className="w-11 h-11 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center">
         <IconWithFallback src={icon} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={44} />
       </span>
       <span className="text-[10px] text-txt mt-1.5 leading-tight line-clamp-2 min-h-[24px]">{name}</span>
-      <span className="text-[10.5px] font-bold tabular-nums text-teal">
-        {count}/{denom}
+      <span className="text-[10.5px] font-bold tabular-nums text-teal">{pct}</span>
+      <span className="text-[9.5px] text-mut/70 tabular-nums">{count}/{denom}</span>
+    </button>
+  );
+}
+
+/** Small icon+name+fraction row for a minor rune / secondary pick / shard —
+ *  the "additional runes" block (requirement #2). Deliberately smaller than
+ *  the keystone row (keystone stays visually prominent per the brief). */
+function RuneMiniRow({
+  runeId,
+  count,
+  denom,
+  name,
+  icon,
+  onClick,
+}: {
+  runeId: number;
+  count: number;
+  denom: number;
+  name: string;
+  icon: string;
+  onClick: () => void;
+}) {
+  const pct = formatSharePct(denom > 0 ? count / denom : 0);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`View details for ${name} — picked in ${count} of ${denom} games (${pct})`}
+      className="flex items-center gap-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
+    >
+      <span className="w-6 h-6 rounded-full bg-black/25 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
+        <IconWithFallback src={icon} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={24} />
+      </span>
+      <span className="text-left">
+        <span className="block text-[10.5px] text-txt leading-tight">{name}</span>
+        <span className="block text-[9.5px] leading-tight tabular-nums">
+          <span className="font-semibold text-teal">{pct}</span>
+          <span className="text-mut/60"> · {count}/{denom}</span>
+        </span>
       </span>
     </button>
   );
 }
 
+/** Honest sub-sample caption for a rune-slot breakdown — "from N games", or
+ *  "from N solo-queue games" when the sample is entirely soloq-sourced
+ *  (structurally true for shards today, see proConsensus.ts's header), or a
+ *  mixed-source split when both are present. Never asserts a source split
+ *  the data doesn't actually show. */
+function slotSampleNote(breakdown: RuneSlotBreakdown): string {
+  const { sampleSize, soloqCount, prostageCount } = breakdown;
+  if (sampleSize === 0) return "";
+  if (prostageCount === 0 && soloqCount > 0) return `from ${soloqCount} solo-queue game${soloqCount === 1 ? "" : "s"}`;
+  if (soloqCount === 0 && prostageCount > 0) return `from ${prostageCount} pro-play game${prostageCount === 1 ? "" : "s"}`;
+  return `from ${sampleSize} games (${soloqCount} solo queue, ${prostageCount} pro play)`;
+}
+
 export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: ProConsensusCardProps) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
-  const [names, setNames] = useState<DisplayNames>({ items: new Map(), keystone: null });
+  const [names, setNames] = useState<DisplayNames>({
+    items: new Map(),
+    keystone: null,
+    primaryMinors: new Map(),
+    secondaryPicks: new Map(),
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -107,17 +186,30 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
     // ALWAYS source=all (maximum sample for the frequency count) regardless
     // of whatever All/Solo Queue/Pro Play filter the user has picked for the
     // PRO BUILDS list below; the two are deliberately decoupled.
-    fetch(`/api/pros?championId=${champ.id}&role=${role}&limit=${AGGREGATION_LIMIT}&source=all`)
-      .then(async (res) => {
+    //
+    // v0.27.1: fetched in parallel with the full item-metadata map
+    // (into/from/tags/purchasable) — aggregateProConsensus now needs it to
+    // filter out mid-build components (Needlessly Large Rod etc.) DURING
+    // aggregation, not as a display-only afterthought. getItemDetailMap
+    // never throws (degrades to an empty map on failure), so a failed item
+    // fetch can't reject this Promise.all — it just means every item gets
+    // excluded that round (see isBuildItem's "unknown item -> exclude"
+    // default), never that an unverified item slips through.
+    Promise.all([
+      fetch(`/api/pros?championId=${champ.id}&role=${role}&limit=${AGGREGATION_LIMIT}&source=all`).then(async (res) => {
         if (!res.ok) throw new Error(`pros fetch ${res.status}`);
         const data: ProGamesApiResponse = await res.json();
+        return Array.isArray(data?.games) ? data.games : [];
+      }),
+      getItemDetailMap(ver),
+    ])
+      .then(([games, itemMeta]: [ProGame[], Map<number, ItemDetail>]) => {
         if (cancelled) return;
-        const games: ProGame[] = Array.isArray(data?.games) ? data.games : [];
         if (games.length === 0) {
           setState({ status: "hidden" });
           return;
         }
-        setState({ status: "ok", model: aggregateProConsensus(games) });
+        setState({ status: "ok", model: aggregateProConsensus(games, itemMeta), itemMeta });
       })
       .catch(() => {
         // Supplementary card — a failed fetch degrades to "not shown" rather
@@ -127,21 +219,40 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
     return () => {
       cancelled = true;
     };
-  }, [champ.id, lane]);
+  }, [champ.id, lane, ver]);
 
   useEffect(() => {
     if (state.status !== "ok") return;
     let cancelled = false;
-    const { model } = state;
+    const { model, itemMeta } = state;
     (async () => {
-      const [itemNames, keystoneDisplay] = await Promise.all([
-        getItemNameMap(ver),
-        model.keystone ? resolveRuneDisplay(model.keystone.keystoneId, ver) : Promise.resolve(null),
-      ]);
+      // Item names are already in itemMeta (same fetch that filtered the
+      // items in the first place) — no second item fetch needed. Rune perk
+      // names/icons (keystone + the new primary-minor/secondary-pick rows)
+      // still need proAssets' CDN rune-map resolution.
+      const runeIds = new Set<number>();
+      if (model.keystone) runeIds.add(model.keystone.keystoneId);
+      model.primaryMinors.entries.forEach((e) => runeIds.add(e.runeId));
+      model.secondaryPicks.entries.forEach((e) => runeIds.add(e.runeId));
+
+      const resolved = await Promise.all(Array.from(runeIds).map((id) => resolveRuneDisplay(id, ver)));
       if (cancelled) return;
+
+      const runeDisplay = new Map<number, RuneDisplay>();
+      resolved.forEach((r) => runeDisplay.set(r.id, { name: r.name, icon: r.icon }));
+
+      const itemNames = new Map<number, string>();
+      itemMeta.forEach((detail, id) => itemNames.set(id, detail.name));
+
       setNames({
         items: itemNames,
-        keystone: keystoneDisplay ? { name: keystoneDisplay.name, icon: keystoneDisplay.icon } : null,
+        keystone: model.keystone ? (runeDisplay.get(model.keystone.keystoneId) ?? null) : null,
+        primaryMinors: new Map(
+          model.primaryMinors.entries.map((e) => [e.runeId, runeDisplay.get(e.runeId) ?? { name: `Rune #${e.runeId}`, icon: "" }])
+        ),
+        secondaryPicks: new Map(
+          model.secondaryPicks.entries.map((e) => [e.runeId, runeDisplay.get(e.runeId) ?? { name: `Rune #${e.runeId}`, icon: "" }])
+        ),
       });
     })();
     return () => {
@@ -171,6 +282,8 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
   const sampleLine = `From ${model.gamesTotal} pro game${model.gamesTotal === 1 ? "" : "s"} (${sourceNote}) · fresh window${
     tournamentNote ? ` · ${tournamentNote}` : ""
   }`;
+
+  const hasAdditionalRunes = model.primaryMinors.entries.length > 0 || model.secondaryPicks.entries.length > 0 || model.shards.entries.length > 0;
 
   return (
     <div className="bg-panel border border-line rounded-xl p-5">
@@ -223,7 +336,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
             <button
               type="button"
               onClick={() => onOpenDetail("rune", keystone.keystoneId)}
-              aria-label={`View details for keystone ${names.keystone?.name ?? `rune #${keystone.keystoneId}`} — picked in ${keystone.count} of ${model.runesSampleSize} games with known runes`}
+              aria-label={`View details for keystone ${names.keystone?.name ?? `rune #${keystone.keystoneId}`} — picked in ${keystone.count} of ${model.runesSampleSize} games with known runes (${formatSharePct(keystone.share)})`}
               className="flex items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
             >
               <span className="w-9 h-9 rounded-full bg-black/30 border border-line-gold overflow-hidden flex items-center justify-center flex-shrink-0">
@@ -239,8 +352,9 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
                 <span className="block text-[11.5px] text-txt font-medium leading-tight">
                   {names.keystone?.name ?? `Rune #${keystone.keystoneId}`}
                 </span>
-                <span className="block text-[10px] text-mut tabular-nums leading-tight">
-                  {keystone.count}/{model.runesSampleSize} keystone
+                <span className="block text-[10px] leading-tight mt-0.5">
+                  <FractionPct count={keystone.count} denom={model.runesSampleSize} />
+                  <span className="text-mut/60"> keystone</span>
                 </span>
               </span>
             </button>
@@ -261,8 +375,9 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
                 <span className="block text-[11.5px] text-txt font-medium leading-tight">
                   {treeName(secondaryTree.treeId)}
                 </span>
-                <span className="block text-[10px] text-mut tabular-nums leading-tight">
-                  {secondaryTree.count}/{model.secondaryTreeSampleSize} secondary
+                <span className="block text-[10px] leading-tight mt-0.5">
+                  <FractionPct count={secondaryTree.count} denom={model.secondaryTreeSampleSize} />
+                  <span className="text-mut/60"> secondary</span>
                 </span>
               </span>
             </div>
@@ -293,8 +408,9 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
                 <span className="block text-[11.5px] text-txt font-medium leading-tight">
                   {spellPair.spells.map((id) => spellName(id)).join(" + ")}
                 </span>
-                <span className="block text-[10px] text-mut tabular-nums leading-tight">
-                  {spellPair.count}/{model.spellSampleSize} spells
+                <span className="block text-[10px] leading-tight mt-0.5">
+                  <FractionPct count={spellPair.count} denom={model.spellSampleSize} />
+                  <span className="text-mut/60"> spells</span>
                 </span>
               </span>
             </div>
@@ -302,6 +418,76 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
         </div>
         );
       })()}
+
+      {hasAdditionalRunes && (
+        <div className="mt-4 pt-3.5 border-t border-line">
+          <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2.5">Additional Runes</p>
+          <div className="flex flex-col gap-3">
+            {model.primaryMinors.entries.length > 0 && (
+              <div>
+                <p className="text-[9.5px] text-mut/60 mb-1.5">
+                  Primary tree minors <span className="text-mut/40">— {slotSampleNote(model.primaryMinors)}</span>
+                </p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                  {model.primaryMinors.entries.map((e) => (
+                    <RuneMiniRow
+                      key={e.runeId}
+                      runeId={e.runeId}
+                      count={e.count}
+                      denom={model.primaryMinors.sampleSize}
+                      name={names.primaryMinors.get(e.runeId)?.name ?? `Rune #${e.runeId}`}
+                      icon={names.primaryMinors.get(e.runeId)?.icon ?? ""}
+                      onClick={() => onOpenDetail("rune", e.runeId)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {model.secondaryPicks.entries.length > 0 && (
+              <div>
+                <p className="text-[9.5px] text-mut/60 mb-1.5">
+                  Secondary picks <span className="text-mut/40">— {slotSampleNote(model.secondaryPicks)}</span>
+                </p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                  {model.secondaryPicks.entries.map((e) => (
+                    <RuneMiniRow
+                      key={e.runeId}
+                      runeId={e.runeId}
+                      count={e.count}
+                      denom={model.secondaryPicks.sampleSize}
+                      name={names.secondaryPicks.get(e.runeId)?.name ?? `Rune #${e.runeId}`}
+                      icon={names.secondaryPicks.get(e.runeId)?.icon ?? ""}
+                      onClick={() => onOpenDetail("rune", e.runeId)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {model.shards.entries.length > 0 && (
+              <div>
+                <p className="text-[9.5px] text-mut/60 mb-1.5">
+                  Shards <span className="text-mut/40">— {slotSampleNote(model.shards)}</span>
+                </p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                  {model.shards.entries.map((e) => (
+                    <RuneMiniRow
+                      key={e.runeId}
+                      runeId={e.runeId}
+                      count={e.count}
+                      denom={model.shards.sampleSize}
+                      name={shardName(e.runeId)}
+                      icon={shardIconUrl(e.runeId)}
+                      onClick={() => onOpenDetail("shard", e.runeId)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <p className="text-[10px] text-mut/70 mt-3.5 pt-3 border-t border-line">{sampleLine}</p>
     </div>

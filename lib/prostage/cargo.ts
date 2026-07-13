@@ -136,6 +136,14 @@ export interface CargoQueryOptions {
   where?: string;
   orderBy?: string;
   limit?: number;
+  /** Standard Cargo `offset` param — page N of a >500-row result set (Cargo's
+   *  hard per-call row cap applies to BOTH api.php and CargoExport). Live-
+   *  verified 2026-07-13 against LPL/2026 Season/Split 2 Playoffs (680 real
+   *  rows): a plain limit=500 call silently truncates at row 500 with no
+   *  error/warning of any kind — offset=500 on a second call returns the
+   *  remaining 180. See lib/prostage/ingest.ts's paginated fetch for the
+   *  consumer of this. */
+  offset?: number;
 }
 
 interface CargoApiError {
@@ -164,6 +172,7 @@ export async function cargoQuery<T = Record<string, string | undefined>>(
     });
     if (opts.where) params.set("where", opts.where);
     if (opts.orderBy) params.set("order_by", opts.orderBy);
+    if (opts.offset) params.set("offset", String(opts.offset));
 
     const res = await fetch(`${CARGO_ENDPOINT}?${params.toString()}`, {
       headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
@@ -235,6 +244,7 @@ export async function cargoExportQuery<T = Record<string, string | undefined>>(
     // `order+by=...`, which Special:CargoExport accepts (api.php instead
     // wants `order_by`, handled separately in cargoQuery() above).
     if (opts.orderBy) params.set("order by", opts.orderBy);
+    if (opts.offset) params.set("offset", String(opts.offset));
 
     const text = await transport(`${CARGO_EXPORT_ENDPOINT}?${params.toString()}`);
     let body: unknown;

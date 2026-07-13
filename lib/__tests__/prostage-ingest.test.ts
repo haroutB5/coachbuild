@@ -192,6 +192,64 @@ describe("runProstageIngest", () => {
     expect(proIdArg).toBe("pro-raw-exact");
   });
 
+  it("paginate:false (default) makes exactly one queryFn call with no offset key", async () => {
+    vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
+    vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce([]);
+    const queryFn = vi.fn().mockResolvedValue([scoreboardRow({ GameId: "g1", Role: "Top" })]);
+
+    const result = await runProstageIngest({ cursor: 0, queryFn });
+
+    expect(queryFn).toHaveBeenCalledTimes(1);
+    expect(queryFn.mock.calls[0][0]).not.toHaveProperty("offset");
+    expect(result.rowsSeen).toBe(1);
+  });
+
+  it("paginate:true walks offset in 500-row pages until a short page ends the walk", async () => {
+    // Regression for the 2026-07-13 truncation fix: live-verified a real
+    // tournament (LPL/2026 Season/Split 2 Playoffs) has 680 ScoreboardPlayers
+    // rows — a single limit=500 call silently drops the last 180. Simulates
+    // a 2-page tournament: page 1 full (500), page 2 short (180) ends it.
+    vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
+    vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce([]); // pro-name index
+    const page1 = Array.from({ length: 500 }, (_, i) => scoreboardRow({ GameId: `g${i}` }));
+    const page2 = Array.from({ length: 180 }, (_, i) => scoreboardRow({ GameId: `g${500 + i}` }));
+    const queryFn = vi.fn().mockResolvedValueOnce(page1).mockResolvedValueOnce(page2);
+
+    const result = await runProstageIngest({ cursor: 0, queryFn, paginate: true });
+
+    expect(queryFn).toHaveBeenCalledTimes(2);
+    expect(queryFn.mock.calls[0][0]).not.toHaveProperty("offset"); // first page: no offset key at all
+    expect(queryFn.mock.calls[1][0]).toMatchObject({ offset: 500 }); // second page: offset=PAGE_SIZE
+    expect(result.rowsSeen).toBe(680); // both pages' rows counted
+  });
+
+  it("paginate:true stops after a single page when it's already short (no wasted second call)", async () => {
+    vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
+    vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce([]);
+    const queryFn = vi.fn().mockResolvedValue([scoreboardRow({ GameId: "g1", Role: "Top" })]);
+
+    const result = await runProstageIngest({ cursor: 0, queryFn, paginate: true });
+
+    expect(queryFn).toHaveBeenCalledTimes(1);
+    expect(result.rowsSeen).toBe(1);
+  });
+
+  it("paginate:true caps at MAX_PAGES (10) as a safety backstop against a pathological always-full response", async () => {
+    vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
+    vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce([]);
+    const fullPage = Array.from({ length: 500 }, (_, i) => scoreboardRow({ GameId: `g${i}` }));
+    const queryFn = vi.fn().mockResolvedValue(fullPage); // ALWAYS returns a full page
+
+    const result = await runProstageIngest({ cursor: 0, queryFn, paginate: true });
+
+    expect(queryFn).toHaveBeenCalledTimes(10); // MAX_PAGES, not an infinite loop
+    expect(result.rowsSeen).toBe(5000);
+  });
+
   it("does NOT warn when unresolved role is at or below 50%", async () => {
     vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
     vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
