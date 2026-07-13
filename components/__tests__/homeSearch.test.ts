@@ -4,6 +4,7 @@ import {
   modeAfterLaneChange,
   modeAfterChampionSelect,
   modeAfterPlayerSelect,
+  defaultSourceForKind,
   applyWireMainView,
   wireViewForChampion,
   wireViewForPlayer,
@@ -84,54 +85,102 @@ describe("modeAfterPlayerSelect", () => {
   });
 });
 
+// v0.24.0: All/Solo Queue/Pro Play games-list filter default per view kind
+// (see homeSearch.ts's header comment above this function for the "why").
+describe("defaultSourceForKind", () => {
+  it("defaults the champion view (ProBuildsTab) to Pro Play, matching the Hextech spec mockup", () => {
+    expect(defaultSourceForKind("champion")).toBe("prostage");
+  });
+
+  it("defaults the player view (PlayerGamesSection) to All", () => {
+    expect(defaultSourceForKind("player")).toBe("all");
+  });
+});
+
 // v0.23.0: back-gesture history integration (the wire<->state mapping
 // app/page.tsx's useSheetBackNav<WireMainView> instance uses to push/replace
-// entries and restore from them).
+// entries and restore from them). v0.24.0 added the `source` games-list
+// filter field to the same wire shape.
 describe("wireViewForChampion", () => {
-  it("wraps a champion+lane pick with the given tab", () => {
-    expect(wireViewForChampion(VIKTOR, "mid", "build")).toEqual({
+  it("wraps a champion+lane pick with the given tab and source", () => {
+    expect(wireViewForChampion(VIKTOR, "mid", "build", "prostage")).toEqual({
       view: { kind: "champion", champ: VIKTOR, lane: "mid" },
       tab: "build",
+      source: "prostage",
     });
   });
 });
 
 describe("wireViewForPlayer", () => {
-  it("wraps a player pick with the given tab", () => {
-    expect(wireViewForPlayer(BWIPO, "proBuilds")).toEqual({
+  it("wraps a player pick with the given tab and source", () => {
+    expect(wireViewForPlayer(BWIPO, "proBuilds", "all")).toEqual({
       view: { kind: "player", player: BWIPO },
       tab: "proBuilds",
+      source: "all",
     });
   });
 });
 
 describe("applyWireMainView", () => {
-  it("maps a champion-kind wire to CHAMPIONS mode + activeLane/champ, omitting selectedPlayer entirely", () => {
-    const applied = applyWireMainView(wireViewForChampion(DARIUS, "top", "proBuilds"));
-    expect(applied).toEqual({ searchMode: "champions", tab: "proBuilds", activeLane: "top", champ: DARIUS });
+  it("maps a champion-kind wire to CHAMPIONS mode + activeLane/champ/gamesSource, omitting selectedPlayer entirely", () => {
+    const applied = applyWireMainView(wireViewForChampion(DARIUS, "top", "proBuilds", "soloq"));
+    expect(applied).toEqual({
+      searchMode: "champions",
+      tab: "proBuilds",
+      gamesSource: "soloq",
+      activeLane: "top",
+      champ: DARIUS,
+    });
     expect(applied.selectedPlayer).toBeUndefined();
     expect("selectedPlayer" in applied).toBe(false);
   });
 
-  it("maps a player-kind wire to PROS mode + selectedPlayer, omitting activeLane/champ entirely", () => {
-    const applied = applyWireMainView(wireViewForPlayer(BWIPO, "build"));
-    expect(applied).toEqual({ searchMode: "pros", tab: "build", selectedPlayer: BWIPO });
+  it("maps a player-kind wire to PROS mode + selectedPlayer/gamesSource, omitting activeLane/champ entirely", () => {
+    const applied = applyWireMainView(wireViewForPlayer(BWIPO, "build", "all"));
+    expect(applied).toEqual({ searchMode: "pros", tab: "build", gamesSource: "all", selectedPlayer: BWIPO });
     expect(applied.activeLane).toBeUndefined();
     expect(applied.champ).toBeUndefined();
   });
 
-  it("round-trips the full user-reported trail: Viktor(mid) -> pick Bwipo -> back restores Viktor(mid) untouched", () => {
-    // Seeded entry at mount (app/page.tsx's seedInitialSelection).
-    const seeded = wireViewForChampion(VIKTOR, "mid", "build");
-    // Pushed when the player search fires (handlePlayerSelect).
-    const pushed = wireViewForPlayer(BWIPO, "build");
+  it("round-trips the full user-reported trail: Viktor(mid) -> pick Bwipo -> back restores Viktor(mid) untouched, including its filter", () => {
+    // Seeded entry at mount (app/page.tsx's seedInitialSelection) — champion
+    // view's default filter.
+    const seeded = wireViewForChampion(VIKTOR, "mid", "build", "prostage");
+    // Pushed when the player search fires (handlePlayerSelect) — resets to
+    // the player view's own default filter.
+    const pushed = wireViewForPlayer(BWIPO, "build", "all");
     // A back-press pops back to the seeded entry -- applyWireMainView(seeded)
-    // must reproduce the exact original champion/lane, not something derived
-    // from the player entry in between.
-    expect(applyWireMainView(pushed)).toEqual({ searchMode: "pros", tab: "build", selectedPlayer: BWIPO });
+    // must reproduce the exact original champion/lane/filter, not something
+    // derived from the player entry in between.
+    expect(applyWireMainView(pushed)).toEqual({
+      searchMode: "pros",
+      tab: "build",
+      gamesSource: "all",
+      selectedPlayer: BWIPO,
+    });
     expect(applyWireMainView(seeded)).toEqual({
       searchMode: "champions",
       tab: "build",
+      gamesSource: "prostage",
+      activeLane: "mid",
+      champ: VIKTOR,
+    });
+  });
+
+  it("a filter change (replaceSelection) on the champion view keeps champ/lane/tab untouched, only source differs", () => {
+    const beforeFilterChange = wireViewForChampion(VIKTOR, "mid", "proBuilds", "prostage");
+    const afterFilterChange = wireViewForChampion(VIKTOR, "mid", "proBuilds", "soloq");
+    expect(applyWireMainView(beforeFilterChange)).toEqual({
+      searchMode: "champions",
+      tab: "proBuilds",
+      gamesSource: "prostage",
+      activeLane: "mid",
+      champ: VIKTOR,
+    });
+    expect(applyWireMainView(afterFilterChange)).toEqual({
+      searchMode: "champions",
+      tab: "proBuilds",
+      gamesSource: "soloq",
       activeLane: "mid",
       champ: VIKTOR,
     });

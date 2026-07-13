@@ -4109,3 +4109,56 @@ User request: "search should depend on if I'm searching champions or pro players
 
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-13 04:23
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-12 23:01:32Z; previous content preserved there. Append new rounds below. -->
+
+## v0.24.0 — 2026-07-13 — All/Solo Queue/Pro Play games filter restored on the Hextech shell
+
+**Ask:** the pre-redesign `/history` page had an All | Solo Queue | Pro Play SegmentedControl; the Hextech shell (v0.23.0) dropped it. Add it back to (1) the PROS player view, wiring to `/api/pros`'s existing `source=` param, and (2) the champion PRO BUILDS tab.
+
+**What I found before writing code:** `/history` still has this filter live (`components/ProGamesSection.tsx`), and `components/proGames.types.ts` already exports the exact shared pieces for it — `ProGameSource`, `SOURCE_FILTER_OPTIONS`, `proGamesEmptyTitle()`, `proGamesEmptySub()`. I reused these verbatim rather than forking a second copy; the Hextech empty states now read identically to `/history`'s (e.g. "No pro-play games tracked yet for Bwipo" / "Check back after their next official match."). `ProBuildsTab.tsx` was hardcoded to `source=prostage` with an explicit comment saying it was "not a user-toggleable filter like /history, deliberately" — per the brief I added the toggle there too but kept the **default at Pro Play**, since the Hextech spec mockup (`Design/redesign-2026-07/pro-builds-tab.png`) shows only prostage rows (league + date column) and I wanted first-load to still pixel-match the spec. `PlayerGamesSection.tsx` defaults to **All** (unchanged from what `/history`'s player mode already used, and the sensible default for browsing one person's whole history).
+
+**Filter placement:** small `SegmentedControl` (`size="sm"`, already built for "a filter row next to a section header" per its own doc comment) left-aligned directly under the BUILD/PRO BUILDS tab bar (champion view) or directly under the player hero (player view), above the games list. Same visual vocabulary as everywhere else in the app — no new component needed.
+
+**State policy (view sub-state, matches the BUILD/PRO BUILDS tab precedent from v0.23.0):**
+- `WireMainView` (`components/hextech/homeSearch.ts`) gained a required `source: ProGameSource` field alongside `view`/`tab`. `wireViewForChampion`/`wireViewForPlayer` now take `source` as a 4th param; `applyWireMainView` returns it as `gamesSource` (always present, unlike `activeLane`/`champ`/`selectedPlayer` which are kind-conditional — mirrors how `tab` is always present).
+- New pure helper `defaultSourceForKind(kind)`: `"champion" → "prostage"`, `"player" → "all"`.
+- `app/page.tsx` lifted the filter to page-level state (`gamesSource`), same tier as `tab`. Lane taps / champion search picks / player search picks (`handleLaneChange`/`handleChampionSelect`/`handlePlayerSelect`) all **reset** `gamesSource` to `defaultSourceForKind` for the new view (identity change). A tab switch (`handleTabChange`) carries the current `gamesSource` through unchanged (sub-state of the same champion, not an identity change). New `handleSourceChange` handler: `replaceSelection`s the current entry with the new source (no push, no back-gesture step — same policy as tab), **except** if a sheet is open, in which case it just `dismissGame()`s first and lets the user's next click apply the filter for real — identical trade-off to v0.23.0's tab-switch-while-sheet-open handling. Verified live this branch is actually unreachable via mouse too, for the same reason as the tab bar: `GameDetailSheet`'s backdrop is `fixed inset-0 z-[100]` and physically covers the filter row while a sheet is open, so a real click on a filter button while a sheet is open is a no-op (confirmed via puppeteer — clicking "Solo Queue" with a sheet open did nothing; closing the sheet first then clicking worked normally). The defensive branch exists for completeness/future call sites, same posture as the existing tab-bar one.
+
+**Files:**
+- `components/hextech/homeSearch.ts` — `WireMainView.source`, `HomeRestoreState.gamesSource`, `defaultSourceForKind`, updated `wireViewForChampion`/`wireViewForPlayer`/`applyWireMainView` signatures.
+- `app/page.tsx` — `gamesSource` state, `handleSourceChange`, updated all 4 existing push/replace call sites + the mount-only lane-defaults-resolution effect's `replaceSelection` call + `seedInitialSelection` + `restoreMainView` + both `openGame()` calls (now carry `source` in the pushed selection) + prop threading to `ProBuildsTab`/`PlayerGamesSection`.
+- `components/hextech/ProBuildsTab.tsx` — `source`/`onSourceChange` props, fetch URL now uses `source` instead of hardcoded `"prostage"`, filter bar + shared empty-state copy, restructured loading/error/empty/ok branches to always render the filter bar (avoids CLS from the bar appearing/disappearing).
+- `components/hextech/PlayerGamesSection.tsx` — same shape of change; also unified its previously-hardcoded empty-state strings onto `proGamesEmptyTitle`/`proGamesEmptySub` (byte-identical text for the `source="all"` case, so no visible regression).
+- `components/__tests__/homeSearch.test.ts` — updated existing signatures, added `defaultSourceForKind` coverage + a filter-change-only (`replaceSelection`) round-trip test.
+
+**Tests:** 489 → 492 (3 new: 2 for `defaultSourceForKind`, 1 for the filter-change replaceSelection round-trip). No new component test file — `ProBuildsTab.tsx`/`PlayerGamesSection.tsx` remain untestable JSX per this repo's no-rendering-harness convention; their pure logic already lived in `homeSearch.ts`.
+
+**Browser verification (puppeteer via chrome-devtools MCP, local dev on port 4231 — non-default, avoided the project's already-running 3123/4178/3417 dev servers):**
+- 1280px: Ahri PRO BUILDS defaults to Pro Play, pixel-matches `pro-builds-tab.png` (filter row added below the tab underline). Clicked All → mixed soloq+prostage rows. Clicked Solo Queue → soloq-only rows, no league/date column oddities.
+- Bwipo player view: defaults to All (40-game mix across many champions, `showOwnChampion` badges intact). Pro Play → correctly empty ("No pro-play games tracked yet for Bwipo" — this pro has zero tracked prostage games in the live dataset, a real exercise of the empty-state path, not a mock). Solo Queue → same 20 rows as All (consistent, since Bwipo has 0 prostage games).
+- Back/forward: set champion view filter to Solo Queue → searched + picked Bwipo (push, resets to All) → browser back restored Ahri/PRO BUILDS/**Solo Queue** exactly → forward restored Bwipo/**Solo Queue** (the filter I'd last set there) exactly. Confirms per-view filter persistence across the back-stack.
+- Identity reset: tapped Top lane while on Ahri/Solo Queue → landed on Garen/PRO BUILDS with filter reset to **Pro Play** (the champion-view default), not carried over from Ahri. Confirmed the mode-toggle-alone case does NOT reset it (CHAMPIONS↔PROS toggle with no new pick left the filter untouched), matching the "only identity change resets" contract.
+- 390px: champion PRO BUILDS filter row + rows reflow cleanly, no horizontal overflow. Player view All/Pro-Play-empty both screenshotted clean, filter bar doesn't jitter between states.
+- Sheet-open + filter-click: opened a game sheet, clicked a different filter option — no-op (backdrop physically blocks the click, verified via a11y snapshot showing sheet still open + filter selection unchanged), matches the documented v0.23.0 tab-bar precedent. Closed the sheet via ✕, then the same filter click worked normally.
+
+**Gates:** `verify-fix.sh` ALL GREEN (tsc, lint 0 warnings, 492 tests, build clean, sw versioning, manifest) — one build run hit the known `.next/trace` EPERM lock from the still-running dev server (see project CLAUDE.md gotcha (i)/urgot memory `bash-bg-dev-server-gotcha`), killed the dev process and re-ran clean.
+
+**Version:** 0.23.0 → 0.24.0, CHANGELOG updated. Not deployed — per brief, urgot ships.
+
+
+

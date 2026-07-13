@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import type { ChampionRef } from "@/lib/types";
 import type { PlayerRef } from "@/components/proHistory.types";
+import type { ProGameSource } from "@/components/proGames.types";
 import Sidebar from "@/components/hextech/Sidebar";
 import ChampionHero from "@/components/hextech/ChampionHero";
 import PlayerHero from "@/components/hextech/PlayerHero";
@@ -22,6 +23,7 @@ import {
   modeAfterLaneChange,
   modeAfterChampionSelect,
   modeAfterPlayerSelect,
+  defaultSourceForKind,
   applyWireMainView,
   wireViewForChampion,
   wireViewForPlayer,
@@ -54,6 +56,13 @@ export default function HomePage() {
   // the derivation/transition logic (kept pure + unit-tested there).
   const [searchMode, setSearchMode] = useState<SearchMode>("champions");
   const [selectedPlayer, setSelectedPlayer] = useState<PlayerRef | null>(null);
+
+  // v0.24.0: All/Solo Queue/Pro Play games-list filter — sub-state of
+  // whichever main view is showing (ProBuildsTab or PlayerGamesSection), same
+  // replace-not-push history policy as `tab` (see homeSearch.ts's WireMainView
+  // doc comment). Starts at the champion view's default since the page always
+  // mounts on a champion view.
+  const [gamesSource, setGamesSource] = useState<ProGameSource>(defaultSourceForKind("champion"));
 
   // Tracks which lanes the user has since picked a champion for via search —
   // the live lane-defaults resolution (which can land well after mount, see
@@ -92,7 +101,9 @@ export default function HomePage() {
       // lanes, see heroContracts.ts's header note), not what the page has
       // actually been showing the whole time.
       if (!cancelled && !hasInteractedRef.current && !overriddenLanesRef.current.has(INITIAL_LANE)) {
-        sheetNav.replaceSelection(wireViewForChampion(resolved[INITIAL_LANE], INITIAL_LANE, "build"));
+        sheetNav.replaceSelection(
+          wireViewForChampion(resolved[INITIAL_LANE], INITIAL_LANE, "build", defaultSourceForKind("champion"))
+        );
       }
     });
     return () => {
@@ -151,7 +162,7 @@ export default function HomePage() {
     // land on the page's true starting view instead of a no-op (unlike
     // /history, whose mount default is "nothing selected" and so seeds
     // `null`).
-    seedInitialSelection: () => ({ view: mainView, tab }),
+    seedInitialSelection: () => ({ view: mainView, tab, source: gamesSource }),
   });
 
   /** Repaints searchMode/tab/activeLane+champ/selectedPlayer from a landed-on
@@ -163,6 +174,7 @@ export default function HomePage() {
     const applied = applyWireMainView(wire);
     setSearchMode(applied.searchMode);
     setTab(applied.tab);
+    setGamesSource(applied.gamesSource);
     if (applied.activeLane !== undefined && applied.champ !== undefined) {
       const lane = applied.activeLane;
       const restoredChamp = applied.champ;
@@ -179,7 +191,13 @@ export default function HomePage() {
       if (sheetNav.isRestoring()) return;
       setActiveLane(lane);
       setSearchMode(modeAfterLaneChange());
-      sheetNav.pushSelection(wireViewForChampion(laneChampions[lane], lane, tab));
+      // A lane tap is a champion-identity change (possibly a different
+      // champion entirely) — reset the games filter to the champion view's
+      // default rather than carrying over whatever the previous champion had
+      // set (see homeSearch.ts's WireMainView doc comment).
+      const source = defaultSourceForKind("champion");
+      setGamesSource(source);
+      sheetNav.pushSelection(wireViewForChampion(laneChampions[lane], lane, tab, source));
     },
     [laneChampions, tab, sheetNav]
   );
@@ -190,7 +208,10 @@ export default function HomePage() {
       overriddenLanesRef.current.add(activeLane);
       setLaneChampions((prev) => ({ ...prev, [activeLane]: selected }));
       setSearchMode(modeAfterChampionSelect());
-      sheetNav.pushSelection(wireViewForChampion(selected, activeLane, tab));
+      // Identity change — reset the filter, same rationale as handleLaneChange.
+      const source = defaultSourceForKind("champion");
+      setGamesSource(source);
+      sheetNav.pushSelection(wireViewForChampion(selected, activeLane, tab, source));
     },
     [activeLane, tab, sheetNav]
   );
@@ -200,7 +221,11 @@ export default function HomePage() {
       if (sheetNav.isRestoring()) return;
       setSelectedPlayer(player);
       setSearchMode(modeAfterPlayerSelect());
-      sheetNav.pushSelection(wireViewForPlayer(player, tab));
+      // New player identity — reset to the player view's own default (All),
+      // not whatever the champion view (or a previous player) had set.
+      const source = defaultSourceForKind("player");
+      setGamesSource(source);
+      sheetNav.pushSelection(wireViewForPlayer(player, tab, source));
     },
     [tab, sheetNav]
   );
@@ -230,9 +255,31 @@ export default function HomePage() {
         return;
       }
       setTab(next);
-      sheetNav.replaceSelection(wireViewForChampion(champ, activeLane, next));
+      sheetNav.replaceSelection(wireViewForChampion(champ, activeLane, next, gamesSource));
     },
-    [sheetNav, champ, activeLane]
+    [sheetNav, champ, activeLane, gamesSource]
+  );
+
+  /** v0.24.0: the All/Solo Queue/Pro Play games-list filter — sub-state of
+   *  the current view, same replace-not-push policy as handleTabChange above
+   *  (and the same sheet-open trade-off: if a sheet is open, the filter
+   *  click just closes it via a real back() first rather than changing the
+   *  filter underneath an open sheet whose game might not survive the new
+   *  filter — the user's next click applies the filter for real). */
+  const handleSourceChange = useCallback(
+    (next: ProGameSource) => {
+      if (sheetNav.openGameId !== null) {
+        sheetNav.dismissGame();
+        return;
+      }
+      setGamesSource(next);
+      if (mainView.kind === "champion") {
+        sheetNav.replaceSelection(wireViewForChampion(mainView.champ, mainView.lane, tab, next));
+      } else {
+        sheetNav.replaceSelection(wireViewForPlayer(mainView.player, tab, next));
+      }
+    },
+    [sheetNav, mainView, tab]
   );
 
   return (
@@ -275,8 +322,10 @@ export default function HomePage() {
                 <ProBuildsTab
                   champ={mainView.champ}
                   lane={mainView.lane}
+                  source={gamesSource}
+                  onSourceChange={handleSourceChange}
                   openGameId={sheetNav.openGameId}
-                  onOpenGame={(gameId) => sheetNav.openGame(gameId, { view: mainView, tab })}
+                  onOpenGame={(gameId) => sheetNav.openGame(gameId, { view: mainView, tab, source: gamesSource })}
                   onDismissGame={sheetNav.dismissGame}
                 />
               )}
@@ -286,8 +335,10 @@ export default function HomePage() {
               <PlayerHero player={mainView.player} />
               <PlayerGamesSection
                 player={mainView.player}
+                source={gamesSource}
+                onSourceChange={handleSourceChange}
                 openGameId={sheetNav.openGameId}
-                onOpenGame={(gameId) => sheetNav.openGame(gameId, { view: mainView, tab })}
+                onOpenGame={(gameId) => sheetNav.openGame(gameId, { view: mainView, tab, source: gamesSource })}
                 onDismissGame={sheetNav.dismissGame}
               />
             </>

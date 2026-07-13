@@ -10,6 +10,7 @@
 
 import type { ChampionRef } from "@/lib/types";
 import type { PlayerRef } from "@/components/proHistory.types";
+import type { ProGameSource } from "@/components/proGames.types";
 import type { LaneId } from "./heroContracts";
 import type { HextechTab } from "./HextechTabs";
 
@@ -63,6 +64,29 @@ export function modeAfterPlayerSelect(): SearchMode {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// v0.24.0: the All/Solo Queue/Pro Play source filter the pre-Hextech /history
+// page had (ProGamesSection.tsx, still live there) but the Hextech shell
+// dropped. Reuses that page's exact ProGameSource type + SOURCE_FILTER_OPTIONS
+// + empty-state copy (components/proGames.types.ts) rather than forking a
+// second copy — both surfaces filter the same /api/pros?source= param.
+//
+// Each MAIN VIEW KIND gets its own default, not one global default, because
+// the two kinds mean structurally different things: ProBuildsTab's rows are
+// ALWAYS one fixed champion, and the Hextech spec's PRO BUILDS mockup shows
+// only prostage (league + date) rows — so "prostage" is the default that
+// pixel-matches the spec on first load. PlayerGamesSection is browsing one
+// PERSON's whole history across every champion, where solo queue is that
+// person's bulk of tracked games — "all" is the useful default there (the
+// same default the legacy /history page already used for both modes, kept
+// here only for the player view since the champion view now has a
+// spec-driven reason to differ).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function defaultSourceForKind(kind: MainView["kind"]): ProGameSource {
+  return kind === "champion" ? "prostage" : "all";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // v0.23.0: back-gesture history integration for main-view changes (champion
 // <-> player, champion -> different champion). Extends the SAME
 // useSheetBackNav<S> hook /history (v0.20.0) and the home page's own
@@ -86,6 +110,13 @@ export function modeAfterPlayerSelect(): SearchMode {
 export interface WireMainView {
   view: MainView;
   tab: HextechTab;
+  /** v0.24.0: the games-list source filter (All/Solo Queue/Pro Play) — sub-
+   *  state of the current view, same "replace, don't push" policy as `tab`
+   *  (see wireViewForChampion/wireViewForPlayer's callers in app/page.tsx:
+   *  a filter change replaceSelection()s the current entry; only a genuine
+   *  champion/player identity change pushes a new one, resetting this field
+   *  to defaultSourceForKind's default for the new view's kind). */
+  source: ProGameSource;
 }
 
 /** Fields app/page.tsx's restore needs to setState from a landed-on history
@@ -99,6 +130,11 @@ export interface WireMainView {
 export interface HomeRestoreState {
   searchMode: SearchMode;
   tab: HextechTab;
+  /** Unlike activeLane/champ/selectedPlayer below (kind-conditional — only
+   *  the branch matching wire.view.kind is present), gamesSource is always
+   *  present: it's one page-level piece of state regardless of which view
+   *  is showing, same posture as `tab`. */
+  gamesSource: ProGameSource;
   activeLane?: LaneId;
   champ?: ChampionRef;
   selectedPlayer?: PlayerRef;
@@ -106,18 +142,29 @@ export interface HomeRestoreState {
 
 export function applyWireMainView(wire: WireMainView): HomeRestoreState {
   if (wire.view.kind === "player") {
-    return { searchMode: "pros", tab: wire.tab, selectedPlayer: wire.view.player };
+    return { searchMode: "pros", tab: wire.tab, gamesSource: wire.source, selectedPlayer: wire.view.player };
   }
-  return { searchMode: "champions", tab: wire.tab, activeLane: wire.view.lane, champ: wire.view.champ };
+  return {
+    searchMode: "champions",
+    tab: wire.tab,
+    gamesSource: wire.source,
+    activeLane: wire.view.lane,
+    champ: wire.view.champ,
+  };
 }
 
 /** Builds the wire shape to push/replace for a champion-view change (lane
  *  tap, search pick, or a tab switch replacing the current entry in place). */
-export function wireViewForChampion(champ: ChampionRef, lane: LaneId, tab: HextechTab): WireMainView {
-  return { view: { kind: "champion", champ, lane }, tab };
+export function wireViewForChampion(
+  champ: ChampionRef,
+  lane: LaneId,
+  tab: HextechTab,
+  source: ProGameSource
+): WireMainView {
+  return { view: { kind: "champion", champ, lane }, tab, source };
 }
 
 /** Builds the wire shape to push for a player pick. */
-export function wireViewForPlayer(player: PlayerRef, tab: HextechTab): WireMainView {
-  return { view: { kind: "player", player }, tab };
+export function wireViewForPlayer(player: PlayerRef, tab: HextechTab, source: ProGameSource): WireMainView {
+  return { view: { kind: "player", player }, tab, source };
 }
