@@ -171,6 +171,13 @@ function slotSampleNote(breakdown: RuneSlotBreakdown): string {
 
 export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: ProConsensusCardProps) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
+  // v0.27.3 (live user report: the v0.27.2 error line showed up on-device and
+  // then STUCK — the fetch only ever re-fired on champion/lane change, so one
+  // transient blip parked the error until a full navigation): bumping this
+  // token re-runs the fetch effect. Bumped by the tappable retry in the error
+  // branch below; the effect itself also auto-retries before ever surfacing
+  // the error state.
+  const [retryToken, setRetryToken] = useState(0);
   const [names, setNames] = useState<DisplayNames>({
     items: new Map(),
     keystone: null,
@@ -196,39 +203,48 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
     // fetch can't reject this Promise.all — it just means every item gets
     // excluded that round (see isBuildItem's "unknown item -> exclude"
     // default), never that an unverified item slips through.
-    Promise.all([
-      fetch(`/api/pros?championId=${champ.id}&role=${role}&limit=${AGGREGATION_LIMIT}&source=all`).then(async (res) => {
-        if (!res.ok) throw new Error(`pros fetch ${res.status}`);
-        const data: ProGamesApiResponse = await res.json();
-        return Array.isArray(data?.games) ? data.games : [];
-      }),
-      getItemDetailMap(ver),
-    ])
-      .then(([games, itemMeta]: [ProGame[], Map<number, ItemDetail>]) => {
-        if (cancelled) return;
-        if (games.length === 0) {
-          setState({ status: "hidden" });
-          return;
-        }
-        setState({ status: "ok", model: aggregateProConsensus(games, itemMeta), itemMeta });
-      })
-      .catch(() => {
-        // v0.27.2 (bugfix — see HANDOFF-fronty.md's v0.27.2 entry): this used
-        // to collapse into the SAME "hidden" state as a genuine N=0 result
-        // (e.g. Viktor Support, essentially never played by pros) — a real
-        // fetch failure (network blip, a cold /api/pros invocation, a
-        // transient 5xx) was therefore INDISTINGUISHABLE from "no pro data
-        // exists for this champion+lane," which is exactly what made the
-        // live user bug report ("card just isn't there") impossible to
-        // triage from the outside. Still supplementary — never a competing
-        // error box — but now a real, visible, muted signal instead of
-        // silent nothing. See the render branch below.
-        if (!cancelled) setState({ status: "error" });
-      });
+    const attempt = (attemptsLeft: number) => {
+      Promise.all([
+        fetch(`/api/pros?championId=${champ.id}&role=${role}&limit=${AGGREGATION_LIMIT}&source=all`).then(async (res) => {
+          if (!res.ok) throw new Error(`pros fetch ${res.status}`);
+          const data: ProGamesApiResponse = await res.json();
+          return Array.isArray(data?.games) ? data.games : [];
+        }),
+        getItemDetailMap(ver),
+      ])
+        .then(([games, itemMeta]: [ProGame[], Map<number, ItemDetail>]) => {
+          if (cancelled) return;
+          if (games.length === 0) {
+            setState({ status: "hidden" });
+            return;
+          }
+          setState({ status: "ok", model: aggregateProConsensus(games, itemMeta), itemMeta });
+        })
+        .catch(() => {
+          if (cancelled) return;
+          // v0.27.3 (live user report): a SINGLE transient failure (network
+          // blip, cold /api/pros invocation, the SW's empty-cache fallback
+          // right after a deploy) used to park the error line until the next
+          // champion change. Auto-retry with backoff first — most blips
+          // self-heal within seconds — and only surface the error state once
+          // the retries are exhausted. The error line is also tappable now
+          // (bumps retryToken) so the user is never told to hard-refresh.
+          if (attemptsLeft > 0) {
+            window.setTimeout(() => {
+              if (!cancelled) attempt(attemptsLeft - 1);
+            }, attemptsLeft === 2 ? 1200 : 3500);
+            return;
+          }
+          // v0.27.2: distinct from "hidden" (genuine N=0) — a real, visible,
+          // muted signal instead of silent nothing. See the render branch.
+          setState({ status: "error" });
+        });
+    };
+    attempt(2);
     return () => {
       cancelled = true;
     };
-  }, [champ.id, lane, ver]);
+  }, [champ.id, lane, ver, retryToken]);
 
   useEffect(() => {
     if (state.status !== "ok") return;
@@ -275,7 +291,17 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
   if (state.status === "error") {
     return (
       <p className="text-[10.5px] text-mut/50 px-0.5" role="status">
-        Pro consensus data couldn&apos;t load — try refreshing.
+        Pro consensus data couldn&apos;t load.{" "}
+        <button
+          type="button"
+          onClick={() => {
+            setState({ status: "loading" });
+            setRetryToken((t) => t + 1);
+          }}
+          className="underline decoration-dotted underline-offset-2 text-mut/80 hover:text-teal-dim transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-teal rounded-sm"
+        >
+          Retry
+        </button>
       </p>
     );
   }
