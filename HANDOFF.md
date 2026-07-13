@@ -4162,3 +4162,46 @@ User request: "search should depend on if I'm searching champions or pro players
 
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-13 05:59
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-13 03:23:23Z; previous content preserved there. Append new rounds below. -->
+
+## v0.25.0 — BUILD tab: full rune page + tap-for-detail everywhere (2026-07-13)
+
+**Request**: user screenshotted the BUILD tab (Ahri mid) and asked for "more info for runes and items" — the Hextech `RunesSummonersCard` only showed keystone + secondary tree icon + 3 mini shard dots, while the pre-redesign Builds page (still-live components: `RunePage.tsx`, `runeDetail.ts`/`shardDetail.ts`/`summonerDetail.ts`/`itemDetail.ts`, `DetailPopover`/`EntityDetailPopover`/`ItemDetailPopover`) had the full rune page + tap-to-detail everywhere. Solo fronty, no backend change needed — `/api/build`'s `RunesBlock` already carries `primary[]`/`secondary[]` (the compact card just wasn't rendering them).
+
+**Data shape found**: `lib/types.ts`'s `RunesBlock` already has everything: `primary: Pick[]` (3 minors), `secondary: Pick[]` (2 picks), `shards: ShardSet` (offense/flex/defense), each `Pick` carrying `id`/`name`/`icon`/`wpa`/`lowSample`. No backend/contract change — this was purely a "the compact card never rendered fields the wire already had" gap.
+
+**Layout choice**: `RunesSummonersCard` is now full-width (was `md:col-span-2` sharing a row with `StartingCard`) with an internal `grid-cols-[1.5fr_1.1fr_auto]` at `md:` (primary tree | secondary tree+shards | summoners), single column below `md:`. `StartingCard` moved to pair with `CoreBuildOrderCard` in the next row (1-col + 2-col split) instead — reads better since Starting leads into the build order. `BuildLoadingSkeleton` reordered to match (full-width skeleton, then a 1+2 row, then one more).
+
+**Popover wiring**: `BuildTabContent.tsx` now owns the same `activeDetail`/`lastDetail` popover-state pattern `GameDetailSheet.tsx` established — `openDetail(kind, id)` / `openItemPopover(id)` / `closeDetail()`, `EntityDetailPopover` (rune/shard/spell) and `ItemDetailPopover` (item) mounted once `lastDetail` is ever set, `open` driven by `activeDetail !== null`. `ver` derived via `versionFromPatch(build.patch)` (`components/proAssets.ts`) — same helper `GameDetailSheet`/`ProGameCard` already use, just fed `BuildResponse.patch` instead of `ProGame.patch`. Every rune tile (keystone + minors), shard, summoner spell in `RunesSummonersCard`, and every item button in `StartingCard`/`CoreBuildOrderCard`/`SituationalCard` now calls through. Popovers are overlay state only, never pushed to history (consistent with v0.23.0 policy — confirmed no regression to back-nav).
+
+**Real bug caught during live verification, fixed before shipping**: extracted a `useBodyScrollLock` hook (`components/useBodyScrollLock.ts`, GameDetailSheet's inline iOS-safe recipe — `position:fixed` pinned at scroll offset, not `overflow:hidden`) since the BUILD tab's popovers have no enclosing sheet to inherit a lock from. First version tied the lock to `lastDetail !== null` — but `lastDetail` is *deliberately* never cleared back to null (that's what lets the popover play its exit fade instead of vanishing from the tree), so the lock never released after the FIRST popover tap: `document.body` stayed `position:fixed` forever, silently freezing page scroll for the rest of the session. Caught by literally checking `getComputedStyle(document.body).position` via `evaluate_script` after closing a popover mid-verification — screenshots alone wouldn't have shown it (the bug is scroll-only, not visual). Fixed by tracking a separate `popoverMounted` state, released 150ms after `activeDetail` goes null (matches `DetailPopover`'s own `EXIT_MS`). Re-verified: `getComputedStyle(document.body).position` returns `"static"` and `scrollY` is correctly restored ~300ms after Escape-closing a popover.
+
+**Escape handling**: BUILD tab has no enclosing modal (unlike `GameDetailSheet`'s two-stage Escape), so added a plain `keydown` listener scoped to `activeDetail !== null` that closes the popover only. Verified: Escape closes the popover, focus restores to the trigger button (`DetailPopover`'s own `triggerFocusRef` mechanism, unchanged), rest of the page stays exactly as it was.
+
+**Files**:
+- `components/hextech/runesPage.ts` (new) — pure `buildRunesPageModel`/`buildShardRow`, unit-tested
+- `components/__tests__/runesPage.test.ts` (new, 6 tests) — **note**: I originally placed this at `components/hextech/__tests__/runesPage.test.ts`, which vitest's config does NOT include (`include: ["lib/__tests__/**/*.test.ts", "components/__tests__/**/*.test.ts"]` — every other hextech-adjacent test already lives flat under `components/__tests__/` with a relative `../hextech/...` import, e.g. `situational.test.ts`). Moved it to match. The stray now-superseded duplicate at `components/hextech/__tests__/runesPage.test.ts` is still on disk — it's dead (not picked up by vitest, doesn't affect verify-fix) but I couldn't clean it up: the safety-gate hook blocked both `rm -rf` (recursive) and a plain single-file `rm` on it. **Someone with delete approval should remove `components/hextech/__tests__/runesPage.test.ts` and then the now-empty `components/hextech/__tests__/` dir.**
+- `components/hextech/RunesSummonersCard.tsx` — rewritten, full rune page + tap-for-detail
+- `components/hextech/StartingCard.tsx`, `CoreBuildOrderCard.tsx`, `SituationalCard.tsx` — added `onItemClick`, wrapped icons in buttons
+- `components/hextech/BuildTabContent.tsx` — popover state, scroll lock, Escape handler, restructured grid + skeleton
+- `components/useBodyScrollLock.ts` (new) — shared iOS-safe scroll lock; `GameDetailSheet.tsx` NOT touched (out of scope, already battle-tested, a future consolidation could point it at this hook)
+- `package.json` 0.24.0 → 0.25.0, `CHANGELOG.md`
+
+**Verification**: `verify-fix.sh` ALL GREEN (tsc, lint 0 warnings, 498 tests [+6], build, SW). Live-drove `npx next dev -p 3411` (killed after, PID 44712) via chrome-devtools MCP: Ahri Mid at 1280px — full rune page renders (Domination keystone Electrocute + 3 named minors, Sorcery 2 named picks incl. low-sample ⚠ on Axiom Arcanist, 3 named shards, Ignite/Flash); tapped keystone → real CDragon numbers (70–240 dmg, 20s CD); tapped a shard → "+9 Adaptive Force (5.4 AD or 9 AP)"; tapped Ignite → "180s cooldown" + real text; tapped items in all 3 cards (Doran's Ring/Rabadon's Deathcap/Cosmic Drive) → centered popover w/ gold + stats + passive; Escape closed popover only, focus restored, rest of page untouched. Repeated core flow at 390px — single-column stack, no horizontal overflow (`scrollWidth === clientWidth`), popover renders centered and readable. Console clean (no errors/warnings) at both sizes. Did NOT test PRO BUILDS tab or player view (out of scope — request was BUILD tab only) and did NOT deploy (per brief, urgot ships).
+
+

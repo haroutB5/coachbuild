@@ -6,17 +6,23 @@ import { IconWithFallback } from "@/components/IconWithFallback";
 
 interface CoreBuildOrderCardProps {
   items: ItemsBlock;
+  onItemClick: (id: number) => void;
 }
 
-function ItemSquare({ pick }: { pick: PickType }) {
+function ItemSquare({ pick, onItemClick }: { pick: PickType; onItemClick: (id: number) => void }) {
   return (
-    <div className="flex flex-col items-center text-center w-[76px] flex-shrink-0">
+    <button
+      type="button"
+      onClick={() => onItemClick(pick.id)}
+      aria-label={`View details for ${pick.name}`}
+      className="flex flex-col items-center text-center w-[76px] flex-shrink-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
+    >
       <span className="w-12 h-12 rounded-lg bg-black/30 border border-line-gold overflow-hidden flex items-center justify-center">
-        <IconWithFallback src={pick.icon} alt={pick.name} className="w-full h-full object-contain" size={48} />
+        <IconWithFallback src={pick.icon} alt={pick.name} fallbackGlyph={pick.name} className="w-full h-full object-contain" size={48} />
       </span>
       <span className="text-[10.5px] text-txt mt-1.5 leading-tight line-clamp-2 min-h-[26px]">{pick.name}</span>
       <span className={`text-[11px] font-bold tabular-nums ${wpaClass(pick.wpa)}`}>{wpaText(pick.wpa)}</span>
-    </div>
+    </button>
   );
 }
 
@@ -28,7 +34,7 @@ function Arrow() {
   );
 }
 
-export default function CoreBuildOrderCard({ items }: CoreBuildOrderCardProps) {
+export default function CoreBuildOrderCard({ items, onItemClick }: CoreBuildOrderCardProps) {
   // Progression order matching the spec: 1st -> 2nd -> 3rd legendary, then
   // boots, then any 4th+ items — deliberately NOT the same slot order as the
   // legacy ItemPath.tsx (starter/boots-early), since "Starting" now has its
@@ -44,7 +50,7 @@ export default function CoreBuildOrderCard({ items }: CoreBuildOrderCardProps) {
         {order.map((pick, i) => (
           <div key={`${pick.id}-${i}`} className="flex items-start">
             {i > 0 && <Arrow />}
-            <ItemSquare pick={pick} />
+            <ItemSquare pick={pick} onItemClick={onItemClick} />
           </div>
         ))}
       </div>

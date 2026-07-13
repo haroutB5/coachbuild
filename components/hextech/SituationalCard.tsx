@@ -7,9 +7,10 @@ import { flattenSituational } from "./situational";
 
 interface SituationalCardProps {
   items: ItemsBlock;
+  onItemClick: (id: number) => void;
 }
 
-export default function SituationalCard({ items }: SituationalCardProps) {
+export default function SituationalCard({ items, onItemClick }: SituationalCardProps) {
   const situational = flattenSituational(items).slice(0, 6);
   if (situational.length === 0) return null;
 
@@ -20,12 +21,15 @@ export default function SituationalCard({ items }: SituationalCardProps) {
       </p>
       <div className="flex flex-wrap gap-2.5">
         {situational.map((pick) => (
-          <div
+          <button
             key={pick.id}
-            className="flex items-center gap-2 bg-panel2/70 border border-line rounded-lg px-2.5 py-2 hover:border-line-gold transition-colors"
+            type="button"
+            onClick={() => onItemClick(pick.id)}
+            aria-label={`View details for ${pick.name}`}
+            className="flex items-center gap-2 bg-panel2/70 border border-line rounded-lg px-2.5 py-2 hover:border-line-gold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-[0.98]"
           >
             <span className="w-7 h-7 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
-              <IconWithFallback src={pick.icon} alt={pick.name} className="w-full h-full object-contain" size={28} />
+              <IconWithFallback src={pick.icon} alt={pick.name} fallbackGlyph={pick.name} className="w-full h-full object-contain" size={28} />
             </span>
             <div className="leading-tight">
               <div className="text-[11.5px] text-txt font-medium">{pick.name}</div>
@@ -33,7 +37,7 @@ export default function SituationalCard({ items }: SituationalCardProps) {
                 {wpaText(pick.wpa)}
               </div>
             </div>
-          </div>
+          </button>
         ))}
       </div>
     </div>
