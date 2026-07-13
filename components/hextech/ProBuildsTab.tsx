@@ -6,6 +6,7 @@ import type { ProGame, ProGamesApiResponse, ProGameSource } from "@/components/p
 import { SOURCE_FILTER_OPTIONS, proGamesEmptyTitle, proGamesEmptySub } from "@/components/proGames.types";
 import { getChampionIconMap, type ChampionIconEntry } from "@/components/proAssets";
 import SegmentedControl from "@/components/SegmentedControl";
+import type { PendingPlayerSelect } from "@/components/playerSelectHandoff";
 import { LANE_TO_ROLE_ID, type LaneId } from "./heroContracts";
 import ProBuildRow from "./ProBuildRow";
 
@@ -33,6 +34,13 @@ interface ProBuildsTabProps {
   openGameId?: string | null;
   onOpenGame?: (gameId: string) => void;
   onDismissGame?: () => void;
+  /** v0.26.0: Teams-box "view this player's games" tap, forwarded straight
+   *  through to every ProBuildRow's GameDetailSheet — see app/page.tsx's
+   *  handleSelectPlayerFromSheet for the fix this wiring completes (this tab
+   *  previously left GameDetailSheet's onSelectPlayer unset entirely, so the
+   *  tap fell through to the legacy cross-page fallback instead of staying
+   *  in the Hextech shell). */
+  onSelectPlayer?: (player: PendingPlayerSelect) => void;
 }
 
 type State =
@@ -53,6 +61,7 @@ export default function ProBuildsTab({
   openGameId,
   onOpenGame,
   onDismissGame,
+  onSelectPlayer,
 }: ProBuildsTabProps) {
   const [state, setState] = useState<State>({ status: "loading" });
   const [championMap, setChampionMap] = useState<Map<number, ChampionIconEntry> | null>(null);
@@ -64,6 +73,14 @@ export default function ProBuildsTab({
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
+    // v0.26.0 (issue 2): PRO BUILDS was already filtering by the selected
+    // lane's role here — which is exactly what the brief asked to confirm/
+    // keep, now that lanes are pure lane-selectors for the current champion
+    // rather than separate champion picks: "using the selected lane's role
+    // would be BETTER and consistent" is the status quo, not a new change.
+    // role=5 (all lanes) is never passed from here; that sentinel only
+    // matters to PlayerGamesSection, whose games span every lane a player's
+    // played (see app/api/pros/route.ts's role=0-4 vs role=5 doc comment).
     const role = LANE_TO_ROLE_ID[lane];
     fetch(`/api/pros?championId=${champ.id}&role=${role}&limit=20&source=${source}`)
       .then(async (res) => {
@@ -146,6 +163,7 @@ export default function ProBuildsTab({
               championIcon={champ.icon}
               championDisplayName={champ.name}
               enemyLaner={enemyLaner}
+              onSelectPlayer={onSelectPlayer}
               historySheet={
                 openGameId !== undefined
                   ? {

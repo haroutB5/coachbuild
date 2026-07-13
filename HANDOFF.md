@@ -4205,3 +4205,61 @@ User request: "search should depend on if I'm searching champions or pro players
 **Verification**: `verify-fix.sh` ALL GREEN (tsc, lint 0 warnings, 498 tests [+6], build, SW). Live-drove `npx next dev -p 3411` (killed after, PID 44712) via chrome-devtools MCP: Ahri Mid at 1280px — full rune page renders (Domination keystone Electrocute + 3 named minors, Sorcery 2 named picks incl. low-sample ⚠ on Axiom Arcanist, 3 named shards, Ignite/Flash); tapped keystone → real CDragon numbers (70–240 dmg, 20s CD); tapped a shard → "+9 Adaptive Force (5.4 AD or 9 AP)"; tapped Ignite → "180s cooldown" + real text; tapped items in all 3 cards (Doran's Ring/Rabadon's Deathcap/Cosmic Drive) → centered popover w/ gold + stats + passive; Escape closed popover only, focus restored, rest of page untouched. Repeated core flow at 390px — single-column stack, no horizontal overflow (`scrollWidth === clientWidth`), popover renders centered and readable. Console clean (no errors/warnings) at both sizes. Did NOT test PRO BUILDS tab or player view (out of scope — request was BUILD tab only) and did NOT deploy (per brief, urgot ships).
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-13 09:04
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-13 04:59:19Z; previous content preserved there. Append new rounds below. -->
+
+## v0.26.0 — two user-reported home-shell bugs, both fixed (2026-07-13)
+
+### Issue 1 — in-sheet player links escaped the Hextech shell
+
+**Root cause found by reading, not guessing:** neither `ProBuildsTab.tsx` nor `PlayerGamesSection.tsx` ever wired `GameDetailSheet`'s `onSelectPlayer` prop through their `ProBuildRow` (which itself never even accepted the prop). So every Teams-box tap unconditionally fell to `GameDetailSheet`'s cross-page fallback (`stashPendingPlayerSelect` + `router.push("/history")`) — landing on the legacy pill-tab page. `/history` had already solved this exact problem in v0.20.0 (`PlayerSubject` tracked/link split + `onSelectPlayer` same-page callback); the fix mirrors that pattern into the home shell rather than inventing a new one.
+
+**Implementation:**
+- `components/hextech/homeSearch.ts` — new `TrackedPlayerSubject { kind:"tracked", id, name, team, gameCount: number|null }` / `LinkPlayerSubject { kind:"link", playerLink, name }` / `PlayerSubject` union, plus `trackedSubjectFromPlayerRef`, `subjectFromPendingPlayerSelect`, `defaultSourceForPlayer`. `MainView`'s `player` arm now carries `subject: PlayerSubject` instead of a bare `PlayerRef`. `applyWireMainView` clamps a link subject's restored `gamesSource` to `"prostage"` defensively (never trusts a stale/corrupted wire).
+- `app/page.tsx` — new `handleSelectPlayerFromSheet(pending: PendingPlayerSelect)`, wired as `onSelectPlayer` into both `ProBuildsTab` and `PlayerGamesSection`. **Back-nav decision (asked-for, documented inline):** mirrors `/history`'s cross-player-jump policy exactly — `GameDetailSheet` already calls `onClose()` (visual only) before invoking this, then it `pushSelection`s a new entry on top, leaving the sheet's own entry un-popped. Back lands on the ORIGINAL view with its sheet reopened (verified live, see below); one more back closes it. Chosen over "back lands sheet-closed" because it's the exact already-shipped `/history` behavior (zero new back-nav branches to write or verify) and arguably the more useful trail.
+- `components/hextech/ProBuildsTab.tsx`, `components/hextech/ProBuildRow.tsx` — threaded `onSelectPlayer` straight through to `GameDetailSheet`.
+- `components/hextech/PlayerGamesSection.tsx` — takes `subject: PlayerSubject` instead of `player: PlayerRef`; fetches by `proId=` (tracked) or `player=<link>` (link-only); link-only renders a **locked filter label** ("Pro Play only — untracked player, no solo queue data") instead of a live `SegmentedControl`, mirroring `/history`'s `ProHistoryResults` treatment verbatim rather than inventing a disabled-button variant.
+- `components/hextech/PlayerHero.tsx` — takes `subject`. Tracked-from-search (gameCount already known): renders instantly, zero extra fetch. Tracked-from-sheet-tap (gameCount `null`): background `/api/players?q=<name>` lookup matched by `id` resolves real team+gameCount, showing ChampionHero's own "— GAMES" placeholder convention meanwhile (CLS-safe). Link-only: no gameCount fetch attempted at all (no cheap endpoint exists for it) — the GAMES segment is a **permanent omission**, not a loading state; team shows "Untracked pro" rather than fabricating "Free agent".
+
+**Live-verified** (puppeteer/chrome-devtools, 1280px + 390px): tracked tap (Zeus → Kanavi) — resolved to "KANAVI / HANWHA LIFE ESPORTS / 20 GAMES" (real, not fabricated), stayed on `/`, back reopened the Zeus game sheet. Link-only tap (Zeus → Dhokla, an untracked LYON teammate — the exact player CLAUDE.md's gotcha (j) already knew about) — resolved to "DHOKLA / UNTRACKED PRO" with no GAMES line and a locked "Pro Play only" filter chip, games list populated correctly, stayed on `/`. `/history` re-checked afterward and renders completely untouched (legacy layout, own `PlayerPicker`/`ProHistoryResults`).
+
+### Issue 2 — lanes now select a LANE for the current champion, not a different champion
+
+**User correction applied as literally stated:** lanes were previously five independent "most-played champion for that lane" slots (`laneChampions: Record<LaneId, ChampionRef>`); tapping a lane switched BOTH champion and lane. Fixed to a single page-level `champ: ChampionRef` + `activeLane` — a lane tap now only ever changes `activeLane`, refetching BUILD/PRO BUILDS for `(champ, newLane)`.
+
+**Champion→initial-lane decision:** a fresh champion pick lands on that champion's own most-played lane. Derived via a new `getMostPlayedLane(championId)` in `components/hextech/heroContracts.ts` — 5 parallel calls to the already-public `/api/hero-stats?champ=&lane=` route (reusing its `gamesCount`, which is the *exact same* keystone-occurrence-sum definition `lib/laneDefaults.ts`'s per-lane sweep already uses for "most played"), rather than a new backend endpoint or a full 860-call sweep inversion. Fire-and-forget in `handleChampionSelect` (`app/page.tsx`): lands instantly on the CURRENT lane first (no flash), corrects via `replaceSelection` (same history entry, not a second push — one user gesture, one back-press to undo) if a different lane resolves. Request-id ref guards against a stale correction clobbering a manual lane/champion/player action taken in the meantime. Falls back to keeping the current lane on total failure — least-surprising degradation, as the brief allowed.
+
+**PRO BUILDS role-filter decision:** `ProBuildsTab.tsx` already passed `role=<selected lane's role>` to `/api/pros` (not `role=5`/all-lanes) — this pre-existing behavior turned out to already be "use the selected lane's role," which the brief called out as the better, more consistent choice. No code change there, just a doc comment confirming it's deliberate.
+
+**`lib/laneDefaults.ts`** (engo's per-lane most-played-champion sweep, `getLaneDefaults()`) and its `heroContracts.ts` wrapper (`getLaneDefaultChampions`) are **left in place, unmodified** — only their now-dead sidebar consumer (`app/page.tsx`'s mount-time correction effect, `overriddenLanesRef`, `hasInteractedRef`) was removed. `STATIC_FALLBACK_LANE_CHAMPIONS.mid` (Viktor) is still reused as the single initial `champ` for cold-load parity with the mockup.
+
+**Sidebar UI:** lane rows now show only the lane name; the ACTIVE row alone also shows the current champion's name as a subtitle ("you are viewing X here"), non-active rows keep a blank subtitle line (same row height, no layout jump). `components/hextech/Sidebar.tsx`'s `laneChampions` prop replaced with a single `champ: ChampionRef`.
+
+**Live-verified** (1280px + 390px): Ahri Mid → tap Top → "AHRI TOP", 51.7% WIN / 4,973 GAMES (vs Mid's 50.8% / 260,518), fully different rune page (Grisly Mementos/Transcendence vs Ultimate Hunter/Axiom Arcanist) and core build order (Luden's Echo core vs Blackfire Torch core) — champion never changed, only the lane. Sidebar showed "Top — Ahri (current)" pressed with the other four rows blank.
+
+### Gates
+- `bash scripts/verify-fix.sh` — **ALL GREEN**: tsc clean, lint clean (0 warnings), **510 tests passed** (was 498 — +12 new, all in `components/__tests__/homeSearch.test.ts`: lane-keeps-champion contract pins, `trackedSubjectFromPlayerRef`/`subjectFromPendingPlayerSelect` conversions, `defaultSourceForPlayer`, link-only wire-state clamping on restore, and a full champion-view→link-player-from-sheet round-trip), build clean, SW/manifest unchanged.
+- Version bump verified landed: `package.json` reads `0.26.0` after the gate re-run (not just before).
+- **Not deployed** — per brief, urgot ships.
+
+### Files touched
+`components/hextech/homeSearch.ts`, `components/hextech/heroContracts.ts` (added `getMostPlayedLane`, nothing removed), `components/hextech/Sidebar.tsx`, `components/hextech/PlayerHero.tsx`, `components/hextech/PlayerGamesSection.tsx`, `components/hextech/ProBuildsTab.tsx`, `components/hextech/ProBuildRow.tsx`, `app/page.tsx`, `components/__tests__/homeSearch.test.ts`, `package.json`, `CHANGELOG.md`.
+
+### Known gaps / not done
+- Did not add a dedicated single-player-lookup API route (e.g. `/api/players/:id`) — `PlayerHero`'s background enrichment reuses the existing `/api/players?q=<name>` search, matched by `id`, which is a defensible reuse but is technically a name-search under the hood (would mis-resolve if two tracked pros shared an exact display name — not observed in the live dataset, and `/history`'s own tracked-player synthesis has the same theoretical gap).
+- `lib/laneDefaults.ts`'s expensive per-lane sweep (`getLaneDefaults()`) is now consumed nowhere in the app (its `heroContracts.ts` wrapper too) — left in place per instruction, but genuinely orphaned; worth a follow-up decision (delete vs. find a new use) in a future session.
+
+

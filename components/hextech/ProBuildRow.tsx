@@ -8,6 +8,7 @@ import { cleanPlayerName } from "@/components/playerName";
 import GameDetailSheet from "@/components/GameDetailSheet";
 import type { ChampionIconEntry } from "@/components/proAssets";
 import type { HistorySheetControl } from "@/components/ProGameCard";
+import type { PendingPlayerSelect } from "@/components/playerSelectHandoff";
 
 function formatShortDate(iso: string): string {
   try {
@@ -42,6 +43,14 @@ interface ProBuildRowProps {
    *  local-state split. Absent falls back to fully local `open` state,
    *  unchanged prior behavior. */
   historySheet?: HistorySheetControl;
+  /** v0.26.0: Teams-box "view this player's games" tap — threaded straight
+   *  through to GameDetailSheet's own prop of the same name (see its doc
+   *  comment for the same-page-callback vs. cross-page-navigation split).
+   *  Previously left unset here, which is why a Teams-box tap from either
+   *  home-shell sheet (ProBuildsTab's or PlayerGamesSection's) always fell
+   *  through to GameDetailSheet's cross-page fallback instead of staying in
+   *  the Hextech shell — the fix for issue 1. */
+  onSelectPlayer?: (player: PendingPlayerSelect) => void;
 }
 
 export default function ProBuildRow({
@@ -51,6 +60,7 @@ export default function ProBuildRow({
   enemyLaner,
   showOwnChampion,
   historySheet,
+  onSelectPlayer,
 }: ProBuildRowProps) {
   const [localOpen, setLocalOpen] = useState(false);
   const open = historySheet ? historySheet.isOpen : localOpen;
@@ -191,6 +201,7 @@ export default function ProBuildRow({
         // IS the real close. Same split as ProGameCard's onClose.
         onClose={() => setLocalOpen(false)}
         onDismiss={historySheet?.onDismiss}
+        onSelectPlayer={onSelectPlayer}
       />
     </>
   );

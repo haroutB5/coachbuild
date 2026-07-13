@@ -10,7 +10,10 @@ import SidebarChampionSearch from "./SidebarChampionSearch";
 interface SidebarProps {
   activeLane: LaneId;
   onLaneChange: (lane: LaneId) => void;
-  laneChampions: Record<LaneId, ChampionRef>;
+  /** v0.26.0 (issue 2): lanes are now LANE SELECTORS for the champion being
+   *  viewed, not independent per-lane champion slots — every row shares this
+   *  ONE current champion, not `laneChampions[lane]`. */
+  champ: ChampionRef;
   onSearchSelect: (champ: ChampionRef) => void;
   /** v0.22.0: CHAMPIONS/PROS search-mode toggle, lifted to the page level
    *  (app/page.tsx) so both Sidebar renders (collapsed mobile bar, full
@@ -30,7 +33,7 @@ interface SidebarProps {
 export default function Sidebar({
   activeLane,
   onLaneChange,
-  laneChampions,
+  champ,
   onSearchSelect,
   searchMode,
   onSearchModeChange,
@@ -92,13 +95,13 @@ export default function Sidebar({
         >
           {LANE_ORDER.map((lane) => {
             const active = lane === activeLane;
-            const champ = laneChampions[lane];
             return (
               <button
                 key={lane}
                 type="button"
                 onClick={() => onLaneChange(lane)}
                 aria-pressed={active}
+                aria-label={active ? `${LANE_LABEL[lane]} — ${champ.name} (current)` : `${champ.name} ${LANE_LABEL[lane]}`}
                 className={`text-left rounded-lg transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-teal focus-visible:ring-offset-1 focus-visible:ring-offset-sidebar ${
                   collapsed ? "flex-shrink-0 min-w-[92px] px-3 py-2" : "px-3 py-2"
                 } ${
@@ -110,8 +113,15 @@ export default function Sidebar({
                 <div className={`text-[12.5px] font-medium ${active ? "text-txt" : "text-txt/85"}`}>
                   {LANE_LABEL[lane]}
                 </div>
+                {/* v0.26.0 (issue 2): lanes select a LANE for the current
+                    champion, not a different champion per row — showing a
+                    per-lane champion name here was the bug (implied Top
+                    would jump to a different champion than Mid). Only the
+                    ACTIVE row names the champion now, as a "you are viewing
+                    X here" reminder; a non-breaking space on the other rows
+                    keeps every row the same height (no layout jump on tap). */}
                 <div className="text-[11px] text-mut truncate leading-tight mt-0.5">
-                  {champ ? champ.name : "—"}
+                  {active ? champ.name : " "}
                 </div>
               </button>
             );

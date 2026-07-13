@@ -10,11 +10,83 @@
 
 import type { ChampionRef } from "@/lib/types";
 import type { PlayerRef } from "@/components/proHistory.types";
+import type { PendingPlayerSelect } from "@/components/playerSelectHandoff";
 import type { ProGameSource } from "@/components/proGames.types";
 import type { LaneId } from "./heroContracts";
 import type { HextechTab } from "./HextechTabs";
 
 export type SearchMode = "champions" | "pros";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Player subject (v0.26.0) — a sheet-tap "view this player's games" can land
+// on either a TRACKED pro (has a `pros` row, proId-addressable) or an
+// UNTRACKED prostage-only player (Leaguepedia player_link only, no `pros`
+// row) — the exact same split app/history/page.tsx's own PlayerSubject has
+// handled since v0.20.0's Teams-box tap support. Before this version, the
+// home shell's OWN game sheet (ProBuildsTab's/PlayerGamesSection's
+// GameDetailSheet, reached via ProBuildRow) never wired GameDetailSheet's
+// onSelectPlayer prop at all — every such tap fell through to its cross-page
+// fallback (stash + router.push("/history")), which is the user-reported
+// "escapes the Hextech shell" bug. Fixing it means the home page needs the
+// same two-kind subject /history already has, not just the single
+// always-fully-known PlayerRef the sidebar's PROS search flow provides.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface TrackedPlayerSubject {
+  kind: "tracked";
+  id: string;
+  name: string;
+  team: string | null;
+  /** Total tracked-game count, for the hero banner. Known immediately for a
+   *  sidebar PROS search pick (the /api/players search response already
+   *  carries it — see trackedSubjectFromPlayerRef) — null right after a
+   *  Teams-box sheet-tap, where only id/name/team are known synchronously
+   *  (see subjectFromPendingPlayerSelect). PlayerHero resolves it in the
+   *  background via its own /api/players lookup keyed on id when null; never
+   *  fabricated as 0 — a made-up "zero games" is a real, wrong claim, not a
+   *  harmless placeholder. */
+  gameCount: number | null;
+}
+
+export interface LinkPlayerSubject {
+  kind: "link";
+  playerLink: string;
+  name: string;
+}
+
+export type PlayerSubject = TrackedPlayerSubject | LinkPlayerSubject;
+
+/** Sidebar PROS search always returns a fully-resolved PlayerRef (real
+ *  gameCount/team/etc — see app/api/players/route.ts) — wraps it as a
+ *  "nothing left to resolve" tracked subject. */
+export function trackedSubjectFromPlayerRef(ref: PlayerRef): TrackedPlayerSubject {
+  return { kind: "tracked", id: ref.id, name: ref.name, team: ref.team, gameCount: ref.gameCount };
+}
+
+/** Converts a Teams-box-tap payload (PendingPlayerSelect — tracked
+ *  {id,name,team} or link {playerLink,name}, distinguished structurally, see
+ *  playerSelectHandoff.ts) into a PlayerSubject — mirrors
+ *  app/history/page.tsx's own toPlayerSubject. gameCount is always null for
+ *  a fresh tracked tap (not known synchronously — see TrackedPlayerSubject's
+ *  doc comment); PlayerHero resolves it. */
+export function subjectFromPendingPlayerSelect(pending: PendingPlayerSelect): PlayerSubject {
+  if ("id" in pending) {
+    return { kind: "tracked", id: pending.id, name: pending.name, team: pending.team, gameCount: null };
+  }
+  return { kind: "link", playerLink: pending.playerLink, name: pending.name };
+}
+
+/** Games-list source-filter default for a player subject. A link-only
+ *  (untracked) player has no soloq identity at all (see app/api/pros/
+ *  route.ts's `player=` lookup, prostage-only by construction), so Pro Play
+ *  is its only real option; a tracked player keeps the v0.24.0 default
+ *  ("all", see defaultSourceForKind's doc comment below). Prefer this over
+ *  defaultSourceForKind("player") wherever the actual subject is in hand —
+ *  the lock is derived from real data (has a playerLink?), not just the view
+ *  kind string. */
+export function defaultSourceForPlayer(subject: PlayerSubject): ProGameSource {
+  return subject.kind === "link" ? "prostage" : "all";
+}
 
 /** Discriminated view of "what the main content area should render" —
  *  derived from the sidebar's search mode plus the current champion/lane
@@ -24,16 +96,16 @@ export type SearchMode = "champions" | "pros";
  *  toggle alone carries no content of its own to show). */
 export type MainView =
   | { kind: "champion"; champ: ChampionRef; lane: LaneId }
-  | { kind: "player"; player: PlayerRef };
+  | { kind: "player"; subject: PlayerSubject };
 
 export function deriveMainView(
   mode: SearchMode,
   champ: ChampionRef,
   lane: LaneId,
-  selectedPlayer: PlayerRef | null
+  selectedPlayer: PlayerSubject | null
 ): MainView {
   if (mode === "pros" && selectedPlayer) {
-    return { kind: "player", player: selectedPlayer };
+    return { kind: "player", subject: selectedPlayer };
   }
   return { kind: "champion", champ, lane };
 }
@@ -137,12 +209,19 @@ export interface HomeRestoreState {
   gamesSource: ProGameSource;
   activeLane?: LaneId;
   champ?: ChampionRef;
-  selectedPlayer?: PlayerRef;
+  selectedPlayer?: PlayerSubject;
 }
 
 export function applyWireMainView(wire: WireMainView): HomeRestoreState {
   if (wire.view.kind === "player") {
-    return { searchMode: "pros", tab: wire.tab, gamesSource: wire.source, selectedPlayer: wire.view.player };
+    // A link-only subject's source is ALWAYS forced back to Pro Play on
+    // restore, regardless of what the wire's own `source` field says —
+    // defensive against a stale/corrupted history entry (e.g. one written
+    // before this lock existed, or hand-edited) ever landing a link-only
+    // player view on a filter that can only ever show "no games" (see
+    // defaultSourceForPlayer's doc comment).
+    const gamesSource = wire.view.subject.kind === "link" ? "prostage" : wire.source;
+    return { searchMode: "pros", tab: wire.tab, gamesSource, selectedPlayer: wire.view.subject };
   }
   return {
     searchMode: "champions",
@@ -164,7 +243,8 @@ export function wireViewForChampion(
   return { view: { kind: "champion", champ, lane }, tab, source };
 }
 
-/** Builds the wire shape to push for a player pick. */
-export function wireViewForPlayer(player: PlayerRef, tab: HextechTab, source: ProGameSource): WireMainView {
-  return { view: { kind: "player", player }, tab, source };
+/** Builds the wire shape to push/replace for a player-view change (sidebar
+ *  PROS search pick, or a Teams-box sheet-tap cross-player jump). */
+export function wireViewForPlayer(subject: PlayerSubject, tab: HextechTab, source: ProGameSource): WireMainView {
+  return { view: { kind: "player", subject }, tab, source };
 }

@@ -67,6 +67,36 @@ export async function getHeroStats(championId: number, lane: LaneId): Promise<He
   }
 }
 
+/** v0.26.0 (issue 2): cheap champion -> most-played-lane inversion. A fresh
+ *  champion pick (search, or the app's default) should land on the lane that
+ *  champion is actually most played in, not whatever lane happened to be
+ *  active before the pick. lib/laneDefaults.ts's getLaneDefaults() answers
+ *  the OPPOSITE question ("who's most played in lane X") by sweeping every
+ *  champion PER LANE — up to 172 champs x 5 lanes = 860 calls, deliberately
+ *  budget-capped there because of that cost. This function's question is far
+ *  cheaper to answer directly: only 5 calls (one per lane, for ONE
+ *  champion), reusing getHeroStats' `gamesCount` — the SAME
+ *  keystone-occurrence-sum definition lib/laneDefaults.ts's sweepLane uses —
+ *  via the already-public /api/hero-stats route. No backend change needed.
+ *  Never throws (getHeroStats itself never does); returns null when every
+ *  lane comes back with no data (a brand-new champion, or a total upstream
+ *  outage) so the caller can fall back to keeping whatever lane was already
+ *  showing — the least-surprising degradation per the brief. */
+export async function getMostPlayedLane(championId: number): Promise<LaneId | null> {
+  const results = await Promise.all(
+    LANE_ORDER.map((lane) => getHeroStats(championId, lane).then((s) => ({ lane, games: s.gamesCount ?? 0 })))
+  );
+  let best: LaneId | null = null;
+  let bestGames = 0;
+  for (const r of results) {
+    if (r.games > bestGames) {
+      bestGames = r.games;
+      best = r.lane;
+    }
+  }
+  return best;
+}
+
 /** lib/splash.ts is pure/sync and explicitly documented as safe to import
  *  directly into a client component (URL used in an <img src>, not fetch()
  *  — no CORS concern). Re-exported here rather than imported ad hoc so every
