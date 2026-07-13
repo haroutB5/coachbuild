@@ -134,17 +134,32 @@ export interface ProConsensusModel {
   /** Total games the aggregation ran over — the sample-size line's
    *  denominator ("From N pro games"). */
   gamesTotal: number;
-  /** Top items by pick rate (present at least once in a game's finalItems),
-   *  filtered to completed items + the starting-item allowlist (see module
-   *  header) — components like Needlessly Large Rod never appear here.
-   *  Consumables/trinket-slot noise excluded via the existing
+  /** Top NON-boots items by pick rate (present at least once in a game's
+   *  finalItems), filtered to completed items + the starting-item allowlist
+   *  (see module header) — components like Needlessly Large Rod never appear
+   *  here. Consumables/trinket-slot noise excluded via the existing
    *  CONSUMABLE_ITEM_IDS. Deduplicated per game — a game that somehow lists
    *  the same id twice only counts once, so this is a true "N of M games"
    *  pick rate, not a raw occurrence tally. Sorted by count desc, then
    *  itemId asc for a deterministic tie order. share is against gamesTotal
    *  (unchanged denominator — filtering removes disqualified items, it
-   *  doesn't shrink the sample). */
+   *  doesn't shrink the sample). Boots are carved out into `boots` below
+   *  (v0.28.0 user report: Crimson Lucidity + Spellslinger's Shoes each ate a
+   *  full item slot on the same champion — a real item couldn't fit) so this
+   *  list is never diluted by a second boots entry. */
   items: ItemFrequency[];
+  /** v0.28.0 — top 2 boots choices by pick rate, carved out of `items` so a
+   *  champion with a split boots preference (e.g. Crimson Lucidity 35% vs.
+   *  Spellslinger's Shoes 27%) occupies ONE grid slot instead of two,
+   *  freeing a slot for an actual non-boots item. Partitioned from the SAME
+   *  completed-item counts `items` draws from (via `itemMeta`'s `tags`,
+   *  `Array.isArray(meta.tags) && meta.tags.includes("Boots")` — the same
+   *  defensive guard `isBootsFinal` uses) — an item with no metadata at all
+   *  is never classified as boots (stays out of this list, same "never
+   *  assume" posture as the rest of this module). share is against
+   *  gamesTotal, same denominator as `items` — these are still two
+   *  independent per-boot fractions, not a merged combined stat. */
+  boots: ItemFrequency[];
   /** Null when no game in the sample carries a resolved keystone (id 0 is
    *  the "unresolved/missing" sentinel — real for prostage rows Leaguepedia
    *  never populated a Runes column for, see lib/prostage/extract.ts). */
@@ -183,6 +198,7 @@ export interface ProConsensusModel {
 }
 
 const TOP_ITEMS_LIMIT = 6;
+const TOP_BOOTS_LIMIT = 2;
 const TOP_PRIMARY_MINORS_LIMIT = 3;
 const TOP_SECONDARY_PICKS_LIMIT = 2;
 const TOP_SHARDS_LIMIT = 3;
@@ -218,6 +234,18 @@ const STARTING_ITEM_ALLOWLIST = new Set<number>([
  *  of throwing (`Cannot read properties of undefined (reading 'includes')`). */
 function isBootsFinal(meta: ItemDetail): boolean {
   return Array.isArray(meta.tags) && meta.tags.includes("Boots") && Array.isArray(meta.from) && meta.from.length > 0;
+}
+
+/** v0.28.0 — is this a boots item at all, for the items/boots grid partition
+ *  (a lighter check than `isBootsFinal`, which additionally requires a
+ *  non-empty `from` to exclude the raw tier-1 Boots). Reused here because a
+ *  tier-1 raw Boots never reaches this function in the first place — it's
+ *  already excluded by `isBuildItem` upstream — so `tags.includes("Boots")`
+ *  alone is sufficient once an id has passed that filter. No metadata at all
+ *  -> never classified as boots (same "never assume" default as the rest of
+ *  this module). */
+function isBootsTag(meta: ItemDetail | undefined): boolean {
+  return !!meta && Array.isArray(meta.tags) && meta.tags.includes("Boots");
 }
 
 /** True when `itemId` belongs in the aggregated items list — a real build
@@ -347,9 +375,24 @@ export function aggregateProConsensus(
     }
   }
 
-  const items: ItemFrequency[] = sortEntries(itemCounts)
+  // v0.28.0: partition the SAME sorted (count desc, itemId asc) entries into
+  // boots vs. non-boots, preserving relative order within each subset —
+  // simpler and less error-prone than maintaining two separate accumulator
+  // maps during the game loop above.
+  const sortedItemEntries = sortEntries(itemCounts);
+  const toFrequency = ([itemId, count]: [number, number]): ItemFrequency => ({
+    itemId,
+    count,
+    share: gamesTotal > 0 ? count / gamesTotal : 0,
+  });
+  const items: ItemFrequency[] = sortedItemEntries
+    .filter(([itemId]) => !isBootsTag(itemMeta.get(itemId)))
     .slice(0, TOP_ITEMS_LIMIT)
-    .map(([itemId, count]) => ({ itemId, count, share: gamesTotal > 0 ? count / gamesTotal : 0 }));
+    .map(toFrequency);
+  const boots: ItemFrequency[] = sortedItemEntries
+    .filter(([itemId]) => isBootsTag(itemMeta.get(itemId)))
+    .slice(0, TOP_BOOTS_LIMIT)
+    .map(toFrequency);
 
   const topKeystone = sortEntries(keystoneCounts)[0];
   const keystone: KeystoneFrequency | null = topKeystone
@@ -378,6 +421,7 @@ export function aggregateProConsensus(
   return {
     gamesTotal,
     items,
+    boots,
     keystone,
     runesSampleSize,
     secondaryTree,

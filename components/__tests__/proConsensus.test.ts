@@ -153,6 +153,7 @@ describe("aggregateProConsensus", () => {
     const model = aggregateProConsensus([], itemMeta());
     expect(model.gamesTotal).toBe(0);
     expect(model.items).toEqual([]);
+    expect(model.boots).toEqual([]);
     expect(model.keystone).toBeNull();
     expect(model.secondaryTree).toBeNull();
     expect(model.spellPair).toBeNull();
@@ -178,7 +179,9 @@ describe("aggregateProConsensus", () => {
     expect(rocketbelt).toEqual({ itemId: ROCKETBELT, count: 2, share: 2 / 3 });
     // Health Potion (2003) is a consumable — must never appear in item counts.
     expect(model.items.find((i) => i.itemId === 2003)).toBeUndefined();
-    const sorcShoes = model.items.find((i) => i.itemId === 3020);
+    // Sorc Shoes is boots -> carved into `boots`, not `items` (v0.28.0).
+    expect(model.items.find((i) => i.itemId === 3020)).toBeUndefined();
+    const sorcShoes = model.boots.find((i) => i.itemId === 3020);
     expect(sorcShoes?.count).toBe(2);
     // 4645 has no metadata and isn't allowlisted -> excluded, not just "unnamed".
     expect(model.items.find((i) => i.itemId === 4645)).toBeUndefined();
@@ -222,11 +225,12 @@ describe("aggregateProConsensus", () => {
     expect(model.items.slice(1).map((i) => i.itemId)).toEqual([2, 3, 4, 5, 6]);
   });
 
-  it("boots count like any other completed item once past tier 1", () => {
+  it("boots count as a real build choice once past tier 1, surfaced via `boots` not `items` (v0.28.0)", () => {
     const meta = itemMeta(item(3020, { into: ["3175"], from: ["1001"], tags: ["Boots"] }));
     const games = [game({ finalItems: [3020] }), game({ finalItems: [3020] })];
     const model = aggregateProConsensus(games, meta);
-    expect(model.items.find((i) => i.itemId === 3020)).toEqual({ itemId: 3020, count: 2, share: 1 });
+    expect(model.items.find((i) => i.itemId === 3020)).toBeUndefined();
+    expect(model.boots.find((i) => i.itemId === 3020)).toEqual({ itemId: 3020, count: 2, share: 1 });
   });
 
   it("computes keystone frequency against runesSampleSize, not gamesTotal", () => {
@@ -352,6 +356,66 @@ describe("aggregateProConsensus", () => {
   it("never crashes when runes.primary/secondary/shards are missing entirely (malformed payload)", () => {
     const malformed = { ...game(), runes: { ...NO_RUNES, primary: undefined, secondary: undefined, shards: undefined } } as unknown as ProGame;
     expect(() => aggregateProConsensus([malformed], itemMeta())).not.toThrow();
+  });
+
+  // ── v0.28.0: boots carved out of `items` into their own `boots` list ──────
+
+  it("carves boots out of items into their own list, freeing an items slot for a real item", () => {
+    const CRIMSON_LUCIDITY = 3117; // fake but tagged as tier-3 boots enchant
+    const SPELLSLINGERS_SHOES = 3020;
+    const meta = itemMeta(
+      item(ROCKETBELT, { from: ["x"] }),
+      item(CRIMSON_LUCIDITY, { from: ["1001"], tags: ["Boots"] }),
+      item(SPELLSLINGERS_SHOES, { into: ["3157"], from: ["1001"], tags: ["Boots", "MagicPenetration"] })
+    );
+    const games = [
+      ...Array.from({ length: 5 }, () => game({ finalItems: [ROCKETBELT, CRIMSON_LUCIDITY] })),
+      ...Array.from({ length: 3 }, () => game({ finalItems: [ROCKETBELT, SPELLSLINGERS_SHOES] })),
+    ];
+    const model = aggregateProConsensus(games, meta);
+    expect(model.items.find((i) => i.itemId === CRIMSON_LUCIDITY)).toBeUndefined();
+    expect(model.items.find((i) => i.itemId === SPELLSLINGERS_SHOES)).toBeUndefined();
+    expect(model.items.find((i) => i.itemId === ROCKETBELT)?.count).toBe(8);
+    expect(model.boots).toEqual([
+      { itemId: CRIMSON_LUCIDITY, count: 5, share: 5 / 8 },
+      { itemId: SPELLSLINGERS_SHOES, count: 3, share: 3 / 8 },
+    ]);
+  });
+
+  it("caps boots at top 2, sorted count desc then itemId asc, and backfills items to top 6 non-boots", () => {
+    const bootIds = [3006, 3009, 3020, 3047, 3111, 3158]; // 6 distinct boots
+    const nonBootIds = [1, 2, 3, 4, 5, 6, 7]; // 7 distinct non-boots
+    const meta = itemMeta(
+      ...bootIds.map((id) => item(id, { from: ["1001"], tags: ["Boots"] })),
+      ...nonBootIds.map((id) => item(id, { from: ["x"] }))
+    );
+    // Every id appears in exactly one game each -> all tied at count=1 within
+    // their own partition; itemId asc breaks the tie in both lists.
+    const games = [...bootIds, ...nonBootIds].map((id) => game({ finalItems: [id] }));
+    const model = aggregateProConsensus(games, meta);
+    expect(model.boots).toHaveLength(2);
+    expect(model.boots.map((b) => b.itemId)).toEqual([3006, 3009]);
+    expect(model.items).toHaveLength(6);
+    expect(model.items.map((i) => i.itemId)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("never classifies an item with no metadata as boots, even at high pick rate", () => {
+    const meta = itemMeta(item(ROCKETBELT, { from: ["x"] }));
+    const games = [
+      ...Array.from({ length: 4 }, () => game({ finalItems: [ROCKETBELT] })),
+      // 4645 has no metadata -> excluded entirely (isBuildItem returns false),
+      // and must never appear in `boots` even if it somehow slipped through.
+      game({ finalItems: [4645] }),
+    ];
+    const model = aggregateProConsensus(games, meta);
+    expect(model.boots).toEqual([]);
+    expect(model.items.find((i) => i.itemId === 4645)).toBeUndefined();
+  });
+
+  it("boots list is empty (not undefined/throwing) when the sample has no boots at all", () => {
+    const meta = itemMeta(item(ROCKETBELT, { from: ["x"] }));
+    const model = aggregateProConsensus([game({ finalItems: [ROCKETBELT] })], meta);
+    expect(model.boots).toEqual([]);
   });
 });
 

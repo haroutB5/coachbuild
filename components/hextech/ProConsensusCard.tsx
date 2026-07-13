@@ -118,42 +118,99 @@ function ItemTile({
   );
 }
 
-/** Small icon+name+fraction row for a minor rune / secondary pick / shard —
- *  the "additional runes" block (requirement #2). Deliberately smaller than
- *  the keystone row (keystone stays visually prominent per the brief). */
-function RuneMiniRow({
-  runeId,
+/** v0.28.0 — one grid slot holding BOTH boots choices stacked vertically
+ *  (user report: Crimson Lucidity 35% and Spellslinger's Shoes 27% each ate a
+ *  full item slot on the same champion — "count them under the same item,
+ *  just put the two choices on top of each other"). Same overall footprint
+ *  as one ItemTile so it reflows in the same flex-wrap row; each row is its
+ *  own tap target with its own icon/name/pct/count — the two counts are
+ *  never merged into a fake combined stat (they're independent per-boot
+ *  fractions against the same `denom`). */
+function BootsStackTile({
+  boots,
+  denom,
+  names,
+  icon,
+  onClick,
+}: {
+  boots: { itemId: number; count: number }[];
+  denom: number;
+  names: Map<number, string>;
+  icon: (itemId: number) => string;
+  onClick: (itemId: number) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1 w-[72px] flex-shrink-0 justify-center">
+      {boots.map((b) => {
+        const name = names.get(b.itemId) ?? `Item #${b.itemId}`;
+        const pct = formatSharePct(denom > 0 ? b.count / denom : 0);
+        return (
+          <button
+            key={b.itemId}
+            type="button"
+            onClick={() => onClick(b.itemId)}
+            aria-label={`View details for ${name} — built in ${b.count} of ${denom} pro games (${pct})`}
+            className="flex items-center gap-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
+          >
+            <span className="w-5 h-5 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
+              <IconWithFallback src={icon(b.itemId)} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={20} />
+            </span>
+            <span className="text-left leading-tight min-w-0">
+              <span className="block text-[9px] text-txt line-clamp-1">{name}</span>
+              <span className="block text-[8.5px] tabular-nums">
+                <span className="font-bold text-teal">{pct}</span>
+                <span className="text-mut/60"> · {b.count}/{denom}</span>
+              </span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** In-game-page rune tile — icon above name above percentage, the same
+ *  vocabulary RunesSummonersCard's RuneTile uses on the BUILD tab, just
+ *  driven by a pick-rate fraction instead of a WPA score (requirement: "put
+ *  the additional runes as the layout... runes are set as in game"). `size`
+ *  controls the keystone's extra prominence (large + gold ring) vs. the
+ *  smaller minor/pick/shard tiles. */
+function ConsensusRuneTile({
   count,
   denom,
   name,
   icon,
+  size = "sm",
   onClick,
 }: {
-  runeId: number;
   count: number;
   denom: number;
   name: string;
   icon: string;
+  size?: "lg" | "sm" | "xs";
   onClick: () => void;
 }) {
   const pct = formatSharePct(denom > 0 ? count / denom : 0);
+  const dim =
+    size === "lg"
+      ? "w-14 h-14 border-2 border-line-gold shadow-[0_0_14px_rgba(200,170,110,0.3)]"
+      : size === "sm"
+        ? "w-10 h-10 border border-line"
+        : "w-8 h-8 border border-line";
+  const pxSize = size === "lg" ? 56 : size === "sm" ? 40 : 32;
   return (
     <button
       type="button"
       onClick={onClick}
       aria-label={`View details for ${name} — picked in ${count} of ${denom} games (${pct})`}
-      className="flex items-center gap-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
+      className="group flex flex-col items-center text-center w-[64px] gap-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
     >
-      <span className="w-6 h-6 rounded-full bg-black/25 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
-        <IconWithFallback src={icon} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={24} />
+      <span className={`${dim} rounded-full bg-black/30 overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform group-hover:scale-105`}>
+        <IconWithFallback src={icon} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={pxSize} />
       </span>
-      <span className="text-left">
-        <span className="block text-[10.5px] text-txt leading-tight">{name}</span>
-        <span className="block text-[9.5px] leading-tight tabular-nums">
-          <span className="font-semibold text-teal">{pct}</span>
-          <span className="text-mut/60"> · {count}/{denom}</span>
-        </span>
-      </span>
+      <span className="text-[10px] text-txt leading-tight line-clamp-2 min-h-[24px]">{name}</span>
+      <span className="text-[10.5px] font-bold tabular-nums text-teal">{pct}</span>
+      <span className="text-[9px] text-mut/60 tabular-nums">{count}/{denom}</span>
     </button>
   );
 }
@@ -336,7 +393,15 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
     tournamentNote ? ` · ${tournamentNote}` : ""
   }`;
 
-  const hasAdditionalRunes = model.primaryMinors.entries.length > 0 || model.secondaryPicks.entries.length > 0 || model.shards.entries.length > 0;
+  // v0.28.0 — one consolidated caption for the additional-runes sample sizes
+  // (minors/picks/shards each carry their OWN denominator, see proConsensus.ts
+  // module header) instead of three repeated "from N games" lines — still
+  // honest per-slot, just one line instead of three.
+  const additionalRuneNotes = [
+    model.primaryMinors.entries.length > 0 ? `minors ${slotSampleNote(model.primaryMinors)}` : null,
+    model.secondaryPicks.entries.length > 0 ? `picks ${slotSampleNote(model.secondaryPicks)}` : null,
+    model.shards.entries.length > 0 ? `shards ${slotSampleNote(model.shards)}` : null,
+  ].filter((n): n is string => Boolean(n));
 
   return (
     <div className="bg-panel border border-line rounded-xl p-5">
@@ -351,14 +416,25 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
         </p>
       )}
 
-      {model.items.length > 0 && (
+      {(model.items.length > 0 || model.boots.length > 0) && (
         <div className="mb-4">
           <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">Items</p>
           {/* flex-wrap, not overflow-x-auto — matches CoreBuildOrderCard/
               SituationalCard's own item-row convention on this tab (no
-              horizontal scroll strips anywhere on BUILD), so 6 tiles reflow
-              to a second row instead of hiding behind a scrollbar at 390px. */}
+              horizontal scroll strips anywhere on BUILD), so tiles reflow
+              to a second row instead of hiding behind a scrollbar at 390px.
+              v0.28.0: boots render as ONE stacked slot (see BootsStackTile)
+              instead of eating two separate item slots. */}
           <div className="flex flex-wrap gap-2.5">
+            {model.boots.length > 0 && (
+              <BootsStackTile
+                boots={model.boots}
+                denom={model.gamesTotal}
+                names={names.items}
+                icon={(id) => itemIconUrl(id, ver)}
+                onClick={(id) => onOpenDetail("item", id)}
+              />
+            )}
             {model.items.map((entry) => (
               <ItemTile
                 key={entry.itemId}
@@ -382,131 +458,75 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
         const keystone = model.keystone;
         const secondaryTree = model.secondaryTree;
         const spellPair = model.spellPair;
-        if (!keystone && !secondaryTree && !spellPair) return null;
+        const hasPrimaryCol = Boolean(keystone) || model.primaryMinors.entries.length > 0;
+        const hasSecondaryCol = Boolean(secondaryTree) || model.secondaryPicks.entries.length > 0 || model.shards.entries.length > 0;
+        if (!hasPrimaryCol && !hasSecondaryCol && !spellPair) return null;
+        // v0.28.0 (user request: "put the additional runes as the layout...
+        // runes are set as in game. Don't put them like that separately") —
+        // composed as ONE in-game-style rune page (primary column: keystone
+        // + its minors below; secondary column: tree label + 2 picks + stat
+        // shards; summoners column), the same layout vocabulary
+        // RunesSummonersCard already uses on the BUILD tab for the WPA
+        // recommendation, adapted here to a pick-rate fraction per tile
+        // instead of a WPA score. No "Additional Runes" sub-section anymore —
+        // minors/picks/shards render directly under their owning tree.
         return (
-        <div className="flex flex-wrap gap-x-6 gap-y-3 mb-1">
-          {keystone && (
-            <button
-              type="button"
-              onClick={() => onOpenDetail("rune", keystone.keystoneId)}
-              aria-label={`View details for keystone ${names.keystone?.name ?? `rune #${keystone.keystoneId}`} — picked in ${keystone.count} of ${model.runesSampleSize} games with known runes (${formatSharePct(keystone.share)})`}
-              className="flex items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
-            >
-              <span className="w-9 h-9 rounded-full bg-black/30 border border-line-gold overflow-hidden flex items-center justify-center flex-shrink-0">
-                <IconWithFallback
-                  src={names.keystone?.icon ?? ""}
-                  alt={names.keystone?.name ?? "Keystone"}
-                  fallbackGlyph={names.keystone?.name}
-                  className="w-full h-full object-contain"
-                  size={36}
-                />
-              </span>
-              <span className="text-left">
-                <span className="block text-[11.5px] text-txt font-medium leading-tight">
-                  {names.keystone?.name ?? `Rune #${keystone.keystoneId}`}
-                </span>
-                <span className="block text-[10px] leading-tight mt-0.5">
-                  <FractionPct count={keystone.count} denom={model.runesSampleSize} />
-                  <span className="text-mut/60"> keystone</span>
-                </span>
-              </span>
-            </button>
-          )}
-
-          {secondaryTree && (
-            <div className="flex items-center gap-2">
-              <span className="w-9 h-9 rounded-full bg-black/20 overflow-hidden flex items-center justify-center flex-shrink-0">
-                <IconWithFallback
-                  src={treeIconUrl(secondaryTree.treeId)}
-                  alt={treeName(secondaryTree.treeId)}
-                  fallbackGlyph={treeName(secondaryTree.treeId)}
-                  className="w-full h-full object-contain"
-                  size={36}
-                />
-              </span>
-              <span>
-                <span className="block text-[11.5px] text-txt font-medium leading-tight">
-                  {treeName(secondaryTree.treeId)}
-                </span>
-                <span className="block text-[10px] leading-tight mt-0.5">
-                  <FractionPct count={secondaryTree.count} denom={model.secondaryTreeSampleSize} />
-                  <span className="text-mut/60"> secondary</span>
-                </span>
-              </span>
-            </div>
-          )}
-
-          {spellPair && (
-            <div className="flex items-center gap-2">
-              <div className="flex -space-x-1">
-                {spellPair.spells.map((id) => (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => onOpenDetail("spell", id)}
-                    aria-label={`View details for summoner spell ${spellName(id)}`}
-                    className="w-8 h-8 rounded-[8px] bg-black/30 border border-line ring-2 ring-panel overflow-hidden flex items-center justify-center flex-shrink-0 focus-visible:outline-none focus-visible:ring-teal active:scale-95 transition-transform"
-                  >
-                    <IconWithFallback
-                      src={spellIconUrl(id, ver)}
-                      alt={spellName(id)}
-                      fallbackGlyph={spellName(id)}
-                      className="w-full h-full object-contain"
-                      size={32}
-                    />
-                  </button>
+        <div className="grid grid-cols-1 md:grid-cols-[1.5fr_1.1fr_auto] gap-x-8 gap-y-5 mb-1">
+          {hasPrimaryCol && (
+            <div>
+              <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2.5">Primary</p>
+              <div className="flex flex-wrap items-end gap-2.5">
+                {keystone && (
+                  <ConsensusRuneTile
+                    size="lg"
+                    count={keystone.count}
+                    denom={model.runesSampleSize}
+                    name={names.keystone?.name ?? `Rune #${keystone.keystoneId}`}
+                    icon={names.keystone?.icon ?? ""}
+                    onClick={() => onOpenDetail("rune", keystone.keystoneId)}
+                  />
+                )}
+                {model.primaryMinors.entries.map((e) => (
+                  <ConsensusRuneTile
+                    key={e.runeId}
+                    count={e.count}
+                    denom={model.primaryMinors.sampleSize}
+                    name={names.primaryMinors.get(e.runeId)?.name ?? `Rune #${e.runeId}`}
+                    icon={names.primaryMinors.get(e.runeId)?.icon ?? ""}
+                    onClick={() => onOpenDetail("rune", e.runeId)}
+                  />
                 ))}
               </div>
-              <span>
-                <span className="block text-[11.5px] text-txt font-medium leading-tight">
-                  {spellPair.spells.map((id) => spellName(id)).join(" + ")}
-                </span>
-                <span className="block text-[10px] leading-tight mt-0.5">
-                  <FractionPct count={spellPair.count} denom={model.spellSampleSize} />
-                  <span className="text-mut/60"> spells</span>
-                </span>
-              </span>
             </div>
           )}
-        </div>
-        );
-      })()}
 
-      {hasAdditionalRunes && (
-        <div className="mt-4 pt-3.5 border-t border-line">
-          <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2.5">Additional Runes</p>
-          <div className="flex flex-col gap-3">
-            {model.primaryMinors.entries.length > 0 && (
-              <div>
-                <p className="text-[9.5px] text-mut/60 mb-1.5">
-                  Primary tree minors <span className="text-mut/40">— {slotSampleNote(model.primaryMinors)}</span>
-                </p>
-                <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-                  {model.primaryMinors.entries.map((e) => (
-                    <RuneMiniRow
-                      key={e.runeId}
-                      runeId={e.runeId}
-                      count={e.count}
-                      denom={model.primaryMinors.sampleSize}
-                      name={names.primaryMinors.get(e.runeId)?.name ?? `Rune #${e.runeId}`}
-                      icon={names.primaryMinors.get(e.runeId)?.icon ?? ""}
-                      onClick={() => onOpenDetail("rune", e.runeId)}
+          {hasSecondaryCol && (
+            <div>
+              {secondaryTree ? (
+                <div className="flex items-center gap-2 mb-2.5">
+                  <span className="w-5 h-5 rounded-full bg-black/20 overflow-hidden flex items-center justify-center flex-shrink-0">
+                    <IconWithFallback
+                      src={treeIconUrl(secondaryTree.treeId)}
+                      alt={treeName(secondaryTree.treeId)}
+                      fallbackGlyph={treeName(secondaryTree.treeId)}
+                      className="w-full h-full object-contain"
+                      size={20}
                     />
-                  ))}
+                  </span>
+                  <span className="text-[11.5px] text-txt font-semibold">{treeName(secondaryTree.treeId)}</span>
+                  <span className="text-[9.5px] leading-tight">
+                    <FractionPct count={secondaryTree.count} denom={model.secondaryTreeSampleSize} />
+                  </span>
                 </div>
-              </div>
-            )}
+              ) : (
+                <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2.5">Secondary</p>
+              )}
 
-            {model.secondaryPicks.entries.length > 0 && (
-              <div>
-                <p className="text-[9.5px] text-mut/60 mb-1.5">
-                  Secondary picks <span className="text-mut/40">— {slotSampleNote(model.secondaryPicks)}</span>
-                </p>
-                <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+              {model.secondaryPicks.entries.length > 0 && (
+                <div className="flex flex-wrap gap-2.5 mb-3.5">
                   {model.secondaryPicks.entries.map((e) => (
-                    <RuneMiniRow
+                    <ConsensusRuneTile
                       key={e.runeId}
-                      runeId={e.runeId}
                       count={e.count}
                       denom={model.secondaryPicks.sampleSize}
                       name={names.secondaryPicks.get(e.runeId)?.name ?? `Rune #${e.runeId}`}
@@ -515,19 +535,14 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
                     />
                   ))}
                 </div>
-              </div>
-            )}
+              )}
 
-            {model.shards.entries.length > 0 && (
-              <div>
-                <p className="text-[9.5px] text-mut/60 mb-1.5">
-                  Shards <span className="text-mut/40">— {slotSampleNote(model.shards)}</span>
-                </p>
-                <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+              {model.shards.entries.length > 0 && (
+                <div className="flex flex-wrap gap-2.5">
                   {model.shards.entries.map((e) => (
-                    <RuneMiniRow
+                    <ConsensusRuneTile
                       key={e.runeId}
-                      runeId={e.runeId}
+                      size="xs"
                       count={e.count}
                       denom={model.shards.sampleSize}
                       name={shardName(e.runeId)}
@@ -536,10 +551,52 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
                     />
                   ))}
                 </div>
+              )}
+            </div>
+          )}
+
+          {spellPair && (
+            <div className="flex md:flex-col md:justify-center gap-2">
+              <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-0 md:mb-1.5 hidden md:block">
+                Summoners
+              </p>
+              <div className="flex items-center gap-2">
+                <div className="flex -space-x-1">
+                  {spellPair.spells.map((id) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => onOpenDetail("spell", id)}
+                      aria-label={`View details for summoner spell ${spellName(id)}`}
+                      className="w-8 h-8 rounded-[8px] bg-black/30 border border-line ring-2 ring-panel overflow-hidden flex items-center justify-center flex-shrink-0 focus-visible:outline-none focus-visible:ring-teal active:scale-95 transition-transform"
+                    >
+                      <IconWithFallback
+                        src={spellIconUrl(id, ver)}
+                        alt={spellName(id)}
+                        fallbackGlyph={spellName(id)}
+                        className="w-full h-full object-contain"
+                        size={32}
+                      />
+                    </button>
+                  ))}
+                </div>
+                <span>
+                  <span className="block text-[11.5px] text-txt font-medium leading-tight">
+                    {spellPair.spells.map((id) => spellName(id)).join(" + ")}
+                  </span>
+                  <span className="block text-[10px] leading-tight mt-0.5">
+                    <FractionPct count={spellPair.count} denom={model.spellSampleSize} />
+                  </span>
+                </span>
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
+        );
+      })()}
+
+      {additionalRuneNotes.length > 0 && (
+        <p className="text-[9.5px] text-mut/50 mt-1 mb-1">{additionalRuneNotes.join(" · ")}</p>
       )}
 
       <p className="text-[10px] text-mut/70 mt-3.5 pt-3 border-t border-line">{sampleLine}</p>
