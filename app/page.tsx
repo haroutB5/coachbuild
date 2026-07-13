@@ -127,6 +127,22 @@ export default function HomePage() {
    *  tested there) and only owns the imperative setState calls here. */
   function restoreMainView(wire: WireMainView | null) {
     if (!wire) return;
+    // v0.27.2 (bugfix, same incident as BuildTabContent's load() race —
+    // HANDOFF-fronty.md's v0.27.2 entry): every OTHER navigation handler
+    // (lane tap, champion pick, player pick, sheet-tap jump) bumps this ref
+    // to invalidate a pending getMostPlayedLane() correction, but a browser
+    // back/forward restore never did — it's not one of those handlers, it's
+    // driven by useSheetBackNav's popstate listener instead. A slow
+    // most-played-lane lookup for a champion the user has since navigated
+    // AWAY from (via back, before the lookup resolved) could still land:
+    // its requestId was never superseded, so `setActiveLane(bestLane)` +
+    // `replaceSelection(wireViewForChampion(selected, ...))` would fire for
+    // the STALE champion against whatever view the user has since
+    // restored to, corrupting its lane and its history entry. Bumping the
+    // ref on every restore (mount-resume AND popstate alike — both route
+    // through this function) closes that window the same way every other
+    // navigation action already does.
+    mostPlayedLaneRequestRef.current++;
     const applied = applyWireMainView(wire);
     setSearchMode(applied.searchMode);
     setTab(applied.tab);

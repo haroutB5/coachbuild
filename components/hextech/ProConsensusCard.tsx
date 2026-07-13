@@ -35,7 +35,8 @@ interface ProConsensusCardProps {
 type FetchState =
   | { status: "loading" }
   | { status: "ok"; model: ProConsensusModel; itemMeta: Map<number, ItemDetail> }
-  | { status: "hidden" }; // N=0 or fetch failed — this card is supplementary, never shows an error box
+  | { status: "hidden" } // N=0 by design (e.g. Viktor Support) — genuinely nothing to show
+  | { status: "error" }; // fetch failed — distinct from N=0 (v0.27.2, see below)
 
 interface RuneDisplay {
   name: string;
@@ -212,9 +213,17 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
         setState({ status: "ok", model: aggregateProConsensus(games, itemMeta), itemMeta });
       })
       .catch(() => {
-        // Supplementary card — a failed fetch degrades to "not shown" rather
-        // than an error box competing with the BUILD tab's real content.
-        if (!cancelled) setState({ status: "hidden" });
+        // v0.27.2 (bugfix — see HANDOFF-fronty.md's v0.27.2 entry): this used
+        // to collapse into the SAME "hidden" state as a genuine N=0 result
+        // (e.g. Viktor Support, essentially never played by pros) — a real
+        // fetch failure (network blip, a cold /api/pros invocation, a
+        // transient 5xx) was therefore INDISTINGUISHABLE from "no pro data
+        // exists for this champion+lane," which is exactly what made the
+        // live user bug report ("card just isn't there") impossible to
+        // triage from the outside. Still supplementary — never a competing
+        // error box — but now a real, visible, muted signal instead of
+        // silent nothing. See the render branch below.
+        if (!cancelled) setState({ status: "error" });
       });
     return () => {
       cancelled = true;
@@ -263,6 +272,13 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
 
   if (state.status === "loading") return <ConsensusSkeleton />;
   if (state.status === "hidden") return null;
+  if (state.status === "error") {
+    return (
+      <p className="text-[10.5px] text-mut/50 px-0.5" role="status">
+        Pro consensus data couldn&apos;t load — try refreshing.
+      </p>
+    );
+  }
 
   const { model } = state;
   const lowSample = model.gamesTotal < LOW_SAMPLE_THRESHOLD;

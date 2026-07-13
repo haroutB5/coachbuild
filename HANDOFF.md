@@ -4453,3 +4453,47 @@ The daily cron (`/api/ingest/prostage`) still has gotcha (o)'s known issue (neve
 — engo
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-13 12:46
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-13 10:42:33Z; previous content preserved there. Append new rounds below. -->
+
+## v0.27.2 — Pro Consensus card missing (bug report investigation + fix)
+
+**Bug report as given:** user on prod v0.27.1 saw the Pro Consensus card completely absent on Viktor Mid BUILD tab (RUNES/STARTING/CORE/SITUATIONAL all rendered fine), with the sidebar search toggle showing PROS while a champion view rendered. Hypothesis in the brief: champion pick → PROS toggle → player search/view → BACK (history restore) leaves the card missing.
+
+**Reproduction: exhaustive, did NOT confirm the hypothesized path.** Drove the exact sequence (champion pick → PROS toggle → search/select a player → browser back) repeatedly on both local dev and **live prod** (`coachbuild.vercel.app`), at 390px, under normal AND throttled (Slow 3G / Fast 4G) network, plus forward-then-back and reload-then-back variants. The Pro Consensus card rendered correctly every single time. `applyWireMainView` always forces `searchMode` back to `"champions"` on a champion-kind restore (verified in `components/hextech/homeSearch.ts`), so the PROS-toggle-with-champion-view state in the user's screenshot is actually reachable a much simpler way: the sidebar's `onSearchModeChange` prop (`app/page.tsx`) is wired directly to the raw `setSearchMode` state setter — toggling to PROS mode with no player yet selected doesn't push any history entry and doesn't affect `BuildTabContent`/`ProConsensusCard` at all (`deriveMainView` stays on the champion view). This is a red herring, not a bug — noting it so nobody re-investigates the same dead end.
+
+**What I found instead, while probing the same suspect file (`BuildTabContent.tsx`) under throttled network — two real, independently confirmed, LIVE-REPRODUCED bugs:**
+
+1. **P0 — wrong champion's entire build could silently render under the correct champion's header.** `BuildTabContent.tsx`'s `load()` fetch had NO stale-response guard (unlike `ProConsensusCard`'s own effect, which has always had a `cancelled` flag). A champ/lane change starts a brand-new `/api/build` fetch without cancelling the previous one; two in-flight requests can resolve OUT OF ORDER. **Reproduced live on prod**: Slow 3G, search "Ahri" from Viktor Mid, hit browser back before the pick's `/api/build?champ=103...` (cache MISS, slow) resolves — it lands AFTER the restored `/api/build?champ=112...` (cache HIT, `age=1439`, near-instant) and clobbers the page with Ahri's Electrocute/Ignite/Domination build rendered under the still-correct "VIKTOR" header (confirmed via `list_network_requests`/`get_network_request` — response timestamps and cache status prove the ordering). `ChampionHero`/`Sidebar` never desynced because they read separate, correctly-guarded page state (`champ`/`activeLane`), not `BuildTabContent`'s own `state.build`. **Fixed**: added the same `cancelled`-closure pattern `ProConsensusCard` already uses — every `setState` in `load()` now checks `isCancelled()` first, so a superseded response is inert regardless of resolution order. Re-verified the exact repro post-fix (dev, Slow 3G): Viktor's build stayed correct even after waiting 6s for the stale Ahri response to land.
+2. **A slow `getMostPlayedLane()` correction (v0.26.0) wasn't invalidated by back/forward navigation.** Every OTHER handler that fires it (`handleLaneChange`, `handleChampionSelect`, `handlePlayerSelect`, `handleSelectPlayerFromSheet`) bumps `mostPlayedLaneRequestRef` to cancel a pending lookup, but browser back/forward is driven by `useSheetBackNav`'s popstate listener, not one of those handlers — so a lookup that outlives a back-navigation could still land on `restoreMainView`, changing the CURRENT (unrelated) view's `activeLane` and overwriting its history entry with a stale champion via `replaceSelection`. Didn't manifest visibly in my specific repro run (the stale correction happened to resolve to a no-op — Ahri's most-played lane was also "mid"), but the code path is real and was traced end-to-end. **Fixed**: `restoreMainView` (`app/page.tsx`) now bumps the same ref on every restore, closing the gap the same way every other navigation action already does.
+
+**Root cause of the ORIGINAL reported symptom: still not conclusively identified** — the specific "card only, nothing else wrong" repro never reproduced despite extensive live+throttled testing. Most likely explanation, per the code read: `ProConsensusCard`'s fetch-error path and its genuine-N=0 path collapsed into the exact same silent `hidden` state (`catch(() => setState({status:"hidden"}))`), making a real transient failure (cold `/api/pros` invocation, a network blip, a coachless CDN 404 for `getItemDetailMap`) indistinguishable from "Viktor Support, essentially never played by pros." **Fixed regardless** (this was task item #2 and is unambiguously correct to do): split `FetchState` into `"hidden"` (N=0, renders nothing, unchanged) vs `"error"` (fetch failed, renders a small muted line — "Pro consensus data couldn't load — try refreshing", `role="status"`). Verified live by monkey-patching `window.fetch` to reject `/api/pros?` calls and confirming the muted line appears (screenshot: `pro-consensus-error-state-390px.png`) — real offline network emulation in Chrome DevTools hung rather than erroring cleanly, so the fetch-patch approach was more reliable for forcing this path.
+
+**Files changed:**
+- `components/hextech/BuildTabContent.tsx` — `load()` now takes an `isCancelled()` guard; effect wraps it in the standard `cancelled`-closure pattern.
+- `app/page.tsx` — `restoreMainView` bumps `mostPlayedLaneRequestRef.current` before applying a restored selection.
+- `components/hextech/ProConsensusCard.tsx` — `FetchState` split into `"hidden"` | `"error"`; error path renders a muted status line instead of nothing.
+- `package.json` (0.27.1 → 0.27.2), `CHANGELOG.md`.
+
+**Tests:** no new pure-module tests added — both fixes are React-effect/closure-level (stale-response guards, a ref bump inside a component callback), not extractable into the pure-function test style this repo uses (no JSX rendering harness). Verification was behavioral: live network-request tracing on prod to confirm the race, then a dev re-run of the identical repro post-fix (with `list_network_requests` confirming both the Ahri and Viktor `/api/build` requests actually fired and resolved) to confirm no wrong-champion bleed-through, plus a fetch-patch forced-error test for the muted line. `npx vitest run` still 543/543 green (unchanged — no regressions).
+
+**Gates:** `verify-fix.sh` ALL CHECKS PASSED (tsc clean, lint clean, 543 tests, build clean, sw/manifest fine). Did NOT deploy — per instructions, urgot ships.
+
+**Not done / honest gaps:** the user's exact reported symptom (card silently absent, everything else fine, no visible champion mismatch) was never directly reproduced, so I can't 100% confirm the fixes above are THE fix for THIS user's specific report — they're confirmed, real, serious bugs found in the same suspect file/failure class (unguarded async state surviving a navigation change), and the error/hidden-state split directly closes the "can't tell what happened" gap that made the original report untriaged. If it recurs, the muted error line should now make the next occurrence self-diagnosing.
+
+
+

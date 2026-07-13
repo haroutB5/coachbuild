@@ -114,12 +114,32 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
     return () => document.removeEventListener("keydown", onKey);
   }, [activeDetail]);
 
+  // v0.27.2 (bugfix — see HANDOFF-fronty.md's v0.27.2 entry): this fetch had
+  // NO stale-response guard, unlike ProConsensusCard's own effect below
+  // (which has always had a `cancelled` flag). A champ/lane change fires a
+  // brand-new fetch on every render without cancelling the PREVIOUS one, so
+  // two in-flight `/api/build` requests can resolve OUT OF ORDER — e.g. a
+  // fresh champion pick (cache MISS, slow) immediately followed by a browser
+  // back-navigation to the champion just left (cache HIT, near-instant): the
+  // HIT applies first (correct), then the MISS resolves LATER and silently
+  // overwrites it with the WRONG (superseded) champion's entire build —
+  // runes/summoners/items all swap under the still-correct header, since
+  // ChampionHero/Sidebar read the separate, correctly-guarded `champ`/
+  // `activeLane` page state, not this component's own `state.build`.
+  // Reproduced live on prod (Slow 3G, Viktor -> Ahri search -> immediate
+  // back): `/api/build?champ=103...` (Ahri, MISS) landed after
+  // `/api/build?champ=112...` (Viktor, HIT, age 1439s) and clobbered the
+  // page with Ahri's Electrocute/Ignite build under the "VIKTOR" header.
+  // Fixed with the exact same `cancelled`-closure pattern ProConsensusCard
+  // already uses — every setState is guarded so a superseded response is
+  // inert no matter which order the two requests actually resolve in.
   const load = useCallback(
-    async (c: ChampionRef, l: LaneId) => {
+    async (c: ChampionRef, l: LaneId, isCancelled: () => boolean) => {
       setState({ status: "loading" });
       try {
         const roleId = LANE_TO_ROLE_ID[l];
         const res = await fetch(`/api/build?champ=${c.id}&role=${roleId}`);
+        if (isCancelled()) return;
         if (res.status === 404) {
           setState({ status: "empty" });
           return;
@@ -129,6 +149,7 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
           return;
         }
         const data: BuildResponse[] = await res.json();
+        if (isCancelled()) return;
         if (!Array.isArray(data) || data.length === 0) {
           setState({ status: "empty" });
           return;
@@ -138,14 +159,18 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
         setState({ status: "ok", build: data[0] });
         onPatchResolved?.(data[0].patch);
       } catch {
-        setState({ status: "error" });
+        if (!isCancelled()) setState({ status: "error" });
       }
     },
     [onPatchResolved]
   );
 
   useEffect(() => {
-    load(champ, lane);
+    let cancelled = false;
+    load(champ, lane, () => cancelled);
+    return () => {
+      cancelled = true;
+    };
   }, [champ, lane, load]);
 
   if (state.status === "loading") return <BuildLoadingSkeleton />;
