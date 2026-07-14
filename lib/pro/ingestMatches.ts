@@ -51,11 +51,21 @@ export async function runMatchIngest(opts: MatchIngestOptions = {}): Promise<Mat
     errors: [],
   };
 
+  // Tiebreaker is load-bearing: `last_fetched_at ASC NULLS FIRST` alone leaves
+  // every never-fetched account (NULL) in an UNSTABLE relative order — Postgres
+  // makes no ordering guarantee among equal (here: all-NULL) sort keys, so the
+  // OFFSET/LIMIT window over a large NULL cohort can return an arbitrary subset
+  // per call, with no guarantee every account is ever eventually reached. Audit
+  // 2026-07-13 found 1,312/1,445 active accounts permanently stuck at NULL for
+  // exactly this reason. `created_at ASC` breaks the tie deterministically —
+  // oldest-registered NULL account goes first — so every account is reached
+  // in bounded time (a strict FIFO once last_fetched_at is set, since a fresh
+  // fetch pushes an account to "now()", far behind the remaining NULLs).
   const accounts = (await sql`
     SELECT puuid, pro_id, region, riot_id
     FROM coachbuild.pro_accounts
     WHERE active = true
-    ORDER BY last_fetched_at ASC NULLS FIRST
+    ORDER BY last_fetched_at ASC NULLS FIRST, created_at ASC
     OFFSET ${cursor} LIMIT ${batch}
   `) as unknown as AccountRow[];
 
