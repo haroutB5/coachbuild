@@ -176,4 +176,30 @@ describe("orderByStaleness", () => {
     await orderByStaleness(sql as never, ["A", "B"]);
     expect(sql).toHaveBeenCalledTimes(1);
   });
+
+  it("queries coachbuild.prostage_ingest_attempts (last ATTEMPTED), not prostage_matches (last actually wrote a row)", async () => {
+    // P2 fix (2026-07-17): the old ingested_at proxy never advanced on a
+    // zero-new-rows pass, permanently pinning a finished tournament as
+    // "stalest." The new stamp (migration 0008) advances on every attempt.
+    const sql = vi.fn().mockResolvedValue([]);
+    await orderByStaleness(sql as never, ["A"]);
+    const strings = sql.mock.calls[0][0] as TemplateStringsArray;
+    const queryText = strings.join("?");
+    expect(queryText).toContain("prostage_ingest_attempts");
+    expect(queryText).not.toContain("prostage_matches");
+  });
+
+  it("regression: a finished tournament that keeps getting ATTEMPTED (zero new rows every pass) no longer wins cursor=0 forever — it sorts AFTER a never-attempted page", async () => {
+    // Simulates the pin bug this migration closes: "Finished Bracket" has an
+    // old real ingest but a FRESH attempted_at (every cron pass upserts it,
+    // even though ON CONFLICT DO NOTHING means no new prostage_matches rows
+    // ever land for it) — it must lose staleness priority to a tournament
+    // that has genuinely never been attempted (epoch).
+    const sql = vi.fn().mockResolvedValue([
+      { overview_page: "Never Attempted", last_ingested: "1970-01-01T00:00:00.000Z" },
+      { overview_page: "Finished Bracket", last_ingested: "2026-07-17T07:00:00.000Z" },
+    ]);
+    const result = await orderByStaleness(sql as never, ["Finished Bracket", "Never Attempted"]);
+    expect(result).toEqual(["Never Attempted", "Finished Bracket"]);
+  });
 });

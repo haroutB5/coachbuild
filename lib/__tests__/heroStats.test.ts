@@ -88,12 +88,12 @@ describe("getHeroStats", () => {
     expect(getKeystoneData).not.toHaveBeenCalled();
   });
 
-  it("degrades to nulls (never throws) on an upstream failure", async () => {
+  it("degrades to nulls (never throws) on an upstream failure, flagged `degraded: true` so the route knows never to CDN-cache it", async () => {
     vi.mocked(getKeystoneData).mockRejectedValue(new Error("coachless 500"));
     vi.mocked(getGlobalItemStatistics).mockResolvedValue([]);
 
     const stats = await getHeroStats(112, "mid");
-    expect(stats).toEqual({ winRatePct: null, gamesCount: null });
+    expect(stats).toEqual({ winRatePct: null, gamesCount: null, degraded: true });
   });
 
   it("passes the resolved patch + correct RoleId through to both coachless calls", async () => {

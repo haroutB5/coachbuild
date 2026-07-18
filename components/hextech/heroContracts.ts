@@ -115,9 +115,19 @@ export function getSplashUrl(championKey: string): string {
 // cache here (rather than importing proAssets', which returns {name,icon}
 // only) since ChampionHero's splash art needs the ddragon `key` too.
 
+// v0.29.1 (Fable review 2026-07-17, P3): ICON_VER is a LAST-RESORT constant
+// only — used to build STATIC_FALLBACK_LANE_CHAMPIONS below at MODULE-EVAL
+// time, before any live data has ever been fetched (there is, by definition,
+// nothing live to thread in at that exact synchronous moment). The one place
+// this fallback is actually SERVED after live data exists —
+// getLaneDefaultChampions()'s per-lane "id not in champMap" branch further
+// down — rebuilds its icon URL against the LIVE version instead (derived
+// from champMap, already in hand there), via withLiveIconVersion(). Kept
+// hardcoded here only as the true last-resort (module load / total fetch
+// failure), same posture proAssets.ts's ICON_VERSION_FALLBACK now has.
 const ICON_VER = "16.12.1";
-const champIconUrl = (key: string) =>
-  `https://cdn.coachless.gg/static-files/${ICON_VER}/${ICON_VER}/img/champion/${key}.webp`;
+const champIconUrl = (key: string, ver: string = ICON_VER) =>
+  `https://cdn.coachless.gg/static-files/${ver}/${ver}/img/champion/${key}.webp`;
 
 /** First-paint + total-failure fallback — the mockup's own exact picks
  *  (Darius/Lee Sin/Viktor/Jinx/Thresh), matching engo's own STATIC_FALLBACK
@@ -131,6 +141,39 @@ export const STATIC_FALLBACK_LANE_CHAMPIONS: Record<LaneId, ChampionRef> = {
   bot: { id: 222, key: "Jinx", name: "Jinx", icon: champIconUrl("Jinx") },
   support: { id: 412, key: "Thresh", name: "Thresh", icon: champIconUrl("Thresh") },
 };
+
+/** Extracts the live CDN version folder from an already-resolved
+ *  ChampionRef's icon URL (e.g.
+ *  ".../static-files/16.13.1/16.13.1/img/champion/Viktor.webp" — the exact
+ *  shape lib/staticData.ts's ICON_BASES.champ builds server-side for
+ *  /api/champions). Same technique proAssets.ts's getCachedLiveIconVersion()
+ *  uses, applied here against THIS module's own champMap (already fetched
+ *  at the one call site that needs it) rather than a second cache/module
+ *  dependency. Returns null if champMap is empty (total fetch failure) or
+ *  no entry matches the expected shape. */
+function liveVersionFromChampMap(champMap: Map<number, ChampionRef>): string | null {
+  // .forEach, not for...of — matches this codebase's Map-iteration
+  // convention (see proAssets.ts's getCachedLiveIconVersion) and avoids
+  // tsc's TS2802 without a target/downlevelIteration bump.
+  let found: string | null = null;
+  champMap.forEach((c) => {
+    if (found) return;
+    const m = c.icon?.match(/\/static-files\/(\d+\.\d+\.\d+)\//);
+    if (m) found = m[1];
+  });
+  return found;
+}
+
+/** Rebuilds a STATIC_FALLBACK_LANE_CHAMPIONS entry's icon URL against the
+ *  live version when one's available (keeps id/key/name — the mockup's exact
+ *  pick — untouched, only the icon's version folder moves), so the per-lane
+ *  degraded path doesn't glyph-fallback forever on a frozen 16.12.1 the way
+ *  it did before. Falls through to the champ unchanged (hardcoded ICON_VER)
+ *  when no live version is available. */
+function withLiveIconVersion(champ: ChampionRef, liveVer: string | null): ChampionRef {
+  if (!liveVer) return champ;
+  return { ...champ, icon: champIconUrl(champ.key, liveVer) };
+}
 
 let champMapCache: Map<number, ChampionRef> | null = null;
 let champMapInFlight: Promise<Map<number, ChampionRef>> | null = null;
@@ -176,10 +219,14 @@ export async function getLaneDefaultChampions(): Promise<Record<LaneId, Champion
     ]);
     if (!defaultsRes) return null;
     const out = {} as Record<LaneId, ChampionRef>;
+    // v0.29.1: derive the live version ONCE from champMap (already fetched
+    // above) rather than per-lane, and thread it into any per-lane fallback
+    // below instead of the hardcoded ICON_VER.
+    const liveVer = liveVersionFromChampMap(champMap);
     for (const lane of LANE_ORDER) {
       const wire = defaultsRes[lane];
       const resolved = wire ? champMap.get(wire.championId) : undefined;
-      out[lane] = resolved ?? STATIC_FALLBACK_LANE_CHAMPIONS[lane];
+      out[lane] = resolved ?? withLiveIconVersion(STATIC_FALLBACK_LANE_CHAMPIONS[lane], liveVer);
     }
     return out;
   } catch {

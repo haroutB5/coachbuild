@@ -74,6 +74,28 @@ export default function HomePage() {
   // picking yet another champion/player).
   const mostPlayedLaneRequestRef = useRef(0);
 
+  // v0.29.2 (Fable review 2026-07-17, P3): handleChampionSelect's late
+  // getMostPlayedLane() correction below needs the CURRENT tab/gamesSource
+  // at the moment it resolves, not whichever were showing when the champion
+  // was picked. A tab switch or games-filter change while the lookup is
+  // in-flight doesn't bump mostPlayedLaneRequestRef above (by design — it
+  // doesn't change WHICH champion/lane the correction targets, only how the
+  // page is currently displayed), so the correction still fires — but it
+  // used to build its sheetNav.replaceSelection(...) call from the
+  // CAPTURED-at-pick-time `tab`/`source` closure consts instead of live
+  // state. Live UI stayed correct (tab/gamesSource state itself was never
+  // touched by this bug), but the history entry the correction wrote got
+  // clobbered back to the stale pick-time tab/filter — a later back/forward
+  // restore would land on the wrong tab. Mirrored into refs (updated every
+  // render, read imperatively at replace time) rather than adding tab/
+  // gamesSource to handleChampionSelect's own dependency list, since this is
+  // a one-shot async correction reading a LATER value, not a re-derivable
+  // render value.
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  const gamesSourceRef = useRef(gamesSource);
+  gamesSourceRef.current = gamesSource;
+
   const mainView = deriveMainView(searchMode, champ, activeLane, selectedPlayer);
 
   // Back-gesture history integration for the home page (v0.23.0) — same
@@ -214,7 +236,11 @@ export default function HomePage() {
         if (mostPlayedLaneRequestRef.current !== requestId) return; // superseded
         if (!bestLane || bestLane === landedLane) return; // unresolved, or already showing it
         setActiveLane(bestLane);
-        sheetNav.replaceSelection(wireViewForChampion(selected, bestLane, tab, source));
+        // Read CURRENT tab/gamesSource via the refs above, not the `tab`/
+        // `source` closure captured back at pick time (see the refs' doc
+        // comment) — a tab or filter change while this lookup was in flight
+        // must not get overwritten in the history entry this replaces.
+        sheetNav.replaceSelection(wireViewForChampion(selected, bestLane, tabRef.current, gamesSourceRef.current));
       });
     },
     [activeLane, tab, sheetNav]

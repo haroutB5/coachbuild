@@ -4,6 +4,24 @@
 // ascending) per call, return the next cursor. Shared core used by both
 // scripts/ingest-matches.mjs (local backfill loop) and
 // app/api/ingest/matches/route.ts (guarded, serverless-timeout-safe).
+//
+// CURSOR CONTRACT (P2 fix, 2026-07-17 Fable review): the cursor is a WALK-
+// START TIMESTAMP (ISO string), not a numeric OFFSET. The old OFFSET/LIMIT
+// walk had a real bug: processing a batch bumps those accounts'
+// `last_fetched_at` to `now()`, which RE-SORTS them to the back of the very
+// `ORDER BY last_fetched_at ASC` the OFFSET window slides over — so the next
+// OFFSET-based page silently skips ~`batch` accounts (the ones that would
+// have landed in the gap the just-processed accounts vacated) and re-fetches
+// some already-processed accounts' tails instead. A stable predicate closes
+// this: the first call in a walk mints `walkStart = now()` and every account
+// selected must satisfy `last_fetched_at IS NULL OR last_fetched_at <
+// walkStart` — a FIXED point in time, immune to reordering from writes that
+// happen DURING the walk. `nextCursor` echoes the SAME walkStart back
+// (never a fresh one) until a short page (fewer than `batch` rows) signals
+// the walk is done, at which point it's null. The cron path (no `cursor`
+// query param) mints its own fresh walkStart every invocation and behaves
+// identically to before for a single un-pinged call — see
+// app/api/ingest/matches/route.ts's header comment.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getSql } from "./db";
@@ -15,7 +33,10 @@ import { getMatch, getMatchIdsByPuuid, getMatchTimeline, RiotRequestError } from
 
 export interface MatchIngestOptions {
   batch?: number;
-  cursor?: number;
+  /** Walk-start timestamp (ISO string), from a PRIOR call's `nextCursor` —
+   *  see this file's header CURSOR CONTRACT. Omit on the first call of a
+   *  walk; one is minted from `now()` internally. */
+  cursor?: string;
   matchesPerAccount?: number;
   onProgress?: (msg: string) => void;
 }
@@ -23,7 +44,10 @@ export interface MatchIngestOptions {
 export interface MatchIngestResult {
   accountsProcessed: number;
   matchesUpserted: number;
-  nextCursor: number | null;
+  /** Echoes the walk's stable start timestamp (ISO string) back for the
+   *  caller's next call, or null once the walk has drained every account
+   *  that qualified under it — see this file's header CURSOR CONTRACT. */
+  nextCursor: string | null;
   errors: string[];
 }
 
@@ -40,7 +64,14 @@ export async function runMatchIngest(opts: MatchIngestOptions = {}): Promise<Mat
   if (!process.env.RIOT_API_KEY) throw new RiotUnavailableError();
 
   const batch = opts.batch ?? 5;
-  const cursor = opts.cursor ?? 0;
+  // A fresh walk mints its own start point; a resumed walk (pinger passing
+  // back a prior nextCursor) reuses the SAME one for every call — see the
+  // CURSOR CONTRACT in this file's header comment for why that stability
+  // matters (an OFFSET-based walk didn't have it). A cursor in the future
+  // would make every account perpetually qualify (endless rolling walk), so
+  // clamp to now — ISO-8601 strings at fixed precision compare lexically.
+  const nowIso = new Date().toISOString();
+  const walkStart = opts.cursor && opts.cursor < nowIso ? opts.cursor : nowIso;
   const matchesPerAccount = opts.matchesPerAccount ?? 20;
   const log = opts.onProgress ?? (() => {});
 
@@ -53,20 +84,26 @@ export async function runMatchIngest(opts: MatchIngestOptions = {}): Promise<Mat
 
   // Tiebreaker is load-bearing: `last_fetched_at ASC NULLS FIRST` alone leaves
   // every never-fetched account (NULL) in an UNSTABLE relative order — Postgres
-  // makes no ordering guarantee among equal (here: all-NULL) sort keys, so the
-  // OFFSET/LIMIT window over a large NULL cohort can return an arbitrary subset
-  // per call, with no guarantee every account is ever eventually reached. Audit
-  // 2026-07-13 found 1,312/1,445 active accounts permanently stuck at NULL for
-  // exactly this reason. `created_at ASC` breaks the tie deterministically —
-  // oldest-registered NULL account goes first — so every account is reached
-  // in bounded time (a strict FIFO once last_fetched_at is set, since a fresh
+  // makes no ordering guarantee among equal (here: all-NULL) sort keys, so an
+  // unstably-ordered window can return an arbitrary subset per call, with no
+  // guarantee every account is ever eventually reached. Audit 2026-07-13 found
+  // 1,312/1,445 active accounts permanently stuck at NULL for exactly this
+  // reason. `created_at ASC` breaks the tie deterministically — oldest-
+  // registered NULL account goes first — so every account is reached in
+  // bounded time (a strict FIFO once last_fetched_at is set, since a fresh
   // fetch pushes an account to "now()", far behind the remaining NULLs).
+  //
+  // `last_fetched_at < walkStart` (instead of OFFSET/LIMIT) is what makes
+  // this walk immune to the accounts THIS VERY CALL just bumped to now() —
+  // those fail the predicate on the NEXT call regardless of where they'd
+  // sort, so nothing is ever skipped or double-counted mid-walk.
   const accounts = (await sql`
     SELECT puuid, pro_id, region, riot_id
     FROM coachbuild.pro_accounts
     WHERE active = true
+      AND (last_fetched_at IS NULL OR last_fetched_at < ${walkStart}::timestamptz)
     ORDER BY last_fetched_at ASC NULLS FIRST, created_at ASC
-    OFFSET ${cursor} LIMIT ${batch}
+    LIMIT ${batch}
   `) as unknown as AccountRow[];
 
   for (const account of accounts) {
@@ -76,10 +113,28 @@ export async function runMatchIngest(opts: MatchIngestOptions = {}): Promise<Mat
       result.matchesUpserted += upserted;
     } catch (err) {
       result.errors.push(`account ${account.riot_id}: ${(err as Error).message}`);
+      // Termination guard: an account that errors without a last_fetched_at
+      // bump still satisfies the walk predicate and still sorts at the front,
+      // so a page of all-erroring accounts (suspended key -> every call 403s)
+      // would make the walk loop forever re-fetching the same page. Data is
+      // safe to defer — bump the stamp so the walk moves past it and the next
+      // daily cycle retries (same argument the route makes for mid-batch
+      // timeouts).
+      try {
+        await sql`
+          UPDATE coachbuild.pro_accounts
+          SET last_fetched_at = now()
+          WHERE puuid = ${account.puuid}
+        `;
+      } catch (bumpErr) {
+        result.errors.push(
+          `account ${account.riot_id}: stamp-bump failed: ${(bumpErr as Error).message}`
+        );
+      }
     }
   }
 
-  result.nextCursor = accounts.length < batch ? null : cursor + batch;
+  result.nextCursor = accounts.length < batch ? null : walkStart;
   return result;
 }
 
@@ -92,6 +147,14 @@ export async function ingestOneAccount(
   const routing = routingForServer(account.region);
   if (!routing) {
     log(`account ${account.riot_id}: unmapped region ${account.region}, skipping`);
+    // Permanent condition (the region map is static) — stamp it so the walk
+    // terminates instead of re-selecting the account at the front of every
+    // page forever. See the termination guard in runMatchIngest's catch.
+    await sql`
+      UPDATE coachbuild.pro_accounts
+      SET last_fetched_at = now()
+      WHERE puuid = ${account.puuid}
+    `;
     return 0;
   }
 

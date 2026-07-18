@@ -226,23 +226,32 @@ describe("extractMatch", () => {
 });
 
 describe("extractTeamComps", () => {
+  // P3(a) fix (2026-07-17): each side must role-resolve CLEANLY (5 distinct
+  // known roles) or extractTeamComps now omits the whole comps object — so
+  // this fixture assigns explicit, DISTINCT teamPositions in TOP/JUNGLE/
+  // MIDDLE/BOTTOM/UTILITY array order (self stays at index 0 = TOP so the
+  // existing [112, 2, 3, 4, 5] expected array is unchanged: source order
+  // happens to equal role order here by construction). Before this fix, the
+  // helper left every participant on the base fixture's default "MIDDLE"
+  // teamPosition — a degenerate (duplicate-role) input that only coincided
+  // with "in source order" because of orderByRole's OLD fallback behavior.
   function fullTenParticipants(): RiotParticipant[] {
     // puuid-1 (self, championId 112) + 4 allies on teamId 100, 5 enemies on teamId 200.
     return [
-      participant(), // puuid-1, teamId 100, championId 112
-      participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2 }),
-      participant({ puuid: "ally-3", participantId: 3, teamId: 100, championId: 3 }),
-      participant({ puuid: "ally-4", participantId: 4, teamId: 100, championId: 4 }),
-      participant({ puuid: "ally-5", participantId: 5, teamId: 100, championId: 5 }),
-      participant({ puuid: "enemy-1", participantId: 6, teamId: 200, championId: 6 }),
-      participant({ puuid: "enemy-2", participantId: 7, teamId: 200, championId: 7 }),
-      participant({ puuid: "enemy-3", participantId: 8, teamId: 200, championId: 8 }),
-      participant({ puuid: "enemy-4", participantId: 9, teamId: 200, championId: 9 }),
-      participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10 }),
+      participant({ teamPosition: "TOP" }), // puuid-1, teamId 100, championId 112
+      participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2, teamPosition: "JUNGLE" }),
+      participant({ puuid: "ally-3", participantId: 3, teamId: 100, championId: 3, teamPosition: "MIDDLE" }),
+      participant({ puuid: "ally-4", participantId: 4, teamId: 100, championId: 4, teamPosition: "BOTTOM" }),
+      participant({ puuid: "ally-5", participantId: 5, teamId: 100, championId: 5, teamPosition: "UTILITY" }),
+      participant({ puuid: "enemy-1", participantId: 6, teamId: 200, championId: 6, teamPosition: "TOP" }),
+      participant({ puuid: "enemy-2", participantId: 7, teamId: 200, championId: 7, teamPosition: "JUNGLE" }),
+      participant({ puuid: "enemy-3", participantId: 8, teamId: 200, championId: 8, teamPosition: "MIDDLE" }),
+      participant({ puuid: "enemy-4", participantId: 9, teamId: 200, championId: 9, teamPosition: "BOTTOM" }),
+      participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10, teamPosition: "UTILITY" }),
     ];
   }
 
-  it("splits a clean 5v5 match into ally (incl. self) + enemy champion ids, in source order", () => {
+  it("splits a clean 5v5 match into ally (incl. self) + enemy champion ids, role-ordered (source order here by construction)", () => {
     const m = match({}, fullTenParticipants());
     expect(extractTeamComps(m, "puuid-1")).toEqual({
       allyChampionIds: [112, 2, 3, 4, 5],
@@ -281,7 +290,11 @@ describe("extractTeamComps", () => {
     expect(comps?.enemyChampionIds).toEqual([31, 32, 33, 35, 34]);
   });
 
-  it("falls back to source order when a side has a duplicate role (never a reordered lie)", () => {
+  it("P3(a) fix: omits comps ENTIRELY (both sides null) when a side has a duplicate role — never a reordered-lie array a consumer would index by role", () => {
+    // Regression for the 2026-07-17 Fable review finding: consumers index
+    // enemyChampionIds[role] to find "the enemy laner in my role" — a
+    // source-ordered (unsorted) array under that same field name silently
+    // produced a WRONG laner with no signal anything had degraded.
     const participants = [
       participant({ teamPosition: "MIDDLE" }), // self, championId 112
       participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2, teamPosition: "MIDDLE" }), // dup MID
@@ -295,12 +308,10 @@ describe("extractTeamComps", () => {
       participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10, teamPosition: "UTILITY" }),
     ];
     const m = match({}, participants);
-    const comps = extractTeamComps(m, "puuid-1");
-    expect(comps?.allyChampionIds).toEqual([112, 2, 3, 4, 5]); // source order preserved, not reordered
-    expect(comps?.enemyChampionIds).toEqual([6, 7, 8, 9, 10]); // enemy side is a clean 5-role set -> role sorted (already in source==role order here)
+    expect(extractTeamComps(m, "puuid-1")).toBeNull();
   });
 
-  it("falls back to source order when a side has an unresolved (empty) teamPosition", () => {
+  it("P3(a) fix: omits comps entirely when a side has an unresolved (empty) teamPosition, even though the OTHER side is clean (both-or-neither)", () => {
     const participants = [
       participant({ teamPosition: "" }), // self, championId 112, unresolved role
       participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2, teamPosition: "JUNGLE" }),
@@ -314,9 +325,9 @@ describe("extractTeamComps", () => {
       participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10, teamPosition: "UTILITY" }),
     ];
     const m = match({}, participants);
-    const comps = extractTeamComps(m, "puuid-1");
-    expect(comps?.allyChampionIds).toEqual([112, 2, 3, 4, 5]); // source order — self's role unresolved
-    expect(comps?.enemyChampionIds).toEqual([6, 7, 8, 9, 10]); // clean 5-role enemy side, unaffected
+    // enemy side alone would resolve cleanly, but the ally side's degrade
+    // must sink the WHOLE comps object, not just its own side.
+    expect(extractTeamComps(m, "puuid-1")).toBeNull();
   });
 });
 
@@ -364,18 +375,21 @@ describe("orderChampionIdsByRole", () => {
 });
 
 describe("extractMatch team comps integration", () => {
+  // See extractTeamComps describe block's fullTenParticipants doc comment —
+  // same P3(a) rationale: distinct teamPositions per participant are
+  // required for a "clean" (non-degraded) 5v5 fixture now.
   function fullTenParticipants(): RiotParticipant[] {
     return [
-      participant(),
-      participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2 }),
-      participant({ puuid: "ally-3", participantId: 3, teamId: 100, championId: 3 }),
-      participant({ puuid: "ally-4", participantId: 4, teamId: 100, championId: 4 }),
-      participant({ puuid: "ally-5", participantId: 5, teamId: 100, championId: 5 }),
-      participant({ puuid: "enemy-1", participantId: 6, teamId: 200, championId: 6 }),
-      participant({ puuid: "enemy-2", participantId: 7, teamId: 200, championId: 7 }),
-      participant({ puuid: "enemy-3", participantId: 8, teamId: 200, championId: 8 }),
-      participant({ puuid: "enemy-4", participantId: 9, teamId: 200, championId: 9 }),
-      participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10 }),
+      participant({ teamPosition: "TOP" }),
+      participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2, teamPosition: "JUNGLE" }),
+      participant({ puuid: "ally-3", participantId: 3, teamId: 100, championId: 3, teamPosition: "MIDDLE" }),
+      participant({ puuid: "ally-4", participantId: 4, teamId: 100, championId: 4, teamPosition: "BOTTOM" }),
+      participant({ puuid: "ally-5", participantId: 5, teamId: 100, championId: 5, teamPosition: "UTILITY" }),
+      participant({ puuid: "enemy-1", participantId: 6, teamId: 200, championId: 6, teamPosition: "TOP" }),
+      participant({ puuid: "enemy-2", participantId: 7, teamId: 200, championId: 7, teamPosition: "JUNGLE" }),
+      participant({ puuid: "enemy-3", participantId: 8, teamId: 200, championId: 8, teamPosition: "MIDDLE" }),
+      participant({ puuid: "enemy-4", participantId: 9, teamId: 200, championId: 9, teamPosition: "BOTTOM" }),
+      participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10, teamPosition: "UTILITY" }),
     ];
   }
 
@@ -391,6 +405,27 @@ describe("extractMatch team comps integration", () => {
     const row = extractMatch(m, timeline(), "puuid-1");
     expect(row?.allyChampionIds).toBeNull();
     expect(row?.enemyChampionIds).toBeNull();
+  });
+
+  it("P3(a) fix: nulls both fields when a side degrades (5 participants, but not 5 distinct roles) rather than storing a role-position-wrong array", () => {
+    const participants = [
+      participant({ teamPosition: "MIDDLE" }), // self, championId 112
+      participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2, teamPosition: "MIDDLE" }), // dup MID
+      participant({ puuid: "ally-3", participantId: 3, teamId: 100, championId: 3, teamPosition: "TOP" }),
+      participant({ puuid: "ally-4", participantId: 4, teamId: 100, championId: 4, teamPosition: "BOTTOM" }),
+      participant({ puuid: "ally-5", participantId: 5, teamId: 100, championId: 5, teamPosition: "UTILITY" }),
+      participant({ puuid: "enemy-1", participantId: 6, teamId: 200, championId: 6, teamPosition: "TOP" }),
+      participant({ puuid: "enemy-2", participantId: 7, teamId: 200, championId: 7, teamPosition: "JUNGLE" }),
+      participant({ puuid: "enemy-3", participantId: 8, teamId: 200, championId: 8, teamPosition: "MIDDLE" }),
+      participant({ puuid: "enemy-4", participantId: 9, teamId: 200, championId: 9, teamPosition: "BOTTOM" }),
+      participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10, teamPosition: "UTILITY" }),
+    ];
+    const m = match({}, participants);
+    const row = extractMatch(m, timeline(), "puuid-1");
+    expect(row?.allyChampionIds).toBeNull();
+    expect(row?.enemyChampionIds).toBeNull();
+    expect(row?.allyPlayers).toBeNull();
+    expect(row?.enemyPlayers).toBeNull();
   });
 });
 
@@ -453,13 +488,12 @@ describe("extractTeamPlayers", () => {
     expect(players?.enemyPlayers.map((p) => p.championId)).toEqual([6, 7, 8, 9, 10]);
   });
 
-  it("falls back to source order when a side's roles don't resolve to 5 distinct known roles", () => {
+  it("P3(a) fix: returns null entirely when a side's roles don't resolve to 5 distinct known roles (never a reordered lie)", () => {
     const m = match(
       {},
       fullTenParticipants([{}, { teamPosition: "TOP" }, { teamPosition: "TOP" }]) // ally-2 and ally-3 both TOP -> dup
     );
-    const players = extractTeamPlayers(m, "puuid-1");
-    expect(players?.allyPlayers.map((p) => p.championId)).toEqual([112, 2, 3, 4, 5]); // source order preserved
+    expect(extractTeamPlayers(m, "puuid-1")).toBeNull();
   });
 
   it("filters 0s out of items and nulls an empty trinket slot per player", () => {
@@ -523,17 +557,21 @@ describe("extractTeamPlayers", () => {
 
 describe("extractMatch team players integration", () => {
   it("populates allyPlayers/enemyPlayers on a full 5v5 row, in lockstep with allyChampionIds/enemyChampionIds", () => {
+    // P3(a) fix (2026-07-17): distinct teamPositions per participant are
+    // required now — a degenerate (all-MIDDLE) fixture would make
+    // extractTeamComps/extractTeamPlayers omit the whole result (see the
+    // "extractTeamComps" describe block's fullTenParticipants doc comment).
     const participants = [
-      participant(), // puuid-1, teamId 100, championId 112
-      participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2 }),
-      participant({ puuid: "ally-3", participantId: 3, teamId: 100, championId: 3 }),
-      participant({ puuid: "ally-4", participantId: 4, teamId: 100, championId: 4 }),
-      participant({ puuid: "ally-5", participantId: 5, teamId: 100, championId: 5 }),
-      participant({ puuid: "enemy-1", participantId: 6, teamId: 200, championId: 6 }),
-      participant({ puuid: "enemy-2", participantId: 7, teamId: 200, championId: 7 }),
-      participant({ puuid: "enemy-3", participantId: 8, teamId: 200, championId: 8 }),
-      participant({ puuid: "enemy-4", participantId: 9, teamId: 200, championId: 9 }),
-      participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10 }),
+      participant({ teamPosition: "TOP" }), // puuid-1, teamId 100, championId 112
+      participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2, teamPosition: "JUNGLE" }),
+      participant({ puuid: "ally-3", participantId: 3, teamId: 100, championId: 3, teamPosition: "MIDDLE" }),
+      participant({ puuid: "ally-4", participantId: 4, teamId: 100, championId: 4, teamPosition: "BOTTOM" }),
+      participant({ puuid: "ally-5", participantId: 5, teamId: 100, championId: 5, teamPosition: "UTILITY" }),
+      participant({ puuid: "enemy-1", participantId: 6, teamId: 200, championId: 6, teamPosition: "TOP" }),
+      participant({ puuid: "enemy-2", participantId: 7, teamId: 200, championId: 7, teamPosition: "JUNGLE" }),
+      participant({ puuid: "enemy-3", participantId: 8, teamId: 200, championId: 8, teamPosition: "MIDDLE" }),
+      participant({ puuid: "enemy-4", participantId: 9, teamId: 200, championId: 9, teamPosition: "BOTTOM" }),
+      participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10, teamPosition: "UTILITY" }),
     ];
     const m = match({}, participants);
     const row = extractMatch(m, timeline(), "puuid-1");
@@ -543,16 +581,16 @@ describe("extractMatch team players integration", () => {
 
   it("threads extractMatch's optional 4th proId param through to the tracked player's own allyPlayers slot", () => {
     const participants = [
-      participant(), // puuid-1, teamId 100, championId 112
-      participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2 }),
-      participant({ puuid: "ally-3", participantId: 3, teamId: 100, championId: 3 }),
-      participant({ puuid: "ally-4", participantId: 4, teamId: 100, championId: 4 }),
-      participant({ puuid: "ally-5", participantId: 5, teamId: 100, championId: 5 }),
-      participant({ puuid: "enemy-1", participantId: 6, teamId: 200, championId: 6 }),
-      participant({ puuid: "enemy-2", participantId: 7, teamId: 200, championId: 7 }),
-      participant({ puuid: "enemy-3", participantId: 8, teamId: 200, championId: 8 }),
-      participant({ puuid: "enemy-4", participantId: 9, teamId: 200, championId: 9 }),
-      participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10 }),
+      participant({ teamPosition: "TOP" }), // puuid-1, teamId 100, championId 112
+      participant({ puuid: "ally-2", participantId: 2, teamId: 100, championId: 2, teamPosition: "JUNGLE" }),
+      participant({ puuid: "ally-3", participantId: 3, teamId: 100, championId: 3, teamPosition: "MIDDLE" }),
+      participant({ puuid: "ally-4", participantId: 4, teamId: 100, championId: 4, teamPosition: "BOTTOM" }),
+      participant({ puuid: "ally-5", participantId: 5, teamId: 100, championId: 5, teamPosition: "UTILITY" }),
+      participant({ puuid: "enemy-1", participantId: 6, teamId: 200, championId: 6, teamPosition: "TOP" }),
+      participant({ puuid: "enemy-2", participantId: 7, teamId: 200, championId: 7, teamPosition: "JUNGLE" }),
+      participant({ puuid: "enemy-3", participantId: 8, teamId: 200, championId: 8, teamPosition: "MIDDLE" }),
+      participant({ puuid: "enemy-4", participantId: 9, teamId: 200, championId: 9, teamPosition: "BOTTOM" }),
+      participant({ puuid: "enemy-5", participantId: 10, teamId: 200, championId: 10, teamPosition: "UTILITY" }),
     ];
     const m = match({}, participants);
     const row = extractMatch(m, timeline(), "puuid-1", "pro-self-id");

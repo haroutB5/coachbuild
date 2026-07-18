@@ -47,20 +47,79 @@ const STORMRAIDERS_SURGE_ICON =
 // visible fallback glyph instead of vanishing, see IconWithFallback) rather
 // than a silent gap — add its id here when spotted.
 
-/** Static fallback icon/data version — matches staticData.ts's own fallback. */
+/** Static fallback icon/data version — matches staticData.ts's own fallback.
+ *  LAST-RESORT ONLY (Fable review 2026-07-17, P3): prostage rows always have
+ *  a NULL `patch` (Leaguepedia's Cargo tables don't expose game-length/patch
+ *  data the way Riot's match-v5 does — same structural-gap class CLAUDE.md's
+ *  gotcha (h) documents), so every prostage-sourced icon used to resolve
+ *  against this FROZEN version forever — any item/rune/champion added after
+ *  16.11 would glyph-fallback on prostage surfaces only, permanently, no
+ *  matter how far the live patch advances. `versionFromPatch` below now
+ *  tries `getCachedLiveIconVersion()` first (derived from data already
+ *  fetched client-side, see that function's doc comment) and only falls back
+ *  to this hardcoded string when nothing live has resolved yet (e.g. the
+ *  very first paint, before any component has fetched the champion map). */
 const ICON_VERSION_FALLBACK = "16.11.1";
+
+/** Best-effort LIVE icon/data CDN version, derived from `getChampionIconMap()`
+ *  (this module's own /api/champions fetch, already shared across every
+ *  consumer — TeamComp, ProBuildRow, etc.) rather than a second network call
+ *  or a hardcoded constant. /api/champions doesn't expose a raw version
+ *  field, but every champion icon URL it returns embeds one
+ *  (".../static-files/16.13.1/16.13.1/img/champion/Viktor.webp" — see
+ *  lib/staticData.ts's ICON_BASES.champ, the server-side builder for that
+ *  exact URL shape), so this extracts it from whichever entry happens to be
+ *  first rather than adding a new backend field.
+ *
+ *  Synchronous + cached: the FIRST successful resolution (anywhere in the
+ *  app, since the underlying map is a shared module-level cache) is reused
+ *  for the rest of the session — no need to re-derive per call. Kicks off
+ *  the champion-map fetch if nothing has resolved yet (so a component that
+ *  never itself calls getChampionIconMap still benefits once ANY other
+ *  component on the page has), but returns null immediately rather than
+ *  blocking — callers treat this as a fallback TIER, not an awaited value;
+ *  ICON_VERSION_FALLBACK covers the gap until it resolves, same "never
+ *  block on decorative data" posture as resolveRuneDisplay/getChampionIconMap
+ *  already use in this module. */
+let liveIconVersionCache: string | null = null;
+
+function extractVersionFromIconUrl(url: string | undefined): string | null {
+  if (!url) return null;
+  const m = url.match(/\/static-files\/(\d+\.\d+\.\d+)\//);
+  return m ? m[1] : null;
+}
+
+export function getCachedLiveIconVersion(): string | null {
+  if (liveIconVersionCache) return liveIconVersionCache;
+  void getChampionIconMap().then((map) => {
+    // .forEach, not for...of — matches this codebase's Map-iteration
+    // convention (itemDetail.ts/runeDetail.ts/summonerDetail.ts), and avoids
+    // tsc's TS2802 without a target/downlevelIteration bump.
+    map.forEach((entry) => {
+      if (liveIconVersionCache) return; // already found one this pass
+      const v = extractVersionFromIconUrl(entry.icon);
+      if (v) liveIconVersionCache = v;
+    });
+  });
+  return liveIconVersionCache;
+}
 
 /**
  * A ProGame's `patch` field is "16.13" — convert to the CDN's versioned
  * folder format "16.13.1" (matches lib/staticData.ts's versionFolder()).
- * Falls back to the static version if the patch string is unparseable.
+ * Falls back to the live-resolved icon version (getCachedLiveIconVersion(),
+ * see above) when `patch` is missing/unparseable — real for every prostage
+ * row — and only to the hardcoded ICON_VERSION_FALLBACK when NEITHER a patch
+ * NOR a live version is available.
  */
 export function versionFromPatch(patch: string | undefined): string {
-  if (!patch) return ICON_VERSION_FALLBACK;
+  if (!patch) return getCachedLiveIconVersion() ?? ICON_VERSION_FALLBACK;
   const parts = patch.split(".");
   const major = parseInt(parts[0], 10);
   const minor = parseInt(parts[1], 10);
-  if (!Number.isFinite(major) || !Number.isFinite(minor)) return ICON_VERSION_FALLBACK;
+  if (!Number.isFinite(major) || !Number.isFinite(minor)) {
+    return getCachedLiveIconVersion() ?? ICON_VERSION_FALLBACK;
+  }
   return `${major}.${minor}.1`;
 }
 

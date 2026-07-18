@@ -11,9 +11,22 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { routingForServer } from "./regionMap";
-import { getAccountByRiotId, getMatchIdsByPuuid } from "./riot";
+import { getAccountByRiotId, getMatchIdsByPuuid, RiotRequestError } from "./riot";
 import { RiotUnavailableError } from "./errors";
 import type { LolProsAccountRaw } from "./types";
+
+/** P3(d) fix (2026-07-17 Fable review): distinguishes a DEFINITIVE Riot
+ *  rejection (4xx other than 429 — the puuid/riotId genuinely doesn't
+ *  resolve) from a TRANSIENT failure (network/fetch throw, 5xx, or 429
+ *  rate-limit) that says nothing about whether the account is actually
+ *  good. A non-RiotRequestError is always transient (fetch threw before
+ *  Riot even returned a response, or the response body failed to parse) —
+ *  see resolveAccount's doc comment for why this matters (there's no roster
+ *  cron re-check to self-heal a wrongly-inactive account). */
+function isTransientRiotError(err: unknown): boolean {
+  if (err instanceof RiotRequestError) return err.status >= 500 || err.status === 429;
+  return true;
+}
 
 export interface ResolvedAccount {
   puuid: string;
@@ -34,7 +47,18 @@ function riotIdOf(account: LolProsAccountRaw): string | null {
 }
 
 /** Returns null when the account can't even be attempted (no region match,
- *  no puuid AND no riot id to fall back on) — caller should skip+log. */
+ *  no puuid AND no riot id to fall back on), OR when every attempted path
+ *  failed but at least one of those failures was TRANSIENT (P3(d) fix,
+ *  2026-07-17 — see isTransientRiotError above) — caller should skip+log
+ *  WITHOUT touching the account's stored `active` state (lib/pro/
+ *  ingestRoster.ts's ingestOnePro only upserts when this returns non-null,
+ *  so null leaves an existing DB row completely alone). Before this fix, a
+ *  one-off network blip or a Riot 503/429 on the puuid probe fell through
+ *  to the SAME "both attempts failed" path a genuine 400/404 does, silently
+ *  flipping a perfectly good, already-active account to `active: false` —
+ *  sticky, since there's no separate roster cron to re-check and self-heal
+ *  it. Only a DEFINITIVE rejection (every attempted path came back a clean
+ *  4xx-not-429, or there was nothing to attempt) may downgrade `active`. */
 export async function resolveAccount(account: LolProsAccountRaw): Promise<ResolvedAccount | null> {
   const routing = routingForServer(account.server);
   if (!routing) return null;
@@ -53,6 +77,8 @@ export async function resolveAccount(account: LolProsAccountRaw): Promise<Resolv
     return null; // no puuid to store without a key to resolve one via riotId
   }
 
+  let sawTransientFailure = false;
+
   // 1. Try the lolpros puuid directly.
   if (lolprosPuuid) {
     try {
@@ -60,7 +86,10 @@ export async function resolveAccount(account: LolProsAccountRaw): Promise<Resolv
       return { ...base, puuid: lolprosPuuid, riotId: riotId ?? account.summoner_name ?? lolprosPuuid, active: true };
     } catch (err) {
       if (err instanceof RiotUnavailableError) throw err;
-      // RiotRequestError (400/404/etc) or network hiccup -> fall through to riotId fallback.
+      if (isTransientRiotError(err)) sawTransientFailure = true;
+      // RiotRequestError (definitive 4xx) or a transient blip either way ->
+      // fall through and still TRY the riotId fallback (a different Riot
+      // endpoint — worth attempting even after a transient hit on this one).
     }
   }
 
@@ -73,12 +102,18 @@ export async function resolveAccount(account: LolProsAccountRaw): Promise<Resolv
         return { ...base, puuid: acc.puuid, riotId, active: true };
       } catch (err) {
         if (err instanceof RiotUnavailableError) throw err;
+        if (isTransientRiotError(err)) sawTransientFailure = true;
         // fall through to unresolved
       }
     }
   }
 
-  // Both attempts failed — store what we have (if anything) as inactive.
+  // A transient blip anywhere in the chain -> skip this pass without
+  // touching `active` at all (see this function's doc comment).
+  if (sawTransientFailure) return null;
+
+  // Every attempted path definitively failed (clean 4xx-not-429, or nothing
+  // was attempted) — store what we have (if anything) as inactive.
   if (lolprosPuuid) {
     return { ...base, puuid: lolprosPuuid, riotId: riotId ?? account.summoner_name ?? lolprosPuuid, active: false };
   }

@@ -286,8 +286,20 @@ export async function resolveEsportsGameId(
 
     // Walk schedule pages (older token) collecting team-matching candidates
     // within the date window; stop once we've paged past the target date.
+    //
+    // `pagingExhaustedWithoutReachingWindow` (P3(e) fix, 2026-07-17): tracks
+    // whether the loop stopped for a NATURAL reason (no more older pages, or
+    // this page's oldest event is already comfortably past the target date —
+    // either way, we've genuinely covered the whole relevant window) versus
+    // hitting the MAX_SCHEDULE_PAGES safety cap first. Only the natural-stop
+    // case licenses a confident "no match exists" (unavailable) conclusion
+    // when candidates is empty — hitting the artificial page cap on a busy
+    // league's schedule means the real match might simply be further back
+    // than we paged, which is a TRANSIENT (retry-worthy, budget/timeout)
+    // condition, not proof the game doesn't exist.
     const candidates: LolScheduleEvent[] = [];
     let pageToken: string | undefined;
+    let pagingExhaustedWithoutReachingWindow = true;
     for (let page = 0; page < MAX_SCHEDULE_PAGES; page++) {
       const { events, olderToken }: SchedulePage = await getSchedule(league.id, pageToken);
       for (const ev of events) {
@@ -305,12 +317,27 @@ export async function resolveEsportsGameId(
         (min, e) => Math.min(min, e.startTime ? new Date(e.startTime).getTime() : Infinity),
         Infinity
       );
-      if (!olderToken) break;
-      if (Number.isFinite(oldestMs) && oldestMs < targetMs - PAGE_PAST_TARGET_SLACK_MS) break;
+      if (!olderToken) {
+        pagingExhaustedWithoutReachingWindow = false;
+        break;
+      }
+      if (Number.isFinite(oldestMs) && oldestMs < targetMs - PAGE_PAST_TARGET_SLACK_MS) {
+        pagingExhaustedWithoutReachingWindow = false;
+        break;
+      }
       pageToken = olderToken;
     }
 
     if (candidates.length === 0) {
+      if (pagingExhaustedWithoutReachingWindow) {
+        // Hit MAX_SCHEDULE_PAGES before naturally covering the target date
+        // window — we genuinely don't know if a match exists further back.
+        return {
+          ok: false,
+          transient: true,
+          reason: `schedule paging hit MAX_SCHEDULE_PAGES (${MAX_SCHEDULE_PAGES}) before reaching the target date window for teams ${params.teams.join(" vs ")} near ${params.gameDatetime}`,
+        };
+      }
       return { ok: false, transient: false, reason: `no schedule match for teams ${params.teams.join(" vs ")} near ${params.gameDatetime}` };
     }
 
@@ -424,9 +451,13 @@ export async function computeGameTimelines(
   }
 
   const timeline = await buildTimeline(esportsGameId, opening.gameStartTs, endTs);
-  if (timeline.hadFailures) {
-    // A tainted (incomplete) walk must not be persisted as finished.
-    return { status: "transient", reason: `livestats details walk incomplete for game ${esportsGameId}` };
+  if (timeline.hadFailures || timeline.truncated) {
+    // A tainted (incomplete, via a fetch failure) OR TRUNCATED (P3(e) fix,
+    // 2026-07-17 — the WALK_MAX_POINTS cap was hit before covering the full
+    // range) walk must not be persisted as finished; either way, a later
+    // pass can retry.
+    const why = timeline.hadFailures ? "incomplete (fetch failures)" : "truncated (WALK_MAX_POINTS cap hit)";
+    return { status: "transient", reason: `livestats details walk ${why} for game ${esportsGameId}` };
   }
 
   let championKeyByInternalId: Map<string, number>;

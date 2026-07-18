@@ -114,6 +114,33 @@
 // rare (Leaguepedia usually resolves parent styles) and out of scope for a
 // per-game tree conditioning fix — the invariant holds for all
 // parent-resolved data, which is the overwhelming majority.
+//
+// ── Fallback-tree/keystone consistency guard (v0.29.1, Fable review 2026-07-17) ──
+// BUG THIS FIXES: resolvePrimaryTree's fallback branch fires when EVERY game
+// carrying the modal keystone has an unresolved primaryTree (real for prostage
+// rows where Leaguepedia's Cargo resolved KeystoneRune but not PrimaryTree) —
+// it then returns the SAMPLE-WIDE modal tree, which can belong entirely to a
+// DIFFERENT keystone's games. Left unguarded, aggregateProConsensus would
+// still show the ORIGINAL modal keystone in the tile while conditioning the
+// page (minors/secondaryTree/secondaryPicks) on that foreign tree's games —
+// the exact "impossible page" class v0.29.0 closed for the main path,
+// reopened on the fallback branch (keystone tile above a tree header/minors
+// that keystone never actually ran with).
+//
+// FIX: after resolving primaryTreeId and its pageSample, check whether the
+// pageSample contains ANY game that ran the displayed (phase-A modal)
+// keystone. If it does (the common case, including every already-tested
+// v0.29.0 path), nothing changes. If it doesn't:
+//   (a) Recompute the keystone as the fallback tree's OWN modal keystone
+//       (modal over pageSample only) so tile and page agree — "drop the
+//       keystone to the fallback tree's modal keystone." Its count/share/
+//       runesSampleSize are then scoped to pageSample, not gamesTotal, so
+//       the fraction shown stays honest about what population it describes.
+//   (b) If pageSample itself has no resolved keystone either (nothing to
+//       pair the page with honestly), degrade to the EXISTING tree-less
+//       pattern: keep the original global-modal keystone (still an honest
+//       fraction on its own) but drop the page (primaryTree -> null, empty
+//       minors/secondary) rather than pairing it with a page it never ran.
 
 import type { ProGame } from "@/components/proGames.types";
 import { CONSUMABLE_ITEM_IDS } from "@/components/proAssets";
@@ -206,12 +233,23 @@ export interface ProConsensusModel {
   boots: ItemFrequency[];
   /** Null when no game in the sample carries a resolved keystone (id 0 is
    *  the "unresolved/missing" sentinel — real for prostage rows Leaguepedia
-   *  never populated a Runes column for, see lib/prostage/extract.ts). */
+   *  never populated a Runes column for, see lib/prostage/extract.ts).
+   *  Normally the modal keystone over ALL games with a resolved keystone
+   *  (unchanged by tree conditioning). v0.29.1: on the rare degenerate path
+   *  where that modal keystone's own games never carried a resolved
+   *  primaryTree AND the fallback tree resolvePrimaryTree lands on belongs
+   *  to a DIFFERENT keystone, this is overridden to the fallback tree's OWN
+   *  modal keystone instead — see the module header's "Fallback-tree/
+   *  keystone consistency guard" — so this field and `primaryTree` always
+   *  describe one coherent page, never a keystone paired with a tree it
+   *  didn't run. */
   keystone: KeystoneFrequency | null;
   /** Denominator for keystone.share — games with a resolved (non-zero)
    *  keystone, NOT gamesTotal, so a champion with lots of rune-less prostage
    *  rows doesn't silently dilute the fraction shown for the ones that do
-   *  have data. */
+   *  have data. v0.29.1: scoped down to the fallback tree's own resolved-
+   *  keystone count on the degenerate guard path above, so it stays the
+   *  correct denominator for whatever `keystone` ends up being. */
   runesSampleSize: number;
   /** v0.29.0 — the page's PRIMARY tree id (8000 Precision … 8400 Resolve),
    *  resolved from the game data itself (each game's runes.primaryTree),
@@ -488,8 +526,45 @@ export function aggregateProConsensus(
   // minors + secondary tree + secondary picks on games that actually ran that
   // tree — see the module header for the incoherence bug this fixes.
   const primaryTreeId = resolvePrimaryTree(games, keystone?.keystoneId ?? 0);
-  const pageSample =
+  let pageSample =
     primaryTreeId > 0 ? games.filter((g) => (g.runes?.primaryTree ?? 0) === primaryTreeId) : [];
+
+  // v0.29.1 guard — see module header "Fallback-tree/keystone consistency
+  // guard" for the bug this closes. Only relevant when resolvePrimaryTree
+  // actually fell back to a tree the modal keystone's own games never ran;
+  // detected here (rather than threading a flag out of resolvePrimaryTree)
+  // by simply checking whether the resolved page sample contains the
+  // keystone we're about to display — true for every already-tested v0.29.0
+  // path (the tied-to-keystone branch guarantees it by construction), so
+  // this is a no-op guard on the main path and only fires on the degenerate
+  // fallback case.
+  let effectiveKeystone = keystone;
+  let effectiveRunesSampleSize = runesSampleSize;
+  if (keystone && pageSample.length > 0 && !pageSample.some((g) => (g.runes?.keystone ?? 0) === keystone.keystoneId)) {
+    const localCounts = new Map<number, number>();
+    let localSampleSize = 0;
+    for (const g of pageSample) {
+      const k = g.runes?.keystone ?? 0;
+      if (k > 0) {
+        localSampleSize += 1;
+        bump(localCounts, k);
+      }
+    }
+    const localTop = sortEntries(localCounts)[0];
+    if (localTop) {
+      // (a) Drop the keystone to the fallback tree's OWN modal keystone —
+      // tile and page now agree, and the fraction is scoped to the page it
+      // actually describes.
+      effectiveKeystone = { keystoneId: localTop[0], count: localTop[1], share: localTop[1] / localSampleSize };
+      effectiveRunesSampleSize = localSampleSize;
+    } else {
+      // (b) The fallback tree's games have no resolved keystone either —
+      // nothing honest to pair the page with. Degrade to the existing
+      // tree-less pattern (keystone tile keeps the honest global fraction,
+      // page underneath is dropped).
+      pageSample = [];
+    }
+  }
   const primaryTreeSampleSize = pageSample.length;
 
   // primaryMinors: primary[] over the page sample only, keystone ids filtered
@@ -499,7 +574,7 @@ export function aggregateProConsensus(
   for (const game of pageSample) {
     const ownKeystone = game.runes?.keystone ?? 0;
     const minors = (game.runes?.primary ?? []).filter(
-      (id) => id > 0 && id !== ownKeystone && id !== keystone?.keystoneId
+      (id) => id > 0 && id !== ownKeystone && id !== effectiveKeystone?.keystoneId
     );
     primaryMinors.add(minors, game.source);
   }
@@ -552,9 +627,12 @@ export function aggregateProConsensus(
     gamesTotal,
     items,
     boots,
-    keystone,
-    runesSampleSize,
-    primaryTree: primaryTreeId > 0 ? primaryTreeId : null,
+    keystone: effectiveKeystone,
+    runesSampleSize: effectiveRunesSampleSize,
+    // primaryTreeSampleSize (== pageSample.length) is the authority here, not
+    // the raw primaryTreeId — case (b) above can force pageSample back to []
+    // (degrading to tree-less) while primaryTreeId itself stays nonzero.
+    primaryTree: primaryTreeSampleSize > 0 ? primaryTreeId : null,
     primaryTreeSampleSize,
     secondaryTree,
     secondaryTreeSampleSize,

@@ -175,13 +175,25 @@ export interface ExtractedTeamComps {
  *  both delegate here so the champion-id strip and the full per-player
  *  TeamCompPlayer array can NEVER disagree on ordering for the same row —
  *  one degrade rule, one implementation, two call sites. */
-export function orderByRole<T extends { role: number | null | undefined }>(entries: T[]): T[] {
+/** True when every entry's role resolves to one of exactly 5 DISTINCT known
+ *  values (0-4) — the same degrade condition orderByRole checks, exported
+ *  separately so a caller can decide to OMIT a degraded side entirely
+ *  instead of accepting orderByRole's source-order fallback (see
+ *  extractTeamComps/extractTeamPlayers below — the soloq producers use this;
+ *  lib/prostage/teamComps.ts's orderedSidesForGame still calls orderByRole
+ *  directly and keeps its own fallback-to-source-order behavior, unchanged
+ *  by this — see the P3(a) fix's HANDOFF entry for why the two producers
+ *  diverge here). */
+export function sideResolvesCleanly<T extends { role: number | null | undefined }>(entries: T[]): boolean {
   const roles = entries.map((e) => (typeof e.role === "number" && e.role >= 0 && e.role <= 4 ? e.role : null));
   const knownCount = roles.filter((r) => r !== null).length;
   const distinctKnown = new Set(roles.filter((r): r is number => r !== null));
-  if (knownCount !== entries.length || distinctKnown.size !== entries.length) {
-    return entries.slice();
-  }
+  return knownCount === entries.length && distinctKnown.size === entries.length;
+}
+
+export function orderByRole<T extends { role: number | null | undefined }>(entries: T[]): T[] {
+  if (!sideResolvesCleanly(entries)) return entries.slice();
+  const roles = entries.map((e) => (typeof e.role === "number" && e.role >= 0 && e.role <= 4 ? e.role : null));
   return entries
     .map((e, i) => ({ entry: e, role: roles[i] as number }))
     .sort((a, b) => a.role - b.role)
@@ -200,24 +212,37 @@ export function orderChampionIdsByRole(
  *  lands at index 2. Falls back to source (participant array) order when a
  *  side's teamPosition values don't resolve to exactly 5 distinct known
  *  roles (teamPosition can be "" on remade/edge-case games).
- *  Returns null unless BOTH sides have exactly 5 champions — queue=420
+ *  Returns null unless BOTH sides have exactly 5 champions AND both sides
+ *  role-resolve CLEANLY (exactly 5 distinct known roles each) — queue=420
  *  (ranked solo/duo, the only queue lib/pro/ingestMatches.ts ingests) is
  *  always 5v5, so this should always succeed in practice, but a truncated
  *  fetch or a remake with missing participants must never store a partial
- *  side (dpm.lol-style comps rows are all-or-nothing on the frontend). */
+ *  side (dpm.lol-style comps rows are all-or-nothing on the frontend).
+ *
+ *  P3(a) fix (2026-07-17 Fable review): a degraded side used to still be
+ *  emitted in orderByRole's SOURCE-ORDER fallback rather than role order —
+ *  but every consumer of allyChampionIds/enemyChampionIds indexes them BY
+ *  ROLE POSITION (`enemyChampionIds[role]`, e.g. "who's the enemy laner in
+ *  my role"), so a source-ordered array silently produced a WRONG "vs"
+ *  laner with no signal anything had degraded. This violates the documented
+ *  contract in CLAUDE.md's API contracts section ("role-ordered … when a
+ *  side resolves cleanly, else omitted entirely — never a partial or a
+ *  'wrong but silent' side"). Fixed at the producer: a degraded side now
+ *  omits the WHOLE comps object (both fields stay null, matching the
+ *  existing both-or-neither contract) instead of returning a plausible-
+ *  looking-but-wrong array. */
 export function extractTeamComps(match: RiotMatch, puuid: string): ExtractedTeamComps | null {
   const participant = match.info.participants.find((p) => p.puuid === puuid);
   if (!participant) return null;
   const allies = match.info.participants.filter((p) => p.teamId === participant.teamId);
   const enemies = match.info.participants.filter((p) => p.teamId !== participant.teamId);
   if (allies.length !== 5 || enemies.length !== 5) return null;
+  const allyEntries = allies.map((p) => ({ championId: p.championId, role: roleFromTeamPosition(p.teamPosition) }));
+  const enemyEntries = enemies.map((p) => ({ championId: p.championId, role: roleFromTeamPosition(p.teamPosition) }));
+  if (!sideResolvesCleanly(allyEntries) || !sideResolvesCleanly(enemyEntries)) return null;
   return {
-    allyChampionIds: orderChampionIdsByRole(
-      allies.map((p) => ({ championId: p.championId, role: roleFromTeamPosition(p.teamPosition) }))
-    ),
-    enemyChampionIds: orderChampionIdsByRole(
-      enemies.map((p) => ({ championId: p.championId, role: roleFromTeamPosition(p.teamPosition) }))
-    ),
+    allyChampionIds: orderChampionIdsByRole(allyEntries),
+    enemyChampionIds: orderChampionIdsByRole(enemyEntries),
   };
 }
 
@@ -266,8 +291,11 @@ export interface ExtractedTeamPlayers {
  *  itself: extractTeamComps's narrower ExtractedTeamComps shape is still what
  *  scripts/backfill-team-comps.mjs's plain (non---players) mode writes, and
  *  callers that only need champion ids shouldn't have to thread the heavier
- *  shape through. Returns null unless BOTH sides have exactly 5 champions —
- *  same all-or-nothing contract as extractTeamComps. */
+ *  shape through. Returns null unless BOTH sides have exactly 5 champions
+ *  AND both sides role-resolve cleanly — same all-or-nothing contract as
+ *  extractTeamComps, including the P3(a) fix: a degraded side omits the
+ *  whole result rather than falling back to a source-ordered (role-position-
+ *  wrong) array — see extractTeamComps's doc comment for the full rationale. */
 export function extractTeamPlayers(
   match: RiotMatch,
   puuid: string,
@@ -278,9 +306,12 @@ export function extractTeamPlayers(
   const allies = match.info.participants.filter((p) => p.teamId === participant.teamId);
   const enemies = match.info.participants.filter((p) => p.teamId !== participant.teamId);
   if (allies.length !== 5 || enemies.length !== 5) return null;
+  const allyPlayers = allies.map((p) => participantToTeamCompPlayer(p, puuid, trackedProId));
+  const enemyPlayers = enemies.map((p) => participantToTeamCompPlayer(p, puuid, trackedProId));
+  if (!sideResolvesCleanly(allyPlayers) || !sideResolvesCleanly(enemyPlayers)) return null;
   return {
-    allyPlayers: orderByRole(allies.map((p) => participantToTeamCompPlayer(p, puuid, trackedProId))),
-    enemyPlayers: orderByRole(enemies.map((p) => participantToTeamCompPlayer(p, puuid, trackedProId))),
+    allyPlayers: orderByRole(allyPlayers),
+    enemyPlayers: orderByRole(enemyPlayers),
   };
 }
 

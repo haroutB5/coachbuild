@@ -31,10 +31,22 @@ export async function GET(req: NextRequest) {
 
   try {
     const stats = await getHeroStats(champId, laneParam);
-    return NextResponse.json(stats, {
+    const { winRatePct, gamesCount, degraded } = stats;
+    // P1 fix (2026-07-17 Fable review): getHeroStats degrades ANY upstream
+    // failure to the SAME {null, null} shape genuine no-data uses — this
+    // route used to CDN-cache both identically at s-maxage=21600, so a
+    // transient coachless blip pinned the empty win-rate banner (AND the
+    // 5-parallel most-played-lane sweep, which reads THIS route) for 6h per
+    // PoP. Never cache a degraded OR partial-null result — genuine nulls are
+    // cheap to recompute, so no-store costs nothing on the happy path and
+    // buys immediate self-healing on the unhappy one (CLAUDE.md gotcha (b)).
+    const isHealthy = !degraded && winRatePct !== null && gamesCount !== null;
+    const body = { winRatePct, gamesCount }; // wire shape stays exactly {winRatePct, gamesCount} — degraded never leaks to the client
+    return NextResponse.json(body, {
       headers: {
-        // Same cadence as /api/build — champ+lane WPA data only moves per patch.
-        "Cache-Control": "s-maxage=21600, stale-while-revalidate=86400",
+        "Cache-Control": isHealthy
+          ? "s-maxage=21600, stale-while-revalidate=86400" // same cadence as /api/build — champ+lane WPA data only moves per patch
+          : "no-store",
       },
     });
   } catch (err) {

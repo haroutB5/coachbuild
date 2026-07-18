@@ -68,6 +68,7 @@ describe("runProstageIngest", () => {
   it("applies staleness ordering when tournaments are resolved fresh (no override)", async () => {
     vi.mocked(resolveActiveTournaments).mockResolvedValue(["B", "A"]);
     vi.mocked(orderByStaleness).mockResolvedValue(["A", "B"]); // stalest-first reorder
+    mockSql.mockResolvedValueOnce(undefined); // ingest-attempt stamp (migration 0008)
     mockSql.mockResolvedValueOnce([]); // pro-name index
     vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([]);
 
@@ -77,6 +78,7 @@ describe("runProstageIngest", () => {
   });
 
   it("bypasses staleness ordering entirely when an explicit tournaments override is given", async () => {
+    mockSql.mockResolvedValueOnce(undefined); // ingest-attempt stamp
     mockSql.mockResolvedValueOnce([]);
     vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([]);
 
@@ -89,6 +91,7 @@ describe("runProstageIngest", () => {
   it("threads fastFailOnRatelimit to both the Tournaments lookup and the ScoreboardPlayers call", async () => {
     vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
     vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce(undefined); // ingest-attempt stamp
     mockSql.mockResolvedValueOnce([]);
     vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([]);
 
@@ -104,6 +107,7 @@ describe("runProstageIngest", () => {
   it("defaults fastFailOnRatelimit to false (script path keeps the full cooldown)", async () => {
     vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
     vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce(undefined); // ingest-attempt stamp
     mockSql.mockResolvedValueOnce([]);
     vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([]);
 
@@ -119,6 +123,7 @@ describe("runProstageIngest", () => {
   it("logs a warning when >50% of a tournament's extracted rows have unresolved role", async () => {
     vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
     vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce(undefined); // ingest-attempt stamp
     mockSql.mockResolvedValueOnce([]); // pro-name index; insert calls below are left unmocked (resolve undefined, caught per-row)
     vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([
       scoreboardRow({ GameId: "g1", Role: "Top" }), // resolves
@@ -141,6 +146,7 @@ describe("runProstageIngest", () => {
     // when an override is supplied.
     vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
     vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce(undefined); // ingest-attempt stamp
     mockSql.mockResolvedValueOnce([]); // pro-name index
     const queryFn = vi.fn().mockResolvedValue([scoreboardRow({ GameId: "g1", Role: "Top" })]);
 
@@ -160,14 +166,15 @@ describe("runProstageIngest", () => {
     // (~400 rows found live, see scripts/backfill-prostage-proid.mjs).
     vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
     vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
-    mockSql.mockResolvedValueOnce([{ id: "pro-zeka", name: "Zeka" }]); // pro-name index
+    mockSql.mockResolvedValueOnce(undefined); // [0] = ingest-attempt stamp
+    mockSql.mockResolvedValueOnce([{ id: "pro-zeka", name: "Zeka" }]); // [1] = pro-name index
     vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([
       scoreboardRow({ GameId: "g1", Link: "Zeka (Kim Geon-woo)", Role: "Mid" }),
     ] as never);
 
     await runProstageIngest({ cursor: 0 });
 
-    const insertCall = mockSql.mock.calls[1]; // [0] = pro-name index, [1] = the row INSERT
+    const insertCall = mockSql.mock.calls[2]; // [0] = stamp, [1] = pro-name index, [2] = the row INSERT
     const proIdArg = insertCall[insertCall.length - 1]; // pro_id is the LAST value bound in the INSERT
     expect(proIdArg).toBe("pro-zeka");
   });
@@ -177,6 +184,7 @@ describe("runProstageIngest", () => {
     vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
     // A pro literally named with the raw (undisambiguated) form should win
     // over a coincidental match on the cleaned form.
+    mockSql.mockResolvedValueOnce(undefined); // ingest-attempt stamp
     mockSql.mockResolvedValueOnce([
       { id: "pro-raw-exact", name: "Zeka (Kim Geon-woo)" },
       { id: "pro-cleaned", name: "Zeka" },
@@ -187,7 +195,7 @@ describe("runProstageIngest", () => {
 
     await runProstageIngest({ cursor: 0 });
 
-    const insertCall = mockSql.mock.calls[1];
+    const insertCall = mockSql.mock.calls[2]; // [0] = stamp, [1] = pro-name index, [2] = row INSERT
     const proIdArg = insertCall[insertCall.length - 1];
     expect(proIdArg).toBe("pro-raw-exact");
   });
@@ -195,6 +203,7 @@ describe("runProstageIngest", () => {
   it("paginate:false (default) makes exactly one queryFn call with no offset key", async () => {
     vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
     vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce(undefined); // ingest-attempt stamp
     mockSql.mockResolvedValueOnce([]);
     const queryFn = vi.fn().mockResolvedValue([scoreboardRow({ GameId: "g1", Role: "Top" })]);
 
@@ -212,6 +221,7 @@ describe("runProstageIngest", () => {
     // a 2-page tournament: page 1 full (500), page 2 short (180) ends it.
     vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
     vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce(undefined); // ingest-attempt stamp
     mockSql.mockResolvedValueOnce([]); // pro-name index
     const page1 = Array.from({ length: 500 }, (_, i) => scoreboardRow({ GameId: `g${i}` }));
     const page2 = Array.from({ length: 180 }, (_, i) => scoreboardRow({ GameId: `g${500 + i}` }));
@@ -228,6 +238,7 @@ describe("runProstageIngest", () => {
   it("paginate:true stops after a single page when it's already short (no wasted second call)", async () => {
     vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
     vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce(undefined); // ingest-attempt stamp
     mockSql.mockResolvedValueOnce([]);
     const queryFn = vi.fn().mockResolvedValue([scoreboardRow({ GameId: "g1", Role: "Top" })]);
 
@@ -240,6 +251,7 @@ describe("runProstageIngest", () => {
   it("paginate:true caps at MAX_PAGES (10) as a safety backstop against a pathological always-full response", async () => {
     vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
     vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce(undefined); // ingest-attempt stamp
     mockSql.mockResolvedValueOnce([]);
     const fullPage = Array.from({ length: 500 }, (_, i) => scoreboardRow({ GameId: `g${i}` }));
     const queryFn = vi.fn().mockResolvedValue(fullPage); // ALWAYS returns a full page
@@ -253,6 +265,7 @@ describe("runProstageIngest", () => {
   it("does NOT warn when unresolved role is at or below 50%", async () => {
     vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
     vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce(undefined); // ingest-attempt stamp
     mockSql.mockResolvedValueOnce([]);
     vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([
       scoreboardRow({ GameId: "g1", Role: "Top" }),
@@ -264,5 +277,40 @@ describe("runProstageIngest", () => {
     await runProstageIngest({ cursor: 0, onProgress: log });
 
     expect(log.mock.calls.some(([msg]) => msg.includes("unresolved role"))).toBe(false);
+  });
+
+  it("stamps coachbuild.prostage_ingest_attempts at the START of the pass, keyed on the overview_page, upserting on conflict", async () => {
+    // Regression for the P2 fix: this stamp — not prostage_matches.ingested_at
+    // — is what orderByStaleness now sorts on, so it must fire on EVERY
+    // attempt (not just ones that write new rows).
+    vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
+    vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce(undefined); // the stamp itself
+    mockSql.mockResolvedValueOnce([]); // pro-name index
+    vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([]);
+
+    await runProstageIngest({ cursor: 0 });
+
+    expect(mockSql.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const [strings, ...values] = mockSql.mock.calls[0];
+    const queryText = (strings as TemplateStringsArray).join("?");
+    expect(queryText).toContain("prostage_ingest_attempts");
+    expect(queryText).toContain("ON CONFLICT");
+    expect(values).toContain("A");
+  });
+
+  it("a stamp-write failure is recorded as an error but never blocks the ingest attempt itself", async () => {
+    vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
+    vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockRejectedValueOnce(new Error("stamp write failed")); // the stamp fails...
+    mockSql.mockResolvedValueOnce([]); // ...but pro-name index still runs
+    vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([
+      scoreboardRow({ GameId: "g1", Role: "Top" }),
+    ] as never);
+
+    const result = await runProstageIngest({ cursor: 0 });
+
+    expect(result.errors.some((e) => e.includes("failed to stamp ingest attempt"))).toBe(true);
+    expect(result.rowsSeen).toBe(1); // the ingest attempt itself still proceeded
   });
 });

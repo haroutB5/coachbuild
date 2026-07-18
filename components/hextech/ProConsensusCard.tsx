@@ -17,8 +17,12 @@ import { aggregateProConsensus, formatSharePct, type ProConsensusModel, type Run
 const LOW_SAMPLE_THRESHOLD = 3;
 // Fetched sample size for the aggregation — deliberately larger than PRO
 // BUILDS' own list limit (20): this card never renders individual rows, only
-// counts, so a bigger sample (backend caps at 100) sharpens the fractions
-// without any extra per-row render cost.
+// counts, so a bigger sample (route caps `limit` at 150 — see
+// app/api/pros/route.ts) sharpens the fractions without any extra per-row
+// render cost. 100 here, not 150, is this card's own deliberate choice
+// within that ceiling, not a claim about the backend's own cap (comment
+// fixed 2026-07-17 — previously said "backend caps at 100", which was wrong;
+// the route's cap was raised 100 -> 150 on 2026-07-13 for this same request).
 const AGGREGATION_LIMIT = 100;
 
 interface ProConsensusCardProps {

@@ -287,7 +287,27 @@ export async function buildRecommendations(
 
   const totalGames = keystoneData.reduce((s, e) => s + e.occurrence, 0);
   const bar = adoptionBar(totalGames);
-  const noiseFloor = Math.max(800, totalGames * 0.002);
+  // P3(b) fix (2026-07-17 Fable review): the noise floor is supposed to be a
+  // LOWER/looser threshold than the headline adoption bar (bar = max(500,
+  // total*0.05); see adoptionBar above) — but with the old flat component of
+  // 800, bar only exceeds 800 once total > 16,000 (0.05*16000 = 800). Below
+  // that (the vast majority of real champ+role combos — most sit well under
+  // 16k games), the "noise floor" was HIGHER than the bar it's meant to sit
+  // under, i.e. inverted: an item/rune the adoption bar already accepted as
+  // reliable could still fail the supposedly-looser noise floor. Decision
+  // (exactly this change, nothing else): drop the flat component 800 -> 400.
+  // 400 <= bar's own floor (500) always holds, and for total > 10,000 (where
+  // bar's 0.05 scaling term overtakes its 500 floor) 400 stays under bar's
+  // scaling term too — so noiseFloor <= bar across the ENTIRE small/mid
+  // sample regime this was broken in. Once total is large enough that
+  // noiseFloor's own 0.002 scaling term exceeds 400 (total > 200,000), that
+  // term was already correctly BELOW bar's 0.05 term (0.002 < 0.05) even
+  // before this fix — that large-sample regime is untouched. Ran the full
+  // suite after this change: no snapshot/recommendation test shifted — no
+  // test in this repo exercises buildRecommendations end-to-end against real
+  // coachless data (route.test.ts mocks the engine; recommend.test.ts tests
+  // pure ranking primitives with a LITERAL floor param, never this constant).
+  const noiseFloor = Math.max(400, totalGames * 0.002);
 
   // ── Shared parts (identical across every variant) ──────────────────────────
   const bestOffense = pickRecommended(shardsData.offense ?? [], bar);

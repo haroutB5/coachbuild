@@ -52,6 +52,19 @@ const LANE_ROLE: Record<LaneKey, RoleId> = {
 export interface HeroStats {
   winRatePct: number | null;
   gamesCount: number | null;
+  /** true ONLY when this result reflects a TRANSIENT UPSTREAM FAILURE
+   *  (network/5xx/timeout from coachless), never genuine no-data. Internal
+   *  signal for app/api/hero-stats/route.ts's Cache-Control decision —
+   *  CLAUDE.md gotcha (b) ("never CDN-cache an empty API response") applies
+   *  here just as much as to /api/pros: a degraded blip cached at
+   *  s-maxage=21600 would pin a broken win-rate banner for 6h per PoP. The
+   *  route strips this field before responding — it never reaches the wire
+   *  (winRatePct/gamesCount stay the only response keys, backward-compatible
+   *  with every existing consumer). Omitted (undefined) for a genuine-no-data
+   *  result, never `false` — callers should treat undefined and false the
+   *  same way (falsy), this is just to keep the common case's object literal
+   *  shorter. */
+  degraded?: boolean;
 }
 
 /** itemType 6 = starter (see coachless.ts's getGlobalItemStatistics doc). */
@@ -113,7 +126,10 @@ export async function getHeroStats(
   } catch (err) {
     // Upstream failure (network/5xx/timeout) — degrade to null, never throw;
     // this feeds a decorative hero banner, not a page-blocking data path.
+    // `degraded: true` is the signal the route needs to skip its CDN cache —
+    // a transient coachless blip must never be pinned at the edge for 6h
+    // (see this interface's doc comment / CLAUDE.md gotcha (b)).
     console.error(`[heroStats] getHeroStats(${championId}, ${lane}) failed:`, err);
-    return { winRatePct: null, gamesCount: null };
+    return { winRatePct: null, gamesCount: null, degraded: true };
   }
 }

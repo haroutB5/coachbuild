@@ -157,12 +157,11 @@ interface StalenessRow {
   last_ingested: string;
 }
 
-/** Reorders `pages` stalest-first, using coachbuild.prostage_matches as the
- *  source of truth for "last actually ingested" per tournament — mirrors the
- *  `last_fetched_at ASC NULLS FIRST` pattern lib/pro/ingestMatches.ts uses
- *  for pro_accounts. Never-ingested pages (no matching rows, or every attempt
- *  so far failed/ratelimited before a row was written) sort to 'epoch' and
- *  float to the front.
+/** Reorders `pages` stalest-first, using coachbuild.prostage_ingest_attempts
+ *  (migration 0008) as the source of truth for "last time a Cargo pass was
+ *  ATTEMPTED" per tournament — mirrors the `last_fetched_at ASC NULLS FIRST`
+ *  pattern lib/pro/ingestMatches.ts uses for pro_accounts. Never-attempted
+ *  pages (no matching row yet) sort to 'epoch' and float to the front.
  *
  *  Fixes: the cron hits /api/ingest/prostage with no cursor tracking (no
  *  external pinger walks nextCursor for this route the way one does for
@@ -172,14 +171,18 @@ interface StalenessRow {
  *  list would never get ingested. Staleness ordering makes cursor=0
  *  self-rotate across the whole list over successive cron runs instead.
  *
- *  Known gap (accepted, no migration this round per the fix brief): a
- *  tournament with genuinely zero real games (e.g. an unstarted bracket)
- *  can never accumulate a prostage_matches row, so it never advances past
- *  'epoch' and would keep winning cursor=0 indefinitely — starving the rest
- *  of the list exactly like the bug this fixes. A dedicated "last attempted"
- *  tracking column (separate from "last successfully wrote a row") would
- *  close this gap; flagged as a follow-up if it's observed in practice
- *  rather than built speculatively now. */
+ *  P2 fix (2026-07-17 Fable review): this used to proxy staleness off
+ *  `max(coachbuild.prostage_matches.ingested_at)` instead — which ONLY
+ *  advances when a pass actually WRITES a new row. A finished tournament
+ *  (nothing new to ingest — every row already exists, `ON CONFLICT DO
+ *  NOTHING` short-circuits every insert) or a ratelimited/errored Cargo call
+ *  never advances that stamp, so it stayed pinned at whatever its last real
+ *  ingest was — permanently "stalest," permanently winning cursor=0,
+ *  permanently starving every ongoing tournament behind it. lib/prostage/
+ *  ingest.ts now upserts coachbuild.prostage_ingest_attempts at the START of
+ *  every tournament pass (before the Cargo call even runs), so the stamp
+ *  advances on EVERY attempt regardless of outcome — closing the gap the
+ *  previous version of this function flagged as a known, unclosed risk. */
 export async function orderByStaleness(
   sql: NonNullable<ReturnType<typeof getSql>>,
   pages: string[]
@@ -187,10 +190,9 @@ export async function orderByStaleness(
   if (pages.length === 0) return pages;
   const rows = (await sql`
     SELECT ov.overview_page AS overview_page,
-           COALESCE(max(pm.ingested_at), 'epoch'::timestamptz) AS last_ingested
+           COALESCE(pia.attempted_at, 'epoch'::timestamptz) AS last_ingested
     FROM unnest(${pages}::text[]) AS ov(overview_page)
-    LEFT JOIN coachbuild.prostage_matches pm ON pm.overview_page = ov.overview_page
-    GROUP BY ov.overview_page
+    LEFT JOIN coachbuild.prostage_ingest_attempts pia ON pia.overview_page = ov.overview_page
     ORDER BY last_ingested ASC
   `) as unknown as StalenessRow[];
   return rows.map((r) => r.overview_page);

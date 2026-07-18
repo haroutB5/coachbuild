@@ -110,6 +110,32 @@ const sp = (id: number, wpa: number, occ: number) => ({
   averageCasts: 0,
 });
 
+// ── noise floor vs adoption bar invariant (P3(b) fix, 2026-07-17) ──────────
+// recommend.ts's real noiseFloor/bar aren't exported (computed inline inside
+// buildRecommendations), so this mirrors both formulas exactly — same
+// pattern this whole file already uses for adoptionBar/pickRecommended/etc.
+// The noise floor is meant to be a LOWER/looser threshold than the adoption
+// bar; before the fix, floor(800) exceeded bar for every total under 16,000
+// games (the vast majority of real champ+role combos) — this test directly
+// encodes the invariant that regression would have broken.
+
+describe("noiseFloor vs adoptionBar invariant", () => {
+  const bar = (total: number) => Math.max(500, total * 0.05);
+  const noiseFloor = (total: number) => Math.max(400, total * 0.002);
+
+  it("noiseFloor never exceeds the adoption bar, across the full sample-size range", () => {
+    for (const total of [0, 500, 2000, 8000, 10000, 16000, 50000, 200000, 1000000]) {
+      expect(noiseFloor(total)).toBeLessThanOrEqual(bar(total));
+    }
+  });
+
+  it("the OLD flat component (800) would have violated the invariant below 16,000 games — proves this is a real fix, not a no-op", () => {
+    const oldNoiseFloor = (total: number) => Math.max(800, total * 0.002);
+    expect(oldNoiseFloor(8000)).toBeGreaterThan(bar(8000)); // 800 > 500 — inverted
+    expect(oldNoiseFloor(15999)).toBeGreaterThan(bar(15999)); // 800 > 799.95 — inverted
+  });
+});
+
 describe("pickSpells", () => {
   it("returns the 2 distinct highest-WPA adopted spells", () => {
     const pool = [sp(4, 0.0, 50000), sp(6, 1.2, 20000), sp(14, 0.8, 1000)];

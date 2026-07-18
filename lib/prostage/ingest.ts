@@ -156,6 +156,22 @@ export async function runProstageIngest(opts: ProstageIngestOptions = {}): Promi
   result.tournament = overviewPage;
   result.nextCursor = cursor + 1 < tournaments.length ? cursor + 1 : null;
 
+  // Stamp the ATTEMPT before the Cargo call, unconditionally — this is what
+  // makes orderByStaleness's rotation self-heal even on a zero-new-rows pass
+  // (finished tournament, ratelimited/errored call). See migration 0008 +
+  // orderByStaleness's doc comment (lib/prostage/tournaments.ts) for the bug
+  // this closes. A stamp failure is logged but never blocks the actual
+  // ingest attempt below.
+  try {
+    await sql`
+      INSERT INTO coachbuild.prostage_ingest_attempts (overview_page, attempted_at)
+      VALUES (${overviewPage}, now())
+      ON CONFLICT (overview_page) DO UPDATE SET attempted_at = now()
+    `;
+  } catch (err) {
+    result.errors.push(`tournament ${overviewPage}: failed to stamp ingest attempt: ${(err as Error).message}`);
+  }
+
   try {
     const [maps, proByName, rows] = await Promise.all([
       getDdragonMaps(),

@@ -94,6 +94,18 @@ export interface TimelineResult {
   /** true if any details page failed after retries — the caller must treat the
    *  build as INCOMPLETE (do not persist as finished; re-attempt later). */
   hadFailures: boolean;
+  /** P3(e) fix (2026-07-17 Fable review): true when the walk hit
+   *  WALK_MAX_POINTS (500, ~83min) BEFORE covering [gameStart, endTs] —
+   *  i.e. a genuinely truncated build, not a safety margin that was never
+   *  approached. Previously this silently persisted `timeline_status='ok'`
+   *  with a cut-off build order and no signal anything was wrong. A caller
+   *  must treat `truncated` the SAME way it treats `hadFailures` (do not
+   *  persist as finished; a later pass can retry) — resolveGame.ts's
+   *  computeGameTimelines checks `hadFailures || truncated`. Kept as a
+   *  separate field rather than folded into hadFailures itself so a test
+   *  (or a future caller) can tell "network/feed failures" apart from
+   *  "walk budget exhausted" if that distinction ever matters. */
+  truncated: boolean;
 }
 
 // ── small helpers ────────────────────────────────────────────────────────────
@@ -297,17 +309,24 @@ export async function buildTimeline(
   const startMs = new Date(gameStartTs).getTime();
   const endMs = new Date(endTs).getTime();
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
-    return { seq: state.seq, hadFailures: false };
+    return { seq: state.seq, hadFailures: false, truncated: false };
   }
 
-  // Enumerate the 10s-aligned startingTimes to fetch.
+  // Enumerate the 10s-aligned startingTimes to fetch. `truncated` is set when
+  // the maxPoints cap is hit BEFORE the range [gameStart, endTs+slack] is
+  // fully covered — i.e. there's a real remaining ms range beyond what
+  // `points` ended up holding, not just "the loop happened to stop exactly
+  // at the cap on the last needed point."
+  const alignedStartMs = Math.floor(startMs / WALK_STRIDE_MS) * WALK_STRIDE_MS;
   const points: number[] = [];
-  for (
-    let ms = Math.floor(startMs / WALK_STRIDE_MS) * WALK_STRIDE_MS;
-    ms <= endMs + END_SLACK_MS && points.length < maxPoints;
-    ms += WALK_STRIDE_MS
-  ) {
+  let truncated = false;
+  for (let ms = alignedStartMs; points.length < maxPoints; ms += WALK_STRIDE_MS) {
+    if (ms > endMs + END_SLACK_MS) break;
     points.push(ms);
+  }
+  if (points.length === maxPoints) {
+    const nextMs = alignedStartMs + points.length * WALK_STRIDE_MS;
+    if (nextMs <= endMs + END_SLACK_MS) truncated = true;
   }
 
   // Fetch ONE page, retrying only a FAILURE (null); a 204 empty page is accepted
@@ -351,5 +370,5 @@ export async function buildTimeline(
   );
   for (const f of sorted) processTimelineFrame(f, state);
 
-  return { seq: state.seq, hadFailures };
+  return { seq: state.seq, hadFailures, truncated };
 }

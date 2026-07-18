@@ -581,6 +581,72 @@ describe("aggregateProConsensus — tree conditioning (v0.29.0)", () => {
     expect(model.secondaryTree).toBeNull();
     expect(model.secondaryPicks.entries).toEqual([]);
   });
+
+  // ── v0.29.1 (Fable review 2026-07-17, P3): fallback-tree/keystone guard ──
+  // Exact degraded shape from the bug report: every game carrying the modal
+  // keystone has primaryTree:0 (Leaguepedia resolved KeystoneRune but not
+  // PrimaryTree), so resolvePrimaryTree falls back to the sample-wide modal
+  // tree — which here belongs entirely to a DIFFERENT keystone's games.
+  // Without the guard, the keystone tile would show the ORIGINAL modal
+  // keystone (Deathfire Touch) above a Precision-tree page (Press the
+  // Attack's minors/secondary) it never ran with — the "impossible page".
+
+  it("drops the keystone to the fallback tree's own modal keystone when the fallback tree's games don't run the original modal keystone (case a)", () => {
+    const games = [
+      // Modal keystone (5 games) — every one has an UNRESOLVED primaryTree.
+      ...Array.from({ length: 5 }, () => game({ runes: { ...NO_RUNES, keystone: DEATHFIRE_TOUCH } })),
+      // A different keystone's games (3) — these are the ONLY games with a
+      // resolved primaryTree, so resolvePrimaryTree's fallback lands here.
+      ...Array.from({ length: 3 }, () =>
+        game({
+          runes: {
+            primaryTree: PRECISION,
+            keystone: PRESS_THE_ATTACK,
+            primary: [PRESENCE_OF_MIND, TRIUMPH, COUP_DE_GRACE],
+            secondaryTree: 0,
+            secondary: [],
+            shards: [],
+          },
+        })
+      ),
+    ];
+    const model = aggregateProConsensus(games, itemMeta());
+
+    // Without the guard this would be { keystoneId: DEATHFIRE_TOUCH, count: 5,
+    // share: 5/8 } paired with the Precision page below — an impossible page.
+    expect(model.keystone).toEqual({ keystoneId: PRESS_THE_ATTACK, count: 3, share: 1 });
+    expect(model.runesSampleSize).toBe(3); // scoped to the page it actually describes, not gamesTotal's 8
+
+    expect(model.primaryTree).toBe(PRECISION);
+    expect(model.primaryTreeSampleSize).toBe(3);
+    const minorIds = model.primaryMinors.entries.map((e) => e.runeId).sort((a, b) => a - b);
+    expect(minorIds).toEqual([PRESENCE_OF_MIND, TRIUMPH, COUP_DE_GRACE].sort((a, b) => a - b));
+    // Deathfire Touch's tree never leaks in — there IS no Deathfire-tree data
+    // in this fixture, so this is really just confirming the page is 100%
+    // Precision, consistent with the (now-corrected) keystone tile.
+  });
+
+  it("degrades to tree-less (keeps the honest global keystone, drops the page) when the fallback tree's games have no resolved keystone either (case b)", () => {
+    const games = [
+      // Modal keystone (5 games) — every one has an UNRESOLVED primaryTree.
+      ...Array.from({ length: 5 }, () => game({ runes: { ...NO_RUNES, keystone: DEATHFIRE_TOUCH } })),
+      // The only games with a resolved primaryTree — but THEIR keystone is
+      // also unresolved, so there's nothing honest to pair the page with.
+      ...Array.from({ length: 3 }, () => game({ runes: { ...NO_RUNES, primaryTree: PRECISION } })),
+    ];
+    const model = aggregateProConsensus(games, itemMeta());
+
+    // Keystone tile keeps the honest global fraction (unchanged, no page paired with it).
+    expect(model.keystone).toEqual({ keystoneId: DEATHFIRE_TOUCH, count: 5, share: 1 });
+    expect(model.runesSampleSize).toBe(5);
+
+    // No coherent page to show — same shape as the "no tree data at all" degraded pattern above.
+    expect(model.primaryTree).toBeNull();
+    expect(model.primaryTreeSampleSize).toBe(0);
+    expect(model.primaryMinors.entries).toEqual([]);
+    expect(model.secondaryTree).toBeNull();
+    expect(model.secondaryPicks.entries).toEqual([]);
+  });
 });
 
 describe("resolvePrimaryTree", () => {

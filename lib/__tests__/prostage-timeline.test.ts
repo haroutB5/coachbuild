@@ -88,6 +88,7 @@ describe("buildTimeline", () => {
       retryBackoffMs: 0,
     });
     expect(res.hadFailures).toBe(false);
+    expect(res.truncated).toBe(false);
     expect(res.seq[1]).toEqual([
       { id: 1001, atSec: 5 },
       { id: 1002, atSec: 15 },
@@ -102,6 +103,49 @@ describe("buildTimeline", () => {
       retryBackoffMs: 0,
     });
     expect(res.hadFailures).toBe(true);
+    expect(res.truncated).toBe(false);
+  });
+
+  // ── P3(e) fix (2026-07-17): WALK_MAX_POINTS cap-hit must be flagged, not
+  // silently persisted as a complete build ─────────────────────────────────
+
+  it("sets truncated:true when maxPoints is hit BEFORE covering the full [gameStart, endTs] range", async () => {
+    // 10 points needed to cover start..end at a 10s stride, but maxPoints
+    // caps the walk at 3 — the walk stops well short of endTs.
+    const longEnd = "2026-01-01T00:01:30Z"; // 90s after start = 10 points at a 10s stride
+    const res = await buildTimeline("g", start, longEnd, {
+      fetchDetails: async () => ({ frames: [] }),
+      concurrency: 4,
+      retryAttempts: 0,
+      retryBackoffMs: 0,
+      maxPoints: 3,
+    });
+    expect(res.truncated).toBe(true);
+    expect(res.hadFailures).toBe(false); // truncation is a distinct signal from a fetch failure
+  });
+
+  it("does NOT set truncated when maxPoints happens to equal exactly the number of points needed (cap not actually hit short)", async () => {
+    // start=0s, end=20s, END_SLACK_MS=15s -> full coverage needs points at
+    // 0s/10s/20s/30s (30s <= 20s+15s slack) = exactly 4 points at a 10s
+    // stride. maxPoints=4 covers the WHOLE range with nothing left over.
+    const res = await buildTimeline("g", start, end, {
+      fetchDetails: async () => ({ frames: [] }),
+      concurrency: 4,
+      retryAttempts: 0,
+      retryBackoffMs: 0,
+      maxPoints: 4,
+    });
+    expect(res.truncated).toBe(false);
+  });
+
+  it("truncated stays false under the default maxPoints (500) for a normal-length game", async () => {
+    const res = await buildTimeline("g", start, end, {
+      fetchDetails: async () => ({ frames: [] }),
+      concurrency: 4,
+      retryAttempts: 0,
+      retryBackoffMs: 0,
+    });
+    expect(res.truncated).toBe(false);
   });
 });
 
@@ -250,6 +294,7 @@ describe("mapTimelinesToPlayers", () => {
   it("maps each participant's sequence to a player_link by champion_id, shaped as ProGamePurchase", () => {
     const timeline = {
       hadFailures: false,
+      truncated: false,
       seq: {
         1: [{ id: 3047, atSec: 120 }],
         6: [{ id: 1101, atSec: 60 }, { id: 3340, atSec: 61 }],
@@ -270,7 +315,7 @@ describe("mapTimelinesToPlayers", () => {
         participantMetadata: [{ participantId: 6, summonerName: "x", championId: "Cassiopeia", role: "mid" }],
       },
     };
-    const byPlayer = mapTimelinesToPlayers({ hadFailures: false, seq: { 6: [{ id: 1, atSec: 1 }] } }, meta2, [{ player_link: "z", team: "T1", champion_id: 999 }], champMap);
+    const byPlayer = mapTimelinesToPlayers({ hadFailures: false, truncated: false, seq: { 6: [{ id: 1, atSec: 1 }] } }, meta2, [{ player_link: "z", team: "T1", champion_id: 999 }], champMap);
     expect(byPlayer.size).toBe(0);
   });
 });
@@ -361,6 +406,43 @@ describe("resolveEsportsGameId", () => {
     );
     expect(r).toMatchObject({ ok: false, transient: false });
   });
+
+  it("P3(e) fix: returns TRANSIENT (not terminal unavailable) when schedule paging hits MAX_SCHEDULE_PAGES before naturally covering the target date window", async () => {
+    // A busy league whose schedule NEVER signals "no more pages" and whose
+    // events never age comfortably past the target (so the natural-stop
+    // slack condition never trips either) — the walk must hit
+    // MAX_SCHEDULE_PAGES itself, at which point we genuinely don't know
+    // whether a match exists further back. That's a retry-worthy condition,
+    // not proof the game doesn't exist.
+    const alwaysMorePages = {
+      ...baseDeps,
+      getScheduleForLeague: async () => ({
+        events: [
+          {
+            startTime: "2026-07-08T08:00:00Z", // near the target — never trips PAGE_PAST_TARGET_SLACK_MS
+            type: "match",
+            state: "completed",
+            match: { id: "NOMATCH", teams: [{ name: "Unrelated A", code: "UA" }, { name: "Unrelated B", code: "UB" }] },
+          },
+        ],
+        olderToken: "more", // always more pages -> never trips the "no more pages" natural stop
+      }),
+    };
+    const r = await resolveEsportsGameId(
+      { overviewPage: "2026 Mid-Season Invitational", teams: ["T1", "G2 Esports"], gameDatetime: "2026-07-08T05:52:00Z", gameNumber: 1 },
+      alwaysMorePages
+    );
+    expect(r).toMatchObject({ ok: false, transient: true });
+    if (!r.ok) expect(r.reason).toContain("MAX_SCHEDULE_PAGES");
+  });
+
+  it("still returns terminal unavailable (transient:false) when paging ends NATURALLY (no older pages) with zero matches — the MAX_SCHEDULE_PAGES fix must not weaken this case", async () => {
+    const r = await resolveEsportsGameId(
+      { overviewPage: "2026 Mid-Season Invitational", teams: ["Gen.G", "HLE"], gameDatetime: "2026-07-08T05:52:00Z", gameNumber: 1 },
+      baseDeps // olderToken: null -> natural stop after page 0
+    );
+    expect(r).toMatchObject({ ok: false, transient: false });
+  });
 });
 
 // ── computeGameTimelines (orchestrator, fully mocked) ────────────────────────
@@ -384,7 +466,7 @@ describe("computeGameTimelines", () => {
     getEventDetails: async () => ({ teams: [], games: [{ number: 1, id: "ESP1", state: "completed" }] }),
     fetchOpeningWindow: async () => ({ ok: true as const, metadata: meta, gameStartTs: "2026-07-08T05:52:45Z" }),
     fetchLatestFrameTs: async () => "2026-07-08T06:20:00Z",
-    buildTimeline: async () => ({ hadFailures: false, seq: { 1: [{ id: 3047, atSec: 100 }], 8: [{ id: 1056, atSec: 40 }] } }),
+    buildTimeline: async () => ({ hadFailures: false, truncated: false, seq: { 1: [{ id: 3047, atSec: 100 }], 8: [{ id: 1056, atSec: 40 }] } }),
     getChampionKeyByInternalId: async () => new Map<string, number>([["Renekton", 58], ["Cassiopeia", 69]]),
   };
 
@@ -409,7 +491,20 @@ describe("computeGameTimelines", () => {
       "2026-07-08T05:52:00Z",
       "2026 Mid-Season Invitational",
       dbRows,
-      { ...deps, buildTimeline: async () => ({ hadFailures: true, seq: {} }) }
+      { ...deps, buildTimeline: async () => ({ hadFailures: true, truncated: false, seq: {} }) }
+    );
+    expect(r.status).toBe("transient");
+  });
+
+  it("returns transient (never persists) when the walk is TRUNCATED by the maxPoints cap, even with no fetch failures", async () => {
+    // P3(e) fix (2026-07-17): a truncated build is just as incomplete as a
+    // failed one — must not be silently persisted as 'ok'.
+    const r = await computeGameTimelines(
+      "2026 Mid-Season Invitational_Bracket Round 2_4_1",
+      "2026-07-08T05:52:00Z",
+      "2026 Mid-Season Invitational",
+      dbRows,
+      { ...deps, buildTimeline: async () => ({ hadFailures: false, truncated: true, seq: {} }) }
     );
     expect(r.status).toBe("transient");
   });

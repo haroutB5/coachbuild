@@ -2,7 +2,26 @@
 
 All notable changes to CoachBuild are documented here.
 
-## [0.29.1] — 2026-07-14
+## [0.30.0] — 2026-07-18
+Full adversarial codebase review (Fable, cold-start) at v0.29.1: no P0, 1 P1, 2 P2, P3 batch — all implemented, re-verified by the same reviewer (one new seam defect found in re-verify, patched same release).
+
+### Fixed
+- **P1: `/api/hero-stats` no longer CDN-caches degraded results.** A transient upstream (coachless) failure returned `{winRatePct: null, gamesCount: null}` with a 6h edge cache — pinning a broken win-rate banner and most-played-lane landing per PoP (the v0.15.1 cached-empty incident class). Degraded and no-data results now go out `no-store`; healthy results keep the cache.
+- **P2: prostage cron tournament rotation no longer pins dead tournaments.** Staleness was proxied by `max(ingested_at)`, which never advances on a zero-new-rows pass — a finished tournament would win the rotation every day forever, starving ongoing ones. New `prostage_ingest_attempts` table (migration 0008) stamps every attempt; rotation orders by last attempt.
+- **P2: match-ingest cursor walk no longer skips half the backlog.** OFFSET pagination over an ORDER BY that mutates mid-walk (processing bumps `last_fetched_at`) skipped ~batch accounts per step for external pingers. Replaced with a stable walk-start-timestamp predicate; the daily-cron path is unchanged. Re-verify found the rewrite could loop forever on a zero-progress page (e.g. suspended Riot key → all 403s); errored and unmapped-region accounts now stamp `last_fetched_at` so the walk always terminates, and a future cursor is clamped to now.
+- Transient Riot blips can no longer stick `active=false` on a healthy pro account (definitive 4xx only).
+- Ultra-long game timelines that hit the 500-frame walk cap, and games beyond the 10-page schedule search, are now marked transient (retryable) instead of being persisted as complete/unavailable.
+- Team comps are omitted for sides whose role ordering degraded to source order (soloq producer) — the "vs" laner shown can no longer be silently wrong for those rows.
+- Pro-consensus: a keystone whose games all lack a resolved rune tree can no longer render above a different keystone's tree (falls back to a consistent tree+keystone pair or a tree-less page).
+- Prostage icons no longer resolve against a frozen 16.11.1 CDN folder — the live patch version is derived from the champion icon map, hardcoded version only as last resort.
+- Back/forward history entries no longer capture a stale tab/source when a champion's lane correction lands after a mid-flight filter change.
+
+### Changed
+- Recommendation engine: alternatives' noise floor lowered 800→400 games so it is always below the headline adoption bar (was inverted for sub-16k-game champ+role combos; sparse combos may show different alternates — intended).
+- Ingest auth uses constant-time comparison; prostage cron logs and returns an error count (diagnosing why the scheduled run has never landed data).
+
+### Removed
+- Orphan public `/api/lane-defaults` route (zero consumers; its lib remains).
 ### Fixed
 - **Durable pro-account match ingest: fixed the root cause of accounts never getting fetched** (audit 2026-07-13 found 1,312/1,445 active `pro_accounts` permanently stuck at `last_fetched_at IS NULL`, incl. all 6 of pro player Nemesis's EUW accounts, added 2026-07-09 — his tracked gameCount was 0). `lib/pro/ingestMatches.ts`'s account-selection query ordered by `last_fetched_at ASC NULLS FIRST` with NO tiebreaker — Postgres gives no ordering guarantee among equal (all-NULL) sort keys, so an `OFFSET`/`LIMIT` window over a 1,312-row NULL cohort could return an arbitrary subset per invocation with no bounded-time guarantee every account is ever reached. Added `created_at ASC` as a deterministic tiebreaker — oldest-registered never-fetched account goes first, and a fresh fetch pushes an account to `now()` (far behind the remaining NULLs), so the queue is now a strict FIFO that provably drains.
 - **Raised the daily cron's effective batch from 5 to 20** (`app/api/ingest/matches/route.ts`'s un-parameterized default — the Hobby-plan cron hits the route with no query string, so this default IS the cron's daily throughput). Worked through the 60s `maxDuration` budget: a never-fetched account can cost up to `1 + 20*2 = 41` paced Riot calls (`getMatchIdsByPuuid` + `getMatch`/`getMatchTimeline` per new match, 1.3s pacer floor) ≈ 53s — nearly the whole budget for ONE account, so neither the new batch of 20 nor the old default of 5 is provably safe against an all-worst-case batch. Raised anyway: ingest is idempotent/resumable at the match level (`ON CONFLICT DO NOTHING` + an `existing`-match filter before fetching), so a mid-batch timeout only delays that account's `last_fetched_at` bump by a day, never loses data — batch=20 maximizes drain rate for the common (incremental, few-new-match) case while degrading gracefully on the worst case. Full math in the route's header comment.

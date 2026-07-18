@@ -7,13 +7,22 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// Chunked for serverless timeouts: ?cursor=<offset>&batch=<n> processes n
-// accounts per invocation (default/cron-invoked: 20, the route's own cap) and
-// returns the next cursor to call with. A Vercel Hobby-plan cron can only fire
-// once/day (see vercel.json) with no query params, so this default IS the
-// cron's effective daily batch — finer cadence for draining the full account
-// list comes from an external pinger looping this endpoint with the returned
-// cursor until it's null.
+// Chunked for serverless timeouts: ?cursor=<ISO timestamp>&batch=<n> processes
+// n accounts per invocation (default/cron-invoked: 20, the route's own cap)
+// and returns the next cursor to call with. A Vercel Hobby-plan cron can only
+// fire once/day (see vercel.json) with no query params, so this default IS
+// the cron's effective daily batch — finer cadence for draining the full
+// account list comes from an external pinger looping this endpoint with the
+// returned cursor until it's null.
+//
+// CURSOR CONTRACT (P2 fix, 2026-07-17 Fable review): `cursor` is a WALK-START
+// ISO TIMESTAMP now, not a numeric offset — lib/pro/ingestMatches.ts's header
+// comment has the full rationale (the old OFFSET walk skipped ~`batch`
+// accounts per page once a page's own writes reordered the underlying
+// `ORDER BY last_fetched_at` out from under it). A request with NO `cursor`
+// param (the cron's daily invocation) mints a fresh walkStart internally and
+// behaves exactly like the old cursor=0 call did for a single un-pinged
+// invocation — this route's contract is otherwise unchanged.
 //
 // 60s budget math (audit 2026-07-13): each account costs 1 paced Riot call
 // (getMatchIdsByPuuid) plus 2 paced calls per NEW match (getMatch +
@@ -46,14 +55,16 @@ export async function GET(req: NextRequest) {
   const cursorParam = searchParams.get("cursor");
   const batchParam = searchParams.get("batch");
 
-  if ((cursorParam && !/^\d+$/.test(cursorParam)) || (batchParam && !/^\d+$/.test(batchParam))) {
+  if (
+    (cursorParam && Number.isNaN(Date.parse(cursorParam))) ||
+    (batchParam && !/^\d+$/.test(batchParam))
+  ) {
     return NextResponse.json({ error: "Invalid cursor or batch param" }, { status: 400 });
   }
-  const cursor = cursorParam ? parseInt(cursorParam, 10) : 0;
   const batch = batchParam ? Math.min(parseInt(batchParam, 10), 20) : 20;
 
   try {
-    const result = await runMatchIngest({ cursor, batch });
+    const result = await runMatchIngest({ cursor: cursorParam ?? undefined, batch });
     return NextResponse.json(result);
   } catch (err) {
     if (err instanceof DbUnavailableError) {
