@@ -2,6 +2,20 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.31.0] — 2026-07-18
+### Added
+- **Optimized item order**: the core build's item sequence re-derived with each pick conditioned on owning the previous one (the coachless API supports 2 priors — verified live), with an adoption-relative floor so thin conditional tails can't surface as advice. Shown under the core path when it differs; a quiet confirmation note when identical.
+- **Rank bracket selector**: filter builds by real league tiers (Platinum+ through Challenger; default remains the legacy high-elo blend, byte-identical requests). Persisted per device.
+- **Patch Movers page**: biggest headline keystone/item WPA swings between the current and previous patch, per lane, compared daily.
+- **Update toast**: new deploys offer "Update ready — Refresh" instead of applying silently on next navigation.
+
+### Not shipped (honest finding)
+- Matchup-conditioned builds: the upstream API rejects matchup parameters (verified 403 across endpoints). The engine degrades gracefully and will auto-activate if support ever appears; no UI is shown.
+
+### Fixed (pre-ship audit)
+- Patch-movers route gained `maxDuration = 60` (its cold path exceeded the platform default — the first daily visit would have 500'd).
+- First-time visitors no longer get a spontaneous reload from the new SW lifecycle (reload now only fires when the user tapped Refresh).
+
 ## [0.30.0] — 2026-07-18
 Full adversarial codebase review (Fable, cold-start) at v0.29.1: no P0, 1 P1, 2 P2, P3 batch — all implemented, re-verified by the same reviewer (one new seam defect found in re-verify, patched same release).
 

@@ -50,6 +50,12 @@ export interface Pick {
   winrate: number | null; // winrateObserved (%) when available
   occurrence: number; // sample size / confidence signal
   lowSample?: boolean; // true when below the confidence guard threshold
+  /** Feature 1 (matchup): present ONLY on slots that participate in matchup
+   *  conditioning when an `enemyChampionId` was requested. `true` = this pick
+   *  came from matchup-conditioned data; `false` = matchup data was missing /
+   *  below threshold for this slot and it fell back to the unconditioned pick.
+   *  Undefined when no matchup was requested. */
+  matchupConditioned?: boolean;
 }
 
 export interface ShardSet {
@@ -82,6 +88,15 @@ export interface ItemsBlock {
   fourthPlus: Pick[]; // 2-3 items
   /** Ranked alternatives per slot key: "starter"|"boots"|"first"|... (v0.2). */
   alts?: Record<string, Pick[]>;
+  /** Feature 2 (sequential item optimizer): a greedy WPA-optimal core-item
+   *  chain — each pick after the first is conditioned on OWNING the previous
+   *  picks (coachless `firstLegendaryId`/`secondLegendaryId`). Max length 3
+   *  (the API conditions on at most 2 prior legendaries — `thirdLegendaryId`
+   *  is verified to be a no-op). Each Pick's `occurrence`/`wpa` are the
+   *  CONDITIONAL sample size + WPA at that depth. Truncated (shorter, or
+   *  omitted) when conditioned samples collapse below the guard threshold —
+   *  the UI renders exactly what exists. */
+  optimizedPath?: Pick[];
 }
 
 export interface BuildResponse {
@@ -99,6 +114,21 @@ export interface BuildResponse {
   rank?: number; // 1 = top recommendation
   label?: string; // e.g. "Top pick", "Alternative"
   subtitle?: string; // e.g. "Precision secondary"
+  /** Feature 3 (rank brackets): the resolved rank-bracket id this build was
+   *  computed for (e.g. "all", "challenger"). Absent → historical default
+   *  ("all" / High Elo). `tierLabel` mirrors the bracket's display label. */
+  rankBracket?: string;
+  /** Feature 1 (matchup): present ONLY when an `enemyChampionId` was requested.
+   *  `supported: false` means coachless returned no usable matchup-conditioned
+   *  data (today it ALWAYS 403s → always false) and the build fell back to the
+   *  standard unconditioned recommendation; the UI should show a "matchup data
+   *  unavailable, showing standard build" note. `gamesCount` is the conditioned
+   *  sample total (0 when unsupported). */
+  matchup?: {
+    enemyChampionId: number;
+    gamesCount: number;
+    supported: boolean;
+  };
 }
 
 /** Top-3 recommended setups for a champion + role. */

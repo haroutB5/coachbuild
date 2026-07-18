@@ -163,15 +163,27 @@ export default function Sidebar({
           >
             Pro players
           </Link>
+          {/* Feature 4 (patch movers) — the Hextech shell's own cross-page
+              nav is this quiet footer link, not TabNav (that only renders on
+              /history) — mirrors the "Pro players" link above so /movers
+              stays reachable from the main build page. */}
+          <Link
+            href="/movers"
+            className="inline-block text-[10.5px] text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
+          >
+            Patch movers
+          </Link>
         </div>
       )}
 
       {/* Mobile/collapsed: the desktop footer's "Pro players" link has no
           other home in the horizontal top-bar layout — /history must stay
           reachable below the 1024px breakpoint too, just folded into this
-          one muted line instead of a multi-line footer block. */}
+          one muted line instead of a multi-line footer block. flex-wrap so
+          adding the "Patch movers" link (Feature 4) can't clip at narrow
+          widths the way a rigid single-line row would. */}
       {collapsed && (
-        <div className="mt-2.5 flex items-center gap-2 text-[10.5px] text-mut">
+        <div className="mt-2.5 flex items-center gap-2 flex-wrap text-[10.5px] text-mut">
           <span className="tabular-nums">Patch {patch ?? "—"}</span>
           <span aria-hidden="true">&middot;</span>
           <Link
@@ -179,6 +191,13 @@ export default function Sidebar({
             className="text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
           >
             Pro players
+          </Link>
+          <span aria-hidden="true">&middot;</span>
+          <Link
+            href="/movers"
+            className="text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
+          >
+            Patch movers
           </Link>
         </div>
       )}

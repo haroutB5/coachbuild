@@ -25,20 +25,40 @@ export interface CommonFilters {
   role: RoleId;
 }
 
+/**
+ * Cross-cutting filter overrides layered onto the default commonFilters.
+ *  - `leagueTiers`  — rank-bracket tier set (Feature 3). Omitted → HIGH_ELO_TIERS
+ *     (the app's historical default; preserves every existing request byte-for-byte
+ *     and therefore the Next fetch-cache keys). Verified live: tiers 3-8 populated,
+ *     0-2 / 9-10 empty (see HANDOFF probe evidence).
+ *  - `matchupChampionIds` — lane-opponent conditioning (Feature 1). Omitted/null →
+ *     unconditioned. VERIFIED LIVE: any non-empty value currently 403s on EVERY
+ *     coachless endpoint (matchup conditioning is not exposed on the public API),
+ *     so callers must treat a matchup request as best-effort and degrade — see
+ *     recommend.ts's probe-gated matchup path.
+ */
+export interface FilterOpts {
+  matchupChampionIds?: number[] | null;
+  leagueTiers?: number[];
+}
+
 function buildFilters(
   champId: number,
   role: RoleId,
-  patch: Patch
+  patch: Patch,
+  opts: FilterOpts = {}
 ): CommonFilters {
   return {
     patch,
     championIds: [champId],
-    matchupChampionIds: null,
-    leagueTiers: HIGH_ELO_TIERS,
+    matchupChampionIds: opts.matchupChampionIds ?? null,
+    leagueTiers: opts.leagueTiers ?? HIGH_ELO_TIERS,
     regions: null,
     role,
   };
 }
+
+export { HIGH_ELO_TIERS };
 
 // ── Low-level fetch ──────────────────────────────────────────────────────────
 
@@ -111,11 +131,12 @@ export function getKeystoneData(
   champId: number,
   role: RoleId,
   patch: Patch,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  opts?: FilterOpts
 ): Promise<RuneEntry[]> {
   return post<RuneEntry[]>(
     "Rune/GetKeystoneData",
-    { commonFilters: buildFilters(champId, role, patch) },
+    { commonFilters: buildFilters(champId, role, patch, opts) },
     signal
   );
 }
@@ -130,13 +151,14 @@ export function getRunesForKeystoneAndTree(
   patch: Patch,
   mainTree: number,
   treeToLoad: number,
-  keystone: number | null = null
+  keystone: number | null = null,
+  opts?: FilterOpts
 ): Promise<RuneRowsResponse> {
   return post<RuneRowsResponse>("Rune/GetRunesForKeystoneAndTree", {
     keystone,
     mainTree,
     treeToLoad,
-    commonFilters: buildFilters(champId, role, patch),
+    commonFilters: buildFilters(champId, role, patch, opts),
   });
 }
 
@@ -145,11 +167,12 @@ export function getShardsForKeystoneAndTree(
   champId: number,
   role: RoleId,
   patch: Patch,
-  keystone: number | null = null
+  keystone: number | null = null,
+  opts?: FilterOpts
 ): Promise<ShardsResponse> {
   return post<ShardsResponse>("Rune/GetShardsForKeystoneAndTree", {
     keystone,
-    commonFilters: buildFilters(champId, role, patch),
+    commonFilters: buildFilters(champId, role, patch, opts),
   });
 }
 
@@ -164,7 +187,8 @@ export function getGlobalItemStatistics(
   patch: Patch,
   itemSlots: number[] | null,
   itemType: number,
-  extras: Record<string, unknown> = {}
+  extras: Record<string, unknown> = {},
+  opts?: FilterOpts
 ): Promise<ItemEntry[]> {
   return post<ItemEntry[]>("ChampionWinprob/GetGlobalItemStatistics", {
     itemSlots,
@@ -174,8 +198,12 @@ export function getGlobalItemStatistics(
     firstPurchaseId: null,
     firstLegendaryId: null,
     secondLegendaryId: null,
+    // NOTE: item-CONDITIONING (Feature 2) rides `extras`: firstLegendaryId /
+    // secondLegendaryId. VERIFIED LIVE they genuinely subset the pool and shift
+    // WPA ordering. `thirdLegendaryId` is IGNORED by the API (max 2 priors) —
+    // do not add it expecting effect (see HANDOFF probe evidence).
     ...extras,
-    commonFilters: buildFilters(champId, role, patch),
+    commonFilters: buildFilters(champId, role, patch, opts),
   });
 }
 
@@ -183,10 +211,11 @@ export function getGlobalItemStatistics(
 export function getGlobalSummonerSpellStatistics(
   champId: number,
   role: RoleId,
-  patch: Patch
+  patch: Patch,
+  opts?: FilterOpts
 ): Promise<SpellEntry[]> {
   return post<SpellEntry[]>("ChampionWinprob/GetGlobalSummonerSpellStatistics", {
     pairedSpell: null,
-    commonFilters: buildFilters(champId, role, patch),
+    commonFilters: buildFilters(champId, role, patch, opts),
   });
 }

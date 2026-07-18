@@ -17,10 +17,31 @@ const ICON_ORIGIN = "https://cdn.coachless.gg";
 const ICON_PATH_PREFIX = "/static-files/";
 
 self.addEventListener("install", (event) => {
-  self.skipWaiting();
+  // v0.31.0 (SW update toast, Feature 4): this used to call self.skipWaiting()
+  // unconditionally here, which meant a new SW version activated (and started
+  // serving fetches) silently on every deploy — there was no "waiting" phase
+  // for the client to detect and prompt on. Removed so an UPDATE (a new SW
+  // installing while one is already active for this scope) follows the
+  // standard lifecycle instead: installing -> installed -> WAITING, parked
+  // until ServiceWorkerRegister.tsx explicitly posts "SKIP_WAITING" (only
+  // once the user taps the toast — see the message listener below). A
+  // first-ever install (no existing active worker for this scope) is
+  // UNAFFECTED: the browser activates it immediately regardless, since
+  // there's nothing to wait for.
   event.waitUntil(
     caches.open(CACHE).then((c) => c.addAll(SHELL).catch(() => {}))
   );
+});
+
+// v0.31.0 (SW update toast, Feature 4): the client-side half of the
+// standard "new version waiting, refresh to update" pattern — postMessage's
+// payload is the plain string "SKIP_WAITING" (see ServiceWorkerRegister.tsx),
+// matched loosely against the common {type:"SKIP_WAITING"} shape too in case
+// a future caller (or browser devtools) sends that form instead.
+self.addEventListener("message", (event) => {
+  if (event.data === "SKIP_WAITING" || (event.data && event.data.type === "SKIP_WAITING")) {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener("activate", (event) => {

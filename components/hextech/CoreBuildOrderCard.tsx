@@ -3,6 +3,7 @@
 import type { ItemsBlock, Pick as PickType } from "@/lib/types";
 import { wpaClass, wpaText } from "@/components/StatBadge";
 import { IconWithFallback } from "@/components/IconWithFallback";
+import OptimizedPathRow from "./OptimizedPathRow";
 
 interface CoreBuildOrderCardProps {
   items: ItemsBlock;
@@ -54,6 +55,12 @@ export default function CoreBuildOrderCard({ items, onItemClick }: CoreBuildOrde
           </div>
         ))}
       </div>
+
+      {/* Feature 2 (sequential item optimizer) — nothing when
+          items.optimizedPath is absent/empty, a tiny confirmation note when
+          it matches this same core order, or its own conditioned strip when
+          it genuinely differs. See OptimizedPathRow.tsx. */}
+      <OptimizedPathRow items={items} onItemClick={onItemClick} />
     </div>
   );
 }

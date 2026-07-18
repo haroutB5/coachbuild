@@ -4909,3 +4909,328 @@ Map-iteration note: both new `getCachedLiveIconVersion()`/`liveVersionFromChampM
 Did not run a browser/puppeteer smoke test — this is a pure logic-layer fix (aggregation guard + version-string resolution + ref-timing), no new DOM/visual surface, and `next build`/dev server were explicitly off-limits this round (orchestrator runs the build gate). All 3 fixes are covered by targeted unit tests instead, per the brief's own verify list (vitest + tsc + eslint, no next build/deploy).
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-18 19:05
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+# HANDOFF-engy — 4 new engine features (matchup / optimizer / rank brackets / patch movers)
+
+Engine-only wave. I own `lib/**` + `app/api/**`. UI is a SEPARATE fronty wave — the
+**API contracts** section below is the interface. `components/**` and page files untouched.
+
+Baseline v0.30.0 / 609 tests → now **652 tests green** (`npx vitest run`), `npx tsc --noEmit`
+clean, eslint clean. No `next build`, no version bump, no deploy (orchestrator's gate).
+
+## Summary
+
+- **F1 Matchup** — DISPROVEN by live probe: `matchupChampionIds` **403s on every coachless
+  endpoint** (not exposed on the public API). Implemented HONESTLY: `/api/build` accepts
+  `enemyChampionId`, probes the real API, and degrades fully (every slot `matchupConditioned:false`,
+  top-level `matchup.supported:false`). The conditioning machinery IS wired behind the real probe
+  gate, so it auto-activates if coachless ever exposes matchup — but today it never fires. The
+  per-slot threshold/fallback LOGIC is a tested pure helper.
+- **F2 Sequential item optimizer** — VERIFIED working. `items.optimizedPath` = greedy WPA-optimal
+  core chain (each pick conditioned on owning the prior picks via `firstLegendaryId`/`secondLegendaryId`).
+  Depth ≤ 3 (API conditions on ≤ 2 priors; `thirdLegendaryId` verified no-op). Adoption-guarded.
+- **F3 Rank brackets** — VERIFIED working. `lib/rankBrackets.ts` exports `RANK_BRACKETS`; `/api/build`
+  accepts `rank`. Default ('all') = historical High-Elo `[5,6,7]`, byte-identical to legacy requests.
+- **F4 Patch movers** — VERIFIED working. New `GET /api/patch-movers?role=<0-4>` → biggest WPA swings
+  16.13 vs 16.12, per lane.
+
+## Per-feature probe evidence (live api.coachless.gg, 2026-07-18, Viktor mid unless noted)
+
+Current populated data patch = **16.13** (16.14 403s — WPA not computed yet). Prev populated = **16.12**.
+
+- **F1 matchup:** `GetKeystoneData` with `matchupChampionIds:[103]` → **HTTP 403** while the interleaved
+  `matchupChampionIds:null` control returned 329,436 games. Reproduced across **item / spell / shards**
+  endpoints and for a second champ (Jinx bot vs Cait) — all 403. `[]` (empty) → 200 with 0 rows; `null`
+  → normal. Conclusion: matchup conditioning is gated off entirely. Not transient (controls succeeded
+  between every 403).
+- **F2 optimizer:** `GetGlobalItemStatistics` slot [2] with `firstLegendaryId=2503` → total games drop
+  290,775 → 220,985 and the leaderboard reorders (uncond slot-2 leader i3152; conditioned on first=6655
+  the leader flips to i4645). `secondLegendaryId` also conditions (slot-3). **`thirdLegendaryId` produced
+  byte-identical output → ignored** (depth capped at 2 priors → path length ≤ 3).
+- **F3 rank:** `leagueTiers=[N]` filters real data. Populated: **[3]=194,981 [4]=217,139 [5]=210,171
+  [6]=101,057 [7]=17,871 [8]=5,116**. Empty: [0][1][2][9][10]. Distribution matches Platinum(3)→
+  Challenger(8) and the pre-existing "High Elo" = `[5,6,7]` label = Diamond/Master/GM. (Rank→name mapping
+  INFERRED from the population shape — see Known Issues.)
+- **F4 prior patch:** 16.12 / 16.11 / 16.10 all populated (246k / 269k / 309k games). No champion-list /
+  tier-list endpoint exists (6 candidate paths all **404**), so "most-played champs" uses a curated pool
+  — see Known Issues.
+
+Live end-to-end smoke (ran the real modules via tsx, since removed from repo):
+```
+F2 optimizedPath: Blackfire Torch(occ248931,wpa0.20) -> Lich Bane(occ30887,wpa1.19) -> Void Staff(occ1452,wpa3.12)
+F3 challenger: tierLabel "Challenger", keystone occ 302125 -> 4828 (real tier filtering)
+F1 vs Ahri:  matchup={"enemyChampionId":103,"gamesCount":0,"supported":false}; all matchupConditioned:false
+F4 role=2:   patch 16.13 vs 16.12, 20 movers (e.g. Galio item Hollow Radiance -1.34->-0.70 Δ0.64 @75116 games)
+```
+
+## API contracts (the interface for the UI wave)
+
+### `GET /api/build` — additive optional params (unchanged shape otherwise)
+Existing params `champ`, `role` (0-5) unchanged. **New optional params:**
+- `enemyChampionId=<int>` (F1) — lane opponent. Omit/empty = no matchup. Non-integer → **400**.
+- `rank=<bracketId>` (F3) — one of `RANK_BRACKETS[].id`. Omit/empty = `all` (default). Unknown → **400**.
+
+Example: `GET /api/build?champ=112&role=2&rank=challenger&enemyChampionId=103`
+
+Response is still `BuildResponse[]` (top-3 variants). **Additive fields:**
+- `BuildResponse.rankBracket?: string` — resolved bracket id (e.g. `"all"`, `"challenger"`). `tierLabel`
+  now mirrors the bracket label (`"High Elo"`, `"Challenger"`, …).
+- `BuildResponse.matchup?: { enemyChampionId: number; gamesCount: number; supported: boolean }` —
+  present ONLY when `enemyChampionId` was sent. **Today `supported` is ALWAYS `false`** (API 403s) and
+  `gamesCount:0` → show a "matchup data unavailable — showing standard build" note; do NOT hide the build.
+- `Pick.matchupConditioned?: boolean` — present on keystone + `items.first/second/third` + `spells`
+  when `enemyChampionId` was sent. `true` = matchup-conditioned; `false` = fell back. Today all `false`.
+- `ItemsBlock.optimizedPath?: Pick[]` (F2) — greedy WPA-optimal core chain, **length 2-3** (omitted if
+  it would be <2). Each `Pick.occurrence` = CONDITIONAL sample size at that depth, `Pick.wpa` = conditional
+  WPA. It is a SEPARATE view from the reliable core `first/second/third` (which stay adoption-ranked);
+  the optimized path deliberately differs (e.g. reliable 2nd = Lich Bane, optimized 2nd could differ).
+  Render as "if you build X, then Y (conditional), then Z" with the sample sizes shown.
+
+Cache: unchanged `s-maxage=21600, SWR=86400`. The CDN keys on the full query string, so `enemyChampionId`
++ `rank` each get their own edge entry automatically. 404 (no data) is never long-cached (repo Gotcha (b)).
+
+### `lib/rankBrackets.ts` (F3) — the bracket list for the selector
+```ts
+RANK_BRACKETS: { id: string; label: string; apiValue: number[] }[]
+// [0] all→[5,6,7] "High Elo" (DEFAULT, first), challenger→[8], grandmaster→[7],
+//     master→[6], diamond→[5], emerald→[4], platinum→[3]
+DEFAULT_RANK_BRACKET   // = RANK_BRACKETS[0]
+RANK_FILTERING_SUPPORTED // true → render the selector. (If a future probe disproves
+                         // tier filtering, collapse to just 'all' → this flips false → UI hides it.)
+resolveRankBracket(id) // → bracket | null (null/''/undefined → default; unknown → null)
+```
+UI: render a bracket selector from `RANK_BRACKETS` when `RANK_FILTERING_SUPPORTED`; send the chosen
+`id` as `?rank=`. Labels are INFERRED (see Known Issues) — sanity-check display names, the DATA is fine.
+
+### `GET /api/patch-movers?role=<laneId 0-4>` (F4) — NEW route
+- `role` required, **0-4 only** (5/auto is not a lane → 400). Missing/invalid → **400**.
+- **200** `{ patch: string, prevPatch: string, movers: PatchMover[] }` (cached `s-maxage=86400, SWR`)
+  where each mover:
+  ```ts
+  { championId, championName, lane, kind: "keystone"|"item", name, iconHint,
+    prevWpa, currWpa, delta, gamesCount }   // sorted by |delta| desc, ≤20 rows
+  ```
+  `iconHint` = resolved absolute icon URL (rune or item). `name` = resolved rune/item name.
+- **200** `{ unsupported: true }` (`no-store`) when no previous populated patch exists → UI hides the page.
+  (Prior-patch data IS available today, so this won't fire now — defensive.) NOTE: I returned **200 +
+  `{unsupported:true}`** rather than a literal 501 — cleaner for the client (`if (data.unsupported) hide`);
+  the brief said "501-style", flag if you want the status changed.
+- Empty `movers` → `no-store` (treated as degraded, repo Gotcha (b)).
+
+Example: `GET /api/patch-movers?role=2` → 20 mid-lane movers, 16.13 vs 16.12.
+
+## Files touched
+
+**New:** `lib/rankBrackets.ts`, `lib/buildConditioning.ts` (pure optimizer + matchup primitives),
+`lib/patchMovers.ts`, `app/api/patch-movers/route.ts`, and 6 test files (`buildConditioning`,
+`rankBrackets`, `coachless-filters`, `patchMovers`, `build-route-params`, `patch-movers-route`).
+
+**Modified:**
+- `lib/coachless.ts` — `FilterOpts` (matchup/tiers) threaded through all 5 endpoint wrappers via
+  `buildFilters`; item conditioning rides existing `extras`. Defaults unchanged → legacy requests
+  byte-identical. Re-exported `HIGH_ELO_TIERS`.
+- `lib/types.ts` — added `Pick.matchupConditioned?`, `ItemsBlock.optimizedPath?`,
+  `BuildResponse.rankBracket?` + `.matchup?`. All additive/optional.
+- `lib/recommend.ts` — `buildRecommendations(champId, role, options?)` with
+  `{ enemyChampionId?, rankBracket? }`; threads tiers everywhere; builds `optimizedPath`; probe-gated
+  matchup conditioning + per-slot flags; `tierLabel`/`rankBracket` from bracket.
+- `lib/staticData.ts` — added `getPreviousPopulatedPatch(current)` (F4).
+- `app/api/build/route.ts` — parse/validate `enemyChampionId` + `rank`, pass options to engine.
+
+## Tests
+43 new (652 total green). Cover: optimizer truncation + adoption-floor outlier rejection + no-re-pick;
+matchup per-slot fallback (incl. empty-pool 403 case); rank bracket resolution/validation; request-body
+composition (matchup + tiers + firstLegendaryId land in the body → distinct cache keys); patch-movers pure
+delta math + both-patch-presence guard + ranking/cap + orchestrator unsupported path + per-champ failure
+isolation; both routes' param validation + cache-header discipline. Convention: pure logic unit-tested;
+routes mock the engine (matches existing `route.test.ts`).
+
+## Known Issues / decisions (probe-driven)
+
+1. **F1 matchup is unavailable on the live API (403).** This is the headline feature and its core
+   assumption is DISPROVEN. I did not fake it: the build degrades to the standard recommendation with
+   `matchup.supported:false`. The conditioning code is wired behind a genuine probe (1 extra keystone
+   call per matchup request, caught on 403) so it activates automatically IF coachless exposes matchup;
+   the per-slot threshold logic is unit-tested. **UI:** still ship the enemy picker, but on
+   `supported:false` show "matchup data unavailable" — do not imply conditioned data.
+2. **F3 rank→name labels are INFERRED**, not confirmed against a coachless UI (no tier-name endpoint
+   exists). The `apiValue` tier-SETS are verified to return data; only the human LABELS are inferred
+   from ladder-population shape + the pre-existing `[5,6,7]`="High Elo". A wrong label never yields wrong
+   DATA. Fronty should sanity-check names against coachless.gg's own rank selector if easy. Tier **8**
+   (~5k games, likely Challenger) is included as `challenger`.
+3. **F4 uses a curated per-role champion pool, not a true ladder "top-25 by games."** No champion-list
+   endpoint exists (verified 404s), so `ROLE_CHAMPION_POOL` (≈20 meta champs/lane) bounds the candidate
+   set; within it we rank by current-patch games and keep the top 25. The mover DATA (WPA deltas) is
+   real; only the SELECTION is a curated approximation. Documented in `patchMovers.ts` header.
+4. **F4 cost:** ≈ |pool|×4 coachless calls (keystone cur/prev + item1 cur/prev) at concurrency 6, run
+   at most ~once/day/role behind the 24h CDN cache + shared Next fetch-cache. Cold first-hit is ~15-20s.
+   If that's too slow in prod, shrink `ROLE_CHAMPION_POOL` / `MOVERS_TOP_CHAMPS` (config constants).
+5. **F4 return status:** chose 200 + `{unsupported:true}` over literal 501 (see contract). Trivially
+   changeable in `app/api/patch-movers/route.ts` if the orchestrator prefers 501.
+6. **Optimizer floor is a judgment call:** `OPTIMIZER_MIN_SAMPLE=300` + `OPTIMIZER_ADOPT_FRAC=0.05`
+   (added after the live smoke showed a 430-game/+3.69-WPA tail spike winning slot-2). Tunable in
+   `lib/buildConditioning.ts`. Raising the frac shortens the path; lowering it risks outliers.
+
+## Wiki note
+No `wiki/` dir at the coachbuild root — nothing to update. If one is generated later, the matchup-403
+fact + the no-champion-list-endpoint fact + the tier-mapping inference belong in `gotchas.md`.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-18 19:21
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+# HANDOFF-fronty — UI for 4 new CoachBuild engine features (rank brackets / optimized path / patch movers / SW update toast)
+
+I own `components/**`, `app/page.tsx` + new `app/` routes, `public/sw.js` + SW registration.
+Did NOT touch `lib/**` or `app/api/**` (engy's, frozen) — confirmed via `git status` before/after.
+Matchup UI (F1) was explicitly OUT of scope per the engine handoff (403s on every coachless
+endpoint, disproven) — no enemy picker, no matchup UI anywhere. Not built.
+
+## Summary
+
+- **Rank bracket selector (F3)** — compact `SegmentedControl` at the top of the BUILD tab
+  (`BuildTabContent.tsx`), rendered in every fetch state (loading/empty/error/ok) so a user who
+  picks a bracket with no data for that champ+lane can switch straight back. Options come from
+  `RANK_BRACKETS` (imported, not edited). Selection re-fetches `/api/build` with `rank=` (omitted
+  entirely for the default bracket, preserving the historical byte-identical cache key per the
+  engine handoff's contract note). Persists to `localStorage` (`coachbuild:rankBracket:v1`,
+  SSR-safe read/write in `rankBracketStorage.ts`). Single `rankBracket` state variable drives both
+  the selector's shown value and the fetch param — can't desync by construction. The existing
+  `cancelled`-closure stale-response guard (the file's own established pattern, gotcha (q)) was
+  extended to cover `rankBracket` alongside `champ`/`lane` rather than adding a second guard
+  mechanism — see "Known Issues / decisions" below for why I didn't use a literal `reqIdRef` here.
+- **Optimized item path (F2)** — `CoreBuildOrderCard.tsx` renders a new `OptimizedPathRow` under
+  the existing core order. Pure view-model (`optimizedPath.ts`, unit-tested) decides the outcome:
+  absent/empty `items.optimizedPath` → nothing; identical (same ids, same order) to the reliable
+  core path → a tiny "Order confirmed by conditioned data" note instead of a duplicate strip;
+  genuinely different → the full conditioned strip, same icon-square style as the core order, each
+  item after the first captioned "after &lt;prev&gt;" (title tooltip + small text), WPA + sample
+  size (`fmtSample`) in the same muted-stat style `ItemPath.tsx`/`CoreBuildOrderCard.tsx` use.
+- **Patch movers page (F4)** — new `/movers` route + a "Movers" entry in `TabNav.tsx`. Lane pill
+  selector (`LaneFilterPills.tsx`, built on `LaneId`/`LANE_ORDER` — deliberately no "All" option,
+  since the route requires a concrete 0-4 lane). Rows (`MoverRow.tsx`): champion icon + name, a
+  keystone/item kind badge, the pick's name + icon, delta with sign/direction (up = teal, down =
+  muted red — `patchMoversFormat.ts`, unit-tested), prev→curr WPA small, games muted. Sorted as
+  served (no client re-sort). Loading skeleton (final-dimension rows, no CLS), error state,
+  `{unsupported:true}` → a quiet "Patch comparison unavailable" empty state (distinct from a
+  genuine empty-movers-array result, which gets its own "no movers yet" empty state). Header shows
+  "16.13 vs 16.12" once resolved, plus a "compared daily" caption per the 24h CDN cache. Stale-
+  response guard on lane switches via a numeric `reqIdRef` (same idiom as `app/page.tsx`'s
+  `mostPlayedLaneRequestRef`). Since the Hextech home page (`app/page.tsx`) never renders `TabNav`
+  itself (only `/history` does — see "Known Issues" below), I also added a "Patch movers" footer
+  link in `Sidebar.tsx` (both collapsed/mobile and desktop variants) mirroring the existing
+  "Pro players" link, so `/movers` is reachable from the main build page too.
+- **SW update toast (F4)** — `ServiceWorkerRegister.tsx` now detects `updatefound`→`installed`
+  (with an existing `navigator.serviceWorker.controller`, i.e. a genuine update, not the first
+  install) and renders a small fixed bottom toast ("Update ready — Refresh"). Tap → `postMessage`
+  the literal string `"SKIP_WAITING"` to the waiting worker → `sw.js`'s new `message` listener
+  calls `self.skipWaiting()` → `controllerchange` fires → a single, loop-guarded `location.reload()`.
+  **Made one real behavioral change to `sw.js`, flagged prominently below.**
+
+## Files touched
+
+**New:**
+- `components/hextech/rankBracketStorage.ts` — SSR-safe localStorage read/write, unit-tested.
+- `components/hextech/optimizedPath.ts` — pure view-model for F2, unit-tested.
+- `components/hextech/OptimizedPathRow.tsx` — F2's JSX strip/confirmation note.
+- `components/hextech/patchMoversFormat.ts` — pure delta/formatting helpers for F4, unit-tested.
+- `components/hextech/LaneFilterPills.tsx` — 0-4 lane pill row for `/movers` (no "All").
+- `components/hextech/MoverRow.tsx` — one patch-mover row.
+- `app/movers/page.tsx` — the new route.
+- `components/__tests__/rankBracketStorage.test.ts`, `optimizedPath.test.ts`, `patchMoversFormat.test.ts`.
+
+**Modified:**
+- `components/hextech/BuildTabContent.tsx` — rank bracket state/selector/fetch wiring (F3).
+- `components/hextech/CoreBuildOrderCard.tsx` — renders `OptimizedPathRow` (F2).
+- `components/TabNav.tsx` — added the "Movers" tab.
+- `components/hextech/Sidebar.tsx` — added a "Patch movers" footer link (both layouts).
+- `public/sw.js` — added a `message` listener for `SKIP_WAITING`; **removed the unconditional
+  `self.skipWaiting()` call in `install`** (see Known Issues #1 — this is the one real behavioral
+  change, not just additive).
+- `components/ServiceWorkerRegister.tsx` — update detection + toast + reload wiring (F4).
+
+## Tests
+
+`npx vitest run` → **681 passed** (652 baseline + 29 new, 0 failed). `npx tsc --noEmit` clean.
+`next lint` clean on every file listed above (ran scoped, not a full-repo lint pass). New pure
+modules covered: `rankBracketStorage.ts` (SSR branch, browser-stub branch incl. quota-throw
+degradation, unknown-stored-id fallback, every `RANK_BRACKETS` id round-trips), `optimizedPath.ts`
+(none/confirmed/path outcomes incl. shorter 2-length paths and id-only comparison ignoring
+wpa/occurrence), `patchMoversFormat.ts` (direction/class/arrow/text/swing/header/kind-label).
+
+## Known Issues / decisions
+
+1. **`public/sw.js`'s `install` handler used to call `self.skipWaiting()` unconditionally — I
+   removed it.** This is a real behavioral change, not purely additive, so flagging it clearly:
+   before this change, every new SW version silently activated and started controlling open tabs
+   the moment it finished installing (no "waiting" phase ever existed, so the toast/postMessage
+   pattern the brief asked for would have had nothing to hook onto — `updatefound`→`installed`
+   would fire, but the worker would already be racing to `activating` on its own, and a naive
+   `controllerchange`→reload listener would auto-reload the page within ~1s of every deploy with
+   zero user interaction, never actually waiting for a toast tap). Removing the unconditional call
+   lets an UPDATE follow the standard lifecycle (installing → installed → **waiting**, parked until
+   this component posts `SKIP_WAITING`). A first-ever install (no existing controller) is
+   unaffected — the browser activates it immediately regardless, since there's nothing to wait for,
+   so no toast appears on a fresh install. I did NOT touch the `activate` handler's icon-cache
+   exclusion logic (`ICON_CACHE` stays excluded from the `coachbuild-*` sweep, per repo gotcha (k)).
+2. **Rank bracket's stale-response guard uses the file's existing `cancelled`-closure pattern
+   (gotcha (q)), not a separate numeric `reqIdRef`**, even though the brief said "reqIdRef." Reason:
+   `BuildTabContent.tsx`'s fetch effect already has one guard mechanism for `champ`/`lane` (the
+   exact pattern that fixed the v0.27.2 stale-build P0); adding rank as a third dependency to that
+   SAME effect/guard is safer than introducing a second, differently-shaped guard mechanism
+   side-by-side in one component. Functionally equivalent (any dependency change invalidates the
+   in-flight fetch), just reusing this file's own audited idiom. `app/movers/page.tsx` DOES use a
+   literal numeric `reqIdRef` (matching `mostPlayedLaneRequestRef`'s idiom) since that page has no
+   pre-existing guard to extend.
+3. **Rank bracket tier labels are INFERRED per the engine handoff** ("Challenger"/"Grandmaster"/
+   etc. — not confirmed against coachless.gg's own UI). I did not attempt to re-verify these against
+   coachless.gg (no browser session run this pass, see Verification gap below) — the labels render
+   as-is from `RANK_BRACKETS`; if they're ever found to be wrong, only `lib/rankBrackets.ts` (engy's
+   file) needs a value change, no UI change needed.
+4. **`app/page.tsx` (Hextech home) never renders `TabNav`** — only `/history` does; the home page's
+   own cross-page nav is Sidebar's quiet footer link ("Pro players"). I mirrored that with a new
+   "Patch movers" link rather than assuming `TabNav` alone makes `/movers` reachable from every
+   surface. `/movers` itself renders `TabNav` (same as `/history`) so Builds/Pro's/Movers are all
+   one tap apart from there.
+5. **Optimized-path "identical to core" comparison is by item id only**, not wpa/occurrence — two
+   picks with the same id but different conditional stats still collapse to "confirmed" (tested
+   explicitly). This matches the brief's own wording ("If the optimized path is IDENTICAL (same
+   ids, same order)").
+
+## Verification gap (honest, per the craft rules)
+
+**No browser/puppeteer run this pass** — no dev server, no `next build` (both explicitly out of
+scope for this task; the orchestrator gates build separately, and CLAUDE.md's own gotcha (i) warns
+two `next dev`/`next build` processes against one checkout corrupt `.next`). Verified via
+`tsc --noEmit` (clean), `next lint` (clean, scoped to touched files), and `vitest run` (681/681
+green, including new pure-logic coverage for every non-trivial branch: rank-bracket storage
+degradation paths, optimized-path outcome classification, mover delta formatting). What I did NOT
+verify: actual rendered pixels at 375/390px, the SW update toast's real install→waiting→activate
+lifecycle on a live deploy (the `self.skipWaiting()` removal is a real lifecycle change and is the
+part most worth a live check), and whether `/movers`' champion icon resolution (`getChampionIconMap()`)
+actually returns icons for every id in `ROLE_CHAMPION_POOL`. Recommend a puppeteer/chrome-devtools
+pass (or a real staged deploy) hitting: BUILD tab rank-bracket switch (watch the network tab for
+`rank=` appearing/disappearing correctly), `/movers` for at least one lane with real data, and a
+real SW version bump to confirm the toast appears and the tap→reload path actually completes
+(rather than racing ahead of the toast, which was the whole risk the `skipWaiting()` removal fixes).
+
+

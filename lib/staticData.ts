@@ -315,6 +315,36 @@ export async function getLatestPatch(
   return inFlight;
 }
 
+/**
+ * Feature 4 (patch movers): the newest coachless-populated patch STRICTLY OLDER
+ * than `current`. Walks the same ddragon candidate list newest→oldest, skipping
+ * anything ≥ current, and returns the first older candidate with live keystone
+ * data (coachless keeps prior-patch data — VERIFIED: 16.12/16.11/16.10 all
+ * populated while 16.13 is current). Returns null if ddragon is unreachable or
+ * no older candidate has data (→ caller reports the movers feature unsupported).
+ * Not cached: called only by the aggressively-CDN-cached patch-movers route.
+ */
+export async function getPreviousPopulatedPatch(
+  current: ResolvedPatch
+): Promise<ResolvedPatch | null> {
+  let candidates: ResolvedPatch[];
+  try {
+    const versions = await fetchJson<string[]>(CDN.versions);
+    candidates = parseDdragonVersions(versions);
+  } catch {
+    return null;
+  }
+  const older = candidates.filter(
+    (c) =>
+      c.major < current.major ||
+      (c.major === current.major && c.patch < current.patch)
+  );
+  for (const c of older) {
+    if (await candidateHasData(c)) return c;
+  }
+  return null;
+}
+
 // ── Icon CDN version (derived from the resolved data patch) ─────────────────
 //
 // PROBE EVIDENCE (2026-07-06): coachless's static-files CDN mirrors ddragon's

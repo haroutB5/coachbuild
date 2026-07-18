@@ -25,7 +25,17 @@ import {
   type RuneEntry,
   type ItemEntry,
   type SpellEntry,
+  type FilterOpts,
 } from "./coachless";
+import {
+  buildOptimizedPath,
+  resolveMatchupSlot,
+  OPTIMIZER_MIN_SAMPLE,
+  OPTIMIZER_ADOPT_FRAC,
+  MATCHUP_MIN_SAMPLE,
+  MATCHUP_MIN_TOTAL,
+} from "./buildConditioning";
+import { DEFAULT_RANK_BRACKET, type RankBracket } from "./rankBrackets";
 import {
   getLatestPatch,
   getChampionById,
@@ -240,10 +250,33 @@ interface PrimaryConfig {
 
 // ── Main: top-3 recommended setups ─────────────────────────────────────────────
 
+export interface BuildOptions {
+  /** Feature 1: lane-opponent champion id. Attempts matchup-conditioned picks;
+   *  degrades to the standard build per-slot when data is missing/insufficient
+   *  (today ALWAYS — the coachless matchup path 403s; see HANDOFF). */
+  enemyChampionId?: number | null;
+  /** Feature 3: resolved rank bracket. Defaults to High Elo ([5,6,7]) — the
+   *  app's historical behaviour — when omitted, keeping request bytes (and the
+   *  Next fetch-cache key) identical to pre-feature builds. */
+  rankBracket?: RankBracket | null;
+}
+
 export async function buildRecommendations(
   champId: number,
-  role: RoleId
+  role: RoleId,
+  options: BuildOptions = {}
 ): Promise<BuildResponse[]> {
+  const bracket = options.rankBracket ?? DEFAULT_RANK_BRACKET;
+  // Only pin leagueTiers when a NON-default bracket is chosen — the default
+  // 'all' bracket ([5,6,7]) is exactly buildFilters' own default, so leaving
+  // leagueTiers undefined keeps the request byte-identical to legacy builds.
+  const filterOpts: FilterOpts =
+    bracket.id === DEFAULT_RANK_BRACKET.id ? {} : { leagueTiers: bracket.apiValue };
+  const enemyId =
+    options.enemyChampionId != null && Number.isFinite(options.enemyChampionId)
+      ? options.enemyChampionId
+      : null;
+
   const patchInfo = await getLatestPatch();
   const patch = {
     major: patchInfo.major,
@@ -268,15 +301,15 @@ export async function buildRecommendations(
     leg456Data,
     spellData,
   ] = await Promise.all([
-    getKeystoneData(champId, role, patch),
-    getShardsForKeystoneAndTree(champId, role, patch, null),
-    getGlobalItemStatistics(champId, role, patch, null, 6),
-    getGlobalItemStatistics(champId, role, patch, null, 2),
-    getGlobalItemStatistics(champId, role, patch, [1], 1),
-    getGlobalItemStatistics(champId, role, patch, [2], 1),
-    getGlobalItemStatistics(champId, role, patch, [3], 1),
-    getGlobalItemStatistics(champId, role, patch, [4, 5, 6], 1),
-    getGlobalSummonerSpellStatistics(champId, role, patch),
+    getKeystoneData(champId, role, patch, undefined, filterOpts),
+    getShardsForKeystoneAndTree(champId, role, patch, null, filterOpts),
+    getGlobalItemStatistics(champId, role, patch, null, 6, {}, filterOpts),
+    getGlobalItemStatistics(champId, role, patch, null, 2, {}, filterOpts),
+    getGlobalItemStatistics(champId, role, patch, [1], 1, {}, filterOpts),
+    getGlobalItemStatistics(champId, role, patch, [2], 1, {}, filterOpts),
+    getGlobalItemStatistics(champId, role, patch, [3], 1, {}, filterOpts),
+    getGlobalItemStatistics(champId, role, patch, [4, 5, 6], 1, {}, filterOpts),
+    getGlobalSummonerSpellStatistics(champId, role, patch, filterOpts),
   ]);
 
   if (keystoneData.length === 0) {
@@ -432,6 +465,116 @@ export async function buildRecommendations(
     },
   };
 
+  // ── Feature 2: sequential item optimizer (greedy WPA-optimal core chain) ────
+  // Seed with the core first legendary, then condition each subsequent slot on
+  // OWNING the running prefix (coachless firstLegendaryId/secondLegendaryId,
+  // VERIFIED to subset the pool + shift WPA). Truncates when a conditioned slot
+  // has no candidate clearing OPTIMIZER_MIN_SAMPLE. Depth 2 beyond the seed =>
+  // path length ≤ 3 (the API conditions on ≤ 2 priors). Additive: attached only
+  // when the chain has ≥ 2 items (a 1-item "path" carries no sequence info).
+  const optimizedRest = await buildOptimizedPath<ItemEntry>(
+    async (prefix) => {
+      const slot = prefix.length + 1; // seed(len 1) → slot 2; then → slot 3
+      if (slot > 3) return [];
+      const extras: Record<string, unknown> = { firstLegendaryId: prefix[0] };
+      if (prefix.length >= 2) extras.secondLegendaryId = prefix[1];
+      return getGlobalItemStatistics(champId, role, patch, [slot], 1, extras, filterOpts);
+    },
+    2,
+    OPTIMIZER_MIN_SAMPLE,
+    [leg1Best.itemId],
+    OPTIMIZER_ADOPT_FRAC
+  );
+  const optimizedEntries = [leg1Best, ...optimizedRest];
+  if (optimizedEntries.length >= 2) {
+    items.optimizedPath = await Promise.all(
+      optimizedEntries.map((e) => itemEntryToPick(e, bar))
+    );
+  }
+
+  // ── Feature 1: matchup probe + per-slot conditioning ───────────────────────
+  // The coachless matchup path (matchupChampionIds) is VERIFIED to 403 on every
+  // endpoint today, so `supported` is effectively always false and the build
+  // falls back fully. The probe is real (one keystone call), and the conditioning
+  // below is gated on it — so if coachless ever exposes matchup, this activates
+  // with no code change. Keystone conditioning happens per-variant in the loop
+  // below (reusing this probe's data). `matchupInfo` is attached to every variant.
+  let matchupInfo: BuildResponse["matchup"] | undefined;
+  let matchupKeystoneData: RuneEntry[] | null = null;
+  const mcf = (): FilterOpts => ({ ...filterOpts, matchupChampionIds: [enemyId as number] });
+  if (enemyId != null) {
+    try {
+      const md = await getKeystoneData(champId, role, patch, undefined, mcf());
+      const total = Array.isArray(md) ? md.reduce((s, e) => s + e.occurrence, 0) : 0;
+      if (Array.isArray(md) && md.length > 0 && total >= MATCHUP_MIN_TOTAL) {
+        matchupKeystoneData = md;
+        matchupInfo = { enemyChampionId: enemyId, gamesCount: total, supported: true };
+      } else {
+        matchupInfo = { enemyChampionId: enemyId, gamesCount: total, supported: false };
+      }
+    } catch {
+      matchupInfo = { enemyChampionId: enemyId, gamesCount: 0, supported: false };
+    }
+
+    if (matchupInfo.supported) {
+      // Condition the shared core items + spells on the matchup, per-slot fallback.
+      const [m1, m2, m3, mSpells] = await Promise.all([
+        getGlobalItemStatistics(champId, role, patch, [1], 1, {}, mcf()),
+        getGlobalItemStatistics(champId, role, patch, [2], 1, {}, mcf()),
+        getGlobalItemStatistics(champId, role, patch, [3], 1, {}, mcf()),
+        getGlobalSummonerSpellStatistics(champId, role, patch, mcf()),
+      ]);
+      const usedM = new Set<number>();
+      const condSlots: [ItemEntry, ItemEntry[]][] = [
+        [leg1Best, m1],
+        [leg2Best, m2],
+        [leg3Best, m3],
+      ];
+      const condItemPicks = await Promise.all(
+        condSlots.map(async ([fallback, pool]) => {
+          const res = resolveMatchupSlot(
+            pool, fallback, MATCHUP_MIN_SAMPLE, (e) => usedM.has(e.itemId)
+          );
+          usedM.add(res.entry.itemId);
+          const pick = await itemEntryToPick(res.entry, bar);
+          pick.matchupConditioned = res.conditioned;
+          return pick;
+        })
+      );
+      items.first = condItemPicks[0];
+      items.second = condItemPicks[1];
+      items.third = condItemPicks[2];
+
+      const mPool = role === 1 ? mSpells : mSpells.filter((s) => s.summonerSpell !== 11);
+      const mRanked = pickSpells(mPool, MATCHUP_MIN_SAMPLE);
+      if (mRanked.length >= 1) {
+        const condSpells = await Promise.all(
+          mRanked.map(async (e) => {
+            const p = await spellEntryToPick(e, bar);
+            p.matchupConditioned = true;
+            return p;
+          })
+        );
+        // Backfill to 2 from the unconditioned spells (flagged not-conditioned).
+        for (const s of spellPicks) {
+          if (condSpells.length >= 2) break;
+          if (!condSpells.some((c) => c.id === s.id)) {
+            condSpells.push({ ...s, matchupConditioned: false });
+          }
+        }
+        spellPicks.splice(0, spellPicks.length, ...condSpells.slice(0, 2));
+      } else {
+        spellPicks.forEach((p) => (p.matchupConditioned = false));
+      }
+    } else {
+      // Unsupported (the live case): stamp the shared slots as fell-back.
+      items.first.matchupConditioned = false;
+      items.second.matchupConditioned = false;
+      items.third.matchupConditioned = false;
+      spellPicks.forEach((p) => (p.matchupConditioned = false));
+    }
+  }
+
   // ── Map each keystone to its primary tree ──────────────────────────────────
   const runeMap = await loadRuneMap();
   const keystoneTree = (id: number): number | null => {
@@ -467,7 +610,7 @@ export async function buildRecommendations(
     const cands: SecondaryCandidate[] = await Promise.all(
       ALL_TREES.filter((t) => t !== primaryTreeId).map(async (treeToLoad) => {
         const rows = await getRunesForKeystoneAndTree(
-          champId, role, patch, primaryTreeId, treeToLoad, null
+          champId, role, patch, primaryTreeId, treeToLoad, null, filterOpts
         );
         const rowArr = [rows.rowOnes, rows.rowTwos, rows.rowThrees];
         const reliable = top2ByOcc(
@@ -520,7 +663,7 @@ export async function buildRecommendations(
         const keystone = pickRecommended(adopted, bar) ?? adopted[0];
         const treePopularity = Math.max(...adopted.map((k) => k.occurrence));
         const primRows = await getRunesForKeystoneAndTree(
-          champId, role, patch, treeId, treeId, null
+          champId, role, patch, treeId, treeId, null, filterOpts
         );
         const primaryMinors = rowPicks(
           [primRows.rowOnes, primRows.rowTwos, primRows.rowThrees],
@@ -564,11 +707,31 @@ export async function buildRecommendations(
 
   const variants = await Promise.all(
     top3.map(async (pg, idx) => {
+      // Feature 1: matchup-condition this variant's keystone using the probe
+      // data (filtered to this variant's primary tree). Falls back to the
+      // unconditioned keystone per-slot when conditioned support is thin.
+      let keystoneEntry = pg.cfg.keystone;
+      let keystoneConditioned: boolean | undefined;
+      if (enemyId != null) {
+        if (matchupInfo?.supported && matchupKeystoneData) {
+          const treeKs = matchupKeystoneData.filter(
+            (k) => keystoneTree(k.rune) === pg.cfg.treeId
+          );
+          const res = resolveMatchupSlot(treeKs, pg.cfg.keystone, MATCHUP_MIN_SAMPLE);
+          keystoneEntry = res.entry;
+          keystoneConditioned = res.conditioned;
+        } else {
+          keystoneConditioned = false;
+        }
+      }
       const [keystonePick, primaryMinorPicks, secondaryPicks] = await Promise.all([
-        runeEntryToPick(pg.cfg.keystone, bar),
+        runeEntryToPick(keystoneEntry, bar),
         Promise.all(pg.cfg.primaryMinors.map((e) => runeEntryToPick(e, bar))),
         Promise.all(pg.sec.displayRunes.map((rp) => runeEntryToPick(rp.entry, bar))),
       ]);
+      if (keystoneConditioned !== undefined) {
+        keystonePick.matchupConditioned = keystoneConditioned;
+      }
       const runes: RunesBlock = {
         primaryTree: TREE_REF(pg.cfg.treeId),
         secondaryTree: TREE_REF(pg.sec.treeId),
@@ -582,7 +745,7 @@ export async function buildRecommendations(
         role,
         roleLabel: ROLE_LABEL[role],
         patch: patchInfo.label,
-        tierLabel: "High Elo",
+        tierLabel: bracket.label,
         runes,
         spells: spellPicks,
         items,
@@ -591,6 +754,8 @@ export async function buildRecommendations(
         rank: idx + 1,
         label: VARIANT_LABELS[idx] ?? `Option ${idx + 1}`,
         subtitle: `${treeName(pg.cfg.treeId)} + ${treeName(pg.sec.treeId)}`,
+        rankBracket: bracket.id,
+        ...(matchupInfo ? { matchup: matchupInfo } : {}),
       };
       return build;
     })

@@ -13,6 +13,9 @@ import { versionFromPatch } from "@/components/proAssets";
 import ItemDetailPopover from "@/components/ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "@/components/EntityDetailPopover";
 import { useBodyScrollLock } from "@/components/useBodyScrollLock";
+import SegmentedControl from "@/components/SegmentedControl";
+import { RANK_BRACKETS, DEFAULT_RANK_BRACKET, RANK_FILTERING_SUPPORTED } from "@/lib/rankBrackets";
+import { readStoredRankBracketId, writeStoredRankBracketId } from "./rankBracketStorage";
 
 /** Which tap-for-detail popover is open — items share the "item" kind,
  *  runes/shards/summoner spells route through EntityDetailPopover's own
@@ -54,7 +57,7 @@ function CardSkeleton({ className = "" }: { className?: string }) {
 
 function BuildLoadingSkeleton() {
   return (
-    <div className="mt-5 space-y-5">
+    <div className="space-y-5">
       <CardSkeleton />
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         <CardSkeleton />
@@ -65,10 +68,52 @@ function BuildLoadingSkeleton() {
   );
 }
 
+/** Feature 3 (rank brackets) — compact selector rendered near the champion/
+ *  lane pickers (ChampionHero/HextechTabs sit just above this tab's content
+ *  on app/page.tsx). Rendered in every fetch state (loading/empty/error/ok)
+ *  so a user who picks a bracket with no data for this champ+lane can switch
+ *  right back without losing their place. Hidden entirely when
+ *  RANK_FILTERING_SUPPORTED is false (defensive — see lib/rankBrackets.ts). */
+function RankBracketSelector({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+  if (!RANK_FILTERING_SUPPORTED) return null;
+  return (
+    <div className="flex items-center justify-between gap-3 flex-wrap">
+      <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">Rank bracket</p>
+      <SegmentedControl
+        ariaLabel="Filter build data by rank bracket"
+        size="sm"
+        value={value}
+        onChange={onChange}
+        options={RANK_BRACKETS.map((b) => ({ value: b.id, label: b.label }))}
+      />
+    </div>
+  );
+}
+
 export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildTabContentProps) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
   const [activeDetail, setActiveDetail] = useState<DetailRef | null>(null);
   const [lastDetail, setLastDetail] = useState<DetailRef | null>(null);
+
+  // Feature 3 (rank brackets) — single source of truth for both the
+  // selector's shown value AND the `rank=` fetch param below (never two
+  // separate variables that could desync). Initialized to the default
+  // bracket (matches SSR, since `window` doesn't exist there) and corrected
+  // from localStorage in a mount-only effect — see rankBracketStorage.ts.
+  // `rankHydrated` gates the fetch effect so a returning user with a
+  // NON-default stored bracket doesn't briefly fetch (and flash) the
+  // default bracket's build before the corrected value lands — the fetch
+  // effect below waits one tick for this instead of firing twice.
+  const [rankBracket, setRankBracket] = useState<string>(DEFAULT_RANK_BRACKET.id);
+  const [rankHydrated, setRankHydrated] = useState(false);
+  useEffect(() => {
+    setRankBracket(readStoredRankBracketId());
+    setRankHydrated(true);
+  }, []);
+  function handleRankChange(id: string) {
+    setRankBracket(id);
+    writeStoredRankBracketId(id);
+  }
 
   function openDetail(kind: "item" | EntityKind, id: number) {
     setLastDetail({ kind, id });
@@ -134,11 +179,17 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
   // already uses — every setState is guarded so a superseded response is
   // inert no matter which order the two requests actually resolve in.
   const load = useCallback(
-    async (c: ChampionRef, l: LaneId, isCancelled: () => boolean) => {
+    async (c: ChampionRef, l: LaneId, rank: string, isCancelled: () => boolean) => {
       setState({ status: "loading" });
       try {
         const roleId = LANE_TO_ROLE_ID[l];
-        const res = await fetch(`/api/build?champ=${c.id}&role=${roleId}`);
+        // Feature 3: `rank` is only appended when non-default — keeps the
+        // historical default request byte-identical to before this feature
+        // (same CDN/Next fetch-cache key), per the engine handoff's contract
+        // note ("the 'all' default MUST be first... byte-identical to the
+        // app's historical default").
+        const rankParam = rank && rank !== DEFAULT_RANK_BRACKET.id ? `&rank=${rank}` : "";
+        const res = await fetch(`/api/build?champ=${c.id}&role=${roleId}${rankParam}`);
         if (isCancelled()) return;
         if (res.status === 404) {
           setState({ status: "empty" });
@@ -166,32 +217,46 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
   );
 
   useEffect(() => {
+    // Wait for the mount-only localStorage read above (see rankHydrated's
+    // own doc comment) — avoids a wasted/flashing fetch for the default
+    // bracket when a returning user actually has a different one stored.
+    if (!rankHydrated) return;
     let cancelled = false;
-    load(champ, lane, () => cancelled);
+    load(champ, lane, rankBracket, () => cancelled);
     return () => {
       cancelled = true;
     };
-  }, [champ, lane, load]);
+  }, [champ, lane, rankBracket, rankHydrated, load]);
 
-  if (state.status === "loading") return <BuildLoadingSkeleton />;
+  if (state.status === "loading") {
+    return (
+      <div className="mt-5 space-y-5">
+        <RankBracketSelector value={rankBracket} onChange={handleRankChange} />
+        <BuildLoadingSkeleton />
+      </div>
+    );
+  }
 
   if (state.status === "empty") {
     return (
-      <div className="mt-5 bg-panel border border-line rounded-xl p-10 text-center">
-        <div className="text-txt font-semibold mb-1">
-          Not enough data for {champ.name} {LANE_LABEL[lane]}
-        </div>
-        <div className="text-mut text-sm">
-          Try a different lane, or check{" "}
-          <a
-            href="https://coachless.gg"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-teal hover:underline"
-          >
-            coachless.gg
-          </a>{" "}
-          directly.
+      <div className="mt-5 space-y-5">
+        <RankBracketSelector value={rankBracket} onChange={handleRankChange} />
+        <div className="bg-panel border border-line rounded-xl p-10 text-center">
+          <div className="text-txt font-semibold mb-1">
+            Not enough data for {champ.name} {LANE_LABEL[lane]}
+          </div>
+          <div className="text-mut text-sm">
+            Try a different lane or rank bracket, or check{" "}
+            <a
+              href="https://coachless.gg"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-teal hover:underline"
+            >
+              coachless.gg
+            </a>{" "}
+            directly.
+          </div>
         </div>
       </div>
     );
@@ -199,11 +264,14 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
 
   if (state.status === "error") {
     return (
-      <div className="mt-5 bg-panel border border-line rounded-xl p-10 text-center">
-        <div className="text-txt font-semibold mb-1">Couldn&apos;t load — try again</div>
-        <div className="text-mut text-sm">
-          Something went wrong fetching {champ.name} {LANE_LABEL[lane]}. Check your connection and
-          refresh.
+      <div className="mt-5 space-y-5">
+        <RankBracketSelector value={rankBracket} onChange={handleRankChange} />
+        <div className="bg-panel border border-line rounded-xl p-10 text-center">
+          <div className="text-txt font-semibold mb-1">Couldn&apos;t load — try again</div>
+          <div className="text-mut text-sm">
+            Something went wrong fetching {champ.name} {LANE_LABEL[lane]}. Check your connection and
+            refresh.
+          </div>
         </div>
       </div>
     );
@@ -214,6 +282,7 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
 
   return (
     <div className="mt-5 space-y-5">
+      <RankBracketSelector value={rankBracket} onChange={handleRankChange} />
       <RunesSummonersCard runes={build.runes} spells={build.spells} onOpenDetail={openDetail} />
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         <StartingCard starter={build.items.starter} onItemClick={openItemPopover} />
