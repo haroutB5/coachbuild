@@ -162,6 +162,11 @@ describe("leagueSlugForOverviewPage", () => {
     expect(leagueSlugForOverviewPage("2026 Mid-Season Invitational")).toBe("msi");
     expect(leagueSlugForOverviewPage("2026 World Championship")).toBe("worlds");
   });
+  it("maps the real 2026 Esports World Cup page (regression for the 2026-07-19 missing-EWC bug report)", () => {
+    // Slug live-verified 2026-07-19 against lolesports getLeagues(): league
+    // id 116838530616006090, slug "ewc_lol", name "Esports World Cup".
+    expect(leagueSlugForOverviewPage("Esports World Cup 2026")).toBe("ewc_lol");
+  });
   it("excludes prefix false positives and unknown pages", () => {
     expect(leagueSlugForOverviewPage("LPLOL/2026 Season/Split 1")).toBeNull(); // Brazilian league, not LPL
     expect(leagueSlugForOverviewPage("Some Random Cup 2026")).toBeNull();

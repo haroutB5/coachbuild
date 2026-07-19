@@ -38,7 +38,18 @@ const LEAGUE_PREFIX_PATTERNS = ["LEC", "LCK", "LPL", "LCS"];
 // all; "MSI" is kept too since some sub-bracket pages DO contain it literally
 // (e.g. "LCK/2026 Season/Road to MSI", already covered by the LCK/ prefix
 // above, but other regions' "Road to MSI" pages may not share that prefix).
-const EVENT_CONTAINS_PATTERNS = ["MSI", "Mid-Season Invitational", "World Championship", "Worlds"];
+// "Esports World Cup" added 2026-07-19 — real 2026 page is "Esports World Cup
+// 2026" (bug report: EWC 2026, Jul 15-19, was missing from Pro Play entirely).
+// EWC pages don't contain "Worlds"/"World Championship" (it's a separate
+// third-party event, not a Riot-run international), so none of the existing
+// contains-patterns ever matched it.
+const EVENT_CONTAINS_PATTERNS = [
+  "MSI",
+  "Mid-Season Invitational",
+  "World Championship",
+  "Worlds",
+  "Esports World Cup",
+];
 // Academy pages (e.g. "LCK Academy Series") LIKE-match the LCK/ prefix but
 // resolve to tournaments with no ScoreboardPlayers data — live-verified
 // 2026-07-10 (see DATA-QUALITY PROBE in HANDOFF-engy.md).

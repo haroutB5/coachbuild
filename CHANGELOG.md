@@ -2,7 +2,11 @@
 
 All notable changes to CoachBuild are documented here.
 
-## [0.31.0] — 2026-07-18
+## [0.31.1] — 2026-07-19
+### Fixed
+- **Pro Play feed missing the Esports World Cup 2026.** The ingest tournament resolver (`lib/prostage/tournaments.ts`) matches Leaguepedia pages by LIKE pattern, and no existing pattern matched the real page name "Esports World Cup 2026" (it doesn't contain "Worlds"/"World Championship" — EWC is a third-party event, not a Riot-run international). Added `"Esports World Cup"` to the contains-pattern list, plus the matching lolesports league-slug mapping in `lib/prostage/resolveGame.ts` (`ewc_lol`, live-verified against `getLeagues()` 2026-07-19) so item-build timelines can resolve for EWC games too.
+
+
 ### Added
 - **Optimized item order**: the core build's item sequence re-derived with each pick conditioned on owning the previous one (the coachless API supports 2 priors — verified live), with an adoption-relative floor so thin conditional tails can't surface as advice. Shown under the core path when it differs; a quiet confirmation note when identical.
 - **Rank bracket selector**: filter builds by real league tiers (Platinum+ through Challenger; default remains the legacy high-elo blend, byte-identical requests). Persisted per device.

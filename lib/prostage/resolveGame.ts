@@ -52,11 +52,16 @@ const LEAGUE_PREFIX_TO_SLUG: Array<[string, string]> = [
   ["LTA", "lta_cross"], // LTA umbrella; cross-conference schedule is the broad net
 ];
 // International events have no shared page-tree root, so match by contained name.
+// "Esports World Cup" added 2026-07-19 alongside the tournaments.ts ingest fix
+// (real page: "Esports World Cup 2026") — slug live-verified against
+// getLeagues() the same day: league id 116838530616006090, slug "ewc_lol",
+// name "Esports World Cup".
 const EVENT_CONTAINS_TO_SLUG: Array<[string, string]> = [
   ["Mid-Season Invitational", "msi"],
   ["MSI", "msi"],
   ["World Championship", "worlds"],
   ["Worlds", "worlds"],
+  ["Esports World Cup", "ewc_lol"],
 ];
 
 /** Maps a Leaguepedia overview_page to a lolesports league slug, or null when

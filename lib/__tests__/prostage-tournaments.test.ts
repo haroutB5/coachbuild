@@ -140,6 +140,22 @@ describe("resolveActiveTournaments", () => {
     expect(where).toContain('OverviewPage LIKE "%Worlds%"');
     expect(pages).toEqual(["2026 Mid-Season Invitational"]);
   });
+
+  it("resolves the real 2026 Esports World Cup page (regression for the 2026-07-19 missing-EWC bug report)", async () => {
+    // Bug report: Pro Play stopped at Jul 12 (MSI), missing the ongoing
+    // Esports World Cup 2026 (Jul 15-19). Root cause: none of the prior
+    // patterns matched "Esports World Cup 2026" — it doesn't contain
+    // "Worlds"/"World Championship" (it's a third-party event, not a
+    // Riot-run international).
+    vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([
+      { OverviewPage: "Esports World Cup 2026" },
+    ] as never);
+    const pages = await resolveActiveTournaments();
+    const [queryArgs] = vi.mocked(cargoQueryWithRetry).mock.calls[0];
+    const where = (queryArgs as { where: string }).where;
+    expect(where).toContain('OverviewPage LIKE "%Esports World Cup%"');
+    expect(pages).toEqual(["Esports World Cup 2026"]);
+  });
 });
 
 describe("orderByStaleness", () => {
