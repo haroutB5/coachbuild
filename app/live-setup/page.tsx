@@ -191,10 +191,26 @@ export default function LiveSetupPage() {
           )}
 
           {probeState?.kind === "lna-denied" && (
-            <p className="text-[11.5px] text-bad">
-              Blocked by your browser. Click the lock icon in the address bar &rarr; Site settings
-              &rarr; allow &quot;Local network access&quot;, then test again.
-            </p>
+            <div className="text-[11.5px] text-bad space-y-1">
+              <p>
+                Blocked by your browser.
+              </p>
+              <p>
+                <span className="font-semibold">Chrome / Edge:</span> click the lock icon in the
+                address bar &rarr; Site settings &rarr; allow &quot;Local network access&quot;, then test again.
+              </p>
+              <p>
+                <span className="font-semibold">Brave:</span> open{" "}
+                <code className="text-[10.5px]">brave://settings/content/localhostAccess</code> and add{" "}
+                <code className="text-[10.5px]">https://coachbuild.vercel.app</code> under
+                &quot;Allowed to access localhost&quot; (Brave blocks silently instead of prompting), then reload
+                and test again.
+              </p>
+              <p className="text-mut">
+                This can also appear when the companion simply isn&apos;t running — check the system
+                tray first before changing browser settings.
+              </p>
+            </div>
           )}
 
           {probeState?.kind === "no-companion" && (

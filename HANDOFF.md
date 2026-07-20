@@ -5688,3 +5688,41 @@ Cross-checked against `app/api/mock-companion/route.ts` (engy's dev-aid fixture,
 - Suggest a quick manual check of the two `/live-setup` PowerShell one-liners against the real `companion.ps1`'s actual `param()` block once merged (deviation item 4).
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-20 19:57
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-20 17:57:28Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-20 — companion v1.1.0 follow-up (real-device findings, shipped 0.32.2)
+
+Two findings from the user's actual gaming PC (Win11) on the v1.0.0/v0.32.0 companion, fixed in `public/companion.ps1`:
+
+1. **Silent autostart.** `-Install` used to write a Startup `.lnk` (`powershell.exe -WindowStyle Hidden`). Windows Terminal is Win11's default terminal and ignores `-WindowStyle Hidden` on the process it spawns, so the tray app's autostart showed a visible console tab. Replaced with `New-CompanionAutostartVbs` writing `CoachBuildCompanion.vbs` (`WScript.Shell.Run ..., 0, False` — window-flag 0 is honored regardless of default-terminal setting). `-Install` removes any prior `.lnk`; `-Uninstall` removes both `.lnk` and `.vbs`.
+2. **Pairing unreachable before first champ select.** Session token was per-launch and only reached the browser via a champ-select deep-link. Added `Get-OrCreateSessionToken` (persists to `%LOCALAPPDATA%\CoachBuild\companion-session.txt`, per-launch GUID fallback on IO failure). `Start-Companion` now loads the persistent token before starting the bridge; tray "Reopen page" opens `/live-setup?session=<token>` when no champion has opened yet (previously opened the bare home page, no session); `-Install` auto-opens `/live-setup?session=<token>` once after writing the autostart entry.
+
+COMPANION_VERSION → 1.1.0 (`public/companion.version` matches). `-SelfTest` gained two assertions: session-token persistence round-trip against an isolated, self-cleaning temp dir, and autostart-VBS well-formedness (regex + AppOrigin substring check). Both `-SelfTest` and `-Mock -Once` stay green.
+
+`/live-setup/page.tsx` copy reviewed, not touched — "open this page from the companion's tray menu... first" is now literally true given fix #2, no tweak needed.
+
+Shipped as v0.32.2: `verify-fix.sh` clean (tsc/lint/739 tests/build/sw/manifest), committed as harout_b5@live.com, deployed via `vercel --prod --archive=tgz`, prod-verified: `companion.version` → `{"version":"1.1.0"}`, `companion.ps1` contains the VBS installer + `Get-OrCreateSessionToken` + `Version = '1.1.0'`, both served with `Cache-Control: no-store`.
+
+### User migration steps (they have the OLD .lnk + a running v1.0.0 companion)
+1. Right-click the tray icon → **Quit** (stops the old companion).
+2. Open Startup folder (`Win+R` → `shell:startup`) and delete `CoachBuildCompanion.lnk` if present (the new `-Install` would do this automatically on next run, but the old companion is still running the old script until relaunched, so doing it by hand first is cleaner — no functional harm either way since `-Install` is idempotent about it).
+3. Run the persistent-install one-liner from `/live-setup` again: `& ([scriptblock]::Create((irm https://coachbuild.vercel.app/companion.ps1))) -Install` — this writes the new silent `.vbs`, removes the old `.lnk` if still there, and auto-opens the pairing page with a durable session token.
+4. Confirm: no console window appears, tray icon shows, `/live-setup` Test Connection goes green without needing to enter champ select first.
+5. Next login, only the `.vbs` autostarts — no more `.lnk`.
+
+
+
