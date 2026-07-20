@@ -74,14 +74,46 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.0.0'
+    Version     = '1.1.0'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
     LivePollMs  = 1000
+    # Per-launch fallback only -- Start-Companion / Install-Companion both
+    # overwrite this with the persistent token from Get-OrCreateSessionToken
+    # before it's used for real. -SelfTest/-Mock pass their own explicit
+    # tokens and never touch this value or the on-disk file.
     Session     = ([guid]::NewGuid().ToString('N'))
 }
 $script:MockMode = $false
+#endregion
+
+#region SessionToken
+function Get-OrCreateSessionToken {
+    # Session used to be purely per-launch (a fresh GUID every time the
+    # companion started), which meant pairing (/live-setup Test Connection)
+    # was only reachable via a champ-select deep-link -- impossible to test
+    # before ever entering champ select. Persisting the token means: (a) the
+    # browser's already-stored session (localStorage, companionClient.ts)
+    # stays valid across companion restarts, and (b) -Install can open the
+    # pairing page immediately with a real, durable token. Falls back to a
+    # per-launch GUID on any IO failure (read-only profile, locked file,
+    # AV interference, etc.) -- never blocks startup over this.
+    param([string]$BaseDir = (Join-Path $env:LOCALAPPDATA 'CoachBuild'))
+    $path = Join-Path $BaseDir 'companion-session.txt'
+    try {
+        if (-not (Test-Path $BaseDir)) { New-Item -ItemType Directory -Path $BaseDir -Force | Out-Null }
+        if (Test-Path $path) {
+            $existing = (Get-Content -Path $path -Raw -ErrorAction Stop).Trim()
+            if ($existing) { return $existing }
+        }
+        $token = [guid]::NewGuid().ToString('N')
+        Set-Content -Path $path -Value $token -NoNewline -Encoding ASCII -ErrorAction Stop
+        return $token
+    } catch {
+        return [guid]::NewGuid().ToString('N')
+    }
+}
 #endregion
 
 #region SingleInstance
@@ -486,6 +518,7 @@ function Start-Companion {
         return
     }
 
+    $script:Config.Session = Get-OrCreateSessionToken
     $script:Bridge = Start-BridgeServer -AppOrigin $script:Config.AppOrigin -Ports $script:Config.BridgePorts -Session $script:Config.Session -Version $script:Config.Version
     $script:ChampSelectState = @{ LastOpenedChampId = $null; LastOpenedRoleId = $null }
     $script:WasChampSelect = $false
@@ -509,7 +542,9 @@ function Start-Companion {
             $url = Get-DeepLinkUrl -AppOrigin $script:Config.AppOrigin -SessionToken $script:Config.Session -ChampionId $champId -RoleId $roleId
             Open-CompanionUrl -Url $url
         } else {
-            Open-CompanionUrl -Url $script:Config.AppOrigin
+            # No champ-select open yet this run -- still carry the session so
+            # /live-setup's Test Connection isn't greyed out on first use.
+            Open-CompanionUrl -Url "$($script:Config.AppOrigin)/live-setup?session=$($script:Config.Session)"
         }
     })
     $quitItem.add_Click({
@@ -549,27 +584,56 @@ function Test-AutoUpdate {
 #endregion
 
 #region Install
+function New-CompanionAutostartVbs {
+    # Windows Terminal is the default terminal on Win11 and IGNORES
+    # -WindowStyle Hidden on the powershell.exe process it spawns -- a
+    # .lnk-based autostart (the original v1.0.0 approach) shows a visible
+    # console tab. WScript.Shell.Run's window-style flag (0 = hidden) is
+    # honored regardless of the default-terminal setting, so autostart is a
+    # silent .vbs launcher instead. Built via string concatenation (not one
+    # big escaped literal) so the doubled "" VBS-string-escaping stays
+    # readable: part1/part2 are single-quoted PS strings (no escaping needed
+    # since they contain only double-quotes), AppOrigin is spliced in the
+    # middle.
+    param([string]$AppOrigin)
+    $part1 = 'CreateObject("WScript.Shell").Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ""irm '
+    $part2 = '/companion.ps1 | iex""", 0, False'
+    return $part1 + $AppOrigin + $part2
+}
+
 function Install-Companion {
-    $wsh = New-Object -ComObject WScript.Shell
     $startup = [Environment]::GetFolderPath('Startup')
     $lnkPath = Join-Path $startup 'CoachBuildCompanion.lnk'
-    $shortcut = $wsh.CreateShortcut($lnkPath)
-    $shortcut.TargetPath = 'powershell.exe'
-    $shortcut.Arguments = "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"irm $($script:Config.AppOrigin)/companion.ps1 | iex`""
-    $shortcut.Description = 'CoachBuild Live companion'
-    $shortcut.Save()
-    Write-Host "Installed startup shortcut: $lnkPath"
+    $vbsPath = Join-Path $startup 'CoachBuildCompanion.vbs'
+
+    if (Test-Path $lnkPath) {
+        Remove-Item $lnkPath -Force
+        Write-Host "Removed old startup shortcut: $lnkPath"
+    }
+
+    $vbsContent = New-CompanionAutostartVbs -AppOrigin $script:Config.AppOrigin
+    Set-Content -Path $vbsPath -Value $vbsContent -Encoding ASCII -NoNewline
+    Write-Host "Installed silent startup launcher: $vbsPath"
+
+    # Install -> pair is one flow: open the pairing page immediately with a
+    # durable (persisted) session token, so Test Connection works right away
+    # instead of waiting for the first champ select.
+    $token = Get-OrCreateSessionToken
+    try { Start-Process "$($script:Config.AppOrigin)/live-setup?session=$token" | Out-Null } catch {}
 }
 
 function Uninstall-Companion {
     $startup = [Environment]::GetFolderPath('Startup')
-    $lnkPath = Join-Path $startup 'CoachBuildCompanion.lnk'
-    if (Test-Path $lnkPath) {
-        Remove-Item $lnkPath -Force
-        Write-Host "Removed $lnkPath"
-    } else {
-        Write-Host 'No startup shortcut found.'
+    $removedAny = $false
+    foreach ($name in 'CoachBuildCompanion.lnk', 'CoachBuildCompanion.vbs') {
+        $p = Join-Path $startup $name
+        if (Test-Path $p) {
+            Remove-Item $p -Force
+            Write-Host "Removed $p"
+            $removedAny = $true
+        }
     }
+    if (-not $removedAny) { Write-Host 'No startup entry found.' }
 }
 #endregion
 
@@ -753,6 +817,33 @@ function Invoke-SelfTest {
 
     Stop-BridgeServer -Bridge $bridge
     Stop-MockLcu -Mock $mockLcu
+
+    # 7. Session token persistence round-trip -- isolated temp dir, never
+    # touches the real %LOCALAPPDATA%\CoachBuild. Cleaned up regardless of
+    # outcome so SelfTest never litters the machine it runs on.
+    $tmpSessionDir = Join-Path $env:TEMP ("coachbuild-selftest-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $tok1 = Get-OrCreateSessionToken -BaseDir $tmpSessionDir
+        $tok2 = Get-OrCreateSessionToken -BaseDir $tmpSessionDir
+        if ([string]::IsNullOrEmpty($tok1)) { $failures.Add('Get-OrCreateSessionToken returned empty on first call') }
+        if ($tok1 -ne $tok2) { $failures.Add("Session token not stable across calls: '$tok1' vs '$tok2'") }
+        $sessionFilePath = Join-Path $tmpSessionDir 'companion-session.txt'
+        if (-not (Test-Path $sessionFilePath)) { $failures.Add("Session token file not created at $sessionFilePath") }
+    } catch {
+        $failures.Add("Session token persistence threw: $($_.Exception.Message)")
+    } finally {
+        try { Remove-Item $tmpSessionDir -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+    }
+
+    # 8. Autostart VBS content is well-formed (window-style flag 0 = hidden,
+    # correct AppOrigin spliced in, valid VBS string-escaping).
+    $vbs = New-CompanionAutostartVbs -AppOrigin 'https://coachbuild.vercel.app'
+    if ($vbs -notmatch '^CreateObject\("WScript\.Shell"\)\.Run "powershell\.exe .*", 0, False$') {
+        $failures.Add("Autostart VBS content malformed: $vbs")
+    }
+    if ($vbs -notlike '*irm https://coachbuild.vercel.app/companion.ps1 | iex*') {
+        $failures.Add("Autostart VBS missing expected install command: $vbs")
+    }
 
     if ($failures.Count -gt 0) {
         Write-Host "SELFTEST FAILED ($($failures.Count)):" -ForegroundColor Red

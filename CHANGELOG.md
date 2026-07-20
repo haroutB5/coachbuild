@@ -2,6 +2,12 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.32.2] — 2026-07-20
+### Fixed (companion v1.1.0, two real-device findings from gaming-PC testing)
+- **Silent autostart.** `-Install` wrote a Startup `.lnk` targeting `powershell.exe -WindowStyle Hidden`, but Windows Terminal (Win11's default terminal) ignores `-WindowStyle Hidden` on the process it spawns — autostart showed a visible console tab. Replaced with a silent `.vbs` launcher (`WScript.Shell.Run ..., 0, False`, whose hidden-window flag is honored regardless of the default-terminal setting). `-Install` now also removes any old `.lnk` from a prior install; `-Uninstall` removes both forms.
+- **Pairing impossible before first champ select.** The bridge session token was purely per-launch and only ever reached the browser via a champ-select deep-link, so `/live-setup`'s Test Connection was permanently greyed out until the user's first champ select. Fixed three ways: the token now persists to `%LOCALAPPDATA%\CoachBuild\companion-session.txt` (read-if-exists, else generate+write, per-launch GUID fallback on any IO failure — same security posture, still 127.0.0.1-only + exact-Origin gated); tray "Reopen page" now opens `/live-setup?session=<token>` when no champion has been opened yet this run (previously opened the bare home page with no session at all); `-Install` finishes by auto-opening the pairing page once, so install→pair is one flow instead of two.
+- COMPANION_VERSION bumped to 1.1.0 (`public/companion.version`); `-SelfTest` extended with a session-token persistence round-trip (isolated temp dir, self-cleaning) and an autostart-VBS well-formedness check.
+
 ## [0.32.1] — 2026-07-20
 ### Added
 - "Companion" footer link in the sidebar (both desktop and collapsed/mobile layouts) opening `/live-setup`.
