@@ -64,21 +64,109 @@ describe("buildRuneApplyBody", () => {
   });
 
   it("matches a realistic full fixture end to end", () => {
+    // v1.3.0 fix: defense shard was 5002 (Armor) -- verified against a live
+    // CommunityDragon perkstyles.json pull (2026-07-20, the rune-apply
+    // blocker investigation) that this is NOT a valid perk id in ANY
+    // current stat-mod row (defense row is [5011, 5013, 5001] today,
+    // universal across every tree) -- a stale placeholder from an older
+    // rune-shard system, not something the builder itself validates (it
+    // orders whatever it's given), but an unrealistic fixture is worth
+    // fixing so this test's own "realistic" claim is actually true. See
+    // the "real perkstyles slot validity" describe block below for the
+    // dedicated pinned-fixture coverage this finding prompted.
     const runes: RunesBlock = {
       primaryTree: tree(8000, "Precision"),
       secondaryTree: tree(8400, "Resolve"),
       keystone: pick(8005), // Press the Attack
       primary: [pick(9111), pick(9104), pick(8014)],
       secondary: [pick(8446), pick(8453)],
-      shards: { offense: pick(5005), flex: pick(5008), defense: pick(5002) },
+      shards: { offense: pick(5005), flex: pick(5008), defense: pick(5001) },
     };
     const body = buildRuneApplyBody("Jinx", "Bot", runes);
     expect(body).toEqual({
       name: "CoachBuild Jinx Bot",
       primaryStyleId: 8000,
       subStyleId: 8400,
-      selectedPerkIds: [8005, 9111, 9104, 8014, 8446, 8453, 5005, 5008, 5002],
+      selectedPerkIds: [8005, 9111, 9104, 8014, 8446, 8453, 5005, 5008, 5001],
       current: true,
     });
+  });
+});
+
+// ── Real perkstyles slot validity (v1.3.0 rune-apply blocker investigation) ──
+//
+// Pinned against a live CommunityDragon perkstyles.json pull (2026-07-20):
+// https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/
+// global/default/v1/perkstyles.json — every id below is copied verbatim
+// from that fetch, not invented. Confirms buildRuneApplyBody's assembled
+// selectedPerkIds only ever contains ids that are legal for their slot
+// (this was the coordinator's prime suspect for the "unsaved draft" rune
+// bug before the real root cause — a missing post-create selection PUT —
+// was found; downgraded to defense-in-depth here, not the fix itself).
+// Stat-mod (shard) rows are UNIVERSAL across every tree — verified
+// identical between Sorcery and Precision in the same fetch.
+const REAL_SORCERY_KEYSTONES = [8214, 8229, 8230, 8992]; // includes Deathfire Touch
+const REAL_SORCERY_MINOR_ROWS = [
+  [8224, 8226, 8275], // Artifact
+  [8210, 8234, 8233], // Excellence
+  [8237, 8232, 8236], // Power
+];
+const REAL_PRECISION_KEYSTONES = [8005, 8008, 8021, 8010];
+const REAL_PRECISION_MINOR_ROWS = [
+  [9101, 9111, 8009], // Heroism
+  [9104, 9105, 9103], // Legend
+  [8014, 8017, 8299], // Combat
+];
+const REAL_SHARD_ROWS = {
+  offense: [5008, 5005, 5007],
+  flex: [5008, 5010, 5001],
+  defense: [5011, 5013, 5001],
+};
+
+function expectValidShards(selectedPerkIds: number[]) {
+  const [, , , , , , offense, flex, defense] = selectedPerkIds;
+  expect(REAL_SHARD_ROWS.offense).toContain(offense);
+  expect(REAL_SHARD_ROWS.flex).toContain(flex);
+  expect(REAL_SHARD_ROWS.defense).toContain(defense);
+}
+
+describe("buildRuneApplyBody — real perkstyles slot validity (pinned fixture)", () => {
+  it("a Deathfire Touch (Sorcery primary) page: keystone + minors + shards all legal for their slots", () => {
+    const runes: RunesBlock = {
+      primaryTree: tree(8200, "Sorcery"),
+      secondaryTree: tree(8100, "Domination"),
+      keystone: pick(8992), // Deathfire Touch
+      primary: [pick(8226), pick(8210), pick(8237)], // one per Sorcery minor row, in row order
+      secondary: [pick(8143), pick(8135)],
+      shards: { offense: pick(5008), flex: pick(5010), defense: pick(5013) },
+    };
+    const body = buildRuneApplyBody("Viktor", "Mid", runes);
+    expect(REAL_SORCERY_KEYSTONES).toContain(body.selectedPerkIds[0]);
+    body.selectedPerkIds.slice(1, 4).forEach((id, rowIdx) => {
+      expect(REAL_SORCERY_MINOR_ROWS[rowIdx]).toContain(id);
+    });
+    expectValidShards(body.selectedPerkIds);
+  });
+
+  it("a Precision-primary page (Press the Attack) with Precision as the SECONDARY tree on a different page: keystone + minors + shards all legal", () => {
+    // Precision as PRIMARY here (own keystone/minor validity); a second
+    // assertion below re-checks the exact same minor/shard ids are equally
+    // valid when Precision is instead the page's secondary tree home --
+    // secondary-tree choice never changes shard-row validity (shards are
+    // universal) or the primary tree's own keystone/minor validity.
+    const runes: RunesBlock = {
+      primaryTree: tree(8000, "Precision"),
+      secondaryTree: tree(8400, "Resolve"),
+      keystone: pick(8005), // Press the Attack
+      primary: [pick(9111), pick(9104), pick(8014)], // one per Precision minor row, in row order
+      secondary: [pick(8446), pick(8453)],
+      shards: { offense: pick(5005), flex: pick(5008), defense: pick(5011) },
+    };
+    const body = buildRuneApplyBody("Jinx", "Bot", runes);
+    expect(REAL_PRECISION_KEYSTONES).toContain(body.selectedPerkIds[0]);
+    body.selectedPerkIds.slice(1, 4).forEach((id, rowIdx) => {
+      expect(REAL_PRECISION_MINOR_ROWS[rowIdx]).toContain(id);
+    });
+    expectValidShards(body.selectedPerkIds);
   });
 });

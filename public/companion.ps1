@@ -17,15 +17,31 @@ COMPLIANCE BRIGHT LINES (product law -- do not cross, ever):
     LOCAL USER'S OWN summonerId, purely to address their own
     /lol-item-sets/v1/item-sets/{id}/sets -- never another player's identity,
     never surfaced anywhere, never logged.
-  - Rune-page apply happens ONLY via a user-clicked button on the web app
-    (POST /apply-runes) -- runes stay STRICTLY manual, never auto-exported.
+  - v1.3.0 COMPLIANCE UPDATE (deliberate, documented -- supersedes the prior
+    "runes strictly user-clicked" line): rune WRITES may now fire
+    automatically on a champ-select deep-link too (same class as a
+    Blitz/Moba auto-import -- an inert loadout write, not a game action;
+    the player never acted on their behalf, the client just now shows a
+    different rune page the player still has to accept/play with). Both
+    rune apply (POST /apply-runes, mode:'auto'|'manual') and item-set
+    writes (POST /apply-itemsets) MAY auto-export on a champ-select deep-
+    link (opt-out toggles, /live-setup, both default ON once paired). The
+    one bright line that does NOT move: auto mode must NEVER delete a rune
+    page it doesn't own -- it only ever replaces a page it PREVIOUSLY
+    created (title starts with "CoachBuild") or uses a genuinely free slot;
+    if neither is available it returns {reason:'slots-full'} and touches
+    NOTHING, full stop (SelfTest-pinned: an adversarial 5-page, 0-CoachBuild
+    fixture in auto mode must never issue a single DELETE call). Manual
+    mode (the user-clicked button) keeps the original consented behavior --
+    it may still replace whatever page is currently selected, exactly as
+    before, since a real click is real consent.
   - Item-SET writes (POST /apply-itemsets) are inert shop-panel suggestions
     (same class as Blitz/u.gg's auto-import; compliance-fine, not gameplay
-    automation) -- these MAY be exported automatically on a champ-select
-    deep-link (opt-out toggle, /live-setup), unlike runes. The distinction:
-    an item set is a passive shopping suggestion the player still chooses
-    item-by-item in the store; it does not act in the game on the player's
-    behalf the way an auto-pick/auto-lock would.
+    automation). The distinction that makes BOTH rune-auto-export and
+    item-set-auto-export fine while game-action-automation never is: a
+    rune page or item set is a passive loadout/shopping suggestion the
+    player still has to accept and play with; it does not act in the game
+    on the player's behalf the way an auto-pick/auto-lock/auto-accept would.
   - /live is a raw, unmodified passthrough of the official Live Client Data
     API (127.0.0.1:2999). No cooldown/timer/power-spike computation here or
     anywhere downstream in this repo.
@@ -56,9 +72,35 @@ WIRE CONTRACT (must match components/live/companionClient.ts exactly):
                                   contains the session token or a name)}
   - GET  /live         -> 200 <raw allgamedata JSON> | 200 {error:"no-live"}
   - POST /apply-runes  body {name, primaryStyleId, subStyleId,
-                              selectedPerkIds:number[9], current:true}
-                       -> 200 {ok:true}
+                              selectedPerkIds:number[9], current:true,
+                              mode:'auto'|'manual' (optional, validated,
+                                defaults to 'manual' for back-compat with
+                                pre-1.3.0 web builds)}
+                       -> 200 {ok:true, selected:boolean, verified:boolean,
+                                mismatch:string[]}
                         | 200 {ok:false, reason:string, hint?:string}
+    Page-selection logic (BOTH modes): GET /lol-perks/v1/pages (only
+    isDeletable:true pages count -- preset/default pages never do). A page
+    titled starting "CoachBuild" already exists -> DELETE the oldest such
+    page -> POST (replaces OUR OWN prior page, either mode). None exists ->
+    is there a free slot (GET /lol-perks/v1/inventory ownedPageCount vs the
+    editable-page count when available; else a speculative POST, since the
+    LCU itself rejects a full inventory) -> POST directly, no delete at
+    all. Genuinely full AND no CoachBuild page to replace: mode='manual'
+    (a real user click = real consent) falls back to the ORIGINAL behavior
+    -- GET currentpage -> DELETE it -> POST; mode='auto' NEVER deletes a
+    page it doesn't own -> {ok:false, reason:'slots-full', hint:'all rune
+    pages are yours -- click Apply runes to replace the current one'}.
+    Post-create SELECTION (v1.3.0 blocker fix, live-reported: a created page
+    saved correctly but the client stayed on a fresh "ADD NEW PAGE" editor --
+    `current:true` in the POST body alone does NOT select it): after every
+    successful create, PUT the raw page id to /lol-perks/v1/currentpage,
+    then GET /lol-perks/v1/currentpage back and compare id/name/
+    selectedPerkIds to what was sent -- `selected` reflects whether the PUT
+    succeeded, `verified`/`mismatch` reflect whether the readback matches
+    byte-for-byte (a failed selection or a content mismatch still reports
+    ok:true -- the page WAS created -- so the web toast can say "saved --
+    pick it in the client" rather than falsely implying full success).
   - POST /apply-itemsets body {championId:int, sets:ItemSet[] (1-3, each
                                 title MUST start with "CoachBuild" -- the
                                 bridge validates this defensively and
@@ -141,7 +183,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.2.2'
+    Version     = '1.3.0'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -307,7 +349,12 @@ function Invoke-LcuRaw {
         # Encoding it ourselves here sidesteps that entirely, for BOTH
         # rune bodies (ASCII today, but not guaranteed forever) and item-set
         # bodies (titles carry a real em-dash from itemSetBody.ts).
-        $json = $Body | ConvertTo-Json -Depth 10 -Compress
+        # -InputObject, not piped: piping an empty ARRAY into ConvertTo-Json
+        # unrolls it to zero pipeline objects and produces no output at all
+        # (see Write-JsonResponse's identical fix) -- defensive here too,
+        # even though $Body is a hashtable/object/scalar in every call site
+        # today, never a bare empty array.
+        $json = ConvertTo-Json -InputObject $Body -Depth 10 -Compress
         $params.Body = [Text.Encoding]::UTF8.GetBytes($json)
         $params.ContentType = 'application/json'
     }
@@ -350,8 +397,19 @@ function Set-CorsHeaders {
 }
 
 function Write-JsonResponse {
+    # v1.3.0 bug (found via SelfTest on an empty rune-pages fixture): PIPING
+    # an object into ConvertTo-Json (`$Obj | ConvertTo-Json`) unrolls an
+    # ARRAY into the pipeline one element at a time -- for a genuinely EMPTY
+    # array that means ConvertTo-Json receives ZERO pipeline objects and
+    # produces NO output at all (not the JSON literal "[]"), leaving $json
+    # as $null; GetBytes($null) below then throws, and every caller's own
+    # try/catch turns that into an opaque 500. -InputObject treats the
+    # array as ONE value instead of unrolling it, so an empty array
+    # correctly serializes to "[]" -- this is the fix for @{} routes ever
+    # writing an empty collection (e.g. /lol-perks/v1/pages with zero
+    # custom pages).
     param($Response, [int]$StatusCode, $Obj)
-    $json = $Obj | ConvertTo-Json -Depth 10 -Compress
+    $json = ConvertTo-Json -InputObject $Obj -Depth 10 -Compress
     $bytes = [Text.Encoding]::UTF8.GetBytes($json)
     $Response.StatusCode = $StatusCode
     $Response.ContentType = 'application/json'
@@ -360,25 +418,130 @@ function Write-JsonResponse {
     $Response.OutputStream.Close()
 }
 
-function Invoke-ApplyRunes {
-    # Importer pattern: GET current page -> DELETE it -> POST the new page.
-    # Bug #1013 (RiotGames/developer-relations): DELETE on an isDeletable
-    # page can falsely fail -- fail SOFT here (never attempt the POST after
-    # a failed delete) and surface a manual-delete hint instead of retrying
-    # or forcing anything.
-    param($Body, [int]$LcuPort, [string]$LcuToken, [string]$Scheme = 'https')
+function Complete-RuneApply {
+    # v1.3.0 BLOCKER FIX (live-reported, 2nd screenshot): the created page
+    # DID save correctly (creation was never the bug) -- the client just
+    # stayed on a fresh "ADD NEW PAGE" editor instead of switching to it.
+    # `current:true` in the POST body is evidently NOT sufficient to select
+    # a page in the live client. Fix: PUT the raw page id to
+    # /lol-perks/v1/currentpage right after a successful create -- the
+    # documented post-create selection call (the old "never PUT currentpage
+    # to an uncreated page" warning is about PUTting BEFORE creation, not
+    # after). Fail-soft: a failed selection PUT still reports ok:true (the
+    # page WAS created) but selected:false, so the web toast can say "saved
+    # -- pick it in the client" instead of falsely implying it's active.
+    #
+    # Verify-by-readback: GET currentpage back and compare id/name/
+    # selectedPerkIds to what we sent -- catches a silent partial apply
+    # (some slots didn't stick) instead of trusting a 2xx blindly.
+    param($PostResult, $Body, [int]$LcuPort, [string]$LcuToken, [string]$Scheme)
+    $pageId = $PostResult.Content.id
+    $selected = $false
+    if ($pageId) {
+        $selectPut = Invoke-LcuRaw -Method PUT -Path '/lol-perks/v1/currentpage' -Body $pageId -Port $LcuPort -Token $LcuToken -Scheme $Scheme
+        $selected = [bool]$selectPut.Ok
+    }
+
+    $verified = $false
+    $mismatch = @()
     $current = Invoke-LcuRaw -Method GET -Path '/lol-perks/v1/currentpage' -Port $LcuPort -Token $LcuToken -Scheme $Scheme
-    if ($current.Ok -and $current.Content -and $current.Content.id) {
-        $del = Invoke-LcuRaw -Method DELETE -Path "/lol-perks/v1/pages/$($current.Content.id)" -Port $LcuPort -Token $LcuToken -Scheme $Scheme
+    if ($current.Ok -and $current.Content -and $pageId -and ([string]$current.Content.id -eq [string]$pageId)) {
+        if ($current.Content.name -ne $Body.name) { $mismatch += 'name' }
+        $gotPerks = @($current.Content.selectedPerkIds)
+        $wantPerks = @($Body.selectedPerkIds)
+        if ($gotPerks.Count -ne $wantPerks.Count) {
+            $mismatch += 'selectedPerkIds'
+        } else {
+            for ($i = 0; $i -lt $wantPerks.Count; $i++) {
+                if ([int]$gotPerks[$i] -ne [int]$wantPerks[$i]) { $mismatch += "selectedPerkIds[$i]"; break }
+            }
+        }
+        $verified = $mismatch.Count -eq 0
+    }
+
+    return [pscustomobject]@{ ok = $true; selected = $selected; verified = $verified; mismatch = $mismatch }
+}
+
+function Invoke-ApplyRunes {
+    # v1.3.0 SAFETY REDESIGN: the original importer pattern (GET currentpage
+    # -> DELETE it -> POST) deletes WHATEVER page happens to be selected --
+    # fine under a real user click (real consent), unacceptable to ever
+    # auto-fire (could silently wipe a page that isn't ours at all). New
+    # page-selection logic, same for BOTH modes: prefer replacing a page WE
+    # created (title starts with "CoachBuild"); else use a genuinely free
+    # slot; only fall back to "delete whatever's selected" in manual mode,
+    # where a real click IS real consent. Auto mode NEVER deletes a
+    # non-CoachBuild page -- SelfTest-pinned (adversarial 5-page,
+    # 0-CoachBuild fixture must produce zero DELETE calls).
+    # Bug #1013 (RiotGames/developer-relations): DELETE on an isDeletable
+    # page can falsely fail -- fail SOFT everywhere (never attempt a POST
+    # after a failed delete) and surface a manual-delete hint instead of
+    # retrying or forcing anything.
+    param($Body, [int]$LcuPort, [string]$LcuToken, [string]$Scheme = 'https', [string]$Mode = 'manual')
+
+    $pagesResult = Invoke-LcuRaw -Method GET -Path '/lol-perks/v1/pages' -Port $LcuPort -Token $LcuToken -Scheme $Scheme
+    if (-not $pagesResult.Ok) {
+        # NOTE: only $pagesResult.Ok gates this -- a genuinely EMPTY pages
+        # array is a legitimate, successful response (no custom pages yet),
+        # not a failure. PS 5.1's ConvertFrom-Json famously returns $null
+        # (not @()) for the JSON literal "[]", so `$null -eq Content` is NOT
+        # a reliable failure signal here; @() below normalizes either shape
+        # to zero usable pages.
+        return [pscustomobject]@{ ok = $false; reason = 'read-failed'; hint = 'could not read existing rune pages -- nothing was changed' }
+    }
+    # Only DELETABLE (custom) pages count toward slot usage or are eligible
+    # CoachBuild-page targets -- preset/default pages that ship with the
+    # client can't be removed and were never ours to begin with.
+    $editablePages = @(@($pagesResult.Content) | Where-Object { $_.isDeletable -eq $true })
+    $coachPages = @($editablePages | Where-Object { $_.name -and ([string]$_.name).StartsWith('CoachBuild') })
+
+    if ($coachPages.Count -gt 0) {
+        # A CoachBuild page already exists -- replace THAT one (oldest by
+        # id if several), never anyone else's page, in EITHER mode.
+        $target = ($coachPages | Sort-Object -Property id)[0]
+        $del = Invoke-LcuRaw -Method DELETE -Path "/lol-perks/v1/pages/$($target.id)" -Port $LcuPort -Token $LcuToken -Scheme $Scheme
         if (-not $del.Ok) {
             return [pscustomobject]@{ ok = $false; reason = 'delete-failed'; hint = 'delete a rune page manually and retry' }
         }
+        $post = Invoke-LcuRaw -Method POST -Path '/lol-perks/v1/pages' -Body $Body -Port $LcuPort -Token $LcuToken -Scheme $Scheme
+        if (-not $post.Ok) { return [pscustomobject]@{ ok = $false; reason = 'create-failed' } }
+        return Complete-RuneApply -PostResult $post -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
     }
-    $post = Invoke-LcuRaw -Method POST -Path '/lol-perks/v1/pages' -Body $Body -Port $LcuPort -Token $LcuToken -Scheme $Scheme
-    if (-not $post.Ok) {
-        return [pscustomobject]@{ ok = $false; reason = 'create-failed' }
+
+    # No CoachBuild page yet -- is there a free slot? Prefer the
+    # inventory-reported cap when available (avoids a doomed POST attempt);
+    # fall back to a speculative POST when the endpoint's unavailable/
+    # unreadable (the LCU itself authoritatively rejects a full inventory).
+    $hasFreeSlot = $null
+    $inv = Invoke-LcuRaw -Method GET -Path '/lol-perks/v1/inventory' -Port $LcuPort -Token $LcuToken -Scheme $Scheme
+    if ($inv.Ok -and $inv.Content -and $inv.Content.ownedPageCount) {
+        $hasFreeSlot = $editablePages.Count -lt [int]$inv.Content.ownedPageCount
     }
-    return [pscustomobject]@{ ok = $true }
+
+    if ($hasFreeSlot -ne $false) {
+        $post = Invoke-LcuRaw -Method POST -Path '/lol-perks/v1/pages' -Body $Body -Port $LcuPort -Token $LcuToken -Scheme $Scheme
+        if ($post.Ok) { return Complete-RuneApply -PostResult $post -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme }
+        # POST failed -- the LCU's own rejection is authoritative regardless
+        # of what the inventory guess said; fall through to the full path.
+    }
+
+    if ($Mode -ne 'auto') {
+        # Manual mode, user consented via a real click: original behavior --
+        # delete whatever's currently selected, then POST.
+        $current = Invoke-LcuRaw -Method GET -Path '/lol-perks/v1/currentpage' -Port $LcuPort -Token $LcuToken -Scheme $Scheme
+        if ($current.Ok -and $current.Content -and $current.Content.id) {
+            $del = Invoke-LcuRaw -Method DELETE -Path "/lol-perks/v1/pages/$($current.Content.id)" -Port $LcuPort -Token $LcuToken -Scheme $Scheme
+            if (-not $del.Ok) {
+                return [pscustomobject]@{ ok = $false; reason = 'delete-failed'; hint = 'delete a rune page manually and retry' }
+            }
+        }
+        $post2 = Invoke-LcuRaw -Method POST -Path '/lol-perks/v1/pages' -Body $Body -Port $LcuPort -Token $LcuToken -Scheme $Scheme
+        if (-not $post2.Ok) { return [pscustomobject]@{ ok = $false; reason = 'create-failed' } }
+        return Complete-RuneApply -PostResult $post2 -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
+    }
+
+    # Auto mode, genuinely full, nothing of ours to replace: touch NOTHING.
+    return [pscustomobject]@{ ok = $false; reason = 'slots-full'; hint = 'all rune pages are yours -- click Apply runes to replace the current one' }
 }
 
 function Write-CompanionLog {
@@ -666,6 +829,23 @@ function Set-LastOpen {
     $script:LastOpenRecord = $entry
 }
 
+function Test-CompanionHasAttachedTab {
+    # v1.3.0 (attached-tab live-follow): a "tab is attached" when the web
+    # side has polled /status recently (see companionClient's follow poll,
+    # which stamps $Sync.LastStatusPollAt on the bridge side) -- if so,
+    # champ-select opens should NOT spawn a NEW tab on every hover change;
+    # the already-open tab live-follows via its own poll instead (page.tsx
+    # applies the new championId in place). 8s window: generous versus the
+    # web poll's own ~3s cadence, tight enough that a genuinely closed tab
+    # (no poll in 8s) still gets a fresh Start-Process on the next hover.
+    if (-not $script:Bridge -or -not $script:Bridge.Sync -or -not $script:Bridge.Sync.LastStatusPollAt) { return $false }
+    try {
+        return (New-TimeSpan -Start ([datetime]$script:Bridge.Sync.LastStatusPollAt) -End (Get-Date)).TotalSeconds -lt 8
+    } catch {
+        return $false
+    }
+}
+
 function Update-ChampSelectState {
     # Debounce rule (plan section 1): open once per champ-select, re-open ONLY on
     # an actual championId change. Never reopen on a timer tick or a
@@ -701,10 +881,19 @@ function Update-ChampSelectState {
 
     $State.LastOpenedChampId = $champId
     $State.LastOpenedRoleId = $roleId
-    $url = Get-DeepLinkUrl -AppOrigin $AppOrigin -SessionToken $SessionToken -ChampionId $champId -RoleId $roleId
-    Open-CompanionUrl -Url $url
+
+    # v1.3.0 (attached-tab live-follow): a tab is ALREADY open and actively
+    # polling -- don't spawn a new one on every hover, let it live-follow
+    # in place. Debounce state above still advances regardless (so we don't
+    # re-decide on every tick for the same champion), we just skip the
+    # actual Start-Process this one time.
+    $hasAttachedTab = Test-CompanionHasAttachedTab
+    if (-not $hasAttachedTab) {
+        $url = Get-DeepLinkUrl -AppOrigin $AppOrigin -SessionToken $SessionToken -ChampionId $champId -RoleId $roleId
+        Open-CompanionUrl -Url $url
+    }
     Set-LastOpen -ChampionId $champId -RoleId $roleId
-    Write-CompanionLog "champ-select open: champ=$champId role=$(if ($null -ne $roleId) { $roleId } else { 'none' })"
+    Write-CompanionLog "champ-select $(if ($hasAttachedTab) { 'update (tab attached)' } else { 'open' }): champ=$champId role=$(if ($null -ne $roleId) { $roleId } else { 'none' })"
 }
 #endregion
 
@@ -790,6 +979,14 @@ while ($Sync.Running) {
     $path = $req.Url.AbsolutePath
     try {
         if ($path -eq '/status' -and $req.HttpMethod -eq 'GET') {
+            # v1.3.0 (attached-tab live-follow): stamped on every
+            # AUTHORIZED /status GET (session+origin already validated
+            # above by the time this branch runs) -- this is how the
+            # champ-select open logic below knows a browser tab is still
+            # actively polling (i.e. "attached") and should be live-followed
+            # in place instead of getting a brand-new Start-Process tab on
+            # every hover change.
+            $Sync.LastStatusPollAt = (Get-Date).ToUniversalTime().ToString('o')
             Write-JsonResponse -Response $res -StatusCode 200 -Obj @{
                 version         = $Sync.Version
                 port            = $Sync.BridgePort
@@ -817,9 +1014,16 @@ while ($Sync.Running) {
                 Write-JsonResponse -Response $res -StatusCode 200 -Obj @{ ok = $false; reason = 'no-client' }
             } else {
                 $scheme = if ($Sync.LcuScheme) { $Sync.LcuScheme } else { 'https' }
-                $result = Invoke-ApplyRunes -Body $bodyObj -LcuPort $Sync.LcuPort -LcuToken $Sync.LcuToken -Scheme $scheme
+                # mode is validated here, not trusted verbatim: anything
+                # other than the literal string 'auto' degrades safely to
+                # 'manual' (back-compat default -- a garbage/missing value
+                # must never accidentally grant auto mode's different
+                # safety posture).
+                $mode = 'manual'
+                if ($bodyObj -and $bodyObj.mode -eq 'auto') { $mode = 'auto' }
+                $result = Invoke-ApplyRunes -Body $bodyObj -LcuPort $Sync.LcuPort -LcuToken $Sync.LcuToken -Scheme $scheme -Mode $mode
                 Write-JsonResponse -Response $res -StatusCode 200 -Obj $result
-                Write-CompanionLog "apply-runes: ok=$($result.ok) reason=$($result.reason)"
+                Write-CompanionLog "apply-runes: ok=$($result.ok) reason=$($result.reason) mode=$mode"
             }
         } elseif ($path -eq '/apply-itemsets' -and $req.HttpMethod -eq 'POST') {
             $reader = New-Object IO.StreamReader($req.InputStream, [Text.Encoding]::UTF8)
@@ -878,6 +1082,7 @@ function Start-BridgeServer {
         LastError           = $null
         LastErrorKey        = $null
         LastErrorAt         = $null
+        LastStatusPollAt    = $null
     })
 
     $rs = [runspacefactory]::CreateRunspace()
@@ -1094,17 +1299,76 @@ while ($Sync.Running) {
     $method = $req.HttpMethod
     [void]$Sync.Calls.Add($method)
     try {
-        if ($path -eq '/lol-perks/v1/currentpage' -and $method -eq 'GET') {
-            Write-JsonResponse -Response $res -StatusCode 200 -Obj @{ id = 12345; isDeletable = $true }
+        if ($path -eq '/lol-perks/v1/pages' -and $method -eq 'GET') {
+            Write-JsonResponse -Response $res -StatusCode 200 -Obj @($Sync.MockPages)
+        } elseif ($path -eq '/lol-perks/v1/inventory' -and $method -eq 'GET') {
+            if ($null -eq $Sync.MockInventory) {
+                Write-JsonResponse -Response $res -StatusCode 404 -Obj @{ error = 'mock-no-inventory' }
+            } else {
+                Write-JsonResponse -Response $res -StatusCode 200 -Obj $Sync.MockInventory
+            }
+        } elseif ($path -eq '/lol-perks/v1/currentpage' -and $method -eq 'GET') {
+            if ($Sync.MockCurrentPageOverride) {
+                # Test-only escape hatch: lets SelfTest simulate a readback
+                # that DOESN'T match what was actually posted (a silent
+                # partial apply) without needing the real LCU to misbehave.
+                Write-JsonResponse -Response $res -StatusCode 200 -Obj $Sync.MockCurrentPageOverride
+            } else {
+                # @() wraps the WHOLE filtered result (not just the source):
+                # a single-match Where-Object result unwraps to a bare
+                # object in PS5.1, and .Count on a bare (non-collection)
+                # object silently returns $null -- `$null -gt 0` is false,
+                # so an unwrapped single match would wrongly 404 here.
+                $cur = @(@($Sync.MockPages) | Where-Object { [string]$_.id -eq [string]$Sync.MockCurrentPageId })
+                if ($cur.Count -gt 0) {
+                    Write-JsonResponse -Response $res -StatusCode 200 -Obj $cur[0]
+                } else {
+                    Write-JsonResponse -Response $res -StatusCode 404 -Obj @{ error = 'mock-no-current-page' }
+                }
+            }
+        } elseif ($path -eq '/lol-perks/v1/currentpage' -and $method -eq 'PUT') {
+            if ($Sync.CurrentPageSelectShouldFail) {
+                Write-JsonResponse -Response $res -StatusCode 500 -Obj @{ error = 'mock-select-failed' }
+            } else {
+                $reader3 = New-Object IO.StreamReader($req.InputStream, [Text.Encoding]::UTF8)
+                $selectBodyRaw = $reader3.ReadToEnd()
+                $reader3.Close()
+                $Sync.MockCurrentPageId = ($selectBodyRaw | ConvertFrom-Json)
+                $res.StatusCode = 204
+                $res.OutputStream.Close()
+            }
         } elseif ($path -like '/lol-perks/v1/pages/*' -and $method -eq 'DELETE') {
             if ($Sync.DeleteShouldFail) {
                 Write-JsonResponse -Response $res -StatusCode 500 -Obj @{ error = 'mock-delete-failed' }
             } else {
+                $deletedId = $path -replace '.*/pages/', ''
+                $Sync.MockPages = @(@($Sync.MockPages) | Where-Object { [string]$_.id -ne [string]$deletedId })
                 $res.StatusCode = 204
                 $res.OutputStream.Close()
             }
         } elseif ($path -eq '/lol-perks/v1/pages' -and $method -eq 'POST') {
-            Write-JsonResponse -Response $res -StatusCode 200 -Obj @{ id = 12346; current = $true }
+            if ($Sync.PagePostShouldFail) {
+                Write-JsonResponse -Response $res -StatusCode 400 -Obj @{ error = 'mock-slots-full' }
+            } else {
+                $reader4 = New-Object IO.StreamReader($req.InputStream, [Text.Encoding]::UTF8)
+                $postBodyRaw = $reader4.ReadToEnd()
+                $reader4.Close()
+                $postBodyObj = $postBodyRaw | ConvertFrom-Json
+                $newId = $Sync.MockNextPageId
+                $Sync.MockNextPageId = $Sync.MockNextPageId + 1
+                $newPage = [pscustomobject]@{
+                    id                = $newId
+                    name              = $postBodyObj.name
+                    primaryStyleId    = $postBodyObj.primaryStyleId
+                    subStyleId        = $postBodyObj.subStyleId
+                    selectedPerkIds   = $postBodyObj.selectedPerkIds
+                    isDeletable       = $true
+                    isEditable        = $true
+                    current           = $false  # v1.3.0 finding: creating a page does NOT select it
+                }
+                $Sync.MockPages = @(@($Sync.MockPages) + $newPage)
+                Write-JsonResponse -Response $res -StatusCode 200 -Obj @{ id = $newId; current = $true }
+            }
         } elseif ($path -eq '/lol-summoner/v1/current-summoner' -and $method -eq 'GET') {
             if ($Sync.SummonerGetShouldFail) {
                 Write-JsonResponse -Response $res -StatusCode 500 -Obj @{ error = 'mock-summoner-get-failed' }
@@ -1149,14 +1413,22 @@ function Start-MockLcu {
     if (-not $listener) { throw 'No free mock-LCU port available' }
 
     $sync = [hashtable]::Synchronized(@{
-        Running             = $true
-        Listener            = $listener
-        DeleteShouldFail    = $false
-        Calls               = [System.Collections.ArrayList]::Synchronized((New-Object System.Collections.ArrayList))
-        SummonerGetShouldFail = $false
-        ItemSetsGetShouldFail = $false
-        ExistingItemSets    = [pscustomobject]@{ accountId = 1; timestamp = 0; itemSets = @() }
-        LastPutBody         = $null
+        Running                   = $true
+        Listener                  = $listener
+        DeleteShouldFail          = $false
+        Calls                     = [System.Collections.ArrayList]::Synchronized((New-Object System.Collections.ArrayList))
+        SummonerGetShouldFail     = $false
+        ItemSetsGetShouldFail     = $false
+        ExistingItemSets          = [pscustomobject]@{ accountId = 1; timestamp = 0; itemSets = @() }
+        LastPutBody               = $null
+        # Rune-pages mock state (v1.3.0 safety redesign + PUT-currentpage fix)
+        MockPages                 = @()
+        MockNextPageId            = 20000
+        MockCurrentPageId         = $null
+        MockInventory             = $null
+        CurrentPageSelectShouldFail = $false
+        PagePostShouldFail        = $false
+        MockCurrentPageOverride   = $null
     })
 
     $rs = [runspacefactory]::CreateRunspace()
@@ -1263,21 +1535,121 @@ function Invoke-SelfTest {
     $bridge.Sync.Phase = 'InProgress'
     $bridge.Sync.ChampSelectSnapshot = $null
 
-    # 5. apply-runes happy path: GET -> DELETE -> POST sequencing
+    $applyBody = @{ name = 'CoachBuild Test Mid'; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = @(8005, 9111, 9104, 8014, 8017, 8009, 8017, 5008, 5008); current = $true }
+
+    # 5. apply-runes: free-slot path (no existing pages) -- direct POST, NO
+    # delete at all; PUT currentpage selects it; readback verifies content.
+    $mockLcu.Sync.MockPages = @()
+    $mockLcu.Sync.MockNextPageId = 20000
+    $mockLcu.Sync.MockCurrentPageId = $null
+    $mockLcu.Sync.MockInventory = $null
+    $mockLcu.Sync.CurrentPageSelectShouldFail = $false
+    $mockLcu.Sync.PagePostShouldFail = $false
     $mockLcu.Sync.DeleteShouldFail = $false
+    $mockLcu.Sync.MockCurrentPageOverride = $null
     $mockLcu.Sync.Calls.Clear()
-    $applyBody = @{ name = 'CoachBuild Test'; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = @(8005, 9111, 9104, 8014, 8017, 8009, 8017, 5008, 5008); current = $true }
     try {
         $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($applyBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
         $obj = $r.Content | ConvertFrom-Json
-        if (-not $obj.ok) { $failures.Add("apply-runes happy path expected ok:true, got $($r.Content)") }
-        $calls = @($mockLcu.Sync.Calls)
-        if ($calls.Count -lt 3 -or $calls[0] -ne 'GET' -or $calls[1] -ne 'DELETE' -or $calls[2] -ne 'POST') {
-            $failures.Add("apply-runes sequencing wrong: $($calls -join ',')")
-        }
-    } catch { $failures.Add("apply-runes happy path threw: $($_.Exception.Message)") }
+        if (-not $obj.ok) { $failures.Add("apply-runes free-slot path expected ok:true, got $($r.Content)") }
+        if ($obj.selected -ne $true) { $failures.Add("apply-runes free-slot path expected selected:true, got $($r.Content)") }
+        if ($obj.verified -ne $true) { $failures.Add("apply-runes free-slot path expected verified:true (readback should match), got $($r.Content)") }
+        if (@($mockLcu.Sync.Calls) -contains 'DELETE') { $failures.Add('apply-runes free-slot path issued a DELETE with no existing pages') }
+    } catch { $failures.Add("apply-runes free-slot path threw: $($_.Exception.Message)") }
 
-    # 6. apply-runes delete-fail envelope (#1013 fail-soft)
+    # 6. apply-runes: CoachBuild-page replacement (works in either mode) --
+    # an existing CoachBuild page gets DELETEd, a new one created+selected,
+    # a non-CoachBuild page is left completely untouched.
+    $mockLcu.Sync.MockPages = @(
+        [pscustomobject]@{ id = 111; name = 'My Custom Build'; isDeletable = $true }
+        [pscustomobject]@{ id = 222; name = 'CoachBuild Test Mid'; isDeletable = $true }
+    )
+    $mockLcu.Sync.MockCurrentPageId = 222
+    $mockLcu.Sync.Calls.Clear()
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($applyBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if (-not $obj.ok -or $obj.selected -ne $true -or $obj.verified -ne $true) {
+            $failures.Add("apply-runes CoachBuild-replace path expected ok/selected/verified all true, got $($r.Content)")
+        }
+        if (@(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 222 }).Count -gt 0) {
+            $failures.Add('apply-runes CoachBuild-replace path did not remove the stale CoachBuild page')
+        }
+        if (@(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 111 }).Count -ne 1) {
+            $failures.Add('apply-runes CoachBuild-replace path touched the non-CoachBuild page')
+        }
+    } catch { $failures.Add("apply-runes CoachBuild-replace threw: $($_.Exception.Message)") }
+
+    # 6b. apply-runes AUTO mode adversarial fixture: 5 user pages, ZERO
+    # CoachBuild pages, inventory reports full -- must NEVER issue a single
+    # DELETE call and must return slots-full untouched. This is the
+    # SelfTest-pinned compliance guarantee from the v1.3.0 safety redesign.
+    $mockLcu.Sync.MockPages = @(1..5 | ForEach-Object { [pscustomobject]@{ id = (1000 + $_); name = "User Page $_"; isDeletable = $true } })
+    $mockLcu.Sync.MockInventory = @{ ownedPageCount = 5 }
+    $mockLcu.Sync.Calls.Clear()
+    $autoBody = @{ name = 'CoachBuild Test Mid'; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = @(8005, 9111, 9104, 8014, 8017, 8009, 8017, 5008, 5008); current = $true; mode = 'auto' }
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($autoBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.ok -ne $false -or $obj.reason -ne 'slots-full') { $failures.Add("apply-runes AUTO-mode adversarial expected slots-full, got $($r.Content)") }
+        if (@($mockLcu.Sync.Calls) -contains 'DELETE') { $failures.Add('apply-runes AUTO mode issued a DELETE on a non-CoachBuild page -- compliance violation') }
+        if (@($mockLcu.Sync.MockPages).Count -ne 5) { $failures.Add('apply-runes AUTO-mode adversarial mutated the user pages') }
+    } catch { $failures.Add("apply-runes AUTO-mode adversarial threw: $($_.Exception.Message)") }
+
+    # 6c. apply-runes MANUAL mode, SAME adversarial 5-page/full fixture --
+    # falls back to the ORIGINAL consented behavior (delete currentpage,
+    # then POST), since a real click is real consent.
+    $mockLcu.Sync.MockCurrentPageId = 1003
+    $mockLcu.Sync.Calls.Clear()
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($applyBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if (-not $obj.ok -or $obj.selected -ne $true -or $obj.verified -ne $true) {
+            $failures.Add("apply-runes MANUAL-mode fallback expected ok/selected/verified all true, got $($r.Content)")
+        }
+        if (@($mockLcu.Sync.Calls) -notcontains 'DELETE') { $failures.Add('apply-runes MANUAL-mode fallback never deleted the current page') }
+        if (@(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 1003 }).Count -gt 0) {
+            $failures.Add('apply-runes MANUAL-mode fallback did not actually remove the deleted page from mock state')
+        }
+    } catch { $failures.Add("apply-runes MANUAL-mode fallback threw: $($_.Exception.Message)") }
+    $mockLcu.Sync.MockInventory = $null
+
+    # 6d. apply-runes readback MISMATCH -- verified:false + a populated
+    # mismatch array when the client's actual currentpage content doesn't
+    # match what was sent (simulates a partial/silent apply -- the exact
+    # failure mode "trust a 2xx blindly" would have hidden).
+    $mockLcu.Sync.MockPages = @()
+    $mockLcu.Sync.MockCurrentPageId = $null
+    $mockLcu.Sync.MockNextPageId = 30000
+    $mockLcu.Sync.MockCurrentPageOverride = [pscustomobject]@{ id = 30000; name = 'CoachBuild Test Mid'; selectedPerkIds = @(1, 2, 3, 4, 5, 6, 7, 8, 9) }
+    $mockLcu.Sync.Calls.Clear()
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($applyBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if (-not $obj.ok) { $failures.Add("apply-runes mismatch-readback path expected ok:true, got $($r.Content)") }
+        if ($obj.selected -ne $true) { $failures.Add("apply-runes mismatch-readback path expected selected:true, got $($r.Content)") }
+        if ($obj.verified -ne $false) { $failures.Add("apply-runes mismatch-readback path expected verified:false, got $($r.Content)") }
+        if (-not $obj.mismatch -or @($obj.mismatch).Count -eq 0) { $failures.Add("apply-runes mismatch-readback path expected a populated mismatch array, got $($r.Content)") }
+    } catch { $failures.Add("apply-runes mismatch-readback threw: $($_.Exception.Message)") }
+    $mockLcu.Sync.MockCurrentPageOverride = $null
+
+    # 6e. apply-runes: a failed selection PUT still reports ok:true (the
+    # page WAS created) but selected:false -- never falsely implies active.
+    $mockLcu.Sync.MockPages = @()
+    $mockLcu.Sync.MockCurrentPageId = $null
+    $mockLcu.Sync.CurrentPageSelectShouldFail = $true
+    $mockLcu.Sync.Calls.Clear()
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($applyBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if (-not $obj.ok) { $failures.Add("apply-runes select-fail path expected ok:true, got $($r.Content)") }
+        if ($obj.selected -ne $false) { $failures.Add("apply-runes select-fail path expected selected:false, got $($r.Content)") }
+    } catch { $failures.Add("apply-runes select-fail threw: $($_.Exception.Message)") }
+    $mockLcu.Sync.CurrentPageSelectShouldFail = $false
+
+    # 6f. apply-runes delete-fail envelope (#1013 fail-soft) -- existing
+    # CoachBuild page, DELETE itself fails; must never POST afterward.
+    $mockLcu.Sync.MockPages = @([pscustomobject]@{ id = 555; name = 'CoachBuild Test Mid'; isDeletable = $true })
     $mockLcu.Sync.DeleteShouldFail = $true
     $mockLcu.Sync.Calls.Clear()
     try {
@@ -1288,6 +1660,8 @@ function Invoke-SelfTest {
         }
         if (@($mockLcu.Sync.Calls) -contains 'POST') { $failures.Add('apply-runes POSTed after a failed delete (#1013 fail-soft violated)') }
     } catch { $failures.Add("apply-runes delete-fail threw: $($_.Exception.Message)") }
+    $mockLcu.Sync.DeleteShouldFail = $false
+    $mockLcu.Sync.MockPages = @()
 
     # 6b. apply-itemsets happy path: merge preserves a non-CoachBuild set
     # byte-for-byte, and stale CoachBuild sets for the SAME champ+role are
@@ -1572,6 +1946,45 @@ function Invoke-MockRun {
     if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedActionsOnly) {
         $failures.Add("actions[]-only resolution expected exactly 1 open to '$expectedActionsOnly', got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     }
+
+    # Attached-tab gate (v1.3.0 live-follow fold-in): a fresh
+    # $script:Bridge.Sync.LastStatusPollAt (the web side is actively
+    # polling /status, i.e. a tab is still open and will live-follow)
+    # suppresses Open-CompanionUrl on a champion CHANGE; a stale/absent one
+    # (no tab attached) still opens exactly as before. -Mock fakes a
+    # lightweight $script:Bridge (no real HttpListener) purely so
+    # Test-CompanionHasAttachedTab has something to read.
+    $script:Bridge = [pscustomobject]@{ Sync = @{ LastStatusPollAt = $null } }
+    $attachState = @{ LastOpenedChampId = $null }
+
+    # No attached tab (LastStatusPollAt never set) -> opens as normal.
+    $script:OpenActions.Clear()
+    Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 103 -IntentId 103 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 1) {
+        $failures.Add("Attached-tab gate: expected an open with no attached tab, got $($script:OpenActions.Count)")
+    }
+
+    # Fresh poll (tab attached) -> a champion CHANGE must NOT open a new tab
+    # -- debounce state still advances (the tab itself follows via poll).
+    $script:Bridge.Sync.LastStatusPollAt = (Get-Date).ToUniversalTime().ToString('o')
+    $script:OpenActions.Clear()
+    Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 7 -IntentId 7 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 0) {
+        $failures.Add("Attached-tab gate: expected NO open with a fresh attached tab, got $($script:OpenActions.Count)")
+    }
+    if ($attachState.LastOpenedChampId -ne 7) {
+        $failures.Add('Attached-tab gate: debounce state did not advance even though the tab-follow path is responsible for it')
+    }
+
+    # Poll goes stale (tab presumably closed) -> the NEXT champion change
+    # resumes opening a fresh tab.
+    $script:Bridge.Sync.LastStatusPollAt = (Get-Date).ToUniversalTime().AddSeconds(-30).ToString('o')
+    $script:OpenActions.Clear()
+    Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 64 -IntentId 64 -Position 'jungle') -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 1) {
+        $failures.Add("Attached-tab gate: expected open to resume once the poll goes stale, got $($script:OpenActions.Count)")
+    }
+    $script:Bridge = $null
 
     if ($failures.Count -gt 0) {
         Write-Host "MOCK RUN FAILED ($($failures.Count)):" -ForegroundColor Red

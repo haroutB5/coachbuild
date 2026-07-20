@@ -13,15 +13,24 @@
 //                            pickIntent|null, actionChampionId|null,
 //                            roleId|null}|null (null outside ChampSelect)}
 //   GET  /live         -> raw allgamedata passthrough | {error:'no-live'}
-//   POST /apply-runes  -> {ok:true} | {ok:false, reason, hint?}
+//   POST /apply-runes  body {..., mode:'auto'|'manual'} ->
+//                          {ok:true, selected, verified, mismatch} |
+//                          {ok:false, reason, hint?}
 //   POST /apply-itemsets body {championId, sets:ItemSet[]} ->
 //                          {ok:true, count} | {ok:false, reason, hint?}
 //
-// Item-set writes are inert shop-panel SUGGESTIONS (same class as a
-// Blitz/u.gg auto-import) — unlike rune apply, which stays strictly
-// user-clicked, item sets MAY be exported automatically on a champ-select
-// deep-link (see components/hextech/itemSetsApply.ts's auto-export gate +
-// the AUTO_ITEMSETS_KEY toggle below, surfaced on /live-setup).
+// v1.3.0 COMPLIANCE UPDATE: rune writes may now auto-export too, same as
+// item sets (both are inert loadout/shop SUGGESTIONS, same class as a
+// Blitz/Moba auto-import — see companion.ps1's header for the full
+// reasoning). The one bright line that does NOT move: `mode:'auto'` on
+// /apply-runes must NEVER delete a rune page the companion doesn't own —
+// it only replaces a page it PREVIOUSLY created or uses a free slot; if
+// neither is available it returns {reason:'slots-full'} untouched. Manual
+// mode (the click-through button) keeps the original consented behavior.
+// Both item-set and rune auto-export share the same gate pattern (see
+// components/hextech/autoExportShared.ts, used by both itemSetsApply.ts
+// and runeAutoApply.ts) and the same toggle convention (AUTO_ITEMSETS_KEY /
+// AUTO_RUNES_STORAGE_KEY below, surfaced on /live-setup).
 //
 // Every network call here is fail-soft (never throws to the caller) and
 // takes an injectable `deps.fetchImpl` so companionClient.test.ts can drive
@@ -44,11 +53,13 @@ export const LIVE_POLL_MS = 1000;
 
 const SESSION_STORAGE_KEY = "coachbuild:companion:session";
 const PORT_STORAGE_KEY = "coachbuild:companion:port";
-/** Auto-export toggle for item sets ONLY (runes stay strictly manual — see
- *  this file's header comment). Default ON the first time a session ever
- *  exists (the user explicitly asked for automatic export) — see
- *  getAutoItemSetsEnabled's own doc comment for the exact default rule. */
+/** Auto-export toggles (v1.3.0: BOTH item sets AND runes may now auto-export
+ *  — see this file's header comment for the compliance update). Default ON
+ *  the first time a session ever exists (the user explicitly asked for
+ *  automatic export) — see getAutoItemSetsEnabled's own doc comment for the
+ *  exact default rule; getAutoRunesEnabled mirrors it exactly. */
 const AUTO_ITEMSETS_STORAGE_KEY = "coachbuild:companion:autoItemSets";
+const AUTO_RUNES_STORAGE_KEY = "coachbuild:companion:autoRunes";
 
 /** The companion's most recent champ-select deep-link open THIS launch —
  *  null until the first one. Diagnostic only (surfaced on /live-setup),
@@ -96,9 +107,16 @@ export interface CompanionStatus {
 
 /** Result of an apply-runes call — mirrors the wire contract's own
  *  discriminated shape verbatim (no local reinterpretation) so a `reason`/
- *  `hint` string from the companion (e.g. bug #1013's delete-failed path)
- *  reaches the UI unchanged. */
-export type ApplyRunesResult = { ok: true } | { ok: false; reason: string; hint?: string };
+ *  `hint` string from the companion (e.g. bug #1013's delete-failed path,
+ *  or v1.3.0's 'slots-full') reaches the UI unchanged. v1.3.0: a success
+ *  now also carries `selected`/`verified`/`mismatch` — the page WAS created
+ *  even when `selected` or `verified` come back false (a failed
+ *  post-create selection PUT, or a content readback that didn't match what
+ *  was sent), so the UI can report that honestly instead of implying full
+ *  success on any 2xx. */
+export type ApplyRunesResult =
+  | { ok: true; selected: boolean; verified: boolean; mismatch: string[] }
+  | { ok: false; reason: string; hint?: string };
 
 /** Result of an apply-itemsets call — same discriminated shape convention
  *  as ApplyRunesResult, plus `count` (how many sets were written) on
@@ -206,6 +224,25 @@ export function getAutoItemSetsEnabled(): boolean {
 export function setAutoItemSetsEnabled(enabled: boolean): void {
   try {
     safeLocalStorage()?.setItem(AUTO_ITEMSETS_STORAGE_KEY, String(enabled));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** v1.3.0 compliance update: rune WRITES may now auto-export too (same
+ *  class as a Blitz/Moba auto-import — an inert loadout write, not a game
+ *  action; see companion.ps1's header for the full reasoning and the one
+ *  bright line that does NOT move — auto mode never deletes a page it
+ *  doesn't own). Same default rule as getAutoItemSetsEnabled. */
+export function getAutoRunesEnabled(): boolean {
+  const raw = safeLocalStorage()?.getItem(AUTO_RUNES_STORAGE_KEY);
+  if (raw === null || raw === undefined) return hasSession();
+  return raw === "true";
+}
+
+export function setAutoRunesEnabled(enabled: boolean): void {
+  try {
+    safeLocalStorage()?.setItem(AUTO_RUNES_STORAGE_KEY, String(enabled));
   } catch {
     /* ignore */
   }
@@ -369,14 +406,17 @@ export async function getLive(
   }
 }
 
-/** POSTs a rune-page apply request. STRICTLY meant to be called from a
- *  user-clicked handler (compliance guardrail, plan §3) — this function
- *  itself has no gating opinion on that; RunesSummonersCard.tsx is
- *  responsible for only ever invoking it from an onClick. */
+/** POSTs a rune-page apply request. v1.3.0: callable from EITHER a
+ *  user-clicked handler (`mode: "manual"` — RunesSummonersCard's button)
+ *  OR the champ-select auto-export path (`mode: "auto"` —
+ *  runeAutoApply.ts). The companion enforces the actual safety difference
+ *  server-side (auto mode never deletes a non-CoachBuild page); this
+ *  function just forwards whichever mode the caller declares. */
 export async function applyRunes(
   port: CompanionPort,
   session: string,
   body: { name: string; primaryStyleId: number; subStyleId: number; selectedPerkIds: number[]; current: true },
+  mode: "auto" | "manual",
   deps: CompanionClientDeps = {}
 ): Promise<ApplyRunesResult> {
   const f = deps.fetchImpl ?? fetch;
@@ -384,7 +424,7 @@ export async function applyRunes(
     const res = await f(bridgeUrl(port, "/apply-runes", session), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, mode }),
     });
     const data = await res.json().catch(() => null);
     if (data && typeof data === "object" && typeof (data as { ok?: unknown }).ok === "boolean") {

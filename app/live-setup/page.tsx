@@ -15,6 +15,8 @@ import {
   probeCompanion,
   getAutoItemSetsEnabled,
   setAutoItemSetsEnabled,
+  getAutoRunesEnabled,
+  setAutoRunesEnabled,
   type ProbeState,
 } from "@/components/live/companionClient";
 
@@ -86,6 +88,7 @@ export default function LiveSetupPage() {
   // Hydrated post-mount (localStorage read) to avoid an SSR/client mismatch,
   // same pattern BuildTabContent's rankHydrated uses.
   const [autoItemSets, setAutoItemSets] = useState(false);
+  const [autoRunes, setAutoRunes] = useState(false);
   const [autoHydrated, setAutoHydrated] = useState(false);
 
   // Mount-only: capture ?session= from a companion-opened link, else fall
@@ -100,12 +103,18 @@ export default function LiveSetupPage() {
       setSession(getStoredSession());
     }
     setAutoItemSets(getAutoItemSetsEnabled());
+    setAutoRunes(getAutoRunesEnabled());
     setAutoHydrated(true);
   }, []);
 
   function handleAutoItemSetsToggle(next: boolean) {
     setAutoItemSets(next);
     setAutoItemSetsEnabled(next);
+  }
+
+  function handleAutoRunesToggle(next: boolean) {
+    setAutoRunes(next);
+    setAutoRunesEnabled(next);
   }
 
   const runTest = useCallback(async () => {
@@ -300,7 +309,26 @@ export default function LiveSetupPage() {
                 When you enter champ select, up to 3 item builds (Core, Optimized, Pro) are added to
                 your in-client shop automatically — no click needed. This is a passive shop
                 suggestion, same as Blitz/u.gg&apos;s auto-import; it never acts in the game for you.
-                Runes always stay a manual, one-click apply — never automatic.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autoHydrated && autoRunes}
+              onChange={(e) => handleAutoRunesToggle(e.target.checked)}
+              className="mt-0.5 w-4 h-4 accent-teal cursor-pointer"
+            />
+            <span>
+              <span className="block text-[12.5px] text-txt font-medium">Auto-apply runes on champ select</span>
+              <span className="block text-[11px] text-mut leading-relaxed mt-0.5">
+                Applies your recommended rune page automatically as you pick — <strong className="text-txt">your
+                own pages are never touched automatically</strong>: it only ever replaces a page CoachBuild
+                itself created before, or uses one of your free rune-page slots. If neither is available,
+                nothing is touched and you&apos;ll get a quiet notice to click{" "}
+                <strong className="text-txt">Apply runes</strong> instead, which can replace the current page
+                (that&apos;s a real click, so that&apos;s always allowed).
               </span>
             </span>
           </label>

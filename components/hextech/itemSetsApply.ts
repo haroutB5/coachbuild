@@ -26,6 +26,9 @@ import { aggregateProConsensus } from "./proConsensus";
 import { LANE_TO_ROLE_ID, type LaneId } from "./heroContracts";
 import { buildItemSets, type ProConsensusItemsInput } from "./itemSetBody";
 import { applyItemSets, type ApplyItemSetsResult, getStatus, type CompanionPort } from "@/components/live/companionClient";
+import { shouldAutoExport, isAutoExportEligibleBuild, type AutoApplyGateInput } from "./autoExportShared";
+
+export { isAutoExportEligibleBuild, type AutoApplyGateInput };
 
 const PRO_CONSENSUS_LIMIT = 100;
 
@@ -82,53 +85,11 @@ export async function applyItemSetsForBuild(params: {
   return applyItemSets(params.port, params.session, { championId: params.champ.id, sets });
 }
 
-// ── Auto-export gate (BuildTabContent's deep-link effect) ──────────────────
-
-export interface AutoApplyGateInput {
-  /** True iff parseLiveDeepLink(window.location.search) returned non-null
-   *  for THIS page load — role-less deep links (custom/blind-pick/ARAM)
-   *  count too; only championId's presence matters here, not role. */
-  isDeepLink: boolean;
-  autoEnabled: boolean;
-  session: string | null;
-  port: number | null;
-  /** One-shot guard (a ref in the calling component) — a fresh deep-link
-   *  navigation is a genuine new page load (Start-Process opens a new tab),
-   *  which remounts the component and resets this to false again; this gate
-   *  itself only needs to refuse a SECOND fire within the same mount. */
-  alreadyFired: boolean;
-}
-
-/** Pure decision of whether the auto-export effect should even ATTEMPT a
- *  companion probe + apply. Kept separate from the async probe/apply
- *  itself so "no session -> never", "toggle off -> never", "not a deep
- *  link -> never", and "already fired this mount -> never" are each
- *  independently unit-testable without mounting React or mocking fetch. */
+// ── Auto-export gate (BuildTabContent's deep-link/live-follow effect) ──────
+// Thin wrapper kept for backward compat with existing call sites/tests —
+// the real logic now lives in autoExportShared.ts, shared with runes too.
 export function shouldAutoApplyItemSets(input: AutoApplyGateInput): boolean {
-  if (input.alreadyFired) return false;
-  if (!input.isDeepLink) return false;
-  if (!input.autoEnabled) return false;
-  if (!input.session || !input.port) return false;
-  return true;
-}
-
-/** Guards against the wrong-champion race (P1, Fable audit 2026-07-20): a
- *  deep-link tab can render its FIRST successful `build` for a FALLBACK
- *  champion (BuildTabContent's own default, e.g. Viktor) before
- *  app/page.tsx's own /api/champions lookup resolves and swaps in the
- *  actual deep-linked champion. If the caller consumes its one-shot
- *  "already exported this mount" ref against that fallback build, the
- *  real deep-linked champion's export is silently and permanently skipped
- *  for the rest of that tab's life (BuildTabContent re-renders on the
- *  later champion swap, it never remounts — no `key` forces a fresh
- *  instance). Returns false ("not yet eligible — wait for the matching
- *  build, do not consume the ref") only when the URL names a SPECIFIC
- *  championId that doesn't match the build in hand; true when there's no
- *  deep link at all (nothing to race against) or the champion already
- *  matches. */
-export function isAutoExportEligibleBuild(parsed: { championId: number } | null, buildChampionId: number): boolean {
-  if (!parsed) return true;
-  return parsed.championId === buildChampionId;
+  return shouldAutoExport(input);
 }
 
 export type AutoApplyOutcome =

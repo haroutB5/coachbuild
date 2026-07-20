@@ -22,7 +22,7 @@ function CardHeader({ children }: { children: React.ReactNode }) {
 type ApplyUiState =
   | { status: "idle" }
   | { status: "applying" }
-  | { status: "success" }
+  | { status: "success"; message: string }
   | { status: "error"; message: string };
 
 /** v0.32.0 (Live mode, plan §2c): companion-connected "Apply runes" action —
@@ -74,9 +74,21 @@ function ApplyRunesButton({
     }
 
     setState({ status: "applying" });
-    const result = await applyRunes(port, session, body);
+    // Manual mode: this is the click-through consent path, keeps the
+    // original "may replace whatever page is currently selected" behavior
+    // when there's no CoachBuild page to replace and no free slot.
+    const result = await applyRunes(port, session, body, "manual");
     if (result.ok) {
-      setState({ status: "success" });
+      // v1.3.0: a 2xx no longer implies full success on its own — the page
+      // creation itself always worked here (companion only returns ok:true
+      // once it has), but selection/verification can still fail (e.g. the
+      // post-create selection PUT didn't stick) and deserve an honest,
+      // distinct message rather than a blanket "Applied."
+      const message =
+        result.selected && result.verified
+          ? "Applied in-client."
+          : "Saved as a rune page — open the client to select it.";
+      setState({ status: "success", message });
     } else {
       setState({
         status: "error",
@@ -100,7 +112,7 @@ function ApplyRunesButton({
       </button>
       {state.status === "success" && (
         <p role="status" className="text-[10.5px] text-teal">
-          Applied in-client.
+          {state.message}
         </p>
       )}
       {state.status === "error" && (

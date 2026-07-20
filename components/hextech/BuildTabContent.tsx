@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import type { BuildResponse, ChampionRef } from "@/lib/types";
 import type { LaneId } from "./heroContracts";
 import { LANE_TO_ROLE_ID, LANE_LABEL } from "./heroContracts";
@@ -10,9 +10,16 @@ import CoreBuildOrderCard from "./CoreBuildOrderCard";
 import SituationalCard from "./SituationalCard";
 import ProConsensusCard from "./ProConsensusCard";
 import { versionFromPatch } from "@/components/proAssets";
-import { parseLiveDeepLink } from "@/components/live/deepLink";
-import { getStoredSession, getStoredPort, getAutoItemSetsEnabled } from "@/components/live/companionClient";
-import { autoApplyItemSetsIfEligible, isAutoExportEligibleBuild } from "./itemSetsApply";
+import { getStoredSession, getStoredPort, getAutoItemSetsEnabled, getAutoRunesEnabled } from "@/components/live/companionClient";
+import { autoApplyItemSetsIfEligible } from "./itemSetsApply";
+import { autoApplyRunesIfEligible } from "./runeAutoApply";
+import {
+  getChampSelectPhaseEpoch,
+  hasAppliedForChampion,
+  markAppliedForChampion,
+  isCompanionDrivenChampion,
+  tryClaimAutoExportLock,
+} from "@/components/live/champSelectFollowState";
 import ItemDetailPopover from "@/components/ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "@/components/EntityDetailPopover";
 import { useBodyScrollLock } from "@/components/useBodyScrollLock";
@@ -231,66 +238,91 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
     };
   }, [champ, lane, rankBracket, rankHydrated, load]);
 
-  // ── Item-sets auto-export (companion v1.2.0 feature) ─────────────────────
+  // ── Auto-export: item sets (v1.2.0) + runes (v1.3.0) ─────────────────────
   //
-  // One-shot per mount: a fresh champ-select deep-link is a genuine new page
-  // load (companion.ps1's Start-Process opens it), which remounts this whole
-  // component tree fresh — so a plain mount-scoped ref is exactly "once per
-  // deep-link navigation, refires on a new one." Runs are ACCEPTABLE to fire
-  // against whichever `build` first loads successfully after the deep link,
-  // even if the lane later gets corrected by the most-played-lane lookup
-  // (app/page.tsx) — the sets are champ-associated, lane only affects which
-  // build variant gets exported (product direction, not a bug). Runes stay
-  // strictly manual; only item sets ever auto-export (compliance note in
-  // companion.ps1's header + companionClient.ts's own header comment).
-  const autoExportedRef = useRef(false);
-  const [autoExportToast, setAutoExportToast] = useState<{ kind: "success" | "error"; message: string } | null>(null);
+  // v1.3.0: generalized from "once per deep-link page mount" to "once per
+  // (champ-select session, championId)" — the companion no longer opens a
+  // NEW tab on every hover (attached-tab live-follow, companion.ps1's
+  // Test-CompanionHasAttachedTab), so this SAME component instance now sees
+  // many champion changes within one champ-select, not just one at mount.
+  // A plain mount-ref can't express "hover A exports once, hover B exports
+  // once, re-hover A doesn't re-export" — components/live/
+  // champSelectFollowState.ts's per-epoch Set does (app/page.tsx's status
+  // poll bumps the epoch on every ChampSelect ENTRY).
+  //
+  // The wrong-champion race (P1 audit fix, 2026-07-20) still applies:
+  // isCompanionDrivenChampion gates on whether THIS championId was actually
+  // reached via a companion signal (initial deep link OR a later live-follow
+  // update — both mark it in champSelectFollowState.ts) rather than a
+  // transient fallback render (e.g. the page's default champion showing
+  // before app/page.tsx's own lookup resolves and swaps in the real one).
+  //
+  // Compliance (v1.3.0 update): BOTH item sets AND runes may now auto-export
+  // — see companion.ps1's header + companionClient.ts's header comment for
+  // the reasoning (inert loadout suggestions, not game actions) and the one
+  // bright line that doesn't move (rune auto mode never deletes a page it
+  // doesn't own).
+  const [itemsToast, setItemsToast] = useState<{ kind: "success" | "error"; message: string } | null>(null);
+  const [runesToast, setRunesToast] = useState<{ kind: "success" | "error"; message: string } | null>(null);
 
   useEffect(() => {
     if (state.status !== "ok") return;
-    if (autoExportedRef.current) return;
-
-    const parsed = parseLiveDeepLink(window.location.search);
-    // v1.2.1 audit fix (P1, wrong-champion race) — see itemSetsApply.ts's
-    // isAutoExportEligibleBuild doc comment for the full mechanism. Wait
-    // for a build whose champion actually matches the URL before ever
-    // consuming the ref; a later render with the correct build still gets
-    // exactly one shot.
-    if (!isAutoExportEligibleBuild(parsed, state.build.champion.id)) return;
-
-    autoExportedRef.current = true;
-
-    const gate = {
-      isDeepLink: parsed !== null,
-      autoEnabled: getAutoItemSetsEnabled(),
-      session: getStoredSession(),
-      port: getStoredPort(),
-      alreadyFired: false, // the ref above already guards the once-per-mount rule
-    };
-
     const build = state.build;
-    autoApplyItemSetsIfEligible(gate, async () => ({
-      champ: build.champion,
-      lane,
-      roleLabel: build.roleLabel,
-      build,
-    })).then((outcome) => {
-      if (!outcome.attempted) return; // gate refused, or the companion probe failed -- quiet, no toast
-      if (outcome.result.ok) {
-        setAutoExportToast({
-          kind: "success",
-          message: `Item builds added for ${build.champion.name} — check your shop in game.`,
-        });
-      } else {
-        setAutoExportToast({
-          kind: "error",
-          message: outcome.result.hint ?? "Couldn't auto-add item builds — add them manually from the Runes & Summoners card.",
-        });
-      }
-      setTimeout(() => setAutoExportToast(null), 6000);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot per mount by design (autoExportedRef), not a live-updating effect
-  }, [state]);
+    const championId = build.champion.id;
+    if (!isCompanionDrivenChampion(championId)) return;
+
+    const session = getStoredSession();
+    const port = getStoredPort();
+    const epoch = getChampSelectPhaseEpoch();
+
+    // Item sets
+    if (!hasAppliedForChampion("items", championId) && tryClaimAutoExportLock("items", epoch, championId)) {
+      markAppliedForChampion("items", championId);
+      autoApplyItemSetsIfEligible(
+        { isDeepLink: true, autoEnabled: getAutoItemSetsEnabled(), session, port, alreadyFired: false },
+        async () => ({ champ: build.champion, lane, roleLabel: build.roleLabel, build })
+      ).then((outcome) => {
+        if (!outcome.attempted) return; // gate refused, or the companion probe failed -- quiet, no toast
+        if (outcome.result.ok) {
+          setItemsToast({ kind: "success", message: `Item builds added for ${build.champion.name} — check your shop in game.` });
+        } else {
+          setItemsToast({
+            kind: "error",
+            message: outcome.result.hint ?? "Couldn't auto-add item builds — add them manually from the Runes & Summoners card.",
+          });
+        }
+        setTimeout(() => setItemsToast(null), 6000);
+      });
+    }
+
+    // Runes
+    if (!hasAppliedForChampion("runes", championId) && tryClaimAutoExportLock("runes", epoch, championId)) {
+      markAppliedForChampion("runes", championId);
+      autoApplyRunesIfEligible(
+        { isDeepLink: true, autoEnabled: getAutoRunesEnabled(), session, port, alreadyFired: false },
+        async () => ({ championName: build.champion.name, roleLabel: build.roleLabel, runes: build.runes })
+      ).then((outcome) => {
+        if (!outcome.attempted) return;
+        if (outcome.result.ok) {
+          const r = outcome.result;
+          setRunesToast({
+            kind: "success",
+            message:
+              r.selected && r.verified
+                ? `Runes applied for ${build.champion.name}.`
+                : `Runes saved for ${build.champion.name} — open the client to select the page.`,
+          });
+        } else {
+          setRunesToast({
+            kind: "error",
+            message: outcome.result.hint ?? "Couldn't auto-apply runes — use the Apply runes button instead.",
+          });
+        }
+        setTimeout(() => setRunesToast(null), 6000);
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires once per (epoch, championId) by design (champSelectFollowState's own Set), not a live-updating effect
+  }, [state, lane]);
 
   if (state.status === "loading") {
     return (
@@ -347,14 +379,24 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
   return (
     <div className="mt-5 space-y-5">
       <RankBracketSelector value={rankBracket} onChange={handleRankChange} />
-      {autoExportToast && (
+      {runesToast && (
         <p
           role="status"
           className={`text-[11.5px] rounded-lg border px-3.5 py-2.5 ${
-            autoExportToast.kind === "success" ? "text-teal border-teal-dim bg-teal/5" : "text-bad border-bad/40 bg-bad/5"
+            runesToast.kind === "success" ? "text-teal border-teal-dim bg-teal/5" : "text-bad border-bad/40 bg-bad/5"
           }`}
         >
-          {autoExportToast.message}
+          {runesToast.message}
+        </p>
+      )}
+      {itemsToast && (
+        <p
+          role="status"
+          className={`text-[11.5px] rounded-lg border px-3.5 py-2.5 ${
+            itemsToast.kind === "success" ? "text-teal border-teal-dim bg-teal/5" : "text-bad border-bad/40 bg-bad/5"
+          }`}
+        >
+          {itemsToast.message}
         </p>
       )}
       <RunesSummonersCard

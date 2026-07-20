@@ -346,18 +346,21 @@ describe("companionClient — getLive / isLiveError", () => {
 });
 
 describe("companionClient — applyRunes", () => {
-  it("returns {ok:true} on a successful apply", async () => {
-    const fetchImpl = vi.fn(async () => ({ ok: true, json: async () => ({ ok: true }) })) as unknown as typeof fetch;
-    const result = await applyRunes(48291, "sess", RUNE_BODY, { fetchImpl });
-    expect(result).toEqual({ ok: true });
+  it("returns {ok:true, selected, verified, mismatch} on a successful apply", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ok: true, selected: true, verified: true, mismatch: [] }),
+    })) as unknown as typeof fetch;
+    const result = await applyRunes(48291, "sess", RUNE_BODY, "manual", { fetchImpl });
+    expect(result).toEqual({ ok: true, selected: true, verified: true, mismatch: [] });
   });
 
-  it("passes through a {ok:false, reason, hint} envelope verbatim (e.g. bug #1013 delete-failed)", async () => {
+  it("passes through a {ok:false, reason, hint} envelope verbatim (e.g. bug #1013 delete-failed, or v1.3.0 slots-full)", async () => {
     const fetchImpl = vi.fn(async () => ({
       ok: true,
       json: async () => ({ ok: false, reason: "delete-failed", hint: "delete a rune page manually and retry" }),
     })) as unknown as typeof fetch;
-    const result = await applyRunes(48291, "sess", RUNE_BODY, { fetchImpl });
+    const result = await applyRunes(48291, "sess", RUNE_BODY, "manual", { fetchImpl });
     expect(result).toEqual({ ok: false, reason: "delete-failed", hint: "delete a rune page manually and retry" });
   });
 
@@ -365,7 +368,7 @@ describe("companionClient — applyRunes", () => {
     const fetchImpl = vi.fn(async () => {
       throw new TypeError("Failed to fetch");
     });
-    const result = await applyRunes(48291, "sess", RUNE_BODY, { fetchImpl });
+    const result = await applyRunes(48291, "sess", RUNE_BODY, "manual", { fetchImpl });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("network-error");
   });
@@ -378,8 +381,20 @@ describe("companionClient — applyRunes", () => {
         throw new Error("not json");
       },
     })) as unknown as typeof fetch;
-    const result = await applyRunes(48291, "sess", RUNE_BODY, { fetchImpl });
+    const result = await applyRunes(48291, "sess", RUNE_BODY, "manual", { fetchImpl });
     expect(result).toEqual({ ok: false, reason: "http-500" });
+  });
+
+  it("sends the mode in the request body (v1.3.0)", async () => {
+    let capturedBody: string | undefined;
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return { ok: true, json: async () => ({ ok: true, selected: true, verified: true, mismatch: [] }) } as Response;
+    }) as unknown as typeof fetch;
+    await applyRunes(48291, "sess", RUNE_BODY, "auto", { fetchImpl });
+    const parsed = JSON.parse(capturedBody!);
+    expect(parsed.mode).toBe("auto");
+    expect(parsed.name).toBe(RUNE_BODY.name);
   });
 });
 

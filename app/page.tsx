@@ -14,6 +14,8 @@ import BuildTabContent from "@/components/hextech/BuildTabContent";
 import ProBuildsTab from "@/components/hextech/ProBuildsTab";
 import LivePanel from "@/components/live/LivePanel";
 import { parseLiveDeepLink, roleIdToLane } from "@/components/live/deepLink";
+import { resolveChampSelectFollow } from "@/components/live/champSelectFollow";
+import { noteCompanionPhase, markCompanionDriven } from "@/components/live/champSelectFollowState";
 import {
   getStoredSession,
   setStoredSession,
@@ -191,6 +193,11 @@ export default function HomePage() {
       .then((champs) => {
         const found = Array.isArray(champs) ? champs.find((c) => c.id === parsed.championId) : undefined;
         if (!found) return; // unresolvable champion id (coachless gap, bad id) — leave the default view alone
+        // v1.3.0: this IS a genuine companion signal (a deep-link open),
+        // not a fallback/default render — auto-export effects gate on this
+        // (see champSelectFollowState.ts's isCompanionDrivenChampion doc
+        // comment for the wrong-champion race this generalizes the fix for).
+        markCompanionDriven(found.id);
         const source = defaultSourceForKind("champion");
 
         if (parsed.role !== undefined) {
@@ -247,6 +254,14 @@ export default function HomePage() {
   // the "Live game detected" LivePanel mount below. Deliberately a
   // "passive" probe via refreshStatus (never triggers its own LNA prompt —
   // that's /live-setup's Test Connection button's job).
+  //
+  // v1.3.0 attached-tab live-follow: this SAME poll now also drives the
+  // "the tab follows the user's champ-select hovers in place" behavior —
+  // piggybacks on this existing interval rather than adding a second one
+  // (companion.ps1's bridge stamps lastStatusPollAt from these very GETs,
+  // which is what tells it to stop opening a NEW tab on every hover once
+  // this one is "attached"). Works whether this tab was opened via a
+  // deep-link or manually — session+port presence is the only real gate.
   useEffect(() => {
     if (!companionSession) {
       setCompanionPhase(null);
@@ -256,7 +271,52 @@ export default function HomePage() {
     async function tick() {
       const state = await refreshStatus(companionSession as string);
       if (cancelled) return;
-      setCompanionPhase(state.kind === "connected" ? state.status.phase : null);
+      const phase = state.kind === "connected" ? state.status.phase : null;
+      setCompanionPhase(phase);
+      if (phase) noteCompanionPhase(phase);
+      if (state.kind !== "connected") return;
+
+      const target = resolveChampSelectFollow({
+        phase: state.status.phase,
+        champSelect: state.status.champSelect,
+        currentChampionId: champ.id,
+      });
+      if (!target) return;
+
+      fetch("/api/champions")
+        .then((r) => (r.ok ? (r.json() as Promise<ChampionRef[]>) : []))
+        .then((champs) => {
+          if (cancelled) return;
+          const found = Array.isArray(champs) ? champs.find((c) => c.id === target.championId) : undefined;
+          if (!found) return;
+          markCompanionDriven(found.id);
+
+          if (target.roleId !== undefined) {
+            mostPlayedLaneRequestRef.current++;
+            const lane = roleIdToLane(target.roleId);
+            setChamp(found);
+            setActiveLane(lane);
+            sheetNav.replaceSelection(wireViewForChampion(found, lane, tabRef.current, gamesSourceRef.current));
+            return;
+          }
+
+          // Role-less follow target (blank/unmapped position) — same
+          // "land on current lane, then most-played-lane correction"
+          // pattern as the role-less deep-link mount effect.
+          const landedLane = activeLane;
+          setChamp(found);
+          sheetNav.replaceSelection(wireViewForChampion(found, landedLane, tabRef.current, gamesSourceRef.current));
+          const requestId = ++mostPlayedLaneRequestRef.current;
+          getMostPlayedLane(found.id).then((bestLane) => {
+            if (mostPlayedLaneRequestRef.current !== requestId) return;
+            if (!bestLane || bestLane === landedLane) return;
+            setActiveLane(bestLane);
+            sheetNav.replaceSelection(wireViewForChampion(found, bestLane, tabRef.current, gamesSourceRef.current));
+          });
+        })
+        .catch(() => {
+          /* network hiccup — live-follow silently no-ops this tick, retries next poll */
+        });
     }
     tick();
     const id = setInterval(tick, COMPANION_STATUS_POLL_MS);
@@ -264,7 +324,16 @@ export default function HomePage() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [companionSession]);
+    // champ.id/activeLane MUST be dependencies: `tick` reads them via
+    // closure to decide "does the follow target differ from what's
+    // currently shown," and without them here the closure would freeze on
+    // whatever they were when the effect last ran, comparing every future
+    // tick against a stale champion forever. Re-creating the interval on
+    // every champion/lane change is harmless (clears+resets a 3s timer,
+    // `tick()` still fires immediately on setup) — sheetNav/the ref objects
+    // are stable across renders so they're intentionally omitted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companionSession, champ.id, activeLane]);
 
   /** Repaints searchMode/tab/activeLane+champ/selectedPlayer from a landed-on
    *  entry — fired on mount-resume and every popstate. Delegates the actual
