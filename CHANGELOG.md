@@ -2,6 +2,10 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.36.1] — 2026-07-21
+### Fixed
+- **First-champ-select-of-a-session auto-export race (Round-B audit P1).** On a companion-opened fresh tab, if the page's champion resolution won the network race against the first companion status poll, the poll's champ-select entry-clear wiped the "companion-driven" mark and nothing re-established it — both item-set and rune auto-exports then silently skipped for that entire champ select (no error, manual buttons unaffected). The mark is now re-established unconditionally on every status tick that resolves a champ-select champion, making the auto-export gate deterministic regardless of fetch ordering. Attached-tab (page already open) sessions were never affected.
+
 ## [0.36.0] — 2026-07-20 (web-only — companion unchanged at 1.3.1)
 ### Fixed — lane flip never re-exported RUNES (root cause: a React stale-closure race, not the dedup logic)
 - **User on-device evidence: flipping Ashe Bot → Support left the client's selected rune page on "CoachBuild Ashe Bot."** Root cause was NOT in v0.35.0's lane-aware dedup itself — it was a real race between `BuildTabContent.tsx`'s two effects sharing `state`/`lane`: `lane` updates the INSTANT the user flips (`Sidebar`'s `onLaneChange`, synchronous), but `state.build` only catches up once the new lane's `/api/build` fetch resolves. React runs every changed-deps effect for a commit using THAT render's own closure, without waiting for a state update an earlier effect in the same commit just scheduled — so on the very first re-render after a flip, the auto-export effect could see the PREVIOUS lane's resolved build (`state`) paired with the ALREADY-updated `lane` prop. Exporting against that mismatched pair silently "used up" the new lane's dedup slot with the OLD lane's data, permanently blocking the real export once the correct build resolved a moment later.

@@ -287,11 +287,19 @@ export default function HomePage() {
       // lanes on the champion still locked/hovered in the real client" apart
       // from "the user is just browsing an old companion-driven pick after
       // champ select moved on." See that module's shouldAutoExportForLane.
-      setCurrentChampSelectChampionId(
+      const liveChampSelectId =
         phase === "ChampSelect" && state.kind === "connected"
           ? resolveCurrentChampSelectChampionId(state.status.champSelect)
-          : null
-      );
+          : null;
+      setCurrentChampSelectChampionId(liveChampSelectId);
+      // Round-B audit P1: the driven-mark must be re-established on the SAME
+      // tick as (and every tick after) noteCompanionPhase's entry-clear.
+      // Marking only inside the follow's target-branch loses a race on a
+      // fresh deep-link tab: if the mount effect's /api/champions resolves
+      // BEFORE the first /status tick, the entry-clear wipes the mount's
+      // mark and the follow (champ already showing) never re-marks — both
+      // auto-exports then silently no-op for the whole champ select.
+      if (liveChampSelectId !== null) markCompanionDriven(liveChampSelectId);
       if (state.kind !== "connected") return;
 
       const target = resolveChampSelectFollow({

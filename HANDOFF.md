@@ -5780,3 +5780,319 @@ Everything landed and is green: `-SelfTest` and `-Mock -Once` both pass with the
 
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-20 21:53
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-20 19:36:43Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-20 — Urgent hotfix: real-mode gameflow loop blind spot (companion v1.2.1, shipped 0.33.1)
+
+### Root cause (honest, not oversold)
+Live report: `/live-setup` showed `PHASE: None` while inside a real Practice Tool champ select (`clientConnected: true`), hover never opened anything, consistent across every test including v1.1.0 draft games. I could NOT conclusively isolate the exact failing statement on this machine — there's no League client here, so the credentials-present branch of `Invoke-GameflowTick` (where the live symptoms point) can't be exercised end to end. What I DID conclusively establish:
+
+1. Added a `/status` `lastPollAt` heartbeat and ran the companion in **real mode** on this machine (`powershell -File public/companion.ps1`, no flags — not `-Install`, killed after). Curled `/status` twice 5s apart: `lastPollAt` advanced (`19:46:07.60` → `19:46:12.12`). **This means the WinForms.Timer + `Application.Run()` harness DOES tick correctly in the no-LCU branch on this box** — the "loop never runs at all" theory is not reproduced here.
+2. The one thing structurally undeniable regardless: **`-Mock` calls `Update-ChampSelectState` directly (never runs `Start-Companion`'s loop at all) and `-SelfTest` only ever exercises the bridge server — neither test has EVER executed the real gameflow-poll harness.** That blind spot is real and is now closed for good via `-HarnessTest` (see below).
+
+Given I couldn't fully rule in or rule out the credentials-present path here, I implemented the coordinator's requested fix direction regardless (replacing the WinForms.Timer/event-delegate harness with a plain sequential loop) since it strictly reduces reasoning surface — a straight-line `while` loop has no ".NET event dispatched through a message pump" ambiguity to worry about, and every failure mode (hung HTTPS call, CIM flakiness, an unhandled exception mid-tick) now LOGS via `Write-CompanionLog` instead of vanishing into a bare `catch {}`. `Get-LcuCredentials`'s CIM-query catch, previously silent, now logs too.
+
+### Local repro before/after
+- **Before** (heartbeat-instrumented but harness unchanged): real mode run, `lastPollAt` advanced correctly in the no-creds branch — could not reproduce a fully dead loop on this machine.
+- **After** (plain-loop harness + `-HarnessTest`): `powershell -File public/companion.ps1 -HarnessTest` — spawns a real `-DebugRunSeconds 10` child (tray suppressed), discovers its persisted session token, polls `/status` twice 3s apart, asserts `lastPollAt` advances and required fields are present, kills the child. Result: `HARNESSTEST PASSED`.
+
+### Fix
+- `public/companion.ps1`: `Start-Companion` rewritten — WinForms.Timer/`Application.Run()` replaced with `while ($script:CompanionRunning) { ...; Application.DoEvents(); Start-Sleep -Milliseconds 50 }`, ticking `Invoke-GameflowTick` once per `PollMs` via a `Stopwatch`. New `-RunSeconds`/`-SuppressTray` params (used by the new harness test). `/status` gains `lastPollAt`. `Get-LcuCredentials`'s CIM catch now logs.
+- New `-DebugRunSeconds N` / `-HarnessTest` flags + `Invoke-HarnessTest` function — the permanent regression guard for this exact blind spot.
+- COMPANION_VERSION → 1.2.1.
+
+### Folded-in audit findings (same ship)
+- **P1** (`components/hextech/BuildTabContent.tsx`): wrong-champion race in the item-sets auto-export effect — a fallback build could consume the one-shot export ref before the real deep-linked champion's build resolved, permanently blocking its export (no remount ever corrects it). Fixed with a new pure, tested guard: `itemSetsApply.ts`'s `isAutoExportEligibleBuild`.
+- **P2** (`public/companion.ps1`): removed the last 2 non-ASCII bytes (`§` in two comments) — the file's invariant is zero non-ASCII bytes (served over `irm | iex`, no encoding guarantee).
+
+### Gates
+`tsc` clean, lint clean, **789** vitest tests passed (up from 786), build clean, sw/manifest present. `-SelfTest`, `-Mock -Once`, and the new `-HarnessTest` all `PASSED` on this machine, re-verified after the version bump.
+
+### Deploy
+Committed as `harout_b5@live.com` (v0.33.1 / companion v1.2.1), `vercel --prod --archive=tgz`, prod-verified: `companion.version` → `{"version":"1.2.1"}`; served `companion.ps1` contains `lastPollAt`, `DebugRunSeconds`, `HarnessTest`, `Version = '1.2.1'`, zero non-ASCII bytes (verified on the committed file pre-deploy — identical bytes served); `/live-setup` returns 200.
+
+### User steps
+1. Tray icon → **Quit** (stops the running v1.2.0 process).
+2. Re-run the one-liner: `irm https://coachbuild.vercel.app/companion.ps1 | iex` — fetches and runs v1.2.1 fresh. No need to re-`-Install`.
+3. Confirm: `/live-setup` shows version `1.2.1`; enter a real champ select and confirm the Builds page now opens automatically (the actual end-to-end confirmation this hotfix can't get on a dev machine without a League client — genuinely needs the user's own next game).
+4. If it's STILL broken after this: the new `lastPollAt` field on `/status` is the next diagnostic step — if it's null or stuck, the loop truly isn't ticking on their machine specifically (a machine-specific quirk this dev box doesn't share); if it advances but `phase` still never leaves `None` during a real champ select, the bug is downstream in the actual LCU credential/gameflow-phase fetch chain, not the loop itself — worth capturing `%LOCALAPPDATA%\CoachBuild\companion.log` (now logs CIM failures and tick exceptions that were previously silent) for the next round.
+
+
+## 2026-07-20 — Fast-follow hotfix: TLS handshake dies on scriptblock cert callback (companion v1.2.2, shipped 0.33.2)
+
+User re-tested v1.2.1: still Phase:None during a real champ select. Root cause identified and fixed (see CHANGELOG [0.33.2] entry for full detail):
+
+**`[Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }` is a PowerShell scriptblock — scriptblocks are runspace-affine, and .NET invokes this callback on a threadpool thread during the TLS handshake that has NO runspace attached.** It throws there, failing the handshake, so every HTTPS call to the self-signed LCU dies (`Invoke-LcuRaw` returns `Ok=$false`) — `phase` can never leave `'None'`, while `clientConnected` stays true regardless (CIM-only check, never reflects an actual successful LCU call). Invisible on this dev box (no League client → no LCU HTTPS ever attempted).
+
+**Fix:** replaced the scriptblock with a compiled `Add-Type` delegate (`CoachBuildCertPolicy.AlwaysTrue`) — compiled code has no runspace affinity, runs on any thread.
+
+**Addendum (user's `companion.log` tail arrived mid-round):** confirmed the actual failure was being swallowed one layer below where v1.2.1's logging lived — inside `Invoke-LcuRaw`/`Get-LiveClientData`/`Get-LcuCredentials`'s own try/catch blocks. Added a new throttled logger (`Write-ThrottledErrorLog`, ~1 log per 60s per distinct failure) so a persistent failure can't flood the 200KB log, and wired it through all three. `/status` gains `lastError`; also discovered `lastPollAt` (added server-side in 1.2.1) was NEVER wired into `companionClient.ts`'s `CompanionStatus` type or rendered on `/live-setup` — fixed both, so the diagnostics panel now genuinely shows everything in one screenshot.
+
+**Honest validation limit:** the TLS-callback fix itself is untestable without a real self-signed HTTPS peer. Confirmed empirically: the compiled delegate builds and applies with zero errors, and a real HTTPS call (valid cert, `coachbuild.vercel.app`) still succeeds with the callback active — but this can't prove the self-signed-cert-over-threadpool-thread scenario resolves. Genuine confirmation needs the user's own `companion.log`/`/status` on their next real champ select.
+
+**Gates:** tsc/lint clean, **792 tests** passed (up from 789), build clean. `-SelfTest` (incl. a new assertion pinning that a real `Invoke-LcuRaw` failure against an unreachable port populates `lastError`), `-Mock -Once`, and `-HarnessTest` all green.
+
+**Deploy:** v0.33.2 / companion v1.2.2, committed as `harout_b5@live.com`, deployed, prod-verified.
+
+**User steps:** Tray → Quit → re-run `irm https://coachbuild.vercel.app/companion.ps1 | iex` → confirm `/live-setup` shows version `1.2.2` → enter a real champ select → check whether Builds now opens automatically. If not: screenshot `/live-setup`'s connection details (now shows last poll time + last error) — that one screenshot should show exactly what's still failing.
+
+## 2026-07-20 — Rune-apply blocker fix + safer auto-runes + attached-tab live-follow (companion v1.3.0, shipped 0.34.0)
+
+### Root cause found (2nd user screenshot, refined mid-round)
+The 1st screenshot suggested a broken/partial page (slot-validity concern). The 2nd screenshot corrected this: **the created "CoachBuild Galio Mid" page existed, saved, populated — creation always worked.** The failure was SELECTION: the client stayed on a fresh "ADD NEW PAGE" editor instead of switching to the created page. `current:true` in the POST body does not select it. Fixed: `Invoke-ApplyRunes`'s new `Complete-RuneApply` helper `PUT`s the raw page id to `/lol-perks/v1/currentpage` right after every successful create, then reads `/lol-perks/v1/currentpage` back and compares id/name/`selectedPerkIds` to what was sent — `/apply-runes` responses now carry `selected`/`verified`/`mismatch` so a partial apply is reported honestly (`{ok:true}` no longer implies full success).
+
+Slot-validity (the original prime suspect) was checked against a **live CommunityDragon perkstyles.json pull** — fetched real slot membership for Sorcery/Precision (keystone rows, minor rows, stat-mod/shard rows — confirmed shards are universal across every tree). Found ONE stale placeholder in the repo's own `runeApplyBody.test.ts` fixture (defense shard `5002` Armor, not valid in any current row) and fixed it; no actual misplacement in the builder itself. Pinned as a new fixture test (`runeApplyBody.test.ts`'s new describe block) using the real fetched ids, per the coordinator's "downgrade to defense-in-depth, verify cheaply" steer.
+
+### Two real PowerShell bugs found via SelfTest while building this (not specific to this feature — general landmines)
+1. **`$Obj | ConvertTo-Json` on an empty array produces NO output at all** (not the JSON literal `"[]"`) — crashed `Write-JsonResponse`/`Invoke-LcuRaw` whenever a route needed to serialize a genuinely empty collection (e.g. GET `/lol-perks/v1/pages` with zero custom pages). Fixed with `ConvertTo-Json -InputObject $Obj` (no piping) in both places.
+2. **A single-match `Where-Object` result silently unwraps to a bare (non-array) object in PS 5.1**, and `.Count` on a bare object returns `$null` — `$null -gt 0` is false, so a genuine match could still 404. Fixed by wrapping the WHOLE filtered result in `@(...)` in the mock's currentpage lookup (all other instances in the file were already correctly wrapped).
+
+### Companion v1.3.0 safety redesign (auto-runes)
+`/apply-runes` gains `mode:'auto'|'manual'`. New page-selection logic, both modes: replace an existing CoachBuild-titled page (oldest first) if one exists; else use a genuinely free slot (checked via `GET /lol-perks/v1/inventory` `ownedPageCount`, falling back to a speculative POST when unavailable); if neither and `mode='manual'`, fall back to the ORIGINAL delete-currentpage-then-POST behavior (real click = real consent); if neither and `mode='auto'`, **never delete anything** — return `{reason:'slots-full'}`. SelfTest pins an adversarial 5-page/0-CoachBuild fixture: zero DELETE calls in auto mode.
+
+### Attached-tab live-follow (fold-in)
+Companion tracks `lastStatusPollAt` (stamped on every authorized `/status` GET); `Test-CompanionHasAttachedTab` (8s freshness window) gates whether `Update-ChampSelectState` actually calls `Start-Process` on a champion change — if a tab is already polling, it's trusted to live-follow instead. Web side: `app/page.tsx`'s existing companion-status poll (3s, unchanged cadence, reused rather than adding a second interval) now also resolves+applies champion changes via the new `resolveChampSelectFollow` pure function. Auto-export dedup generalized from "once per page load" (a ref) to "once per (champ-select epoch, championId, kind)" via a new shared singleton module `champSelectFollowState.ts` — `noteCompanionPhase` (called from the poll) bumps the epoch on every ChampSelect entry; `markCompanionDriven`/`isCompanionDrivenChampion` generalizes the P1 wrong-champion-race audit fix (a transient fallback-champion render is never marked, so it never wrongly auto-exports). A cheap localStorage lock (`tryClaimAutoExportLock`) avoids double-firing across two open tabs.
+
+### Files
+- `public/companion.ps1`: `Complete-RuneApply` (new), `Invoke-ApplyRunes` rewritten (mode param, page-selection logic), `Write-JsonResponse`/`Invoke-LcuRaw` (`-InputObject` fix), mock LCU rune-page state (`MockPages`/`MockInventory`/etc.), `Test-CompanionHasAttachedTab` (new), `lastStatusPollAt` stamping, SelfTest/Mock/HarnessTest all extended.
+- `components/hextech/autoExportShared.ts` (new) — generalized gate logic (`shouldAutoExport`, `isAutoExportEligibleBuild`) shared by items + runes.
+- `components/hextech/runeAutoApply.ts` (new) — rune counterpart to `itemSetsApply.ts`.
+- `components/live/champSelectFollow.ts` (new) — pure live-follow decision.
+- `components/live/champSelectFollowState.ts` (new) — shared epoch/dedup/lock singleton.
+- `components/live/companionClient.ts` — `applyRunes` gains `mode` param; `ApplyRunesResult` gains `selected`/`verified`/`mismatch`; `getAutoRunesEnabled`/`setAutoRunesEnabled`.
+- `components/hextech/RunesSummonersCard.tsx`, `components/hextech/BuildTabContent.tsx`, `app/page.tsx`, `app/live-setup/page.tsx` — wired through.
+- New tests: `champSelectFollow.test.ts`, `champSelectFollowState.test.ts`, `runeAutoApply.test.ts`; extended `companionClient.test.ts`, `runeApplyBody.test.ts` (incl. the real-perkstyles pinned fixture).
+
+### Gates
+tsc/lint clean, **822 tests** passed (up from 793 at round start). `-SelfTest`, `-Mock -Once`, `-HarnessTest` all green, re-verified after the version bump.
+
+### Deploy
+v0.34.0 / companion v1.3.0, committed as `harout_b5@live.com`, deployed, prod-verified (`companion.version` → `1.3.0`, served script contains `Complete-RuneApply`, `Test-CompanionHasAttachedTab`, `Version = '1.3.0'`; `/live-setup` 200).
+
+### User steps
+1. Tray → **Quit** (stops v1.2.2).
+2. Re-run `irm https://coachbuild.vercel.app/companion.ps1 | iex` → v1.3.0.
+3. Confirm `/live-setup` shows version `1.3.0`; review the two Automation toggles (item builds + runes, both default ON since already paired).
+4. Real test: enter champ select — the SAME tab should now follow hovers without opening new ones; click **Apply runes** (or let it auto-apply) and confirm the in-client rune editor actually SWITCHES to the "CoachBuild" page (not a blank "ADD NEW PAGE" draft) — this is the actual end-to-end confirmation of the blocker fix.
+
+### Queued, explicitly NOT done this round (per coordinator instruction)
+Item-set restructuring (one set per champ+role with blocks, 6-items-one-boots invariant) — queued as a follow-up, web-only, no companion change expected. Do not fold into a future round without re-reading that specific brief.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-20 22:03
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-13 10:52:35Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-20 — engo: item-set restructure (3 sets → 1 set, blocks), v0.34.1 (web-only)
+
+**User feedback driving this round** (item sets confirmed working in-game): merge Core/Optimized/Pro into ONE LCU set per champ+role as BLOCKS; every build line must be exactly 6 items with exactly 1 boots (live bugs: a line with 2 boots; an Optimized line with only 3 items); situational scenarios as another line in the same set.
+
+### Files touched
+- `components/hextech/itemSetBody.ts` — full rewrite. `buildItemSets` now returns a single-element array: ONE `ItemSet` (`uid: coachbuild-<champ>-<role>`, `title: CoachBuild <champ> <role>`, no variant suffix). New shared algorithm `buildLine(primary, fallbackPools, bootsIds)` enforces the 6-item/1-boots invariant for every line (dedupe → resolve boots count → pad from priority pools → trim to 6, never invents).
+- `components/__tests__/itemSetBody.test.ts` — full rewrite for the new shape, 30 tests, incl. regression fixtures pinning both live bugs (2-boots-in-a-line via `alts.boots`/`fourthPlus`, 2-boots-in-pro-consensus via `pro.boots`, and a 3-item `optimizedPath` padded to 6) plus the companion.ps1 stale-set prefix-match test (item 3 of the brief).
+- `components/__tests__/itemSetsApply.test.ts` — updated the two `applyItemSetsForBuild` tests that hardcoded the old suffixed titles / multi-set shape.
+- `components/hextech/itemSetsApply.ts` — doc-comment only (no logic change; still calls `buildItemSets`/`applyItemSets` exactly as before — the array-of-1 return type is source-compatible).
+- `components/hextech/RunesSummonersCard.tsx` — toast copy: "Item build added — check your shop in game." (was pluralized off `result.count`, which is now always 1).
+- `components/hextech/BuildTabContent.tsx` — toast copy: "Item build added for `<champ>`…" (was "Item builds added…").
+- `package.json` — `0.34.0` → `0.34.1`.
+- `CHANGELOG.md` — new `[0.34.1]` entry.
+- **`public/companion.ps1` — NOT touched**, per the brief and confirmed by reading `Merge-ItemSets`: it computes the stale-set prefix from `newArr[0].title` stripped from an em-dash onward. The new no-suffix title has no em dash, so the prefix is the full title (`CoachBuild <champ> <role>`) — old suffixed titles (`... — Core/Optimized/Pro`) all still start with it and get cleaned up automatically on next export. `companion.version` stays `1.3.0`.
+
+### Block structure as shipped (in order)
+1. **Starting** — `[items.starter]`, 1 item, exempt from the 6-rule.
+2. **Core build** — always present. Primary = `[first, second, third, boots, ...fourthPlus]`. Padding cascade when short: optimized → situational → pro consensus.
+3. **Optimized order** — only when `resolveOptimizedPathView` returns `kind: "path"` (same "genuinely differs from core" rule as before). Padding: **core remainder only** (deliberately not situational/pro, so it reads as "this build, refined order," not a grab-bag).
+4. **Pro build** — only when pro-consensus data resolves non-empty. Primary = `pro.boots` + `pro.items` combined, sorted by share desc (boots dedup happens inside `buildLine` same as any other line). Padding cascade: optimized → situational → pro leftover.
+5. **Situational swaps** — only when `items.alts` produces anything. `flattenSituational(items)` capped at 6, **exempt from the one-boots rule** (swap suggestions, not a worn loadout — several boots alternatives side by side is intended).
+
+### Boots identification (read this before touching `buildLine`)
+`Pick` (the shape this pure builder sees) has no `tags` field, so the tags-based `isBootsTag`/`isBootsFinal` check in `proConsensus.ts` (which needs `ItemDetail` metadata from an async `getItemDetailMap` fetch) is NOT reachable here. `collectBootsIds(items, pro)` builds one id set structurally instead: `items.boots.id` (the dedicated boots slot) + every id in `items.alts?.boots` (the dedicated alternate-boots pool — the same structural convention `ItemPath.tsx`'s own `isBoots` badge already uses, no tags involved there either) + every id in `pro.boots` (already tag-partitioned upstream by `proConsensus.ts`'s `isBootsTag` before this module ever sees it). If a future data source ever puts a boots item somewhere NOT covered by these three (e.g. a raw `fourthPlus` boots pick that never shows up in `alts.boots`), it will NOT be detected — flagged in the code comment, not a silent gap. Root-caused both live bugs against this design before writing it: the old Pro-set builder combined `[...pro.boots(≤2), ...pro.items]` sorted by share with no cap → 2 boots could both land in the top slice; the old Optimized-set builder shipped `optimizedPath` (2-3 items) completely unpadded.
+
+### Test count
+- `itemSetBody.test.ts`: 30 tests (was ~19 pre-rewrite).
+- `itemSetsApply.test.ts`: unchanged count, 2 tests updated for the new shape.
+- Full suite: **834 tests passed** (baseline was 822; net +12 from the richer fixture set, all new/updated tests are in the two files above).
+- `bash scripts/verify-fix.sh` (tsc, lint, tests, build, sw, manifest) — ALL PASS, run twice (pre- and post-version-bump).
+
+### Deploy
+- Committed as `harout_b5@live.com` (see commit for hash).
+- `npx vercel --prod --archive=tgz` — see terminal output in this round; prod URL verified to serve the new build (`__APP_VERSION__` sourced from `package.json`, no separate version file to hand-bump).
+
+### Pending / out of scope
+- Nothing outstanding from this brief. `HANDOFF.md`/`HANDOFF-engy.md` had pre-existing uncommitted changes in this worktree when I started (not mine, not touched) — left as-is; Urgot's merge hook owns reconciling those.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-20 22:39
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-20 21:04:00Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-20 (round 2) — engo: lane-flip auto-export fix + items-silently-missing investigation, v0.35.0 / companion 1.3.1
+
+**User on-device evidence driving this round:** (a) during a live Senna champ select, flipping Bot → Support left auto-export (both runes and items) on the OLD lane's build — the client still had "CoachBuild Senna Bot" after switching to Support. (b) A second report from the SAME champ select: runes auto-exported but item sets silently did not, despite the items toggle defaulting ON.
+
+### (a) Lane-flip dedup fix
+
+**Root cause (verified in code, not assumed):** `components/live/champSelectFollowState.ts`'s auto-export dedup keyed ONLY on `championId` (an ever-growing `Set<string>` of `"${kind}:${championId}"`). `BuildTabContent.tsx`'s auto-export effect gates on `hasAppliedForChampion(kind, championId)` — once true for a champion (from the FIRST lane's export), it stayed true for the rest of that champ-select epoch regardless of lane, since `handleLaneChange` (`app/page.tsx`) never touches the champion, only `activeLane`.
+
+**Fix:** replaced the championId-only Set with a single most-recently-exported `(championId, laneId)` pair PER KIND (`shouldAutoExportForLane` / `markAutoExported` in `champSelectFollowState.ts`) — "latest wins": fire whenever the current pair differs from the last one applied. This is deliberately simpler than a per-championId lane map, and correctly handles a same-champion lane bounce Bot → Support → Bot (each flip differs from whatever was most recently applied, so each re-fires) per the brief's own "simplest correct" framing.
+
+**Additional guard on the RE-FIRE path only** (first-ever export keeps its existing, unchanged gate — `isCompanionDrivenChampion`): a lane re-fire only proceeds when `isInChampSelect()` (new, mirrors the last phase `noteCompanionPhase` was called with) AND `getCurrentChampSelectChampionId() === championId` (new — the companion's OWN live champ-select resolution, fed every poll tick by `app/page.tsx` via a new `resolveCurrentChampSelectChampionId` split out of `champSelectFollow.ts`'s `resolveChampSelectFollow`). Without this, browsing back to an old companion-driven pick after champ select ended (isCompanionDrivenChampion doesn't expire until the NEXT champ-select entry) and flipping ITS lane would also incorrectly re-export.
+
+The multi-tab localStorage lock (`tryClaimAutoExportLock`) gained `laneId` in its key for the same reason — a lock claimed for one lane must never starve a legitimate re-fire for a different lane on the same champion within the 30s TTL window.
+
+### (b) Items-silently-missing investigation
+
+Traced all 4 candidate causes the coordinator listed, against the actual current code (not the brief's hypotheses):
+
+1. **"Follow path doesn't trigger item export"** — DISPROVEN. Both `autoApplyItemSetsIfEligible` and `autoApplyRunesIfEligible` are called from the exact SAME unified effect in `BuildTabContent.tsx` (`[state, lane]` deps), fired identically regardless of whether `champ`/`activeLane` changed via the deep-link mount effect or the live-follow poll.
+2. **"Multi-tab lock contention"** — DISPROVEN as a cross-kind blocker. Lock keys are `coachbuild:autoExport:${kind}:...` (kind-scoped) — an "items" claim can never be blocked by a "runes" claim.
+3. **"Toggle defaults OFF"** — verified `getAutoItemSetsEnabled`/`getAutoRunesEnabled` are byte-for-byte symmetric (same default rule, same synchronous localStorage read at effect-call time, no hydration-order risk since both are read fresh inside a client-only effect). Can't rule out an actual per-device persisted `false` value, but that would be device data state, not a code bug.
+4. **"Stale URL guard (`isAutoExportEligibleBuild`) blocking the follow path"** — CONFIRMED NOT the live cause, but for a more fundamental reason than expected: **this guard has had NO call site in `BuildTabContent.tsx` at all since the v1.3.0 rewrite** (grep-verified repo-wide). It's fully superseded by `isCompanionDrivenChampion` and is dead code in the runtime path today — kept exported only because its own regression tests (P1 audit, 2026-07-20) are still pinned and valid as historical documentation. Added a clarifying comment in `itemSetsApply.ts` explaining this, so a future reader doesn't assume it's load-bearing and "fix" something that isn't wired in. Wiring it against `window.location.search` (as the coordinator's candidate #4 suspected) would in fact be WRONG for the follow path exactly as flagged — the URL is only ever set once at deep-link mount, never touched by a later live-follow champion change.
+
+**The one real, verifiable asymmetry found:** item sets have strictly more surface area that can throw BEFORE ever reaching the companion — `applyItemSetsForBuild` calls the synchronous, pure `buildItemSets` AFTER the async `resolveProConsensusForSets` resolves; runes has no equivalent extra step. Neither `BuildTabContent.tsx` promise chain had a `.catch()` — only `.then(onFulfilled)` — so ANY uncaught rejection anywhere in either attempt (a probe throwing, a pure builder throwing on a genuinely malformed field, anything) would vanish completely silently: no toast, no companion call, no console signal a user would ever see. This matches "runes worked, items silently didn't" exactly. Fixed: both promise chains in `BuildTabContent.tsx` now end in `.catch()`, surfacing the same visible error toast the graceful `ok:false` branch already shows.
+
+I could not reproduce or pin the EXACT trigger for this specific user's Senna Bot session (no repro harness for a live LCU) — reporting this as "hardened against the class of bug that explains it," not "found and fixed the literal root cause with certainty." If it recurs with the new `.catch()` in place, the user will now SEE an error toast, which itself will be diagnostic information we didn't have before.
+
+### Champ-scoped item-set stale cleanup (companion 1.3.1)
+
+Verified via reading `Merge-ItemSets`: pre-1.3.1, the stale-removal prefix was ALWAYS derived from the new set's own (role-scoped) title — a lane flip's export left the OLD lane's set behind (e.g. both "CoachBuild Senna Bot" and "CoachBuild Senna Support" would coexist). Added an explicit `replacePrefix` field to the `/apply-itemsets` wire body: web now sends `CoachBuild <champ> ` (champ-scoped, trailing space load-bearing — stops "CoachBuild Vi " from also matching "CoachBuild Viktor ...") via `itemSetBody.ts`'s new `champScopedReplacePrefix`. Companion validates it starts with "CoachBuild" (same defense-in-depth as titles, rejects the WHOLE request otherwise) and prefers it over the title-derived prefix when present; falls back to the original em-dash-derived, role-scoped prefix when absent (back-compat either direction).
+
+**Verified runes do NOT need the same fix** — read `Invoke-ApplyRunes`: it matches ANY page whose name starts with the literal `'CoachBuild'` (no champ/role scoping at all), so at most ONE CoachBuild rune page ever exists — a lane flip already replaces it, never accumulates. No change needed there.
+
+### Files touched
+- `components/live/champSelectFollowState.ts` — rewrite: `lastApplied` (per-kind single pair) replaces `appliedKeys` Set; new `isInChampSelect`, `setCurrentChampSelectChampionId`/`getCurrentChampSelectChampionId`, `shouldAutoExportForLane`, `markAutoExported`; `tryClaimAutoExportLock` gained a `laneId` param.
+- `components/live/champSelectFollow.ts` — new exported `resolveCurrentChampSelectChampionId`, factored out of `resolveChampSelectFollow`.
+- `app/page.tsx` — status-poll tick now calls `setCurrentChampSelectChampionId` every tick.
+- `components/hextech/BuildTabContent.tsx` — effect updated to the new dedup API + `.catch()` on both promise chains.
+- `components/hextech/itemSetBody.ts` — new exported `champScopedReplacePrefix`.
+- `components/live/companionClient.ts` — `applyItemSets` body type gains `replacePrefix?: string`; header comments updated.
+- `components/hextech/itemSetsApply.ts` — passes `replacePrefix`; clarifying comment on `isAutoExportEligibleBuild`'s dead-code status.
+- `public/companion.ps1` — version `1.3.0` → `1.3.1`; `Test-ItemSetsPayload`/`Merge-ItemSets`/`Invoke-ApplyItemSets` gain `ReplacePrefix`; bridge route wires `$bodyObj.replacePrefix` through; new SelfTest cases (champ-scoped removal across old-lane + old-3-set-era titles without touching a non-CoachBuild or different-champion set; bad-prefix rejection).
+- `public/companion.version` — `1.3.0` → `1.3.1`.
+- Tests: `champSelectFollowState.test.ts` rewritten; `champSelectFollow.test.ts` gains `resolveCurrentChampSelectChampionId` coverage; `itemSetBody.test.ts` gains `champScopedReplacePrefix` coverage; `itemSetsApply.test.ts` pins `replacePrefix` on the wire body.
+- `package.json` `0.34.1` → `0.35.0`; `CHANGELOG.md` new entry.
+
+### Verification
+- `powershell ... companion.ps1 -SelfTest` → PASSED (incl. all new replacePrefix cases).
+- `powershell ... companion.ps1 -Mock -Once` → PASSED.
+- `powershell ... companion.ps1 -HarnessTest` → PASSED.
+- `bash scripts/verify-fix.sh` (tsc, lint, tests, build, sw, manifest) → ALL PASS, run twice (pre/post version bump). **851 tests passing** (baseline 834; +17 net new/updated across the 4 touched test files).
+
+### Ship
+- Committed as `harout_b5@live.com`.
+- `npx vercel --prod --archive=tgz` — prod URL verified to serve `v0.35.0` (footer).
+- **User action required this time:** the companion is a long-running background process — auto-update only shows a balloon notification, it does NOT self-replace itself. The user must: (1) right-click the CoachBuild tray icon → Quit, (2) re-run the install one-liner (`irm https://coachbuild.vercel.app/companion.ps1 | iex`, or the persistent `-Install` variant if they want it back on the Startup list) to pick up companion 1.3.1. Confirmed via `/status`'s `version` field on next Test Connection.
+
+### Pending / out of scope
+- Could not reproduce the exact "items silently missing" trigger for THIS specific user's session (no live-LCU repro harness available) — see investigation notes above. The `.catch()` hardening is defense-in-depth for the whole class of "uncaught rejection = silent no-op" bug, not a confirmed single root cause.
+- `HANDOFF.md`/`HANDOFF-engy.md` again show pre-existing uncommitted changes in this worktree that are not mine — left untouched, not staged.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-20 23:10
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-20 21:39:56Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-20 (round 3) — engo: lane-flip runes root cause + full-item rule + Buy order rename + themed lines, v0.36.0 (web-only)
+
+**User-approved Round A, 4 items, on-device evidence from v0.35.0/companion 1.3.1.** Good news acknowledged: items now auto-export in game (last round's `.catch()` hardening / flow fix landed it).
+
+### 1. Lane flip did not re-export RUNES — ROOT CAUSE FOUND (not what I expected)
+
+I initially suspected the bug was in `champSelectFollowState.ts`'s new per-kind dedup (last round's own code) or in `runeAutoApply.ts` carrying a stale dedup of its own. Neither was true — verified by reading both fully: `runeAutoApply.ts` has NO dedup of its own (thin wrapper only, defers entirely to the shared gate), and the items/runes blocks in `BuildTabContent.tsx`'s effect are byte-for-byte structurally identical (same `shouldAutoExportForLane`/`tryClaimAutoExportLock`/`markAutoExported` calls, differing only in `kind`). If the dedup logic itself were broken, it would break BOTH kinds identically — but the coordinator's own framing ("items path unclear-but-working, runes definitively did not") was the tell that this was actually a TIMING bug likely affecting both, just more visibly reported for runes (a stale rune page name is glaringly visible in the client; a missing/stale item set for one lane is easy to not specifically check).
+
+**Actual root cause: a React stale-closure race between BuildTabContent's two effects.** `lane` is a prop that updates the INSTANT the user flips lanes (`Sidebar.onLaneChange` → `setActiveLane`, synchronous). `state` (the fetched build) only catches up once the new lane's `/api/build` fetch resolves. React runs every changed-deps effect for a given commit using THAT render's own closure, in declaration order, without waiting for a state update an EARLIER effect in the same commit just scheduled. So on the very first re-render after a lane flip: the fetch effect (declared first) kicks off `load()` (which calls `setState({status:'loading'})` — queued for a LATER render); the auto-export effect (declared right after it) runs in the SAME commit and still sees `state.build` = the PREVIOUS lane's resolved build, paired with the ALREADY-updated `lane` prop. Exporting against that mismatched pair silently "used up" the new lane's dedup slot (`shouldAutoExportForLane`/`markAutoExported`) with the OLD lane's data — permanently blocking the real export once the correct build resolved moments later (its own render finds the dedup already thinks that (champion, lane) pair was handled).
+
+**Fix:** new pure guard `heroContracts.ts`'s `isBuildForLane(buildRole, lane)` — the auto-export effect now returns early whenever `state.build.role` doesn't match `LANE_TO_ROLE_ID[lane]`, so it can only ever act once they're genuinely in sync. Symmetric fix for both kinds (this was never a runes-specific bug in the code, even though it was reported as one).
+
+**Files:** `components/hextech/heroContracts.ts` (new `isBuildForLane` export), `components/hextech/BuildTabContent.tsx` (guard added as the effect's first line). Tests: `components/__tests__/heroContracts.test.ts` (pure `isBuildForLane` unit tests) + `components/__tests__/champSelectFollowState.test.ts` (a new describe block replaying the EXACT BuildTabContent sequence — stale render is a no-op for BOTH kinds, the real render still fires for both — this is the "lane flip fires both kinds" pin the brief asked for).
+
+### 2. Full-items-only build lines (Dark Seal regression)
+
+Root cause: `proConsensus.ts`'s `aggregateProConsensus` deliberately allowlists Dark Seal/Cull/Tear of the Goddess/Doran's items/support starters as "counts as a build choice" (`STARTING_ITEM_ALLOWLIST`) — correct for the Pro Consensus CARD's own display, but that same allowlist-inclusive `pro.items` data also fed `itemSetBody.ts`'s Pro build line.
+
+Fixed with a narrower `isFullItem(itemId, meta)` in `itemSetBody.ts` that does NOT consult that allowlist: full = genuine recipe-tree leaf (`into` empty) or a legitimate finished boots (mirrors `proConsensus.ts`'s tier-2-boots special case exactly). No metadata at all → EXCLUDE (never assume finished) — deliberate, documented tradeoff (a totally failed metadata fetch degrades build lines toward empty rather than showing a possibly-wrong item; Starting/Situational are unaffected either way).
+
+Real tag vocabulary confirmed via a live `item.json` pull against the coachless CDN mirror (16.13.1) before writing any of this — not invented. Full vocabulary observed: `AbilityHaste, Active, Armor, ArmorPenetration, AttackSpeed, Aura, Bilgewater, Boots, Consumable, CooldownReduction, CriticalStrike, Damage, GoldPer, Health, HealthRegen, Jungle, Lane, LifeSteal, MagicPenetration, MagicResist, Mana, ManaRegen, NonbootsMovement, OnHit, Slow, SpellBlock, SpellDamage, SpellVamp, Stealth, Tenacity, Trinket, Vision`. Confirmed Dark Seal (1082) has `into: ["3041"]` (Mejai's) — non-empty, correctly excluded.
+
+`itemSetsApply.ts`'s `applyItemSetsForBuild` now resolves item metadata (`resolveItemMetaForSets`, new — reuses `itemDetail.ts`'s already-memoized `getItemDetailMap`, no extra network cost) in parallel with pro-consensus, threading it into `buildItemSets`'s new optional 5th param.
+
+**Edge case found and closed while wiring this up:** a "Buy order"/"Pro build" block could ship with ZERO items if every candidate failed the new full-item filter (the data-availability gate was independent of content-emptiness). Both blocks now only push when their resulting line is non-empty.
+
+### 3. "Optimized order" → "Buy order"
+
+User: "that doesn't make sense." Block-`type` string rename only; `optimizedPath.ts`'s underlying logic (shared with `CoreBuildOrderCard`'s UI) untouched — out of scope.
+
+### 4. Three themed lines: Highest WPA, Tanky, Burst
+
+No new upstream fetch — derived from the SAME pools already built (core/buy-order/situational/pro-consensus), unioned by highest-weight-wins dedup. `TANKY_TAGS = {Health, Armor, SpellBlock}`, `BURST_TAGS = {SpellDamage, Damage, ArmorPenetration, MagicPenetration}` — there is no "Lethality" tag in ddragon (it's a stat, not a tag); real Lethality-class items are tagged `ArmorPenetration`, confirmed the closest real substitute rather than inventing a tag. "Highest WPA" has no tag filter (top-6 by weight across the whole pool). Each line: full-items-only, exactly one boots (themed-boots preferred, falls back to the overall best boots), omitted entirely (not padded with off-theme items) below a 4-qualifying-item threshold.
+
+Block order: Starting, Core build, Buy order (if it differs), Pro build, Highest WPA, Tanky, Burst, Situational swaps.
+
+### Files touched
+- `components/hextech/heroContracts.ts` — new `isBuildForLane` export.
+- `components/hextech/BuildTabContent.tsx` — the `isBuildForLane` guard added.
+- `components/hextech/itemSetBody.ts` — `isFullItem`/`fullItemsOnly`/`hasAnyTag`/`unionPool`/`buildThemedLine` added; "Optimized order" → "Buy order"; empty-block guard on Buy order/Pro build; `buildItemSets` gains an optional 5th `itemMeta` param.
+- `components/hextech/itemSetsApply.ts` — new `resolveItemMetaForSets`; `applyItemSetsForBuild` resolves it in parallel with pro-consensus and threads it through.
+- Tests: `heroContracts.test.ts` (new `isBuildForLane` coverage), `champSelectFollowState.test.ts` (new lane-flip-sequence describe block), `itemSetBody.test.ts` (full rewrite with real `ItemDetail` fixtures throughout — the full-items rule needs them — Dark Seal regressions across Core/Pro/Situational/themed contexts, themed-line construction/omission/boots-preference), `itemSetsApply.test.ts` (item-metadata wiring incl. a total-fetch-failure degradation case).
+- `package.json` `0.35.0` → `0.36.0`; `CHANGELOG.md` new entry.
+- **`public/companion.ps1`/`companion.version` NOT touched** — confirmed this round is entirely web-side (the runes bug was a web-side React race, not a companion protocol issue; the item-set rules are pure builder logic). Companion stays at 1.3.1 — no user action needed this round.
+
+### Verification
+- `bash scripts/verify-fix.sh` (tsc, lint, tests, build, sw, manifest) → ALL PASS, run 3x across the round (once mid-work, once after a TS2802 Map-iterator-spread fix, once after the version bump). **867 tests passing** (baseline 851; net +16 across the 4 touched/new test files).
+- One real bug caught by tsc during this round (not by me manually): `tsc -b` failed on `[...map.values()]` (Map iterator spread needs `--downlevelIteration`/ES2015+ target this project doesn't set) — vitest's own transpiler didn't catch it, only the strict build did. Fixed by switching to `Array.from(map.values())` throughout (itemSetBody.ts's `unionPool` + every test fixture spread). Worth remembering: an all-green `vitest run` is NOT proof `tsc -b`/the Next build will also pass — always run the full `verify-fix.sh`, not just the test runner, before calling something done.
+
+### Ship
+- Committed as `harout_b5@live.com`.
+- `npx vercel --prod --archive=tgz` — prod URL verified to serve `v0.36.0` (footer).
+- No companion re-install needed this round (still 1.3.1, unchanged).
+
+### Pending — Round B (full optimization sweep) NOT started per explicit instruction
+- Coordinator said a Round B follow-up is coming after this round; told explicitly not to start it. Stopping here and reporting back.
+- `HANDOFF.md`/`HANDOFF-engy.md` again show pre-existing uncommitted changes in this worktree that are not mine — left untouched, not staged.
+
+
