@@ -5,7 +5,7 @@ Full verified research feeding the Live-feature design. Confidence flags inline;
 ## TL;DR recommendation
 
 - Feasible + Riot-compliant IF the bright line holds: recommend builds/runes/comp-aware items only — never enemy cooldowns/ult timers, never automate game actions (queue-accept/pick/lock/dodge). User-clicked rune-page apply is standard importer behavior.
-- **Packaging: pure PowerShell companion via `irm coachbuild.vercel.app/companion.ps1 | iex`.** All compile-to-exe toolchains (bun/pkg/Node SEA/Deno) are ~50MB+ with unsigned-exe SmartScreen walls + real AV false-positive history (bun flagged as trojan, oven-sh/bun #16981). PS 5.1 is preinstalled; `irm|iex` runs in-memory (bypasses ExecutionPolicy); KB footprint.
+- **Packaging: pure PowerShell companion via `irm https://coachbuild.vercel.app/companion.ps1 | iex`.** All compile-to-exe toolchains (bun/pkg/Node SEA/Deno) are ~50MB+ with unsigned-exe SmartScreen walls + real AV false-positive history (bun flagged as trojan, oven-sh/bun #16981). PS 5.1 is preinstalled; `irm|iex` runs in-memory (bypasses ExecutionPolicy); KB footprint.
 - **Bridge: hybrid.** Champ-select flow is ZERO-BRIDGE: companion `Start-Process`-opens the right CoachBuild URL (no browser→localhost call, no permission prompt). Browser→companion (rune apply + live in-game poll) uses `fetch('http://127.0.0.1:48291/...')` — **Chrome 142 (Sept 2025) Local Network Access now prompts once per origin for loopback** ("Allow" once). WebSocket is currently NOT LNA-gated (temporary gap, don't build on it).
 - **Beating Blitz/u.gg concretely:** zero-login, zero-ads, KB-scale (they're 1-2GB Electron/Overwolf), instant native page-open, comp-aware recos (only Hexgate does this; Blitz/Moba/u.gg are static-build).
 
@@ -40,7 +40,7 @@ Our wins: no runtime tax (KB script + existing browser), zero ads/login, comp-aw
 
 ## D. Packaging + install
 
-- **PowerShell one-liner wins**: `irm coachbuild.vercel.app/companion.ps1 | iex` — KB-scale, in-memory (no ExecutionPolicy wall), no unsigned-exe SmartScreen, lowest AV surface. All exe toolchains ≈50MB+ AND AV drama. Vercel serves .ps1 statically fine (set Content-Type via vercel.json headers if needed).
+- **PowerShell one-liner wins**: `irm https://coachbuild.vercel.app/companion.ps1 | iex` — KB-scale, in-memory (no ExecutionPolicy wall), no unsigned-exe SmartScreen, lowest AV surface. All exe toolchains ≈50MB+ AND AV drama. Vercel serves .ps1 statically fine (set Content-Type via vercel.json headers if needed).
 - Auto-start: Startup-folder .lnk (no admin) or `schtasks /sc onlogon ... powershell -w hidden -ep bypass -f <path>`.
 - Auto-update: fetch `companion.version` on launch, re-download script on mismatch.
 - Presence: headless (`-w hidden`) + `System.Windows.Forms.NotifyIcon` tray (Quit/Reopen). Never a bare console window.
