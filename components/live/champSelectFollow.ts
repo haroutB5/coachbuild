@@ -32,6 +32,25 @@ export interface ChampSelectFollowTarget {
   roleId: LiveRoleId | undefined;
 }
 
+/** The raw champion the companion's live champ-select session currently
+ *  resolves to (cellChampionId -> pickIntent -> actionChampionId, same 3-way
+ *  priority companion.ps1 uses), regardless of whether it differs from
+ *  whatever the page is currently showing. Null when there's no snapshot at
+ *  all or nothing has resolved yet.
+ *
+ *  Split out from resolveChampSelectFollow (v0.35.0) so app/page.tsx's
+ *  status-poll tick can feed champSelectFollowState.ts's
+ *  setCurrentChampSelectChampionId with "what does the client currently
+ *  say" on EVERY tick — resolveChampSelectFollow deliberately returns null
+ *  once the resolved champion already matches what's shown (nothing to
+ *  follow), which makes it useless as a live "is X still the champ-select
+ *  champion" mirror for gating a same-champion LANE re-fire. */
+export function resolveCurrentChampSelectChampionId(champSelect: CompanionChampSelectSnapshot | null): number | null {
+  if (!champSelect) return null;
+  const championId = champSelect.cellChampionId ?? champSelect.pickIntent ?? champSelect.actionChampionId ?? null;
+  return championId && championId > 0 ? championId : null;
+}
+
 /** Returns the champion+role the page should switch to, or null when
  *  nothing should change (not in ChampSelect, no resolvable championId
  *  yet, or it's already showing the resolved champion). Mirrors
@@ -40,14 +59,11 @@ export interface ChampSelectFollowTarget {
  *  agree on "what champion is this, right now." */
 export function resolveChampSelectFollow(input: ChampSelectFollowInput): ChampSelectFollowTarget | null {
   if (input.phase !== "ChampSelect") return null;
-  if (!input.champSelect) return null;
-
-  const cs = input.champSelect;
-  const championId = cs.cellChampionId ?? cs.pickIntent ?? cs.actionChampionId ?? null;
-  if (!championId || championId <= 0) return null;
+  const championId = resolveCurrentChampSelectChampionId(input.champSelect);
+  if (!championId) return null;
   if (championId === input.currentChampionId) return null;
 
-  const rawRole = cs.roleId;
+  const rawRole = input.champSelect!.roleId;
   const roleId = rawRole !== null && VALID_ROLES.includes(rawRole as LiveRoleId) ? (rawRole as LiveRoleId) : undefined;
   return { championId, roleId };
 }

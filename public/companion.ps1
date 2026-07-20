@@ -105,18 +105,30 @@ WIRE CONTRACT (must match components/live/companionClient.ts exactly):
                                 title MUST start with "CoachBuild" -- the
                                 bridge validates this defensively and
                                 rejects otherwise, never writing a
-                                non-CoachBuild-titled set)}
+                                non-CoachBuild-titled set),
+                                replacePrefix?:string (v1.3.1 -- if present,
+                                MUST also start with "CoachBuild" or the
+                                whole request is rejected the same way)}
                        -> 200 {ok:true, count:number}
                         | 200 {ok:false, reason:string, hint?:string}
     Merge semantics (PUT to /lol-item-sets/v1/item-sets/{id}/sets REPLACES
     THE ENTIRE object -- the #1 correctness risk): GET the full existing
     sets object first; NEVER PUT on a failed GET (-> {ok:false,
     reason:'read-failed'}); keep every existing set whose title does NOT
-    start with THIS champ+role's "CoachBuild <champ> <role>" prefix (so a
-    CoachBuild set for a DIFFERENT champion/role accumulates across
-    sessions rather than being wiped); replace (not duplicate) stale sets
-    for the same champ+role; PUT back every other top-level field
-    (accountId, timestamp, etc.) byte-for-byte untouched.
+    start with the stale-removal prefix (so a CoachBuild set for a
+    DIFFERENT champion accumulates across sessions rather than being
+    wiped); replace (not duplicate) stale sets matching that prefix; PUT
+    back every other top-level field (accountId, timestamp, etc.)
+    byte-for-byte untouched.
+    v1.3.1 stale-removal prefix (live bug: a LANE FLIP, e.g. Senna Bot ->
+    Support, left BOTH "CoachBuild Senna Bot" and "CoachBuild Senna
+    Support" behind -- the OLD prefix derivation was role-scoped, derived
+    from the new set's own title): prefer the explicit `replacePrefix` the
+    web side now sends (CHAMP-SCOPED, e.g. "CoachBuild Senna " -- trailing
+    space load-bearing, see itemSetBody.ts's champScopedReplacePrefix) when
+    present; fall back to the ORIGINAL title-derived (role-scoped, em-dash-
+    stripped) prefix when absent, for back-compat with an older web build
+    or an older companion that predates this field.
   - Champ-select flow is ZERO-BRIDGE: the companion opens
     "<AppOrigin>/?championId=<id>[&role=<0-4>]&session=<token>" directly via
     Start-Process. `role` is OMITTED (not a bogus value) when
@@ -183,7 +195,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.3.0'
+    Version     = '1.3.1'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -593,13 +605,20 @@ function Test-ItemSetsPayload {
     # titled set into the user's client via this endpoint. 1-3 sets only
     # ("top 3 if available" -- the web side never sends more, but the bridge
     # doesn't trust that on its own either).
-    param($Sets)
+    # v1.3.1: `ReplacePrefix`, when present, is validated the SAME way (must
+    # start with "CoachBuild") -- an explicit stale-removal prefix is just as
+    # capable of touching arbitrary existing sets as a title is, so it gets
+    # the identical defense-in-depth treatment. $null (the field was simply
+    # omitted -- an older web build) always passes this check; only a
+    # genuinely present-but-wrong-prefixed value is rejected.
+    param($Sets, $ReplacePrefix = $null)
     $arr = @($Sets)
     if ($arr.Count -lt 1 -or $arr.Count -gt 3) { return $false }
     foreach ($s in $arr) {
         if (-not $s -or -not $s.title) { return $false }
         if (-not ([string]$s.title).StartsWith('CoachBuild')) { return $false }
     }
+    if ($ReplacePrefix -and -not ([string]$ReplacePrefix).StartsWith('CoachBuild')) { return $false }
     return $true
 }
 
@@ -608,21 +627,40 @@ function Merge-ItemSets {
     # (plan finding). Never blind-PUT: every other top-level field on the
     # GET'd object (accountId, timestamp, whatever else the client emits)
     # passes through UNTOUCHED; only .itemSets is rebuilt. Keeps every
-    # existing set whose title does NOT start with THIS champ+role's
-    # CoachBuild prefix -- a CoachBuild set for a DIFFERENT champion/role
-    # accumulates across sessions (the whole point of per-champ+role
-    # titles) instead of being wiped by an unrelated update; only stale
-    # versions of THIS exact champ+role are replaced, not duplicated.
-    param($ExistingSetsObject, $NewSets)
+    # existing set whose title does NOT start with the stale-removal prefix
+    # -- a CoachBuild set for a DIFFERENT champion accumulates across
+    # sessions instead of being wiped by an unrelated update; only stale
+    # matches are replaced, not duplicated.
+    #
+    # v1.3.1 stale-removal prefix (live bug fix -- see this file's header
+    # WIRE CONTRACT note): prefers the caller's explicit, CHAMP-SCOPED
+    # `ReplacePrefix` (e.g. "CoachBuild Senna " -- trailing space
+    # load-bearing) when supplied -- a LANE FLIP (Senna Bot -> Support) then
+    # correctly removes the OLD lane's stale set instead of leaving it
+    # alongside the new one, since both titles share this wider, champ-only
+    # prefix. Falls back to the ORIGINAL role-scoped, em-dash-derived prefix
+    # (from the new set's own title) when omitted -- back-compat with an
+    # older web build that never sends this field.
+    param($ExistingSetsObject, $NewSets, $ReplacePrefix = $null)
     $newArr = @($NewSets)
-    # NOTE: matches the U+2014 EM DASH via a \uXXXX regex escape, NEVER a
-    # literal non-ASCII byte in this file's own source -- this script has no
-    # reliable BOM/encoding guarantee served over irm|iex (a literal
-    # non-ASCII char here previously broke this file's OWN tokenizer under a
-    # misdetected codepage). The title strings THEMSELVES (JSON sent from
-    # the web side at runtime, e.g. "CoachBuild Viktor Mid <U+2014> Core")
-    # still carry a real em dash -- this escape matches it fine.
-    $prefix = ([string]$newArr[0].title) -replace ('\s+' + [char]0x2014 + '.*$'), ''
+    $prefix = $null
+    if ($ReplacePrefix) {
+        $prefix = [string]$ReplacePrefix
+    } else {
+        # NOTE: matches the U+2014 EM DASH via a \uXXXX regex escape, NEVER a
+        # literal non-ASCII byte in this file's own source -- this script has
+        # no reliable BOM/encoding guarantee served over irm|iex (a literal
+        # non-ASCII char here previously broke this file's OWN tokenizer
+        # under a misdetected codepage). The title strings THEMSELVES (JSON
+        # sent from the web side at runtime, e.g. "CoachBuild Viktor Mid
+        # <U+2014> Core") still carry a real em dash -- this escape matches
+        # it fine. Pre-1.3.1 web builds ship a NO-suffix title
+        # ("CoachBuild <champ> <role>", no em dash at all) -- the regex
+        # simply doesn't match anything in that case, so $prefix ends up
+        # being the full, role-scoped title unchanged, exactly the old
+        # per-champ+role (not per-champ) behavior this fallback preserves.
+        $prefix = ([string]$newArr[0].title) -replace ('\s+' + [char]0x2014 + '.*$'), ''
+    }
     $rawExisting = $ExistingSetsObject.itemSets
     $existingArr = if ($rawExisting) { @($rawExisting) } else { @() }
     $kept = @($existingArr | Where-Object { -not ([string]$_.title).StartsWith($prefix) })
@@ -637,9 +675,9 @@ function Invoke-ApplyItemSets {
     # flow uses): GET current-summoner -> GET existing sets -> merge ->
     # PUT. NEVER PUT on a failed read at any step (that would either target
     # the wrong summoner or wipe sets we never actually read).
-    param($Sets, [int]$LcuPort, [string]$LcuToken, [string]$Scheme = 'https')
-    if (-not (Test-ItemSetsPayload -Sets $Sets)) {
-        return [pscustomobject]@{ ok = $false; reason = 'invalid-sets'; hint = 'each set title must start with "CoachBuild" (1-3 sets)' }
+    param($Sets, [int]$LcuPort, [string]$LcuToken, [string]$Scheme = 'https', $ReplacePrefix = $null)
+    if (-not (Test-ItemSetsPayload -Sets $Sets -ReplacePrefix $ReplacePrefix)) {
+        return [pscustomobject]@{ ok = $false; reason = 'invalid-sets'; hint = 'each set title (and replacePrefix, if given) must start with "CoachBuild" (1-3 sets)' }
     }
     $summoner = Invoke-LcuRaw -Method GET -Path '/lol-summoner/v1/current-summoner' -Port $LcuPort -Token $LcuToken -Scheme $Scheme
     if (-not $summoner.Ok -or -not $summoner.Content -or -not $summoner.Content.summonerId) {
@@ -650,7 +688,7 @@ function Invoke-ApplyItemSets {
     if (-not $existing.Ok -or -not $existing.Content) {
         return [pscustomobject]@{ ok = $false; reason = 'read-failed'; hint = 'could not read existing item sets -- nothing was changed' }
     }
-    $merged = Merge-ItemSets -ExistingSetsObject $existing.Content -NewSets $Sets
+    $merged = Merge-ItemSets -ExistingSetsObject $existing.Content -NewSets $Sets -ReplacePrefix $ReplacePrefix
     $put = Invoke-LcuRaw -Method PUT -Path "/lol-item-sets/v1/item-sets/$summonerId/sets" -Body $merged -Port $LcuPort -Token $LcuToken -Scheme $Scheme
     if (-not $put.Ok) {
         return [pscustomobject]@{ ok = $false; reason = 'write-failed' }
@@ -1035,7 +1073,12 @@ while ($Sync.Running) {
                 Write-JsonResponse -Response $res -StatusCode 200 -Obj @{ ok = $false; reason = 'no-client' }
             } else {
                 $scheme = if ($Sync.LcuScheme) { $Sync.LcuScheme } else { 'https' }
-                $result = Invoke-ApplyItemSets -Sets $bodyObj.sets -LcuPort $Sync.LcuPort -LcuToken $Sync.LcuToken -Scheme $scheme
+                # v1.3.1: $bodyObj.replacePrefix is $null on an older web
+                # build that never sends the field (PowerShell dynamic
+                # member access on a parsed PSCustomObject returns $null for
+                # a missing property) -- Invoke-ApplyItemSets/Merge-ItemSets
+                # both treat that as "fall back to the title-derived prefix."
+                $result = Invoke-ApplyItemSets -Sets $bodyObj.sets -LcuPort $Sync.LcuPort -LcuToken $Sync.LcuToken -Scheme $scheme -ReplacePrefix $bodyObj.replacePrefix
                 Write-JsonResponse -Response $res -StatusCode 200 -Obj $result
                 Write-CompanionLog "apply-itemsets: ok=$($result.ok) reason=$($result.reason) count=$($result.count)"
             }
@@ -1722,6 +1765,53 @@ function Invoke-SelfTest {
         if ($obj.ok -ne $false -or $obj.reason -ne 'invalid-sets') { $failures.Add("apply-itemsets malicious title expected invalid-sets rejection, got $($r.Content)") }
         if ($mockLcu.Sync.LastPutBody) { $failures.Add('apply-itemsets issued a PUT for a non-CoachBuild-titled set') }
     } catch { $failures.Add("apply-itemsets malicious title threw: $($_.Exception.Message)") }
+
+    # 6f. v1.3.1 -- champ-scoped `replacePrefix` stale removal (live bug
+    # fix): a LANE FLIP (Senna Bot -> Support) must remove BOTH the
+    # old-lane title AND an old-3-set-era title for the SAME champion, while
+    # NEVER touching a non-CoachBuild set or a DIFFERENT champion's
+    # CoachBuild set.
+    $mockLcu.Sync.ExistingItemSets = [pscustomobject]@{
+        accountId = 12345
+        timestamp = 1700000000
+        itemSets  = @(
+            [pscustomobject]@{ uid = 'user-1'; title = 'My Custom Build'; type = 'custom'; blocks = @() }
+            [pscustomobject]@{ uid = 'coachbuild-senna-bot'; title = 'CoachBuild Senna Bot'; type = 'custom'; blocks = @() }
+            [pscustomobject]@{ uid = 'coachbuild-senna-bot-core'; title = "CoachBuild Senna Bot $([char]0x2014) Core"; type = 'custom'; blocks = @() }
+            [pscustomobject]@{ uid = 'coachbuild-viktor-mid'; title = 'CoachBuild Viktor Mid'; type = 'custom'; blocks = @() }
+        )
+    }
+    $sennaSupportSets = @(
+        [pscustomobject]@{ uid = 'coachbuild-senna-support'; title = 'CoachBuild Senna Support'; type = 'custom'; map = 'any'; mode = 'any'; associatedMaps = @(); associatedChampions = @(235); preferredItemSlots = @(); sortrank = 0; blocks = @(@{ type = 'Starting'; items = @(@{ id = '1054'; count = 1 }) }) }
+    )
+    $mockLcu.Sync.LastPutBody = $null
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-itemsets?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes((@{ championId = 235; sets = $sennaSupportSets; replacePrefix = 'CoachBuild Senna ' } | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if (-not $obj.ok -or $obj.count -ne 1) { $failures.Add("apply-itemsets replacePrefix lane-flip expected ok:true count:1, got $($r.Content)") }
+        if (-not $mockLcu.Sync.LastPutBody) {
+            $failures.Add('apply-itemsets replacePrefix lane-flip never issued a PUT')
+        } else {
+            $putObj = $mockLcu.Sync.LastPutBody | ConvertFrom-Json
+            $putTitles = @($putObj.itemSets | ForEach-Object { $_.title })
+            if ($putTitles -contains 'CoachBuild Senna Bot') { $failures.Add('apply-itemsets replacePrefix lane-flip left the OLD-LANE title behind') }
+            if ($putTitles -contains "CoachBuild Senna Bot $([char]0x2014) Core") { $failures.Add('apply-itemsets replacePrefix lane-flip left an old-3-set-era title behind') }
+            if ($putTitles -notcontains 'CoachBuild Senna Support') { $failures.Add('apply-itemsets replacePrefix lane-flip did not write the new lane set') }
+            if ($putTitles -notcontains 'My Custom Build') { $failures.Add('apply-itemsets replacePrefix lane-flip dropped a non-CoachBuild set') }
+            if ($putTitles -notcontains 'CoachBuild Viktor Mid') { $failures.Add('apply-itemsets replacePrefix lane-flip touched a DIFFERENT champion''s CoachBuild set') }
+        }
+    } catch { $failures.Add("apply-itemsets replacePrefix lane-flip threw: $($_.Exception.Message)") }
+
+    # 6g. v1.3.1 -- replacePrefix validation: a value that doesn't start
+    # with "CoachBuild" rejects the WHOLE request (invalid-sets), same as a
+    # bad title -- never partially applied, never a PUT.
+    $mockLcu.Sync.LastPutBody = $null
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-itemsets?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes((@{ championId = 235; sets = $sennaSupportSets; replacePrefix = 'NotCoachBuild Senna ' } | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.ok -ne $false -or $obj.reason -ne 'invalid-sets') { $failures.Add("apply-itemsets bad replacePrefix expected invalid-sets rejection, got $($r.Content)") }
+        if ($mockLcu.Sync.LastPutBody) { $failures.Add('apply-itemsets issued a PUT with an invalid replacePrefix') }
+    } catch { $failures.Add("apply-itemsets bad replacePrefix threw: $($_.Exception.Message)") }
 
     # 6e. v1.2.2 -- a real Invoke-LcuRaw failure (point LcuPort at a port
     # nothing listens on) must populate /status's lastError. This is the

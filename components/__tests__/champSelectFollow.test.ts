@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveChampSelectFollow } from "../live/champSelectFollow";
+import { resolveChampSelectFollow, resolveCurrentChampSelectChampionId } from "../live/champSelectFollow";
 import type { CompanionChampSelectSnapshot } from "../live/companionClient";
 
 function snapshot(overrides: Partial<CompanionChampSelectSnapshot> = {}): CompanionChampSelectSnapshot {
@@ -81,5 +81,38 @@ describe("resolveChampSelectFollow", () => {
       currentChampionId: 64,
     });
     expect(result).toEqual({ championId: 103, roleId: undefined });
+  });
+});
+
+// v0.35.0 — split out of resolveChampSelectFollow so app/page.tsx's poll
+// tick can mirror "what does the client currently say" on EVERY tick,
+// including when it matches what's already showing (resolveChampSelectFollow
+// itself returns null in that case, by design, since it's a "should I
+// change" decision, not a "what does it currently resolve to" one).
+describe("resolveCurrentChampSelectChampionId", () => {
+  it("null when champSelect is null", () => {
+    expect(resolveCurrentChampSelectChampionId(null)).toBeNull();
+  });
+
+  it("null when nothing has resolved yet (all fields null)", () => {
+    expect(resolveCurrentChampSelectChampionId(snapshot())).toBeNull();
+  });
+
+  it("resolves via cellChampionId first (locked)", () => {
+    expect(resolveCurrentChampSelectChampionId(snapshot({ cellChampionId: 103, pickIntent: 7 }))).toBe(103);
+  });
+
+  it("falls back to pickIntent when cellChampionId is unresolved", () => {
+    expect(resolveCurrentChampSelectChampionId(snapshot({ pickIntent: 7 }))).toBe(7);
+  });
+
+  it("falls back to actionChampionId last", () => {
+    expect(resolveCurrentChampSelectChampionId(snapshot({ actionChampionId: 64 }))).toBe(64);
+  });
+
+  it("returns the resolved champion even when it's the SAME as what's already showing (unlike resolveChampSelectFollow)", () => {
+    // This is the whole reason this helper is split out: a plain mirror,
+    // not a "should something change" decision.
+    expect(resolveCurrentChampSelectChampionId(snapshot({ cellChampionId: 103 }))).toBe(103);
   });
 });

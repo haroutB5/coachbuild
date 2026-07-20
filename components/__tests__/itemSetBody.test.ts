@@ -5,7 +5,7 @@
 // components/hextech/itemSetBody.ts's header for the two live bugs this
 // closes (a line with 2 boots; an Optimized line with only 3 items).
 import { describe, it, expect } from "vitest";
-import { buildItemSets } from "../hextech/itemSetBody";
+import { buildItemSets, champScopedReplacePrefix } from "../hextech/itemSetBody";
 import type { ChampionRef, BuildResponse, ItemsBlock, Pick, RunesBlock } from "@/lib/types";
 
 function pick(id: number, wpa = 0.02): Pick {
@@ -366,6 +366,33 @@ describe("buildItemSets — companion.ps1 stale-set migration (prefix match, pin
       const oldTitle = `${sets[0].title} — ${suffix}`;
       expect(oldTitle.startsWith(prefix)).toBe(true);
     }
+  });
+});
+
+describe("champScopedReplacePrefix — v0.35.0 lane-flip stale-removal prefix", () => {
+  it("is champ-scoped (NOT role-scoped) with a trailing space", () => {
+    expect(champScopedReplacePrefix(CHAMP)).toBe("CoachBuild Jinx ");
+  });
+
+  it("matches both an old-lane title and an old-3-set-era title for the SAME champion", () => {
+    const prefix = champScopedReplacePrefix(CHAMP);
+    expect("CoachBuild Jinx Support".startsWith(prefix)).toBe(true);
+    expect(`CoachBuild Jinx Bot — Core`.startsWith(prefix)).toBe(true);
+  });
+
+  it("does NOT match a different champion whose name starts with the same letters", () => {
+    // Regression target: "CoachBuild Vi " must not swallow "CoachBuild Viktor ...".
+    const vi: ChampionRef = { id: 254, key: "Vi", name: "Vi", icon: "vi.png" };
+    const prefix = champScopedReplacePrefix(vi);
+    expect("CoachBuild Viktor Mid".startsWith(prefix)).toBe(false);
+  });
+
+  it("mirrors companion.ps1's champ-scoped removal semantics for a multi-word/apostrophe champion name", () => {
+    const champ: ChampionRef = { id: 145, key: "Kaisa", name: "Kai'Sa", icon: "k.png" };
+    const prefix = champScopedReplacePrefix(champ);
+    expect(prefix).toBe("CoachBuild Kai'Sa ");
+    expect("CoachBuild Kai'Sa Bot".startsWith(prefix)).toBe(true);
+    expect("CoachBuild Kai'Sa Support".startsWith(prefix)).toBe(true);
   });
 });
 

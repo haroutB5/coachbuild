@@ -15,8 +15,8 @@ import { autoApplyItemSetsIfEligible } from "./itemSetsApply";
 import { autoApplyRunesIfEligible } from "./runeAutoApply";
 import {
   getChampSelectPhaseEpoch,
-  hasAppliedForChampion,
-  markAppliedForChampion,
+  shouldAutoExportForLane,
+  markAutoExported,
   isCompanionDrivenChampion,
   tryClaimAutoExportLock,
 } from "@/components/live/champSelectFollowState";
@@ -245,10 +245,17 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
   // NEW tab on every hover (attached-tab live-follow, companion.ps1's
   // Test-CompanionHasAttachedTab), so this SAME component instance now sees
   // many champion changes within one champ-select, not just one at mount.
-  // A plain mount-ref can't express "hover A exports once, hover B exports
-  // once, re-hover A doesn't re-export" — components/live/
-  // champSelectFollowState.ts's per-epoch Set does (app/page.tsx's status
-  // poll bumps the epoch on every ChampSelect ENTRY).
+  //
+  // v0.35.0 (user on-device evidence): that championId-only key never
+  // re-fired on a LANE CHANGE for the SAME champion (e.g. Senna Bot ->
+  // Support) — the game was left on the OLD lane's build. Generalized again
+  // to "once per (champ-select session, championId, laneId)" via
+  // champSelectFollowState.ts's shouldAutoExportForLane/markAutoExported
+  // (see that module's doc comment for the "latest wins" model and why it
+  // correctly handles a same-champion lane bounce A -> B -> A). The
+  // localStorage multi-tab lock (tryClaimAutoExportLock) gained `lane` in
+  // its key for the same reason — a lock claimed for one lane must never
+  // starve a legitimate re-fire for a different one.
   //
   // The wrong-champion race (P1 audit fix, 2026-07-20) still applies:
   // isCompanionDrivenChampion gates on whether THIS championId was actually
@@ -256,12 +263,27 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
   // update — both mark it in champSelectFollowState.ts) rather than a
   // transient fallback render (e.g. the page's default champion showing
   // before app/page.tsx's own lookup resolves and swaps in the real one).
+  // This is unchanged and gates BOTH the first-ever export AND any later
+  // lane re-fire, checked before shouldAutoExportForLane is ever consulted.
   //
   // Compliance (v1.3.0 update): BOTH item sets AND runes may now auto-export
   // — see companion.ps1's header + companionClient.ts's header comment for
   // the reasoning (inert loadout suggestions, not game actions) and the one
   // bright line that doesn't move (rune auto mode never deletes a page it
   // doesn't own).
+  //
+  // v0.35.0 fold-in fix: both promise chains below now end in a `.catch()`,
+  // not just `.then()` — an uncaught rejection anywhere in the attempt
+  // (e.g. a pure builder throwing on a genuinely malformed field) used to
+  // vanish completely silently (no toast, no companion call, no console
+  // signal a user would ever see): exactly the asymmetry investigated after
+  // a live report of "runes auto-exported, items silently didn't." Item
+  // sets have strictly more surface area that could throw before ever
+  // reaching the companion (buildItemSets is a synchronous pure builder
+  // called after the async pro-consensus resolution; runes has no
+  // equivalent extra step), so this hardening matters more for that path,
+  // but it's applied symmetrically to both on the "never let an attempt
+  // vanish without at least a visible error toast" principle.
   const [itemsToast, setItemsToast] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const [runesToast, setRunesToast] = useState<{ kind: "success" | "error"; message: string } | null>(null);
 
@@ -276,52 +298,71 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
     const epoch = getChampSelectPhaseEpoch();
 
     // Item sets
-    if (!hasAppliedForChampion("items", championId) && tryClaimAutoExportLock("items", epoch, championId)) {
-      markAppliedForChampion("items", championId);
+    if (shouldAutoExportForLane("items", championId, lane) && tryClaimAutoExportLock("items", epoch, championId, lane)) {
+      markAutoExported("items", championId, lane);
       autoApplyItemSetsIfEligible(
         { isDeepLink: true, autoEnabled: getAutoItemSetsEnabled(), session, port, alreadyFired: false },
         async () => ({ champ: build.champion, lane, roleLabel: build.roleLabel, build })
-      ).then((outcome) => {
-        if (!outcome.attempted) return; // gate refused, or the companion probe failed -- quiet, no toast
-        if (outcome.result.ok) {
-          setItemsToast({ kind: "success", message: `Item build added for ${build.champion.name} — check your shop in game.` });
-        } else {
+      )
+        .then((outcome) => {
+          if (!outcome.attempted) return; // gate refused, or the companion probe failed -- quiet, no toast
+          if (outcome.result.ok) {
+            setItemsToast({ kind: "success", message: `Item build added for ${build.champion.name} — check your shop in game.` });
+          } else {
+            setItemsToast({
+              kind: "error",
+              message: outcome.result.hint ?? "Couldn't auto-add item builds — add them manually from the Runes & Summoners card.",
+            });
+          }
+          setTimeout(() => setItemsToast(null), 6000);
+        })
+        .catch(() => {
+          // See this effect's header comment (v0.35.0 fold-in fix) — an
+          // uncaught exception anywhere in the attempt must surface a
+          // visible error, never vanish silently.
           setItemsToast({
             kind: "error",
-            message: outcome.result.hint ?? "Couldn't auto-add item builds — add them manually from the Runes & Summoners card.",
+            message: "Couldn't auto-add item builds — add them manually from the Runes & Summoners card.",
           });
-        }
-        setTimeout(() => setItemsToast(null), 6000);
-      });
+          setTimeout(() => setItemsToast(null), 6000);
+        });
     }
 
     // Runes
-    if (!hasAppliedForChampion("runes", championId) && tryClaimAutoExportLock("runes", epoch, championId)) {
-      markAppliedForChampion("runes", championId);
+    if (shouldAutoExportForLane("runes", championId, lane) && tryClaimAutoExportLock("runes", epoch, championId, lane)) {
+      markAutoExported("runes", championId, lane);
       autoApplyRunesIfEligible(
         { isDeepLink: true, autoEnabled: getAutoRunesEnabled(), session, port, alreadyFired: false },
         async () => ({ championName: build.champion.name, roleLabel: build.roleLabel, runes: build.runes })
-      ).then((outcome) => {
-        if (!outcome.attempted) return;
-        if (outcome.result.ok) {
-          const r = outcome.result;
-          setRunesToast({
-            kind: "success",
-            message:
-              r.selected && r.verified
-                ? `Runes applied for ${build.champion.name}.`
-                : `Runes saved for ${build.champion.name} — open the client to select the page.`,
-          });
-        } else {
+      )
+        .then((outcome) => {
+          if (!outcome.attempted) return;
+          if (outcome.result.ok) {
+            const r = outcome.result;
+            setRunesToast({
+              kind: "success",
+              message:
+                r.selected && r.verified
+                  ? `Runes applied for ${build.champion.name}.`
+                  : `Runes saved for ${build.champion.name} — open the client to select the page.`,
+            });
+          } else {
+            setRunesToast({
+              kind: "error",
+              message: outcome.result.hint ?? "Couldn't auto-apply runes — use the Apply runes button instead.",
+            });
+          }
+          setTimeout(() => setRunesToast(null), 6000);
+        })
+        .catch(() => {
           setRunesToast({
             kind: "error",
-            message: outcome.result.hint ?? "Couldn't auto-apply runes — use the Apply runes button instead.",
+            message: "Couldn't auto-apply runes — use the Apply runes button instead.",
           });
-        }
-        setTimeout(() => setRunesToast(null), 6000);
-      });
+          setTimeout(() => setRunesToast(null), 6000);
+        });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires once per (epoch, championId) by design (champSelectFollowState's own Set), not a live-updating effect
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires once per (epoch, championId, lane) by design (champSelectFollowState's own dedup), not a live-updating effect
   }, [state, lane]);
 
   if (state.status === "loading") {

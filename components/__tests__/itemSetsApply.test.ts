@@ -176,6 +176,9 @@ describe("applyItemSetsForBuild", () => {
     expect(parsed.sets).toHaveLength(1);
     expect(parsed.sets[0].title).toBe("CoachBuild Jinx Bot");
     expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).toEqual(["Starting", "Core build"]);
+    // v0.35.0: champ-scoped (not role-scoped) stale-removal prefix, so a
+    // later lane flip's export cleans up THIS lane's set too.
+    expect(parsed.replacePrefix).toBe("CoachBuild Jinx ");
   });
 
   it("adds a Pro build BLOCK (still one set) when pro-consensus data resolves", async () => {

@@ -16,8 +16,16 @@
 //   POST /apply-runes  body {..., mode:'auto'|'manual'} ->
 //                          {ok:true, selected, verified, mismatch} |
 //                          {ok:false, reason, hint?}
-//   POST /apply-itemsets body {championId, sets:ItemSet[]} ->
+//   POST /apply-itemsets body {championId, sets:ItemSet[], replacePrefix?:string} ->
 //                          {ok:true, count} | {ok:false, reason, hint?}
+//
+// v0.35.0 / companion 1.3.1: `replacePrefix` is an explicit, CHAMP-SCOPED
+// (not champ+role-scoped) stale-removal prefix — see itemSetBody.ts's
+// champScopedReplacePrefix for why (a lane flip left a stale set for the
+// OLD lane behind, since the companion's own title-derived prefix was
+// role-scoped). Optional: an older web build omitting it, or an older
+// companion that doesn't read it, both fall back to the pre-1.3.1
+// title-derived behavior — never a hard requirement either side.
 //
 // v1.3.0 COMPLIANCE UPDATE: rune writes may now auto-export too, same as
 // item sets (both are inert loadout/shop SUGGESTIONS, same class as a
@@ -446,11 +454,14 @@ export async function applyRunes(
  *  since a written item set is an inert shop-panel suggestion, not a
  *  gameplay action (see this file's header comment for the compliance
  *  distinction). The manual "Add item builds" button and the auto-export
- *  path both call this SAME function with the SAME body shape. */
+ *  path both call this SAME function with the SAME body shape.
+ *
+ *  `replacePrefix` (v0.35.0 / companion 1.3.1+) — see this file's header
+ *  comment and itemSetBody.ts's champScopedReplacePrefix. */
 export async function applyItemSets(
   port: CompanionPort,
   session: string,
-  body: { championId: number; sets: unknown[] },
+  body: { championId: number; sets: unknown[]; replacePrefix?: string },
   deps: CompanionClientDeps = {}
 ): Promise<ApplyItemSetsResult> {
   const f = deps.fetchImpl ?? fetch;

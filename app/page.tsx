@@ -14,8 +14,12 @@ import BuildTabContent from "@/components/hextech/BuildTabContent";
 import ProBuildsTab from "@/components/hextech/ProBuildsTab";
 import LivePanel from "@/components/live/LivePanel";
 import { parseLiveDeepLink, roleIdToLane } from "@/components/live/deepLink";
-import { resolveChampSelectFollow } from "@/components/live/champSelectFollow";
-import { noteCompanionPhase, markCompanionDriven } from "@/components/live/champSelectFollowState";
+import { resolveChampSelectFollow, resolveCurrentChampSelectChampionId } from "@/components/live/champSelectFollow";
+import {
+  noteCompanionPhase,
+  markCompanionDriven,
+  setCurrentChampSelectChampionId,
+} from "@/components/live/champSelectFollowState";
 import {
   getStoredSession,
   setStoredSession,
@@ -274,6 +278,20 @@ export default function HomePage() {
       const phase = state.kind === "connected" ? state.status.phase : null;
       setCompanionPhase(phase);
       if (phase) noteCompanionPhase(phase);
+      // v0.35.0 (lane-flip auto-export fix): mirrors the companion's OWN
+      // live champ-select resolution into champSelectFollowState.ts on
+      // EVERY tick, regardless of whether it differs from what the page is
+      // currently showing (unlike resolveChampSelectFollow just below, which
+      // only returns a value when something SHOULD change) — this is what
+      // lets BuildTabContent's auto-export effect tell "the user flipped
+      // lanes on the champion still locked/hovered in the real client" apart
+      // from "the user is just browsing an old companion-driven pick after
+      // champ select moved on." See that module's shouldAutoExportForLane.
+      setCurrentChampSelectChampionId(
+        phase === "ChampSelect" && state.kind === "connected"
+          ? resolveCurrentChampSelectChampionId(state.status.champSelect)
+          : null
+      );
       if (state.kind !== "connected") return;
 
       const target = resolveChampSelectFollow({

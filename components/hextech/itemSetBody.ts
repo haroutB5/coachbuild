@@ -225,6 +225,28 @@ function collectBootsIds(items: ItemsBlock, pro?: ProConsensusItemsInput | null)
   return ids;
 }
 
+/** Champ-scoped (NOT champ+role-scoped) stale-removal prefix for the
+ *  companion's /apply-itemsets `replacePrefix` field (v0.35.0, companion
+ *  1.3.1+). Deliberately narrower than this module's own per-role uid/title
+ *  (`CoachBuild <champ> <role>`) — user-reported: switching Senna Bot ->
+ *  Support left BOTH "CoachBuild Senna Bot" and "CoachBuild Senna Support"
+ *  in the client, because the companion's OWN stale-match (when
+ *  `replacePrefix` is absent, e.g. an older web build) derives its prefix
+ *  from the NEW set's own title, which is already role-scoped. Sending this
+ *  wider, champ-only prefix explicitly means a LANE FLIP now cleans up the
+ *  OTHER lane's stale set for the same champion instead of leaving it to
+ *  accumulate. The trailing space is load-bearing: it's what stops
+ *  "CoachBuild Vi " from ALSO matching "CoachBuild Viktor ..." — a
+ *  different champion whose name happens to start with the same letters.
+ *  See public/companion.ps1's Merge-ItemSets for the companion-side match
+ *  (falls back to its own em-dash-derived, role-scoped prefix when this is
+ *  omitted — back-compat with an older web build talking to a newer
+ *  companion, or a newer web build talking to an older companion that
+ *  doesn't read this field at all). */
+export function champScopedReplacePrefix(champ: ChampionRef): string {
+  return `CoachBuild ${champ.name} `;
+}
+
 function baseSet(champ: ChampionRef, roleLabel: string): Omit<ItemSet, "blocks"> {
   return {
     uid: `coachbuild-${slugPart(champ.name)}-${slugPart(roleLabel)}`,
