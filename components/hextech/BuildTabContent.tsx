@@ -12,7 +12,7 @@ import ProConsensusCard from "./ProConsensusCard";
 import { versionFromPatch } from "@/components/proAssets";
 import { parseLiveDeepLink } from "@/components/live/deepLink";
 import { getStoredSession, getStoredPort, getAutoItemSetsEnabled } from "@/components/live/companionClient";
-import { autoApplyItemSetsIfEligible } from "./itemSetsApply";
+import { autoApplyItemSetsIfEligible, isAutoExportEligibleBuild } from "./itemSetsApply";
 import ItemDetailPopover from "@/components/ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "@/components/EntityDetailPopover";
 import { useBodyScrollLock } from "@/components/useBodyScrollLock";
@@ -249,9 +249,17 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
   useEffect(() => {
     if (state.status !== "ok") return;
     if (autoExportedRef.current) return;
-    autoExportedRef.current = true;
 
     const parsed = parseLiveDeepLink(window.location.search);
+    // v1.2.1 audit fix (P1, wrong-champion race) — see itemSetsApply.ts's
+    // isAutoExportEligibleBuild doc comment for the full mechanism. Wait
+    // for a build whose champion actually matches the URL before ever
+    // consuming the ref; a later render with the correct build still gets
+    // exactly one shot.
+    if (!isAutoExportEligibleBuild(parsed, state.build.champion.id)) return;
+
+    autoExportedRef.current = true;
+
     const gate = {
       isDeepLink: parsed !== null,
       autoEnabled: getAutoItemSetsEnabled(),

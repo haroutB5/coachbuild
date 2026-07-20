@@ -203,6 +203,24 @@ describe("applyItemSetsForBuild", () => {
   });
 });
 
+describe("isAutoExportEligibleBuild — wrong-champion race guard (P1, Fable audit 2026-07-20)", () => {
+  it("refuses a fallback build (Y) when the deep link names a different champion (X) — do not consume the ref", async () => {
+    const { isAutoExportEligibleBuild } = await import("../hextech/itemSetsApply");
+    // Deep link says championId=112 (X), but the build in hand is for 64 (Y, the page's fallback).
+    expect(isAutoExportEligibleBuild({ championId: 112 }, 64)).toBe(false);
+  });
+
+  it("accepts once the build's champion matches the deep link (X) — fires exactly once", async () => {
+    const { isAutoExportEligibleBuild } = await import("../hextech/itemSetsApply");
+    expect(isAutoExportEligibleBuild({ championId: 112 }, 112)).toBe(true);
+  });
+
+  it("accepts any build when there's no deep link at all (nothing to race against)", async () => {
+    const { isAutoExportEligibleBuild } = await import("../hextech/itemSetsApply");
+    expect(isAutoExportEligibleBuild(null, 64)).toBe(true);
+  });
+});
+
 describe("shouldAutoApplyItemSets — pure gate", () => {
   it("fires when deep-link + toggle-on + session/port present + not yet fired", async () => {
     const { shouldAutoApplyItemSets } = await import("../hextech/itemSetsApply");

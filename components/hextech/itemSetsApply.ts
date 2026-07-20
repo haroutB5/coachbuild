@@ -112,6 +112,25 @@ export function shouldAutoApplyItemSets(input: AutoApplyGateInput): boolean {
   return true;
 }
 
+/** Guards against the wrong-champion race (P1, Fable audit 2026-07-20): a
+ *  deep-link tab can render its FIRST successful `build` for a FALLBACK
+ *  champion (BuildTabContent's own default, e.g. Viktor) before
+ *  app/page.tsx's own /api/champions lookup resolves and swaps in the
+ *  actual deep-linked champion. If the caller consumes its one-shot
+ *  "already exported this mount" ref against that fallback build, the
+ *  real deep-linked champion's export is silently and permanently skipped
+ *  for the rest of that tab's life (BuildTabContent re-renders on the
+ *  later champion swap, it never remounts — no `key` forces a fresh
+ *  instance). Returns false ("not yet eligible — wait for the matching
+ *  build, do not consume the ref") only when the URL names a SPECIFIC
+ *  championId that doesn't match the build in hand; true when there's no
+ *  deep link at all (nothing to race against) or the champion already
+ *  matches. */
+export function isAutoExportEligibleBuild(parsed: { championId: number } | null, buildChampionId: number): boolean {
+  if (!parsed) return true;
+  return parsed.championId === buildChampionId;
+}
+
 export type AutoApplyOutcome =
   | { attempted: false }
   | { attempted: true; result: ApplyItemSetsResult };

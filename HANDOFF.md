@@ -5726,3 +5726,57 @@ Shipped as v0.32.2: `verify-fix.sh` clean (tsc/lint/739 tests/build/sw/manifest)
 
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-20 20:36
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-20 18:57:26Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-20 — Item sets + 3 live-device fold-ins (companion v1.2.0, shipped 0.33.0)
+
+Started as a single-feature round ("Add item builds" button + auto-export) and grew four fold-ins deep while in flight (item sets → auto-export → no-role champ-select fix → actions[]-fallback champ-select fix). Flagging explicitly per the coordinator's ask: yes, this made the working state busy — companion.ps1 grew from ~933 to ~1350 lines across the session, and I hit two genuinely serious bugs mid-flight that needed real debugging, not just adjustment:
+
+1. **A literal em-dash byte in companion.ps1's own source broke the script's tokenizer.** PS 5.1 has no BOM guarantee for a file served over `irm | iex`, and a real Unicode em-dash character typed directly into the script (both in comments and in the `Merge-ItemSets` regex / SelfTest fixtures) got misdecoded under this box's codepage, producing parser errors. Fixed by eliminating every literal non-ASCII byte from the file: comments use plain `--`, and the one place that actually needs to match a real em dash (`Merge-ItemSets`' title-prefix regex) builds it via `[char]0x2014` at runtime instead.
+2. **A real, separate production bug**, caught only because SelfTest's item-set fixtures happened to contain an em dash: `Invoke-WebRequest -Body <string>` silently downgrades non-ASCII characters to the console's best-fit OEM codepage (em dash → plain hyphen) unless given pre-encoded bytes, and `HttpListenerRequest.ContentEncoding` defaults away from UTF-8 when the caller doesn't send an explicit charset. Both fixed: `Invoke-LcuRaw` now always sends `[Text.Encoding]::UTF8.GetBytes(...)` bodies (this is the real fix — it affects every outbound PUT/POST the companion makes to the LCU, not just item sets), and the bridge's request-body readers explicitly decode as UTF-8. Worth a second pair of eyes given how easy this class of bug is to miss (it's invisible for ASCII-only payloads, which rune-apply bodies happen to be).
+
+Everything landed and is green: `-SelfTest` and `-Mock -Once` both pass with the new assertions (item-sets merge preserve/replace/read-fail/malicious-title, role-less open, actions[]-only resolution, champSelect snapshot echo), `verify-fix.sh` is clean (tsc/lint/**786** vitest tests/build/sw/manifest — up from 683 at session start), deployed and prod-verified (`companion.version` → `1.2.0`, served `companion.ps1` contains `/apply-itemsets`, `Get-ChampSelectActionChampionId`, `companion.log`, `Version = '1.2.0'`).
+
+### Files (this round)
+- `public/companion.ps1` — item-sets (`Test-ItemSetsPayload`/`Merge-ItemSets`/`Invoke-ApplyItemSets`, `/apply-itemsets` route), no-role deep-link fix (`Get-DeepLinkUrl` nullable role, tray Reopen), 3-way champion resolution (`Get-ChampSelectActionChampionId`), `/status` `lastOpen`/`champSelect` diagnostics, rolling `companion.log`, the encoding fixes above. Version 1.2.0.
+- `public/companion.version` → 1.2.0.
+- `components/hextech/itemSetBody.ts` (new) — pure Core/Optimized/Pro set builder.
+- `components/hextech/itemSetsApply.ts` (new) — shared async path (pro-consensus resolution + POST) between the button and auto-export; the pure `shouldAutoApplyItemSets` gate + `autoApplyItemSetsIfEligible` orchestration.
+- `components/live/companionClient.ts` — `applyItemSets`, `getAutoItemSetsEnabled`/`setAutoItemSetsEnabled`, `CompanionStatus.lastOpen`/`.champSelect`.
+- `components/live/deepLink.ts` — `role` is now optional (role-less links are valid).
+- `app/page.tsx` — role-less deep link falls back to most-played-lane resolution instead of a fixed lane.
+- `components/hextech/RunesSummonersCard.tsx` — "Add item builds" button next to Apply runes.
+- `components/hextech/BuildTabContent.tsx` — passes `build`/`lane` down; one-shot auto-export effect + toast banner.
+- `app/live-setup/page.tsx` — "Automation" toggle section + subtle `lastOpen`/`champSelect` diagnostics.
+- New tests: `itemSetBody.test.ts`, `itemSetsApply.test.ts`; extended `companionClient.test.ts`, `deepLink.test.ts`.
+
+### Residuals / needs real-device verification (flagged honestly, not swept under)
+- The `session.actions` field names (`actorCellId`, `type`, `championId`, `completed`) match the community-documented LCU champ-select schema per the live evidence description, but I could not verify them against a real client. If the real schema differs, that ONE fallback tier silently no-ops — the other two tiers (locked `championId`, `championPickIntent`) are unaffected, so this is additive risk, not regressive.
+- Role-less deep-link → most-played-lane correction (`app/page.tsx`) is unit-tested at the pure-function level (`deepLink.test.ts`) but the actual browser UX (does the lane visibly flash between the interim and corrected lane?) hasn't been puppeteer/manually verified this round.
+- The auto-export toast banner and `/live-setup`'s new Automation toggle/diagnostics render logic pass `tsc`/build but haven't had a visual browser pass this round — recommend a quick check.
+- `companion.log`'s 200KB truncate-half behavior is implemented (same pattern as everything else) but not exercised in `-SelfTest` (would need writing 200KB+ of lines) — low risk, easy to eyeball on a real device after a long session.
+- Given the volume of concurrent scope this round, a fresh cold-start audit of `companion.ps1`'s ChampSelect region + the two encoding fixes would be a reasonable next step before the user's next real gaming session, if there's appetite for it.
+
+### User migration (currently on companion v1.1.0, already running)
+1. Tray icon → **Quit** (stops the running v1.1.0 process).
+2. Re-run the plain one-liner: `irm https://coachbuild.vercel.app/companion.ps1 | iex` — fetches and runs v1.2.0 fresh. No need to re-run `-Install`: the Startup `.vbs` and the persisted session token from v1.1.0 are untouched and still valid.
+3. Confirm: tray icon reappears, `/live-setup` Test Connection shows version `1.2.0`.
+4. New: visit `/live-setup`'s "Automation" section to review "Auto-add item builds on champ select" (default ON since they're already paired) and toggle off if not wanted.
+5. Note: if they don't do steps 1-2 proactively, the OLD v1.1.0 process keeps running until next reboot/relaunch (Windows only fires the Startup `.vbs` at logon) — the auto-update balloon will surface on next relaunch either way, pointing at the same one-liner.
+
+
+

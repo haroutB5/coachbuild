@@ -101,7 +101,7 @@ PS 5.1 GOTCHAS (why this script looks the way it does):
   - Win32_Process.CommandLine can be $null -> guard before regex-matching.
   - .NET 4.x ClientWebSocket (PS5.1's WS story) can't do a per-connection
     cert callback -> WS against the LCU's self-signed cert is a dead end;
-    champ-select uses 1s session polling instead (see decisions, plan §7).
+    champ-select uses 1s session polling instead (see decisions, plan section 7).
   - HttpListener on 127.0.0.1 needs no netsh URL ACL (loopback-only bind).
   - WinForms NotifyIcon needs an STA thread; Windows PowerShell's console
     host is STA by default, so the tray + polling timer live on the main
@@ -122,12 +122,20 @@ param(
     [switch]$SelfTest,
     [switch]$Mock,
     [switch]$Once,
-    [int]$TimeoutSec = 15
+    [int]$TimeoutSec = 15,
+    # v1.2.1 -- runs the FULL real-mode harness (tray suppressed) for N
+    # seconds then exits 0. This is what -HarnessTest launches as a child
+    # process to prove the real gameflow-poll loop actually ticks -- the
+    # blind spot that shipped a dead-loop regression undetected (-Mock
+    # drives the champ-select logic directly; -SelfTest only exercises the
+    # bridge; neither ever ran Start-Companion's real loop until now).
+    [int]$DebugRunSeconds = 0,
+    [switch]$HarnessTest
 )
 
 #region Config
 $script:Config = @{
-    Version     = '1.2.0'
+    Version     = '1.2.1'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -399,6 +407,13 @@ function Get-LcuCredentials {
     try {
         $procs = @(Get-CimInstance Win32_Process -Filter "Name='LeagueClientUx.exe'" -ErrorAction Stop)
     } catch {
+        # v1.2.1: this used to swallow the exception with no trace at all --
+        # if Get-CimInstance is ever flaky/slow/throwing on a real machine
+        # (CIM/WMI calls repeated every poll from an STA thread are a known
+        # rough edge), the companion would silently degrade to "no client"
+        # forever with zero diagnostic signal. Logged now (never blocks --
+        # still degrades to empty, same as before).
+        Write-CompanionLog "Get-LcuCredentials CIM query failed: $($_.Exception.Message)"
         $procs = @()
     }
     foreach ($proc in $procs) {
@@ -554,7 +569,7 @@ function Set-LastOpen {
 }
 
 function Update-ChampSelectState {
-    # Debounce rule (plan §1): open once per champ-select, re-open ONLY on
+    # Debounce rule (plan section 1): open once per champ-select, re-open ONLY on
     # an actual championId change. Never reopen on a timer tick or a
     # teammate's action -- Reset-ChampSelectState is the only thing allowed
     # to clear LastOpenedChampId, and it's called only on ChampSelect ENTRY.
@@ -597,6 +612,9 @@ function Update-ChampSelectState {
 
 #region GameflowPoll
 function Invoke-GameflowTick {
+    if ($script:Bridge -and $script:Bridge.Sync) {
+        $script:Bridge.Sync.LastPollAt = (Get-Date).ToUniversalTime().ToString('o')
+    }
     $creds = Get-LcuCredentials  # re-read every loop -- port/token rotate per client restart
 
     if ($creds) {
@@ -681,6 +699,7 @@ while ($Sync.Running) {
                 clientConnected = [bool]$Sync.LcuPort
                 lastOpen        = $Sync.LastOpen
                 champSelect     = $(if ($Sync.Phase -eq 'ChampSelect') { $Sync.ChampSelectSnapshot } else { $null })
+                lastPollAt      = $Sync.LastPollAt
             }
         } elseif ($path -eq '/live' -and $req.HttpMethod -eq 'GET') {
             $live = Get-LiveClientData
@@ -756,6 +775,7 @@ function Start-BridgeServer {
         LcuScheme           = 'https'
         LastOpen            = $null
         ChampSelectSnapshot = $null
+        LastPollAt          = $null
     })
 
     $rs = [runspacefactory]::CreateRunspace()
@@ -790,6 +810,34 @@ function Stop-BridgeServer {
 
 #region Tray
 function Start-Companion {
+    # v1.2.1 INCIDENT NOTE (real-mode dead-loop hotfix, live-reported): the
+    # gameflow/champ-select loop previously rode a WinForms.Timer Tick event
+    # dispatched through Application.Run()'s message pump. Local repro on a
+    # dev machine (no League client -- Get-LcuCredentials always null branch)
+    # showed that specific path DOES tick reliably; the more likely failure
+    # surface is the heavier real-client branch (Get-CimInstance + up to two
+    # blocking 5s-timeout HTTPS calls per tick), which -Mock/-SelfTest never
+    # exercised end to end (-Mock drives Update-ChampSelectState directly;
+    # -SelfTest only exercises the bridge) -- see -HarnessTest below, added
+    # specifically to close that blind spot going forward. Replaced the
+    # event-based harness with a plain sequential loop regardless: a
+    # straight-line loop is strictly easier to reason about than a .NET
+    # event delegate invoked by a message pump, and every failure mode
+    # considered (an exception mid-tick, a hung HTTPS call, CIM flakiness)
+    # degrades the same way here -- logged (Write-CompanionLog, no longer
+    # silently swallowed) and retried next iteration, never a dead poll with
+    # zero trace. Tray responsiveness (Reopen/Quit) comes from DoEvents(),
+    # pumped every 50ms between ticks.
+    param(
+        # >0 = auto-exit after N seconds (the -DebugRunSeconds / -HarnessTest
+        # test seam). 0 = run until Quit is clicked (normal real usage).
+        [int]$RunSeconds = 0,
+        # Skips NotifyIcon/menu entirely -- lets -HarnessTest drive the EXACT
+        # same tick loop headlessly (no Window Station assumptions) while
+        # still proving the real gameflow/champ-select code path ticks.
+        [switch]$SuppressTray
+    )
+
     Initialize-TlsShim
     if (-not (Test-SingleInstance)) {
         Write-Host 'CoachBuild companion already running (mutex held). Exiting.'
@@ -801,50 +849,56 @@ function Start-Companion {
     $script:ChampSelectState = @{ LastOpenedChampId = $null; LastOpenedRoleId = $null }
     $script:WasChampSelect = $false
     $script:LastLoggedPhase = $null
+    $script:CompanionRunning = $true
 
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
 
-    $icon = New-Object System.Windows.Forms.NotifyIcon
-    $icon.Icon = [System.Drawing.SystemIcons]::Application  # never a bare console window (-w hidden at launch)
-    $icon.Text = 'CoachBuild Live Companion'
-    $icon.Visible = $true
+    $icon = $null
+    if (-not $SuppressTray) {
+        $icon = New-Object System.Windows.Forms.NotifyIcon
+        $icon.Icon = [System.Drawing.SystemIcons]::Application  # never a bare console window (-w hidden at launch)
+        $icon.Text = 'CoachBuild Live Companion'
+        $icon.Visible = $true
 
-    $menu = New-Object System.Windows.Forms.ContextMenuStrip
-    $reopenItem = $menu.Items.Add('Reopen page')
-    $quitItem = $menu.Items.Add('Quit')
+        $menu = New-Object System.Windows.Forms.ContextMenuStrip
+        $reopenItem = $menu.Items.Add('Reopen page')
+        $quitItem = $menu.Items.Add('Quit')
 
-    $reopenItem.add_Click({
-        $champId = $script:ChampSelectState.LastOpenedChampId
-        $roleId = $script:ChampSelectState.LastOpenedRoleId
-        if ($champId) {
-            $url = Get-DeepLinkUrl -AppOrigin $script:Config.AppOrigin -SessionToken $script:Config.Session -ChampionId $champId -RoleId $roleId
-            Open-CompanionUrl -Url $url
-        } else {
-            # No champ-select open yet this run -- still carry the session so
-            # /live-setup's Test Connection isn't greyed out on first use.
-            Open-CompanionUrl -Url "$($script:Config.AppOrigin)/live-setup?session=$($script:Config.Session)"
+        $reopenItem.add_Click({
+            $champId = $script:ChampSelectState.LastOpenedChampId
+            $roleId = $script:ChampSelectState.LastOpenedRoleId
+            if ($champId) {
+                $url = Get-DeepLinkUrl -AppOrigin $script:Config.AppOrigin -SessionToken $script:Config.Session -ChampionId $champId -RoleId $roleId
+                Open-CompanionUrl -Url $url
+            } else {
+                # No champ-select open yet this run -- still carry the session so
+                # /live-setup's Test Connection isn't greyed out on first use.
+                Open-CompanionUrl -Url "$($script:Config.AppOrigin)/live-setup?session=$($script:Config.Session)"
+            }
+        })
+        $quitItem.add_Click({ $script:CompanionRunning = $false })
+        $icon.ContextMenuStrip = $menu
+
+        Test-AutoUpdate -Icon $icon
+    }
+
+    $pollSw = [System.Diagnostics.Stopwatch]::StartNew()
+    $runSw = [System.Diagnostics.Stopwatch]::StartNew()
+    try { Invoke-GameflowTick } catch { Write-CompanionLog "gameflow tick error: $($_.Exception.Message)" }
+
+    while ($script:CompanionRunning) {
+        if (-not $SuppressTray) { [System.Windows.Forms.Application]::DoEvents() }
+        if ($RunSeconds -gt 0 -and $runSw.Elapsed.TotalSeconds -ge $RunSeconds) { break }
+        if ($pollSw.ElapsedMilliseconds -ge $script:Config.PollMs) {
+            try { Invoke-GameflowTick } catch { Write-CompanionLog "gameflow tick error: $($_.Exception.Message)" }
+            $pollSw.Restart()
         }
-    })
-    $quitItem.add_Click({
-        $icon.Visible = $false
-        $timer.Stop()
-        Stop-BridgeServer -Bridge $script:Bridge
-        [System.Windows.Forms.Application]::Exit()
-    })
-    $icon.ContextMenuStrip = $menu
+        Start-Sleep -Milliseconds 50
+    }
 
-    Test-AutoUpdate -Icon $icon
-
-    # Gameflow polling rides the tray's own STA message loop as a WinForms
-    # Timer tick -- lightweight, non-blocking, and avoids spinning up a
-    # second background runspace on top of the bridge server's.
-    $timer = New-Object System.Windows.Forms.Timer
-    $timer.Interval = $script:Config.PollMs
-    $timer.add_Tick({ try { Invoke-GameflowTick } catch {} })
-    $timer.Start()
-
-    [System.Windows.Forms.Application]::Run()
+    if ($icon) { $icon.Visible = $false }
+    Stop-BridgeServer -Bridge $script:Bridge
 }
 #endregion
 
@@ -1234,6 +1288,92 @@ function Invoke-SelfTest {
 }
 #endregion
 
+#region HarnessTest
+function Invoke-HarnessTest {
+    # v1.2.1 -- closes the exact blind spot that let a dead real-mode loop
+    # ship undetected: -Mock drives Update-ChampSelectState directly (never
+    # runs Start-Companion's actual loop) and -SelfTest only ever exercises
+    # the bridge server, never the gameflow-poll harness around it. This
+    # spawns a REAL `-DebugRunSeconds` child process (tray suppressed, no
+    # League client needed) and asserts /status's `lastPollAt` heartbeat
+    # genuinely advances between two polls -- if the real loop ever dies
+    # again (event-handler regression, an unhandled exception, whatever),
+    # this fails loudly instead of shipping silently.
+    $failures = New-Object System.Collections.Generic.List[string]
+    $proc = $null
+    try {
+        $proc = Start-Process -FilePath 'powershell.exe' `
+            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-DebugRunSeconds', '10') `
+            -PassThru -WindowStyle Hidden
+
+        $sessionPath = Join-Path (Join-Path $env:LOCALAPPDATA 'CoachBuild') 'companion-session.txt'
+        $token = $null
+        for ($i = 0; $i -lt 40 -and -not $token; $i++) {
+            Start-Sleep -Milliseconds 250
+            if (Test-Path $sessionPath) {
+                $candidate = (Get-Content -Path $sessionPath -Raw -ErrorAction SilentlyContinue).Trim()
+                if ($candidate) { $token = $candidate }
+            }
+        }
+        if (-not $token) { $failures.Add('HarnessTest: session token file never appeared -- Start-Companion never reached Get-OrCreateSessionToken') }
+
+        $base = $null
+        $first = $null
+        if ($token) {
+            for ($i = 0; $i -lt 20 -and -not $first; $i++) {
+                foreach ($p in 48291, 48292, 48293) {
+                    try {
+                        $r = Invoke-WebRequest -Uri "http://127.0.0.1:$p/status?session=$token" -Method GET -Headers @{ Origin = 'https://coachbuild.vercel.app' } -UseBasicParsing -TimeoutSec 2
+                        $first = $r.Content | ConvertFrom-Json
+                        $base = "http://127.0.0.1:$p"
+                        break
+                    } catch { continue }
+                }
+                if (-not $first) { Start-Sleep -Milliseconds 250 }
+            }
+        }
+
+        if (-not $first) {
+            $failures.Add('HarnessTest: /status never answered on any bridge port -- the bridge itself never came up in real mode')
+        } else {
+            foreach ($k in 'phase', 'lastPollAt', 'clientConnected', 'lastOpen', 'champSelect') {
+                if (-not ($first.PSObject.Properties.Name -contains $k)) { $failures.Add("HarnessTest: /status missing field $k") }
+            }
+            if (-not $first.lastPollAt) {
+                $failures.Add('HarnessTest: lastPollAt was null on first successful poll -- the real gameflow-poll loop never ticked even once')
+            } else {
+                Start-Sleep -Milliseconds 3000
+                $r2 = Invoke-WebRequest -Uri "$base/status?session=$token" -Method GET -Headers @{ Origin = 'https://coachbuild.vercel.app' } -UseBasicParsing -TimeoutSec 2
+                $second = $r2.Content | ConvertFrom-Json
+                if (-not $second.lastPollAt -or ([datetime]$second.lastPollAt) -le ([datetime]$first.lastPollAt)) {
+                    $failures.Add("HarnessTest: lastPollAt did not advance (first=$($first.lastPollAt) second=$($second.lastPollAt)) -- the real-mode loop is DEAD")
+                }
+            }
+        }
+    } finally {
+        try { if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } } catch {}
+        # Belt-and-braces: kill any lingering child by commandline match too
+        # (the harness process may itself be a different PID than $proc if
+        # powershell.exe re-execs) -- never leave a real-mode instance
+        # running after this test, on this or any other machine.
+        try {
+            Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+                Where-Object { $_.CommandLine -like '*-DebugRunSeconds*' } |
+                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        } catch {}
+    }
+
+    if ($failures.Count -gt 0) {
+        Write-Host "HARNESSTEST FAILED ($($failures.Count)):" -ForegroundColor Red
+        $failures | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+        exit 1
+    } else {
+        Write-Host 'HARNESSTEST PASSED' -ForegroundColor Green
+        exit 0
+    }
+}
+#endregion
+
 #region Mock
 function Invoke-MockRun {
     param([switch]$Once)
@@ -1326,12 +1466,16 @@ Initialize-TlsShim
 
 if ($SelfTest) {
     Invoke-SelfTest
+} elseif ($HarnessTest) {
+    Invoke-HarnessTest
 } elseif ($Mock) {
     Invoke-MockRun -Once:$Once
 } elseif ($Install) {
     Install-Companion
 } elseif ($Uninstall) {
     Uninstall-Companion
+} elseif ($DebugRunSeconds -gt 0) {
+    Start-Companion -RunSeconds $DebugRunSeconds -SuppressTray
 } else {
     Start-Companion
 }
