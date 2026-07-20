@@ -186,26 +186,55 @@ export default function HomePage() {
       setCompanionSession(parsed.session);
     }
 
-    // The deep link is authoritative about role/lane (the user's real
-    // champ-select pick) — never to be second-guessed by the fire-and-forget
-    // most-played-lane correction handleChampionSelect kicks off elsewhere.
-    mostPlayedLaneRequestRef.current++;
-    const lane = roleIdToLane(parsed.role);
-
     fetch("/api/champions")
       .then((r) => (r.ok ? (r.json() as Promise<ChampionRef[]>) : []))
       .then((champs) => {
         const found = Array.isArray(champs) ? champs.find((c) => c.id === parsed.championId) : undefined;
         if (!found) return; // unresolvable champion id (coachless gap, bad id) — leave the default view alone
-        setChamp(found);
-        setActiveLane(lane);
-        setSearchMode("champions");
         const source = defaultSourceForKind("champion");
+
+        if (parsed.role !== undefined) {
+          // Role-BEARING deep link (ranked/normal draft — champ-select
+          // assigned a real lane) is authoritative about role/lane, never
+          // to be second-guessed by the fire-and-forget most-played-lane
+          // correction below.
+          mostPlayedLaneRequestRef.current++;
+          const lane = roleIdToLane(parsed.role);
+          setChamp(found);
+          setActiveLane(lane);
+          setSearchMode("champions");
+          setGamesSource(source);
+          // Corrects the seeded initial entry in place — this IS the page's
+          // true starting view (a champ-select-driven open), not a user
+          // action stacking on top of the STATIC_FALLBACK seed.
+          sheetNav.replaceSelection(wireViewForChampion(found, lane, tabRef.current, gamesSourceRef.current));
+          return;
+        }
+
+        // Role-LESS deep link (companion.ps1 v1.2.0 — custom lobbies, blind
+        // pick, ARAM: champ-select never assigned assignedPosition, but the
+        // companion still opens rather than silently skipping as v1.1.0
+        // did). No authoritative lane here — land on the current lane
+        // first (instant, non-flashing, same as a manual champion pick),
+        // then let the SAME most-played-lane correction handleChampionSelect
+        // uses resolve and correct in place. Deliberately does NOT bump
+        // mostPlayedLaneRequestRef beforehand — that guard exists to CANCEL
+        // a correction, and this is the one deep-link case that actually
+        // wants one to run.
+        const landedLane = activeLane;
+        setChamp(found);
+        setActiveLane(landedLane);
+        setSearchMode("champions");
         setGamesSource(source);
-        // Corrects the seeded initial entry in place — this IS the page's
-        // true starting view (a champ-select-driven open), not a user
-        // action stacking on top of the STATIC_FALLBACK seed.
-        sheetNav.replaceSelection(wireViewForChampion(found, lane, tabRef.current, gamesSourceRef.current));
+        sheetNav.replaceSelection(wireViewForChampion(found, landedLane, tabRef.current, gamesSourceRef.current));
+
+        const requestId = ++mostPlayedLaneRequestRef.current;
+        getMostPlayedLane(found.id).then((bestLane) => {
+          if (mostPlayedLaneRequestRef.current !== requestId) return; // superseded
+          if (!bestLane || bestLane === landedLane) return; // unresolved, or already showing it
+          setActiveLane(bestLane);
+          sheetNav.replaceSelection(wireViewForChampion(found, bestLane, tabRef.current, gamesSourceRef.current));
+        });
       })
       .catch(() => {
         /* network hiccup — deep link silently no-ops, default view stands */

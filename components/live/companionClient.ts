@@ -7,9 +7,21 @@
 // comment): ports [48291,48292,48293]; `?session=<token>` on every
 // non-OPTIONS request; exact Origin https://coachbuild.vercel.app (enforced
 // server-side, nothing to do here); shapes:
-//   GET  /status       -> {version, port, phase, clientConnected}
+//   GET  /status       -> {version, port, phase, clientConnected,
+//                          lastOpen:{championId,roleId|null,at}|null,
+//                          champSelect:{localPlayerCellId, cellChampionId|null,
+//                            pickIntent|null, actionChampionId|null,
+//                            roleId|null}|null (null outside ChampSelect)}
 //   GET  /live         -> raw allgamedata passthrough | {error:'no-live'}
 //   POST /apply-runes  -> {ok:true} | {ok:false, reason, hint?}
+//   POST /apply-itemsets body {championId, sets:ItemSet[]} ->
+//                          {ok:true, count} | {ok:false, reason, hint?}
+//
+// Item-set writes are inert shop-panel SUGGESTIONS (same class as a
+// Blitz/u.gg auto-import) — unlike rune apply, which stays strictly
+// user-clicked, item sets MAY be exported automatically on a champ-select
+// deep-link (see components/hextech/itemSetsApply.ts's auto-export gate +
+// the AUTO_ITEMSETS_KEY toggle below, surfaced on /live-setup).
 //
 // Every network call here is fail-soft (never throws to the caller) and
 // takes an injectable `deps.fetchImpl` so companionClient.test.ts can drive
@@ -32,12 +44,43 @@ export const LIVE_POLL_MS = 1000;
 
 const SESSION_STORAGE_KEY = "coachbuild:companion:session";
 const PORT_STORAGE_KEY = "coachbuild:companion:port";
+/** Auto-export toggle for item sets ONLY (runes stay strictly manual — see
+ *  this file's header comment). Default ON the first time a session ever
+ *  exists (the user explicitly asked for automatic export) — see
+ *  getAutoItemSetsEnabled's own doc comment for the exact default rule. */
+const AUTO_ITEMSETS_STORAGE_KEY = "coachbuild:companion:autoItemSets";
+
+/** The companion's most recent champ-select deep-link open THIS launch —
+ *  null until the first one. Diagnostic only (surfaced on /live-setup),
+ *  never used to drive any decision client-side. */
+export interface CompanionLastOpen {
+  championId: number;
+  roleId: number | null;
+  at: string;
+}
+
+/** Diagnostic snapshot of champ-select cell/action resolution — present
+ *  only while phase === "ChampSelect" (companion.ps1 nulls it outside that
+ *  phase). Lets /live-setup show WHY a champion did/didn't resolve during a
+ *  live-reported "nothing opens" investigation, without needing a
+ *  screen-share. Never contains a name — only ids. */
+export interface CompanionChampSelectSnapshot {
+  localPlayerCellId: number;
+  cellChampionId: number | null;
+  pickIntent: number | null;
+  actionChampionId: number | null;
+  roleId: number | null;
+}
 
 export interface CompanionStatus {
   version: string;
   port: number;
   phase: string;
   clientConnected: boolean;
+  /** Absent/malformed on an OLDER companion (pre-1.2.0) degrades to null —
+   *  never rejects the whole status over a missing diagnostic field. */
+  lastOpen: CompanionLastOpen | null;
+  champSelect: CompanionChampSelectSnapshot | null;
 }
 
 /** Result of an apply-runes call — mirrors the wire contract's own
@@ -45,6 +88,11 @@ export interface CompanionStatus {
  *  `hint` string from the companion (e.g. bug #1013's delete-failed path)
  *  reaches the UI unchanged. */
 export type ApplyRunesResult = { ok: true } | { ok: false; reason: string; hint?: string };
+
+/** Result of an apply-itemsets call — same discriminated shape convention
+ *  as ApplyRunesResult, plus `count` (how many sets were written) on
+ *  success. */
+export type ApplyItemSetsResult = { ok: true; count: number } | { ok: false; reason: string; hint?: string };
 
 /** Raw Live Client Data passthrough (allgamedata) — deliberately typed as an
  *  open record; components/live/livePanelModel.ts is the ONLY place that
@@ -130,10 +178,59 @@ export function hasSession(): boolean {
   return getStoredSession() !== null;
 }
 
+/** Auto-export toggle for item sets (item sets ONLY — runes stay strictly
+ *  manual, see this file's header). Default ON the first time it's ever
+ *  read for a session that already exists (the user explicitly asked for
+ *  "automatic" — see the fold-in note this shipped under); once the user
+ *  has EXPLICITLY set it via /live-setup, that stored value always wins
+ *  regardless of session state. No session yet -> defaults false (nothing
+ *  to toggle for), but callers gate on hasSession() anyway before this ever
+ *  matters. */
+export function getAutoItemSetsEnabled(): boolean {
+  const raw = safeLocalStorage()?.getItem(AUTO_ITEMSETS_STORAGE_KEY);
+  if (raw === null || raw === undefined) return hasSession();
+  return raw === "true";
+}
+
+export function setAutoItemSetsEnabled(enabled: boolean): void {
+  try {
+    safeLocalStorage()?.setItem(AUTO_ITEMSETS_STORAGE_KEY, String(enabled));
+  } catch {
+    /* ignore */
+  }
+}
+
 // ── Wire calls ──────────────────────────────────────────────────────────────
 
 function bridgeUrl(port: number, path: string, session: string): string {
   return `http://127.0.0.1:${port}${path}?session=${encodeURIComponent(session)}`;
+}
+
+/** Defensive parse of /status's `lastOpen` diagnostic field — absent
+ *  (older companion, pre-1.2.0) or malformed degrades to null rather than
+ *  rejecting the whole /status response over a field nothing depends on
+ *  functionally. */
+function normalizeLastOpen(raw: unknown): CompanionLastOpen | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<CompanionLastOpen>;
+  if (typeof r.championId !== "number" || typeof r.at !== "string") return null;
+  const roleId = typeof r.roleId === "number" ? r.roleId : null;
+  return { championId: r.championId, roleId, at: r.at };
+}
+
+/** Same defensive posture as normalizeLastOpen, for `champSelect`. */
+function normalizeChampSelect(raw: unknown): CompanionChampSelectSnapshot | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<CompanionChampSelectSnapshot>;
+  if (typeof r.localPlayerCellId !== "number") return null;
+  const numOrNull = (v: unknown): number | null => (typeof v === "number" ? v : null);
+  return {
+    localPlayerCellId: r.localPlayerCellId,
+    cellChampionId: numOrNull(r.cellChampionId),
+    pickIntent: numOrNull(r.pickIntent),
+    actionChampionId: numOrNull(r.actionChampionId),
+    roleId: numOrNull(r.roleId),
+  };
 }
 
 export async function getStatus(
@@ -153,7 +250,14 @@ export async function getStatus(
     ) {
       return null; // malformed — treat exactly like unreachable
     }
-    return { version: data.version, port, phase: data.phase, clientConnected: data.clientConnected };
+    return {
+      version: data.version,
+      port,
+      phase: data.phase,
+      clientConnected: data.clientConnected,
+      lastOpen: normalizeLastOpen(data.lastOpen),
+      champSelect: normalizeChampSelect(data.champSelect),
+    };
   } catch {
     return null;
   }
@@ -187,7 +291,18 @@ export async function probeCompanion(
         continue;
       }
       setStoredPort(port);
-      return { kind: "connected", port, status: { version: data.version, port, phase: data.phase, clientConnected: data.clientConnected } };
+      return {
+        kind: "connected",
+        port,
+        status: {
+          version: data.version,
+          port,
+          phase: data.phase,
+          clientConnected: data.clientConnected,
+          lastOpen: normalizeLastOpen(data.lastOpen),
+          champSelect: normalizeChampSelect(data.champSelect),
+        },
+      };
     } catch (err) {
       if (err instanceof TypeError) sawTypeError = true;
       // Any other thrown shape (e.g. a JSON parse error on a non-JSON 200)
@@ -252,6 +367,40 @@ export async function applyRunes(
     const data = await res.json().catch(() => null);
     if (data && typeof data === "object" && typeof (data as { ok?: unknown }).ok === "boolean") {
       return data as ApplyRunesResult;
+    }
+    return { ok: false, reason: res.ok ? "malformed-response" : `http-${res.status}` };
+  } catch {
+    return {
+      ok: false,
+      reason: "network-error",
+      hint: "Check the companion is still running and try again.",
+    };
+  }
+}
+
+/** POSTs an item-sets apply request. Unlike applyRunes, this is NOT
+ *  required to be user-clicked — item sets may be exported automatically
+ *  on a champ-select deep-link (see itemSetsApply.ts's auto-export gate),
+ *  since a written item set is an inert shop-panel suggestion, not a
+ *  gameplay action (see this file's header comment for the compliance
+ *  distinction). The manual "Add item builds" button and the auto-export
+ *  path both call this SAME function with the SAME body shape. */
+export async function applyItemSets(
+  port: CompanionPort,
+  session: string,
+  body: { championId: number; sets: unknown[] },
+  deps: CompanionClientDeps = {}
+): Promise<ApplyItemSetsResult> {
+  const f = deps.fetchImpl ?? fetch;
+  try {
+    const res = await f(bridgeUrl(port, "/apply-itemsets", session), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => null);
+    if (data && typeof data === "object" && typeof (data as { ok?: unknown }).ok === "boolean") {
+      return data as ApplyItemSetsResult;
     }
     return { ok: false, reason: res.ok ? "malformed-response" : `http-${res.status}` };
   } catch {

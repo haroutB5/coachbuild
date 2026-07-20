@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import type { BuildResponse, ChampionRef } from "@/lib/types";
 import type { LaneId } from "./heroContracts";
 import { LANE_TO_ROLE_ID, LANE_LABEL } from "./heroContracts";
@@ -10,6 +10,9 @@ import CoreBuildOrderCard from "./CoreBuildOrderCard";
 import SituationalCard from "./SituationalCard";
 import ProConsensusCard from "./ProConsensusCard";
 import { versionFromPatch } from "@/components/proAssets";
+import { parseLiveDeepLink } from "@/components/live/deepLink";
+import { getStoredSession, getStoredPort, getAutoItemSetsEnabled } from "@/components/live/companionClient";
+import { autoApplyItemSetsIfEligible } from "./itemSetsApply";
 import ItemDetailPopover from "@/components/ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "@/components/EntityDetailPopover";
 import { useBodyScrollLock } from "@/components/useBodyScrollLock";
@@ -228,6 +231,59 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
     };
   }, [champ, lane, rankBracket, rankHydrated, load]);
 
+  // ── Item-sets auto-export (companion v1.2.0 feature) ─────────────────────
+  //
+  // One-shot per mount: a fresh champ-select deep-link is a genuine new page
+  // load (companion.ps1's Start-Process opens it), which remounts this whole
+  // component tree fresh — so a plain mount-scoped ref is exactly "once per
+  // deep-link navigation, refires on a new one." Runs are ACCEPTABLE to fire
+  // against whichever `build` first loads successfully after the deep link,
+  // even if the lane later gets corrected by the most-played-lane lookup
+  // (app/page.tsx) — the sets are champ-associated, lane only affects which
+  // build variant gets exported (product direction, not a bug). Runes stay
+  // strictly manual; only item sets ever auto-export (compliance note in
+  // companion.ps1's header + companionClient.ts's own header comment).
+  const autoExportedRef = useRef(false);
+  const [autoExportToast, setAutoExportToast] = useState<{ kind: "success" | "error"; message: string } | null>(null);
+
+  useEffect(() => {
+    if (state.status !== "ok") return;
+    if (autoExportedRef.current) return;
+    autoExportedRef.current = true;
+
+    const parsed = parseLiveDeepLink(window.location.search);
+    const gate = {
+      isDeepLink: parsed !== null,
+      autoEnabled: getAutoItemSetsEnabled(),
+      session: getStoredSession(),
+      port: getStoredPort(),
+      alreadyFired: false, // the ref above already guards the once-per-mount rule
+    };
+
+    const build = state.build;
+    autoApplyItemSetsIfEligible(gate, async () => ({
+      champ: build.champion,
+      lane,
+      roleLabel: build.roleLabel,
+      build,
+    })).then((outcome) => {
+      if (!outcome.attempted) return; // gate refused, or the companion probe failed -- quiet, no toast
+      if (outcome.result.ok) {
+        setAutoExportToast({
+          kind: "success",
+          message: `Item builds added for ${build.champion.name} — check your shop in game.`,
+        });
+      } else {
+        setAutoExportToast({
+          kind: "error",
+          message: outcome.result.hint ?? "Couldn't auto-add item builds — add them manually from the Runes & Summoners card.",
+        });
+      }
+      setTimeout(() => setAutoExportToast(null), 6000);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot per mount by design (autoExportedRef), not a live-updating effect
+  }, [state]);
+
   if (state.status === "loading") {
     return (
       <div className="mt-5 space-y-5">
@@ -283,12 +339,24 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
   return (
     <div className="mt-5 space-y-5">
       <RankBracketSelector value={rankBracket} onChange={handleRankChange} />
+      {autoExportToast && (
+        <p
+          role="status"
+          className={`text-[11.5px] rounded-lg border px-3.5 py-2.5 ${
+            autoExportToast.kind === "success" ? "text-teal border-teal-dim bg-teal/5" : "text-bad border-bad/40 bg-bad/5"
+          }`}
+        >
+          {autoExportToast.message}
+        </p>
+      )}
       <RunesSummonersCard
         runes={build.runes}
         spells={build.spells}
         onOpenDetail={openDetail}
         championName={build.champion.name}
         roleLabel={build.roleLabel}
+        build={build}
+        lane={lane}
       />
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         <StartingCard starter={build.items.starter} onItemClick={openItemPopover} />

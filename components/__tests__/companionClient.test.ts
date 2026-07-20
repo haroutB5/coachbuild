@@ -20,6 +20,9 @@ import {
   getLive,
   isLiveError,
   applyRunes,
+  applyItemSets,
+  getAutoItemSetsEnabled,
+  setAutoItemSetsEnabled,
 } from "../live/companionClient";
 
 function makeLocalStorageShim() {
@@ -113,7 +116,14 @@ describe("companionClient — probeCompanion (port walk + classification)", () =
       expect(state).toEqual({
         kind: "connected",
         port: COMPANION_PORTS[1],
-        status: { version: "1.0.0", port: COMPANION_PORTS[1], phase: "ChampSelect", clientConnected: true },
+        status: {
+          version: "1.0.0",
+          port: COMPANION_PORTS[1],
+          phase: "ChampSelect",
+          clientConnected: true,
+          lastOpen: null,
+          champSelect: null,
+        },
       });
       expect(getStoredPort()).toBe(COMPANION_PORTS[1]);
     });
@@ -195,7 +205,14 @@ describe("companionClient — getStatus / refreshStatus", () => {
     expect(state).toEqual({
       kind: "connected",
       port: 48293,
-      status: { version: "1.0.0", port: 48293, phase: "InProgress", clientConnected: true },
+      status: {
+        version: "1.0.0",
+        port: 48293,
+        phase: "InProgress",
+        clientConnected: true,
+        lastOpen: null,
+        champSelect: null,
+      },
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1); // no 3-port walk needed
   });
@@ -221,6 +238,42 @@ describe("companionClient — getStatus / refreshStatus", () => {
     });
     const state = await refreshStatus("sess", { fetchImpl });
     expect(state).toEqual({ kind: "no-companion" });
+  });
+
+  it("parses a real lastOpen + champSelect snapshot from a v1.2.0 companion", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        version: "1.2.0",
+        phase: "ChampSelect",
+        clientConnected: true,
+        lastOpen: { championId: 103, roleId: 0, at: "2026-07-20T00:00:00.000Z" },
+        champSelect: { localPlayerCellId: 0, cellChampionId: null, pickIntent: 103, actionChampionId: null, roleId: 0 },
+      }),
+    })) as unknown as typeof fetch;
+    const status = await getStatus(48291, "sess", { fetchImpl });
+    expect(status?.lastOpen).toEqual({ championId: 103, roleId: 0, at: "2026-07-20T00:00:00.000Z" });
+    expect(status?.champSelect).toEqual({ localPlayerCellId: 0, cellChampionId: null, pickIntent: 103, actionChampionId: null, roleId: 0 });
+  });
+
+  it("degrades lastOpen/champSelect to null from an older (pre-1.2.0) companion that never sends them", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ version: "1.1.0", phase: "InProgress", clientConnected: true }),
+    })) as unknown as typeof fetch;
+    const status = await getStatus(48291, "sess", { fetchImpl });
+    expect(status?.lastOpen).toBeNull();
+    expect(status?.champSelect).toBeNull();
+  });
+
+  it("degrades a malformed lastOpen/champSelect to null rather than rejecting the whole status", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ version: "1.2.0", phase: "InProgress", clientConnected: true, lastOpen: "not-an-object", champSelect: 42 }),
+    })) as unknown as typeof fetch;
+    const status = await getStatus(48291, "sess", { fetchImpl });
+    expect(status?.lastOpen).toBeNull();
+    expect(status?.champSelect).toBeNull();
   });
 });
 
@@ -287,5 +340,81 @@ describe("companionClient — applyRunes", () => {
     })) as unknown as typeof fetch;
     const result = await applyRunes(48291, "sess", RUNE_BODY, { fetchImpl });
     expect(result).toEqual({ ok: false, reason: "http-500" });
+  });
+});
+
+describe("companionClient — applyItemSets", () => {
+  const ITEM_SETS_BODY = { championId: 112, sets: [{ uid: "coachbuild-viktor-mid-core", title: "CoachBuild Viktor Mid — Core" }] };
+
+  it("returns {ok:true, count} on a successful apply", async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true, json: async () => ({ ok: true, count: 2 }) })) as unknown as typeof fetch;
+    const result = await applyItemSets(48291, "sess", ITEM_SETS_BODY, { fetchImpl });
+    expect(result).toEqual({ ok: true, count: 2 });
+  });
+
+  it("passes through a {ok:false, reason, hint} envelope verbatim (e.g. read-failed)", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ok: false, reason: "read-failed", hint: "could not read existing item sets -- nothing was changed" }),
+    })) as unknown as typeof fetch;
+    const result = await applyItemSets(48291, "sess", ITEM_SETS_BODY, { fetchImpl });
+    expect(result).toEqual({ ok: false, reason: "read-failed", hint: "could not read existing item sets -- nothing was changed" });
+  });
+
+  it("degrades to a network-error result on a fetch throw, never throwing itself", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    const result = await applyItemSets(48291, "sess", ITEM_SETS_BODY, { fetchImpl });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("network-error");
+  });
+
+  it("posts to /apply-itemsets with the exact body shape (championId + sets)", async () => {
+    let capturedBody: string | undefined;
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return { ok: true, json: async () => ({ ok: true, count: 1 }) } as Response;
+    }) as unknown as typeof fetch;
+    await applyItemSets(48291, "sess", ITEM_SETS_BODY, { fetchImpl });
+    expect(JSON.parse(capturedBody!)).toEqual(ITEM_SETS_BODY);
+    const calledUrl = (fetchImpl as unknown as { mock: { calls: [string][] } }).mock.calls[0][0];
+    expect(calledUrl).toContain("/apply-itemsets?session=sess");
+  });
+});
+
+describe("companionClient — getAutoItemSetsEnabled / setAutoItemSetsEnabled", () => {
+  afterEach(() => unstubWindow());
+
+  it("defaults to false with no window (SSR — nothing to toggle for)", () => {
+    expect(getAutoItemSetsEnabled()).toBe(false);
+  });
+
+  it("defaults ON once a session already exists and the toggle was never explicitly set", () => {
+    stubWindow(makeLocalStorageShim());
+    setStoredSession("sess-1");
+    expect(getAutoItemSetsEnabled()).toBe(true);
+  });
+
+  it("defaults to false when no session exists yet, even though nothing was explicitly set", () => {
+    stubWindow(makeLocalStorageShim());
+    expect(getAutoItemSetsEnabled()).toBe(false);
+  });
+
+  it("an explicit false always wins, even with a session present", () => {
+    stubWindow(makeLocalStorageShim());
+    setStoredSession("sess-1");
+    setAutoItemSetsEnabled(false);
+    expect(getAutoItemSetsEnabled()).toBe(false);
+  });
+
+  it("an explicit true round-trips", () => {
+    stubWindow(makeLocalStorageShim());
+    setAutoItemSetsEnabled(true);
+    expect(getAutoItemSetsEnabled()).toBe(true);
+  });
+
+  it("setAutoItemSetsEnabled never throws with no window", () => {
+    expect(() => setAutoItemSetsEnabled(true)).not.toThrow();
   });
 });

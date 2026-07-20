@@ -18,11 +18,19 @@ export type LiveRoleId = 0 | 1 | 2 | 3 | 4;
 
 export interface LiveDeepLink {
   championId: number;
-  role: LiveRoleId;
+  /** Absent (undefined) for a ROLE-LESS deep link — companion.ps1 v1.2.0
+   *  still opens when champ-select's `assignedPosition` is blank/unmapped
+   *  (custom lobbies, blind pick, ARAM — anything without a real draft
+   *  role), just without a `role=` param, instead of the old v1.1.0
+   *  behavior of silently never opening at all for those modes. The web
+   *  side (app/page.tsx) treats this case like a fresh manual champion pick
+   *  — falls back to its own most-played-lane resolution rather than
+   *  guessing or defaulting to a fixed lane. */
+  role: LiveRoleId | undefined;
   /** Pairing token for the browser<->companion bridge. Null when the URL
-   *  carries championId/role but no session (e.g. a hand-typed test URL) —
-   *  the caller still applies the champion/lane, it just has nothing to
-   *  persist for the bridge. */
+   *  carries championId (and maybe role) but no session (e.g. a hand-typed
+   *  test URL) — the caller still applies the champion/lane, it just has
+   *  nothing to persist for the bridge. */
   session: string | null;
 }
 
@@ -31,32 +39,41 @@ const VALID_ROLES: readonly LiveRoleId[] = [0, 1, 2, 3, 4];
 /** Parses the companion deep-link query string. Returns null for anything
  *  that isn't a well-formed champ-select link — every failure mode
  *  degrades to "not a live deep link," never a partial/guessed apply:
- *  - missing championId or role
+ *  - missing championId
  *  - non-numeric championId/role (parseInt truncates a stray "2.5" role to 2,
  *    which is accepted — the origin is always our own companion, not
  *    untrusted user input, so a truncated float is treated as a minor
  *    formatting slip rather than a rejection)
  *  - championId <= 0
- *  - role outside 0-4 (companion never emits 5/"Auto")
- *  `session` is read independently and is never required for the link to be
- *  considered valid — a missing session just means nothing to persist. */
+ *  - role PRESENT but outside 0-4 (companion never emits 5/"Auto") — a
+ *    malformed role is rejected outright rather than silently downgraded to
+ *    role-less, since our own companion never emits one
+ *  `role` itself is OPTIONAL — absent entirely means a role-less link (see
+ *  LiveDeepLink.role's doc comment), which is a VALID link, not a rejection.
+ *  `session` is likewise read independently and never required for the link
+ *  to be considered valid — a missing session just means nothing to
+ *  persist. */
 export function parseLiveDeepLink(search: string): LiveDeepLink | null {
   const qs = search.startsWith("?") ? search.slice(1) : search;
   const params = new URLSearchParams(qs);
 
   const championIdRaw = params.get("championId");
-  const roleRaw = params.get("role");
-  if (!championIdRaw || !roleRaw) return null;
+  if (!championIdRaw) return null;
 
   const championId = parseInt(championIdRaw, 10);
   if (!Number.isFinite(championId) || championId <= 0) return null;
 
-  const role = parseInt(roleRaw, 10);
-  if (!Number.isFinite(role) || !VALID_ROLES.includes(role as LiveRoleId)) return null;
+  const roleRaw = params.get("role");
+  let role: LiveRoleId | undefined;
+  if (roleRaw !== null && roleRaw !== "") {
+    const parsedRole = parseInt(roleRaw, 10);
+    if (!Number.isFinite(parsedRole) || !VALID_ROLES.includes(parsedRole as LiveRoleId)) return null;
+    role = parsedRole as LiveRoleId;
+  }
 
   const session = params.get("session");
 
-  return { championId, role: role as LiveRoleId, session };
+  return { championId, role, session };
 }
 
 const ROLE_TO_LANE: Record<LiveRoleId, LaneId> = {

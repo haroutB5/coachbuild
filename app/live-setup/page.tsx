@@ -9,7 +9,14 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { getStoredSession, setStoredSession, probeCompanion, type ProbeState } from "@/components/live/companionClient";
+import {
+  getStoredSession,
+  setStoredSession,
+  probeCompanion,
+  getAutoItemSetsEnabled,
+  setAutoItemSetsEnabled,
+  type ProbeState,
+} from "@/components/live/companionClient";
 
 // Best-effort install commands per the companion's documented flag contract
 // (live-companion-plan.md §1: "-Install flag -> Startup-folder .lnk...
@@ -76,6 +83,10 @@ export default function LiveSetupPage() {
   const [session, setSession] = useState<string | null>(null);
   const [probeState, setProbeState] = useState<ProbeState | null>(null);
   const [probing, setProbing] = useState(false);
+  // Hydrated post-mount (localStorage read) to avoid an SSR/client mismatch,
+  // same pattern BuildTabContent's rankHydrated uses.
+  const [autoItemSets, setAutoItemSets] = useState(false);
+  const [autoHydrated, setAutoHydrated] = useState(false);
 
   // Mount-only: capture ?session= from a companion-opened link, else fall
   // back to whatever's already stored from a previous pairing.
@@ -85,10 +96,17 @@ export default function LiveSetupPage() {
     if (fromUrl) {
       setStoredSession(fromUrl);
       setSession(fromUrl);
-      return;
+    } else {
+      setSession(getStoredSession());
     }
-    setSession(getStoredSession());
+    setAutoItemSets(getAutoItemSetsEnabled());
+    setAutoHydrated(true);
   }, []);
+
+  function handleAutoItemSetsToggle(next: boolean) {
+    setAutoItemSets(next);
+    setAutoItemSetsEnabled(next);
+  }
 
   const runTest = useCallback(async () => {
     if (!session) return;
@@ -172,22 +190,52 @@ export default function LiveSetupPage() {
           )}
 
           {probeState?.kind === "connected" && (
-            <dl className="grid grid-cols-3 gap-3 text-[11px]">
-              <div>
-                <dt className="text-mut uppercase tracking-[0.08em] text-[9.5px]">Version</dt>
-                <dd className="text-txt font-medium tabular-nums">{probeState.status.version}</dd>
-              </div>
-              <div>
-                <dt className="text-mut uppercase tracking-[0.08em] text-[9.5px]">Phase</dt>
-                <dd className="text-txt font-medium">{probeState.status.phase}</dd>
-              </div>
-              <div>
-                <dt className="text-mut uppercase tracking-[0.08em] text-[9.5px]">Client</dt>
-                <dd className="text-txt font-medium">
-                  {probeState.status.clientConnected ? "Connected" : "Not detected"}
-                </dd>
-              </div>
-            </dl>
+            <>
+              <dl className="grid grid-cols-3 gap-3 text-[11px]">
+                <div>
+                  <dt className="text-mut uppercase tracking-[0.08em] text-[9.5px]">Version</dt>
+                  <dd className="text-txt font-medium tabular-nums">{probeState.status.version}</dd>
+                </div>
+                <div>
+                  <dt className="text-mut uppercase tracking-[0.08em] text-[9.5px]">Phase</dt>
+                  <dd className="text-txt font-medium">{probeState.status.phase}</dd>
+                </div>
+                <div>
+                  <dt className="text-mut uppercase tracking-[0.08em] text-[9.5px]">Client</dt>
+                  <dd className="text-txt font-medium">
+                    {probeState.status.clientConnected ? "Connected" : "Not detected"}
+                  </dd>
+                </div>
+              </dl>
+
+              {/* Diagnosability (v1.2.0) — lets us debug a "nothing opens"
+                  report remotely without a screen-share: the most recent
+                  deep-link this companion opened THIS launch, plus a live
+                  champ-select resolution snapshot while phase is
+                  ChampSelect. Subtle by design — this is a debugging aid,
+                  not a feature most users need day to day. */}
+              {(probeState.status.lastOpen || probeState.status.champSelect) && (
+                <div className="text-[10px] text-mut/70 space-y-0.5 pt-1 border-t border-line/50">
+                  {probeState.status.lastOpen && (
+                    <p>
+                      Last opened: champion #{probeState.status.lastOpen.championId}, role{" "}
+                      {probeState.status.lastOpen.roleId ?? "auto"} at{" "}
+                      {new Date(probeState.status.lastOpen.at).toLocaleTimeString()}
+                    </p>
+                  )}
+                  {probeState.status.champSelect && (
+                    <p>
+                      Champ select: cell #{probeState.status.champSelect.localPlayerCellId}, champion{" "}
+                      {probeState.status.champSelect.cellChampionId ??
+                        probeState.status.champSelect.pickIntent ??
+                        probeState.status.champSelect.actionChampionId ??
+                        "none yet"}
+                      , role {probeState.status.champSelect.roleId ?? "auto"}
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
           )}
 
           {probeState?.kind === "lna-denied" && (
@@ -219,6 +267,29 @@ export default function LiveSetupPage() {
               and try again.
             </p>
           )}
+        </section>
+
+        <section className="bg-panel border border-line rounded-xl p-5 space-y-3">
+          <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">Automation</p>
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autoHydrated && autoItemSets}
+              onChange={(e) => handleAutoItemSetsToggle(e.target.checked)}
+              className="mt-0.5 w-4 h-4 accent-teal cursor-pointer"
+            />
+            <span>
+              <span className="block text-[12.5px] text-txt font-medium">
+                Auto-add item builds on champ select
+              </span>
+              <span className="block text-[11px] text-mut leading-relaxed mt-0.5">
+                When you enter champ select, up to 3 item builds (Core, Optimized, Pro) are added to
+                your in-client shop automatically — no click needed. This is a passive shop
+                suggestion, same as Blitz/u.gg&apos;s auto-import; it never acts in the game for you.
+                Runes always stay a manual, one-click apply — never automatic.
+              </span>
+            </span>
+          </label>
         </section>
 
         <section className="bg-panel border border-line rounded-xl p-5 space-y-3">

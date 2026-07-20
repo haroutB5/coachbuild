@@ -30,8 +30,20 @@ describe("parseLiveDeepLink", () => {
     expect(parseLiveDeepLink("?role=2&session=abc")).toBeNull();
   });
 
-  it("returns null when role is missing", () => {
-    expect(parseLiveDeepLink("?championId=112&session=abc")).toBeNull();
+  it("role-less link (blank/unmapped assignedPosition — custom/blind-pick/ARAM) is VALID, role is undefined", () => {
+    expect(parseLiveDeepLink("?championId=112&session=abc")).toEqual({
+      championId: 112,
+      role: undefined,
+      session: "abc",
+    });
+  });
+
+  it("role-less link with no session either — still valid", () => {
+    expect(parseLiveDeepLink("?championId=112")).toEqual({
+      championId: 112,
+      role: undefined,
+      session: null,
+    });
   });
 
   it("returns null for a non-numeric championId", () => {

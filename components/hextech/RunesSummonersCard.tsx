@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { RunesBlock, Pick as PickType } from "@/lib/types";
+import type { RunesBlock, Pick as PickType, BuildResponse } from "@/lib/types";
+import type { LaneId } from "./heroContracts";
 import type { EntityKind } from "@/components/EntityDetailPopover";
 import { wpaClass, wpaText } from "@/components/StatBadge";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import { buildRunesPageModel } from "./runesPage";
 import { buildRuneApplyBody } from "./runeApplyBody";
+import { applyItemSetsForBuild } from "./itemSetsApply";
 import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/components/live/companionClient";
 
 function CardHeader({ children }: { children: React.ReactNode }) {
@@ -99,6 +101,91 @@ function ApplyRunesButton({
       {state.status === "success" && (
         <p role="status" className="text-[10.5px] text-teal">
           Applied in-client.
+        </p>
+      )}
+      {state.status === "error" && (
+        <p role="status" className="text-[10.5px] text-bad max-w-[220px] text-right">
+          {state.message}
+        </p>
+      )}
+    </div>
+  );
+}
+
+type ItemSetsUiState =
+  | { status: "idle" }
+  | { status: "applying" }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
+/** "Add item builds" — the manual counterpart to the champ-select
+ *  auto-export effect (BuildTabContent.tsx). Both call the SAME
+ *  applyItemSetsForBuild (itemSetsApply.ts) so there's exactly one
+ *  implementation of "resolve pro-consensus data, build sets, POST them."
+ *  Gated on hasSession() same as Apply runes, but item-set writes are NOT
+ *  compliance-restricted to user-clicks the way rune apply is (see
+ *  companion.ps1's compliance header) — this button exists for the
+ *  non-deep-link case (a manual visit) and as a way to re-export on demand. */
+function ItemSetsButton({
+  champ,
+  lane,
+  roleLabel,
+  build,
+}: {
+  champ: BuildResponse["champion"];
+  lane: LaneId;
+  roleLabel: string;
+  build: BuildResponse;
+}) {
+  const [ready, setReady] = useState(false);
+  const [state, setState] = useState<ItemSetsUiState>({ status: "idle" });
+
+  useEffect(() => {
+    setReady(hasSession());
+  }, []);
+
+  async function handleClick() {
+    const session = getStoredSession();
+    const port = getStoredPort();
+    if (!session || !port) {
+      setState({
+        status: "error",
+        message: "Companion not connected — open /live-setup and reconnect.",
+      });
+      return;
+    }
+
+    setState({ status: "applying" });
+    const result = await applyItemSetsForBuild({ champ, lane, roleLabel, build, port, session });
+    if (result.ok) {
+      setState({
+        status: "success",
+        message: `${result.count} item build${result.count === 1 ? "" : "s"} added — check your shop in game.`,
+      });
+    } else {
+      setState({
+        status: "error",
+        message: result.hint ?? "Couldn't add item builds — try again, or add them manually in-client.",
+      });
+    }
+    setTimeout(() => setState({ status: "idle" }), 4000);
+  }
+
+  if (!ready) return null;
+
+  return (
+    <div className="flex flex-col items-end gap-1.5">
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={state.status === "applying"}
+        className="flex-shrink-0 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-txt bg-panel2 border border-line hover:border-line-gold disabled:opacity-60 disabled:cursor-not-allowed rounded-md px-2.5 py-1.5 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
+      >
+        {state.status === "applying" ? "Adding…" : "Add item builds"}
+      </button>
+      {state.status === "success" && (
+        <p role="status" className="text-[10.5px] text-teal max-w-[220px] text-right">
+          {state.message}
         </p>
       )}
       {state.status === "error" && (
@@ -243,6 +330,14 @@ interface RunesSummonersCardProps {
    *  caller of this card keeps rendering exactly as before. */
   championName?: string;
   roleLabel?: string;
+  /** v2026-07-20 (item-sets feature): the full BuildResponse + its LaneId —
+   *  needed by the "Add item builds" button (itemSetsApply.ts's
+   *  applyItemSetsForBuild needs the whole build to derive Core/Optimized
+   *  sets, plus lane to query pro-consensus by role). Optional, same
+   *  degrade-quietly convention as championName/roleLabel above — omitting
+   *  either hides just this button, Apply runes is unaffected. */
+  build?: BuildResponse;
+  lane?: LaneId;
 }
 
 export default function RunesSummonersCard({
@@ -251,6 +346,8 @@ export default function RunesSummonersCard({
   onOpenDetail,
   championName,
   roleLabel,
+  build,
+  lane,
 }: RunesSummonersCardProps) {
   const model = buildRunesPageModel(runes);
 
@@ -258,9 +355,14 @@ export default function RunesSummonersCard({
     <div className="bg-panel border border-line rounded-xl p-5">
       <div className="flex items-start justify-between gap-3 mb-3.5">
         <CardHeader>Runes &amp; Summoners</CardHeader>
-        {championName && roleLabel && (
-          <ApplyRunesButton championName={championName} roleLabel={roleLabel} runes={runes} />
-        )}
+        <div className="flex items-start gap-2.5">
+          {championName && roleLabel && (
+            <ApplyRunesButton championName={championName} roleLabel={roleLabel} runes={runes} />
+          )}
+          {build && lane && roleLabel && (
+            <ItemSetsButton champ={build.champion} lane={lane} roleLabel={roleLabel} build={build} />
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-[1.5fr_1.1fr_auto] gap-x-8 gap-y-5">
