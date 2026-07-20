@@ -69,9 +69,11 @@ export async function resolveProConsensusForSets(
 }
 
 /** The ONE call both the manual button and the auto-export effect make:
- *  resolve pro-consensus data (best-effort), build up to 3 sets, POST them.
- *  Never throws — applyItemSets itself is already fail-soft, and a failed
- *  pro-consensus fetch just means no Pro variant this round. */
+ *  resolve pro-consensus data (best-effort), build the one champ+role set
+ *  (Core/Optimized/Pro/Situational as BLOCKS inside it — see itemSetBody.ts's
+ *  v0.34.1 header for the 3-sets-to-1-set restructure), POST it. Never
+ *  throws — applyItemSets itself is already fail-soft, and a failed
+ *  pro-consensus fetch just means no Pro build block this round. */
 export async function applyItemSetsForBuild(params: {
   champ: ChampionRef;
   lane: LaneId;

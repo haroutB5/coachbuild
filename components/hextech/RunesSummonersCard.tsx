@@ -172,7 +172,11 @@ function ItemSetsButton({
     if (result.ok) {
       setState({
         status: "success",
-        message: `${result.count} item build${result.count === 1 ? "" : "s"} added — check your shop in game.`,
+        // v0.34.1: always exactly one champ+role item set now (Core/
+        // Optimized/Pro/Situational are blocks inside it, not separate
+        // sets) — result.count is always 1, so the copy is a flat
+        // singular rather than the old pluralized "N item builds".
+        message: "Item build added — check your shop in game.",
       });
     } else {
       setState({

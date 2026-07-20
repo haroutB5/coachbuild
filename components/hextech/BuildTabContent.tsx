@@ -284,7 +284,7 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
       ).then((outcome) => {
         if (!outcome.attempted) return; // gate refused, or the companion probe failed -- quiet, no toast
         if (outcome.result.ok) {
-          setItemsToast({ kind: "success", message: `Item builds added for ${build.champion.name} — check your shop in game.` });
+          setItemsToast({ kind: "success", message: `Item build added for ${build.champion.name} — check your shop in game.` });
         } else {
           setItemsToast({
             kind: "error",

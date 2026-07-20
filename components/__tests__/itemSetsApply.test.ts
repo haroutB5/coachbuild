@@ -145,7 +145,7 @@ describe("applyItemSetsForBuild", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("builds sets (Core only, pro fetch empty) and POSTs to the bridge", async () => {
+  it("builds ONE set (Core build block only, pro fetch empty) and POSTs to the bridge", async () => {
     let capturedBridgeBody: string | undefined;
     vi.stubGlobal(
       "fetch",
@@ -171,11 +171,14 @@ describe("applyItemSetsForBuild", () => {
     expect(result).toEqual({ ok: true, count: 1 });
     const parsed = JSON.parse(capturedBridgeBody!);
     expect(parsed.championId).toBe(222);
-    expect(parsed.sets).toHaveLength(1); // Core only -- pro fetch came back empty
-    expect(parsed.sets[0].title).toBe("CoachBuild Jinx Bot — Core");
+    // v0.34.1: always exactly ONE champ+role set now (Core/Optimized/Pro/
+    // Situational are blocks inside it, not separate sets).
+    expect(parsed.sets).toHaveLength(1);
+    expect(parsed.sets[0].title).toBe("CoachBuild Jinx Bot");
+    expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).toEqual(["Starting", "Core build"]);
   });
 
-  it("includes a Pro set when pro-consensus data resolves", async () => {
+  it("adds a Pro build BLOCK (still one set) when pro-consensus data resolves", async () => {
     let capturedBridgeBody: string | undefined;
     vi.stubGlobal(
       "fetch",
@@ -184,7 +187,7 @@ describe("applyItemSetsForBuild", () => {
         if (url.startsWith("https://cdn.coachless.gg")) return jsonResponse({ type: "item", version: "16.13.1", data: {} });
         if (url.includes("/apply-itemsets")) {
           capturedBridgeBody = init?.body as string;
-          return jsonResponse({ ok: true, count: 2 });
+          return jsonResponse({ ok: true, count: 1 });
         }
         return jsonResponse({}, false);
       })
@@ -199,7 +202,8 @@ describe("applyItemSetsForBuild", () => {
       session: "sess-1",
     });
     const parsed = JSON.parse(capturedBridgeBody!);
-    expect(parsed.sets.map((s: { title: string }) => s.title)).toContain("CoachBuild Jinx Bot — Pro");
+    expect(parsed.sets).toHaveLength(1);
+    expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).toContain("Pro build");
   });
 });
 
