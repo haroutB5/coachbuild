@@ -19,6 +19,7 @@ import {
   resetChampSelectFollowState,
   tryClaimAutoExportLock,
 } from "../live/champSelectFollowState";
+import { isBuildForLane } from "../hextech/heroContracts";
 
 function makeLocalStorageShim() {
   const store = new Map<string, string>();
@@ -159,6 +160,63 @@ describe("champSelectFollowState — shouldAutoExportForLane / markAutoExported"
     markCompanionDriven(103);
     noteCompanionPhase("ChampSelect");
     expect(isCompanionDrivenChampion(103)).toBe(false);
+  });
+});
+
+// v0.36.0 — integration-style: replays the EXACT sequence
+// BuildTabContent.tsx's effect runs on a real lane flip, using the real
+// gate functions (isBuildForLane + shouldAutoExportForLane +
+// markAutoExported), to pin "lane flip fires BOTH kinds; a transient
+// stale-build/fresh-lane render never blocks the real one." See
+// heroContracts.ts's isBuildForLane doc comment for the live bug
+// (runes never followed a lane flip) this closes.
+describe("lane-flip auto-export sequence (BuildTabContent effect, replayed)", () => {
+  beforeEach(() => resetChampSelectFollowState());
+
+  /** Mirrors BuildTabContent's effect body exactly: guard on isBuildForLane
+   *  first, then the dedup gate, returning whether an export would actually
+   *  be attempted (and marking dedup state exactly as the real effect does
+   *  when it does). */
+  function runEffect(kind: "items" | "runes", buildRole: number, lane: "bot" | "support", championId: number): boolean {
+    if (!isBuildForLane(buildRole, lane)) return false;
+    const epoch = getChampSelectPhaseEpoch();
+    if (shouldAutoExportForLane(kind, championId, lane) && tryClaimAutoExportLock(kind, epoch, championId, lane)) {
+      markAutoExported(kind, championId, lane);
+      return true;
+    }
+    return false;
+  }
+
+  it("a genuine lane flip fires BOTH items and runes for the new lane", () => {
+    noteCompanionPhase("ChampSelect");
+    setCurrentChampSelectChampionId(103);
+
+    // Ashe Bot resolves first (role 3 == "bot").
+    expect(runEffect("items", 3, "bot", 103)).toBe(true);
+    expect(runEffect("runes", 3, "bot", 103)).toBe(true);
+
+    // User flips to Support; the CORRECT Support build resolves (role 4 == "support").
+    expect(runEffect("items", 4, "support", 103)).toBe(true);
+    expect(runEffect("runes", 4, "support", 103)).toBe(true);
+  });
+
+  it("a transient stale-build/fresh-lane render (build still Bot, lane already Support) is a no-op for BOTH kinds and does NOT block the real export", () => {
+    noteCompanionPhase("ChampSelect");
+    setCurrentChampSelectChampionId(103);
+    runEffect("items", 3, "bot", 103);
+    runEffect("runes", 3, "bot", 103);
+
+    // Transient render: state.build.role is STILL 3 (Bot) but `lane` prop
+    // already flipped to "support" — isBuildForLane must reject this for
+    // BOTH kinds, and neither should touch dedup state.
+    expect(runEffect("items", 3, "support", 103)).toBe(false);
+    expect(runEffect("runes", 3, "support", 103)).toBe(false);
+
+    // The REAL Support build resolves moments later (role 4 == "support") —
+    // must still fire for BOTH kinds, proving the stale render above did
+    // NOT consume the dedup slot.
+    expect(runEffect("items", 4, "support", 103)).toBe(true);
+    expect(runEffect("runes", 4, "support", 103)).toBe(true);
   });
 });
 

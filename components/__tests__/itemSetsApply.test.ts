@@ -14,6 +14,29 @@ function jsonResponse(body: unknown, ok = true) {
   return { ok, json: async () => body };
 }
 
+/** v0.36.0 — a realistic ddragon item.json fixture (raw shape, matching
+ *  itemDetail.ts's RawItemJson) covering every item id these tests'
+ *  baseItems()/baseBuild() reference, all FULL items (empty `into`) except
+ *  the boots slot (tagged Boots, built FROM something — passes
+ *  itemSetBody.ts's isFullItem boots special case). Needed now that
+ *  applyItemSetsForBuild threads real item metadata into buildItemSets for
+ *  the full-items-only build-line rule — an empty `data: {}` CDN response
+ *  (this file's pre-v0.36.0 fixture) would degrade every build line to
+ *  empty, which is correct behavior but not what these wiring tests are
+ *  meant to exercise. */
+const ITEM_JSON_FIXTURE = {
+  type: "item",
+  version: "16.13.1",
+  data: {
+    "1054": { name: "Doran's Shield", into: [], from: [] },
+    "3006": { name: "Berserker's Greaves", tags: ["Boots", "AttackSpeed"], into: ["3172"], from: ["1001"] },
+    "3031": { name: "Infinity Edge", tags: ["CriticalStrike"], into: [], from: ["1038"] },
+    "3036": { name: "Lord Dominik's Regards", tags: ["Damage"], into: [], from: ["3035"] },
+    "3095": { name: "Item 3095", tags: ["Damage"], into: [], from: ["1038"] },
+    "3072": { name: "Bloodthirster", tags: ["Damage", "LifeSteal"], into: [], from: ["1038"] },
+  },
+};
+
 function routedFetch(routes: [string, unknown | (() => unknown)][]) {
   return vi.fn(async (url: string) => {
     for (const [prefix, body] of routes) {
@@ -145,13 +168,13 @@ describe("applyItemSetsForBuild", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("builds ONE set (Core build block only, pro fetch empty) and POSTs to the bridge", async () => {
+  it("builds ONE set (Core build + Highest WPA, pro fetch empty) and POSTs to the bridge", async () => {
     let capturedBridgeBody: string | undefined;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
         if (url.startsWith("/api/pros")) return jsonResponse({ games: [] });
-        if (url.startsWith("https://cdn.coachless.gg")) return jsonResponse({ type: "item", version: "16.13.1", data: {} });
+        if (url.startsWith("https://cdn.coachless.gg")) return jsonResponse(ITEM_JSON_FIXTURE);
         if (url.includes("/apply-itemsets")) {
           capturedBridgeBody = init?.body as string;
           return jsonResponse({ ok: true, count: 1 });
@@ -175,7 +198,9 @@ describe("applyItemSetsForBuild", () => {
     // Situational are blocks inside it, not separate sets).
     expect(parsed.sets).toHaveLength(1);
     expect(parsed.sets[0].title).toBe("CoachBuild Jinx Bot");
-    expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).toEqual(["Starting", "Core build"]);
+    // v0.36.0: "Highest WPA" has no tag requirement, only a ≥4-item pool
+    // threshold -- Core alone (5 full items here) already clears it.
+    expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).toEqual(["Starting", "Core build", "Highest WPA"]);
     // v0.35.0: champ-scoped (not role-scoped) stale-removal prefix, so a
     // later lane flip's export cleans up THIS lane's set too.
     expect(parsed.replacePrefix).toBe("CoachBuild Jinx ");
@@ -187,7 +212,7 @@ describe("applyItemSetsForBuild", () => {
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
         if (url.startsWith("/api/pros")) return jsonResponse({ games: [PRO_GAME(1054), PRO_GAME(1054)] });
-        if (url.startsWith("https://cdn.coachless.gg")) return jsonResponse({ type: "item", version: "16.13.1", data: {} });
+        if (url.startsWith("https://cdn.coachless.gg")) return jsonResponse(ITEM_JSON_FIXTURE);
         if (url.includes("/apply-itemsets")) {
           capturedBridgeBody = init?.body as string;
           return jsonResponse({ ok: true, count: 1 });
@@ -207,6 +232,35 @@ describe("applyItemSetsForBuild", () => {
     const parsed = JSON.parse(capturedBridgeBody!);
     expect(parsed.sets).toHaveLength(1);
     expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).toContain("Pro build");
+  });
+
+  it("REGRESSION (Dark Seal reaching a Pro build line via pro-consensus) -- a totally degraded item-metadata fetch degrades build lines to empty rather than shipping an unfiltered item", async () => {
+    let capturedBridgeBody: string | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.startsWith("/api/pros")) return jsonResponse({ games: [] });
+        if (url.startsWith("https://cdn.coachless.gg")) return jsonResponse({}, false); // total metadata fetch failure
+        if (url.includes("/apply-itemsets")) {
+          capturedBridgeBody = init?.body as string;
+          return jsonResponse({ ok: true, count: 1 });
+        }
+        return jsonResponse({}, false);
+      })
+    );
+    const { applyItemSetsForBuild } = await import("../hextech/itemSetsApply");
+    await applyItemSetsForBuild({
+      champ: CHAMP,
+      lane: "bot",
+      roleLabel: "Bot",
+      build: baseBuild(),
+      port: 48291,
+      session: "sess-1",
+    });
+    const parsed = JSON.parse(capturedBridgeBody!);
+    const core = parsed.sets[0].blocks.find((b: { type: string }) => b.type === "Core build");
+    expect(core.items).toEqual([]); // every id unknown -- excluded, never an unfiltered/invented item
+    expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).not.toContain("Highest WPA"); // pool size 0
   });
 });
 

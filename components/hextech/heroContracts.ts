@@ -43,6 +43,40 @@ export const LANE_TO_ROLE_ID: Record<LaneId, 0 | 1 | 2 | 3 | 4> = {
   support: 4,
 };
 
+/** True when a BuildResponse's own resolved `role` matches what THIS lane's
+ *  request would produce -- i.e. the build and `lane` are NOT stale relative
+ *  to each other right now.
+ *
+ *  v0.36.0 (live bug: a lane flip's auto-exported RUNES stayed on the OLD
+ *  lane's page). Root cause: BuildTabContent.tsx's auto-export effect has
+ *  BOTH `state` (the fetched build) and `lane` (a separate prop) in its
+ *  deps. `lane` updates the INSTANT the user flips lanes (Sidebar's
+ *  onLaneChange -> setActiveLane, synchronous); `state` only catches up
+ *  once the new lane's /api/build fetch resolves. React runs every
+ *  changed-deps effect for a commit using THAT render's own closure, in
+ *  declaration order, without waiting for a state update an EARLIER effect
+ *  in the same commit just scheduled — so on the very first re-render after
+ *  a lane flip, the fetch effect kicks off `load()` (which calls
+ *  `setState({status:'loading'})`, a state update queued for a LATER
+ *  render) and the auto-export effect, declared right after it, still sees
+ *  THIS render's stale `state` (the PREVIOUS lane's resolved build) paired
+ *  with the ALREADY-updated `lane` prop. Exporting in that mismatched pair
+ *  would silently "use up" the new lane's dedup slot
+ *  (champSelectFollowState.ts's shouldAutoExportForLane/markAutoExported)
+ *  with the OLD lane's data — permanently blocking the real export once the
+ *  correct build actually resolves a moment later (its own effect run finds
+ *  the dedup already thinks this (champion, lane) pair was handled).
+ *
+ *  Fix: BuildTabContent's effect calls this FIRST and returns early on a
+ *  mismatch, so it can only ever act once `state.build.role` genuinely
+ *  agrees with the CURRENT `lane` prop — never on the stale-build/fresh-lane
+ *  render in between. Exported here (not inlined) so it's independently
+ *  unit-testable without mounting the component (no jsdom in this repo's
+ *  harness). */
+export function isBuildForLane(buildRole: number, lane: LaneId): boolean {
+  return buildRole === LANE_TO_ROLE_ID[lane];
+}
+
 export interface HeroStats {
   winRatePct: number | null;
   gamesCount: number | null;

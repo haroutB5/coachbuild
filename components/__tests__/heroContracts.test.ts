@@ -16,6 +16,7 @@
  * is a module-level singleton cache.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { isBuildForLane, LANE_TO_ROLE_ID } from "../hextech/heroContracts";
 
 function jsonResponse(body: unknown, ok = true) {
   return { ok, json: async () => body };
@@ -125,5 +126,26 @@ describe("getLaneDefaultChampions — live icon-version threading", () => {
     const { getLaneDefaultChampions } = await import("../hextech/heroContracts");
     const result = await getLaneDefaultChampions();
     expect(result).toBeNull();
+  });
+});
+
+// v0.36.0 — the pure guard behind the lane-flip auto-export fix (live bug:
+// a lane flip's runes never updated the client). See its own doc comment
+// in heroContracts.ts for the full stale-closure race this closes.
+describe("isBuildForLane", () => {
+  it("true when the build's role matches the lane's own RoleId", () => {
+    for (const lane of Object.keys(LANE_TO_ROLE_ID) as (keyof typeof LANE_TO_ROLE_ID)[]) {
+      expect(isBuildForLane(LANE_TO_ROLE_ID[lane], lane)).toBe(true);
+    }
+  });
+
+  it("false when the build is for a DIFFERENT role than the current lane (the stale-render case)", () => {
+    // A build resolved for Bot (role 3) but the page has already flipped to
+    // Support — exactly the mismatched pair the fix must catch.
+    expect(isBuildForLane(3, "support")).toBe(false);
+  });
+
+  it("false for the historical role 5 ('Auto') against any real lane — never matches, by design", () => {
+    expect(isBuildForLane(5, "mid")).toBe(false);
   });
 });

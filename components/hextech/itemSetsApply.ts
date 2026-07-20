@@ -82,12 +82,35 @@ export async function resolveProConsensusForSets(
   }
 }
 
+/** v0.36.0 — item metadata (tags/into/from/purchasable) for
+ *  itemSetBody.ts's full-items-only build-line filter AND its themed-line
+ *  (Highest WPA/Tanky/Burst) tag classification. Resolved INDEPENDENTLY of
+ *  pro-consensus (not just piggybacked on resolveProConsensusForSets'
+ *  internal fetch) because it's needed even when pro-consensus comes back
+ *  null/empty — Core/Buy order/themed lines all depend on it too, not just
+ *  Pro. getItemDetailMap is already module-level memoized (itemDetail.ts),
+ *  so this and resolveProConsensusForSets's own internal call end up
+ *  sharing the SAME cached/in-flight promise for the same version — no
+ *  duplicate network cost. Degrades to an empty Map on any failure (never
+ *  throws) — itemSetBody.ts's isFullItem treats an unknown id as "exclude
+ *  from build lines," a deliberate, documented tradeoff (see that
+ *  function's own doc comment), never a crash. */
+export async function resolveItemMetaForSets(patch: string): Promise<Map<number, ItemDetail>> {
+  try {
+    return await getItemDetailMap(versionFromPatch(patch));
+  } catch {
+    return new Map<number, ItemDetail>();
+  }
+}
+
 /** The ONE call both the manual button and the auto-export effect make:
- *  resolve pro-consensus data (best-effort), build the one champ+role set
- *  (Core/Optimized/Pro/Situational as BLOCKS inside it — see itemSetBody.ts's
- *  v0.34.1 header for the 3-sets-to-1-set restructure), POST it. Never
- *  throws — applyItemSets itself is already fail-soft, and a failed
- *  pro-consensus fetch just means no Pro build block this round. */
+ *  resolve pro-consensus data + item metadata (both best-effort, in
+ *  parallel), build the one champ+role set (Core/Buy order/Pro/themed/
+ *  Situational as BLOCKS inside it — see itemSetBody.ts's v0.34.1 header
+ *  for the 3-sets-to-1-set restructure), POST it. Never throws —
+ *  applyItemSets itself is already fail-soft, a failed pro-consensus fetch
+ *  just means no Pro build block this round, and a failed item-metadata
+ *  fetch degrades the 6-item build lines per isFullItem's own doc comment. */
 export async function applyItemSetsForBuild(params: {
   champ: ChampionRef;
   lane: LaneId;
@@ -96,8 +119,11 @@ export async function applyItemSetsForBuild(params: {
   port: CompanionPort;
   session: string;
 }): Promise<ApplyItemSetsResult> {
-  const pro = await resolveProConsensusForSets(params.champ, params.lane, params.build.patch);
-  const sets = buildItemSets(params.champ, params.roleLabel, params.build, pro);
+  const [pro, itemMeta] = await Promise.all([
+    resolveProConsensusForSets(params.champ, params.lane, params.build.patch),
+    resolveItemMetaForSets(params.build.patch),
+  ]);
+  const sets = buildItemSets(params.champ, params.roleLabel, params.build, pro, itemMeta);
   return applyItemSets(params.port, params.session, {
     championId: params.champ.id,
     sets,

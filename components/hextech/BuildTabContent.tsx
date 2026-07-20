@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import type { BuildResponse, ChampionRef } from "@/lib/types";
 import type { LaneId } from "./heroContracts";
-import { LANE_TO_ROLE_ID, LANE_LABEL } from "./heroContracts";
+import { LANE_TO_ROLE_ID, LANE_LABEL, isBuildForLane } from "./heroContracts";
 import RunesSummonersCard from "./RunesSummonersCard";
 import StartingCard from "./StartingCard";
 import CoreBuildOrderCard from "./CoreBuildOrderCard";
@@ -290,6 +290,14 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
   useEffect(() => {
     if (state.status !== "ok") return;
     const build = state.build;
+    // v0.36.0 (live bug fix — see heroContracts.ts's isBuildForLane doc
+    // comment for the full stale-closure race): `lane` can already reflect
+    // a JUST-FLIPPED lane while `state.build` still holds the PREVIOUS
+    // lane's data, in the SAME render this effect runs in. Never export
+    // against that mismatched pair — it would silently claim the new
+    // lane's dedup slot with the wrong lane's data and permanently block
+    // the real export.
+    if (!isBuildForLane(build.role, lane)) return;
     const championId = build.champion.id;
     if (!isCompanionDrivenChampion(championId)) return;
 
