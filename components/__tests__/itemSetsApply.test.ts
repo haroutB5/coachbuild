@@ -300,7 +300,16 @@ describe("autoApplyItemSetsIfEligible — probe + apply orchestration", () => {
     const { autoApplyItemSetsIfEligible } = await import("../hextech/itemSetsApply");
     const params = { champ: CHAMP, lane: "bot" as const, roleLabel: "Bot", build: baseBuild() };
     const buildFn = vi.fn(async () => params);
-    const getStatusImpl = vi.fn(async () => ({ version: "1.2.0", port: 48291, phase: "InProgress", clientConnected: true, lastOpen: null, champSelect: null }));
+    const getStatusImpl = vi.fn(async () => ({
+      version: "1.2.2",
+      port: 48291,
+      phase: "InProgress",
+      clientConnected: true,
+      lastOpen: null,
+      champSelect: null,
+      lastPollAt: null,
+      lastError: null,
+    }));
     const applyFn = vi.fn(async () => ({ ok: true as const, count: 2 }));
     const outcome = await autoApplyItemSetsIfEligible(
       { isDeepLink: true, autoEnabled: true, session: "s", port: 48291, alreadyFired: false },

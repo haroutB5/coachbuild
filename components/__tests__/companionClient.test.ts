@@ -123,6 +123,8 @@ describe("companionClient — probeCompanion (port walk + classification)", () =
           clientConnected: true,
           lastOpen: null,
           champSelect: null,
+          lastPollAt: null,
+          lastError: null,
         },
       });
       expect(getStoredPort()).toBe(COMPANION_PORTS[1]);
@@ -212,6 +214,8 @@ describe("companionClient — getStatus / refreshStatus", () => {
         clientConnected: true,
         lastOpen: null,
         champSelect: null,
+        lastPollAt: null,
+        lastError: null,
       },
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1); // no 3-port walk needed
@@ -274,6 +278,42 @@ describe("companionClient — getStatus / refreshStatus", () => {
     const status = await getStatus(48291, "sess", { fetchImpl });
     expect(status?.lastOpen).toBeNull();
     expect(status?.champSelect).toBeNull();
+  });
+
+  it("parses lastPollAt + lastError from a v1.2.2 companion", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        version: "1.2.2",
+        phase: "None",
+        clientConnected: true,
+        lastPollAt: "2026-07-20T00:00:05.000Z",
+        lastError: "Invoke-LcuRaw failed: GET /lol-gameflow/v1/gameflow-phase -- WebException: The underlying connection was closed",
+      }),
+    })) as unknown as typeof fetch;
+    const status = await getStatus(48291, "sess", { fetchImpl });
+    expect(status?.lastPollAt).toBe("2026-07-20T00:00:05.000Z");
+    expect(status?.lastError).toContain("Invoke-LcuRaw failed");
+  });
+
+  it("degrades lastPollAt/lastError to null from an older (pre-1.2.1/1.2.2) companion that never sends them", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ version: "1.2.0", phase: "InProgress", clientConnected: true }),
+    })) as unknown as typeof fetch;
+    const status = await getStatus(48291, "sess", { fetchImpl });
+    expect(status?.lastPollAt).toBeNull();
+    expect(status?.lastError).toBeNull();
+  });
+
+  it("degrades a malformed (non-string) lastPollAt/lastError to null", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ version: "1.2.2", phase: "None", clientConnected: false, lastPollAt: 12345, lastError: { oops: true } }),
+    })) as unknown as typeof fetch;
+    const status = await getStatus(48291, "sess", { fetchImpl });
+    expect(status?.lastPollAt).toBeNull();
+    expect(status?.lastError).toBeNull();
   });
 });
 

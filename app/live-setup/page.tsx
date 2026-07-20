@@ -208,14 +208,25 @@ export default function LiveSetupPage() {
                 </div>
               </dl>
 
-              {/* Diagnosability (v1.2.0) — lets us debug a "nothing opens"
-                  report remotely without a screen-share: the most recent
-                  deep-link this companion opened THIS launch, plus a live
-                  champ-select resolution snapshot while phase is
-                  ChampSelect. Subtle by design — this is a debugging aid,
-                  not a feature most users need day to day. */}
-              {(probeState.status.lastOpen || probeState.status.champSelect) && (
+              {/* Diagnosability (v1.2.0-1.2.2) — lets us debug a "nothing
+                  opens" report remotely from ONE screenshot, without a
+                  screen-share: the most recent deep-link this companion
+                  opened THIS launch, a live champ-select resolution
+                  snapshot while phase is ChampSelect, the last poll-loop
+                  heartbeat (the single most telling field — if this is
+                  missing or stale, the real-mode loop itself is dead), and
+                  the most recent unexpected failure message (e.g. an LCU
+                  call dying at the TLS handshake). Subtle by design — this
+                  is a debugging aid, not a feature most users need day to
+                  day. */}
+              {(probeState.status.lastOpen ||
+                probeState.status.champSelect ||
+                probeState.status.lastPollAt ||
+                probeState.status.lastError) && (
                 <div className="text-[10px] text-mut/70 space-y-0.5 pt-1 border-t border-line/50">
+                  {probeState.status.lastPollAt && (
+                    <p>Last poll: {new Date(probeState.status.lastPollAt).toLocaleTimeString()}</p>
+                  )}
                   {probeState.status.lastOpen && (
                     <p>
                       Last opened: champion #{probeState.status.lastOpen.championId}, role{" "}
@@ -232,6 +243,9 @@ export default function LiveSetupPage() {
                         "none yet"}
                       , role {probeState.status.champSelect.roleId ?? "auto"}
                     </p>
+                  )}
+                  {probeState.status.lastError && (
+                    <p className="text-bad/80">Last error: {probeState.status.lastError}</p>
                   )}
                 </div>
               )}

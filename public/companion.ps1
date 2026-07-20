@@ -47,7 +47,13 @@ WIRE CONTRACT (must match components/live/companionClient.ts exactly):
                                 champSelect:{localPlayerCellId,
                                   cellChampionId|null, pickIntent|null,
                                   actionChampionId|null, roleId|null}|null
-                                  (null outside phase=="ChampSelect")}
+                                  (null outside phase=="ChampSelect"),
+                                lastPollAt:string|null (ISO, updated every
+                                  poll tick regardless of LCU presence),
+                                lastError:string|null (most recent
+                                  unexpected-failure message, throttled to
+                                  ~1 per 60s per distinct failure -- never
+                                  contains the session token or a name)}
   - GET  /live         -> 200 <raw allgamedata JSON> | 200 {error:"no-live"}
   - POST /apply-runes  body {name, primaryStyleId, subStyleId,
                               selectedPerkIds:number[9], current:true}
@@ -135,7 +141,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.2.1'
+    Version     = '1.2.2'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -190,7 +196,36 @@ function Initialize-TlsShim {
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
     # PS 5.1 has no -SkipCertificateCheck; the LCU + Live Client Data APIs
     # both serve self-signed loopback certs, so accept-all is the only path.
-    [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+    #
+    # v1.2.2 FIX (live-reported: real champ select stuck at Phase:None with
+    # Client:Connected, even after the v1.2.1 loop-harness rewrite): a
+    # PowerShell SCRIPTBLOCK is runspace-affine -- it can only execute on a
+    # thread that has a PowerShell runspace attached. .NET invokes
+    # ServerCertificateValidationCallback during the TLS handshake on a
+    # THREADPOOL thread that has NO runspace, so a scriptblock callback
+    # ({ $true }) throws there. On this dev box that's invisible (no League
+    # client -> no HTTPS call to the LCU is EVER attempted, so the handshake
+    # callback is never invoked at all -- that's exactly why everything read
+    # green here through v1.2.1). On a machine with a real client, EVERY
+    # HTTPS call to the self-signed LCU dies at the handshake ->
+    # Invoke-LcuRaw returns Ok=$false -> phase never leaves 'None' -- while
+    # clientConnected stays true because that flag only reflects the
+    # CIM/lockfile credential lookup, never an actual successful LCU call.
+    # Fix: a COMPILED .NET delegate (via Add-Type), not a scriptblock --
+    # compiled code has no runspace affinity and runs correctly on any
+    # thread, including the handshake's threadpool thread.
+    if (-not ([System.Management.Automation.PSTypeName]'CoachBuildCertPolicy').Type) {
+        Add-Type -TypeDefinition @"
+using System.Net;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+public static class CoachBuildCertPolicy {
+    public static bool AlwaysTrue(object s, X509Certificate c, X509Chain ch, SslPolicyErrors e) { return true; }
+    public static void Apply() { ServicePointManager.ServerCertificateValidationCallback = AlwaysTrue; }
+}
+"@
+    }
+    [CoachBuildCertPolicy]::Apply()
 }
 #endregion
 
@@ -204,6 +239,45 @@ function ConvertTo-BasicAuthHeader {
     param([string]$Token)
     $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("riot:$Token"))
     return "Basic $b64"
+}
+
+function Get-CompanionSyncRef {
+    # Resolves the ONE shared state hashtable regardless of which context
+    # this runs in: the bridge/mock-LCU runspace has a bare $Sync variable
+    # (set via SessionStateProxy.SetVariable before this source is injected
+    # via AddScript); the main thread instead has $script:Bridge.Sync.
+    # Returns $null if neither exists (e.g. -Mock, which never starts a
+    # real bridge) -- every caller treats that as "nowhere to record this."
+    $bare = Get-Variable -Name Sync -ErrorAction SilentlyContinue
+    if ($bare -and $bare.Value) { return $bare.Value }
+    if ($script:Bridge -and $script:Bridge.Sync) { return $script:Bridge.Sync }
+    return $null
+}
+
+function Write-ThrottledErrorLog {
+    # v1.2.2 (live-reported: 3 companion.log tails showed only the startup
+    # phase-transition line, nothing else, while sitting in a real champ
+    # select with the client connected -- the ACTUAL failing call's
+    # exception was being swallowed inside Invoke-LcuRaw's own try/catch,
+    # one layer below where v1.2.1's logging was added). This is the
+    # generic, THROTTLED logger every real-LCU-call catch block routes
+    # through: the same failure can hit every single poll tick (1.5s) --
+    # without throttling, a persistently-failing call floods the 200KB
+    # rolling log within minutes and evicts everything else. Logs (and
+    # updates /status's lastError) at most once per ~60s per distinct Key.
+    param([string]$Key, [string]$Message)
+    $sync = Get-CompanionSyncRef
+    $now = Get-Date
+    if ($sync -and $sync.LastErrorKey -eq $Key -and $sync.LastErrorAt) {
+        try {
+            if (((New-TimeSpan -Start ([datetime]$sync.LastErrorAt) -End $now).TotalSeconds) -lt 60) { return }
+        } catch {}
+    }
+    Write-CompanionLog $Message -IsError
+    if ($sync) {
+        $sync.LastErrorKey = $Key
+        $sync.LastErrorAt = $now
+    }
 }
 
 function Invoke-LcuRaw {
@@ -247,6 +321,13 @@ function Invoke-LcuRaw {
     } catch {
         $status = 0
         try { if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode } } catch {}
+        # v1.2.2: this used to swallow the exception with ZERO trace -- the
+        # exact gap that let a real "every LCU call dies" failure ship
+        # invisibly (companion.log showed nothing past startup even while
+        # sitting in a live champ select). Throttled (see
+        # Write-ThrottledErrorLog) so a persistent failure logs once per
+        # ~60s, not once per 1.5s poll.
+        Write-ThrottledErrorLog -Key "lcu:$Method $Path" -Message "Invoke-LcuRaw failed: $Method $Path -- $($_.Exception.GetType().Name): $($_.Exception.Message)"
         return [pscustomobject]@{ Ok = $false; StatusCode = $status; Content = $null }
     }
 }
@@ -255,6 +336,7 @@ function Get-LiveClientData {
     try {
         return Invoke-RestMethod -Uri 'https://127.0.0.1:2999/liveclientdata/allgamedata' -UseBasicParsing -TimeoutSec 3
     } catch {
+        Write-ThrottledErrorLog -Key 'live-client-data' -Message "Get-LiveClientData failed: $($_.Exception.GetType().Name): $($_.Exception.Message)"
         return $null
     }
 }
@@ -305,7 +387,14 @@ function Write-CompanionLog {
     # the bridge runspace (apply-runes/apply-itemsets results, errors) write
     # through the same implementation. Never logs the session token or any
     # name -- callers pass already-safe messages only.
-    param([string]$Message)
+    #
+    # -IsError also mirrors $Message into /status's `lastError` field (via
+    # Get-CompanionSyncRef) -- one screenshot of /live-setup should be
+    # enough to see the real failure next time, not just "something is
+    # wrong." Routine informational lines (phase transitions, champ-select
+    # opens, apply-* results) do NOT set this -- only genuine unexpected
+    # failures (Write-ThrottledErrorLog's callers) do.
+    param([string]$Message, [switch]$IsError)
     try {
         $dir = Join-Path $env:LOCALAPPDATA 'CoachBuild'
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
@@ -324,6 +413,13 @@ function Write-CompanionLog {
         Add-Content -Path $logPath -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
     } catch {
         # Logging must never take down the companion.
+    }
+
+    if ($IsError) {
+        try {
+            $sync = Get-CompanionSyncRef
+            if ($sync) { $sync.LastError = $Message }
+        } catch {}
     }
 }
 
@@ -412,8 +508,10 @@ function Get-LcuCredentials {
         # (CIM/WMI calls repeated every poll from an STA thread are a known
         # rough edge), the companion would silently degrade to "no client"
         # forever with zero diagnostic signal. Logged now (never blocks --
-        # still degrades to empty, same as before).
-        Write-CompanionLog "Get-LcuCredentials CIM query failed: $($_.Exception.Message)"
+        # still degrades to empty, same as before). v1.2.2: throttled (this
+        # runs every 1.5s poll -- an un-throttled log here would flood the
+        # 200KB rolling log within minutes if CIM is persistently failing).
+        Write-ThrottledErrorLog -Key 'cim-query' -Message "Get-LcuCredentials CIM query failed: $($_.Exception.Message)"
         $procs = @()
     }
     foreach ($proc in $procs) {
@@ -700,6 +798,7 @@ while ($Sync.Running) {
                 lastOpen        = $Sync.LastOpen
                 champSelect     = $(if ($Sync.Phase -eq 'ChampSelect') { $Sync.ChampSelectSnapshot } else { $null })
                 lastPollAt      = $Sync.LastPollAt
+                lastError       = $Sync.LastError
             }
         } elseif ($path -eq '/live' -and $req.HttpMethod -eq 'GET') {
             $live = Get-LiveClientData
@@ -776,6 +875,9 @@ function Start-BridgeServer {
         LastOpen            = $null
         ChampSelectSnapshot = $null
         LastPollAt          = $null
+        LastError           = $null
+        LastErrorKey        = $null
+        LastErrorAt         = $null
     })
 
     $rs = [runspacefactory]::CreateRunspace()
@@ -1140,7 +1242,7 @@ function Invoke-SelfTest {
         $r = Invoke-WebRequest -Uri "$base/status?session=$session" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing
         if ($r.StatusCode -ne 200) { $failures.Add("Valid /status expected 200, got $($r.StatusCode)") }
         $obj = $r.Content | ConvertFrom-Json
-        foreach ($k in 'version', 'port', 'phase', 'clientConnected', 'lastOpen', 'champSelect') {
+        foreach ($k in 'version', 'port', 'phase', 'clientConnected', 'lastOpen', 'champSelect', 'lastPollAt', 'lastError') {
             if (-not ($obj.PSObject.Properties.Name -contains $k)) { $failures.Add("/status missing field $k") }
         }
         if ($null -ne $obj.lastOpen) { $failures.Add("/status lastOpen expected null before any open, got $($obj.lastOpen)") }
@@ -1246,6 +1348,27 @@ function Invoke-SelfTest {
         if ($obj.ok -ne $false -or $obj.reason -ne 'invalid-sets') { $failures.Add("apply-itemsets malicious title expected invalid-sets rejection, got $($r.Content)") }
         if ($mockLcu.Sync.LastPutBody) { $failures.Add('apply-itemsets issued a PUT for a non-CoachBuild-titled set') }
     } catch { $failures.Add("apply-itemsets malicious title threw: $($_.Exception.Message)") }
+
+    # 6e. v1.2.2 -- a real Invoke-LcuRaw failure (point LcuPort at a port
+    # nothing listens on) must populate /status's lastError. This is the
+    # exact gap that shipped invisibly in v1.2.1: the failing call's own
+    # catch block swallowed the exception one layer below where logging had
+    # been added.
+    $bridge.Sync.LcuPort = 59999
+    $bridge.Sync.LastError = $null
+    $bridge.Sync.LastErrorKey = $null
+    $bridge.Sync.LastErrorAt = $null
+    try {
+        Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($applyBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing | Out-Null
+        Start-Sleep -Milliseconds 300
+        $statusResp = Invoke-WebRequest -Uri "$base/status?session=$session" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing
+        $statusObj = $statusResp.Content | ConvertFrom-Json
+        if (-not $statusObj.lastError) {
+            $failures.Add('lastError never populated after a real Invoke-LcuRaw failure (unreachable port) -- v1.2.1-class blind spot has regressed')
+        } elseif ($statusObj.lastError -notlike '*Invoke-LcuRaw failed*') {
+            $failures.Add("lastError populated but doesn't look like the expected message: $($statusObj.lastError)")
+        }
+    } catch { $failures.Add("lastError repro threw: $($_.Exception.Message)") }
 
     Stop-BridgeServer -Bridge $bridge
     Stop-MockLcu -Mock $mockLcu

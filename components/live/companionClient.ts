@@ -81,6 +81,17 @@ export interface CompanionStatus {
    *  never rejects the whole status over a missing diagnostic field. */
   lastOpen: CompanionLastOpen | null;
   champSelect: CompanionChampSelectSnapshot | null;
+  /** v1.2.1+ — ISO timestamp of the most recent gameflow-poll tick,
+   *  regardless of whether a real LCU is present. The single most
+   *  important diagnostic field: if this is null or stops advancing across
+   *  two /status reads, the real-mode loop itself is dead. Absent on an
+   *  older companion (pre-1.2.1) degrades to null. */
+  lastPollAt: string | null;
+  /** v1.2.2 — most recent UNEXPECTED failure message (throttled to ~1 per
+   *  60s per distinct failure server-side), e.g. an LCU HTTPS call dying at
+   *  the TLS handshake. Never contains the session token or a name. Absent
+   *  on an older companion degrades to null. */
+  lastError: string | null;
 }
 
 /** Result of an apply-runes call — mirrors the wire contract's own
@@ -233,6 +244,13 @@ function normalizeChampSelect(raw: unknown): CompanionChampSelectSnapshot | null
   };
 }
 
+/** `lastPollAt`/`lastError` are both plain nullable strings — absent (older
+ *  companion) or any non-string degrades to null, same defensive posture as
+ *  the two normalizers above. */
+function normalizeNullableString(raw: unknown): string | null {
+  return typeof raw === "string" ? raw : null;
+}
+
 export async function getStatus(
   port: CompanionPort,
   session: string,
@@ -257,6 +275,8 @@ export async function getStatus(
       clientConnected: data.clientConnected,
       lastOpen: normalizeLastOpen(data.lastOpen),
       champSelect: normalizeChampSelect(data.champSelect),
+      lastPollAt: normalizeNullableString(data.lastPollAt),
+      lastError: normalizeNullableString(data.lastError),
     };
   } catch {
     return null;
@@ -301,6 +321,8 @@ export async function probeCompanion(
           clientConnected: data.clientConnected,
           lastOpen: normalizeLastOpen(data.lastOpen),
           champSelect: normalizeChampSelect(data.champSelect),
+          lastPollAt: normalizeNullableString(data.lastPollAt),
+          lastError: normalizeNullableString(data.lastError),
         },
       };
     } catch (err) {
