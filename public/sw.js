@@ -68,6 +68,15 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
 
+  // Live companion script + version file: never intercepted by the SW, never
+  // precached, never cached. The companion self-updates by fetching
+  // /companion.version on launch and /live-setup always needs the freshest
+  // .ps1 -- vercel.json sets no-store on both at the HTTP layer already,
+  // this is belt-and-suspenders so a stale SW build can never shadow them.
+  if (url.origin === self.location.origin && (url.pathname === "/companion.ps1" || url.pathname === "/companion.version")) {
+    return;
+  }
+
   // Icon/data CDN: cache-first. These URLs are patch-versioned
   // (immutable — the same URL never serves different bytes), so there's
   // nothing to revalidate; a cache hit is always correct and skips the

@@ -8,5 +8,22 @@
       "path": "/api/ingest/prostage",
       "schedule": "0 7 * * *"
     }
+  ],
+  "headers": [
+    {
+      "source": "/companion.ps1",
+      "headers": [
+        { "key": "Content-Type", "value": "text/plain; charset=utf-8" },
+        { "key": "Cache-Control", "value": "no-store" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" }
+      ]
+    },
+    {
+      "source": "/companion.version",
+      "headers": [
+        { "key": "Content-Type", "value": "application/json" },
+        { "key": "Cache-Control", "value": "no-store" }
+      ]
+    }
   ]
 }

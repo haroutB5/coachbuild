@@ -283,7 +283,13 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
   return (
     <div className="mt-5 space-y-5">
       <RankBracketSelector value={rankBracket} onChange={handleRankChange} />
-      <RunesSummonersCard runes={build.runes} spells={build.spells} onOpenDetail={openDetail} />
+      <RunesSummonersCard
+        runes={build.runes}
+        spells={build.spells}
+        onOpenDetail={openDetail}
+        championName={build.champion.name}
+        roleLabel={build.roleLabel}
+      />
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         <StartingCard starter={build.items.starter} onItemClick={openItemPopover} />
         <div className="md:col-span-2">

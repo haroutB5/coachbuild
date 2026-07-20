@@ -5231,3 +5231,460 @@ real SW version bump to confirm the toast appears and the tap→reload path actu
 (rather than racing ahead of the toast, which was the whole risk the `skipWaiting()` removal fixes).
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-19 18:35
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-18 18:05:01Z; previous content preserved there. Append new rounds below. -->
+
+# HANDOFF — engy — 2026-07-19 — Esports World Cup 2026 missing from Pro Play
+
+## Bug
+Pro Play feed stopped at Jul 12 (2026 MSI); Esports World Cup 2026 (LoL, Jul 15-19,
+ongoing) never appeared.
+
+## Root cause (pre-diagnosed, confirmed correct)
+`lib/prostage/tournaments.ts`'s `EVENT_CONTAINS_PATTERNS` (`MSI`, `Mid-Season
+Invitational`, `World Championship`, `Worlds`) never matched the real Leaguepedia
+page **"Esports World Cup 2026"** — it's a third-party event, not a Riot-run
+international, so it doesn't contain "Worlds"/"World Championship" at all.
+
+## Fix
+1. `lib/prostage/tournaments.ts` — added `"Esports World Cup"` to
+   `EVENT_CONTAINS_PATTERNS`, dated comment explaining why the existing patterns
+   missed it. `EXCLUDE_PATTERNS = ["Academy"]` doesn't clash (verified — no EWC
+   page contains "Academy").
+2. `lib/prostage/resolveGame.ts` — added `["Esports World Cup", "ewc_lol"]` to
+   `EVENT_CONTAINS_TO_SLUG`. **Not a guess** — live-fetched
+   `esports-api.lolesports.com/persisted/gw/getLeagues` today (2026-07-19) and
+   confirmed: league id `116838530616006090`, slug `ewc_lol`, name
+   "Esports World Cup". This unlocks item-build timeline resolution for EWC
+   games via the same lolesports livestats chain other tier-1 leagues use.
+3. Confirmed `MAX_TOURNAMENTS = 7` + `DateStart DESC` ordering means no cap
+   change was needed — EWC 2026 (DateStart 2026-07-15) sorts near the head of
+   the list; verified live (see below) it's actually #1 in the resolved list.
+4. Tests added:
+   - `lib/__tests__/prostage-tournaments.test.ts` — new regression test
+     asserting the WHERE clause contains `OverviewPage LIKE "%Esports World Cup%"`
+     and that a mocked "Esports World Cup 2026" row resolves through.
+   - `lib/__tests__/prostage-timeline.test.ts` — new test asserting
+     `leagueSlugForOverviewPage("Esports World Cup 2026") === "ewc_lol"`.
+   - Did NOT touch `lib/prostage/extract.ts`'s `tournamentDisplayFromOverviewPage`
+     — traced it manually: "Esports World Cup 2026" has no `/` so it passes
+     through as a single segment, unchanged, already a readable label. No fix
+     or test needed there (confirmed by the live ingest sanity check below,
+     which shows `tournament_display: "Esports World Cup 2026"`).
+
+## Verify-fix gate
+`bash <urgot-repo>/scripts/verify-fix.sh <coachbuild-dir>` — ALL PASS:
+tsc clean, lint clean (0 warnings), **683 tests passed**, build clean, SW/manifest OK.
+
+## Version + deploy
+- `package.json`: 0.31.0 → **0.31.1** (patch — bug fix, not a new feature).
+- `CHANGELOG.md`: new `[0.31.1] — 2026-07-19` entry.
+- Commit `5df59c9`, authored `Harout <harout_b5@live.com>` (Vercel-required author).
+- Deployed via `vercel --prod --archive=tgz --yes` →
+  **https://coachbuild-jypieh9s9-harouts-projects-6ab63cc3.vercel.app**, aliased to
+  `coachbuild.vercel.app`. Confirmed prod HTML now serves `0.31.1` (curl-grepped the
+  footer's version string post-deploy).
+
+## Data ingest — SUCCEEDED, no rate-limit hit
+Ran ONE local ingest: `npx tsx scripts/ingest-prostage.mjs --via-export` (CargoExport
+transport — avoids the api.php rate limiter per today's known-sticky-limiter
+context). Single attempt, did not retry/hammer.
+
+Result: tournament resolution now includes EWC —
+```json
+"tournaments": [
+  "Esports World Cup 2026",
+  "2026 Mid-Season Invitational/Classic Showmatch",
+  "2026 Mid-Season Invitational",
+  "Esports World Cup 2026/Online Qualifiers/South America",
+  "LCK/2026 Season/Road to MSI",
+  "LPL/2026 Season/Split 2 Playoffs",
+  "LCS/2026 Season/Spring Playoffs"
+]
+```
+`totalSeen: 2290, totalUpserted: 800, errors: []`.
+
+Note the `"Esports World Cup"` contains-pattern also picked up
+`"Esports World Cup 2026/Online Qualifiers/South America"` — this is a genuine
+real EWC subpage (regional qualifier), not a false positive; leaving it in scope
+is correct (same page-tree family as the main event).
+
+Sanity-checked `coachbuild.prostage_matches` directly:
+```json
+[
+  { "overview_page": "Esports World Cup 2026", "n": "500", "tournament_display": "Esports World Cup 2026" },
+  { "overview_page": "Esports World Cup 2026/Online Qualifiers/South America", "n": "300", "tournament_display": "Esports World Cup 2026 Online Qualifiers South America" }
+]
+```
+Rows landed, `tournament_display` renders a sane readable label for both.
+
+Vercel's 07:00 daily cron (`/api/ingest/prostage`) will also now pick up EWC
+automatically once it runs, per the existing rotation — no code change needed
+there beyond this fix.
+
+## FOLLOW-UP (same day, per coordinator) — truncation check, prod verification, cron assessment
+
+Coordinator flagged (correctly, from code inspection) that `scripts/ingest-prostage.mjs`
+never passes `paginate` and `runProstageIngest` defaults `paginate: false` — a
+single unpaginated 500-row `DateTime_UTC DESC` call, so the "exactly 500" row
+count above was suspicious-looking and worth independently re-checking rather
+than hand-waved as "coincidence."
+
+**1. Paginated top-up — RUN, and it resolves the question with real evidence,
+not just re-asserting the concern.** Wrote a temporary local script
+`scripts/_ingest-ewc-topup.mjs` (same CargoExport+curl transport +
+retry-once-on-Cloudflare-challenge pattern as `ingest-prostage-seed.mjs`, but
+targeting only the two EWC pages instead of that script's unrelated hardcoded
+`SEED_TOURNAMENTS` list — smaller blast radius, no edit to a shared file, no
+redeploy needed). Ran `runProstageIngest({ tournaments: [...], paginate: true,
+queryFn: cargoExportViaCurl })` for both EWC pages, single consumer, one
+attempt.
+
+**Result — clean, no errors:**
+| tournament | rowsSeen (paginated) | rowsUpserted (new) |
+|---|---|---|
+| Esports World Cup 2026 | 500 | 0 |
+| Esports World Cup 2026/Online Qualifiers/South America | 300 | 0 |
+
+**This is a genuine completeness proof, not a rerun of the same blind call:**
+the paginated walk fetched offset=0 (returned exactly 500, the cap — so it
+kept going), then offset=500 (returned 0 rows — a SHORT page, which is the
+loop's own stop condition). A short second page proves the true total row
+count for "Esports World Cup 2026" is exactly 500 right now, not >500 truncated
+to 500 — if there were, say, 620 real rows, the offset=500 call would have
+returned the remaining 120 and `rowsSeen` would read 620, not 500. It didn't.
+`rowsUpserted: 0` on both pages independently confirms this (nothing new to
+insert means the original unpaginated run on 2026-07-19 already had every row
+that exists). **Conclusion: for these two specific EWC pages, right now, no
+data was actually lost** — the coordinator's coded-truncation-risk was correct
+as a general finding (the class of bug is real and already documented in
+`ingest.ts`'s `paginate` option + `ingest-prostage-seed.mjs`'s header, which
+cites a real prior case: LPL 2026 Split 2 Playoffs had 680 rows, only 500 of
+which an unpaginated call ever captured) — it just didn't happen to fire on
+EWC specifically, because EWC's real current row count is ≤500.
+
+One follow-up re-run I did purely to double-check the above (unnecessary,
+in hindsight) hit a Cloudflare challenge on the main EWC page after its
+built-in one retry (`CargoExport returned a non-JSON response`). Per the
+"stop after one attempt if challenged" instruction, I did not retry again —
+the first run's clean result stands as authoritative.
+
+**2. Row counts (final):** Esports World Cup 2026 = 500 (proven complete, see
+above). Esports World Cup 2026/Online Qualifiers/South America = 300 (was
+already <500 on the very first ingest, so was never at truncation risk to
+begin with — a page under the per-call cap can't be truncated by it).
+
+**3. Prod verification — user-visible fix confirmed live.** Queried DB first
+to pick a real, populated repro champ: `champion_id=112` (Viktor), `role=2`
+(mid) has 10 EWC rows spanning 2026-06-07..2026-07-19 (Viktor was also played
+in the earlier online qualifiers, hence the June dates on some rows — the
+July 15-19 span is the LAN). Hit prod live (cache-busted query param, fresh
+each time):
+
+```
+curl "https://coachbuild.vercel.app/api/pros?championId=112&role=2&source=all&_cb=<ts>"
+```
+
+Result: 6 of 20 returned games are EWC, `gameCreation` dates **2026-07-15
+through 2026-07-19** (`Saint (Kang Sung-in)` 07-15, `Dire` 07-15, `DARKWINGS`
+07-16, `Knight (Zhuo Ding)` 07-17, `kyeahoo` 07-18, `ShowMaker` 07-19), all
+`tournament: "Esports World Cup 2026"`, `source: "prostage"`. This is exactly
+the champion from the user's original bug-report screenshot and exactly the
+missing date window — **confirmed fixed on prod**, not just in the DB.
+
+**4. Daily-cron truncation assessment — NOT self-healing in general (code-only
+note, no fix applied per instruction).** `app/api/ingest/prostage/route.ts`
+calls `runProstageIngest({ cursor, fastFailOnRatelimit: true })` — no
+`paginate: true`, so the cron path has the exact same unpaginated-500-cap
+shape as the local script. Because the query orders `DateTime_UTC DESC`, each
+cron hit on a given tournament always captures that tournament's newest ≤500
+rows AS OF THAT DAY. Whether this self-heals depends entirely on whether a
+tournament's real row count crosses 500 *between* that specific tournament's
+cron visits (the rotation is stalest-first across up to `MAX_TOURNAMENTS = 7`
+resolved tournaments — a given tournament isn't necessarily hit daily):
+- **Self-heals** when a tournament never exceeds 500 total rows, or when the
+  cron happens to revisit it often enough that no >500-row gap opens between
+  visits — new rows just keep sliding into the top-500 window before anything
+  ages out unseen.
+- **Does NOT self-heal** once a tournament's true total exceeds 500 for long
+  enough that some rows both (a) aged past the 500-row DESC window and (b)
+  were never captured while still inside it — those rows are permanently
+  invisible to the incremental cron; only a manual paginated top-up (like
+  today's) recovers them. This is a real, already-known failure mode, not
+  hypothetical: it's the documented reason `ingest-prostage-seed.mjs` exists
+  at all (LPL 2026 Split 2 Playoffs: 680 real rows, cron/script had only ever
+  captured 500 until that one-off paginated seed ran).
+- EWC 2026 happened to dodge this today only because its real total is ≤500
+  right now — as the LAN bracket progresses this week it could plausibly cross
+  500 total rows across its ~week-long run, at which point the SAME gap could
+  reopen on the daily cron unless someone reruns a paginated top-up (or the
+  route itself is changed to paginate, which is a real fix candidate but out
+  of scope for this ship per the coordinator's explicit "don't code a fix now").
+
+## Files changed
+- `lib/prostage/tournaments.ts`
+- `lib/prostage/resolveGame.ts`
+- `lib/__tests__/prostage-tournaments.test.ts`
+- `lib/__tests__/prostage-timeline.test.ts`
+- `package.json` (version)
+- `CHANGELOG.md`
+
+## Known residuals (not blockers)
+- `scripts/_check-ewc-temp.mjs` and `scripts/_ingest-ewc-topup.mjs` — throwaway
+  read-only/one-off scripts I wrote to sanity-verify row counts and run the
+  paginated top-up. Both **untracked** (not committed, won't ship), and the
+  topup script is inert without being invoked again. `rm` on the first one was
+  blocked by the orchestrator's safety gate (file-deletion requires explicit
+  user approval) — left both in place. Approve+delete whenever convenient:
+  `rm "C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/scripts/_check-ewc-temp.mjs" "C:/Users/Harout/urgot-travel-bundle-2026-06-18/AI/coachbuild/scripts/_ingest-ewc-topup.mjs"`.
+- The daily-cron truncation gap (see FOLLOW-UP §4) is unfixed by design/
+  instruction — a real fix candidate (pass `paginate: true` from the cron
+  route, or split it across more cursor steps to stay under `maxDuration`) is
+  future work, not done here.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-20 18:57
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-19 17:35:04Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-20 — Live companion build (engy half, parallel w/ fronty)
+
+Implemented plan §1 + §4 + §5 (my scope only — did not touch app/live-setup/,
+components/live/, RunesSummonersCard.tsx, SituationalCard.tsx, runeApplyBody.ts,
+or app/page.tsx).
+
+### Files changed
+- `public/companion.ps1` (new, ~640 lines) — full PS5.1 companion: Config,
+  SingleInstance (named mutex), TlsShim, SharedFunctions (injected into every
+  background runspace via source-text `Invoke-Expression`/`AddScript`, so bridge
+  + mock-LCU + main thread share one implementation), LcuDiscovery (CIM +
+  lockfile fallback), ChampSelect (session-poll debounce), GameflowPoll,
+  BridgeServer (HttpListener on a background runspace), Tray (WinForms
+  NotifyIcon + WinForms Timer driving gameflow polling on the STA message
+  loop — see deviation below), AutoUpdate, Install/Uninstall (Startup .lnk),
+  `-SelfTest`, `-Mock`.
+- `public/companion.version` — `{"version":"1.0.0"}`.
+- `vercel.json` — added `headers` block for `/companion.ps1` (text/plain,
+  no-store, nosniff) and `/companion.version` (application/json, no-store).
+  Crons block untouched.
+- `public/sw.js` — added companion-asset bypass as the first check inside the
+  `fetch` handler (`/companion.ps1` + `/companion.version` → `return` and let
+  the browser handle it, before the ICON_ORIGIN / same-origin / `/api/` logic
+  runs). Nothing else in the SW touched.
+- `app/api/mock-companion/route.ts` (new) — single-file dev fixture per the
+  brief's literal path. GET `?path=status` (+ optional `&phase=` /
+  `&clientConnected=false`), GET `?path=live` (+ `&live=false` → `{error:
+  'no-live'}`), POST → apply-runes envelope (`?fail=delete` / `?fail=create`
+  to exercise the fail-soft branches; validates `selectedPerkIds.length===9`).
+  Not a security surface (same-origin, no CORS/session enforcement) —
+  documented in a header comment so fronty doesn't mistake it for the real
+  bridge's trust boundary.
+
+### Wire contract confirmation
+Ports `[48291,48292,48293]`, `?session=` required on every non-OPTIONS
+request, exact-Origin check (`https://coachbuild.vercel.app`) enforced before
+the OPTIONS short-circuit, response shapes for `/status`, `/live`,
+`/apply-runes` all match plan §5 verbatim. The contract is written out in
+full as a comment block at the top of `companion.ps1` (copy it verbatim into
+`companionClient.ts` if it isn't already — didn't touch that file per scope
+split).
+
+### Validation
+`powershell -ExecutionPolicy Bypass -File public/companion.ps1 -SelfTest`:
+```
+SELFTEST PASSED
+```
+Asserts: OPTIONS→204+correct CORS header; wrong-Origin→403; missing
+`?session=`→403; valid `/status`→200 with all 4 fields; `/apply-runes` happy
+path calls mock LCU in GET→DELETE→POST order and returns `{ok:true}`; mock
+LCU forced to fail DELETE (500) → `{ok:false, reason:'delete-failed', hint:...}`
+with **no POST call ever issued** (asserted directly against the mock LCU's
+call log — the #1013 fail-soft path is not just "doesn't crash," it verifiably
+never reaches the create step).
+
+`powershell -ExecutionPolicy Bypass -File public/companion.ps1 -Mock -Once`:
+```
+MOCK RUN PASSED
+```
+Asserts the debounce collapses hover→re-poll(same champ)→lock into a single
+open, a champion swap opens exactly once more (2 opens total, exact URL
+string match on both), and a blank `assignedPosition` (ARAM-style) never
+opens anything.
+
+`npx tsc --noEmit`: clean, no output.
+`npx vitest run`: 56 files / 683 tests passed (full existing suite, confirms
+nothing pre-existing broke).
+Manual smoke of `/api/mock-companion` via a throwaway `next dev` on :4173,
+curled all 3 routes + both fail branches — outputs matched the contract
+exactly (pasted in this session's tool output, not repeated here for space).
+
+### Deviations from the plan (with reasoning)
+1. **Gameflow polling runs on a `System.Windows.Forms.Timer` tied to the
+   tray's STA message loop, not a second background runspace.** Plan §1 says
+   "Tray: ... Application.Run on dedicated STA thread; loops on runspace." I
+   read "loops on runspace" as referring to the bridge server (which genuinely
+   needs its own thread — `HttpListener.GetContextAsync` blocks and would
+   freeze the tray's message loop). Gameflow polling is a lightweight
+   1.5s-interval LCU GET, which is exactly what a WinForms `Timer.Tick` is
+   for, and keeping it on the same thread as `Application.Run()` avoids a
+   second cross-thread shared-state runspace for no benefit. If this reading
+   is wrong, it's a small refactor (wrap `Invoke-GameflowTick`'s loop body in
+   its own runspace like `Start-BridgeServer` does) — flagging so review
+   catches it if the plan meant something more literal.
+2. **`Invoke-LcuRaw` / `Invoke-ApplyRunes` take an optional `-Scheme`
+   parameter (default `https`).** Needed this to make `-SelfTest` work at
+   all: the mock LCU is a plain `HttpListener` (no cert to bind for an https
+   endpoint), so the bridge's LCU calls during self-test point at
+   `http://127.0.0.1:<mockPort>` via `$Sync.LcuScheme = 'http'`. Production
+   code path (real `Get-LcuCredentials` → real gameflow/champ-select/perks
+   calls) never sets this and gets the real `https` scheme untouched. This
+   was the one actual bug SelfTest caught during my own build — first pass
+   had hardcoded `https://` and all three apply-runes assertions failed with
+   `create-failed` because every LCU call was silently connection-refused
+   inside the `try/catch` fail-soft (worth remembering: fail-soft error
+   handling makes this class of bug invisible without a call-log assertion
+   like the mock's `$Sync.Calls`, which is exactly what caught it).
+3. **`-Mock` runs one deterministic scripted sequence and exits, rather than
+   a continuous loop with `-Once` as an early-exit flag.** Plan describes
+   "-Once/timeout flag for CI" implying an otherwise-continuous mode exists.
+   Since the debounce/deep-link logic is pure (`Update-ChampSelectState` /
+   `Get-DeepLinkUrl` / `Open-CompanionUrl`) and doesn't need real wall-clock
+   timing to exercise correctly, I made the whole `-Mock` path synchronous
+   and CI-safe by default; `-Once`/`-TimeoutSec` are accepted as no-ops for
+   forward compatibility with the brief's flag names but don't change
+   behavior today. If an interactive/continuous mock mode is wanted later
+   (e.g. for manually watching Start-Process fire against a real browser),
+   that's additive, not a rewrite.
+4. Added one extra self-test assertion beyond the plan's list: a blank
+   `assignedPosition` (ARAM lobbies report `""`) must never open a deep
+   link, since `role` is a required query param on the contract and there's
+   no sane RoleId to send. Cheap to add, closes an edge case the plan didn't
+   explicitly call out.
+
+### Not independently testable here (per plan, expected)
+Real LCU discovery/gameflow/champ-select/perks endpoints, real 2999 Live
+Client Data, the actual Chrome LNA prompt, and `Start-Process` actually
+opening a browser — all as called out in plan §5's "Untestable off gaming
+PC" list. `-SelfTest`/`-Mock` are the designed test seam for exactly this
+reason and both pass.
+
+### For fronty / co-review
+The wire-contract comment block is in `public/companion.ps1` (top of file).
+Please cross-check it against whatever's in
+`components/live/companionClient.ts` — I did not open or edit that file, so
+if there's drift it needs reconciling at merge, not silently in one file.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-20 19:07
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-18 18:21:55Z; previous content preserved there. Append new rounds below. -->
+
+# HANDOFF — fronty — CoachBuild "Live" web mode (v0.32.0 candidate)
+
+Parallel build with engy (companion.ps1 + serving/versioning). This covers my half: web Live mode, the deep-link/companion client, Apply-runes, and the live matchup panel.
+
+## Files changed
+
+New:
+- `app/live-setup/page.tsx` — install one-liner + copy button, `?session=` capture, LNA explainer, Test Connection button (port walk via `probeCompanion`), tri-state indicator (grey/gold/win-green), 5-minute self-test checklist.
+- `components/live/companionClient.ts` — wire client: `probeCompanion`, `getStatus`, `refreshStatus`, `getLive`, `applyRunes`, localStorage session/port persistence (`coachbuild:companion:session` / `:port`), `COMPANION_PORTS` `[48291,48292,48293]`, `COMPANION_STATUS_POLL_MS` (3s), `LIVE_POLL_MS` (1s). Every wire call takes an injectable `deps.fetchImpl` (never throws to the caller).
+- `components/live/deepLink.ts` — `parseLiveDeepLink(search)` + `roleIdToLane(role)`, pure.
+- `components/hextech/runeApplyBody.ts` — `buildRuneApplyBody(championName, roleLabel, runes)`, pure, throws on a malformed rune shape (caught by the caller, never silently truncates).
+- `components/live/compHighlight.ts` — `selectCompAwareHighlights(situational, enemyChampionIds)`, pure.
+- `components/live/livePanelModel.ts` — `buildLivePanelModel(raw, selfChampionKey)` + `indexChampionsByKey(champs)`, pure. This is the compliance regression guard.
+- `components/live/LivePanel.tsx` — the live matchup panel (enemy comp + comp-aware situational highlights + item popover).
+- Tests: `components/__tests__/{deepLink,runeApplyBody,compHighlight,companionClient,livePanelModel}.test.ts`.
+
+Edited:
+- `app/page.tsx` (surgical) — mount-only deep-link effect (`window.location.search`, not router params, per the file's own existing design note), companion status poll effect (`companionSession`/`companionPhase` state), `LivePanel` mount gated on `companionPhase === "InProgress"`.
+- `components/hextech/RunesSummonersCard.tsx` — new `ApplyRunesButton` (optional `championName`/`roleLabel` props gate it), inline success/error status line (no shared Toast component exists in this repo — didn't build one under scope discipline).
+- `components/hextech/SituationalCard.tsx` — optional `highlightIds` prop; reorders the **full** flattened list (highlights first) before the top-6 slice, then rings the highlighted tiles.
+- `components/hextech/BuildTabContent.tsx` — **1 deviation, see below** — added `championName={build.champion.name}` / `roleLabel={build.roleLabel}` to its existing `RunesSummonersCard` call.
+
+## Deviations from the plan (flag for review)
+
+1. **`BuildTabContent.tsx` touched — not in my assigned file list.** The plan lists `RunesSummonersCard.tsx` as mine but never wires `championName`/`roleLabel` into its one real caller. Without those two props the Apply-runes button can never render (it's gated on both being present) — i.e. the feature would ship dead. `BuildTabContent.tsx` already has `build.champion.name`/`build.roleLabel` in scope from its existing fetch, so this was a 5-line additive prop-pass, zero logic change, zero collision with engy's files (public/companion.ps1, companion.version, vercel.json, sw.js, mock-companion route). Flagging rather than hiding it.
+
+2. **`compHighlight.ts`'s "comp-aware" signal is honestly empty today.** This repo has no per-champion damage-type/tag data anywhere, and `BuildResponse.matchup.supported` is hardcoded `false` (coachless 403s matchup-conditioned requests — plan §0). Rather than fabricate a "counters this champion" heuristic from item names (exactly what plan §3's "never invents recos" guardrail exists to prevent), `selectCompAwareHighlights` only ever promotes picks the backend has already flagged `matchupConditioned: true`. It returns `[]` in every real session right now — an honest empty state — and activates for free the moment upstream matchup data goes live, with zero code change here. Tested for the "never invents an id" property explicitly.
+
+3. **LivePanel does its own independent `/api/build` fetch** rather than receiving `items` from `BuildTabContent`'s state, since that file wasn't in my scope to prop-drill through. The route is CDN-cached 6h (`s-maxage=21600`), so the duplicate request is cheap.
+
+4. **`/live-setup`'s install one-liners are best-effort against the plan's documented flag contract** (§1: "`-Install` flag → Startup-folder .lnk... target `powershell.exe ... -Command 'irm <ScriptUrl> | iex'`"). The persistent variant uses the standard `& ([scriptblock]::Create((irm URL))) -Install` idiom for passing an argument through a piped-script invocation. I don't own `companion.ps1` and couldn't verify its actual param binding — **please cross-check this against engy's real script before shipping** the install instructions live.
+
+5. **Toasts are inline status lines, not a floating toast.** No shared Toast component exists in this repo (only `ServiceWorkerRegister.tsx`'s one-off fixed-position pattern). Building a new generic Toast system felt out of scope for this dispatch; the Apply-runes button shows its result as a small status line beneath itself instead.
+
+## Deep-link edge cases handled (`deepLink.ts`, unit-tested)
+
+- Missing `championId` or `role` → `null` (default view stands).
+- Non-numeric `championId`/`role` → `null`.
+- `championId <= 0` → `null`.
+- `role` outside 0-4 (companion never emits 5/"Auto") → `null`.
+- `session` absent → link still valid (champion/lane apply; nothing persisted for the bridge).
+- Stray float role (e.g. `"2.9"`) → truncated, accepted (trusted origin — our own companion, not untrusted user input).
+- Extra/unknown query params → ignored.
+- Unresolvable `championId` (not in `/api/champions`, e.g. a coachless gap) → app/page.tsx's effect no-ops, default view stands (never a partial apply — lane is never set without a valid champion).
+- `/api/champions` fetch failure → caught, silent no-op.
+- React 18 Strict Mode double-invoke in dev → guarded by `deepLinkAppliedRef`.
+
+## Wire-contract confirmation
+
+Cross-checked against `app/api/mock-companion/route.ts` (engy's dev-aid fixture, built concurrently — I did not know its exact shape in advance): its `GET ?path=status` response shape (`{version, port, phase, clientConnected}`) and its `allgamedata` fixture shape (`allPlayers[].{championName, team, position, ...}`, team values `"ORDER"`/`"CHAOS"`, position values `"TOP"|"JUNGLE"|"MIDDLE"|"BOTTOM"|"UTILITY"`) match what `companionClient.ts`/`livePanelModel.ts` were built against independently — good independent confirmation of the Live Client Data assumptions in `livePanelModel.ts`'s header comment. Note: the mock route is a single same-origin endpoint keyed by `?path=`, not the real bridge's `/status`/`/live`/`/apply-runes` path scheme on `127.0.0.1:PORT` — my client targets the real bridge shape, so it isn't a drop-in browser-test target for the mock without a small adapter. Did NOT wire that adapter (out of scope, unit-mocked fetch already covers the client's own logic).
+
+## Compliance guardrails verified
+
+- `livePanelModel.test.ts` asserts the rendered model contains **zero** name/riotId fields from the raw payload (serializes the model and confirms none of the fixture's `summonerName`/`riotId` strings appear anywhere in it) and that `LiveEnemy`'s own keys are only `championKey`/`position`.
+- `compHighlight.test.ts` asserts every returned id is a member of the input list (never invents).
+- `applyRunes` is only ever invoked from `ApplyRunesButton`'s `onClick` — no poll/effect calls it.
+- No cooldown/timer computation anywhere in `livePanelModel.ts` or `LivePanel.tsx`.
+
+## Validation run
+
+- `npx vitest run` — **739 passed** (61 files), up from 681 baseline (+58 new: 56 from my 5 new test files + 2 incidental).
+- `npx tsc --noEmit` — clean.
+- `npx eslint components/live components/hextech/runeApplyBody.ts components/hextech/RunesSummonersCard.tsx components/hextech/SituationalCard.tsx app/page.tsx app/live-setup/page.tsx` — clean.
+- `npm run build` — succeeded; `/live-setup` compiles as a static route (3.65 kB). Had to kill 3 orphaned `next dev -p 4173` processes against this same checkout first (locked `.next/trace`, EPERM — the documented Bash-bg-dev-server gotcha); not something I started, killed per that runbook.
+- Did **not** run a live browser/puppeteer check — this feature has no reachable server on a dev machine without the real companion or a manual adapter to the mock route's query-param scheme (see wire-contract note above); relied on `tsc` + `next build` (real RSC/client-boundary compile) + unit tests with mocked fetch for the network-facing logic. Flagging this gap explicitly per craft rules rather than claiming a browser verification I didn't do.
+- Did not bump version / deploy / run `verify-fix.sh` — per dispatch, urgot runs the combined gate after both agents finish.
+
+## For urgot / merge
+
+- No file overlaps with engy's list (`public/companion.ps1`, `public/companion.version`, `vercel.json`, `public/sw.js`, `app/api/mock-companion/route.ts`) — confirmed, only read the mock route, didn't touch it.
+- `BuildTabContent.tsx` deviation (item 1 above) needs a sanity glance since it wasn't explicitly assigned to either agent.
+- Suggest a quick manual check of the two `/live-setup` PowerShell one-liners against the real `companion.ps1`'s actual `param()` block once merged (deviation item 4).
+
+

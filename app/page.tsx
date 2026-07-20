@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import type { ChampionRef } from "@/lib/types";
 import type { PlayerRef } from "@/components/proHistory.types";
 import type { ProGameSource } from "@/components/proGames.types";
@@ -12,6 +12,14 @@ import PlayerGamesSection from "@/components/hextech/PlayerGamesSection";
 import HextechTabs, { type HextechTab } from "@/components/hextech/HextechTabs";
 import BuildTabContent from "@/components/hextech/BuildTabContent";
 import ProBuildsTab from "@/components/hextech/ProBuildsTab";
+import LivePanel from "@/components/live/LivePanel";
+import { parseLiveDeepLink, roleIdToLane } from "@/components/live/deepLink";
+import {
+  getStoredSession,
+  setStoredSession,
+  refreshStatus,
+  COMPANION_STATUS_POLL_MS,
+} from "@/components/live/companionClient";
 import { useSheetBackNav } from "@/components/useSheetBackNav";
 import {
   STATIC_FALLBACK_LANE_CHAMPIONS,
@@ -142,6 +150,92 @@ export default function HomePage() {
     // `null`).
     seedInitialSelection: () => ({ view: mainView, tab, source: gamesSource }),
   });
+
+  // ── Live mode (v0.32.0) ────────────────────────────────────────────────
+  //
+  // Companion pairing session — hydrated from localStorage on mount, and
+  // overwritten by a fresh `?session=` on a companion-opened deep link (see
+  // the mount effect below). Drives the status-poll effect further down,
+  // which is what gates the "Live game detected" LivePanel mount.
+  const [companionSession, setCompanionSession] = useState<string | null>(null);
+  const [companionPhase, setCompanionPhase] = useState<string | null>(null);
+  // Run-once guard for the deep-link mount effect (covers React 18 Strict
+  // Mode's dev double-invoke) — separate from mostPlayedLaneRequestRef,
+  // which guards a DIFFERENT race (a slow most-played-lane lookup).
+  const deepLinkAppliedRef = useRef(false);
+
+  useEffect(() => {
+    // Mount-only effect reading window.location.search directly (NOT Next
+    // router params / useSearchParams) — same design note as sheetNav's own
+    // "why not URL query params" comment above: composing a second
+    // history-mutation source with useSheetBackNav's raw pushState is a real
+    // risk, and this only needs to run once at mount, not track the URL
+    // live. Companion's champ-select Start-Process always opens
+    // `/?championId=&role=&session=` (plan §0/§2b).
+    if (deepLinkAppliedRef.current) return;
+    deepLinkAppliedRef.current = true;
+
+    const stored = getStoredSession();
+    if (stored) setCompanionSession(stored);
+
+    const parsed = parseLiveDeepLink(window.location.search);
+    if (!parsed) return; // not a live deep link — default view stands, untouched
+
+    if (parsed.session) {
+      setStoredSession(parsed.session);
+      setCompanionSession(parsed.session);
+    }
+
+    // The deep link is authoritative about role/lane (the user's real
+    // champ-select pick) — never to be second-guessed by the fire-and-forget
+    // most-played-lane correction handleChampionSelect kicks off elsewhere.
+    mostPlayedLaneRequestRef.current++;
+    const lane = roleIdToLane(parsed.role);
+
+    fetch("/api/champions")
+      .then((r) => (r.ok ? (r.json() as Promise<ChampionRef[]>) : []))
+      .then((champs) => {
+        const found = Array.isArray(champs) ? champs.find((c) => c.id === parsed.championId) : undefined;
+        if (!found) return; // unresolvable champion id (coachless gap, bad id) — leave the default view alone
+        setChamp(found);
+        setActiveLane(lane);
+        setSearchMode("champions");
+        const source = defaultSourceForKind("champion");
+        setGamesSource(source);
+        // Corrects the seeded initial entry in place — this IS the page's
+        // true starting view (a champ-select-driven open), not a user
+        // action stacking on top of the STATIC_FALLBACK seed.
+        sheetNav.replaceSelection(wireViewForChampion(found, lane, tabRef.current, gamesSourceRef.current));
+      })
+      .catch(() => {
+        /* network hiccup — deep link silently no-ops, default view stands */
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Companion status poll — slow cadence (COMPANION_STATUS_POLL_MS, 3s),
+  // only runs once a session is known. Drives companionPhase, which gates
+  // the "Live game detected" LivePanel mount below. Deliberately a
+  // "passive" probe via refreshStatus (never triggers its own LNA prompt —
+  // that's /live-setup's Test Connection button's job).
+  useEffect(() => {
+    if (!companionSession) {
+      setCompanionPhase(null);
+      return;
+    }
+    let cancelled = false;
+    async function tick() {
+      const state = await refreshStatus(companionSession as string);
+      if (cancelled) return;
+      setCompanionPhase(state.kind === "connected" ? state.status.phase : null);
+    }
+    tick();
+    const id = setInterval(tick, COMPANION_STATUS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [companionSession]);
 
   /** Repaints searchMode/tab/activeLane+champ/selectedPlayer from a landed-on
    *  entry — fired on mount-resume and every popstate. Delegates the actual
@@ -399,7 +493,18 @@ export default function HomePage() {
               </div>
 
               {tab === "build" ? (
-                <BuildTabContent champ={mainView.champ} lane={mainView.lane} onPatchResolved={setPatch} />
+                <>
+                  <BuildTabContent champ={mainView.champ} lane={mainView.lane} onPatchResolved={setPatch} />
+                  {/* v0.32.0 (Live mode): only mounted while the companion
+                      reports gameflow phase InProgress (companionPhase,
+                      polled above) — owns its own 1s live-client-data poll
+                      once mounted. Absent entirely otherwise, so this never
+                      reserves layout space or shows placeholder chrome for a
+                      feature most sessions won't use. */}
+                  {companionPhase === "InProgress" && (
+                    <LivePanel champ={mainView.champ} lane={mainView.lane} />
+                  )}
+                </>
               ) : (
                 <ProBuildsTab
                   champ={mainView.champ}

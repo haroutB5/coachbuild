@@ -1,16 +1,112 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { RunesBlock, Pick as PickType } from "@/lib/types";
 import type { EntityKind } from "@/components/EntityDetailPopover";
 import { wpaClass, wpaText } from "@/components/StatBadge";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import { buildRunesPageModel } from "./runesPage";
+import { buildRuneApplyBody } from "./runeApplyBody";
+import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/components/live/companionClient";
 
 function CardHeader({ children }: { children: React.ReactNode }) {
   return (
-    <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold mb-3.5">
+    <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">
       {children}
     </p>
+  );
+}
+
+type ApplyUiState =
+  | { status: "idle" }
+  | { status: "applying" }
+  | { status: "success" }
+  | { status: "error"; message: string };
+
+/** v0.32.0 (Live mode, plan §2c): companion-connected "Apply runes" action —
+ *  strictly user-clicked (compliance guardrail, plan §3: applyRunes is only
+ *  ever invoked from this onClick, never from a poll/effect). Gated on
+ *  companionClient.hasSession() (checked in a post-mount effect below, not
+ *  during render, to avoid an SSR/client hydration mismatch on a
+ *  localStorage read — same pattern as BuildTabContent's rankHydrated) AND
+ *  on the caller actually supplying
+ *  championName/roleLabel — both optional so any OTHER future caller of this
+ *  card that doesn't have them degrades to exactly today's behavior (no
+ *  button rendered at all). */
+function ApplyRunesButton({
+  championName,
+  roleLabel,
+  runes,
+}: {
+  championName: string;
+  roleLabel: string;
+  runes: RunesBlock;
+}) {
+  const [ready, setReady] = useState(false);
+  const [state, setState] = useState<ApplyUiState>({ status: "idle" });
+
+  useEffect(() => {
+    setReady(hasSession());
+  }, []);
+
+  async function handleClick() {
+    const session = getStoredSession();
+    const port = getStoredPort();
+    if (!session || !port) {
+      setState({
+        status: "error",
+        message: "Companion not connected — open /live-setup and reconnect.",
+      });
+      return;
+    }
+
+    let body: ReturnType<typeof buildRuneApplyBody>;
+    try {
+      body = buildRuneApplyBody(championName, roleLabel, runes);
+    } catch {
+      setState({
+        status: "error",
+        message: "Couldn't build a rune page from this build — try refreshing.",
+      });
+      return;
+    }
+
+    setState({ status: "applying" });
+    const result = await applyRunes(port, session, body);
+    if (result.ok) {
+      setState({ status: "success" });
+    } else {
+      setState({
+        status: "error",
+        message: result.hint ?? "Apply failed — try again, or set runes manually in-client.",
+      });
+    }
+    setTimeout(() => setState({ status: "idle" }), 4000);
+  }
+
+  if (!ready) return null;
+
+  return (
+    <div className="flex flex-col items-end gap-1.5">
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={state.status === "applying"}
+        className="flex-shrink-0 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-bg bg-teal hover:bg-teal-hover disabled:opacity-60 disabled:cursor-not-allowed rounded-md px-2.5 py-1.5 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
+      >
+        {state.status === "applying" ? "Applying…" : "Apply runes"}
+      </button>
+      {state.status === "success" && (
+        <p role="status" className="text-[10.5px] text-teal">
+          Applied in-client.
+        </p>
+      )}
+      {state.status === "error" && (
+        <p role="status" className="text-[10.5px] text-bad max-w-[220px] text-right">
+          {state.message}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -139,14 +235,33 @@ interface RunesSummonersCardProps {
   runes: RunesBlock;
   spells: PickType[];
   onOpenDetail: (kind: EntityKind, id: number) => void;
+  /** v0.32.0 (Live mode): champion display name + role label for the
+   *  Apply-runes rune-page NAME (`CoachBuild <champ> <role>`) — sourced from
+   *  the already-fetched BuildResponse (build.champion.name / build.roleLabel)
+   *  by BuildTabContent.tsx, the one caller. Optional: omitting either hides
+   *  the Apply-runes button entirely (see ApplyRunesButton), so any other
+   *  caller of this card keeps rendering exactly as before. */
+  championName?: string;
+  roleLabel?: string;
 }
 
-export default function RunesSummonersCard({ runes, spells, onOpenDetail }: RunesSummonersCardProps) {
+export default function RunesSummonersCard({
+  runes,
+  spells,
+  onOpenDetail,
+  championName,
+  roleLabel,
+}: RunesSummonersCardProps) {
   const model = buildRunesPageModel(runes);
 
   return (
     <div className="bg-panel border border-line rounded-xl p-5">
-      <CardHeader>Runes &amp; Summoners</CardHeader>
+      <div className="flex items-start justify-between gap-3 mb-3.5">
+        <CardHeader>Runes &amp; Summoners</CardHeader>
+        {championName && roleLabel && (
+          <ApplyRunesButton championName={championName} roleLabel={roleLabel} runes={runes} />
+        )}
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-[1.5fr_1.1fr_auto] gap-x-8 gap-y-5">
         {/* Primary tree: keystone (large) + 3 minors */}
