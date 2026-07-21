@@ -43,6 +43,7 @@ import {
   filterPoolByPickrate,
   filterPoolByTotalGames,
   rankBans,
+  shrunkDelta,
   splitPlaysBySampleSize,
   type BanResult,
   type ChampBaseline,
@@ -52,6 +53,9 @@ import {
 } from "@/lib/draft/score";
 import { EMERALD_TIER } from "@/lib/draft/ugg";
 import { resolveDraftPatchLabel } from "@/lib/draft/patch";
+import type { DifficultyBand } from "@/lib/draft/difficulty";
+import { suggestedDefense, type SuggestedDefense } from "@/lib/draft/damageProfile";
+import { getChampionMeta } from "@/lib/staticData";
 
 /** P3-1 (audit, 2026-07-21): a patch needs at least this many distinct
  *  champions present in draft_champ_stats before resolveServingPatch will
@@ -144,6 +148,54 @@ export interface RecommendMeta {
   currentPatch: string | null;
 }
 
+/** Draft redesign plan §2.3 — additive, per-enemy analysis backing the
+ *  MatchupAnalysisPopover. One entry per `params.enemies` id (deduped by the
+ *  route already). `laneThreatBand` REUSES lib/draft/difficulty.ts's
+ *  DifficultyBand union ("Low"/"Medium"/"High") for its label vocabulary —
+ *  a deliberate type-level reuse, NOT the same axis as champion difficulty
+ *  (that's kit complexity; this is matchup danger) — see
+ *  `laneThreatBandFromDelta`'s own doc comment for the banding thresholds. */
+export interface EnemyAnalysis {
+  champId: number;
+  /** True iff this is the resolved direct lane opponent (meta.laneOppInferred)
+   *  — the ONLY entry that can carry non-null winRateVsYou/laneThreatBand,
+   *  since those are both keyed on the (laneOpponent, hover) matchup row. */
+  isLaneOpponent: boolean;
+  /** REAL — the lane opponent's own win rate specifically against `hover`
+   *  (draft_matchup row, champ_id=this enemy, opp_id=hover), shipped
+   *  alongside `winRateVsYouGames` so the UI can show its sample size
+   *  honestly. Null when this isn't the lane opponent, `hover` wasn't given,
+   *  or no matchup row exists at all (never a fabricated 50%). */
+  winRateVsYou: number | null;
+  winRateVsYouGames: number | null;
+  /** DERIVED (never a raw stat): shrunkDelta magnitude between the lane
+   *  opponent's win rate vs `hover` and their own lane baseline, banded. Null
+   *  below N_FLOOR (suppressed, per plan §2.3) or when the preconditions for
+   *  winRateVsYou above aren't met. */
+  laneThreatBand: DifficultyBand | null;
+  /** DERIVED from this enemy's ddragon tags + attack/magic axes
+   *  (lib/draft/damageProfile.ts) — populated for EVERY enemy, independent
+   *  of lane-opponent status or `hover`. Null only on a genuine data gap
+   *  (champion meta fetch failed/champion unknown). */
+  suggestedDefense: SuggestedDefense | null;
+}
+
+/** Lane-threat banding thresholds (draft redesign plan §2.3) — tunable
+ *  display constants, entirely separate from lib/draft/difficulty.ts's
+ *  champion-complexity bands even though both return the same DifficultyBand
+ *  union. |shrunkDelta| magnitude: < 0.02 -> Low, < 0.05 -> Medium, else
+ *  High. Exported for direct unit testing. */
+export const LANE_THREAT_LOW_MAX = 0.02;
+export const LANE_THREAT_MEDIUM_MAX = 0.05;
+
+export function laneThreatBandFromDelta(delta: number | null): DifficultyBand | null {
+  if (delta === null) return null;
+  const mag = Math.abs(delta);
+  if (mag < LANE_THREAT_LOW_MAX) return "Low";
+  if (mag < LANE_THREAT_MEDIUM_MAX) return "Medium";
+  return "High";
+}
+
 export interface RecommendResult {
   /** v0.37.4: when a direct lane opponent is resolved, this is the "main"
    *  bucket from splitPlaysBySampleSize — top 10, matchup-vs-opponent
@@ -168,6 +220,11 @@ export interface RecommendResult {
    *  this specific lane has zero champ_stats rows for the serving patch) —
    *  the route must never CDN-cache this (see this file's header). */
   pending?: boolean;
+  /** Draft redesign plan §2.3, additive: one entry per `params.enemies` id.
+   *  Always [] when `enemies` is empty, on the pending path, or if the whole
+   *  computation soft-fails (see computeEnemyAnalysis's doc comment) — never
+   *  throws, never taints plays/bans/meta. */
+  enemyAnalysis: EnemyAnalysis[];
 }
 
 interface ChampStatsRow {
@@ -315,6 +372,77 @@ async function attachPersonalRecords(
   return { main: decorate(mainPlays), potential: decorate(potentialPlays) };
 }
 
+/** Draft redesign plan §2.3 — additive per-enemy analysis (see
+ *  EnemyAnalysis's doc comment). Soft-fails like attachPersonalRecords: any
+ *  DB/ddragon failure degrades to [] rather than taking down the whole
+ *  recommend response — this is optional display data, never load-bearing
+ *  for plays/bans/meta. Issues AT MOST one extra draft_matchup lookup (the
+ *  resolved lane opponent vs `hover`) regardless of how many enemies are
+ *  passed — suggestedDefense's per-champion getChampionMeta lookups reuse
+ *  lib/staticData.ts's own in-memory champion-list cache (populated once per
+ *  serverless instance), so they cost no extra network beyond that list's
+ *  first fetch. A per-champion suggestedDefense failure is caught locally so
+ *  ONE bad lookup never blanks the other enemies' entries. */
+async function computeEnemyAnalysis(
+  sql: NonNullable<ReturnType<typeof getSql>>,
+  patch: string,
+  lane: RoleId,
+  enemies: number[],
+  laneOppInferred: number | null,
+  hover: number | null,
+  fullPool: ChampBaseline[]
+): Promise<EnemyAnalysis[]> {
+  if (enemies.length === 0) return [];
+  try {
+    let laneOppWr: number | null = null;
+    let laneOppGames: number | null = null;
+    let laneThreat: DifficultyBand | null = null;
+
+    if (laneOppInferred !== null && hover !== null) {
+      const rows = (await sql`
+        SELECT wins, games FROM coachbuild.draft_matchup
+        WHERE patch = ${patch} AND tier = ${EMERALD_TIER} AND role = ${lane}
+          AND champ_id = ${laneOppInferred} AND opp_id = ${hover}
+      `) as unknown as { wins: number; games: number }[];
+      const row = rows[0];
+      if (row && row.games > 0) {
+        laneOppWr = row.wins / row.games;
+        laneOppGames = row.games;
+        const laneOppBaseline = fullPool.find((c) => c.champId === laneOppInferred)?.baselineWr ?? null;
+        if (laneOppBaseline !== null) {
+          // shrunkDelta(their-wr-vs-you, their-own-lane-baseline, n) -- null
+          // below N_FLOOR, per plan §2.3's "below floor -> suppressed".
+          const delta = shrunkDelta(laneOppWr, laneOppBaseline, laneOppGames);
+          laneThreat = laneThreatBandFromDelta(delta);
+        }
+      }
+    }
+
+    return await Promise.all(
+      enemies.map(async (champId): Promise<EnemyAnalysis> => {
+        const isLaneOpponent = champId === laneOppInferred;
+        let defense: SuggestedDefense | null = null;
+        try {
+          const meta = await getChampionMeta(champId);
+          if (meta) defense = suggestedDefense(meta.tags, meta.info);
+        } catch {
+          defense = null; // per-champion soft-fail -- never taints the others
+        }
+        return {
+          champId,
+          isLaneOpponent,
+          winRateVsYou: isLaneOpponent ? laneOppWr : null,
+          winRateVsYouGames: isLaneOpponent ? laneOppGames : null,
+          laneThreatBand: isLaneOpponent ? laneThreat : null,
+          suggestedDefense: defense,
+        };
+      })
+    );
+  } catch {
+    return []; // whole-computation soft-fail -- see this fn's doc comment
+  }
+}
+
 export async function computeDraftRecommend(params: RecommendParams): Promise<RecommendResult> {
   const sql = getSql();
   if (!sql) throw new DbUnavailableError();
@@ -330,6 +458,7 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
     bans: null,
     meta: { patch, tier: EMERALD_TIER, fetchedAt, laneOppInferred: null, currentPatch },
     pending: true,
+    enemyAnalysis: [],
   });
 
   const patch = await resolveServingPatch(sql);
@@ -410,10 +539,21 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
     laneOppInferred
   );
 
+  const enemyAnalysis = await computeEnemyAnalysis(
+    sql,
+    patch,
+    params.lane,
+    params.enemies,
+    laneOppInferred,
+    params.hover,
+    fullPool
+  );
+
   return {
     plays: personalMain,
     potentialPlays: personalPotential,
     bans,
     meta: { patch, tier: EMERALD_TIER, fetchedAt, laneOppInferred, currentPatch },
+    enemyAnalysis,
   };
 }

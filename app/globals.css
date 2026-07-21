@@ -106,3 +106,144 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--cyan-dim);
 }
+
+/* ── /draft "Tactical Draft Analyzer" reskin (2026-07-21) ─────────────────
+   SCOPED to `.draft-tactical` only — never :root. The rest of the app's
+   `teal`/`cyan` Tailwind tokens are actually Hextech GOLD (see this file's
+   :root block above); this page needs a genuinely separate cyan HUD accent,
+   so it gets its own custom-property namespace (`--dt-*`) plus a small set
+   of plain CSS classes (`.dt-*`) rather than fighting Tailwind's static-hex
+   `teal`/`gold` utilities. Every rule below lives under `.draft-tactical` so
+   it can never leak onto any other page. Shared out-of-scope components
+   rendered inside this page (TabNav, ChampionPicker) deliberately keep their
+   app-wide gold accent — see HANDOFF-fronty.md for the reasoning. */
+.draft-tactical {
+  --dt-bg: #070d10;
+  --dt-panel: #0d161a;
+  --dt-panel2: #122029;
+  --dt-line: rgba(93, 222, 255, 0.16);
+  --dt-line-bright: rgba(93, 222, 255, 0.5);
+  --dt-cyan: #2dd8ff;
+  --dt-cyan-hover: #74e7ff;
+  --dt-cyan-dim: #146485;
+  --dt-cyan-glow: rgba(45, 216, 255, 0.55);
+  --dt-txt: #e7f7fb;
+  --dt-mut: #7d97a1;
+  --dt-good: #3ecf8e;
+  --dt-bad: #f2555a;
+
+  position: relative;
+  isolation: isolate;
+  background: var(--dt-bg);
+  color: var(--dt-txt);
+}
+
+/* Circuit-board backdrop — pure CSS gradients (no SVG fetch, no filter
+   blur, GPU-cheap: opacity/background only, no layout cost). A faint grid
+   of hairlines + node dots, layered under the content via a fixed pseudo
+   layer so it doesn't scroll-repaint per pixel. */
+.dt-circuit-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image:
+    radial-gradient(circle at 20% 30%, var(--dt-line-bright) 0, transparent 2.5px),
+    radial-gradient(circle at 75% 18%, var(--dt-line-bright) 0, transparent 2.5px),
+    radial-gradient(circle at 60% 70%, var(--dt-line-bright) 0, transparent 2.5px),
+    radial-gradient(circle at 12% 82%, var(--dt-line-bright) 0, transparent 2.5px),
+    radial-gradient(circle at 90% 55%, var(--dt-line-bright) 0, transparent 2.5px),
+    linear-gradient(var(--dt-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--dt-line) 1px, transparent 1px);
+  background-size:
+    100% 100%,
+    100% 100%,
+    100% 100%,
+    100% 100%,
+    100% 100%,
+    48px 48px,
+    48px 48px;
+  animation: dt-circuit-pulse 6s ease-in-out infinite;
+}
+@keyframes dt-circuit-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.draft-tactical .dt-content {
+  position: relative;
+  z-index: 1;
+}
+
+/* Chamfered HUD panel — angular corners via clip-path (cheap, no extra DOM),
+   thin luminous cyan hairline, layered shadow instead of a blurred glow
+   filter (perf: box-shadow is compositor-cheap, `filter: blur()` is not). */
+.dt-panel {
+  position: relative;
+  background: linear-gradient(180deg, var(--dt-panel2), var(--dt-panel));
+  border: 1px solid var(--dt-line);
+  clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.03) inset,
+    0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.dt-panel-glow {
+  border-color: var(--dt-line-bright);
+  box-shadow:
+    0 0 0 1px var(--dt-line-bright) inset,
+    0 0 18px var(--dt-cyan-glow),
+    0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.dt-chamfer-sm {
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+}
+
+/* Glow text — text-shadow only (GPU-cheap, unlike `filter: drop-shadow`). */
+.dt-glow-text {
+  color: var(--dt-txt);
+  text-shadow:
+    0 0 6px var(--dt-cyan-glow),
+    0 0 22px rgba(45, 216, 255, 0.3);
+}
+.dt-accent-text {
+  color: var(--dt-cyan);
+}
+
+/* Node-dot pulse used on the LIVE indicator / lane-opponent highlight —
+   opacity + box-shadow only (compositor-safe); the blanket
+   prefers-reduced-motion rule near the top of this file already knocks
+   every animation here to ~0ms, so no per-rule guard is needed. */
+@keyframes dt-node-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--dt-cyan-glow);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(45, 216, 255, 0);
+    opacity: 0.75;
+  }
+}
+.dt-node-pulse {
+  animation: dt-node-pulse 1.8s ease-out infinite;
+}
+
+/* Energy-line connector — the MatchupAnalysisPopover's visual tether back to
+   the lane-opponent portrait it belongs to. Pure border + gradient, no SVG. */
+.dt-energy-line {
+  width: 2px;
+  background: linear-gradient(180deg, var(--dt-cyan), transparent);
+  box-shadow: 0 0 8px var(--dt-cyan-glow);
+}
+
+/* Sortable table header button underline-on-active affordance. */
+.dt-th-btn[aria-sort="ascending"],
+.dt-th-btn[aria-sort="descending"] {
+  color: var(--dt-cyan);
+}

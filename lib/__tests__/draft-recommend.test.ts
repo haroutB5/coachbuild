@@ -14,10 +14,18 @@ vi.mock("@/lib/pro/db", () => ({ getSql: vi.fn(() => mockSql) }));
 // same as heroStats.test.ts/laneDefaults.test.ts mock @/lib/staticData
 // directly for the same reason.
 vi.mock("@/lib/draft/patch", () => ({ resolveDraftPatchLabel: vi.fn() }));
+// Draft redesign plan §2.3 — computeEnemyAnalysis (new) calls
+// getChampionMeta per enemy for suggestedDefense whenever `enemies` is
+// non-empty. Mocked here (defaults to null = "no champion meta") so every
+// PRE-EXISTING test in this file stays network-free and deterministic;
+// draft-recommend-enemyAnalysis.test.ts exercises the real behavior with
+// real fixture return values.
+vi.mock("@/lib/staticData", () => ({ getChampionMeta: vi.fn() }));
 
 import { getSql } from "@/lib/pro/db";
 import { computeDraftRecommend } from "@/lib/draft/recommend";
 import { resolveDraftPatchLabel } from "@/lib/draft/patch";
+import { getChampionMeta } from "@/lib/staticData";
 import { POOL_MIN_TOTAL_GAMES } from "@/lib/draft/score";
 
 function sqlText(strings: TemplateStringsArray): string {
@@ -46,6 +54,8 @@ describe("computeDraftRecommend", () => {
     vi.mocked(getSql).mockReturnValue(mockSql as never);
     vi.mocked(resolveDraftPatchLabel).mockReset();
     vi.mocked(resolveDraftPatchLabel).mockResolvedValue("16.14"); // matches most fixtures' served patch by default -- no false-positive staleness
+    vi.mocked(getChampionMeta).mockReset();
+    vi.mocked(getChampionMeta).mockResolvedValue(null); // no champion meta by default -- enemyAnalysis[].suggestedDefense stays null, network-free
   });
 
   it("no patch ingested at all -> pending, patch null", async () => {

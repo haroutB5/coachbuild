@@ -54,11 +54,22 @@ describe("normalizeDraftRecommendResponse", () => {
           minGames: 400,
           personal: { games: 11, wins: 8 },
           personalOverall: { games: 39, wins: 25 },
+          synergyDelta: 0.02,
         },
       ],
       potentialPlays: [{ champId: 200, score: 0.5, winVsLaneOpp: 0.48, winVsLaneOppGames: 500, confidence: "low", minGames: 500 }],
       bans: [{ champId: 64, score: 0.08, confidence: "low", minGames: 20 }],
       meta: { patch: "16.14", tier: 10, fetchedAt: "2026-07-20T00:00:00.000Z", laneOppInferred: 64, currentPatch: "16.14" },
+      enemyAnalysis: [
+        {
+          champId: 64,
+          isLaneOpponent: true,
+          winRateVsYou: 0.55,
+          winRateVsYouGames: 1200,
+          laneThreatBand: "Medium",
+          suggestedDefense: { label: "Armor / Plated Steelcaps", reason: "their kit leans physical damage" },
+        },
+      ],
     });
     expect(result).toEqual({
       plays: [
@@ -71,6 +82,8 @@ describe("normalizeDraftRecommendResponse", () => {
           minGames: 400,
           personal: { games: 11, wins: 8 },
           personalOverall: { games: 39, wins: 25 },
+          synergyDelta: 0.02,
+          synergyBand: "Strong", // 0.02 >= SYNERGY_STRONG_DELTA (0.015)
         },
       ],
       potentialPlays: [
@@ -83,11 +96,98 @@ describe("normalizeDraftRecommendResponse", () => {
           minGames: 500,
           personal: null,
           personalOverall: { games: 0, wins: 0 },
+          synergyDelta: 0,
+          synergyBand: "Even",
         },
       ],
       bans: [{ champId: 64, score: 0.08, confidence: "low", minGames: 20 }],
       meta: { patch: "16.14", tier: 10, fetchedAt: "2026-07-20T00:00:00.000Z", laneOppInferred: 64, currentPatch: "16.14" },
       pending: false,
+      enemyAnalysis: [
+        {
+          champId: 64,
+          isLaneOpponent: true,
+          winRateVsYou: 0.55,
+          winRateVsYouGames: 1200,
+          laneThreatBand: "Medium",
+          suggestedDefense: { label: "Armor / Plated Steelcaps", reason: "their kit leans physical damage" },
+        },
+      ],
+    });
+  });
+
+  describe("synergyDelta/synergyBand (draft redesign plan §2.4)", () => {
+    it("absent synergyDelta defaults to 0, synergyBand derives to Even", () => {
+      const result = normalizeDraftRecommendResponse({
+        plays: [{ champId: 103, score: 0.5, confidence: "normal", minGames: 300 }],
+        meta: {},
+      });
+      expect(result?.plays[0].synergyDelta).toBe(0);
+      expect(result?.plays[0].synergyBand).toBe("Even");
+    });
+
+    it("a strongly negative synergyDelta derives to Weak", () => {
+      const result = normalizeDraftRecommendResponse({
+        plays: [{ champId: 103, score: 0.5, confidence: "normal", minGames: 300, synergyDelta: -0.03 }],
+        meta: {},
+      });
+      expect(result?.plays[0].synergyBand).toBe("Weak");
+    });
+
+    it("a non-numeric synergyDelta degrades to 0/Even, never crashes", () => {
+      const result = normalizeDraftRecommendResponse({
+        plays: [{ champId: 103, score: 0.5, confidence: "normal", minGames: 300, synergyDelta: "0.5" }],
+        meta: {},
+      });
+      expect(result?.plays[0].synergyDelta).toBe(0);
+      expect(result?.plays[0].synergyBand).toBe("Even");
+    });
+  });
+
+  describe("enemyAnalysis (draft redesign plan §2.3)", () => {
+    it("absent enemyAnalysis degrades to [], never crashes", () => {
+      const result = normalizeDraftRecommendResponse({ plays: [], meta: {} });
+      expect(result?.enemyAnalysis).toEqual([]);
+    });
+
+    it("a malformed entry (missing champId) is dropped without dropping the rest", () => {
+      const result = normalizeDraftRecommendResponse({
+        plays: [],
+        meta: {},
+        enemyAnalysis: [
+          { champId: 7, isLaneOpponent: false, winRateVsYou: null, winRateVsYouGames: null, laneThreatBand: null, suggestedDefense: null },
+          { isLaneOpponent: true }, // missing champId
+        ],
+      });
+      expect(result?.enemyAnalysis).toHaveLength(1);
+      expect(result?.enemyAnalysis[0].champId).toBe(7);
+    });
+
+    it("an unrecognized laneThreatBand string degrades to null, never a fabricated band", () => {
+      const result = normalizeDraftRecommendResponse({
+        plays: [],
+        meta: {},
+        enemyAnalysis: [{ champId: 7, laneThreatBand: "Extreme" }],
+      });
+      expect(result?.enemyAnalysis[0].laneThreatBand).toBeNull();
+    });
+
+    it("a suggestedDefense missing its `reason` half is treated as fully absent", () => {
+      const result = normalizeDraftRecommendResponse({
+        plays: [],
+        meta: {},
+        enemyAnalysis: [{ champId: 7, suggestedDefense: { label: "Armor" } }],
+      });
+      expect(result?.enemyAnalysis[0].suggestedDefense).toBeNull();
+    });
+
+    it("isLaneOpponent absent/non-boolean degrades to false", () => {
+      const result = normalizeDraftRecommendResponse({
+        plays: [],
+        meta: {},
+        enemyAnalysis: [{ champId: 7 }],
+      });
+      expect(result?.enemyAnalysis[0].isLaneOpponent).toBe(false);
     });
   });
 
@@ -160,6 +260,7 @@ describe("normalizeDraftRecommendResponse", () => {
       bans: null,
       meta: { patch: "", tier: 0, fetchedAt: "", laneOppInferred: null, currentPatch: null },
       pending: false,
+      enemyAnalysis: [],
     });
   });
 

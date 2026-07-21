@@ -33,6 +33,16 @@ export interface ChampionRef {
   key: string; // Riot string key, e.g. "Viktor"
   name: string; // display name
   icon: string; // absolute URL
+  /** Draft redesign plan §2.1 (additive, v0.42.0): ddragon champion.json's
+   *  info.difficulty (1-10). null when unknown (a ddragon gap-fill entry
+   *  that predates this field, or a genuinely missing/malformed value) --
+   *  never fabricated. Absent entirely on an OLDER cached response; treat
+   *  missing the same as null. Display-only, never feeds lib/draft/score.ts. */
+  difficulty?: number | null;
+  /** ddragon champion.json's tags[] (e.g. ["Fighter","Tank"]) -- coarse
+   *  archetype basis for lib/draft/compRatings.ts's deriveFallbackRating.
+   *  Additive; absent/missing degrades to []. */
+  tags?: string[];
 }
 
 export interface TreeRef {

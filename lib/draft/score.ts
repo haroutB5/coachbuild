@@ -138,6 +138,12 @@ export interface PlayResult {
    *  more than one enemy is in play. Null under the exact same conditions
    *  as `winVsLaneOpp` (no direct opponent tagged, or no/degenerate row). */
   winVsLaneOppGames: number | null;
+  /** Draft redesign plan §2.4: `score - baselineWr` — the SAME terms
+   *  computeScoredPool already sums into `score`, just re-exposed as its own
+   *  field (no new arithmetic, no formula change). Display-only ("Matchup
+   *  Synergy" column); see `synergyBand` below for the re-banding. Empty
+   *  enemies (scoreDelta never accumulates anything) -> exactly 0 -> "Even". */
+  synergyDelta: number;
 }
 
 export interface BanResult {
@@ -261,8 +267,37 @@ function computeScoredPool(
       winVsLaneOppGames,
       confidence: lowConfidence ? "low" : "normal",
       minGames,
+      // = score - baselineWr, i.e. exactly `scoreDelta` -- re-derived from
+      // the two already-returned fields (not just `scoreDelta` directly) so
+      // this can never silently drift from the "score - baselineWr" contract
+      // if the `score` expression above is ever touched.
+      synergyDelta: cand.baselineWr + scoreDelta - cand.baselineWr,
     };
   });
+}
+
+// ── Matchup Synergy re-banding (draft redesign plan §2.4) ───────────────────
+//
+// Pure re-band of `synergyDelta` (= score - baselineWr, already computed
+// above) into a 3-value display label. Thresholds are TUNABLE display
+// constants, NOT part of the locked scoring formula (K/N_FLOOR/W_DIRECT/
+// W_OFFLANE/pool floors/BAN_MIN_MATCHUP_GAMES) — changing them re-labels the
+// same underlying numbers, it never re-scores or re-ranks anything.
+
+export type SynergyBand = "Strong" | "Even" | "Weak";
+
+/** >= this synergyDelta -> "Strong". 0.015 = 1.5 percentage points of
+ *  shrunk-delta-weighted winrate swing, chosen as a visually-meaningful cut
+ *  point well above float noise. */
+export const SYNERGY_STRONG_DELTA = 0.015;
+/** <= this synergyDelta -> "Weak" (note: NEGATIVE — a champion scoring worse
+ *  than its own baseline against this enemy set). */
+export const SYNERGY_WEAK_DELTA = -0.015;
+
+export function synergyBand(delta: number): SynergyBand {
+  if (delta >= SYNERGY_STRONG_DELTA) return "Strong";
+  if (delta <= SYNERGY_WEAK_DELTA) return "Weak";
+  return "Even";
 }
 
 /**

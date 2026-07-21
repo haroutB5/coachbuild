@@ -115,3 +115,60 @@ describe("versionFromPatch / getCachedLiveIconVersion", () => {
     expect(versionFromPatch(undefined)).toBe("16.11.1");
   });
 });
+
+/**
+ * Draft redesign plan §2.1 (additive, v0.42.0) — getChampionIconMap() now
+ * surfaces ChampionRef's new difficulty/tags fields as difficulty/
+ * difficultyBand/tags on ChampionIconEntry, pre-banded via
+ * lib/draft/difficulty.ts's difficultyBand() at map-build time.
+ */
+describe("getChampionIconMap — difficulty/tags surface (draft redesign plan §2.1)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.unstubAllGlobals();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("carries difficulty/difficultyBand/tags through from /api/champions", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [
+          { id: 238, name: "Zed", icon: "https://cdn.example/zed.webp", difficulty: 7, tags: ["Assassin"] },
+        ],
+      })
+    );
+    const { getChampionIconMap } = await import("../proAssets");
+    const map = await getChampionIconMap();
+    expect(map.get(238)).toEqual({
+      name: "Zed",
+      icon: "https://cdn.example/zed.webp",
+      difficulty: 7,
+      difficultyBand: "High",
+      tags: ["Assassin"],
+    });
+  });
+
+  it("difficulty/tags absent on the wire -> null/[] (never fabricated), difficultyBand null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [{ id: 1, name: "Annie", icon: "https://cdn.example/annie.webp" }],
+      })
+    );
+    const { getChampionIconMap } = await import("../proAssets");
+    const map = await getChampionIconMap();
+    expect(map.get(1)).toEqual({
+      name: "Annie",
+      icon: "https://cdn.example/annie.webp",
+      difficulty: null,
+      difficultyBand: null,
+      tags: [],
+    });
+  });
+});

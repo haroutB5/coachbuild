@@ -7024,3 +7024,306 @@ GET /api/draft/recommend?lane=2&enemies=266,103,77,222
 - Scoring formula (`K`, `N_FLOOR`, `W_DIRECT`, `W_OFFLANE`, `POOL_MIN_TOTAL_GAMES`, `PLAY_MAIN_SAMPLE_FLOOR`) — all constants unchanged, this was purely the confidence-flag derivation.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-21 20:55
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-21 19:43:06Z; previous content preserved there. Append new rounds below. -->
+
+# HANDOFF-engy — CoachBuild v0.40.0 (2026-07-21)
+
+## Ship: two user-reported P0/UX items — live pickup permanently dying + fringe sub-1000-game bans
+
+**Deployed:** v0.40.0 → https://coachbuild.vercel.app (prod). `verify-fix.sh` clean, 1192 tests (baseline 1179 + 13 net new).
+
+### Item 1 — /draft live pickup permanently died after any manual edit
+
+**Confirmed the briefed mechanism exactly.** `dirty` (`app/draft/page.tsx`) is latched by every manual handler including `handleClearHover`, and was previously cleared ONLY by the explicit "Reset to live" link. One Clear tap in game 1 permanently detached the page from every future champ select — `resolveDraftLiveTarget` returns `null` whenever `dirty` is true, unconditionally.
+
+**Fix — entry-transition auto-reset (`components/live/draftLiveSync.ts`):**
+- New pure state machine `resolveChampSelectEntry(prev: ChampSelectEntryState, phase: string | null): ChampSelectEntryResult`. `ChampSelectEntryState` tracks only `lastRealPhase: string | null` — the most recently observed NON-NULL phase, across ticks.
+- A `null` phase (transient `/status` poll failure) is a complete no-op: `{ isEntry: false, next: prev }` — it never updates `lastRealPhase` and never itself counts as leaving/entering anything. This is what makes the blip cases correct:
+  - `ChampSelect → null → ChampSelect`: NOT an entry (the null tick left `lastRealPhase` at `"ChampSelect"`, so the next real tick sees no transition).
+  - `Lobby → null → ChampSelect`: IS an entry (the null tick didn't touch `lastRealPhase`, still `"Lobby"` when the real tick lands).
+- `isEntry = phase === "ChampSelect" && prev.lastRealPhase !== "ChampSelect"` — fires exactly once per genuine entry, never on the steady state (repeated `"ChampSelect"` ticks).
+- **Wired in `app/draft/page.tsx`:** a new `entryStateRef` (ref, not state — pure bookkeeping) feeds `resolveChampSelectEntry` on every `companion.tick` inside the existing live-sync effect, BEFORE the existing `resolveDraftLiveTarget` call. On `entryResult.isEntry && dirty`, calls `setDirty(false)` and returns early — the re-render this triggers (dirty is already an effect dependency) re-runs the effect with fresh `dirty` state and applies the live target normally on the next pass. No double-apply, no infinite loop (the ref is updated to `next` regardless of whether `isEntry` fired, so entry can't re-fire on the following tick).
+- Manual edits still win for the REST of the same champ select (the fix only resets on the entry tick, never on steady-state ticks) — preserves the earlier "follow fights user" behavior the plan is built around.
+
+**Legibility fix (design item b):** the dirty+live-champ-select state previously showed a small underlined text link ("Reset to live") easy to miss entirely — plausibly why the bug read to the user as "live pickup is just dead" rather than "I'm in manual mode, here's the button." Replaced with a bordered, filled banner (`role="status"`, teal-tinted background/border matching the existing accent) reading "Manual mode — champ select detected" plus a solid filled "Reset to live" button (was: dotted-underline text link). The quiet "Syncing from champ select" pill for the passive-syncing state is unchanged.
+
+**Tests (`components/__tests__/draftLiveSync.test.ts`, 8 new):** fresh-mount-into-ChampSelect is an entry; real-phase→ChampSelect is an entry; repeated ChampSelect ticks never re-fire; leave-then-reenter (the literal "game 2" repro) fires again; a null tick alone changes nothing; **the exact blip case from the brief** — `ChampSelect → null → ChampSelect` does NOT count as re-entry; a null blip DURING a real transition (`Lobby → null → ChampSelect`) still resolves correctly once the real tick lands; a non-ChampSelect→non-ChampSelect phase change is never an entry.
+
+**Not verified on a real device this round (per dispatch note) — what the user should see on their next Practice Tool session:**
+1. Game 1: enter champ select → hover auto-fills your champion (unchanged from before).
+2. Tap Clear (or make any manual edit) → the "Manual mode — champ select detected" banner should appear (NEW — previously just a small link, easy to miss).
+3. Finish game 1, start game 2's Practice Tool champ select → hover should AUTO-FILL again without touching Reset to live — this is the actual fix. Previously it stayed blank forever after step 2.
+4. If it does NOT re-attach on game 2, the thing to check first is whether the companion's `/status` phase string between games is literally `"ChampSelect"` again (not some other value this repo hasn't seen) — `resolveChampSelectEntry` only recognizes the exact string `"ChampSelect"`, matching `resolveDraftLiveTarget`'s existing check.
+
+### Item 2 — Suggested bans included sub-1000-game fringe rows outranking well-sampled counters
+
+**Confirmed the exact repro is the reported mechanism.** Ban candidates are drawn from `pool` (`lib/draft/recommend.ts`), which is floored by `filterPoolByTotalGames` at `POOL_MIN_TOTAL_GAMES=5000` — but that's the champion's AGGREGATE games across every opponent in that role, not the specific hover-vs-target matchup sample `rankBans` actually scores and the UI displays as `n=`. A champion can clear the 5000-aggregate floor easily while having a tiny, noisy sample against one specific hovered champion — that's exactly how Singed (n=463 vs Viktor) out-scored Xerath (n=16547 vs Viktor): a genuine shrunk-delta disadvantage on a small sample can still exceed a well-sampled one's magnitude.
+
+**Fix (`lib/draft/score.ts`, `rankBans`):**
+- New named constant `BAN_MIN_MATCHUP_GAMES = 1000` — same VALUE as `PLAY_MAIN_SAMPLE_FLOOR` but a deliberately separate constant (different axis: hover-vs-target matchup, not direct-lane-opponent matchup; doc comment cross-references both).
+- Candidates with no matchup row, or `row.games < BAN_MIN_MATCHUP_GAMES`, are excluded from the ban pool ENTIRELY (`.map` → `null` → `.filter` out) — not scored at 0, not flagged "low confidence" and still shown. Ban formula (`disadvantage × presence`) is byte-identical otherwise.
+- Side effect worth knowing: since `BAN_MIN_MATCHUP_GAMES (1000) > K (200)`, the `confidence: "low"` branch inside `rankBans` is now structurally unreachable for any surviving candidate — kept as a real `row.games < K` check (not hardcoded to `"normal"`) rather than deleted, so it self-corrects if either constant is ever retuned independently. Flagged in a code comment at the call site.
+- `app/draft/page.tsx`: the `bans.length === 0` empty-state copy changed from the old generic "No strong bans identified" / "Nothing stands out…" to "No well-sampled counters" / "No well-sampled counters to your pick this patch — check back as more games are recorded." — this state now specifically means the floor filtered everything, not "nothing stands out," and the copy needed to say that honestly rather than fabricate a ban.
+
+**Tests (`lib/__tests__/draft-score.test.ts`, describe "ban candidate floor", 5 new):** floor value pinned equal to `PLAY_MAIN_SAMPLE_FLOOR`; exactly-at-floor (1000 games) included; **the literal Singed(463)/Xerath(16547) repro** — sub-floor excluded even with a real signal, well-sampled candidate included and ranked; just-under-floor (999) excluded; empty-result shape (all candidates sub-floor → `[]`). Three pre-existing `rankBans` tests updated because they previously depended on missing/sub-floor rows still appearing (`new Map()` for a top-5 tiebreak test, and the confidence/minGames pair that used to exercise n=300/n=90 — both now sub-floor).
+
+**PROD SMOKE:**
+```
+GET /api/draft/recommend?lane=2&hover=<Viktor champId>
+→ every entry in `bans[]` has minGames >= 1000 (verify exact command/output below)
+```
+
+### Ship mechanics
+- `bash scripts/verify-fix.sh coachbuild`: tsc clean, lint clean (0 warnings), 1192 tests passed (baseline 1179 + 13 net new: 8 draftLiveSync + 5 draft-score, 0 net from 3 pre-existing tests updated in place), build clean, SW/manifest OK.
+- Version bump `0.39.1` → `0.40.0` (`package.json`), `CHANGELOG.md` entry added for both items.
+- Commit authored as `harout_b5@live.com` / `Harout` (Vercel personal-account requirement).
+- Deployed via `npx vercel --prod --archive=tgz`.
+
+### Not done this round (explicitly out of scope, called out per dispatch)
+- Real-device confirm of the full hover→auto-fill→game-2-reattach flow — needs the user's own Practice Tool session (companion 1.5.0 + LCU), can't be simulated headlessly. See "what the user should see" above.
+- No change to `BanResult.confidence`'s TYPE or `PersonalPlayResult`/play-list scoring — this ship touches `rankBans` candidate INCLUSION only, not `computeScoredPool`/`splitPlaysBySampleSize`/the play-list formula.
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-21 21:19
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-21 19:55:50Z; previous content preserved there. Append new rounds below. -->
+
+## v0.41.0 — champ-select auto-export lifted to the app-wide companion layer (engy, 2026-07-21)
+
+**Bug (real Practice Tool game):** picked Viktor, in-client rune page stayed on a previous game's "CoachBuild Nasus Jungle" — no auto-import fired. Confirmed the orchestrator's root cause against the source: `autoApplyRunesIfEligible`/`autoApplyItemSetsIfEligible` were mounted ONLY in `components/hextech/BuildTabContent.tsx`, which fetches `/api/build` and runs the export effect only when the **Builds page** (`/`, tab==="build") is showing. Since companion 1.5.0 the user drafts from `/draft`, which suppresses opening the Builds page — so nothing ever fetched the picked champion's build and nothing exported. The side-effect chain was implicitly anchored to the Builds page being mounted.
+
+**What I did:**
+- **New `components/live/autoExport.ts`** (pure logic + injectable effect body): `resolveAutoExportTarget(phase, champSelect)` (pure trigger → `{championId, roleId}`), `resolveTargetLane(target, getMostPlayed)` (role-bearing → `roleIdToLane`; role-less → most-played fallback), and `executeAutoExport(championId, laneId, deps)` — the async fetch→identity-guard→dedup→apply→mark→toast body, every collaborator injected.
+- **New `components/live/AutoExporter.tsx`** — headless component mounted inside `CompanionProvider` (`app/layout.tsx`), keyed on `companion.tick`. Owns the React glue: per-tick trigger, a request-id generation counter backing the identity guard, an in-flight set (keyed by championId), a per-champion most-played-lane memo, the `/api/build` fetch (same endpoint/params/rank-bracket rule as `BuildTabContent.load()`), and an app-wide fixed toast overlay.
+- **Removed** `BuildTabContent`'s auto-export effect, the stale-toast-clear effect, the two toast states, the toast JSX, and all now-unused imports. Exactly one owner.
+- **Mounted** `<AutoExporter />` in `app/layout.tsx` (inside `CompanionProvider`, alongside `{children}`).
+- **Tests:** `components/__tests__/autoExport.test.ts`, 17 new.
+
+**Exact files touched:**
+- Added: `components/live/autoExport.ts`, `components/live/AutoExporter.tsx`, `components/__tests__/autoExport.test.ts`
+- Modified: `app/layout.tsx`, `components/hextech/BuildTabContent.tsx`, `CHANGELOG.md`, `package.json` (0.40.0 → 0.41.0)
+
+**Design decisions / why:**
+- **App-wide mount works where per-page didn't** because the root layout persists across client nav (`/` ↔ `/draft`), so the exporter's refs (gen counter, in-flight set, lane memo) survive the whole champ-select. Load-bearing — documented in the component header.
+- **Reused, never re-implemented:** the 3-way champion/role resolution (`resolveCurrentChampSelectChampionId`/`resolveChampSelectRoleId`), the `champSelectFollowState` dedup (latest-wins `(championId,laneId)` per kind, the multi-tab localStorage lock, `markAutoExported` deferred until AFTER an attempt), and the SAME `autoApplyItemSetsIfEligible`/`autoApplyRunesIfEligible` pipelines the manual buttons use.
+- **`isCompanionDriven` still gates** — but the champ-select champion is marked driven by `CompanionProvider` every tick (unconditional, its Round-B P1 fix), so the gate passes on `/draft`/any route without depending on `app/page.tsx`'s page-specific follow effect.
+- **Identity guard (v0.36 lesson):** two mechanisms, either sufficient for a champion-change-mid-fetch: (a) the generation counter (a newer kickoff bumps it; the stale run's post-fetch check fails), and (b) an explicit `getCurrentChampSelectChampionId() === championId` check at consume time. The stale run returns BEFORE `shouldExportForLane`/`claimLock`/`markExported` are touched, so no dedup slot is consumed — pinned by a test that then runs a fresh export for the same pair and confirms it fires.
+- **Role fallback:** Practice Tool carries no `assignedPosition` (`roleId: null`), so `resolveChampSelectRoleId` returns undefined → `getMostPlayedLane(112)` → mid. If most-played resolves null (a champion with zero data anywhere, where `/api/build` would 404 too) the run skips — documented, not silent.
+- **Toasts:** moved to a fixed `z-[200]` overlay (`bg-panel` solid so it reads over arbitrary page content), since the export now fires on routes with no Builds-page panel to host the old inline toast. Same message text + 6s dismiss + `.catch()`-into-error-toast hardening as the old effect.
+- **Rank bracket:** the fetch honors the user's persisted `readStoredRankBracketId()` and keeps the historical default request byte-identical (rank only appended when non-default) — faithful to `BuildTabContent.load()`.
+
+**Adjacent things I noticed but did NOT fix (out of scope):**
+- `app/page.tsx`'s live-follow effect still marks `markCompanionDriven` redundantly with the provider (harmless, idempotent, pre-existing) — left as-is.
+- The role-less-then-lane-change-for-SAME-champion mid-fetch case (e.g. Senna Bot→Support while a Senna fetch is in flight) is caught one tick later rather than instantly, because the in-flight guard is keyed on championId only. Champion CHANGES (the actual user bug + the spec's mid-fetch test) are caught immediately since different champions aren't blocked. This self-heals within one 3s tick and never corrupts the per-lane dedup; I judged an instant lane-change-mid-fetch guard not worth the added complexity. Flagged rather than buried.
+- `getMostPlayedLane` fires 5 `/api/hero-stats` calls; memoized per-champion in the component so it runs once per champion per session, not every 3s tick.
+
+**Post-deploy real-device confirm should look like:** open `/draft` (or any CoachBuild route) with the companion paired and auto-toggles on, enter a Practice Tool, pick Viktor (no assigned role). Within a poll tick or two a success toast appears ("Runes applied for Viktor." / "Item build added for Viktor — check your shop in game.") and the in-client rune page + item set update to CoachBuild's Viktor Mid — NOT a stale previous-game page. Change champion mid-select → the new champion re-exports (latest-wins). Confirm the Builds page open at the same time does NOT double-push (single export). Verify toggles off on `/live-setup` suppress the respective export.
+
+**HOLD DEPLOY honored:** implemented → `verify-fix.sh` clean (1209 tests, baseline 1192 + 17) → bumped 0.41.0 + CHANGELOG → committed locally as harout_b5@live.com → STOPPED. Did NOT run vercel. Diff is ready for the read-only audit.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-21 22:10
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-21 18:49:22Z; previous content preserved there. Append new rounds below. -->
+
+## /draft tactical HUD reskin — Stage 1 (fronty, paired with engo per `_research/draft-redesign-plan.md`)
+
+**Scope respected:** touched only `app/globals.css` (scoped `.draft-tactical` block, never `:root`), `app/draft/page.tsx`, and new files under `components/hextech/`. Did not touch `lib/**`, `app/api/**`, `components/proAssets.ts`, or `components/live/draftRecommend.ts` — those landed from engo mid-session and I verified my defensive typing matched exactly (see below).
+
+**New files:**
+- `components/hextech/draftRadarGeom.ts` + `DraftCompRadar.tsx` — pure SVG 6-axis radar (CC/Damage/Tankiness/Mobility/Utility/Engage). Consumes `aggregateEnemyComp` from engo's `lib/draft/compRatings.ts` directly (the one piece of the plan NOT wired through `/api/draft/recommend` — a static client-safe lookup by design). Enemy comp = solid cyan fill; optional hovered-champion comp = dashed outline only (no second fill, so identity reads on structure, not color-alone — dataviz skill's rule). Empty-enemies state is explicit copy, not a degenerate zero-hexagon.
+- `components/hextech/draftPicksTable.ts` + `DraftPicksTable.tsx` — "SUGGESTED PICKS" sortable table (Rank/Champion/Win Rate bar+%/Difficulty/Matchup Synergy). Native `<table>` with `aria-sort` header buttons (deliberately hand-rolled, not a shadcn pull — a table with correct semantics needs no Radix machinery, and avoided touching `package.json` mid-parallel-run with engo). Default sort = server rank; any other sort shows a "ranking is CoachBuild's own" caption (plan §5.4 honesty gate) and never reorders on refetch — pure display transform, `sortPickRows` never mutates. Used for both "Suggested picks" and "Potential counters" (same component, different `caption` prop — one implementation, can't drift on honesty states).
+- `components/hextech/draftBansTable.ts` + `DraftBansTable.tsx` — "SUGGESTED BANS", Champion/Priority-bar/Difficulty, non-sortable (5-row cap, server priority order is the point).
+- `components/hextech/matchupAnalysis.ts` + `MatchupAnalysisPopover.tsx` — inline (no history entry, no portal/position:fixed) matchup panel anchored under the lane-opponent portrait via a pure-CSS `.dt-energy-line` connector. Three lines, each independently null-safe: Win Rate vs You (real), Lane threat (derived, banded), Suggested defense (derived, damage-type based).
+- `components/hextech/EnemyTeamPanel.tsx` / `MyChampionPanel.tsx` — the two top panels. **Deviation from the prototype, deliberate:** no per-portrait role icon on enemy chips — this app has no per-enemy role/lane data (only a single lane-opponent tag), so I didn't fabricate one. MyChampionPanel's 5 lane-role toggles are hand-rolled inline SVG glyphs (no icon-pack dependency) wired to the SAME `handleLaneChange` the old `LaneFilterPills` used.
+
+**app/globals.css:** new `.draft-tactical` scoped block (cyan HUD tokens `--dt-*`, circuit-board CSS-gradient backdrop, chamfered-panel `clip-path`, text-shadow/box-shadow glow — no `filter: blur`, GPU-cheap). Every animation is plain CSS `animation`/`transition`, so the file's existing blanket `@media (prefers-reduced-motion: reduce)` rule (knocks all durations to 0.01ms) already covers every new keyframe — no per-rule guard needed, verified by re-reading that rule's `*` selector scope.
+
+**Deliberately NOT done (scope/risk calls, flagged rather than silently skipped):**
+1. **TabNav and ChampionPicker keep the app-wide GOLD accent** inside `/draft`, not cyan — those are shared, out-of-scope files, and the app's `teal`/`gold` Tailwind tokens are static hex (not CSS-var-backed), so overriding them would need `!important` selector hacks I can't visually verify without a live browser. Judged not worth the risk for two small chrome elements; flagged as an optional Stage 2 cohesion polish if wanted.
+2. **reactbits.dev was not rendered via puppeteer** — chrome-devtools MCP reported the browser already running for this profile (`--isolated` required to run a second instance), and spinning up an isolated instance mid-parallel-run felt like unnecessary risk for a decorative-only consult. Adopted well-known react-bits patterns (Dot Grid / Star Border) from knowledge and hand-rolled them in pure CSS instead of pulling the actual npm package — avoids touching `package.json`/lockfile while engo is concurrently editing files in the same checkout.
+3. **No sticky first column** on the picks table at narrow widths — it scrolls as one unit (`overflow-x-auto`, `min-w-[560px]`) rather than a sticky-Rank/Champion + scrolling-stats split. Simpler and lower-risk without a live browser to verify the sticky behavior; noted as a Stage 2 candidate.
+4. **Did not run `npx tsc --noEmit` / `next build`** — build discipline for this dispatch was vitest-only. Relied on careful reading + the defensive-typing pattern below; TypeScript correctness against engo's REAL landed types was spot-checked once they appeared mid-session (see below), not exhaustively type-checked.
+
+**Defensive-field pattern used (matchday tennis pattern, see fronty memory), then reconciled once real:** while engo's `components/live/draftRecommend.ts` / `components/proAssets.ts` were still in flight, `draftPicksTable.ts` and `matchupAnalysis.ts` locally widened `DraftPlayResult`/`ChampionIconEntry` with optional fields and declared a structural-duplicate `EnemyAnalysis` interface, rather than editing those shared files. Once engo's real changes landed mid-session (confirmed via `git status`), I reconciled: `matchupAnalysis.ts` now imports the real `DraftEnemyAnalysis` type directly (removed the duplicate interface), and `MatchupAnalysisPopover`/`EnemyTeamPanel` prop types were tightened from `unknown` to the real `EnemyAnalysis[]`. `draftPicksTable.ts`'s local optional-widening was left in place (harmless once redundant — the real fields are optional/required in a way that still satisfies the widened type) rather than churned further.
+
+**Test coverage (JSX-free pure-function modules, this repo's convention — confirmed the hard way: an identical geometry/helper module WITH JSX inline failed vitest's import-analysis, "Failed to parse source... invalid JS syntax," the moment the component gained a `return`; split into a sibling `.ts` module and it passed):**
+- `components/__tests__/draftRadarGeom.test.ts` (13 tests) — axis geometry, polygon points, ring points, footnote copy singular/plural/null cases.
+- `components/__tests__/draftPicksTable.test.ts` (22 tests) — row-shaping defaults (synergy 0/Even, difficulty null), sort correctness incl. null-difficulty handling and non-mutation, sort-state reducer, aria-sort, caption text.
+- `components/__tests__/draftBansTable.test.ts` (10 tests) — row-shaping, priority-bar clamping.
+- `components/__tests__/matchupAnalysis.test.ts` (10 tests) — lookup by champId, win-rate-line null cases (0 games ≠ real record), signal-presence check.
+
+**Verification run:** `npx vitest run` (full suite) — 93/94 files, 1323/1328 tests passed. The 5 failures are all in `lib/__tests__/staticData.champions.test.ts` (engo's file/scope — fixture `toEqual`s don't yet include the new `difficulty`/`tags` fields engo's `lib/staticData.ts` change added; unrelated to anything I touched, will self-resolve when engo updates that test's fixtures). Did not run `verify-fix.sh`, `next build`, or a browser smoke test — out of scope for this dispatch (vitest-only build discipline); orchestrator should run the full gate once both agents' work is merged.
+
+**Live-sync risk item (plan §9, highest risk):** `app/draft/page.tsx`'s `companion.tick` effect, `entryStateRef`, the `dirty` latch, and the debounced/race-guarded fetch (`reqIdRef`) are preserved byte-for-byte from the pre-reskin file — only the `return` JSX changed (re-composed into the new panel/table/radar components). Diffed the two versions side-by-side while writing to confirm no dependency array or handler body drifted.
+
+**Not verified (no browser available this dispatch):** no screenshot/visual check at 375/390px, no `prefers-reduced-motion` runtime check, no click-target verification. Per craft rules this means the visual/interaction claims above are unverified hypotheses, not confirmed facts — recommend a puppeteer pass (390px + desktop, at-rest and with the lane-opponent popover open) before calling this shipped.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-21 22:11
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-21 21:10:31Z; previous content preserved there. Append new rounds below. -->
+
+## /draft tactical HUD reskin — post-merge reconciliation (fronty, same task as the entry already merged into HANDOFF.md above)
+
+After the previous entry merged, engo's `components/live/draftRecommend.ts`/`components/proAssets.ts`/`lib/draft/recommend.ts` landed for real (confirmed via `git status`). Reconciled my defensive-typing stand-ins against the real contract:
+- `components/hextech/matchupAnalysis.ts`: replaced the local structural-duplicate `EnemyAnalysis` interface with a type alias of engo's real `DraftEnemyAnalysis` (`components/live/draftRecommend.ts`) — one definition now, no drift risk.
+- `components/hextech/MatchupAnalysisPopover.tsx` / `EnemyTeamPanel.tsx`: tightened the `enemyAnalysis` prop from `unknown` to the real `EnemyAnalysis[] | undefined | null`, dropped the now-unnecessary `as` cast.
+- `app/draft/page.tsx`: simplified `enemyAnalysisRaw` from a cast-widened read to a direct `state.data.enemyAnalysis` (the field is real and always-populated now).
+- Left `components/hextech/draftPicksTable.ts`'s local optional-widening of `DraftPlayResult`/`ChampionIconEntry` in place — now redundant (the real fields match exactly) but harmless, not worth further churn.
+
+**Final verification (`npx vitest run`, full suite):** 93/95 files, 1332/1338 tests passed. All 6 remaining failures are in `lib/__tests__/staticData.champions.test.ts` and `lib/__tests__/draft-recommend-enemyAnalysis.test.ts` — both engo's files/scope (fixture assertions not yet updated for the new `difficulty`/`tags` fields, and one soft-fail test in `lib/draft/recommend.ts`'s own new suite); nothing in `components/hextech/Draft*`, `draftRadarGeom.ts`, `draftPicksTable.ts`, `draftBansTable.ts`, or `matchupAnalysis.ts` (my 6 new test files, 90 tests, all green throughout every re-run this session).
+
+**Task complete on my side.** No version bump, no commit, no deploy, no `verify-fix.sh`/`next build` run — all out of scope for this vitest-only dispatch per the brief. Recommend the orchestrator run the full gate (`verify-fix.sh` + a puppeteer pass at 390px/desktop, at-rest and with the lane-opponent popover expanded) once engo's Stage 0 is also fully green.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-21 23:29
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+# HANDOFF — engo (Draft redesign, Stage 0: data layer)
+
+Plan: `_research/draft-redesign-plan.md`. Scope: engo's Stage 0 table (§3) + §2 specs + §4 pinned contracts + engo's rows of §6's test plan. fronty owns app/draft/page.tsx, app/globals.css, components/hextech/Draft*.tsx (running in parallel in the same checkout — did not touch any of those files).
+
+## Status: DONE. `npx vitest run` → **95 files, 1344 tests, all green** (no failures, no skips).
+
+## Files delivered
+
+**New:**
+- `lib/draft/difficulty.ts` — `DifficultyBand`, `difficultyBand(n)`, `DIFFICULTY_LOW_MAX`/`DIFFICULTY_MEDIUM_MAX` constants.
+- `lib/draft/compRatings.ts` — `CompRatingVector`, `RatedComp`, `AggregatedComp`, `ChampInfo`, `COMP_RATINGS` (curated, **173/173 live champions**), `deriveFallbackRating(tags, info)`, `getCompRating(champId)`, `aggregateEnemyComp(enemyIds)`.
+- `lib/draft/damageProfile.ts` — `SuggestedDefense`, `DamageProfileInfo`, `suggestedDefense(tags, info)`.
+- `lib/__tests__/draft-difficulty.test.ts` (10 tests), `draft-compRatings.test.ts` (23), `draft-damageProfile.test.ts` (7), `draft-score-synergy.test.ts` (18), `draft-recommend-enemyAnalysis.test.ts` (10) — **68 new tests** in dedicated files.
+
+**Modified (all additive, back-compat):**
+- `lib/types.ts` — `ChampionRef` += `difficulty?: number | null`, `tags?: string[]`.
+- `lib/staticData.ts` — `ChampDataEntry`/`DdragonChampionRaw` widened with `info`/`tags` (the raw JSON already carried these fields; only the TS shape was too narrow before, no fetch change needed); `getAllChampions`/`getChampionById` now attach `difficulty`/`tags`; `findChampionGaps` carries `info`/`tags` through for ddragon-sourced gap-fills too; **new `getChampionMeta(id)`** — server-side-only accessor (tags + difficulty + `{attack,defense,magic}`) used exclusively by `recommend.ts`'s `suggestedDefense` call (see Deviation #1 below) — deliberately NOT part of the public `/api/champions` wire shape.
+- `components/proAssets.ts` — `ChampionIconEntry` += `difficulty?`, `difficultyBand?` (pre-banded via `difficultyBand()` at map-build time), `tags?`; `getChampionIconMap()` populates them from `/api/champions`.
+- `lib/draft/score.ts` — `PlayResult` += `synergyDelta: number` (`= score - baselineWr`, computed in `computeScoredPool`, re-derived from the two already-returned fields so it can never drift). New `SynergyBand`, `SYNERGY_STRONG_DELTA`/`SYNERGY_WEAK_DELTA` (0.015 / -0.015), `synergyBand(delta)`. **Scoring formula itself untouched** — `K`/`N_FLOOR`/`W_DIRECT`/`W_OFFLANE`/pool floors/`BAN_MIN_MATCHUP_GAMES` all unchanged.
+- `lib/draft/recommend.ts` — new `EnemyAnalysis` interface, `laneThreatBandFromDelta` + `LANE_THREAT_LOW_MAX`/`LANE_THREAT_MEDIUM_MAX`, new `computeEnemyAnalysis()` (soft-fails like `attachPersonalRecords`, wired into `computeDraftRecommend`'s return + `pendingMeta`). `synergyDelta` flows through `plays`/`potentialPlays` automatically (inherited from `PlayResult`, no extra code needed there).
+- `components/live/draftRecommend.ts` — `DraftPlayResult` += `synergyDelta: number` (default 0) + `synergyBand: SynergyBand` (derived client-side via the imported `synergyBand()`, NOT sent on the wire — see contract note below). New `DraftEnemyAnalysis` type + `DraftRecommendResponse.enemyAnalysis: DraftEnemyAnalysis[]` (defaults `[]`). Normalizer extended for both, never crashes on an older/malformed payload.
+- `components/__tests__/draftRecommend.test.ts`, `lib/__tests__/staticData.champions.test.ts`, `components/__tests__/proAssets.test.ts`, `lib/__tests__/draft-recommend.test.ts` — extended for the new fields (existing `toEqual` fixtures updated; new mocks added for `@/lib/staticData`'s `getChampionMeta` so the pre-existing recommend tests stay network-free).
+
+**Untouched (no logic change needed, confirmed):** `app/api/champions/route.ts`, `app/api/draft/recommend/route.ts` — both are thin pass-throughs; additive fields flow through their existing JSON responses automatically.
+
+## Contracts — delivered exactly as pinned, with 3 flagged interpretations
+
+All pinned TS shapes in plan §4 match verbatim (`DifficultyBand`, `ChampionIconEntry` additions, `CompRatingVector`/`AggregatedComp`/`aggregateEnemyComp(enemyIds: number[])`, `SuggestedDefense`, `PlayResult += synergyDelta`, `SynergyBand`/`synergyBand()`, `EnemyAnalysis`, `DraftPlayResult += {synergyDelta, synergyBand}`, `DraftRecommendResponse += {enemyAnalysis}`) — confirmed by fronty's own already-written `draftPicksTable.ts`/`draftRadarGeom.ts`/tests importing these exact names/shapes, all passing against my real implementations (not their local defensive-widened types).
+
+**Three places the plan's prose was ambiguous or in tension with a pinned signature — flagging LOUDLY, all defensible but worth a second look:**
+
+1. **`suggestedDefense` needs ddragon `info` (attack/magic), but §2.1 says "recommend.ts stays free of ddragon coupling."** That line is scoped to the Difficulty column's client-side join (§2.1) — §2.3 explicitly assigns "per-enemy suggestedDefense" to `recommend.ts`'s file-table row, which can't be done without SOME ddragon-derived source. Resolved by adding a **new, narrow, server-only accessor** `getChampionMeta()` in `lib/staticData.ts` (not reusing/bloating `ChampionRef`'s public wire shape) — `recommend.ts` now has exactly one new import (`@/lib/staticData`), scoped to this one feature. In-memory-cached per serverless instance (reuses `loadChampsData()`'s existing cache), so no extra network cost per enemy beyond the champion list's first fetch.
+
+2. **`aggregateEnemyComp(enemyIds: number[])`'s pinned signature takes ONLY ids, but `deriveFallbackRating` needs `tags`/`info` for a good guess.** Since `aggregateEnemyComp` has no access to any champion's tags/info (by the pinned contract), its internal fallback for an un-curated id calls `deriveFallbackRating([])` — a neutral, `estimated:true` vector. This is dead code today (**all 173 live champions are curated**, verified — see below); it only matters for a genuinely new champion released after this ship, until someone adds its row. `deriveFallbackRating(tags, info)` itself stays fully exported/testable with real tag-driven output for any future richer-context caller.
+
+3. **`laneThreatBand` reuses `DifficultyBand`'s type but the plan doesn't pin numeric thresholds for the shrunk-delta magnitude banding.** Chose `LANE_THREAT_LOW_MAX = 0.02` / `LANE_THREAT_MEDIUM_MAX = 0.05` (own named constants in `recommend.ts`, entirely separate from `difficulty.ts`'s champion-complexity bands despite the shared TS union) — tunable, not part of the locked scoring formula.
+
+## compRatings.ts curation — 173/173 live champions
+
+Curated by hand from actual League kit knowledge, sanity-checked against ddragon's own `tags`/`info` (fetched live, see below) as a cross-check, NOT derived mechanically from tags (that's what `deriveFallbackRating` is for — the curated map is meant to be sharper than the coarse fallback). Spot-checks pinned as tests exactly matching the brief's named exemplars:
+- **Leona** (89): `cc3 damage0 tankiness3 mobility1 utility2 engage3` — matches plan §2.2's own worked example verbatim.
+- **Malphite** (54): `tankiness3 cc3 engage3`, low damage/mobility, no utility.
+- **Yuumi** (350): `utility3 damage0 tankiness0 mobility0`.
+- **Zed** (238): `mobility3 damage3`, cc ≤1, no tankiness/utility.
+- **Ashe** (22): `cc3` (unusual for an ADC — permaslow passive + global-stun ult), real damage, no mobility.
+- **Ornn** (516): `tankiness3 cc3 engage3`, low damage/mobility, real utility (item-upgrade mechanic).
+
+## Live API spot-check (no dev server — direct curl + unit-level validation, per build-discipline note)
+
+```
+curl https://ddragon.leagueoflegends.com/cdn/16.14.1/data/en_US/champion.json
+```
+→ 173 live champions returned. Cross-validated programmatically against `COMP_RATINGS`: **0 missing, 0 extra, 0 range errors** (every curated axis is an integer in [0,3]). This is the exact same live roster `lib/draft/compRatings.test.ts`'s "covers exactly 173" assertion pins.
+
+`lib/staticData.ts` itself is unit-tested against injected ddragon/coachless fixtures (no live network in CI, matches this repo's existing convention) — `getChampionMeta`/`getAllChampions`/`getChampionById`/`findChampionGaps` difficulty/tags propagation all covered.
+
+## Test count
+
+- **New dedicated test files:** 68 tests (`draft-difficulty` 10, `draft-compRatings` 23, `draft-damageProfile` 7, `draft-score-synergy` 18, `draft-recommend-enemyAnalysis` 10).
+- **Extended existing files:** `draftRecommend.test.ts` (client, +13 incl. new `describe` blocks for synergy/enemyAnalysis normalization), `staticData.champions.test.ts` (+7, incl. new `getChampionMeta` describe block), `proAssets.test.ts` (+2), `draft-recommend.test.ts` (mock scaffolding only, no new test cases — existing 40 tests all still pass with the new `getChampionMeta` mock in place).
+- **Full suite: `npx vitest run` → 95 files, 1344 tests, all green.**
+
+## CHANGELOG draft lines (for urgot to fold in at ship time — pair with fronty's Stage 1 entry)
+
+```
+## [0.42.0] — TBD
+### Added — /draft data layer for the tactical-HUD redesign (Stage 0, engo)
+- **Difficulty column:** ddragon's `info.difficulty` now surfaces end-to-end (`ChampionRef`/`ChampionIconEntry` → `/api/champions`), banded Low/Medium/High (`lib/draft/difficulty.ts`). Display-only, never feeds scoring.
+- **Team-comp radar data:** `lib/draft/compRatings.ts` — hand-curated 0-3 rubric across 6 axes (cc/damage/tankiness/mobility/utility/engage) for all 173 live champions, with a coarse tag-driven fallback (flagged `estimated`) for any future un-curated champion. `aggregateEnemyComp` means an enemy team's profile.
+- **Matchup Synergy:** `lib/draft/score.ts`'s `PlayResult` now carries `synergyDelta` (= `score - baselineWr`, same already-computed terms, no new arithmetic) re-banded to Strong/Even/Weak — the locked scoring formula (K/N_FLOOR/W_DIRECT/W_OFFLANE/pool floors/ban floor) is untouched.
+- **MatchupAnalysisPopover data:** `GET /api/draft/recommend` additively returns `enemyAnalysis[]` — a REAL win-rate-vs-you stat (with its real `n`, never floor-gated), a derived "Lane threat" band (floor-gated, no fabricated percentage), and a derived "Suggested defense" (`lib/draft/damageProfile.ts`, from the enemy's ddragon tags/damage-type axes, explicitly labeled derived).
+- All additive/back-compat: an older cached response or client normalizes safely to `synergyDelta:0`/`"Even"`/`enemyAnalysis:[]` — never crashes, never fabricates non-zero data.
+- No DB migration. `npx vitest run`: 1344 tests, all green.
+```
+
+## What I did NOT do / flag for follow-up
+
+- Did not touch `app/api/champions/route.ts` or `app/api/draft/recommend/route.ts` — confirmed no logic change needed, both already pass additive fields through their existing response bodies unmodified.
+- Did not run `verify-fix.sh` / `next build` / bump version / touch `CHANGELOG.md` / commit / deploy — per build discipline, that's urgot's gate after both agents land.
+- Did not touch any `components/hextech/**` file or `app/draft/page.tsx`/`app/globals.css` — confirmed fronty's exclusive scope, verified via `git status` before starting (both already mid-edit in the shared checkout) and left untouched throughout.
+- `deriveFallbackRating`'s tag-only fallback is coarse by design (see Deviation #2) — if a future champion ships without someone adding its curated row promptly, the radar will show an `estimated` footnote for that one axis until curated. Not a bug, just the documented maintenance contract from plan §2.2.
+
+

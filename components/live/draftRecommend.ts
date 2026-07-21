@@ -10,6 +10,10 @@
 // than a real network call.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { synergyBand, type SynergyBand } from "@/lib/draft/score";
+import type { DifficultyBand } from "@/lib/draft/difficulty";
+import type { SuggestedDefense } from "@/lib/draft/damageProfile";
+
 export type DraftConfidence = "low" | "normal";
 
 /** {games, wins} — a raw personal record, never a rate/score. Mirrors
@@ -52,6 +56,16 @@ export interface DraftPlayResult {
    *  that's never played this champion) so callers never need a second
    *  null-check beyond `personal` above. */
   personalOverall: PersonalRecord;
+  /** Draft redesign plan §2.4, additive: = score - baselineWr
+   *  (lib/draft/score.ts's PlayResult.synergyDelta, wire-identical). Defaults
+   *  to 0 when absent/malformed (older cached response, or Stage 0 not
+   *  landed yet) — never a fabricated non-zero swing. */
+  synergyDelta: number;
+  /** Derived CLIENT-SIDE via lib/draft/score.ts's synergyBand(synergyDelta)
+   *  at normalization time — NOT sent on the wire itself (the server only
+   *  ships synergyDelta; re-deriving here means the band can never drift
+   *  from the same formula/thresholds the server would use). */
+  synergyBand: SynergyBand;
 }
 
 /** One BAN candidate — lib/draft/score.ts's rankBans() output shape. Audit
@@ -91,6 +105,20 @@ export interface DraftRecommendMeta {
   currentPatch: string | null;
 }
 
+/** Draft redesign plan §2.3 — mirrors lib/draft/recommend.ts's EnemyAnalysis
+ *  on the wire. `laneThreatBand` reuses lib/draft/difficulty.ts's
+ *  DifficultyBand union for its label vocabulary (Low/Medium/High) — a
+ *  different axis (matchup danger) than champion kit-complexity difficulty,
+ *  same type reused deliberately per the server type's own doc comment. */
+export interface DraftEnemyAnalysis {
+  champId: number;
+  isLaneOpponent: boolean;
+  winRateVsYou: number | null;
+  winRateVsYouGames: number | null;
+  laneThreatBand: DifficultyBand | null;
+  suggestedDefense: SuggestedDefense | null;
+}
+
 export interface DraftRecommendResponse {
   /** "Main" list per v0.37.4's sample-size split — when a direct lane
    *  opponent is resolved, only candidates with >= 1,000 games vs that
@@ -114,6 +142,11 @@ export interface DraftRecommendResponse {
    *  must not fabricate empty-looking results in that window (§6a's
    *  "pending" copy). */
   pending?: boolean;
+  /** Draft redesign plan §2.3, additive: one entry per requested enemy.
+   *  Always [] when absent/malformed on the wire (older cached response, or
+   *  Stage 0 not landed yet) — never crashes the client over a field it
+   *  doesn't know about. */
+  enemyAnalysis: DraftEnemyAnalysis[];
 }
 
 export interface DraftRecommendParams {
@@ -183,6 +216,40 @@ function normalizePlay(raw: unknown): DraftPlayResult | null {
     // crash, never a fabricated non-zero record.
     personal: normalizePersonalRecord(r.personal),
     personalOverall: normalizePersonalRecord(r.personalOverall) ?? { games: 0, wins: 0 },
+    // Draft redesign plan §2.4: absent/malformed -> 0, and synergyBand(0) is
+    // always "Even" -- a consistent, honest default, never a fabricated
+    // Strong/Weak swing.
+    synergyDelta: typeof r.synergyDelta === "number" ? r.synergyDelta : 0,
+    synergyBand: synergyBand(typeof r.synergyDelta === "number" ? r.synergyDelta : 0),
+  };
+}
+
+function isDifficultyBand(v: unknown): v is DifficultyBand {
+  return v === "Low" || v === "Medium" || v === "High";
+}
+
+function normalizeSuggestedDefense(raw: unknown): SuggestedDefense | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<SuggestedDefense>;
+  if (typeof r.label !== "string" || typeof r.reason !== "string") return null;
+  return { label: r.label, reason: r.reason };
+}
+
+/** Draft redesign plan §2.3 — mirrors normalizePlay/normalizeBan's posture: a
+ *  malformed entry is dropped entirely (never a fabricated champId: 0 row),
+ *  and each optional field degrades independently to null/false rather than
+ *  rejecting the whole entry over one bad field. */
+function normalizeEnemyAnalysis(raw: unknown): DraftEnemyAnalysis | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<DraftEnemyAnalysis>;
+  if (typeof r.champId !== "number") return null;
+  return {
+    champId: r.champId,
+    isLaneOpponent: r.isLaneOpponent === true,
+    winRateVsYou: typeof r.winRateVsYou === "number" ? r.winRateVsYou : null,
+    winRateVsYouGames: typeof r.winRateVsYouGames === "number" ? r.winRateVsYouGames : null,
+    laneThreatBand: isDifficultyBand(r.laneThreatBand) ? r.laneThreatBand : null,
+    suggestedDefense: normalizeSuggestedDefense(r.suggestedDefense),
   };
 }
 
@@ -225,8 +292,14 @@ export function normalizeDraftRecommendResponse(raw: unknown): DraftRecommendRes
     laneOppInferred: typeof r.meta?.laneOppInferred === "number" ? r.meta.laneOppInferred : null,
     currentPatch: typeof r.meta?.currentPatch === "string" ? r.meta.currentPatch : null,
   };
+  // Draft redesign plan §2.3: absent/malformed (older cached response, or
+  // Stage 0 not landed yet) degrades to [] -- never crashes, never treated
+  // as a signal that no enemies were requested.
+  const enemyAnalysis = Array.isArray(r.enemyAnalysis)
+    ? r.enemyAnalysis.map(normalizeEnemyAnalysis).filter((e): e is DraftEnemyAnalysis => e !== null)
+    : [];
 
-  return { plays, potentialPlays, bans, meta, pending: r.pending === true };
+  return { plays, potentialPlays, bans, meta, pending: r.pending === true, enemyAnalysis };
 }
 
 export interface DraftRecommendDeps {

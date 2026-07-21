@@ -23,6 +23,7 @@ import { getKeystoneData } from "../coachless";
 import {
   getAllChampions,
   getChampionById,
+  getChampionMeta,
   findChampionGaps,
   __resetPatchCacheForTests,
   __resetChampsCacheForTests,
@@ -33,7 +34,15 @@ import {
 const DDRAGON_VERSIONS = ["16.13.1", "16.13.1", "16.12.1", "16.12.1", "16.11.1"];
 
 const COACHLESS_CHAMPIONS = {
-  Viktor: { id: "Viktor", key: "112", name: "Viktor" },
+  // info/tags added (draft redesign plan §2.1) -- mirrors ddragon's own
+  // summary champion.json shape (coachless's bundle is a mirror of it).
+  Viktor: {
+    id: "Viktor",
+    key: "112",
+    name: "Viktor",
+    info: { attack: 2, defense: 4, magic: 10, difficulty: 9 },
+    tags: ["Mage"],
+  },
 };
 
 // Deliberately includes a DUPLICATE of an id coachless already has (with a
@@ -41,7 +50,13 @@ const COACHLESS_CHAMPIONS = {
 // 805) that coachless doesn't have yet.
 const DDRAGON_CHAMPIONS = {
   Viktor: { id: "Viktor", key: "112", name: "Viktor (should never surface)" },
-  Locke: { id: "Locke", key: "805", name: "Locke" },
+  Locke: {
+    id: "Locke",
+    key: "805",
+    name: "Locke",
+    info: { attack: 6, defense: 4, magic: 2, difficulty: 5 },
+    tags: ["Assassin", "Mage"],
+  },
 };
 
 function mockFetch(opts: { ddragonFail?: boolean; champJsonFail?: boolean } = {}) {
@@ -120,6 +135,9 @@ describe("getAllChampions — coachless + ddragon gap-fill merge", () => {
       key: "Locke",
       name: "Locke",
       icon: "https://ddragon.leagueoflegends.com/cdn/16.13.1/img/champion/Locke.png",
+      // Draft redesign plan §2.1: gap-filled entries carry difficulty/tags too.
+      difficulty: 5,
+      tags: ["Assassin", "Mage"],
     });
   });
 
@@ -132,6 +150,8 @@ describe("getAllChampions — coachless + ddragon gap-fill merge", () => {
       key: "Viktor",
       name: "Viktor", // NOT ddragon's "Viktor (should never surface)"
       icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/Viktor.webp",
+      difficulty: 9,
+      tags: ["Mage"],
     });
   });
 
@@ -148,6 +168,8 @@ describe("getAllChampions — coachless + ddragon gap-fill merge", () => {
         key: "Viktor",
         name: "Viktor",
         icon: "https://cdn.coachless.gg/static-files/16.11.1/16.11.1/img/champion/Viktor.webp",
+        difficulty: 9,
+        tags: ["Mage"],
       },
     ]);
   });
@@ -164,8 +186,29 @@ describe("getAllChampions — coachless + ddragon gap-fill merge", () => {
         key: "Viktor",
         name: "Viktor",
         icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/Viktor.webp",
+        difficulty: 9,
+        tags: ["Mage"],
       },
     ]);
+  });
+
+  it("difficulty/tags degrade to null/[] when the source entry has no info/tags block at all", async () => {
+    // A minimal coachless fixture with no info/tags -- e.g. an upstream
+    // shape the site hasn't populated yet. Never a fabricated difficulty.
+    global.fetch = vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (u.includes("ddragon.leagueoflegends.com/api/versions.json")) return { ok: true, json: async () => DDRAGON_VERSIONS } as unknown as Response;
+      if (u.includes("cdn.coachless.gg") && u.includes("champion.json")) {
+        return { ok: true, json: async () => ({ data: { Ashe: { id: "Ashe", key: "22", name: "Ashe" } } }) } as unknown as Response;
+      }
+      if (u.includes("ddragon.leagueoflegends.com/cdn") && u.includes("champion.json")) {
+        return { ok: true, json: async () => ({ data: {} }) } as unknown as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+    const champs = await getAllChampions();
+    expect(champs[0].difficulty).toBeNull();
+    expect(champs[0].tags).toEqual([]);
   });
 });
 
@@ -178,6 +221,8 @@ describe("getChampionById — resolves a gap-filled champion", () => {
       key: "Locke",
       name: "Locke",
       icon: "https://ddragon.leagueoflegends.com/cdn/16.13.1/img/champion/Locke.png",
+      difficulty: 5,
+      tags: ["Assassin", "Mage"],
     });
   });
 
@@ -185,5 +230,33 @@ describe("getChampionById — resolves a gap-filled champion", () => {
     mockFetch();
     const nope = await getChampionById(999999);
     expect(nope).toBeNull();
+  });
+});
+
+describe("getChampionMeta — server-side-only accessor for suggestedDefense (draft redesign plan §2.3)", () => {
+  it("resolves tags/difficulty/info for a champion with a full info block", async () => {
+    mockFetch();
+    const meta = await getChampionMeta(112); // Viktor
+    expect(meta).toEqual({
+      tags: ["Mage"],
+      difficulty: 9,
+      info: { attack: 2, defense: 4, magic: 10 },
+    });
+  });
+
+  it("resolves a gap-filled champion's meta too (Locke, 805)", async () => {
+    mockFetch();
+    const meta = await getChampionMeta(805);
+    expect(meta).toEqual({
+      tags: ["Assassin", "Mage"],
+      difficulty: 5,
+      info: { attack: 6, defense: 4, magic: 2 },
+    });
+  });
+
+  it("returns null for an unknown id", async () => {
+    mockFetch();
+    const meta = await getChampionMeta(999999);
+    expect(meta).toBeNull();
   });
 });

@@ -39,20 +39,20 @@ describe("GET /api/draft/recommend", () => {
   });
 
   it("dedupes enemies and caps at 5", async () => {
-    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({ plays: [], potentialPlays: [], bans: null, meta: baseMeta, pending: true });
+    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({ plays: [], potentialPlays: [], bans: null, enemyAnalysis: [], meta: baseMeta, pending: true });
     await GET(req("?lane=0&enemies=1,1,2,3,4,5,6,7"));
     const call = vi.mocked(computeDraftRecommend).mock.calls[0][0];
     expect(call.enemies).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("passes lane/enemies/laneOpp/hover through to the engine", async () => {
-    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({ plays: [], potentialPlays: [], bans: null, meta: baseMeta, pending: true });
+    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({ plays: [], potentialPlays: [], bans: null, enemyAnalysis: [], meta: baseMeta, pending: true });
     await GET(req("?lane=2&enemies=10,20&laneOpp=10&hover=99"));
     expect(computeDraftRecommend).toHaveBeenCalledWith({ lane: 2, enemies: [10, 20], laneOpp: 10, hover: 99 });
   });
 
   it("pending -> 200 + no-store", async () => {
-    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({ plays: [], potentialPlays: [], bans: null, meta: baseMeta, pending: true });
+    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({ plays: [], potentialPlays: [], bans: null, enemyAnalysis: [], meta: baseMeta, pending: true });
     const res = await GET(req("?lane=0"));
     expect(res.status).toBe(200);
     expect(res.headers.get("Cache-Control")).toBe("no-store");
@@ -60,7 +60,7 @@ describe("GET /api/draft/recommend", () => {
   });
 
   it("empty plays (no pending flag) -> no-store (degraded, per repo Gotcha (b))", async () => {
-    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({ plays: [], potentialPlays: [], bans: null, meta: baseMeta });
+    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({ plays: [], potentialPlays: [], bans: null, enemyAnalysis: [], meta: baseMeta });
     const res = await GET(req("?lane=0"));
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
@@ -76,11 +76,12 @@ describe("GET /api/draft/recommend", () => {
           confidence: "normal",
           minGames: 10000,
           personal: null,
-          personalOverall: { games: 0, wins: 0 },
+          personalOverall: { games: 0, wins: 0 }, synergyDelta: 0,
         },
       ],
       potentialPlays: [],
       bans: null,
+      enemyAnalysis: [],
       meta: baseMeta,
     });
     const res = await GET(req("?lane=0"));
@@ -102,10 +103,11 @@ describe("GET /api/draft/recommend", () => {
           confidence: "low",
           minGames: 500,
           personal: null,
-          personalOverall: { games: 0, wins: 0 },
+          personalOverall: { games: 0, wins: 0 }, synergyDelta: 0,
         },
       ],
       bans: null,
+      enemyAnalysis: [],
       meta: baseMeta,
     });
     const res = await GET(req("?lane=0"));

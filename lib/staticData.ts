@@ -128,6 +128,17 @@ type ItemsMap = Record<string, ItemEntry>;
 
 // ── Champ data ────────────────────────────────────────────────────────────────
 
+/** ddragon champion.json's `info` block (1-10 scale per axis). Draft redesign
+ *  plan §2.1/§2.3 — carried through for the Difficulty column
+ *  (info.difficulty) and, server-side only (see getChampionMeta below), the
+ *  Suggested Defense derivation (info.attack vs info.magic). */
+interface ChampInfoRaw {
+  attack: number;
+  defense: number;
+  magic: number;
+  difficulty: number;
+}
+
 interface ChampDataEntry {
   id: string; // "Viktor"
   key: string; // "112" (numeric string)
@@ -138,6 +149,13 @@ interface ChampDataEntry {
    *  CDN URL directly instead of the coachless-derived ICON_BASES.champ()
    *  path, since coachless has no asset for this key at all. */
   ddragonIconUrl?: string;
+  /** Draft redesign plan §2.1 (additive, v0.42.0) — both coachless's bundle
+   *  (mirrors ddragon's summary champion.json, see plan §1's investigation)
+   *  and ddragon's own champion.json used by the gap-fill path already carry
+   *  these fields on the wire; this was just never captured in the TYPE
+   *  before now, so no fetch/shape change is needed beyond widening it. */
+  info?: ChampInfoRaw;
+  tags?: string[];
 }
 
 interface SummonerDataEntry {
@@ -464,6 +482,11 @@ interface DdragonChampionRaw {
   key: string; // numeric string, e.g. "805"
   id: string; // "Locke" (CDN key form)
   name: string; // "Locke" (display name)
+  /** Draft redesign plan §2.1 (additive) — ddragon's own champion.json
+   *  (this gap-fill path's source) carries the same info/tags shape as
+   *  coachless's mirrored bundle. */
+  info?: ChampInfoRaw;
+  tags?: string[];
 }
 
 /** Pure merge logic — given the set of champion ids coachless already has,
@@ -484,6 +507,13 @@ export function findChampionGaps(
       key: entry.key,
       name: entry.name,
       ddragonIconUrl: DDRAGON_CHAMPION_ICON(ddragonVersion, entry.id),
+      // Draft redesign plan §2.1: gap-filled champions carry difficulty/tags
+      // too (via `info`/`tags` below, undefined when the source entry never
+      // had them — never fabricated). Omitted entirely rather than set to
+      // undefined-valued keys when absent, so a fixture without these
+      // fields still deep-equals a pre-this-change gap entry exactly.
+      ...(entry.info ? { info: entry.info } : {}),
+      ...(entry.tags ? { tags: entry.tags } : {}),
     });
   }
   return gaps;
@@ -611,6 +641,11 @@ export async function getAllChampions(): Promise<ChampionRef[]> {
       // (coachless has no asset for them at all); every coachless-sourced
       // entry keeps using the coachless CDN as before.
       icon: c.ddragonIconUrl ?? ICON_BASES.champ(c.id, ver),
+      // Draft redesign plan §2.1 (additive): null/[] when info/tags are
+      // genuinely absent (e.g. a malformed upstream entry) -- never a
+      // fabricated difficulty number.
+      difficulty: c.info?.difficulty ?? null,
+      tags: c.tags ?? [],
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -627,6 +662,36 @@ export async function getChampionById(
     key: c.id,
     name: c.name,
     icon: c.ddragonIconUrl ?? ICON_BASES.champ(c.id, ver),
+    difficulty: c.info?.difficulty ?? null,
+    tags: c.tags ?? [],
+  };
+}
+
+/** Draft redesign plan §2.3 — server-side-only accessor for the "Suggested
+ *  Defense" derivation (lib/draft/damageProfile.ts's suggestedDefense, called
+ *  from lib/draft/recommend.ts). Deliberately SEPARATE from
+ *  getChampionById/getAllChampions (the public /api/champions contract):
+ *  attack/defense/magic are NOT part of ChampionRef's wire shape (keeps the
+ *  client contract lean — only difficulty/tags are exposed there, per §2.1's
+ *  "join is client-side" design for the Difficulty column). This is the one
+ *  place recommend.ts genuinely needs a ddragon-derived value beyond what
+ *  ChampionRef exposes. Returns null when the champion isn't found or its
+ *  `info` block is missing -- callers (suggestedDefense) already treat a
+ *  null info as "nothing to derive a damage-type lean from". */
+export interface ChampionMeta {
+  tags: string[];
+  difficulty: number | null;
+  info: { attack: number; defense: number; magic: number } | null;
+}
+
+export async function getChampionMeta(id: number): Promise<ChampionMeta | null> {
+  const champs = await loadChampsData();
+  const c = champs.find((x) => parseInt(x.key, 10) === id);
+  if (!c) return null;
+  return {
+    tags: c.tags ?? [],
+    difficulty: c.info?.difficulty ?? null,
+    info: c.info ? { attack: c.info.attack, defense: c.info.defense, magic: c.info.magic } : null,
   };
 }
 
