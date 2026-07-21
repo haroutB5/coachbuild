@@ -25,6 +25,7 @@ import {
   resolveAutoExportTarget,
   resolveTargetLane,
   executeAutoExport,
+  inFlightKey,
   type AutoExportToast,
 } from "./autoExport";
 import { roleIdToLane } from "./deepLink";
@@ -83,11 +84,16 @@ export default function AutoExporter() {
   // discards itself — this is the mechanism behind the identity guard's
   // isStillCurrent below.
   const genRef = useRef(0);
-  // Cheap guard against stacking concurrent runs for the SAME champion (keyed
-  // on championId — a DIFFERENT champion is never blocked, so a real
-  // champion-change-mid-fetch still kicks off its own run and bumps the gen,
-  // discarding the older one).
-  const inFlightRef = useRef<Set<number>>(new Set());
+  // Cheap guard against stacking concurrent runs for the SAME (champion, lane)
+  // pair — keyed via inFlightKey(championId, knownLane), NOT championId alone.
+  // AUDIT P1 FIX (2026-07-21 pre-ship audit): champion-only keying suppressed
+  // the run for a same-champion LANE FLIP mid-fetch (position trade), so the
+  // in-flight run's gen was never bumped, isStillCurrent stayed true, and the
+  // OLD lane's runes/items were pushed — reaching the live game when the trade
+  // landed inside the finalization window. Keying on (champion, lane) lets the
+  // flipped lane start its own run, which bumps the gen and makes the stale
+  // run discard itself before any push (the guard's documented contract).
+  const inFlightRef = useRef<Set<string>>(new Set());
   // Per-champion most-played-lane memo (role-less path only) — the answer is
   // stable for a champion, so we resolve it once instead of running the
   // 5-call lookup on every 3s poll tick while the same champion is hovered.
@@ -119,14 +125,18 @@ export default function AutoExporter() {
     const target = resolveAutoExportTarget(companion.phase, companion.champSelect);
     if (!target) return;
     const { championId, roleId } = target;
-    // Don't stack a second run for a champion already mid-run.
-    if (inFlightRef.current.has(championId)) return;
 
     // Resolve lane cheaply: role-bearing (ranked/draft) is instant; role-less
     // (Practice Tool / custom / ARAM) uses the memo, falling through to the
     // async most-played lookup inside the run below when not yet cached.
     const knownLane: LaneId | null =
       roleId !== undefined ? roleIdToLane(roleId) : laneCacheRef.current.get(championId) ?? null;
+
+    // Don't stack a second run for the same (champion, lane) pair. Computed
+    // AFTER knownLane so a lane flip produces a DIFFERENT key and is never
+    // suppressed (see the inFlightRef comment above — audit P1).
+    const flightKey = inFlightKey(championId, knownLane);
+    if (inFlightRef.current.has(flightKey)) return;
 
     // Pre-dedup: when we already know the lane and BOTH kinds are already
     // exported for this (champion, lane), skip the whole run — no fetch, no
@@ -141,7 +151,7 @@ export default function AutoExporter() {
     }
 
     let cancelled = false;
-    inFlightRef.current.add(championId);
+    inFlightRef.current.add(flightKey);
     const myGen = ++genRef.current;
 
     (async () => {
@@ -163,9 +173,12 @@ export default function AutoExporter() {
           fetchBuild: fetchBuildFor,
           // Identity guard: the run is still current iff (a) no newer run has
           // bumped the gen AND (b) the live champ-select champion still matches
-          // this run's champion. Either check catches a champion-change-mid-
-          // fetch; both are cheap. (Lane changes for the SAME champion are
-          // caught by the per-lane dedup keying, not needed here.)
+          // this run's champion. A champion change mid-fetch fails (b); a
+          // same-champion LANE flip mid-fetch starts its own run (inFlightKey
+          // includes the lane) which bumps the gen, so this run fails (a) —
+          // that gen bump is load-bearing, it is what discards the wrong-lane
+          // build before any push (audit P1). laneId needs no direct check
+          // here because every lane change is funnelled through the gen.
           isStillCurrent: (cid) => genRef.current === myGen && getCurrentChampSelectChampionId() === cid,
           isCompanionDriven: isCompanionDrivenChampion,
           epoch: getChampSelectPhaseEpoch(),
@@ -183,7 +196,7 @@ export default function AutoExporter() {
           },
         });
       } finally {
-        inFlightRef.current.delete(championId);
+        inFlightRef.current.delete(flightKey);
       }
     })();
 

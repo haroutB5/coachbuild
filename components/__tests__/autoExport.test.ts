@@ -333,3 +333,66 @@ describe("executeAutoExport — error hardening", () => {
     expect(h.itemApply).not.toHaveBeenCalled();
   });
 });
+
+// ── Audit P1 regression (2026-07-21 pre-ship audit): same-champion LANE FLIP
+// mid-fetch. With inFlightRef keyed on championId alone, the flipped lane's
+// run was suppressed, the gen never bumped, and the OLD lane's build was
+// pushed (could reach a live game on a late position trade). inFlightKey now
+// includes the lane, so the flip starts a superseding run; this suite pins
+// the exact wiring semantics: gen bump -> stale discard -> only the new
+// lane's build is ever pushed.
+import { inFlightKey } from "../live/autoExport";
+
+describe("inFlightKey — lane is part of the in-flight identity (audit P1)", () => {
+  it("keys the same champion differently per lane, with 'pending' for null", () => {
+    expect(inFlightKey(VIKTOR, "top")).not.toBe(inFlightKey(VIKTOR, "mid"));
+    expect(inFlightKey(VIKTOR, null)).toBe(`${VIKTOR}:pending`);
+    // Different champions never collide even on the same lane.
+    expect(inFlightKey(VIKTOR, "mid")).not.toBe(inFlightKey(AHRI, "mid"));
+  });
+});
+
+describe("executeAutoExport — same-champion lane flip mid-FETCH (audit P1)", () => {
+  it("gen bump from the flipped lane's run discards the old lane's build before any push", async () => {
+    enterChampSelect(VIKTOR);
+
+    // Mirror AutoExporter's wiring: one shared gen counter, one closure per run.
+    const gen = { current: 0 };
+
+    // Run 1: (Viktor, top) — its fetch is HELD so the flip lands mid-flight.
+    const myGen1 = ++gen.current;
+    let releaseTopFetch!: (b: BuildResponse | null) => void;
+    const heldTopFetch = new Promise<BuildResponse | null>((r) => (releaseTopFetch = r));
+    const h1 = makeDeps({});
+    h1.deps.fetchBuild = () => heldTopFetch;
+    h1.deps.isStillCurrent = (cid) => gen.current === myGen1 && cid === VIKTOR;
+    const p1 = executeAutoExport(VIKTOR, "top", h1.deps);
+
+    // Lane flips to mid while run 1's fetch is in flight. Under the NEW
+    // keying (inFlightKey includes the lane) this run is NOT suppressed —
+    // it starts and bumps the gen. (Champion-only keying would have blocked
+    // exactly this, leaving myGen1 current: the bug.)
+    const myGen2 = ++gen.current;
+    const h2 = makeDeps({ build: { ...buildFor(VIKTOR), role: 2, roleLabel: "Mid" } });
+    h2.deps.isStillCurrent = (cid) => gen.current === myGen2 && cid === VIKTOR;
+    const p2 = executeAutoExport(VIKTOR, "mid", h2.deps);
+
+    // Run 1's TOP build finally resolves — must be discarded at consume time.
+    releaseTopFetch({ ...buildFor(VIKTOR), role: 0, roleLabel: "Top" });
+    const res1 = await p1;
+    const res2 = await p2;
+
+    expect(res1).toEqual({ items: "stale", runes: "stale" });
+    // The old lane's build was never pushed anywhere.
+    expect(h1.itemApply).not.toHaveBeenCalled();
+    expect(h1.runeApply).not.toHaveBeenCalled();
+    // The flipped lane exported exactly once.
+    expect(res2).toEqual({ items: "exported-ok", runes: "exported-ok" });
+    expect(h2.itemApply).toHaveBeenCalledTimes(1);
+    expect(h2.runeApply).toHaveBeenCalledTimes(1);
+    // Dedup ledger: top slot untouched (a genuine later top run may fire),
+    // mid slot consumed by run 2.
+    expect(shouldAutoExportForLane("items", VIKTOR, "top")).toBe(true);
+    expect(shouldAutoExportForLane("items", VIKTOR, "mid")).toBe(false);
+  });
+});

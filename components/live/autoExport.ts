@@ -85,6 +85,17 @@ export async function resolveTargetLane(
   return getMostPlayed(target.championId);
 }
 
+/** In-flight run key — MUST include the lane (audit P1, 2026-07-21): keying
+ *  runs on championId alone suppressed a same-champion lane-flip's run, so the
+ *  stale run's gen was never bumped and the OLD lane's build got pushed. A
+ *  null lane (role-less, most-played not yet memoized) keys as "pending" — a
+ *  later tick that HAS the memoized lane produces a different key and may
+ *  start a superseding run, which is safe: the gen bump makes the pending run
+ *  discard itself, and dedup + the multi-tab lock prevent any double push. */
+export function inFlightKey(championId: number, knownLane: LaneId | null): string {
+  return `${championId}:${knownLane ?? "pending"}`;
+}
+
 export interface AutoExportToast {
   kind: "success" | "error";
   message: string;
