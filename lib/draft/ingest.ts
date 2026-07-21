@@ -31,6 +31,7 @@ import {
 } from "@/lib/draft/ugg";
 import { patchSegment, resolveDraftPatchLabel } from "@/lib/draft/patch";
 import { runDefaultIngestGuard, runSymmetryCheck } from "@/lib/draft/ingestGuard";
+import { runDefaultLolalyticsCheck, type LolalyticsTransport } from "@/lib/draft/lolalyticsCheck";
 
 /** Champions per invocation. ~170 champs / 9 per batch ≈ 19 batches; at
  *  ~1.5s pacing and 2 requests (matchups+rankings) per champ, one batch is
@@ -84,7 +85,7 @@ export interface DraftIngestOptions {
   /** Overrides the champion list entirely (index by numeric id only) —
    *  skips getAllChampions(). Used by tests, and available to a future
    *  script that already resolved the list once itself. */
-  champions?: { id: number }[];
+  champions?: { id: number; name?: string }[];
   onProgress?: (msg: string) => void;
   /** Injectable HTTP transport — app/route code stays on the default fetch
    *  transport; scripts/ingest-draft.mjs injects a curl-based one (see
@@ -97,6 +98,12 @@ export interface DraftIngestOptions {
    *  batch immediately (route, tight 60s budget) vs. is logged per-champion
    *  and the walk continues (script, default, long-running). */
   fastFailOnRatelimit?: boolean;
+  /** Injectable HTTP transport for lib/draft/lolalyticsCheck.ts's external
+   *  matchup-direction tripwire -- defaults to plain fetch (confirmed
+   *  reachable from this box, see that module's header); a script/future
+   *  environment can override with a curl-based transport the same way
+   *  scripts/ingest-draft.mjs overrides `transport` for u.gg. */
+  lolalyticsTransport?: LolalyticsTransport;
 }
 
 export interface DraftIngestResult {
@@ -123,6 +130,14 @@ export interface DraftIngestResult {
    *  (never silently trusted), but the last-known-good patch is NOT pruned
    *  until a human investigates (see the pushed errors for specifics). */
   guardOk: boolean | null;
+  /** EXTERNAL matchup-direction tripwire (2026-07-21, see
+   *  lib/draft/lolalyticsCheck.ts's header): null on every batch except the
+   *  final one. "fail" blocks retention exactly like a `guardOk===false`
+   *  above; "indeterminate" (lolalytics scrape shape broke, or too few
+   *  high-sample matchups were comparable) logs loudly but does NOT block --
+   *  this is a tripwire against a THIRD PARTY's markup, not a dependency,
+   *  and a scrape break must never be confused with a real ingest failure. */
+  lolalyticsVerdict: "pass" | "fail" | "indeterminate" | null;
 }
 
 const APP_ROLES: RoleId[] = [0, 1, 2, 3, 4];
@@ -192,6 +207,7 @@ export async function runDraftIngest(opts: DraftIngestOptions = {}): Promise<Dra
     errors: [],
     retentionRan: false,
     guardOk: null,
+    lolalyticsVerdict: null,
   };
 
   if (champIds.length === 0 || cursor < 0 || cursor >= champIds.length) {
@@ -300,15 +316,50 @@ export async function runDraftIngest(opts: DraftIngestOptions = {}): Promise<Dra
       result.errors.push(`ingest guard threw unexpectedly (treated as failed, never silently trusted): ${(err as Error).message}`);
     }
 
-    if (result.guardOk) {
+    // EXTERNAL matchup-direction tripwire (2026-07-21, see
+    // lib/draft/lolalyticsCheck.ts's header): the two checks above verify
+    // BASELINES (cross-source panel) and INTERNAL decode/keying integrity
+    // (symmetry) -- neither actually verifies matchup DIRECTION against a
+    // third-party source that itself publishes per-matchup winrates. This
+    // check does that via lolalytics's SSR counters pages. "fail" (>=2
+    // high-sample matchups disagree) blocks retention exactly like the
+    // checks above; "indeterminate" (lolalytics markup changed, or too few
+    // high-sample matchups were comparable) is logged loudly but NEVER
+    // blocks retention on its own -- this guards a third party's page shape,
+    // not a dependency this ingest can require to be up.
+    try {
+      const lolalyticsResult = await runDefaultLolalyticsCheck(
+        sql,
+        patchLabel,
+        allChampions.map((c) => ({ id: c.id, name: c.name ?? "" })),
+        opts.lolalyticsTransport
+      );
+      result.lolalyticsVerdict = lolalyticsResult.verdict;
+      if (lolalyticsResult.verdict === "fail") {
+        result.errors.push(`lolalytics matchup-direction tripwire FAILED: ${lolalyticsResult.disagreements.join("; ")}`);
+      } else if (lolalyticsResult.verdict === "indeterminate") {
+        log(`lolalytics matchup-direction tripwire: indeterminate (${lolalyticsResult.reason}) -- not blocking retention`);
+      }
+    } catch (err) {
+      // A thrown check (vs. an in-band "indeterminate" verdict) is treated
+      // the SAME as indeterminate, not as a failure -- this is a tripwire
+      // against a third party's page, never a hard ingest dependency.
+      result.lolalyticsVerdict = "indeterminate";
+      log(`lolalytics matchup-direction tripwire threw unexpectedly (treated as indeterminate, non-blocking): ${(err as Error).message}`);
+    }
+
+    const retentionSafe = result.guardOk && result.lolalyticsVerdict !== "fail";
+    if (retentionSafe) {
       try {
         await pruneOldPatches(sql);
         result.retentionRan = true;
       } catch (err) {
         result.errors.push(`retention prune failed: ${(err as Error).message}`);
       }
-    } else {
+    } else if (!result.guardOk) {
       log("ingest guard failed -- retention SKIPPED, existing data left in place for investigation");
+    } else {
+      log("lolalytics matchup-direction tripwire FAILED -- retention SKIPPED, existing data left in place for investigation");
     }
   }
 

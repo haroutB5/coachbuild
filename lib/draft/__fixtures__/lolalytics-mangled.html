@@ -1,0 +1,16 @@
+<!-- Simulates a lolalytics markup rework: only 2 rows still match the
+     expected "{champ} wins against {opp} {pct}%" shape (real bytes, copied
+     from lolalytics-garen-top.html); the rest have had their qwik comment /
+     span structure altered (a plausible real-world page-rework shape) so
+     the parser's regex does not match them. 2 < LOLALYTICS_MIN_PARSEABLE
+     (5) -- this fixture exists to prove parseLolalyticsCounters degrades to
+     "few matches", and runLolalyticsCheck degrades to "indeterminate",
+     rather than throwing. -->
+<html><body><div class="lolalytics-mangled-fixture">
+Garen<!----> wins against <!--t=4l-->Twisted Fate<!----> <span class="text-green-300">44.83%</span>
+Garen<!----> wins against <!--t=5h-->Kayle<!----> <span class="text-green-300">45.19%</span>
+Garen wins-against <!--t=6d-->Ryze<!----><div class="new-layout-wr">46.49</div>
+Garen <span data-role="matchup">Camille</span> <b class="wr">46.66</b>
+<section><h3>Tryndamere</h3><p>win rate unavailable in this layout</p></section>
+<section><h3>Quinn</h3><p>win rate unavailable in this layout</p></section>
+</div></body></html>

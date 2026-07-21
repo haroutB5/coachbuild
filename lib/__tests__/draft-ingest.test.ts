@@ -35,10 +35,20 @@ vi.mock("@/lib/draft/ingestGuard", () => ({
   runSymmetryCheck: vi.fn(async () => ({ ok: true, checked: 100, failures: [] })),
 }));
 
+// EXTERNAL matchup-direction tripwire (2026-07-21): mocked to a passing
+// default here -- this file covers ORCHESTRATION (cursor/batch/retention
+// wiring), not the check's own logic (see draft-lolalyticsCheck.test.ts for
+// that). Dedicated tests below flip this to fail/indeterminate to prove the
+// retention gate reacts correctly to each verdict.
+vi.mock("@/lib/draft/lolalyticsCheck", () => ({
+  runDefaultLolalyticsCheck: vi.fn(async () => ({ verdict: "pass", reason: "", pages: [], comparisons: [], disagreements: [] })),
+}));
+
 import { getSql } from "@/lib/pro/db";
 import { resolveDraftPatchLabel } from "@/lib/draft/patch";
 import { fetchMatchups, fetchRankings } from "@/lib/draft/ugg";
 import { runDefaultIngestGuard, runSymmetryCheck } from "@/lib/draft/ingestGuard";
+import { runDefaultLolalyticsCheck } from "@/lib/draft/lolalyticsCheck";
 import {
   runDraftIngest,
   BATCH_SIZE,
@@ -61,6 +71,13 @@ describe("runDraftIngest", () => {
     vi.mocked(fetchRankings).mockReset().mockResolvedValue({ byRole: {} });
     vi.mocked(runDefaultIngestGuard).mockReset().mockResolvedValue({ ok: true, checked: 20, failures: [], details: [] });
     vi.mocked(runSymmetryCheck).mockReset().mockResolvedValue({ ok: true, checked: 100, failures: [] });
+    vi.mocked(runDefaultLolalyticsCheck).mockReset().mockResolvedValue({
+      verdict: "pass",
+      reason: "",
+      pages: [],
+      comparisons: [],
+      disagreements: [],
+    });
     __resetDraftPacerForTests();
     __setDraftPaceMsForTests(0); // no real wall-clock pacing needed against a mocked transport
 
@@ -142,7 +159,9 @@ describe("runDraftIngest", () => {
     expect(mid.nextCursor).not.toBeNull();
     expect(mid.retentionRan).toBe(false);
     expect(mid.guardOk).toBeNull(); // guard never runs on a non-final batch
+    expect(mid.lolalyticsVerdict).toBeNull(); // neither does the lolalytics tripwire
     expect(runDefaultIngestGuard).not.toHaveBeenCalled();
+    expect(runDefaultLolalyticsCheck).not.toHaveBeenCalled();
     const pruneCallsMid = mockSql.mock.calls.filter(([strings]) =>
       (strings as TemplateStringsArray).join("").includes("GROUP BY patch")
     );
@@ -152,9 +171,11 @@ describe("runDraftIngest", () => {
     const final = await runDraftIngest({ cursor: 9, champions }); // final batch
     expect(final.nextCursor).toBeNull();
     expect(final.guardOk).toBe(true);
+    expect(final.lolalyticsVerdict).toBe("pass");
     expect(final.retentionRan).toBe(true);
     expect(runDefaultIngestGuard).toHaveBeenCalledWith(mockSql, "16.14");
     expect(runSymmetryCheck).toHaveBeenCalledWith(mockSql, "16.14");
+    expect(runDefaultLolalyticsCheck).toHaveBeenCalledWith(mockSql, "16.14", expect.any(Array), undefined);
     const pruneCallsFinal = mockSql.mock.calls.filter(([strings]) =>
       (strings as TemplateStringsArray).join("").includes("GROUP BY patch")
     );
@@ -163,6 +184,53 @@ describe("runDraftIngest", () => {
       (strings as TemplateStringsArray).join("").startsWith("DELETE FROM coachbuild.draft_")
     );
     expect(deleteCalls).toHaveLength(2); // draft_matchup + draft_champ_stats
+  });
+
+  it("EXTERNAL tripwire: a FAILING lolalytics verdict skips retention even when the other two guards pass", async () => {
+    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0 });
+    vi.mocked(runDefaultLolalyticsCheck).mockResolvedValue({
+      verdict: "fail",
+      reason: "2 high-sample matchups disagree",
+      pages: [],
+      comparisons: [],
+      disagreements: ["Viktor/mid vs Gragas: lolalytics 44.3% vs ours 55.7% (delta 11.4 > tolerance 4, n=5000)"],
+    });
+
+    const result = await runDraftIngest({ cursor: 0, champions: [{ id: 1 }] });
+    expect(result.nextCursor).toBeNull();
+    expect(result.guardOk).toBe(true); // the OTHER two guards still passed
+    expect(result.lolalyticsVerdict).toBe("fail");
+    expect(result.retentionRan).toBe(false);
+    expect(result.errors.some((e) => e.includes("lolalytics matchup-direction tripwire FAILED"))).toBe(true);
+    const pruneCalls = mockSql.mock.calls.filter(([strings]) =>
+      (strings as TemplateStringsArray).join("").includes("GROUP BY patch")
+    );
+    expect(pruneCalls).toHaveLength(0);
+  });
+
+  it("EXTERNAL tripwire: an INDETERMINATE lolalytics verdict does NOT block retention (scrape break, not an ingest failure)", async () => {
+    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0 });
+    vi.mocked(runDefaultLolalyticsCheck).mockResolvedValue({
+      verdict: "indeterminate",
+      reason: "only 2/5 high-sample matchups were comparable",
+      pages: [],
+      comparisons: [],
+      disagreements: [],
+    });
+
+    const result = await runDraftIngest({ cursor: 0, champions: [{ id: 1 }] });
+    expect(result.lolalyticsVerdict).toBe("indeterminate");
+    expect(result.guardOk).toBe(true);
+    expect(result.retentionRan).toBe(true);
+  });
+
+  it("EXTERNAL tripwire: a thrown lolalytics check is treated as indeterminate (non-blocking), never an uncaught failure", async () => {
+    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0 });
+    vi.mocked(runDefaultLolalyticsCheck).mockRejectedValue(new Error("lolalytics HTTP 500"));
+
+    const result = await runDraftIngest({ cursor: 0, champions: [{ id: 1 }] });
+    expect(result.lolalyticsVerdict).toBe("indeterminate");
+    expect(result.retentionRan).toBe(true);
   });
 
   it("P0 guard: a FAILING cross-source panel skips retention and surfaces the failure (never silently trusted)", async () => {

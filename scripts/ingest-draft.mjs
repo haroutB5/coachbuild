@@ -125,6 +125,7 @@ async function main() {
   let totalSkippedRows = 0;
   let patch = "";
   let guardOk = null;
+  let lolalyticsVerdict = null;
   const allErrors = [];
 
   for (;;) {
@@ -155,6 +156,20 @@ async function main() {
       if (guardOk === false) {
         console.log("  GUARD FAILED -- retention was skipped, see errors below for the specific failing comparisons.");
       }
+
+      // EXTERNAL matchup-direction tripwire (2026-07-21, see
+      // lib/draft/lolalyticsCheck.ts): also ran internally on this FINAL
+      // cursor. "fail" blocks retention just like the guard above;
+      // "indeterminate" (lolalytics markup broke, or too few high-sample
+      // matchups were comparable) is expected to happen sometimes and is
+      // NOT a failure -- surfaced here so it's never mistaken for one.
+      lolalyticsVerdict = result.lolalyticsVerdict;
+      console.log(`=== lolalytics matchup-direction tripwire === verdict=${lolalyticsVerdict}`);
+      if (lolalyticsVerdict === "fail") {
+        console.log("  TRIPWIRE FAILED -- retention was skipped, see errors below for the specific disagreeing matchups.");
+      } else if (lolalyticsVerdict === "indeterminate") {
+        console.log("  indeterminate (scrape shape or DB coverage) -- non-blocking, retention still ran if the other guard passed.");
+      }
       break;
     }
     cursor = result.nextCursor;
@@ -174,6 +189,7 @@ async function main() {
         errorCount: allErrors.length,
         roleProbeFailures,
         guardOk,
+        lolalyticsVerdict,
       },
       null,
       2
@@ -182,7 +198,7 @@ async function main() {
   if (allErrors.length > 0) {
     console.log(`\nfirst 5 errors:\n  ${allErrors.slice(0, 5).join("\n  ")}`);
   }
-  if (allErrors.length > 0 || roleProbeFailures.length > 0 || guardOk === false) process.exitCode = 1;
+  if (allErrors.length > 0 || roleProbeFailures.length > 0 || guardOk === false || lolalyticsVerdict === "fail") process.exitCode = 1;
 }
 
 main().catch((err) => {

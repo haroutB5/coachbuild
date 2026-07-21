@@ -38,6 +38,7 @@ function batchResult(overrides: Partial<Awaited<ReturnType<typeof runDraftIngest
     errors: [],
     retentionRan: false,
     guardOk: null,
+    lolalyticsVerdict: null,
     ...overrides,
   };
 }
