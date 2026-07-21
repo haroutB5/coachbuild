@@ -3,23 +3,13 @@
 import { useEffect, useState, useCallback } from "react";
 import type { BuildResponse, ChampionRef } from "@/lib/types";
 import type { LaneId } from "./heroContracts";
-import { LANE_TO_ROLE_ID, LANE_LABEL, isBuildForLane } from "./heroContracts";
+import { LANE_TO_ROLE_ID, LANE_LABEL } from "./heroContracts";
 import RunesSummonersCard from "./RunesSummonersCard";
 import StartingCard from "./StartingCard";
 import CoreBuildOrderCard from "./CoreBuildOrderCard";
 import SituationalCard from "./SituationalCard";
 import ProConsensusCard from "./ProConsensusCard";
 import { versionFromPatch } from "@/components/proAssets";
-import { getStoredSession, getStoredPort, getAutoItemSetsEnabled, getAutoRunesEnabled } from "@/components/live/companionClient";
-import { autoApplyItemSetsIfEligible } from "./itemSetsApply";
-import { autoApplyRunesIfEligible } from "./runeAutoApply";
-import {
-  getChampSelectPhaseEpoch,
-  shouldAutoExportForLane,
-  markAutoExported,
-  isCompanionDrivenChampion,
-  tryClaimAutoExportLock,
-} from "@/components/live/champSelectFollowState";
 import ItemDetailPopover from "@/components/ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "@/components/EntityDetailPopover";
 import { useBodyScrollLock } from "@/components/useBodyScrollLock";
@@ -238,179 +228,16 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
     };
   }, [champ, lane, rankBracket, rankHydrated, load]);
 
-  // ── Auto-export: item sets (v1.2.0) + runes (v1.3.0) ─────────────────────
-  //
-  // v1.3.0: generalized from "once per deep-link page mount" to "once per
-  // (champ-select session, championId)" — the companion no longer opens a
-  // NEW tab on every hover (attached-tab live-follow, companion.ps1's
-  // Test-CompanionHasAttachedTab), so this SAME component instance now sees
-  // many champion changes within one champ-select, not just one at mount.
-  //
-  // v0.35.0 (user on-device evidence): that championId-only key never
-  // re-fired on a LANE CHANGE for the SAME champion (e.g. Senna Bot ->
-  // Support) — the game was left on the OLD lane's build. Generalized again
-  // to "once per (champ-select session, championId, laneId)" via
-  // champSelectFollowState.ts's shouldAutoExportForLane/markAutoExported
-  // (see that module's doc comment for the "latest wins" model and why it
-  // correctly handles a same-champion lane bounce A -> B -> A). The
-  // localStorage multi-tab lock (tryClaimAutoExportLock) gained `lane` in
-  // its key for the same reason — a lock claimed for one lane must never
-  // starve a legitimate re-fire for a different one.
-  //
-  // The wrong-champion race (P1 audit fix, 2026-07-20) still applies:
-  // isCompanionDrivenChampion gates on whether THIS championId was actually
-  // reached via a companion signal (initial deep link OR a later live-follow
-  // update — both mark it in champSelectFollowState.ts) rather than a
-  // transient fallback render (e.g. the page's default champion showing
-  // before app/page.tsx's own lookup resolves and swaps in the real one).
-  // This is unchanged and gates BOTH the first-ever export AND any later
-  // lane re-fire, checked before shouldAutoExportForLane is ever consulted.
-  //
-  // Compliance (v1.3.0 update): BOTH item sets AND runes may now auto-export
-  // — see companion.ps1's header + companionClient.ts's header comment for
-  // the reasoning (inert loadout suggestions, not game actions) and the one
-  // bright line that doesn't move (rune auto mode never deletes a page it
-  // doesn't own).
-  //
-  // v0.35.0 fold-in fix: both promise chains below now end in a `.catch()`,
-  // not just `.then()` — an uncaught rejection anywhere in the attempt
-  // (e.g. a pure builder throwing on a genuinely malformed field) used to
-  // vanish completely silently (no toast, no companion call, no console
-  // signal a user would ever see): exactly the asymmetry investigated after
-  // a live report of "runes auto-exported, items silently didn't." Item
-  // sets have strictly more surface area that could throw before ever
-  // reaching the companion (buildItemSets is a synchronous pure builder
-  // called after the async pro-consensus resolution; runes has no
-  // equivalent extra step), so this hardening matters more for that path,
-  // but it's applied symmetrically to both on the "never let an attempt
-  // vanish without at least a visible error toast" principle.
-  const [itemsToast, setItemsToast] = useState<{ kind: "success" | "error"; message: string } | null>(null);
-  const [runesToast, setRunesToast] = useState<{ kind: "success" | "error"; message: string } | null>(null);
-
-  // Round-B P3 fix ("stale toast champion name"): a toast's message text
-  // always correctly names the champion it was actually exported FOR (the
-  // effect below closes over `build.champion.name` at export time, not at
-  // render time — that part was never wrong) — the bug was that the toast
-  // could keep showing for up to its full 6s window even after the user had
-  // already moved on to a DIFFERENT champion/lane, reading as stale/
-  // confusing against whatever's now on screen. Clearing on every
-  // champion/lane change closes that gap without touching the message
-  // composition itself (capturing the name at render time instead would be
-  // actively WRONG — it would attribute the export to whatever's currently
-  // shown rather than what was actually exported).
-  useEffect(() => {
-    setItemsToast(null);
-    setRunesToast(null);
-  }, [champ.id, lane]);
-
-  useEffect(() => {
-    if (state.status !== "ok") return;
-    const build = state.build;
-    // v0.36.0 (live bug fix — see heroContracts.ts's isBuildForLane doc
-    // comment for the full stale-closure race): `lane` can already reflect
-    // a JUST-FLIPPED lane while `state.build` still holds the PREVIOUS
-    // lane's data, in the SAME render this effect runs in. Never export
-    // against that mismatched pair — it would silently claim the new
-    // lane's dedup slot with the wrong lane's data and permanently block
-    // the real export.
-    if (!isBuildForLane(build.role, lane)) return;
-    const championId = build.champion.id;
-    if (!isCompanionDrivenChampion(championId)) return;
-
-    const session = getStoredSession();
-    const port = getStoredPort();
-    const epoch = getChampSelectPhaseEpoch();
-
-    // Item sets
-    //
-    // Round-B P3 fix ("transient-probe-failure marks-as-done"): markAutoExported
-    // used to fire synchronously here, BEFORE the async attempt even started —
-    // so a transient "companion not connected yet" (outcome.attempted === false,
-    // e.g. the tab opened before the local companion process finished pairing)
-    // permanently consumed this (champion, lane)'s dedup slot, even though
-    // NOTHING was actually exported. The only way to retry was a coincidental
-    // lane bounce. Fixed by moving the mark into the resolution below, gated on
-    // outcome.attempted: an attempt the deeper shouldAutoExport() gate refused
-    // (no session/port yet, or the toggle is off) leaves the slot OPEN for a
-    // later genuine attempt; a REAL attempt (companion reachable) marks done
-    // regardless of ok/error — a write failure isn't fixed by bouncing lanes,
-    // it's surfaced via the error toast instead. tryClaimAutoExportLock is
-    // still claimed synchronously (unchanged) — its 30s localStorage TTL is
-    // what prevents a double-fire in the async window before the in-memory
-    // mark lands (a second effect run for the SAME (kind, epoch, championId,
-    // laneId) within that window fails the lock claim outright), so no
-    // separate in-flight flag is needed.
-    if (shouldAutoExportForLane("items", championId, lane) && tryClaimAutoExportLock("items", epoch, championId, lane)) {
-      autoApplyItemSetsIfEligible(
-        { isDeepLink: true, autoEnabled: getAutoItemSetsEnabled(), session, port, alreadyFired: false },
-        async () => ({ champ: build.champion, lane, roleLabel: build.roleLabel, build })
-      )
-        .then((outcome) => {
-          if (!outcome.attempted) return; // gate refused (not yet connected / toggle off) -- quiet, no toast, slot left open for a later retry
-          markAutoExported("items", championId, lane);
-          if (outcome.result.ok) {
-            setItemsToast({ kind: "success", message: `Item build added for ${build.champion.name} — check your shop in game.` });
-          } else {
-            setItemsToast({
-              kind: "error",
-              message: outcome.result.hint ?? "Couldn't auto-add item builds — add them manually from the Runes & Summoners card.",
-            });
-          }
-          setTimeout(() => setItemsToast(null), 6000);
-        })
-        .catch(() => {
-          // See this effect's header comment (v0.35.0 fold-in fix) — an
-          // uncaught exception anywhere in the attempt must surface a
-          // visible error, never vanish silently. Still counts as a
-          // completed attempt (marked done) so it doesn't retry into the
-          // same exception on every lane bounce.
-          markAutoExported("items", championId, lane);
-          setItemsToast({
-            kind: "error",
-            message: "Couldn't auto-add item builds — add them manually from the Runes & Summoners card.",
-          });
-          setTimeout(() => setItemsToast(null), 6000);
-        });
-    }
-
-    // Runes — same Round-B P3 fix as item sets above (mark deferred to the
-    // resolution, gated on outcome.attempted).
-    if (shouldAutoExportForLane("runes", championId, lane) && tryClaimAutoExportLock("runes", epoch, championId, lane)) {
-      autoApplyRunesIfEligible(
-        { isDeepLink: true, autoEnabled: getAutoRunesEnabled(), session, port, alreadyFired: false },
-        async () => ({ championName: build.champion.name, roleLabel: build.roleLabel, runes: build.runes })
-      )
-        .then((outcome) => {
-          if (!outcome.attempted) return;
-          markAutoExported("runes", championId, lane);
-          if (outcome.result.ok) {
-            const r = outcome.result;
-            setRunesToast({
-              kind: "success",
-              message:
-                r.selected && r.verified
-                  ? `Runes applied for ${build.champion.name}.`
-                  : `Runes saved for ${build.champion.name} — open the client to select the page.`,
-            });
-          } else {
-            setRunesToast({
-              kind: "error",
-              message: outcome.result.hint ?? "Couldn't auto-apply runes — use the Apply runes button instead.",
-            });
-          }
-          setTimeout(() => setRunesToast(null), 6000);
-        })
-        .catch(() => {
-          markAutoExported("runes", championId, lane);
-          setRunesToast({
-            kind: "error",
-            message: "Couldn't auto-apply runes — use the Apply runes button instead.",
-          });
-          setTimeout(() => setRunesToast(null), 6000);
-        });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires once per (epoch, championId, lane) by design (champSelectFollowState's own dedup), not a live-updating effect
-  }, [state, lane]);
+  // NOTE (v0.41.0): champ-select AUTO-EXPORT was LIFTED OUT of this component
+  // to the app-wide companion layer (components/live/AutoExporter.tsx, mounted
+  // in app/layout.tsx). It used to live here, but this tab only mounts on the
+  // Builds page ("/", tab === "build"); since companion 1.5.0 the user drafts
+  // from /draft (which suppresses opening the Builds page), so the exporter
+  // anchored here never ran. AutoExporter fetches the picked champion's build
+  // itself off the app-wide /status poll and pushes through the SAME apply
+  // pipelines + the SAME champSelectFollowState dedup — exactly one owner, so
+  // an open Builds page can no longer double-push. The MANUAL Apply buttons
+  // (RunesSummonersCard's own click handlers) are untouched and still live.
 
   if (state.status === "loading") {
     return (
@@ -467,26 +294,6 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
   return (
     <div className="mt-5 space-y-5">
       <RankBracketSelector value={rankBracket} onChange={handleRankChange} />
-      {runesToast && (
-        <p
-          role="status"
-          className={`text-[11.5px] rounded-lg border px-3.5 py-2.5 ${
-            runesToast.kind === "success" ? "text-teal border-teal-dim bg-teal/5" : "text-bad border-bad/40 bg-bad/5"
-          }`}
-        >
-          {runesToast.message}
-        </p>
-      )}
-      {itemsToast && (
-        <p
-          role="status"
-          className={`text-[11.5px] rounded-lg border px-3.5 py-2.5 ${
-            itemsToast.kind === "success" ? "text-teal border-teal-dim bg-teal/5" : "text-bad border-bad/40 bg-bad/5"
-          }`}
-        >
-          {itemsToast.message}
-        </p>
-      )}
       <RunesSummonersCard
         runes={build.runes}
         spells={build.spells}

@@ -3,6 +3,7 @@ import { Plus_Jakarta_Sans, Cinzel } from "next/font/google";
 import "./globals.css";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 import CompanionProvider from "@/components/live/CompanionProvider";
+import AutoExporter from "@/components/live/AutoExporter";
 
 const plusJakarta = Plus_Jakarta_Sans({
   subsets: ["latin"],
@@ -66,7 +67,16 @@ export default function RootLayout({
             comment for the split of responsibility with app/page.tsx's
             follow effect. Wrapping at the root (not just "/") is what lets
             /draft react to the same live session without a second poller. */}
-        <CompanionProvider>{children}</CompanionProvider>
+        {/* v0.41.0 (champ-select auto-export lift): AutoExporter mounts inside
+            CompanionProvider so it reacts to the SAME app-wide /status poll on
+            EVERY route — the fix for auto-export never firing when the user
+            drafts from /draft (which suppresses opening the Builds page, where
+            the exporter used to live). Exactly one owner app-wide; see
+            components/live/autoExport.ts's header. */}
+        <CompanionProvider>
+          {children}
+          <AutoExporter />
+        </CompanionProvider>
         <ServiceWorkerRegister />
       </body>
     </html>

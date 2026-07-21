@@ -1,59 +1,34 @@
-<!-- merged into HANDOFF.md 2026-07-21 19:43:06Z; previous content preserved there. Append new rounds below. -->
+<!-- merged into HANDOFF.md 2026-07-21 19:55:50Z; previous content preserved there. Append new rounds below. -->
 
-# HANDOFF-engy — CoachBuild v0.40.0 (2026-07-21)
+## v0.41.0 — champ-select auto-export lifted to the app-wide companion layer (engy, 2026-07-21)
 
-## Ship: two user-reported P0/UX items — live pickup permanently dying + fringe sub-1000-game bans
+**Bug (real Practice Tool game):** picked Viktor, in-client rune page stayed on a previous game's "CoachBuild Nasus Jungle" — no auto-import fired. Confirmed the orchestrator's root cause against the source: `autoApplyRunesIfEligible`/`autoApplyItemSetsIfEligible` were mounted ONLY in `components/hextech/BuildTabContent.tsx`, which fetches `/api/build` and runs the export effect only when the **Builds page** (`/`, tab==="build") is showing. Since companion 1.5.0 the user drafts from `/draft`, which suppresses opening the Builds page — so nothing ever fetched the picked champion's build and nothing exported. The side-effect chain was implicitly anchored to the Builds page being mounted.
 
-**Deployed:** v0.40.0 → https://coachbuild.vercel.app (prod). `verify-fix.sh` clean, 1192 tests (baseline 1179 + 13 net new).
+**What I did:**
+- **New `components/live/autoExport.ts`** (pure logic + injectable effect body): `resolveAutoExportTarget(phase, champSelect)` (pure trigger → `{championId, roleId}`), `resolveTargetLane(target, getMostPlayed)` (role-bearing → `roleIdToLane`; role-less → most-played fallback), and `executeAutoExport(championId, laneId, deps)` — the async fetch→identity-guard→dedup→apply→mark→toast body, every collaborator injected.
+- **New `components/live/AutoExporter.tsx`** — headless component mounted inside `CompanionProvider` (`app/layout.tsx`), keyed on `companion.tick`. Owns the React glue: per-tick trigger, a request-id generation counter backing the identity guard, an in-flight set (keyed by championId), a per-champion most-played-lane memo, the `/api/build` fetch (same endpoint/params/rank-bracket rule as `BuildTabContent.load()`), and an app-wide fixed toast overlay.
+- **Removed** `BuildTabContent`'s auto-export effect, the stale-toast-clear effect, the two toast states, the toast JSX, and all now-unused imports. Exactly one owner.
+- **Mounted** `<AutoExporter />` in `app/layout.tsx` (inside `CompanionProvider`, alongside `{children}`).
+- **Tests:** `components/__tests__/autoExport.test.ts`, 17 new.
 
-### Item 1 — /draft live pickup permanently died after any manual edit
+**Exact files touched:**
+- Added: `components/live/autoExport.ts`, `components/live/AutoExporter.tsx`, `components/__tests__/autoExport.test.ts`
+- Modified: `app/layout.tsx`, `components/hextech/BuildTabContent.tsx`, `CHANGELOG.md`, `package.json` (0.40.0 → 0.41.0)
 
-**Confirmed the briefed mechanism exactly.** `dirty` (`app/draft/page.tsx`) is latched by every manual handler including `handleClearHover`, and was previously cleared ONLY by the explicit "Reset to live" link. One Clear tap in game 1 permanently detached the page from every future champ select — `resolveDraftLiveTarget` returns `null` whenever `dirty` is true, unconditionally.
+**Design decisions / why:**
+- **App-wide mount works where per-page didn't** because the root layout persists across client nav (`/` ↔ `/draft`), so the exporter's refs (gen counter, in-flight set, lane memo) survive the whole champ-select. Load-bearing — documented in the component header.
+- **Reused, never re-implemented:** the 3-way champion/role resolution (`resolveCurrentChampSelectChampionId`/`resolveChampSelectRoleId`), the `champSelectFollowState` dedup (latest-wins `(championId,laneId)` per kind, the multi-tab localStorage lock, `markAutoExported` deferred until AFTER an attempt), and the SAME `autoApplyItemSetsIfEligible`/`autoApplyRunesIfEligible` pipelines the manual buttons use.
+- **`isCompanionDriven` still gates** — but the champ-select champion is marked driven by `CompanionProvider` every tick (unconditional, its Round-B P1 fix), so the gate passes on `/draft`/any route without depending on `app/page.tsx`'s page-specific follow effect.
+- **Identity guard (v0.36 lesson):** two mechanisms, either sufficient for a champion-change-mid-fetch: (a) the generation counter (a newer kickoff bumps it; the stale run's post-fetch check fails), and (b) an explicit `getCurrentChampSelectChampionId() === championId` check at consume time. The stale run returns BEFORE `shouldExportForLane`/`claimLock`/`markExported` are touched, so no dedup slot is consumed — pinned by a test that then runs a fresh export for the same pair and confirms it fires.
+- **Role fallback:** Practice Tool carries no `assignedPosition` (`roleId: null`), so `resolveChampSelectRoleId` returns undefined → `getMostPlayedLane(112)` → mid. If most-played resolves null (a champion with zero data anywhere, where `/api/build` would 404 too) the run skips — documented, not silent.
+- **Toasts:** moved to a fixed `z-[200]` overlay (`bg-panel` solid so it reads over arbitrary page content), since the export now fires on routes with no Builds-page panel to host the old inline toast. Same message text + 6s dismiss + `.catch()`-into-error-toast hardening as the old effect.
+- **Rank bracket:** the fetch honors the user's persisted `readStoredRankBracketId()` and keeps the historical default request byte-identical (rank only appended when non-default) — faithful to `BuildTabContent.load()`.
 
-**Fix — entry-transition auto-reset (`components/live/draftLiveSync.ts`):**
-- New pure state machine `resolveChampSelectEntry(prev: ChampSelectEntryState, phase: string | null): ChampSelectEntryResult`. `ChampSelectEntryState` tracks only `lastRealPhase: string | null` — the most recently observed NON-NULL phase, across ticks.
-- A `null` phase (transient `/status` poll failure) is a complete no-op: `{ isEntry: false, next: prev }` — it never updates `lastRealPhase` and never itself counts as leaving/entering anything. This is what makes the blip cases correct:
-  - `ChampSelect → null → ChampSelect`: NOT an entry (the null tick left `lastRealPhase` at `"ChampSelect"`, so the next real tick sees no transition).
-  - `Lobby → null → ChampSelect`: IS an entry (the null tick didn't touch `lastRealPhase`, still `"Lobby"` when the real tick lands).
-- `isEntry = phase === "ChampSelect" && prev.lastRealPhase !== "ChampSelect"` — fires exactly once per genuine entry, never on the steady state (repeated `"ChampSelect"` ticks).
-- **Wired in `app/draft/page.tsx`:** a new `entryStateRef` (ref, not state — pure bookkeeping) feeds `resolveChampSelectEntry` on every `companion.tick` inside the existing live-sync effect, BEFORE the existing `resolveDraftLiveTarget` call. On `entryResult.isEntry && dirty`, calls `setDirty(false)` and returns early — the re-render this triggers (dirty is already an effect dependency) re-runs the effect with fresh `dirty` state and applies the live target normally on the next pass. No double-apply, no infinite loop (the ref is updated to `next` regardless of whether `isEntry` fired, so entry can't re-fire on the following tick).
-- Manual edits still win for the REST of the same champ select (the fix only resets on the entry tick, never on steady-state ticks) — preserves the earlier "follow fights user" behavior the plan is built around.
+**Adjacent things I noticed but did NOT fix (out of scope):**
+- `app/page.tsx`'s live-follow effect still marks `markCompanionDriven` redundantly with the provider (harmless, idempotent, pre-existing) — left as-is.
+- The role-less-then-lane-change-for-SAME-champion mid-fetch case (e.g. Senna Bot→Support while a Senna fetch is in flight) is caught one tick later rather than instantly, because the in-flight guard is keyed on championId only. Champion CHANGES (the actual user bug + the spec's mid-fetch test) are caught immediately since different champions aren't blocked. This self-heals within one 3s tick and never corrupts the per-lane dedup; I judged an instant lane-change-mid-fetch guard not worth the added complexity. Flagged rather than buried.
+- `getMostPlayedLane` fires 5 `/api/hero-stats` calls; memoized per-champion in the component so it runs once per champion per session, not every 3s tick.
 
-**Legibility fix (design item b):** the dirty+live-champ-select state previously showed a small underlined text link ("Reset to live") easy to miss entirely — plausibly why the bug read to the user as "live pickup is just dead" rather than "I'm in manual mode, here's the button." Replaced with a bordered, filled banner (`role="status"`, teal-tinted background/border matching the existing accent) reading "Manual mode — champ select detected" plus a solid filled "Reset to live" button (was: dotted-underline text link). The quiet "Syncing from champ select" pill for the passive-syncing state is unchanged.
+**Post-deploy real-device confirm should look like:** open `/draft` (or any CoachBuild route) with the companion paired and auto-toggles on, enter a Practice Tool, pick Viktor (no assigned role). Within a poll tick or two a success toast appears ("Runes applied for Viktor." / "Item build added for Viktor — check your shop in game.") and the in-client rune page + item set update to CoachBuild's Viktor Mid — NOT a stale previous-game page. Change champion mid-select → the new champion re-exports (latest-wins). Confirm the Builds page open at the same time does NOT double-push (single export). Verify toggles off on `/live-setup` suppress the respective export.
 
-**Tests (`components/__tests__/draftLiveSync.test.ts`, 8 new):** fresh-mount-into-ChampSelect is an entry; real-phase→ChampSelect is an entry; repeated ChampSelect ticks never re-fire; leave-then-reenter (the literal "game 2" repro) fires again; a null tick alone changes nothing; **the exact blip case from the brief** — `ChampSelect → null → ChampSelect` does NOT count as re-entry; a null blip DURING a real transition (`Lobby → null → ChampSelect`) still resolves correctly once the real tick lands; a non-ChampSelect→non-ChampSelect phase change is never an entry.
-
-**Not verified on a real device this round (per dispatch note) — what the user should see on their next Practice Tool session:**
-1. Game 1: enter champ select → hover auto-fills your champion (unchanged from before).
-2. Tap Clear (or make any manual edit) → the "Manual mode — champ select detected" banner should appear (NEW — previously just a small link, easy to miss).
-3. Finish game 1, start game 2's Practice Tool champ select → hover should AUTO-FILL again without touching Reset to live — this is the actual fix. Previously it stayed blank forever after step 2.
-4. If it does NOT re-attach on game 2, the thing to check first is whether the companion's `/status` phase string between games is literally `"ChampSelect"` again (not some other value this repo hasn't seen) — `resolveChampSelectEntry` only recognizes the exact string `"ChampSelect"`, matching `resolveDraftLiveTarget`'s existing check.
-
-### Item 2 — Suggested bans included sub-1000-game fringe rows outranking well-sampled counters
-
-**Confirmed the exact repro is the reported mechanism.** Ban candidates are drawn from `pool` (`lib/draft/recommend.ts`), which is floored by `filterPoolByTotalGames` at `POOL_MIN_TOTAL_GAMES=5000` — but that's the champion's AGGREGATE games across every opponent in that role, not the specific hover-vs-target matchup sample `rankBans` actually scores and the UI displays as `n=`. A champion can clear the 5000-aggregate floor easily while having a tiny, noisy sample against one specific hovered champion — that's exactly how Singed (n=463 vs Viktor) out-scored Xerath (n=16547 vs Viktor): a genuine shrunk-delta disadvantage on a small sample can still exceed a well-sampled one's magnitude.
-
-**Fix (`lib/draft/score.ts`, `rankBans`):**
-- New named constant `BAN_MIN_MATCHUP_GAMES = 1000` — same VALUE as `PLAY_MAIN_SAMPLE_FLOOR` but a deliberately separate constant (different axis: hover-vs-target matchup, not direct-lane-opponent matchup; doc comment cross-references both).
-- Candidates with no matchup row, or `row.games < BAN_MIN_MATCHUP_GAMES`, are excluded from the ban pool ENTIRELY (`.map` → `null` → `.filter` out) — not scored at 0, not flagged "low confidence" and still shown. Ban formula (`disadvantage × presence`) is byte-identical otherwise.
-- Side effect worth knowing: since `BAN_MIN_MATCHUP_GAMES (1000) > K (200)`, the `confidence: "low"` branch inside `rankBans` is now structurally unreachable for any surviving candidate — kept as a real `row.games < K` check (not hardcoded to `"normal"`) rather than deleted, so it self-corrects if either constant is ever retuned independently. Flagged in a code comment at the call site.
-- `app/draft/page.tsx`: the `bans.length === 0` empty-state copy changed from the old generic "No strong bans identified" / "Nothing stands out…" to "No well-sampled counters" / "No well-sampled counters to your pick this patch — check back as more games are recorded." — this state now specifically means the floor filtered everything, not "nothing stands out," and the copy needed to say that honestly rather than fabricate a ban.
-
-**Tests (`lib/__tests__/draft-score.test.ts`, describe "ban candidate floor", 5 new):** floor value pinned equal to `PLAY_MAIN_SAMPLE_FLOOR`; exactly-at-floor (1000 games) included; **the literal Singed(463)/Xerath(16547) repro** — sub-floor excluded even with a real signal, well-sampled candidate included and ranked; just-under-floor (999) excluded; empty-result shape (all candidates sub-floor → `[]`). Three pre-existing `rankBans` tests updated because they previously depended on missing/sub-floor rows still appearing (`new Map()` for a top-5 tiebreak test, and the confidence/minGames pair that used to exercise n=300/n=90 — both now sub-floor).
-
-**PROD SMOKE:**
-```
-GET /api/draft/recommend?lane=2&hover=<Viktor champId>
-→ every entry in `bans[]` has minGames >= 1000 (verify exact command/output below)
-```
-
-### Ship mechanics
-- `bash scripts/verify-fix.sh coachbuild`: tsc clean, lint clean (0 warnings), 1192 tests passed (baseline 1179 + 13 net new: 8 draftLiveSync + 5 draft-score, 0 net from 3 pre-existing tests updated in place), build clean, SW/manifest OK.
-- Version bump `0.39.1` → `0.40.0` (`package.json`), `CHANGELOG.md` entry added for both items.
-- Commit authored as `harout_b5@live.com` / `Harout` (Vercel personal-account requirement).
-- Deployed via `npx vercel --prod --archive=tgz`.
-
-### Not done this round (explicitly out of scope, called out per dispatch)
-- Real-device confirm of the full hover→auto-fill→game-2-reattach flow — needs the user's own Practice Tool session (companion 1.5.0 + LCU), can't be simulated headlessly. See "what the user should see" above.
-- No change to `BanResult.confidence`'s TYPE or `PersonalPlayResult`/play-list scoring — this ship touches `rankBans` candidate INCLUSION only, not `computeScoredPool`/`splitPlaysBySampleSize`/the play-list formula.
-
+**HOLD DEPLOY honored:** implemented → `verify-fix.sh` clean (1209 tests, baseline 1192 + 17) → bumped 0.41.0 + CHANGELOG → committed locally as harout_b5@live.com → STOPPED. Did NOT run vercel. Diff is ready for the read-only audit.
