@@ -52,6 +52,19 @@
 // it with a mocked fetch instead of a real loopback server (the bridge is
 // fundamentally untestable off a real gaming PC — see plan §5's
 // "Untestable off gaming PC" note).
+//
+// v0.43.0 diagnosability — user hit "Couldn't add item builds — try again,
+// or add them manually in-client" repeatedly on-device and can no longer
+// retrieve the companion log, so this round hardens BLIND: every failure
+// mode applyItemSets/applyRunes can hit now gets its own classified `hint`
+// string (previously several distinct failure modes — a non-2xx HTTP
+// status, a malformed-but-2xx body, an ok:false companion response with no
+// `hint` field — all fell through to the SAME generic caller-side fallback
+// message, indistinguishable from each other and from "the companion
+// itself said nothing useful"). See recordCompanionError below for the
+// second half: every classified failure is also appended to a small
+// rolling localStorage ring buffer so /live-setup can show recent failure
+// history on a return visit, even without PowerShell/log access.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const COMPANION_PORTS = [48291, 48292, 48293] as const;
@@ -212,6 +225,77 @@ function safeLocalStorage(): Storage | null {
     return window.localStorage;
   } catch {
     return null; // storage disabled (private mode, policy, etc.)
+  }
+}
+
+// ── Companion error ring buffer (v0.43.0 diagnosability) ────────────────────
+// Small rolling localStorage log of classified companion-call failures
+// (network refused, HTTP status, malformed body, or a companion ok:false)
+// so /live-setup can show recent failure history on a LATER visit — the
+// whole point being the user can report from their phone next time without
+// needing PowerShell/log access at all. Best-effort only (same posture as
+// every other localStorage write in this file): a quota/policy failure here
+// must never break the apply call itself.
+
+const LAST_ERRORS_STORAGE_KEY = "coachbuild:companion:lastErrors:v1";
+const LAST_ERRORS_CAP = 20;
+
+export interface CompanionErrorLogEntry {
+  ts: string; // ISO timestamp
+  kind: string; // classification, e.g. "network-error" | "http-503" | "slots-full"
+  detail: string; // the same hint text shown to the user
+}
+
+function isErrorLogEntry(v: unknown): v is CompanionErrorLogEntry {
+  const e = v as Partial<CompanionErrorLogEntry> | null;
+  return !!e && typeof e === "object" && typeof e.ts === "string" && typeof e.kind === "string" && typeof e.detail === "string";
+}
+
+function parseErrorLog(raw: string): CompanionErrorLogEntry[] {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(isErrorLogEntry) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Appends one classified failure to the ring buffer, capped at
+ *  LAST_ERRORS_CAP (oldest dropped first). Called from applyItemSets'/
+ *  applyRunes' own failure paths below — never from a passive poll
+ *  (getStatus/probeCompanion), which would flood the log with routine
+ *  "companion not open yet" noise instead of an actual apply failure. */
+export function recordCompanionError(kind: string, detail: string): void {
+  try {
+    const store = safeLocalStorage();
+    if (!store) return;
+    const raw = store.getItem(LAST_ERRORS_STORAGE_KEY);
+    const list = raw ? parseErrorLog(raw) : [];
+    list.push({ ts: new Date().toISOString(), kind, detail });
+    while (list.length > LAST_ERRORS_CAP) list.shift();
+    store.setItem(LAST_ERRORS_STORAGE_KEY, JSON.stringify(list));
+  } catch {
+    /* best-effort only -- never let logging break the actual apply call */
+  }
+}
+
+/** Most-recent-last list of recent companion-call failures, for
+ *  /live-setup's status panel. Never throws; degrades to []. */
+export function getCompanionErrorLog(): CompanionErrorLogEntry[] {
+  try {
+    const store = safeLocalStorage();
+    const raw = store?.getItem(LAST_ERRORS_STORAGE_KEY);
+    return raw ? parseErrorLog(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function clearCompanionErrorLog(): void {
+  try {
+    safeLocalStorage()?.removeItem(LAST_ERRORS_STORAGE_KEY);
+  } catch {
+    /* ignore */
   }
 }
 
@@ -505,24 +589,57 @@ export async function applyRunes(
   deps: CompanionClientDeps = {}
 ): Promise<ApplyRunesResult> {
   const f = deps.fetchImpl ?? fetch;
+  let res: Response;
   try {
-    const res = await f(bridgeUrl(port, "/apply-runes", session), {
+    res = await f(bridgeUrl(port, "/apply-runes", session), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...body, mode }),
     });
-    const data = await res.json().catch(() => null);
-    if (data && typeof data === "object" && typeof (data as { ok?: unknown }).ok === "boolean") {
-      return data as ApplyRunesResult;
-    }
-    return { ok: false, reason: res.ok ? "malformed-response" : `http-${res.status}` };
   } catch {
-    return {
+    // fetch itself threw -- classified as "the companion isn't reachable at
+    // all" (port closed / tray app not running / LNA blocked). Distinct from
+    // every OTHER failure mode below, which all imply a real HTTP round trip.
+    const result: ApplyRunesResult = {
       ok: false,
       reason: "network-error",
-      hint: "Check the companion is still running and try again.",
+      hint: "Companion not reachable — is the tray app running?",
     };
+    recordCompanionError(result.reason, result.hint!);
+    return result;
   }
+
+  if (!res.ok) {
+    const result: ApplyRunesResult = {
+      ok: false,
+      reason: `http-${res.status}`,
+      hint: `League client refused the rune-page write (code ${res.status}) — is the client open?`,
+    };
+    recordCompanionError(result.reason, result.hint!);
+    return result;
+  }
+
+  const data = await res.json().catch(() => null);
+  if (data && typeof data === "object" && typeof (data as { ok?: unknown }).ok === "boolean") {
+    const parsed = data as ApplyRunesResult;
+    if (!parsed.ok) {
+      // The companion answered but didn't supply its own `hint` -- surface
+      // its raw `reason` rather than dropping straight to the caller's
+      // generic fallback text, same fix as applyItemSets below.
+      const hint = parsed.hint ?? `Companion reported "${parsed.reason}" — try again, or set runes manually in-client.`;
+      recordCompanionError(parsed.reason, hint);
+      return { ...parsed, hint };
+    }
+    return parsed;
+  }
+
+  const result: ApplyRunesResult = {
+    ok: false,
+    reason: "malformed-response",
+    hint: "Companion sent an unexpected response — try again or restart the tray app.",
+  };
+  recordCompanionError(result.reason, result.hint!);
+  return result;
 }
 
 /** POSTs an item-sets apply request. Unlike applyRunes, this is NOT
@@ -542,22 +659,65 @@ export async function applyItemSets(
   deps: CompanionClientDeps = {}
 ): Promise<ApplyItemSetsResult> {
   const f = deps.fetchImpl ?? fetch;
+  let res: Response;
   try {
-    const res = await f(bridgeUrl(port, "/apply-itemsets", session), {
+    res = await f(bridgeUrl(port, "/apply-itemsets", session), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const data = await res.json().catch(() => null);
-    if (data && typeof data === "object" && typeof (data as { ok?: unknown }).ok === "boolean") {
-      return data as ApplyItemSetsResult;
-    }
-    return { ok: false, reason: res.ok ? "malformed-response" : `http-${res.status}` };
   } catch {
-    return {
+    // fetch itself threw -- same "not reachable at all" classification as
+    // applyRunes above (port closed / tray app not running / LNA blocked).
+    // This is the failure mode the user's on-device report most plausibly
+    // hits if the companion had quietly stopped running or restarted on a
+    // different port mid-session (see this file's v0.43.0 header note).
+    const result: ApplyItemSetsResult = {
       ok: false,
       reason: "network-error",
-      hint: "Check the companion is still running and try again.",
+      hint: "Companion not reachable — is the tray app running?",
     };
+    recordCompanionError(result.reason, result.hint!);
+    return result;
   }
+
+  if (!res.ok) {
+    // A real HTTP round trip happened but came back non-2xx -- distinct
+    // from "not reachable at all" (network-error above): the companion (or
+    // something in front of it) IS there, but rejected/errored the write.
+    const result: ApplyItemSetsResult = {
+      ok: false,
+      reason: `http-${res.status}`,
+      hint: `League client refused the item-set write (code ${res.status}) — is the client open?`,
+    };
+    recordCompanionError(result.reason, result.hint!);
+    return result;
+  }
+
+  const data = await res.json().catch(() => null);
+  if (data && typeof data === "object" && typeof (data as { ok?: unknown }).ok === "boolean") {
+    const parsed = data as ApplyItemSetsResult;
+    if (!parsed.ok) {
+      // 2xx + a well-formed {ok:false,...} -- the companion answered but
+      // may not have supplied its own `hint` (older companion, or a reason
+      // it never bothered to explain). Surface the raw `reason` instead of
+      // falling all the way through to RunesSummonersCard's generic
+      // "Couldn't add item builds" fallback -- THIS is the exact gap that
+      // made every ok:false-without-hint response indistinguishable from
+      // every other failure mode on-device.
+      const hint = parsed.hint ?? `Companion reported "${parsed.reason}" — try again, or add manually in-client.`;
+      recordCompanionError(parsed.reason, hint);
+      return { ...parsed, hint };
+    }
+    return parsed;
+  }
+
+  // 2xx but the body wasn't the expected {ok:boolean,...} shape at all.
+  const result: ApplyItemSetsResult = {
+    ok: false,
+    reason: "malformed-response",
+    hint: "Companion sent an unexpected response — try again or restart the tray app.",
+  };
+  recordCompanionError(result.reason, result.hint!);
+  return result;
 }

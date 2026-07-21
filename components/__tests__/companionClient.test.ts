@@ -24,6 +24,9 @@ import {
   getAutoItemSetsEnabled,
   setAutoItemSetsEnabled,
   isFollowCapableRoute,
+  recordCompanionError,
+  getCompanionErrorLog,
+  clearCompanionErrorLog,
 } from "../live/companionClient";
 
 function makeLocalStorageShim() {
@@ -472,7 +475,14 @@ describe("companionClient — applyRunes", () => {
       },
     })) as unknown as typeof fetch;
     const result = await applyRunes(48291, "sess", RUNE_BODY, "manual", { fetchImpl });
-    expect(result).toEqual({ ok: false, reason: "http-500" });
+    // v0.43.0 diagnosability: a non-2xx now carries a classified, distinct
+    // hint (previously dropped entirely, indistinguishable from every other
+    // failure mode on the toast).
+    expect(result).toEqual({
+      ok: false,
+      reason: "http-500",
+      hint: "League client refused the rune-page write (code 500) — is the client open?",
+    });
   });
 
   it("sends the mode in the request body (v1.3.0)", async () => {
@@ -644,5 +654,131 @@ describe("companionClient — getAutoItemSetsEnabled / setAutoItemSetsEnabled", 
 
   it("setAutoItemSetsEnabled never throws with no window", () => {
     expect(() => setAutoItemSetsEnabled(true)).not.toThrow();
+  });
+});
+
+describe("companionClient — recordCompanionError / getCompanionErrorLog (v0.43.0 diagnosability ring buffer)", () => {
+  afterEach(() => unstubWindow());
+
+  it("no window (SSR) — getCompanionErrorLog returns [], recordCompanionError never throws", () => {
+    expect(getCompanionErrorLog()).toEqual([]);
+    expect(() => recordCompanionError("network-error", "detail")).not.toThrow();
+  });
+
+  it("round-trips one entry with ts/kind/detail", () => {
+    stubWindow(makeLocalStorageShim());
+    recordCompanionError("http-500", "League client refused the item-set write (code 500) — is the client open?");
+    const log = getCompanionErrorLog();
+    expect(log).toHaveLength(1);
+    expect(log[0].kind).toBe("http-500");
+    expect(log[0].detail).toBe("League client refused the item-set write (code 500) — is the client open?");
+    expect(typeof log[0].ts).toBe("string");
+    expect(new Date(log[0].ts).toString()).not.toBe("Invalid Date");
+  });
+
+  it("appends in order, most-recent-last", () => {
+    stubWindow(makeLocalStorageShim());
+    recordCompanionError("a", "first");
+    recordCompanionError("b", "second");
+    recordCompanionError("c", "third");
+    const log = getCompanionErrorLog();
+    expect(log.map((e) => e.kind)).toEqual(["a", "b", "c"]);
+  });
+
+  it("caps at 20 entries, dropping the oldest first", () => {
+    stubWindow(makeLocalStorageShim());
+    for (let i = 0; i < 25; i++) recordCompanionError(`kind-${i}`, `detail-${i}`);
+    const log = getCompanionErrorLog();
+    expect(log).toHaveLength(20);
+    expect(log[0].kind).toBe("kind-5"); // first 5 dropped
+    expect(log[19].kind).toBe("kind-24");
+  });
+
+  it("clearCompanionErrorLog empties the log", () => {
+    stubWindow(makeLocalStorageShim());
+    recordCompanionError("x", "y");
+    expect(getCompanionErrorLog()).toHaveLength(1);
+    clearCompanionErrorLog();
+    expect(getCompanionErrorLog()).toEqual([]);
+  });
+
+  it("a malformed stored value degrades to [] rather than throwing", () => {
+    const shim = makeLocalStorageShim();
+    shim.setItem("coachbuild:companion:lastErrors:v1", "not json");
+    stubWindow(shim);
+    expect(getCompanionErrorLog()).toEqual([]);
+  });
+
+  it("applyItemSets' network-error failure is recorded into the log", async () => {
+    stubWindow(makeLocalStorageShim());
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    await applyItemSets(48291, "sess", { championId: 1, sets: [] }, { fetchImpl });
+    const log = getCompanionErrorLog();
+    expect(log).toHaveLength(1);
+    expect(log[0].kind).toBe("network-error");
+    expect(log[0].detail).toBe("Companion not reachable — is the tray app running?");
+  });
+
+  it("applyItemSets' non-2xx failure is recorded with the classified hint", async () => {
+    stubWindow(makeLocalStorageShim());
+    const fetchImpl = vi.fn(async () => ({
+      ok: false,
+      status: 503,
+      json: async () => ({}),
+    })) as unknown as typeof fetch;
+    await applyItemSets(48291, "sess", { championId: 1, sets: [] }, { fetchImpl });
+    const log = getCompanionErrorLog();
+    expect(log).toHaveLength(1);
+    expect(log[0].kind).toBe("http-503");
+    expect(log[0].detail).toContain("code 503");
+  });
+
+  it("applyItemSets' ok:false-without-hint is recorded with a reason-derived detail", async () => {
+    stubWindow(makeLocalStorageShim());
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ok: false, reason: "slots-full" }),
+    })) as unknown as typeof fetch;
+    const result = await applyItemSets(48291, "sess", { championId: 1, sets: [] }, { fetchImpl });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.hint).toContain("slots-full");
+    const log = getCompanionErrorLog();
+    expect(log).toHaveLength(1);
+    expect(log[0].kind).toBe("slots-full");
+  });
+
+  it("applyItemSets' ok:false WITH a companion-supplied hint is passed through verbatim into the log", async () => {
+    stubWindow(makeLocalStorageShim());
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ok: false, reason: "read-failed", hint: "could not read existing item sets" }),
+    })) as unknown as typeof fetch;
+    await applyItemSets(48291, "sess", { championId: 1, sets: [] }, { fetchImpl });
+    const log = getCompanionErrorLog();
+    expect(log).toHaveLength(1);
+    expect(log[0].detail).toBe("could not read existing item sets");
+  });
+
+  it("a successful applyItemSets call records nothing", async () => {
+    stubWindow(makeLocalStorageShim());
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ok: true, count: 1 }),
+    })) as unknown as typeof fetch;
+    await applyItemSets(48291, "sess", { championId: 1, sets: [] }, { fetchImpl });
+    expect(getCompanionErrorLog()).toEqual([]);
+  });
+
+  it("applyRunes' network-error failure is recorded into the same log", async () => {
+    stubWindow(makeLocalStorageShim());
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    await applyRunes(48291, "sess", RUNE_BODY, "manual", { fetchImpl });
+    const log = getCompanionErrorLog();
+    expect(log).toHaveLength(1);
+    expect(log[0].kind).toBe("network-error");
   });
 });

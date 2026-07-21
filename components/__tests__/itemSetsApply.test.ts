@@ -200,7 +200,21 @@ describe("applyItemSetsForBuild", () => {
     expect(parsed.sets[0].title).toBe("CoachBuild Jinx Bot");
     // v0.36.0: "Highest WPA" has no tag requirement, only a ≥4-item pool
     // threshold -- Core alone (5 full items here) already clears it.
-    expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).toEqual(["Starting", "Core build", "Highest WPA"]);
+    // v0.43.0: this fixture's own item tags legitimately open two archetype
+    // categories -- 3031/3036/3095/3072 are all CriticalStrike/Damage-tagged
+    // (exactly 4, clears MIN_THEMED_POOL -> a MEASURED "AD/Lethality" line)
+    // and boots 3006 carries "AttackSpeed" (1 real match -> the live-data
+    // escape hatch opens Attack Speed/On-hit as a "(low data)" fill line).
+    // Not a regression in this wiring test -- confirms real ItemDetail tags
+    // threaded through applyItemSetsForBuild actually drive category
+    // emission end to end.
+    expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).toEqual([
+      "Starting",
+      "Core build",
+      "Highest WPA",
+      "AD/Lethality",
+      "Attack Speed/On-hit (low data)",
+    ]);
     // v0.35.0: champ-scoped (not role-scoped) stale-removal prefix, so a
     // later lane flip's export cleans up THIS lane's set too.
     expect(parsed.replacePrefix).toBe("CoachBuild Jinx ");

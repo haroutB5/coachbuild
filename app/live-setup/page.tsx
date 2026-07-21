@@ -17,7 +17,10 @@ import {
   setAutoItemSetsEnabled,
   getAutoRunesEnabled,
   setAutoRunesEnabled,
+  getCompanionErrorLog,
+  clearCompanionErrorLog,
   type ProbeState,
+  type CompanionErrorLogEntry,
 } from "@/components/live/companionClient";
 
 // Best-effort install commands per the companion's documented flag contract
@@ -90,6 +93,11 @@ export default function LiveSetupPage() {
   const [autoItemSets, setAutoItemSets] = useState(false);
   const [autoRunes, setAutoRunes] = useState(false);
   const [autoHydrated, setAutoHydrated] = useState(false);
+  // v0.43.0 diagnosability -- recent companion-call failures (apply-runes/
+  // apply-itemsets), persisted client-side so a return visit shows history
+  // even without PowerShell/log access. Hydrated post-mount same as the
+  // toggles above (localStorage read).
+  const [errorLog, setErrorLog] = useState<CompanionErrorLogEntry[]>([]);
 
   // Mount-only: capture ?session= from a companion-opened link, else fall
   // back to whatever's already stored from a previous pairing.
@@ -105,7 +113,13 @@ export default function LiveSetupPage() {
     setAutoItemSets(getAutoItemSetsEnabled());
     setAutoRunes(getAutoRunesEnabled());
     setAutoHydrated(true);
+    setErrorLog(getCompanionErrorLog());
   }, []);
+
+  function handleClearErrorLog() {
+    clearCompanionErrorLog();
+    setErrorLog([]);
+  }
 
   function handleAutoItemSetsToggle(next: boolean) {
     setAutoItemSets(next);
@@ -333,6 +347,41 @@ export default function LiveSetupPage() {
             </span>
           </label>
         </section>
+
+        {errorLog.length > 0 && (
+          <section className="bg-panel border border-line rounded-xl p-5 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">
+                Recent errors
+              </p>
+              <button
+                type="button"
+                onClick={handleClearErrorLog}
+                className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-mut hover:text-txt transition-colors"
+              >
+                Clear
+              </button>
+            </div>
+            <p className="text-[11px] text-mut leading-relaxed">
+              The last few times an &quot;Apply runes&quot; or &quot;Add item builds&quot; write failed on this
+              device -- kept here so you can share it (a screenshot works) without needing PowerShell
+              access to the companion&apos;s own log.
+            </p>
+            <ul className="space-y-1.5 text-[11px]">
+              {[...errorLog]
+                .reverse()
+                .slice(0, 5)
+                .map((entry, i) => (
+                  <li key={`${entry.ts}-${i}`} className="border-t border-line/50 pt-1.5 first:border-t-0 first:pt-0">
+                    <p className="text-mut/70 text-[10px]">
+                      {new Date(entry.ts).toLocaleString()} &middot; {entry.kind}
+                    </p>
+                    <p className="text-bad/80">{entry.detail}</p>
+                  </li>
+                ))}
+            </ul>
+          </section>
+        )}
 
         <section className="bg-panel border border-line rounded-xl p-5 space-y-3">
           <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">

@@ -51,6 +51,28 @@
 //      item.json pull, not invented) and the ≥4-qualifying-items omission
 //      rule.
 //
+// v0.43.0 — user feedback ("add the item categories even if not with big
+// sample size... create builds for each champ and item category you think
+// is best"): the old binary Tanky/Burst pair is REPLACED by a fuller
+// archetype vocabulary — Tank / AP/Mage / AD/Lethality / Attack Speed
+// (On-hit) / Support-Utility — see CATEGORY_DEFS below. Two things changed
+// from the old themed-line model:
+//   1. Emission is now archetype-GATED, not just pool-size-gated — a
+//      category only appears when it's SENSIBLE for the champion (a
+//      lib/draft/compRatings.ts curated rating signal, e.g. tankiness>=1
+//      for Tank, OR the champ's own ddragon tags from ChampionRef.tags) OR
+//      the champ's real item data already shows usage of that tag (the
+//      live-data escape hatch — see buildCategoryLine's doc comment). This
+//      is what keeps a Yuumi from getting an AD/Lethality line just because
+//      the whole roster is being swept for a build.
+//   2. Thin data (fewer than MIN_THEMED_POOL real qualifying items) is no
+//      longer an omission reason for a category that IS sensible — it's a
+//      FILL trigger instead (buildCategoryLine's low-data path), titled
+//      "<Category> (low data)" so the UI never presents a judgment fill as
+//      measured. Highest WPA is UNCHANGED — still built by buildThemedLine
+//      below exactly as before (byte-identical regression pin), still
+//      omitted below MIN_THEMED_POOL like every pre-v0.43.0 themed line.
+//
 // Item-set schema per set (LCU /lol-item-sets/v1/item-sets/{id}/sets
 // contract, community-standard importer shape — see companion.ps1's own
 // header comment for the full wire contract + PUT-replaces-all merge-safety
@@ -79,6 +101,7 @@
 
 import type { ChampionRef, BuildResponse, ItemsBlock, Pick as PickType } from "@/lib/types";
 import type { ItemDetail } from "@/components/itemDetail";
+import { getCompRating, type RatedComp } from "@/lib/draft/compRatings";
 import { flattenSituational } from "./situational";
 import { resolveOptimizedPathView } from "./optimizedPath";
 
@@ -146,8 +169,60 @@ const MIN_THEMED_POOL = 4;
 // "MagicResist" tag — confirmed: SpellBlock covers Spirit Visage/Banshee's
 // Veil/Mercury's Treads/etc., MagicResist only a handful of newer items) is
 // the MR tag matching the brief's literal "Armor/SpellBlock-tagged" wording.
-const TANKY_TAGS = new Set(["Health", "Armor", "SpellBlock"]);
-const BURST_TAGS = new Set(["SpellDamage", "Damage", "ArmorPenetration", "MagicPenetration"]);
+// v0.43.0 — five archetype categories replacing the old Tanky/Burst pair.
+// TANK_TAGS is the old TANKY_TAGS verbatim; AP_TAGS/AD_TAGS split what used
+// to be one combined BURST_TAGS (SpellDamage/MagicPenetration are magic,
+// Damage/ArmorPenetration/CriticalStrike are physical); ATTACK_SPEED_TAGS
+// and SUPPORT_TAGS are new but drawn from the SAME confirmed tag list above
+// — no new fetch, no invented tags.
+const TANK_TAGS = new Set(["Health", "Armor", "SpellBlock"]);
+const AP_TAGS = new Set(["SpellDamage", "MagicPenetration"]);
+const AD_TAGS = new Set(["Damage", "ArmorPenetration", "CriticalStrike"]);
+const ATTACK_SPEED_TAGS = new Set(["AttackSpeed", "OnHit"]);
+const SUPPORT_TAGS = new Set(["Aura", "GoldPer", "CooldownReduction", "ManaRegen", "HealthRegen"]);
+
+/** One archetype category. `sensible` is the curated-rating/ddragon-tag
+ *  gate; buildItemSets ALSO ORs it with a live-data escape hatch (the
+ *  champ's own item pool already showing ≥1 tag-matched full item) — see
+ *  buildCategoryLine's doc comment for why that matters (a champ who
+ *  genuinely itemizes into a category should never be blocked from it by a
+ *  gate that hasn't been curated for them yet). */
+interface CategoryDef {
+  title: string;
+  tags: ReadonlySet<string>;
+  sensible: (rating: RatedComp, champTags: string[]) => boolean;
+}
+
+const CATEGORY_DEFS: CategoryDef[] = [
+  { title: "Tank", tags: TANK_TAGS, sensible: (r, tags) => r.tankiness >= 1 || tags.includes("Tank") },
+  { title: "AP/Mage", tags: AP_TAGS, sensible: (_r, tags) => tags.includes("Mage") },
+  {
+    title: "AD/Lethality",
+    tags: AD_TAGS,
+    sensible: (_r, tags) =>
+      tags.includes("Marksman") || tags.includes("Assassin") || tags.includes("Fighter"),
+  },
+  {
+    title: "Attack Speed/On-hit",
+    tags: ATTACK_SPEED_TAGS,
+    sensible: (_r, tags) => tags.includes("Marksman") || tags.includes("Fighter"),
+  },
+  {
+    title: "Support/Utility",
+    tags: SUPPORT_TAGS,
+    sensible: (r, tags) => tags.includes("Support") || r.utility >= 2,
+  },
+];
+
+/** Worst-case block-count guard (companion side wants ~10 blocks max):
+ *  Starting/Core/Buy order/Pro build/Highest WPA/Situational already
+ *  account for up to 6 blocks; capping categories at 4 keeps the
+ *  theoretical worst case at 10. Rarely hit in practice — "aim for 2-4
+ *  category lines per champ, not all five always" is what the sensibility
+ *  gate is already tuned for. When more than 4 pass the gate, keep the ones
+ *  with the MOST real per-champ data (prefer a measured line over a
+ *  low-data fill getting bumped), original CATEGORY_DEFS order otherwise. */
+const CATEGORY_MAX_EMIT = 4;
 
 function slugPart(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-+|-+$)/g, "") || "x";
@@ -369,6 +444,83 @@ function buildThemedLine(
   return [...top.slice(0, insertAt), boots, ...top.slice(insertAt)];
 }
 
+/** v0.43.0 — catalog-wide (NOT champ-scoped) full-item pool for a
+ *  category's low-data fill, ranked by total gold cost: a cheap, honest
+ *  "this is a real, substantial item" proxy, deliberately NOT a claim of
+ *  measured performance (the "(low data)" title suffix is what keeps this
+ *  honest to the user — see buildCategoryLine). `tagSet: null` returns
+ *  every full item regardless of tag — used as a catalog-wide boots/
+ *  padding safety net, since boots rarely carry any of the five category
+ *  tags themselves. */
+function categoryDefaultPool(
+  itemMeta: ReadonlyMap<number, ItemDetail>,
+  tagSet: ReadonlySet<string> | null
+): Candidate[] {
+  const out: Candidate[] = [];
+  itemMeta.forEach((m, id) => {
+    if (!isFullItem(id, m)) return;
+    if (tagSet && !hasAnyTag(m, tagSet)) return;
+    out.push({ id, weight: m.goldTotal });
+  });
+  return out.sort((a, b) => b.weight - a.weight);
+}
+
+/** v0.43.0 — one archetype category line (Tank/AP-Mage/AD-Lethality/
+ *  Attack Speed/Support-Utility). `pool` is `themedUnion` — the SAME
+ *  full-item-filtered, any-tag union Highest WPA ranks within.
+ *
+ *  >= MIN_THEMED_POOL real tag-matched candidates -> "measured": the exact
+ *  top-N/boots-preference mechanic buildThemedLine already uses,
+ *  DUPLICATED rather than shared — buildThemedLine itself must never
+ *  change (Highest WPA's byte-identical regression pin).
+ *
+ *  < MIN_THEMED_POOL (including 0) -> "low data": NEVER omitted (the
+ *  user's explicit ask — a sensible category always ships something).
+ *  Fills via `buildLine`, the same 6-items/1-boots machinery every other
+ *  line in this file goes through:
+ *   - `primary` = the real tag-matched candidates that DO exist, plus the
+ *     champ's own overall best boots pick (any theme — folded in up front
+ *     so a themed line doesn't strand itself boots-less just because no
+ *     boots happens to carry that category's tag; buildLine's own
+ *     primaryBoots branch then resolves it directly).
+ *   - fallback pools are CATALOG-WIDE defaults only (tag-matched, then
+ *     any-tag) — deliberately never the champ's own OFF-THEME real items;
+ *     that would silently smuggle e.g. a real AP pick into a "Tank (low
+ *     data)" line, exactly the honesty problem the title suffix exists to
+ *     prevent. */
+function buildCategoryLine(
+  pool: Candidate[],
+  tagSet: ReadonlySet<string>,
+  itemMeta: ReadonlyMap<number, ItemDetail>,
+  bootsIds: ReadonlySet<number>
+): { line: Candidate[]; lowData: boolean } {
+  const themed = pool
+    .filter((c) => hasAnyTag(itemMeta.get(c.id), tagSet))
+    .sort((a, b) => b.weight - a.weight);
+
+  if (themed.length >= MIN_THEMED_POOL) {
+    const nonBoots = themed.filter((c) => !bootsIds.has(c.id));
+    const themedBoots = themed.filter((c) => bootsIds.has(c.id))[0] ?? null; // already sorted desc
+    const overallBoots =
+      pool.filter((c) => bootsIds.has(c.id)).sort((a, b) => b.weight - a.weight)[0] ?? null;
+    const boots = themedBoots ?? overallBoots;
+    const target = LINE_LEN - (boots ? 1 : 0);
+    const top = nonBoots.slice(0, target);
+    if (!boots) return { line: top, lowData: false };
+    const insertAt = Math.min(3, top.length);
+    return { line: [...top.slice(0, insertAt), boots, ...top.slice(insertAt)], lowData: false };
+  }
+
+  const overallBoots = pool.filter((c) => bootsIds.has(c.id)).sort((a, b) => b.weight - a.weight)[0];
+  const hasThemedBoots = themed.some((c) => bootsIds.has(c.id));
+  const primary = overallBoots && !hasThemedBoots ? [...themed, overallBoots] : themed;
+
+  const taggedDefaults = categoryDefaultPool(itemMeta, tagSet);
+  const anyDefaults = categoryDefaultPool(itemMeta, null);
+  const line = buildLine(primary, [taggedDefaults, anyDefaults], bootsIds);
+  return { line, lowData: true };
+}
+
 function toItemRefs(cands: Candidate[]): ItemSetItem[] {
   return cands.map((c) => itemRef(c.id));
 }
@@ -437,9 +589,13 @@ function baseSet(champ: ChampionRef, roleLabel: string): Omit<ItemSet, "blocks">
  *  specifically, so it reads as "same build, refined order" rather than
  *  pulling in situational/pro noise) → Pro build (only when pro-consensus
  *  data resolves, boots-deduped to the single highest-share pick, padded
- *  via the general optimized→situational→consensus cascade) → Highest WPA /
- *  Tanky / Burst (only when each has ≥4 qualifying full items — see
- *  buildThemedLine) → Situational swaps (the alternates pool, cap 6, exempt
+ *  via the general optimized→situational→consensus cascade) → Highest WPA
+ *  (only when the whole pool has ≥4 qualifying full items — see
+ *  buildThemedLine, UNCHANGED since v0.36.0) → up to CATEGORY_MAX_EMIT of
+ *  Tank / AP/Mage / AD/Lethality / Attack Speed/On-hit / Support/Utility
+ *  (v0.43.0 — archetype-gated, never omitted once sensible; thin data fills
+ *  via buildCategoryLine and gets a "(low data)" title suffix instead of
+ *  being dropped) → Situational swaps (the alternates pool, cap 6, exempt
  *  from BOTH the one-boots rule AND the full-items rule — these are swap
  *  SUGGESTIONS, not a worn loadout, so a stacking item or several boots
  *  options side by side is the intended shape, not a bug). */
@@ -503,18 +659,39 @@ export function buildItemSets(
     if (proLine.length > 0) blocks.push({ type: "Pro build", items: toItemRefs(proLine) });
   }
 
-  // Themed lines (v0.36.0) — derived entirely from the pools already built
-  // above, no new upstream data. All full-item-filtered already (every pool
-  // fed into themedUnion is), so buildThemedLine only needs to apply its own
-  // tag filter + boots/omission rules on top.
+  // Themed lines — derived entirely from the pools already built above, no
+  // new upstream data. All full-item-filtered already (every pool fed into
+  // themedUnion is). Highest WPA (v0.36.0, UNCHANGED) uses buildThemedLine
+  // directly; the five archetype categories (v0.43.0) use buildCategoryLine
+  // — see that function's doc comment for why they're never shared code.
   const themedUnion = unionPool(corePrimary, optimizedPrimary ?? [], situationalPoolFull, proPool);
   const highestWpaLine = buildThemedLine(themedUnion, null, meta, bootsIds);
-  const tankyLine = buildThemedLine(themedUnion, TANKY_TAGS, meta, bootsIds);
-  const burstLine = buildThemedLine(themedUnion, BURST_TAGS, meta, bootsIds);
-
   if (highestWpaLine) blocks.push({ type: "Highest WPA", items: toItemRefs(highestWpaLine) });
-  if (tankyLine) blocks.push({ type: "Tanky", items: toItemRefs(tankyLine) });
-  if (burstLine) blocks.push({ type: "Burst", items: toItemRefs(burstLine) });
+
+  const rating = getCompRating(champ.id);
+  const champTags = champ.tags ?? [];
+  const eligible = CATEGORY_DEFS.map((def) => {
+    const poolLen = themedUnion.filter((c) => hasAnyTag(meta.get(c.id), def.tags)).length;
+    const sensible = def.sensible(rating, champTags) || poolLen > 0;
+    return { def, sensible, poolLen };
+  }).filter((e) => e.sensible);
+
+  const chosenDefs =
+    eligible.length > CATEGORY_MAX_EMIT
+      ? new Set(
+          [...eligible]
+            .sort((a, b) => b.poolLen - a.poolLen)
+            .slice(0, CATEGORY_MAX_EMIT)
+            .map((e) => e.def)
+        )
+      : new Set(eligible.map((e) => e.def));
+
+  for (const def of CATEGORY_DEFS) {
+    if (!chosenDefs.has(def)) continue;
+    const { line, lowData } = buildCategoryLine(themedUnion, def.tags, meta, bootsIds);
+    if (line.length === 0) continue; // never a genuinely empty block
+    blocks.push({ type: lowData ? `${def.title} (low data)` : def.title, items: toItemRefs(line) });
+  }
 
   if (situationalPicks.length > 0) {
     blocks.push({
