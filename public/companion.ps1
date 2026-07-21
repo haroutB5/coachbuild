@@ -206,7 +206,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.4.1'
+    Version     = '1.5.0'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -940,17 +940,31 @@ function Set-LastOpen {
 }
 
 function Test-CompanionHasAttachedTab {
-    # v1.3.0 (attached-tab live-follow): a "tab is attached" when the web
-    # side has polled /status recently (see companionClient's follow poll,
-    # which stamps $Sync.LastStatusPollAt on the bridge side) -- if so,
-    # champ-select opens should NOT spawn a NEW tab on every hover change;
-    # the already-open tab live-follows via its own poll instead (page.tsx
-    # applies the new championId in place). 8s window: generous versus the
-    # web poll's own ~3s cadence, tight enough that a genuinely closed tab
-    # (no poll in 8s) still gets a fresh Start-Process on the next hover.
-    if (-not $script:Bridge -or -not $script:Bridge.Sync -or -not $script:Bridge.Sync.LastStatusPollAt) { return $false }
+    # v1.3.0 (attached-tab live-follow), NARROWED in v1.5.0: a "tab is
+    # attached" means a FOLLOW-CAPABLE page has polled /status recently, NOT
+    # merely any page. Every route in the app polls /status once a session
+    # token exists (CompanionProvider is mounted app-wide, app/layout.tsx),
+    # but only the Builds page (`/`) and `/draft` actually react to a live
+    # champ-select change -- a poll from /live-setup, /mystats, /history, or
+    # /movers proves nothing is listening, so it must NOT suppress the open.
+    # companionClient's follow-capable poll appends `follow=1` to its
+    # /status query string; the bridge handler stamps that into
+    # $Sync.LastFollowPollAt specifically (LastStatusPollAt keeps stamping
+    # on EVERY /status poll regardless of follow, for other diagnostics).
+    # 8s window: generous versus the web poll's own ~3s cadence, tight
+    # enough that a genuinely closed tab (no follow poll in 8s) still gets a
+    # fresh Start-Process on the next hover.
+    #
+    # Back-compat: a companion running this code against a STALE cached web
+    # build that never sends `follow=1` (pre-1.5.0 client) will never see
+    # LastFollowPollAt set at all -- it stays $null forever, so this always
+    # returns $false and every champ-select change opens a fresh tab, same
+    # as the pre-1.3.0 behavior. That's the deliberate degrade: correctness
+    # (always opens) over the live-follow optimization (skip redundant
+    # opens) when the two sides disagree on the contract.
+    if (-not $script:Bridge -or -not $script:Bridge.Sync -or -not $script:Bridge.Sync.LastFollowPollAt) { return $false }
     try {
-        return (New-TimeSpan -Start ([datetime]$script:Bridge.Sync.LastStatusPollAt) -End (Get-Date)).TotalSeconds -lt 8
+        return (New-TimeSpan -Start ([datetime]$script:Bridge.Sync.LastFollowPollAt) -End (Get-Date)).TotalSeconds -lt 8
     } catch {
         return $false
     }
@@ -1108,12 +1122,20 @@ while ($Sync.Running) {
         if ($path -eq '/status' -and $req.HttpMethod -eq 'GET') {
             # v1.3.0 (attached-tab live-follow): stamped on every
             # AUTHORIZED /status GET (session+origin already validated
-            # above by the time this branch runs) -- this is how the
-            # champ-select open logic below knows a browser tab is still
-            # actively polling (i.e. "attached") and should be live-followed
-            # in place instead of getting a brand-new Start-Process tab on
-            # every hover change.
+            # above by the time this branch runs) -- kept as a general
+            # "something polled recently" diagnostic other consumers may
+            # still read. v1.5.0: this alone no longer means a tab will
+            # live-follow a champ-select change -- see LastFollowPollAt
+            # below and Test-CompanionHasAttachedTab's header comment.
             $Sync.LastStatusPollAt = (Get-Date).ToUniversalTime().ToString('o')
+            # v1.5.0: only stamped when the poller declares itself
+            # follow-capable (`?follow=1`, sent by CompanionProvider only on
+            # `/` and `/draft` -- see companionClient.ts/CompanionProvider.tsx).
+            # This is the field Test-CompanionHasAttachedTab actually gates
+            # on now.
+            if ($req.QueryString['follow'] -eq '1') {
+                $Sync.LastFollowPollAt = (Get-Date).ToUniversalTime().ToString('o')
+            }
             Write-JsonResponse -Response $res -StatusCode 200 -Obj @{
                 version         = $Sync.Version
                 port            = $Sync.BridgePort
@@ -1215,6 +1237,7 @@ function Start-BridgeServer {
         LastErrorKey        = $null
         LastErrorAt         = $null
         LastStatusPollAt    = $null
+        LastFollowPollAt    = $null
     })
 
     $rs = [runspacefactory]::CreateRunspace()
@@ -2195,26 +2218,33 @@ function Invoke-MockRun {
         $failures.Add("timerPhase expected null when session.timer is absent, got $($script:ChampSelectSnapshotRecord.timerPhase)")
     }
 
-    # Attached-tab gate (v1.3.0 live-follow fold-in): a fresh
-    # $script:Bridge.Sync.LastStatusPollAt (the web side is actively
-    # polling /status, i.e. a tab is still open and will live-follow)
-    # suppresses Open-CompanionUrl on a champion CHANGE; a stale/absent one
-    # (no tab attached) still opens exactly as before. -Mock fakes a
-    # lightweight $script:Bridge (no real HttpListener) purely so
+    # Attached-tab gate (v1.3.0 live-follow fold-in, NARROWED in v1.5.0 to
+    # follow-capable pollers only): a fresh
+    # $script:Bridge.Sync.LastFollowPollAt (a follow-capable page -- `/` or
+    # `/draft` -- is actively polling /status with `follow=1`, i.e. a tab is
+    # still open and will live-follow) suppresses Open-CompanionUrl on a
+    # champion CHANGE; a stale/absent one (no follow-capable tab attached,
+    # e.g. only /live-setup is open) still opens exactly as before. -Mock
+    # fakes a lightweight $script:Bridge (no real HttpListener) purely so
     # Test-CompanionHasAttachedTab has something to read.
-    $script:Bridge = [pscustomobject]@{ Sync = @{ LastStatusPollAt = $null } }
+    $script:Bridge = [pscustomobject]@{ Sync = @{ LastFollowPollAt = $null } }
     $attachState = @{ LastOpenedChampId = $null }
 
-    # No attached tab (LastStatusPollAt never set) -> opens as normal.
+    # No attached tab (LastFollowPollAt never set) -> opens as normal. This
+    # is also the back-compat path: a stale cached web build that never
+    # sends `follow=1` (e.g. only a non-follow-capable page like
+    # /live-setup is open, or an old client) never sets this field either,
+    # so it always degrades to opening a fresh tab.
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 103 -IntentId 103 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
     if ($script:OpenActions.Count -ne 1) {
         $failures.Add("Attached-tab gate: expected an open with no attached tab, got $($script:OpenActions.Count)")
     }
 
-    # Fresh poll (tab attached) -> a champion CHANGE must NOT open a new tab
-    # -- debounce state still advances (the tab itself follows via poll).
-    $script:Bridge.Sync.LastStatusPollAt = (Get-Date).ToUniversalTime().ToString('o')
+    # Fresh follow poll (follow-capable tab attached) -> a champion CHANGE
+    # must NOT open a new tab -- debounce state still advances (the tab
+    # itself follows via poll).
+    $script:Bridge.Sync.LastFollowPollAt = (Get-Date).ToUniversalTime().ToString('o')
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 7 -IntentId 7 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
     if ($script:OpenActions.Count -ne 0) {
@@ -2226,11 +2256,23 @@ function Invoke-MockRun {
 
     # Poll goes stale (tab presumably closed) -> the NEXT champion change
     # resumes opening a fresh tab.
-    $script:Bridge.Sync.LastStatusPollAt = (Get-Date).ToUniversalTime().AddSeconds(-30).ToString('o')
+    $script:Bridge.Sync.LastFollowPollAt = (Get-Date).ToUniversalTime().AddSeconds(-30).ToString('o')
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 64 -IntentId 64 -Position 'jungle') -AppOrigin $appOrigin -SessionToken $sessionToken
     if ($script:OpenActions.Count -ne 1) {
         $failures.Add("Attached-tab gate: expected open to resume once the poll goes stale, got $($script:OpenActions.Count)")
+    }
+
+    # v1.5.0: a poll from a NON-follow-capable page (LastStatusPollAt fresh
+    # but LastFollowPollAt untouched -- simulates /live-setup polling)
+    # must NOT suppress the open. This is the exact regression this ship
+    # fixes -- pre-v1.5.0, ANY /status poll counted as "attached."
+    $script:Bridge.Sync.LastStatusPollAt = (Get-Date).ToUniversalTime().ToString('o')
+    $script:Bridge.Sync.LastFollowPollAt = $null
+    $script:OpenActions.Clear()
+    Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 22 -IntentId 22 -Position 'bottom') -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 1) {
+        $failures.Add("Attached-tab gate: a non-follow-capable poll (e.g. /live-setup) must not suppress the open, got $($script:OpenActions.Count) opens")
     }
     $script:Bridge = $null
 

@@ -23,6 +23,18 @@
 // - /draft consumes this context READ-ONLY via useCompanion() (plan §6c) —
 //   it never calls any of the champSelectFollowState setters itself.
 //
+// v1.5.0 addition (attached-tab-suppression fix, companion 1.5.0): every
+// route mounts this provider and polls /status, but only `/` and `/draft`
+// actually react to a live champ-select change (page.tsx's follow effect,
+// /draft's read-only live awareness). companion.ps1's
+// Test-CompanionHasAttachedTab used to treat ANY recent /status poll as
+// proof a tab would live-follow, so opening champ select with e.g.
+// /live-setup open silently suppressed the deep-link open. This poll now
+// appends `follow=1` only when the CURRENT route is follow-capable
+// (isFollowCapableRoute, companionClient.ts) — see the followRef below.
+// This is purely about what query string the poll sends; it does NOT
+// change when/whether the tick fires, and must not reorder anything below.
+//
 // Round-B P1 regression note (CRITICAL — do not simplify away): the original
 // bug was "the driven-mark only fires inside the follow's target branch,"
 // which loses a race on a fresh deep-link tab (mount effect's /api/champions
@@ -36,11 +48,13 @@
 // incident.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { usePathname } from "next/navigation";
 import {
   getStoredSession,
   setStoredSession,
   refreshStatus,
+  isFollowCapableRoute,
   COMPANION_STATUS_POLL_MS,
   type CompanionChampSelectSnapshot,
 } from "./companionClient";
@@ -91,6 +105,19 @@ export default function CompanionProvider({ children }: { children: ReactNode })
   const [clientConnected, setClientConnected] = useState(false);
   const [tick, setTick] = useState(0);
 
+  // v1.5.0 (attached-tab fix, see companionClient.ts's isFollowCapableRoute):
+  // which route is current, read fresh by every poll tick via a ref rather
+  // than added to the poll effect's own dependency array below — a client
+  // nav between two follow-capable-or-not routes must NOT restart the poll
+  // interval (that would perturb the tick cadence the Round-B P1 fix and
+  // /draft's live-sync both depend on), it only needs the NEXT tick to send
+  // the correct `follow` flag.
+  const pathname = usePathname();
+  const followRef = useRef(isFollowCapableRoute(pathname));
+  useEffect(() => {
+    followRef.current = isFollowCapableRoute(pathname);
+  }, [pathname]);
+
   // Hydrate any previously-paired session on mount. A companion-opened deep
   // link's OWN `?session=` (app/page.tsx's mount effect) calls setSession
   // directly and wins regardless of ordering against this effect — both
@@ -115,7 +142,7 @@ export default function CompanionProvider({ children }: { children: ReactNode })
     let cancelled = false;
 
     async function poll() {
-      const state = await refreshStatus(session as string);
+      const state = await refreshStatus(session as string, {}, followRef.current);
       if (cancelled) return;
 
       const nextPhase = state.kind === "connected" ? state.status.phase : null;

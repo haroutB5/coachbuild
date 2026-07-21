@@ -12,6 +12,13 @@
 //                          champSelect:{localPlayerCellId, cellChampionId|null,
 //                            pickIntent|null, actionChampionId|null,
 //                            roleId|null}|null (null outside ChampSelect)}
+//                          -- v1.5.0: the REQUEST may carry an optional
+//                          `&follow=1` (not part of the response shape) to
+//                          declare this poller follow-capable — see
+//                          isFollowCapableRoute's doc comment below and
+//                          companion.ps1's Test-CompanionHasAttachedTab.
+//                          Omitting it (older web build) is equivalent to
+//                          follow=0.
 //   GET  /live         -> raw allgamedata passthrough | {error:'no-live'}
 //   POST /apply-runes  body {..., mode:'auto'|'manual'} ->
 //                          {ok:true, selected, verified, mismatch} |
@@ -288,8 +295,28 @@ export function setAutoRunesEnabled(enabled: boolean): void {
 
 // ── Wire calls ──────────────────────────────────────────────────────────────
 
-function bridgeUrl(port: number, path: string, session: string): string {
-  return `http://127.0.0.1:${port}${path}?session=${encodeURIComponent(session)}`;
+function bridgeUrl(port: number, path: string, session: string, follow = false): string {
+  const base = `http://127.0.0.1:${port}${path}?session=${encodeURIComponent(session)}`;
+  return follow ? `${base}&follow=1` : base;
+}
+
+/** v1.5.0 (companion 1.5.0) — routes whose CompanionProvider poll should
+ *  declare itself follow-capable (`follow=1`) to the bridge. Every route
+ *  polls /status once a session token exists (CompanionProvider is mounted
+ *  app-wide, app/layout.tsx), but only these pages actually REACT to a live
+ *  champ-select change (page.tsx's follow effect, /draft's read-only live
+ *  awareness) — a poll from anywhere else (e.g. /live-setup, /mystats,
+ *  /history, /movers) proves nothing is listening, and must NOT make
+ *  companion.ps1's Test-CompanionHasAttachedTab think a tab will live-follow
+ *  (that was the real bug: those routes' ordinary polls were suppressing
+ *  the champ-select open with nothing open to follow it).
+ *
+ *  Exact-match only, no prefix matching — a new live-aware route must be
+ *  added here explicitly, not inferred from a path segment. Extracted as a
+ *  pure function (rather than inlined in CompanionProvider) specifically so
+ *  the route→follow decision is unit-testable without mounting React. */
+export function isFollowCapableRoute(pathname: string | null | undefined): boolean {
+  return pathname === "/" || pathname === "/draft";
 }
 
 /** Defensive parse of /status's `lastOpen` diagnostic field — absent
@@ -343,11 +370,12 @@ function normalizeChampSelect(raw: unknown): CompanionChampSelectSnapshot | null
 export async function getStatus(
   port: CompanionPort,
   session: string,
-  deps: CompanionClientDeps = {}
+  deps: CompanionClientDeps = {},
+  follow = false
 ): Promise<CompanionStatus | null> {
   const f = deps.fetchImpl ?? fetch;
   try {
-    const res = await f(bridgeUrl(port, "/status", session), { method: "GET" });
+    const res = await f(bridgeUrl(port, "/status", session, follow), { method: "GET" });
     if (!res.ok) return null;
     const data = (await res.json()) as Partial<CompanionStatus>;
     if (
@@ -378,7 +406,8 @@ export async function getStatus(
 export async function probeCompanion(
   session: string,
   trigger: ProbeTrigger,
-  deps: CompanionClientDeps = {}
+  deps: CompanionClientDeps = {},
+  follow = false
 ): Promise<ProbeState> {
   const f = deps.fetchImpl ?? fetch;
   const known = getStoredPort();
@@ -389,7 +418,7 @@ export async function probeCompanion(
   let sawTypeError = false;
   for (const port of ports) {
     try {
-      const res = await f(bridgeUrl(port, "/status", session), { method: "GET" });
+      const res = await f(bridgeUrl(port, "/status", session, follow), { method: "GET" });
       if (!res.ok) continue;
       const data = (await res.json()) as Partial<CompanionStatus>;
       if (
@@ -430,13 +459,17 @@ export async function probeCompanion(
  *  that port no longer answers (companion restarted on a different port, or
  *  was closed). Always a "passive" probe — page-level polling must never
  *  itself trigger a fresh LNA prompt UX; that's Test Connection's job. */
-export async function refreshStatus(session: string, deps: CompanionClientDeps = {}): Promise<ProbeState> {
+export async function refreshStatus(
+  session: string,
+  deps: CompanionClientDeps = {},
+  follow = false
+): Promise<ProbeState> {
   const port = getStoredPort();
   if (port != null) {
-    const status = await getStatus(port, session, deps);
+    const status = await getStatus(port, session, deps, follow);
     if (status) return { kind: "connected", port, status };
   }
-  return probeCompanion(session, "passive", deps);
+  return probeCompanion(session, "passive", deps, follow);
 }
 
 /** Raw allgamedata passthrough (or {error:'no-live'} outside a live game).

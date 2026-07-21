@@ -23,6 +23,7 @@ import {
   applyItemSets,
   getAutoItemSetsEnabled,
   setAutoItemSetsEnabled,
+  isFollowCapableRoute,
 } from "../live/companionClient";
 
 function makeLocalStorageShim() {
@@ -524,6 +525,89 @@ describe("companionClient — applyItemSets", () => {
     expect(JSON.parse(capturedBody!)).toEqual(ITEM_SETS_BODY);
     const calledUrl = (fetchImpl as unknown as { mock: { calls: [string][] } }).mock.calls[0][0];
     expect(calledUrl).toContain("/apply-itemsets?session=sess");
+  });
+});
+
+describe("companionClient — isFollowCapableRoute", () => {
+  it("is true for the Builds page ('/')", () => {
+    expect(isFollowCapableRoute("/")).toBe(true);
+  });
+
+  it("is true for /draft", () => {
+    expect(isFollowCapableRoute("/draft")).toBe(true);
+  });
+
+  it("is false for every other route (the reported bug: /live-setup)", () => {
+    expect(isFollowCapableRoute("/live-setup")).toBe(false);
+    expect(isFollowCapableRoute("/mystats")).toBe(false);
+    expect(isFollowCapableRoute("/history")).toBe(false);
+    expect(isFollowCapableRoute("/movers")).toBe(false);
+  });
+
+  it("does not prefix-match — a nested path under a follow-capable route is NOT follow-capable", () => {
+    expect(isFollowCapableRoute("/draft/something")).toBe(false);
+  });
+
+  it("is false for null/undefined (usePathname can return null during a transition)", () => {
+    expect(isFollowCapableRoute(null)).toBe(false);
+    expect(isFollowCapableRoute(undefined)).toBe(false);
+  });
+});
+
+describe("companionClient — follow=1 query param plumbing (v1.5.0)", () => {
+  afterEach(() => unstubWindow());
+
+  it("getStatus omits follow=1 by default", async () => {
+    let calledUrl = "";
+    const fetchImpl = vi.fn(async (url: string) => {
+      calledUrl = url;
+      return { ok: true, json: async () => ({ version: "1.5.0", phase: "None", clientConnected: false }) } as Response;
+    }) as unknown as typeof fetch;
+    await getStatus(48291, "sess", { fetchImpl });
+    expect(calledUrl).not.toContain("follow=1");
+  });
+
+  it("getStatus appends follow=1 when the 4th arg is true", async () => {
+    let calledUrl = "";
+    const fetchImpl = vi.fn(async (url: string) => {
+      calledUrl = url;
+      return { ok: true, json: async () => ({ version: "1.5.0", phase: "None", clientConnected: false }) } as Response;
+    }) as unknown as typeof fetch;
+    await getStatus(48291, "sess", { fetchImpl }, true);
+    expect(calledUrl).toContain("follow=1");
+  });
+
+  it("refreshStatus forwards the follow flag through to the /status request (stored-port path)", async () => {
+    stubWindow(makeLocalStorageShim());
+    setStoredPort(48293);
+    let calledUrl = "";
+    const fetchImpl = vi.fn(async (url: string) => {
+      calledUrl = url;
+      return { ok: true, json: async () => ({ version: "1.5.0", phase: "None", clientConnected: false }) } as Response;
+    }) as unknown as typeof fetch;
+    await refreshStatus("sess", { fetchImpl }, true);
+    expect(calledUrl).toContain("follow=1");
+  });
+
+  it("refreshStatus forwards the follow flag through to the probe fallback path", async () => {
+    let calledUrl = "";
+    const fetchImpl = vi.fn(async (url: string) => {
+      calledUrl = url;
+      return { ok: true, json: async () => ({ version: "1.5.0", phase: "None", clientConnected: false }) } as Response;
+    }) as unknown as typeof fetch;
+    await refreshStatus("sess", { fetchImpl }, true);
+    expect(calledUrl).toContain("follow=1");
+  });
+
+  it("probeCompanion appends follow=1 to every port it tries when asked to", async () => {
+    const urls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      urls.push(url);
+      throw new TypeError("Failed to fetch");
+    }) as unknown as typeof fetch;
+    await probeCompanion("sess", "passive", { fetchImpl }, true);
+    expect(urls.length).toBeGreaterThan(0);
+    expect(urls.every((u) => u.includes("follow=1"))).toBe(true);
   });
 });
 
