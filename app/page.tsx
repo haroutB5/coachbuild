@@ -12,10 +12,22 @@ import PlayerGamesSection from "@/components/hextech/PlayerGamesSection";
 import HextechTabs, { type HextechTab } from "@/components/hextech/HextechTabs";
 import BuildTabContent from "@/components/hextech/BuildTabContent";
 import ProBuildsTab from "@/components/hextech/ProBuildsTab";
-import LivePanel from "@/components/live/LivePanel";
+import dynamic from "next/dynamic";
+// Round-B P3 fix (companion CIM cost section, item 5c): code-split via
+// next/dynamic — LivePanel only ever mounts for a session with a paired
+// companion reporting phase===InProgress (see the render site below), so
+// most page loads never need its JS at all. ssr:false is safe (and
+// intentional): LivePanel is itself a "use client" component driven
+// entirely by browser-only state (localStorage session/port, its own
+// fetch/poll effects) with nothing to render server-side.
+const LivePanel = dynamic(() => import("@/components/live/LivePanel"), { ssr: false });
 import { parseLiveDeepLink, roleIdToLane } from "@/components/live/deepLink";
-import { resolveChampSelectFollow } from "@/components/live/champSelectFollow";
-import { markCompanionDriven } from "@/components/live/champSelectFollowState";
+import { resolveCurrentChampSelectChampionId, resolveChampSelectRoleId } from "@/components/live/champSelectFollow";
+import {
+  markCompanionDriven,
+  shouldFollowChampSelectChange,
+  markFollowedChampSelectChampion,
+} from "@/components/live/champSelectFollowState";
 import { useCompanion } from "@/components/live/CompanionProvider";
 import { useSheetBackNav } from "@/components/useSheetBackNav";
 import {
@@ -251,24 +263,37 @@ export default function HomePage() {
   }, []);
 
   // Live-follow effect (v1.3.0 attached-tab behavior; provider-lifted
-  // v0.37.0) — "the tab follows the user's champ-select hovers in place."
-  // CompanionProvider now owns the actual /status poll + the phase/
-  // champSelect state + the P1 driven-mark bookkeeping (see its header
-  // comment); this effect ONLY decides "given the current phase/champSelect,
-  // should THIS page navigate to a different champion/lane" — the exact same
-  // decision app/page.tsx's own poll tick made inline before the lift, now
-  // re-keyed off `companion.tick` instead of its own setInterval so it still
-  // re-evaluates on EVERY poll tick (not just when phase/champSelect happen
-  // to change value) — see CompanionProvider.tsx's `tick` field doc comment
-  // for why that preserves the pre-lift cadence exactly.
+  // v0.37.0; Round-B P2 "follow-fights-user" fix) — "the tab follows the
+  // user's champ-select hovers in place, UNLESS the user is manually
+  // browsing something else." CompanionProvider now owns the actual /status
+  // poll + the phase/champSelect state + the P1 driven-mark bookkeeping
+  // (see its header comment); this effect ONLY decides "given the current
+  // phase/champSelect, should THIS page navigate to a different
+  // champion/lane" — re-keyed off `companion.tick` instead of its own
+  // setInterval so it still re-evaluates on EVERY poll tick (not just when
+  // phase/champSelect happen to change value) — see CompanionProvider.tsx's
+  // `tick` field doc comment for why that preserves the pre-lift cadence.
+  //
+  // Round-B: this used to gate on resolveChampSelectFollow's own
+  // "differs from champ.id (whatever's currently shown)" check — which
+  // re-fired every tick once a manual browse diverged champ.id from an
+  // UNCHANGED champ-select champion, snapping the view back and fighting
+  // the user. Now gated on champSelectFollowState.ts's
+  // shouldFollowChampSelectChange(resolvedId) instead: re-assert ONLY when
+  // the champ-select champion ITSELF actually changes (a new hover/lock),
+  // never merely because the shown champion no longer matches it. A manual
+  // browse away now persists until the real champ-select pick changes.
   useEffect(() => {
     let cancelled = false;
-    const target = resolveChampSelectFollow({
-      phase: companion.phase ?? "",
-      champSelect: companion.champSelect,
-      currentChampionId: champ.id,
-    });
-    if (!target) return;
+    const resolvedChampionId = resolveCurrentChampSelectChampionId(companion.champSelect);
+    if (companion.phase !== "ChampSelect" || resolvedChampionId === null) return;
+    if (!shouldFollowChampSelectChange(resolvedChampionId)) return;
+    // Mark synchronously (before the async lookup below resolves) — same
+    // "mark at decision time, not at apply time" convention
+    // shouldAutoExportForLane/markAutoExported use in BuildTabContent, so a
+    // second poll tick landing before this fetch resolves doesn't re-fire.
+    markFollowedChampSelectChampion(resolvedChampionId);
+    const target = { championId: resolvedChampionId, roleId: resolveChampSelectRoleId(companion.champSelect) };
 
     fetch("/api/champions")
       .then((r) => (r.ok ? (r.json() as Promise<ChampionRef[]>) : []))
@@ -313,13 +338,17 @@ export default function HomePage() {
       cancelled = true;
     };
     // companion.tick MUST be a dependency — it's what re-runs this effect on
-    // every poll tick (see the doc comment above); champ.id/activeLane must
-    // also stay, for the exact same "closure would freeze on a stale
-    // champion" reason the pre-lift effect's own comment documented.
-    // sheetNav/the ref objects are stable across renders so they're
-    // intentionally omitted.
+    // every poll tick (see the doc comment above); activeLane must also
+    // stay, for the exact same "closure would freeze on a stale lane" reason
+    // the pre-lift effect's own comment documented (the role-less branch's
+    // landedLane fallback reads it). champ.id is Round-B's whole point: the
+    // decision to (re)act no longer depends on it at all, so it's
+    // deliberately NOT a dependency here (unlike the pre-fix version) —
+    // this effect must NOT re-run just because the user manually browsed to
+    // a different champion. sheetNav/the ref objects are stable across
+    // renders so they're intentionally omitted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companion.tick, champ.id, activeLane]);
+  }, [companion.tick, activeLane]);
 
   /** Repaints searchMode/tab/activeLane+champ/selectedPlayer from a landed-on
    *  entry — fired on mount-resume and every popstate. Delegates the actual

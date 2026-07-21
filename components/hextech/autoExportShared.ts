@@ -39,18 +39,11 @@ export function shouldAutoExport(input: AutoApplyGateInput): boolean {
   return true;
 }
 
-/** Guards against the wrong-champion race (P1, Fable audit 2026-07-20): a
- *  deep-link tab can render its FIRST successful `build` for a FALLBACK
- *  champion (BuildTabContent's own default, e.g. Viktor) before
- *  app/page.tsx's own /api/champions lookup resolves and swaps in the
- *  actual target champion. If the caller consumes its one-shot "already
- *  exported" tracking against that fallback build, the real champion's
- *  export can be silently skipped or (worse) the wrong champion gets
- *  runes/items written. Returns false ("not yet eligible — wait for the
- *  matching build") only when a specific target championId is known and
- *  doesn't match the build in hand; true when there's no specific target
- *  at all (nothing to race against) or the champion already matches. */
-export function isAutoExportEligibleBuild(parsed: { championId: number } | null, buildChampionId: number): boolean {
-  if (!parsed) return true;
-  return parsed.championId === buildChampionId;
-}
+// isAutoExportEligibleBuild (the P1, Fable audit 2026-07-20, wrong-champion
+// race guard) was DELETED in Round B (2026-07-21) — repo-wide grep confirmed
+// zero call sites in components/hextech/BuildTabContent.tsx or anywhere else
+// in the live decision chain; it had been kept only for its own pinned
+// regression tests since the v1.3.0 rewrite (see git history for the
+// original implementation/reasoning if this needs revisiting). The race it
+// guarded against is closed structurally today by
+// champSelectFollowState.ts's isCompanionDrivenChampion instead.

@@ -51,6 +51,19 @@ export function resolveCurrentChampSelectChampionId(champSelect: CompanionChampS
   return championId && championId > 0 ? championId : null;
 }
 
+/** Pure roleId extraction, split out of resolveChampSelectFollow (Round-B P2
+ *  follow-fights-user fix) so app/page.tsx's follow effect can pair it with
+ *  resolveCurrentChampSelectChampionId directly, gated on
+ *  champSelectFollowState.ts's shouldFollowChampSelectChange rather than on
+ *  "does it differ from what's currently shown" — see that function's doc
+ *  comment for why the latter re-fires every tick a manual browse diverges
+ *  from the champ-select champion, fighting the user. */
+export function resolveChampSelectRoleId(champSelect: CompanionChampSelectSnapshot | null): LiveRoleId | undefined {
+  if (!champSelect) return undefined;
+  const rawRole = champSelect.roleId;
+  return rawRole !== null && VALID_ROLES.includes(rawRole as LiveRoleId) ? (rawRole as LiveRoleId) : undefined;
+}
+
 /** Returns the champion+role the page should switch to, or null when
  *  nothing should change (not in ChampSelect, no resolvable championId
  *  yet, or it's already showing the resolved champion). Mirrors
@@ -63,7 +76,5 @@ export function resolveChampSelectFollow(input: ChampSelectFollowInput): ChampSe
   if (!championId) return null;
   if (championId === input.currentChampionId) return null;
 
-  const rawRole = input.champSelect!.roleId;
-  const roleId = rawRole !== null && VALID_ROLES.includes(rawRole as LiveRoleId) ? (rawRole as LiveRoleId) : undefined;
-  return { championId, roleId };
+  return { championId, roleId: resolveChampSelectRoleId(input.champSelect) };
 }

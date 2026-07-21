@@ -108,3 +108,19 @@ export function indexChampionsByKey(champs: ChampionRef[]): Map<string, Champion
   for (const c of champs) map.set(c.key, c);
   return map;
 }
+
+/** Round-B P2 fix — "LivePanel churn": the enemy roster is fixed for the
+ *  whole game (nobody's champion changes once InProgress), but the raw
+ *  Live Client Data payload is a brand-new object reference every poll
+ *  tick, so a naive setModel(buildLivePanelModel(...)) re-rendered
+ *  LivePanel's whole subtree once a second, all game, for identical
+ *  content. LivePanel.tsx's tick() uses this to skip the setState (and the
+ *  resulting re-render) whenever the derived enemy set is byte-identical to
+ *  the previous tick's — order-sensitive (buildLivePanelModel's own sort
+ *  is deterministic, so a real roster never reorders on its own). */
+export function sameLivePanelModel(a: LivePanelModel | null, b: LivePanelModel | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.enemies.length !== b.enemies.length) return false;
+  return a.enemies.every((e, i) => e.championKey === b.enemies[i].championKey && e.position === b.enemies[i].position);
+}

@@ -212,6 +212,21 @@ export default function DraftPage() {
   const showResetToLive = shouldShowResetToLive(dirty, companion.phase, companion.champSelect);
   const liveSyncing = companion.phase === "ChampSelect" && !dirty;
 
+  // Round-B stale-data honesty fix: meta.patch is whatever the draft tables
+  // actually have ingested (lib/draft/recommend.ts's resolveServingPatch);
+  // meta.currentPatch is what the rest of the app considers current
+  // (getLatestPatch()). The daily ingest cron is Cloudflare-blocked from
+  // reaching u.gg on Vercel's egress IP (see HANDOFF's "Vercel-egress probe
+  // of stats2" finding) — not something this page can fix — so the two can
+  // diverge for days. Rather than silently keep showing the old patch's
+  // numbers with no signal, surface it honestly whenever real data IS being
+  // shown for a patch that isn't the newest one.
+  const isStalePatchData =
+    state.status === "ok" &&
+    state.data.meta.currentPatch !== null &&
+    state.data.meta.patch !== null &&
+    state.data.meta.currentPatch !== state.data.meta.patch;
+
   // audit P2-1: the enemy chip highlight reflects EITHER the user's own
   // explicit tag (laneOpponentId) OR — when the user hasn't tagged anyone —
   // the server's own statistical inference (meta.laneOppInferred), never a
@@ -236,6 +251,12 @@ export default function DraftPage() {
               <p className="text-mut/70 text-[11px] mt-1 tabular-nums">
                 Patch {state.data.meta.patch || "—"} · {tierLabel(state.data.meta.tier)}
                 {state.data.meta.fetchedAt && ` · updated ${formatFetchedAt(state.data.meta.fetchedAt)}`}
+              </p>
+            )}
+            {isStalePatchData && (
+              <p className="text-mut/60 text-[10px] mt-0.5">
+                Patch {state.data.meta.currentPatch} data isn&apos;t ready yet — showing the last available patch (
+                {state.data.meta.patch}).
               </p>
             )}
           </div>

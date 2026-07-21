@@ -46,12 +46,12 @@ describe("normalizeDraftRecommendResponse", () => {
     const result = normalizeDraftRecommendResponse({
       plays: [{ champId: 103, score: 0.52, winVsLaneOpp: 0.54, confidence: "normal", minGames: 400 }],
       bans: [{ champId: 64, score: 0.08, confidence: "low", minGames: 20 }],
-      meta: { patch: "16.14", tier: 10, fetchedAt: "2026-07-20T00:00:00.000Z", laneOppInferred: 64 },
+      meta: { patch: "16.14", tier: 10, fetchedAt: "2026-07-20T00:00:00.000Z", laneOppInferred: 64, currentPatch: "16.14" },
     });
     expect(result).toEqual({
       plays: [{ champId: 103, score: 0.52, winVsLaneOpp: 0.54, confidence: "normal", minGames: 400 }],
       bans: [{ champId: 64, score: 0.08, confidence: "low", minGames: 20 }],
-      meta: { patch: "16.14", tier: 10, fetchedAt: "2026-07-20T00:00:00.000Z", laneOppInferred: 64 },
+      meta: { patch: "16.14", tier: 10, fetchedAt: "2026-07-20T00:00:00.000Z", laneOppInferred: 64, currentPatch: "16.14" },
       pending: false,
     });
   });
@@ -59,6 +59,12 @@ describe("normalizeDraftRecommendResponse", () => {
   it("meta.laneOppInferred degrades to null when absent or non-numeric", () => {
     expect(normalizeDraftRecommendResponse({ meta: {} })?.meta.laneOppInferred).toBeNull();
     expect(normalizeDraftRecommendResponse({ meta: { laneOppInferred: "64" } })?.meta.laneOppInferred).toBeNull();
+  });
+
+  it("meta.currentPatch degrades to null when absent or non-string, parses through when present (Round-B)", () => {
+    expect(normalizeDraftRecommendResponse({ meta: {} })?.meta.currentPatch).toBeNull();
+    expect(normalizeDraftRecommendResponse({ meta: { currentPatch: 16.14 } })?.meta.currentPatch).toBeNull();
+    expect(normalizeDraftRecommendResponse({ meta: { currentPatch: "16.15" } })?.meta.currentPatch).toBe("16.15");
   });
 
   it("bans:null (no hover sent) passes through as null, not an empty array", () => {
@@ -75,7 +81,7 @@ describe("normalizeDraftRecommendResponse", () => {
     expect(result).toEqual({
       plays: [],
       bans: null,
-      meta: { patch: "", tier: 0, fetchedAt: "", laneOppInferred: null },
+      meta: { patch: "", tier: 0, fetchedAt: "", laneOppInferred: null, currentPatch: null },
       pending: false,
     });
   });

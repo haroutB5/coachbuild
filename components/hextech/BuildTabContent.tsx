@@ -287,6 +287,22 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
   const [itemsToast, setItemsToast] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const [runesToast, setRunesToast] = useState<{ kind: "success" | "error"; message: string } | null>(null);
 
+  // Round-B P3 fix ("stale toast champion name"): a toast's message text
+  // always correctly names the champion it was actually exported FOR (the
+  // effect below closes over `build.champion.name` at export time, not at
+  // render time — that part was never wrong) — the bug was that the toast
+  // could keep showing for up to its full 6s window even after the user had
+  // already moved on to a DIFFERENT champion/lane, reading as stale/
+  // confusing against whatever's now on screen. Clearing on every
+  // champion/lane change closes that gap without touching the message
+  // composition itself (capturing the name at render time instead would be
+  // actively WRONG — it would attribute the export to whatever's currently
+  // shown rather than what was actually exported).
+  useEffect(() => {
+    setItemsToast(null);
+    setRunesToast(null);
+  }, [champ.id, lane]);
+
   useEffect(() => {
     if (state.status !== "ok") return;
     const build = state.build;
@@ -306,14 +322,32 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
     const epoch = getChampSelectPhaseEpoch();
 
     // Item sets
+    //
+    // Round-B P3 fix ("transient-probe-failure marks-as-done"): markAutoExported
+    // used to fire synchronously here, BEFORE the async attempt even started —
+    // so a transient "companion not connected yet" (outcome.attempted === false,
+    // e.g. the tab opened before the local companion process finished pairing)
+    // permanently consumed this (champion, lane)'s dedup slot, even though
+    // NOTHING was actually exported. The only way to retry was a coincidental
+    // lane bounce. Fixed by moving the mark into the resolution below, gated on
+    // outcome.attempted: an attempt the deeper shouldAutoExport() gate refused
+    // (no session/port yet, or the toggle is off) leaves the slot OPEN for a
+    // later genuine attempt; a REAL attempt (companion reachable) marks done
+    // regardless of ok/error — a write failure isn't fixed by bouncing lanes,
+    // it's surfaced via the error toast instead. tryClaimAutoExportLock is
+    // still claimed synchronously (unchanged) — its 30s localStorage TTL is
+    // what prevents a double-fire in the async window before the in-memory
+    // mark lands (a second effect run for the SAME (kind, epoch, championId,
+    // laneId) within that window fails the lock claim outright), so no
+    // separate in-flight flag is needed.
     if (shouldAutoExportForLane("items", championId, lane) && tryClaimAutoExportLock("items", epoch, championId, lane)) {
-      markAutoExported("items", championId, lane);
       autoApplyItemSetsIfEligible(
         { isDeepLink: true, autoEnabled: getAutoItemSetsEnabled(), session, port, alreadyFired: false },
         async () => ({ champ: build.champion, lane, roleLabel: build.roleLabel, build })
       )
         .then((outcome) => {
-          if (!outcome.attempted) return; // gate refused, or the companion probe failed -- quiet, no toast
+          if (!outcome.attempted) return; // gate refused (not yet connected / toggle off) -- quiet, no toast, slot left open for a later retry
+          markAutoExported("items", championId, lane);
           if (outcome.result.ok) {
             setItemsToast({ kind: "success", message: `Item build added for ${build.champion.name} — check your shop in game.` });
           } else {
@@ -327,7 +361,10 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
         .catch(() => {
           // See this effect's header comment (v0.35.0 fold-in fix) — an
           // uncaught exception anywhere in the attempt must surface a
-          // visible error, never vanish silently.
+          // visible error, never vanish silently. Still counts as a
+          // completed attempt (marked done) so it doesn't retry into the
+          // same exception on every lane bounce.
+          markAutoExported("items", championId, lane);
           setItemsToast({
             kind: "error",
             message: "Couldn't auto-add item builds — add them manually from the Runes & Summoners card.",
@@ -336,15 +373,16 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
         });
     }
 
-    // Runes
+    // Runes — same Round-B P3 fix as item sets above (mark deferred to the
+    // resolution, gated on outcome.attempted).
     if (shouldAutoExportForLane("runes", championId, lane) && tryClaimAutoExportLock("runes", epoch, championId, lane)) {
-      markAutoExported("runes", championId, lane);
       autoApplyRunesIfEligible(
         { isDeepLink: true, autoEnabled: getAutoRunesEnabled(), session, port, alreadyFired: false },
         async () => ({ championName: build.champion.name, roleLabel: build.roleLabel, runes: build.runes })
       )
         .then((outcome) => {
           if (!outcome.attempted) return;
+          markAutoExported("runes", championId, lane);
           if (outcome.result.ok) {
             const r = outcome.result;
             setRunesToast({
@@ -363,6 +401,7 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
           setTimeout(() => setRunesToast(null), 6000);
         })
         .catch(() => {
+          markAutoExported("runes", championId, lane);
           setRunesToast({
             kind: "error",
             message: "Couldn't auto-apply runes — use the Apply runes button instead.",

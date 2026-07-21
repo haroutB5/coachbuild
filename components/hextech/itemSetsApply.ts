@@ -26,23 +26,9 @@ import { aggregateProConsensus } from "./proConsensus";
 import { LANE_TO_ROLE_ID, type LaneId } from "./heroContracts";
 import { buildItemSets, champScopedReplacePrefix, type ProConsensusItemsInput } from "./itemSetBody";
 import { applyItemSets, type ApplyItemSetsResult, getStatus, type CompanionPort } from "@/components/live/companionClient";
-import { shouldAutoExport, isAutoExportEligibleBuild, type AutoApplyGateInput } from "./autoExportShared";
+import { shouldAutoExport, type AutoApplyGateInput } from "./autoExportShared";
 
-/** NOTE (v0.35.0 fold-in investigation): isAutoExportEligibleBuild is kept
- *  exported (and its regression tests kept passing) for historical/pinned
- *  documentation of the P1 wrong-champion race it originally fixed
- *  (2026-07-20 audit) — but it is NOT part of the live auto-export decision
- *  chain as of the v1.3.0 rewrite. That race is now closed structurally by
- *  champSelectFollowState.ts's isCompanionDrivenChampion (BuildTabContent's
- *  effect gates on it directly), which needs no `parsed`/URL argument at
- *  all — comparing against `window.location.search` the way this function
- *  does would in fact be WRONG for the v1.3.0 attached-tab live-follow path
- *  (the URL is only ever set once, at the deep-link mount; a later
- *  live-follow-driven champion change never touches it, so a stale
- *  `championId` would silently block every followed champion's export
- *  forever). Confirmed via a repo-wide search: this function has no call
- *  site in components/hextech/BuildTabContent.tsx today. */
-export { isAutoExportEligibleBuild, type AutoApplyGateInput };
+export { type AutoApplyGateInput };
 
 const PRO_CONSENSUS_LIMIT = 100;
 

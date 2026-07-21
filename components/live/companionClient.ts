@@ -55,9 +55,16 @@ export type CompanionPort = (typeof COMPANION_PORTS)[number];
  *  to catch a ChampSelect->InProgress transition, not track anything
  *  frame-accurate. */
 export const COMPANION_STATUS_POLL_MS = 3000;
-/** In-game live-client-data poll cadence — matches the plan's "1s" spec and
- *  the community-established Live Client Data polling norm (research §B). */
-export const LIVE_POLL_MS = 1000;
+/** In-game live-client-data poll cadence. Originally 1000ms (the plan's spec
+ *  and the community-established Live Client Data polling norm, research
+ *  §B) — slowed to 3000ms in Round-B (P2 "LivePanel churn" fix): the enemy
+ *  roster LivePanel derives from this poll is fixed for the whole game (no
+ *  champion changes once InProgress), so the extra cadence bought nothing
+ *  but a subtree re-render every second, all game. Paired with a
+ *  shallow-compare skip in LivePanel.tsx's tick() (belt and braces — there
+ *  are no cooldowns/timers derived from this data by design, so neither fix
+ *  trades away anything time-sensitive). */
+export const LIVE_POLL_MS = 3000;
 
 const SESSION_STORAGE_KEY = "coachbuild:companion:session";
 const PORT_STORAGE_KEY = "coachbuild:companion:port";

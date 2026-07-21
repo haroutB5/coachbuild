@@ -41,6 +41,7 @@ import {
   type PlayResult,
 } from "@/lib/draft/score";
 import { EMERALD_TIER } from "@/lib/draft/ugg";
+import { resolveDraftPatchLabel } from "@/lib/draft/patch";
 
 /** P3-1 (audit, 2026-07-21): a patch needs at least this many distinct
  *  champions present in draft_champ_stats before resolveServingPatch will
@@ -65,6 +66,25 @@ export interface RecommendMeta {
   tier: number;
   fetchedAt: string;
   laneOppInferred: number | null;
+  /** Round-B (2026-07-21) stale-data honesty fix: the patch the REST of the
+   *  app considers current (lib/staticData.ts's getLatestPatch(), the same
+   *  resolver lib/draft/patch.ts's resolveDraftPatchLabel() reuses at ingest
+   *  time) — independent of `patch` above, which is whatever's actually
+   *  SERVED (resolveServingPatch, a plain DB read of what's been ingested).
+   *  The two can diverge for days at a time: the daily /api/ingest/draft
+   *  cron is Cloudflare-blocked from reaching u.gg on Vercel's egress IP
+   *  (see HANDOFF's "Vercel-egress probe of stats2" finding, 2026-07-21) —
+   *  not fixed here, out of scope — so a patch bump can sit un-ingested
+   *  indefinitely with only a manual `npm run ingest:draft` run to close the
+   *  gap. Rather than silently keep serving the old patch's numbers with no
+   *  signal, or showing "still being prepared" forever (the existing
+   *  `pending` state, which only fires when NOTHING has been ingested for
+   *  ANY patch), the client compares `patch` against `currentPatch` and
+   *  surfaces an honest one-line notice when they differ but real data IS
+   *  being shown. Null if the getLatestPatch() resolution itself fails (see
+   *  its own fallback chain) — degrades to "no notice" rather than a
+   *  false-positive staleness warning. */
+  currentPatch: string | null;
 }
 
 export interface RecommendResult {
@@ -150,10 +170,14 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
   if (!sql) throw new DbUnavailableError();
 
   const fetchedAt = new Date().toISOString();
+  // Fail-soft (see RecommendMeta.currentPatch's own doc comment) — this
+  // resolver's own fallback chain currently never throws, but a null here
+  // must never block serving the real `patch` data below.
+  const currentPatch = await resolveDraftPatchLabel().catch(() => null);
   const pendingMeta = (patch: string | null): RecommendResult => ({
     plays: [],
     bans: null,
-    meta: { patch, tier: EMERALD_TIER, fetchedAt, laneOppInferred: null },
+    meta: { patch, tier: EMERALD_TIER, fetchedAt, laneOppInferred: null, currentPatch },
     pending: true,
   });
 
@@ -226,6 +250,6 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
   return {
     plays,
     bans,
-    meta: { patch, tier: EMERALD_TIER, fetchedAt, laneOppInferred },
+    meta: { patch, tier: EMERALD_TIER, fetchedAt, laneOppInferred, currentPatch },
   };
 }

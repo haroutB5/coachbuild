@@ -206,7 +206,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.4.0'
+    Version     = '1.4.1'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -757,6 +757,33 @@ function Get-LcuCredentials {
 
     return $null
 }
+
+# Round-B P3 fix (companion CIM cost): Get-LcuCredentials above shells out to
+# Get-CimInstance every call -- Invoke-GameflowTick used to call it
+# unconditionally on EVERY 1.5s poll tick, all game, even though the
+# port/token pair is stable for the entire lifetime of one LeagueClientUx.exe
+# process. Cached here after a successful discovery; only re-discovered when
+# the cache is empty (nothing found yet, or it was explicitly cleared) --
+# never on a fixed timer of its own, since there's no "this might be stale"
+# signal on a schedule, only on an actual failure (see Clear-LcuCredentialsCache
+# and its call site in Invoke-GameflowTick, which invalidates on a
+# connection-refused/401 LCU response -- the client restarted or rotated its
+# token). $Resolver is injectable (defaults to the real Get-LcuCredentials)
+# so Invoke-SelfTest can verify "resolver called once across N ticks, called
+# again after invalidation" without needing a real LeagueClientUx.exe process.
+$script:CachedLcuCreds = $null
+
+function Get-LcuCredentialsCached {
+    param([scriptblock]$Resolver = ${function:Get-LcuCredentials})
+    if ($script:CachedLcuCreds) { return $script:CachedLcuCreds }
+    $creds = & $Resolver
+    if ($creds) { $script:CachedLcuCreds = $creds }
+    return $creds
+}
+
+function Clear-LcuCredentialsCache {
+    $script:CachedLcuCreds = $null
+}
 #endregion
 
 #region ChampSelect
@@ -987,7 +1014,11 @@ function Invoke-GameflowTick {
     if ($script:Bridge -and $script:Bridge.Sync) {
         $script:Bridge.Sync.LastPollAt = (Get-Date).ToUniversalTime().ToString('o')
     }
-    $creds = Get-LcuCredentials  # re-read every loop -- port/token rotate per client restart
+    # Round-B P3 fix: cached across ticks (was Get-CimInstance every 1.5s
+    # poll, all game) -- only re-discovers when the cache is empty, which
+    # Test-LcuCallFailure below forces on a connection-refused/401 response
+    # (client restarted or its token rotated), never on a fixed schedule.
+    $creds = Get-LcuCredentialsCached
 
     if ($creds) {
         $script:Bridge.Sync.LcuPort = $creds.Port
@@ -1000,7 +1031,16 @@ function Invoke-GameflowTick {
     $phase = 'None'
     if ($creds) {
         $r = Invoke-LcuRaw -Method GET -Path '/lol-gameflow/v1/gameflow-phase' -Port $creds.Port -Token $creds.Token
-        if ($r.Ok -and $r.Content) { $phase = [string]$r.Content }
+        if ($r.Ok -and $r.Content) {
+            $phase = [string]$r.Content
+        } elseif (-not $r.Ok -and ($r.StatusCode -eq 0 -or $r.StatusCode -eq 401)) {
+            # Connection refused (client process gone/restarted -- a new one
+            # will have a different port/token) or 401 (stale token) -- the
+            # cached creds are dead. Drop them so the NEXT tick re-discovers
+            # via Get-CimInstance instead of hammering a dead port/token pair
+            # every 1.5s until the user notices something's wrong.
+            Clear-LcuCredentialsCache
+        }
     }
     if ($phase -ne $script:LastLoggedPhase) {
         Write-CompanionLog "phase: $script:LastLoggedPhase -> $phase"
@@ -1015,6 +1055,8 @@ function Invoke-GameflowTick {
             $sessRaw = Invoke-LcuRaw -Method GET -Path '/lol-champ-select/v1/session' -Port $creds.Port -Token $creds.Token
             if ($sessRaw.Ok) {
                 Update-ChampSelectState -State $script:ChampSelectState -Session $sessRaw.Content -AppOrigin $script:Config.AppOrigin -SessionToken $script:Config.Session
+            } elseif ($sessRaw.StatusCode -eq 0 -or $sessRaw.StatusCode -eq 401) {
+                Clear-LcuCredentialsCache
             }
         }
     } else {
@@ -1247,6 +1289,7 @@ function Start-Companion {
     $script:WasChampSelect = $false
     $script:LastLoggedPhase = $null
     $script:CompanionRunning = $true
+    $script:CachedLcuCreds = $null  # fresh discovery on every real run
 
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
@@ -1919,6 +1962,33 @@ function Invoke-SelfTest {
     if ($vbs -notlike '*irm https://coachbuild.vercel.app/companion.ps1 | iex*') {
         $failures.Add("Autostart VBS missing expected install command: $vbs")
     }
+
+    # 9. LCU credentials cache (Round-B P3 fix) -- resolver (stands in for
+    # the real Get-CimInstance-backed Get-LcuCredentials) must be called
+    # exactly once across repeated ticks, and again only after an explicit
+    # invalidation (the connection-refused/401 path in Invoke-GameflowTick).
+    $script:CachedLcuCreds = $null
+    $script:__lcuSelfTestResolveCount = 0
+    $fakeLcuResolver = {
+        $script:__lcuSelfTestResolveCount++
+        [pscustomobject]@{ Port = 65000; Token = 'faketoken'; Source = 'selftest-fake' }
+    }
+    $c1 = Get-LcuCredentialsCached -Resolver $fakeLcuResolver
+    $c2 = Get-LcuCredentialsCached -Resolver $fakeLcuResolver
+    $c3 = Get-LcuCredentialsCached -Resolver $fakeLcuResolver
+    if ($script:__lcuSelfTestResolveCount -ne 1) {
+        $failures.Add("LCU creds cache: resolver called $($script:__lcuSelfTestResolveCount) times across 3 ticks, expected exactly 1 (cache not being reused)")
+    }
+    if ($c1.Port -ne 65000 -or $c2.Port -ne 65000 -or $c3.Port -ne 65000) {
+        $failures.Add('LCU creds cache: cached creds were not returned consistently across ticks')
+    }
+    Clear-LcuCredentialsCache
+    $c4 = Get-LcuCredentialsCached -Resolver $fakeLcuResolver
+    if ($script:__lcuSelfTestResolveCount -ne 2) {
+        $failures.Add("LCU creds cache: invalidation did not force re-discovery on the next tick (resolve count $($script:__lcuSelfTestResolveCount), expected 2)")
+    }
+    if ($c4.Port -ne 65000) { $failures.Add('LCU creds cache: re-discovery after invalidation did not return fresh creds') }
+    Clear-LcuCredentialsCache  # leave global state clean for anything run after SelfTest in-process
 
     if ($failures.Count -gt 0) {
         Write-Host "SELFTEST FAILED ($($failures.Count)):" -ForegroundColor Red

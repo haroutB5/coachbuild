@@ -51,6 +51,14 @@ export interface DraftRecommendMeta {
    *  `laneOpp` was omitted/invalid. Null when no enemy qualified either
    *  way. Absent on a malformed/older response degrades to null. */
   laneOppInferred: number | null;
+  /** Round-B (2026-07-21) stale-data honesty fix: the patch the rest of the
+   *  app considers current, independent of `patch` above (which is whatever
+   *  the draft tables actually have ingested — see lib/draft/recommend.ts's
+   *  RecommendMeta.currentPatch doc comment for why these can diverge for
+   *  days at a time). Null on a malformed/older response, or if the
+   *  server's own resolver failed — degrades to "no staleness notice"
+   *  rather than a false positive. */
+  currentPatch: string | null;
 }
 
 export interface DraftRecommendResponse {
@@ -152,6 +160,7 @@ export function normalizeDraftRecommendResponse(raw: unknown): DraftRecommendRes
     tier: typeof r.meta?.tier === "number" ? r.meta.tier : 0,
     fetchedAt: typeof r.meta?.fetchedAt === "string" ? r.meta.fetchedAt : "",
     laneOppInferred: typeof r.meta?.laneOppInferred === "number" ? r.meta.laneOppInferred : null,
+    currentPatch: typeof r.meta?.currentPatch === "string" ? r.meta.currentPatch : null,
   };
 
   return { plays, bans, meta, pending: r.pending === true };

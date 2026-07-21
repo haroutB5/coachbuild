@@ -36,10 +36,10 @@
 // fix (wrong-champion race): app/page.tsx marks a championId the moment it
 // ACTUALLY applies it (deep link OR live-follow), so BuildTabContent's
 // auto-export effects never fire against a transient default/fallback
-// champion that was never a real companion signal. (See
-// itemSetsApply.ts's isAutoExportEligibleBuild for the OLDER, now-unused
-// guard this superseded — kept only for its own pinned regression tests,
-// not part of the live decision chain below.)
+// champion that was never a real companion signal. (The OLDER
+// isAutoExportEligibleBuild guard this superseded was deleted in Round B,
+// 2026-07-21 — see autoExportShared.ts's own deletion note and git history
+// for the original implementation, if this needs revisiting.)
 //
 // v0.35.0 also tracks the companion's OWN live champ-select resolution
 // (currentChampSelectChampionId, fed every poll tick by app/page.tsx via
@@ -65,6 +65,7 @@ let lastApplied: Record<AutoExportKind, AppliedLaneRecord | null> = { items: nul
 let companionDrivenChampionIds = new Set<number>();
 let lastPhase: string | null = null;
 let currentChampSelectChampionId: number | null = null;
+let lastFollowedChampSelectChampionId: number | null = null;
 
 /** Call on every companion /status poll. Bumps the epoch (and clears
  *  per-epoch state) exactly once per ChampSelect ENTRY — i.e. transitioning
@@ -78,6 +79,7 @@ export function noteCompanionPhase(phase: string): void {
     phaseEpoch += 1;
     lastApplied = { items: null, runes: null };
     companionDrivenChampionIds = new Set();
+    lastFollowedChampSelectChampionId = null;
   }
   lastPhase = phase;
   if (phase !== "ChampSelect") currentChampSelectChampionId = null;
@@ -110,6 +112,29 @@ export function setCurrentChampSelectChampionId(championId: number | null): void
 
 export function getCurrentChampSelectChampionId(): number | null {
   return currentChampSelectChampionId;
+}
+
+/** Round-B P2 fix — "follow-fights-user": app/page.tsx's live-follow effect
+ *  used to gate re-assertion on "does the resolved champ-select champion
+ *  differ from whatever the page is CURRENTLY SHOWING" (resolveChampSelectFollow's
+ *  own currentChampionId check). That re-fires on EVERY poll tick once a
+ *  user manually browses to a different champion mid-champ-select, since
+ *  the shown champion (now the user's browse target) permanently diverges
+ *  from the unchanged champ-select champion — snapping the view back every
+ *  3s and making manual browsing during champ select unusable.
+ *
+ *  Fixed by tracking the last champ-select championId the follow effect
+ *  actually acted on (below), and re-asserting ONLY when THAT changes — a
+ *  genuine new hover/lock, never a manual browse away from an unchanged
+ *  champ-select champion. A manual browse now persists until the real
+ *  champ-select pick changes, at which point the follow fires exactly once
+ *  for the new champion (matching the pre-fix "first assert" behavior). */
+export function shouldFollowChampSelectChange(championId: number): boolean {
+  return championId !== lastFollowedChampSelectChampionId;
+}
+
+export function markFollowedChampSelectChampion(championId: number): void {
+  lastFollowedChampSelectChampionId = championId;
 }
 
 /** v0.35.0 — the auto-export dedup decision. Replaces the old
@@ -170,6 +195,7 @@ export function resetChampSelectFollowState(): void {
   companionDrivenChampionIds = new Set();
   lastPhase = null;
   currentChampSelectChampionId = null;
+  lastFollowedChampSelectChampionId = null;
 }
 
 const AUTO_EXPORT_LOCK_TTL_MS = 30000;

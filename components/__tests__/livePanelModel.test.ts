@@ -4,7 +4,7 @@
  * Live Client Data payload — only championKey + a normalized position.
  */
 import { describe, it, expect } from "vitest";
-import { buildLivePanelModel, indexChampionsByKey } from "../live/livePanelModel";
+import { buildLivePanelModel, indexChampionsByKey, sameLivePanelModel } from "../live/livePanelModel";
 import type { LiveDataRaw } from "../live/companionClient";
 import type { ChampionRef } from "@/lib/types";
 
@@ -79,6 +79,50 @@ describe("buildLivePanelModel — behavior", () => {
     });
     const model = buildLivePanelModel(raw, "Viktor");
     expect(model!.enemies.every((e) => e.position === null)).toBe(true);
+  });
+});
+
+// Round-B P2 fix — LivePanel.tsx's poll now skips setModel entirely when the
+// derived enemy set hasn't changed, avoiding a subtree re-render every tick
+// for static in-game data.
+describe("sameLivePanelModel", () => {
+  it("both null -> same", () => {
+    expect(sameLivePanelModel(null, null)).toBe(true);
+  });
+
+  it("one null, one not -> different", () => {
+    const m = { enemies: [{ championKey: "Ahri", position: "Mid" }] };
+    expect(sameLivePanelModel(null, m)).toBe(false);
+    expect(sameLivePanelModel(m, null)).toBe(false);
+  });
+
+  it("same reference -> same (fast path)", () => {
+    const m = { enemies: [{ championKey: "Ahri", position: "Mid" }] };
+    expect(sameLivePanelModel(m, m)).toBe(true);
+  });
+
+  it("identical content, different object references -> same", () => {
+    const a = { enemies: [{ championKey: "Ahri", position: "Mid" }, { championKey: "Jinx", position: "Bot" }] };
+    const b = { enemies: [{ championKey: "Ahri", position: "Mid" }, { championKey: "Jinx", position: "Bot" }] };
+    expect(sameLivePanelModel(a, b)).toBe(true);
+  });
+
+  it("different enemy count -> different", () => {
+    const a = { enemies: [{ championKey: "Ahri", position: "Mid" }] };
+    const b = { enemies: [{ championKey: "Ahri", position: "Mid" }, { championKey: "Jinx", position: "Bot" }] };
+    expect(sameLivePanelModel(a, b)).toBe(false);
+  });
+
+  it("same champion, different position -> different (mid-game role swap edge case)", () => {
+    const a = { enemies: [{ championKey: "Ahri", position: "Mid" }] };
+    const b = { enemies: [{ championKey: "Ahri", position: "Top" }] };
+    expect(sameLivePanelModel(a, b)).toBe(false);
+  });
+
+  it("same set, different order -> different (order is significant, matches the deterministic sort)", () => {
+    const a = { enemies: [{ championKey: "Ahri", position: "Mid" }, { championKey: "Jinx", position: "Bot" }] };
+    const b = { enemies: [{ championKey: "Jinx", position: "Bot" }, { championKey: "Ahri", position: "Mid" }] };
+    expect(sameLivePanelModel(a, b)).toBe(false);
   });
 });
 

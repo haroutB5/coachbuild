@@ -15,7 +15,7 @@ import { DbUnavailableError } from "@/lib/pro/errors";
 const req = (qs: string) =>
   ({ url: `http://localhost/api/draft/recommend${qs}` }) as unknown as Parameters<typeof GET>[0];
 
-const baseMeta = { patch: "16.14", tier: 10, fetchedAt: "2026-07-21T00:00:00.000Z", laneOppInferred: null };
+const baseMeta = { patch: "16.14", tier: 10, fetchedAt: "2026-07-21T00:00:00.000Z", laneOppInferred: null, currentPatch: "16.14" };
 
 describe("GET /api/draft/recommend", () => {
   beforeEach(() => vi.mocked(computeDraftRecommend).mockReset());

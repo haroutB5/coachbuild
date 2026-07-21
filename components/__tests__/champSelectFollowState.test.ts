@@ -16,6 +16,8 @@ import {
   markAutoExported,
   markCompanionDriven,
   isCompanionDrivenChampion,
+  shouldFollowChampSelectChange,
+  markFollowedChampSelectChampion,
   resetChampSelectFollowState,
   tryClaimAutoExportLock,
 } from "../live/champSelectFollowState";
@@ -160,6 +162,49 @@ describe("champSelectFollowState — shouldAutoExportForLane / markAutoExported"
     markCompanionDriven(103);
     noteCompanionPhase("ChampSelect");
     expect(isCompanionDrivenChampion(103)).toBe(false);
+  });
+});
+
+// Round-B P2 "follow-fights-user" fix — app/page.tsx's live-follow effect
+// used to re-assert the champ-select champion every poll tick once a user
+// manually browsed to a different champion, because it compared the
+// resolved champ-select championId against whatever was CURRENTLY SHOWN
+// (which the user's manual browse changes) rather than against the last
+// champ-select championId the follow effect itself acted on. See
+// shouldFollowChampSelectChange's own doc comment.
+describe("champSelectFollowState — shouldFollowChampSelectChange / markFollowedChampSelectChampion", () => {
+  beforeEach(() => resetChampSelectFollowState());
+
+  it("fires on the first-ever resolution (nothing followed yet)", () => {
+    expect(shouldFollowChampSelectChange(103)).toBe(true);
+  });
+
+  it("does not re-fire once the SAME champ-select championId has been followed", () => {
+    markFollowedChampSelectChampion(103);
+    expect(shouldFollowChampSelectChange(103)).toBe(false);
+  });
+
+  it("a manual browse away does NOT cause a re-fire on the next tick (the bug fix) -- champ-select championId is unchanged", () => {
+    markFollowedChampSelectChampion(103);
+    // User manually browses to champion 7 -- nothing in this module's state
+    // changes as a result (app/page.tsx no longer feeds champ.id into this
+    // decision at all), so the champ-select champion (still 103) must not
+    // re-assert on subsequent ticks.
+    expect(shouldFollowChampSelectChange(103)).toBe(false);
+    expect(shouldFollowChampSelectChange(103)).toBe(false); // repeated ticks -- still no re-fire
+  });
+
+  it("a genuine champ-select champion CHANGE re-fires exactly once", () => {
+    markFollowedChampSelectChampion(103);
+    expect(shouldFollowChampSelectChange(7)).toBe(true); // hover/lock moved to a new champion
+    markFollowedChampSelectChampion(7);
+    expect(shouldFollowChampSelectChange(7)).toBe(false); // settles again
+  });
+
+  it("a fresh ChampSelect epoch clears the last-followed championId too", () => {
+    markFollowedChampSelectChampion(103);
+    noteCompanionPhase("ChampSelect");
+    expect(shouldFollowChampSelectChange(103)).toBe(true);
   });
 });
 

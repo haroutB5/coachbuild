@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveChampSelectFollow, resolveCurrentChampSelectChampionId } from "../live/champSelectFollow";
+import { resolveChampSelectFollow, resolveCurrentChampSelectChampionId, resolveChampSelectRoleId } from "../live/champSelectFollow";
 import type { CompanionChampSelectSnapshot } from "../live/companionClient";
 
 function snapshot(overrides: Partial<CompanionChampSelectSnapshot> = {}): CompanionChampSelectSnapshot {
@@ -116,5 +116,27 @@ describe("resolveCurrentChampSelectChampionId", () => {
     // This is the whole reason this helper is split out: a plain mirror,
     // not a "should something change" decision.
     expect(resolveCurrentChampSelectChampionId(snapshot({ cellChampionId: 103 }))).toBe(103);
+  });
+});
+
+// Round-B P2 fix — split out of resolveChampSelectFollow so app/page.tsx's
+// follow effect can pair it with resolveCurrentChampSelectChampionId
+// directly, gated on champSelectFollowState.ts's shouldFollowChampSelectChange
+// instead of a "differs from what's currently shown" check.
+describe("resolveChampSelectRoleId", () => {
+  it("undefined when champSelect is null", () => {
+    expect(resolveChampSelectRoleId(null)).toBeUndefined();
+  });
+
+  it("undefined when roleId is null (blank/unmapped assignedPosition)", () => {
+    expect(resolveChampSelectRoleId(snapshot({ roleId: null }))).toBeUndefined();
+  });
+
+  it("resolves a valid roleId", () => {
+    expect(resolveChampSelectRoleId(snapshot({ roleId: 2 }))).toBe(2);
+  });
+
+  it("an out-of-range roleId degrades to undefined rather than propagating garbage", () => {
+    expect(resolveChampSelectRoleId(snapshot({ roleId: 99 }))).toBeUndefined();
   });
 });

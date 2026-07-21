@@ -25,7 +25,7 @@ import { useBodyScrollLock } from "@/components/useBodyScrollLock";
 import SituationalCard from "@/components/hextech/SituationalCard";
 import { flattenSituational } from "@/components/hextech/situational";
 import { getStoredSession, getStoredPort, getLive, isLiveError, LIVE_POLL_MS } from "./companionClient";
-import { buildLivePanelModel, indexChampionsByKey, type LivePanelModel } from "./livePanelModel";
+import { buildLivePanelModel, indexChampionsByKey, sameLivePanelModel, type LivePanelModel } from "./livePanelModel";
 import { selectCompAwareHighlights } from "./compHighlight";
 
 interface LivePanelProps {
@@ -85,8 +85,13 @@ export default function LivePanel({ champ, lane }: LivePanelProps) {
     };
   }, []);
 
-  // The actual live-client-data poll (plan §2d: 1s while this panel is
-  // mounted — app/page.tsx only mounts it while phase === InProgress).
+  // The actual live-client-data poll (plan §2d spec'd 1s; Round-B P2 slowed
+  // it to LIVE_POLL_MS=3000 — the enemy roster this panel derives is fixed
+  // for the whole game, so 1s bought nothing but subtree churn). Also
+  // shallow-compares the derived model against the previous tick's (via the
+  // functional setState form below) and skips the setState entirely when
+  // the enemy set is unchanged — belt-and-braces with the slower interval,
+  // see sameLivePanelModel's own doc comment in livePanelModel.ts.
   useEffect(() => {
     const session = getStoredSession();
     const port = getStoredPort();
@@ -97,10 +102,11 @@ export default function LivePanel({ champ, lane }: LivePanelProps) {
       const live = await getLive(port!, session!);
       if (cancelled) return;
       if (!live || isLiveError(live)) {
-        setModel(null);
+        setModel((prev) => (prev === null ? prev : null));
         return;
       }
-      setModel(buildLivePanelModel(live, champ.key));
+      const next = buildLivePanelModel(live, champ.key);
+      setModel((prev) => (sameLivePanelModel(prev, next) ? prev : next));
     }
 
     tick();

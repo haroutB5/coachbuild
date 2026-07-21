@@ -9,9 +9,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mockSql = vi.fn();
 vi.mock("@/lib/pro/db", () => ({ getSql: vi.fn(() => mockSql) }));
+// Round-B currentPatch fix — resolveDraftPatchLabel() calls the real
+// getLatestPatch() (ddragon network probe) if left unmocked; stubbed here
+// same as heroStats.test.ts/laneDefaults.test.ts mock @/lib/staticData
+// directly for the same reason.
+vi.mock("@/lib/draft/patch", () => ({ resolveDraftPatchLabel: vi.fn() }));
 
 import { getSql } from "@/lib/pro/db";
 import { computeDraftRecommend } from "@/lib/draft/recommend";
+import { resolveDraftPatchLabel } from "@/lib/draft/patch";
 import { POOL_MIN_TOTAL_GAMES } from "@/lib/draft/score";
 
 function sqlText(strings: TemplateStringsArray): string {
@@ -38,6 +44,8 @@ describe("computeDraftRecommend", () => {
   beforeEach(() => {
     mockSql.mockReset();
     vi.mocked(getSql).mockReturnValue(mockSql as never);
+    vi.mocked(resolveDraftPatchLabel).mockReset();
+    vi.mocked(resolveDraftPatchLabel).mockResolvedValue("16.14"); // matches most fixtures' served patch by default -- no false-positive staleness
   });
 
   it("no patch ingested at all -> pending, patch null", async () => {
@@ -210,6 +218,41 @@ describe("computeDraftRecommend", () => {
     });
     const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: 555 });
     expect(result.bans).toEqual([]);
+  });
+
+  describe("meta.currentPatch (Round-B stale-data honesty fix)", () => {
+    it("reflects the live patch resolver, independent of the served patch", async () => {
+      vi.mocked(resolveDraftPatchLabel).mockResolvedValue("16.15");
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.draft_champ_stats")) return Promise.resolve([champStatsRow({ champ_id: 1 })]);
+        return Promise.resolve([]);
+      });
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.meta.patch).toBe("16.14"); // served -- what's actually ingested
+      expect(result.meta.currentPatch).toBe("16.15"); // live -- what the rest of the app considers current
+    });
+
+    it("also populated on the pending path (patch ingested, but this lane is empty)", async () => {
+      vi.mocked(resolveDraftPatchLabel).mockResolvedValue("16.15");
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        return Promise.resolve([]);
+      });
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.pending).toBe(true);
+      expect(result.meta.currentPatch).toBe("16.15");
+    });
+
+    it("degrades to null (not a thrown error) if the resolver itself fails", async () => {
+      vi.mocked(resolveDraftPatchLabel).mockRejectedValue(new Error("network"));
+      mockSql.mockImplementation(() => Promise.resolve([]));
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.meta.currentPatch).toBeNull();
+      expect(result.pending).toBe(true); // unrelated to the resolver failure -- still driven by patch-ingestion state
+    });
   });
 
   it("bans computed when hover has a baseline", async () => {
