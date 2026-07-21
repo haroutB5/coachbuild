@@ -156,17 +156,14 @@ describe("computeDraftRecommend", () => {
     expect(enemyStatsQueried).toBe(false); // inference query never even runs when laneOpp is valid
   });
 
-  it("laneOpp not among enemies -> falls back to statistical inference", async () => {
+  it("laneOpp not among enemies -> falls back to statistical inference (pickrate axis when known)", async () => {
     mockSql.mockImplementation((strings: TemplateStringsArray) => {
       const text = sqlText(strings);
       if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
-      if (text.includes("FROM coachbuild.draft_champ_stats") && text.includes("champ_id = ANY") && !text.includes("role = ")) {
-        return Promise.resolve([]); // unreachable branch guard, not used
-      }
-      if (text.includes("SELECT champ_id, pickrate FROM")) {
+      if (text.includes("SELECT champ_id, pickrate, total_games")) {
         return Promise.resolve([
-          { champ_id: 10, pickrate: 0.02 },
-          { champ_id: 11, pickrate: 0.08 }, // highest -- should win
+          { champ_id: 10, pickrate: 0.02, total_games: 99999 }, // total_games higher, but pickrate axis wins when known
+          { champ_id: 11, pickrate: 0.08, total_games: 100 }, // highest pickrate, >2x -- should win
         ]);
       }
       if (text.includes("FROM coachbuild.draft_champ_stats")) {
@@ -178,12 +175,12 @@ describe("computeDraftRecommend", () => {
     expect(result.meta.laneOppInferred).toBe(11);
   });
 
-  it("no enemy has a positive pickrate -> laneOppInferred stays null", async () => {
+  it("no enemy has pickrate OR any lane games -> laneOppInferred stays null", async () => {
     mockSql.mockImplementation((strings: TemplateStringsArray) => {
       const text = sqlText(strings);
       if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
-      if (text.includes("SELECT champ_id, pickrate FROM")) {
-        return Promise.resolve([{ champ_id: 10, pickrate: null }]);
+      if (text.includes("SELECT champ_id, pickrate, total_games")) {
+        return Promise.resolve([{ champ_id: 10, pickrate: null, total_games: 0 }]);
       }
       if (text.includes("FROM coachbuild.draft_champ_stats")) {
         return Promise.resolve([champStatsRow({ champ_id: 1 })]);
@@ -192,6 +189,67 @@ describe("computeDraftRecommend", () => {
     });
     const result = await computeDraftRecommend({ lane: 0, enemies: [10], laneOpp: null, hover: null });
     expect(result.meta.laneOppInferred).toBeNull();
+  });
+
+  describe("total_games playrate-proxy inference (pickrate null — today's real state)", () => {
+    // Helper: mock the inference query (the only champ_stats query with
+    // `champ_id = ANY`) with the given enemy presence rows, plus a trivial
+    // one-champ pool so the rest of the pipeline runs.
+    function mockInference(inferenceRows: { champ_id: number; pickrate: number | null; total_games: number | null }[]) {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("SELECT champ_id, pickrate, total_games")) return Promise.resolve(inferenceRows);
+        if (text.includes("FROM coachbuild.draft_champ_stats")) return Promise.resolve([champStatsRow({ champ_id: 1 })]);
+        return Promise.resolve([]);
+      });
+    }
+
+    it("user's exact case: [Aatrox, Ahri, Udyr, Jinx] for MID infers Ahri (103) off total_games", async () => {
+      // Only Ahri and Aatrox even have a mid champ_stats row; Ahri dominates.
+      // Udyr(77)/Jinx(222) have no mid row at all (absent from the result set).
+      mockInference([
+        { champ_id: 266, pickrate: null, total_games: 3200 }, // Aatrox: niche mid
+        { champ_id: 103, pickrate: null, total_games: 84000 }, // Ahri: the mid staple
+      ]);
+      const result = await computeDraftRecommend({ lane: 2, enemies: [266, 103, 77, 222], laneOpp: null, hover: null });
+      expect(result.meta.laneOppInferred).toBe(103);
+    });
+
+    it("single enemy with any lane games -> inferred (nothing to be ambiguous with)", async () => {
+      mockInference([{ champ_id: 103, pickrate: null, total_games: 500 }]);
+      const result = await computeDraftRecommend({ lane: 2, enemies: [103, 266], laneOpp: null, hover: null });
+      expect(result.meta.laneOppInferred).toBe(103);
+    });
+
+    it("two comparable mid-capable enemies, no other lane signal -> stays null (ambiguous, user taps)", async () => {
+      // Ahri(103) and Syndra(134) both genuinely play mid, near-equal presence
+      // (runner-up within 2x of leader) -> dominance guard keeps it null.
+      mockInference([
+        { champ_id: 103, pickrate: null, total_games: 50000 },
+        { champ_id: 134, pickrate: null, total_games: 45000 },
+      ]);
+      const result = await computeDraftRecommend({ lane: 2, enemies: [103, 134], laneOpp: null, hover: null });
+      expect(result.meta.laneOppInferred).toBeNull();
+    });
+
+    it("dominance ratio exactly 2x -> leader IS inferred (>= boundary)", async () => {
+      mockInference([
+        { champ_id: 103, pickrate: null, total_games: 40000 }, // exactly 2x the runner-up
+        { champ_id: 134, pickrate: null, total_games: 20000 },
+      ]);
+      const result = await computeDraftRecommend({ lane: 2, enemies: [103, 134], laneOpp: null, hover: null });
+      expect(result.meta.laneOppInferred).toBe(103);
+    });
+
+    it("tie on presence -> null (neither dominates; ambiguous)", async () => {
+      mockInference([
+        { champ_id: 134, pickrate: null, total_games: 30000 },
+        { champ_id: 103, pickrate: null, total_games: 30000 },
+      ]);
+      const result = await computeDraftRecommend({ lane: 2, enemies: [134, 103], laneOpp: null, hover: null });
+      expect(result.meta.laneOppInferred).toBeNull();
+    });
   });
 
   it("bans null when no hover given", async () => {

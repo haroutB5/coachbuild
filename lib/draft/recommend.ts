@@ -14,12 +14,22 @@
 //     opponent (companion mode: theirTeam[roleId]; manual mode: whichever
 //     chip the user flagged isDirectLaneOpp).
 //   - Otherwise, if `enemies` is non-empty, the direct lane opponent is
-//     INFERRED statistically: whichever enemy has the highest KNOWN pickrate
-//     in THIS lane+patch+tier (coachbuild.draft_champ_stats), ties broken by
-//     champId ascending. An enemy with unknown (null) or zero pickrate never
-//     wins the inference — see this ship's pickrate gap (lib/draft/
-//     ugg.ts's decodeRankingsJson stub), which means inference currently
-//     resolves to null (no direct opponent) until that decoder is filled in.
+//     INFERRED statistically by LANE PRESENCE in THIS lane+patch+tier
+//     (coachbuild.draft_champ_stats): whichever enemy plays this lane the
+//     most. Presence is measured by KNOWN pickrate when it exists (so the
+//     moment lib/draft/ugg.ts's decodeRankingsJson stub is filled in, real
+//     pickrate takes over transparently) and otherwise by `total_games` —
+//     the enemy's own aggregate game count in this role, ALWAYS populated at
+//     ingest (lib/draft/ingest.ts) and the SAME playrate proxy the pool
+//     floor already trusts (POOL_MIN_TOTAL_GAMES). This is what makes a
+//     partial enemy set with one clear lane-mate (e.g. Ahri among
+//     [Aatrox, Ahri, Udyr, Jinx] for mid) infer correctly TODAY, despite
+//     pickrate being null. Honesty guard: when two or more enemies genuinely
+//     BOTH plausibly play this lane (the runner-up's presence is within
+//     LANE_OPP_DOMINANCE_RATIO of the leader's), inference stays null and
+//     the user taps the chip — a wrong 1.0-weight (W_DIRECT) direct-opponent
+//     term is far more damaging than no term, so we never force-pick a
+//     genuinely ambiguous lane.
 //   - `meta.laneOppInferred` always reports WHICH enemy (if any) was
 //     actually used as the direct-lane weight (W_DIRECT), regardless of
 //     whether it came from the explicit param or the statistical fallback —
@@ -52,6 +62,20 @@ import { resolveDraftPatchLabel } from "@/lib/draft/patch";
  *  lanes. ~170 total champions exist; 120 is comfortably past the
  *  first-few-cron-ticks partial state without waiting for a full 173/173. */
 const SERVING_PATCH_MIN_CHAMPS = 120;
+
+/** Lane-opponent inference dominance guard (2026-07-21): when 2+ enemies
+ *  have real presence in the user's lane, the leader must out-present the
+ *  runner-up by at least this ratio to be inferred as the direct lane
+ *  opponent; otherwise inference stays null and the user taps the chip.
+ *  Rationale: a WRONG direct opponent applies the full W_DIRECT (1.0) weight
+ *  to the wrong matchup and skews the whole list, whereas a null just means
+ *  the user makes one tap — so we bias hard toward "only infer when it's
+ *  unambiguous." 2.0 = the leader must have at least twice the runner-up's
+ *  lane presence. Tunable; not part of the locked score.ts formula (this is
+ *  opponent RESOLUTION, upstream of scoring). A single-candidate lane (only
+ *  one enemy plays it at all) skips this guard — there's nothing to be
+ *  ambiguous with. */
+const LANE_OPP_DOMINANCE_RATIO = 2.0;
 
 /** {games, wins} — a raw personal record, never a rate/score. */
 export interface PersonalRecord {
@@ -187,8 +211,10 @@ async function resolveServingPatch(sql: NonNullable<ReturnType<typeof getSql>>):
 
 /** Resolves the direct-lane-opponent champId per this file's header
  *  contract: explicit `laneOpp` (if it's actually among `enemies`) wins;
- *  otherwise the enemy with the highest KNOWN pickrate in this lane, ties
- *  broken by champId ascending; null if nothing qualifies. */
+ *  otherwise inferred by LANE PRESENCE among the enemies — pickrate when
+ *  known, else the `total_games` playrate proxy (see header). Ties broken by
+ *  champId ascending; the dominance guard (LANE_OPP_DOMINANCE_RATIO) keeps a
+ *  genuinely ambiguous two-mid lane null; null if nothing qualifies. */
 async function resolveLaneOpponent(
   sql: NonNullable<ReturnType<typeof getSql>>,
   patch: string,
@@ -200,18 +226,31 @@ async function resolveLaneOpponent(
   if (enemies.length === 0) return null;
 
   const rows = (await sql`
-    SELECT champ_id, pickrate FROM coachbuild.draft_champ_stats
+    SELECT champ_id, pickrate, total_games FROM coachbuild.draft_champ_stats
     WHERE patch = ${patch} AND tier = ${EMERALD_TIER} AND role = ${lane} AND champ_id = ANY(${enemies}::int[])
-  `) as unknown as { champ_id: number; pickrate: number | null }[];
+  `) as unknown as { champ_id: number; pickrate: number | null; total_games: number | null }[];
 
-  let best: { champId: number; pickrate: number } | null = null;
-  for (const row of rows) {
-    if (row.pickrate === null || row.pickrate <= 0) continue;
-    if (!best || row.pickrate > best.pickrate || (row.pickrate === best.pickrate && row.champ_id < best.champId)) {
-      best = { champId: row.champ_id, pickrate: row.pickrate };
-    }
-  }
-  return best?.champId ?? null;
+  // Measure every enemy on ONE axis: real pickrate if ANY enemy has a
+  // positive one (contract-preserving — pickrate wins the moment the decoder
+  // is filled in), else total_games for all (today's actual state, pickrate
+  // universally null). Never mix the two axes within a single resolution.
+  const anyPickrate = rows.some((r) => r.pickrate !== null && r.pickrate > 0);
+  const presenceOf = (r: { pickrate: number | null; total_games: number | null }): number =>
+    anyPickrate ? (r.pickrate ?? 0) : (r.total_games ?? 0);
+
+  const scored = rows
+    .map((r) => ({ champId: r.champ_id, presence: presenceOf(r) }))
+    .filter((r) => r.presence > 0)
+    .sort((a, b) => (b.presence !== a.presence ? b.presence - a.presence : a.champId - b.champId));
+
+  if (scored.length === 0) return null;
+  if (scored.length === 1) return scored[0].champId; // only one enemy plays this lane at all — unambiguous
+
+  // 2+ real lane candidates: only infer when the leader clearly dominates,
+  // otherwise stay null and let the user tap (honest > forced-pick).
+  const [top, runnerUp] = scored;
+  if (top.presence < runnerUp.presence * LANE_OPP_DOMINANCE_RATIO) return null;
+  return top.champId;
 }
 
 interface MyMatchDbRow {

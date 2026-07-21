@@ -247,6 +247,18 @@ export default function DraftPage() {
   const serverInferredLaneOpponentId = state.status === "ok" ? state.data.meta.laneOppInferred : null;
   const effectiveLaneOpponentId = laneOpponentId ?? serverInferredLaneOpponentId;
 
+  // Plain-language explainer (user request 2026-07-21) — what "Suggested
+  // picks" actually MEANS, adapting to whether enemies / a lane opponent are
+  // in play. Kept to one muted line.
+  const laneOppName =
+    effectiveLaneOpponentId !== null ? champIcons.get(effectiveLaneOpponentId)?.name ?? null : null;
+  const picksExplainer =
+    enemyIds.length === 0
+      ? "Each champion's own win rate in this lane on the current patch."
+      : laneOppName
+        ? `Win rate in this lane, adjusted by matchup records against the enemy team — weighted heaviest against your lane opponent (${laneOppName}).`
+        : "Win rate in this lane, adjusted by each champion's matchup records against the enemies you've added.";
+
   // My pool filter — applied to a DISPLAY copy only; state.data.plays/
   // potentialPlays (and their order) are never mutated, so toggling this off
   // always restores the exact server-ranked list.
@@ -339,12 +351,27 @@ export default function DraftPage() {
                       type="button"
                       onClick={() => handleToggleLaneOpponent(id)}
                       aria-pressed={isLaneOpp}
-                      title={isServerInferredOnly ? "Server-inferred lane opponent — tap to set explicitly" : "Flag as lane opponent"}
-                      className={`ml-0.5 px-1.5 py-0.5 rounded text-[9.5px] font-bold uppercase tracking-[0.04em] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-teal ${
-                        isLaneOpp ? "bg-teal text-bg" : "bg-transparent text-mut hover:text-txt"
+                      aria-label={
+                        isLaneOpp
+                          ? `${entry?.name ?? "Champion"} set as your lane opponent — tap to unset`
+                          : `Mark ${entry?.name ?? "champion"} as your lane opponent`
+                      }
+                      title={
+                        isServerInferredOnly
+                          ? "Auto-detected as your lane opponent — tap to confirm or pick a different chip"
+                          : isLaneOpp
+                            ? "Your lane opponent (weighted heaviest) — tap to unset"
+                            : "Mark as your lane opponent — weights suggestions heaviest against this pick"
+                      }
+                      className={`ml-0.5 px-1.5 py-0.5 rounded text-[9.5px] font-bold uppercase tracking-[0.04em] border transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-teal ${
+                        isLaneOpp
+                          ? isServerInferredOnly
+                            ? "bg-teal/80 text-bg border-teal border-dashed"
+                            : "bg-teal text-bg border-teal"
+                          : "bg-transparent text-mut border-line hover:border-teal-dim hover:text-txt"
                       }`}
                     >
-                      Lane opp{isServerInferredOnly ? " (inferred)" : ""}
+                      {isLaneOpp ? "" : "+ "}Lane opp{isServerInferredOnly ? " (inferred)" : ""}
                     </button>
                     <button
                       type="button"
@@ -404,7 +431,10 @@ export default function DraftPage() {
             )}
           </div>
           {state.status === "ok" && (
-            <p className="text-mut/70 text-[10.5px] mb-2 px-0.5">
+            <p className="text-mut/70 text-[11px] mb-1 px-0.5">{picksExplainer}</p>
+          )}
+          {state.status === "ok" && (
+            <p className="text-mut/60 text-[10.5px] mb-2 px-0.5">
               Only champions with a well-sampled pool this patch in this lane are shown — a rare off-role pick won&apos;t
               out-rank a real lane staple.
             </p>
@@ -507,7 +537,10 @@ export default function DraftPage() {
         {hover !== null && state.status === "ok" && state.data.bans && (
           <section className="mb-8">
             <p className="text-[10px] tracking-[0.14em] uppercase text-mut font-semibold mb-1 px-0.5">Suggested bans</p>
-            <p className="text-mut/70 text-[10.5px] mb-2 px-0.5">Bans that counter your pick in your lane.</p>
+            <p className="text-mut/70 text-[10.5px] mb-2 px-0.5">
+              Champions most likely to beat your pick in this lane — ranked by how hard they counter you and how often
+              they&apos;re played.
+            </p>
             {state.data.bans.length === 0 ? (
               <EmptyPanel title="No strong bans identified" body="Nothing stands out as a high-priority ban for this matchup yet." />
             ) : (
