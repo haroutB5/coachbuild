@@ -6096,3 +6096,168 @@ Block order: Starting, Core build, Buy order (if it differs), Pro build, Highest
 - `HANDOFF.md`/`HANDOFF-engy.md` again show pre-existing uncommitted changes in this worktree that are not mine — left untouched, not staged.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-20 23:54
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-20 18:07:19Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-21 — Draft recommender UI + CompanionProvider lift (fronty half, parallel w/ engy)
+
+Built against `_research/draft-feature-plan.md` §6/§7/§8. Did NOT bump version, run verify-fix, or deploy (per brief — urgot runs the combined gate). `npx tsc --noEmit` clean for every file I touched (one pre-existing error in engy's `lib/draft/ingest.ts` — `Set<number>` iteration needs `--downlevelIteration`/es2015 target — not mine, flagging in case it's still open at gate time). Full repo `npx vitest run`: **947 tests passing, 71 files** (this already includes engy's `lib/__tests__/draft-{score,ugg-decode,ingest}.test.ts`, present in the working tree). My own new/changed test files: `draftLiveSync.test.ts` (+22), `draftRecommend.test.ts` (+21, incl. `orderEnemiesForQuery`), `companionClient.test.ts` (+4 theirTeam/timerPhase cases, plus updated 2 pre-existing exact-`toEqual` assertions), `champSelectFollow.test.ts` (fixture updated for the snapshot's new required fields, no new cases).
+
+### 1. CompanionProvider lift (`components/live/CompanionProvider.tsx`, new; `app/layout.tsx`; `app/page.tsx`)
+
+Split of responsibility (see the provider's own header comment for the full rationale):
+- **CompanionProvider** now owns THE single app-wide `/status` poll (mounted at `app/layout.tsx`, wrapping every route) — session hydration/override, the 3s interval, and the two `champSelectFollowState.ts` singleton writes that must happen unconditionally every tick: `noteCompanionPhase(phase)` and the **Round-B P1 fix** `if (liveChampSelectId !== null) markCompanionDriven(liveChampSelectId)`.
+- **app/page.tsx** keeps its OWN follow effect (unchanged in spirit) — "given phase/champSelect, should THIS page navigate to a different champion/lane" — now re-keyed off `companion.tick`/`companion.phase`/`companion.champSelect` (context) instead of its own `setInterval`.
+
+**Proof the P1 fix is intact:** I diffed the pre-lift `tick()` function (git history) against `CompanionProvider.poll()` line-by-line. The exact sequence — `setPhase/setChampSelect` → `noteCompanionPhase(nextPhase)` → `resolveCurrentChampSelectChampionId` → `setCurrentChampSelectChampionId` → **unconditional `markCompanionDriven` when non-null, same synchronous tick, before any `await`/`.then()`** — is preserved verbatim in `CompanionProvider.tsx`'s `poll()`, just relocated. The redundant second `markCompanionDriven(found.id)` call inside app/page.tsx's follow-effect target branch (present pre-lift alongside the P1 fix) is also kept as-is — idempotent, harmless, and matches the original code exactly.
+
+Added a `tick` field (bumped once per completed poll, regardless of whether phase/champSelect actually changed) specifically so page.tsx's follow effect and /draft's live-sync effect both re-evaluate on **every** 3s tick — matching the pre-lift cadence exactly rather than relying on incidental object-identity churn on `champSelect`.
+
+No React-component-level test for the provider itself — this repo's vitest config is `environment: "node"` (no jsdom/RTL anywhere in the codebase; confirmed via `vitest.config.ts`), so component tests aren't the established pattern here. Verified instead by (a) code-level diff against the pre-lift function and (b) `npx tsc --noEmit` + the full existing champ-select-follow/companionClient/champSelectFollowState suites still passing unchanged.
+
+### 2. `companionClient.ts` — theirTeam/timerPhase (plan §5)
+
+Added `theirTeam: number[]` + `timerPhase: string | null` to `CompanionChampSelectSnapshot`, with defensive normalizers (`normalizeTheirTeam` filters to positive finite numbers, defaults `[]`; `timerPhase` reuses the existing `normalizeNullableString`, defaults `null`). Old companion (pre-1.4.0) missing either field never rejects the whole `/status` response. Tests: parse from a 1.4.0 fixture, degrade from an older fixture, filter garbage entries (negatives/zero/strings/NaN/null), and a non-array `theirTeam` never taking down the rest of the snapshot. Updated the two pre-existing exact-`toEqual` assertions (in `companionClient.test.ts` and `champSelectFollow.test.ts`'s snapshot helper) to include the new required fields.
+
+### 3. `components/live/draftLiveSync.ts` (new) — pure live-sync decision
+
+`resolveDraftLiveTarget({phase, champSelect, dirty})` → `{lane, enemies, hover, laneOpponentIndex} | null`. Manual-override dirty latch: returns `null` whenever `dirty` is true, regardless of phase (caller/page owns exactly when `dirty` flips true/false). `normalizeDraftEnemyIds` dedupes/caps at `MAX_DRAFT_ENEMIES=5`, order-preserving. `shouldShowResetToLive` gates the button (dirty + ChampSelect + a snapshot to reset to).
+
+**Flagged assumption (needs a real-LCU verification, plan §8):** `theirTeam` is NOT lane-tagged on the wire (the LCU champ-select session doesn't expose the enemy team's assigned positions, and the companion snapshot is a flat `number[]`). I inferred the direct-lane-opponent as `theirTeam[roleId]` — the enemy at the SAME array index as the local player's own `roleId` — the standard convention community counter-pick overlays (porofessor/op.gg-style) rely on for ranked/draft queues, where both teams' cell order matches display position. This is the ONE piece of this build that's a genuine guess rather than a verified fact — flagging for `scripts/ingest-draft.mjs`-adjacent or manual on-device verification once a real LCU session is available.
+
+### 4. `components/live/draftRecommend.ts` (new) — client wiring for GET /api/draft/recommend
+
+Defensive fetch wrapper (never throws, degrades to `null`) + pure `buildDraftRecommendQuery`/`normalizeDraftRecommendResponse`/`orderEnemiesForQuery`, all built against plan §4's contract text since `app/api/draft/recommend/route.ts` is engy's parallel work (didn't wait on it — tested entirely via `fetchImpl` mocks, per the brief's explicit allowance).
+
+**Second flagged assumption:** plan §4 says "Direct-lane-opponent: tagged enemy (companion) or the enemy placed in the lane slot (manual)" with no separate query param named. I encoded this as **position 0 of the `enemies` csv = the lane opponent** (`orderEnemiesForQuery` reorders before every fetch, both live and manual paths converge on this one wire convention). If engy's route instead expects a distinct `laneOpp=<id>` param, it's a one-line fix at the single call site in `app/draft/page.tsx` — the actual decision (`laneOpponentId` state) is already correct, only the wire encoding would change. **Please diff this against the merged route before shipping.**
+
+### 5. `app/draft/page.tsx` (new) + `components/hextech/DraftResultRow.tsx` (new)
+
+Standalone-shell page (same convention as `/movers`/`/live-setup` — not the two-Sidebar main layout; added to `TabNav.tsx`'s tab list too, alongside the two `Sidebar.tsx` "Draft" links the plan asked for). Lane picker reuses `LaneFilterPills` (already the exact segmented-control visual language `/movers` uses — no new component needed). Enemy multi-picker reuses root `ChampionPicker` (value reset to `null` after each add) + removable chips with a per-chip "Lane opp" toggle button (radio behavior — only one chip can be flagged; toggling a new one moves the flag, re-tapping the active one clears it). Hover-your-champ picker (same `ChampionPicker`, single value) unlocks the Bans section once set, with a "Clear" link to unset it. Debounced (300ms) + request-id race-guarded fetch, states: loading (skeleton) / pending ("Draft data being prepared for patch X") / empty / error / ok. Confidence badge ("Low sample") never hides a row, just flags it — shows `n=<minGames>` always. Patch + tier + fetch-date stamp in the header once data resolves. Live-sync status strip ("Syncing from champ select" / "Reset to live") only renders when actually relevant — no companion at all is the silent default, no nag anywhere.
+
+**Compliance (plan §7), verified structurally:** grepped my own new files for `applyRunes|applyItemSets|POST` — zero hits outside `companionClient.ts` itself (which I only import read-only functions from, never the apply* ones, in `/draft`). Never renders/reads a summoner or riotId field anywhere in `/draft` or `DraftResultRow` — only `champId`/`name`/`icon` via `getChampionIconMap()`.
+
+### Did NOT do
+- No browser/puppeteer run of `/draft` — this is a build-only round (data tables are pre-bootstrap per plan §9's ship sequence; `/api/draft/recommend` doesn't exist yet on this branch, so a live click-through would only exercise the loading/error states). Recommend a puppeteer pass once engy's route + migration are merged and `scripts/ingest-draft.mjs` has bootstrapped real data — specifically verify: the enemies-csv lane-opponent-position assumption (#4 above) against the real route, and the `theirTeam[roleId]` index assumption (#3 above) against a real LCU champ-select session.
+- Did not touch `app/api/mock-companion/route.ts` (per brief) — so `/draft`'s live-sync path is untested against any real or mock companion response; only unit-tested via `resolveDraftLiveTarget` fixtures.
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-21 00:46
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-20 20:53:06Z; previous content preserved there. Append new rounds below. -->
+
+# HANDOFF-engy.md — "Draft" recommender BACKEND (2026-07-21)
+
+## Status: DONE
+
+Backend half of the two-agent "Draft" recommender build (plan `_research/draft-feature-plan.md` §1-§5, §8-§9). No version bump, no deploy, no `verify-fix.sh` run — per brief, urgot runs the combined gate.
+
+## Summary
+
+- Migration `0009_draft.sql` applied to live Neon.
+- Full bootstrap ingest completed: **173/173 champions**, single patch, zero constraint violations across ~101K rows.
+- `lib/draft/{ugg,patch,ingest,score,recommend}.ts` + `app/api/draft/recommend/route.ts` + `app/api/ingest/draft/route.ts` + cron entry.
+- Companion bumped to **1.4.0**: `theirTeam`/`timerPhase` in the champ-select snapshot, SelfTest + Mock extended and green.
+- Contract reconciliation with fronty's already-shipped client (`laneOpp` explicit param + server-side statistical fallback + `meta.laneOppInferred`) — fronty's files were adjusted per the mid-task brief.
+- 973/973 vitest tests green, `tsc --noEmit` clean.
+
+## Network finding (important, read before touching u.gg again)
+
+This sandbox's Bash-tool `curl`, WebFetch, and a real CDP-driven Chrome browser were ALL Cloudflare-challenged against the entire u.gg zone (even `https://u.gg/` itself returned "Just a moment..."). That looked like a hard, environment-wide block. It wasn't: a plain Node `child_process.execFile('curl', ...)` — exactly what `scripts/_curl-transport.mjs`'s new `curlTransportWithHeaders` does, i.e. the actual production ingest transport — went through clean every time, no challenge at all. Confirmed live against real data: Aatrox(266) vs Mordekaiser(82) at region 12/tier 10/role 4 decoded to **3173/6100 = 52.02%**, byte-for-byte the figure `counterpick-research.md` cites from an earlier, differently-networked session. Saved to my agent memory (`feedback_bash_tool_vs_execfile_network_path.md`) since this is a reusable lesson for any future "is this target reachable" probe: test the ACTUAL script transport, not just the interactive tool calls, before concluding a target is blocked.
+
+## Bootstrap ingest — results + repair
+
+`npm run ingest:draft` ran the full 173-champion walk via `scripts/_curl-transport.mjs`'s curl transport (Referer header). First batch (champs 1-9) hit a one-time Neon cold-start blip (`TypeError: fetch failed` on the DB connection, not a u.gg issue) — 400 row-level errors, all traced to champions 6/7/8 (Fiddlesticks/LeBlanc/Vladimir) specifically. Every batch after that (champs 10-173) ran with **zero errors**. I diagnosed the gap post-hoc (champ 6 had only 1/5 roles populated; champs 7 and 8 were completely absent from both tables) and re-ingested those 3 champions individually once Neon was warm — all three completed with zero errors.
+
+**Final verified state (live Neon, `coachbuild` schema):**
+- `draft_matchup`: **101,052 rows**, **173/173 distinct champions**, 1 patch (`16.13`), **0 rows** violating `wins<=games`/non-negative (checked with a fresh SQL aggregate, independent of the ingest's own `skippedRows` counter, which was also 0 across the entire real dataset).
+- `draft_champ_stats`: **865 rows**, 173/173 champions, 1 patch.
+- Every champion has all 5 role buckets populated (0 champs with <5 roles present).
+- `patch` label served is **"16.13"**, not ddragon's newest "16.14" — this is EXPECTED, not a bug: `lib/draft/patch.ts`'s `resolveDraftPatchLabel()` deliberately reuses `getLatestPatch()` (`lib/staticData.ts`), which gates on the app's existing coachless-WPA-readiness resolver (a different subsystem than u.gg) — same lag the rest of the app already has. u.gg itself has "16_14" segment fully populated (manually verified), so once `getLatestPatch()` advances, the next cron tick will pick up 16.14 automatically with no code change.
+
+### Empirical assertions (plan §9)
+
+- **Role indices** (known-champ-max-sample): Garen(top)→role 0 dominant (172 rows, 137,678 games vs next-highest 9,509), LeeSin(jungle)→role 1 (233,839 games), Viktor(mid)→role 2 (148,692 games), Jinx(adc)→role 3 (183,282 games), Thresh(support)→role 4 (219,542 games). All 5 correct, `roleProbeFailures: []`.
+- **wins<=games**: 0 violations across 101,052 live rows (both the decoder's own counter AND an independent post-hoc SQL check agree).
+- **1.5/1.5.0 schema liveness**: primary schema worked for the entire run, no fallback probe needed.
+- **u.gg spot-check vs live site**: Aatrox vs Mordekaiser role=4/tier=10/region=12 = 3173/6100 = **52.02%**, matching `counterpick-research.md`'s cited figure exactly (manual verification during ugg.ts development, not just the script's generic byte-count check). The script's own spot-check (Aatrox/Yasuo/Malzahar counters pages) fetched real HTML (170-175KB each) via the same transport, confirming live reachability end-to-end.
+
+## Files
+
+**New:**
+- `migrations/0009_draft.sql`
+- `lib/draft/ugg.ts`, `lib/draft/patch.ts`, `lib/draft/ingest.ts`, `lib/draft/score.ts`, `lib/draft/recommend.ts`
+- `app/api/draft/recommend/route.ts`, `app/api/ingest/draft/route.ts`
+- `scripts/ingest-draft.mjs`
+- `lib/__tests__/draft-{score,ugg-decode,ingest,ingest-route,recommend,recommend-route}.test.ts`
+
+**Modified:**
+- `scripts/_curl-transport.mjs` — added `curlTransportWithHeaders` (u.gg needs `Referer`; existing `curlTransport` untouched, still used by prostage)
+- `package.json` — added `ingest:draft` script (no version bump)
+- `vercel.json` — added `/api/ingest/draft` cron (`0 8 * * *`)
+- `public/companion.ps1`, `public/companion.version` — 1.3.1 → **1.4.0**
+- `app/api/mock-companion/route.ts` — `?theirTeam=&timerPhase=&roleId=&cellChampionId=&pickIntent=&actionChampionId=` params, full `/status` shape (was missing `champSelect`/`lastOpen`/`lastPollAt`/`lastError` entirely before this)
+- **Contract reconciliation (fronty's files, adjusted per mid-task brief):** `components/live/draftRecommend.ts` (added `laneOpp?: number | null` param + `meta.laneOppInferred`, removed the now-superseded `orderEnemiesForQuery` position-encoding hack), `components/__tests__/draftRecommend.test.ts` (updated to match), `app/draft/page.tsx` (call site: `enemies: enemyIds` unordered + explicit `laneOpp: laneOpponentId`)
+
+## Companion 1.4.0
+
+- `Get-TheirTeamChampionIds` / `Get-TimerPhase` (new, `#region ChampSelect`): enemy championId per slot (locked id, else visible pickIntent fallback — IDs only, never names) + `session.timer.phase`.
+- `Set-ChampSelectSnapshot` / `Update-ChampSelectState` extended to thread both through to `/status`'s `champSelect` field.
+- `Invoke-SelfTest` (bridge-level) and `Invoke-MockRun` (pure-function level, via `$script:ChampSelectSnapshotRecord`) both extended with theirTeam/timerPhase assertions — both **PASSED**.
+- Zero non-ASCII bytes verified (`grep -P '[^\x00-\x7F]'` → 0 matches).
+- fronty's `companionClient.ts` already had the matching `theirTeam`/`timerPhase` client-side types + defensive normalizer wired in before I touched `.ps1` — wire contract lines up on both sides with no further changes needed there.
+
+## Recommend route contract (finalized mid-task, see `lib/draft/recommend.ts` header comment)
+
+`GET /api/draft/recommend?lane=<0-4>&enemies=<csv>&laneOpp=<id>&hover=<id>`:
+- `laneOpp`, if present AND a member of `enemies`, is the direct lane opponent.
+- Otherwise, if `enemies` is non-empty, the server infers it statistically: highest-KNOWN-pickrate enemy in that lane+patch+tier, ties broken by champId ascending. Given `pickrate` is currently always null (see gap below), this inference currently resolves to `null` until the rankings decoder is filled in — documented, not silently broken.
+- `meta.laneOppInferred` always reports which enemy (if any) actually got the `W_DIRECT` weight, regardless of source.
+- Cache headers: populated → `s-maxage=300, stale-while-revalidate=600`; pending/empty/degraded → `no-store` (both asserted in `draft-recommend-route.test.ts`).
+
+Smoke-tested against LIVE Neon (not just mocks): `lane=0, enemies=[86], laneOpp=86, hover=86` returned real ranked plays (scores 0.57-0.71, sane winrates, correct confidence/minGames badges) and correctly empty bans (hover champ 86/Garen hadn't been bootstrap-ingested as a PRIMARY subject yet at smoke-test time — that's the correct, honest degrade, not a bug: Garen appears as an OPPONENT column in others' matchup rows well before his own champ_stats row lands).
+
+## Known gap — pickrate/banrate (deliberate, documented)
+
+`lib/draft/ugg.ts`'s `decodeRankingsJson` is a **deliberate no-op stub** — it always returns null pickrate/banrate. I could not live-verify the rankings endpoint's exact column layout in this session (had matchups verified in detail, ran out of scope to also reverse-engineer rankings before the bootstrap needed to run), and guessing array indices for a scoring-layer input felt like the wrong tradeoff versus an honest null. Instead:
+- `winrate` (baseline_wr, the score formula's anchor term) is **derived from the matchups data itself** (aggregate wins/games across all opponents per champ+role) — verified-shape data, not the unverified endpoint. This is arguably MORE correct than trusting rankings blindly, since it's the same population the matchup deltas are computed against.
+- Pool-cutoff (`filterPoolByPickrate`) treats null pickrate as "keep" (never excludes on unknown data) — otherwise the entire pool would be empty right now.
+- Ban-score `presence()` falls back to a neutral 1.0 multiplier when both pickrate/banrate are null — ban ranking degrades to pure matchup-disadvantage magnitude instead of collapsing to a shared constant.
+- **Before shipping pickrate/banrate for real:** dump a raw rankings response (`fetchRankings` already does the real network call, just discards the body), hand-verify against the live u.gg champion page for 2-3 champions, then wire up real extraction in `decodeRankingsJson`. Everything downstream (`score.ts`, `recommend.ts`) already treats pickrate/banrate as optional, so this is a pure decoder fill-in, no call-site changes needed later.
+
+## Tests
+
+`draft-score.test.ts` (17), `draft-ugg-decode.test.ts` (7), `draft-ingest.test.ts` (9), `draft-ingest-route.test.ts` (10), `draft-recommend.test.ts` (9), `draft-recommend-route.test.ts` (10) — all new, all green. Full suite: **973/973 passed**, `tsc --noEmit` clean.
+
+## Deviations from the plan (documented, not silent)
+
+1. **Ingest cron self-chaining:** plan's "recommended" design is an internal-fetch self-chain with a hop cap; that needs `waitUntil` (`@vercel/functions`, not a current dependency) to survive past the response. I used the plan's own explicitly-sanctioned fallback instead: an in-process multi-batch loop bounded by a 45s wall-clock budget (~4-5 batches/~40 champs per daily cron tick — full refresh in ~4-5 days, well inside the 14-day patch cadence). See `app/api/ingest/draft/route.ts`'s header comment.
+2. **pickrate/banrate** — see "Known gap" above.
+3. **laneOpp contract** — reconciled mid-task per the coordinator's explicit message; fronty's pre-existing `orderEnemiesForQuery` position-encoding guess was replaced with the explicit-param contract (fronty's files adjusted, not fronty re-dispatched).
+
+

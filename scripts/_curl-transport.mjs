@@ -48,3 +48,33 @@ export function curlTransport(url) {
     );
   });
 }
+
+/**
+ * Same shape/contract as curlTransport, plus arbitrary extra headers — used
+ * by scripts/ingest-draft.mjs for u.gg's stats2 CDN, which REQUIRES
+ * `Referer: https://u.gg/` (403s without it; see lib/draft/ugg.ts's header
+ * comment). Kept as a separate function rather than adding an optional
+ * `headers` param to curlTransport so that function's call shape (and every
+ * existing caller/test) stays byte-identical.
+ *
+ * @param {string} url
+ * @param {Record<string,string>} [headers]
+ * @returns {Promise<string>}
+ */
+export function curlTransportWithHeaders(url, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const headerArgs = Object.entries(headers).flatMap(([k, v]) => ["-H", `${k}: ${v}`]);
+    execFile(
+      "curl",
+      ["-sL", "-m", "60", "-H", `User-Agent: ${USER_AGENT}`, ...headerArgs, url],
+      { maxBuffer: 32 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error(`curl transport failed (exit ${err.code ?? "?"}): ${stderr || err.message}`));
+          return;
+        }
+        resolve(stdout);
+      }
+    );
+  });
+}

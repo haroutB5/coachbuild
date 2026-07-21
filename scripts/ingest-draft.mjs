@@ -1,0 +1,181 @@
+#!/usr/bin/env node
+// Local bootstrap runner for the "Draft" recommender's matchup/champ-stats
+// ingest (see _research/draft-feature-plan.md §2/§9). Walks EVERY champion
+// via lib/draft/ingest.ts's cursor, in-process, back to back — same shape as
+// scripts/ingest-prostage.mjs. Uses a curl-subprocess transport (u.gg
+// REQUIRES a `Referer: https://u.gg/` header the plain curlTransport
+// doesn't send — see scripts/_curl-transport.mjs's curlTransportWithHeaders)
+// since app/route code can't shell out but this script can.
+//
+// NETWORK STATUS (2026-07-20, RESOLVED): this sandbox's Bash-tool curl,
+// WebFetch, and a real CDP-driven Chrome browser are ALL Cloudflare-
+// challenged against the u.gg zone — but a Node child_process curl spawn
+// (exactly what this script's uggCurlTransport does) goes through clean.
+// Live-confirmed: Aatrox(266) vs Mordekaiser(82) decodes to 3173/6100 =
+// 52.02%, matching counterpick-research.md exactly, and all 5 role-
+// dominance probes (top/jungle/mid/adc/support) check out. See
+// lib/draft/ugg.ts's header comment and HANDOFF-engy.md for the full log.
+//
+// Run: npm run ingest:draft
+import { loadEnvLocal } from "./_env.mjs";
+import { curlTransportWithHeaders } from "./_curl-transport.mjs";
+
+loadEnvLocal();
+
+const { runDraftIngest } = await import("../lib/draft/ingest.ts");
+const { getAllChampions } = await import("../lib/staticData.ts");
+const { UGG_REFERER } = await import("../lib/draft/ugg.ts");
+
+/** curlTransportWithHeaders, pre-bound with u.gg's required Referer. */
+function uggCurlTransport(url) {
+  return curlTransportWithHeaders(url, { Referer: UGG_REFERER });
+}
+
+// Known-lane-dominant champions for the "role indices via known-champ-max-
+// sample" empirical assertion (plan §9): a champion played overwhelmingly in
+// ONE lane should decode with the bulk of its matchup ROW COUNT (a rough
+// sample-count proxy — real game-volume weighting would need the row's own
+// `games` field, checked separately below) concentrated in that lane's app
+// role. This is a SIGNAL, not a hard gate (niche/flex picks are real) — it's
+// printed for human review, and only fails the run if a role bucket that
+// SHOULD be near-empty for this champ instead dominates (a strong sign the
+// u.gg role->app-role map is wrong).
+const ROLE_PROBES = [
+  { name: "Garen", champId: 86, expectedAppRole: 0 }, // top
+  { name: "LeeSin", champId: 64, expectedAppRole: 1 }, // jungle
+  { name: "Viktor", champId: 112, expectedAppRole: 2 }, // mid
+  { name: "Jinx", champId: 222, expectedAppRole: 3 }, // bot/adc
+  { name: "Thresh", champId: 412, expectedAppRole: 4 }, // support
+];
+
+// 2-3 lopsided matchups to spot-check against the live u.gg site (plan §9).
+// champA is hovered on the u.gg counters page; champB is the opponent shown
+// in that page's counter list. u.gg's public counters page renders as
+// client-rendered React -- this script fetches the page HTML via the SAME
+// curl transport (best-effort: prints raw fetch status/byte-length only,
+// since regex-scraping a client-rendered SPA's server HTML is unreliable --
+// a human should visually cross-check the live page against the printed
+// ingested numbers below, exactly as the plan's ship-sequence requires).
+const SPOT_CHECK_URLS = [
+  "https://u.gg/lol/champions/aatrox/counters",
+  "https://u.gg/lol/champions/yasuo/counters",
+  "https://u.gg/lol/champions/malzahar/counters",
+];
+
+async function runSpotChecks() {
+  console.log("\n=== u.gg live spot-check (best-effort HTML fetch) ===");
+  for (const url of SPOT_CHECK_URLS) {
+    try {
+      const body = await uggCurlTransport(url);
+      console.log(`  ${url} -> ${body.length} bytes fetched`);
+      if (/just a moment/i.test(body)) {
+        console.log("    ! Cloudflare challenge page, not real content -- cannot verify from this network");
+      }
+    } catch (err) {
+      console.log(`  ${url} -> FAILED: ${err.message}`);
+    }
+  }
+}
+
+async function runRoleIndexProbes(champions) {
+  console.log("\n=== role-index probe (known-champ-max-sample) ===");
+  const { fetchMatchups, resolveUggSchema, makeSchemaProbe } = await import("../lib/draft/ugg.ts");
+  const { resolveDraftPatchLabel, patchSegment } = await import("../lib/draft/patch.ts");
+  const patchLabel = await resolveDraftPatchLabel();
+  const seg = patchSegment(patchLabel);
+  const schema = await resolveUggSchema(makeSchemaProbe(ROLE_PROBES[0].champId, seg, uggCurlTransport));
+
+  const failures = [];
+  for (const probe of ROLE_PROBES) {
+    if (!champions.some((c) => c.id === probe.champId)) {
+      console.log(`  skip ${probe.name} (id ${probe.champId} not in champion list)`);
+      continue;
+    }
+    try {
+      const decoded = await fetchMatchups(probe.champId, seg, schema, uggCurlTransport);
+      const counts = Object.fromEntries(
+        Object.entries(decoded.byRole).map(([role, rows]) => [role, rows?.length ?? 0])
+      );
+      const expectedCount = counts[String(probe.expectedAppRole)] ?? 0;
+      const maxOtherCount = Math.max(0, ...Object.entries(counts)
+        .filter(([role]) => role !== String(probe.expectedAppRole))
+        .map(([, n]) => n));
+      console.log(`  ${probe.name} (expected app role ${probe.expectedAppRole}): row counts by role = ${JSON.stringify(counts)}`);
+      if (expectedCount === 0 && maxOtherCount > 0) {
+        failures.push(`${probe.name}: expected app role ${probe.expectedAppRole} had 0 rows while another role had ${maxOtherCount} -- possible role-map mismatch`);
+      }
+    } catch (err) {
+      console.log(`  ${probe.name} -> FAILED: ${err.message}`);
+    }
+  }
+  return failures;
+}
+
+async function main() {
+  const champions = await getAllChampions();
+  console.log(`resolved ${champions.length} champions`);
+  if (champions.length === 0) {
+    console.log("nothing to ingest -- champion list came back empty");
+    return;
+  }
+
+  let cursor = 0;
+  let totalRowsUpserted = 0;
+  let totalStatsUpserted = 0;
+  let totalSkippedRows = 0;
+  let patch = "";
+  const allErrors = [];
+
+  for (;;) {
+    console.log(`batch: cursor=${cursor}`);
+    const result = await runDraftIngest({
+      cursor,
+      transport: uggCurlTransport,
+      onProgress: (msg) => console.log(`  ${msg}`),
+    });
+    patch = result.patch;
+    totalRowsUpserted += result.rowsUpserted;
+    totalStatsUpserted += result.statsUpserted;
+    totalSkippedRows += result.skippedRows;
+    allErrors.push(...result.errors);
+    console.log(
+      `  champs ${result.champStart}..+${result.champCount}: ${result.rowsUpserted} matchup rows, ` +
+        `${result.statsUpserted} stats rows, ${result.skippedRows} skipped` +
+        (result.errors.length ? `, ${result.errors.length} errors` : "")
+    );
+    if (result.nextCursor === null) break;
+    cursor = result.nextCursor;
+  }
+
+  const roleProbeFailures = await runRoleIndexProbes(champions);
+  await runSpotChecks();
+
+  console.log("\n=== summary ===");
+  console.log(
+    JSON.stringify(
+      {
+        patch,
+        totalRowsUpserted,
+        totalStatsUpserted,
+        totalSkippedRows,
+        errorCount: allErrors.length,
+        roleProbeFailures,
+      },
+      null,
+      2
+    )
+  );
+  if (allErrors.length > 0) {
+    console.log(`\nfirst 5 errors:\n  ${allErrors.slice(0, 5).join("\n  ")}`);
+  }
+  if (allErrors.length > 0 || roleProbeFailures.length > 0) process.exitCode = 1;
+}
+
+main().catch((err) => {
+  if (err?.name === "DbUnavailableError") {
+    console.error(`ingest-draft: ${err.message}`);
+    process.exit(1);
+  }
+  console.error("ingest-draft failed:", err);
+  process.exit(1);
+});

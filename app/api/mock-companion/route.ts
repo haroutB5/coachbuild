@@ -11,9 +11,20 @@ import { NextRequest, NextResponse } from "next/server";
 // parity with the real contract but never validated here.
 //
 // Wire contract mirrored exactly (see companion.ps1 header comment):
-//   GET  /api/mock-companion?path=status -> {version, port, phase, clientConnected}
+//   GET  /api/mock-companion?path=status -> {version, port, phase, clientConnected,
+//                                             lastOpen, champSelect, lastPollAt, lastError}
 //   GET  /api/mock-companion?path=live   -> <allgamedata fixture> | {error:'no-live'}
 //   POST /api/mock-companion             -> {ok:true} | {ok:false, reason, hint?}
+//
+// v1.4.0 (Draft recommender, plan §5): `?phase=ChampSelect` now populates a
+// full `champSelect` snapshot (previously this mock never returned one at
+// all, even in ChampSelect -- a real gap vs. companion.ps1's actual /status
+// shape). Query params let a dev drive draftLiveSync.ts / CompanionProvider
+// against realistic champ-select data with no real League client:
+//   ?theirTeam=1,2,3   -- csv of enemy championIds (default: a 3-enemy fixture)
+//   ?timerPhase=BAN_PICK -- default "BAN_PICK"; pass an empty string for null
+//   ?roleId=0-4        -- default 2 (mid)
+//   ?cellChampionId=<id>, ?pickIntent=<id>, ?actionChampionId=<id> -- default 0 (null)
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,6 +60,39 @@ function buildLiveFixture() {
   };
 }
 
+/** ?theirTeam=1,2,3 -> [1,2,3]; malformed/absent entries dropped, never throws. */
+function parseTheirTeamParam(raw: string | null): number[] {
+  if (!raw) return [45, 91, 238]; // default 3-enemy fixture (Ekko/Talon/Zed-ish ids)
+  return raw
+    .split(",")
+    .map((s) => parseInt(s.trim(), 10))
+    .filter((n) => Number.isFinite(n) && n > 0);
+}
+
+function parseIntOrZero(raw: string | null): number {
+  if (!raw) return 0;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Builds the champSelect snapshot exactly per companion.ps1's own
+ *  Set-ChampSelectSnapshot shape -- see this route's header comment for the
+ *  query params. Only meaningful when phase === "ChampSelect" (the real
+ *  bridge nulls this field outside that phase; this mock mirrors that). */
+function buildChampSelectFixture(searchParams: URLSearchParams) {
+  const nullIfZero = (n: number) => (n > 0 ? n : null);
+  const timerPhaseParam = searchParams.get("timerPhase");
+  return {
+    localPlayerCellId: parseIntOrZero(searchParams.get("localPlayerCellId")),
+    cellChampionId: nullIfZero(parseIntOrZero(searchParams.get("cellChampionId"))),
+    pickIntent: nullIfZero(parseIntOrZero(searchParams.get("pickIntent"))),
+    actionChampionId: nullIfZero(parseIntOrZero(searchParams.get("actionChampionId"))),
+    roleId: searchParams.has("roleId") ? parseIntOrZero(searchParams.get("roleId")) : 2,
+    theirTeam: parseTheirTeamParam(searchParams.get("theirTeam")),
+    timerPhase: timerPhaseParam === null ? "BAN_PICK" : timerPhaseParam || null,
+  };
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const path = searchParams.get("path") || "status";
@@ -61,6 +105,10 @@ export async function GET(req: NextRequest) {
       port: MOCK_PORT,
       phase,
       clientConnected,
+      lastOpen: null,
+      champSelect: phase === "ChampSelect" ? buildChampSelectFixture(searchParams) : null,
+      lastPollAt: new Date().toISOString(),
+      lastError: null,
     });
   }
 

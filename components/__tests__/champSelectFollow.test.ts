@@ -9,6 +9,8 @@ function snapshot(overrides: Partial<CompanionChampSelectSnapshot> = {}): Compan
     pickIntent: null,
     actionChampionId: null,
     roleId: null,
+    theirTeam: [],
+    timerPhase: null,
     ...overrides,
   };
 }

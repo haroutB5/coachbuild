@@ -257,7 +257,15 @@ describe("companionClient — getStatus / refreshStatus", () => {
     })) as unknown as typeof fetch;
     const status = await getStatus(48291, "sess", { fetchImpl });
     expect(status?.lastOpen).toEqual({ championId: 103, roleId: 0, at: "2026-07-20T00:00:00.000Z" });
-    expect(status?.champSelect).toEqual({ localPlayerCellId: 0, cellChampionId: null, pickIntent: 103, actionChampionId: null, roleId: 0 });
+    expect(status?.champSelect).toEqual({
+      localPlayerCellId: 0,
+      cellChampionId: null,
+      pickIntent: 103,
+      actionChampionId: null,
+      roleId: 0,
+      theirTeam: [],
+      timerPhase: null,
+    });
   });
 
   it("degrades lastOpen/champSelect to null from an older (pre-1.2.0) companion that never sends them", async () => {
@@ -278,6 +286,87 @@ describe("companionClient — getStatus / refreshStatus", () => {
     const status = await getStatus(48291, "sess", { fetchImpl });
     expect(status?.lastOpen).toBeNull();
     expect(status?.champSelect).toBeNull();
+  });
+
+  it("parses theirTeam + timerPhase from a v1.4.0 companion", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        version: "1.4.0",
+        phase: "ChampSelect",
+        clientConnected: true,
+        champSelect: {
+          localPlayerCellId: 2,
+          cellChampionId: 112,
+          pickIntent: null,
+          actionChampionId: null,
+          roleId: 2,
+          theirTeam: [103, 64, 0, 51, 412],
+          timerPhase: "BAN_PICK",
+        },
+      }),
+    })) as unknown as typeof fetch;
+    const status = await getStatus(48291, "sess", { fetchImpl });
+    // The literal 0 (an enemy who's only shown pickIntent, per companion.ps1's
+    // own substitution — see CompanionChampSelectSnapshot's doc comment) is
+    // dropped by the client's defensive `>0` filter, not forwarded as a fake
+    // championId; that substitution is the COMPANION's job, not this file's.
+    expect(status?.champSelect?.theirTeam).toEqual([103, 64, 51, 412]);
+    expect(status?.champSelect?.timerPhase).toBe("BAN_PICK");
+  });
+
+  it("degrades theirTeam to [] and timerPhase to null from an older (pre-1.4.0) companion that never sends them", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        version: "1.3.1",
+        phase: "ChampSelect",
+        clientConnected: true,
+        champSelect: { localPlayerCellId: 0, cellChampionId: null, pickIntent: 103, actionChampionId: null, roleId: 0 },
+      }),
+    })) as unknown as typeof fetch;
+    const status = await getStatus(48291, "sess", { fetchImpl });
+    expect(status?.champSelect?.theirTeam).toEqual([]);
+    expect(status?.champSelect?.timerPhase).toBeNull();
+  });
+
+  it("filters non-number/negative/zero garbage entries out of theirTeam defensively", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        version: "1.4.0",
+        phase: "ChampSelect",
+        clientConnected: true,
+        champSelect: {
+          localPlayerCellId: 0,
+          cellChampionId: null,
+          pickIntent: null,
+          actionChampionId: null,
+          roleId: null,
+          theirTeam: [103, -1, 0, "64", null, undefined, NaN, 222],
+          timerPhase: 42,
+        },
+      }),
+    })) as unknown as typeof fetch;
+    const status = await getStatus(48291, "sess", { fetchImpl });
+    expect(status?.champSelect?.theirTeam).toEqual([103, 222]);
+    expect(status?.champSelect?.timerPhase).toBeNull(); // non-string degrades to null too
+  });
+
+  it("never rejects the whole status over a malformed theirTeam (non-array)", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        version: "1.4.0",
+        phase: "ChampSelect",
+        clientConnected: true,
+        champSelect: { localPlayerCellId: 0, cellChampionId: 103, pickIntent: null, actionChampionId: null, roleId: 0, theirTeam: "not-an-array" },
+      }),
+    })) as unknown as typeof fetch;
+    const status = await getStatus(48291, "sess", { fetchImpl });
+    expect(status).not.toBeNull();
+    expect(status?.champSelect?.cellChampionId).toBe(103);
+    expect(status?.champSelect?.theirTeam).toEqual([]);
   });
 
   it("parses lastPollAt + lastError from a v1.2.2 companion", async () => {

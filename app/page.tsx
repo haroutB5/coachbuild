@@ -14,18 +14,9 @@ import BuildTabContent from "@/components/hextech/BuildTabContent";
 import ProBuildsTab from "@/components/hextech/ProBuildsTab";
 import LivePanel from "@/components/live/LivePanel";
 import { parseLiveDeepLink, roleIdToLane } from "@/components/live/deepLink";
-import { resolveChampSelectFollow, resolveCurrentChampSelectChampionId } from "@/components/live/champSelectFollow";
-import {
-  noteCompanionPhase,
-  markCompanionDriven,
-  setCurrentChampSelectChampionId,
-} from "@/components/live/champSelectFollowState";
-import {
-  getStoredSession,
-  setStoredSession,
-  refreshStatus,
-  COMPANION_STATUS_POLL_MS,
-} from "@/components/live/companionClient";
+import { resolveChampSelectFollow } from "@/components/live/champSelectFollow";
+import { markCompanionDriven } from "@/components/live/champSelectFollowState";
+import { useCompanion } from "@/components/live/CompanionProvider";
 import { useSheetBackNav } from "@/components/useSheetBackNav";
 import {
   STATIC_FALLBACK_LANE_CHAMPIONS,
@@ -157,14 +148,20 @@ export default function HomePage() {
     seedInitialSelection: () => ({ view: mainView, tab, source: gamesSource }),
   });
 
-  // ── Live mode (v0.32.0) ────────────────────────────────────────────────
+  // ── Live mode (v0.32.0; provider-lifted v0.37.0) ────────────────────────
   //
-  // Companion pairing session — hydrated from localStorage on mount, and
-  // overwritten by a fresh `?session=` on a companion-opened deep link (see
-  // the mount effect below). Drives the status-poll effect further down,
-  // which is what gates the "Live game detected" LivePanel mount.
-  const [companionSession, setCompanionSession] = useState<string | null>(null);
-  const [companionPhase, setCompanionPhase] = useState<string | null>(null);
+  // Companion pairing session/phase/champSelect now live in
+  // CompanionProvider (app/layout.tsx) — THE single app-wide status poll
+  // (plan §6c). This page only CONSUMES that context: its own mount effect
+  // below still owns the deep-link-specific session override (a companion-
+  // opened tab's `?session=` is page-navigation-specific, not something
+  // every route needs to parse), and its own follow effect further down
+  // still owns "given the current phase/champSelect, should THIS page
+  // navigate to a different champion/lane" — see CompanionProvider.tsx's
+  // header comment for the full split of responsibility, and its Round-B P1
+  // note for why the driven-mark bookkeeping moved into the provider
+  // WITHOUT changing when/how often it fires.
+  const companion = useCompanion();
   // Run-once guard for the deep-link mount effect (covers React 18 Strict
   // Mode's dev double-invoke) — separate from mostPlayedLaneRequestRef,
   // which guards a DIFFERENT race (a slow most-played-lane lookup).
@@ -181,15 +178,15 @@ export default function HomePage() {
     if (deepLinkAppliedRef.current) return;
     deepLinkAppliedRef.current = true;
 
-    const stored = getStoredSession();
-    if (stored) setCompanionSession(stored);
-
+    // Session hydration from localStorage (the non-deep-link "returning
+    // user already paired" case) is now CompanionProvider's own mount
+    // effect's job (app/layout.tsx wraps every route) — this effect only
+    // needs to handle a FRESH `?session=` from a companion-opened deep link.
     const parsed = parseLiveDeepLink(window.location.search);
     if (!parsed) return; // not a live deep link — default view stands, untouched
 
     if (parsed.session) {
-      setStoredSession(parsed.session);
-      setCompanionSession(parsed.session);
+      companion.setSession(parsed.session);
     }
 
     fetch("/api/champions")
@@ -253,113 +250,76 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Companion status poll — slow cadence (COMPANION_STATUS_POLL_MS, 3s),
-  // only runs once a session is known. Drives companionPhase, which gates
-  // the "Live game detected" LivePanel mount below. Deliberately a
-  // "passive" probe via refreshStatus (never triggers its own LNA prompt —
-  // that's /live-setup's Test Connection button's job).
-  //
-  // v1.3.0 attached-tab live-follow: this SAME poll now also drives the
-  // "the tab follows the user's champ-select hovers in place" behavior —
-  // piggybacks on this existing interval rather than adding a second one
-  // (companion.ps1's bridge stamps lastStatusPollAt from these very GETs,
-  // which is what tells it to stop opening a NEW tab on every hover once
-  // this one is "attached"). Works whether this tab was opened via a
-  // deep-link or manually — session+port presence is the only real gate.
+  // Live-follow effect (v1.3.0 attached-tab behavior; provider-lifted
+  // v0.37.0) — "the tab follows the user's champ-select hovers in place."
+  // CompanionProvider now owns the actual /status poll + the phase/
+  // champSelect state + the P1 driven-mark bookkeeping (see its header
+  // comment); this effect ONLY decides "given the current phase/champSelect,
+  // should THIS page navigate to a different champion/lane" — the exact same
+  // decision app/page.tsx's own poll tick made inline before the lift, now
+  // re-keyed off `companion.tick` instead of its own setInterval so it still
+  // re-evaluates on EVERY poll tick (not just when phase/champSelect happen
+  // to change value) — see CompanionProvider.tsx's `tick` field doc comment
+  // for why that preserves the pre-lift cadence exactly.
   useEffect(() => {
-    if (!companionSession) {
-      setCompanionPhase(null);
-      return;
-    }
     let cancelled = false;
-    async function tick() {
-      const state = await refreshStatus(companionSession as string);
-      if (cancelled) return;
-      const phase = state.kind === "connected" ? state.status.phase : null;
-      setCompanionPhase(phase);
-      if (phase) noteCompanionPhase(phase);
-      // v0.35.0 (lane-flip auto-export fix): mirrors the companion's OWN
-      // live champ-select resolution into champSelectFollowState.ts on
-      // EVERY tick, regardless of whether it differs from what the page is
-      // currently showing (unlike resolveChampSelectFollow just below, which
-      // only returns a value when something SHOULD change) — this is what
-      // lets BuildTabContent's auto-export effect tell "the user flipped
-      // lanes on the champion still locked/hovered in the real client" apart
-      // from "the user is just browsing an old companion-driven pick after
-      // champ select moved on." See that module's shouldAutoExportForLane.
-      const liveChampSelectId =
-        phase === "ChampSelect" && state.kind === "connected"
-          ? resolveCurrentChampSelectChampionId(state.status.champSelect)
-          : null;
-      setCurrentChampSelectChampionId(liveChampSelectId);
-      // Round-B audit P1: the driven-mark must be re-established on the SAME
-      // tick as (and every tick after) noteCompanionPhase's entry-clear.
-      // Marking only inside the follow's target-branch loses a race on a
-      // fresh deep-link tab: if the mount effect's /api/champions resolves
-      // BEFORE the first /status tick, the entry-clear wipes the mount's
-      // mark and the follow (champ already showing) never re-marks — both
-      // auto-exports then silently no-op for the whole champ select.
-      if (liveChampSelectId !== null) markCompanionDriven(liveChampSelectId);
-      if (state.kind !== "connected") return;
+    const target = resolveChampSelectFollow({
+      phase: companion.phase ?? "",
+      champSelect: companion.champSelect,
+      currentChampionId: champ.id,
+    });
+    if (!target) return;
 
-      const target = resolveChampSelectFollow({
-        phase: state.status.phase,
-        champSelect: state.status.champSelect,
-        currentChampionId: champ.id,
-      });
-      if (!target) return;
+    fetch("/api/champions")
+      .then((r) => (r.ok ? (r.json() as Promise<ChampionRef[]>) : []))
+      .then((champs) => {
+        if (cancelled) return;
+        const found = Array.isArray(champs) ? champs.find((c) => c.id === target.championId) : undefined;
+        if (!found) return;
+        // Redundant with CompanionProvider's own P1 tick-level mark in the
+        // common case (target.championId always equals the provider's
+        // resolveCurrentChampSelectChampionId result) — kept anyway,
+        // unchanged from the pre-lift code, since marking is idempotent and
+        // this is the exact spot the original fix's own comment called out.
+        markCompanionDriven(found.id);
 
-      fetch("/api/champions")
-        .then((r) => (r.ok ? (r.json() as Promise<ChampionRef[]>) : []))
-        .then((champs) => {
-          if (cancelled) return;
-          const found = Array.isArray(champs) ? champs.find((c) => c.id === target.championId) : undefined;
-          if (!found) return;
-          markCompanionDriven(found.id);
-
-          if (target.roleId !== undefined) {
-            mostPlayedLaneRequestRef.current++;
-            const lane = roleIdToLane(target.roleId);
-            setChamp(found);
-            setActiveLane(lane);
-            sheetNav.replaceSelection(wireViewForChampion(found, lane, tabRef.current, gamesSourceRef.current));
-            return;
-          }
-
-          // Role-less follow target (blank/unmapped position) — same
-          // "land on current lane, then most-played-lane correction"
-          // pattern as the role-less deep-link mount effect.
-          const landedLane = activeLane;
+        if (target.roleId !== undefined) {
+          mostPlayedLaneRequestRef.current++;
+          const lane = roleIdToLane(target.roleId);
           setChamp(found);
-          sheetNav.replaceSelection(wireViewForChampion(found, landedLane, tabRef.current, gamesSourceRef.current));
-          const requestId = ++mostPlayedLaneRequestRef.current;
-          getMostPlayedLane(found.id).then((bestLane) => {
-            if (mostPlayedLaneRequestRef.current !== requestId) return;
-            if (!bestLane || bestLane === landedLane) return;
-            setActiveLane(bestLane);
-            sheetNav.replaceSelection(wireViewForChampion(found, bestLane, tabRef.current, gamesSourceRef.current));
-          });
-        })
-        .catch(() => {
-          /* network hiccup — live-follow silently no-ops this tick, retries next poll */
+          setActiveLane(lane);
+          sheetNav.replaceSelection(wireViewForChampion(found, lane, tabRef.current, gamesSourceRef.current));
+          return;
+        }
+
+        // Role-less follow target (blank/unmapped position) — same
+        // "land on current lane, then most-played-lane correction"
+        // pattern as the role-less deep-link mount effect.
+        const landedLane = activeLane;
+        setChamp(found);
+        sheetNav.replaceSelection(wireViewForChampion(found, landedLane, tabRef.current, gamesSourceRef.current));
+        const requestId = ++mostPlayedLaneRequestRef.current;
+        getMostPlayedLane(found.id).then((bestLane) => {
+          if (mostPlayedLaneRequestRef.current !== requestId) return;
+          if (!bestLane || bestLane === landedLane) return;
+          setActiveLane(bestLane);
+          sheetNav.replaceSelection(wireViewForChampion(found, bestLane, tabRef.current, gamesSourceRef.current));
         });
-    }
-    tick();
-    const id = setInterval(tick, COMPANION_STATUS_POLL_MS);
+      })
+      .catch(() => {
+        /* network hiccup — live-follow silently no-ops this tick, retries next poll */
+      });
     return () => {
       cancelled = true;
-      clearInterval(id);
     };
-    // champ.id/activeLane MUST be dependencies: `tick` reads them via
-    // closure to decide "does the follow target differ from what's
-    // currently shown," and without them here the closure would freeze on
-    // whatever they were when the effect last ran, comparing every future
-    // tick against a stale champion forever. Re-creating the interval on
-    // every champion/lane change is harmless (clears+resets a 3s timer,
-    // `tick()` still fires immediately on setup) — sheetNav/the ref objects
-    // are stable across renders so they're intentionally omitted.
+    // companion.tick MUST be a dependency — it's what re-runs this effect on
+    // every poll tick (see the doc comment above); champ.id/activeLane must
+    // also stay, for the exact same "closure would freeze on a stale
+    // champion" reason the pre-lift effect's own comment documented.
+    // sheetNav/the ref objects are stable across renders so they're
+    // intentionally omitted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companionSession, champ.id, activeLane]);
+  }, [companion.tick, champ.id, activeLane]);
 
   /** Repaints searchMode/tab/activeLane+champ/selectedPlayer from a landed-on
    *  entry — fired on mount-resume and every popstate. Delegates the actual
@@ -619,13 +579,14 @@ export default function HomePage() {
               {tab === "build" ? (
                 <>
                   <BuildTabContent champ={mainView.champ} lane={mainView.lane} onPatchResolved={setPatch} />
-                  {/* v0.32.0 (Live mode): only mounted while the companion
-                      reports gameflow phase InProgress (companionPhase,
-                      polled above) — owns its own 1s live-client-data poll
-                      once mounted. Absent entirely otherwise, so this never
-                      reserves layout space or shows placeholder chrome for a
-                      feature most sessions won't use. */}
-                  {companionPhase === "InProgress" && (
+                  {/* v0.32.0 (Live mode; provider-lifted v0.37.0): only
+                      mounted while the companion reports gameflow phase
+                      InProgress (companion.phase, from CompanionProvider's
+                      single app-wide poll) — owns its own 1s live-client-data
+                      poll once mounted. Absent entirely otherwise, so this
+                      never reserves layout space or shows placeholder chrome
+                      for a feature most sessions won't use. */}
+                  {companion.phase === "InProgress" && (
                     <LivePanel champ={mainView.champ} lane={mainView.lane} />
                   )}
                 </>

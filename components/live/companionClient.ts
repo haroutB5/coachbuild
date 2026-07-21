@@ -89,6 +89,29 @@ export interface CompanionChampSelectSnapshot {
   pickIntent: number | null;
   actionChampionId: number | null;
   roleId: number | null;
+  /** v1.4.0 (Draft recommender, plan §5) — the enemy team's championId per
+   *  slot (>0 only; a hovering-but-unlocked enemy is represented by their
+   *  pickIntent in that slot, same "visible info, IDs only, never names"
+   *  posture as every other champSelect field here). Absent on a companion
+   *  older than 1.4.0 (or outside ChampSelect) degrades to `[]` — an empty
+   *  enemy list is indistinguishable from "not reported yet," and /draft's
+   *  live-sync (draftLiveSync.ts) already treats an empty array as "nothing
+   *  to auto-fill," so this degrades safely without a separate sentinel.
+   *  NOT lane-tagged in the wire contract (the LCU champ-select session
+   *  doesn't expose the enemy team's assigned positions) — draftLiveSync.ts
+   *  infers the direct-lane-opponent as the entry at the SAME index as the
+   *  local player's own roleId, the standard convention community overlays
+   *  (porofessor/op.gg-style) rely on for ranked/draft queues where both
+   *  teams' cell order matches display position; flagged as an off-device
+   *  assumption in HANDOFF-fronty.md pending a real-LCU shape check (plan
+   *  §8's "real LCU theirTeam shape" verification). */
+  theirTeam: number[];
+  /** v1.4.0 — champ-select's session timer phase (e.g. "PLANNING", "BAN_PICK",
+   *  "FINALIZATION") straight off the LCU session, null outside ChampSelect
+   *  or on an older companion that never sends it. Diagnostic/UX only
+   *  (nothing in the scoring or live-sync decision path depends on it today)
+   *  — never rejects the whole status over a missing/malformed value. */
+  timerPhase: string | null;
 }
 
 export interface CompanionStatus {
@@ -274,6 +297,25 @@ function normalizeLastOpen(raw: unknown): CompanionLastOpen | null {
   return { championId: r.championId, roleId, at: r.at };
 }
 
+/** `lastPollAt`/`lastError`/`timerPhase` are all plain nullable strings —
+ *  absent (older companion) or any non-string degrades to null, same
+ *  defensive posture as the id normalizers below. Declared above
+ *  normalizeChampSelect (which now uses it for `timerPhase`) — function
+ *  declarations hoist, but keeping the read order matches call order. */
+function normalizeNullableString(raw: unknown): string | null {
+  return typeof raw === "string" ? raw : null;
+}
+
+/** v1.4.0 — defensive normalize for `theirTeam`: anything other than an
+ *  array degrades to `[]` (older companion, or a mid-transition malformed
+ *  value), and non-finite/non-positive entries are dropped rather than
+ *  rejecting the whole array — a single garbage slot must never take down
+ *  every other (legitimately visible) enemy pick. */
+function normalizeTheirTeam(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0);
+}
+
 /** Same defensive posture as normalizeLastOpen, for `champSelect`. */
 function normalizeChampSelect(raw: unknown): CompanionChampSelectSnapshot | null {
   if (!raw || typeof raw !== "object") return null;
@@ -286,14 +328,9 @@ function normalizeChampSelect(raw: unknown): CompanionChampSelectSnapshot | null
     pickIntent: numOrNull(r.pickIntent),
     actionChampionId: numOrNull(r.actionChampionId),
     roleId: numOrNull(r.roleId),
+    theirTeam: normalizeTheirTeam(r.theirTeam),
+    timerPhase: normalizeNullableString(r.timerPhase),
   };
-}
-
-/** `lastPollAt`/`lastError` are both plain nullable strings — absent (older
- *  companion) or any non-string degrades to null, same defensive posture as
- *  the two normalizers above. */
-function normalizeNullableString(raw: unknown): string | null {
-  return typeof raw === "string" ? raw : null;
 }
 
 export async function getStatus(

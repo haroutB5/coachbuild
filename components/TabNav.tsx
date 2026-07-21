@@ -7,6 +7,7 @@ const TABS = [
   { href: "/", label: "Builds" },
   { href: "/history", label: "Pro's" },
   { href: "/movers", label: "Movers" },
+  { href: "/draft", label: "Draft" },
 ] as const;
 
 export default function TabNav() {

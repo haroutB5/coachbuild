@@ -62,8 +62,19 @@ WIRE CONTRACT (must match components/live/companionClient.ts exactly):
                                 lastOpen:{championId,roleId|null,at}|null,
                                 champSelect:{localPlayerCellId,
                                   cellChampionId|null, pickIntent|null,
-                                  actionChampionId|null, roleId|null}|null
-                                  (null outside phase=="ChampSelect"),
+                                  actionChampionId|null, roleId|null,
+                                  theirTeam:number[], timerPhase:string|null}
+                                  |null (null outside phase=="ChampSelect")
+                                  -- v1.4.0 (Draft recommender, plan section 5):
+                                  theirTeam is the enemy team's championId
+                                  per slot (>0 only; a hovering-but-unlocked
+                                  enemy is represented by their
+                                  championPickIntent in that slot instead --
+                                  visible info, IDs only, never names, same
+                                  posture as every other champSelect field
+                                  here); timerPhase is session.timer.phase
+                                  straight off the LCU, null if the session
+                                  has no timer object,
                                 lastPollAt:string|null (ISO, updated every
                                   poll tick regardless of LCU presence),
                                 lastError:string|null (most recent
@@ -195,7 +206,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.3.1'
+    Version     = '1.4.0'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -830,6 +841,38 @@ function Get-ChampSelectActionChampionId {
     return 0
 }
 
+function Get-TheirTeamChampionIds {
+    # v1.4.0 (Draft recommender, plan section 5): enemy champion ids visible
+    # in champ-select's theirTeam array -- ON-SCREEN visible info (Riot's
+    # anonymity rule bars summoner NAMES only, never champion picks/hovers).
+    # IDs only, never names. Each theirTeam member resolves to championId
+    # when locked (>0), else championPickIntent when hovering (>0) -- a
+    # member who hasn't picked or hovered yet contributes NOTHING (never a 0
+    # placeholder, so the app-side array length reflects only real signal).
+    param($Session)
+    $ids = @()
+    if (-not $Session -or -not $Session.theirTeam) { return , $ids }
+    foreach ($m in @($Session.theirTeam)) {
+        if (-not $m) { continue }
+        $cid = [int]$m.championId
+        if ($cid -gt 0) { $ids += $cid; continue }
+        $intent = [int]$m.championPickIntent
+        if ($intent -gt 0) { $ids += $intent }
+    }
+    return , $ids
+}
+
+function Get-TimerPhase {
+    # v1.4.0 -- session.timer.phase straight off the LCU (e.g. "PLANNING",
+    # "BAN_PICK", "FINALIZATION"), null if the session has no timer object
+    # at all (older client behavior, or a session shape this companion
+    # hasn't seen). Diagnostic/UX only -- nothing in the scoring or
+    # live-sync decision path depends on this.
+    param($Session)
+    if ($Session -and $Session.timer -and $Session.timer.phase) { return [string]$Session.timer.phase }
+    return $null
+}
+
 function Set-ChampSelectSnapshot {
     # Diagnostic snapshot for /status's `champSelect` field (remote
     # debugging without a screen-share) -- updated on EVERY poll while in
@@ -837,13 +880,15 @@ function Set-ChampSelectSnapshot {
     # even before any open decision is made. Writes into the BRIDGE's own
     # synchronized Sync (a different runspace) when a real bridge exists;
     # no-ops safely in -Mock (no bridge is ever started there).
-    param([int]$LocalPlayerCellId, [int]$CellChampionId, [int]$PickIntent, [int]$ActionChampionId, $RoleId)
+    param([int]$LocalPlayerCellId, [int]$CellChampionId, [int]$PickIntent, [int]$ActionChampionId, $RoleId, $TheirTeam, $TimerPhase)
     $snapshot = @{
         localPlayerCellId = $LocalPlayerCellId
         cellChampionId    = $(if ($CellChampionId -gt 0) { $CellChampionId } else { $null })
         pickIntent        = $(if ($PickIntent -gt 0) { $PickIntent } else { $null })
         actionChampionId  = $(if ($ActionChampionId -gt 0) { $ActionChampionId } else { $null })
         roleId            = $RoleId
+        theirTeam         = @($TheirTeam)
+        timerPhase        = $TimerPhase
     }
     if ($script:Bridge -and $script:Bridge.Sync) {
         $script:Bridge.Sync.ChampSelectSnapshot = $snapshot
@@ -898,8 +943,10 @@ function Update-ChampSelectState {
     $pickIntent = [int]$cell.championPickIntent
     $actionChampionId = Get-ChampSelectActionChampionId -Session $Session -LocalCellId $localCellId
     $roleId = Get-RoleIdFromPosition -Position $cell.assignedPosition
+    $theirTeam = Get-TheirTeamChampionIds -Session $Session
+    $timerPhase = Get-TimerPhase -Session $Session
 
-    Set-ChampSelectSnapshot -LocalPlayerCellId $localCellId -CellChampionId $cellChampionId -PickIntent $pickIntent -ActionChampionId $actionChampionId -RoleId $roleId
+    Set-ChampSelectSnapshot -LocalPlayerCellId $localCellId -CellChampionId $cellChampionId -PickIntent $pickIntent -ActionChampionId $actionChampionId -RoleId $roleId -TheirTeam $theirTeam -TimerPhase $timerPhase
 
     # 3-way champion resolution, in priority order: (1) locked cell
     # championId, (2) cell championPickIntent (some client versions DO
@@ -1566,13 +1613,22 @@ function Invoke-SelfTest {
 
     # 4b. champSelect snapshot only surfaces while phase==ChampSelect, and
     # reflects whatever Set-ChampSelectSnapshot last wrote (diagnosability).
+    # v1.4.0: also covers theirTeam/timerPhase (Draft recommender, plan
+    # section 5) round-tripping through the same echo.
     $bridge.Sync.Phase = 'ChampSelect'
-    $bridge.Sync.ChampSelectSnapshot = @{ localPlayerCellId = 0; cellChampionId = $null; pickIntent = 103; actionChampionId = $null; roleId = 0 }
+    $bridge.Sync.ChampSelectSnapshot = @{ localPlayerCellId = 0; cellChampionId = $null; pickIntent = 103; actionChampionId = $null; roleId = 0; theirTeam = @(45, 91); timerPhase = 'BAN_PICK' }
     try {
         $r = Invoke-WebRequest -Uri "$base/status?session=$session" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing
         $obj = $r.Content | ConvertFrom-Json
         if (-not $obj.champSelect -or $obj.champSelect.pickIntent -ne 103) {
             $failures.Add("/status champSelect snapshot not echoed correctly: $($r.Content)")
+        }
+        $gotTheirTeam = @($obj.champSelect.theirTeam)
+        if ($gotTheirTeam.Count -ne 2 -or $gotTheirTeam[0] -ne 45 -or $gotTheirTeam[1] -ne 91) {
+            $failures.Add("/status champSelect.theirTeam not echoed correctly: $($r.Content)")
+        }
+        if ($obj.champSelect.timerPhase -ne 'BAN_PICK') {
+            $failures.Add("/status champSelect.timerPhase not echoed correctly: $($r.Content)")
         }
     } catch { $failures.Add("/status champSelect request threw: $($_.Exception.Message)") }
     $bridge.Sync.Phase = 'InProgress'
@@ -1979,10 +2035,14 @@ function Invoke-MockRun {
     $failures = New-Object System.Collections.Generic.List[string]
 
     function New-MockChampSelectSession {
-        param([int]$ChampId, [int]$IntentId, [string]$Position, $Actions = @())
+        param([int]$ChampId, [int]$IntentId, [string]$Position, $Actions = @(), $TheirTeam = @(), $TimerPhase = $null)
+        $timer = $null
+        if ($TimerPhase) { $timer = [pscustomobject]@{ phase = $TimerPhase } }
         return [pscustomobject]@{
             localPlayerCellId = 0
             myTeam            = @([pscustomobject]@{ cellId = 0; championId = $ChampId; championPickIntent = $IntentId; assignedPosition = $Position })
+            theirTeam         = $TheirTeam
+            timer             = $timer
             actions           = $Actions
         }
     }
@@ -2035,6 +2095,34 @@ function Invoke-MockRun {
     $expectedActionsOnly = "$appOrigin/?championId=64&role=1&session=$sessionToken"
     if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedActionsOnly) {
         $failures.Add("actions[]-only resolution expected exactly 1 open to '$expectedActionsOnly', got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
+    }
+
+    # theirTeam + timerPhase resolution (v1.4.0 -- Draft recommender feed,
+    # plan section 5): enemy champion ids (locked championId, else visible
+    # pickIntent fallback -- IDs ONLY, never names) + the session timer's
+    # phase land in the same snapshot /status echoes (Set-ChampSelectSnapshot).
+    # Verified via $script:ChampSelectSnapshotRecord, which is always written
+    # even in -Mock (no real bridge exists here -- see Set-ChampSelectSnapshot).
+    $script:OpenActions.Clear()
+    $theirTeamState = @{ LastOpenedChampId = $null }
+    $theirTeamFixture = @(
+        [pscustomobject]@{ cellId = 5; championId = 45; championPickIntent = 0 }   # locked
+        [pscustomobject]@{ cellId = 6; championId = 0; championPickIntent = 91 }   # hovering only
+        [pscustomobject]@{ cellId = 7; championId = 0; championPickIntent = 0 }    # nothing yet -- must be omitted
+    )
+    Update-ChampSelectState -State $theirTeamState -Session (New-MockChampSelectSession -ChampId 103 -IntentId 103 -Position 'top' -TheirTeam $theirTeamFixture -TimerPhase 'BAN_PICK') -AppOrigin $appOrigin -SessionToken $sessionToken
+    $snap = $script:ChampSelectSnapshotRecord
+    $gotTheirTeam = @($snap.theirTeam)
+    if ($gotTheirTeam.Count -ne 2 -or $gotTheirTeam[0] -ne 45 -or $gotTheirTeam[1] -ne 91) {
+        $failures.Add("theirTeam resolution mismatch: got $($gotTheirTeam -join ',')")
+    }
+    if ($snap.timerPhase -ne 'BAN_PICK') {
+        $failures.Add("timerPhase mismatch: got $($snap.timerPhase)")
+    }
+    # timerPhase is null when the session has no timer object at all.
+    Update-ChampSelectState -State $theirTeamState -Session (New-MockChampSelectSession -ChampId 103 -IntentId 103 -Position 'top' -TheirTeam @() -TimerPhase $null) -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($null -ne $script:ChampSelectSnapshotRecord.timerPhase) {
+        $failures.Add("timerPhase expected null when session.timer is absent, got $($script:ChampSelectSnapshotRecord.timerPhase)")
     }
 
     # Attached-tab gate (v1.3.0 live-follow fold-in): a fresh

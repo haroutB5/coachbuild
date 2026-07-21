@@ -179,6 +179,12 @@ export default function Sidebar({
           >
             Companion
           </Link>
+          <Link
+            href="/draft"
+            className="inline-block text-[10.5px] text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
+          >
+            Draft
+          </Link>
         </div>
       )}
 
@@ -211,6 +217,13 @@ export default function Sidebar({
             className="text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
           >
             Companion
+          </Link>
+          <span aria-hidden="true">&middot;</span>
+          <Link
+            href="/draft"
+            className="text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
+          >
+            Draft
           </Link>
         </div>
       )}

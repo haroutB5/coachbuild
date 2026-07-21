@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Plus_Jakarta_Sans, Cinzel } from "next/font/google";
 import "./globals.css";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
+import CompanionProvider from "@/components/live/CompanionProvider";
 
 const plusJakarta = Plus_Jakarta_Sans({
   subsets: ["latin"],
@@ -60,7 +61,12 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${plusJakarta.variable} ${cinzel.variable}`}>
       <body className="antialiased font-sans">
-        {children}
+        {/* v0.37.0 (Draft recommender, plan §6c): CompanionProvider now owns
+            THE single app-wide companion status poll — see its own header
+            comment for the split of responsibility with app/page.tsx's
+            follow effect. Wrapping at the root (not just "/") is what lets
+            /draft react to the same live session without a second poller. */}
+        <CompanionProvider>{children}</CompanionProvider>
         <ServiceWorkerRegister />
       </body>
     </html>
