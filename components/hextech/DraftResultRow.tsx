@@ -1,7 +1,8 @@
 "use client";
 
 import { IconWithFallback } from "@/components/IconWithFallback";
-import type { DraftConfidence } from "@/components/live/draftRecommend";
+import type { DraftConfidence, PersonalRecord } from "@/components/live/draftRecommend";
+import { buildPersonalBadgeModel } from "@/components/live/personalBadge";
 
 interface DraftResultRowProps {
   rank: number;
@@ -23,6 +24,13 @@ interface DraftResultRowProps {
    *  score IS already computed against the hovered champion) — hides that
    *  second stat line rather than showing a redundant duplicate number. */
   variant?: "play" | "ban";
+  /** My Stats decoration (2026-07-21) — omitted entirely for bans (personal
+   *  records are only decorated onto PLAY candidates server-side, see
+   *  lib/draft/recommend.ts's PersonalPlayResult). Absent/undefined renders
+   *  no badge at all, same as a row with genuinely zero personal games —
+   *  see components/live/personalBadge.ts's no-clutter rule. */
+  personal?: PersonalRecord | null;
+  personalOverall?: PersonalRecord;
 }
 
 function pct(fraction: number): string {
@@ -54,7 +62,12 @@ export default function DraftResultRow({
   confidence,
   minGames,
   variant = "play",
+  personal,
+  personalOverall,
 }: DraftResultRowProps) {
+  const personalBadge =
+    variant === "play" && personalOverall !== undefined ? buildPersonalBadgeModel(personal ?? null, personalOverall) : null;
+
   return (
     <div className="flex items-center gap-3 py-2.5 border-b border-line last:border-b-0">
       <span className="w-5 text-[11px] text-mut font-bold tabular-nums text-center flex-shrink-0" aria-hidden="true">
@@ -97,6 +110,26 @@ export default function DraftResultRow({
           <div className="text-[13.5px] font-bold tabular-nums text-good">{pct(scoreFraction)}</div>
           {winVsLaneOppFraction !== null && (
             <div className="text-[10px] text-mut tabular-nums mt-0.5">{pct(winVsLaneOppFraction)} vs lane opp</div>
+          )}
+          {personalBadge && (
+            <div className="flex flex-col items-end gap-0.5 mt-1">
+              {personalBadge.vsLabel && (
+                <span
+                  title={personalBadge.tooltip}
+                  className="inline-block rounded border border-line-gold bg-panel2 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-mut whitespace-nowrap"
+                >
+                  {personalBadge.vsLabel}
+                </span>
+              )}
+              {personalBadge.overallLabel && (
+                <span
+                  title={personalBadge.tooltip}
+                  className="inline-block rounded border border-line bg-panel2 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-mut whitespace-nowrap"
+                >
+                  {personalBadge.overallLabel}
+                </span>
+              )}
+            </div>
           )}
         </div>
       )}

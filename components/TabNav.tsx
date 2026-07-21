@@ -8,6 +8,7 @@ const TABS = [
   { href: "/history", label: "Pro's" },
   { href: "/movers", label: "Movers" },
   { href: "/draft", label: "Draft" },
+  { href: "/mystats", label: "My Stats" },
 ] as const;
 
 export default function TabNav() {

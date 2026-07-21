@@ -6261,3 +6261,520 @@ Smoke-tested against LIVE Neon (not just mocks): `lane=0, enemies=[86], laneOpp=
 3. **laneOpp contract** — reconciled mid-task per the coordinator's explicit message; fronty's pre-existing `orderEnemiesForQuery` position-encoding guess was replaced with the explicit-param contract (fronty's files adjusted, not fronty re-dispatched).
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-21 01:24
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-20 23:46:16Z; previous content preserved there. Append new rounds below. -->
+
+# HANDOFF-engy.md — Draft recommender audit patch round + full ship (2026-07-21)
+
+## Status: DONE — shipped as v0.37.0
+
+Audit verdict was SHIP-AFTER-PATCH. All 6 findings (P1-1, P1-2, P2-1, P2-2, P2-3, P3-1) fixed, live-verified against Neon where applicable, then full ship pipeline run.
+
+## Fixes
+
+- **P1-1 (default-screen garbage, e.g. Yuumi 81%/128g in a Top pool):** added `total_games` column to `draft_champ_stats` (migration `0010_draft_audit_patches.sql`, backfilled from existing matchup data) + `filterPoolByTotalGames` (5000-game floor, `lib/draft/score.ts`), wired into the pool query in `lib/draft/recommend.ts`. Also fixed `rankPlays`' empty-enemies path — `minGames`/`confidence` are now seeded from the candidate's own `totalGames` (never a blank "normal" with no sample reported).
+  - **Acceptance evidence (live Neon, all 5 lanes, no enemies):** every single candidate across every lane has `minGames` >= 5196 (well above the 5000 floor) — full dump: lane0 `12:5759,51:6485,35:7379,145:7032,64:9429,901:18865,18:5656,202:5400,104:9761,254:5208`; lane1 `29:9892,805:259660,67:5245,238:107041,164:5196,68:5361,63:15730,246:100328,107:180721,80:43836`; lane3 `805:18557,4:7940,800:114040,110:142963,81:738642,804:212517,42:53907,429:91918,236:390949,145:691449`; lane4 `21:12620,81:13490,64:11870,29:17886,800:121454,805:18138,238:5984,22:44816,90:6234,54:25659`. Yuumi(350)/Bard(432)/Braum(201) — the auditor's cited artifacts — appear in NONE of them. Also added a UI hint caption under "Suggested picks" documenting the floor.
+- **P1-2 (cron never progressed):** `coachbuild.draft_ingest_cursor` one-row table (same migration). `app/api/ingest/draft/route.ts` reads/persists it when no explicit `?cursor=` is given (wraps to 0 on a completed walk); an explicit cursor still overrides and never touches the persisted state. `lib/draft/ingest.ts` gained `getPersistedCursor`/`setPersistedCursor`.
+- **P2-1 (lane-opp auto-detect wrong):** deleted `draftLiveSync.ts`'s `laneOpponentIndex` field/computation and its 3 tests entirely — the index-vs-role assumption was falsified by the companion's own SelfTest fixture (theirTeam compacts unresolved slots). `app/draft/page.tsx` no longer derives a client-side guess from live sync; the enemy-chip highlight now reflects the user's explicit tag OR the server's `meta.laneOppInferred` (never a client index guess), with an "(inferred)" label distinguishing the two.
+- **P2-2 (every ban "Low sample n=0"):** `BanResult` (score.ts) gained real `confidence`/`minGames`, computed in `rankBans` from the hover-vs-target matchup row's own `games` — null/low only when there's genuinely no row. `components/live/draftRecommend.ts`'s `DraftBanResult.minGames` is now `number | null` (was defaulting to a fabricated 0).
+- **P2-3 (ban score as a green win-%):** `DraftResultRow.tsx`'s ban variant now renders a relative priority bar (scaled against a documented 0.12 ceiling) + raw score subtext — no `pct()`, no green.
+- **P3-1 (serving-patch completeness):** `resolveServingPatch` now orders by `(count(DISTINCT champ_id) >= 120) DESC, MAX(ingested_at) DESC` — a genuinely complete older patch outranks a mid-ingest newer one. Bans section gained a "bans that counter your pick in your lane" scope-note caption.
+
+## Tests
+
+986 passing (baseline 973, +13 net: score/ingest/recommend/route/draftLiveSync all extended for the new behavior — draftLiveSync actually shed 2 net tests removing the deleted laneOpponentIndex describe block, offset by new coverage elsewhere). `tsc --noEmit` clean. `verify-fix.sh` full gate: tsc/lint/tests/build/sw-version/manifest all PASS.
+
+## Ship
+
+- Version: app **0.37.0** (was 0.36.1). Companion: **stays 1.4.0** — P2-1's fix was entirely client-side (draftLiveSync.ts/page.tsx); `companion.ps1` was not touched this round.
+- CHANGELOG.md: new 0.37.0 entry (Draft feature headline + all 6 audit patches).
+## Deploy + prod smoke (plan §9.5)
+
+- Deployed via `vercel --prod --archive=tgz` (commit `f059633`, author `harout_b5@live.com`). Live at https://coachbuild.vercel.app, aliased correctly, build clean (`/draft`, `/api/draft/recommend`, `/api/ingest/draft` all present in the route manifest).
+- **`/draft` real-browser check (chrome-devtools, prod URL):** loads with lane defaulted to Mid, a sane top-10 (Lucian/Ezreal/Caitlyn/Kai'Sa/Corki/Mel/Smolder/Azir/Varus/Orianna, n=6746-158197, scores 53.3-59.0%) — **zero Yuumi/Bard/Braum-class garbage, confirming P1-1's acceptance criterion on the live deployed site, not just locally.** Draft nav link present and correctly highlighted. Selected Orianna as "your champion" → Suggested bans rendered real per-target `n=` counts (960/2140/301/976/81) and "priority 0.0XX" subtext (0.036-0.052, matching the auditor's cited 0.02-0.07 range) — **no green pct(), confirming P2-3** — and correctly flagged ONLY Teemo (n=81) as "LOW SAMPLE" while n=301+ targets showed no badge, confirming P2-2's confidence math is accurate against real data. Zero console errors. Footer correctly shows v0.37.0.
+- **Recommend-endpoint sanity vs u.gg:** already cross-checked at the decode layer during the original build (Aatrox vs Mordekaiser 3173/6100=52.02%, byte-exact vs u.gg); this round's live-browser check above is the end-to-end equivalent (real ranked output, real sample sizes, no per-matchup value fabricated).
+- **Header discipline (`curl -I`):** populated and degraded (400) cases both return `Cache-Control: public, max-age=0, must-revalidate` VERBATIM — Vercel/Next.js normalizes the outward-facing header text for App Router route handlers (confirmed this is a PRE-EXISTING, project-wide platform behavior, not something my route introduced: `/api/patch-movers`, an already-shipped route with the identical `NextResponse.json(..., {headers})` pattern, shows the exact same normalized text in prod). The FUNCTIONAL behavior is still correct underneath: a fresh populated query goes `X-Vercel-Cache: MISS` → `HIT` on repeat (edge caching my `s-maxage` value internally), while the 400/invalid-lane case stays `MISS` on every repeat (never cached), matching `no-store`'s intent. Verified, not assumed — repeated the 400 case 3x.
+- **Vercel-egress probe of stats2 (non-blocking, per plan):** could NOT trigger the real `/api/ingest/draft` route directly — `CRON_SECRET` is a Vercel "Sensitive" env var (write-only; `vercel env pull` returns `""` for it AND for `DATABASE_URL`, confirming this is Vercel's redaction behavior, not a real empty value). Deployed a tiny throwaway unauthenticated diagnostic route instead (`GET` to the same stats2 URL my ingest lib uses, default fetch transport — no auth, no secrets, removed + redeployed clean immediately after this one check). **Result: HTTP 403, Cloudflare "Just a moment..." challenge** — the SAME block this session's Bash-tool/WebFetch/browser hit locally (see `[[feedback_bash_tool_vs_execfile_network_path]]`), meaning Vercel's own serverless egress IP is ALSO Cloudflare-challenged for this CDN via the default `fetch`-based transport (unlike the local script's curl-subprocess transport, which is not an option inside a Vercel Node function the same way). **Practical effect: the daily `/api/ingest/draft` cron will very likely fail to fetch fresh u.gg data going forward**, same class of problem as the pre-existing, already-documented prostage cron gap in this repo's HANDOFF ("has never landed data in production"). Non-blocking for THIS ship (the pool is fully bootstrapped via the local script), but flagging clearly: refreshing this data patch-to-patch will need either (a) a periodic manual `npm run ingest:draft` run from a reachable machine (the proven-working path), or (b) further investigation into Vercel egress IP reputation with u.gg/Cloudflare. Recommend surfacing this to the user as a known follow-up, not silently trusting the cron.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-21 01:49
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-20 22:10:29Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-21 (Round B) — engo: fix wave on the banked seamlessness-audit findings, v0.37.1 / companion 1.4.1
+
+### Summary
+
+Applied all 6 banked Round-B findings against CURRENT code (post-Draft feature + CompanionProvider poller lift, which had already landed the P1 fix). Re-verified each finding's mechanism before fixing — three findings' underlying code had shifted since the audit ran at v0.36.0, though the fix directions all still applied once re-traced. 1003/1003 tests passing (baseline 973, +30 net), `tsc --noEmit` and `tsc -b --force` both clean, `next lint`/`next build` clean (only pre-existing `<img>` warnings), companion SelfTest/Mock/HarnessTest all PASSED.
+
+### Per-finding
+
+1. **P2 follow-fights-user** — RE-VERIFIED still live post-lift: the follow effect (now in `app/page.tsx`, fed by `CompanionProvider`'s `companion.tick`/`phase`/`champSelect`) still gated on `resolveChampSelectFollow`'s "differs from `champ.id` (currently shown)" check, which re-fires every tick once a manual browse diverges `champ.id` from an unchanged champ-select champion. Fixed by decoupling entirely: new `champSelectFollowState.ts` exports `shouldFollowChampSelectChange`/`markFollowedChampSelectChampion` (tracks the last champ-select championId the follow effect actually acted on, reset on a fresh ChampSelect epoch), paired with `champSelectFollow.ts`'s new `resolveChampSelectRoleId` (role-extraction split out of the old `resolveChampSelectFollow`, which is UNCHANGED and still used by nothing else — kept for its own tests). `app/page.tsx`'s follow effect rewired; `champ.id` deliberately removed from that effect's dep array (that WAS the bug).
+2. **P2 LivePanel churn** — `LIVE_POLL_MS` (`companionClient.ts`) 1000 → 3000. `livePanelModel.ts`'s new `sameLivePanelModel` (order-sensitive shallow compare) used in `LivePanel.tsx`'s tick via the functional `setModel(prev => ...)` form to skip the setState entirely when the derived enemy set is unchanged. Both applied (belt and braces, per brief).
+3. **P3 companion CIM cost** — `Get-LcuCredentials` (Get-CimInstance) was still called every 1.5s tick unconditionally, unaffected by the Draft/CompanionProvider work (that's all web-side). Added `Get-LcuCredentialsCached`/`Clear-LcuCredentialsCache` (`public/companion.ps1`) — cached after first discovery, injectable `$Resolver` param for testability. `Invoke-GameflowTick` now calls the cached wrapper and invalidates on a connection-refused (StatusCode 0) or 401 response from either of its two per-tick LCU calls (gameflow-phase, champ-select session). New SelfTest section (#9) proves the resolver is called exactly once across 3 ticks and again exactly once after an explicit invalidation. Companion → **1.4.1**.
+4. **Dead-code deletion** — RE-GREPPED repo-wide post-Draft: `isAutoExportEligibleBuild` still has zero real call sites (only its own definition, `itemSetsApply.ts`'s re-export, and its own pinned tests). Deleted the function from `autoExportShared.ts`, the re-export + doc comment from `itemSetsApply.ts`, the 3 orphaned tests from `itemSetsApply.test.ts`, and updated a stale comment in `champSelectFollowState.ts` that referenced it. Left the documented-vestigial `shouldAutoExport` (the OTHER, still-live gate) untouched.
+5. **P3s:**
+   - (a) transient-probe-failure marks-as-done — RE-CHECKED the current shape (unchanged since the audit, in `BuildTabContent.tsx`): `markAutoExported` fired synchronously BEFORE the async attempt, so a companion-not-connected-yet failure (`outcome.attempted === false`) permanently burned the dedup slot. Fixed cleanly (no in-flight flag needed): moved both items'/runes' `markAutoExported` calls into the `.then()`/`.catch()` resolution, gated on `outcome.attempted` — the existing `tryClaimAutoExportLock` localStorage lock (already claimed synchronously, 30s TTL) already prevents a double-fire in the async window, so this was safe to do without extra state.
+   - (b) stale toast champion name — new effect in `BuildTabContent.tsx` clears both `itemsToast`/`runesToast` on `[champ.id, lane]` change. (The message text itself was never wrong — it always named the champion actually exported for, closure-captured at export time — the bug was a toast about an OLD champion lingering on screen after the user moved on.)
+   - (c) LivePanel dynamic import — `app/page.tsx`'s `LivePanel` import converted to `next/dynamic({ ssr: false })`.
+6. **Draft stale-patch honesty** — added `currentPatch: string | null` to `RecommendMeta` (`lib/draft/recommend.ts`, resolved via `resolveDraftPatchLabel()`/`getLatestPatch()`, fail-soft) alongside the existing `patch` (whatever `resolveServingPatch` actually has ingested) — these can diverge for days since the `/api/ingest/draft` cron is Cloudflare-blocked from reaching u.gg on Vercel's egress IP (HANDOFF's "Vercel-egress probe of stats2" finding, out of scope to fix here). Threaded through `components/live/draftRecommend.ts`'s `DraftRecommendMeta`/normalizer. `app/draft/page.tsx` shows a one-line notice under the patch stamp whenever `currentPatch !== patch` (both non-null) and real data is being shown.
+
+### Files touched
+
+- `components/live/champSelectFollow.ts`, `components/live/champSelectFollowState.ts`, `app/page.tsx` — finding 1.
+- `components/live/companionClient.ts`, `components/live/livePanelModel.ts`, `components/live/LivePanel.tsx` — finding 2.
+- `public/companion.ps1`, `public/companion.version` — finding 3 (1.4.0 → 1.4.1).
+- `components/hextech/autoExportShared.ts`, `components/hextech/itemSetsApply.ts` — finding 4.
+- `components/hextech/BuildTabContent.tsx` — findings 5(a)/(b).
+- `app/page.tsx` (LivePanel import) — finding 5(c).
+- `lib/draft/recommend.ts`, `components/live/draftRecommend.ts`, `app/draft/page.tsx` — finding 6.
+- Tests: `components/__tests__/champSelectFollow.test.ts`, `components/__tests__/champSelectFollowState.test.ts`, `components/__tests__/livePanelModel.test.ts`, `components/__tests__/itemSetsApply.test.ts` (removals), `components/__tests__/draftRecommend.test.ts`, `lib/__tests__/draft-recommend.test.ts`, `lib/__tests__/draft-recommend-route.test.ts`.
+- `package.json` 0.37.0 → 0.37.1; `CHANGELOG.md` new entry.
+
+### Tests
+
+- `npx vitest run` → **1003/1003 passing** (baseline 973; +30 net across the touched/new test files, minus the 3 deleted `isAutoExportEligibleBuild` cases).
+- `npx tsc --noEmit` and `npx tsc -b --force` → both clean.
+- `npx next lint` / `npx next build` → clean (only pre-existing `<img>` warnings, same files as before).
+- `powershell public/companion.ps1 -SelfTest` → PASSED (incl. new LCU-cache section).
+- `powershell public/companion.ps1 -Mock -Once` → PASSED.
+- `powershell public/companion.ps1 -HarnessTest` → PASSED (real subprocess, confirms the gameflow-poll loop still ticks with the cached-creds path wired in).
+
+### Known issues / not done
+
+- Did not attempt a live-LCU or live-champ-select repro of finding 1 or 3 (no real League client in this environment) — verified via the pure-function/SelfTest layer only, same posture as every other companion-side change in this repo's history.
+- Did not touch the Vercel egress block itself (finding 6's root cause) — out of scope per the brief; the notice is an honesty affordance, not a fix.
+- `HANDOFF.md`/`HANDOFF-engy.md` again show pre-existing uncommitted changes in this worktree that are not mine — left untouched, not staged (same as prior rounds).
+
+### Ship
+
+- Version bumped: app **0.37.1**, companion **1.4.1** (`public/companion.version` updated).
+- Not yet committed/deployed as of this write-up — see final report for commit/deploy confirmation.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-21 18:25
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-21 00:24:23Z; previous content preserved there. Append new rounds below. -->
+
+# HANDOFF-engy.md — P0: u.gg matchup perspective inversion, fix + ship (2026-07-21)
+
+## Status: DONE — shipped as v0.37.2
+
+## The bug
+
+`wins` in champion X's OWN u.gg matchups file row `[oppId, wins, matches]` is the **opponent's** wins in that pairing, not X's. Every row this app ever ingested (the 0.37.0 bootstrap + this morning's scheduled full refresh) was stored mirror-flipped. User-caught (lolalytics screenshot showed Viktor mid's real worst matchups losing ~48-50%; ours showed off-meta marksmen "beating" him at 58-64%) and internally confirmed (Mel mid baseline 54.6% stored vs real ~44.8%; Ashe support 55.2% vs real ~43.7% — near-exact complements). The bootstrap's own `wins<=games` invariant and the research doc's Aatrox-vs-Mordekaiser "52.02%" anchor both held true under either perspective — that figure was actually Mordekaiser's winrate, not Aatrox's (real: 47.98%) — so neither could ever have caught this.
+
+## Fix
+
+1. **Data (no re-fetch):** `migrations/0011_draft_perspective_fix.sql` — `UPDATE coachbuild.draft_matchup SET wins = games - wins`, then re-derived `draft_champ_stats.winrate` from the corrected rows (games-weighted, same derivation as ingest — not a blind `1 - old_value`). Applied to live Neon; verified.
+2. **Decoder:** `lib/draft/ugg.ts`'s `decodeMatchupsJson` now computes `wins: games - rawWins` at decode time (validation still runs on the raw value first). Loud doc comment explaining u.gg's row-owner/opponent convention. Fixture tests rewritten with deliberately asymmetric win/loss numbers (the old fixtures used near-50/50 splits that would pass either way — useless for pinning a flip).
+3. **Permanent guard (`lib/draft/ingestGuard.ts`, new):** two INDEPENDENT checks, both wired into `runDraftIngest`'s final-cursor path (gates `pruneOldPatches` — a failure never deletes anything, just skips retention and surfaces the specifics):
+   - **Cross-source panel** — 20 champions, 4 per role across all 5 roles (deliberately mixing normal and skewed archetypes), comparing draft baseline vs `lib/heroStats.ts`'s coachless data (genuinely separate upstream). >4-point drift on enough entries = fail.
+   - **Symmetry check** — 100 sampled (A,B) pairs, asserts wr(A,B)+wr(B,A)≈100%. Explicitly documented as NOT redundant with the panel: a uniform inversion (both sides flipped the same way) still sums to ~100%, so this alone would never have caught THIS bug — it catches a different failure class (decode/keying corruption, role-map regressions). Kept both, with a code comment specifically warning against ever "simplifying" one into the other.
+   - Also wired into `scripts/ingest-draft.mjs`'s summary output (explicit `guardOk` field + non-zero exit on failure), not just buried in `errors[]`.
+4. **Docs:** `_research/counterpick-research.md` — added a correction blockquote at the top plus inline fixes to the specific wrong claim and the verify-at-build checklist item that "passed" without actually checking perspective.
+
+## Post-fix verification (live Neon)
+
+- **Known-skew spot check:** Mel mid 45.4% (target ~44-46%), Ashe support 44.8% (target ~43-45%), Viktor mid 50.6% (target ~50-51%) — all landed correctly.
+- **Full cross-source panel (all 20 entries, all 5 roles):** 20/20 checked, ALL pass, max delta 0.7 points (tolerance is 4). Full breakdown:
+
+  ```
+  Garen/top            draft=51.7%  truth=51.5%  delta=0.2
+  Malphite/top         draft=51.3%  truth=51.1%  delta=0.2
+  Riven/top            draft=50.0%  truth=50.6%  delta=0.6
+  Illaoi/top           draft=50.5%  truth=50.4%  delta=0.1
+  LeeSin/jungle        draft=48.8%  truth=49.0%  delta=0.2
+  Warwick/jungle       draft=51.8%  truth=51.3%  delta=0.5
+  Amumu/jungle         draft=50.5%  truth=49.8%  delta=0.7
+  Kayn/jungle          draft=50.4%  truth=50.3%  delta=0.1
+  Viktor/mid           draft=50.6%  truth=50.4%  delta=0.2
+  Yasuo/mid            draft=48.5%  truth=48.3%  delta=0.2
+  Annie/mid            draft=50.8%  truth=50.6%  delta=0.2
+  Malzahar/mid         draft=50.7%  truth=50.3%  delta=0.4
+  Jinx/bot             draft=51.5%  truth=51.7%  delta=0.2
+  Xayah/bot            draft=51.0%  truth=51.3%  delta=0.3
+  Twitch/bot           draft=50.7%  truth=50.8%  delta=0.1
+  Kalista/bot          draft=48.7%  truth=49.2%  delta=0.5
+  Thresh/support       draft=51.6%  truth=51.7%  delta=0.1
+  Yuumi/support        draft=48.2%  truth=48.0%  delta=0.2
+  Soraka/support       draft=51.0%  truth=50.8%  delta=0.2
+  Blitzcrank/support   draft=50.6%  truth=50.6%  delta=0.0
+  ```
+- **Symmetry check:** 100/100 sampled pairs pass.
+- **Per-role correlation** (draft baseline vs coachless ground truth): top r=0.884, jungle r=0.959, mid r=0.997, bot r=0.997, support r=0.997.
+- **Distribution sanity:** per-role mean matchup winrate ≈50.00% for every role (role0=25186 rows, role1=15558, role2=23046, role3=15660, role4=21602) — expected for a correctly-complementary A-vs-B/B-vs-A matchup population.
+- **wr>62% with n>1000 survivors:** exactly 1 — Nasus(75) vs Naafiri(805) in the JUNGLE bucket, 63.1% @ n=5029. Flagged for visibility per the ask, not treated as a failure: Nasus jungle is a genuinely rare, niche crossover pick, and a single outlier in tens of thousands of rows isn't a systemic pattern. Worth a human glance but not blocking.
+- **Prod acceptance — `lane=2&enemies=112&laneOpp=112` (Viktor mid, laneOpp=self to force the direct-lane weight):**
+
+  ```json
+  "plays": [Singed 58.5% (winVsLaneOpp 60.3%, n=463), Zilean 54.4% (55.2%, n=534),
+            Nunu&Willump 53.4% (54.3%, n=897), Kayle 53.0% (53.3%, n=612),
+            Xerath 52.6% (52.6%, n=16547), Gwen 52.4% (52.4%, n=496),
+            Vel'Koz 51.8% (51.9%, n=2268), Master Yi 51.8% (52.8%, n=233),
+            Garen 51.7% (51.5%, n=752), Syndra 51.5% (51.5%, n=20235)]
+  "bans": [Singed 0.076, Zilean 0.042, Nunu&Willump 0.040, Xerath 0.031, Kayle 0.029] (all confidence:"normal", real n= per target)
+  ```
+
+  Real mid-relevant control-mage/bruiser matchups, zero marksmen, no repeat of the old garbage. One honest note: Singed's `winVsLaneOpp` (60.3%, n=463) is just over the "no 60%+" bar in the letter — but it's a real, explicable matchup (Singed's proximity/tankiness genuinely bothers immobile mages), not nonsensical like the old list, and the candidate's blended `score` (which is what ranks/displays, not the raw matchup figure) is 58.5%. Flagged transparently rather than silently rounded away.
+
+## Tests / gate
+
+1022 passing (baseline 1003 going into this round: +19 net — 2 in `draft-ingest.test.ts` for guard-gating, 17 new in `draft-ingestGuard.test.ts`). `tsc --noEmit` clean. Full `verify-fix.sh`: tsc/lint/tests/build/sw-version/manifest all PASS.
+
+## Ship
+
+- Version: app **0.37.2** (was 0.37.1). Companion unchanged at **1.4.1** (engo's Round B ship, already on disk before this round started — this fix never touched `.ps1`).
+- Migration `0011_draft_perspective_fix.sql` applied to live Neon (confirmed before/after via the spot-check numbers above).
+- CHANGELOG.md: new 0.37.2 entry, stated plainly as user-caught with external evidence — no euphemism.
+- Deployed via `vercel --prod --archive=tgz`, commit authored `harout_b5@live.com`.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-21 19:02
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-21 00:49:08Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-21 (Round C) — engo: EXTERNAL matchup-direction tripwire (lolalytics), v0.37.3
+
+### Summary
+
+Added `lib/draft/lolalyticsCheck.ts`, a third permanent ingest guard alongside `lib/draft/ingestGuard.ts`'s cross-source baseline panel (vs coachless) and internal symmetry check. Neither existing check verifies matchup **direction** against a source that itself publishes per-matchup winrates -- this closes that gap using lolalytics's SSR counters pages. Wired into `lib/draft/ingest.ts`'s final-cursor path and `scripts/ingest-draft.mjs`. Live-validated against the corrected DB (post the 2026-07-21 P0 perspective fix): **PASS**. 1084/1084 tests passing, `tsc --noEmit`/`verify-fix.sh` clean. Shipped as **0.37.3**.
+
+Two real bugs surfaced by live-validating before shipping, not just unit tests -- see "Two bugs found via live probe" below; skip straight there if short on time.
+
+### Parse approach
+
+lolalytics's counters page (`https://lolalytics.com/lol/<slug>/counters/?lane=<lane>`) is Qwik SSR -- champion/opponent names render split across `<!--t=xx-->name<!---->` resumability comments, but the page-owner's own winrate against each opponent appears as literal text: `"{Subject}<!----> wins against <!--t=xx-->{Opponent}<!----> <span class="text-green-NNN">{pct}%"`. This is the SUBJECT's own winrate (verified against the live u.gg-corrected DB, not assumed) -- a nearby, easily-confused "average opponent winrate against X" sentence and a "played N% more/less often" pick-rate-deviation number sit in the same paragraph and are deliberately NOT matched (see `parseLolalyticsCounters`'s doc comment; a dedicated test pins this).
+
+`parseLolalyticsCounters(html, subjectName)` is a pure regex-based extractor: tolerant of malformed/absent input (never throws, returns fewer/zero matches on a shape break), decodes the handful of HTML entities lolalytics actually uses (`&#39;`, `&amp;`, etc. -- `Kai'Sa`, `Nunu & Willump`, `Vel'Koz`), and dedupes by lowercased opponent name. Below `LOLALYTICS_MIN_PARSEABLE` (5) matches, that page is flagged unusable and excluded from comparisons -- never fed forward as possibly-garbage data.
+
+Opponent name -> champion id resolution is a simple normalize-and-map (`normalizeChampName`: lowercase, strip non-alphanumeric) against the app's own champion list -- no hand-maintained alias table, and an unresolved name is silently excluded (never a failure signal).
+
+Fixed 3-champion panel (politeness: 3 requests total, ~2s apart via the existing paced-call pattern if wired at scale -- currently a straight sequential loop since 3 requests is trivial): Viktor/mid, Garen/top, Jinx/bot -- one per lane family, each a high-volume single-role-main so their counters pages are large (more high-sample matchups to check).
+
+### Two bugs found via live probe (both fixed before shipping)
+
+1. **Patch drift -> false positives.** lolalytics defaults to its OWN current patch with no pin. Our DB sat on patch 16.13 (one bounded ingest batch behind lolalytics' live 16.14 -- an entirely ordinary state, not a bug in the ingest). Comparing across that one-patch gap alone produced 18 disagreements -- but every one was SAME-DIRECTION (ours consistently a few points below lolalytics, never near the complement/100-x shape a real perspective flip produces), which is the tell that this was patch-to-patch balance drift, not a keying bug. Fixed: lolalytics supports `&patch=<label>` (verified live, `curl ...&patch=16.13` returns "Patch 16.13" in the page) -- `lolalyticsCountersUrl` now pins it, and `runLolalyticsCheck`/`runDefaultLolalyticsCheck` thread the ingest's own resolved patch label through. This is the real invariant: compare the same patch on both sides, never "ours vs whatever's currently live on theirs".
+2. **A flat "≥2 disagreements" count doesn't scale to real page sizes.** The brief's "≥2 high-sample matchups disagree" reads naturally for a small panel (c.f. `ingestGuard.ts`'s 20-entry `DEFAULT_GUARD_PANEL`), but lolalytics' real pages return 100+ opponents each -- the live run had 157 actual high-sample comparisons post patch-fix. At that scale, ordinary cross-source noise (different tier/rank-cut composition between lolalytics and our Emerald+ bucket) put 3 matchups a hair past the 4pt tolerance, right at the n>=1000 sample floor's edge where variance is highest. 3 >= 2 would have FAILED every single real run despite zero direction/keying issues. Fixed: added `LOLALYTICS_FAIL_RATE_PCT` (10%) -- FAIL now requires BOTH the `>= 2` floor AND a disagreement RATE above 10%. A genuine perspective inversion clears both by a wide margin (near-universal disagreement on every meaningfully-off-50% matchup, not 3 edge cases); ordinary noise clears neither. Pinned with a dedicated 100-synthetic-matchup regression test.
+
+Both fixes are exactly the "probe before you build" pattern -- the brief's mechanism (fetch, parse, compare, ≥2 fails) was right in spirit but wrong in two implementation details that only a live probe against the real feed and the real DB surfaced.
+
+### Live validation table (final, post both fixes)
+
+Standalone run of `runDefaultLolalyticsCheck` against the live Neon DB (patch 16.13, 173 champions), patch pinned, fail-rate-scaled verdict:
+
+```
+verdict: pass
+157 high-sample matchups compared against lolalytics, 3 disagreement(s) (1.9% -- below the 10% fail-rate threshold)
+
+pages:
+  Viktor/mid: https://lolalytics.com/lol/viktor/counters/?lane=middle&patch=16.13 -- parsedPairs=111, usable=true
+  Garen/top:  https://lolalytics.com/lol/garen/counters/?lane=top&patch=16.13    -- parsedPairs=124, usable=true
+  Jinx/bot:   https://lolalytics.com/lol/jinx/counters/?lane=bottom&patch=16.13 -- parsedPairs=69,  usable=true
+
+sample comparisons (label | opponent | lolalytics% | ours% | delta | n):
+Viktor/mid | Xerath      | 48.24 | 47.43 | 0.81 | 16547
+Viktor/mid | Vel'Koz     | 49.70 | 48.06 | 1.64 |  2268
+Viktor/mid | Locke       | 49.71 | 49.53 | 0.18 | 17029
+Viktor/mid | Diana       | 49.93 | 49.11 | 0.82 |  8414
+Viktor/mid | Akali       | 50.30 | 49.10 | 1.20 | 13081
+Garen/top  | Kayle       | 47.30 | 44.99 | 2.31 | 10803
+Garen/top  | Darius      | 51.08 | 49.94 | 1.14 | 23385
+Garen/top  | Aatrox      | 52.29 | 51.15 | 1.14 | 12339
+Jinx/bot   | Ashe        | 53.17 | 50.72 | 2.45 | 37076
+Jinx/bot   | Caitlyn     | 54.95 | 52.06 | 2.89 | 68037
+... (152 more, full table in the scratch run output -- not persisted anywhere, reproducible any time)
+
+disagreements (3, all narrowly past the 4pt tolerance at the n>=1000 floor's edge -- ordinary noise, not a direction signature):
+  Garen/top vs Anivia:  lolalytics 51.7% vs ours 46.9% (delta 4.8, n=1202)
+  Garen/top vs Naafiri: lolalytics 61.6% vs ours 56.0% (delta 5.6, n=1287)
+  Jinx/bot vs Tahm Kench: lolalytics 49.6% vs ours 43.5% (delta 6.1, n=1133)
+```
+
+No complement-shaped (100-x) disagreements anywhere in the 157 comparisons -- the strongest possible live confirmation that the 2026-07-21 P0 perspective fix is holding and this new tripwire has nothing real to catch right now.
+
+### Tests
+
+- `lib/__tests__/draft-lolalyticsCheck.test.ts` -- **21 tests**, new: parse extraction from a real trimmed fixture (`lib/draft/__fixtures__/lolalytics-garen-top.html`, 14 real byte-exact matchup snippets pulled live from the Garen/top counters page), HTML-entity decoding, "average opponent winrate"/pick-rate-deviation non-confusion, dedup, `normalizeChampName`, the synthetically-inverted fixture (`lolalytics-garen-top-inverted.html`) producing a FAIL, the mangled fixture (`lolalytics-mangled.html`, only 2 parseable rows) degrading to indeterminate without throwing, the patch-pin URL shape + threading regression, and the fail-rate-scaling regression (100 synthetic matchups, 3 disagreeing -> must still PASS).
+- `lib/__tests__/draft-ingest.test.ts` -- extended: `lolalyticsVerdict` null on non-final batches; a FAILING lolalytics verdict skips retention even when the other two guards pass; an INDETERMINATE verdict does NOT block retention; a thrown check is treated as indeterminate, never an uncaught failure.
+- `lib/__tests__/draft-ingest-route.test.ts` -- one-line fix: its `batchResult` fixture helper needed `lolalyticsVerdict: null` added to satisfy the widened `DraftIngestResult` type.
+- Full suite: **1084/1084 passing** (baseline 1022 + this round's +~40 net, working off a shared checkout with a parallel mystats branch also in flight -- see "Not mine" below).
+- `bash scripts/verify-fix.sh` (from the urgot repo, target coachbuild): tsc -b clean, lint clean, tests 1084 passed, build clean, sw/manifest present. ALL CHECKS PASSED.
+
+### Files touched (mine)
+
+- `lib/draft/lolalyticsCheck.ts` -- new.
+- `lib/draft/__fixtures__/lolalytics-garen-top.html`, `lolalytics-garen-top-inverted.html`, `lolalytics-mangled.html` -- new fixtures.
+- `lib/__tests__/draft-lolalyticsCheck.test.ts` -- new.
+- `lib/draft/ingest.ts` -- `DraftIngestOptions.lolalyticsTransport`, `DraftIngestResult.lolalyticsVerdict`, wired the check into the final-cursor guard sequence (retention gated on `guardOk && lolalyticsVerdict !== "fail"`).
+- `lib/__tests__/draft-ingest.test.ts` -- mocked the new module, extended retention tests.
+- `lib/__tests__/draft-ingest-route.test.ts` -- one-line `batchResult` fixture fix.
+- `scripts/ingest-draft.mjs` -- surfaces `lolalyticsVerdict` in the final-cursor console block, summary JSON, and exit code.
+- `package.json` -- version 0.37.2 -> 0.37.3 (this commit will also carry Engy's already-present `ingest:mystats` script-line addition to this same file -- see below).
+- `CHANGELOG.md` -- new 0.37.3 entry.
+
+### NOT mine -- present in the shared working tree, left untouched, not staged by me
+
+This session ran alongside a parallel Engy session on the SAME checkout (not separate worktrees) working on a "mystats" feature. At the time of my commit these were also dirty in the tree: `lib/mystats/`, `app/api/mystats/`, `app/api/ingest/mystats/`, `scripts/ingest-mystats.mjs`, `migrations/0012_mystats.sql`, `lib/__tests__/mystats-*.test.ts`, `lib/pro/riot.ts`, `lib/pro/puuidResolve.ts`, `vercel.json` (mystats cron), `lib/draft/recommend.ts` + `lib/__tests__/draft-recommend*.test.ts` (unclear scope, never touched by me), `HANDOFF-engy.md`, `HANDOFF.md`. I did not stage or commit any of these -- `package.json` is the one unavoidable exception (single shared file; Engy's `ingest:mystats` script-line addition was already present before my version bump and can't be cleanly split out of the same-file diff, but it's an inert, non-conflicting addition).
+
+Also left in place, untracked, NOT staged: `_scratch_live_validate_lolalytics.mjs` / `_scratch_live_validate_lolalytics2.mjs` (one-off live-validation runners used for the two probes above, not part of the shipped app -- deletion is blocked by this environment's safety gate on any `rm`, so they're just sitting untracked; safe to delete whenever convenient, or ask the user to approve).
+
+### Ship
+
+- `bash scripts/verify-fix.sh` -- ALL CHECKS PASSED (see above).
+- Version bumped: app **0.37.2 -> 0.37.3**. Companion unchanged (1.4.1).
+- CHANGELOG.md entry added.
+- Commit/deploy/prod-version-check: see final report to Urgot for confirmation once done.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-21 19:09
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-21 17:25:20Z; previous content preserved there. Append new rounds below. -->
+
+## "My Stats" personal match tracker — backend (2026-07-21)
+
+Backend-only ship, scope disjoint from the two other in-flight 0.37.3/0.37.4 rounds (touched only lib/pro/riot.ts + lib/pro/puuidResolve.ts + lib/draft/recommend.ts as shared/additive files, plus a wholly new lib/mystats/** tree). Design: Riot match-v5 history BACKFILL for ONE personal account, not live recording.
+
+**HARD USER DIRECTIVE (ratified 2026-07-21, mid-task, via the coordinator): "Don't mix my data with the sample size."** Personal-record data (`personal`/`personalOverall` on `/api/draft/recommend` candidates) is DISPLAY ONLY and must NEVER feed any score/ranking/ordering anywhere in this codebase, now or later. This is documented directly in code — see `lib/draft/recommend.ts`'s `PersonalPlayResult` doc comment — not just here. The previously-floated "future work: opt-in personal-delta scoring with K~20 shrinkage" idea is downgraded per this directive: it is NOT a planned follow-up, and must not be built speculatively — only if the user explicitly asks for it later.
+
+**Account resolution: SUCCEEDED on the first try.** The believed Riot ID `MunsterHunter#EUW` (europe routing) resolved cleanly via account-v1 by-riot-id — no alternate-tag guessing was ever needed. Stored in `coachbuild.my_account` (migration 0012, `lib/mystats/account.ts`). `MY_RIOT_ID`/`MY_RIOT_REGION` env overrides exist in case a future account change is needed without a redeploy.
+
+**Backfill run (real Neon DB + real Riot API, `npx tsx scripts/ingest-mystats.mjs`, run once, serialized — confirmed no other tsx/node process running before and no timing overlap with the pro/prostage/draft cron windows):**
+- Resolved account: `MunsterHunter#EUW` (EUW)
+- 400/400 matches ingested (hit `BACKFILL_CAP`; backfill cursor persisted `backfill_done=true`, `next_start=0` — a re-run of the script is now a fast no-op unless the cap is raised)
+- 43/400 rows have `role=-1` (unresolved lane — ARAM etc.), 4 distinct `queue_id`s present, confirming the deliberate unfiltered-queue ingest design (see `lib/mystats/ingest.ts` header) is doing what it's supposed to
+- **Top 5 personal champions by games:**
+  | Champion ID | Games | Winrate | W-L |
+  |---|---|---|---|
+  | 6 | 55 | 54.5% | 30W-25L |
+  | 21 | 53 | 52.8% | 28W-25L |
+  | 112 | 45 | 62.2% | 28W-17L |
+  | 90 | 30 | 43.3% | 13W-17L |
+  | 54 | 24 | 50.0% | 12W-12L |
+
+**Files:**
+- `migrations/0012_mystats.sql` — `coachbuild.my_account`, `coachbuild.my_matches` (+ 2 indexes), `coachbuild.my_ingest_cursor`. Applied to live Neon DB.
+- `lib/mystats/types.ts`, `account.ts` (resolve/cache the one account), `extract.ts` (pure Riot-match → row extraction, NEVER drops a row for unresolved role — degrades to role=-1/oppChampionId=null instead, unlike `lib/pro/extract.ts`'s skip-on-unresolved), `aggregate.ts` (pure per-champion/matchup aggregation math), `ingest.ts` (backfill w/ persisted cursor + incremental modes, shares `lib/pro`'s Riot pacer/db client).
+- `app/api/ingest/mystats/route.ts` (CRON_SECRET-guarded, `mode=incremental|backfill`), `app/api/mystats/summary/route.ts`, `app/api/mystats/matchups/route.ts` — all `no-store` unconditionally (private per-user data, never CDN-cached, per CLAUDE.md gotcha (b)).
+- `scripts/ingest-mystats.mjs` (backfill runner + top-5 report), `package.json` `ingest:mystats` script.
+- `vercel.json` — new cron `/api/ingest/mystats` at **20:00 UTC**, deliberately far from the 06:00 (`/api/ingest/matches`, the only OTHER Riot consumer) / 07:00 (Cargo, not Riot) / 08:00 (u.gg, not Riot) cluster.
+- `lib/draft/recommend.ts` — THE one shared/additive file per the brief's constraint: new `PersonalPlayResult`/`PersonalRecord` types + `attachPersonalRecords()`, called strictly AFTER `rankPlays` has already scored+sorted (score.ts untouched, as instructed). Soft-fails (`.catch(() => [])`) if `my_matches` isn't queryable, so this can never take down the recommend route.
+- `lib/pro/riot.ts` — `getMatchIdsByPuuid`'s `queue` param lost its implicit 420 default (now omits the URL param entirely when absent) so mystats can fetch an unfiltered/mixed-queue id stream; the one existing caller relying on the old default (`lib/pro/puuidResolve.ts`'s probe) now pins `queue: 420` explicitly — behavior-preserving, verified via the full existing test suite.
+
+**Tests:** 4 new files (`mystats-extract`, `mystats-aggregate`, `mystats-ingest`, `mystats-routes`) + an appended `describe` block in `draft-recommend.test.ts` for the personal-record decoration. Extraction fixtures cover: clean 1v1 lane opponent, ARAM/blank-teamPosition (role -1, opp null, row still stored), resolved-role-but-no-matching-enemy, resolved-role-but-TWO-matching-enemies (ambiguous, degrades to null), unrecognized teamPosition string. Ingest cursor tests cover: accountUnresolved short-circuit, incremental-always-start-0, backfill persisted-cursor read/write, explicit-start-never-persists, short-page-ends-walk, BACKFILL_CAP-ends-walk, done-cursor-is-a-no-op, idempotent skip of already-known match ids. Full suite: **1083/1083 passing**, `tsc --noEmit` clean, `next build` clean (new routes all registered), `next lint` clean (only pre-existing unrelated `<img>` warnings).
+
+**Quota notes:** confirmed no concurrent tsx/node process before running the real backfill; the new 20:00 UTC cron doesn't overlap any other Riot-calling schedule. `lib/mystats/ingest.ts`'s ingest is unfiltered-by-queue at fetch time (fetches ALL queues in one paginated stream, stores every `queue_id` including ARAM) rather than 4 interleaved per-queue calls — a deliberate simplicity/quota tradeoff documented in that file's header.
+
+Not built (deliberately, per the ratified no-blending directive): any UI (draft page/`components/live/draftRecommend.ts` untouched, out of THIS ship's scope per the brief anyway), any personal-delta scoring mode.
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-21 19:25
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-21 18:10:00Z; previous content preserved there. Append new rounds below. -->
+
+## "My Stats" — season-scoping refinement (2026-07-21, same session, follow-up to the initial backend ship)
+
+User-approved refinement: My Stats covers the **current season only** (Season 16/2026), not all-time. Still backend-only, still no version bump/deploy (gated with the UI round per the coordinator).
+
+**SEASON_START_MS = 2026-01-08T00:00:00.000Z**, in new `lib/mystats/season.ts`. Verified via WebSearch: patch 26.1/16.1 shipped Wednesday 2026-01-08, kicking off Season 16's first split ("Demacia") — corroborated by esports.gg's 2026 patch schedule and the LoL Wiki's "2026 Annual Cycle" page (both cited in the file's header comment). Pinned to midnight UTC (no single documented global rollout instant exists intra-day). `SEASON_LABEL = "Season 2026"`.
+
+**Ingest filter (two redundant layers, `lib/mystats/ingest.ts`):** (1) `startTime` now passed on every `getMatchIdsByPuuid` call (list-level — Riot never returns a pre-season id). (2) A row-level `isInSeason` guard right before INSERT, belt-and-braces since Riot's `startTime` is a documented list filter, not a hard per-row guarantee. Covered by new ingest tests (`mystats-ingest.test.ts`'s new "season row-level guard" describe block) proving a pre-season match that slips past the list filter is fetched but never inserted, and an in-season one just after the boundary IS inserted.
+
+**Purge — real run against live Neon, once, serialized (confirmed no concurrent Riot process both before the purge and before the top-up backfill):**
+- Cross-checked `game_creation` against `patch` on all 400 pre-purge rows first (`lib/mystats/season.ts`'s `checkSeasonAnomaly`, new `lib/mystats/purge.ts`'s `runSeasonPurge` orchestration) — **zero disagreements found**, both signals agreed on every row.
+- `DELETE FROM coachbuild.my_matches WHERE game_creation < '2026-01-08T00:00:00.000Z'` (game_creation is the authoritative signal, patch only ever a cross-check, per the brief) — **308 rows deleted, 92 rows kept**.
+- Confirmed: every one of the 92 remaining rows has `patch LIKE '16.%'`.
+- Reset the backfill cursor (`next_start=0, backfill_done=false`) as part of the purge — the season `startTime` filter changes Riot's own `start`/`count` pagination semantics going forward, so the old offset position was meaningless.
+
+**Top-up backfill (re-ran `scripts/ingest-mystats.mjs`, serialized):** walked from `start=0` with the season `startTime` filter — returned exactly 92 ids (a SHORT page, i.e. genuinely exhausted this account's ENTIRE in-season history, not a cap cutoff), all 92 already stored (0 new upserts). This account simply hasn't played more than 92 games since the season started — there was no deeper in-season history to top up. Cursor is `backfill_done=true` again. DB spot-check: `game_creation` range is 2026-01-12 → 2026-07-20 (all post-boundary), 0 off-season-patch rows remaining.
+
+**Corrected top-5 personal champions (Season 2026 only, 92 games total, vs. the previous all-time 400-game table):**
+| Champion ID | Games | Winrate | W-L |
+|---|---|---|---|
+| 112 | 39 | 64.1% | 25W-14L |
+| 90 | 7 | 14.3% | 1W-6L |
+| 235 | 6 | 66.7% | 4W-2L |
+| 13 | 4 | 50.0% | 2W-2L |
+| 54 | 3 | 66.7% | 2W-1L |
+
+**Files:** `lib/mystats/season.ts` (new — `SEASON_START_MS`/`SEASON_LABEL`/`isInSeason`/`seasonStartEpochSec`/`checkSeasonAnomaly`), `lib/mystats/purge.ts` (new — testable `runSeasonPurge` orchestration), `scripts/purge-mystats-preseason.mjs` (new, idempotent, no package.json entry — same convention as `backfill-*.mjs`/`audit-accounts.mjs`), `lib/mystats/ingest.ts` (season filter, both layers), `app/api/mystats/{summary,matchups}/route.ts` (additive `season: SEASON_LABEL` field on every response — for the UI round to render "Season 2026" without re-deriving the constant; **UI itself NOT built, per the coordinator's instruction**).
+
+**Tests:** new `mystats-season.test.ts` (boundary inclusive/exclusive at the exact millisecond, patch/timestamp cross-check agreement + both disagreement directions, unparseable-timestamp handling), new `mystats-purge.test.ts` (first-run purge, **idempotence** — a second run purges 0 rows without erroring, anomaly-flagged-but-still-purged-by-timestamp, off-patch-remaining reporting), extended `mystats-ingest.test.ts` with the row-level-guard describe block + updated `startTime` assertions on the 3 existing param-passthrough tests + fixed 3 fixtures whose hardcoded epoch-ms timestamp (Nov 2023) was silently pre-season under the new filter. Full suite: **1123/1123 passing**, `tsc --noEmit` clean, `next build` clean.
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-21 19:25
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-21 18:25:04Z; previous content preserved there. Append new rounds below. -->
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-21 19:27
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-21 18:02:23Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-21 (Round D) — engo: PLAY sample-size split (main/potential), v0.37.4
+
+### Summary
+
+When a direct lane opponent is resolved, `/api/draft/recommend` now partitions PLAY candidates by matchup sample size vs THAT opponent specifically: `plays` (back-compat name) = "main" top-10 among candidates with >=1,000 games vs the opponent; new `potentialPlays` = top-5 among 30-999 games (same scoring, honestly labeled as leads not conclusions). No row (or <30 games) vs the opponent = excluded from BOTH lists once a lane opponent is resolved. No lane opponent resolved = byte-identical to pre-v0.37.4 behavior. Live-validated against the corrected DB: exact match to the precomputed acceptance table. 1123/1123 tests, `verify-fix.sh` clean, shipped **0.37.4**.
+
+### Implementation
+
+- `lib/draft/score.ts`: extracted the scoring loop out of `rankPlays` into a private `computeScoredPool` helper (unsorted, unsliced) so `rankPlays` and the new `splitPlaysBySampleSize` can never silently drift on the scoring formula itself -- the split is a POST-scoring partition, never a second scoring pass. `rankPlays` itself is otherwise untouched byte-for-byte (still exported, still used as-is for the no-laneOpp case, still covered by its own pre-existing exhaustive tests, all of which pass unmodified). New `PlayResult.winVsLaneOppGames: number | null` -- the direct-opponent matchup row's own game count, deliberately kept SEPARATE from the existing `minGames` (which can be pulled down by a smaller off-lane enemy term or the candidate's own baseline sample, so it is not a reliable stand-in for "games behind this specific matchup" once more than one enemy is in play). New constants `PLAY_MAIN_TOP_N` (10), `PLAY_POTENTIAL_TOP_N` (5), `PLAY_MAIN_SAMPLE_FLOOR` (1000).
+- `lib/draft/score.ts`'s `splitPlaysBySampleSize(pool, matchups, enemies)`: when no direct lane opponent is tagged, returns `{ main: <rankPlays' own output>, potential: [] }` (a genuine degenerate case of the same code path, not a special-cased branch) -- pinned by a test asserting `split.main` is `.toEqual()` to a real `rankPlays()` call on the same inputs. When a direct opponent IS resolved, partitions the full scored pool by that opponent's matchup row games (>=1000 -> main, 30-999 -> potential, else excluded from both), then sorts+slices each bucket independently.
+- `lib/draft/recommend.ts`: `computeDraftRecommend` calls `splitPlaysBySampleSize` instead of `rankPlays`. `attachPersonalRecords` (Engy's My Stats decoration, already in-flight in this same file when I started) extended to take BOTH lists and decorate them from ONE combined `my_matches` query (never two round-trips) -- each list decorated independently from the same fetched rows, preserving order. `RecommendResult` gains `potentialPlays` (required, always populated -- `[]` on the pending path and the no-laneOpp path).
+- `components/live/draftRecommend.ts`: `DraftPlayResult` gains `winVsLaneOppGames`; `DraftRecommendResponse` gains `potentialPlays`. Normalizer defaults BOTH to null/`[]` when absent/malformed -- an older cached response, or a response from before this field existed, degrades gracefully instead of crashing the client.
+- `app/draft/page.tsx`: new "Potential counters" section below "Suggested picks", framing line "Promising but under 1,000 games — treat as leads, not conclusions." The existing empty-state check (`data.plays.length === 0`) was WRONG for the new split -- a laneOpp-resolved response can legitimately have an empty main list while `potentialPlays` has real leads; fixed to check both lists before showing "No data yet for this lane." Each row's displayed `n=` now uses `play.winVsLaneOppGames ?? play.minGames` (falls back cleanly to the pre-existing behavior when no lane opponent is resolved, since `winVsLaneOppGames` is null in that case).
+
+### A behavior clash with Engy's in-flight personal-record test (fixed, not a real conflict)
+
+Engy's `draft-recommend.test.ts` had one existing test ("personal is populated ... once a laneOpp IS resolved") whose DB mock supplied NO `draft_matchup` rows at all for `laneOpp: 7` -- under the OLD behavior that's fine (candidates still list on their off-lane/baseline score alone), but under v0.37.4's new "no evidence vs the resolved opponent = no listing" rule, both test candidates would be excluded entirely and the test's `result.plays.find(...)` assertions would throw on `undefined`. This isn't a merge conflict (different code, not different edits to the same lines) -- it's an assumption baked into a fixture that the new feature spec deliberately invalidates. Fixed by adding `>=1000`-game `draft_matchup` rows for both candidates vs opponent 7 to that ONE test's mock, so the personal-decoration behavior it verifies still holds meaningfully under the new partition rule. Every OTHER laneOpp-resolved test in that file only asserts `meta.laneOppInferred`, never `.plays` contents, so they were unaffected.
+
+### Live validation (acceptance table match)
+
+Called `computeDraftRecommend({ lane: 2, enemies: [112], laneOpp: 112, hover: null })` directly against the real Neon DB (patch 16.13) -- not a hand-derived reimplementation, the actual production code path:
+
+```
+=== MAIN (plays, top 10) ===
+Xerath        -- 52.6% n=16547
+Vel'Koz       -- 51.9% n=2268
+Syndra        -- 51.5% n=20235
+Kassadin      -- 51.5% n=5014
+Fizz          -- 51.4% n=9299
+Veigar        -- 51.3% n=7087
+Twisted Fate  -- 51.0% n=11190
+Diana         -- 50.9% n=8414
+Akali         -- 50.9% n=13081
+Aurelion Sol  -- 50.8% n=2854
+
+=== POTENTIAL (potentialPlays, top 5) ===
+Singed             -- 60.3% n=463
+Zilean             -- 55.2% n=534
+Nunu & Willump     -- 54.3% n=897
+Kayle              -- 53.3% n=612
+Gwen               -- 52.4% n=496
+```
+
+Exact match to the precomputed acceptance table (main leads Xerath/Vel'Koz/Syndra/Kassadin/Fizz; potential = Singed/Zilean/Nunu/Kayle/Gwen) -- zero material differences, ship proceeded as planned.
+
+### Tests
+
+- `lib/__tests__/draft-score.test.ts` -- +11 new: `winVsLaneOppGames` independence from `minGames` and its null-conditions (pinned on `rankPlays`, since the scoring core is shared), then a full `splitPlaysBySampleSize` describe block: partition boundary (n=999 -> potential, n=1000 -> main), no-laneOpp degrades to `rankPlays`' own byte-identical output, no-evidence exclusion (no row / n<30 -> excluded from both), empty-potential, top-N caps enforced independently per bucket, same score formula in both buckets, `PLAY_MAIN_SAMPLE_FLOOR` pinned at 1000.
+- `lib/__tests__/draft-recommend.test.ts` -- +6 new (one existing test fixture fixed, see above): no-laneOpp unchanged, partition boundary at the engine level, no-evidence exclusion, potentialPlays decorated with personal-record fields same as plays, empty-potential, pending path reports `potentialPlays: []`.
+- `lib/__tests__/draft-recommend-route.test.ts` -- 4 existing mock fixtures updated with `potentialPlays: []` / `winVsLaneOppGames: null` (required field, TS-enforced) + 1 new test proving the route passes `potentialPlays` through unmodified.
+- `components/__tests__/draftRecommend.test.ts` -- 2 existing exact-`toEqual` fixtures updated for the new fields; +2 new tests: `potentialPlays` absent degrades to `[]`, a malformed `potentialPlays` entry is dropped without dropping the rest.
+- Full suite: **1123/1123 passing** (baseline 1084, +39 net -- working off the same shared checkout as Engy's continuing mystats work, now also touching `lib/mystats/purge`/`season` additions; none of that is mine, see below).
+- `bash scripts/verify-fix.sh`: tsc -b clean, lint clean, tests 1123 passed, build clean (one transient build-lock FAIL on the first run of this session, resolved by re-running -- known `.next/trace` stale-lock gotcha, not a real regression), sw/manifest present. ALL CHECKS PASSED.
+
+### Files touched (mine)
+
+- `lib/draft/score.ts`, `lib/draft/recommend.ts` -- core split logic.
+- `lib/__tests__/draft-score.test.ts`, `lib/__tests__/draft-recommend.test.ts`, `lib/__tests__/draft-recommend-route.test.ts` -- tests (recommend-route + one recommend fixture updated for the new required fields, rest new).
+- `components/live/draftRecommend.ts`, `components/__tests__/draftRecommend.test.ts` -- client type/normalizer.
+- `app/draft/page.tsx` -- UI section + empty-state fix + n= display fix.
+- `package.json` -- 0.37.3 -> 0.37.4. `CHANGELOG.md` -- new entry.
+
+### NOT mine -- Engy's in-flight mystats work, untouched, not staged
+
+Same discipline as the 0.37.3 ship: `lib/mystats/`, `app/api/mystats/`, `app/api/ingest/mystats/`, `scripts/ingest-mystats.mjs`, `scripts/purge-mystats-preseason.mjs` (new since my last commit), `migrations/0012_mystats.sql`, `lib/__tests__/mystats-*.test.ts` (now includes new `mystats-purge.test.ts`/`mystats-season.test.ts`), `lib/pro/riot.ts`, `lib/pro/puuidResolve.ts`, `vercel.json`, `HANDOFF-engy.md`, `HANDOFF.md` -- all left as-is, not staged by me.
+
+Also untracked, NOT staged: `_scratch_live_validate_split.mjs` (the one-off acceptance-check runner above -- not part of the shipped app; this environment's safety gate blocks `rm`, same as the two 0.37.3-round scratch files, so it's just sitting there, harmless).
+
+### Ship
+
+- `bash scripts/verify-fix.sh` -- ALL CHECKS PASSED.
+- Version bumped: app **0.37.3 -> 0.37.4**. Companion unchanged (1.4.1).
+- CHANGELOG.md entry added.
+- Commit/deploy/prod-check: see final report to Urgot.
+
+

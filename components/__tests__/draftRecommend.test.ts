@@ -44,18 +44,68 @@ describe("normalizeDraftRecommendResponse", () => {
 
   it("parses a full, well-formed envelope", () => {
     const result = normalizeDraftRecommendResponse({
-      plays: [{ champId: 103, score: 0.52, winVsLaneOpp: 0.54, winVsLaneOppGames: 5000, confidence: "normal", minGames: 400 }],
+      plays: [
+        {
+          champId: 103,
+          score: 0.52,
+          winVsLaneOpp: 0.54,
+          winVsLaneOppGames: 5000,
+          confidence: "normal",
+          minGames: 400,
+          personal: { games: 11, wins: 8 },
+          personalOverall: { games: 39, wins: 25 },
+        },
+      ],
       potentialPlays: [{ champId: 200, score: 0.5, winVsLaneOpp: 0.48, winVsLaneOppGames: 500, confidence: "low", minGames: 500 }],
       bans: [{ champId: 64, score: 0.08, confidence: "low", minGames: 20 }],
       meta: { patch: "16.14", tier: 10, fetchedAt: "2026-07-20T00:00:00.000Z", laneOppInferred: 64, currentPatch: "16.14" },
     });
     expect(result).toEqual({
-      plays: [{ champId: 103, score: 0.52, winVsLaneOpp: 0.54, winVsLaneOppGames: 5000, confidence: "normal", minGames: 400 }],
-      potentialPlays: [{ champId: 200, score: 0.5, winVsLaneOpp: 0.48, winVsLaneOppGames: 500, confidence: "low", minGames: 500 }],
+      plays: [
+        {
+          champId: 103,
+          score: 0.52,
+          winVsLaneOpp: 0.54,
+          winVsLaneOppGames: 5000,
+          confidence: "normal",
+          minGames: 400,
+          personal: { games: 11, wins: 8 },
+          personalOverall: { games: 39, wins: 25 },
+        },
+      ],
+      potentialPlays: [
+        {
+          champId: 200,
+          score: 0.5,
+          winVsLaneOpp: 0.48,
+          winVsLaneOppGames: 500,
+          confidence: "low",
+          minGames: 500,
+          personal: null,
+          personalOverall: { games: 0, wins: 0 },
+        },
+      ],
       bans: [{ champId: 64, score: 0.08, confidence: "low", minGames: 20 }],
       meta: { patch: "16.14", tier: 10, fetchedAt: "2026-07-20T00:00:00.000Z", laneOppInferred: 64, currentPatch: "16.14" },
       pending: false,
     });
+  });
+
+  it("My Stats: personal/personalOverall absent (older cached response) degrade to null/{games:0,wins:0}, never crash", () => {
+    const result = normalizeDraftRecommendResponse({
+      plays: [{ champId: 103, score: 0.5, confidence: "normal", minGames: 300 }],
+      meta: {},
+    });
+    expect(result?.plays[0].personal).toBeNull();
+    expect(result?.plays[0].personalOverall).toEqual({ games: 0, wins: 0 });
+  });
+
+  it("My Stats: a personalOverall missing its `wins` half is treated as fully absent, not coerced to a fabricated 0", () => {
+    const result = normalizeDraftRecommendResponse({
+      plays: [{ champId: 103, score: 0.5, confidence: "normal", minGames: 300, personalOverall: { games: 5 } }],
+      meta: {},
+    });
+    expect(result?.plays[0].personalOverall).toEqual({ games: 0, wins: 0 });
   });
 
   it("v0.37.4: potentialPlays absent (older cached response / server hasn't shipped it) degrades to [], never crashes", () => {

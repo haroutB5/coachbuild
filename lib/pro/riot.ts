@@ -54,12 +54,20 @@ export function getMatchIdsByPuuid(
   puuid: string,
   opts: { queue?: number; start?: number; count?: number; startTime?: number } = {}
 ): Promise<string[]> {
-  const { queue = 420, start = 0, count = 20, startTime } = opts;
+  const { queue, start = 0, count = 20, startTime } = opts;
   // startTime (epoch seconds) keeps stale bootcamp/history games out of the
   // id list entirely — cheaper than fetching then discarding at extract time.
   const startTimeParam = startTime != null ? `&startTime=${startTime}` : "";
+  // `queue` is OPTIONAL now (mystats P0 fix, 2026-07-21): omitting it from
+  // the URL entirely returns matches from EVERY queue (Riot's own default),
+  // which lib/mystats/ingest.ts relies on to fetch a personal account's full
+  // mixed-queue history in one paginated stream rather than one call per
+  // queue id. Every EXISTING caller (lib/pro/ingestMatches.ts,
+  // scripts/audit-accounts.mjs) already passes an explicit `queue: 420` —
+  // this is a behavior-preserving widening for them, not a default change.
+  const queueParam = queue != null ? `&queue=${queue}` : "";
   return riotFetch<string[]>(
-    `https://${regional}.api.riotgames.com/lol/match/v5/matches/by-puuid/${puuid}/ids?queue=${queue}&start=${start}&count=${count}${startTimeParam}`
+    `https://${regional}.api.riotgames.com/lol/match/v5/matches/by-puuid/${puuid}/ids?start=${start}&count=${count}${queueParam}${startTimeParam}`
   );
 }
 

@@ -32,7 +32,9 @@ import {
   fetchDraftRecommend,
   type DraftRecommendResponse,
   type DraftRecommendMeta,
+  type DraftPlayResult,
 } from "@/components/live/draftRecommend";
+import { filterToMyPool } from "@/components/live/personalBadge";
 
 const RECOMMEND_DEBOUNCE_MS = 300;
 
@@ -98,6 +100,12 @@ export default function DraftPage() {
   // below; live auto-fill stops overwriting the user's inputs until they
   // explicitly tap "Reset to live".
   const [dirty, setDirty] = useState(false);
+  // "My pool" filter (My Stats, 2026-07-21) — a FILTER, never a re-scorer:
+  // keeps only candidates I've played at least once in this lane, in the
+  // SAME order the server already ranked them (see personalBadge.ts's
+  // filterToMyPool doc comment). Independent of `dirty`/live-sync — purely
+  // a display toggle over whatever the server already returned.
+  const [myPoolOnly, setMyPoolOnly] = useState(false);
 
   const [champIcons, setChampIcons] = useState<Map<number, ChampionIconEntry>>(new Map());
   const [state, setState] = useState<FetchState>({ status: "loading" });
@@ -239,6 +247,15 @@ export default function DraftPage() {
   const serverInferredLaneOpponentId = state.status === "ok" ? state.data.meta.laneOppInferred : null;
   const effectiveLaneOpponentId = laneOpponentId ?? serverInferredLaneOpponentId;
 
+  // My pool filter — applied to a DISPLAY copy only; state.data.plays/
+  // potentialPlays (and their order) are never mutated, so toggling this off
+  // always restores the exact server-ranked list.
+  const basePlays: DraftPlayResult[] = state.status === "ok" ? state.data.plays : [];
+  const basePotentialPlays: DraftPlayResult[] = state.status === "ok" ? state.data.potentialPlays : [];
+  const displayedPlays = myPoolOnly ? filterToMyPool(basePlays) : basePlays;
+  const displayedPotentialPlays = myPoolOnly ? filterToMyPool(basePotentialPlays) : basePotentialPlays;
+  const hasAnyMyPoolData = basePlays.some((p) => p.personalOverall.games >= 1) || basePotentialPlays.some((p) => p.personalOverall.games >= 1);
+
   return (
     <div className="min-h-screen pb-16">
       <div className="max-w-[720px] mx-auto px-4 sm:px-6">
@@ -370,7 +387,22 @@ export default function DraftPage() {
 
         {/* Results */}
         <section className="mb-8">
-          <p className="text-[10px] tracking-[0.14em] uppercase text-mut font-semibold mb-1 px-0.5">Suggested picks</p>
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <p className="text-[10px] tracking-[0.14em] uppercase text-mut font-semibold px-0.5">Suggested picks</p>
+            {state.status === "ok" && hasAnyMyPoolData && (
+              <button
+                type="button"
+                onClick={() => setMyPoolOnly((v) => !v)}
+                aria-pressed={myPoolOnly}
+                title="Show only champions you've played this season — a filter, never a re-ranking"
+                className={`px-2 py-1 rounded-md text-[10.5px] font-semibold border transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
+                  myPoolOnly ? "bg-teal text-bg border-teal" : "bg-panel2 text-mut border-line hover:border-teal-dim hover:text-txt"
+                }`}
+              >
+                My pool
+              </button>
+            )}
+          </div>
           {state.status === "ok" && (
             <p className="text-mut/70 text-[10.5px] mb-2 px-0.5">
               Only champions with a well-sampled pool this patch in this lane are shown — a rare off-role pick won&apos;t
@@ -407,9 +439,18 @@ export default function DraftPage() {
             </p>
           )}
 
-          {state.status === "ok" && state.data.plays.length > 0 && (
+          {state.status === "ok" && state.data.plays.length > 0 && myPoolOnly && displayedPlays.length === 0 && (
+            // My pool filter narrowed a non-empty list down to nothing --
+            // distinct from "no data yet" above (the server has data, the
+            // filter is just narrow right now).
+            <p className="text-mut/70 text-[11px] px-0.5 py-2">
+              None of your played champions are in this list yet. Toggle &quot;My pool&quot; off to see all suggestions.
+            </p>
+          )}
+
+          {state.status === "ok" && displayedPlays.length > 0 && (
             <div className="bg-panel border border-line rounded-xl px-5">
-              {state.data.plays.map((play, i) => {
+              {displayedPlays.map((play, i) => {
                 const entry = champIcons.get(play.champId);
                 return (
                   <DraftResultRow
@@ -421,6 +462,8 @@ export default function DraftPage() {
                     winVsLaneOppFraction={play.winVsLaneOpp}
                     confidence={play.confidence}
                     minGames={play.winVsLaneOppGames ?? play.minGames}
+                    personal={play.personal}
+                    personalOverall={play.personalOverall}
                   />
                 );
               })}
@@ -432,14 +475,14 @@ export default function DraftPage() {
             above, just under the 1,000-game floor on this specific matchup.
             Only rendered when there's something to show; never conflated
             with the main "Suggested picks" empty/loading states. */}
-        {state.status === "ok" && state.data.potentialPlays.length > 0 && (
+        {state.status === "ok" && displayedPotentialPlays.length > 0 && (
           <section className="mb-8">
             <p className="text-[10px] tracking-[0.14em] uppercase text-mut font-semibold mb-1 px-0.5">Potential counters</p>
             <p className="text-mut/70 text-[10.5px] mb-2 px-0.5">
               Promising but under 1,000 games — treat as leads, not conclusions.
             </p>
             <div className="bg-panel border border-line rounded-xl px-5">
-              {state.data.potentialPlays.map((play, i) => {
+              {displayedPotentialPlays.map((play, i) => {
                 const entry = champIcons.get(play.champId);
                 return (
                   <DraftResultRow
@@ -451,6 +494,8 @@ export default function DraftPage() {
                     winVsLaneOppFraction={play.winVsLaneOpp}
                     confidence={play.confidence}
                     minGames={play.winVsLaneOppGames ?? play.minGames}
+                    personal={play.personal}
+                    personalOverall={play.personalOverall}
                   />
                 );
               })}

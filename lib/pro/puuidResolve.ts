@@ -82,7 +82,12 @@ export async function resolveAccount(account: LolProsAccountRaw): Promise<Resolv
   // 1. Try the lolpros puuid directly.
   if (lolprosPuuid) {
     try {
-      await getMatchIdsByPuuid(routing.regional, lolprosPuuid, { count: 1 });
+      // queue:420 pinned explicitly (P0 fix, 2026-07-21): getMatchIdsByPuuid's
+      // `queue` param lost its implicit 420 default when it became optional
+      // for lib/mystats/ingest.ts's unfiltered fetch — pin it here so this
+      // probe's behavior is unchanged (any concrete queue would do for a
+      // pure "does this puuid resolve" check; 420 is what it always used).
+      await getMatchIdsByPuuid(routing.regional, lolprosPuuid, { queue: 420, count: 1 });
       return { ...base, puuid: lolprosPuuid, riotId: riotId ?? account.summoner_name ?? lolprosPuuid, active: true };
     } catch (err) {
       if (err instanceof RiotUnavailableError) throw err;

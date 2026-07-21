@@ -12,6 +12,17 @@
 
 export type DraftConfidence = "low" | "normal";
 
+/** {games, wins} — a raw personal record, never a rate/score. Mirrors
+ *  lib/draft/recommend.ts's PersonalRecord on the wire. My Stats badges
+ *  (My Stats backend, ratified 2026-07-21) are DISPLAY-ONLY — nothing in
+ *  this file or app/draft/page.tsx may derive a score/sort order from these
+ *  fields. See components/live/personalBadge.ts for the render model and
+ *  the my-pool FILTER (never a re-scorer). */
+export interface PersonalRecord {
+  games: number;
+  wins: number;
+}
+
 /** One PLAY candidate — lib/draft/score.ts's rankPlays()/splitPlaysBySampleSize()
  *  output shape (plan §3). `winVsLaneOpp` is null when there's no direct
  *  lane opponent (empty enemies, or none tagged as the lane slot) or the
@@ -29,6 +40,18 @@ export interface DraftPlayResult {
   winVsLaneOppGames: number | null;
   confidence: DraftConfidence;
   minGames: number;
+  /** My Stats decoration (2026-07-21, additive): my record vs the resolved
+   *  lane opponent specifically. Null when no lane opponent is resolved, OR
+   *  absent/malformed on the wire (older cached response) — never a
+   *  fabricated {games:0,wins:0} in that case, since "no lane opponent" and
+   *  "lane opponent but zero games" are genuinely different states. */
+  personal: PersonalRecord | null;
+  /** My Stats decoration: my record on this champion in this lane, vs ANY
+   *  opponent. Always populated — degrades to {games:0,wins:0} when
+   *  absent/malformed on the wire (older cached response, or an account
+   *  that's never played this champion) so callers never need a second
+   *  null-check beyond `personal` above. */
+  personalOverall: PersonalRecord;
 }
 
 /** One BAN candidate — lib/draft/score.ts's rankBans() output shape. Audit
@@ -133,6 +156,17 @@ function isConfidence(v: unknown): v is DraftConfidence {
   return v === "low" || v === "normal";
 }
 
+/** `wins` must be a number AND `games` must be a number for this to count as
+ *  a real record — a partially-malformed object (e.g. `{games: 3}` with no
+ *  `wins`) is treated the same as "absent," never coerced with a fabricated
+ *  0 for the missing half. */
+function normalizePersonalRecord(raw: unknown): PersonalRecord | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<PersonalRecord>;
+  if (typeof r.games !== "number" || typeof r.wins !== "number") return null;
+  return { games: r.games, wins: r.wins };
+}
+
 function normalizePlay(raw: unknown): DraftPlayResult | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Partial<DraftPlayResult>;
@@ -144,6 +178,11 @@ function normalizePlay(raw: unknown): DraftPlayResult | null {
     winVsLaneOppGames: typeof r.winVsLaneOppGames === "number" ? r.winVsLaneOppGames : null,
     confidence: isConfidence(r.confidence) ? r.confidence : "low", // unknown -> the CAUTIOUS default, never a false "normal"
     minGames: typeof r.minGames === "number" ? r.minGames : 0,
+    // My Stats fields absent/malformed (older cached response, or a server
+    // that hasn't shipped this yet) degrade to "no personal data" -- never
+    // crash, never a fabricated non-zero record.
+    personal: normalizePersonalRecord(r.personal),
+    personalOverall: normalizePersonalRecord(r.personalOverall) ?? { games: 0, wins: 0 },
   };
 }
 
