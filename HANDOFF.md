@@ -6778,3 +6778,193 @@ Also untracked, NOT staged: `_scratch_live_validate_split.mjs` (the one-off acce
 - Commit/deploy/prod-check: see final report to Urgot.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-21 19:49
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-20 22:54:06Z; previous content preserved there. Append new rounds below. -->
+
+## "My Stats" — UI + combined ship (2026-07-21)
+
+Final round of the My Stats arc: built the `/mystats` page + Draft-page personal badges/My-pool filter, then committed engy's staged backend (`lib/mystats/**`, migration 0012, `app/api/mystats/*`, `app/api/ingest/mystats`, `lib/pro/riot.ts`/`puuidResolve.ts` tweaks, `vercel.json` cron) TOGETHER with this UI as one release: **v0.38.0**.
+
+**HARD DIRECTIVES honored:** display-only (nothing here computes a score or reorders anything by outcome — encoded directly in `components/hextech/myStats.ts`'s and `components/live/personalBadge.ts`'s header comments, not just here), current-season-only ("Season 2026" label shown on `/mystats`'s header, sourced from the wire's `season` field, never re-derived).
+
+**Small additive backend touch (my own, not engy's):** added `riotId` to `/api/mystats/summary`'s response (both branches) so the page header can show which account the data belongs to without a second endpoint — low-risk, existing route tests use scoped assertions (not full-envelope `toEqual`), extended two of them for the new field.
+
+**`app/mystats/page.tsx` (new):** header (riot id + Season 2026 + overall games/winrate via new `computeMyStatsOverall`), per-champion table sorted by the server's own order (NOT re-sorted client-side — `buildMyStatsRows` only decorates, doc comment explicit about this), rows under 10 games ("Low sample" badge + muted winrate color instead of green/red). Tap a row → accessible disclosure (`aria-expanded`/`aria-controls`, region always mounted with the `hidden` attribute rather than unmounted, so `aria-controls` always resolves — `fixing-accessibility` guidance) fetches `/api/mystats/matchups?championId=` lazily and renders matchups grouped by lane opponent. Graceful states: accountUnresolved, zero games, fetch error — all via one `SummaryState`/`DetailState` union, same shape as the Draft page's own `FetchState`. Stale-response guard (`cancelled` closure, gotcha (q)) on both fetch effects.
+
+**Draft integration:** `components/live/draftRecommend.ts` gained `PersonalRecord`/`personal`/`personalOverall` on `DraftPlayResult`, defensively normalized (absent/malformed degrades to `null`/`{games:0,wins:0}`, a partial record missing either half is treated as fully absent, never coerced). New `components/live/personalBadge.ts` (pure): `buildPersonalBadgeModel` (vs-opponent/overall text, null when nothing to show — no clutter) + `filterToMyPool` (a FILTER, preserves order — the "My pool" toggle in `app/draft/page.tsx`, only rendered when at least one visible candidate actually has personal data). `DraftResultRow.tsx` renders the badge as a small muted chip (border-line-gold for vs-opponent, border-line for overall) below the score — deliberately NOT `text-good`/`text-bad`, so it never reads as another scored stat.
+
+**Tests (all new/extended, JSX-free per repo convention):** `components/__tests__/myStats.test.ts`, `components/__tests__/personalBadge.test.ts` (badge model incl. vs-only/overall-only/both/neither; my-pool filter incl. order-preservation and empty cases), extended `draftRecommend.test.ts` (personal/personalOverall parsing + graceful degradation) and `lib/__tests__/mystats-routes.test.ts` (`riotId` field). Full suite **1158 passing** (baseline 1123 + 35), `verify-fix.sh` ALL CHECKS PASSED (tsc, lint, build, sw/manifest).
+
+**Ship:** `package.json` → **0.38.0**, CHANGELOG entry added, committed everything (engy's backend + my UI) as one commit (`f0fc402`, author `harout_b5@live.com`), deployed via `npx vercel --prod --archive=tgz`, aliased to `coachbuild.vercel.app`.
+
+**Prod smoke (chrome-devtools MCP, 390px + interaction, zero console errors throughout):**
+- `/mystats` renders the real season table — Viktor/Mid tops it at **27g, 66.7%** (Viktor's two role rows sum to 38g; the table is keyed by (champion, role) same as the backend's `summarizeByChampion`, so Viktor Mid and Viktor Top are correctly two separate rows, not merged), header shows `MunsterHunter#EUW · Season 2026 · 92 games · 54.3% overall`. Row tap → drill-in confirmed live (Viktor vs Ahri 3g 1-2, vs Shen 2g 1-1, etc.), chevron rotates, icons resolve.
+- `/draft` with `enemies=103&laneOpp=103` (explicit lane-opp tag) surfaces Katarina at rank 9 in "Suggested picks" with a real **"you: 0W-1L overall"** badge — confirmed the badge renders only where personal data exists (0/10 other rows show one). "My pool" toggle appeared (only when applicable) and correctly filtered the list down to just Katarina, rank re-numbered but score-order preserved among survivors, "Potential counters" section correctly disappeared (no potential candidate matched the filter).
+- **Found and ruled out, not a bug:** with `enemies=112` (or any enemy) and NO explicit "Lane opp" tap, `meta.laneOppInferred` is `null` and the pool falls back to the enemy-less baseline ranking — this is `lib/draft/recommend.ts`'s pre-existing, already-documented gap (`resolveLaneOpponent` requires a non-null `pickrate`, which is currently always null pending the u.gg rankings decoder — see that file's own `filterPoolByPickrate` comment). Not something this ship touches or regresses; flagging since it means personal badges currently only surface when the user explicitly taps "Lane opp" on a single-enemy pick, not from inference alone.
+- Nav: "My Stats" present in `TabNav` (active-state styling correct) and both Sidebar footer/mobile-strip render sites.
+
+**Not done / gaps:** did not add a role/lane filter control on `/mystats` (brief didn't ask for one — table already shows role per row and role-sorts naturally by games). Did not touch `lib/draft/recommend.ts`'s pickrate-inference gap (pre-existing, out of scope for this ship, documented above for Urgot's awareness).
+
+Files: `app/mystats/page.tsx`, `components/hextech/myStats.ts`, `components/live/personalBadge.ts`, `components/live/draftRecommend.ts`, `components/hextech/DraftResultRow.tsx`, `app/draft/page.tsx`, `components/TabNav.tsx`, `components/hextech/Sidebar.tsx`, `app/api/mystats/summary/route.ts`, `components/__tests__/myStats.test.ts`, `components/__tests__/personalBadge.test.ts`, `components/__tests__/draftRecommend.test.ts`, `lib/__tests__/mystats-routes.test.ts`, `package.json`, `CHANGELOG.md`.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-21 20:07
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-21 18:25:05Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-21 — v0.38.1 / companion 1.5.0 — "champ select doesn't open Builds page when another tab is open"
+
+### Root-cause confirmation
+Verified the briefed mechanism by reading the actual code before touching anything:
+- `components/live/CompanionProvider.tsx` is mounted app-wide (`app/layout.tsx`), so **every** route polls `/status` every 3s once a session token exists in localStorage — not just `/` and `/draft`.
+- `public/companion.ps1`'s `Test-CompanionHasAttachedTab` (was ~line 942) returned `true` whenever `$Sync.LastStatusPollAt` was stamped within the last 8s — i.e. **any** poll from **any** route, not just a follow-capable one.
+- `Update-ChampSelectState` skips `Start-Process` when `Test-CompanionHasAttachedTab` is true, on the (wrong, for non-follow routes) assumption the open tab live-follows. The debounce (`$State.LastOpenedChampId`) still advances regardless, so the champion never re-triggers even after the non-following tab closes.
+- Confirmed via read: only `app/page.tsx`'s follow effect and `/draft`'s read-only live awareness actually consume `useCompanion()`'s `champSelect`/`phase` to react to a change. `/live-setup`, `/mystats`, `/history`, `/movers` poll but follow nothing — exactly the reported repro (`/live-setup` open, champ select doesn't open Builds).
+
+Root cause matched the brief's hypothesis exactly — no surprises on re-verification.
+
+### Files changed
+- `public/companion.ps1` — bumped `Version` to `1.5.0`. `/status` handler now parses `?follow=1` from the query string; stamps a new `$Sync.LastFollowPollAt` only when present (keeps stamping `$Sync.LastStatusPollAt` unconditionally on every poll, for other diagnostics/back-compat readers). `Test-CompanionHasAttachedTab` now gates on `LastFollowPollAt` instead of `LastStatusPollAt`, with an updated header comment describing the narrowed rule and the deliberate back-compat degrade (stale web build that never sends `follow=1` -> `LastFollowPollAt` stays `$null` forever -> always opens a fresh tab, matching pre-1.3.0 behavior). Added a new `$Sync` field to the synchronized hashtable init. Extended the `-Mock` self-test's attached-tab-gate block with a case simulating a non-follow-capable poll (fresh `LastStatusPollAt`, untouched `LastFollowPollAt`) asserting the open is **not** suppressed — this is the exact regression this ship fixes.
+- `components/live/companionClient.ts` — `bridgeUrl` gains an optional `follow` param appending `&follow=1`; `getStatus`/`probeCompanion`/`refreshStatus` all gain a trailing optional `follow = false` param threaded down to `bridgeUrl` (appended after existing params, so every pre-existing call site — including all of `companionClient.test.ts` — is untouched/backward-compatible). New pure exported `isFollowCapableRoute(pathname)`: exact-matches `/` and `/draft` only (no prefix matching, null/undefined-safe).
+- `components/live/CompanionProvider.tsx` — imports `usePathname` from `next/navigation`. Reads the current route into a `followRef` (via `useRef` + a small `useEffect` keyed on `pathname`) rather than adding `pathname` to the poll effect's own `[session]` dependency array — a route change must not restart the poll interval or perturb the tick cadence the Round-B P1 fix and `/draft`'s live-sync depend on; only the *next* tick needs the updated `follow` flag. `poll()`'s `refreshStatus` call now passes `followRef.current` as the 3rd arg. Did **not** touch the unconditional `markCompanionDriven`/`noteCompanionPhase` block per the brief's instruction — verified by reading the final file back, that block is byte-identical in content and position, just re-commented.
+- `components/__tests__/companionClient.test.ts` — new `isFollowCapableRoute` suite (5 cases: `/` true, `/draft` true, every other route incl. the reported `/live-setup` false, no prefix-match on `/draft/something`, null/undefined-safe) and a `follow=1` query-param plumbing suite (5 cases across `getStatus`/`refreshStatus`/`probeCompanion`).
+- `package.json` — `0.38.0` -> `0.38.1`.
+- `CHANGELOG.md` — new `[0.38.1]` entry, flags the companion bump and that users must re-run the install one-liner.
+
+### Test count
+Baseline stated at dispatch (1123) was stale — actual pre-ship green baseline was 1158. **1168 tests passing** (+10 net new, all in `companionClient.test.ts`). `tsc -b`, `next lint`, `next build`, SW cache-name/version tie, and manifest all clean via `verify-fix.sh`.
+
+Also ran the companion's own two offline harnesses directly (Windows PowerShell 5.1, `powershell -NoProfile -ExecutionPolicy Bypass -File public/companion.ps1 <flag>`):
+- `-SelfTest` -> `SELFTEST PASSED`
+- `-Mock` -> `MOCK RUN PASSED` (this is the one that exercises the edited attached-tab-gate block, including the new non-follow-capable-poll case)
+
+Confirmed zero non-ASCII bytes in `public/companion.ps1` both locally and in the **served** prod copy (`curl .../companion.ps1 | grep -P '[^\x00-\x7F]'` -> no match, both times).
+
+### Deployed
+- Commit `04cacff` (author `harout_b5@live.com` / Harout — Vercel-compliant), `git -C coachbuild -c user.email=harout_b5@live.com -c user.name=Harout commit ...`.
+- `npx vercel --prod --archive=tgz` -> aliased to `https://coachbuild.vercel.app`.
+- Prod smoke: homepage HTML contains `0.38.1`; `curl https://coachbuild.vercel.app/companion.ps1` shows `Version     = '1.5.0'`; served companion.ps1 is 100% ASCII.
+
+### Found but not fixed
+- Nothing new surfaced. Did **not** touch the 3-way champion resolution fallback (`championId` -> `pickIntent` -> `actions`) in `Update-ChampSelectState` — read it to confirm it's unrelated to this bug and left it exactly as-is, per the brief.
+- Did not attempt to reproduce end-to-end on a real LCU client (this bug and its fix are only reproducible on a live gaming PC with the LCU running — same "untestable off gaming PC" limitation `companionClient.ts`'s own header notes for the rest of this subsystem). Coverage instead comes from: (a) the companion's own `-Mock` harness, which drives `Update-ChampSelectState`/`Test-CompanionHasAttachedTab` against synthetic champ-select sessions and a fake `$Bridge.Sync`, and (b) the new companionClient unit tests proving the exact query string sent per route. Recommend the user verify once live (open `/live-setup` in one tab, enter Practice Tool champ select, confirm the Builds page still opens) before considering this fully closed.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-21 20:39
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+# HANDOFF-engy — CoachBuild v0.39.0 (2026-07-21)
+
+## Ship: /draft lane-opponent inference fix + chip affordance + explainer copy
+
+**Deployed:** v0.39.0 → https://coachbuild.vercel.app (prod, READY). Commit `430d5a1`, authored `harout_b5@live.com`. `verify-fix.sh` clean, 1177 tests (baseline 1172 + 5 net new).
+
+---
+
+### Task 1 — ROOT CAUSE of "suggested picks don't change with enemy comp"
+
+`lib/draft/recommend.ts`'s `resolveLaneOpponent` inferred the direct lane opponent **purely from `pickrate`**:
+```
+if (row.pickrate === null || row.pickrate <= 0) continue;
+```
+But `pickrate` is **universally null** in `draft_champ_stats` — `lib/draft/ugg.ts`'s `decodeRankingsJson` is a deliberate stub (u.gg rankings JSON column layout never live-verified; see its header). So the inference loop skipped every enemy → `meta.laneOppInferred` always `null` → the 1.0-weight `W_DIRECT` term in `score.ts` never engaged. Only the 0.2-weight off-lane terms fired, moving scores fractions of a percent. This exactly reproduced the user's screenshot (Singed 54.1, Garen 52.5…).
+
+**Not a weights problem** — the scoring formula was fine; the direct-opponent term simply never had an opponent to weight against.
+
+**Fix:** inference now measures **lane presence** on one axis:
+- known `pickrate` if ANY enemy has a positive one (contract-preserving — real pickrate takes over transparently the moment the decoder is filled in), else
+- `total_games` for all enemies (today's real state) — the enemy's own aggregate game count in that role, always populated at ingest (`lib/draft/ingest.ts:264`), and the **same playrate proxy the pool floor already trusts** (`POOL_MIN_TOTAL_GAMES`, audit P1-1). Never mixes the two axes within one resolution.
+- **Single** enemy with any lane games → inferred directly (nothing to be ambiguous with).
+- **2+** real lane candidates → dominance guard: leader must out-present the runner-up by `LANE_OPP_DOMINANCE_RATIO = 2.0`, else stays `null` (honest > forced-pick — a wrong 1.0-weight opponent skews the whole list; a null just means one user tap). Ties → null.
+
+`score.ts` (K/weights/floors) **untouched** — this is opponent *resolution*, upstream of scoring.
+
+**Files:** `lib/draft/recommend.ts` (header contract comment rewritten, `LANE_OPP_DOMINANCE_RATIO` const, `resolveLaneOpponent` rewrite — query now `SELECT champ_id, pickrate, total_games`).
+
+**Tests** (`lib/__tests__/draft-recommend.test.ts`): new `total_games` proxy-inference suite pins the user's exact case `[266,103,77,222]` lane=2 → infers **Ahri (103)**; single-candidate lane → inferred; two comparable mids no other signal → **null**; 2× dominance boundary → inferred; presence tie → null. The two pre-existing inference tests updated to the new `pickrate, total_games` query shape.
+
+**PROD SMOKE (definitive):**
+```
+GET /api/draft/recommend?lane=2&enemies=266,103,77,222
+→ meta.laneOppInferred = 103   (was null before)
+→ plays[0..] re-ranked to Ahri-counters with real vs-Ahri samples:
+   Swain 52.7 (vs 52.9, n=1568), Veigar 52.1 (n=9975), Sylas 51.9 (n=24030)…
+```
+Old Singed/Garen/Heimer picks correctly demoted to **Potential counters** (<1000 games vs Ahri).
+
+---
+
+### Task 2 — chip affordance (`app/draft/page.tsx`)
+
+The per-enemy "Lane opp" control now reads as a control, not a label:
+- **inactive:** outlined `+ Lane opp` pill (muted, hover-accents teal), `aria-label="Mark … as your lane opponent"`.
+- **explicit tap:** solid filled teal.
+- **server-inferred:** dashed-border filled `Lane opp (inferred)` so the user sees *why* the list re-ranked and can confirm/override.
+- `aria-pressed` reflects on/off.
+
+**PROD SMOKE (puppeteer drive, 4 enemies added via UI):** exactly one chip (Ahri) `pressed:true` + `border:dashed` + label "Lane opp (inferred)"; other three `pressed:false` + solid outline "+ Lane opp". Screenshot: `<urgot>/.smoke-tools/smoke-039-draft.png` (footer confirms v0.39.0).
+
+### Task 3 — explainer copy (user's explicit request)
+
+- **Suggested picks** (dynamic, one muted line): no enemies → "Each champion's own win rate in this lane on the current patch."; enemies+resolved opp → "Win rate in this lane, adjusted by matchup records against the enemy team — weighted heaviest against your lane opponent (Ahri)."; enemies+ambiguous → "…adjusted by each champion's matchup records against the enemies you've added." (kept the existing pool-sampling note below it, de-emphasized to `text-mut/60`).
+- **Suggested bans:** reworded to "Champions most likely to beat your pick in this lane — ranked by how hard they counter you and how often they're played."
+
+Prod smoke confirmed the picks explainer renders with "(Ahri)" interpolated.
+
+---
+
+### Task 4 — FOUND-NOT-FIXED (reported per dispatch guidance; fix is NOT contained)
+
+**What the orchestrator asked about (no laneOpp resolved, n=32 in main list):** confirmed. The v0.37.4 main/potential split's 1000-game floor is defined **relative to the direct opponent**; when none is resolved, `splitPlaysBySampleSize` correctly degrades to the single top-10 list gated only by the champion's own `POOL_MIN_TOTAL_GAMES` (5000). The `n=32` came from `minGames` tracking the *smallest contributing term* — a thin 0.2-weight off-lane matchup. The split is **not broken**; it just doesn't apply without a direct opponent, by design. The primary fix moots this for the user's actual scenario (an opponent now resolves).
+
+**What I ALSO found (now prominent, worse):** even **with** a lane opp resolved, **every main-list row shows "LOW SAMPLE"** despite huge headline samples (e.g. Sylas `n=24030 vs lane opp` + `LOW SAMPLE`). See `smoke-039-draft.png`. Sharp diagnosis:
+- `confidence:"low"` (score.ts `computeScoredPool`) fires when the candidate's baseline pool < K(200) **OR any contributing matchup term < K**.
+- Because `POOL_MIN_TOTAL_GAMES = 5000 >> K = 200`, a pooled play's confidence can **never** be low from its own baseline — it's **always** from a thin contributing matchup term.
+- With a resolved opp, the direct-opp term is ≥1000 (≥K), so the ONLY thing flipping a main-list row "low" is a thin **off-lane** (0.2-weight) term — e.g. the candidate's matchup vs **Udyr-mid / Jinx-mid**, which barely exist (30–199 games). So "n=24030 LOW SAMPLE" is a systematic badge/number contradiction whenever the enemy set includes an off-meta-in-this-lane champion.
+
+**Why NOT fixed in this ship:** the fix requires changing the server-side `confidence` semantics, which is pinned by a deliberate audit-P1-1 test (`draft-score.test.ts:166`, "confidence is low iff a CONTRIBUTING term has n<K", explicitly including off-lane terms) and documented in `PlayResult.confidence`'s contract. That's the scoring module the dispatch said is **not up for retuning**, and a display-only client patch would partially reimplement the confidence contract across the plays/bans boundary. Neither is "contained" per the task-4 guidance ("only fix if it's a clear bug with a contained fix").
+
+**Proposed fast-follow (small, needs sign-off on changing the confidence contract):** base a PLAY's "low sample" badge on the **headline evidence** — the direct-opponent matchup games (`winVsLaneOppGames`) when a lane opp is resolved, else the baseline pool — NOT on 0.2-weight off-lane terms. Since pooled plays always have baseline ≥5000 and main-list plays always have direct-opp ≥1000, main-list rows would then correctly read normal-confidence; only genuinely thin potential-list rows (30–999) keep the flag. Re-scope test 166 to distinguish direct vs off-lane term contribution. ~1 file + 1 test.
+
+---
+
+### Wiki/CLAUDE.md note (session-end)
+CLAUDE.md's v0.38.0 note that `resolveLaneOpponent` "only infers a lane opponent when `pickrate` is non-null, which is currently always null" is now **stale** — inference works via the `total_games` proxy as of v0.39.0. Update that sentence.
+
+

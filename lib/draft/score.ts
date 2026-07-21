@@ -101,11 +101,28 @@ export interface PlayResult {
    *  that pairing. Never shrunk — this is the raw observed winrate, for
    *  display (the shrunk value only feeds `score`). */
   winVsLaneOpp: number | null;
-  /** "low" iff EITHER the candidate's own baseline sample (totalGames) is
-   *  below K, OR a contributing enemy term (cleared N_FLOOR) was backed by
-   *  fewer than K games (audit P1-1: an empty-enemies / zero-contributing-
-   *  term ranking is STILL a claim about this champion's baseline winrate,
-   *  and must report its real confidence, not a blanket "normal"). */
+  /** "low" iff the row's DOMINANT evidence term is thin: the candidate's own
+   *  baseline sample (totalGames) is below K, OR — when a direct lane
+   *  opponent is resolved — that direct-opponent matchup term (having
+   *  cleared N_FLOOR) was backed by fewer than K games. Off-lane
+   *  (W_OFFLANE, 0.2-weight) terms NEVER flip this flag on their own: their
+   *  contribution to `score` is already shrunk to near-nothing by the
+   *  weight, so flagging "low sample" off a thin off-lane term overstated
+   *  exactly the noise the shrink math exists to neutralize.
+   *
+   *  v0.39.1 SUPERSEDES the earlier "low iff ANY contributing term (incl.
+   *  off-lane) has n<K" rule — prod-observed 2026-07-21: every /draft
+   *  main-list row badged "LOW SAMPLE" despite huge direct-opponent
+   *  samples (e.g. Sylas n=24030 vs lane opp) purely because of a thin
+   *  0.2-weight off-lane term (e.g. Udyr-mid, barely played in that lane).
+   *  Main-tier rows (direct-opp n >= PLAY_MAIN_SAMPLE_FLOOR=1000, always
+   *  >= K) now correctly read normal confidence. Potential-tier rows
+   *  (direct-opp n in [N_FLOOR, PLAY_MAIN_SAMPLE_FLOOR)) still show "low"
+   *  whenever that thin direct-opp sample is itself below K — that's the
+   *  badge's honest job, since the direct-opp term IS the dominant
+   *  (1.0-weight) evidence for those rows. Audit P1-1's baseline-totalGames
+   *  clause (empty-enemies / zero-contributing-term rankings still report
+   *  real confidence, never a blanket "normal") is unchanged. */
   confidence: "normal" | "low";
   /** Smallest sample size among the candidate's own baseline (totalGames)
    *  and every enemy term that contributed to `score` — ALWAYS a real
@@ -230,7 +247,11 @@ function computeScoredPool(
       const weight = enemy.isDirectLaneOpp ? W_DIRECT : W_OFFLANE;
       scoreDelta += weight * delta;
       minGames = Math.min(minGames, row.games);
-      if (row.games < K) lowConfidence = true;
+      // v0.39.1: confidence tracks the DOMINANT (1.0-weight direct-opp, or
+      // baseline) term only -- a thin 0.2-weight off-lane term must NOT flip
+      // this flag (see PlayResult.confidence's doc comment for the prod
+      // repro this supersedes).
+      if (enemy.isDirectLaneOpp && row.games < K) lowConfidence = true;
     }
 
     return {

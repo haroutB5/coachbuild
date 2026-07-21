@@ -163,9 +163,18 @@ describe("rankPlays", () => {
     expect(missingRowResult.winVsLaneOppGames).toBeNull();
   });
 
-  it("confidence is low iff a CONTRIBUTING term has n<K, ignoring omitted (n<N_FLOOR) terms", () => {
-    const pool = [baseline(1, 0.5)]; // totalGames=10000, well above K -- baseline alone wouldn't trip low confidence
-    // one enemy below N_FLOOR (omitted), one enemy between N_FLOOR and K (contributes, low confidence)
+  it("v0.39.1 SUPERSEDES the old 'ANY contributing term' rule: a thin OFF-LANE term does NOT flip confidence low", () => {
+    // Original audit-P1-1 contract (pre-v0.39.1) was "confidence is low iff a
+    // CONTRIBUTING term has n<K, ignoring omitted (n<N_FLOOR) terms" -- that
+    // included off-lane (0.2-weight) terms. Prod (2026-07-21) showed exactly
+    // why that's wrong: every /draft main-list row badged "LOW SAMPLE" even
+    // with huge direct-opponent samples (Sylas n=24030), because SOME
+    // 0.2-weight off-lane matchup (e.g. Udyr-mid) was always thin somewhere
+    // in a 4-enemy comp. The off-lane term's already-shrunk contribution to
+    // `score` is near zero -- flagging the row over it overstated the exact
+    // noise the shrink math neutralizes. New contract: only the DOMINANT
+    // term (direct-opp, or baseline when no direct opp) can flip this flag.
+    const pool = [baseline(1, 0.5)]; // totalGames=10000, well above K
     const enemies: EnemyInput[] = [
       { champId: 10, isDirectLaneOpp: false },
       { champId: 11, isDirectLaneOpp: false },
@@ -175,13 +184,43 @@ describe("rankPlays", () => {
         1,
         new Map([
           [10, { wins: 10, games: 20 }], // below N_FLOOR -- omitted entirely
-          [11, { wins: 55, games: 100 }], // contributes, n=100 < K=200 -> low confidence
+          [11, { wins: 55, games: 100 }], // contributes to score (n=100 >= N_FLOOR), but OFF-LANE -- must NOT trip low confidence
         ]),
       ],
     ]);
     const result = rankPlays(pool, matchups, enemies)[0];
-    expect(result.confidence).toBe("low");
-    expect(result.minGames).toBe(100); // only the contributing term counts (lower than the 10000 baseline)
+    expect(result.confidence).toBe("normal"); // was "low" under the pre-v0.39.1 contract
+    expect(result.minGames).toBe(100); // minGames still tracks the smallest contributing term, unchanged
+  });
+
+  it("main-tier row: fat direct-opp sample + thin off-lane term -> confidence normal (v0.39.1)", () => {
+    const pool = [baseline(1, 0.5, null, null, 24030)]; // Sylas-shaped: huge baseline sample too
+    const enemies: EnemyInput[] = [
+      { champId: 999, isDirectLaneOpp: true }, // the resolved lane opponent, e.g. Ahri
+      { champId: 42, isDirectLaneOpp: false }, // e.g. Udyr-mid -- barely played in this lane
+    ];
+    const matchups = matchupMap([
+      [
+        1,
+        new Map([
+          [999, { wins: 12500, games: 24030 }], // direct opp: n=24030, well above K -- dominant term is fat
+          [42, { wins: 60, games: 100 }], // off-lane: n=100 < K -- thin, but must NOT dominate the badge
+        ]),
+      ],
+    ]);
+    const result = rankPlays(pool, matchups, enemies)[0];
+    expect(result.confidence).toBe("normal");
+  });
+
+  it("potential-tier row: thin direct-opp sample (n<K) -> confidence low, that's the badge's honest job (v0.39.1)", () => {
+    const pool = [baseline(1, 0.5)]; // baseline totalGames=10000, well above K
+    const enemies: EnemyInput[] = [{ champId: 999, isDirectLaneOpp: true }];
+    // n=150 clears N_FLOOR (30) so it's a real potential-tier row (< PLAY_MAIN_SAMPLE_FLOOR=1000),
+    // but is itself below K=200 -- the direct-opp term IS this row's dominant (1.0-weight) evidence.
+    const matchups = matchupMap([[1, new Map([[999, { wins: 80, games: 150 }]])]]);
+    const { potential } = splitPlaysBySampleSize(pool, matchups, enemies);
+    expect(potential.map((p) => p.champId)).toEqual([1]);
+    expect(potential[0].confidence).toBe("low");
   });
 
   it("baseline totalGames below K makes confidence low even with zero enemy terms", () => {
