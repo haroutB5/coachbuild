@@ -55,15 +55,29 @@ function CardSkeleton({ className = "" }: { className?: string }) {
   );
 }
 
+// v0.44.0 (Builds responsive plan §3c/§3d/§4): shared with the ok-branch's
+// grid below — grid-template-areas keeps a SINGLE set of area names
+// ("runes"/"starting"/"core"/"situational"/"pro") mapped to a genuinely
+// different layout per breakpoint (single column, plan's original DOM order,
+// below lg; a 7fr/5fr two-column composition — left: runes+core, right:
+// starting+pro+situational — at lg+) without duplicating any component
+// instance or relying on CSS Grid auto-placement (which can't reproduce two
+// independent-height columns from a flat DOM order). Every grid consumer
+// below (skeleton + the real ok-branch grid) must keep this exact area map
+// in sync, or the loading skeleton will reflow into a different shape than
+// the resolved content once it lands (defeats the whole "skeleton mirrors
+// the grid" point of this pass).
+const BUILD_GRID_CLASS =
+  "grid grid-cols-1 gap-5 [grid-template-areas:'runes'_'starting'_'core'_'situational'_'pro'] lg:grid-cols-[7fr_5fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_starting'_'core_pro'_'core_situational']";
+
 function BuildLoadingSkeleton() {
   return (
-    <div className="space-y-5">
-      <CardSkeleton />
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-        <CardSkeleton />
-        <CardSkeleton className="md:col-span-2" />
-      </div>
-      <CardSkeleton />
+    <div className={BUILD_GRID_CLASS}>
+      <CardSkeleton className="[grid-area:runes]" />
+      <CardSkeleton className="[grid-area:starting]" />
+      <CardSkeleton className="[grid-area:core]" />
+      <CardSkeleton className="[grid-area:situational]" />
+      <CardSkeleton className="[grid-area:pro]" />
     </div>
   );
 }
@@ -77,11 +91,20 @@ function BuildLoadingSkeleton() {
 function RankBracketSelector({ value, onChange }: { value: string; onChange: (id: string) => void }) {
   if (!RANK_FILTERING_SUPPORTED) return null;
   return (
-    <div className="flex items-center justify-between gap-3 flex-wrap">
+    // v0.44.0 (Builds responsive plan §2c): below `sm`, 7 rank-bracket pills
+    // don't fit one inline row — SegmentedControl's new layout="scroll"
+    // (default "inline" everywhere else) renders a horizontally-scrollable,
+    // snap-scrolling strip with a static edge fade instead of wrapping to a
+    // ragged 4+3 or overflowing the viewport (the root cause of the mobile
+    // right-edge void — see plan §1). Single "scroll" render degrades to a
+    // normal non-scrolling row once the content fits (sm+, per §3e "inline
+    // right-aligned"), so no separate desktop-only render is needed.
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
       <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">Rank bracket</p>
       <SegmentedControl
         ariaLabel="Filter build data by rank bracket"
         size="sm"
+        layout="scroll"
         value={value}
         onChange={onChange}
         options={RANK_BRACKETS.map((b) => ({ value: b.id, label: b.label }))}
@@ -294,33 +317,56 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
   return (
     <div className="mt-5 space-y-5">
       <RankBracketSelector value={rankBracket} onChange={handleRankChange} />
-      <RunesSummonersCard
-        runes={build.runes}
-        spells={build.spells}
-        onOpenDetail={openDetail}
-        championName={build.champion.name}
-        roleLabel={build.roleLabel}
-        build={build}
-        lane={lane}
-      />
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-        <StartingCard starter={build.items.starter} onItemClick={openItemPopover} />
-        <div className="md:col-span-2">
+
+      {/* v0.44.0 (Builds responsive plan §3c/§3d): below `lg` this is a
+          plain single-column stack in the tab's original order (Runes,
+          Starting, Core, Situational, ProConsensus) — the retired
+          `md:grid-cols-3` Starting/Core pairing no longer kicks in at any
+          width below lg. At `lg`+ the SAME five cards reflow into a real
+          2-column composition (left: Runes+Core, right: Starting+
+          ProConsensus+Situational) via grid-template-areas — see
+          BUILD_GRID_CLASS's doc comment above for why areas were used
+          instead of two nested left/right wrapper divs (area assignment
+          lets each breakpoint have a genuinely different visual order from
+          the SAME DOM nodes, no duplicate mounts, no reordered fetch
+          effects). */}
+      <div className={BUILD_GRID_CLASS}>
+        <div className="[grid-area:runes]">
+          <RunesSummonersCard
+            runes={build.runes}
+            spells={build.spells}
+            onOpenDetail={openDetail}
+            championName={build.champion.name}
+            roleLabel={build.roleLabel}
+            build={build}
+            lane={lane}
+          />
+        </div>
+        <div className="[grid-area:starting]">
+          <StartingCard starter={build.items.starter} onItemClick={openItemPopover} />
+        </div>
+        <div className="[grid-area:core]">
           <CoreBuildOrderCard items={build.items} onItemClick={openItemPopover} />
         </div>
+        <div className="[grid-area:situational]">
+          <SituationalCard items={build.items} onItemClick={openItemPopover} />
+        </div>
+        <div className="[grid-area:pro]">
+          {/* v0.27.0 (user request: "pro players seem to build Rocketbelt on
+              Viktor — create another builds and runes space based on what pro
+              players are often building"). Complements the WPA recommendation
+              above with a plain pick-rate count over the same champion-scoped
+              pro-games feed PRO BUILDS lists — own fetch, own loading/hidden
+              states (components/hextech/ProConsensusCard.tsx), refetches on
+              champ/lane change same as everything else on this tab. Reuses
+              this tab's own popover plumbing (openDetail) rather than
+              standing up a second popover/scroll-lock instance. A hidden
+              (N=0) ProConsensusCard renders null, collapsing this grid cell
+              to zero height cleanly — grid-template-areas doesn't reserve
+              empty space for a null child. */}
+          <ProConsensusCard champ={champ} lane={lane} ver={ver} onOpenDetail={openDetail} />
+        </div>
       </div>
-      <SituationalCard items={build.items} onItemClick={openItemPopover} />
-
-      {/* v0.27.0 (user request: "pro players seem to build Rocketbelt on
-          Viktor — create another builds and runes space based on what pro
-          players are often building"). Complements the WPA recommendation
-          above with a plain pick-rate count over the same champion-scoped
-          pro-games feed PRO BUILDS lists — own fetch, own loading/hidden
-          states (components/hextech/ProConsensusCard.tsx), refetches on
-          champ/lane change same as everything else on this tab. Reuses this
-          tab's own popover plumbing (openDetail) rather than standing up a
-          second popover/scroll-lock instance. */}
-      <ProConsensusCard champ={champ} lane={lane} ver={ver} onOpenDetail={openDetail} />
 
       {/* Always mounted (once any item/rune/shard/spell has ever been
           opened) so its own rendered/visible exit transition — DetailPopover's

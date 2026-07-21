@@ -6,6 +6,8 @@ import type { PlayerRef } from "@/components/proHistory.types";
 import { LANE_ORDER, LANE_LABEL, type LaneId } from "./heroContracts";
 import type { SearchMode } from "./homeSearch";
 import SidebarChampionSearch from "./SidebarChampionSearch";
+import MobileNavMenu from "./MobileNavMenu";
+import { NAV_LINKS } from "./navLinks";
 
 interface SidebarProps {
   activeLane: LaneId;
@@ -49,23 +51,26 @@ export default function Sidebar({
           : "hidden lg:flex lg:flex-col w-[220px] flex-shrink-0 bg-sidebar border-r border-line min-h-screen px-4 py-5"
       }
     >
-      <div className={collapsed ? "flex items-center justify-between gap-4" : ""}>
+      <div className={collapsed ? "flex items-center gap-3" : ""}>
         <h1
-          className="font-display text-[19px] font-semibold tracking-[0.12em] text-teal uppercase select-none"
+          className="flex-shrink-0 font-display text-[19px] font-semibold tracking-[0.12em] text-teal uppercase select-none"
           style={{ textShadow: "0 0 18px rgba(200,170,110,0.25)" }}
         >
           Coachbuild
         </h1>
 
         {collapsed && (
-          <div className="flex-1 max-w-[240px]">
-            <SidebarChampionSearch
-              mode={searchMode}
-              onModeChange={onSearchModeChange}
-              onSelectChampion={onSearchSelect}
-              onSelectPlayer={onPlayerSelect}
-            />
-          </div>
+          <>
+            <div className="flex-1 min-w-0">
+              <SidebarChampionSearch
+                mode={searchMode}
+                onModeChange={onSearchModeChange}
+                onSelectChampion={onSearchSelect}
+                onSelectPlayer={onPlayerSelect}
+              />
+            </div>
+            <MobileNavMenu patch={patch} />
+          </>
         )}
       </div>
 
@@ -149,6 +154,11 @@ export default function Sidebar({
       </div>
       )}
 
+      {/* v0.44.0 (Builds responsive plan §3b/§4): desktop footer links now
+          render from the shared NAV_LINKS registry (components/hextech/
+          navLinks.ts) instead of 5 hardcoded <Link>s, so mobile's
+          MobileNavMenu and this footer can never drift on which routes are
+          reachable or their labels. */}
       {!collapsed && (
         <div className="mt-auto pt-6 space-y-1">
           <p className="text-[10.5px] text-mut tabular-nums">
@@ -157,89 +167,28 @@ export default function Sidebar({
           <p className="text-[10.5px] text-mut">
             WPA data &middot; coachless.gg
           </p>
-          <Link
-            href="/history"
-            className="inline-block text-[10.5px] text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
-          >
-            Pro players
-          </Link>
-          {/* Feature 4 (patch movers) — the Hextech shell's own cross-page
-              nav is this quiet footer link, not TabNav (that only renders on
-              /history) — mirrors the "Pro players" link above so /movers
-              stays reachable from the main build page. */}
-          <Link
-            href="/movers"
-            className="inline-block text-[10.5px] text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
-          >
-            Patch movers
-          </Link>
-          <Link
-            href="/live-setup"
-            className="inline-block text-[10.5px] text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
-          >
-            Companion
-          </Link>
-          <Link
-            href="/draft"
-            className="inline-block text-[10.5px] text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
-          >
-            Draft
-          </Link>
-          <Link
-            href="/mystats"
-            className="inline-block text-[10.5px] text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
-          >
-            My Stats
-          </Link>
+          {/* flex column with gaps — inline-block links inside space-y-* run
+              together on one line with no separators (caught in the v0.44.0
+              acceptance screenshot: "Pro playersPatch moversCompanion"). */}
+          <div className="flex flex-col gap-1 pt-1">
+            {NAV_LINKS.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className="self-start text-[10.5px] text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
+              >
+                {link.label}
+              </Link>
+            ))}
+          </div>
         </div>
       )}
 
-      {/* Mobile/collapsed: the desktop footer's "Pro players" link has no
-          other home in the horizontal top-bar layout — /history must stay
-          reachable below the 1024px breakpoint too, just folded into this
-          one muted line instead of a multi-line footer block. flex-wrap so
-          adding the "Patch movers" link (Feature 4) can't clip at narrow
-          widths the way a rigid single-line row would. */}
-      {collapsed && (
-        <div className="mt-2.5 flex items-center gap-2 flex-wrap text-[10.5px] text-mut">
-          <span className="tabular-nums">Patch {patch ?? "—"}</span>
-          <span aria-hidden="true">&middot;</span>
-          <Link
-            href="/history"
-            className="text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
-          >
-            Pro players
-          </Link>
-          <span aria-hidden="true">&middot;</span>
-          <Link
-            href="/movers"
-            className="text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
-          >
-            Patch movers
-          </Link>
-          <span aria-hidden="true">&middot;</span>
-          <Link
-            href="/live-setup"
-            className="text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
-          >
-            Companion
-          </Link>
-          <span aria-hidden="true">&middot;</span>
-          <Link
-            href="/draft"
-            className="text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
-          >
-            Draft
-          </Link>
-          <span aria-hidden="true">&middot;</span>
-          <Link
-            href="/mystats"
-            className="text-mut/80 hover:text-teal-dim transition-colors underline decoration-dotted underline-offset-2"
-          >
-            My Stats
-          </Link>
-        </div>
-      )}
+      {/* v0.44.0: the collapsed (mobile) dotted utility-links row moved into
+          MobileNavMenu's "More" disclosure (rendered in the top-bar row 1
+          above) — 5 equal-weight cross-route links no longer fight for width
+          against Patch/lane chrome in ~358px, and each link is now a real
+          ≥44px tap target instead of a dotted-underline inline run. */}
     </aside>
   );
 }

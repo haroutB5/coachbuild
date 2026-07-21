@@ -7327,3 +7327,172 @@ curl https://ddragon.leagueoflegends.com/cdn/16.14.1/data/en_US/champion.json
 - `deriveFallbackRating`'s tag-only fallback is coarse by design (see Deviation #2) — if a future champion ships without someone adding its curated row promptly, the radar will show an `estimated` footnote for that one axis until curated. Not a bug, just the documented maintenance contract from plan §2.2.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-21 23:56
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-21 22:29:48Z; previous content preserved there. Append new rounds below. -->
+
+## engo — builds-responsive-plan §5 carve-out (2026-07-21)
+
+Scope: navLinks.ts, buildTabLayout.ts + their tests only. Did not touch Sidebar/BuildTabContent/RunesSummonersCard/SegmentedControl/app/page.tsx (fronty's lane) or itemSetBody/itemSetsApply/companionClient/live-setup (engy's frozen v0.43.0 lane).
+
+**New: `components/hextech/navLinks.ts`**
+```ts
+export interface NavLink {
+  href: string;
+  label: string;
+}
+
+export const NAV_LINKS: NavLink[] = [
+  { href: "/history", label: "Pro players" },
+  { href: "/movers", label: "Patch movers" },
+  { href: "/live-setup", label: "Companion" },
+  { href: "/draft", label: "Draft" },
+  { href: "/mystats", label: "My Stats" },
+];
+```
+Labels/routes pulled verbatim from Sidebar.tsx's current collapsed-footer block (lines ~203-241) so mobile MobileNavMenu and desktop footer render from one source. Sidebar itself untouched — fronty wires both branches to read NAV_LINKS.
+
+**New: `components/hextech/buildTabLayout.ts`**
+```ts
+export type BuildCardId = "runes" | "core" | "starting" | "proConsensus" | "situational";
+
+export interface BuildTabLayout {
+  left: BuildCardId[];
+  right: BuildCardId[];
+}
+
+export const BUILD_TAB_LAYOUT: BuildTabLayout = {
+  left: ["runes", "core"],
+  right: ["starting", "proConsensus", "situational"],
+};
+```
+Matches plan §3c (`lg:col-span-7` left = RunesSummonersCard + CoreBuildOrderCard, `lg:col-span-5` right = StartingCard + ProConsensusCard + SituationalCard). fronty maps this to JSX order — no card ids are component references, just data.
+
+**Tests:** `components/__tests__/navLinks.test.ts` (5 pairs exact match, no dupe hrefs/labels, all routes absolute) + `components/__tests__/buildTabLayout.test.ts` (exact left/right arrays, all 5 cards present exactly once). `npx vitest run components/__tests__/navLinks.test.ts components/__tests__/buildTabLayout.test.ts` → **2 files passed, 9 tests passed**, 539ms. No other test files touched, no build run, no version bump.
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-22 00:03
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-21 21:11:32Z; previous content preserved there. Append new rounds below. -->
+
+## v0.44.0 — Builds page responsive overhaul, fronty's rows (2026-07-22)
+
+Both stages (mobile §2 + desktop §3) done in one pass per the dispatch brief. Full plan: `_research/builds-responsive-plan.md`.
+
+**Files changed (mine only, exactly the assigned scope):**
+- `components/SegmentedControl.tsx` — additive `layout?: "inline" | "scroll"` prop, default `"inline"`. Non-scroll render path is byte-identical to before (verified by construction: `trackLayoutClass` = `"inline-flex"` when `scroll` is false, same string interpolation shape as the original). `"scroll"`: `flex overflow-x-auto snap-x` track + a static right-edge fade (`from-panel2`, matching the track's own surface color, not page bg — a deliberate deviation from the plan's literal "from-bg" wording, see below) that's `sm:hidden`. Wrapper `w-full sm:w-auto` so it's full-width below `sm` and content-sized (inline-right-aligned) at `sm+`.
+- `components/hextech/MobileNavMenu.tsx` (new) — local `useState` disclosure only, zero history entries, per the hard "popovers aren't a nav step" rule. Outside-click + Escape mirror `SidebarChampionSearch`'s existing pattern exactly. Imports `NAV_LINKS` from `./navLinks` — **engo's file, not yet landed as of this dispatch** (confirmed via glob before starting: `components/hextech/navLinks.ts` doesn't exist yet). Coded strictly against the pinned §4 contract (`export interface NavLink { href: string; label: string }`, `export const NAV_LINKS: NavLink[]`). This file will not typecheck until engo's file lands — expected, per the dispatch brief ("engo lands them within the hour"); I did not create a stub for it (that's engo's file to own).
+- `components/hextech/Sidebar.tsx` — collapsed row 1 restructured to wordmark (shrink-0) + `SidebarChampionSearch` (`flex-1 min-w-0`, dropped `max-w-[240px]`) + `<MobileNavMenu patch={patch}/>` (shrink-0). Removed the dotted 5-link utility row entirely (was ~40 lines, sub-44px targets). Desktop footer also switched from 5 hardcoded `<Link>`s to `NAV_LINKS.map(...)` so mobile/desktop can't drift — **also imports `./navLinks`, same not-yet-landed dependency as MobileNavMenu.tsx.**
+- `app/page.tsx` — **only** the `<main>` inner wrapper class string touched, nothing above the `return`, both `Sidebar` renders untouched (verified: same props, same order, same JSX shape as before). `max-w-[900px] mx-auto` → `max-w-[900px] lg:max-w-none xl:max-w-[1440px] lg:mx-0 xl:mx-auto overflow-x-clip`.
+- `components/hextech/RunesSummonersCard.tsx` — grid `grid-cols-1 md:grid-cols-[1.5fr_1.1fr_auto]` → `grid-cols-2 gap-x-6 gap-y-5 md:grid-cols-[auto_auto_auto] md:justify-start md:gap-x-10`; summoner cell `col-span-2 md:col-span-1`. `RuneTile`: `w-[68px]` → `w-[64px]`, name span `min-h-[24px]` → `min-h-[28px]` + `break-words` added, applied identically to keystone and minor tiles (no per-call-site variance). **Apply/companion wiring (`ApplyRunesButton`, `ItemSetsButton`, their click handlers, `buildRuneApplyBody`, `applyItemSetsForBuild` imports) untouched — only grid/tile layout classes changed**, confirmed by diff review before finishing.
+- `components/hextech/BuildTabContent.tsx` — `RankBracketSelector`: `layout="scroll"` on its `SegmentedControl`, wrapper `flex-col gap-2 sm:flex-row sm:items-center sm:justify-between` (stacked label-above-control on mobile, inline-right-aligned at `sm+`). Ok-branch grid: replaced `space-y-5` linear stack + retired `md:grid-cols-3` Starting/Core pairing with a `grid-template-areas`-driven composition (`BUILD_GRID_CLASS` const, shared by both the loading skeleton and the real content) — below `lg`: single column, original DOM order (Runes, Starting, Core, Situational, ProConsensus); at `lg`+: `7fr 5fr` two-column (left: Runes+Core, right: Starting+ProConsensus+Situational). `BuildLoadingSkeleton` mirrors the same `BUILD_GRID_CLASS` with 5 `CardSkeleton`s (one per area) — no reflow on resolve.
+
+**Deviations from the plan, flagged loudly:**
+1. **§3c "Left/Right, lg:col-span-7/5" was implemented via CSS `grid-template-areas`, not two nested wrapper `<div>`s.** The plan's literal pseudocode (two divs, each `space-y-5`) is simpler but can't simultaneously satisfy "≥lg: single column, **current order**" (Runes→Starting→Core→Situational→ProConsensus) AND the Left/Right grouping (Runes+Core / Starting+ProConsensus+Situational) from the same DOM order — nested divs would force the mobile order to become Runes→Core→Starting→ProConsensus→Situational (grouped by column, not original order), since sub-lg the two wrapper divs just stack fully block-by-block. `grid-template-areas` lets the exact same 5 DOM nodes (no duplicate mounts, no duplicate `ProConsensusCard`/`RunesSummonersCard` fetch effects) claim genuinely different named-area layouts per breakpoint, preserving the literal original single-column order below `lg` while still producing the Left/Right composition at `lg`+. This is standard, well-supported CSS Grid (not experimental) — multi-row-spanning auto-track items (Core spans 2 template rows on the right's behalf) size correctly per spec. **Needs a live viewport check at both `lg` (1280) and `xl` (1440+) to confirm Core's spanned height doesn't leave an odd gap next to Starting+ProConsensus+Situational** — this is exactly the kind of thing box-model reasoning can get subtly wrong; I could not verify it visually in this dispatch (no browser tool available to me here).
+2. **`BuildLoadingSkeleton` now renders 5 `CardSkeleton`s (one per grid area), not 4.** The original skeleton only had 4 (Runes, Starting, Core, one more) despite the resolved content always having 5 cards (Runes, Starting, Core, Situational, ProConsensus) — an existing under-count I fixed as a byproduct of making the skeleton a precise mirror of `BUILD_GRID_CLASS`. Net effect: the loading skeleton now more accurately previews the resolved layout than before.
+3. **SegmentedControl's scroll-mode fade gradient uses `from-panel2` (the track's own background), not `from-bg` (page background) as the plan's shorthand wording said.** The track itself is `bg-panel2`, not `bg-bg` — fading toward the page background would create a visible two-tone seam at the track's own edge instead of a convincing mask. Functionally identical intent, different token.
+
+**§9 acceptance items — what I could verify statically vs what needs the orchestrator's puppeteer pass:**
+- Verified by construction / code review: SegmentedControl default stays `"inline"` (byte-identical non-scroll path); no `useSheetBackNav`/`pushState` in `MobileNavMenu`; `overflow-x-clip` on the `<main>` content wrapper only (not root, not an ancestor of `GameDetailSheet`'s `fixed inset-0` backdrop); `app/page.tsx` diff is the single class-string edit only, both `Sidebar` renders byte-identical to before; `RunesSummonersCard`'s Apply/ItemSets button wiring untouched; `ProConsensusCard`'s existing `hidden`→`null` return naturally collapses its `[grid-area:pro]` cell (confirmed by reading `ProConsensusCard.tsx` line 371: `if (state.status === "hidden") return null;`).
+- **Needs live/puppeteer verification (could not run a browser in this dispatch):** actual pixel result at 390×844 (no horizontal scroll, 7 rank pills scrollable with visible right fade, header bg spans full width, runes card height reduction, 2-col rune tiles not wrapping awkwardly at ~180px half-columns per the risk register); desktop 1280/1440 (2-col grid genuinely forms with no dead space, Core's multi-row-span height resolves cleanly next to the 3 stacked right-column cards — this is the one genuinely novel layout technique in this pass and the most likely place for a visual surprise); `reduced-motion` behavior (no smooth scroll was ever added, so this should be inert by construction, but not screenshot-verified); zero console errors; `npx vitest run` — **ran and confirmed green: 97 files / 1371 tests passed** (does not cover any JSX/component rendering — this repo has no jsdom/RTL harness by design, so none of the above visual items are covered by this run).
+- Untested by me entirely: engo's `NAV_LINKS`/`navLinks.ts` landing — both `Sidebar.tsx` and `MobileNavMenu.tsx` import it and will not compile until it exists. Confirm it landed with the pinned `{href, label}` shape and the 5 routes (`/history`, `/movers`, `/live-setup`, `/draft`, `/mystats`) before running `verify-fix.sh`/build.
+
+**CHANGELOG draft lines (v0.44.0):**
+```
+### Changed
+- Builds page (`/`) is now genuinely responsive: mobile gets a "More" overflow menu for cross-route links (was a cramped 5-link dotted row), a scrollable rank-bracket selector with an edge-fade affordance (was an overflowing 7-pill row causing a right-edge void), and a denser 2-column Runes & Summoners card. Desktop (lg+) sheds the old 900px width cap for a real 2-column build-tab layout (Runes+Core / Starting+Pro Consensus+Situational) on wide viewports.
+```
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-22 00:15
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-21 20:20:05Z; previous content preserved there. Append new rounds below. -->
+
+## v0.43.0 (2026-07-22) — item-set archetype categories + companion apply-failure diagnosability
+
+**Ship note:** this working tree had unrelated concurrent WIP from other agents (fronty/engo, a v0.44.0 responsive-layout pass on `app/page.tsx`, `Sidebar.tsx`, `BuildTabContent.tsx`, `RunesSummonersCard.tsx`, `SegmentedControl.tsx` + new files under `_research/`/`components/hextech/`) mid-edit in the SAME non-isolated directory. To avoid bundling their uncommitted work into my commit/deploy, I diffed only my 8 files, applied that patch in a throwaway `git worktree` off HEAD, ran `npm install` + `verify-fix.sh` + the Vercel deploy from there, then committed the identical file set directly onto `main` in the shared tree (git refused a fast-forward merge since the working tree already had matching uncommitted content — committed those exact files in place instead). Their files were never staged, touched, or included in the deploy artifact.
+
+### Item 1 — category vocabulary chosen + why (`components/hextech/itemSetBody.ts`)
+
+Five categories replace the old binary Tanky/Burst pair, all using the SAME confirmed ddragon tag vocabulary already pinned in this file's v0.36.0 header comment (no new fetch):
+- **Tank** — `Health`/`Armor`/`SpellBlock` (unchanged from the old `TANKY_TAGS`).
+- **AP/Mage** — `SpellDamage`/`MagicPenetration` (the magic half of the old combined `BURST_TAGS`).
+- **AD/Lethality** — `Damage`/`ArmorPenetration`/`CriticalStrike` (the physical half, `CriticalStrike` added since it wasn't in the old Burst set but is clearly AD-itemization).
+- **Attack Speed/On-hit** — `AttackSpeed`/`OnHit` (new, but drawn from the same confirmed vocabulary).
+- **Support/Utility** — `Aura`/`GoldPer`/`CooldownReduction`/`ManaRegen`/`HealthRegen` (new, same vocabulary).
+
+**Emission rule** is a two-part gate, per the user's literal ask ("Yuumi gets no AD line... most champs get Tank only if tankiness>=1 OR the tag vocab shows real tank-item usage"):
+1. **Sensible?** = a curated `lib/draft/compRatings.ts` rating signal (e.g. `tankiness>=1` for Tank, `utility>=2` for Support) OR a ddragon archetype tag on `ChampionRef.tags` (e.g. `Marksman`→AD/Lethality) OR the champion's own real item pool already has ≥1 tag-matched full item (the live-data escape hatch — this is what lets a champion who isn't curated/tagged for a category still get it when their actual play data supports it). Not sensible → omitted entirely, same as the old Tanky/Burst behavior.
+2. **Enough data?** — ≥4 real qualifying items → a "measured" line, byte-identical mechanic to the old `buildThemedLine` (kept as its own untouched function, still solely backing Highest WPA — regression-pinned). Fewer than 4 (including zero) → **never omitted anymore** — fills via the existing `buildLine` 6-items/1-boots machinery: real per-champ data ranks first, then a catalog-wide default-quality pool (every full/purchasable item of that tag across the WHOLE item metadata map passed in, ranked by total gold as an honest-not-measured proxy) pads the rest. Titled `"<Category> (low data)"`.
+
+Capped at 4 category lines per champ (keeps the LCU set's block count at ~10 max: Starting + Core + Buy order + Pro + Highest WPA + 4 categories + Situational); when more than 4 pass the gate, the ones with the most real data win.
+
+### Item 1 — tests
+
+27 new/rewritten tests in `components/__tests__/itemSetBody.test.ts` (51 total in that file): the four brief-named exemplars (Yuumi → Support/Utility only, no AD; Malphite → Tank+AD/Lethality+Attack Speed, no AP/Support; Zed → AD/Lethality only; Ashe → AD/Lethality+Attack Speed only), the thin-data-never-omitted-once-sensible path (exact 6+1 items, "(low data)" title, real data ranked ahead of catalog defaults), an invariant sweep across measured+low-data blocks (never >6 items, never >1 boots, every item passes the same `isFullItem` rule), and the Highest WPA regression pin (verbatim old fixture/assertions, function untouched). One integration test in `itemSetsApply.test.ts` needed its expected block list updated — its own fixture's real item tags legitimately open AD/Lethality (measured) and Attack Speed/On-hit (low-data) now; confirmed as expected behavior, not a regression.
+
+### Item 2 — exactly what each failure mode's toast now says
+
+`components/live/companionClient.ts`'s `applyItemSets`/`applyRunes` now classify every failure into a hint (previously several of these fell through to nothing, hitting `RunesSummonersCard.tsx`'s generic caller-side fallback "Couldn't add item builds — try again, or add them manually in-client." / "Apply failed — try again, or set runes manually in-client."):
+
+| Failure mode | `reason` | `hint` shown in the toast |
+|---|---|---|
+| `fetch()` throws (port closed, tray app not running, LNA blocked) | `network-error` | "Companion not reachable — is the tray app running?" |
+| Non-2xx HTTP status | `` `http-${status}` `` | "League client refused the item-set write (code N) — is the client open?" (rune-page wording for applyRunes) |
+| 2xx but body isn't the expected `{ok:boolean,...}` shape | `malformed-response` | "Companion sent an unexpected response — try again or restart the tray app." |
+| 2xx, well-formed `{ok:false, reason}` with NO companion-supplied hint | companion's own `reason` verbatim | `` `Companion reported "${reason}" — try again, or add manually in-client.` `` |
+| 2xx, `{ok:false, reason, hint}` WITH a companion hint | companion's own `reason` | companion's own `hint`, unchanged (passthrough, as before) |
+
+Every classified failure is also appended to a new localStorage ring buffer (`coachbuild:companion:lastErrors:v1`, cap 20, `{ts, kind, detail}` via `recordCompanionError`/`getCompanionErrorLog`/`clearCompanionErrorLog`) and `/live-setup` now renders the last 5 (most recent first, "Recent errors" section with a Clear button) — so a future report is diagnosable from a screenshot of that page, without PowerShell access. `companion.ps1` untouched this round (web-side only, per brief).
+
+### Item 2 — ranked suspects for the user's on-device "Couldn't add item builds" reports
+
+Traced the full chain: `RunesSummonersCard.tsx`/`BuildTabContent.tsx`/`AutoExporter.tsx` → `itemSetsApply.ts`'s `applyItemSetsForBuild` → `companionClient.ts`'s `applyItemSets` → `public/companion.ps1`'s `/apply-itemsets` handler. One concrete, evidence-backed finding: **the OLD generic fallback text the user reported is the EXACT text that fires only when `result.hint` is `undefined`** — and `companionClient.ts`'s pre-fix network-error catch branch (fetch threw) always DID set a hint ("Check the companion is still running and try again."), a visibly different message. So if the user saw literally "Couldn't add item builds — try again, or add them manually in-client." (not the network-error variant), the browser most likely reached the companion successfully and got back an HTTP response — narrowing the field. Ranked by plausibility, backed by reading `companion.ps1` (lines ~1177-1194, ~691-705):
+
+1. **`{ok:false, reason:'no-client'}`, HTTP 200, no `hint` field at all** (`companion.ps1` line ~1184) — fires whenever `$Sync.LcuPort` is unset, i.e. the companion's background poll hasn't detected a running League client process yet. This is the single most likely candidate: clicking "Add item builds" (or auto-export firing) in the gap between "companion tray app running" and "League client actually up and polled," or right as the client restarts between champ-select and game. Previously indistinguishable from every other failure — now surfaces literally as `Companion reported "no-client" — try again, or add manually in-client.` and logs `kind: "no-client"`, so the NEXT report will show this plainly if it's the real cause.
+2. **`{ok:false, reason:'write-failed'}`, HTTP 200, no `hint`** (`companion.ps1` line ~705) — the PUT of the item-set body to the LCU's own item-sets endpoint itself failed (LCU present and polled, but rejected/errored the write — wrong game phase, a stale/rotated LCU auth token, or a transient LCU-side hiccup). Second most likely given it's the other `ok:false`-with-no-hint path in the item-sets handler specifically.
+3. **An uncaught PowerShell exception in the request handler** → falls to the outer `catch` → likely a 500 with no JSON envelope at all → client-side `http-500` with no hint (pre-fix). Plausible but no direct evidence found in the read; would show as `http-5xx` going forward.
+4. **Companion not running / port closed at all** (`network-error`) — LEAST likely given the exact wording the user reported already had a distinct pre-fix message for this path; only stays on the list because "the user might have paraphrased" is a real possibility.
+
+Recommend: once this ships, the next time it happens, the `/live-setup` "Recent errors" panel should show which of these it actually is — that observation should drive whether the fix belongs in companion.ps1's `no-client` detection latency, its LCU-write retry logic, or elsewhere.
+
+

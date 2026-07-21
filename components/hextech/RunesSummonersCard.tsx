@@ -256,7 +256,7 @@ function RuneTile({ pick, isKeystone, onOpenDetail }: RuneTileProps) {
       type="button"
       onClick={() => onOpenDetail("rune", pick.id)}
       aria-label={`View details for rune ${pick.name}`}
-      className={`group flex flex-col items-center text-center w-[68px] gap-1 rounded-md ${TAP_RING}`}
+      className={`group flex flex-col items-center text-center w-[64px] gap-1 rounded-md ${TAP_RING}`}
     >
       <span
         className={`${dim} rounded-full bg-black/30 overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform group-hover:scale-105`}
@@ -269,7 +269,12 @@ function RuneTile({ pick, isKeystone, onOpenDetail }: RuneTileProps) {
           size={pxSize}
         />
       </span>
-      <span className="text-[10px] text-txt leading-tight line-clamp-2 min-h-[24px]">{pick.name}</span>
+      {/* v0.44.0 (Builds responsive plan §2d): uniform tile width (w-[64px],
+          was w-[68px]) so two tiles fit a 390px half-column, and a taller
+          min-h (24px -> 28px) + break-words for the now-narrower name
+          column — applied identically to every RuneTile render (keystone and
+          minors alike), never varied per call site. */}
+      <span className="text-[10px] text-txt leading-tight line-clamp-2 min-h-[28px] break-words">{pick.name}</span>
       <span className={`text-[11px] font-bold tabular-nums flex items-center gap-0.5 ${wpaClass(pick.wpa)}`}>
         {wpaText(pick.wpa)}
         {pick.lowSample && <LowSampleFlag />}
@@ -381,7 +386,16 @@ export default function RunesSummonersCard({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-[1.5fr_1.1fr_auto] gap-x-8 gap-y-5">
+      {/* v0.44.0 (Builds responsive plan §2d): was
+          grid-cols-1 md:grid-cols-[1.5fr_1.1fr_auto] — fr columns stretched
+          while the small left-packed tiles didn't, leaving dead space, and
+          the auto summoner column floated far right. Now: mobile packs
+          primary+secondary trees side by side (2 cols, tiles fit ~180px each
+          half at 390px) with summoners as a full-width third row, roughly
+          halving the card's mobile height; md+ reverts to 3 content-sized
+          columns (auto), summoners back to the right, justify-start so they
+          don't stretch to fill leftover width the way the old fr track did. */}
+      <div className="grid grid-cols-2 gap-x-6 gap-y-5 md:grid-cols-[auto_auto_auto] md:justify-start md:gap-x-10">
         {/* Primary tree: keystone (large) + 3 minors */}
         <div>
           <TreeLabel icon={model.primaryTree.icon} name={model.primaryTree.name} />
@@ -408,8 +422,9 @@ export default function RunesSummonersCard({
           </div>
         </div>
 
-        {/* Summoner spells */}
-        <div className="flex md:flex-col gap-2 md:justify-center">
+        {/* Summoner spells: full-width third row on mobile (col-span-2),
+            back to its own column on md+ */}
+        <div className="col-span-2 flex flex-row gap-2 md:col-span-1 md:flex-col md:justify-center">
           {spells.map((spell) => (
             <SummonerTile key={spell.id} spell={spell} onOpenDetail={onOpenDetail} />
           ))}

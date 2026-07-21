@@ -596,7 +596,14 @@ export default function HomePage() {
       />
 
       <main className="flex-1 min-w-0 px-4 sm:px-6 lg:px-8 py-6 pb-16">
-        <div className="max-w-[900px] mx-auto">
+        {/* v0.44.0 (Builds responsive plan §3a/§2e): frees desktop width
+            (the 900px cap wasted a real xl monitor's width) and adds a
+            defensive overflow-x-clip against any future horizontal-overflow
+            regression on THIS wrapper only — never the root or an ancestor
+            of a fixed-position overlay (GameDetailSheet's backdrop is
+            `fixed inset-0 z-[100]`, unaffected either way since `<main>` has
+            no fixed descendants). */}
+        <div className="max-w-[900px] lg:max-w-none xl:max-w-[1440px] lg:mx-0 xl:mx-auto overflow-x-clip">
           {mainView.kind === "champion" ? (
             <>
               <ChampionHero champ={mainView.champ} lane={mainView.lane} />
