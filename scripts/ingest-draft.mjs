@@ -124,6 +124,7 @@ async function main() {
   let totalStatsUpserted = 0;
   let totalSkippedRows = 0;
   let patch = "";
+  let guardOk = null;
   const allErrors = [];
 
   for (;;) {
@@ -143,7 +144,19 @@ async function main() {
         `${result.statsUpserted} stats rows, ${result.skippedRows} skipped` +
         (result.errors.length ? `, ${result.errors.length} errors` : "")
     );
-    if (result.nextCursor === null) break;
+    if (result.nextCursor === null) {
+      // P0 permanent guard (2026-07-21, see lib/draft/ingestGuard.ts): runDraftIngest
+      // already ran the cross-source panel + symmetry check on this FINAL
+      // cursor internally (gating retention on both) -- surfaced explicitly
+      // here too, not just buried in `errors`, so a bootstrap run's own
+      // console output makes the guard's verdict impossible to miss.
+      guardOk = result.guardOk;
+      console.log(`\n=== P0 ingest guard (cross-source panel + symmetry check) === guardOk=${guardOk}`);
+      if (guardOk === false) {
+        console.log("  GUARD FAILED -- retention was skipped, see errors below for the specific failing comparisons.");
+      }
+      break;
+    }
     cursor = result.nextCursor;
   }
 
@@ -160,6 +173,7 @@ async function main() {
         totalSkippedRows,
         errorCount: allErrors.length,
         roleProbeFailures,
+        guardOk,
       },
       null,
       2
@@ -168,7 +182,7 @@ async function main() {
   if (allErrors.length > 0) {
     console.log(`\nfirst 5 errors:\n  ${allErrors.slice(0, 5).join("\n  ")}`);
   }
-  if (allErrors.length > 0 || roleProbeFailures.length > 0) process.exitCode = 1;
+  if (allErrors.length > 0 || roleProbeFailures.length > 0 || guardOk === false) process.exitCode = 1;
 }
 
 main().catch((err) => {

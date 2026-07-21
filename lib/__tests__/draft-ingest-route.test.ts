@@ -37,6 +37,7 @@ function batchResult(overrides: Partial<Awaited<ReturnType<typeof runDraftIngest
     nextCursor: null,
     errors: [],
     retentionRan: false,
+    guardOk: null,
     ...overrides,
   };
 }

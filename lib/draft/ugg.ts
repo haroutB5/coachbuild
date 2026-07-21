@@ -17,20 +17,32 @@
 // (exactly what scripts/_curl-transport.mjs's curlTransportWithHeaders does,
 // i.e. the REAL production path for scripts/ingest-draft.mjs) went through
 // clean, every time. Confirmed live: Aatrox(266) vs Mordekaiser(82) at
-// region 12/tier 10/role 4 decoded to 3173/6100 = 52.02%, byte-for-byte the
-// figure counterpick-research.md cites, and role-dominance probes (Garen
-// top/LeeSin jungle/Viktor mid/Jinx adc/Thresh support) all confirmed
-// UGG_ROLE_TO_APP_ROLE below is correct, with zero wins>games rows across
-// every champion probed. So: the sandbox's own shell/tool-level HTTP paths
-// are blocked (a real, reproducible finding, just not one that affects this
-// feature), but the actual ingest transport is NOT — see HANDOFF-engy.md
-// for the full probe log and figures. decodeMatchupsJson stays defensive
-// regardless (drops+counts anything that doesn't fit) as normal engineering
-// hygiene, not because the shape is in doubt anymore. The rankings
+// region 12/tier 10/role 4 decoded to raw row 3173/6100, and role-dominance
+// probes (Garen top/LeeSin jungle/Viktor mid/Jinx adc/Thresh support) all
+// confirmed UGG_ROLE_TO_APP_ROLE below is correct, with zero rawWins>games
+// rows across every champion probed. So: the sandbox's own shell/tool-level
+// HTTP paths are blocked (a real, reproducible finding, just not one that
+// affects this feature), but the actual ingest transport is NOT — see
+// HANDOFF-engy.md for the full probe log and figures.
+//
+// P0 CORRECTION (2026-07-21 — see decodeMatchupsJson's own doc comment for
+// the full story): that 3173/6100 = 52.02% figure, and the byte-identical
+// one counterpick-research.md cites as its "empirically verified" anchor,
+// is NOT Aatrox's own winrate against Mordekaiser — it's Mordekaiser's.
+// Both this file's original decoder AND the research doc took the raw
+// `wins` column at face value as the FILE OWNER's wins; it's actually the
+// OPPONENT's. Aatrox's real winrate in that matchup is the complement,
+// 2927/6100 = 47.98%. The wins<=games invariant this comment used to cite
+// as validation is satisfied by EITHER perspective and was never proof of
+// anything here — decodeMatchupsJson now flips at decode time (`wins:
+// games - rawWins`), and lib/draft/ingestGuard.ts adds a real cross-source
+// sanity check so a future perspective/schema drift is self-detecting.
+// decodeMatchupsJson stays defensive regardless (drops+counts anything
+// that doesn't fit) as normal engineering hygiene. The rankings
 // (champ_stats pickrate/banrate) shape is a SEPARATE, still-open question —
 // see decodeRankingsJson's own comment for why this file deliberately does
 // NOT trust it for `winrate` (which is derived from the matchups data
-// above instead, now confirmed correct).
+// above instead).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { RoleId } from "@/lib/types";
@@ -145,11 +157,32 @@ export interface DecodeMatchupsResult {
 /**
  * Pure decoder for one champion's matchups JSON. Shape (per
  * counterpick-research.md): `data[regionId][tierId][uggRoleId]` ->
- * `[ [rows], meta ]`, row = `[opponentChampionId, wins, matches, ...15 diff
- * cols]`. Validates wins<=games and both non-negative on every row —
- * violations are dropped and counted in `skippedRows`, never included (this
- * IS the empirical assertion the plan's §9 ship-sequence calls for: run
- * this decoder over real data and confirm skippedRows stays at/near 0).
+ * `[ [rows], meta ]`, row = `[opponentChampionId, rawWins, matches, ...15
+ * diff cols]`.
+ *
+ * P0 PERSPECTIVE FIX (2026-07-21, user-caught with external + internal
+ * evidence — see migrations/0011_draft_perspective_fix.sql,
+ * lib/draft/ingestGuard.ts, HANDOFF-engy.md): `rawWins` in champion X's OWN
+ * matchups file is the OPPONENT's wins in that pairing, NOT X's — this row
+ * is written from the opponent's perspective even though it lives in X's
+ * file. The original decoder took `rawWins` at face value as X's own wins,
+ * which silently mirror-flipped every baseline winrate and matchup delta
+ * app-wide (proof: Mel mid's derived baseline landed at 54.6% against a
+ * real ~44.8%; Ashe support at 55.2% against a real ~43.7% — near-exact
+ * complements; a live Viktor mid "counters" list surfaced off-meta
+ * marksmen "beating" him at 58-64%, which is actually VIKTOR crushing
+ * THEM, read backwards). The wins<=games invariant and the research's
+ * original Aatrox-vs-Mordekaiser 52.02% anchor both hold true under EITHER
+ * perspective and could never have caught this alone — see
+ * lib/draft/ingestGuard.ts's cross-source sanity check for the fix that
+ * makes a future perspective/schema drift self-detecting instead of
+ * user-detected.
+ *
+ * Fix: this champion's own wins is now computed as `games - rawWins`. The
+ * raw row still has to satisfy `0 <= rawWins <= games` first (same shape
+ * check as before, just applied to the raw value before flipping — a
+ * validated raw value can never flip to something negative/out-of-range).
+ * Violations are dropped and counted in `skippedRows`, never included.
  * Scoped to WORLD_REGION/EMERALD_TIER only (v1 scope — see this file's
  * header). Never throws on a missing/malformed region-tier-role node — an
  * absent bucket just contributes zero rows for that role, since coachless-
@@ -178,16 +211,18 @@ export function decodeMatchupsJson(
         result.skippedRows += 1;
         continue;
       }
-      const [oppId, wins, games] = raw as unknown[];
-      if (typeof oppId !== "number" || typeof wins !== "number" || typeof games !== "number") {
+      const [oppId, rawWins, games] = raw as unknown[];
+      if (typeof oppId !== "number" || typeof rawWins !== "number" || typeof games !== "number") {
         result.skippedRows += 1;
         continue;
       }
-      if (wins < 0 || games < 0 || wins > games) {
+      if (rawWins < 0 || games < 0 || rawWins > games) {
         result.skippedRows += 1;
         continue;
       }
-      rows.push({ oppId, wins, games });
+      // P0 fix: rawWins is the OPPONENT's wins in this row — this
+      // champion's own wins is the complement.
+      rows.push({ oppId, wins: games - rawWins, games });
     }
     result.byRole[appRole as unknown as RoleId] = rows;
   }

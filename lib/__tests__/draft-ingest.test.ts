@@ -26,9 +26,19 @@ vi.mock("@/lib/draft/ugg", async (importOriginal) => {
   };
 });
 
+// P0 guard (2026-07-21): mocked to a passing default here -- this file
+// covers ORCHESTRATION (cursor/batch/retention wiring), not guard logic
+// itself (see draft-ingestGuard.test.ts for that). A dedicated test below
+// flips these to failing to prove retention actually gets gated on them.
+vi.mock("@/lib/draft/ingestGuard", () => ({
+  runDefaultIngestGuard: vi.fn(async () => ({ ok: true, checked: 20, failures: [], details: [] })),
+  runSymmetryCheck: vi.fn(async () => ({ ok: true, checked: 100, failures: [] })),
+}));
+
 import { getSql } from "@/lib/pro/db";
 import { resolveDraftPatchLabel } from "@/lib/draft/patch";
 import { fetchMatchups, fetchRankings } from "@/lib/draft/ugg";
+import { runDefaultIngestGuard, runSymmetryCheck } from "@/lib/draft/ingestGuard";
 import {
   runDraftIngest,
   BATCH_SIZE,
@@ -49,6 +59,8 @@ describe("runDraftIngest", () => {
     vi.mocked(resolveDraftPatchLabel).mockReset().mockResolvedValue("16.14");
     vi.mocked(fetchMatchups).mockReset();
     vi.mocked(fetchRankings).mockReset().mockResolvedValue({ byRole: {} });
+    vi.mocked(runDefaultIngestGuard).mockReset().mockResolvedValue({ ok: true, checked: 20, failures: [], details: [] });
+    vi.mocked(runSymmetryCheck).mockReset().mockResolvedValue({ ok: true, checked: 100, failures: [] });
     __resetDraftPacerForTests();
     __setDraftPaceMsForTests(0); // no real wall-clock pacing needed against a mocked transport
 
@@ -122,13 +134,15 @@ describe("runDraftIngest", () => {
     expect(result.skippedRows).toBe(5);
   });
 
-  it("retention prunes only on the FINAL batch (nextCursor === null)", async () => {
+  it("retention prunes only on the FINAL batch (nextCursor === null), gated on a passing guard", async () => {
     vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0 });
     const champions = Array.from({ length: 12 }, (_, i) => ({ id: i + 1 }));
 
     const mid = await runDraftIngest({ cursor: 0, champions }); // not final (12 champs, batch 9 -> nextCursor=9)
     expect(mid.nextCursor).not.toBeNull();
     expect(mid.retentionRan).toBe(false);
+    expect(mid.guardOk).toBeNull(); // guard never runs on a non-final batch
+    expect(runDefaultIngestGuard).not.toHaveBeenCalled();
     const pruneCallsMid = mockSql.mock.calls.filter(([strings]) =>
       (strings as TemplateStringsArray).join("").includes("GROUP BY patch")
     );
@@ -137,7 +151,10 @@ describe("runDraftIngest", () => {
     mockSql.mockClear();
     const final = await runDraftIngest({ cursor: 9, champions }); // final batch
     expect(final.nextCursor).toBeNull();
+    expect(final.guardOk).toBe(true);
     expect(final.retentionRan).toBe(true);
+    expect(runDefaultIngestGuard).toHaveBeenCalledWith(mockSql, "16.14");
+    expect(runSymmetryCheck).toHaveBeenCalledWith(mockSql, "16.14");
     const pruneCallsFinal = mockSql.mock.calls.filter(([strings]) =>
       (strings as TemplateStringsArray).join("").includes("GROUP BY patch")
     );
@@ -146,6 +163,40 @@ describe("runDraftIngest", () => {
       (strings as TemplateStringsArray).join("").startsWith("DELETE FROM coachbuild.draft_")
     );
     expect(deleteCalls).toHaveLength(2); // draft_matchup + draft_champ_stats
+  });
+
+  it("P0 guard: a FAILING cross-source panel skips retention and surfaces the failure (never silently trusted)", async () => {
+    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0 });
+    vi.mocked(runDefaultIngestGuard).mockResolvedValue({
+      ok: false,
+      checked: 15,
+      failures: ["Viktor/mid: draft baseline 58.0% vs ground truth 50.5% (delta 7.5 > tolerance 4)"],
+      details: [],
+    });
+
+    const result = await runDraftIngest({ cursor: 0, champions: [{ id: 1 }] });
+    expect(result.nextCursor).toBeNull();
+    expect(result.guardOk).toBe(false);
+    expect(result.retentionRan).toBe(false);
+    expect(result.errors.some((e) => e.includes("cross-source panel"))).toBe(true);
+    const pruneCalls = mockSql.mock.calls.filter(([strings]) =>
+      (strings as TemplateStringsArray).join("").includes("GROUP BY patch")
+    );
+    expect(pruneCalls).toHaveLength(0); // pruneOldPatches never even attempted
+  });
+
+  it("P0 guard: a FAILING symmetry check also skips retention, independent of the panel result", async () => {
+    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0 });
+    vi.mocked(runSymmetryCheck).mockResolvedValue({
+      ok: false,
+      checked: 50,
+      failures: ["champ 1 vs 2 (role 0): wr(A,B)=70.0% + wr(B,A)=70.0% = 140.0% (expected ~100%, delta 40.0 > tolerance 4)"],
+    });
+
+    const result = await runDraftIngest({ cursor: 0, champions: [{ id: 1 }] });
+    expect(result.guardOk).toBe(false);
+    expect(result.retentionRan).toBe(false);
+    expect(result.errors.some((e) => e.includes("symmetry check"))).toBe(true);
   });
 
   it("fastFailOnRatelimit aborts the rest of the batch on a 403/429-shaped error", async () => {

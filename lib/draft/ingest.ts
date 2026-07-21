@@ -30,6 +30,7 @@ import {
   type UggTransport,
 } from "@/lib/draft/ugg";
 import { patchSegment, resolveDraftPatchLabel } from "@/lib/draft/patch";
+import { runDefaultIngestGuard, runSymmetryCheck } from "@/lib/draft/ingestGuard";
 
 /** Champions per invocation. ~170 champs / 9 per batch ≈ 19 batches; at
  *  ~1.5s pacing and 2 requests (matchups+rankings) per champ, one batch is
@@ -114,6 +115,14 @@ export interface DraftIngestResult {
   /** True only on the batch where nextCursor became null AND retention
    *  pruning (keep last 2 distinct patch labels) actually ran. */
   retentionRan: boolean;
+  /** P0 permanent guard (2026-07-21, see lib/draft/ingestGuard.ts): null on
+   *  every batch except the final one (nextCursor === null), where BOTH the
+   *  cross-source panel AND the internal symmetry check must pass before
+   *  retention is allowed to run. false means retention was SKIPPED this
+   *  walk even though the walk itself completed — the data stays in place
+   *  (never silently trusted), but the last-known-good patch is NOT pruned
+   *  until a human investigates (see the pushed errors for specifics). */
+  guardOk: boolean | null;
 }
 
 const APP_ROLES: RoleId[] = [0, 1, 2, 3, 4];
@@ -182,6 +191,7 @@ export async function runDraftIngest(opts: DraftIngestOptions = {}): Promise<Dra
     nextCursor: null,
     errors: [],
     retentionRan: false,
+    guardOk: null,
   };
 
   if (champIds.length === 0 || cursor < 0 || cursor >= champIds.length) {
@@ -260,11 +270,45 @@ export async function runDraftIngest(opts: DraftIngestOptions = {}): Promise<Dra
   }
 
   if (result.nextCursor === null) {
+    // P0 PERMANENT GUARD (2026-07-21 — see lib/draft/ingestGuard.ts's header
+    // for the full incident this closes): a full walk finishing is NOT
+    // enough evidence the data is trustworthy — the perspective-inversion
+    // bug that prompted this guard satisfied every internal invariant
+    // (wins<=games, a stale empirical anchor) while being systematically
+    // wrong. Two independent checks must BOTH pass before retention (which
+    // deletes the last known-good patch) is allowed to run: the
+    // cross-source panel (vs coachless, catches a perspective/schema
+    // inversion) and the symmetry check (vs itself, catches decode/keying
+    // corruption — see that function's own comment for why these are NOT
+    // redundant with each other). A guard failure never deletes anything
+    // that's already there — it just refuses to prune, and surfaces the
+    // specific failures so a human can investigate before the next run.
     try {
-      await pruneOldPatches(sql);
-      result.retentionRan = true;
+      const [panelResult, symmetryResult] = await Promise.all([
+        runDefaultIngestGuard(sql, patchLabel),
+        runSymmetryCheck(sql, patchLabel),
+      ]);
+      result.guardOk = panelResult.ok && symmetryResult.ok;
+      if (!panelResult.ok) {
+        result.errors.push(`ingest guard (cross-source panel) FAILED: ${panelResult.failures.join("; ")}`);
+      }
+      if (!symmetryResult.ok) {
+        result.errors.push(`ingest guard (symmetry check) FAILED: ${symmetryResult.failures.join("; ")}`);
+      }
     } catch (err) {
-      result.errors.push(`retention prune failed: ${(err as Error).message}`);
+      result.guardOk = false;
+      result.errors.push(`ingest guard threw unexpectedly (treated as failed, never silently trusted): ${(err as Error).message}`);
+    }
+
+    if (result.guardOk) {
+      try {
+        await pruneOldPatches(sql);
+        result.retentionRan = true;
+      } catch (err) {
+        result.errors.push(`retention prune failed: ${(err as Error).message}`);
+      }
+    } else {
+      log("ingest guard failed -- retention SKIPPED, existing data left in place for investigation");
     }
   }
 

@@ -1,33 +1,74 @@
-<!-- merged into HANDOFF.md 2026-07-20 23:46:16Z; previous content preserved there. Append new rounds below. -->
+<!-- merged into HANDOFF.md 2026-07-21 00:24:23Z; previous content preserved there. Append new rounds below. -->
 
-# HANDOFF-engy.md — Draft recommender audit patch round + full ship (2026-07-21)
+# HANDOFF-engy.md — P0: u.gg matchup perspective inversion, fix + ship (2026-07-21)
 
-## Status: DONE — shipped as v0.37.0
+## Status: DONE — shipped as v0.37.2
 
-Audit verdict was SHIP-AFTER-PATCH. All 6 findings (P1-1, P1-2, P2-1, P2-2, P2-3, P3-1) fixed, live-verified against Neon where applicable, then full ship pipeline run.
+## The bug
 
-## Fixes
+`wins` in champion X's OWN u.gg matchups file row `[oppId, wins, matches]` is the **opponent's** wins in that pairing, not X's. Every row this app ever ingested (the 0.37.0 bootstrap + this morning's scheduled full refresh) was stored mirror-flipped. User-caught (lolalytics screenshot showed Viktor mid's real worst matchups losing ~48-50%; ours showed off-meta marksmen "beating" him at 58-64%) and internally confirmed (Mel mid baseline 54.6% stored vs real ~44.8%; Ashe support 55.2% vs real ~43.7% — near-exact complements). The bootstrap's own `wins<=games` invariant and the research doc's Aatrox-vs-Mordekaiser "52.02%" anchor both held true under either perspective — that figure was actually Mordekaiser's winrate, not Aatrox's (real: 47.98%) — so neither could ever have caught this.
 
-- **P1-1 (default-screen garbage, e.g. Yuumi 81%/128g in a Top pool):** added `total_games` column to `draft_champ_stats` (migration `0010_draft_audit_patches.sql`, backfilled from existing matchup data) + `filterPoolByTotalGames` (5000-game floor, `lib/draft/score.ts`), wired into the pool query in `lib/draft/recommend.ts`. Also fixed `rankPlays`' empty-enemies path — `minGames`/`confidence` are now seeded from the candidate's own `totalGames` (never a blank "normal" with no sample reported).
-  - **Acceptance evidence (live Neon, all 5 lanes, no enemies):** every single candidate across every lane has `minGames` >= 5196 (well above the 5000 floor) — full dump: lane0 `12:5759,51:6485,35:7379,145:7032,64:9429,901:18865,18:5656,202:5400,104:9761,254:5208`; lane1 `29:9892,805:259660,67:5245,238:107041,164:5196,68:5361,63:15730,246:100328,107:180721,80:43836`; lane3 `805:18557,4:7940,800:114040,110:142963,81:738642,804:212517,42:53907,429:91918,236:390949,145:691449`; lane4 `21:12620,81:13490,64:11870,29:17886,800:121454,805:18138,238:5984,22:44816,90:6234,54:25659`. Yuumi(350)/Bard(432)/Braum(201) — the auditor's cited artifacts — appear in NONE of them. Also added a UI hint caption under "Suggested picks" documenting the floor.
-- **P1-2 (cron never progressed):** `coachbuild.draft_ingest_cursor` one-row table (same migration). `app/api/ingest/draft/route.ts` reads/persists it when no explicit `?cursor=` is given (wraps to 0 on a completed walk); an explicit cursor still overrides and never touches the persisted state. `lib/draft/ingest.ts` gained `getPersistedCursor`/`setPersistedCursor`.
-- **P2-1 (lane-opp auto-detect wrong):** deleted `draftLiveSync.ts`'s `laneOpponentIndex` field/computation and its 3 tests entirely — the index-vs-role assumption was falsified by the companion's own SelfTest fixture (theirTeam compacts unresolved slots). `app/draft/page.tsx` no longer derives a client-side guess from live sync; the enemy-chip highlight now reflects the user's explicit tag OR the server's `meta.laneOppInferred` (never a client index guess), with an "(inferred)" label distinguishing the two.
-- **P2-2 (every ban "Low sample n=0"):** `BanResult` (score.ts) gained real `confidence`/`minGames`, computed in `rankBans` from the hover-vs-target matchup row's own `games` — null/low only when there's genuinely no row. `components/live/draftRecommend.ts`'s `DraftBanResult.minGames` is now `number | null` (was defaulting to a fabricated 0).
-- **P2-3 (ban score as a green win-%):** `DraftResultRow.tsx`'s ban variant now renders a relative priority bar (scaled against a documented 0.12 ceiling) + raw score subtext — no `pct()`, no green.
-- **P3-1 (serving-patch completeness):** `resolveServingPatch` now orders by `(count(DISTINCT champ_id) >= 120) DESC, MAX(ingested_at) DESC` — a genuinely complete older patch outranks a mid-ingest newer one. Bans section gained a "bans that counter your pick in your lane" scope-note caption.
+## Fix
 
-## Tests
+1. **Data (no re-fetch):** `migrations/0011_draft_perspective_fix.sql` — `UPDATE coachbuild.draft_matchup SET wins = games - wins`, then re-derived `draft_champ_stats.winrate` from the corrected rows (games-weighted, same derivation as ingest — not a blind `1 - old_value`). Applied to live Neon; verified.
+2. **Decoder:** `lib/draft/ugg.ts`'s `decodeMatchupsJson` now computes `wins: games - rawWins` at decode time (validation still runs on the raw value first). Loud doc comment explaining u.gg's row-owner/opponent convention. Fixture tests rewritten with deliberately asymmetric win/loss numbers (the old fixtures used near-50/50 splits that would pass either way — useless for pinning a flip).
+3. **Permanent guard (`lib/draft/ingestGuard.ts`, new):** two INDEPENDENT checks, both wired into `runDraftIngest`'s final-cursor path (gates `pruneOldPatches` — a failure never deletes anything, just skips retention and surfaces the specifics):
+   - **Cross-source panel** — 20 champions, 4 per role across all 5 roles (deliberately mixing normal and skewed archetypes), comparing draft baseline vs `lib/heroStats.ts`'s coachless data (genuinely separate upstream). >4-point drift on enough entries = fail.
+   - **Symmetry check** — 100 sampled (A,B) pairs, asserts wr(A,B)+wr(B,A)≈100%. Explicitly documented as NOT redundant with the panel: a uniform inversion (both sides flipped the same way) still sums to ~100%, so this alone would never have caught THIS bug — it catches a different failure class (decode/keying corruption, role-map regressions). Kept both, with a code comment specifically warning against ever "simplifying" one into the other.
+   - Also wired into `scripts/ingest-draft.mjs`'s summary output (explicit `guardOk` field + non-zero exit on failure), not just buried in `errors[]`.
+4. **Docs:** `_research/counterpick-research.md` — added a correction blockquote at the top plus inline fixes to the specific wrong claim and the verify-at-build checklist item that "passed" without actually checking perspective.
 
-986 passing (baseline 973, +13 net: score/ingest/recommend/route/draftLiveSync all extended for the new behavior — draftLiveSync actually shed 2 net tests removing the deleted laneOpponentIndex describe block, offset by new coverage elsewhere). `tsc --noEmit` clean. `verify-fix.sh` full gate: tsc/lint/tests/build/sw-version/manifest all PASS.
+## Post-fix verification (live Neon)
+
+- **Known-skew spot check:** Mel mid 45.4% (target ~44-46%), Ashe support 44.8% (target ~43-45%), Viktor mid 50.6% (target ~50-51%) — all landed correctly.
+- **Full cross-source panel (all 20 entries, all 5 roles):** 20/20 checked, ALL pass, max delta 0.7 points (tolerance is 4). Full breakdown:
+
+  ```
+  Garen/top            draft=51.7%  truth=51.5%  delta=0.2
+  Malphite/top         draft=51.3%  truth=51.1%  delta=0.2
+  Riven/top            draft=50.0%  truth=50.6%  delta=0.6
+  Illaoi/top           draft=50.5%  truth=50.4%  delta=0.1
+  LeeSin/jungle        draft=48.8%  truth=49.0%  delta=0.2
+  Warwick/jungle       draft=51.8%  truth=51.3%  delta=0.5
+  Amumu/jungle         draft=50.5%  truth=49.8%  delta=0.7
+  Kayn/jungle          draft=50.4%  truth=50.3%  delta=0.1
+  Viktor/mid           draft=50.6%  truth=50.4%  delta=0.2
+  Yasuo/mid            draft=48.5%  truth=48.3%  delta=0.2
+  Annie/mid            draft=50.8%  truth=50.6%  delta=0.2
+  Malzahar/mid         draft=50.7%  truth=50.3%  delta=0.4
+  Jinx/bot             draft=51.5%  truth=51.7%  delta=0.2
+  Xayah/bot            draft=51.0%  truth=51.3%  delta=0.3
+  Twitch/bot           draft=50.7%  truth=50.8%  delta=0.1
+  Kalista/bot          draft=48.7%  truth=49.2%  delta=0.5
+  Thresh/support       draft=51.6%  truth=51.7%  delta=0.1
+  Yuumi/support        draft=48.2%  truth=48.0%  delta=0.2
+  Soraka/support       draft=51.0%  truth=50.8%  delta=0.2
+  Blitzcrank/support   draft=50.6%  truth=50.6%  delta=0.0
+  ```
+- **Symmetry check:** 100/100 sampled pairs pass.
+- **Per-role correlation** (draft baseline vs coachless ground truth): top r=0.884, jungle r=0.959, mid r=0.997, bot r=0.997, support r=0.997.
+- **Distribution sanity:** per-role mean matchup winrate ≈50.00% for every role (role0=25186 rows, role1=15558, role2=23046, role3=15660, role4=21602) — expected for a correctly-complementary A-vs-B/B-vs-A matchup population.
+- **wr>62% with n>1000 survivors:** exactly 1 — Nasus(75) vs Naafiri(805) in the JUNGLE bucket, 63.1% @ n=5029. Flagged for visibility per the ask, not treated as a failure: Nasus jungle is a genuinely rare, niche crossover pick, and a single outlier in tens of thousands of rows isn't a systemic pattern. Worth a human glance but not blocking.
+- **Prod acceptance — `lane=2&enemies=112&laneOpp=112` (Viktor mid, laneOpp=self to force the direct-lane weight):**
+
+  ```json
+  "plays": [Singed 58.5% (winVsLaneOpp 60.3%, n=463), Zilean 54.4% (55.2%, n=534),
+            Nunu&Willump 53.4% (54.3%, n=897), Kayle 53.0% (53.3%, n=612),
+            Xerath 52.6% (52.6%, n=16547), Gwen 52.4% (52.4%, n=496),
+            Vel'Koz 51.8% (51.9%, n=2268), Master Yi 51.8% (52.8%, n=233),
+            Garen 51.7% (51.5%, n=752), Syndra 51.5% (51.5%, n=20235)]
+  "bans": [Singed 0.076, Zilean 0.042, Nunu&Willump 0.040, Xerath 0.031, Kayle 0.029] (all confidence:"normal", real n= per target)
+  ```
+
+  Real mid-relevant control-mage/bruiser matchups, zero marksmen, no repeat of the old garbage. One honest note: Singed's `winVsLaneOpp` (60.3%, n=463) is just over the "no 60%+" bar in the letter — but it's a real, explicable matchup (Singed's proximity/tankiness genuinely bothers immobile mages), not nonsensical like the old list, and the candidate's blended `score` (which is what ranks/displays, not the raw matchup figure) is 58.5%. Flagged transparently rather than silently rounded away.
+
+## Tests / gate
+
+1022 passing (baseline 1003 going into this round: +19 net — 2 in `draft-ingest.test.ts` for guard-gating, 17 new in `draft-ingestGuard.test.ts`). `tsc --noEmit` clean. Full `verify-fix.sh`: tsc/lint/tests/build/sw-version/manifest all PASS.
 
 ## Ship
 
-- Version: app **0.37.0** (was 0.36.1). Companion: **stays 1.4.0** — P2-1's fix was entirely client-side (draftLiveSync.ts/page.tsx); `companion.ps1` was not touched this round.
-- CHANGELOG.md: new 0.37.0 entry (Draft feature headline + all 6 audit patches).
-## Deploy + prod smoke (plan §9.5)
-
-- Deployed via `vercel --prod --archive=tgz` (commit `f059633`, author `harout_b5@live.com`). Live at https://coachbuild.vercel.app, aliased correctly, build clean (`/draft`, `/api/draft/recommend`, `/api/ingest/draft` all present in the route manifest).
-- **`/draft` real-browser check (chrome-devtools, prod URL):** loads with lane defaulted to Mid, a sane top-10 (Lucian/Ezreal/Caitlyn/Kai'Sa/Corki/Mel/Smolder/Azir/Varus/Orianna, n=6746-158197, scores 53.3-59.0%) — **zero Yuumi/Bard/Braum-class garbage, confirming P1-1's acceptance criterion on the live deployed site, not just locally.** Draft nav link present and correctly highlighted. Selected Orianna as "your champion" → Suggested bans rendered real per-target `n=` counts (960/2140/301/976/81) and "priority 0.0XX" subtext (0.036-0.052, matching the auditor's cited 0.02-0.07 range) — **no green pct(), confirming P2-3** — and correctly flagged ONLY Teemo (n=81) as "LOW SAMPLE" while n=301+ targets showed no badge, confirming P2-2's confidence math is accurate against real data. Zero console errors. Footer correctly shows v0.37.0.
-- **Recommend-endpoint sanity vs u.gg:** already cross-checked at the decode layer during the original build (Aatrox vs Mordekaiser 3173/6100=52.02%, byte-exact vs u.gg); this round's live-browser check above is the end-to-end equivalent (real ranked output, real sample sizes, no per-matchup value fabricated).
-- **Header discipline (`curl -I`):** populated and degraded (400) cases both return `Cache-Control: public, max-age=0, must-revalidate` VERBATIM — Vercel/Next.js normalizes the outward-facing header text for App Router route handlers (confirmed this is a PRE-EXISTING, project-wide platform behavior, not something my route introduced: `/api/patch-movers`, an already-shipped route with the identical `NextResponse.json(..., {headers})` pattern, shows the exact same normalized text in prod). The FUNCTIONAL behavior is still correct underneath: a fresh populated query goes `X-Vercel-Cache: MISS` → `HIT` on repeat (edge caching my `s-maxage` value internally), while the 400/invalid-lane case stays `MISS` on every repeat (never cached), matching `no-store`'s intent. Verified, not assumed — repeated the 400 case 3x.
-- **Vercel-egress probe of stats2 (non-blocking, per plan):** could NOT trigger the real `/api/ingest/draft` route directly — `CRON_SECRET` is a Vercel "Sensitive" env var (write-only; `vercel env pull` returns `""` for it AND for `DATABASE_URL`, confirming this is Vercel's redaction behavior, not a real empty value). Deployed a tiny throwaway unauthenticated diagnostic route instead (`GET` to the same stats2 URL my ingest lib uses, default fetch transport — no auth, no secrets, removed + redeployed clean immediately after this one check). **Result: HTTP 403, Cloudflare "Just a moment..." challenge** — the SAME block this session's Bash-tool/WebFetch/browser hit locally (see `[[feedback_bash_tool_vs_execfile_network_path]]`), meaning Vercel's own serverless egress IP is ALSO Cloudflare-challenged for this CDN via the default `fetch`-based transport (unlike the local script's curl-subprocess transport, which is not an option inside a Vercel Node function the same way). **Practical effect: the daily `/api/ingest/draft` cron will very likely fail to fetch fresh u.gg data going forward**, same class of problem as the pre-existing, already-documented prostage cron gap in this repo's HANDOFF ("has never landed data in production"). Non-blocking for THIS ship (the pool is fully bootstrapped via the local script), but flagging clearly: refreshing this data patch-to-patch will need either (a) a periodic manual `npm run ingest:draft` run from a reachable machine (the proven-working path), or (b) further investigation into Vercel egress IP reputation with u.gg/Cloudflare. Recommend surfacing this to the user as a known follow-up, not silently trusting the cron.
+- Version: app **0.37.2** (was 0.37.1). Companion unchanged at **1.4.1** (engo's Round B ship, already on disk before this round started — this fix never touched `.ps1`).
+- Migration `0011_draft_perspective_fix.sql` applied to live Neon (confirmed before/after via the spot-check numbers above).
+- CHANGELOG.md: new 0.37.2 entry, stated plainly as user-caught with external evidence — no euphemism.
+- Deployed via `vercel --prod --archive=tgz`, commit authored `harout_b5@live.com`.
