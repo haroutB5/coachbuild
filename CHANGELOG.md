@@ -2,6 +2,11 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.38.2] — 2026-07-21 (companion unchanged at 1.5.0)
+### Fixed — Stormraider's Surge keystone icon showed a fallback glyph on the BUILD tab
+- User-reported: the keystone rendered as a letter glyph ("S") in the Runes & Summoners card. Root cause: `lib/staticData.ts`'s `runeIconUrl` still trusted the coachless rune bundle's Icon path for id 8230, which is the stale pre-rework `…/PhaseRush/PhaseRush.png` path — it 403s on the CDN. The v0.13.0 special case (`StormraidersSurgeRuneIcon2.webp`) was only ever added to `components/proAssets.ts` (pro-play surfaces), so the BUILD tab's resolver was missed.
+- Fix: mirrored the same special case in `runeIconUrl` (alongside the existing Deathfire Touch 8992 one). New pure test suite `lib/__tests__/staticData.runeIconUrl.test.ts` (4 tests) pins both special cases, the .png→.webp rewrite, and the empty-path degrade. 1172 tests passing.
+
 ## [0.38.1] — 2026-07-21 (companion 1.4.1 -> **1.5.0 — re-run the install one-liner**)
 ### Fixed — champ select silently failed to open the Builds page when ANY other CoachBuild tab was open
 - **Real user-reported bug (Practice Tool, queue-agnostic):** entering champ select didn't open `/`'s live setup if the user had, say, `/live-setup` open in another tab. Root cause: `CompanionProvider.tsx` (mounted app-wide since the v0.37 lift) polls `/status` from EVERY route once a session token exists, but `companion.ps1`'s `Test-CompanionHasAttachedTab` treated ANY recent poll (`LastStatusPollAt` fresh within 8s) as proof a tab would live-follow the champion change, so it skipped `Start-Process` — even though only `/` and `/draft` actually react to a live champ-select update. The debounce state (`LastOpenedChampId`) still advanced, so the same champion never re-triggered even after the non-following tab closed.

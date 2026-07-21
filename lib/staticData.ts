@@ -73,6 +73,16 @@ const DEATHFIRE_TOUCH_ID = 8992;
 const DEATHFIRE_TOUCH_ICON =
   "perk-images/Styles/Sorcery/DeathfireTouch/DEATHFIRE_TOUCH_KEYSTONE.webp";
 
+// Stormraider's Surge (id 8230) — reworked/renamed Phase Rush: same id, same
+// "PhaseRush" key, new asset filename. The coachless rune bundle still carries
+// the OLD path (…/PhaseRush/PhaseRush.png → .webp), which 403s on the CDN.
+// components/proAssets.ts has carried this same special case since v0.13.0;
+// this builder (used by the BUILD tab's rune card) was missed then and the
+// stale path surfaced as a fallback glyph (user-reported 2026-07-21).
+const STORMRAIDERS_SURGE_ID = 8230;
+const STORMRAIDERS_SURGE_ICON =
+  "perk-images/Styles/Sorcery/PhaseRush/StormraidersSurgeRuneIcon2.webp";
+
 /**
  * Convert a rune's Icon path (from the CDN map) to an absolute URL.
  * The map may return .png paths but the served files are .webp.
@@ -87,6 +97,9 @@ export function runeIconUrl(
 ): string {
   if (runeId === DEATHFIRE_TOUCH_ID) {
     return ICON_BASES.rune(ver) + DEATHFIRE_TOUCH_ICON;
+  }
+  if (runeId === STORMRAIDERS_SURGE_ID) {
+    return ICON_BASES.rune(ver) + STORMRAIDERS_SURGE_ICON;
   }
   if (!iconPath) return "";
   // Replace .png extension with .webp
