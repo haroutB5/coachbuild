@@ -39,20 +39,20 @@ describe("GET /api/draft/recommend", () => {
   });
 
   it("dedupes enemies and caps at 5", async () => {
-    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({ plays: [], bans: null, meta: baseMeta, pending: true });
+    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({ plays: [], potentialPlays: [], bans: null, meta: baseMeta, pending: true });
     await GET(req("?lane=0&enemies=1,1,2,3,4,5,6,7"));
     const call = vi.mocked(computeDraftRecommend).mock.calls[0][0];
     expect(call.enemies).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("passes lane/enemies/laneOpp/hover through to the engine", async () => {
-    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({ plays: [], bans: null, meta: baseMeta, pending: true });
+    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({ plays: [], potentialPlays: [], bans: null, meta: baseMeta, pending: true });
     await GET(req("?lane=2&enemies=10,20&laneOpp=10&hover=99"));
     expect(computeDraftRecommend).toHaveBeenCalledWith({ lane: 2, enemies: [10, 20], laneOpp: 10, hover: 99 });
   });
 
   it("pending -> 200 + no-store", async () => {
-    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({ plays: [], bans: null, meta: baseMeta, pending: true });
+    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({ plays: [], potentialPlays: [], bans: null, meta: baseMeta, pending: true });
     const res = await GET(req("?lane=0"));
     expect(res.status).toBe(200);
     expect(res.headers.get("Cache-Control")).toBe("no-store");
@@ -60,14 +60,26 @@ describe("GET /api/draft/recommend", () => {
   });
 
   it("empty plays (no pending flag) -> no-store (degraded, per repo Gotcha (b))", async () => {
-    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({ plays: [], bans: null, meta: baseMeta });
+    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({ plays: [], potentialPlays: [], bans: null, meta: baseMeta });
     const res = await GET(req("?lane=0"));
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
   it("populated plays -> hard s-maxage=300/swr=600 cache", async () => {
     vi.mocked(computeDraftRecommend).mockResolvedValueOnce({
-      plays: [{ champId: 1, score: 0.55, winVsLaneOpp: null, confidence: "normal", minGames: 10000 }],
+      plays: [
+        {
+          champId: 1,
+          score: 0.55,
+          winVsLaneOpp: null,
+          winVsLaneOppGames: null,
+          confidence: "normal",
+          minGames: 10000,
+          personal: null,
+          personalOverall: { games: 0, wins: 0 },
+        },
+      ],
+      potentialPlays: [],
       bans: null,
       meta: baseMeta,
     });
@@ -76,6 +88,30 @@ describe("GET /api/draft/recommend", () => {
     const cc = res.headers.get("Cache-Control")!;
     expect(cc).toContain("s-maxage=300");
     expect(cc).toContain("stale-while-revalidate=600");
+  });
+
+  it("v0.37.4: potentialPlays is included in the passed-through response body", async () => {
+    vi.mocked(computeDraftRecommend).mockResolvedValueOnce({
+      plays: [],
+      potentialPlays: [
+        {
+          champId: 2,
+          score: 0.5,
+          winVsLaneOpp: 0.48,
+          winVsLaneOppGames: 500,
+          confidence: "low",
+          minGames: 500,
+          personal: null,
+          personalOverall: { games: 0, wins: 0 },
+        },
+      ],
+      bans: null,
+      meta: baseMeta,
+    });
+    const res = await GET(req("?lane=0"));
+    const body = await res.json();
+    expect(body.potentialPlays).toHaveLength(1);
+    expect(body.potentialPlays[0].champId).toBe(2);
   });
 
   it("DbUnavailableError -> 503 no-store", async () => {

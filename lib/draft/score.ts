@@ -112,6 +112,15 @@ export interface PlayResult {
    *  number now (never null; a play always has at least its own baseline
    *  sample to report, audit P1-1). */
   minGames: number;
+  /** Games behind `winVsLaneOpp` specifically (the direct-lane-opponent
+   *  matchup row's own `games`) — v0.37.4, added for splitPlaysBySampleSize
+   *  below. Deliberately a SEPARATE field from `minGames`: `minGames` can be
+   *  pulled down by the candidate's own baseline sample OR by a DIFFERENT
+   *  (off-lane) enemy term with a smaller game count, so it is NOT a
+   *  reliable proxy for "how many games back THIS specific matchup" once
+   *  more than one enemy is in play. Null under the exact same conditions
+   *  as `winVsLaneOpp` (no direct opponent tagged, or no/degenerate row). */
+  winVsLaneOppGames: number | null;
 }
 
 export interface BanResult {
@@ -165,21 +174,36 @@ function sortStable<T extends { score: number; champId: number }>(items: T[]): T
   return [...items].sort((a, b) => (b.score !== a.score ? b.score - a.score : a.champId - b.champId));
 }
 
-/**
- * Ranks `pool` (already pickrate-filtered — see filterPoolByPickrate) as
- * champ-select PLAY suggestions against the given `enemies`. `matchups` is
- * keyed [candidateChampId][oppChampId] -> that candidate's own matchup row
- * vs that opponent (perspective = candidate). Returns the top 10 by score,
- * stable-tiebroken by champId.
- */
-export function rankPlays(
+/** Top-N cutoff for the PLAY main list (`rankPlays`, and
+ *  splitPlaysBySampleSize's "main" bucket) — unchanged from the original
+ *  plan's "top 10", just named now that a second (potential) list exists
+ *  alongside it. */
+export const PLAY_MAIN_TOP_N = 10;
+/** Top-N cutoff for splitPlaysBySampleSize's "potential" bucket (v0.37.4). */
+export const PLAY_POTENTIAL_TOP_N = 5;
+/** v0.37.4 sample-split floor: a candidate's matchup row vs the resolved
+ *  direct lane opponent needs at least this many games to land in the
+ *  "main" (top-counters) list rather than "potential" (still-scored, but
+ *  under 1,000 games — a lead, not a conclusion). Independent of N_FLOOR
+ *  (30, the hard floor below which the matchup term is dropped from
+ *  scoring entirely) and of POOL_MIN_TOTAL_GAMES (5000, the champion's own
+ *  aggregate-across-every-opponent sample) — this is specifically about
+ *  ONE matchup's own sample size. */
+export const PLAY_MAIN_SAMPLE_FLOOR = 1000;
+
+/** Shared scoring core for both `rankPlays` and `splitPlaysBySampleSize` —
+ *  computes every pool candidate's full PlayResult (unsorted, unsliced).
+ *  Pulled out so the two callers can never silently drift apart on the
+ *  scoring formula itself (v0.37.4's split is explicitly a POST-scoring
+ *  partition, never a second scoring pass — see this file's header). */
+function computeScoredPool(
   pool: ChampBaseline[],
   matchups: Map<number, Map<number, MatchupRow>>,
   enemies: EnemyInput[]
 ): PlayResult[] {
   const directOppId = enemies.find((e) => e.isDirectLaneOpp)?.champId ?? null;
 
-  const scored: PlayResult[] = pool.map((cand) => {
+  return pool.map((cand) => {
     let scoreDelta = 0;
     // Seeded from the candidate's OWN baseline sample (audit P1-1) — a play
     // ALWAYS has at least this to report, so minGames/confidence are never
@@ -188,13 +212,17 @@ export function rankPlays(
     let minGames = cand.totalGames;
     let lowConfidence = cand.totalGames < K;
     let winVsLaneOpp: number | null = null;
+    let winVsLaneOppGames: number | null = null;
 
     for (const enemy of enemies) {
       const row = matchups.get(cand.champId)?.get(enemy.champId);
       if (!row || row.games <= 0) continue; // missing row -- term simply omitted
 
       const wr = row.wins / row.games;
-      if (directOppId !== null && enemy.champId === directOppId) winVsLaneOpp = wr;
+      if (directOppId !== null && enemy.champId === directOppId) {
+        winVsLaneOpp = wr;
+        winVsLaneOppGames = row.games;
+      }
 
       const delta = shrunkDelta(wr, cand.baselineWr, row.games);
       if (delta === null) continue; // n < N_FLOOR -- omitted, not zeroed
@@ -209,12 +237,85 @@ export function rankPlays(
       champId: cand.champId,
       score: cand.baselineWr + scoreDelta,
       winVsLaneOpp,
+      winVsLaneOppGames,
       confidence: lowConfidence ? "low" : "normal",
       minGames,
     };
   });
+}
 
-  return sortStable(scored).slice(0, 10);
+/**
+ * Ranks `pool` (already pickrate-filtered — see filterPoolByPickrate) as
+ * champ-select PLAY suggestions against the given `enemies`. `matchups` is
+ * keyed [candidateChampId][oppChampId] -> that candidate's own matchup row
+ * vs that opponent (perspective = candidate). Returns the top 10 by score,
+ * stable-tiebroken by champId. UNCHANGED by v0.37.4's sample-size split
+ * below — this remains the single-list ranking used whenever no direct
+ * lane opponent is resolved (see splitPlaysBySampleSize's null-directOppId
+ * branch, which reproduces this exact function's output).
+ */
+export function rankPlays(
+  pool: ChampBaseline[],
+  matchups: Map<number, Map<number, MatchupRow>>,
+  enemies: EnemyInput[]
+): PlayResult[] {
+  return sortStable(computeScoredPool(pool, matchups, enemies)).slice(0, PLAY_MAIN_TOP_N);
+}
+
+export interface PlaySplitResult {
+  /** Top PLAY_MAIN_TOP_N by score among candidates whose matchup row vs the
+   *  direct lane opponent has >= PLAY_MAIN_SAMPLE_FLOOR games. When no
+   *  direct lane opponent is resolved, this is simply `rankPlays`' own
+   *  output (byte-identical) and `potential` is always []. */
+  main: PlayResult[];
+  /** Top PLAY_POTENTIAL_TOP_N by score among candidates whose matchup row vs
+   *  the direct lane opponent has fewer than PLAY_MAIN_SAMPLE_FLOOR games
+   *  but still clears N_FLOOR (30) — SAME scoring as `main`, just too thin a
+   *  sample on the ONE matchup that matters most to earn a "main" slot.
+   *  Always [] when no direct lane opponent is resolved. */
+  potential: PlayResult[];
+}
+
+/**
+ * v0.37.4 — partitions the FULL scored pool (same formula as `rankPlays`,
+ * see computeScoredPool) by sample size specifically against the resolved
+ * direct lane opponent, rather than returning one top-10 list:
+ *   - No row vs the direct opponent (or games < N_FLOOR=30): excluded from
+ *     BOTH lists — no evidence against the one matchup that matters most
+ *     means no listing, not a listing built on other enemies' evidence alone.
+ *   - games >= PLAY_MAIN_SAMPLE_FLOOR (1000): eligible for `main`.
+ *   - N_FLOOR <= games < PLAY_MAIN_SAMPLE_FLOOR: eligible for `potential`.
+ * When no direct lane opponent is resolved (`enemies` has no
+ * `isDirectLaneOpp: true` entry, or `enemies` is empty), this degrades to
+ * TODAY's unchanged single-list behavior: `main` = rankPlays' own output,
+ * `potential` = [] — see this file's exhaustive tests for the byte-identical
+ * pin.
+ */
+export function splitPlaysBySampleSize(
+  pool: ChampBaseline[],
+  matchups: Map<number, Map<number, MatchupRow>>,
+  enemies: EnemyInput[]
+): PlaySplitResult {
+  const directOppId = enemies.find((e) => e.isDirectLaneOpp)?.champId ?? null;
+  const scored = computeScoredPool(pool, matchups, enemies);
+
+  if (directOppId === null) {
+    return { main: sortStable(scored).slice(0, PLAY_MAIN_TOP_N), potential: [] };
+  }
+
+  const main: PlayResult[] = [];
+  const potential: PlayResult[] = [];
+  for (const p of scored) {
+    const row = matchups.get(p.champId)?.get(directOppId);
+    if (!row || row.games < N_FLOOR) continue; // no evidence vs the direct opponent -- excluded from BOTH lists
+    if (row.games >= PLAY_MAIN_SAMPLE_FLOOR) main.push(p);
+    else potential.push(p);
+  }
+
+  return {
+    main: sortStable(main).slice(0, PLAY_MAIN_TOP_N),
+    potential: sortStable(potential).slice(0, PLAY_POTENTIAL_TOP_N),
+  };
 }
 
 /** Presence weight for a ban target: known pickrate/banrate combine as

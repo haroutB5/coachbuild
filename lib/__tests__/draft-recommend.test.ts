@@ -274,4 +274,186 @@ describe("computeDraftRecommend", () => {
     expect(result.bans![0].confidence).toBeDefined();
     expect(result.bans![0].minGames).toBe(1000); // audit P2-2: real minGames from the matchup row
   });
+
+  describe("personal-record decoration (My Stats backend, additive, DISPLAY ONLY)", () => {
+    it("plays are decorated with personalOverall (never null) and personal (null with no laneOpp)", async () => {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.my_matches")) {
+          return Promise.resolve([
+            { champion_id: 1, opp_champion_id: 55, win: true },
+            { champion_id: 1, opp_champion_id: 55, win: false },
+            { champion_id: 1, opp_champion_id: 77, win: true }, // different opponent -- still counts toward personalOverall
+          ]);
+        }
+        if (text.includes("FROM coachbuild.draft_champ_stats")) return Promise.resolve([champStatsRow({ champ_id: 1 })]);
+        return Promise.resolve([]);
+      });
+      // enemies empty -> laneOppInferred is null (no lane opponent resolved)
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.plays).toHaveLength(1);
+      expect(result.plays[0].personalOverall).toEqual({ games: 3, wins: 2 });
+      expect(result.plays[0].personal).toBeNull(); // no laneOpp resolved -- nothing to compare against
+    });
+
+    it("personal is populated (even {games:0,wins:0}) once a laneOpp IS resolved", async () => {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.my_matches")) {
+          return Promise.resolve([
+            { champion_id: 1, opp_champion_id: 7, win: true }, // matches the resolved laneOpp (7)
+            { champion_id: 1, opp_champion_id: 999, win: false }, // different opponent
+            { champion_id: 2, opp_champion_id: 7, win: false }, // different champion -- doesn't leak into champ 1's record
+          ]);
+        }
+        if (text.includes("FROM coachbuild.draft_champ_stats") && text.includes("champ_id = ANY")) {
+          return Promise.resolve([]); // inference query -- irrelevant, laneOpp is explicit
+        }
+        if (text.includes("FROM coachbuild.draft_champ_stats")) {
+          return Promise.resolve([champStatsRow({ champ_id: 1 }), champStatsRow({ champ_id: 2 })]);
+        }
+        // v0.37.4: a laneOpp IS resolved (7), so splitPlaysBySampleSize now
+        // requires real evidence vs 7 to keep a candidate on EITHER list --
+        // both champs need a >=1000-game row here to land in `plays` (main),
+        // same as this test's pre-v0.37.4 assumption, so its assertions
+        // below (looking specifically in `result.plays`) stay meaningful.
+        if (text.includes("FROM coachbuild.draft_matchup")) {
+          return Promise.resolve([
+            { champ_id: 1, opp_id: 7, wins: 5500, games: 10000 },
+            { champ_id: 2, opp_id: 7, wins: 4800, games: 10000 },
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+      const result = await computeDraftRecommend({ lane: 0, enemies: [7], laneOpp: 7, hover: null });
+      expect(result.meta.laneOppInferred).toBe(7);
+      const champ1 = result.plays.find((p) => p.champId === 1)!;
+      expect(champ1.personal).toEqual({ games: 1, wins: 1 });
+      expect(champ1.personalOverall).toEqual({ games: 2, wins: 1 }); // both my_matches rows for champ 1
+      const champ2 = result.plays.find((p) => p.champId === 2)!;
+      expect(champ2.personal).toEqual({ games: 1, wins: 0 }); // champ2's own row vs opp 7, not leaked from champ1
+    });
+
+    it("no rows at all -> every play still gets personalOverall {games:0,wins:0}, never crashes/omits the field", async () => {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.draft_champ_stats")) return Promise.resolve([champStatsRow({ champ_id: 1 })]);
+        return Promise.resolve([]); // my_matches query -- empty, table might not be migrated yet
+      });
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.plays[0].personalOverall).toEqual({ games: 0, wins: 0 });
+      expect(result.plays[0].personal).toBeNull();
+    });
+
+    it("empty pool (pending) -> no my_matches query is ever issued", async () => {
+      mockSql.mockImplementation(() => Promise.resolve([]));
+      await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      const myMatchesCall = mockSql.mock.calls.find(([s]) => sqlText(s as TemplateStringsArray).includes("FROM coachbuild.my_matches"));
+      expect(myMatchesCall).toBeUndefined();
+    });
+  });
+
+  describe("v0.37.4 sample-size split (plays = main, potentialPlays = new)", () => {
+    it("no laneOpp resolved -> potentialPlays is [], plays unchanged (existing 5000-total-games pool floor governs)", async () => {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.draft_champ_stats")) {
+          return Promise.resolve([champStatsRow({ champ_id: 1, winrate: 0.55 }), champStatsRow({ champ_id: 2, winrate: 0.52 })]);
+        }
+        return Promise.resolve([]);
+      });
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.potentialPlays).toEqual([]);
+      expect(result.plays.map((p) => p.champId)).toEqual([1, 2]);
+    });
+
+    it("laneOpp resolved: n>=1000 vs opponent -> plays (main); n<1000 (but >=30) -> potentialPlays", async () => {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.draft_champ_stats")) {
+          return Promise.resolve([
+            champStatsRow({ champ_id: 1, winrate: 0.55 }), // will have n=1000 vs opp -> main
+            champStatsRow({ champ_id: 2, winrate: 0.6 }), // will have n=500 vs opp -> potential
+          ]);
+        }
+        if (text.includes("FROM coachbuild.draft_matchup")) {
+          return Promise.resolve([
+            { champ_id: 1, opp_id: 7, wins: 550, games: 1000 },
+            { champ_id: 2, opp_id: 7, wins: 300, games: 500 },
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+      const result = await computeDraftRecommend({ lane: 0, enemies: [7], laneOpp: 7, hover: null });
+      expect(result.plays.map((p) => p.champId)).toEqual([1]);
+      expect(result.potentialPlays.map((p) => p.champId)).toEqual([2]);
+    });
+
+    it("laneOpp resolved but a pool candidate has NO matchup row vs it -> excluded from BOTH lists", async () => {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.draft_champ_stats")) {
+          return Promise.resolve([
+            champStatsRow({ champ_id: 1 }), // has a row vs 7 -> listed
+            champStatsRow({ champ_id: 2 }), // no row vs 7 at all -> excluded
+          ]);
+        }
+        if (text.includes("FROM coachbuild.draft_matchup")) {
+          return Promise.resolve([{ champ_id: 1, opp_id: 7, wins: 5500, games: 10000 }]);
+        }
+        return Promise.resolve([]);
+      });
+      const result = await computeDraftRecommend({ lane: 0, enemies: [7], laneOpp: 7, hover: null });
+      const allListed = [...result.plays, ...result.potentialPlays].map((p) => p.champId);
+      expect(allListed).toEqual([1]);
+      expect(allListed).not.toContain(2);
+    });
+
+    it("potentialPlays candidates are ALSO decorated with personal-record fields (same as plays)", async () => {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.draft_champ_stats")) return Promise.resolve([champStatsRow({ champ_id: 1 })]);
+        if (text.includes("FROM coachbuild.draft_matchup")) {
+          return Promise.resolve([{ champ_id: 1, opp_id: 7, wins: 300, games: 500 }]); // n=500 -> potential
+        }
+        if (text.includes("FROM coachbuild.my_matches")) {
+          return Promise.resolve([{ champion_id: 1, opp_champion_id: 7, win: true }]);
+        }
+        return Promise.resolve([]);
+      });
+      const result = await computeDraftRecommend({ lane: 0, enemies: [7], laneOpp: 7, hover: null });
+      expect(result.plays).toEqual([]);
+      expect(result.potentialPlays).toHaveLength(1);
+      expect(result.potentialPlays[0].personal).toEqual({ games: 1, wins: 1 });
+    });
+
+    it("empty potential when every eligible candidate clears the main sample floor", async () => {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.draft_champ_stats")) return Promise.resolve([champStatsRow({ champ_id: 1 })]);
+        if (text.includes("FROM coachbuild.draft_matchup")) {
+          return Promise.resolve([{ champ_id: 1, opp_id: 7, wins: 5500, games: 10000 }]);
+        }
+        return Promise.resolve([]);
+      });
+      const result = await computeDraftRecommend({ lane: 0, enemies: [7], laneOpp: 7, hover: null });
+      expect(result.plays).toHaveLength(1);
+      expect(result.potentialPlays).toEqual([]);
+    });
+
+    it("pending path also reports potentialPlays: []", async () => {
+      mockSql.mockImplementation(() => Promise.resolve([]));
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.pending).toBe(true);
+      expect(result.potentialPlays).toEqual([]);
+    });
+  });
 });

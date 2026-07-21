@@ -12,14 +12,21 @@
 
 export type DraftConfidence = "low" | "normal";
 
-/** One PLAY candidate — lib/draft/score.ts's rankPlays() output shape
- *  (plan §3). `winVsLaneOpp` is null when there's no direct lane opponent
- *  (empty enemies, or none tagged as the lane slot) or the matchup sample
- *  fell below the N_FLOOR and was dropped — never a fabricated 50%. */
+/** One PLAY candidate — lib/draft/score.ts's rankPlays()/splitPlaysBySampleSize()
+ *  output shape (plan §3). `winVsLaneOpp` is null when there's no direct
+ *  lane opponent (empty enemies, or none tagged as the lane slot) or the
+ *  matchup sample fell below the N_FLOOR and was dropped — never a
+ *  fabricated 50%. */
 export interface DraftPlayResult {
   champId: number;
   score: number;
   winVsLaneOpp: number | null;
+  /** v0.37.4: games behind `winVsLaneOpp` specifically (NOT the same as
+   *  `minGames`, which can be pulled down by a different, smaller off-lane
+   *  term or the candidate's own baseline sample — see lib/draft/score.ts's
+   *  PlayResult.winVsLaneOppGames doc comment). Null under the same
+   *  conditions as `winVsLaneOpp`. */
+  winVsLaneOppGames: number | null;
   confidence: DraftConfidence;
   minGames: number;
 }
@@ -62,7 +69,17 @@ export interface DraftRecommendMeta {
 }
 
 export interface DraftRecommendResponse {
+  /** "Main" list per v0.37.4's sample-size split — when a direct lane
+   *  opponent is resolved, only candidates with >= 1,000 games vs that
+   *  opponent; unchanged single-list behavior when no opponent is
+   *  resolved. Field name kept for back-compat. */
   plays: DraftPlayResult[];
+  /** v0.37.4, NEW: candidates with a matchup vs the resolved lane opponent
+   *  under 1,000 games (but still scored, same floor as `plays`) — "leads,
+   *  not conclusions". Always [] when no lane opponent is resolved, OR when
+   *  absent/malformed on the wire (an older cached response can't crash the
+   *  client over a field it doesn't know about). */
+  potentialPlays: DraftPlayResult[];
   /** null when no `hover` was sent (bans only compute against a hovered
    *  own-champion, plan §3/§6a: "hover-your-champ picker -> Bans section
    *  appears"). */
@@ -124,6 +141,7 @@ function normalizePlay(raw: unknown): DraftPlayResult | null {
     champId: r.champId,
     score: r.score,
     winVsLaneOpp: typeof r.winVsLaneOpp === "number" ? r.winVsLaneOpp : null,
+    winVsLaneOppGames: typeof r.winVsLaneOppGames === "number" ? r.winVsLaneOppGames : null,
     confidence: isConfidence(r.confidence) ? r.confidence : "low", // unknown -> the CAUTIOUS default, never a false "normal"
     minGames: typeof r.minGames === "number" ? r.minGames : 0,
   };
@@ -152,6 +170,12 @@ export function normalizeDraftRecommendResponse(raw: unknown): DraftRecommendRes
   const r = raw as Partial<DraftRecommendResponse> & { meta?: Partial<DraftRecommendMeta> };
 
   const plays = Array.isArray(r.plays) ? r.plays.map(normalizePlay).filter((p): p is DraftPlayResult => p !== null) : [];
+  // v0.37.4: absent/malformed potentialPlays (older cached response, or a
+  // server that hasn't shipped this field yet) degrades to [] -- never a
+  // thrown error, and never treated as "the same as plays".
+  const potentialPlays = Array.isArray(r.potentialPlays)
+    ? r.potentialPlays.map(normalizePlay).filter((p): p is DraftPlayResult => p !== null)
+    : [];
   const bans = Array.isArray(r.bans)
     ? r.bans.map(normalizeBan).filter((b): b is DraftBanResult => b !== null)
     : null;
@@ -163,7 +187,7 @@ export function normalizeDraftRecommendResponse(raw: unknown): DraftRecommendRes
     currentPatch: typeof r.meta?.currentPatch === "string" ? r.meta.currentPatch : null,
   };
 
-  return { plays, bans, meta, pending: r.pending === true };
+  return { plays, potentialPlays, bans, meta, pending: r.pending === true };
 }
 
 export interface DraftRecommendDeps {

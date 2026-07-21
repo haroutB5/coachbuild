@@ -14,12 +14,16 @@ import {
   W_OFFLANE,
   POOL_MIN_PICKRATE,
   POOL_MIN_TOTAL_GAMES,
+  PLAY_MAIN_TOP_N,
+  PLAY_POTENTIAL_TOP_N,
+  PLAY_MAIN_SAMPLE_FLOOR,
   shrinkFactor,
   shrunkDelta,
   filterPoolByPickrate,
   filterPoolByTotalGames,
   rankPlays,
   rankBans,
+  splitPlaysBySampleSize,
   type ChampBaseline,
   type MatchupRow,
   type EnemyInput,
@@ -127,6 +131,38 @@ describe("rankPlays", () => {
     expect(result.winVsLaneOpp).toBeCloseTo(0.65, 6);
   });
 
+  it("winVsLaneOppGames (v0.37.4) is the direct-opponent row's own games, independent of minGames", () => {
+    const pool = [baseline(1, 0.5)];
+    // TWO enemies: the direct opponent (99, 1000 games) and an off-lane
+    // enemy with a SMALLER game count (11, 50 games) -- minGames pulls down
+    // to 50 (the smallest contributing term), but winVsLaneOppGames must
+    // stay pinned to the direct opponent's OWN 1000, proving the two fields
+    // are genuinely independent rather than aliases of each other.
+    const enemies: EnemyInput[] = [
+      { champId: 99, isDirectLaneOpp: true },
+      { champId: 11, isDirectLaneOpp: false },
+    ];
+    const matchups = matchupMap([
+      [1, new Map([[99, { wins: 650, games: 1000 }], [11, { wins: 30, games: 50 }]])],
+    ]);
+    const result = rankPlays(pool, matchups, enemies)[0];
+    expect(result.winVsLaneOppGames).toBe(1000);
+    expect(result.minGames).toBe(50);
+  });
+
+  it("winVsLaneOppGames is null under the same conditions as winVsLaneOpp (no direct opponent, or no row)", () => {
+    const pool = [baseline(1, 0.5), baseline(2, 0.5)];
+    // champ 1: no direct opponent tagged at all.
+    const noOppResult = rankPlays(pool, matchupMap([]), [])[0];
+    expect(noOppResult.winVsLaneOpp).toBeNull();
+    expect(noOppResult.winVsLaneOppGames).toBeNull();
+    // champ 2: direct opponent tagged, but no matchup row exists for it.
+    const enemies: EnemyInput[] = [{ champId: 99, isDirectLaneOpp: true }];
+    const missingRowResult = rankPlays([baseline(2, 0.5)], matchupMap([]), enemies)[0];
+    expect(missingRowResult.winVsLaneOpp).toBeNull();
+    expect(missingRowResult.winVsLaneOppGames).toBeNull();
+  });
+
   it("confidence is low iff a CONTRIBUTING term has n<K, ignoring omitted (n<N_FLOOR) terms", () => {
     const pool = [baseline(1, 0.5)]; // totalGames=10000, well above K -- baseline alone wouldn't trip low confidence
     // one enemy below N_FLOOR (omitted), one enemy between N_FLOOR and K (contributes, low confidence)
@@ -171,6 +207,96 @@ describe("rankPlays", () => {
     const pool = Array.from({ length: 15 }, (_, i) => baseline(i + 1, 0.5 + i * 0.001));
     const results = rankPlays(pool, matchupMap([]), []);
     expect(results).toHaveLength(10);
+  });
+});
+
+describe("splitPlaysBySampleSize (v0.37.4 sample-size split)", () => {
+  /** One direct-lane-opponent enemy (champId 999) -- the only shape this
+   *  feature partitions on. `n` is that candidate's OWN matchup games vs
+   *  999; wins is fixed at 55% so scoring never ties. */
+  function directOnly(): EnemyInput[] {
+    return [{ champId: 999, isDirectLaneOpp: true }];
+  }
+  function row(n: number, wr = 0.55): MatchupRow {
+    return { wins: Math.round(n * wr), games: n };
+  }
+
+  it("partition boundary: n=999 -> potential, n=1000 -> main", () => {
+    const pool = [baseline(1, 0.5), baseline(2, 0.5)];
+    const matchups = matchupMap([
+      [1, new Map([[999, row(999)]])],
+      [2, new Map([[999, row(1000)]])],
+    ]);
+    const { main, potential } = splitPlaysBySampleSize(pool, matchups, directOnly());
+    expect(main.map((p) => p.champId)).toEqual([2]);
+    expect(potential.map((p) => p.champId)).toEqual([1]);
+  });
+
+  it("no direct lane opponent resolved -> degrades to rankPlays' own (unchanged) output, potential always []", () => {
+    const pool = [baseline(1, 0.55), baseline(2, 0.52), baseline(3, 0.5)];
+    const enemies: EnemyInput[] = [{ champId: 999, isDirectLaneOpp: false }]; // off-lane only, no direct tag
+    const matchups = matchupMap([[1, new Map([[999, row(5000)]])]]);
+
+    const rankPlaysResult = rankPlays(pool, matchups, enemies);
+    const split = splitPlaysBySampleSize(pool, matchups, enemies);
+    expect(split.main).toEqual(rankPlaysResult);
+    expect(split.potential).toEqual([]);
+
+    // Same for genuinely empty enemies.
+    const splitEmpty = splitPlaysBySampleSize(pool, matchupMap([]), []);
+    expect(splitEmpty.main).toEqual(rankPlays(pool, matchupMap([]), []));
+    expect(splitEmpty.potential).toEqual([]);
+  });
+
+  it("no evidence vs the direct opponent (no row, or n < N_FLOOR) -> excluded from BOTH lists", () => {
+    const pool = [baseline(1, 0.5), baseline(2, 0.5), baseline(3, 0.5)];
+    const matchups = matchupMap([
+      // champ 1: no row at all vs 999.
+      // champ 2: row exists but below N_FLOOR (30).
+      [2, new Map([[999, row(29)]])],
+      // champ 3: clears N_FLOOR -> included (potential, since n<1000).
+      [3, new Map([[999, row(500)]])],
+    ]);
+    const { main, potential } = splitPlaysBySampleSize(pool, matchups, directOnly());
+    const allListed = [...main, ...potential].map((p) => p.champId);
+    expect(allListed).not.toContain(1);
+    expect(allListed).not.toContain(2);
+    expect(allListed).toContain(3);
+  });
+
+  it("empty potential when every eligible candidate clears the main sample floor", () => {
+    const pool = [baseline(1, 0.5), baseline(2, 0.5)];
+    const matchups = matchupMap([
+      [1, new Map([[999, row(5000)]])],
+      [2, new Map([[999, row(2000)]])],
+    ]);
+    const { main, potential } = splitPlaysBySampleSize(pool, matchups, directOnly());
+    expect(main.map((p) => p.champId).sort()).toEqual([1, 2]);
+    expect(potential).toEqual([]);
+  });
+
+  it("main is capped at PLAY_MAIN_TOP_N (10), potential at PLAY_POTENTIAL_TOP_N (5), independently", () => {
+    const mainPool = Array.from({ length: 15 }, (_, i) => baseline(i + 1, 0.5 + i * 0.001));
+    const mainMatchups = matchupMap(mainPool.map((c) => [c.champId, new Map([[999, row(5000)]])] as const));
+    const { main } = splitPlaysBySampleSize(mainPool, mainMatchups, directOnly());
+    expect(main).toHaveLength(PLAY_MAIN_TOP_N);
+
+    const potentialPool = Array.from({ length: 8 }, (_, i) => baseline(i + 1, 0.5 + i * 0.001));
+    const potentialMatchups = matchupMap(potentialPool.map((c) => [c.champId, new Map([[999, row(500)]])] as const));
+    const { potential } = splitPlaysBySampleSize(potentialPool, potentialMatchups, directOnly());
+    expect(potential).toHaveLength(PLAY_POTENTIAL_TOP_N);
+  });
+
+  it("same score formula in both buckets -- a potential-bucket score is computed identically to a main-bucket one", () => {
+    const pool = [baseline(1, 0.5, null, null, 10000)];
+    const matchups = matchupMap([[1, new Map([[999, row(500, 0.6)]])]]);
+    const { potential } = splitPlaysBySampleSize(pool, matchups, directOnly());
+    const rankPlaysEquivalent = rankPlays(pool, matchups, [{ champId: 999, isDirectLaneOpp: true }]);
+    expect(potential[0].score).toBeCloseTo(rankPlaysEquivalent[0].score, 10);
+  });
+
+  it("PLAY_MAIN_SAMPLE_FLOOR is 1000 (pinned -- the exact threshold the feature spec calls out)", () => {
+    expect(PLAY_MAIN_SAMPLE_FLOOR).toBe(1000);
   });
 });
 

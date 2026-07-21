@@ -33,7 +33,7 @@ import {
   filterPoolByPickrate,
   filterPoolByTotalGames,
   rankBans,
-  rankPlays,
+  splitPlaysBySampleSize,
   type BanResult,
   type ChampBaseline,
   type EnemyInput,
@@ -52,6 +52,39 @@ import { resolveDraftPatchLabel } from "@/lib/draft/patch";
  *  lanes. ~170 total champions exist; 120 is comfortably past the
  *  first-few-cron-ticks partial state without waiting for a full 173/173. */
 const SERVING_PATCH_MIN_CHAMPS = 120;
+
+/** {games, wins} — a raw personal record, never a rate/score. */
+export interface PersonalRecord {
+  games: number;
+  wins: number;
+}
+
+/** PlayResult + two ADDITIVE, DISPLAY-ONLY personal fields (My Stats
+ *  backend, 2026-07-21). HARD USER DIRECTIVE, ratified 2026-07-21 ("Don't
+ *  mix my data with the sample size"): personal record data must NEVER
+ *  influence `score`/ranking/ordering anywhere in this pipeline, now or in
+ *  any future change to this file. `attachPersonalRecords` below runs
+ *  strictly AFTER rankPlays has already scored and sorted — it only
+ *  decorates the already-final array. A shrinkage-weighted "personal delta"
+ *  blended into score was considered and explicitly rejected for this ship
+ *  (my own match count is anecdotal — single-digit-to-low-double-digit
+ *  games per matchup, far below N_FLOOR=30 — so blending it into a
+ *  cross-population score would let one player's small sample silently
+ *  outweigh thousands of aggregate games). If a personal-delta scoring mode
+ *  is ever wanted, it must be a SEPARATE, EXPLICITLY OPT-IN feature with its
+ *  own shrinkage (K~20) — do not build it speculatively; only take this on
+ *  if the user asks for it directly. */
+export interface PersonalPlayResult extends PlayResult {
+  /** My record playing this candidate vs the resolved lane opponent
+   *  (`meta.laneOppInferred`) — null when no lane opponent is resolved yet
+   *  (nothing to compare against); `{games:0,wins:0}` when one IS resolved
+   *  but I've never played that exact matchup. */
+  personal: PersonalRecord | null;
+  /** My record playing this candidate in this lane, vs ANY opponent —
+   *  always populated (never null; no recorded games renders as
+   *  `{games:0,wins:0}`). */
+  personalOverall: PersonalRecord;
+}
 
 export interface RecommendParams {
   lane: RoleId;
@@ -88,7 +121,23 @@ export interface RecommendMeta {
 }
 
 export interface RecommendResult {
-  plays: PlayResult[];
+  /** v0.37.4: when a direct lane opponent is resolved, this is the "main"
+   *  bucket from splitPlaysBySampleSize — top 10, matchup-vs-opponent
+   *  games >= PLAY_MAIN_SAMPLE_FLOOR (1000). Field NAME kept for back-compat
+   *  (existing clients/cached responses read `plays`); the CONTENTS now
+   *  exclude any candidate with no evidence against the resolved opponent
+   *  (see splitPlaysBySampleSize's doc comment). When no lane opponent is
+   *  resolved, this is byte-identical to the pre-v0.37.4 single-list
+   *  behavior (rankPlays' own output). */
+  plays: PersonalPlayResult[];
+  /** v0.37.4, NEW, additive: candidates whose matchup vs the resolved lane
+   *  opponent has fewer than PLAY_MAIN_SAMPLE_FLOOR games but still clears
+   *  the existing N_FLOOR (30) scoring floor — same scoring as `plays`,
+   *  just too thin a sample on the one matchup that matters most to earn a
+   *  "main" slot. Always [] when no lane opponent is resolved (see
+   *  splitPlaysBySampleSize) — an older cached response or client that
+   *  doesn't know this field exists sees a normal `plays`-only response. */
+  potentialPlays: PersonalPlayResult[];
   bans: BanResult[] | null;
   meta: RecommendMeta;
   /** True when there's nothing to serve yet (no patch ingested at all, or
@@ -165,6 +214,68 @@ async function resolveLaneOpponent(
   return best?.champId ?? null;
 }
 
+interface MyMatchDbRow {
+  champion_id: number;
+  opp_champion_id: number | null;
+  win: boolean;
+}
+
+/** Decorates already-ranked plays with personal-record fields, in ONE extra
+ *  indexed query (coachbuild.my_matches has an index on (champion_id, role,
+ *  opp_champion_id) for exactly this — migration 0012). Runs strictly AFTER
+ *  scoring+splitting has finished — see PersonalPlayResult's doc comment for
+ *  the hard no-blending directive this depends on. Wrapped in a soft failure
+ *  (`.catch`) so a missing/not-yet-migrated my_matches table degrades to
+ *  all-zero personal records instead of taking down the whole recommend
+ *  response — this decoration is optional display data, the ranking itself
+ *  never depended on it.
+ *
+ *  v0.37.4: takes BOTH the main and potential lists so a single combined
+ *  query covers both (never two separate my_matches round-trips for one
+ *  request) — each list is decorated independently from the SAME fetched
+ *  rows, preserving each one's own order. */
+async function attachPersonalRecords(
+  sql: NonNullable<ReturnType<typeof getSql>>,
+  mainPlays: PlayResult[],
+  potentialPlays: PlayResult[],
+  lane: RoleId,
+  laneOppInferred: number | null
+): Promise<{ main: PersonalPlayResult[]; potential: PersonalPlayResult[] }> {
+  const allPlays = mainPlays.length === 0 && potentialPlays.length === 0 ? [] : [...mainPlays, ...potentialPlays];
+  if (allPlays.length === 0) return { main: [], potential: [] };
+
+  const champIds = allPlays.map((p) => p.champId);
+  const rows = await sql`
+    SELECT champion_id, opp_champion_id, win FROM coachbuild.my_matches
+    WHERE role = ${lane} AND champion_id = ANY(${champIds}::int[])
+  `.catch(() => []) as unknown as MyMatchDbRow[];
+
+  const overall = new Map<number, PersonalRecord>();
+  const vsLaneOpp = new Map<number, PersonalRecord>();
+  for (const row of rows) {
+    const o = overall.get(row.champion_id) ?? { games: 0, wins: 0 };
+    o.games += 1;
+    if (row.win) o.wins += 1;
+    overall.set(row.champion_id, o);
+
+    if (laneOppInferred !== null && row.opp_champion_id === laneOppInferred) {
+      const v = vsLaneOpp.get(row.champion_id) ?? { games: 0, wins: 0 };
+      v.games += 1;
+      if (row.win) v.wins += 1;
+      vsLaneOpp.set(row.champion_id, v);
+    }
+  }
+
+  const decorate = (plays: PlayResult[]): PersonalPlayResult[] =>
+    plays.map((p) => ({
+      ...p,
+      personalOverall: overall.get(p.champId) ?? { games: 0, wins: 0 },
+      personal: laneOppInferred !== null ? vsLaneOpp.get(p.champId) ?? { games: 0, wins: 0 } : null,
+    }));
+
+  return { main: decorate(mainPlays), potential: decorate(potentialPlays) };
+}
+
 export async function computeDraftRecommend(params: RecommendParams): Promise<RecommendResult> {
   const sql = getSql();
   if (!sql) throw new DbUnavailableError();
@@ -176,6 +287,7 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
   const currentPatch = await resolveDraftPatchLabel().catch(() => null);
   const pendingMeta = (patch: string | null): RecommendResult => ({
     plays: [],
+    potentialPlays: [],
     bans: null,
     meta: { patch, tier: EMERALD_TIER, fetchedAt, laneOppInferred: null, currentPatch },
     pending: true,
@@ -227,7 +339,11 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
     }
   }
 
-  const plays = rankPlays(pool, matchups, enemyInputs);
+  // v0.37.4: partition by matchup sample size vs the resolved direct lane
+  // opponent instead of a single top-10 (see splitPlaysBySampleSize's doc
+  // comment) — degrades to today's unchanged single-list behavior when
+  // laneOppInferred is null (empty enemies, or no enemy has known pickrate).
+  const { main: rankedMain, potential: rankedPotential } = splitPlaysBySampleSize(pool, matchups, enemyInputs);
 
   let bans: BanResult[] | null = null;
   if (params.hover !== null) {
@@ -247,8 +363,17 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
     }
   }
 
+  const { main: personalMain, potential: personalPotential } = await attachPersonalRecords(
+    sql,
+    rankedMain,
+    rankedPotential,
+    params.lane,
+    laneOppInferred
+  );
+
   return {
-    plays,
+    plays: personalMain,
+    potentialPlays: personalPotential,
     bans,
     meta: { patch, tier: EMERALD_TIER, fetchedAt, laneOppInferred, currentPatch },
   };

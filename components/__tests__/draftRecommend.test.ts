@@ -44,16 +44,42 @@ describe("normalizeDraftRecommendResponse", () => {
 
   it("parses a full, well-formed envelope", () => {
     const result = normalizeDraftRecommendResponse({
-      plays: [{ champId: 103, score: 0.52, winVsLaneOpp: 0.54, confidence: "normal", minGames: 400 }],
+      plays: [{ champId: 103, score: 0.52, winVsLaneOpp: 0.54, winVsLaneOppGames: 5000, confidence: "normal", minGames: 400 }],
+      potentialPlays: [{ champId: 200, score: 0.5, winVsLaneOpp: 0.48, winVsLaneOppGames: 500, confidence: "low", minGames: 500 }],
       bans: [{ champId: 64, score: 0.08, confidence: "low", minGames: 20 }],
       meta: { patch: "16.14", tier: 10, fetchedAt: "2026-07-20T00:00:00.000Z", laneOppInferred: 64, currentPatch: "16.14" },
     });
     expect(result).toEqual({
-      plays: [{ champId: 103, score: 0.52, winVsLaneOpp: 0.54, confidence: "normal", minGames: 400 }],
+      plays: [{ champId: 103, score: 0.52, winVsLaneOpp: 0.54, winVsLaneOppGames: 5000, confidence: "normal", minGames: 400 }],
+      potentialPlays: [{ champId: 200, score: 0.5, winVsLaneOpp: 0.48, winVsLaneOppGames: 500, confidence: "low", minGames: 500 }],
       bans: [{ champId: 64, score: 0.08, confidence: "low", minGames: 20 }],
       meta: { patch: "16.14", tier: 10, fetchedAt: "2026-07-20T00:00:00.000Z", laneOppInferred: 64, currentPatch: "16.14" },
       pending: false,
     });
+  });
+
+  it("v0.37.4: potentialPlays absent (older cached response / server hasn't shipped it) degrades to [], never crashes", () => {
+    const result = normalizeDraftRecommendResponse({
+      plays: [{ champId: 103, score: 0.52, winVsLaneOpp: null, confidence: "normal", minGames: 400 }],
+      bans: null,
+      meta: { patch: "16.14", tier: 10, fetchedAt: "2026-07-20T00:00:00.000Z" },
+    });
+    expect(result?.potentialPlays).toEqual([]);
+    // absent winVsLaneOppGames on an individual play also degrades to null, same posture as the other optional numeric fields
+    expect(result?.plays[0].winVsLaneOppGames).toBeNull();
+  });
+
+  it("v0.37.4: a malformed potentialPlays entry is dropped without dropping the rest of the list", () => {
+    const result = normalizeDraftRecommendResponse({
+      plays: [],
+      potentialPlays: [
+        { champId: 200, score: 0.5, confidence: "low", minGames: 500 },
+        { score: 0.5 }, // missing champId
+      ],
+      meta: {},
+    });
+    expect(result?.potentialPlays).toHaveLength(1);
+    expect(result?.potentialPlays[0].champId).toBe(200);
   });
 
   it("meta.laneOppInferred degrades to null when absent or non-numeric", () => {
@@ -80,6 +106,7 @@ describe("normalizeDraftRecommendResponse", () => {
     const result = normalizeDraftRecommendResponse({});
     expect(result).toEqual({
       plays: [],
+      potentialPlays: [],
       bans: null,
       meta: { patch: "", tier: 0, fetchedAt: "", laneOppInferred: null, currentPatch: null },
       pending: false,

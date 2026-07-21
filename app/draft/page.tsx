@@ -160,7 +160,10 @@ export default function DraftPage() {
           setState({ status: "pending", meta: data.meta });
           return;
         }
-        if (data.plays.length === 0) {
+        // v0.37.4: a laneOpp-resolved response can legitimately have an
+        // empty `plays` (main) while still having real `potentialPlays` --
+        // low-sample leads are still something to show, not "no data".
+        if (data.plays.length === 0 && data.potentialPlays.length === 0) {
           setState({ status: "empty", meta: data.meta });
           return;
         }
@@ -395,7 +398,16 @@ export default function DraftPage() {
             />
           )}
 
-          {state.status === "ok" && (
+          {state.status === "ok" && state.data.plays.length === 0 && state.data.potentialPlays.length > 0 && (
+            // v0.37.4: a laneOpp is resolved but nothing cleared the
+            // 1,000-game main-list floor yet -- real data exists (below,
+            // in Potential counters), so this is NOT the "empty" state.
+            <p className="text-mut/70 text-[11px] px-0.5 py-2">
+              No well-sampled (1,000+ game) counters yet for this matchup — see potential counters below.
+            </p>
+          )}
+
+          {state.status === "ok" && state.data.plays.length > 0 && (
             <div className="bg-panel border border-line rounded-xl px-5">
               {state.data.plays.map((play, i) => {
                 const entry = champIcons.get(play.champId);
@@ -408,13 +420,43 @@ export default function DraftPage() {
                     scoreFraction={play.score}
                     winVsLaneOppFraction={play.winVsLaneOpp}
                     confidence={play.confidence}
-                    minGames={play.minGames}
+                    minGames={play.winVsLaneOppGames ?? play.minGames}
                   />
                 );
               })}
             </div>
           )}
         </section>
+
+        {/* Potential counters (v0.37.4) — same scoring as the main list
+            above, just under the 1,000-game floor on this specific matchup.
+            Only rendered when there's something to show; never conflated
+            with the main "Suggested picks" empty/loading states. */}
+        {state.status === "ok" && state.data.potentialPlays.length > 0 && (
+          <section className="mb-8">
+            <p className="text-[10px] tracking-[0.14em] uppercase text-mut font-semibold mb-1 px-0.5">Potential counters</p>
+            <p className="text-mut/70 text-[10.5px] mb-2 px-0.5">
+              Promising but under 1,000 games — treat as leads, not conclusions.
+            </p>
+            <div className="bg-panel border border-line rounded-xl px-5">
+              {state.data.potentialPlays.map((play, i) => {
+                const entry = champIcons.get(play.champId);
+                return (
+                  <DraftResultRow
+                    key={play.champId}
+                    rank={i + 1}
+                    championName={entry?.name ?? `Champion #${play.champId}`}
+                    championIcon={entry?.icon ?? ""}
+                    scoreFraction={play.score}
+                    winVsLaneOppFraction={play.winVsLaneOpp}
+                    confidence={play.confidence}
+                    minGames={play.winVsLaneOppGames ?? play.minGames}
+                  />
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         {/* Bans */}
         {hover !== null && state.status === "ok" && state.data.bans && (
