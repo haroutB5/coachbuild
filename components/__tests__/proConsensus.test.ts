@@ -5,7 +5,7 @@
  * ProGame[] + a fake item-metadata Map in, ProConsensusModel out.
  */
 import { describe, it, expect } from "vitest";
-import { aggregateProConsensus, isBuildItem, formatSharePct, resolvePrimaryTree } from "../hextech/proConsensus";
+import { aggregateProConsensus, isBuildItem, formatSharePct, resolvePrimaryTree, STARTING_ITEM_ALLOWLIST } from "../hextech/proConsensus";
 import type { ProGame, ProGameRunes } from "../proGames.types";
 import type { ItemDetail } from "../itemDetail";
 
@@ -171,6 +171,7 @@ describe("aggregateProConsensus", () => {
     expect(model.gamesTotal).toBe(0);
     expect(model.items).toEqual([]);
     expect(model.boots).toEqual([]);
+    expect(model.starters).toEqual([]);
     expect(model.keystone).toBeNull();
     expect(model.primaryTree).toBeNull();
     expect(model.primaryTreeSampleSize).toBe(0);
@@ -442,6 +443,78 @@ describe("aggregateProConsensus", () => {
     const meta = itemMeta(item(ROCKETBELT, { from: ["x"] }));
     const model = aggregateProConsensus([game({ finalItems: [ROCKETBELT] })], meta);
     expect(model.boots).toEqual([]);
+  });
+
+  // ── 2026-07-22: starters carved out of `items` into their own `starters`
+  // list — hard user directive, screenshot-verified live bug: Pro Consensus's
+  // ITEMS grid on Viktor mid showed "Dark Seal 24% (23/95)" mixed in with
+  // Blackfire Torch/Rabadon's/etc. Mirrors the v0.28.0 boots partition
+  // exactly (same mechanism, same test shapes below).
+
+  it("carves starter-allowlist items out of items into their own starters list, freeing an items slot for a real item", () => {
+    const meta = itemMeta(item(ROCKETBELT, { from: ["x"] })); // Dark Seal/Tear need no metadata (allowlist wins)
+    const games = [
+      ...Array.from({ length: 23 }, () => game({ finalItems: [ROCKETBELT, DARK_SEAL] })),
+      ...Array.from({ length: 5 }, () => game({ finalItems: [ROCKETBELT, TEAR_OF_THE_GODDESS] })),
+    ];
+    const model = aggregateProConsensus(games, meta);
+    expect(model.items.find((i) => i.itemId === DARK_SEAL)).toBeUndefined();
+    expect(model.items.find((i) => i.itemId === TEAR_OF_THE_GODDESS)).toBeUndefined();
+    expect(model.items.find((i) => i.itemId === ROCKETBELT)?.count).toBe(28);
+    expect(model.starters).toEqual([
+      { itemId: DARK_SEAL, count: 23, share: 23 / 28 },
+      { itemId: TEAR_OF_THE_GODDESS, count: 5, share: 5 / 28 },
+    ]);
+  });
+
+  it("REGRESSION PIN: the main items aggregation can never contain an allowlist id, across every real allowlist entry", () => {
+    // Every id in the real STARTING_ITEM_ALLOWLIST, each pumped to a high
+    // pick rate alongside one ordinary completed item — if the partition
+    // regressed for even one entry (e.g. someone reordered the boots/starter
+    // checks, or a future allowlist addition), this catches it generically
+    // rather than only re-testing the two ids the header comment calls out.
+    // Each allowlist id gets a DISTINCT game count (descending) specifically
+    // so every one of them clears TOP_STARTERS_LIMIT's cap and is checked in
+    // `starters` too, not just excluded from `items` — see the dedicated cap
+    // test below for the truncation behavior itself.
+    const meta = itemMeta(item(ROCKETBELT, { from: ["x"] }));
+    const allowlistIds = Array.from(STARTING_ITEM_ALLOWLIST);
+    for (const id of allowlistIds) {
+      const games = [game({ finalItems: [ROCKETBELT, id] })];
+      const model = aggregateProConsensus(games, meta);
+      expect(model.items.some((i) => i.itemId === id)).toBe(false);
+      expect(model.starters.some((i) => i.itemId === id)).toBe(true);
+    }
+  });
+
+  it("starters is capped, sorted count desc then itemId asc, mirroring the boots cap", () => {
+    // 9 real allowlist entries in the module today — pump all of them so the
+    // cap is actually exercised, not just documented.
+    const meta = itemMeta(item(ROCKETBELT, { from: ["x"] }));
+    const allowlistIds = Array.from(STARTING_ITEM_ALLOWLIST).sort((a, b) => a - b);
+    const games = allowlistIds.map((id) => game({ finalItems: [ROCKETBELT, id] }));
+    const model = aggregateProConsensus(games, meta);
+    expect(model.starters.length).toBeLessThanOrEqual(2);
+    expect(model.starters.length).toBeGreaterThan(0);
+    // All tied at count=1 -> itemId asc breaks the tie -> the two lowest ids win.
+    expect(model.starters.map((s) => s.itemId)).toEqual(allowlistIds.slice(0, 2));
+  });
+
+  it("starters list is empty (not undefined/throwing) when the sample has no starter-class items at all", () => {
+    const meta = itemMeta(item(ROCKETBELT, { from: ["x"] }));
+    const model = aggregateProConsensus([game({ finalItems: [ROCKETBELT] })], meta);
+    expect(model.starters).toEqual([]);
+  });
+
+  it("a starter that is ALSO the modal item still only ever appears in starters, never in items, at any pick rate", () => {
+    const meta = itemMeta(item(ROCKETBELT, { from: ["x"] }));
+    const games = [
+      ...Array.from({ length: 20 }, () => game({ finalItems: [DARK_SEAL] })), // Dark Seal as the ONLY item this game, high pick rate
+      game({ finalItems: [ROCKETBELT] }),
+    ];
+    const model = aggregateProConsensus(games, meta);
+    expect(model.items).toEqual([{ itemId: ROCKETBELT, count: 1, share: 1 / 21 }]);
+    expect(model.starters).toEqual([{ itemId: DARK_SEAL, count: 20, share: 20 / 21 }]);
   });
 });
 

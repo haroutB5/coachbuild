@@ -51,6 +51,22 @@
 // pull (2026-07-13): Needlessly Large Rod (1058) has `into` populated (6
 // core mage items) and is not allowlisted → excluded, matching the brief.
 //
+// ── Starters get their OWN slot, never `items` (2026-07-22) ────────────────
+// The rule above still decides whether an allowlisted id counts as "a real
+// build entry" at all — that part is unchanged. What changed is WHERE it
+// lands: previously every id that passed the rule (allowlist or recipe-tree
+// leaf alike) was aggregated into ONE `items` list, so Dark Seal/Tear of the
+// Goddess sat in the same grid as Blackfire Torch/Rabadon's — a hard user
+// directive (screenshot-verified, live Pro Consensus card on Viktor mid:
+// "Dark Seal 24% (23/95)" mixed into the ITEMS grid) says a starter must
+// NEVER render as a completed item anywhere in the app. Fix: after the same
+// aggregation pass, `STARTING_ITEM_ALLOWLIST` ids are partitioned OUT of
+// `items` into their own `starters` field — same mechanical pattern v0.28.0
+// already used to carve `boots` out of `items` (see that field's own doc
+// comment). isBuildItem/the rule above is untouched (still the single source
+// of truth for "does this id count at all"); only the aggregateProConsensus
+// partition step changed.
+//
 // ── Rune slot aggregation (requirement #2) ──────────────────────────────────
 // `ProGameRunes.primary`/`secondary` are NOT reliably row-ordered across both
 // sources: lib/pro/extract.ts (soloq, from Riot's perks.styles[n].selections)
@@ -205,8 +221,8 @@ export interface ProConsensusModel {
   /** Total games the aggregation ran over — the sample-size line's
    *  denominator ("From N pro games"). */
   gamesTotal: number;
-  /** Top NON-boots items by pick rate (present at least once in a game's
-   *  finalItems), filtered to completed items + the starting-item allowlist
+  /** Top NON-boots, NON-starter items by pick rate (present at least once in
+   *  a game's finalItems), filtered to completed items via `isBuildItem`
    *  (see module header) — components like Needlessly Large Rod never appear
    *  here. Consumables/trinket-slot noise excluded via the existing
    *  CONSUMABLE_ITEM_IDS. Deduplicated per game — a game that somehow lists
@@ -216,8 +232,12 @@ export interface ProConsensusModel {
    *  (unchanged denominator — filtering removes disqualified items, it
    *  doesn't shrink the sample). Boots are carved out into `boots` below
    *  (v0.28.0 user report: Crimson Lucidity + Spellslinger's Shoes each ate a
-   *  full item slot on the same champion — a real item couldn't fit) so this
-   *  list is never diluted by a second boots entry. */
+   *  full item slot on the same champion — a real item couldn't fit) and
+   *  STARTING_ITEM_ALLOWLIST entries (Dark Seal, Tear of the Goddess, etc.)
+   *  are carved out into `starters` below (2026-07-22 hard user directive —
+   *  "Dark Seal must NEVER appear as a full/completed item ANYWHERE in the
+   *  app" — live repro was exactly this list mixing Dark Seal in with
+   *  Blackfire Torch/Rabadon's/etc.) so this list is never diluted by either. */
   items: ItemFrequency[];
   /** v0.28.0 — top 2 boots choices by pick rate, carved out of `items` so a
    *  champion with a split boots preference (e.g. Crimson Lucidity 35% vs.
@@ -231,6 +251,24 @@ export interface ProConsensusModel {
    *  gamesTotal, same denominator as `items` — these are still two
    *  independent per-boot fractions, not a merged combined stat. */
   boots: ItemFrequency[];
+  /** 2026-07-22 — top starter-class items (STARTING_ITEM_ALLOWLIST — Dark
+   *  Seal, Tear of the Goddess, the Doran's/Cull/support-starter entries),
+   *  carved out of `items` for the SAME reason `boots` was in v0.28.0: a
+   *  starter is a real build choice worth showing, but it belongs in its own
+   *  labeled slot, never mixed into the completed-item grid (hard user
+   *  directive, 2026-07-22, screenshot-verified: Pro Consensus's ITEMS grid
+   *  on Viktor mid showed "Dark Seal 24%" sitting next to Blackfire Torch/
+   *  Rabadon's — this field is what closes that). Partitioned from the SAME
+   *  sorted counts `items`/`boots` draw from (via
+   *  `STARTING_ITEM_ALLOWLIST.has(itemId)`, checked AFTER the boots check —
+   *  no current allowlist entry carries the "Boots" tag, but boots takes
+   *  precedence by construction if that ever changed). share is against
+   *  gamesTotal, same denominator as `items`/`boots`. Empty when the sample
+   *  never built a starter-class item (e.g. matchups where every game
+   *  reached a full recipe-tree item instead) — the card renders no slot at
+   *  all in that case, same "absent, not empty" convention `boots` already
+   *  established. */
+  starters: ItemFrequency[];
   /** Null when no game in the sample carries a resolved keystone (id 0 is
    *  the "unresolved/missing" sentinel — real for prostage rows Leaguepedia
    *  never populated a Runes column for, see lib/prostage/extract.ts).
@@ -298,6 +336,12 @@ export interface ProConsensusModel {
 
 const TOP_ITEMS_LIMIT = 6;
 const TOP_BOOTS_LIMIT = 2;
+// Mirrors TOP_BOOTS_LIMIT's "one grid slot, both/several choices stacked"
+// pattern (v0.28.0) — a champion can have more than one common starter
+// (e.g. Doran's Ring vs. Dark Seal), and the card renders them the same
+// stacked way BootsStackTile already does. 2 keeps the slot's footprint
+// identical to the boots slot it sits beside.
+const TOP_STARTERS_LIMIT = 2;
 const TOP_PRIMARY_MINORS_LIMIT = 3;
 const TOP_SECONDARY_PICKS_LIMIT = 2;
 const TOP_SHARDS_LIMIT = 3;
@@ -307,7 +351,7 @@ const TOP_SHARDS_LIMIT = 3;
  *  Goddess — both have a real `into` upgrade path) vs. pinned defensively
  *  (everything else here is already empty-into and would pass the general
  *  completed-item rule on its own). */
-const STARTING_ITEM_ALLOWLIST = new Set<number>([
+export const STARTING_ITEM_ALLOWLIST = new Set<number>([
   1054, // Doran's Shield
   1055, // Doran's Blade
   1056, // Doran's Ring
@@ -501,6 +545,10 @@ export function aggregateProConsensus(
   // boots vs. non-boots, preserving relative order within each subset —
   // simpler and less error-prone than maintaining two separate accumulator
   // maps during the game loop above.
+  // 2026-07-22: starters (STARTING_ITEM_ALLOWLIST) partitioned out the same
+  // way — checked AFTER boots so a hypothetical future allowlist entry that
+  // also carried the "Boots" tag would still land in `boots`, not double up
+  // in both lists (no current entry does; see STARTING_ITEM_ALLOWLIST above).
   const sortedItemEntries = sortEntries(itemCounts);
   const toFrequency = ([itemId, count]: [number, number]): ItemFrequency => ({
     itemId,
@@ -508,12 +556,16 @@ export function aggregateProConsensus(
     share: gamesTotal > 0 ? count / gamesTotal : 0,
   });
   const items: ItemFrequency[] = sortedItemEntries
-    .filter(([itemId]) => !isBootsTag(itemMeta.get(itemId)))
+    .filter(([itemId]) => !isBootsTag(itemMeta.get(itemId)) && !STARTING_ITEM_ALLOWLIST.has(itemId))
     .slice(0, TOP_ITEMS_LIMIT)
     .map(toFrequency);
   const boots: ItemFrequency[] = sortedItemEntries
     .filter(([itemId]) => isBootsTag(itemMeta.get(itemId)))
     .slice(0, TOP_BOOTS_LIMIT)
+    .map(toFrequency);
+  const starters: ItemFrequency[] = sortedItemEntries
+    .filter(([itemId]) => !isBootsTag(itemMeta.get(itemId)) && STARTING_ITEM_ALLOWLIST.has(itemId))
+    .slice(0, TOP_STARTERS_LIMIT)
     .map(toFrequency);
 
   const topKeystone = sortEntries(keystoneCounts)[0];
@@ -627,6 +679,7 @@ export function aggregateProConsensus(
     gamesTotal,
     items,
     boots,
+    starters,
     keystone: effectiveKeystone,
     runesSampleSize: effectiveRunesSampleSize,
     // primaryTreeSampleSize (== pageSample.length) is the authority here, not

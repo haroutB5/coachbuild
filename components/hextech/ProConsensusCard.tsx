@@ -182,6 +182,62 @@ function BootsStackTile({
   );
 }
 
+/** 2026-07-22 — one grid slot holding the top starter-class item choice(s)
+ *  (Dark Seal, Tear of the Goddess, etc. — STARTING_ITEM_ALLOWLIST), stacked
+ *  the exact same way BootsStackTile stacks boots choices (v0.28.0) — same
+ *  component, different label vocabulary, since a starter and a boots pick
+ *  are structurally the same "small labeled slot beside the main items
+ *  grid" shape. Hard user directive (screenshot-verified, 2026-07-22): a
+ *  starter must NEVER render inside the main ITEMS grid — this is its
+ *  dedicated home instead. Absent (not rendered) when `starters` is empty —
+ *  see the render call site below. */
+function StartersStackTile({
+  starters,
+  denom,
+  names,
+  icon,
+  onClick,
+}: {
+  starters: { itemId: number; count: number }[];
+  denom: number;
+  names: Map<number, string>;
+  icon: (itemId: number) => string;
+  onClick: (itemId: number) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1 w-[72px] flex-shrink-0 justify-center">
+      {starters.map((s) => {
+        const name = names.get(s.itemId) ?? `Item #${s.itemId}`;
+        const pct = formatSharePct(denom > 0 ? s.count / denom : 0);
+        return (
+          <button
+            key={s.itemId}
+            type="button"
+            onClick={() => onClick(s.itemId)}
+            aria-label={`View details for ${name} — a starting item choice in ${s.count} of ${denom} pro games (${pct})`}
+            className="flex items-center gap-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
+          >
+            <span className="w-5 h-5 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
+              <IconWithFallback src={icon(s.itemId)} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={20} />
+            </span>
+            <span className="text-left leading-tight min-w-0 flex-1">
+              {/* Same line-clamp/flex-1 recipe as BootsStackTile's name span
+                  — see that component's comment for why flex-1 (not just
+                  min-w-0) is load-bearing for -webkit-line-clamp inside a
+                  flex row. */}
+              <span className="block text-[9px] text-txt leading-tight line-clamp-2 break-words">{name}</span>
+              <span className="block text-[8.5px] tabular-nums mt-0.5">
+                <span className="font-bold text-teal">{pct}</span>
+                <span className="text-mut/60"> · {s.count}/{denom}</span>
+              </span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /** In-game-page rune tile — icon above name above percentage, the same
  *  vocabulary RunesSummonersCard's RuneTile uses on the BUILD tab, just
  *  driven by a pick-rate fraction instead of a WPA score (requirement: "put
@@ -431,6 +487,31 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
           <span aria-hidden="true">⚠</span>
           Low sample size — treat these fractions with caution.
         </p>
+      )}
+
+      {/* 2026-07-22 — starters render in their OWN labeled slot, entirely
+          separate from the Items block below (hard user directive: a
+          starter must never render as a completed item, "keep it as a
+          starting item in a separate slot"). "Starting" matches the card's
+          existing label vocabulary (itemSetBody.ts's "Starting" block type /
+          StartingCard.tsx on the BUILD tab above this card use the same
+          word for the same concept). Visually parallel to the boots stack
+          below — same StartersStackTile/BootsStackTile shape — just in its
+          own section instead of sharing the Items header. Absent entirely
+          when there are zero starters in the sample (no empty block). */}
+      {model.starters.length > 0 && (
+        <div className="mb-4">
+          <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">Starting</p>
+          <div className="flex flex-wrap gap-2.5">
+            <StartersStackTile
+              starters={model.starters}
+              denom={model.gamesTotal}
+              names={names.items}
+              icon={(id) => itemIconUrl(id, ver)}
+              onClick={(id) => onOpenDetail("item", id)}
+            />
+          </div>
+        </div>
       )}
 
       {(model.items.length > 0 || model.boots.length > 0) && (

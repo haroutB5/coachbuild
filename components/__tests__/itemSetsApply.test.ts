@@ -127,14 +127,37 @@ describe("resolveProConsensusForSets", () => {
       "fetch",
       routedFetch([
         ["/api/pros", { games: [PRO_GAME(3031), PRO_GAME(3031), PRO_GAME(1054)] }],
-        // 1054 (Doran's Shield) is on the STARTING_ITEM_ALLOWLIST — counts even with no item.json metadata.
-        ["https://cdn.coachless.gg", { type: "item", version: "16.13.1", data: {} }],
+        // 2026-07-22: 3031 needs real metadata (isBuildItem excludes unknown
+        // ids by default now that the allowlist no longer back-fills 1054
+        // into this list — see the dedicated starters regression below).
+        ["https://cdn.coachless.gg", ITEM_JSON_FIXTURE],
       ])
     );
     const { resolveProConsensusForSets } = await import("../hextech/itemSetsApply");
     const result = await resolveProConsensusForSets(CHAMP, "bot", "16.13");
     expect(result).not.toBeNull();
-    expect(result!.items.some((i) => i.itemId === 1054)).toBe(true);
+    expect(result!.items.some((i) => i.itemId === 3031)).toBe(true);
+    expect(result!.items.some((i) => i.itemId === 1054)).toBe(false); // starter -- excluded, not this function's concern
+  });
+
+  it("2026-07-22 REGRESSION: a starting-allowlist item (Doran's Shield, 1054) is carved into proConsensus's own `starters` field and never reaches the items/boots this function returns, even with no item.json metadata", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch([
+        // Every game here carries ONLY the allowlisted starter (1054) — before
+        // the 2026-07-22 fix this counted as "counts even with no item.json
+        // metadata" via isBuildItem's allowlist branch and landed in `items`;
+        // it must now be entirely absent from what this function returns
+        // (itemSetBody's Pro build line has no legitimate use for a starter).
+        ["/api/pros", { games: [PRO_GAME(1054), PRO_GAME(1054)] }],
+        ["https://cdn.coachless.gg", { type: "item", version: "16.13.1", data: {} }],
+      ])
+    );
+    const { resolveProConsensusForSets } = await import("../hextech/itemSetsApply");
+    // Both boots and items come back empty (every seen id was the allowlisted
+    // starter, now partitioned out) -> resolveProConsensusForSets' own
+    // "empty sample" contract returns null, same as a genuinely N=0 sample.
+    expect(await resolveProConsensusForSets(CHAMP, "bot", "16.13")).toBeNull();
   });
 
   it("returns null when the pro-games sample is empty", async () => {
@@ -225,7 +248,14 @@ describe("applyItemSetsForBuild", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
-        if (url.startsWith("/api/pros")) return jsonResponse({ games: [PRO_GAME(1054), PRO_GAME(1054)] });
+        // 2026-07-22: PRO_GAME(3031) not PRO_GAME(1054) -- 1054 (Doran's
+        // Shield) is on STARTING_ITEM_ALLOWLIST and is now carved into
+        // proConsensus's `starters` field, never `items`/`boots` (see the
+        // resolveProConsensusForSets regression test above), so a sample
+        // that ONLY ever carried the allowlisted starter would resolve to
+        // null and never produce a Pro build block at all -- this test needs
+        // a genuine non-starter item to exercise "Pro build block appears."
+        if (url.startsWith("/api/pros")) return jsonResponse({ games: [PRO_GAME(3031), PRO_GAME(3031)] });
         if (url.startsWith("https://cdn.coachless.gg")) return jsonResponse(ITEM_JSON_FIXTURE);
         if (url.includes("/apply-itemsets")) {
           capturedBridgeBody = init?.body as string;

@@ -7496,3 +7496,125 @@ Traced the full chain: `RunesSummonersCard.tsx`/`BuildTabContent.tsx`/`AutoExpor
 Recommend: once this ships, the next time it happens, the `/live-setup` "Recent errors" panel should show which of these it actually is — that observation should drive whether the fix belongs in companion.ps1's `no-client` detection latency, its LCU-write retry logic, or elsewhere.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-22 00:42
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-21 22:56:11Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-22 — Dark Seal must never render as a full/completed item (hard user directive)
+
+Live repro (screenshot-verified): Pro Consensus's ITEMS grid on Viktor mid showed "Dark Seal 24% (23/95)" mixed in with Blackfire Torch/Rabadon's/etc. Directive: Dark Seal (and every other `STARTING_ITEM_ALLOWLIST` entry — Tear of the Goddess, Doran's x3, Cull, World Atlas, Guardian's Amulet/Shroud) must never appear as a full/completed item ANYWHERE in the app; "keep it as a starting item in a separate slot."
+
+### Fix (the actual bug)
+
+- `components/hextech/proConsensus.ts` — `ProConsensusModel` gets a new `starters: ItemFrequency[]` field, mirroring exactly how v0.28.0 carved `boots` out of `items`. `STARTING_ITEM_ALLOWLIST` (now `export`ed for direct testing) partitions its ids out of `items` into `starters` in the same sorted-entries pass; boots is checked first so a hypothetical future allowlist entry that also carried the "Boots" tag would still land in `boots`, not double up. `isBuildItem`/the completed-item rule itself is UNCHANGED — only which list an allowlisted id lands in changed. New const `TOP_STARTERS_LIMIT = 2` (mirrors `TOP_BOOTS_LIMIT`).
+- `components/hextech/ProConsensusCard.tsx` — new `StartersStackTile` component (byte-for-byte the same shape as `BootsStackTile`, different aria-label copy: "a starting item choice in N of M pro games"). Rendered in its OWN block with header "Starting" (matches the card's existing label vocabulary — `itemSetBody.ts`'s "Starting" block type / `StartingCard.tsx` use the same word for the same concept), positioned BEFORE the "Items" block, entirely separate from it. Absent when `model.starters.length === 0` (no empty block, same convention as boots/every other optional section on this card).
+
+### App-wide sweep (per-surface table)
+
+| Surface | Status | Evidence |
+|---|---|---|
+| Pro Consensus ITEMS grid (`proConsensus.ts` + `ProConsensusCard.tsx`) | **FIXED** (this round) | `starters` field + `StartersStackTile`, see above |
+| Item-set build lines (Core/Buy order/Pro/Highest WPA/archetype categories — `itemSetBody.ts`'s `isFullItem`) | Covered-by-construction (pre-existing, v0.36.0) | `isFullItem` (itemSetBody.ts:297) has NO allowlist escape hatch — `into.length === 0` is the only "full" test, so any allowlist id with a real `into` (Dark Seal, Tear) is structurally excluded regardless of source. Verified, not assumed: added a new generic regression test iterating the REAL `STARTING_ITEM_ALLOWLIST` constant (imported from proConsensus.ts, not re-derived) against every 6-item build line — `components/__tests__/itemSetBody.test.ts`, "VERIFY-NOT-ASSUME (2026-07-22)" test, alongside the pre-existing Dark-Seal-specific regressions at lines ~386, ~485, ~666. |
+| Item-set "Starting" block (`items.starter`) | Intentional home, not touched | `itemSetBody.ts:640` — `{ type: "Starting", items: [itemRef(items.starter.id)] }`, exempt from the 6-item/full-item rule by design. This is exactly where a starter belongs per the directive. |
+| Item-set "Situational swaps" block | Covered-by-construction, deliberately exempt (pre-existing, v0.34.1/v0.36.0) | `ItemsBlock.alts` (`lib/types.ts:100`) is keyed by slot INCLUDING `"starter"` — situational swaps shows alternate STARTING-slot choices (e.g. Dark Seal vs. Cull vs. Doran's as alternate starter picks) alongside other slots' swap suggestions. This is a swap-suggestion row, not a worn/completed build (`itemSetBody.ts`'s own module comment, line ~621: "UNFILTERED — Situational swaps deliberately allows non-full items... exactly where they belong here"). Never presents Dark Seal as a completed item — stays compliant with the directive's literal wording. |
+| Core/optimized build order (`lib/recommend.ts`'s `ItemsBlock.first/second/third/fourthPlus`, backend WPA engine) | Covered-by-construction, structural | `starterData` (line 296) is a SEPARATE coachless query/pool from `leg1Data`/`leg2Data`/`leg3Data`/`leg456Data` (lines 297-311) — Dark Seal only ever gets placed into `items.starter` via `starterBest`/`starterPick`, never into the legendary pools that feed first/second/third/fourthPlus. Rendered via `StartingCard.tsx` (own dedicated slot on `BuildTabContent.tsx:346`), never `CoreBuildOrderCard.tsx`. |
+| Optimized path (`lib/buildConditioning.ts`, `ItemsBlock.optimizedPath`) | Covered-by-construction, structural | `buildOptimizedPath` walks conditioned legendary-slot pools (fed from the core engine's own leg1/leg2/leg3-style queries, via `fetchSlot`), never `starterData` — same segregation as above, one layer up. |
+| Situational card's boots/first/second/third alts | Covered-by-construction, structural | `recommend.ts:402-405` — `bootsAltEntries`/`firstAltEntries`/`secondAltEntries`/`thirdAltEntries` are all built from `bootsData`/`orderedLegendaries[N].pool`, never `starterData`. Only the starter-slot's OWN alt (`items.alts.starter`, if present) can carry an allowlist id — see the Situational swaps row above. |
+| Draft-page surfaces (`lib/draft/**`, `app/draft/page.tsx`) | N/A — no item-build aggregation present | Grepped `lib/draft` for `finalItems`/`ItemFrequency`/`aggregateProConsensus` — no hits. Draft page is champion-recommendation only, carries no item-completion surface. |
+| `GameDetailSheet.tsx` / `ProGameCard` per-game item rows | EXEMPT (per brief) | Factual per-game history — a real game legitimately can end with Dark Seal unsold. Not touched. |
+
+### Tests (all new, all green)
+
+- `components/__tests__/proConsensus.test.ts` — partition behavior (starters extracted, ordinary items/boots untouched, empty-starters case), a REGRESSION PIN iterating the real `STARTING_ITEM_ALLOWLIST` (not hardcoded ids) confirming `items` can never contain an allowlist id, a cap/tie-order test, and a "starter as the single most-picked item in the sample" edge case (still never leaks into `items`).
+- `components/__tests__/itemSetBody.test.ts` — new generic "VERIFY-NOT-ASSUME" test against the real allowlist constant (see sweep table above).
+- `components/__tests__/itemSetsApply.test.ts` — updated 2 pre-existing tests that happened to use item id `1054` (Doran's Shield, itself an allowlist entry) as their "real build item" fixture — that fixture's premise ("counts even with no metadata via the allowlist") was the OLD behavior this task corrects, so those tests now use a genuine non-starter id (3031) and assert 1054 is properly excluded. Added one new dedicated regression for the null-when-only-a-starter-was-seen case.
+- Full suite: `npx vitest run` → **1378 passed** (was 1372 before this round; +6 net new). `npx tsc --noEmit` clean.
+
+### Ship status
+
+Waiting on the parallel v0.44.1 round (`public/companion.ps1`, `components/live/companionClient.ts`, `package.json`, `CHANGELOG.md` — frozen to me) to land before bumping to 0.44.2 and deploying, per the collision-avoidance protocol in the brief. Polling `package.json` version + `git log` in the background. **See the end of this entry (or urgot's own notes) for whether 0.44.1 landed within the 30-minute window** — if it timed out, this round stopped WITHOUT shipping, all code/tests above are done and committed-ready but sitting on disk uncommitted, pending urgot's call.
+
+Files touched: `components/hextech/proConsensus.ts`, `components/hextech/ProConsensusCard.tsx`, `components/__tests__/proConsensus.test.ts`, `components/__tests__/itemSetBody.test.ts`, `components/__tests__/itemSetsApply.test.ts`. Did NOT touch: `public/companion.ps1`, `components/live/companionClient.ts`, `package.json`, `CHANGELOG.md` (frozen), `components/hextech/itemSetBody.ts`, `components/hextech/itemSetsApply.ts` (read, no changes needed — see sweep table).
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-22 00:43
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-21 23:15:38Z; previous content preserved there. Append new rounds below. -->
+
+## v0.44.1 (2026-07-22) — companion 1.5.1: hint-audit closes the last "Couldn't add item builds" gaps
+
+**Ship note:** shared working tree had unrelated concurrent WIP again (`proConsensus.ts`'s `starters` field, mid-edit, currently build-breaking) — same isolation recipe as v0.43.0: diffed only `public/companion.ps1`, applied it + a `package.json`/`CHANGELOG.md` version bump in a throwaway worktree (`../coachbuild-wt-companion151`, off `HEAD`), ran `npm install` + `verify-fix.sh` (all green there: tsc/lint/1371 tests/build) + the Vercel deploy from there, removed the worktree and the stray Vercel project the FIRST deploy attempt accidentally created (no `.vercel/project.json` in a fresh worktree — the CLI silently spun up a brand-new project named after the worktree dir; copied the real `.vercel/project.json` over and redeployed correctly to `coachbuild.vercel.app` before cleaning the stray project up), then committed the same 3 files directly onto `main` in the shared tree. The other agent's 5 in-progress files were never staged/touched.
+
+### Every path that gained a hint (before -> after)
+
+| Location | reason | Before | After |
+|---|---|---|---|
+| `/apply-runes` handler, `-not $Sync.LcuPort` | `no-client` | `{ok:false, reason:'no-client'}` | `+ hint: "League client not detected -- open the client and try again"` |
+| `/apply-itemsets` handler, `-not $Sync.LcuPort` | `no-client` | `{ok:false, reason:'no-client'}` | same hint as above |
+| `Invoke-ApplyRunes`, CoachBuild-page-replace branch, POST fails after DELETE succeeds | `create-failed` | `{ok:false, reason:'create-failed'}` | `+ hint` via new `Get-LcuFailureHint -Action 'new rune page'` |
+| `Invoke-ApplyRunes`, manual-mode full-fallback branch, POST fails after DELETE succeeds | `create-failed` | `{ok:false, reason:'create-failed'}` | same, via same helper |
+| `Invoke-ApplyItemSets`, merge-safety GET (existing item sets) fails | `read-failed` | `{ok:false, reason:'read-failed'; hint:'could not read existing item sets -- nothing was changed'}` (already hinted, v0.43.0) | wording aligned to brief: `"couldn't read your existing item sets -- nothing was changed"` |
+| `Invoke-ApplyItemSets`, final PUT fails | `write-failed` | `{ok:false, reason:'write-failed'}` (NO hint — the confirmed gap) | `+ hint` via `Get-LcuFailureHint -Action 'item-set write'` |
+
+`Get-LcuFailureHint -StatusCode -Action` (new, in the shared `SharedFunctionsSrc` block so it's available in the bridge runspace): status `0` (connection-level failure) or `401` (stale token) — the exact same signal `Invoke-GameflowTick`'s existing reconnect logic already treats as "drop cached creds, re-discover next tick" (`-eq 0 -or -eq 401`, unchanged, grep-verified before reusing) — returns `"companion lost the client connection -- it re-detects automatically, try again in a few seconds"`. Any other non-zero status returns `"League client rejected the <Action> (HTTP <code>) -- make sure you're logged in and not mid-game"`. Did NOT call `Clear-LcuCredentialsCache` from inside the apply handlers to force an immediate re-resolve — that function lives outside `SharedFunctionsSrc` (main-thread-only scope, not injected into the bridge runspace) so it isn't reachable from there; self-healing already happens naturally within ~1.5s via the main poll loop's own next `Invoke-GameflowTick` tick hitting the same stale creds and clearing them itself. Verified this boundary by grepping the `SharedFunctionsSrc` here-string's line range (302-762 after this round's additions) before assuming the function was callable — an assumption here would have shipped a silent no-op call.
+
+Untouched by design (brief didn't name them, no gap found): `read-failed`/`delete-failed` in `Invoke-ApplyRunes` (pages-list GET, delete-current-page) and `slots-full`/`invalid-sets` — all already carried a hint since v1.3.0/v1.3.1 and needed no HTTP-status nuance (delete-failed is Bug #1013 fail-soft, not an LCU-status classification problem).
+
+### Body/status capture (item 2 of the brief)
+
+`Invoke-LcuRaw`'s catch block now captures the LCU's own error-response body via `$_.ErrorDetails.Message` (first 200 chars, truncated) — this is how Windows PowerShell 5.1's `Invoke-WebRequest` surfaces a non-2xx response body on a terminating error; the exception object itself carries no body text. Both status and body snippet now flow into the SAME throttled log line (`Write-ThrottledErrorLog`, still ~1/60s per distinct `Key`) instead of just the exception message:
+```
+Invoke-LcuRaw failed: PUT /lol-item-sets/v1/item-sets/999/sets -- WebException: The remote server returned an error: (500) Internal Server Error. (status=500) | body: {"errorCode":"...","message":"..."} (first 200 chars)
+```
+The user-facing hint only ever gets the bare numeric status code (`Get-LcuFailureHint`'s `$StatusCode` param) — the raw body never reaches the toast, exactly per the brief's "never dump raw body to the user-facing hint."
+
+### Harness results
+
+Both run clean on the shipped file (verified twice — once pre-deploy in the main tree, once again on the byte-identical worktree copy that was actually deployed):
+```
+> powershell -File public/companion.ps1 -SelfTest
+SELFTEST PASSED
+> powershell -File public/companion.ps1 -Mock -DebugRunSeconds 3
+MOCK RUN PASSED
+```
+`grep -P '[^\x00-\x7F]' public/companion.ps1` returns nothing (exit 1, zero matches) — confirmed on the local source, the worktree copy, AND the live-served `https://coachbuild.vercel.app/companion.ps1` (byte-diffed identical to the local file post-deploy).
+
+New SelfTest cases (`6h`/`6i`/`6j`, `-Mock` fixtures extended): `PagePostShouldFail` reused with a seeded existing-CoachBuild-page fixture (exercises the CoachBuild-replace create-failed branch, previously entirely untested); new `ItemSetsPutShouldFail` toggle added to the mock LCU worker + its `Start-MockLcu` sync-hashtable defaults (item-sets PUT was previously unconditionally successful in the mock, no failure path existed to test against); a `no-client` case toggling `$bridge.Sync.LcuPort = $null` around both `/apply-runes` and `/apply-itemsets` POSTs. Each asserts the exact `reason` AND a `-like`/exact match on the new `hint` text. **Negative-tested for real** (not just "should catch it"): copied the file to scratch, stripped the two `no-client` hints back out, reran `-SelfTest` — got `SELFTEST FAILED (2)` with both new assertions correctly flagging the missing hint text; confirms the new tests aren't tautological.
+
+### verify-fix.sh / build
+
+The shared tree's own `verify-fix.sh` run FAILED at the build step (`gamesTotal, items, boots` TS error) — traced to the OTHER agent's uncommitted `components/hextech/proConsensus.ts` WIP (adding a `starters` field, object-literal construction apparently not yet updated to match the new interface), unrelated to this round's `companion.ps1`-only change; `git status` confirmed only `proConsensus.ts` + `public/companion.ps1` were dirty at that point. tsc/lint/tests (1371, matches baseline) all passed even in the shared tree — only the Next.js build step is affected by the other WIP. Ran the full `verify-fix.sh` again in the isolated worktree instead: tsc, lint, 1371 tests, build, sw cache-name, manifest all `[PASS]`.
+
+### Prod smoke
+
+`curl https://coachbuild.vercel.app/companion.ps1` -> byte-identical to the shipped local file, `Version = '1.5.1'` at its line, zero non-ASCII bytes. `curl https://coachbuild.vercel.app/` -> `0.44.1` present in the HTML. First deploy attempt (before copying `.vercel/project.json` into the fresh worktree) silently created and deployed to a NEW Vercel project (`coachbuild-wt-companion151`, named after the worktree directory) instead of the real `coachbuild` project — caught before declaring done, fixed by copying the real project link over and redeploying, then removed the stray project (`vercel projects rm`). Worth flagging forward: any future isolated-worktree deploy for this repo MUST copy `.vercel/project.json` into the worktree first, or it will silently fork a new project rather than erroring.
+
+### Not done / honest gaps
+
+No on-device confirmation this fixes the user's original report (per the task's own directive, shipped without it) — the fix closes every hint-less `ok:false` gap found by exhaustive audit of `public/companion.ps1`, and the ranked-suspects list from the v0.43.0 round (no-client most likely, write-failed second) both now surface distinctly in the toast/error log going forward. If the report recurs, `/live-setup`'s "Recent errors" panel (v0.43.0) should now show exactly which of these four paths it is, or reveal a fifth path this audit didn't catch.
+
+

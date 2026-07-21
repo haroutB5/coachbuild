@@ -13,6 +13,7 @@
 // themed lines (Highest WPA / Tanky / Burst).
 import { describe, it, expect } from "vitest";
 import { buildItemSets, champScopedReplacePrefix } from "../hextech/itemSetBody";
+import { STARTING_ITEM_ALLOWLIST } from "../hextech/proConsensus";
 import type { ChampionRef, BuildResponse, ItemsBlock, Pick, RunesBlock } from "@/lib/types";
 import type { ItemDetail } from "@/components/itemDetail";
 
@@ -504,6 +505,49 @@ describe("buildItemSets — Pro build: 6 items, exactly 1 boots, no dupes, full 
     const proBlock = findBlock(sets, "Pro build")!;
     expect(proBlock.items.map((i) => i.id)).not.toContain("1082");
     expect(proBlock.items).toHaveLength(6); // the 5 real full items + boots, Dark Seal correctly skipped
+  });
+
+  it("VERIFY-NOT-ASSUME (2026-07-22): isFullItem has NO allowlist escape hatch, checked against the REAL STARTING_ITEM_ALLOWLIST constant, not just Dark Seal", () => {
+    // Companion round to proConsensus.ts's own hard directive ("Dark Seal
+    // must never appear as a full/completed item anywhere"). The existing
+    // Dark Seal-only regressions above prove isFullItem excludes id 1082
+    // specifically; this proves the underlying INVARIANT generically -- if a
+    // future edit ever gave isFullItem an "unless it's on the starting
+    // allowlist" branch (i.e. re-imported proConsensus's rule instead of
+    // staying deliberately narrower, per this module's own header comment),
+    // this catches it for every current AND future allowlist entry, not just
+    // the two ids hardcoded in the tests above. Real allowlist ids imported
+    // directly from proConsensus.ts -- never re-derived/hardcoded here.
+    const allowlistIds = Array.from(STARTING_ITEM_ALLOWLIST);
+    // Worst-case-for-the-bug metadata: a real, non-empty `into` on every id
+    // (the shape that actually needs isFullItem's rule, not the allowlist,
+    // to exclude it -- an empty-into allowlist entry, e.g. Doran's Ring,
+    // would pass as a genuine recipe-tree leaf regardless of the allowlist,
+    // which is correct, separate behavior this test isn't exercising).
+    const richMeta = metaMap(
+      ...Array.from(baseItemMetaMap().values()),
+      ...allowlistIds.map((id) => meta(id, { tags: ["Health"], into: ["999999"] }))
+    );
+    const build = baseBuild(
+      baseItems({
+        fourthPlus: allowlistIds.map((id) => pick(id, 0.09)),
+      })
+    );
+    const pro = {
+      items: allowlistIds.map((id, i) => ({ itemId: id, share: 0.9 - i * 0.01 })),
+      boots: [],
+    };
+    const sets = buildItemSets(CHAMP, "Bot", build, pro, richMeta);
+    for (const type of ["Core build", "Buy order", "Pro build", "Highest WPA"]) {
+      const block = findBlock(sets, type);
+      if (!block) continue;
+      for (const allowId of allowlistIds) {
+        expect(block.items.map((i) => i.id)).not.toContain(String(allowId));
+      }
+    }
+    // Starting stays exempt (unaffected either way -- it renders items.starter
+    // only, never consults fourthPlus/pro at all).
+    expect(findBlock(sets, "Starting")!.items).toEqual([{ id: "1054", count: 1 }]);
   });
 });
 
