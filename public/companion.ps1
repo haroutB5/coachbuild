@@ -206,7 +206,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.5.0'
+    Version     = '1.5.1'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -387,19 +387,59 @@ function Invoke-LcuRaw {
         if ($res.Content) {
             try { $content = $res.Content | ConvertFrom-Json } catch { $content = $res.Content }
         }
-        return [pscustomobject]@{ Ok = $true; StatusCode = [int]$res.StatusCode; Content = $content }
+        return [pscustomobject]@{ Ok = $true; StatusCode = [int]$res.StatusCode; Content = $content; Body = $null }
     } catch {
         $status = 0
         try { if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode } } catch {}
+        # v1.5.1: capture the LCU's own error-response BODY (first ~200
+        # chars) for diagnostics -- ErrorDetails.Message is how Windows
+        # PowerShell 5.1's Invoke-WebRequest surfaces a non-2xx response
+        # body on a terminating error (the exception object itself carries
+        # no body text). Logged only (throttled, below) -- NEVER surfaced
+        # verbatim to the user; a caller-facing hint gets the numeric status
+        # code alone (see Get-LcuFailureHint), since the raw body is
+        # arbitrary LCU-internal text that could be confusing or leak
+        # internal detail.
+        $bodySnippet = $null
+        try {
+            if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+                $raw = [string]$_.ErrorDetails.Message
+                $bodySnippet = if ($raw.Length -gt 200) { $raw.Substring(0, 200) } else { $raw }
+            }
+        } catch {}
         # v1.2.2: this used to swallow the exception with ZERO trace -- the
         # exact gap that let a real "every LCU call dies" failure ship
         # invisibly (companion.log showed nothing past startup even while
         # sitting in a live champ select). Throttled (see
         # Write-ThrottledErrorLog) so a persistent failure logs once per
         # ~60s, not once per 1.5s poll.
-        Write-ThrottledErrorLog -Key "lcu:$Method $Path" -Message "Invoke-LcuRaw failed: $Method $Path -- $($_.Exception.GetType().Name): $($_.Exception.Message)"
-        return [pscustomobject]@{ Ok = $false; StatusCode = $status; Content = $null }
+        $logMsg = "Invoke-LcuRaw failed: $Method $Path -- $($_.Exception.GetType().Name): $($_.Exception.Message) (status=$status)"
+        if ($bodySnippet) { $logMsg += " | body: $bodySnippet" }
+        Write-ThrottledErrorLog -Key "lcu:$Method $Path" -Message $logMsg
+        return [pscustomobject]@{ Ok = $false; StatusCode = $status; Content = $null; Body = $bodySnippet }
     }
+}
+
+function Get-LcuFailureHint {
+    # Shared hint-builder for a failed Invoke-LcuRaw call, used by every
+    # apply-* path that doesn't already have a more specific fixed hint
+    # (read-failed/delete-failed/slots-full/invalid-sets all set their own).
+    # StatusCode 0 (no response at all -- connection refused/timeout) or 401
+    # (stale auth token) are the exact same "the LCU we resolved credentials
+    # for is no longer there" condition Invoke-GameflowTick already treats
+    # as cache-invalidating (see its own `-eq 0 -or -eq 401` check below) --
+    # from the user's side this is transient and self-healing (the next
+    # ~1.5s poll tick re-discovers a live client on its own), so it earns a
+    # reassuring hint rather than being lumped in with a genuine LCU-side
+    # rejection. Any other non-zero status is a real rejection the LCU
+    # actively returned -- surface the numeric code (never the raw body;
+    # that's throttled-log-only, see Invoke-LcuRaw) plus a targeted
+    # suggestion.
+    param([int]$StatusCode, [string]$Action)
+    if ($StatusCode -eq 0 -or $StatusCode -eq 401) {
+        return 'companion lost the client connection -- it re-detects automatically, try again in a few seconds'
+    }
+    return "League client rejected the $Action (HTTP $StatusCode) -- make sure you're logged in and not mid-game"
 }
 
 function Get-LiveClientData {
@@ -527,7 +567,9 @@ function Invoke-ApplyRunes {
             return [pscustomobject]@{ ok = $false; reason = 'delete-failed'; hint = 'delete a rune page manually and retry' }
         }
         $post = Invoke-LcuRaw -Method POST -Path '/lol-perks/v1/pages' -Body $Body -Port $LcuPort -Token $LcuToken -Scheme $Scheme
-        if (-not $post.Ok) { return [pscustomobject]@{ ok = $false; reason = 'create-failed' } }
+        if (-not $post.Ok) {
+            return [pscustomobject]@{ ok = $false; reason = 'create-failed'; hint = (Get-LcuFailureHint -StatusCode $post.StatusCode -Action 'new rune page') }
+        }
         return Complete-RuneApply -PostResult $post -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
     }
 
@@ -559,7 +601,9 @@ function Invoke-ApplyRunes {
             }
         }
         $post2 = Invoke-LcuRaw -Method POST -Path '/lol-perks/v1/pages' -Body $Body -Port $LcuPort -Token $LcuToken -Scheme $Scheme
-        if (-not $post2.Ok) { return [pscustomobject]@{ ok = $false; reason = 'create-failed' } }
+        if (-not $post2.Ok) {
+            return [pscustomobject]@{ ok = $false; reason = 'create-failed'; hint = (Get-LcuFailureHint -StatusCode $post2.StatusCode -Action 'new rune page') }
+        }
         return Complete-RuneApply -PostResult $post2 -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
     }
 
@@ -697,12 +741,16 @@ function Invoke-ApplyItemSets {
     $summonerId = $summoner.Content.summonerId
     $existing = Invoke-LcuRaw -Method GET -Path "/lol-item-sets/v1/item-sets/$summonerId/sets" -Port $LcuPort -Token $LcuToken -Scheme $Scheme
     if (-not $existing.Ok -or -not $existing.Content) {
-        return [pscustomobject]@{ ok = $false; reason = 'read-failed'; hint = 'could not read existing item sets -- nothing was changed' }
+        # v1.5.1: this is the merge-safety GET (the #1 correctness risk per
+        # this function's own header comment) -- its own hint, distinct from
+        # the current-summoner read-failed above, so a report is
+        # unambiguous about which GET actually failed.
+        return [pscustomobject]@{ ok = $false; reason = 'read-failed'; hint = "couldn't read your existing item sets -- nothing was changed" }
     }
     $merged = Merge-ItemSets -ExistingSetsObject $existing.Content -NewSets $Sets -ReplacePrefix $ReplacePrefix
     $put = Invoke-LcuRaw -Method PUT -Path "/lol-item-sets/v1/item-sets/$summonerId/sets" -Body $merged -Port $LcuPort -Token $LcuToken -Scheme $Scheme
     if (-not $put.Ok) {
-        return [pscustomobject]@{ ok = $false; reason = 'write-failed' }
+        return [pscustomobject]@{ ok = $false; reason = 'write-failed'; hint = (Get-LcuFailureHint -StatusCode $put.StatusCode -Action 'item-set write') }
     }
     return [pscustomobject]@{ ok = $true; count = @($Sets).Count }
 }
@@ -1160,7 +1208,7 @@ while ($Sync.Running) {
             $bodyObj = $null
             try { $bodyObj = $bodyRaw | ConvertFrom-Json } catch {}
             if (-not $Sync.LcuPort) {
-                Write-JsonResponse -Response $res -StatusCode 200 -Obj @{ ok = $false; reason = 'no-client' }
+                Write-JsonResponse -Response $res -StatusCode 200 -Obj @{ ok = $false; reason = 'no-client'; hint = 'League client not detected -- open the client and try again' }
             } else {
                 $scheme = if ($Sync.LcuScheme) { $Sync.LcuScheme } else { 'https' }
                 # mode is validated here, not trusted verbatim: anything
@@ -1181,7 +1229,7 @@ while ($Sync.Running) {
             $bodyObj = $null
             try { $bodyObj = $bodyRaw | ConvertFrom-Json } catch {}
             if (-not $Sync.LcuPort) {
-                Write-JsonResponse -Response $res -StatusCode 200 -Obj @{ ok = $false; reason = 'no-client' }
+                Write-JsonResponse -Response $res -StatusCode 200 -Obj @{ ok = $false; reason = 'no-client'; hint = 'League client not detected -- open the client and try again' }
             } else {
                 $scheme = if ($Sync.LcuScheme) { $Sync.LcuScheme } else { 'https' }
                 # v1.3.1: $bodyObj.replacePrefix is $null on an older web
@@ -1538,12 +1586,19 @@ while ($Sync.Running) {
                 Write-JsonResponse -Response $res -StatusCode 200 -Obj $Sync.ExistingItemSets
             }
         } elseif ($path -like '/lol-item-sets/v1/item-sets/*/sets' -and $method -eq 'PUT') {
-            $reader2 = New-Object IO.StreamReader($req.InputStream, [Text.Encoding]::UTF8)
-            $putBodyRaw = $reader2.ReadToEnd()
-            $reader2.Close()
-            $Sync.LastPutBody = $putBodyRaw
-            $res.StatusCode = 200
-            $res.OutputStream.Close()
+            if ($Sync.ItemSetsPutShouldFail) {
+                # v1.5.1: exercises Invoke-ApplyItemSets's write-failed hint
+                # path (Get-LcuFailureHint) end to end -- previously
+                # untested, this branch always succeeded before.
+                Write-JsonResponse -Response $res -StatusCode 500 -Obj @{ error = 'mock-itemsets-put-failed' }
+            } else {
+                $reader2 = New-Object IO.StreamReader($req.InputStream, [Text.Encoding]::UTF8)
+                $putBodyRaw = $reader2.ReadToEnd()
+                $reader2.Close()
+                $Sync.LastPutBody = $putBodyRaw
+                $res.StatusCode = 200
+                $res.OutputStream.Close()
+            }
         } else {
             Write-JsonResponse -Response $res -StatusCode 404 -Obj @{ error = 'mock-not-found' }
         }
@@ -1575,6 +1630,7 @@ function Start-MockLcu {
         Calls                     = [System.Collections.ArrayList]::Synchronized((New-Object System.Collections.ArrayList))
         SummonerGetShouldFail     = $false
         ItemSetsGetShouldFail     = $false
+        ItemSetsPutShouldFail     = $false
         ExistingItemSets          = [pscustomobject]@{ accountId = 1; timestamp = 0; itemSets = @() }
         LastPutBody               = $null
         # Rune-pages mock state (v1.3.0 safety redesign + PUT-currentpage fix)
@@ -1934,6 +1990,62 @@ function Invoke-SelfTest {
         if ($obj.ok -ne $false -or $obj.reason -ne 'invalid-sets') { $failures.Add("apply-itemsets bad replacePrefix expected invalid-sets rejection, got $($r.Content)") }
         if ($mockLcu.Sync.LastPutBody) { $failures.Add('apply-itemsets issued a PUT with an invalid replacePrefix') }
     } catch { $failures.Add("apply-itemsets bad replacePrefix threw: $($_.Exception.Message)") }
+
+    # 6h. v1.5.1 -- apply-runes create-failed (CoachBuild-page-replace path:
+    # DELETE succeeds, the follow-up POST is rejected by the LCU) now
+    # carries a status-coded hint instead of the old bare {ok:false,
+    # reason:'create-failed'} envelope.
+    $mockLcu.Sync.MockPages = @([pscustomobject]@{ id = 777; name = 'CoachBuild Test Mid'; isDeletable = $true })
+    $mockLcu.Sync.MockCurrentPageId = $null
+    $mockLcu.Sync.PagePostShouldFail = $true
+    $mockLcu.Sync.Calls.Clear()
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($applyBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.ok -ne $false -or $obj.reason -ne 'create-failed') { $failures.Add("apply-runes create-failed expected create-failed envelope, got $($r.Content)") }
+        if (-not $obj.hint -or $obj.hint -notlike '*new rune page*' -or $obj.hint -notlike '*HTTP 400*') {
+            $failures.Add("apply-runes create-failed hint missing/wrong (expected mention of 'new rune page' + 'HTTP 400'), got $($r.Content)")
+        }
+    } catch { $failures.Add("apply-runes create-failed threw: $($_.Exception.Message)") }
+    $mockLcu.Sync.PagePostShouldFail = $false
+    $mockLcu.Sync.MockPages = @()
+
+    # 6i. v1.5.1 -- apply-itemsets write-failed (the final PUT is rejected
+    # by the LCU) now carries a status-coded hint instead of the old bare
+    # {ok:false, reason:'write-failed'} envelope.
+    $mockLcu.Sync.ExistingItemSets = [pscustomobject]@{ accountId = 12345; timestamp = 1700000000; itemSets = @() }
+    $mockLcu.Sync.ItemSetsPutShouldFail = $true
+    $mockLcu.Sync.LastPutBody = $null
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-itemsets?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes((@{ championId = 112; sets = $newSets } | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.ok -ne $false -or $obj.reason -ne 'write-failed') { $failures.Add("apply-itemsets write-failed expected write-failed envelope, got $($r.Content)") }
+        if (-not $obj.hint -or $obj.hint -notlike '*item-set write*' -or $obj.hint -notlike '*HTTP 500*') {
+            $failures.Add("apply-itemsets write-failed hint missing/wrong (expected mention of 'item-set write' + 'HTTP 500'), got $($r.Content)")
+        }
+    } catch { $failures.Add("apply-itemsets write-failed threw: $($_.Exception.Message)") }
+    $mockLcu.Sync.ItemSetsPutShouldFail = $false
+
+    # 6j. v1.5.1 -- no-client (LcuPort not yet detected) now carries a fixed
+    # hint on BOTH apply-runes and apply-itemsets, previously bare
+    # {ok:false, reason:'no-client'} on both.
+    $savedLcuPort = $bridge.Sync.LcuPort
+    $bridge.Sync.LcuPort = $null
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($applyBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.ok -ne $false -or $obj.reason -ne 'no-client' -or $obj.hint -ne 'League client not detected -- open the client and try again') {
+            $failures.Add("apply-runes no-client hint wrong, got $($r.Content)")
+        }
+    } catch { $failures.Add("apply-runes no-client threw: $($_.Exception.Message)") }
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-itemsets?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes((@{ championId = 112; sets = $newSets } | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.ok -ne $false -or $obj.reason -ne 'no-client' -or $obj.hint -ne 'League client not detected -- open the client and try again') {
+            $failures.Add("apply-itemsets no-client hint wrong, got $($r.Content)")
+        }
+    } catch { $failures.Add("apply-itemsets no-client threw: $($_.Exception.Message)") }
+    $bridge.Sync.LcuPort = $savedLcuPort
 
     # 6e. v1.2.2 -- a real Invoke-LcuRaw failure (point LcuPort at a port
     # nothing listens on) must populate /status's lastError. This is the
