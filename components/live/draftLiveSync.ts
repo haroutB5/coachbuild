@@ -112,3 +112,74 @@ export function resolveDraftLiveTarget(input: DraftLiveSyncInput): DraftLiveTarg
 export function shouldShowResetToLive(dirty: boolean, phase: string | null, champSelect: CompanionChampSelectSnapshot | null): boolean {
   return dirty && phase === "ChampSelect" && champSelect !== null;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Champ-select ENTRY detection (v0.40.0 — user-reported P0: live pickup
+// permanently died after any manual edit). Root cause: `dirty` (app/draft/
+// page.tsx) is latched by every manual handler, including handleClearHover,
+// and was previously cleared ONLY by an explicit "Reset to live" tap — so
+// one Clear tap in game 1's champ select silently detached the page from
+// EVERY subsequent champ select the user ever entered (a real live repro:
+// game 1 fresh page -> hover auto-filled -> user tapped Clear -> dirty
+// latched -> game 2's champ select -> hover filled NOTHING).
+//
+// Fix: auto-reset `dirty` on the champ-select ENTRY transition (previous
+// real phase != "ChampSelect", new phase == "ChampSelect") — never on the
+// steady state (repeated "ChampSelect" ticks), so manual edits still win
+// within the SAME champ select (preserves the "follow fights user" lesson).
+// This module only detects the transition; app/draft/page.tsx's live-sync
+// effect is the one that actually calls setDirty(false) on isEntry.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Tracks the last REAL (non-null) phase seen, across poll ticks, so entry
+ *  detection can ignore transient null blips entirely rather than
+ *  mistaking one for a genuine phase change. `lastRealPhase: null` means
+ *  "no real phase observed yet" (fresh mount, or every tick so far has been
+ *  null/no-session). */
+export interface ChampSelectEntryState {
+  lastRealPhase: string | null;
+}
+
+/** Starting state for a freshly-mounted /draft page — no phase observed
+ *  yet, so the very first "ChampSelect" tick (if the user opens /draft
+ *  already mid-champ-select) correctly counts as an entry too. */
+export const INITIAL_CHAMP_SELECT_ENTRY_STATE: ChampSelectEntryState = { lastRealPhase: null };
+
+export interface ChampSelectEntryResult {
+  /** True exactly on the tick where `phase` is "ChampSelect" AND the most
+   *  recently observed REAL phase (nulls skipped entirely) was something
+   *  else. The caller should reset the manual-dirty latch on this tick only
+   *  — never on repeated "ChampSelect" ticks (the steady state). */
+  isEntry: boolean;
+  /** Feed this back in as `prev` on the next tick's call. */
+  next: ChampSelectEntryState;
+}
+
+/** Pure state-machine step (companion.tick-driven — see CompanionProvider's
+ *  doc comment for why every tick, not just phase-identity changes, must be
+ *  evaluated). `phase` is this tick's raw companion phase: a real phase
+ *  string, or null on a transient /status poll failure — companion polling
+ *  can flicker null between otherwise-real ticks (network blip, not a real
+ *  LCU phase), and that blip must never be mistaken for "the user left
+ *  champ select" or "the user entered champ select":
+ *
+ *    ChampSelect -> null -> ChampSelect   =>  NOT an entry. The null tick
+ *      leaves `lastRealPhase` at "ChampSelect" (untouched), so the following
+ *      real "ChampSelect" tick sees no transition — a single-tick blip mid-
+ *      champ-select must never re-fire the dirty reset.
+ *
+ *    Lobby -> null -> ChampSelect         =>  IS an entry. `lastRealPhase`
+ *      was "Lobby" going into the null tick (the null itself changes
+ *      nothing) and is still "Lobby" when the real "ChampSelect" tick
+ *      arrives, so the transition is correctly detected despite the blip
+ *      sitting in between.
+ *
+ *  A null tick therefore ALWAYS returns `isEntry: false` and passes `prev`
+ *  through unchanged — it carries no information, so it must not overwrite
+ *  `lastRealPhase` with null (that would make the very next real phase,
+ *  whatever it is, look like a fresh transition into it). */
+export function resolveChampSelectEntry(prev: ChampSelectEntryState, phase: string | null): ChampSelectEntryResult {
+  if (phase === null) return { isEntry: false, next: prev };
+  const isEntry = phase === "ChampSelect" && prev.lastRealPhase !== "ChampSelect";
+  return { isEntry, next: { lastRealPhase: phase } };
+}

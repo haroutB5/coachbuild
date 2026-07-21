@@ -339,6 +339,24 @@ export function splitPlaysBySampleSize(
   };
 }
 
+/** Ban-candidate matchup floor (v0.40.0 — hard user directive, verbatim:
+ *  "dont put champs with less than 1000 games in Suggested bans"). Same
+ *  threshold CLASS as PLAY_MAIN_SAMPLE_FLOOR (1000, the main play-list's
+ *  sample-size split) but a separate named constant — this gates a
+ *  DIFFERENT axis: the hover-vs-ban-target matchup's own game count, not
+ *  the direct-lane-opponent matchup PLAY_MAIN_SAMPLE_FLOOR gates. Ban
+ *  candidates are drawn from `pool` (already floored at POOL_MIN_TOTAL_GAMES
+ *  = 5000 games *aggregated across every opponent*), which says nothing
+ *  about any ONE opponent's specific sample — live-reproduced: a hovered
+ *  Viktor's ban list surfaced Singed (n=463 vs Viktor specifically) ranked
+ *  above Xerath (n=16547), because a genuine-but-tiny-sample disadvantage
+ *  can still out-score a well-sampled one on raw shrunk-delta magnitude. A
+ *  target whose matchup vs the hovered champion has fewer than this many
+ *  games is excluded from the ban pool ENTIRELY (not merely flagged "low
+ *  confidence") — a sub-1000-game sample is fringe noise, not a trustworthy
+ *  counter-pick signal. */
+export const BAN_MIN_MATCHUP_GAMES = 1000;
+
 /** Presence weight for a ban target: known pickrate/banrate combine as
  *  pickrate + PRESENCE_BANRATE_WEIGHT*banrate; when BOTH are unknown (null —
  *  today's actual state, see ChampBaseline's doc comment) presence falls
@@ -366,26 +384,29 @@ export function rankBans(
 ): BanResult[] {
   const scored: BanResult[] = pool
     .filter((t) => t.champId !== hoverChampId)
-    .map((t) => {
+    .map((t): BanResult | null => {
       const row = matchupsForHover.get(t.champId);
-      let rawDisadvantage = 0;
-      // audit P2-2: confidence/minGames come from the SAME row this score
-      // is computed from — no row at all (or games<=0) is "low"/null, never
-      // a fabricated number the client would otherwise default to on its
-      // own (draftRecommend.ts's normalizeBan previously had nothing real
-      // to normalize, since this file never sent these fields before).
-      let minGames: number | null = null;
-      let confidence: "normal" | "low" = "low";
-      if (row && row.games > 0) {
-        minGames = row.games;
-        confidence = row.games < K ? "low" : "normal";
-        const mWr = row.wins / row.games;
-        const delta = shrunkDelta(mWr, hoverBaselineWr, row.games); // (mWr - baseline)*shrink, null if n<30
-        // plan's ban formula is (baselineWr - matchupWr)*shrink = -delta
-        if (delta !== null) rawDisadvantage = Math.max(0, -delta);
-      }
+      // v0.40.0: no row, or a sub-BAN_MIN_MATCHUP_GAMES row, is excluded
+      // from the ban pool ENTIRELY -- see that constant's doc comment. This
+      // floor (1000) is strictly narrower than N_FLOOR (30, shrunkDelta's
+      // own hard floor below which a term is dropped from scoring): every
+      // row that reaches the return below already clears both floors, so
+      // shrunkDelta can never return null past this point.
+      if (!row || row.games < BAN_MIN_MATCHUP_GAMES) return null;
+
+      const minGames = row.games;
+      // BAN_MIN_MATCHUP_GAMES (1000) > K (200), so this is "normal" for
+      // every surviving candidate today -- kept as a real check (not
+      // hardcoded) so it stays correct if either constant is ever retuned
+      // independently of the other.
+      const confidence: "normal" | "low" = row.games < K ? "low" : "normal";
+      const mWr = row.wins / row.games;
+      const delta = shrunkDelta(mWr, hoverBaselineWr, row.games); // (mWr - baseline)*shrink; never null here
+      // plan's ban formula is (baselineWr - matchupWr)*shrink = -delta
+      const rawDisadvantage = delta !== null ? Math.max(0, -delta) : 0;
       return { champId: t.champId, score: rawDisadvantage * presence(t), confidence, minGames };
-    });
+    })
+    .filter((r): r is BanResult => r !== null);
 
   return sortStable(scored).slice(0, 5);
 }

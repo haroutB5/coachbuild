@@ -17,6 +17,7 @@ import {
   PLAY_MAIN_TOP_N,
   PLAY_POTENTIAL_TOP_N,
   PLAY_MAIN_SAMPLE_FLOOR,
+  BAN_MIN_MATCHUP_GAMES,
   shrinkFactor,
   shrunkDelta,
   filterPoolByPickrate,
@@ -408,7 +409,10 @@ describe("rankBans", () => {
 
   it("returns at most the top 5, stable champId tiebreak on equal score", () => {
     const pool = Array.from({ length: 8 }, (_, i) => baseline(i + 1, 0.5, null, null));
-    const results = rankBans(999, 0.5, pool, new Map());
+    // every candidate clears BAN_MIN_MATCHUP_GAMES with wr == baseline
+    // (0.5) -- zero disadvantage, so all 8 tie at score 0.
+    const matchups = new Map<number, MatchupRow>(pool.map((c) => [c.champId, { wins: 500, games: 1000 }]));
+    const results = rankBans(999, 0.5, pool, matchups);
     expect(results).toHaveLength(5);
     expect(results.every((r) => r.score === 0)).toBe(true);
     expect(results.map((r) => r.champId)).toEqual([1, 2, 3, 4, 5]);
@@ -419,26 +423,62 @@ describe("rankBans", () => {
   });
 
   describe("confidence/minGames (audit P2-2 -- previously absent entirely)", () => {
-    it("real matchup row -> minGames = row.games, confidence from n<K", () => {
-      const pool = [baseline(10, 0.5), baseline(11, 0.5)];
-      const matchups = new Map<number, MatchupRow>([
-        [10, { wins: 100, games: 300 }], // n=300 >= K -- normal
-        [11, { wins: 30, games: 90 }], // n=90 < K -- low
-      ]);
+    it("real matchup row clearing the ban floor -> minGames = row.games, confidence normal (floor 1000 > K 200)", () => {
+      const pool = [baseline(10, 0.5)];
+      const matchups = new Map<number, MatchupRow>([[10, { wins: 400, games: 1500 }]]);
       const results = rankBans(1, 0.5, pool, matchups);
-      const r10 = results.find((r) => r.champId === 10)!;
-      const r11 = results.find((r) => r.champId === 11)!;
-      expect(r10.minGames).toBe(300);
-      expect(r10.confidence).toBe("normal");
-      expect(r11.minGames).toBe(90);
-      expect(r11.confidence).toBe("low");
+      expect(results[0].minGames).toBe(1500);
+      expect(results[0].confidence).toBe("normal");
     });
 
-    it("no matchup row at all -> minGames null, confidence low (never a fabricated 0/normal)", () => {
+    it("no matchup row at all -> excluded entirely (never a fabricated 0/low placeholder)", () => {
       const pool = [baseline(10, 0.5)];
       const results = rankBans(1, 0.5, pool, new Map());
-      expect(results[0].minGames).toBeNull();
-      expect(results[0].confidence).toBe("low");
+      expect(results).toEqual([]);
+    });
+  });
+
+  describe("ban candidate floor (v0.40.0 -- user directive: no sub-1000-game ban candidates)", () => {
+    it("BAN_MIN_MATCHUP_GAMES is 1000, same threshold class as PLAY_MAIN_SAMPLE_FLOOR", () => {
+      expect(BAN_MIN_MATCHUP_GAMES).toBe(1000);
+      expect(BAN_MIN_MATCHUP_GAMES).toBe(PLAY_MAIN_SAMPLE_FLOOR);
+    });
+
+    it("floor applied: a matchup at exactly the floor is included", () => {
+      const pool = [baseline(10, 0.5)];
+      const matchups = new Map<number, MatchupRow>([[10, { wins: 400, games: 1000 }]]);
+      const results = rankBans(1, 0.5, pool, matchups);
+      expect(results.map((r) => r.champId)).toEqual([10]);
+    });
+
+    it("sub-floor excluded: a real disadvantage under 1000 games never outranks a well-sampled one", () => {
+      // reproduces the live bug: hovering Viktor surfaced Singed (n=463)
+      // ranked ABOVE Xerath (n=16547) in Suggested bans -- a genuine but
+      // tiny-sample disadvantage out-scoring a well-sampled one.
+      const pool = [baseline(10, 0.5), baseline(11, 0.5)];
+      const matchups = new Map<number, MatchupRow>([
+        [10, { wins: 300, games: 463 }], // sub-floor -- excluded even though real signal
+        [11, { wins: 6500, games: 16547 }], // well-sampled -- included
+      ]);
+      const results = rankBans(1, 0.5, pool, matchups);
+      expect(results.map((r) => r.champId)).toEqual([11]);
+    });
+
+    it("just-under-the-floor (999 games) is excluded", () => {
+      const pool = [baseline(10, 0.5)];
+      const matchups = new Map<number, MatchupRow>([[10, { wins: 400, games: 999 }]]);
+      const results = rankBans(1, 0.5, pool, matchups);
+      expect(results).toEqual([]);
+    });
+
+    it("empty-result shape: zero candidates clear the floor -> []", () => {
+      const pool = [baseline(10, 0.5), baseline(11, 0.5)];
+      const matchups = new Map<number, MatchupRow>([
+        [10, { wins: 300, games: 463 }],
+        [11, { wins: 20, games: 30 }], // clears N_FLOOR but not the ban floor
+      ]);
+      const results = rankBans(1, 0.5, pool, matchups);
+      expect(results).toEqual([]);
     });
   });
 });

@@ -1,40 +1,59 @@
-<!-- merged into HANDOFF.md 2026-07-21 19:39:19Z; previous content preserved there. Append new rounds below. -->
+<!-- merged into HANDOFF.md 2026-07-21 19:43:06Z; previous content preserved there. Append new rounds below. -->
 
-# HANDOFF-engy — CoachBuild v0.39.1 (2026-07-21)
+# HANDOFF-engy — CoachBuild v0.40.0 (2026-07-21)
 
-## Ship: fast-follow on v0.39.0's Task-4 finding — "LOW SAMPLE" badge false-positive
+## Ship: two user-reported P0/UX items — live pickup permanently dying + fringe sub-1000-game bans
 
-**Deployed:** v0.39.1 → https://coachbuild.vercel.app (prod). `verify-fix.sh` clean, 1179 tests (baseline 1177 + 2 net new).
+**Deployed:** v0.40.0 → https://coachbuild.vercel.app (prod). `verify-fix.sh` clean, 1192 tests (baseline 1179 + 13 net new).
 
-### What shipped
+### Item 1 — /draft live pickup permanently died after any manual edit
 
-v0.39.0's report flagged (Task 4) that every /draft main-list row showed "LOW SAMPLE" despite huge headline samples (Sylas n=24030), and proposed a fast-follow rather than fixing it inline since it touched `score.ts`'s `confidence` contract. Orchestrator ruled the confidence badge is a display/labeling contract, not the scoring formula — the standing "don't retune scoring" constraint doesn't bind it, so this round implements exactly the proposed fix.
+**Confirmed the briefed mechanism exactly.** `dirty` (`app/draft/page.tsx`) is latched by every manual handler including `handleClearHover`, and was previously cleared ONLY by the explicit "Reset to live" link. One Clear tap in game 1 permanently detached the page from every future champ select — `resolveDraftLiveTarget` returns `null` whenever `dirty` is true, unconditionally.
 
-**Root cause (confirmed, matches v0.39.0's diagnosis):** `computeScoredPool` in `lib/draft/score.ts` flipped `confidence: "low"` whenever ANY contributing matchup term (including 0.2-weight off-lane terms, once they clear `N_FLOOR=30`) had `n < K=200`. Since `POOL_MIN_TOTAL_GAMES=5000 >> K`, a pooled candidate's own baseline never trips it — in practice the flag was always driven by a thin off-lane term (e.g. Udyr-mid barely played in the resolved lane), a term whose contribution to `score` is already shrunk to near-zero by `W_OFFLANE=0.2`. The badge was flagging the exact noise the shrink math neutralizes.
+**Fix — entry-transition auto-reset (`components/live/draftLiveSync.ts`):**
+- New pure state machine `resolveChampSelectEntry(prev: ChampSelectEntryState, phase: string | null): ChampSelectEntryResult`. `ChampSelectEntryState` tracks only `lastRealPhase: string | null` — the most recently observed NON-NULL phase, across ticks.
+- A `null` phase (transient `/status` poll failure) is a complete no-op: `{ isEntry: false, next: prev }` — it never updates `lastRealPhase` and never itself counts as leaving/entering anything. This is what makes the blip cases correct:
+  - `ChampSelect → null → ChampSelect`: NOT an entry (the null tick left `lastRealPhase` at `"ChampSelect"`, so the next real tick sees no transition).
+  - `Lobby → null → ChampSelect`: IS an entry (the null tick didn't touch `lastRealPhase`, still `"Lobby"` when the real tick lands).
+- `isEntry = phase === "ChampSelect" && prev.lastRealPhase !== "ChampSelect"` — fires exactly once per genuine entry, never on the steady state (repeated `"ChampSelect"` ticks).
+- **Wired in `app/draft/page.tsx`:** a new `entryStateRef` (ref, not state — pure bookkeeping) feeds `resolveChampSelectEntry` on every `companion.tick` inside the existing live-sync effect, BEFORE the existing `resolveDraftLiveTarget` call. On `entryResult.isEntry && dirty`, calls `setDirty(false)` and returns early — the re-render this triggers (dirty is already an effect dependency) re-runs the effect with fresh `dirty` state and applies the live target normally on the next pass. No double-apply, no infinite loop (the ref is updated to `next` regardless of whether `isEntry` fired, so entry can't re-fire on the following tick).
+- Manual edits still win for the REST of the same champ select (the fix only resets on the entry tick, never on steady-state ticks) — preserves the earlier "follow fights user" behavior the plan is built around.
 
-**Fix (`lib/draft/score.ts`, `computeScoredPool`):** `confidence` now only tracks the row's DOMINANT evidence term:
-- baseline `totalGames < K` (unchanged, audit-P1-1 clause), OR
-- when a direct lane opponent is resolved, that direct-opp matchup term (`enemy.isDirectLaneOpp`) has `row.games < K`.
+**Legibility fix (design item b):** the dirty+live-champ-select state previously showed a small underlined text link ("Reset to live") easy to miss entirely — plausibly why the bug read to the user as "live pickup is just dead" rather than "I'm in manual mode, here's the button." Replaced with a bordered, filled banner (`role="status"`, teal-tinted background/border matching the existing accent) reading "Manual mode — champ select detected" plus a solid filled "Reset to live" button (was: dotted-underline text link). The quiet "Syncing from champ select" pill for the passive-syncing state is unchanged.
 
-Off-lane terms no longer touch the flag (`minGames` is unaffected — still tracks the smallest contributing term across all terms, that field's contract is untouched). Weights/K/N_FLOOR/floors — the actual scoring formula — untouched, exactly as scoped.
+**Tests (`components/__tests__/draftLiveSync.test.ts`, 8 new):** fresh-mount-into-ChampSelect is an entry; real-phase→ChampSelect is an entry; repeated ChampSelect ticks never re-fire; leave-then-reenter (the literal "game 2" repro) fires again; a null tick alone changes nothing; **the exact blip case from the brief** — `ChampSelect → null → ChampSelect` does NOT count as re-entry; a null blip DURING a real transition (`Lobby → null → ChampSelect`) still resolves correctly once the real tick lands; a non-ChampSelect→non-ChampSelect phase change is never an entry.
 
-**Tests** (`lib/__tests__/draft-score.test.ts`): the old audit-P1-1 pinned test (line ~166, "confidence is low iff a CONTRIBUTING term has n<K") is superseded — kept, retitled to explain the supersession, re-asserted `"normal"` (it's a pure off-lane-thin-term case, which is now the reason NOT to flag). Two new tests pin the new contract directly:
-- main-tier row, fat direct-opp (`n=24030`) + thin off-lane term (`n=100`) → `confidence: "normal"`.
-- potential-tier row via `splitPlaysBySampleSize`, direct-opp `n=150` (clears `N_FLOOR=30`, under `K=200`, under `PLAY_MAIN_SAMPLE_FLOOR=1000`) → `confidence: "low"` — the badge's honest job when the direct-opp term IS the dominant evidence.
+**Not verified on a real device this round (per dispatch note) — what the user should see on their next Practice Tool session:**
+1. Game 1: enter champ select → hover auto-fills your champion (unchanged from before).
+2. Tap Clear (or make any manual edit) → the "Manual mode — champ select detected" banner should appear (NEW — previously just a small link, easy to miss).
+3. Finish game 1, start game 2's Practice Tool champ select → hover should AUTO-FILL again without touching Reset to live — this is the actual fix. Previously it stayed blank forever after step 2.
+4. If it does NOT re-attach on game 2, the thing to check first is whether the companion's `/status` phase string between games is literally `"ChampSelect"` again (not some other value this repo hasn't seen) — `resolveChampSelectEntry` only recognizes the exact string `"ChampSelect"`, matching `resolveDraftLiveTarget`'s existing check.
 
-**Doc comments updated:** `PlayResult.confidence`'s JSDoc rewritten to state the new contract and explicitly flag it as superseding the old "ANY contributing term" rule (with the prod repro cited), and the loop's `if (enemy.isDirectLaneOpp && row.games < K)` line has an inline comment pointing back to it.
+### Item 2 — Suggested bans included sub-1000-game fringe rows outranking well-sampled counters
 
-**CLAUDE.md:** the stale v0.38.0-era sentence ("`resolveLaneOpponent` only infers … when pickrate is non-null, currently always null") corrected to describe the v0.39.0 `total_games` proxy + `LANE_OPP_DOMINANCE_RATIO` mechanism (this was flagged stale by the v0.39.0 report, done in this round).
+**Confirmed the exact repro is the reported mechanism.** Ban candidates are drawn from `pool` (`lib/draft/recommend.ts`), which is floored by `filterPoolByTotalGames` at `POOL_MIN_TOTAL_GAMES=5000` — but that's the champion's AGGREGATE games across every opponent in that role, not the specific hover-vs-target matchup sample `rankBans` actually scores and the UI displays as `n=`. A champion can clear the 5000-aggregate floor easily while having a tiny, noisy sample against one specific hovered champion — that's exactly how Singed (n=463 vs Viktor) out-scored Xerath (n=16547 vs Viktor): a genuine shrunk-delta disadvantage on a small sample can still exceed a well-sampled one's magnitude.
+
+**Fix (`lib/draft/score.ts`, `rankBans`):**
+- New named constant `BAN_MIN_MATCHUP_GAMES = 1000` — same VALUE as `PLAY_MAIN_SAMPLE_FLOOR` but a deliberately separate constant (different axis: hover-vs-target matchup, not direct-lane-opponent matchup; doc comment cross-references both).
+- Candidates with no matchup row, or `row.games < BAN_MIN_MATCHUP_GAMES`, are excluded from the ban pool ENTIRELY (`.map` → `null` → `.filter` out) — not scored at 0, not flagged "low confidence" and still shown. Ban formula (`disadvantage × presence`) is byte-identical otherwise.
+- Side effect worth knowing: since `BAN_MIN_MATCHUP_GAMES (1000) > K (200)`, the `confidence: "low"` branch inside `rankBans` is now structurally unreachable for any surviving candidate — kept as a real `row.games < K` check (not hardcoded to `"normal"`) rather than deleted, so it self-corrects if either constant is ever retuned independently. Flagged in a code comment at the call site.
+- `app/draft/page.tsx`: the `bans.length === 0` empty-state copy changed from the old generic "No strong bans identified" / "Nothing stands out…" to "No well-sampled counters" / "No well-sampled counters to your pick this patch — check back as more games are recorded." — this state now specifically means the floor filtered everything, not "nothing stands out," and the copy needed to say that honestly rather than fabricate a ban.
+
+**Tests (`lib/__tests__/draft-score.test.ts`, describe "ban candidate floor", 5 new):** floor value pinned equal to `PLAY_MAIN_SAMPLE_FLOOR`; exactly-at-floor (1000 games) included; **the literal Singed(463)/Xerath(16547) repro** — sub-floor excluded even with a real signal, well-sampled candidate included and ranked; just-under-floor (999) excluded; empty-result shape (all candidates sub-floor → `[]`). Three pre-existing `rankBans` tests updated because they previously depended on missing/sub-floor rows still appearing (`new Map()` for a top-5 tiebreak test, and the confidence/minGames pair that used to exercise n=300/n=90 — both now sub-floor).
 
 **PROD SMOKE:**
 ```
-GET /api/draft/recommend?lane=2&enemies=266,103,77,222
-→ meta.laneOppInferred = 103 (Ahri), main plays report confidence:"normal"
-  (Swain n=1568, Veigar n=9975, Sylas n=24030 — all normal, no off-lane false-positive)
-→ potential-tier plays (direct-opp n in 30-999) still report confidence per the n<K rule where applicable
+GET /api/draft/recommend?lane=2&hover=<Viktor champId>
+→ every entry in `bans[]` has minGames >= 1000 (verify exact command/output below)
 ```
-/draft UI: Sylas/Swain/Veigar main-list rows render WITHOUT the "Low sample" badge.
 
-### Not touched / out of scope
-- `BanResult.confidence` (`rankBans`) — untouched, not part of this defect (bans were never reported as false-positive; their contract is single-row/single-term already, no off-lane-term ambiguity to fix).
-- Scoring formula (`K`, `N_FLOOR`, `W_DIRECT`, `W_OFFLANE`, `POOL_MIN_TOTAL_GAMES`, `PLAY_MAIN_SAMPLE_FLOOR`) — all constants unchanged, this was purely the confidence-flag derivation.
+### Ship mechanics
+- `bash scripts/verify-fix.sh coachbuild`: tsc clean, lint clean (0 warnings), 1192 tests passed (baseline 1179 + 13 net new: 8 draftLiveSync + 5 draft-score, 0 net from 3 pre-existing tests updated in place), build clean, SW/manifest OK.
+- Version bump `0.39.1` → `0.40.0` (`package.json`), `CHANGELOG.md` entry added for both items.
+- Commit authored as `harout_b5@live.com` / `Harout` (Vercel personal-account requirement).
+- Deployed via `npx vercel --prod --archive=tgz`.
+
+### Not done this round (explicitly out of scope, called out per dispatch)
+- Real-device confirm of the full hover→auto-fill→game-2-reattach flow — needs the user's own Practice Tool session (companion 1.5.0 + LCU), can't be simulated headlessly. See "what the user should see" above.
+- No change to `BanResult.confidence`'s TYPE or `PersonalPlayResult`/play-list scoring — this ship touches `rankBans` candidate INCLUSION only, not `computeScoredPool`/`splitPlaysBySampleSize`/the play-list formula.
+

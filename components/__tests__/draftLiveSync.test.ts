@@ -3,7 +3,10 @@ import {
   resolveDraftLiveTarget,
   shouldShowResetToLive,
   normalizeDraftEnemyIds,
+  resolveChampSelectEntry,
+  INITIAL_CHAMP_SELECT_ENTRY_STATE,
   MAX_DRAFT_ENEMIES,
+  type ChampSelectEntryState,
 } from "../live/draftLiveSync";
 import type { CompanionChampSelectSnapshot } from "../live/companionClient";
 
@@ -132,6 +135,85 @@ describe("resolveDraftLiveTarget", () => {
       dirty: false,
     });
     expect(target).not.toHaveProperty("laneOpponentIndex");
+  });
+});
+
+describe("resolveChampSelectEntry (v0.40.0 -- P0 fix: auto-reset dirty on champ-select entry)", () => {
+  it("fresh mount straight into ChampSelect -> entry (lastRealPhase starts null)", () => {
+    const result = resolveChampSelectEntry(INITIAL_CHAMP_SELECT_ENTRY_STATE, "ChampSelect");
+    expect(result.isEntry).toBe(true);
+    expect(result.next).toEqual({ lastRealPhase: "ChampSelect" });
+  });
+
+  it("a real non-ChampSelect phase -> ChampSelect is an entry", () => {
+    const state: ChampSelectEntryState = { lastRealPhase: "Lobby" };
+    const result = resolveChampSelectEntry(state, "ChampSelect");
+    expect(result.isEntry).toBe(true);
+    expect(result.next).toEqual({ lastRealPhase: "ChampSelect" });
+  });
+
+  it("repeated ChampSelect ticks (steady state) -> never re-fires entry", () => {
+    let state: ChampSelectEntryState = { lastRealPhase: "Lobby" };
+    const first = resolveChampSelectEntry(state, "ChampSelect");
+    expect(first.isEntry).toBe(true);
+    state = first.next;
+
+    const second = resolveChampSelectEntry(state, "ChampSelect");
+    expect(second.isEntry).toBe(false);
+    expect(second.next).toEqual({ lastRealPhase: "ChampSelect" });
+  });
+
+  it("leaving ChampSelect for a real phase, then re-entering, is a fresh entry (game 2 re-attaches)", () => {
+    let state: ChampSelectEntryState = { lastRealPhase: "ChampSelect" };
+    const left = resolveChampSelectEntry(state, "InProgress");
+    expect(left.isEntry).toBe(false); // leaving is never itself an "entry"
+    state = left.next;
+    expect(state).toEqual({ lastRealPhase: "InProgress" });
+
+    const reentered = resolveChampSelectEntry(state, "ChampSelect");
+    expect(reentered.isEntry).toBe(true); // the exact user-reported "game 2" case
+  });
+
+  it("null tick (transient poll blip) never counts as an entry and passes state through unchanged", () => {
+    const state: ChampSelectEntryState = { lastRealPhase: "InProgress" };
+    const result = resolveChampSelectEntry(state, null);
+    expect(result.isEntry).toBe(false);
+    expect(result.next).toEqual(state); // untouched, not overwritten with null
+  });
+
+  it("a single-tick null blip MID champ-select must NOT count as re-entry (ChampSelect -> null -> ChampSelect)", () => {
+    let state: ChampSelectEntryState = { lastRealPhase: "Lobby" };
+    const entered = resolveChampSelectEntry(state, "ChampSelect");
+    expect(entered.isEntry).toBe(true);
+    state = entered.next; // { lastRealPhase: "ChampSelect" }
+
+    const blip = resolveChampSelectEntry(state, null);
+    expect(blip.isEntry).toBe(false);
+    state = blip.next; // unchanged -- still { lastRealPhase: "ChampSelect" }
+
+    const afterBlip = resolveChampSelectEntry(state, "ChampSelect");
+    expect(afterBlip.isEntry).toBe(false); // NOT a re-entry -- this is the exact case the fix must not over-fire on
+  });
+
+  it("a null blip DURING a real transition still lets the transition be detected once it resolves", () => {
+    // Lobby -> null -> ChampSelect: the blip carries no info, so the
+    // eventual real ChampSelect tick still compares against "Lobby" and
+    // correctly detects an entry.
+    let state: ChampSelectEntryState = { lastRealPhase: "Lobby" };
+    const blip = resolveChampSelectEntry(state, null);
+    expect(blip.isEntry).toBe(false);
+    state = blip.next;
+    expect(state).toEqual({ lastRealPhase: "Lobby" });
+
+    const afterBlip = resolveChampSelectEntry(state, "ChampSelect");
+    expect(afterBlip.isEntry).toBe(true);
+  });
+
+  it("a non-ChampSelect phase change (e.g. Lobby -> ReadyCheck) is never an entry", () => {
+    const state: ChampSelectEntryState = { lastRealPhase: "Lobby" };
+    const result = resolveChampSelectEntry(state, "ReadyCheck");
+    expect(result.isEntry).toBe(false);
+    expect(result.next).toEqual({ lastRealPhase: "ReadyCheck" });
   });
 });
 

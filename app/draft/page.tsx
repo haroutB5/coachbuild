@@ -27,7 +27,14 @@ import DraftResultRow from "@/components/hextech/DraftResultRow";
 import { LANE_TO_ROLE_ID, type LaneId } from "@/components/hextech/heroContracts";
 import { getChampionIconMap, type ChampionIconEntry } from "@/components/proAssets";
 import { useCompanion } from "@/components/live/CompanionProvider";
-import { resolveDraftLiveTarget, shouldShowResetToLive, MAX_DRAFT_ENEMIES } from "@/components/live/draftLiveSync";
+import {
+  resolveDraftLiveTarget,
+  shouldShowResetToLive,
+  resolveChampSelectEntry,
+  INITIAL_CHAMP_SELECT_ENTRY_STATE,
+  MAX_DRAFT_ENEMIES,
+  type ChampSelectEntryState,
+} from "@/components/live/draftLiveSync";
 import {
   fetchDraftRecommend,
   type DraftRecommendResponse,
@@ -118,6 +125,13 @@ export default function DraftPage() {
   laneOpponentIdRef.current = laneOpponentId;
   const hoverRef = useRef(hover);
   hoverRef.current = hover;
+  // v0.40.0 — see draftLiveSync.ts's resolveChampSelectEntry doc comment.
+  // Tracks the last REAL (non-null) companion phase across ticks so the
+  // live-sync effect below can detect a genuine champ-select ENTRY (not the
+  // steady state, not a transient null poll blip) and auto-clear the
+  // manual-dirty latch on it. A ref, not state -- this is pure bookkeeping
+  // that must never itself trigger a re-render.
+  const entryStateRef = useRef<ChampSelectEntryState>(INITIAL_CHAMP_SELECT_ENTRY_STATE);
 
   useEffect(() => {
     getChampionIconMap().then(setChampIcons);
@@ -133,6 +147,21 @@ export default function DraftPage() {
   // resolves to the SAME values never triggers a pointless re-render or
   // re-fetch.
   useEffect(() => {
+    // P0 fix (v0.40.0): a fresh champ-select ENTRY always wins over a
+    // stale manual-dirty latch from a PREVIOUS draft, so live pickup
+    // re-attaches on every new game rather than staying detached forever
+    // after a single "Clear" tap. Only fires on the transition tick (see
+    // resolveChampSelectEntry) -- manual edits still win for the rest of
+    // THIS champ select. When this fires, bail out and let the re-render
+    // triggered by setDirty(false) re-run this effect with fresh `dirty`
+    // state, rather than trying to also apply the target in the same pass.
+    const entryResult = resolveChampSelectEntry(entryStateRef.current, companion.phase);
+    entryStateRef.current = entryResult.next;
+    if (entryResult.isEntry && dirty) {
+      setDirty(false);
+      return;
+    }
+
     const target = resolveDraftLiveTarget({ phase: companion.phase, champSelect: companion.champSelect, dirty });
     if (!target) return;
 
@@ -293,25 +322,39 @@ export default function DraftPage() {
             )}
           </div>
 
-          {/* Live-sync status strip — quiet, never a nag when there's no
-              companion at all (manual is the default experience). */}
-          {(liveSyncing || showResetToLive) && (
+          {/* Live-sync status strip — quiet when passively syncing (never a
+              nag when there's no companion at all, manual is the default
+              experience); DELIBERATELY prominent when dirty + a live champ
+              select exists (v0.40.0 legibility fix) -- the old small
+              underlined-link affordance for this state was easy to miss
+              entirely, which is how the P0 "live pickup looks dead" report
+              happened in the first place: the page WAS in a legible manual
+              state, the user just couldn't tell. */}
+          {liveSyncing && (
             <div className="flex items-center justify-center gap-2 mb-4">
-              {liveSyncing && (
-                <span className="inline-flex items-center gap-1.5 text-[11px] text-teal-dim">
-                  <span className="w-1.5 h-1.5 rounded-full bg-teal animate-pulse" aria-hidden="true" />
-                  Syncing from champ select
-                </span>
-              )}
-              {showResetToLive && (
-                <button
-                  type="button"
-                  onClick={handleResetToLive}
-                  className="text-[11px] font-semibold text-teal hover:text-teal-hover underline decoration-dotted underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg rounded"
-                >
-                  Reset to live
-                </button>
-              )}
+              <span className="inline-flex items-center gap-1.5 text-[11px] text-teal-dim">
+                <span className="w-1.5 h-1.5 rounded-full bg-teal animate-pulse" aria-hidden="true" />
+                Syncing from champ select
+              </span>
+            </div>
+          )}
+
+          {showResetToLive && (
+            <div
+              role="status"
+              className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 mb-4 px-4 py-2.5 rounded-lg border border-teal-dim bg-teal/10"
+            >
+              <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-txt">
+                <span className="w-1.5 h-1.5 rounded-full bg-teal flex-shrink-0" aria-hidden="true" />
+                Manual mode — champ select detected
+              </span>
+              <button
+                type="button"
+                onClick={handleResetToLive}
+                className="text-[11.5px] font-bold text-bg bg-teal hover:bg-teal-hover px-3 py-1.5 rounded-md transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+              >
+                Reset to live
+              </button>
             </div>
           )}
 
@@ -542,7 +585,15 @@ export default function DraftPage() {
               they&apos;re played.
             </p>
             {state.data.bans.length === 0 ? (
-              <EmptyPanel title="No strong bans identified" body="Nothing stands out as a high-priority ban for this matchup yet." />
+              // v0.40.0: bans.length === 0 now specifically means no ban
+              // candidate cleared BAN_MIN_MATCHUP_GAMES (1000 games vs your
+              // pick) -- never a fabricated/low-sample ban, per user
+              // directive. Copy reflects that precisely rather than the old
+              // generic "nothing stands out."
+              <EmptyPanel
+                title="No well-sampled counters"
+                body="No well-sampled counters to your pick this patch — check back as more games are recorded."
+              />
             ) : (
               <div className="bg-panel border border-line rounded-xl px-5">
                 {state.data.bans.map((ban, i) => {
