@@ -385,6 +385,15 @@ describe("rankBans", () => {
     expect(results[0].score).toBe(0);
   });
 
+  it("winVsYou is the TARGET's winrate vs you = 1 - your winrate (direction pin, v0.37.2 lesson)", () => {
+    // hover (you) wins 42% vs the target -> the target beats you 58% of the time.
+    const matchups = new Map<number, MatchupRow>([[10, { wins: 420, games: 1000 }]]);
+    const results = rankBans(1, 0.5, [baseline(10, 0.5, 0.1, 0.05)], matchups);
+    expect(results[0].winVsYou).toBeCloseTo(0.58, 5);
+    // a real counter (they beat you) reads ABOVE 50% — never inverted.
+    expect(results[0].winVsYou!).toBeGreaterThan(0.5);
+  });
+
   it("presence multiplies a real disadvantage", () => {
     const hoverBaseline = 0.5;
     // hovered champ LOSES 65% of the time vs t -- real disadvantage

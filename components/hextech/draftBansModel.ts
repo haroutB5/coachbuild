@@ -26,6 +26,13 @@ export interface BanRow {
   confidence: DraftConfidence;
   minGames: number | null;
   difficultyBand: DifficultyBand | null;
+  /** 0..1 — the ban target's winrate vs your pick (how often they beat you). */
+  winVsYou: number | null;
+}
+
+/** Format winVsYou as a whole-percent string, or "—" when absent. */
+export function banWinVsYouLabel(winVsYou: number | null): string {
+  return winVsYou === null ? "—" : `${Math.round(winVsYou * 100)}%`;
 }
 
 export function buildBanRows(bans: DraftBanResult[], champIcons: Map<number, ChampionIconEntry>): BanRow[] {
@@ -40,6 +47,7 @@ export function buildBanRows(bans: DraftBanResult[], champIcons: Map<number, Cha
       confidence: ban.confidence,
       minGames: ban.minGames,
       difficultyBand: entry?.difficultyBand ?? null,
+      winVsYou: ban.winVsYou ?? null,
     };
   });
 }

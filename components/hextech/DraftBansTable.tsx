@@ -14,7 +14,7 @@
 import { IconWithFallback } from "@/components/IconWithFallback";
 import type { DraftBanResult } from "@/components/live/draftRecommend";
 import type { ChampionIconEntry } from "@/components/proAssets";
-import { buildBanRows, banPriorityBarPct } from "./draftBansModel";
+import { buildBanRows, banPriorityBarPct, banWinVsYouLabel } from "./draftBansModel";
 import { difficultyLabel } from "./draftPicksModel";
 
 interface DraftBansTableProps {
@@ -28,7 +28,7 @@ export default function DraftBansTable({ bans, champIcons }: DraftBansTableProps
   return (
     <div className="dt-panel overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[420px] border-collapse" aria-label="Suggested bans">
+        <table className="w-full min-w-[480px] border-collapse" aria-label="Suggested bans">
           <thead>
             <tr className="border-b border-[color:var(--dt-line)]">
               <th scope="col" className="py-2 px-2.5 text-left text-[10px] tracking-[0.1em] uppercase font-bold text-[color:var(--dt-mut)]">
@@ -36,6 +36,9 @@ export default function DraftBansTable({ bans, champIcons }: DraftBansTableProps
               </th>
               <th scope="col" className="py-2 px-2.5 text-left text-[10px] tracking-[0.1em] uppercase font-bold text-[color:var(--dt-mut)]">
                 Priority
+              </th>
+              <th scope="col" className="py-2 px-2.5 text-right text-[10px] tracking-[0.1em] uppercase font-bold text-[color:var(--dt-mut)]" title="How often this champion beats your pick in this lane">
+                Beats You
               </th>
               <th scope="col" className="py-2 px-2.5 text-right text-[10px] tracking-[0.1em] uppercase font-bold text-[color:var(--dt-mut)]">
                 Difficulty
@@ -60,6 +63,9 @@ export default function DraftBansTable({ bans, champIcons }: DraftBansTableProps
                     </span>
                     <span className="text-[10px] tabular-nums text-[color:var(--dt-mut)]">n={row.minGames ?? "—"}</span>
                   </div>
+                </td>
+                <td className="py-2 px-2.5 text-right text-[12px] font-semibold tabular-nums text-[color:var(--dt-txt)]">
+                  {banWinVsYouLabel(row.winVsYou)}
                 </td>
                 <td className="py-2 px-2.5 text-right text-[11.5px] tabular-nums text-[color:var(--dt-mut)]">
                   {difficultyLabel(row.difficultyBand)}

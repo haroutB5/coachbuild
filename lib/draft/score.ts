@@ -158,6 +158,14 @@ export interface BanResult {
    *  row at all (never a fabricated 0 — see draftRecommend.ts's client
    *  normalizer, which now receives a real number here to pass through). */
   minGames: number | null;
+  /** 0..1 — the BAN TARGET's winrate AGAINST your hovered pick (i.e. how
+   *  often they beat you). = 1 - (hover's winrate vs target), since a LoL
+   *  matchup has no draws: games = hoverWins + targetWins. DIRECTION MATTERS
+   *  (v0.37.2 inversion lesson): a real counter has a HIGH value here (>50%).
+   *  Display-only — never enters the ban score. Null only if the row is
+   *  somehow absent (can't happen past rankBans' floor, but typed for the
+   *  normalizer). */
+  winVsYou: number | null;
 }
 
 /** Raw shrink ratio n/(n+K) — exported separately from shrunkDelta so its
@@ -435,11 +443,14 @@ export function rankBans(
       // hardcoded) so it stays correct if either constant is ever retuned
       // independently of the other.
       const confidence: "normal" | "low" = row.games < K ? "low" : "normal";
-      const mWr = row.wins / row.games;
+      const mWr = row.wins / row.games; // hover's winrate vs this target
       const delta = shrunkDelta(mWr, hoverBaselineWr, row.games); // (mWr - baseline)*shrink; never null here
       // plan's ban formula is (baselineWr - matchupWr)*shrink = -delta
       const rawDisadvantage = delta !== null ? Math.max(0, -delta) : 0;
-      return { champId: t.champId, score: rawDisadvantage * presence(t), confidence, minGames };
+      // The target's winrate AGAINST you = 1 - your winrate vs them (no draws
+      // in a LoL matchup). A real counter → high value → "beats you 56%".
+      const winVsYou = 1 - mWr;
+      return { champId: t.champId, score: rawDisadvantage * presence(t), confidence, minGames, winVsYou };
     })
     .filter((r): r is BanResult => r !== null);
 

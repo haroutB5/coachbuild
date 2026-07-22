@@ -5,26 +5,26 @@ import type { DraftBanResult } from "../live/draftRecommend";
 describe("buildBanRows", () => {
   it("assigns rank as input-order index + 1", () => {
     const bans: DraftBanResult[] = [
-      { champId: 1, score: 0.05, confidence: "normal", minGames: 2000 },
-      { champId: 2, score: 0.03, confidence: "normal", minGames: 1500 },
+      { champId: 1, score: 0.05, confidence: "normal", minGames: 2000, winVsYou: 0.56 },
+      { champId: 2, score: 0.03, confidence: "normal", minGames: 1500, winVsYou: 0.53 },
     ];
     const rows = buildBanRows(bans, new Map());
     expect(rows.map((r) => r.rank)).toEqual([1, 2]);
   });
 
   it("falls back to a placeholder name/icon when missing from champIcons", () => {
-    const rows = buildBanRows([{ champId: 42, score: 0.02, confidence: "low", minGames: null }], new Map());
+    const rows = buildBanRows([{ champId: 42, score: 0.02, confidence: "low", minGames: null, winVsYou: null }], new Map());
     expect(rows[0].name).toBe("Champion #42");
   });
 
   it("difficultyBand degrades to null when absent from the champIcons entry", () => {
     const icons = new Map([[1, { name: "Ahri", icon: "x" }]]);
-    const rows = buildBanRows([{ champId: 1, score: 0.05, confidence: "normal", minGames: 1000 }], icons);
+    const rows = buildBanRows([{ champId: 1, score: 0.05, confidence: "normal", minGames: 1000, winVsYou: 0.51 }], icons);
     expect(rows[0].difficultyBand).toBeNull();
   });
 
   it("carries minGames through as-is, including null (no matchup row)", () => {
-    const rows = buildBanRows([{ champId: 1, score: 0.05, confidence: "low", minGames: null }], new Map());
+    const rows = buildBanRows([{ champId: 1, score: 0.05, confidence: "low", minGames: null, winVsYou: null }], new Map());
     expect(rows[0].minGames).toBeNull();
   });
 });

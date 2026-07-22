@@ -100,7 +100,7 @@ describe("normalizeDraftRecommendResponse", () => {
           synergyBand: "Even",
         },
       ],
-      bans: [{ champId: 64, score: 0.08, confidence: "low", minGames: 20 }],
+      bans: [{ champId: 64, score: 0.08, confidence: "low", minGames: 20, winVsYou: null }],
       meta: { patch: "16.14", tier: 10, fetchedAt: "2026-07-20T00:00:00.000Z", laneOppInferred: 64, currentPatch: "16.14" },
       pending: false,
       enemyAnalysis: [

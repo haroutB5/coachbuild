@@ -82,6 +82,10 @@ export interface DraftBanResult {
   score: number;
   confidence: DraftConfidence;
   minGames: number | null;
+  /** 0..1 — the ban target's winrate AGAINST your hovered pick (how often
+   *  they beat you); see lib/draft/score.ts BanResult.winVsYou. Null on an
+   *  older cached response that predates the field. */
+  winVsYou: number | null;
 }
 
 export interface DraftRecommendMeta {
@@ -262,6 +266,7 @@ function normalizeBan(raw: unknown): DraftBanResult | null {
     score: r.score,
     confidence: isConfidence(r.confidence) ? r.confidence : "low",
     minGames: typeof r.minGames === "number" ? r.minGames : null,
+    winVsYou: typeof r.winVsYou === "number" ? r.winVsYou : null,
   };
 }
 
