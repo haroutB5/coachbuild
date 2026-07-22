@@ -226,18 +226,23 @@ describe("applyItemSetsForBuild", () => {
     // v0.47.0: this fixture's items are all physical (3031 CriticalStrike,
     // 3036/3095/3072 Damage, boots 3006 AttackSpeed), so the champ resolves to
     // the AD damage FAMILY -- and Jinx carries no sub-lean class tag, so the
-    // full AD spread is considered. Of it, only Lethality/Assassin (the 3
-    // caster-AD Damage items -> MEASURED) and Crit/Marksman (the 1 crit item
-    // -> "(low data)" fill) actually resolve; Bruiser (no durable-AD item) and
-    // On-hit (its only AttackSpeed item is boots) correctly stay omitted. NO
-    // AP line ever appears (cross-family exclusion). Confirms real ItemDetail
-    // tags threaded through applyItemSetsForBuild drive family-scoped archetype
-    // emission end to end.
+    // full AD spread is considered. Bruiser (no durable-AD item) and On-hit
+    // (its only AttackSpeed item is boots) stay omitted (empty lines).
+    // v0.48.0: Lethality/Assassin (Damage items 3036/3095/3072) and
+    // Crit/Marksman (3031 IE + curated-pool fill Lord Dominik's 3036 /
+    // Bloodthirster 3072, both crit-marksman staples) resolve to
+    // near-identical builds here (they share 3036 + 3072), so the GENERAL
+    // de-dup collapses them into ONE block, keeping the higher-priority
+    // "Crit/Marksman" name (Jinx IS a crit marksman — the correct survivor).
+    // In prod, with the full item catalog, the two lines diverge (distinct
+    // crit vs lethality staples) and both would show. NO AP line ever appears
+    // (cross-family exclusion). Confirms real ItemDetail tags threaded through
+    // applyItemSetsForBuild drive family-scoped archetype emission + de-dup
+    // end to end.
     expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).toEqual([
       "Starting",
       "Core build",
       "Highest WPA",
-      "Lethality/Assassin",
       "Crit/Marksman (low data)",
     ]);
     // v0.35.0: champ-scoped (not role-scoped) stale-removal prefix, so a

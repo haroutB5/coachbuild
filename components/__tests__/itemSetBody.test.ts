@@ -287,11 +287,13 @@ describe("buildItemSets — block presence (structural blocks only)", () => {
     expect(structuralBlockTypes(withoutAlts)).toEqual(["Starting", "Core build", "Highest WPA"]);
   });
 
-  it("all blocks appear together in order for an AP champ: Starting, Core, Buy order, Pro, Highest WPA, AP/Mage, AP Burst, Tank Mage, Situational", () => {
-    // v0.47.0 full-order check on a realistic AP champ (Viktor). Family
-    // resolves to AP from his own items, so exactly the AP archetype set
-    // (AP/Mage, AP Burst, Tank Mage) is emitted — never an AD line. Durable-AP
-    // items in his alts give Tank Mage measured content.
+  it("all blocks appear together in order for an AP champ: Starting, Core, Buy order, Pro, Highest WPA, AP/Mage, Tank Mage, Situational (AP Burst DE-DUPED into AP/Mage)", () => {
+    // v0.48.0 full-order check on a realistic AP champ (Viktor). Family resolves
+    // to AP from his own items, so the AP archetype set is considered — but his
+    // burst-leaning data makes AP/Mage and AP Burst near-identical, so the
+    // general de-dup collapses AP Burst into the higher-priority AP/Mage. The
+    // curated Tank Mage (durable-AP, distinct by construction) survives. Net:
+    // exactly ONE standard AP build + a distinct Tank Mage — the user's ask.
     const viktor: ChampionRef = { id: 112, key: "Viktor", name: "Viktor", icon: "v.png", tags: ["Mage"] };
     const build = baseBuild(
       baseItems({
@@ -329,7 +331,6 @@ describe("buildItemSets — block presence (structural blocks only)", () => {
       "Pro build",
       "Highest WPA",
       "AP/Mage",
-      "AP Burst",
       "Tank Mage",
       "Situational swaps",
     ]);
@@ -733,28 +734,92 @@ function presentArchetypes(sets: ReturnType<typeof buildItemSets>): string[] {
   return titles.filter((t) => found.has(t));
 }
 
+// v0.48.0 — a realistic AP catalog (real ~16.13 ids covering the AP_MAGE /
+// AP_BURST / TANK_MAGE curated pools) so AP/Mage and AP Burst pad from their
+// curated pools to full builds and collapse EXACTLY as in prod. The abstract
+// damageMeta lacks curated ids, so AP/Mage's broad catalog fill would pull the
+// durable TM* items and inflate the line, masking the collapse — use this
+// wherever the AP-family de-dup behaviour is under test.
+function apRichMeta(): Map<number, ItemDetail> {
+  return metaMap(
+    meta(1054),
+    bootsMeta(3020, { tags: ["Boots", "MagicPenetration"] }), // Sorcerer's Shoes
+    meta(6655, { tags: ["SpellDamage", "Mana"] }), // Luden's
+    meta(4645, { tags: ["SpellDamage", "MagicPenetration"] }), // Shadowflame
+    meta(3089, { tags: ["SpellDamage"] }), // Rabadon's
+    meta(3135, { tags: ["SpellDamage", "MagicPenetration"] }), // Void Staff
+    meta(6653, { tags: ["SpellDamage", "Health"] }), // Liandry's (AP_MAGE curated)
+    meta(3157, { tags: ["SpellDamage", "Armor"] }), // Zhonya's (AP_MAGE curated)
+    meta(4646, { tags: ["SpellDamage", "MagicPenetration"] }), // Stormsurge (AP_BURST)
+    meta(4628, { tags: ["SpellDamage", "MagicPenetration"] }), // Horizon Focus (AP_BURST)
+    meta(3100, { tags: ["SpellDamage"] }), // Lich Bane (AP_BURST)
+    meta(6657, { tags: ["SpellDamage", "Health", "Mana"] }), // Rod of Ages (TANK_MAGE)
+    meta(4633, { tags: ["SpellDamage", "Health"] }), // Riftmaker (TANK_MAGE)
+    meta(3116, { tags: ["SpellDamage", "Health"] }), // Rylai's (TANK_MAGE)
+    meta(4629, { tags: ["SpellDamage", "MagicPenetration"] }), // Cosmic Drive (TANK_MAGE)
+    meta(3001, { tags: ["MagicResist", "Health"] }) // Abyssal Mask (TANK_MAGE, no SpellDamage)
+  );
+}
+// Realistic pure-burst Viktor: real burst core, no durable-AP in his own data.
+function apRichBurstBuild(champ: ChampionRef): BuildResponse {
+  const b = baseBuild(
+    baseItems({
+      starter: pick(1054),
+      boots: pick(3020, 0.05),
+      first: pick(6655, 0.09),
+      second: pick(4645, 0.08),
+      third: pick(3089, 0.07),
+      fourthPlus: [pick(3135, 0.06)],
+    })
+  );
+  b.champion = champ;
+  return b;
+}
+
 describe("buildItemSets — v0.47.0 AP family (Viktor 'tank mage' acceptance)", () => {
   const VIKTOR: ChampionRef = { id: 112, key: "Viktor", name: "Viktor", icon: "v.png", tags: ["Mage"] };
 
-  it("Viktor emits AP/Mage, AP Burst AND Tank Mage; NEVER AD/On-hit/Attack-Speed or pure Tank", () => {
-    // Core = pure AP (family resolves AP); alts add durable-AP so Tank Mage
-    // has real measured content — the user's exact screenshot archetype.
-    const build = famBuild(
-      VIKTOR,
-      [STARTER, BOOTS, AP1, AP2, AP3],
-      { first: [pick(TM1, 0.06), pick(TM2, 0.055), pick(TM3, 0.05)] }
-    );
-    const sets = buildItemSets(VIKTOR, "Mid", build, null, damageMeta());
+  it("Viktor emits exactly ONE standard AP build + a distinct Tank Mage (AP Burst DE-DUPED); NEVER AD/On-hit/Attack-Speed or pure Tank", () => {
+    // v0.48.0: realistic pure-burst Viktor. AP/Mage and AP Burst both pad from
+    // their curated pools to near-identical builds (share 4/5) -> de-dup
+    // collapses AP Burst into the higher-priority AP/Mage. Tank Mage (curated
+    // durable-AP) is distinct by construction and survives. The user's exact
+    // ask: don't duplicate, show one AP build + one coherent Tank Mage.
+    const sets = buildItemSets(VIKTOR, "Mid", apRichBurstBuild(VIKTOR), null, apRichMeta());
     const present = presentArchetypes(sets);
     expect(present).toContain("AP/Mage");
-    expect(present).toContain("AP Burst");
     expect(present).toContain("Tank Mage");
+    expect(present).not.toContain("AP Burst"); // collapsed into AP/Mage by de-dup
     // No cross-family lines, no pure Tank (Viktor tankiness 0, no Tank tag).
     expect(present).not.toContain("Bruiser (AD)");
     expect(present).not.toContain("Lethality/Assassin");
     expect(present).not.toContain("Crit/Marksman");
     expect(present).not.toContain("On-hit");
     expect(present).not.toContain("Tank");
+  });
+
+  it("DE-DUP: no two archetype lines for Viktor share an identical non-boots item set, AND Tank Mage != the AP build", () => {
+    // The general de-dup guarantee (brief item 4): every emitted archetype line
+    // is a genuinely distinct build. Tank Mage must NOT equal the AP build.
+    const build = famBuild(
+      VIKTOR,
+      [STARTER, BOOTS, AP1, AP2, AP3],
+      { first: [pick(TM1, 0.06), pick(TM2, 0.055), pick(TM3, 0.05)] }
+    );
+    const sets = buildItemSets(VIKTOR, "Mid", build, null, damageMeta());
+    const archBlocks = sets[0].blocks.filter((b) => ARCHETYPE_TITLE_RE.test(b.type));
+    const sig = (b: (typeof archBlocks)[number]) =>
+      b.items
+        .map((i) => Number(i.id))
+        .filter((id) => id !== BOOTS && id !== BOOTS_MR)
+        .sort((x, y) => x - y)
+        .join(",");
+    const sigs = archBlocks.map(sig);
+    expect(new Set(sigs).size).toBe(sigs.length); // all archetype builds distinct
+
+    const ap = archBlocks.find((b) => b.type.startsWith("AP/Mage"))!;
+    const tm = archBlocks.find((b) => b.type.startsWith("Tank Mage"))!;
+    expect(sig(ap)).not.toBe(sig(tm)); // Tank Mage is NOT the AP build
   });
 
   it("Viktor's Tank Mage line carries durable-AP items (SpellDamage + Health/Armor/MR), not glass-cannon-only", () => {
@@ -775,10 +840,14 @@ describe("buildItemSets — v0.47.0 AP family (Viktor 'tank mage' acceptance)", 
     }
   });
 
-  it("Viktor's Tank Mage fills from the curated durable-AP pool (Rylai's/Riftmaker/Abyssal) when his own data is thin", () => {
-    // No durable-AP in his build -> low data -> fills from the curated pool.
-    // Meta includes the real curated ids (incl. Abyssal Mask, which carries NO
-    // SpellDamage tag — proving the curated list is trusted verbatim).
+  it("Viktor's Tank Mage is a CURATED durable-AP build (Rylai's/Riftmaker/Abyssal) even when his own data has zero durable-AP", () => {
+    // v0.48.0: Tank Mage is curated-pool-driven, so it produces a coherent
+    // durable build straight from the curated pool regardless of the champ's
+    // (pure-burst) data — the whole point of a "variant" archetype. It is
+    // labelled plainly "Tank Mage" (a deliberate judgment build), NOT
+    // "(low data)". Meta includes the real curated ids (incl. Abyssal Mask,
+    // which carries NO SpellDamage tag — proving the curated list is trusted
+    // verbatim, not re-filtered through `match`).
     const build = famBuild(VIKTOR, [STARTER, BOOTS, AP1, AP2, AP3]);
     const richMeta = metaMap(
       ...Array.from(damageMeta().values()),
@@ -788,7 +857,7 @@ describe("buildItemSets — v0.47.0 AP family (Viktor 'tank mage' acceptance)", 
     );
     const sets = buildItemSets(VIKTOR, "Mid", build, null, richMeta);
     const tankMage = sets[0].blocks.find((b) => b.type.startsWith("Tank Mage"))!;
-    expect(tankMage.type).toBe("Tank Mage (low data)");
+    expect(tankMage.type).toBe("Tank Mage"); // curated judgment build, NOT "(low data)"
     const ids = tankMage.items.map((i) => i.id);
     expect(ids).toEqual(expect.arrayContaining(["3116", "4633"]));
     expect(ids).toContain("3001"); // Abyssal via curated verbatim, despite no SpellDamage tag
@@ -835,17 +904,102 @@ describe("buildItemSets — v0.47.0 AD family (bruiser / marksman / assassin)", 
     expect(presentArchetypes(zedSets)).toEqual(["Lethality/Assassin"]);
   });
 
-  it("real per-item data always ranks ahead of curated/catalog fill in an AD line", () => {
+  it("real per-item data always ranks ahead of curated/catalog fill in an AD line, padded to a full 6-item build", () => {
     // One real high-wpa Crit item in an otherwise-thin build; it must be
-    // PRESENT (and first) even though it's short of the measured threshold.
+    // PRESENT (and first) even though it's short of the measured threshold, and
+    // the line pads to a full 6 items (v0.48.0) from the curated crit pool.
     const caitlyn: ChampionRef = { id: 51, key: "Caitlyn", name: "Caitlyn", icon: "c.png", tags: ["Marksman"] };
     const build = famBuild(caitlyn, [STARTER, BOOTS, LE1, LE2, LE3], { first: [pick(CR1, 0.5)] });
-    const sets = buildItemSets(caitlyn, "Bot", build, null, damageMeta());
+    // Enrich with real curated crit-pool ids so the fill can reach a full build
+    // (in prod itemMeta is the whole catalog; the minimal damageMeta is not).
+    const richMeta = metaMap(
+      ...Array.from(damageMeta().values()),
+      meta(3031, { tags: ["CriticalStrike", "Damage"] }), // Infinity Edge
+      meta(3094, { tags: ["CriticalStrike", "AttackSpeed"] }), // Rapid Firecannon
+      meta(3087, { tags: ["CriticalStrike", "AttackSpeed"] }) // Statikk Shiv
+    );
+    const sets = buildItemSets(caitlyn, "Bot", build, null, richMeta);
     const crit = sets[0].blocks.find((b) => b.type.startsWith("Crit/Marksman"))!;
     expect(crit.type).toBe("Crit/Marksman (low data)");
     expect(crit.items.map((i) => i.id)).toContain(String(CR1));
     expect(crit.items[0].id).toBe(String(CR1)); // real data ranks first
-    expect(crit.items).toHaveLength(4); // capped at CATEGORY_LINE_LEN
+    expect(crit.items).toHaveLength(6); // full build (CATEGORY_LINE_LEN = 6)
+    expect(crit.items.filter((i) => i.id === String(BOOTS) || i.id === String(BOOTS_MR))).toHaveLength(1);
+  });
+
+  it("v0.48.0 — a bruiser's AD VARIANT (Bruiser (AD), curated) is a distinct build from its Lethality/On-hit DATA builds", () => {
+    // The AD-family analogue of the Tank Mage guarantee: the durable AD variant
+    // is curated from real bruiser itemization, NOT a mirror of the champ's
+    // lethality/on-hit data build. A Fighter+Assassin champ opens Bruiser
+    // (curated) + Lethality (data) + On-hit (data); Bruiser must not equal
+    // either. Curated bruiser-pool ids present in meta so it resolves to 6.
+    const champ: ChampionRef = { id: 39, key: "Irelia", name: "Irelia", icon: "i.png", tags: ["Fighter", "Assassin"] };
+    const build = famBuild(
+      champ,
+      [STARTER, BOOTS, LE1, LE2, LE3], // real data leans lethality
+      { first: [pick(OH1, 0.05), pick(OH2, 0.045), pick(OH3, 0.04)] }
+    );
+    const richMeta = metaMap(
+      ...Array.from(damageMeta().values()),
+      // Curated Bruiser (AD) pool: Stridebreaker, Black Cleaver, Sundered Sky,
+      // Death's Dance, Sterak's, Titanic, Trinity, Hullbreaker.
+      meta(6631, { tags: ["Damage", "Health"] }),
+      meta(3071, { tags: ["Damage", "ArmorPenetration", "Health"] }),
+      meta(6610, { tags: ["Damage", "Health"] }),
+      meta(6333, { tags: ["Damage", "Health"] }),
+      meta(3053, { tags: ["Damage", "Health"] }),
+      meta(3748, { tags: ["Damage", "Health"] }),
+      meta(3078, { tags: ["Damage", "Health"] }),
+      meta(3181, { tags: ["Damage", "Health"] })
+    );
+    const sets = buildItemSets(champ, "Top", build, null, richMeta);
+    const present = presentArchetypes(sets);
+    expect(present).toContain("Bruiser (AD)");
+    expect(present).toContain("Lethality/Assassin");
+
+    const nonBootsSig = (type: string) => {
+      const b = sets[0].blocks.find((x) => x.type.startsWith(type))!;
+      return b.items
+        .map((i) => Number(i.id))
+        .filter((id) => id !== BOOTS && id !== BOOTS_MR)
+        .sort((a, c) => a - c)
+        .join(",");
+    };
+    const bruiser = sets[0].blocks.find((b) => b.type.startsWith("Bruiser (AD)"))!;
+    expect(bruiser.type).toBe("Bruiser (AD)"); // curated judgment build, not "(low data)"
+    expect(bruiser.items).toHaveLength(6);
+    expect(nonBootsSig("Bruiser (AD)")).not.toBe(nonBootsSig("Lethality/Assassin"));
+    if (present.includes("On-hit")) {
+      expect(nonBootsSig("Bruiser (AD)")).not.toBe(nonBootsSig("On-hit"));
+    }
+    // Every Bruiser item is a durable-AD staple (Damage/ArmorPen + a durability tag).
+    for (const item of bruiser.items) {
+      const id = Number(item.id);
+      if (id === BOOTS || id === BOOTS_MR) continue;
+      const m = richMeta.get(id)!;
+      expect(m.tags.some((t) => ["Damage", "ArmorPenetration"].includes(t))).toBe(true);
+      expect(m.tags.some((t) => ["Health", "Armor", "SpellBlock"].includes(t))).toBe(true);
+    }
+  });
+});
+
+describe("buildItemSets — v0.48.0 de-dup keep-priority + determinism", () => {
+  const VIKTOR: ChampionRef = { id: 112, key: "Viktor", name: "Viktor", icon: "v.png", tags: ["Mage"] };
+
+  it("when AP/Mage and AP Burst collapse, the HIGHER-priority name (AP/Mage) is the one kept", () => {
+    // Pure-burst Viktor (realistic catalog): AP/Mage and AP Burst pad to
+    // near-identical builds -> de-dup keeps AP/Mage (higher in
+    // ARCHETYPE_PRIORITY) and drops AP Burst.
+    const sets = buildItemSets(VIKTOR, "Mid", apRichBurstBuild(VIKTOR), null, apRichMeta());
+    const titles = sets[0].blocks.map((b) => b.type);
+    expect(titles.some((t) => t.startsWith("AP/Mage"))).toBe(true);
+    expect(titles.some((t) => t.startsWith("AP Burst"))).toBe(false);
+  });
+
+  it("de-dup is deterministic: building the same input twice yields byte-identical output", () => {
+    const a = buildItemSets(VIKTOR, "Mid", apRichBurstBuild(VIKTOR), null, apRichMeta());
+    const b = buildItemSets(VIKTOR, "Mid", apRichBurstBuild(VIKTOR), null, apRichMeta());
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 });
 
@@ -877,7 +1031,7 @@ describe("buildItemSets — v0.47.0 pure Tank (universal, actual tanks only)", (
 });
 
 describe("buildItemSets — v0.47.0 archetype invariants (every mode)", () => {
-  it("no archetype line exceeds 4 items or carries >1 boots, and every item is a full item; Dark Seal never reaches one", () => {
+  it("no archetype line exceeds 6 items or carries >1 boots, and every item is a full item; Dark Seal never reaches one", () => {
     const ksante: ChampionRef = { id: 897, key: "KSante", name: "K'Sante", icon: "k.png", tags: ["Tank", "Fighter"] };
     const darkSeal = meta(1082, { tags: ["Health", "SpellDamage", "Lane"], into: ["3041"] });
     const build = famBuild(
@@ -890,8 +1044,9 @@ describe("buildItemSets — v0.47.0 archetype invariants (every mode)", () => {
     const bootsIds = new Set([String(BOOTS), String(BOOTS_MR)]);
     for (const block of sets[0].blocks) {
       if (STRUCTURAL_BLOCK_TYPES.has(block.type)) continue;
-      // Every non-structural block is a damage-family archetype line.
-      expect(block.items.length).toBeLessThanOrEqual(4);
+      // Every non-structural block is a damage-family archetype line (now a
+      // FULL 6-item build, v0.48.0 — CATEGORY_LINE_LEN raised 4 -> 6).
+      expect(block.items.length).toBeLessThanOrEqual(6);
       expect(block.items.filter((i) => bootsIds.has(i.id)).length).toBeLessThanOrEqual(1);
       expect(block.items.map((i) => i.id)).not.toContain("1082"); // Dark Seal excluded
       for (const item of block.items) {
@@ -1023,10 +1178,30 @@ describe("buildItemSets — v0.47.0 Viktor set JSON (Tank Mage present + in byte
     const tankMage = set.blocks.find((b) => b.type.startsWith("Tank Mage"));
     expect(tankMage).toBeDefined();
     const nonBoots = tankMage!.items.map((i) => Number(i.id)).filter((id) => id !== 3020);
+    // The build must CONTAIN durable-AP items (the brief's wording) — it is a
+    // genuinely durable build, not a glass-cannon one. A coherent tank-mage
+    // build legitimately also carries a Rabadon's-class damage cap, so we
+    // assert the durable-AP CORE is present, not that literally every slot is
+    // durable.
+    const durableApCount = nonBoots.filter((id) => {
+      const m = viktorMeta().get(id)!;
+      return m.tags.includes("SpellDamage") && m.tags.some((t) => ["Health", "Armor", "SpellBlock"].includes(t));
+    }).length;
+    expect(durableApCount).toBeGreaterThanOrEqual(3);
+    // Every non-boots item is at least AP-flavoured (SpellDamage) or a known
+    // durable-AP staple — never a glass-cannon-only pick that would make this
+    // just the AP build.
     for (const id of nonBoots) {
       const m = viktorMeta().get(id)!;
-      expect(m.tags).toContain("SpellDamage");
-      expect(m.tags.some((t) => ["Health", "Armor", "SpellBlock"].includes(t))).toBe(true);
+      expect(m.tags.includes("SpellDamage") || m.tags.some((t) => ["Health", "Armor", "SpellBlock"].includes(t))).toBe(true);
+    }
+    // Tank Mage must NOT be identical to the standard AP build.
+    const apBuild = set.blocks.find((b) => b.type.startsWith("AP/Mage") || b.type.startsWith("AP Burst"));
+    if (apBuild) {
+      const sig = (ids: number[]) => [...ids].sort((a, b) => a - b).join(",");
+      const tmIds = nonBoots;
+      const apIds = apBuild.items.map((i) => Number(i.id)).filter((id) => id !== 3020);
+      expect(sig(tmIds)).not.toBe(sig(apIds));
     }
     // Never a cross-family AD line.
     for (const t of ["Bruiser (AD)", "Lethality/Assassin", "Crit/Marksman", "On-hit"]) {

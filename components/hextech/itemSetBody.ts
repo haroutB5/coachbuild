@@ -97,6 +97,34 @@
 //      Support/Utility is dropped (enchanters resolve to the AP family).
 //      Highest WPA is UNCHANGED (buildThemedLine, byte-identical pin).
 //
+// v0.48.0 — user feedback (screenshot of Viktor's in-client sets): (1) "AP/Mage"
+// and "AP Burst" showed the IDENTICAL 4 items — "don't duplicate, show one and
+// name it appropriately, and make sure it doesn't happen for other champs"; and
+// (2) the Tank Mage build "isn't a good build and it's not 6 items". Three
+// changes (all in this module, no companion change → web-only ship):
+//   1. Category lines are FULL 6-item builds now (CATEGORY_LINE_LEN 4 → 6) —
+//      the v0.46.0 4-item cap was a payload measure the 413 stale-set prune
+//      made unnecessary; item count is no longer what bounds the byte size
+//      (CATEGORY_MAX_EMIT caps the NUMBER of category blocks — verified a
+//      maximal 6×4 set stays well under 4096 B). buildArchetypeLine now pads
+//      every data-first line to a full build.
+//   2. A GENERAL de-dup (dedupeArchetypeLines) runs for EVERY champ: after all
+//      archetype lines are built, near-duplicate lines collapse to one, keeping
+//      the higher-priority name (ARCHETYPE_PRIORITY). Viktor's AP/Mage ==
+//      AP Burst collapses to just "AP/Mage"; a champ whose builds genuinely
+//      differ keeps both. Pure + unit-tested (nearDuplicateLines).
+//   3. The "variant" archetypes (Tank Mage, Bruiser (AD)) are now
+//      CURATED-POOL-DRIVEN, not data-first (Archetype.curated) — they exist to
+//      show an off-meta durable build the champ's data does NOT reflect, so
+//      they're built from a hand-ranked durable pool (Rylai's/Riftmaker/Cosmic
+//      Drive/Abyssal/Zhonya's/Rod of Ages for Tank Mage), NOT the champ's
+//      burst-leaning real items. That makes them coherent AND distinct from the
+//      standard build so they survive de-dup. The STANDARD builds (AP/Mage,
+//      Crit/Marksman, Lethality, On-hit) stay data-first. VERIFIED root cause:
+//      the pre-v0.48.0 Tank Mage did NOT pull burst items (match already
+//      excluded them) — it was starved (only the champ's 1-2 real durable
+//      items) and capped at 4; the fix is the curated pool + 6 items.
+//
 // Item-set schema per set (LCU /lol-item-sets/v1/item-sets/{id}/sets
 // contract, community-standard importer shape — see companion.ps1's own
 // header comment for the full wire contract + PUT-replaces-all merge-safety
@@ -172,19 +200,18 @@ export interface ProConsensusItemsInput {
 }
 
 const LINE_LEN = 6;
-/** v0.46.0 (413 payload fix, lever 2) — the archetype CATEGORY lines
- *  (Tank / AP/Mage / AD/Lethality / Attack Speed / Support-Utility) are
- *  capped SHORTER than the primary build lines: 4 items (3 core items + 1
- *  boots) instead of 6. A category line is a "if you want to itemize this
- *  way, here are the key pieces" hint, not a full recommended build — its
- *  first 3-4 items already carry the archetype intent, and the extra 2
- *  slots were mostly padding that inflated every set's byte size. Trimming
- *  them (and NOT the real Core/Buy order/Pro/Highest WPA lines, which stay
- *  at LINE_LEN) shrinks each CoachBuild set enough that even several sets
- *  stay well under the LCU item-sets PUT size limit that was returning 413
- *  (see companion.ps1's Merge-ItemSets for the complementary set-count
- *  bound). The 1-boots rule is preserved. */
-const CATEGORY_LINE_LEN = 4;
+/** v0.48.0 — archetype CATEGORY lines are now FULL 6-item builds (5 items +
+ *  1 boots), same as Core/Buy order/Pro/Highest WPA. They were capped at 4 in
+ *  v0.46.0 as a payload measure; the v0.46.0 413 fix's stale-set prune (the PUT
+ *  now carries only the CURRENT champ+role set, not an accumulation) freed the
+ *  byte budget, and a category line truncated to 4 read as an incomplete/"bad"
+ *  build (user report: the Viktor Tank Mage showed only 4 items and looked
+ *  wrong). A build must be a full build — so the item count is NOT what we cap;
+ *  CATEGORY_MAX_EMIT caps the NUMBER of category blocks instead, which is what
+ *  actually bounds the set's byte size (verified: a maximal 6-item × 4-category
+ *  set stays well under the 4096 B LCU per-object ceiling — see the byte-budget
+ *  tests). The 1-boots rule is preserved. */
+const CATEGORY_LINE_LEN = 6;
 const SITUATIONAL_CAP = 6;
 /** A themed line (Highest WPA / Tanky / Burst) is omitted entirely rather
  *  than padded with off-theme junk when fewer than this many qualifying
@@ -238,6 +265,25 @@ interface Archetype {
   match: (meta: ItemDetail) => boolean;
   pool: number[];
   fits: (champTags: string[], rating: RatedComp) => boolean;
+  /** v0.48.0 — CURATED-DRIVEN vs DATA-FIRST.
+   *  A "variant" archetype (Tank Mage, Bruiser (AD)) exists precisely to show
+   *  a coherent build the champ's META DATA does NOT reflect — the user's
+   *  standing directive to surface off-meta potential builds by judgment. Its
+   *  line is therefore driven by the curated `pool` (real itemization
+   *  knowledge, hand-ranked), NOT by the champ's own (burst-leaning) real
+   *  data — which is exactly what makes it (a) a genuinely durable/coherent
+   *  build and (b) distinct from the standard build so it survives de-dup. The
+   *  champ's OWN items that genuinely satisfy `match` (durable-AP items a mage
+   *  actually builds) still rank first — they're both on-archetype AND
+   *  measured — but the champ's off-archetype items are never pulled in
+   *  (they fail `match`). A curated variant is labelled honestly as the plain
+   *  archetype title (never "(low data)"): it's a deliberate judgment build,
+   *  not a thin measurement.
+   *  A DATA-FIRST archetype (AP/Mage, AP Burst, Crit/Marksman, Lethality,
+   *  On-hit, pure Tank) reflects the champ's real meta itemization: real
+   *  matched items rank first, padded to a full build from the curated pool,
+   *  and it carries the measured/"(low data)" distinction. */
+  curated: boolean;
 }
 
 // Curated item pools — hand-ranked best-first from real LoL itemization
@@ -249,20 +295,24 @@ const AP_MAGE: Archetype = {
   title: "AP/Mage",
   family: "AP",
   match: (m) => hasAnyTag(m, AP_DAMAGE_TAGS),
-  // Luden's, Shadowflame, Rabadon's, Void Staff, Liandry's, Zhonya's,
-  // Rylai's, Riftmaker — a broad, standard mage core.
-  pool: [6655, 4645, 3089, 3135, 6653, 3157, 3116, 4633],
+  // Standard/balanced mage core, hand-ranked best-first: Luden's, Liandry's,
+  // Shadowflame, Rabadon's, Void Staff, Zhonya's (one defensive cap). Kept
+  // deliberately BURST/standard-leaning (not stacked with durable-AP items)
+  // so it stays visibly distinct from the curated Tank Mage build.
+  pool: [6655, 6653, 4645, 3089, 3135, 3157],
   fits: () => true,
+  curated: false,
 };
 const AP_BURST: Archetype = {
   title: "AP Burst",
   family: "AP",
   // Glass cannon: AP damage with NO durability tag.
   match: (m) => hasAnyTag(m, AP_DAMAGE_TAGS) && !hasAnyTag(m, DURABILITY_TAGS),
-  // Luden's, Shadowflame, Rabadon's, Void Staff, Stormsurge, Horizon Focus,
+  // Luden's, Shadowflame, Stormsurge, Rabadon's, Void Staff, Horizon Focus,
   // Lich Bane — pure penetration/amp burst.
-  pool: [6655, 4645, 3089, 3135, 4646, 4628, 3100],
+  pool: [6655, 4645, 4646, 3089, 3135, 4628, 3100],
   fits: () => true,
+  curated: false,
 };
 const TANK_MAGE: Archetype = {
   title: "Tank Mage",
@@ -270,10 +320,14 @@ const TANK_MAGE: Archetype = {
   // Durable AP: an AP item that ALSO builds durability (the user's exact
   // screenshot archetype — Rylai's/Riftmaker/Abyssal + Zhonya's Viktor).
   match: (m) => metaHasTag(m, "SpellDamage") && hasAnyTag(m, DURABILITY_TAGS),
-  // Rylai's, Riftmaker, Rod of Ages, Cosmic Drive, Zhonya's, Abyssal Mask,
-  // Liandry's, Hextech Rocketbelt — AP + health/resist.
-  pool: [3116, 4633, 6657, 4629, 3157, 3001, 6653, 3152],
+  // CURATED durable-AP build, hand-ordered durable-core -> defense -> damage
+  // cap: Rod of Ages, Riftmaker, Rylai's (durable AP core) / Cosmic Drive,
+  // Liandry's (durable damage) / Zhonya's, Abyssal Mask (defense) / Rabadon's
+  // (damage cap). Abyssal is a pure-MR item with NO SpellDamage tag — trusted
+  // verbatim (curatedArchetypePool does NOT re-filter through `match`).
+  pool: [6657, 4633, 3116, 4629, 6653, 3157, 3001, 3089],
   fits: () => true,
+  curated: true,
 };
 const BRUISER_AD: Archetype = {
   title: "Bruiser (AD)",
@@ -281,10 +335,13 @@ const BRUISER_AD: Archetype = {
   // Health + AD.
   match: (m) =>
     hasAnyTag(m, new Set(["Damage", "ArmorPenetration"])) && hasAnyTag(m, DURABILITY_TAGS),
-  // Sterak's, Death's Dance, Black Cleaver, Stridebreaker, Titanic Hydra,
-  // Trinity Force, Sundered Sky, Hullbreaker.
-  pool: [3053, 6333, 3071, 6631, 3748, 3078, 6610, 3181],
+  // CURATED durable-AD build, hand-ordered: Stridebreaker, Black Cleaver,
+  // Sundered Sky (bruiser core) / Death's Dance, Sterak's Gage (defense) /
+  // Titanic Hydra, Trinity Force, Hullbreaker (damage/utility). Distinct from
+  // the crit/lethality data builds by construction.
+  pool: [6631, 3071, 6610, 6333, 3053, 3748, 3078, 3181],
   fits: (tags) => tags.includes("Fighter"),
+  curated: true,
 };
 const LETHALITY: Archetype = {
   title: "Lethality/Assassin",
@@ -302,6 +359,7 @@ const LETHALITY: Archetype = {
   // Night, Serpent's Fang.
   pool: [6691, 6692, 6694, 3142, 6698, 6697, 3814, 6695],
   fits: (tags) => tags.includes("Assassin"),
+  curated: false,
 };
 const CRIT_MARKSMAN: Archetype = {
   title: "Crit/Marksman",
@@ -311,6 +369,7 @@ const CRIT_MARKSMAN: Archetype = {
   // Bloodthirster, Shieldbow, Phantom Dancer, The Collector, Mortal Reminder.
   pool: [3031, 3094, 3087, 3036, 3072, 6673, 3046, 6676, 3033],
   fits: (tags) => tags.includes("Marksman"),
+  curated: false,
 };
 const ON_HIT: Archetype = {
   title: "On-hit",
@@ -320,6 +379,7 @@ const ON_HIT: Archetype = {
   // Trinity Force.
   pool: [3153, 3091, 3124, 6672, 3085, 3078],
   fits: (tags) => tags.includes("Marksman") || tags.includes("Fighter"),
+  curated: false,
 };
 const TANK_PURE: Archetype = {
   title: "Tank",
@@ -334,10 +394,105 @@ const TANK_PURE: Archetype = {
   pool: [3068, 3075, 3143, 3065, 3084, 3110, 3193, 3001],
   // Actual tanks only (the v0.47.0 brief: "high tankiness rating").
   fits: (tags, rating) => tags.includes("Tank") || rating.tankiness >= 3,
+  curated: false,
 };
 
 const AP_ARCHETYPES: Archetype[] = [AP_MAGE, AP_BURST, TANK_MAGE];
 const AD_ARCHETYPES: Archetype[] = [BRUISER_AD, LETHALITY, CRIT_MARKSMAN, ON_HIT];
+
+/** v0.48.0 — de-dup keep-priority (lower index = higher priority = the name
+ *  KEPT when two archetype lines collapse into one). The user-reported bug:
+ *  Viktor's "AP/Mage" and "AP Burst" showed the IDENTICAL item list — because
+ *  both are data-first and his real items are pure burst, so both resolve to
+ *  the same picks. The de-dup below detects that and emits ONE block, keeping
+ *  the higher-priority name. Standard builds outrank the off-meta variants
+ *  (Tank Mage, Bruiser) so that when a variant DOES accidentally overlap a
+ *  standard build, the standard name survives — but a properly curated variant
+ *  is distinct by construction and is never the one dropped. AP/Mage outranks
+ *  AP Burst, so Viktor's collapse keeps "AP/Mage". */
+const ARCHETYPE_PRIORITY: readonly string[] = [
+  "Tank",
+  "AP/Mage",
+  "Crit/Marksman",
+  "Lethality/Assassin",
+  "AP Burst",
+  "On-hit",
+  "Tank Mage",
+  "Bruiser (AD)",
+];
+function archetypePriority(title: string): number {
+  const i = ARCHETYPE_PRIORITY.indexOf(title);
+  return i < 0 ? ARCHETYPE_PRIORITY.length : i;
+}
+
+/** v0.48.0 — true when two built lines are near-duplicate BUILDS. Boots are
+ *  excluded from the comparison — two genuinely different builds routinely
+ *  share the champ's one boots pick, and a build is defined by its ~5 non-boots
+ *  items, not its boots. Three conditions, ALL required:
+ *    1. similar length (|A| - |B| <= 1) — a 3-item line and a 1-item line are
+ *       different builds, not duplicates, even if one contains the other;
+ *    2. they differ by at most one item within the smaller set
+ *       (inter >= min-1) — catches the real bug's near-misses (AP/Mage vs
+ *       AP Burst differing only in the last, differently-padded slot), not
+ *       just byte-identical lines;
+ *    3. they actually share something (inter >= 1) — without this a size-1
+ *       set trivially satisfies `inter >= min-1 == 0` and every thin line
+ *       would falsely collapse into every other (the Jinx Lethality-vs-Crit
+ *       false positive).
+ *  A curated variant (Tank Mage: durable AP; Bruiser: durable AD) shares at
+ *  most 1-2 items with the standard build of its family, so it is never a
+ *  near-duplicate; and dedupeArchetypeLines additionally never compares across
+ *  curated-ness, so a variant is doubly protected from being dropped. */
+function nearDuplicateLines(
+  a: Candidate[],
+  b: Candidate[],
+  bootsIds: ReadonlySet<number>
+): boolean {
+  const sa = new Set(a.filter((c) => !bootsIds.has(c.id)).map((c) => c.id));
+  const sb = new Set(b.filter((c) => !bootsIds.has(c.id)).map((c) => c.id));
+  if (sa.size === 0 || sb.size === 0) return false;
+  if (Math.abs(sa.size - sb.size) > 1) return false;
+  const [small, large] = sa.size <= sb.size ? [sa, sb] : [sb, sa];
+  let inter = 0;
+  small.forEach((id) => {
+    if (large.has(id)) inter++;
+  });
+  return inter >= 1 && inter >= small.size - 1;
+}
+
+/** v0.48.0 — collapse near-duplicate archetype lines to one each, keeping the
+ *  higher-priority name (ARCHETYPE_PRIORITY). Greedy over priority: the
+ *  highest-priority survivor of any near-dup cluster is kept; lower-priority
+ *  near-dups are dropped. The kept archetypes are returned in the caller's
+ *  ORIGINAL emission order (block order preserved for the UI). Pure — no I/O,
+ *  deterministic (priority is a total order, emission order is stable). */
+function dedupeArchetypeLines<T extends { arch: Archetype; line: Candidate[] }>(
+  entries: T[],
+  bootsIds: ReadonlySet<number>
+): T[] {
+  const byPriority = [...entries].sort(
+    (x, y) => archetypePriority(x.arch.title) - archetypePriority(y.arch.title)
+  );
+  const kept: T[] = [];
+  for (const cand of byPriority) {
+    // Only collapse lines of the SAME curated-ness. A curated VARIANT (Tank
+    // Mage, Bruiser) is a deliberate off-meta build meant to sit ALONGSIDE the
+    // standard build of its family — it must never be deduped away by a
+    // standard line just because they happen to share items (e.g. a mage whose
+    // AP/Mage fill reached for a durable item that also lives in Tank Mage).
+    // The user-reported dup was two DATA-FIRST siblings (AP/Mage == AP Burst);
+    // that's what this collapses. Variant-vs-variant can still collapse (rare).
+    if (
+      kept.some(
+        (k) => k.arch.curated === cand.arch.curated && nearDuplicateLines(cand.line, k.line, bootsIds)
+      )
+    )
+      continue;
+    kept.push(cand);
+  }
+  const keptArch = new Set(kept.map((k) => k.arch));
+  return entries.filter((e) => keptArch.has(e.arch));
+}
 
 /** A real per-champ matched-item count at/above which an archetype line is
  *  presented as MEASURED (no "(low data)" suffix). CATEGORY_LINE_LEN is 4
@@ -589,6 +744,15 @@ function categoryDefaultPool(
   const out: Candidate[] = [];
   itemMeta.forEach((m, id) => {
     if (!isFullItem(id, m)) return;
+    // A fill pool only ever supplies NON-BOOTS padding slots (the one-boots
+    // machinery resolves the boots slot separately, from the champ's own
+    // pool). A boots-tagged item must never leak in here — e.g. Mercury's
+    // Treads / Plated Steelcaps carry a durability tag and would otherwise
+    // match the pure-Tank archetype and pad in as a SECOND pair of boots
+    // (the champ's recommended boots isn't the catalog's boots), reopening
+    // the "2 boots in one line" bug on a line whose bootsIds set (the
+    // recommended boots only) doesn't know this catalog boot is boots.
+    if (metaHasTag(m, "Boots")) return;
     if (!match(m)) return;
     out.push({ id, weight: m.goldTotal });
   });
@@ -609,6 +773,7 @@ function curatedArchetypePool(
   for (const id of arch.pool) {
     const m = itemMeta.get(id);
     if (!m || !isFullItem(id, m)) continue;
+    if (metaHasTag(m, "Boots")) continue; // fill pools never supply boots (see categoryDefaultPool)
     out.push({ id, weight: m.goldTotal });
   }
   return out;
@@ -682,14 +847,28 @@ function selectArchetypes(
   return out;
 }
 
-/** v0.47.0 — build one archetype line. Real per-champ matched items (the
- *  champ's OWN recommended items embodying this archetype) rank first; a line
- *  with >= MIN_CATEGORY_MEASURED real non-boots matches is MEASURED, otherwise
- *  it's a "(low data)" FILL: real matches, then the curated archetype pool,
- *  then catalog-wide `match` defaults — all through the same one-boots/
- *  isFullItem machinery every other line uses, capped at CATEGORY_LINE_LEN (4).
- *  The champ's own real boots are always folded in so a fill never strands
- *  itself boots-less. */
+/** v0.48.0 — build one archetype line as a FULL 6-item build (5 items + 1
+ *  boots), through the same one-boots / isFullItem machinery every other line
+ *  uses. Two modes (see Archetype.curated):
+ *
+ *  DATA-FIRST (AP/Mage, AP Burst, Crit/Marksman, Lethality, On-hit, pure Tank):
+ *  the champ's OWN matched items rank first, then the line is PADDED to a full
+ *  build from the curated pool, then catalog `match` defaults. A line with
+ *  >= MIN_CATEGORY_MEASURED real non-boots matches is MEASURED; otherwise it's
+ *  "(low data)" — the padding filled in what the champ's thin data could not.
+ *
+ *  CURATED-DRIVEN (Tank Mage, Bruiser (AD)): the build is defined by the
+ *  curated pool, NOT the champ's (off-archetype) real data. The champ's own
+ *  items that genuinely satisfy `match` (durable-AP items a mage actually
+ *  builds) still rank first — on-archetype AND measured — but his
+ *  off-archetype burst items are never pulled in (they fail `match`), and the
+ *  curated pool defines the rest of a coherent, ordered durable build. Always
+ *  labelled as the plain archetype (never "(low data)"): a deliberate judgment
+ *  build, not a thin measurement.
+ *
+ *  Either way the champ's own real boots are folded in so a line never strands
+ *  itself boots-less, and a line that resolves to boots-only (no archetype
+ *  content anywhere in reach) returns empty so buildItemSets omits the block. */
 function buildArchetypeLine(
   pool: Candidate[],
   arch: Archetype,
@@ -703,30 +882,27 @@ function buildArchetypeLine(
     })
     .sort((a, b) => b.weight - a.weight);
   const realNonBoots = realMatched.filter((c) => !bootsIds.has(c.id));
+  const hasRealBoots = realMatched.some((c) => bootsIds.has(c.id));
   const overallBoots =
     pool.filter((c) => bootsIds.has(c.id)).sort((a, b) => b.weight - a.weight)[0] ?? null;
 
-  if (realNonBoots.length >= MIN_CATEGORY_MEASURED) {
-    const themedBoots = realMatched.filter((c) => bootsIds.has(c.id))[0] ?? null; // already weight-desc
-    const boots = themedBoots ?? overallBoots;
-    const target = CATEGORY_LINE_LEN - (boots ? 1 : 0);
-    const top = realNonBoots.slice(0, target);
-    if (!boots) return { line: top, lowData: false };
-    const insertAt = Math.min(3, top.length);
-    return { line: [...top.slice(0, insertAt), boots, ...top.slice(insertAt)], lowData: false };
-  }
-
-  const hasRealBoots = realMatched.some((c) => bootsIds.has(c.id));
-  const primary = overallBoots && !hasRealBoots ? [...realMatched, overallBoots] : realMatched;
   const curatedFill = curatedArchetypePool(arch, itemMeta);
   const catalogFill = categoryDefaultPool(itemMeta, arch.match);
+
+  // Primary = the champ's real matched (on-archetype) items, weight-ranked,
+  // plus his own boots when the matched set had none — identical for both
+  // modes (a curated variant still leads with the champ's genuine durable
+  // items). The curated pool then completes the build for a variant, or pads a
+  // short standard line to a full 6.
+  const primary = overallBoots && !hasRealBoots ? [...realMatched, overallBoots] : realMatched;
   const line = buildLine(primary, [curatedFill, catalogFill], bootsIds, CATEGORY_LINE_LEN);
-  // A line that resolved to boots-only (no real archetype content anywhere in
-  // reach — sparse itemMeta, or a family that the champ has zero on-archetype
-  // items for) is meaningless: return empty so buildItemSets omits the block
-  // rather than shipping a "shop line" that's just a pair of boots.
-  if (line.filter((c) => !bootsIds.has(c.id)).length === 0) return { line: [], lowData: true };
-  return { line, lowData: true };
+  if (line.filter((c) => !bootsIds.has(c.id)).length === 0) return { line: [], lowData: false };
+
+  // A curated variant is a judgment build — never "(low data)". A data-first
+  // line is "(low data)" only when the champ's own matched items were thin
+  // (below the measured threshold) so the curated/catalog padding carried it.
+  const lowData = arch.curated ? false : realNonBoots.length < MIN_CATEGORY_MEASURED;
+  return { line, lowData };
 }
 
 function toItemRefs(cands: Candidate[]): ItemSetItem[] {
@@ -887,39 +1063,51 @@ export function buildItemSets(
   const { family, confident } = resolveDamageFamily(champ, themedUnion, meta);
   const selected = selectArchetypes(family, champTags, rating);
 
+  // Build every selected archetype's line FIRST (in emission order), applying
+  // the confident/empty guards. poolLen (real per-champ matched-item count) is
+  // retained for the CATEGORY_MAX_EMIT trim below.
+  const built = selected
+    .map((arch) => {
+      const poolLen = themedUnion.filter((c) => {
+        const m = meta.get(c.id);
+        return m ? arch.match(m) : false;
+      }).length;
+      // A damage archetype with NO real per-champ items is only worth a
+      // catalog/curated-fill line when the champ's family is CONFIDENT (item-
+      // or class-tag-confirmed). A pure tank/utility champ that only defaulted
+      // into AP should get its Tank line, not a hollow filled damage archetype.
+      // Pure Tank (universal) is exempt — gated on real tankiness, not a guess.
+      if (arch.family !== "universal" && !confident && poolLen === 0) return null;
+      const { line, lowData } = buildArchetypeLine(themedUnion, arch, meta, bootsIds);
+      if (line.length === 0) return null; // never a genuinely empty block
+      return { arch, line, lowData, poolLen };
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null);
+
+  // v0.48.0 — GENERAL de-dup: collapse near-duplicate lines (the user-reported
+  // Viktor "AP/Mage == AP Burst" bug — both data-first, same real burst items),
+  // keeping the higher-priority archetype name. Runs for EVERY champ: a champ
+  // whose builds genuinely differ (a curated Tank Mage vs the standard AP
+  // build) keeps both; identical/near-identical ones collapse to one.
+  const deduped = dedupeArchetypeLines(built, bootsIds);
+
   // Trim to CATEGORY_MAX_EMIT: keep universal pure Tank, then the family
-  // archetypes with the most real per-champ data; declaration order preserved.
-  const withData = selected.map((arch) => ({
-    arch,
-    poolLen: themedUnion.filter((c) => {
-      const m = meta.get(c.id);
-      return m ? arch.match(m) : false;
-    }).length,
-  }));
-  let chosen = withData;
-  if (withData.length > CATEGORY_MAX_EMIT) {
+  // archetypes with the most real per-champ data; emission order preserved.
+  let chosen = deduped;
+  if (deduped.length > CATEGORY_MAX_EMIT) {
     const keep = new Set<Archetype>();
-    for (const w of withData) if (w.arch.family === "universal") keep.add(w.arch);
-    const ranked = withData
+    for (const w of deduped) if (w.arch.family === "universal") keep.add(w.arch);
+    const ranked = deduped
       .filter((w) => w.arch.family !== "universal")
       .sort((a, b) => b.poolLen - a.poolLen);
     for (const w of ranked) {
       if (keep.size >= CATEGORY_MAX_EMIT) break;
       keep.add(w.arch);
     }
-    chosen = withData.filter((w) => keep.has(w.arch));
+    chosen = deduped.filter((w) => keep.has(w.arch));
   }
 
-  for (const { arch, poolLen } of chosen) {
-    // A damage archetype with NO real per-champ items is only worth a
-    // catalog-fill "(low data)" line when the champ's family is CONFIDENT
-    // (item- or class-tag-confirmed). A pure tank/utility champ that only
-    // defaulted into AP should get its Tank line, not a hollow "AP/Mage
-    // (low data)" filled from the catalog. Pure Tank (universal) is exempt —
-    // it's gated on real tankiness, not on a family guess.
-    if (arch.family !== "universal" && !confident && poolLen === 0) continue;
-    const { line, lowData } = buildArchetypeLine(themedUnion, arch, meta, bootsIds);
-    if (line.length === 0) continue; // never a genuinely empty block
+  for (const { arch, line, lowData } of chosen) {
     blocks.push({ type: lowData ? `${arch.title} (low data)` : arch.title, items: toItemRefs(line) });
   }
 
