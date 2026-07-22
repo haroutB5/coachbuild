@@ -914,11 +914,15 @@ describe("proConsensus.ts — pro-consensus rune-apply input (2026-07-22)", () =
       expect(buildRuneApplyBody("Viktor", "Mid", result!.runes).name).toBe("CoachBuild Viktor Mid");
     });
 
-    it("always sources shards from the caller's fallbackShards and flags shardsFromFallback (consensus shards aren't slot-labeled)", () => {
+    it("falls back to the caller's fallbackShards and flags shardsFromFallback when the sample has NO positional shard data (completePageGame's games all carry shards:[])", () => {
       const model = completeModel();
+      expect(model.shardPage).toEqual({ offense: null, flex: null, defense: null });
       const result = proConsensusRuneApplyInput(model, fallbackShards)!;
       expect(result.shardsFromFallback).toBe(true);
-      expect(result.runes.shards).toBe(fallbackShards);
+      // Value-equal (not reference-equal — each slot is now individually
+      // resolved, so the ShardSet is a freshly built object even when every
+      // slot ends up sourcing from fallbackShards).
+      expect(result.runes.shards).toEqual(fallbackShards);
     });
 
     it("per-row modal + row order: primary picks are one-per-row, in row order, never frequency order", () => {
@@ -941,6 +945,107 @@ describe("proConsensus.ts — pro-consensus rune-apply input (2026-07-22)", () =
       expect(result.runes.primary.map((p) => p.id)).toEqual([MANAFLOW_BAND, TRANSCENDENCE, SCORCH]);
       const rows = model.runePage.primaryRows.map((r) => r?.runeId);
       expect(rows).toEqual([MANAFLOW_BAND, TRANSCENDENCE, SCORCH]);
+    });
+  });
+
+  // ── Per-slot PRO shards, not WPA fallback shards (2026-07-24 fix) ──────────
+  // USER BUG (Senna Pro page): the pro consensus for Senna's offense slot IS
+  // Attack Speed, but "Apply pro runes" wrote the WPA build's shard
+  // (Adaptive Force) instead — proConsensusRuneApplyInput always used
+  // fallbackShards wholesale. Fix: model.shardPage resolves each of the 3
+  // positional rows (game.runes.shards[0/1/2]) independently via a per-slot
+  // modal, and proConsensusRuneApplyInput now sources each slot from it.
+  describe("per-slot pro shards (2026-07-24 fix)", () => {
+    const ATTACK_SPEED = 5005;
+    const ADAPTIVE_FORCE = 5008;
+    const MOVE_SPEED = 5010;
+    const HEALTH = 5011;
+    const ABILITY_HASTE = 5007;
+    const TENACITY = 5013;
+
+    it("Senna acceptance pin: offense pro shard is Attack Speed (soloq modal), NOT the WPA fallback's Adaptive Force", () => {
+      const games = Array.from({ length: 10 }, () =>
+        completePageGame({
+          runes: {
+            primaryTree: SORCERY,
+            keystone: DEATHFIRE_TOUCH,
+            primary: [MANAFLOW_BAND, TRANSCENDENCE, SCORCH],
+            secondaryTree: PRECISION,
+            secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE],
+            shards: [ATTACK_SPEED, MOVE_SPEED, HEALTH],
+          },
+        })
+      );
+      const model = aggregateProConsensus(games, itemMeta());
+      expect(model.shardPage.offense).toMatchObject({ runeId: ATTACK_SPEED, count: 10, sampleSize: 10 });
+      expect(model.shardPage.flex).toMatchObject({ runeId: MOVE_SPEED });
+      expect(model.shardPage.defense).toMatchObject({ runeId: HEALTH });
+
+      const result = proConsensusRuneApplyInput(model, fallbackShards)!;
+      expect(result.runes.shards.offense.id).toBe(ATTACK_SPEED);
+      expect(result.runes.shards.offense.id).not.toBe(fallbackShards.offense.id); // not Adaptive Force
+      expect(result.runes.shards.flex.id).toBe(MOVE_SPEED);
+      expect(result.runes.shards.defense.id).toBe(HEALTH);
+      expect(result.shardsFromFallback).toBe(false); // real pro data drove every slot
+
+      const body = buildRuneApplyBody("Senna", "Support", result.runes);
+      expect(body.selectedPerkIds.slice(6)).toEqual([ATTACK_SPEED, MOVE_SPEED, HEALTH]);
+    });
+
+    it("per-slot MAJORITY wins on a split soloq sample (2 Attack Speed vs 1 Ability Haste at offense)", () => {
+      const mk = (offense: number) =>
+        completePageGame({
+          runes: {
+            primaryTree: SORCERY,
+            keystone: DEATHFIRE_TOUCH,
+            primary: [MANAFLOW_BAND, TRANSCENDENCE, SCORCH],
+            secondaryTree: PRECISION,
+            secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE],
+            shards: [offense, MOVE_SPEED, HEALTH],
+          },
+        });
+      const model = aggregateProConsensus([mk(ATTACK_SPEED), mk(ATTACK_SPEED), mk(ABILITY_HASTE)], itemMeta());
+      expect(model.shardPage.offense).toMatchObject({ runeId: ATTACK_SPEED, count: 2, sampleSize: 3 });
+    });
+
+    it("falls back to fallbackShards (all 3 slots) and flags shardsFromFallback ONLY when NO game has positional shard data (all-prostage sample)", () => {
+      const games = Array.from({ length: 5 }, () =>
+        completePageGame({ source: "prostage", tournament: "MSI", runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, primary: [MANAFLOW_BAND, TRANSCENDENCE, SCORCH], secondaryTree: PRECISION, secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE], shards: [] } })
+      );
+      const model = aggregateProConsensus(games, itemMeta());
+      expect(model.shardPage).toEqual({ offense: null, flex: null, defense: null });
+      const result = proConsensusRuneApplyInput(model, fallbackShards)!;
+      expect(result.shardsFromFallback).toBe(true);
+      expect(result.runes.shards).toEqual(fallbackShards);
+    });
+
+    it("an id invalid for a slot (e.g. Health at the offense position) is never crowned that slot's pro pick — falls back for THAT slot only, other slots stay pro", () => {
+      // Corrupted/misaligned offense position (5011 Health belongs to
+      // defense, not offense) — OFFENSE_SHARD_IDS excludes it, so the
+      // offense slot resolves null and falls back individually while
+      // flex/defense (both valid) still resolve from pro data.
+      const games = Array.from({ length: 5 }, () =>
+        completePageGame({
+          runes: {
+            primaryTree: SORCERY,
+            keystone: DEATHFIRE_TOUCH,
+            primary: [MANAFLOW_BAND, TRANSCENDENCE, SCORCH],
+            secondaryTree: PRECISION,
+            secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE],
+            shards: [HEALTH, MOVE_SPEED, TENACITY],
+          },
+        })
+      );
+      const model = aggregateProConsensus(games, itemMeta());
+      expect(model.shardPage.offense).toBeNull(); // invalid id, never counted
+      expect(model.shardPage.flex).toMatchObject({ runeId: MOVE_SPEED });
+      expect(model.shardPage.defense).toMatchObject({ runeId: TENACITY });
+
+      const result = proConsensusRuneApplyInput(model, fallbackShards)!;
+      expect(result.runes.shards.offense.id).toBe(fallbackShards.offense.id); // per-slot fallback
+      expect(result.runes.shards.flex.id).toBe(MOVE_SPEED); // pro data, unaffected
+      expect(result.runes.shards.defense.id).toBe(TENACITY); // pro data, unaffected
+      expect(result.shardsFromFallback).toBe(false); // NOT the all-fallback case — 2 of 3 slots are real pro data
     });
   });
 

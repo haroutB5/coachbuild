@@ -157,9 +157,49 @@
 //       pattern: keep the original global-modal keystone (still an honest
 //       fraction on its own) but drop the page (primaryTree -> null, empty
 //       minors/secondary) rather than pairing it with a page it never ran.
+//
+// ── Per-slot PRO shards, not WPA fallback shards (2026-07-24) ──────────────
+// USER BUG (confirmed, Senna Pro page): "Apply pro runes" wrote the WPA
+// build's shard for Senna's offense slot (Adaptive Force) even though the
+// PRO consensus for that slot is actually Attack Speed. Root cause: the
+// `shards: RuneSlotBreakdown` field below is a FLAT top-3-by-frequency count
+// with no offense/flex/defense label -- real ids overlap between slots (5008
+// Adaptive Force is valid in both offense AND flex), so a bare id from that
+// list can't be safely assigned to a slot. `proConsensusRuneApplyInput`
+// therefore always used the caller's `fallbackShards` (the on-screen
+// WPA-recommended ShardSet) unconditionally -- see
+// `ProConsensusRuneApplyResult.shardsFromFallback`'s doc comment (now
+// superseded by this fix).
+//
+// The flat aggregate was never the only option, though: the RAW per-game
+// field `game.runes.shards` (`ProGameRunes.shards`, `components/
+// proGames.types.ts`) IS positional -- `[offenseShardId, flexShardId,
+// defenseShardId]`, 1:1 with Riot's `perks.statPerks` order, preserved
+// verbatim by `lib/pro/extract.ts` for soloq rows. Shards are structurally
+// SOLOQ-ONLY (module header above, "Rune slot aggregation" -- Leaguepedia's
+// `resolveRunes` always returns `shards: []`), so a 3-element array is both
+// "this game carries positional shard data" and, trivially, "this game is
+// soloq" -- checking length is sufficient, no separate source check needed.
+//
+// FIX: `buildProShardPage` (below) resolves the per-slot MODAL id at each of
+// the 3 positions independently, over every game with a 3-element shards
+// array (shards are tree-independent -- same posture the flat `shards`
+// aggregate above already takes -- so this runs over the full sample, not
+// the tree-conditioned page sample). Each position's modal is restricted to
+// ids KNOWN VALID for that slot (`OFFENSE_SHARD_IDS`/`FLEX_SHARD_IDS`/
+// `DEFENSE_SHARD_IDS`) so a corrupted/misaligned id can never be crowned
+// "the pro pick" for a slot it doesn't belong to -- same "never assume,
+// never invent" posture as `isBuildItem`'s unknown-item handling. A slot
+// with no valid id anywhere in the sample resolves to `null`.
+//
+// `proConsensusRuneApplyInput` then fills each slot from the pro pick when
+// present, falling back to the caller's `fallbackShards.<slot>` ONLY for a
+// slot that resolved `null` -- a per-slot fallback, not an all-or-nothing
+// one. `shardsFromFallback` is true only in the genuine "no pro shard data
+// at all" case (all 3 slots null, e.g. an all-prostage sample).
 
 import type { ProGame } from "@/components/proGames.types";
-import { CONSUMABLE_ITEM_IDS, treeIconUrl, treeName } from "@/components/proAssets";
+import { CONSUMABLE_ITEM_IDS, treeIconUrl, treeName, shardIconUrl, shardName } from "@/components/proAssets";
 import type { ItemDetail } from "@/components/itemDetail";
 import { primaryMinorRow } from "./perkSlots";
 import { TREE_NAME } from "@/lib/types";
@@ -366,10 +406,21 @@ export interface ProConsensusModel {
    *  primaryMinors id (a rune belongs to exactly one tree). A real page has
    *  exactly 2. */
   secondaryPicks: RuneSlotBreakdown;
-  /** v0.27.1 — top 3 stat shards by frequency. Structurally soloq-only
-   *  today (see module header) — soloqCount/prostageCount on the breakdown
-   *  make that visible rather than asserted. */
+  /** v0.27.1 — top 3 stat shards by frequency. FLAT, unlabeled (no offense/
+   *  flex/defense slot structure) — this is the CARD DISPLAY's source only.
+   *  Structurally soloq-only today (see module header) — soloqCount/
+   *  prostageCount on the breakdown make that visible rather than asserted.
+   *  2026-07-24: the apply path no longer reads this — see `shardPage`. */
   shards: RuneSlotBreakdown;
+  /** 2026-07-24 — the per-SLOT resolved pro shards (offense/flex/defense),
+   *  each the modal id at that positional row over every game with a
+   *  3-element `runes.shards` array, restricted to ids valid for that slot.
+   *  `null` for a slot with no valid pro data. This — NOT the flat `shards`
+   *  above — is what `proConsensusRuneApplyInput` uses, so "Apply pro runes"
+   *  writes the actual pro pick per slot (e.g. Attack Speed offense) instead
+   *  of always falling back to the on-screen WPA build's shards. See the
+   *  module header's "Per-slot PRO shards, not WPA fallback shards" section. */
+  shardPage: ProShardPage;
   spellPair: SpellPairFrequency | null;
   /** Denominator for spellPair.share — games with BOTH spell slots resolved
    *  (neither id is the 0 sentinel). */
@@ -622,6 +673,82 @@ function buildSlotCoherentPage(
   return { primaryTreeId, secondaryTreeId, keystoneId, primaryRows, secondaryRows };
 }
 
+// ── Per-slot PRO shard aggregation (2026-07-24 fix) — see module header ────
+
+/** Ids known-valid for the OFFENSE shard row (Adaptive Force, Attack Speed,
+ *  Ability Haste — the current live game's offense row, per
+ *  `lib/staticData.ts`'s `SHARD_NAME`). */
+const OFFENSE_SHARD_IDS = new Set<number>([5008, 5005, 5007]);
+/** Ids known-valid for the FLEX shard row (Adaptive Force, Move Speed,
+ *  Health Scaling). */
+const FLEX_SHARD_IDS = new Set<number>([5008, 5010, 5001]);
+/** Ids known-valid for the DEFENSE shard row (Health Scaling, Tenacity and
+ *  Slow Resist, Health — the current row) PLUS Armor (5002) / Magic Resist
+ *  (5003), which occupied this row before Riot's stat-shard rework replaced
+ *  them with Health Scaling. `lib/pro/fresh.ts`'s 90-day ingest window makes
+ *  a live sample carrying the legacy ids unlikely today, but a historical
+ *  row that does carry one is real pro data for that slot, not corruption —
+ *  same "never assume" posture as the rest of this module, applied here as
+ *  "never silently discard a once-valid id" rather than "never accept an
+ *  id we haven't hardcoded." */
+const DEFENSE_SHARD_IDS = new Set<number>([5011, 5013, 5001, 5002, 5003]);
+
+const SHARD_SLOT_VALID_IDS: readonly [Set<number>, Set<number>, Set<number>] = [
+  OFFENSE_SHARD_IDS,
+  FLEX_SHARD_IDS,
+  DEFENSE_SHARD_IDS,
+];
+
+export interface ProShardSlotPick {
+  runeId: number;
+  /** Games whose modal-winning id appeared at this position. */
+  count: number;
+  /** Games with a 3-element `runes.shards` array (soloq, structurally — see
+   *  module header) — the shared denominator for all 3 slots, since a soloq
+   *  game either carries all 3 positional picks or (prostage) none. */
+  sampleSize: number;
+}
+
+/** The per-slot resolved pro shard page — the modal, slot-valid pick at each
+ *  of the 3 positional rows (`game.runes.shards[0/1/2]`), or `null` when the
+ *  sample never carried a valid id for that slot. Mirrors
+ *  `SlotCoherentRunePage`'s per-row-modal pattern for the primary/secondary
+ *  rune page. Exported for direct unit testing. */
+export interface ProShardPage {
+  offense: ProShardSlotPick | null;
+  flex: ProShardSlotPick | null;
+  defense: ProShardSlotPick | null;
+}
+
+/** Modal id at `position` (0=offense, 1=flex, 2=defense), restricted to ids
+ *  valid for that slot — an id that fails validation is simply never counted
+ *  (not treated as "no data"; a different, valid id at that position in
+ *  another game can still win). `sampleSize` counts every game with 3-element
+ *  shard data regardless of validity, so it stays the honest "how many games
+ *  could have supplied this slot" denominator even when 0 of them did. */
+function resolveShardSlot(games: ProGame[], position: 0 | 1 | 2): ProShardSlotPick | null {
+  const validIds = SHARD_SLOT_VALID_IDS[position];
+  const counts = new Map<number, number>();
+  let sampleSize = 0;
+  for (const g of games) {
+    const shards = g.runes?.shards ?? [];
+    if (shards.length !== 3) continue;
+    sampleSize += 1;
+    const id = shards[position];
+    if (validIds.has(id)) bump(counts, id);
+  }
+  const top = sortEntries(counts)[0];
+  return top ? { runeId: top[0], count: top[1], sampleSize } : null;
+}
+
+function buildProShardPage(games: ProGame[]): ProShardPage {
+  return {
+    offense: resolveShardSlot(games, 0),
+    flex: resolveShardSlot(games, 1),
+    defense: resolveShardSlot(games, 2),
+  };
+}
+
 export function aggregateProConsensus(
   games: ProGame[],
   itemMeta: Map<number, ItemDetail>
@@ -849,6 +976,7 @@ export function aggregateProConsensus(
     primaryMinors: primaryMinors.finalize(TOP_PRIMARY_MINORS_LIMIT),
     secondaryPicks: secondaryPicks.finalize(TOP_SECONDARY_PICKS_LIMIT),
     shards: shards.finalize(TOP_SHARDS_LIMIT),
+    shardPage: buildProShardPage(games),
     spellPair,
     spellSampleSize,
     tournaments: {
@@ -928,6 +1056,26 @@ function asTreeId(id: number): TreeId | null {
   return id in TREE_NAME ? (id as TreeId) : null;
 }
 
+/** Builds a real Pick for a resolved pro shard slot — unlike `toPick` (used
+ *  for keystone/primary/secondary, which stays on a `Rune #${id}` placeholder
+ *  because resolving a real rune name needs an async CommunityDragon fetch,
+ *  see that function's call site doc comment), shard names/icons are a small
+ *  static synchronous lookup (`shardName`/`shardIconUrl`, `components/
+ *  proAssets.ts`, already imported above for tree names), so there's no
+ *  reason not to use the real ones here. `buildRuneApplyBody` still only
+ *  reads `.id`, so this remains a non-goal for display purposes — it's just
+ *  free correctness, not a new requirement. */
+function toShardPick(slot: ProShardSlotPick): PickType {
+  return {
+    id: slot.runeId,
+    name: shardName(slot.runeId),
+    icon: shardIconUrl(slot.runeId),
+    wpa: 0,
+    winrate: null,
+    occurrence: slot.count,
+  };
+}
+
 const REQUIRED_SECONDARY_ROWS = 2;
 
 export function missingRunePageReason(model: ProConsensusModel): string | null {
@@ -961,20 +1109,25 @@ export interface ProConsensusRuneApplyResult {
    *  the champ-scoped cleanup prefix intact — this never mints a new title
    *  vocabulary. */
   runes: RunesBlock;
-  /** Always `true` today. `model.shards` (proConsensus.ts's own
-   *  RuneSlotBreakdown for the shards row) is a FLAT top-3-by-frequency
-   *  count over every game's `runes.shards` array — it carries no
-   *  offense/flex/defense slot label, and real shard ids overlap between
-   *  slots (5008 Adaptive Force is valid in BOTH the offense and flex
-   *  rows), so assigning a bare id from that flat list to a specific slot
-   *  would be fabricating structure the model doesn't have — the exact
-   *  same "never assume, never invent" posture this module already applies
-   *  to primary/secondary row order (see the module header). The caller's
-   *  `fallbackShards` (the CURRENT WPA-recommended build's ShardSet,
-   *  already on screen) is used unconditionally instead; this flag lets
-   *  the caller render an honest "shards from CoachBuild's
-   *  recommendation — pro shard data unavailable" note rather than
-   *  implying the shards came from pro data too. */
+  /** 2026-07-24: `true` only when NONE of the 3 shard slots resolved real
+   *  pro data (`model.shardPage.offense`/`flex`/`defense` all `null` — e.g.
+   *  an all-prostage sample, since shards are structurally soloq-only, see
+   *  the module header). In that genuine no-data case every slot falls back
+   *  to the caller's `fallbackShards` (the on-screen WPA-recommended
+   *  ShardSet) and this flag lets the caller render an honest "shards from
+   *  CoachBuild's recommendation — pro shard data unavailable" note.
+   *
+   *  When at least one slot DOES have pro data, `runes.shards` is a MIX:
+   *  each slot independently uses `model.shardPage.<slot>` when resolved,
+   *  falling back to `fallbackShards.<slot>` only for the specific slot(s)
+   *  that didn't — this flag is `false` in that case (some/all slots are
+   *  real pro data), even if one individual slot still came from the
+   *  fallback. Was previously always `true` — `model.shards` (the FLAT,
+   *  unlabeled top-3-by-frequency shard breakdown) carries no slot
+   *  structure, so it could never be safely assigned to offense/flex/
+   *  defense; `model.shardPage` (per-slot, perkstyles-validated) is what
+   *  fixed that — see the module header's "Per-slot PRO shards, not WPA
+   *  fallback shards" section for the full root-cause + fix. */
   shardsFromFallback: boolean;
 }
 
@@ -984,8 +1137,9 @@ export interface ProConsensusRuneApplyResult {
  *  WPA "Apply runes" button already uses. Pure: no fetch, no DOM, plain
  *  ProConsensusModel + a caller-supplied fallback ShardSet in, a result or
  *  `null` out — see `missingRunePageReason` for exactly when this returns
- *  null, and the type doc above for why shards always come from
- *  `fallbackShards`.
+ *  null (rune-page completeness only — shards never gate the button, since
+ *  every shard slot has its own independent fallback), and the type doc
+ *  above for exactly when/how shards mix pro data with `fallbackShards`.
  *
  *  Slot-coherent by construction (2026-07-22): primary minors are the per-row
  *  modals from `model.runePage.primaryRows`, emitted in ROW order (row 0 → 1 →
@@ -1043,6 +1197,24 @@ export function proConsensusRuneApplyInput(
     .map((p) => toPick(p.runeId, p.count));
   if (secondary.length < REQUIRED_SECONDARY_ROWS) return null; // unreachable; satisfies TS
 
+  // Per-slot pro shards (2026-07-24 fix): use model.shardPage.<slot> when the
+  // sample resolved a valid pro pick for that slot, falling back to the
+  // caller's fallbackShards.<slot> ONLY for a slot that didn't — see the
+  // module header's "Per-slot PRO shards, not WPA fallback shards" section
+  // and ProConsensusRuneApplyResult.shardsFromFallback's doc comment.
+  const { offense, flex, defense } = model.shardPage;
+  const shards: ShardSet = {
+    offense: offense ? toShardPick(offense) : fallbackShards.offense,
+    flex: flex ? toShardPick(flex) : fallbackShards.flex,
+    defense: defense ? toShardPick(defense) : fallbackShards.defense,
+  };
+  // shardsFromFallback is true ONLY in the genuine no-pro-data-anywhere case
+  // (all 3 slots null) — a partial mix (e.g. offense resolved, flex/defense
+  // didn't) is NOT flagged as "fallback," since most of the page is real pro
+  // data; the caller's tooltip text ("pro shard data unavailable") is only
+  // accurate for the all-null case.
+  const shardsFromFallback = !offense && !flex && !defense;
+
   const runes: RunesBlock = {
     primaryTree: { id: primaryTreeId, name: treeName(primaryTreeId), icon: treeIconUrl(primaryTreeId) },
     secondaryTree: {
@@ -1053,8 +1225,8 @@ export function proConsensusRuneApplyInput(
     keystone: toPick(keystone.keystoneId, keystone.count),
     primary,
     secondary,
-    shards: fallbackShards,
+    shards,
   };
 
-  return { runes, shardsFromFallback: true };
+  return { runes, shardsFromFallback };
 }
