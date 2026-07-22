@@ -91,17 +91,27 @@ WIRE CONTRACT (must match components/live/companionClient.ts exactly):
                                 mismatch:string[]}
                         | 200 {ok:false, reason:string, hint?:string}
     Page-selection logic (BOTH modes): GET /lol-perks/v1/pages (only
-    isDeletable:true pages count -- preset/default pages never do). A page
-    titled starting "CoachBuild" already exists -> DELETE the oldest such
-    page -> POST (replaces OUR OWN prior page, either mode). None exists ->
-    is there a free slot (GET /lol-perks/v1/inventory ownedPageCount vs the
-    editable-page count when available; else a speculative POST, since the
-    LCU itself rejects a full inventory) -> POST directly, no delete at
-    all. Genuinely full AND no CoachBuild page to replace: mode='manual'
-    (a real user click = real consent) falls back to the ORIGINAL behavior
-    -- GET currentpage -> DELETE it -> POST; mode='auto' NEVER deletes a
-    page it doesn't own -> {ok:false, reason:'slots-full', hint:'all rune
-    pages are yours -- click Apply runes to replace the current one'}.
+    isDeletable:true pages count -- preset/default pages never do).
+    v1.6.2 ROOT-CAUSE FIX (live-reported twice: "Apply pro runes" fails when
+    a CoachBuild page already exists): a page titled starting "CoachBuild"
+    already exists -> EDIT IT IN PLACE via PUT /lol-perks/v1/pages/{id}
+    (full LolPerksPerkPageResource body: id + name + primaryStyleId +
+    subStyleId + selectedPerkIds + current) -> then select + readback-verify.
+    NO delete of our own page. The old flow DELETEd then POSTed; when the
+    CoachBuild page was the CURRENTLY-SELECTED page the LCU refuses to DELETE
+    it -> delete-failed -> nothing applied (that's the exact user bug). Edit
+    fails -> {ok:false, reason:'edit-failed', hint (status-coded)}; we do NOT
+    fall back to delete+create on an edit failure (the page is likely still
+    selected, so a delete would fail the same way -- reintroducing the bug).
+    None exists -> is there a free slot (GET /lol-perks/v1/inventory
+    ownedPageCount vs the editable-page count when available; else a
+    speculative POST, since the LCU itself rejects a full inventory) -> POST
+    directly, no delete at all. Genuinely full AND no CoachBuild page to
+    edit: mode='manual' (a real user click = real consent) falls back to the
+    ORIGINAL behavior -- GET currentpage -> DELETE it -> POST; mode='auto'
+    NEVER deletes a page it doesn't own -> {ok:false, reason:'slots-full',
+    hint:'all rune pages are yours -- click Apply runes to replace the
+    current one'}.
     Post-create SELECTION (v1.3.0 blocker fix, live-reported: a created page
     saved correctly but the client stayed on a fresh "ADD NEW PAGE" editor --
     `current:true` in the POST body alone does NOT select it): after every
@@ -229,7 +239,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.6.1'
+    Version     = '1.6.2'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -520,8 +530,15 @@ function Complete-RuneApply {
     # Verify-by-readback: GET currentpage back and compare id/name/
     # selectedPerkIds to what we sent -- catches a silent partial apply
     # (some slots didn't stick) instead of trusting a 2xx blindly.
-    param($PostResult, $Body, [int]$LcuPort, [string]$LcuToken, [string]$Scheme)
-    $pageId = $PostResult.Content.id
+    #
+    # v1.6.2: takes the page id EXPLICITLY (-PageId) rather than digging it
+    # out of a POST response, so this same select-then-verify tail serves
+    # BOTH the create paths (id from the POST response body) AND the new
+    # PUT-in-place edit path (id already known -- it's the CoachBuild page we
+    # just overwrote; a PUT edit may return 204/no body, so there's no
+    # response id to read).
+    param($PageId, $Body, [int]$LcuPort, [string]$LcuToken, [string]$Scheme)
+    $pageId = $PageId
     $selected = $false
     if ($pageId) {
         $selectPut = Invoke-LcuRaw -Method PUT -Path '/lol-perks/v1/currentpage' -Body $pageId -Port $LcuPort -Token $LcuToken -Scheme $Scheme
@@ -582,18 +599,62 @@ function Invoke-ApplyRunes {
     $coachPages = @($editablePages | Where-Object { $_.name -and ([string]$_.name).StartsWith('CoachBuild') })
 
     if ($coachPages.Count -gt 0) {
-        # A CoachBuild page already exists -- replace THAT one (oldest by
-        # id if several), never anyone else's page, in EITHER mode.
+        # A CoachBuild page already exists -- EDIT THAT ONE IN PLACE (oldest
+        # by id if several), never anyone else's page, in EITHER mode.
+        #
+        # v1.6.2 ROOT-CAUSE FIX (live-reported twice: "Apply pro runes" fails
+        # when a CoachBuild page already exists). The prior flow DELETEd the
+        # existing CoachBuild page then POSTed a fresh one. When that page was
+        # the CURRENTLY-SELECTED page, the LCU refuses to DELETE it -> the
+        # whole apply returned {reason:'delete-failed'} and nothing landed
+        # (the v1.5.1-hinted delete-failed path the user was actually hitting).
+        # A rune page is a passive loadout suggestion, so overwriting OUR OWN
+        # page's contents is exactly as compliance-safe as delete+create --
+        # and it sidesteps the "can't delete the selected page" wall entirely.
+        #
+        # Endpoint: PUT /lol-perks/v1/pages/{id} with the full
+        # LolPerksPerkPageResource body (id + name + styles + selectedPerkIds
+        # + current). Verified present in the authoritative LCU OpenAPI schema
+        # (lol-perks plugin exposes get/put/delete on /pages/{id}); the
+        # community delete+create tutorials are a convention, not a sign the
+        # PUT is absent. We carry the target page's own id in the body so the
+        # LCU updates that exact resource rather than treating it as a create.
+        #
+        # DECISION TREE (documented per task):
+        #   CoachBuild page exists  -> PUT-in-place (here). NO delete, ever.
+        #   PUT edit fails          -> {reason:'edit-failed'} fail-soft, its
+        #                              own actionable hint. We deliberately do
+        #                              NOT fall back to delete+create on an
+        #                              edit failure: the page is very likely
+        #                              still the selected page (that's the
+        #                              whole bug), so a delete would just fail
+        #                              the same way -- reintroducing exactly
+        #                              the delete-failed symptom we're fixing.
+        #   No CoachBuild page      -> free slot? POST directly (below).
+        #   No CoachBuild + full    -> manual mode falls back to the ORIGINAL
+        #                              currentpage delete+create (real click =
+        #                              real consent); auto mode returns
+        #                              slots-full and touches NOTHING.
         $target = ($coachPages | Sort-Object -Property id)[0]
-        $del = Invoke-LcuRaw -Method DELETE -Path "/lol-perks/v1/pages/$($target.id)" -Port $LcuPort -Token $LcuToken -Scheme $Scheme
-        if (-not $del.Ok) {
-            return [pscustomobject]@{ ok = $false; reason = 'delete-failed'; hint = 'delete a rune page manually and retry' }
+        # Overwrite our own page's contents in place. Include its id in the
+        # body (LolPerksPerkPageResource) so the LCU edits this exact page.
+        $editBody = @{
+            id              = $target.id
+            name            = $Body.name
+            primaryStyleId  = $Body.primaryStyleId
+            subStyleId      = $Body.subStyleId
+            selectedPerkIds = $Body.selectedPerkIds
+            current         = $true
         }
-        $post = Invoke-LcuRaw -Method POST -Path '/lol-perks/v1/pages' -Body $Body -Port $LcuPort -Token $LcuToken -Scheme $Scheme
-        if (-not $post.Ok) {
-            return [pscustomobject]@{ ok = $false; reason = 'create-failed'; hint = (Get-LcuFailureHint -StatusCode $post.StatusCode -Action 'new rune page') }
+        $put = Invoke-LcuRaw -Method PUT -Path "/lol-perks/v1/pages/$($target.id)" -Body $editBody -Port $LcuPort -Token $LcuToken -Scheme $Scheme
+        if (-not $put.Ok) {
+            return [pscustomobject]@{ ok = $false; reason = 'edit-failed'; hint = (Get-LcuFailureHint -StatusCode $put.StatusCode -Action 'rune page edit') }
         }
-        return Complete-RuneApply -PostResult $post -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
+        # Select (reaffirm) + readback-verify against the page we just edited.
+        # It's usually already the current page, but the PUT/GET currentpage
+        # dance is unchanged from the create paths -- selected reflects the
+        # PUT currentpage, verified/mismatch reflect the readback compare.
+        return Complete-RuneApply -PageId $target.id -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
     }
 
     # No CoachBuild page yet -- is there a free slot? Prefer the
@@ -608,7 +669,7 @@ function Invoke-ApplyRunes {
 
     if ($hasFreeSlot -ne $false) {
         $post = Invoke-LcuRaw -Method POST -Path '/lol-perks/v1/pages' -Body $Body -Port $LcuPort -Token $LcuToken -Scheme $Scheme
-        if ($post.Ok) { return Complete-RuneApply -PostResult $post -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme }
+        if ($post.Ok) { return Complete-RuneApply -PageId $post.Content.id -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme }
         # POST failed -- the LCU's own rejection is authoritative regardless
         # of what the inventory guess said; fall through to the full path.
     }
@@ -627,7 +688,7 @@ function Invoke-ApplyRunes {
         if (-not $post2.Ok) {
             return [pscustomobject]@{ ok = $false; reason = 'create-failed'; hint = (Get-LcuFailureHint -StatusCode $post2.StatusCode -Action 'new rune page') }
         }
-        return Complete-RuneApply -PostResult $post2 -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
+        return Complete-RuneApply -PageId $post2.Content.id -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
     }
 
     # Auto mode, genuinely full, nothing of ours to replace: touch NOTHING.
@@ -1638,6 +1699,37 @@ while ($Sync.Running) {
                 $res.StatusCode = 204
                 $res.OutputStream.Close()
             }
+        } elseif ($path -like '/lol-perks/v1/pages/*' -and $method -eq 'PUT') {
+            # v1.6.2: edit-in-place. Overwrites the matching page's contents
+            # (name/styles/selectedPerkIds) while KEEPING its id -- exactly
+            # what PUT /lol-perks/v1/pages/{id} does in the live LCU. Preserves
+            # the entry's `current` flag so a subsequent GET /currentpage
+            # readback sees the freshly-edited content on the still-selected
+            # page. PagePutShouldFail simulates the LCU rejecting the edit.
+            if ($Sync.PagePutShouldFail) {
+                Write-JsonResponse -Response $res -StatusCode 400 -Obj @{ error = 'mock-edit-failed' }
+            } else {
+                $editId = $path -replace '.*/pages/', ''
+                $reader5 = New-Object IO.StreamReader($req.InputStream, [Text.Encoding]::UTF8)
+                $putBodyRaw = $reader5.ReadToEnd()
+                $reader5.Close()
+                $putBodyObj = $putBodyRaw | ConvertFrom-Json
+                $Sync.MockPages = @(@($Sync.MockPages) | ForEach-Object {
+                    if ([string]$_.id -eq [string]$editId) {
+                        [pscustomobject]@{
+                            id              = $_.id
+                            name            = $putBodyObj.name
+                            primaryStyleId  = $putBodyObj.primaryStyleId
+                            subStyleId      = $putBodyObj.subStyleId
+                            selectedPerkIds = $putBodyObj.selectedPerkIds
+                            isDeletable     = $true
+                            isEditable      = $true
+                            current         = $_.current
+                        }
+                    } else { $_ }
+                })
+                Write-JsonResponse -Response $res -StatusCode 200 -Obj @{ id = $editId }
+            }
         } elseif ($path -like '/lol-perks/v1/pages/*' -and $method -eq 'DELETE') {
             if ($Sync.DeleteShouldFail) {
                 Write-JsonResponse -Response $res -StatusCode 500 -Obj @{ error = 'mock-delete-failed' }
@@ -1737,6 +1829,7 @@ function Start-MockLcu {
         MockInventory             = $null
         CurrentPageSelectShouldFail = $false
         PagePostShouldFail        = $false
+        PagePutShouldFail         = $false
         MockCurrentPageOverride   = $null
     })
 
@@ -1916,28 +2009,48 @@ function Invoke-SelfTest {
         if (@($mockLcu.Sync.Calls) -contains 'DELETE') { $failures.Add('apply-runes free-slot path issued a DELETE with no existing pages') }
     } catch { $failures.Add("apply-runes free-slot path threw: $($_.Exception.Message)") }
 
-    # 6. apply-runes: CoachBuild-page replacement (works in either mode) --
-    # an existing CoachBuild page gets DELETEd, a new one created+selected,
-    # a non-CoachBuild page is left completely untouched.
+    # 6. apply-runes: existing SELECTED CoachBuild page -> EDIT IN PLACE
+    # (v1.6.2 root-cause fix, the live user bug). The prior flow DELETEd this
+    # page then POSTed a fresh one -- which failed at the DELETE precisely
+    # BECAUSE the page was the currently-selected one (the LCU refuses to
+    # delete the selected page -> delete-failed -> nothing applied). New
+    # behavior: PUT /lol-perks/v1/pages/{id} overwrites OUR OWN page's
+    # contents while keeping its id, issuing ZERO deletes; the page stays
+    # selected; the readback verifies the new perks; and the non-CoachBuild
+    # page is left byte-for-byte untouched (zero-foreign-mutation).
+    $newPerks = @(8005, 9111, 9104, 8014, 8017, 8009, 8017, 5008, 5008)
     $mockLcu.Sync.MockPages = @(
-        [pscustomobject]@{ id = 111; name = 'My Custom Build'; isDeletable = $true }
-        [pscustomobject]@{ id = 222; name = 'CoachBuild Test Mid'; isDeletable = $true }
+        [pscustomobject]@{ id = 111; name = 'My Custom Build'; isDeletable = $true; selectedPerkIds = @(1, 1, 1, 1, 1, 1, 1, 1, 1) }
+        [pscustomobject]@{ id = 222; name = 'CoachBuild Test Mid'; isDeletable = $true; selectedPerkIds = @(0, 0, 0, 0, 0, 0, 0, 0, 0) }
     )
     $mockLcu.Sync.MockCurrentPageId = 222
+    $mockLcu.Sync.MockCurrentPageOverride = $null
+    $mockLcu.Sync.PagePutShouldFail = $false
+    $mockLcu.Sync.CurrentPageSelectShouldFail = $false
     $mockLcu.Sync.Calls.Clear()
     try {
         $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($applyBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
         $obj = $r.Content | ConvertFrom-Json
         if (-not $obj.ok -or $obj.selected -ne $true -or $obj.verified -ne $true) {
-            $failures.Add("apply-runes CoachBuild-replace path expected ok/selected/verified all true, got $($r.Content)")
+            $failures.Add("apply-runes in-place edit expected ok/selected/verified all true, got $($r.Content)")
         }
-        if (@(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 222 }).Count -gt 0) {
-            $failures.Add('apply-runes CoachBuild-replace path did not remove the stale CoachBuild page')
+        if (@($mockLcu.Sync.Calls) -contains 'DELETE') {
+            $failures.Add('apply-runes in-place edit issued a DELETE -- must edit the selected CoachBuild page in place, never delete it')
         }
-        if (@(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 111 }).Count -ne 1) {
-            $failures.Add('apply-runes CoachBuild-replace path touched the non-CoachBuild page')
+        $page222 = @(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 222 })
+        if ($page222.Count -ne 1) {
+            $failures.Add('apply-runes in-place edit did not keep the CoachBuild page in place (same id 222)')
+        } elseif ((@($page222[0].selectedPerkIds) -join ',') -ne ($newPerks -join ',')) {
+            $failures.Add("apply-runes in-place edit did not overwrite the page perks in place, got $(@($page222[0].selectedPerkIds) -join ',')")
         }
-    } catch { $failures.Add("apply-runes CoachBuild-replace threw: $($_.Exception.Message)") }
+        if ([string]$mockLcu.Sync.MockCurrentPageId -ne '222') {
+            $failures.Add("apply-runes in-place edit lost the selection (currentPageId=$($mockLcu.Sync.MockCurrentPageId), expected 222)")
+        }
+        $page111 = @(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 111 })
+        if ($page111.Count -ne 1 -or ((@($page111[0].selectedPerkIds) -join ',') -ne '1,1,1,1,1,1,1,1,1')) {
+            $failures.Add('apply-runes in-place edit touched the non-CoachBuild page (zero-foreign-mutation violated)')
+        }
+    } catch { $failures.Add("apply-runes in-place edit threw: $($_.Exception.Message)") }
 
     # 6b. apply-runes AUTO mode adversarial fixture: 5 user pages, ZERO
     # CoachBuild pages, inventory reports full -- must NEVER issue a single
@@ -2006,20 +2119,27 @@ function Invoke-SelfTest {
     } catch { $failures.Add("apply-runes select-fail threw: $($_.Exception.Message)") }
     $mockLcu.Sync.CurrentPageSelectShouldFail = $false
 
-    # 6f. apply-runes delete-fail envelope (#1013 fail-soft) -- existing
-    # CoachBuild page, DELETE itself fails; must never POST afterward.
-    $mockLcu.Sync.MockPages = @([pscustomobject]@{ id = 555; name = 'CoachBuild Test Mid'; isDeletable = $true })
-    $mockLcu.Sync.DeleteShouldFail = $true
+    # 6f. apply-runes edit-failed envelope (v1.6.2 fail-soft) -- existing
+    # SELECTED CoachBuild page, the in-place PUT edit is rejected by the LCU.
+    # Must fail soft with {reason:'edit-failed'} + a status-coded hint and
+    # must NEVER fall back to deleting or POSTing -- the page is still the
+    # selected page, so a delete would fail the same way and reintroduce the
+    # exact delete-failed bug this ship fixes.
+    $mockLcu.Sync.MockPages = @([pscustomobject]@{ id = 555; name = 'CoachBuild Test Mid'; isDeletable = $true; selectedPerkIds = @(0, 0, 0, 0, 0, 0, 0, 0, 0) })
+    $mockLcu.Sync.MockCurrentPageId = 555
+    $mockLcu.Sync.PagePutShouldFail = $true
     $mockLcu.Sync.Calls.Clear()
     try {
         $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($applyBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
         $obj = $r.Content | ConvertFrom-Json
-        if ($obj.ok -ne $false -or $obj.reason -ne 'delete-failed' -or -not $obj.hint) {
-            $failures.Add("apply-runes delete-fail envelope wrong: $($r.Content)")
+        if ($obj.ok -ne $false -or $obj.reason -ne 'edit-failed' -or -not $obj.hint) {
+            $failures.Add("apply-runes edit-failed envelope wrong: $($r.Content)")
         }
-        if (@($mockLcu.Sync.Calls) -contains 'POST') { $failures.Add('apply-runes POSTed after a failed delete (#1013 fail-soft violated)') }
-    } catch { $failures.Add("apply-runes delete-fail threw: $($_.Exception.Message)") }
-    $mockLcu.Sync.DeleteShouldFail = $false
+        if (@($mockLcu.Sync.Calls) -contains 'DELETE') { $failures.Add('apply-runes DELETEd after a failed in-place edit (must not fall back to delete)') }
+        if (@($mockLcu.Sync.Calls) -contains 'POST') { $failures.Add('apply-runes POSTed after a failed in-place edit (must not fall back to create)') }
+        if (@(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 555 }).Count -ne 1) { $failures.Add('apply-runes edit-failed path removed/lost the CoachBuild page') }
+    } catch { $failures.Add("apply-runes edit-failed threw: $($_.Exception.Message)") }
+    $mockLcu.Sync.PagePutShouldFail = $false
     $mockLcu.Sync.MockPages = @()
 
     # 6b. apply-itemsets happy path: merge preserves a non-CoachBuild set
@@ -2181,12 +2301,16 @@ function Invoke-SelfTest {
         }
     } catch { $failures.Add("apply-itemsets 413-prune threw: $($_.Exception.Message)") }
 
-    # 6h. v1.5.1 -- apply-runes create-failed (CoachBuild-page-replace path:
-    # DELETE succeeds, the follow-up POST is rejected by the LCU) now
-    # carries a status-coded hint instead of the old bare {ok:false,
-    # reason:'create-failed'} envelope.
-    $mockLcu.Sync.MockPages = @([pscustomobject]@{ id = 777; name = 'CoachBuild Test Mid'; isDeletable = $true })
+    # 6h. v1.5.1/v1.6.2 -- apply-runes create-failed (FREE-SLOT create path:
+    # no CoachBuild page exists, the POST that creates a fresh page is
+    # rejected by the LCU) carries a status-coded hint instead of a bare
+    # {ok:false, reason:'create-failed'} envelope. NB post-v1.6.2 the
+    # CoachBuild-page path no longer POSTs at all (it edits in place, see
+    # cases 6/6f) -- create-failed now only arises on a genuine create
+    # (free-slot here, or the manual slots-full fallback).
+    $mockLcu.Sync.MockPages = @()
     $mockLcu.Sync.MockCurrentPageId = $null
+    $mockLcu.Sync.MockInventory = $null
     $mockLcu.Sync.PagePostShouldFail = $true
     $mockLcu.Sync.Calls.Clear()
     try {

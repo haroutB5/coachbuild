@@ -2,6 +2,18 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.48.1] — 2026-07-22 (COMPANION CHANGE → 1.6.2 — re-install required)
+### Fixed — "Apply pro runes" failed when a CoachBuild rune page already existed (delete-failed)
+- **User-reported (twice, real device):** clicking *Apply pro runes* (or auto-runes) FAILED with a red error whenever a CoachBuild WPA rune page was already present in the client — nothing got applied.
+- **Root cause:** the apply flow was DELETE-then-CREATE — GET pages → DELETE the existing "CoachBuild …" page → POST a new one → PUT /currentpage to select it. When that existing CoachBuild page was the **currently-selected** page, the LCU **refuses to DELETE the selected page** → `delete-failed` → the whole apply aborted (the v1.5.1-hinted `delete-failed` path).
+- **Fix (companion 1.6.2, `public/companion.ps1` `Invoke-ApplyRunes`):** when a page we own (title starts "CoachBuild") already exists, **edit it IN PLACE** via `PUT /lol-perks/v1/pages/{id}` (full `LolPerksPerkPageResource` body — id + name + primaryStyleId + subStyleId + selectedPerkIds + current), then reaffirm selection via PUT /currentpage and run the existing readback-verify. **No delete of our own page, ever.** Endpoint confirmed present in the authoritative LCU OpenAPI schema (the community delete+create tutorials are a convention, not a sign PUT is absent).
+  - **Decision tree:** CoachBuild page exists → PUT-in-place (no delete). PUT edit fails → new `edit-failed` envelope with a status-coded hint; we deliberately do **not** fall back to delete+create (the page is still selected, so a delete would fail the same way — reintroducing the bug). No CoachBuild page + free slot → POST directly. No CoachBuild page + full → manual mode falls back to the original currentpage delete+create (real click = real consent); auto mode returns `slots-full` and touches nothing.
+- **HARD INVARIANT (SelfTest-pinned, unchanged):** never DELETE or PUT-overwrite a page whose title does not start with "CoachBuild". The in-place PUT targets only our own page (title prefix + id). The adversarial 5-page/0-CoachBuild auto fixture still issues **zero** deletes and zero foreign mutations.
+- **Harness:** `-SelfTest`/`-Mock` extended — a fixture where a **selected** "CoachBuild Test Mid" page exists asserts the page is **updated in place** (same id, new perk ids), **zero DELETE** calls, still selected, and the adjacent non-CoachBuild page is untouched; plus an `edit-failed` fail-soft fixture (no fallback delete/POST). Both harnesses PASS. `companion.ps1` stays 100% ASCII.
+- **Web side:** no change — `applyRunes` already forwards the companion's `reason`/`hint` verbatim, so the new `edit-failed` hint reaches the toast unchanged; the manual button and auto-export path handle the result generically.
+- **Caveat:** the LCU edit-in-place behavior is unreproducible without a live client — pinned in the harness against the LCU schema; **please confirm on-device** that *Apply pro runes* now succeeds when a CoachBuild page already exists and is selected.
+- **Re-install the companion** to pick up 1.6.2 (the served `public/companion.ps1` now reports Version `1.6.2`).
+
 ## [0.48.0] — 2026-07-22 (WEB-ONLY — no companion change; no re-install needed)
 ### Fixed — duplicate archetypes + a thin "tank mage"; item-set category lines are now full 6-item builds
 - **User-reported** (screenshot of Viktor's in-client sets): (1) *"AP/Mage" and "AP Burst" show the IDENTICAL 4 items — don't duplicate, just show one and name it appropriately, and make sure it doesn't happen for other champs*; (2) *the tank-mage build isn't a good build and it's not 6 items — think about it and change it.*
