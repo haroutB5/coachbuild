@@ -8,6 +8,7 @@ import RunesSummonersCard from "./RunesSummonersCard";
 import StartingCard from "./StartingCard";
 import CoreBuildOrderCard from "./CoreBuildOrderCard";
 import SituationalCard from "./SituationalCard";
+import SupportItemCard from "./SupportItemCard";
 import ProConsensusCard from "./ProConsensusCard";
 import { versionFromPatch } from "@/components/proAssets";
 import ItemDetailPopover from "@/components/ItemDetailPopover";
@@ -57,24 +58,37 @@ function CardSkeleton({ className = "" }: { className?: string }) {
 
 // v0.44.0 (Builds responsive plan §3c/§3d/§4): shared with the ok-branch's
 // grid below — grid-template-areas keeps a SINGLE set of area names
-// ("runes"/"starting"/"core"/"situational"/"pro") mapped to a genuinely
-// different layout per breakpoint (single column, plan's original DOM order,
-// below lg; a 7fr/5fr two-column composition — left: runes+core, right:
-// starting+pro+situational — at lg+) without duplicating any component
-// instance or relying on CSS Grid auto-placement (which can't reproduce two
-// independent-height columns from a flat DOM order). Every grid consumer
-// below (skeleton + the real ok-branch grid) must keep this exact area map
-// in sync, or the loading skeleton will reflow into a different shape than
-// the resolved content once it lands (defeats the whole "skeleton mirrors
-// the grid" point of this pass).
+// ("runes"/"starting"/"support"/"core"/"situational"/"pro") mapped to a
+// genuinely different layout per breakpoint (single column, plan's original
+// DOM order, below lg; a 7fr/5fr two-column composition — left: runes+core,
+// right: starting+support+pro+situational — at lg+) without duplicating any
+// component instance or relying on CSS Grid auto-placement (which can't
+// reproduce two independent-height columns from a flat DOM order). Every
+// grid consumer below (skeleton + the real ok-branch grid) must keep this
+// exact area map in sync, or the loading skeleton will reflow into a
+// different shape than the resolved content once it lands (defeats the whole
+// "skeleton mirrors the grid" point of this pass).
+//
+// v0.49.0 — "support" is a NEW area added between "starting" and "core"/
+// "pro" for the support-item-upgrade card (user request: "for supp also
+// show which supp item to upgrade to"). Support-role-only: BuildLoadingSkeleton
+// and the ok-branch below both gate their "support" element on `lane ===
+// "support"` (known synchronously from the `lane` prop, no need to wait on
+// the fetch) rather than always rendering it — an UNCLAIMED
+// grid-template-areas cell contributes no track/height in this auto-sized
+// grid, so a non-support champ's layout is byte-identical to before this
+// change (verified: the area name existing in the template but never
+// claimed by an element does not reserve space, same principle
+// ProConsensusCard's own N=0 -> null already relies on for the "pro" area).
 const BUILD_GRID_CLASS =
-  "grid grid-cols-1 gap-5 [grid-template-areas:'runes'_'starting'_'core'_'situational'_'pro'] lg:grid-cols-[7fr_5fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_starting'_'core_pro'_'core_situational']";
+  "grid grid-cols-1 gap-5 [grid-template-areas:'runes'_'starting'_'support'_'core'_'situational'_'pro'] lg:grid-cols-[7fr_5fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_starting'_'core_support'_'core_pro'_'core_situational']";
 
-function BuildLoadingSkeleton() {
+function BuildLoadingSkeleton({ lane }: { lane: LaneId }) {
   return (
     <div className={BUILD_GRID_CLASS}>
       <CardSkeleton className="[grid-area:runes]" />
       <CardSkeleton className="[grid-area:starting]" />
+      {lane === "support" && <CardSkeleton className="[grid-area:support]" />}
       <CardSkeleton className="[grid-area:core]" />
       <CardSkeleton className="[grid-area:situational]" />
       <CardSkeleton className="[grid-area:pro]" />
@@ -266,7 +280,7 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
     return (
       <div className="mt-5 space-y-5">
         <RankBracketSelector value={rankBracket} onChange={handleRankChange} />
-        <BuildLoadingSkeleton />
+        <BuildLoadingSkeleton lane={lane} />
       </div>
     );
   }
@@ -345,6 +359,20 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
         <div className="[grid-area:starting]">
           <StartingCard starter={build.items.starter} onItemClick={openItemPopover} />
         </div>
+        {/* v0.49.0 — support-role only (user request: "for supp also show
+            which supp item to upgrade to"). Gated on `lane` (known
+            synchronously, same value the fetch above requested this `build`
+            for) rather than `build.role` — both agree by construction since
+            `load()` fetches `role=LANE_TO_ROLE_ID[lane]`, but `lane` is the
+            simpler single source of truth already used for the skeleton
+            gate above. See components/hextech/supportItem.ts for the
+            resolver + SupportItemCard.tsx for why this is its own card
+            rather than folded into Core Build Order. */}
+        {lane === "support" && (
+          <div className="[grid-area:support]">
+            <SupportItemCard champ={champ} build={build} ver={ver} onItemClick={openItemPopover} />
+          </div>
+        )}
         <div className="[grid-area:core]">
           <CoreBuildOrderCard items={build.items} onItemClick={openItemPopover} />
         </div>
