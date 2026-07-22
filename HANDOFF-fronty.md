@@ -1,1 +1,30 @@
 <!-- merged into HANDOFF.md 2026-07-21 23:03:57Z; previous content preserved there. Append new rounds below. -->
+
+## v0.44.3 (2026-07-22) — PROS mode no longer shows the champion page underneath
+
+**User report (mobile screenshot):** switching the sidebar search to PROS mode left the entire champion page (hero, BUILD/PRO BUILDS tabs, rank bracket, runes, every card) rendering in the main area until a player was picked. v0.22.1 had already hidden LANES in pros mode, but the main content was never gated.
+
+**Root cause traced:** `deriveMainView` (`components/hextech/homeSearch.ts`) has *always* intentionally kept carrying the champion view's real state (`champ`/`activeLane`) while PROS mode has nothing picked yet — that's what makes the CHAMPIONS↔PROS toggle round-trip losslessly (see its own pre-existing test: "renders the champion view in PROS mode when no player has been selected yet"). Nothing downstream ever used `searchMode` itself as a render signal — `app/page.tsx`'s composition switched purely on `mainView.kind`, which is `"champion"` whenever `selectedPlayer` is `null`, regardless of `searchMode`.
+
+**Fix (render gate only, state untouched):**
+- New pure fn `isProsSearchEmpty(mode, selectedPlayer)` in `components/hextech/homeSearch.ts` — `true` iff `mode === "pros" && selectedPlayer === null`. Does not touch `deriveMainView`, `MainView`, `WireMainView`, or any history/wire logic — those all behave byte-identically to before.
+- `app/page.tsx`: `const showProsSearchPrompt = isProsSearchEmpty(searchMode, selectedPlayer)`, checked *ahead of* `mainView.kind` in the single `<main>` composition block (shared by both the collapsed-mobile and desktop `Sidebar` renders — confirmed breakpoint-agnostic by construction, not by duplicated logic).
+- New `components/hextech/ProsSearchPrompt.tsx` — quiet centered card (`bg-panel border border-line rounded-xl p-10 text-center`, the exact same empty-state shape `PlayerGamesSection.tsx` already uses) with a "Search for a pro player" hint, plus `FavoritePlayerChips` (reused as-is, renders nothing when there are no favorites). Tapping a chip calls `handlePlayerSelect` directly — the SAME handler the sidebar dropdown pick calls, so it's byte-identical (same PROS landing, same `wireViewForPlayer` history push).
+
+**History/back-nav:** unaffected. Mode-toggle-alone still pushes zero history entries (v0.23.0 policy, untouched — the gate reads live `searchMode`/`selectedPlayer` state, not a history entry). A real player selection still pushes via the existing `wireViewForPlayer`/`sheetNav.pushSelection` path.
+
+**Traced per brief item 5 — deep-link mount effect + champSelectFollow live-follow (both left untouched, zero lines changed):**
+- The mount effect's role-bearing AND role-less branches both call `setSearchMode("champions")` on every deep-link fire — so a deep link always force-exits PROS mode before my gate is even evaluated. No interaction.
+- The companion champ-select **live-follow tick effect** (`companion.tick` dependency) does NOT call `setSearchMode` — it only updates `champ`/`activeLane` + `sheetNav.replaceSelection(...)`. Finding: if a user manually flips the sidebar to PROS (nothing searched) while a paired live game's champ-select hover/lock changes mid-session, the follow effect still correctly updates `champ`/`activeLane` in the background (verified — `mostPlayedLaneRequestRef`/`replaceSelection` machinery untouched), but the new prompt now stays visible instead of the champion page silently reappearing underneath. This is a deliberate consequence of the user's directive being unconditional ("when searching for pro players, don't show the champion page UI") — the followed champion is never lost, it reappears immediately and correctly the moment the user flips back to CHAMPIONS or picks a player. Narrow edge case (requires companion paired + live game + manual PROS toggle with no search, all at once); flagging rather than silently deciding it either way.
+
+**Tests:** `isProsSearchEmpty` — 4 new cases in `components/__tests__/homeSearch.test.ts` (pros+null → true; pros+tracked → false; pros+link → false; champions mode → always false regardless of selectedPlayer). `npx vitest run`: 1382 passed (was 1378, baseline confirmed via `verify-fix.sh` pre-change). `npx tsc --noEmit` clean.
+
+**Prod verification (puppeteer-core + system Chrome, chrome-devtools MCP was profile-locked so used the `.smoke-tools` fallback harness per memory):**
+- Desktop 1280×800, fresh session: before toggle → hero/tabs/runes/rank-bracket all present (Viktor). Click PROS tab (nothing searched) → all four gone, "Search for a pro player" hint renders, zero console/page errors. Searched "le", picked "Lelouch" → player view renders (hero + games list), still zero champion-page leakage. Toggled back to CHAMPIONS → Viktor page fully restored (hero/tabs/runes/rank-bracket all true again) — confirms state preservation, not reset.
+- Mobile 390×844, **fresh session** (first pass reused a same-tab reload and incidentally exercised the app's own pre-existing mount-resume-from-history.state feature instead — not a bug, just the wrong test setup; redid with a brand-new browser context to get a true first-load): same result — full champion page before toggle, clean gated prompt after, full restore after toggling back. Zero console/page errors throughout every leg. Screenshots confirm `v0.44.3` in the footer.
+- Scripts used (kept in the shared `.smoke-tools/` harness for reuse): `check-v0443-pros-empty.mjs`, `check-v0443-mobile-fresh.mjs`.
+
+**Deploy:** committed as `harout_b5@live.com`, `npx vercel --prod --archive=tgz` → aliased to `coachbuild.vercel.app`, confirmed live via the smoke scripts above.
+
+**Not done:** did not add a dedicated `/history`-style URL-shareable state for the PROS-empty prompt (out of scope — matches the page's existing deliberate non-URL-backed nav design, see gotcha (p)'s design note). Did not touch the live-follow/deep-link effects at all (see traced finding above) — flagging the narrow live+PROS-empty interaction for awareness, not treating it as a defect to fix in this ship.
+
