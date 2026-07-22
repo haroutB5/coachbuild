@@ -753,7 +753,7 @@ describe("buildItemSets — archetype category lines: thin data is NEVER omitted
     expect(findBlock(sets, "Highest WPA")).toBeDefined(); // Highest WPA's own pool-size gate is untouched
   });
 
-  it("ZERO real tag-matched items, but the champion's ARCHETYPE gate is open -- still fills, exactly 6 items + exactly 1 boots, real per-champ boots folded in", () => {
+  it("ZERO real tag-matched items, but the champion's ARCHETYPE gate is open -- still fills, exactly CATEGORY_LINE_LEN (4) items + exactly 1 boots, real per-champ boots folded in", () => {
     // CHAMP.tags carries "Support" here specifically to open the Support/
     // Utility gate with zero live per-champ support-tagged data at all --
     // proving the archetype gate alone (no live-data escape hatch needed)
@@ -764,7 +764,9 @@ describe("buildItemSets — archetype category lines: thin data is NEVER omitted
     const sets = buildItemSets(champ, "Support", build, null, wideCatalogMeta());
     const support = sets[0].blocks.find((b) => b.type.startsWith("Support/Utility"))!;
     expect(support.type).toBe("Support/Utility (low data)");
-    expect(support.items).toHaveLength(6);
+    // v0.46.0 (413 payload fix): category lines cap at CATEGORY_LINE_LEN (4),
+    // not LINE_LEN (6) -- 3 non-boots fills + 1 boots.
+    expect(support.items).toHaveLength(4);
     // Real boots (items.boots = 3006, tagged Boots via bootsMeta in
     // baseItemMetaMap) is folded in as the primary boots pick -- the fill
     // never invents a boots choice when the champ's own real one is known.
@@ -791,7 +793,8 @@ describe("buildItemSets — archetype category lines: thin data is NEVER omitted
     const ad = sets[0].blocks.find((b) => b.type.startsWith("AD/Lethality"))!;
     expect(ad.type).toBe("AD/Lethality (low data)");
     expect(ad.items.map((i) => i.id)).toContain("6002");
-    expect(ad.items).toHaveLength(6);
+    // v0.46.0 (413 payload fix): category lines cap at CATEGORY_LINE_LEN (4).
+    expect(ad.items).toHaveLength(4);
   });
 });
 
@@ -948,5 +951,154 @@ describe("buildItemSets — single-set payload satisfies the wire contract (1-3 
     const build = baseBuild(baseItems());
     const sets = buildItemSets(CHAMP, "Bot", build, null, baseItemMetaMap());
     expect(sets[0].title.startsWith("CoachBuild")).toBe(true);
+  });
+});
+
+// ── v0.46.0 (413 payload fix) — Viktor category emission + byte budget ───────
+// Two things the 413 fix must guarantee, proven at the unit level (the whole
+// write is rejected on a 413, so if the payload is bounded AND the set still
+// carries its sensible category blocks, both user symptoms — "413 toast" and
+// "my Tank/Mage builds aren't in-game" — are closed by the same fix):
+//   1. A realistic pure-mage Viktor set ACTUALLY CONTAINS its AP/Mage
+//      category and correctly does NOT force Tank/AD/Attack-Speed via the
+//      curated sensible-gate (those only appear if his own real items carry
+//      the tag — the live-data escape hatch, which is intended, not a bug).
+//   2. A single champ's set — even a maximally-full one — is small enough
+//      that many of them (pre-prune) blew past the LCU limit while ONE fits
+//      comfortably. States the byte budget for the follow-up category-
+//      expansion round.
+describe("buildItemSets — v0.46.0 413 fix: Viktor category emission", () => {
+  const VIKTOR: ChampionRef = { id: 112, key: "Viktor", name: "Viktor", icon: "viktor.png", tags: ["Mage"] };
+
+  // A realistic Viktor AP core: Luden's-ish, Shadowflame, Rabadon's, Void
+  // Staff, Zhonya's (Armor — deliberately included; it's a real Viktor buy),
+  // Sorcerer's Shoes. Tags mirror a live item.json pull.
+  function viktorMeta(): Map<number, ItemDetail> {
+    return metaMap(
+      meta(1054), // Doran's Ring-ish starter (Starting never filters)
+      bootsMeta(3020, { tags: ["Boots", "MagicPenetration"] }), // Sorcerer's Shoes
+      meta(6655, { tags: ["SpellDamage", "Mana", "AbilityHaste"] }), // Luden's
+      meta(4645, { tags: ["SpellDamage", "MagicPenetration"] }), // Shadowflame
+      meta(3089, { tags: ["SpellDamage"] }), // Rabadon's
+      meta(3135, { tags: ["SpellDamage", "MagicPenetration"] }), // Void Staff
+      meta(3157, { tags: ["SpellDamage", "Armor"] }) // Zhonya's -- carries Armor
+    );
+  }
+
+  function viktorBuild(): BuildResponse {
+    const b = baseBuild(
+      baseItems({
+        starter: pick(1054),
+        boots: pick(3020, 0.05),
+        first: pick(6655, 0.09),
+        second: pick(4645, 0.08),
+        third: pick(3089, 0.07),
+        fourthPlus: [pick(3135, 0.06), pick(3157, 0.055)],
+      })
+    );
+    b.champion = VIKTOR;
+    return b;
+  }
+
+  it("Viktor (pure mage) emits the AP/Mage category via the curated sensible-gate", () => {
+    const sets = buildItemSets(VIKTOR, "Mid", viktorBuild(), null, viktorMeta());
+    const apMage = sets[0].blocks.find((bl) => bl.type.startsWith("AP/Mage"));
+    expect(apMage).toBeDefined();
+    expect(apMage!.items.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("Viktor does NOT get AD/Lethality or Attack Speed (his gates are closed and no AD/AS item is in his pool)", () => {
+    const sets = buildItemSets(VIKTOR, "Mid", viktorBuild(), null, viktorMeta());
+    const types = blockTypes(sets);
+    expect(types.some((t) => t.startsWith("AD/Lethality"))).toBe(false);
+    expect(types.some((t) => t.startsWith("Attack Speed"))).toBe(false);
+    // Support/Utility gate is also closed (Viktor utility rating is 0, no
+    // Support tag, and none of his items carry a Support-family tag).
+    expect(types.some((t) => t.startsWith("Support/Utility"))).toBe(false);
+  });
+
+  it("Viktor's Tank category appears ONLY via the live-data escape hatch (Zhonya's Armor), documented as intended not a bug", () => {
+    // With Zhonya's (Armor) in his pool, the Tank gate opens via poolLen>0
+    // even though tankiness=0 and no Tank tag -- this is the v0.43.0 live-data
+    // escape hatch working as designed. If Zhonya's is removed, Tank vanishes.
+    const withZhonya = buildItemSets(VIKTOR, "Mid", viktorBuild(), null, viktorMeta());
+    expect(blockTypes(withZhonya).some((t) => t.startsWith("Tank"))).toBe(true);
+
+    const noArmorMeta = viktorMeta();
+    noArmorMeta.set(3157, meta(3157, { tags: ["SpellDamage"] })); // strip Armor
+    const noZhonyaArmor = buildItemSets(VIKTOR, "Mid", viktorBuild(), null, noArmorMeta);
+    expect(blockTypes(noZhonyaArmor).some((t) => t.startsWith("Tank"))).toBe(false);
+  });
+});
+
+describe("buildItemSets — v0.46.0 413 fix: single-set byte budget", () => {
+  // A maximally-full set: a bruiser whose gates open Tank + AD/Lethality +
+  // Attack Speed, plus AP/Mage via a SpellDamage item in-pool (escape hatch)
+  // -> 5 eligible categories capped to CATEGORY_MAX_EMIT (4). Combined with
+  // Starting/Core/Buy order/Pro/Highest WPA/Situational, this is the largest
+  // set the CURRENT code emits (10 blocks).
+  const BRUISER: ChampionRef = { id: 999, key: "Bruiser", name: "Bruiser", icon: "b.png", tags: ["Fighter", "Tank"] };
+
+  function fullMeta(): Map<number, ItemDetail> {
+    return metaMap(
+      meta(1054),
+      bootsMeta(3111, { tags: ["Boots", "SpellBlock"] }),
+      meta(3071, { tags: ["Damage", "ArmorPenetration"] }), // AD
+      meta(6333, { tags: ["Damage", "ArmorPenetration"] }), // AD
+      meta(3153, { tags: ["AttackSpeed", "OnHit"] }), // AS
+      meta(3091, { tags: ["AttackSpeed", "OnHit"] }), // AS
+      meta(3065, { tags: ["Health", "SpellBlock"] }), // Tank
+      meta(3068, { tags: ["Health", "Armor"] }), // Tank
+      meta(3083, { tags: ["Health"] }), // Tank
+      meta(3115, { tags: ["AttackSpeed", "SpellDamage"] }), // AS + AP escape hatch
+      meta(4633, { tags: ["SpellDamage", "Health"] }) // AP + Health
+    );
+  }
+
+  it("a maximally-full single set (4 category blocks + all others) serializes well under a conservative LCU per-object budget, and reports the budget", () => {
+    const build = baseBuild(
+      baseItems({
+        boots: pick(3111, 0.05),
+        first: pick(3071, 0.09),
+        second: pick(6333, 0.08),
+        third: pick(3153, 0.07),
+        fourthPlus: [pick(3091, 0.06), pick(3065, 0.055)],
+        alts: {
+          first: [pick(3068, 0.05), pick(3083, 0.045), pick(3115, 0.04), pick(4633, 0.035)],
+        },
+      })
+    );
+    build.champion = BRUISER;
+    const pro = { items: [{ itemId: 3071, share: 0.5 }, { itemId: 6333, share: 0.3 }], boots: [{ itemId: 3111, share: 0.4 }] };
+    const sets = buildItemSets(BRUISER, "Top", build, pro, fullMeta());
+    const set = sets[0];
+
+    const categoryBlocks = set.blocks.filter((b) =>
+      /^(Tank|AP\/Mage|AD\/Lethality|Attack Speed|Support\/Utility)/.test(b.type)
+    );
+    // Confirm this really is a heavy set (the 413 fix must survive it).
+    expect(categoryBlocks.length).toBeGreaterThanOrEqual(3);
+
+    const bytes = Buffer.byteLength(JSON.stringify(set), "utf8");
+    const blockCount = set.blocks.length;
+    const perCategoryBytes = categoryBlocks.length
+      ? Math.round(categoryBlocks.reduce((s, b) => s + Buffer.byteLength(JSON.stringify(b), "utf8"), 0) / categoryBlocks.length)
+      : 0;
+    // Extrapolated ceiling for the follow-up round that raises the category
+    // count to 6: current bytes + 2 more category blocks.
+    const projected6cat = bytes + 2 * perCategoryBytes;
+
+    // eslint-disable-next-line no-console
+    console.log(
+      `[413-budget] maximal current set: ${bytes} bytes across ${blockCount} blocks ` +
+        `(${categoryBlocks.length} category blocks @ ~${perCategoryBytes}B each). ` +
+        `Projected 6-category set: ~${projected6cat} bytes.`
+    );
+
+    // A single set must be small in absolute terms -- the 413 came from
+    // ACCUMULATION (tens of these), never one set. 4KB is a very safe
+    // per-set ceiling; even a projected 6-category set stays under it.
+    expect(bytes).toBeLessThan(4096);
+    expect(projected6cat).toBeLessThan(4096);
   });
 });

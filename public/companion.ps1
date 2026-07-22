@@ -125,21 +125,25 @@ WIRE CONTRACT (must match components/live/companionClient.ts exactly):
     Merge semantics (PUT to /lol-item-sets/v1/item-sets/{id}/sets REPLACES
     THE ENTIRE object -- the #1 correctness risk): GET the full existing
     sets object first; NEVER PUT on a failed GET (-> {ok:false,
-    reason:'read-failed'}); keep every existing set whose title does NOT
-    start with the stale-removal prefix (so a CoachBuild set for a
-    DIFFERENT champion accumulates across sessions rather than being
-    wiped); replace (not duplicate) stale sets matching that prefix; PUT
-    back every other top-level field (accountId, timestamp, etc.)
-    byte-for-byte untouched.
-    v1.3.1 stale-removal prefix (live bug: a LANE FLIP, e.g. Senna Bot ->
-    Support, left BOTH "CoachBuild Senna Bot" and "CoachBuild Senna
-    Support" behind -- the OLD prefix derivation was role-scoped, derived
-    from the new set's own title): prefer the explicit `replacePrefix` the
-    web side now sends (CHAMP-SCOPED, e.g. "CoachBuild Senna " -- trailing
-    space load-bearing, see itemSetBody.ts's champScopedReplacePrefix) when
-    present; fall back to the ORIGINAL title-derived (role-scoped, em-dash-
-    stripped) prefix when absent, for back-compat with an older web build
-    or an older companion that predates this field.
+    reason:'read-failed'}); PUT back every other top-level field
+    (accountId, timestamp, etc.) byte-for-byte untouched.
+    v1.6.1 PAYLOAD-BOUND PRUNE (413 fix): keep ONLY the set(s) being written
+    this call (the CURRENT champion+role) and DROP every pre-existing
+    CoachBuild-titled set -- this champion's stale roles AND every other
+    champion's accumulated sets. The OLD behavior kept every other
+    champion's CoachBuild set forever; combined with v0.43.0's fuller
+    ~10-block sets, the whole-object PUT eventually exceeded the LCU's
+    item-sets size limit -> HTTP 413 rejected the ENTIRE write, so NONE of
+    the CoachBuild sets landed (both the "413" toast AND "my Tank/Mage
+    category builds aren't in-game" are this one rejected PUT). Keeping only
+    the current set bounds OUR payload contribution at O(1) instead of
+    O(champions ever viewed). HARD INVARIANT (SelfTest-pinned): the prune
+    boundary is the LITERAL generic prefix "CoachBuild" -- a set whose title
+    does NOT start with "CoachBuild" is NEVER dropped (the user's own
+    hand-made sets always survive byte-for-byte). `replacePrefix` is still
+    accepted + validated (wire back-compat) but is no longer the prune
+    boundary -- the generic "CoachBuild" literal drops a strict superset of
+    what any champ-scoped prefix would, exactly the payload-bounding wanted.
   - Champ-select flow is ZERO-BRIDGE: the companion opens
     "<AppOrigin>/?championId=<id>[&role=<0-4>]&session=<token>" directly via
     Start-Process. `role` is OMITTED (not a bogus value) when
@@ -225,7 +229,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.6.0'
+    Version     = '1.6.1'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -700,44 +704,54 @@ function Merge-ItemSets {
     # PUT REPLACES THE ENTIRE item-sets object -- the #1 correctness risk
     # (plan finding). Never blind-PUT: every other top-level field on the
     # GET'd object (accountId, timestamp, whatever else the client emits)
-    # passes through UNTOUCHED; only .itemSets is rebuilt. Keeps every
-    # existing set whose title does NOT start with the stale-removal prefix
-    # -- a CoachBuild set for a DIFFERENT champion accumulates across
-    # sessions instead of being wiped by an unrelated update; only stale
-    # matches are replaced, not duplicated.
+    # passes through UNTOUCHED; only .itemSets is rebuilt.
     #
-    # v1.3.1 stale-removal prefix (live bug fix -- see this file's header
-    # WIRE CONTRACT note): prefers the caller's explicit, CHAMP-SCOPED
-    # `ReplacePrefix` (e.g. "CoachBuild Senna " -- trailing space
-    # load-bearing) when supplied -- a LANE FLIP (Senna Bot -> Support) then
-    # correctly removes the OLD lane's stale set instead of leaving it
-    # alongside the new one, since both titles share this wider, champ-only
-    # prefix. Falls back to the ORIGINAL role-scoped, em-dash-derived prefix
-    # (from the new set's own title) when omitted -- back-compat with an
-    # older web build that never sends this field.
+    # v1.6.1 PAYLOAD-BOUND PRUNE (413 fix -- see this file's header WIRE
+    # CONTRACT note): the old behavior kept every existing CoachBuild set
+    # for a DIFFERENT champion+role, so a user who has been in champ select
+    # for many champions accumulated one ~10-block CoachBuild set PER
+    # champ+role, ALL of which shipped in every subsequent PUT (the endpoint
+    # replaces the whole object). v0.43.0's fuller item-set blocks pushed
+    # that combined payload past the LCU item-sets size limit -> the LCU
+    # returned HTTP 413 (Payload Too Large) and rejected the ENTIRE write,
+    # so NONE of the CoachBuild sets landed in-client (both the "413 error"
+    # toast AND the "my Tank/Mage category builds aren't in the game"
+    # reports are this one rejected PUT).
+    #
+    # New rule: keep ONLY the sets being written this call ($NewSets --
+    # always the CURRENT champion+role, 1-3 sets); drop EVERY pre-existing
+    # CoachBuild-titled set (this champion's stale roles AND every other
+    # champion's accumulated sets). This bounds OUR contribution to the
+    # payload at O(1) -- the current set(s) -- instead of O(champions ever
+    # viewed). Cross-champion persistence had near-zero value (you play one
+    # champion per game and re-push its build on the next champ-select) and
+    # was the entire source of the unbounded growth. Keeping only the
+    # current set is strictly safer against 413 than any "keep N recent"
+    # cap.
+    #
+    # HARD INVARIANT (SelfTest-pinned, do NOT weaken): the prune boundary is
+    # the LITERAL generic prefix "CoachBuild". A set whose title does NOT
+    # start with "CoachBuild" is NEVER dropped -- the user's own hand-made
+    # sets pass through byte-for-byte, always. Our own writes are all
+    # required to start with "CoachBuild" (Test-ItemSetsPayload enforces it),
+    # so this generic boundary cleanly separates "ours, prunable" from
+    # "theirs, sacred" without needing the champ-scoped prefix at all.
+    #
+    # $ReplacePrefix is still accepted + validated upstream (wire back-compat
+    # with the web side, which keeps sending champScopedReplacePrefix) but is
+    # no longer the prune boundary: the generic "CoachBuild" literal drops a
+    # strict superset of what any champ-scoped prefix would, which is exactly
+    # the payload-bounding we now want.
     param($ExistingSetsObject, $NewSets, $ReplacePrefix = $null)
     $newArr = @($NewSets)
-    $prefix = $null
-    if ($ReplacePrefix) {
-        $prefix = [string]$ReplacePrefix
-    } else {
-        # NOTE: matches the U+2014 EM DASH via a \uXXXX regex escape, NEVER a
-        # literal non-ASCII byte in this file's own source -- this script has
-        # no reliable BOM/encoding guarantee served over irm|iex (a literal
-        # non-ASCII char here previously broke this file's OWN tokenizer
-        # under a misdetected codepage). The title strings THEMSELVES (JSON
-        # sent from the web side at runtime, e.g. "CoachBuild Viktor Mid
-        # <U+2014> Core") still carry a real em dash -- this escape matches
-        # it fine. Pre-1.3.1 web builds ship a NO-suffix title
-        # ("CoachBuild <champ> <role>", no em dash at all) -- the regex
-        # simply doesn't match anything in that case, so $prefix ends up
-        # being the full, role-scoped title unchanged, exactly the old
-        # per-champ+role (not per-champ) behavior this fallback preserves.
-        $prefix = ([string]$newArr[0].title) -replace ('\s+' + [char]0x2014 + '.*$'), ''
-    }
     $rawExisting = $ExistingSetsObject.itemSets
     $existingArr = if ($rawExisting) { @($rawExisting) } else { @() }
-    $kept = @($existingArr | Where-Object { -not ([string]$_.title).StartsWith($prefix) })
+    # Keep every NON-CoachBuild set untouched (the hard invariant); drop
+    # every pre-existing CoachBuild set (all of ours are being superseded by
+    # $newArr or are stale accumulation). A null/empty title is treated as
+    # NOT-ours and kept -- we only ever prune something we can positively
+    # identify as a CoachBuild set.
+    $kept = @($existingArr | Where-Object { -not ($_.title -and ([string]$_.title).StartsWith('CoachBuild')) })
     $merged = $kept + $newArr
     $result = $ExistingSetsObject.PSObject.Copy()
     $result | Add-Member -NotePropertyName itemSets -NotePropertyValue $merged -Force
@@ -2068,11 +2082,13 @@ function Invoke-SelfTest {
         if ($mockLcu.Sync.LastPutBody) { $failures.Add('apply-itemsets issued a PUT for a non-CoachBuild-titled set') }
     } catch { $failures.Add("apply-itemsets malicious title threw: $($_.Exception.Message)") }
 
-    # 6f. v1.3.1 -- champ-scoped `replacePrefix` stale removal (live bug
-    # fix): a LANE FLIP (Senna Bot -> Support) must remove BOTH the
-    # old-lane title AND an old-3-set-era title for the SAME champion, while
-    # NEVER touching a non-CoachBuild set or a DIFFERENT champion's
-    # CoachBuild set.
+    # 6f. v1.6.1 -- PAYLOAD-BOUND PRUNE (413 fix, supersedes the v1.3.1
+    # champ-scoped semantics this test used to assert): a write now keeps
+    # ONLY the set(s) being written and drops EVERY pre-existing CoachBuild
+    # set. So a Senna Support write removes the old Senna-Bot titles (as
+    # before) AND now ALSO prunes a DIFFERENT champion's stale CoachBuild
+    # set (CoachBuild Viktor Mid) to bound the payload -- while STILL never
+    # touching a non-CoachBuild (user) set.
     $mockLcu.Sync.ExistingItemSets = [pscustomobject]@{
         accountId = 12345
         timestamp = 1700000000
@@ -2100,7 +2116,10 @@ function Invoke-SelfTest {
             if ($putTitles -contains "CoachBuild Senna Bot $([char]0x2014) Core") { $failures.Add('apply-itemsets replacePrefix lane-flip left an old-3-set-era title behind') }
             if ($putTitles -notcontains 'CoachBuild Senna Support') { $failures.Add('apply-itemsets replacePrefix lane-flip did not write the new lane set') }
             if ($putTitles -notcontains 'My Custom Build') { $failures.Add('apply-itemsets replacePrefix lane-flip dropped a non-CoachBuild set') }
-            if ($putTitles -notcontains 'CoachBuild Viktor Mid') { $failures.Add('apply-itemsets replacePrefix lane-flip touched a DIFFERENT champion''s CoachBuild set') }
+            # v1.6.1: the DIFFERENT champion's stale CoachBuild set is now
+            # PRUNED (payload-bound), not preserved -- the whole point of the
+            # 413 fix. Its survival used to be asserted here; now its removal is.
+            if ($putTitles -contains 'CoachBuild Viktor Mid') { $failures.Add('apply-itemsets 413-prune did NOT remove a different champion''s stale CoachBuild set') }
         }
     } catch { $failures.Add("apply-itemsets replacePrefix lane-flip threw: $($_.Exception.Message)") }
 
@@ -2114,6 +2133,53 @@ function Invoke-SelfTest {
         if ($obj.ok -ne $false -or $obj.reason -ne 'invalid-sets') { $failures.Add("apply-itemsets bad replacePrefix expected invalid-sets rejection, got $($r.Content)") }
         if ($mockLcu.Sync.LastPutBody) { $failures.Add('apply-itemsets issued a PUT with an invalid replacePrefix') }
     } catch { $failures.Add("apply-itemsets bad replacePrefix threw: $($_.Exception.Message)") }
+
+    # 6i. v1.6.1 -- PAYLOAD-BOUND PRUNE (413 fix): an accumulated pile of 15
+    # CoachBuild sets (many different champions+roles) + 3 user sets must,
+    # after ONE write of the current champion, collapse to exactly the
+    # current CoachBuild set(s) + all 3 user sets preserved byte-for-byte.
+    # This is the whole 413 defence: OUR contribution to the PUT is bounded
+    # at the current set(s), never O(champions ever viewed). The hard
+    # invariant still holds -- zero user (non-CoachBuild) sets removed.
+    $userSetsFixture = @(
+        [pscustomobject]@{ uid = 'user-a'; title = 'My Poke Build'; type = 'custom'; blocks = @() }
+        [pscustomobject]@{ uid = 'user-b'; title = 'ARAM Full AP'; type = 'custom'; blocks = @() }
+        [pscustomobject]@{ uid = 'user-c'; title = 'Split Push Set'; type = 'custom'; blocks = @() }
+    )
+    $accumulatedCoach = @(1..15 | ForEach-Object {
+        [pscustomobject]@{ uid = "coachbuild-champ$_-role"; title = "CoachBuild Champ$_ Mid $([char]0x2014) Core"; type = 'custom'; blocks = @() }
+    })
+    $mockLcu.Sync.ExistingItemSets = [pscustomobject]@{
+        accountId = 55555
+        timestamp = 1700009999
+        itemSets  = @($userSetsFixture + $accumulatedCoach)
+    }
+    $currentSet = @(
+        [pscustomobject]@{ uid = 'coachbuild-viktor-mid'; title = "CoachBuild Viktor Mid $([char]0x2014) Core"; type = 'custom'; map = 'any'; mode = 'any'; associatedMaps = @(); associatedChampions = @(112); preferredItemSlots = @(); sortrank = 0; blocks = @(@{ type = 'Core build'; items = @(@{ id = '3020'; count = 1 }) }) }
+    )
+    $mockLcu.Sync.LastPutBody = $null
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-itemsets?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes((@{ championId = 112; sets = $currentSet; replacePrefix = 'CoachBuild Viktor ' } | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if (-not $obj.ok -or $obj.count -ne 1) { $failures.Add("apply-itemsets 413-prune expected ok:true count:1, got $($r.Content)") }
+        if (-not $mockLcu.Sync.LastPutBody) {
+            $failures.Add('apply-itemsets 413-prune never issued a PUT')
+        } else {
+            $putObj = $mockLcu.Sync.LastPutBody | ConvertFrom-Json
+            $putTitles = @($putObj.itemSets | ForEach-Object { $_.title })
+            $coachAfter = @($putTitles | Where-Object { $_ -and ([string]$_).StartsWith('CoachBuild') })
+            $userAfter = @($putTitles | Where-Object { -not ($_ -and ([string]$_).StartsWith('CoachBuild')) })
+            if ($coachAfter.Count -ne 1) { $failures.Add("apply-itemsets 413-prune should leave exactly 1 CoachBuild set (the current one), got $($coachAfter.Count)") }
+            if ($putTitles -notcontains "CoachBuild Viktor Mid $([char]0x2014) Core") { $failures.Add('apply-itemsets 413-prune dropped the current CoachBuild set') }
+            if ($userAfter.Count -ne 3) { $failures.Add("apply-itemsets 413-prune must preserve all 3 user sets, got $($userAfter.Count)") }
+            foreach ($t in @('My Poke Build', 'ARAM Full AP', 'Split Push Set')) {
+                if ($putTitles -notcontains $t) { $failures.Add("apply-itemsets 413-prune dropped user set '$t'") }
+            }
+            # Total sets in the PUT must be bounded (3 user + 1 current = 4),
+            # NOT the pre-existing 18 -- the payload-bounding guarantee.
+            if (@($putObj.itemSets).Count -ne 4) { $failures.Add("apply-itemsets 413-prune payload not bounded: expected 4 total sets, got $(@($putObj.itemSets).Count)") }
+        }
+    } catch { $failures.Add("apply-itemsets 413-prune threw: $($_.Exception.Message)") }
 
     # 6h. v1.5.1 -- apply-runes create-failed (CoachBuild-page-replace path:
     # DELETE succeeds, the follow-up POST is rejected by the LCU) now

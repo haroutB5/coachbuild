@@ -148,6 +148,19 @@ export interface ProConsensusItemsInput {
 }
 
 const LINE_LEN = 6;
+/** v0.46.0 (413 payload fix, lever 2) — the archetype CATEGORY lines
+ *  (Tank / AP/Mage / AD/Lethality / Attack Speed / Support-Utility) are
+ *  capped SHORTER than the primary build lines: 4 items (3 core items + 1
+ *  boots) instead of 6. A category line is a "if you want to itemize this
+ *  way, here are the key pieces" hint, not a full recommended build — its
+ *  first 3-4 items already carry the archetype intent, and the extra 2
+ *  slots were mostly padding that inflated every set's byte size. Trimming
+ *  them (and NOT the real Core/Buy order/Pro/Highest WPA lines, which stay
+ *  at LINE_LEN) shrinks each CoachBuild set enough that even several sets
+ *  stay well under the LCU item-sets PUT size limit that was returning 413
+ *  (see companion.ps1's Merge-ItemSets for the complementary set-count
+ *  bound). The 1-boots rule is preserved. */
+const CATEGORY_LINE_LEN = 4;
 const SITUATIONAL_CAP = 6;
 /** A themed line (Highest WPA / Tanky / Burst) is omitted entirely rather
  *  than padded with off-theme junk when fewer than this many qualifying
@@ -357,7 +370,8 @@ function findBestBoots(
 function buildLine(
   primary: Candidate[],
   fallbackPools: Candidate[][],
-  bootsIds: ReadonlySet<number>
+  bootsIds: ReadonlySet<number>,
+  lineLen: number = LINE_LEN
 ): Candidate[] {
   const dedup = dedupeById(primary);
   const primaryBoots = dedup.filter((c) => bootsIds.has(c.id));
@@ -375,7 +389,7 @@ function buildLine(
     if (boots) used.add(boots.id);
   }
 
-  const target = LINE_LEN - (boots ? 1 : 0);
+  const target = lineLen - (boots ? 1 : 0);
   for (const pool of fallbackPools) {
     if (others.length >= target) break;
     for (const cand of pool) {
@@ -504,7 +518,9 @@ function buildCategoryLine(
     const overallBoots =
       pool.filter((c) => bootsIds.has(c.id)).sort((a, b) => b.weight - a.weight)[0] ?? null;
     const boots = themedBoots ?? overallBoots;
-    const target = LINE_LEN - (boots ? 1 : 0);
+    // v0.46.0: category lines are capped at CATEGORY_LINE_LEN (4), not
+    // LINE_LEN (6) — see the constant's doc comment (413 payload fix).
+    const target = CATEGORY_LINE_LEN - (boots ? 1 : 0);
     const top = nonBoots.slice(0, target);
     if (!boots) return { line: top, lowData: false };
     const insertAt = Math.min(3, top.length);
@@ -517,7 +533,8 @@ function buildCategoryLine(
 
   const taggedDefaults = categoryDefaultPool(itemMeta, tagSet);
   const anyDefaults = categoryDefaultPool(itemMeta, null);
-  const line = buildLine(primary, [taggedDefaults, anyDefaults], bootsIds);
+  // v0.46.0: category lines fill to CATEGORY_LINE_LEN (4), not LINE_LEN (6).
+  const line = buildLine(primary, [taggedDefaults, anyDefaults], bootsIds, CATEGORY_LINE_LEN);
   return { line, lowData: true };
 }
 
