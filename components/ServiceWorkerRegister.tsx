@@ -16,8 +16,27 @@ import { useEffect, useState, useRef } from "react";
 // below. A first-ever install (no existing controller yet) is unaffected: the
 // browser activates it immediately since there's nothing to wait for, so no
 // toast appears on a fresh install.
+// sessionStorage key: once the user dismisses the update toast, keep it hidden
+// for the rest of this tab session (survives the network-first re-renders, not
+// a full reload). During a heavy deploy day every new version legitimately
+// re-triggers the prompt; a session-scoped dismiss lets the user silence the
+// nag without a disruptive mid-champ-select refresh, while a fresh tab still
+// surfaces genuinely new versions. The app is network-first, so a dismissed
+// SW update just means slightly stale cached assets until the next natural load.
+const SW_TOAST_DISMISSED_KEY = "coachbuild:swUpdateDismissed";
+
 export default function ServiceWorkerRegister() {
   const [waitingWorker, setWaitingWorker] = useState<ServiceWorker | null>(null);
+  const [dismissed, setDismissed] = useState(false);
+
+  // Hydrate the dismissed flag from sessionStorage on mount (SSR-safe).
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem(SW_TOAST_DISMISSED_KEY) === "1") setDismissed(true);
+    } catch {
+      /* sessionStorage unavailable (private mode / disabled) — just show the toast */
+    }
+  }, []);
   // Loop guard for the controllerchange -> reload below: controllerchange can
   // in principle fire more than once in a session (another tab could also
   // trigger the same skipWaiting), and a reload-on-every-fire would loop.
@@ -84,11 +103,20 @@ export default function ServiceWorkerRegister() {
     };
   }, []);
 
-  if (!waitingWorker) return null;
+  if (!waitingWorker || dismissed) return null;
 
   function applyUpdate() {
     updateRequestedRef.current = true;
     waitingWorker?.postMessage("SKIP_WAITING");
+  }
+
+  function dismiss() {
+    setDismissed(true);
+    try {
+      sessionStorage.setItem(SW_TOAST_DISMISSED_KEY, "1");
+    } catch {
+      /* best-effort — the in-memory state already hides it this render */
+    }
   }
 
   return (
@@ -103,6 +131,14 @@ export default function ServiceWorkerRegister() {
         className="text-[12px] font-semibold text-bg bg-teal hover:bg-teal-hover rounded-lg px-3 py-1 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
       >
         Refresh
+      </button>
+      <button
+        type="button"
+        onClick={dismiss}
+        aria-label="Dismiss update notification"
+        className="text-mut hover:text-txt text-[15px] leading-none px-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel rounded"
+      >
+        &times;
       </button>
     </div>
   );

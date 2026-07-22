@@ -2,6 +2,10 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.48.5] — 2026-07-22 (companion unchanged at 1.6.3)
+### Added — dismiss ("×") on the "Update ready" service-worker toast
+- User-reported: the "Update ready / Refresh" PWA update prompt felt stuck (it re-appears after each refresh — expected, since every new deploy is a legit new version, and ~20 shipped today — but there was no way to close it without a disruptive refresh mid-champ-select). Added a "×" dismiss button (`components/ServiceWorkerRegister.tsx`) that hides the toast for the rest of the tab session via `sessionStorage` (`coachbuild:swUpdateDismissed`). A fresh tab still surfaces genuinely new versions; the app is network-first so a dismissed SW update only means slightly stale cached assets until the next natural load. The Refresh/skip-waiting/controllerchange-reload flow is unchanged.
+
 ## [0.48.4] — 2026-07-24 (WEB-ONLY — no companion change, no re-install)
 ### Fixed — "Apply pro runes" used the WPA build's shards instead of the actual pro shards
 - **User-reported (Senna Pro page):** the pro consensus for Senna's offense shard slot IS Attack Speed, but applying the pro rune page wrote the WPA-recommended build's shard (Adaptive Force) instead.
