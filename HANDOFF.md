@@ -7618,3 +7618,121 @@ The shared tree's own `verify-fix.sh` run FAILED at the build step (`gamesTotal,
 No on-device confirmation this fixes the user's original report (per the task's own directive, shipped without it) — the fix closes every hint-less `ok:false` gap found by exhaustive audit of `public/companion.ps1`, and the ranked-suspects list from the v0.43.0 round (no-client most likely, write-failed second) both now surface distinctly in the toast/error log going forward. If the report recurs, `/live-setup`'s "Recent errors" panel (v0.43.0) should now show exactly which of these four paths it is, or reveal a fifth path this audit didn't catch.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-22 08:52
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-21 23:03:57Z; previous content preserved there. Append new rounds below. -->
+
+## v0.44.3 (2026-07-22) — PROS mode no longer shows the champion page underneath
+
+**User report (mobile screenshot):** switching the sidebar search to PROS mode left the entire champion page (hero, BUILD/PRO BUILDS tabs, rank bracket, runes, every card) rendering in the main area until a player was picked. v0.22.1 had already hidden LANES in pros mode, but the main content was never gated.
+
+**Root cause traced:** `deriveMainView` (`components/hextech/homeSearch.ts`) has *always* intentionally kept carrying the champion view's real state (`champ`/`activeLane`) while PROS mode has nothing picked yet — that's what makes the CHAMPIONS↔PROS toggle round-trip losslessly (see its own pre-existing test: "renders the champion view in PROS mode when no player has been selected yet"). Nothing downstream ever used `searchMode` itself as a render signal — `app/page.tsx`'s composition switched purely on `mainView.kind`, which is `"champion"` whenever `selectedPlayer` is `null`, regardless of `searchMode`.
+
+**Fix (render gate only, state untouched):**
+- New pure fn `isProsSearchEmpty(mode, selectedPlayer)` in `components/hextech/homeSearch.ts` — `true` iff `mode === "pros" && selectedPlayer === null`. Does not touch `deriveMainView`, `MainView`, `WireMainView`, or any history/wire logic — those all behave byte-identically to before.
+- `app/page.tsx`: `const showProsSearchPrompt = isProsSearchEmpty(searchMode, selectedPlayer)`, checked *ahead of* `mainView.kind` in the single `<main>` composition block (shared by both the collapsed-mobile and desktop `Sidebar` renders — confirmed breakpoint-agnostic by construction, not by duplicated logic).
+- New `components/hextech/ProsSearchPrompt.tsx` — quiet centered card (`bg-panel border border-line rounded-xl p-10 text-center`, the exact same empty-state shape `PlayerGamesSection.tsx` already uses) with a "Search for a pro player" hint, plus `FavoritePlayerChips` (reused as-is, renders nothing when there are no favorites). Tapping a chip calls `handlePlayerSelect` directly — the SAME handler the sidebar dropdown pick calls, so it's byte-identical (same PROS landing, same `wireViewForPlayer` history push).
+
+**History/back-nav:** unaffected. Mode-toggle-alone still pushes zero history entries (v0.23.0 policy, untouched — the gate reads live `searchMode`/`selectedPlayer` state, not a history entry). A real player selection still pushes via the existing `wireViewForPlayer`/`sheetNav.pushSelection` path.
+
+**Traced per brief item 5 — deep-link mount effect + champSelectFollow live-follow (both left untouched, zero lines changed):**
+- The mount effect's role-bearing AND role-less branches both call `setSearchMode("champions")` on every deep-link fire — so a deep link always force-exits PROS mode before my gate is even evaluated. No interaction.
+- The companion champ-select **live-follow tick effect** (`companion.tick` dependency) does NOT call `setSearchMode` — it only updates `champ`/`activeLane` + `sheetNav.replaceSelection(...)`. Finding: if a user manually flips the sidebar to PROS (nothing searched) while a paired live game's champ-select hover/lock changes mid-session, the follow effect still correctly updates `champ`/`activeLane` in the background (verified — `mostPlayedLaneRequestRef`/`replaceSelection` machinery untouched), but the new prompt now stays visible instead of the champion page silently reappearing underneath. This is a deliberate consequence of the user's directive being unconditional ("when searching for pro players, don't show the champion page UI") — the followed champion is never lost, it reappears immediately and correctly the moment the user flips back to CHAMPIONS or picks a player. Narrow edge case (requires companion paired + live game + manual PROS toggle with no search, all at once); flagging rather than silently deciding it either way.
+
+**Tests:** `isProsSearchEmpty` — 4 new cases in `components/__tests__/homeSearch.test.ts` (pros+null → true; pros+tracked → false; pros+link → false; champions mode → always false regardless of selectedPlayer). `npx vitest run`: 1382 passed (was 1378, baseline confirmed via `verify-fix.sh` pre-change). `npx tsc --noEmit` clean.
+
+**Prod verification (puppeteer-core + system Chrome, chrome-devtools MCP was profile-locked so used the `.smoke-tools` fallback harness per memory):**
+- Desktop 1280×800, fresh session: before toggle → hero/tabs/runes/rank-bracket all present (Viktor). Click PROS tab (nothing searched) → all four gone, "Search for a pro player" hint renders, zero console/page errors. Searched "le", picked "Lelouch" → player view renders (hero + games list), still zero champion-page leakage. Toggled back to CHAMPIONS → Viktor page fully restored (hero/tabs/runes/rank-bracket all true again) — confirms state preservation, not reset.
+- Mobile 390×844, **fresh session** (first pass reused a same-tab reload and incidentally exercised the app's own pre-existing mount-resume-from-history.state feature instead — not a bug, just the wrong test setup; redid with a brand-new browser context to get a true first-load): same result — full champion page before toggle, clean gated prompt after, full restore after toggling back. Zero console/page errors throughout every leg. Screenshots confirm `v0.44.3` in the footer.
+- Scripts used (kept in the shared `.smoke-tools/` harness for reuse): `check-v0443-pros-empty.mjs`, `check-v0443-mobile-fresh.mjs`.
+
+**Deploy:** committed as `harout_b5@live.com`, `npx vercel --prod --archive=tgz` → aliased to `coachbuild.vercel.app`, confirmed live via the smoke scripts above.
+
+**Not done:** did not add a dedicated `/history`-style URL-shareable state for the PROS-empty prompt (out of scope — matches the page's existing deliberate non-URL-backed nav design, see gotcha (p)'s design note). Did not touch the live-follow/deep-link effects at all (see traced finding above) — flagging the narrow live+PROS-empty interaction for awareness, not treating it as a defect to fix in this ship.
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-22 09:12
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-21 23:43:37Z; previous content preserved there. Append new rounds below. -->
+
+## v0.45.0 (2026-07-22) — champ select opens Builds + /draft as two simultaneous pages, companion 1.6.0
+
+**User directive (verbatim intent):** "create a new browser page for it, if the page open isnt already a champ select... open two pages simultaneously, one for champ runes and items and another for the draft as the main focus page." Implemented exactly per the design Urgot specced — no scope deviation.
+
+### Full open-decision table (Update-ChampSelectState, companion.ps1)
+
+Fires only when the pre-existing champion-change debounce admits a NEW resolution (unchanged semantics — no new per-tick open loop was added; a champion CHANGE mid-select still only triggers this path, and a page missing at that moment is not retro-opened later in the same champ select).
+
+| Builds attached | Draft attached | Action |
+|---|---|---|
+| no | no | open Builds **first**, then `/draft` **last** (Start-Process order = best-effort OS focus order → user directive's "draft as main focus" satisfied in the common case) |
+| no | yes | open Builds only |
+| yes | no | open `/draft` only (this necessarily focuses the *new* Builds tab instead — an unavoidable Start-Process consequence, not a violation of the directive; the "draft as main focus" preference is specifically about the both-missing row above) |
+| yes | yes | no opens (both tabs already live-follow via their own `/status` polls, identical to pre-1.6.0 single-page behavior) |
+
+"Attached" = a follow-capable poll (`follow=builds` / `follow=draft`) landed within the last 8s (`Test-CompanionHasAttachedTab -Kind`, per-kind fields `$Sync.LastBuildsFollowAt` / `$Sync.LastDraftFollowAt`, replacing the single v1.5.0 `LastFollowPollAt`).
+
+### Back-compat matrix (verified, not just asserted)
+
+| Web build | Companion | Verified behavior |
+|---|---|---|
+| old (pre-1.6.0, sends bare `follow=1`) | new (1.6.0) | `-SelfTest`'s new "follow=<kind> stamping" case confirms `follow=1` stamps `LastBuildsFollowAt` only, never `LastDraftFollowAt` → Builds stays suppressed when that legacy tab is open; `/draft` has no way to ever appear attached to an old web build, so it opens fresh on every champ-select entry (a new tab each time — intentional, not a bug: an old web build structurally cannot declare a `/draft` tab attached) |
+| new (0.45.0) | old (pre-1.6.0, checks `follow=1` exactly — confirmed by reading the *old* companion's `/status` handler logic before this change: `if ($req.QueryString['follow'] -eq '1')`) | `follow=builds`/`follow=draft` never equal the literal string `'1'`, so an old companion never sees either page as attached → it falls to its own single-page open logic, i.e. opens Builds only, same degrade as every pre-1.3.0 companion. No `/draft` open happens against an old companion (it has no code path that knows the URL exists) — this is the SAFE direction of the mismatch. |
+| new | new | Full two-page behavior, both directions of the table above verified via `-Mock`'s dedicated "Attached-tab gate" scenarios (neither/draft-only/builds-only/both attached, plus both-stale resume) and `-SelfTest`'s real-HTTP round trip through the bridge's own query-string parsing. |
+
+**Users must re-run the companion install one-liner** (irm\|iex — a locally cached copy never self-updates) to pick up 1.6.0. Until they do, they sit on the "old companion" row above: Builds-only opens, unchanged from before this ship — never a regression, never tab-spam.
+
+### What the user should observe on their next Practice Tool game
+
+1. Companion tray shows the update (or they re-run the install one-liner if the auto-updater hasn't picked it up yet — confirm `/status`'s `version` reads `1.6.0`, or check the tray tooltip).
+2. Enter champ select with no CoachBuild tabs open at all → **two new browser tabs open**: Builds (runes/items for the resolved champion) and `/draft` — `/draft` should land as the focused/frontmost tab in the common case (OS-dependent, best-effort per Start-Process semantics, documented as such rather than guaranteed).
+3. If they already have `/draft` open and pinned from a previous game, entering a fresh champ select should open **only** the Builds tab (not a second `/draft`).
+4. If they already have the Builds tab open (e.g. manually browsing champions pre-game) and hover/lock a champion, only `/draft` opens fresh.
+5. If both are already open and polling, nothing new opens — both simply live-update via their own poll (Builds via its existing follow effect, `/draft` via its live-sync effect), exactly as before this ship.
+6. A champion SWAP mid-champ-select (e.g. hover Ahri then swap to Le Blanc) still only opens whatever's missing at THAT moment — a page that was open for Ahri and got closed manually before the swap will reopen for Le Blanc; a page still open stays suppressed.
+
+### Verification
+
+- `powershell.exe -File public/companion.ps1 -Mock` → `MOCK RUN PASSED` (Windows PowerShell 5.1, per repo gotcha — pwsh isn't installed in this environment, only `powershell.exe` 5.1.26100 was available and used for both harnesses).
+- `powershell.exe -File public/companion.ps1 -SelfTest` → `SELFTEST PASSED` (real HttpListener bridge + mock LCU; new case round-trips real HTTP requests through the bridge's actual query-string parsing for `follow=builds`/`follow=draft`/no-follow/legacy `follow=1`).
+- `public/companion.ps1` confirmed 100% ASCII (byte-scanned, 0 bytes >127) after all edits — the hard project gotcha.
+- `npx vitest run`: 1391 passed (baseline 1382, +9 net: `followKindForRoute` 7 cases + widened `follow=<kind>` plumbing tests).
+- `bash scripts/verify-fix.sh <coachbuild>`: ALL CHECKS PASSED (tsc -b, lint, tests, build, sw versioning, manifest).
+
+### Gotcha hit: stale `tsconfig.tsbuildinfo` produced 2 false-positive tsc errors
+
+`verify-fix.sh` runs `npx tsc -b` (incremental build mode); it initially reported 2 errors in `components/hextech/proConsensus.ts` (`number` not assignable to `TreeId`) that do **not** reproduce under the project's own `npm run typecheck` (`tsc --noEmit`, no `-b`) — confirmed genuinely spurious by running `npx tsc -b --force`, which passed clean and, having refreshed the incremental cache, made a subsequent plain `npx tsc -b` also pass clean. Root cause: a stale `tsconfig.tsbuildinfo` incrementally cached against an earlier state of a file I never touched. Fixed via `--force` (rebuilds the cache) rather than deleting the file — the safety gate blocks bare `rm`/`rm -f` on this file and per protocol I did not route around it; `--force` sidesteps the need entirely. **Worth a standing note for verify-fix.sh**: if `tsc -b` fails but `tsc --noEmit` on the same file passes, try `tsc -b --force` before concluding it's a real regression — this cost real time chasing a phantom error in code outside this ship's diff.
+
+### Found but out of scope: the tree was not actually clean at dispatch
+
+The brief stated "HEAD = v0.44.3 prod, clean tree." At the start of this round, `git status` showed uncommitted, in-progress changes to `components/hextech/proConsensus.ts`, `ProConsensusCard.tsx`, `ProsSearchPrompt.tsx`, `PlayerHero.tsx`, `components/FavoritePlayerChips.tsx`, `components/hextech/homeSearch.ts`, `components/__tests__/homeSearch.test.ts`, plus `HANDOFF.md`/`HANDOFF-fronty.md` — none of which I touched, and none of which are part of this ship's scope (PRO-search/rune-apply work, judging by the file set — looks like a continuation of the already-shipped v0.44.3 `isProsSearchEmpty` feature). Their mtimes (09:07-09:08) were live during my own session, suggesting another agent may have been mid-edit in this same working directory concurrently.
+
+I deliberately did **not** touch, revert, or commit those files — `verify-fix.sh` passing with them present (1391 tests green, clean build) means they're not blocking my ship, but I only `git add`ed and committed the files in THIS ship's actual scope (companion.ps1, companionClient.ts, CompanionProvider.tsx, app/draft/page.tsx, companionClient.test.ts, package.json, CHANGELOG.md, HANDOFF-engy.md). **Caveat for the deploy step:** `npx vercel --prod --archive=tgz` archives the whole working directory as-is, not git HEAD — so those uncommitted files WILL be included in the prod deploy regardless of git commit scope, since there is no way to deploy "only my files" via the archive path. Flagging this clearly so Urgot/fronty aren't surprised if prod shows PRO-search-adjacent behavior beyond this ship's diff — I have no visibility into whether that other work was finished/intended-to-ship or a genuine mid-flight WIP.
+
+
+

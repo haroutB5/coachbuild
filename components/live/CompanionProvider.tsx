@@ -30,10 +30,16 @@
 // Test-CompanionHasAttachedTab used to treat ANY recent /status poll as
 // proof a tab would live-follow, so opening champ select with e.g.
 // /live-setup open silently suppressed the deep-link open. This poll now
-// appends `follow=1` only when the CURRENT route is follow-capable
-// (isFollowCapableRoute, companionClient.ts) — see the followRef below.
-// This is purely about what query string the poll sends; it does NOT
-// change when/whether the tick fires, and must not reorder anything below.
+// appends `follow=1` only when the CURRENT route is follow-capable.
+//
+// v1.6.0 ("two pages simultaneously" ship): the boolean became a KIND —
+// `follow=builds` (`/`) or `follow=draft` (`/draft`), via followKindForRoute
+// (companionClient.ts) — see the followRef below. companion.ps1 now tracks
+// each page's attachment independently (Test-CompanionHasAttachedTab -Kind)
+// so it can open whichever of the two is MISSING rather than treating either
+// tab as proof the other doesn't need opening. This is purely about what
+// query string the poll sends; it does NOT change when/whether the tick
+// fires, and must not reorder anything below.
 //
 // Round-B P1 regression note (CRITICAL — do not simplify away): the original
 // bug was "the driven-mark only fires inside the follow's target branch,"
@@ -54,9 +60,10 @@ import {
   getStoredSession,
   setStoredSession,
   refreshStatus,
-  isFollowCapableRoute,
+  followKindForRoute,
   COMPANION_STATUS_POLL_MS,
   type CompanionChampSelectSnapshot,
+  type FollowKind,
 } from "./companionClient";
 import { noteCompanionPhase, markCompanionDriven, setCurrentChampSelectChampionId } from "./champSelectFollowState";
 import { resolveCurrentChampSelectChampionId } from "./champSelectFollow";
@@ -105,17 +112,18 @@ export default function CompanionProvider({ children }: { children: ReactNode })
   const [clientConnected, setClientConnected] = useState(false);
   const [tick, setTick] = useState(0);
 
-  // v1.5.0 (attached-tab fix, see companionClient.ts's isFollowCapableRoute):
-  // which route is current, read fresh by every poll tick via a ref rather
-  // than added to the poll effect's own dependency array below — a client
-  // nav between two follow-capable-or-not routes must NOT restart the poll
-  // interval (that would perturb the tick cadence the Round-B P1 fix and
-  // /draft's live-sync both depend on), it only needs the NEXT tick to send
-  // the correct `follow` flag.
+  // v1.5.0 (attached-tab fix), widened to page IDENTITY in v1.6.0 (see
+  // companionClient.ts's followKindForRoute): which route is current, read
+  // fresh by every poll tick via a ref rather than added to the poll
+  // effect's own dependency array below — a client nav between two
+  // follow-capable-or-not routes must NOT restart the poll interval (that
+  // would perturb the tick cadence the Round-B P1 fix and /draft's
+  // live-sync both depend on), it only needs the NEXT tick to send the
+  // correct `follow` kind.
   const pathname = usePathname();
-  const followRef = useRef(isFollowCapableRoute(pathname));
+  const followRef = useRef<FollowKind>(followKindForRoute(pathname));
   useEffect(() => {
-    followRef.current = isFollowCapableRoute(pathname);
+    followRef.current = followKindForRoute(pathname);
   }, [pathname]);
 
   // Hydrate any previously-paired session on mount. A companion-opened deep

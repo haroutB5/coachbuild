@@ -24,6 +24,7 @@ import {
   getAutoItemSetsEnabled,
   setAutoItemSetsEnabled,
   isFollowCapableRoute,
+  followKindForRoute,
   recordCompanionError,
   getCompanionErrorLog,
   clearCompanionErrorLog,
@@ -564,60 +565,102 @@ describe("companionClient — isFollowCapableRoute", () => {
   });
 });
 
-describe("companionClient — follow=1 query param plumbing (v1.5.0)", () => {
+describe("companionClient — followKindForRoute (v1.6.0 page identity)", () => {
+  it("maps '/' to 'builds'", () => {
+    expect(followKindForRoute("/")).toBe("builds");
+  });
+
+  it("maps '/draft' to 'draft'", () => {
+    expect(followKindForRoute("/draft")).toBe("draft");
+  });
+
+  it("maps every other route to null (the reported bug: /live-setup)", () => {
+    expect(followKindForRoute("/live-setup")).toBeNull();
+    expect(followKindForRoute("/mystats")).toBeNull();
+    expect(followKindForRoute("/history")).toBeNull();
+    expect(followKindForRoute("/movers")).toBeNull();
+  });
+
+  it("does not prefix-match — a nested path under a follow-capable route maps to null", () => {
+    expect(followKindForRoute("/draft/something")).toBeNull();
+  });
+
+  it("maps null/undefined to null (usePathname can return null during a transition)", () => {
+    expect(followKindForRoute(null)).toBeNull();
+    expect(followKindForRoute(undefined)).toBeNull();
+  });
+
+  it("isFollowCapableRoute stays a pure boolean wrapper over followKindForRoute", () => {
+    expect(isFollowCapableRoute("/")).toBe(followKindForRoute("/") !== null);
+    expect(isFollowCapableRoute("/draft")).toBe(followKindForRoute("/draft") !== null);
+    expect(isFollowCapableRoute("/mystats")).toBe(followKindForRoute("/mystats") !== null);
+  });
+});
+
+describe("companionClient — follow=<kind> query param plumbing (v1.5.0, widened v1.6.0)", () => {
   afterEach(() => unstubWindow());
 
-  it("getStatus omits follow=1 by default", async () => {
+  it("getStatus omits follow= by default", async () => {
     let calledUrl = "";
     const fetchImpl = vi.fn(async (url: string) => {
       calledUrl = url;
-      return { ok: true, json: async () => ({ version: "1.5.0", phase: "None", clientConnected: false }) } as Response;
+      return { ok: true, json: async () => ({ version: "1.6.0", phase: "None", clientConnected: false }) } as Response;
     }) as unknown as typeof fetch;
     await getStatus(48291, "sess", { fetchImpl });
-    expect(calledUrl).not.toContain("follow=1");
+    expect(calledUrl).not.toContain("follow=");
   });
 
-  it("getStatus appends follow=1 when the 4th arg is true", async () => {
+  it("getStatus appends follow=builds when the 4th arg is 'builds'", async () => {
     let calledUrl = "";
     const fetchImpl = vi.fn(async (url: string) => {
       calledUrl = url;
-      return { ok: true, json: async () => ({ version: "1.5.0", phase: "None", clientConnected: false }) } as Response;
+      return { ok: true, json: async () => ({ version: "1.6.0", phase: "None", clientConnected: false }) } as Response;
     }) as unknown as typeof fetch;
-    await getStatus(48291, "sess", { fetchImpl }, true);
-    expect(calledUrl).toContain("follow=1");
+    await getStatus(48291, "sess", { fetchImpl }, "builds");
+    expect(calledUrl).toContain("follow=builds");
   });
 
-  it("refreshStatus forwards the follow flag through to the /status request (stored-port path)", async () => {
+  it("getStatus appends follow=draft when the 4th arg is 'draft'", async () => {
+    let calledUrl = "";
+    const fetchImpl = vi.fn(async (url: string) => {
+      calledUrl = url;
+      return { ok: true, json: async () => ({ version: "1.6.0", phase: "None", clientConnected: false }) } as Response;
+    }) as unknown as typeof fetch;
+    await getStatus(48291, "sess", { fetchImpl }, "draft");
+    expect(calledUrl).toContain("follow=draft");
+  });
+
+  it("refreshStatus forwards the follow kind through to the /status request (stored-port path)", async () => {
     stubWindow(makeLocalStorageShim());
     setStoredPort(48293);
     let calledUrl = "";
     const fetchImpl = vi.fn(async (url: string) => {
       calledUrl = url;
-      return { ok: true, json: async () => ({ version: "1.5.0", phase: "None", clientConnected: false }) } as Response;
+      return { ok: true, json: async () => ({ version: "1.6.0", phase: "None", clientConnected: false }) } as Response;
     }) as unknown as typeof fetch;
-    await refreshStatus("sess", { fetchImpl }, true);
-    expect(calledUrl).toContain("follow=1");
+    await refreshStatus("sess", { fetchImpl }, "draft");
+    expect(calledUrl).toContain("follow=draft");
   });
 
-  it("refreshStatus forwards the follow flag through to the probe fallback path", async () => {
+  it("refreshStatus forwards the follow kind through to the probe fallback path", async () => {
     let calledUrl = "";
     const fetchImpl = vi.fn(async (url: string) => {
       calledUrl = url;
-      return { ok: true, json: async () => ({ version: "1.5.0", phase: "None", clientConnected: false }) } as Response;
+      return { ok: true, json: async () => ({ version: "1.6.0", phase: "None", clientConnected: false }) } as Response;
     }) as unknown as typeof fetch;
-    await refreshStatus("sess", { fetchImpl }, true);
-    expect(calledUrl).toContain("follow=1");
+    await refreshStatus("sess", { fetchImpl }, "builds");
+    expect(calledUrl).toContain("follow=builds");
   });
 
-  it("probeCompanion appends follow=1 to every port it tries when asked to", async () => {
+  it("probeCompanion appends follow=<kind> to every port it tries when asked to", async () => {
     const urls: string[] = [];
     const fetchImpl = vi.fn(async (url: string) => {
       urls.push(url);
       throw new TypeError("Failed to fetch");
     }) as unknown as typeof fetch;
-    await probeCompanion("sess", "passive", { fetchImpl }, true);
+    await probeCompanion("sess", "passive", { fetchImpl }, "builds");
     expect(urls.length).toBeGreaterThan(0);
-    expect(urls.every((u) => u.includes("follow=1"))).toBe(true);
+    expect(urls.every((u) => u.includes("follow=builds"))).toBe(true);
   });
 });
 

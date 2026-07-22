@@ -14,11 +14,16 @@
 //                            roleId|null}|null (null outside ChampSelect)}
 //                          -- v1.5.0: the REQUEST may carry an optional
 //                          `&follow=1` (not part of the response shape) to
-//                          declare this poller follow-capable — see
-//                          isFollowCapableRoute's doc comment below and
-//                          companion.ps1's Test-CompanionHasAttachedTab.
-//                          Omitting it (older web build) is equivalent to
-//                          follow=0.
+//                          declare this poller follow-capable. v1.6.0 widens
+//                          this to page IDENTITY: `&follow=builds` or
+//                          `&follow=draft` — see followKindForRoute's doc
+//                          comment below and companion.ps1's
+//                          Test-CompanionHasAttachedTab -Kind. A legacy
+//                          `follow=1` (pre-1.6.0 cached web build) is treated
+//                          server-side as builds-kind (back-compat — see
+//                          companion.ps1's /status handler). Omitting it
+//                          (older web build, or a non-follow-capable route)
+//                          sends no follow param at all.
 //   GET  /live         -> raw allgamedata passthrough | {error:'no-live'}
 //   POST /apply-runes  body {..., mode:'auto'|'manual'} ->
 //                          {ok:true, selected, verified, mismatch} |
@@ -379,28 +384,42 @@ export function setAutoRunesEnabled(enabled: boolean): void {
 
 // ── Wire calls ──────────────────────────────────────────────────────────────
 
-function bridgeUrl(port: number, path: string, session: string, follow = false): string {
+function bridgeUrl(port: number, path: string, session: string, followKind: FollowKind = null): string {
   const base = `http://127.0.0.1:${port}${path}?session=${encodeURIComponent(session)}`;
-  return follow ? `${base}&follow=1` : base;
+  return followKind ? `${base}&follow=${followKind}` : base;
 }
 
-/** v1.5.0 (companion 1.5.0) — routes whose CompanionProvider poll should
- *  declare itself follow-capable (`follow=1`) to the bridge. Every route
- *  polls /status once a session token exists (CompanionProvider is mounted
- *  app-wide, app/layout.tsx), but only these pages actually REACT to a live
- *  champ-select change (page.tsx's follow effect, /draft's read-only live
- *  awareness) — a poll from anywhere else (e.g. /live-setup, /mystats,
- *  /history, /movers) proves nothing is listening, and must NOT make
- *  companion.ps1's Test-CompanionHasAttachedTab think a tab will live-follow
- *  (that was the real bug: those routes' ordinary polls were suppressing
- *  the champ-select open with nothing open to follow it).
+/** v1.6.0 (companion 1.6.0, "two pages simultaneously" ship) — PAGE IDENTITY
+ *  for the follow signal, not just capability. Every route polls /status
+ *  once a session token exists (CompanionProvider is mounted app-wide,
+ *  app/layout.tsx), but only `/` (Builds) and `/draft` actually REACT to a
+ *  live champ-select change — a poll from anywhere else (e.g. /live-setup,
+ *  /mystats, /history, /movers) proves nothing is listening. Previously this
+ *  only reported a boolean (`follow=1`); now the bridge needs to know WHICH
+ *  of the two follow-capable pages is attached, since companion.ps1 opens
+ *  Builds and /draft independently (see Test-CompanionHasAttachedTab -Kind
+ *  and Update-ChampSelectState's per-kind open logic) — a `/draft` tab
+ *  attached must never suppress opening Builds, and vice versa.
  *
  *  Exact-match only, no prefix matching — a new live-aware route must be
  *  added here explicitly, not inferred from a path segment. Extracted as a
  *  pure function (rather than inlined in CompanionProvider) specifically so
  *  the route→follow decision is unit-testable without mounting React. */
+export type FollowKind = "builds" | "draft" | null;
+
+export function followKindForRoute(pathname: string | null | undefined): FollowKind {
+  if (pathname === "/") return "builds";
+  if (pathname === "/draft") return "draft";
+  return null;
+}
+
+/** Back-compat boolean wrapper over followKindForRoute — kept in case any
+ *  future caller only needs "is this route follow-capable at all" without
+ *  caring which kind. No current caller uses this (CompanionProvider moved
+ *  to followKindForRoute directly in v1.6.0); retained per the design note
+ *  that other callers of the boolean should keep working. */
 export function isFollowCapableRoute(pathname: string | null | undefined): boolean {
-  return pathname === "/" || pathname === "/draft";
+  return followKindForRoute(pathname) !== null;
 }
 
 /** Defensive parse of /status's `lastOpen` diagnostic field — absent
@@ -455,11 +474,11 @@ export async function getStatus(
   port: CompanionPort,
   session: string,
   deps: CompanionClientDeps = {},
-  follow = false
+  followKind: FollowKind = null
 ): Promise<CompanionStatus | null> {
   const f = deps.fetchImpl ?? fetch;
   try {
-    const res = await f(bridgeUrl(port, "/status", session, follow), { method: "GET" });
+    const res = await f(bridgeUrl(port, "/status", session, followKind), { method: "GET" });
     if (!res.ok) return null;
     const data = (await res.json()) as Partial<CompanionStatus>;
     if (
@@ -491,7 +510,7 @@ export async function probeCompanion(
   session: string,
   trigger: ProbeTrigger,
   deps: CompanionClientDeps = {},
-  follow = false
+  followKind: FollowKind = null
 ): Promise<ProbeState> {
   const f = deps.fetchImpl ?? fetch;
   const known = getStoredPort();
@@ -502,7 +521,7 @@ export async function probeCompanion(
   let sawTypeError = false;
   for (const port of ports) {
     try {
-      const res = await f(bridgeUrl(port, "/status", session, follow), { method: "GET" });
+      const res = await f(bridgeUrl(port, "/status", session, followKind), { method: "GET" });
       if (!res.ok) continue;
       const data = (await res.json()) as Partial<CompanionStatus>;
       if (
@@ -546,14 +565,14 @@ export async function probeCompanion(
 export async function refreshStatus(
   session: string,
   deps: CompanionClientDeps = {},
-  follow = false
+  followKind: FollowKind = null
 ): Promise<ProbeState> {
   const port = getStoredPort();
   if (port != null) {
-    const status = await getStatus(port, session, deps, follow);
+    const status = await getStatus(port, session, deps, followKind);
     if (status) return { kind: "connected", port, status };
   }
-  return probeCompanion(session, "passive", deps, follow);
+  return probeCompanion(session, "passive", deps, followKind);
 }
 
 /** Raw allgamedata passthrough (or {error:'no-live'} outside a live game).

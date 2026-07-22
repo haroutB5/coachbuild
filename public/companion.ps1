@@ -154,6 +154,25 @@ WIRE CONTRACT (must match components/live/companionClient.ts exactly):
     championPickIntent if set, (3) scan session.actions (array OF ARRAYS --
     flatten both levels) for the local player's own in-progress 'pick'
     action.
+  - v1.6.0 ("two pages simultaneously" ship, user directive 2026-07-22):
+    a champion resolution that passes the debounce now opens the MISSING
+    page(s) of a TWO-page set -- the Builds deep-link above AND
+    "<AppOrigin>/draft?session=<token>" (Get-DraftDeepLinkUrl, no
+    championId/role -- /draft live-syncs entirely off its own /status poll,
+    see CompanionProvider.tsx) -- rather than only ever opening Builds.
+    Per-page attachment is now tracked independently
+    (Test-CompanionHasAttachedTab -Kind builds|draft, replacing the single
+    v1.3.0/v1.5.0 LastFollowPollAt with LastBuildsFollowAt/
+    LastDraftFollowAt): both missing -> open Builds FIRST, then /draft LAST
+    (Start-Process order is best-effort OS-level focus order -- lands the
+    user on /draft as the main focus page per the directive, in the common
+    case); only draft attached -> open Builds only; only Builds attached ->
+    open /draft only (this necessarily focuses the newly-opened Builds tab
+    instead -- an unavoidable consequence of Start-Process, not a violation
+    of the "draft as main focus" intent, which is specifically about the
+    both-missing case); both attached -> no opens (both already live-follow
+    via their own polls). See Update-ChampSelectState's own comment for the
+    exact decision table.
 
 LOGGING (diagnosability -- remote-debugging without a screen-share):
   - Rolling log at %LOCALAPPDATA%\CoachBuild\companion.log: one line per
@@ -206,7 +225,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.5.1'
+    Version     = '1.6.0'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -868,6 +887,17 @@ function Get-DeepLinkUrl {
     return "$AppOrigin/?championId=$ChampionId&session=$SessionToken"
 }
 
+function Get-DraftDeepLinkUrl {
+    # v1.6.0 -- /draft has no championId/role param: it's a read-only live
+    # SYNC surface (draftLiveSync.ts resolves lane/enemies/hover off the
+    # SAME champSelect snapshot the bridge already serves via /status), not
+    # a per-champion deep link like Get-DeepLinkUrl above. Only `session` is
+    # needed, so /draft's own mount effect can adopt it (companionClient.ts
+    # setSession) the same way the Builds page's does.
+    param([string]$AppOrigin, [string]$SessionToken)
+    return "$AppOrigin/draft?session=$SessionToken"
+}
+
 function Open-CompanionUrl {
     # Testable seam: -Mock records opens instead of actually launching a
     # browser, so debounce/deep-link logic is asserted without a real
@@ -988,31 +1018,49 @@ function Set-LastOpen {
 }
 
 function Test-CompanionHasAttachedTab {
-    # v1.3.0 (attached-tab live-follow), NARROWED in v1.5.0: a "tab is
-    # attached" means a FOLLOW-CAPABLE page has polled /status recently, NOT
-    # merely any page. Every route in the app polls /status once a session
-    # token exists (CompanionProvider is mounted app-wide, app/layout.tsx),
-    # but only the Builds page (`/`) and `/draft` actually react to a live
-    # champ-select change -- a poll from /live-setup, /mystats, /history, or
-    # /movers proves nothing is listening, so it must NOT suppress the open.
-    # companionClient's follow-capable poll appends `follow=1` to its
-    # /status query string; the bridge handler stamps that into
-    # $Sync.LastFollowPollAt specifically (LastStatusPollAt keeps stamping
-    # on EVERY /status poll regardless of follow, for other diagnostics).
+    # v1.3.0 (attached-tab live-follow), NARROWED in v1.5.0 to follow-capable
+    # pollers only, split PER-KIND in v1.6.0 ("two pages simultaneously"
+    # ship): a "tab is attached" means a specific follow-capable PAGE (Builds
+    # or /draft) has polled /status recently, not merely any page, and not
+    # merely "some follow-capable page" either -- Builds and /draft are now
+    # opened/suppressed INDEPENDENTLY, so a /draft tab attached must never
+    # suppress opening Builds, and vice versa. Every route in the app polls
+    # /status once a session token exists (CompanionProvider is mounted
+    # app-wide, app/layout.tsx), but only Builds (`/`) and `/draft`
+    # themselves react to a live champ-select change -- a poll from
+    # /live-setup, /mystats, /history, or /movers proves nothing is
+    # listening, so it must NOT suppress either open.
+    #
+    # companionClient's follow-capable poll appends `follow=builds` or
+    # `follow=draft` to its /status query string (v1.5.0's boolean
+    # `follow=1` widened to page identity); the bridge handler stamps that
+    # into $Sync.LastBuildsFollowAt / $Sync.LastDraftFollowAt respectively
+    # (LastStatusPollAt keeps stamping on EVERY /status poll regardless of
+    # follow, for other diagnostics). A legacy `follow=1` (stale cached
+    # pre-1.6.0 web build) stamps LastBuildsFollowAt only -- see the bridge
+    # handler's own comment for why that's the safe degrade (at minimum keep
+    # suppressing the Builds open users already had; /draft simply behaves
+    # as though no tab is ever attached for an old web build, same as
+    # pre-1.3.0 companion behavior).
+    #
     # 8s window: generous versus the web poll's own ~3s cadence, tight
     # enough that a genuinely closed tab (no follow poll in 8s) still gets a
     # fresh Start-Process on the next hover.
     #
     # Back-compat: a companion running this code against a STALE cached web
-    # build that never sends `follow=1` (pre-1.5.0 client) will never see
-    # LastFollowPollAt set at all -- it stays $null forever, so this always
-    # returns $false and every champ-select change opens a fresh tab, same
-    # as the pre-1.3.0 behavior. That's the deliberate degrade: correctness
-    # (always opens) over the live-follow optimization (skip redundant
-    # opens) when the two sides disagree on the contract.
-    if (-not $script:Bridge -or -not $script:Bridge.Sync -or -not $script:Bridge.Sync.LastFollowPollAt) { return $false }
+    # build that never sends ANY follow param (pre-1.5.0 client) will never
+    # see either field set at all -- both stay $null forever, so this always
+    # returns $false for both kinds and every champ-select change opens
+    # BOTH pages fresh, same as the pre-1.3.0 behavior. That's the
+    # deliberate degrade: correctness (always opens) over the live-follow
+    # optimization (skip redundant opens) when the two sides disagree on the
+    # contract.
+    param([ValidateSet('builds', 'draft')][string]$Kind)
+    if (-not $script:Bridge -or -not $script:Bridge.Sync) { return $false }
+    $ts = if ($Kind -eq 'draft') { $script:Bridge.Sync.LastDraftFollowAt } else { $script:Bridge.Sync.LastBuildsFollowAt }
+    if (-not $ts) { return $false }
     try {
-        return (New-TimeSpan -Start ([datetime]$script:Bridge.Sync.LastFollowPollAt) -End (Get-Date)).TotalSeconds -lt 8
+        return (New-TimeSpan -Start ([datetime]$ts) -End (Get-Date)).TotalSeconds -lt 8
     } catch {
         return $false
     }
@@ -1056,18 +1104,40 @@ function Update-ChampSelectState {
     $State.LastOpenedChampId = $champId
     $State.LastOpenedRoleId = $roleId
 
-    # v1.3.0 (attached-tab live-follow): a tab is ALREADY open and actively
-    # polling -- don't spawn a new one on every hover, let it live-follow
-    # in place. Debounce state above still advances regardless (so we don't
-    # re-decide on every tick for the same champion), we just skip the
-    # actual Start-Process this one time.
-    $hasAttachedTab = Test-CompanionHasAttachedTab
-    if (-not $hasAttachedTab) {
+    # v1.3.0 (attached-tab live-follow), split into TWO independent pages in
+    # v1.6.0 ("two pages simultaneously" ship, user directive 2026-07-22):
+    # open only whichever of {Builds, /draft} is currently MISSING, in that
+    # exact order (Builds first, /draft last -- Start-Process order is
+    # best-effort OS focus order, so /draft lands focused when both are
+    # opened together, per the directive). Debounce state above still
+    # advances regardless of which/whether opens happen (so we don't
+    # re-decide on every tick for the same champion) -- champion CHANGES
+    # mid-select keep exactly this semantics: opens only happen when the
+    # debounce admits a NEW champion resolution (this code path), never on a
+    # per-tick timer; an attached tab that's missing here stays missing
+    # until the NEXT champion change, it is not retro-opened mid-select.
+    #
+    # Decision table (hasBuilds / hasDraft from Test-CompanionHasAttachedTab):
+    #   neither attached -> open Builds, then open /draft (both; draft focus)
+    #   only draft attached -> open Builds only
+    #   only Builds attached -> open /draft only (this focuses the NEW
+    #     /draft tab instead -- unavoidable from Start-Process; the "draft
+    #     as main focus" preference is specifically about the both-missing
+    #     case above)
+    #   both attached -> no opens (both already live-follow via their own
+    #     polls, exactly like the pre-1.6.0 single-page behavior)
+    $hasBuilds = Test-CompanionHasAttachedTab -Kind builds
+    $hasDraft = Test-CompanionHasAttachedTab -Kind draft
+    if (-not $hasBuilds) {
         $url = Get-DeepLinkUrl -AppOrigin $AppOrigin -SessionToken $SessionToken -ChampionId $champId -RoleId $roleId
         Open-CompanionUrl -Url $url
     }
+    if (-not $hasDraft) {
+        $draftUrl = Get-DraftDeepLinkUrl -AppOrigin $AppOrigin -SessionToken $SessionToken
+        Open-CompanionUrl -Url $draftUrl
+    }
     Set-LastOpen -ChampionId $champId -RoleId $roleId
-    Write-CompanionLog "champ-select $(if ($hasAttachedTab) { 'update (tab attached)' } else { 'open' }): champ=$champId role=$(if ($null -ne $roleId) { $roleId } else { 'none' })"
+    Write-CompanionLog "champ-select champ=$champId role=$(if ($null -ne $roleId) { $roleId } else { 'none' }) builds=$(if ($hasBuilds) { 'attached' } else { 'opened' }) draft=$(if ($hasDraft) { 'attached' } else { 'opened' })"
 }
 #endregion
 
@@ -1173,16 +1243,28 @@ while ($Sync.Running) {
             # above by the time this branch runs) -- kept as a general
             # "something polled recently" diagnostic other consumers may
             # still read. v1.5.0: this alone no longer means a tab will
-            # live-follow a champ-select change -- see LastFollowPollAt
-            # below and Test-CompanionHasAttachedTab's header comment.
+            # live-follow a champ-select change -- see LastBuildsFollowAt/
+            # LastDraftFollowAt below and Test-CompanionHasAttachedTab's
+            # header comment.
             $Sync.LastStatusPollAt = (Get-Date).ToUniversalTime().ToString('o')
             # v1.5.0: only stamped when the poller declares itself
-            # follow-capable (`?follow=1`, sent by CompanionProvider only on
-            # `/` and `/draft` -- see companionClient.ts/CompanionProvider.tsx).
-            # This is the field Test-CompanionHasAttachedTab actually gates
-            # on now.
-            if ($req.QueryString['follow'] -eq '1') {
-                $Sync.LastFollowPollAt = (Get-Date).ToUniversalTime().ToString('o')
+            # follow-capable (sent by CompanionProvider only on `/` and
+            # `/draft` -- see companionClient.ts/CompanionProvider.tsx).
+            # v1.6.0 ("two pages simultaneously" ship): the boolean
+            # `follow=1` widened to page IDENTITY, `follow=builds` or
+            # `follow=draft` -- stamps the matching per-kind field, which is
+            # what Test-CompanionHasAttachedTab -Kind actually gates on now.
+            # A legacy `follow=1` (stale cached pre-1.6.0 web build) stamps
+            # LastBuildsFollowAt -- the safe degrade: it can only ever have
+            # meant the single pre-1.6.0 Builds tab, so it must keep
+            # suppressing at least that open, never a /draft one it was
+            # never capable of signaling for (never tab-spam a legacy
+            # client that's already open and polling).
+            $follow = $req.QueryString['follow']
+            if ($follow -eq 'builds' -or $follow -eq '1') {
+                $Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().ToString('o')
+            } elseif ($follow -eq 'draft') {
+                $Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().ToString('o')
             }
             Write-JsonResponse -Response $res -StatusCode 200 -Obj @{
                 version         = $Sync.Version
@@ -1285,7 +1367,8 @@ function Start-BridgeServer {
         LastErrorKey        = $null
         LastErrorAt         = $null
         LastStatusPollAt    = $null
-        LastFollowPollAt    = $null
+        LastBuildsFollowAt  = $null
+        LastDraftFollowAt   = $null
     })
 
     $rs = [runspacefactory]::CreateRunspace()
@@ -1755,6 +1838,47 @@ function Invoke-SelfTest {
     } catch { $failures.Add("/status champSelect request threw: $($_.Exception.Message)") }
     $bridge.Sync.Phase = 'InProgress'
     $bridge.Sync.ChampSelectSnapshot = $null
+
+    # 4c. v1.6.0 -- real HTTP round trip through the actual bridge worker's
+    # query-string parsing for `follow=<kind>` (Update-ChampSelectState's own
+    # open-decision logic is exercised via -Mock instead, against a fake
+    # Sync -- this is specifically the wire-level parsing the bridge worker
+    # script block does inline). Covers: follow=builds and follow=draft each
+    # stamp only their own field; a request with no follow param stamps
+    # neither; legacy follow=1 (stale pre-1.6.0 cached web build) stamps
+    # LastBuildsFollowAt only, never LastDraftFollowAt.
+    $bridge.Sync.LastBuildsFollowAt = $null
+    $bridge.Sync.LastDraftFollowAt = $null
+    try {
+        [void](Invoke-WebRequest -Uri "$base/status?session=$session&follow=builds" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing)
+        if (-not $bridge.Sync.LastBuildsFollowAt) { $failures.Add('follow=builds did not stamp LastBuildsFollowAt') }
+        if ($bridge.Sync.LastDraftFollowAt) { $failures.Add('follow=builds incorrectly stamped LastDraftFollowAt') }
+    } catch { $failures.Add("follow=builds request threw: $($_.Exception.Message)") }
+
+    $bridge.Sync.LastBuildsFollowAt = $null
+    $bridge.Sync.LastDraftFollowAt = $null
+    try {
+        [void](Invoke-WebRequest -Uri "$base/status?session=$session&follow=draft" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing)
+        if (-not $bridge.Sync.LastDraftFollowAt) { $failures.Add('follow=draft did not stamp LastDraftFollowAt') }
+        if ($bridge.Sync.LastBuildsFollowAt) { $failures.Add('follow=draft incorrectly stamped LastBuildsFollowAt') }
+    } catch { $failures.Add("follow=draft request threw: $($_.Exception.Message)") }
+
+    $bridge.Sync.LastBuildsFollowAt = $null
+    $bridge.Sync.LastDraftFollowAt = $null
+    try {
+        [void](Invoke-WebRequest -Uri "$base/status?session=$session" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing)
+        if ($bridge.Sync.LastBuildsFollowAt -or $bridge.Sync.LastDraftFollowAt) { $failures.Add('a /status poll with no follow param incorrectly stamped a follow field') }
+    } catch { $failures.Add("no-follow /status request threw: $($_.Exception.Message)") }
+
+    $bridge.Sync.LastBuildsFollowAt = $null
+    $bridge.Sync.LastDraftFollowAt = $null
+    try {
+        [void](Invoke-WebRequest -Uri "$base/status?session=$session&follow=1" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing)
+        if (-not $bridge.Sync.LastBuildsFollowAt) { $failures.Add('legacy follow=1 did not stamp LastBuildsFollowAt (back-compat degrade broken)') }
+        if ($bridge.Sync.LastDraftFollowAt) { $failures.Add('legacy follow=1 incorrectly stamped LastDraftFollowAt') }
+    } catch { $failures.Add("legacy follow=1 request threw: $($_.Exception.Message)") }
+    $bridge.Sync.LastBuildsFollowAt = $null
+    $bridge.Sync.LastDraftFollowAt = $null
 
     $applyBody = @{ name = 'CoachBuild Test Mid'; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = @(8005, 9111, 9104, 8014, 8017, 8009, 8017, 5008, 5008); current = $true }
 
@@ -2252,6 +2376,17 @@ function Invoke-MockRun {
         }
     }
 
+    # v1.6.0: every scenario BELOW this point (through the actions[]-only
+    # resolution block) predates the "two pages simultaneously" ship and was
+    # written/asserted purely against Builds opens. Simulate a /draft tab
+    # already attached (LastDraftFollowAt fresh, LastBuildsFollowAt absent)
+    # for this whole resolution-focused portion so those pre-existing
+    # assertions keep testing exactly what they always tested (Builds
+    # debounce + URL-format), undisturbed by the new two-page open decision
+    # -- which gets its own dedicated, exhaustive "Attached-tab gate"
+    # scenarios further down (neither/draft-only/Builds-only/both attached).
+    $script:Bridge = [pscustomobject]@{ Sync = @{ LastBuildsFollowAt = $null; LastDraftFollowAt = (Get-Date).ToUniversalTime().ToString('o') } }
+
     Reset-ChampSelectState -State $state
     Update-ChampSelectState -State $state -Session (New-MockChampSelectSession -ChampId 0 -IntentId 103 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
     Update-ChampSelectState -State $state -Session (New-MockChampSelectSession -ChampId 0 -IntentId 103 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
@@ -2331,60 +2466,76 @@ function Invoke-MockRun {
     }
 
     # Attached-tab gate (v1.3.0 live-follow fold-in, NARROWED in v1.5.0 to
-    # follow-capable pollers only): a fresh
-    # $script:Bridge.Sync.LastFollowPollAt (a follow-capable page -- `/` or
-    # `/draft` -- is actively polling /status with `follow=1`, i.e. a tab is
-    # still open and will live-follow) suppresses Open-CompanionUrl on a
-    # champion CHANGE; a stale/absent one (no follow-capable tab attached,
-    # e.g. only /live-setup is open) still opens exactly as before. -Mock
-    # fakes a lightweight $script:Bridge (no real HttpListener) purely so
-    # Test-CompanionHasAttachedTab has something to read.
-    $script:Bridge = [pscustomobject]@{ Sync = @{ LastFollowPollAt = $null } }
+    # follow-capable pollers only, split PER-KIND in v1.6.0 "two pages
+    # simultaneously" ship): Builds and /draft are now tracked and
+    # opened/suppressed INDEPENDENTLY via LastBuildsFollowAt/
+    # LastDraftFollowAt. -Mock fakes a lightweight $script:Bridge (no real
+    # HttpListener) purely so Test-CompanionHasAttachedTab has something to
+    # read -- these fields are what a real bridge's /status handler would
+    # have stamped from `follow=builds`/`follow=draft`/legacy `follow=1`
+    # (that HTTP-level parsing itself is covered by -SelfTest, which runs a
+    # real bridge; see Invoke-SelfTest's own "follow=<kind> stamping" case).
+    $script:Bridge = [pscustomobject]@{ Sync = @{ LastBuildsFollowAt = $null; LastDraftFollowAt = $null } }
     $attachState = @{ LastOpenedChampId = $null }
 
-    # No attached tab (LastFollowPollAt never set) -> opens as normal. This
-    # is also the back-compat path: a stale cached web build that never
-    # sends `follow=1` (e.g. only a non-follow-capable page like
-    # /live-setup is open, or an old client) never sets this field either,
-    # so it always degrades to opening a fresh tab.
+    # Neither attached -> open BOTH, Builds first then /draft last (exact
+    # order asserted -- Start-Process order is the best-effort OS focus
+    # order the user directive relies on to land on /draft as the main
+    # focus page). This is also the back-compat path: a stale cached web
+    # build that never sends any follow param (pre-1.5.0 client, or only a
+    # non-follow-capable page like /live-setup is open) never sets either
+    # field, so it always degrades to opening both fresh.
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 103 -IntentId 103 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
-    if ($script:OpenActions.Count -ne 1) {
-        $failures.Add("Attached-tab gate: expected an open with no attached tab, got $($script:OpenActions.Count)")
+    $expectedBuilds103 = "$appOrigin/?championId=103&role=0&session=$sessionToken"
+    $expectedDraft = "$appOrigin/draft?session=$sessionToken"
+    if ($script:OpenActions.Count -ne 2) {
+        $failures.Add("Attached-tab gate (neither attached): expected 2 opens (Builds then draft), got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
+    } else {
+        if ($script:OpenActions[0] -ne $expectedBuilds103) { $failures.Add("Attached-tab gate (neither attached): open #1 should be Builds, got $($script:OpenActions[0])") }
+        if ($script:OpenActions[1] -ne $expectedDraft) { $failures.Add("Attached-tab gate (neither attached): open #2 should be /draft, got $($script:OpenActions[1])") }
     }
 
-    # Fresh follow poll (follow-capable tab attached) -> a champion CHANGE
-    # must NOT open a new tab -- debounce state still advances (the tab
-    # itself follows via poll).
-    $script:Bridge.Sync.LastFollowPollAt = (Get-Date).ToUniversalTime().ToString('o')
+    # Only draft attached -> open Builds only.
+    $script:Bridge.Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().ToString('o')
+    $script:Bridge.Sync.LastBuildsFollowAt = $null
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 7 -IntentId 7 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
-    if ($script:OpenActions.Count -ne 0) {
-        $failures.Add("Attached-tab gate: expected NO open with a fresh attached tab, got $($script:OpenActions.Count)")
-    }
-    if ($attachState.LastOpenedChampId -ne 7) {
-        $failures.Add('Attached-tab gate: debounce state did not advance even though the tab-follow path is responsible for it')
+    $expectedBuilds7 = "$appOrigin/?championId=7&role=0&session=$sessionToken"
+    if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedBuilds7) {
+        $failures.Add("Attached-tab gate (draft-only attached): expected exactly 1 open (Builds), got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     }
 
-    # Poll goes stale (tab presumably closed) -> the NEXT champion change
-    # resumes opening a fresh tab.
-    $script:Bridge.Sync.LastFollowPollAt = (Get-Date).ToUniversalTime().AddSeconds(-30).ToString('o')
+    # Only Builds attached -> open /draft only.
+    $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().ToString('o')
+    $script:Bridge.Sync.LastDraftFollowAt = $null
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 64 -IntentId 64 -Position 'jungle') -AppOrigin $appOrigin -SessionToken $sessionToken
-    if ($script:OpenActions.Count -ne 1) {
-        $failures.Add("Attached-tab gate: expected open to resume once the poll goes stale, got $($script:OpenActions.Count)")
+    if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedDraft) {
+        $failures.Add("Attached-tab gate (Builds-only attached): expected exactly 1 open (/draft), got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     }
 
-    # v1.5.0: a poll from a NON-follow-capable page (LastStatusPollAt fresh
-    # but LastFollowPollAt untouched -- simulates /live-setup polling)
-    # must NOT suppress the open. This is the exact regression this ship
-    # fixes -- pre-v1.5.0, ANY /status poll counted as "attached."
-    $script:Bridge.Sync.LastStatusPollAt = (Get-Date).ToUniversalTime().ToString('o')
-    $script:Bridge.Sync.LastFollowPollAt = $null
+    # Both attached -> no opens at all, but debounce state still advances
+    # (both tabs already live-follow via their own polls).
+    $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().ToString('o')
+    $script:Bridge.Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().ToString('o')
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 22 -IntentId 22 -Position 'bottom') -AppOrigin $appOrigin -SessionToken $sessionToken
-    if ($script:OpenActions.Count -ne 1) {
-        $failures.Add("Attached-tab gate: a non-follow-capable poll (e.g. /live-setup) must not suppress the open, got $($script:OpenActions.Count) opens")
+    if ($script:OpenActions.Count -ne 0) {
+        $failures.Add("Attached-tab gate (both attached): expected NO opens, got $($script:OpenActions.Count)")
+    }
+    if ($attachState.LastOpenedChampId -ne 22) {
+        $failures.Add('Attached-tab gate (both attached): debounce state did not advance even though both tab-follow paths are responsible for it')
+    }
+
+    # Both polls go stale (tabs presumably closed) -> the NEXT champion
+    # change resumes opening both fresh, in the same Builds-then-draft order.
+    $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().AddSeconds(-30).ToString('o')
+    $script:Bridge.Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().AddSeconds(-30).ToString('o')
+    $script:OpenActions.Clear()
+    Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 45 -IntentId 45 -Position 'utility') -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 2) {
+        $failures.Add("Attached-tab gate (both stale): expected 2 opens to resume once both polls go stale, got $($script:OpenActions.Count)")
     }
     $script:Bridge = $null
 

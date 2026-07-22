@@ -112,6 +112,27 @@ function EmptyPanel({ title, body }: { title: string; body: string }) {
 export default function DraftPage() {
   const companion = useCompanion();
 
+  // Session adoption (v1.6.0, "two pages simultaneously" ship) — companion.ps1
+  // now opens `/draft?session=<token>` directly (Get-DraftDeepLinkUrl,
+  // Update-ChampSelectState) alongside the Builds deep-link, same
+  // "?championId=&role=&session=" convention app/page.tsx's own mount effect
+  // already handles for `/`. This page has no championId/role to resolve
+  // (it live-syncs entirely off CompanionProvider's poll, see the live-sync
+  // effect below) — SESSION ADOPTION ONLY. Deliberately does NOT touch
+  // dirty/lane/enemyIds/entryStateRef or any of the reskin's byte-for-byte-
+  // preserved state machine (see this file's header comment) — a fresh tab
+  // landing on /draft should sync from live champ select exactly like any
+  // other companion-paired page, not be treated as a manual edit.
+  const sessionAppliedRef = useRef(false);
+  useEffect(() => {
+    if (sessionAppliedRef.current) return;
+    sessionAppliedRef.current = true;
+    const params = new URLSearchParams(window.location.search);
+    const session = params.get("session");
+    if (session) companion.setSession(session);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [lane, setLane] = useState<LaneId>("mid");
   const [enemyIds, setEnemyIds] = useState<number[]>([]);
   const [laneOpponentId, setLaneOpponentId] = useState<number | null>(null);
