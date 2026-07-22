@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import type { ChampionRef } from "@/lib/types";
 import { isFavoriteChampion } from "@/lib/favorites";
 import FavoriteStarButton from "./FavoriteStarButton";
 import { CHAMPION_FAVORITES_CHANGED_EVENT, toggleFavoriteChampion } from "./favoritesSync";
+import { computeDropdownPosition, type DropdownCoords } from "./dropdownPosition";
 
 // Module-level (stable reference) so FavoriteStarButton's subscribe effect
 // doesn't re-run on every ChampionPicker re-render (e.g. each keystroke).
@@ -39,6 +41,19 @@ export default function ChampionPicker({ value, onChange, withFavorites = false 
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  // Results dropdown is portaled to document.body (see doc comment above the
+  // JSX below) so it escapes any clip-path/overflow ancestor — the /draft
+  // tactical panels (`.dt-panel`) clip-path their chamfered corners, which
+  // was silently clipping the dropdown away entirely for the enemy/my-
+  // champion pickers. `mounted` gates the portal so SSR never tries to touch
+  // `document`; `coords` is null until the first position measurement lands
+  // (avoids a one-frame flash at (0,0)); `dropdownRef` lets the outside-click
+  // handler recognize clicks inside the now-detached-from-containerRef list.
+  const [mounted, setMounted] = useState(false);
+  const [coords, setCoords] = useState<DropdownCoords | null>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => setMounted(true), []);
 
   // Fetch champion list from API; silently fall back to hardcoded list
   useEffect(() => {
@@ -59,12 +74,16 @@ export default function ChampionPicker({ value, onChange, withFavorites = false 
     if (value === null) setQuery("");
   }, [value]);
 
-  // Close on outside click or Escape
+  // Close on outside click or Escape. The dropdown is portaled out of
+  // containerRef's DOM subtree, so "outside" must also exclude dropdownRef —
+  // otherwise a mousedown on a result row would close the dropdown (removing
+  // it from the DOM) before the row's own click/select handler ever fires.
   useEffect(() => {
     function onDown(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      const insideContainer = containerRef.current?.contains(target);
+      const insideDropdown = dropdownRef.current?.contains(target);
+      if (!insideContainer && !insideDropdown) setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
@@ -76,6 +95,47 @@ export default function ChampionPicker({ value, onChange, withFavorites = false 
       document.removeEventListener("keydown", onKey);
     };
   }, []);
+
+  // Position the portaled dropdown off the input row's rect while open, and
+  // keep it glued to the anchor across resize. A real page/ancestor scroll
+  // closes it instead of repositioning (simpler and robust — every other
+  // sheet/picker in this app already closes on outside interaction, and the
+  // anchor can move inside an arbitrary number of scroll containers). Scroll
+  // events that originate INSIDE the dropdown itself (the results list's own
+  // `overflow-y-auto`) are ignored so scrolling the list doesn't close it —
+  // `scroll` events bubble/capture from any scrollable descendant, so a
+  // naive window-capture listener would otherwise fire on every wheel tick
+  // over the results.
+  useEffect(() => {
+    if (!open) {
+      // Drop any stale measurement so the next open re-measures from
+      // scratch instead of flashing at last time's position for a frame.
+      setCoords(null);
+      return;
+    }
+    function measure() {
+      const el = containerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      setCoords(
+        computeDropdownPosition(
+          { top: rect.top, bottom: rect.bottom, left: rect.left },
+          { width: window.innerWidth, height: window.innerHeight }
+        )
+      );
+    }
+    measure();
+    function onScroll(e: Event) {
+      if (dropdownRef.current && dropdownRef.current.contains(e.target as Node)) return;
+      setOpen(false);
+    }
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [open]);
 
   const filtered = query.trim()
     ? champions.filter((c) =>
@@ -166,8 +226,21 @@ export default function ChampionPicker({ value, onChange, withFavorites = false 
         />
       </div>
 
-      {open && (
-        <div className="absolute z-50 top-full mt-1.5 left-0 w-[min(280px,90vw)] bg-panel border border-line rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden">
+      {open &&
+        mounted &&
+        coords &&
+        createPortal(
+          <div
+            ref={dropdownRef}
+            style={{
+              position: "fixed",
+              top: coords.top,
+              bottom: coords.bottom,
+              left: coords.left,
+              width: coords.width,
+            }}
+            className="z-50 bg-panel border border-line rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden"
+          >
           <ul
             ref={listRef}
             id={LISTBOX_ID}
@@ -215,8 +288,9 @@ export default function ChampionPicker({ value, onChange, withFavorites = false 
               );
             })}
           </ul>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

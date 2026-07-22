@@ -7766,3 +7766,110 @@ Committed as `29c1011` (author `Harout <harout_b5@live.com>`), scope limited to 
 
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-22 11:07
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-22 07:52:34Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-22 — v0.45.1: Pro Consensus card can push its own page/build (manual)
+
+**Scope:** solo fronty, pure-FE + logic, no backend change. Waited on engy's v0.45.0 (companion.ts follow-kind round) to land before running verify-fix/bump/deploy per the shared-file freeze on `components/live/companionClient.ts` (import-only dependency, no edits) — commit `29c1011` landed ~30min in; `applyRunes(port, session, body, mode, deps)` signature was untouched by that round, so no rework needed.
+
+**Files:**
+- `components/hextech/proConsensus.ts` — new pure exports: `missingRunePageReason(model)` (single source of truth for "is this page complete enough to push"), `proConsensusRuneApplyInput(model, fallbackShards)` (translates `ProConsensusModel` → the exact `RunesBlock` shape `runeApplyBody.ts`'s `buildRuneApplyBody()` consumes). Both documented at length in-file re: the "never fabricate a slot" honesty rule.
+- `components/hextech/ProConsensusCard.tsx` — two new header buttons (`ApplyProRunesButton`, `AddProItemBuildButton`), new optional `build?: BuildResponse` prop. `CardHeader`'s own `mb-3.5` moved to the row wrapper (single call site, verified via grep) to match RunesSummonersCard's exact header-row spacing convention now that the row holds buttons too.
+- `components/hextech/BuildTabContent.tsx` — one-line: passes the already-fetched `build` through to `ProConsensusCard` (no new fetch).
+- `components/__tests__/proConsensus.test.ts` — 10 new cases (`missingRunePageReason` x5, `proConsensusRuneApplyInput` x5 incl. a deterministic tie-order regression that reads the model's own count-desc/id-asc sort rather than re-deciding order).
+
+**Key design decision (re-verify if `proConsensus.ts`'s shard model ever changes):** `proConsensusRuneApplyInput` NEVER derives shards from `model.shards` — that breakdown is a flat top-3-by-frequency count with no offense/flex/defense slot label, and real ids (5008 Adaptive Force) are valid in more than one slot, so assigning a bare id to a slot from that data would be inventing structure. It always uses the caller-supplied `fallbackShards` (current WPA build's `ShardSet`) and flags `shardsFromFallback: true`; the button's tooltip says so. If `proConsensus.ts` is ever extended to slot-label shards for soloq-only rows (structurally possible — `lib/pro/extract.ts` writes `[offense, flex, defense]` in order, prostage is always `[]`), this decision should be revisited.
+
+**Verify:** `bash scripts/verify-fix.sh` — tsc/lint/1400 tests/build/SW/manifest all PASS at v0.45.1. Did NOT run a live browser/companion smoke test (no live League client + companion tray app in this environment) — the apply-runes/item-sets click paths are exercised only through the existing pure-logic test suite + the same `companionClient.applyRunes`/`applyItemSetsForBuild` functions RunesSummonersCard already ships with in prod. Flagging this gap explicitly rather than claiming end-to-end verification I didn't do.
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-22 11:10
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-22 10:07:26Z; previous content preserved there. Append new rounds below. -->
+
+## v0.45.3 — MY CHAMPION lane-toggle icons: placeholder glyphs → real Riot position icons
+
+**User report:** on `/draft`'s MY CHAMPION panel, the 5 Top/Jungle/Mid/Bot/Support lane toggle icons looked like generic hand-drawn placeholders (chess-piece-ish top, plain shields, an arrow for bot), not League's actual position icons.
+
+**Before:** `components/hextech/MyChampionPanel.tsx`'s `LaneGlyph` rendered 5 inline `<svg>` blocks with hand-drawn stroke-based placeholder `<path>`s (24×24 viewBox, `stroke="currentColor"`, no real Riot geometry).
+
+**After:** fetched the CANONICAL Riot champ-select position glyphs from CommunityDragon (`raw.communitydragon.org/latest/plugins/rcp-fe-lol-champ-select/global/default/svg/position-{top,jungle,middle,bottom,utility}.svg`), read the actual path/polygon geometry, and inlined it as static fill-based path data (34×34 viewBox, `fill="currentColor"`) — no hotlink, no new CDN dependency, self-contained per the app's SW/asset convention. Riot's own source splits top/mid/bot into a faint always-on frame path (`opacity="0.5"`) plus a bright corner-bracket "active" polygon; both are kept together under one `currentColor` icon so the panel's existing active/inactive theming (cyan-filled tile when selected) still drives the whole glyph, unchanged. Jungle and support are each a single complex path (leaf/paw and ward-cross shapes respectively) — no frame variant in Riot's source.
+
+Preserved exactly: button sizing (`w-9 h-9`, glyph `16×16`), active/inactive cyan theming, `aria-label`/`title`/`aria-pressed`, `onLaneChange` wiring, `role="group" aria-label="Lane"`.
+
+**Other-surface check:** grepped for `LANE_ORDER`/lane icon usage — `components/hextech/Sidebar.tsx` (collapsed lane nav, v0.27.0) and `components/hextech/LaneFilterPills.tsx` (`/movers`) both render `LANE_LABEL` text pills only, no icons. `MyChampionPanel.tsx` is the ONLY consumer of the lane glyphs — kept the fix local, did not extract a shared `RoleIcon.tsx` (nothing to share yet).
+
+**Verify:** `bash scripts/verify-fix.sh` → tsc/lint/tests(1400, unchanged — no new pure module extracted)/build/sw/manifest all green. Deployed `npx vercel --prod --archive=tgz` from a clean tree (only my 4 files touched: `MyChampionPanel.tsx`, `package.json`, `CHANGELOG.md`, this file); prod smoke via puppeteer at 390×844 (mobile) and desktop on `/draft` — MY CHAMPION panel's 5 lane icons render the real Riot silhouettes, active one cyan-filled, tap-to-toggle works, zero console errors. Screenshots taken.
+
+Files: `components/hextech/MyChampionPanel.tsx`, `package.json` (0.45.2→0.45.3), `CHANGELOG.md`.
+
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-22 13:45
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-22 08:22:38Z; previous content preserved there. Append new rounds below. -->
+
+## v0.46.0 + companion 1.6.1 — item-set 413 fix (bound the PUT payload) — SHIPPED
+
+**Symptoms (ONE root cause):** (1) "Add item builds" → `League client rejected the item-set write (HTTP 413)`; (2) "Tank/Mage category builds aren't in-game — no Tank/Mage for Viktor." Same bug. The LCU item-sets PUT to `/lol-item-sets/v1/item-sets/{id}/sets` **replaces the entire object atomically** — a 413 rejects the *whole* write, so no CoachBuild set lands and the category blocks never appear in-client.
+
+**413 root cause (confirmed):** `Merge-ItemSets` kept every existing CoachBuild set for every OTHER champion+role and re-sent them all in each PUT. A set is auto-written on each champ-select deep-link, so an active user accumulated one ~1.5 KB set **per champion they'd been in champ-select for**; the combined payload eventually exceeded the LCU item-sets size limit → 413. The v0.35.0 champ-scoped cleanup only removed the current champ's *other-lane* set; different champions' sets persisted forever and shipped in every PUT.
+
+**Fix — two levers:**
+1. **Companion (`public/companion.ps1`, → 1.6.1) — PRIMARY lever.** `Merge-ItemSets` now keeps ONLY the set(s) being written this call (current champ+role) and prunes EVERY pre-existing CoachBuild-titled set. Boundary is the literal generic prefix `"CoachBuild"`. `$merged = (existing sets NOT starting with "CoachBuild") + $newArr`. Bounds our payload at O(1) vs O(champions viewed). Chose keep-**only**-current over "keep N recent" for max 413 headroom (coordinator confirmed this is the primary lever + prefer only-current).
+   - **HARD INVARIANT preserved (SelfTest-pinned):** never drop a non-`"CoachBuild"` set. User's own sets pass byte-for-byte.
+   - **Merge safety preserved:** GET-then-PUT, never PUT on failed GET (`read-failed`), all other top-level fields (accountId/timestamp) byte-identical.
+   - `replacePrefix` still validated (`Test-ItemSetsPayload`) for wire back-compat but no longer the prune boundary (generic `"CoachBuild"` drops a strict superset).
+   - **SelfTest:** flipped 6f (a different champion's CoachBuild set is now intentionally PRUNED, not preserved); added 6i (15 CoachBuild + 3 user → after write: exactly current CoachBuild set + all 3 user sets = 4 total; zero user-set removals). `-SelfTest` PASSED, 0 non-ASCII bytes.
+2. **Web (`components/hextech/itemSetBody.ts`).** New `CATEGORY_LINE_LEN = 4`; `buildLine` gained an optional `lineLen` param (default `LINE_LEN`=6); `buildCategoryLine` uses 4 in both measured + low-data branches. Core/Buy order/Pro/Highest WPA stay at 6 (`buildThemedLine` untouched = its byte-identical regression pin holds). **Category count and `CATEGORY_MAX_EMIT` NOT reduced** (coordinator: follow-up expands category vocab; keep-count intact).
+
+**Payload accounting (unit-verified, `itemSetBody.test.ts`):** maximal current set = **1466 B / 9 blocks** (4 category blocks @ ~136 B each); projected 6-category set ≈ **1738 B** — both far under a conservative 4 KB per-set ceiling. Before: ~1.5 KB × every champion viewed (unbounded → tens of KB → 413). After: current set + user's own sets only. **Byte budget for the follow-up category-expansion round: a 6-category set is ~1.74 KB; even 10 such sets would be ~17 KB, so the follow-up has ample room to enrich a single set.**
+
+**Category-missing symptom closed (coordinator's explicit asks):** unit tests prove a realistic Viktor (id 112, tags `["Mage"]`) set **contains AP/Mage** and correctly does **not** force AD/Lethality, Attack Speed, or Support/Utility (curated sensible-gates closed). Viktor's **Tank** line appears only via the intended v0.43.0 live-data escape hatch when Zhonya's (Armor) is in his pool — by design, not a bug; a pure mage having fewer categories than a bruiser is expected. (No second emission-gate bug found — Viktor emits AP/Mage + Tank-via-escape-hatch, never zero.)
+
+**Runes sub-check (SEPARATE from 413, FLAGGED for follow-up):** `/apply-runes` uses a tiny `/lol-perks` body (~150 B) — not a payload issue (confirmed). For "Apply pro runes silently fails when a CoachBuild WPA page already exists": `Invoke-ApplyRunes` does GET pages → find CoachBuild page → **DELETE it → POST new**. The likely mechanism is the LCU refusing to DELETE the *currently-selected* rune page (which the CoachBuild page becomes right after a prior apply, via `Complete-RuneApply`'s currentpage PUT) → `delete-failed` → the web surfaces the hint as a red error toast the user reads as "doesn't work." This is LCU-behavior-dependent and **cannot be reproduced without a live client**, so I did NOT modify the compliance-sensitive rune path speculatively. **Recommended follow-up fix:** PUT-update the existing CoachBuild page in place (`PUT /lol-perks/v1/pages/{id}`) instead of delete+recreate — avoids deleting an active page and avoids slot churn. Needs live-client verification.
+
+**Gates:** `verify-fix.sh` tsc/lint/tests(1404)/build/sw/manifest all green. Companion `-SelfTest` PASSED. **Deploy:** commit `990ee7f` authored `harout_b5@live.com`; `npx vercel --prod --archive=tgz` READY. **Prod smoke:** `coachbuild.vercel.app` serves app **0.46.0**; served `companion.ps1` Version `'1.6.1'`, 0 non-ASCII bytes, prune logic present. Changelog notes users must re-run the `/live-setup` install one-liner to pick up companion 1.6.1.
+
+

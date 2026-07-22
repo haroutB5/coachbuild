@@ -2,6 +2,11 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.47.1] — 2026-07-22 (companion unchanged at 1.6.1)
+### Fixed — /draft champion search dropdown was invisible (clipped by the tactical panels)
+- **User-reported:** typing in the /draft ENEMY TEAM (and MY CHAMPION) search showed no results. Root cause: the tactical `.dt-panel` draws its chamfered corners with `clip-path`, and a clip-path on an ancestor clips the ENTIRE descendant subtree — so `ChampionPicker`'s absolutely-positioned results dropdown rendered but was clipped away by the panel bounds (worst at the enemy add-picker, which sits at the panel's chamfered bottom edge).
+- **Fix:** `ChampionPicker`'s dropdown now renders in a portal to `document.body` (`position: fixed`, positioned off the input's `getBoundingClientRect()`), escaping any ancestor clip/overflow — fixes it globally, not just on /draft. New pure `components/dropdownPosition.ts` (`computeDropdownPosition`: flip-above when low on screen, edge clamping, width match) with 7 tests. SSR-safe mount gate; outside-click/Escape/keyboard-nav/aria/favorite-star rows/IconWithFallback all preserved; repositions on resize, closes on outside scroll.
+
 ## [0.47.0] — 2026-07-22 (WEB-ONLY — no companion change; no re-install needed)
 ### Changed — item-set archetypes are now DAMAGE-TYPE-SCOPED (durable-AP "tank mage" Viktor now shows)
 - **User feedback** (screenshot of a durable-AP Viktor — Rylai's/Blackfire + Sorc + Riftmaker + Abyssal + Rabadon's): *"even if it categorically doesn't work for Viktor, still I want to see potential builds for 'tank mage' Viktor. something like this would defo be a build that works."* The v0.43.0 "sensible-for-champ" gate HID Tank from mages, suppressing exactly these off-meta-but-coherent builds.
