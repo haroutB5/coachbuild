@@ -43,12 +43,18 @@ const LEAGUE_PREFIX_PATTERNS = ["LEC", "LCK", "LPL", "LCS"];
 // EWC pages don't contain "Worlds"/"World Championship" (it's a separate
 // third-party event, not a Riot-run international), so none of the existing
 // contains-patterns ever matched it.
+// "Circuito Desafiante" added 2026-07-22 — Brazil's tier-2 circuit, where
+// Bwipo's Estral Esports plays (user bug report: his official games were
+// structurally invisible, same whitelist-gap class as EWC/Nemesis). This is a
+// TARGETED tier-2 add for a tracked pro's league, NOT a general tier-2
+// widening (user declined that in the 2026-07-14 Nemesis decision).
 const EVENT_CONTAINS_PATTERNS = [
   "MSI",
   "Mid-Season Invitational",
   "World Championship",
   "Worlds",
   "Esports World Cup",
+  "Circuito Desafiante",
 ];
 // Academy pages (e.g. "LCK Academy Series") LIKE-match the LCK/ prefix but
 // resolve to tournaments with no ScoreboardPlayers data — live-verified

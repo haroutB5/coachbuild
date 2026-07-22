@@ -62,6 +62,9 @@ const EVENT_CONTAINS_TO_SLUG: Array<[string, string]> = [
   ["World Championship", "worlds"],
   ["Worlds", "worlds"],
   ["Esports World Cup", "ewc_lol"],
+  // Live-verified via getLeagues 2026-07-22: "Circuito Desafiante" -> slug
+  // "cd" (league id 105549980953490846). NOT guessed (v0.31.1 rule).
+  ["Circuito Desafiante", "cd"],
 ];
 
 /** Maps a Leaguepedia overview_page to a lolesports league slug, or null when
