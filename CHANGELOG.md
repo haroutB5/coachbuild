@@ -2,6 +2,13 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.45.3] — 2026-07-22 (companion unchanged at 1.6.0)
+### Fixed — the 5 lane-role toggle icons on the MY CHAMPION panel now read as real League position icons
+- **User report:** `/draft`'s "MY CHAMPION" panel (`components/hextech/MyChampionPanel.tsx`) rendered 5 hand-drawn placeholder glyphs (a chess-piece-ish top, plain shields, an arrow for bot) for the Top/Jungle/Mid/Bot/Support lane toggle — didn't read as League's actual position icons.
+- Replaced `LaneGlyph`'s inline placeholder `<path>`s with path/polygon data traced directly from Riot's OWN champ-select position glyphs (CommunityDragon `raw.communitydragon.org/latest/plugins/rcp-fe-lol-champ-select/global/default/svg/position-{top,jungle,middle,bottom,utility}.svg`) — inlined as static path data, no hotlink (this app runs a strict SW + self-contained-asset convention, and prostage/coachless icons already establish "Riot/ddragon assets under the personal-use footer" as an existing, not new, compliance posture). Riot's own source splits top/mid/bot into a faint always-on frame (opacity .5) plus a bright corner-bracket accent; both paths are kept as one `fill="currentColor"` icon so the panel's existing active/inactive theming (cyan-filled tile when selected, muted stroke-turned-fill otherwise) still drives the whole glyph exactly as before — sizing (16×16 in a 9×9 button), `aria-label`/`title`/`aria-pressed`, and the `onLaneChange` wiring are all unchanged.
+- Checked for other consumers of these glyphs before touching anything: `components/hextech/Sidebar.tsx` (collapsed lane nav) and `components/hextech/LaneFilterPills.tsx` (`/movers`) both render `LANE_LABEL` text pills, not icons — `MyChampionPanel.tsx` is the ONLY consumer, so the fix stayed local (no `RoleIcon.ts` extraction).
+- `verify-fix.sh`: tsc/lint/tests(1400)/build/sw/manifest all green — no test surface changed (no new pure module extracted).
+
 ## [0.45.2] — 2026-07-22 (companion unchanged at 1.6.0)
 ### Added — favorite star on the home-shell player view + pinned Favorites before searching
 - The player header (`PlayerHero`) gains the favorite star for TRACKED pros — same `FavoriteStarButton` + `coachbuild:favPlayers:v1` storage the /history view uses (link-only players opened from team boxes stay star-less, preserving the v0.26.0 policy).
