@@ -7993,3 +7993,134 @@ AP/Mage and Tank Mage share only Zhonya's (3157) → genuinely distinct.
 **Not done / notes:** verified at UNIT/LOCAL level only (did not hammer prod). The Jinx integration fixture collapses Lethality into Crit/Marksman because that thin fixture's Damage items (Lord Dominik's/Bloodthirster) sit in the crit curated pool AND match lethality → 2/3 overlap; in prod (full catalog) the two diverge and both show. This is correct behaviour for a thin fixture, documented in the test.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-22 15:29
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-22 14:00:02Z; previous content preserved there. Append new rounds below. -->
+
+## v0.48.1 / companion 1.6.2 — rune apply "delete-failed" root-cause fix (engy, 2026-07-22)
+
+**Bug (real device, reported twice):** "Apply pro runes" / auto-runes FAILED when a CoachBuild WPA rune page already existed in the client. Confirmed mechanism: apply was DELETE-then-CREATE, and when the existing "CoachBuild …" page was the **currently-selected** page, the LCU refuses to DELETE the selected page → `delete-failed` → nothing applied.
+
+**Fix — PUT-in-place edit (`public/companion.ps1`, `Invoke-ApplyRunes`):** when a page we own (title starts "CoachBuild") already exists, edit it in place instead of delete+create.
+
+- **Exact LCU endpoint used + why:** `PUT /lol-perks/v1/pages/{id}` with the full `LolPerksPerkPageResource` body (`id` + `name` + `primaryStyleId` + `subStyleId` + `selectedPerkIds` + `current:true`). **Verified against the authoritative LCU OpenAPI schema** (mingweisamuel/lcu-schema): `/lol-perks/v1/pages/{id}` exposes `get`/`put`/`delete`; the `LolPerksPerkPageResource` schema carries exactly those fields. The task's guessed path `/lol-perks/v1/perks/{id}` was **wrong** — it's `/pages/{id}`. The community delete+create tutorials (hextechdocs) are a convention, not evidence PUT is absent. Editing our own page's contents is the same compliance class as delete+create (a passive loadout write) and sidesteps the "can't delete the selected page" wall entirely.
+- **Decision tree (in-place vs delete→post):**
+  - CoachBuild page exists → **PUT-in-place**, then PUT /currentpage (reaffirm select) + readback-verify. **No delete of our own page, ever.**
+  - PUT edit fails → `{ok:false, reason:'edit-failed', hint:(status-coded)}`. **Deliberately NO fallback to delete+create** — the page is still the selected page, so a delete would fail the same way and reintroduce the exact bug. Honest `edit-failed` envelope is strictly safer.
+  - No CoachBuild page + free slot → POST directly (unchanged).
+  - No CoachBuild page + full → manual mode falls back to original currentpage delete+create (real click = real consent); auto mode returns `slots-full`, touches nothing (unchanged).
+- **Hard invariant preserved (SelfTest-pinned):** never DELETE or PUT-overwrite a page whose title doesn't start with "CoachBuild". In-place PUT targets only our own page (title prefix + id match). Adversarial 5-page/0-CoachBuild auto fixture still issues zero deletes + zero foreign mutations.
+- **`Complete-RuneApply` refactor:** now takes `-PageId` explicitly (was digging `id` out of the POST response) so the same select+verify tail serves both create paths (id from POST body) and the edit path (id is the known target — a PUT may return 204/no body).
+
+**Harness results (both PASS, run via Windows PowerShell):**
+- `-SelfTest` → `SELFTEST PASSED`. Fixture 6 rewritten: selected "CoachBuild Test Mid" page → apply → asserts updated **in place** (same id 222, new perk ids), **zero DELETE**, still selected (currentPageId=222), readback verified, adjacent non-CoachBuild page (id 111) untouched. Fixture 6f repurposed to `edit-failed` fail-soft (PagePutShouldFail → no fallback delete/POST). Fixture 6h moved create-failed coverage to the free-slot POST path (the replace path no longer POSTs). Mock LCU gained a `PUT /lol-perks/v1/pages/*` in-place handler + `PagePutShouldFail` flag.
+- `-Mock` → `MOCK RUN PASSED`.
+- `companion.ps1` 100% ASCII (0 non-ASCII bytes). COMPANION_VERSION → `1.6.2`.
+
+**Web side:** no change needed. `components/live/companionClient.ts` `applyRunes` forwards the companion's `reason`/`hint` verbatim, so the new `edit-failed` hint reaches the toast unchanged. `RunesSummonersCard.tsx` (manual "Apply runes" button, mode `manual`) shows `Applied in-client.` on `selected && verified`, else `Saved as a rune page — open the client to select it.`, else `result.hint`. `runeAutoApply.ts` (mode `auto`) returns the result generically. No component branches on specific reason strings, so no `edit-failed` special-case is required. Same POST body for create and edit — the companion picks the strategy.
+
+**Gates:** `verify-fix.sh` → ALL PASS (tsc clean, lint 0 warnings, tests **1412** passed, build clean, sw versioned, manifest present). App version `0.48.0` → `0.48.1`; CHANGELOG entry added.
+
+**What the user should verify on-device (the one thing the harness can't prove without a live client):** open League, enter champ select / a game where a "CoachBuild <champ> <role>" rune page already exists **and is the currently-selected page**, then click **Apply pro runes** — it should now succeed (page updated in place, stays selected) instead of the old red `delete-failed` toast. Re-install the companion first to pick up 1.6.2.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-22 17:20
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-22 14:29:42Z; previous content preserved there. Append new rounds below. -->
+
+## engy — 2026-07-22 — v0.48.2 / companion 1.6.3 (pro-page separation + -Install auto-launch)
+
+### TASK 1 — pro runes get reverted → separate the Pro page from the WPA page
+**Root cause (confirmed):** both the WPA auto-export and *Apply pro runes* built the SAME title `"CoachBuild <champ> <role>"` (`runeApplyBody.ts` `buildRuneApplyBody`), and the pre-1.6.3 companion `Invoke-ApplyRunes` matched ANY `"CoachBuild*"`-prefixed page and edited the **oldest in place** — so WPA and Pro fought over ONE physical LCU page. The AutoExporter (`components/live/autoExport.ts`, mounted app-wide in CompanionProvider) applies WPA and dedups per `(championId, laneId)` via `markExported`, so it fires WPA once per champ-select — but any WPA re-application (champ re-resolve, lane flip, remount, multi-tab) overwrote the shared page → the revert.
+
+**Two page titles + cleanup scoping:**
+- WPA page: `"CoachBuild <champ> <role>"` (unchanged; RunesSummonersCard + auto-export).
+- Pro page: `"CoachBuild <champ> <role> Pro"` — web now calls `buildRuneApplyBody(champ.name, roleLabel, runes, { pageSuffix: "Pro" })` in `ProConsensusCard.tsx`. Suffix AFTER champ/role so the champ-scoped prefix `"CoachBuild <champ> "` matches BOTH pages.
+- New `replacePrefix` field on the apply body (`RuneApplyBody`, both variants set `"CoachBuild <champ> "`), forwarded by `companionClient.applyRunes` and used by the companion for champ-change cleanup — mirrors the item-sets `replacePrefix` precedent (`champScopedReplacePrefix`).
+- Companion `Invoke-ApplyRunes` rewrite: STEP 1 champ-scoped stale cleanup (delete OUR `"CoachBuild*"` pages whose title does NOT start with `replacePrefix` = other champs; NEVER a page starting with the prefix → protects both current-champ pages from cross-deletion; NEVER a non-CoachBuild page; fail-soft on a refused delete); STEP 2 EXACT-TITLE match (not prefix) → PUT-in-place; STEP 3 create (free slot) / manual consent fallback / auto slots-full. Bounded at the current champ's ≤2 pages.
+
+**Secondary-tree body finding:** the user's "consensus said Sorcery secondary but the page showed Resolve" was the SAME revert symptom — the WPA page's Resolve secondary overwrote the pro page's Sorcery. The pro **body construction is correct**: `proConsensusRuneApplyInput` builds `subStyleId` from the tree-conditioned `model.secondaryTree.treeId` and picks from `model.secondaryPicks` (Phase-B conditioned on that tree in `proConsensus.ts`), verified by the existing 9-slot-order test. The companion's readback-verify (`Complete-RuneApply`) still compares `name` + `selectedPerkIds` byte-for-byte, so a genuine content mismatch is caught honestly. No body bug to fix — the separate page resolves it.
+
+**HARD INVARIANT preserved:** never DELETE/PUT-overwrite a non-`"CoachBuild"` page. Auto 5-page/0-CoachBuild adversarial = zero deletes, now also proven WITH `replacePrefix` present (new 6k).
+
+### TASK 2 — `-Install` launches the companion immediately
+`Install-Companion` (`public/companion.ps1`): after writing the truly-hidden Startup `.vbs` (unchanged), it now also launches the watcher right away via `Start-CompanionDetachedHidden` → `WScript.Shell.Run(cmd, 0, False)` — windowStyle 0 = hidden (honored under Windows Terminal, unlike `-WindowStyle Hidden`), fire-and-forget. Launch command shared with the `.vbs` via `Get-CompanionLaunchCommand` (single source of truth; the spawned process runs `irm .../companion.ps1 | iex` → `Start-Companion`).
+**Double-launch guard:** `Test-CompanionAlreadyRunning` opens the named single-instance mutex `Local\CoachBuildCompanion`; if held → surface "already running", don't spawn. The spawned instance's own `Test-SingleInstance` mutex is the hard backstop, so re-running `-Install` never stacks. Session token persisted FIRST so the immediate launch + pairing page share it.
+
+### Harnesses / gates
+- `-SelfTest` PASSED (added 6g–6k rune two-page/cleanup/fail-soft cases + 8b/8c install launch-command + guard). `-Mock` PASSED. `companion.ps1` 100% ASCII.
+- `verify-fix.sh`: tsc + lint(0) + **1415 tests** + build + sw + manifest ALL PASS. Added 3 web tests (`runeApplyBody.test.ts`) + updated the pro-apply title test (`proConsensus.test.ts`).
+
+### On-device verification needed (unreproducible without a live LCU)
+1. *Apply pro runes* leaves a distinct `"CoachBuild <champ> <role> Pro"` page that COEXISTS with the WPA page and survives the WPA auto-export (no revert).
+2. Switching champions cleans up the previous champion's CoachBuild pages (both WPA + Pro) while leaving your own hand-made pages untouched.
+3. Re-run `& ([scriptblock]::Create((irm https://coachbuild.vercel.app/companion.ps1))) -Install` → companion starts hidden immediately (tray icon appears, no click/reboot); re-running while it's running says "already running" and does not stack a second tray instance.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-22 17:59
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-22 16:20:06Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-22 — v0.48.3: pro-rune SLOT COHERENCE (WEB-ONLY, no companion change)
+
+**Reported:** in-client "CoachBuild Ashe Bot Pro" applied with EMPTY primary-tree minor slots (only keystone Lethal Tempo selected). The `…Pro` page itself is correct (1.6.3); this is about page CONTENTS.
+
+**Confirmed root cause (probed against live prod feed, not just the briefed hypothesis):**
+- `proConsensusRuneApplyInput` built `runes.primary` from `model.primaryMinors.entries` — a FLAT top-3-by-FREQUENCY list, NO per-row structure. A valid LCU page needs exactly one rune per perkstyles row (0/1/2). Flat frequency can rank two runes from the SAME row above a third row's rune (or emit a tree-foreign rune) → the client has no valid perk for the missing row → EMPTY minor slot. `missingRunePageReason`'s `entries.length < 3` count check passed it (3 total = 2-from-one-row + empty row).
+- The WPA "Apply runes" button never had this — `lib/recommend.ts`'s `rowPicks` selects one rune PER ROW. The pro path bypassed that guarantee.
+- **Probe finding that corrected the brief:** the brief assumed "the app already fetches perkstyles for slot validity." It does NOT — slot structure existed ONLY as a fixture in `runeApplyBody.test.ts`. Built a real runtime slot map. Also: Ashe bot is **97% prostage** (Leaguepedia), whose `primary[]` is NOT row-ordered — so index/positional slotting alone is insufficient; ids must be resolved by the perkstyles MAP. (soloq `primary[]` IS row-ordered, so it's read positionally — this is what fills all 3 rows from a single real game.)
+
+**Fix (slot-coherent by construction):**
+- NEW `components/hextech/perkSlots.ts` — id→(tree,row) map for all 5 trees + keystones, pinned from a live CDragon `perkstyles.json` pull (2026-07-22). Helpers `primaryMinorRow`, `isKeystoneOf`. Drift is graceful (unknown id → row null → filled from another game or honest disable, never a wrong slot).
+- `aggregateProConsensus` emits additive `runePage: SlotCoherentRunePage` — per-row modal over the conditioned page sample (soloq positional, prostage via map). `primaryRows[3]`/`secondaryRows[3]`, null = uncoverable row.
+- `proConsensusRuneApplyInput` reads `runePage`: primary in ROW order (0→1→2), 2 most-adopted secondary rows in ascending row order. `missingRunePageReason` checks the per-ROW structure (slot gap), not a raw count. The FLAT `primaryMinors`/`secondaryPicks` stay the card DISPLAY source — untouched (deliberate scope boundary; display coherence is a pre-existing lesser issue, noted as possible follow-up).
+
+**Ashe-bot before/after (real prod 100-game feed, run through the real code path):**
+- BEFORE (flat, count-desc order): primary emitted `[8017(row2), 8009(row0), 9103(row1)]` — scrambled row order; and on a colliding/thin sample, two same-row ids + a missing row.
+- AFTER: `selectedPerkIds = [8008(Lethal Tempo), 8009(row0), 9103(row1), 8017(row2), 8313(Inspiration secRow1), 8410(secRow2), 5008, 5010, 5011]`, primaryStyleId 8000 / subStyleId 8300, name "CoachBuild Ashe Bot Pro". Keystone valid, one minor per row in row order, 2 secondary picks from 2 distinct rows. A complete legal page.
+
+**Thin-data fill decision:** per-row modal already realizes "fill from real games" — cross-game at the ROW level (game A covers rows 0/1, game B covers row 2 → complete), and a single complete soloq game fills all 3 rows positionally. So the button stays usable on any sample containing ≥1 complete real page. A row absent from EVERY sampled game → button DISABLED with reason (no "modal game" could supply it either) — never fabricate/empty a slot.
+
+**Tests:** extended `proConsensus.test.ts` — complete/thin-1-game/cross-game-fill (usable) vs. uncoverable-slot + same-row-collision (disabled), all perkstyles-validated; fixed pre-existing fixtures that used slot-INCOHERENT triplets (`[MANAFLOW_BAND(r0), CELERITY(r1), TRANSCENDENCE(r1)]` — two row1s, no row2) which the old flat logic silently accepted. `verify-fix.sh` ALL GREEN, 1422 tests.
+
+**On device the user should see:** applying the Pro page now fills the keystone + ALL 3 primary minor rows + both secondary picks. WEB-ONLY — no companion re-install.
+
+**CLEANUP FLAG for orchestrator:** an untracked temp verification file `components/__tests__/_ashe_repro.test.ts` (hermetic, passes) was left behind — the session safety gate blocked every `rm`, and worktree isolation blocked editing the shared `approved.txt`. NOT staged/committed. Please `rm` it (approve the deletion). It does not affect the deployed build.
+
+

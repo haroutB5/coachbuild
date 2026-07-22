@@ -161,6 +161,7 @@
 import type { ProGame } from "@/components/proGames.types";
 import { CONSUMABLE_ITEM_IDS, treeIconUrl, treeName } from "@/components/proAssets";
 import type { ItemDetail } from "@/components/itemDetail";
+import { primaryMinorRow } from "./perkSlots";
 import { TREE_NAME } from "@/lib/types";
 import type { Pick as PickType, RunesBlock, ShardSet, TreeId } from "@/lib/types";
 
@@ -209,6 +210,46 @@ export interface RuneSlotBreakdown {
    *  was never there. */
   soloqCount: number;
   prostageCount: number;
+}
+
+/** One resolved rune-page SLOT (a primary minor row, or a secondary tree row)
+ *  — the single modal rune for that slot over the conditioned page sample.
+ *  Unlike a `RuneSlotFrequency` (which ranks every rune seen in a FLAT slot
+ *  GROUP by frequency, with no per-row structure), this is the winner of ONE
+ *  specific row, so a page assembled from these can never put two runes in the
+ *  same slot. See the module header's "Slot-coherent apply page" section. */
+export interface RunePageSlotPick {
+  runeId: number;
+  /** 0-based minor-row index within the owning tree (perkSlots.ts). */
+  row: 0 | 1 | 2;
+  /** Page-sample games that ran THIS rune in THIS row. */
+  count: number;
+  /** Page-sample games that ran ANY resolved rune in this row — the honest
+   *  denominator for this slot (a row absent from a game doesn't dilute it). */
+  sampleSize: number;
+}
+
+/** The slot-coherent rune page the "Apply pro runes" button writes — exactly
+ *  one rune per required slot, derived by resolving each sampled rune to its
+ *  perkstyles row and taking the per-row modal, NOT a flat frequency ranking.
+ *  This is the apply path's source of truth; the FLAT primaryMinors/
+ *  secondaryPicks below remain the CARD DISPLAY's source (unchanged), which is
+ *  why both coexist on the model. */
+export interface SlotCoherentRunePage {
+  /** Page primary tree (null when no tree data — same condition as
+   *  `ProConsensusModel.primaryTree`). */
+  primaryTreeId: number | null;
+  /** Modal secondary tree (null when none resolved). */
+  secondaryTreeId: number | null;
+  /** Displayed modal keystone id (null when no keystone data). */
+  keystoneId: number | null;
+  /** length 3, index = primary minor row. `null` = that row had NO resolvable
+   *  rune anywhere in the page sample (genuinely uncoverable) — the apply
+   *  button disables rather than writing a page with an empty slot. */
+  primaryRows: (RunePageSlotPick | null)[];
+  /** length 3, index = secondary tree row. A real page picks 2 of these 3;
+   *  `null` = no data for that row. */
+  secondaryRows: (RunePageSlotPick | null)[];
 }
 
 export interface TournamentBreakdown {
@@ -334,6 +375,13 @@ export interface ProConsensusModel {
    *  (neither id is the 0 sentinel). */
   spellSampleSize: number;
   tournaments: TournamentBreakdown;
+  /** 2026-07-22 — the slot-coherent page the "Apply pro runes" button writes
+   *  (one modal rune per perkstyles slot). Computed over the SAME conditioned
+   *  page sample as primaryMinors/secondaryPicks, but resolved PER ROW so no
+   *  two ids can share a slot. `proConsensusRuneApplyInput` /
+   *  `missingRunePageReason` read exclusively off this; the flat
+   *  primaryMinors/secondaryPicks above stay the card DISPLAY's source. */
+  runePage: SlotCoherentRunePage;
 }
 
 const TOP_ITEMS_LIMIT = 6;
@@ -476,6 +524,102 @@ export function resolvePrimaryTree(games: ProGame[], modalKeystoneId: number): n
     if (tiedToKeystone > 0) return tiedToKeystone;
   }
   return modalTreeAmong(() => true);
+}
+
+// ── Slot-coherent page assembly (2026-07-22 pro-rune slot-coherence fix) ──────
+// The flat primaryMinors/secondaryPicks aggregates rank runes by frequency with
+// NO per-row structure, so a thin/split sample can rank two runes from the same
+// perkstyles row above a third row's rune — a page assembled from that top-N
+// list then has a duplicate slot AND a missing slot, which the LCU renders as
+// an EMPTY minor slot (the reported "Ashe Bot Pro" bug). These helpers instead
+// resolve each sampled rune to its ROW (perkSlots.ts) and take the per-row
+// modal, so the resulting page has exactly one rune per slot by construction —
+// the same one-per-row guarantee lib/recommend.ts's `rowPicks` gives the WPA
+// page. See the RunePageSlotPick / SlotCoherentRunePage type docs.
+
+/** row -> runeId for one game's PRIMARY minors. Soloq selections come back in
+ *  slot (row) order from Riot (lib/pro/extract.ts), so a full 3-minor soloq
+ *  page is read POSITIONALLY — this is what lets a single real game fill every
+ *  row (the brief's "a single real game HAS a complete valid page"), and also
+ *  slots a brand-new rune id the static perkstyles map hasn't caught up to yet.
+ *  Prostage's primary[] is NOT row-ordered (lib/prostage/extract.ts buckets by
+ *  parent tree), so those ids are resolved by the perkstyles map instead; the
+ *  first id to claim a row wins on the rare within-game duplicate. */
+function primaryRowAssignments(
+  game: ProGame,
+  primaryTreeId: number,
+  keystoneId: number | null
+): Map<number, number> {
+  const own = game.runes?.keystone ?? 0;
+  const raw = (game.runes?.primary ?? []).filter((id) => id > 0 && id !== own && id !== keystoneId);
+  const out = new Map<number, number>();
+  if (game.source === "soloq" && raw.length === 3) {
+    for (let i = 0; i < 3; i++) out.set(i, raw[i]);
+    return out;
+  }
+  for (const id of raw) {
+    const r = primaryMinorRow(primaryTreeId, id);
+    if (r !== null && !out.has(r)) out.set(r, id);
+  }
+  return out;
+}
+
+/** row -> runeId for one game's SECONDARY picks. Unlike primary, secondary
+ *  picks are NOT positionally row-mapped even for soloq (the two picks come
+ *  from 2 of 3 rows, ascending, but which 2 varies), so every id is resolved
+ *  through the perkstyles map for both sources. */
+function secondaryRowAssignments(game: ProGame, secondaryTreeId: number): Map<number, number> {
+  const own = game.runes?.keystone ?? 0;
+  const raw = (game.runes?.secondary ?? []).filter((id) => id > 0 && id !== own);
+  const out = new Map<number, number>();
+  for (const id of raw) {
+    const r = primaryMinorRow(secondaryTreeId, id);
+    if (r !== null && !out.has(r)) out.set(r, id);
+  }
+  return out;
+}
+
+/** Per-row modal over the page sample for one tree role (primary or secondary),
+ *  using the supplied per-game row->id assigner. Returns a fixed-length-3 array
+ *  indexed by row; a row with no sampled data is `null`. */
+function resolveRowPicks(
+  pageSample: ProGame[],
+  assign: (game: ProGame) => Map<number, number>
+): (RunePageSlotPick | null)[] {
+  const counts: Map<number, number>[] = [new Map(), new Map(), new Map()];
+  const rowSample = [0, 0, 0];
+  for (const game of pageSample) {
+    assign(game).forEach((id, row) => {
+      rowSample[row] += 1;
+      bump(counts[row], id);
+    });
+  }
+  return [0, 1, 2].map((r) => {
+    const top = sortEntries(counts[r])[0];
+    return top ? { runeId: top[0], row: r as 0 | 1 | 2, count: top[1], sampleSize: rowSample[r] } : null;
+  });
+}
+
+/** Assemble the slot-coherent apply page from the conditioned page sample. */
+function buildSlotCoherentPage(
+  pageSample: ProGame[],
+  primaryTreeId: number | null,
+  keystoneId: number | null,
+  secondaryTreeId: number | null
+): SlotCoherentRunePage {
+  const primaryRows =
+    primaryTreeId !== null
+      ? resolveRowPicks(pageSample, (g) => primaryRowAssignments(g, primaryTreeId, keystoneId))
+      : [null, null, null];
+  const secondaryRows =
+    secondaryTreeId !== null
+      ? resolveRowPicks(pageSample, (g) =>
+          (g.runes?.secondaryTree ?? 0) === secondaryTreeId
+            ? secondaryRowAssignments(g, secondaryTreeId)
+            : new Map<number, number>()
+        )
+      : [null, null, null];
+  return { primaryTreeId, secondaryTreeId, keystoneId, primaryRows, secondaryRows };
 }
 
 export function aggregateProConsensus(
@@ -677,6 +821,17 @@ export function aggregateProConsensus(
       }
     : null;
 
+  // Slot-coherent apply page — resolved PER ROW over the same conditioned page
+  // sample the flat minors/picks used, so no two ids can share a slot. Trees/
+  // keystone match the fields returned below (page primaryTree is null when the
+  // conditioned sample collapsed to empty — see primaryTreeSampleSize).
+  const runePage = buildSlotCoherentPage(
+    pageSample,
+    primaryTreeSampleSize > 0 ? primaryTreeId : null,
+    effectiveKeystone?.keystoneId ?? null,
+    secondaryTree?.treeId ?? null
+  );
+
   return {
     gamesTotal,
     items,
@@ -701,6 +856,7 @@ export function aggregateProConsensus(
       soloqCount,
       prostageCount,
     },
+    runePage,
   };
 }
 
@@ -736,15 +892,31 @@ export function formatSharePct(share: number): string {
 // only the ids/tree differ. No auto behavior is touched by any of this.
 //
 // ── Honesty rules (never fabricate a slot) ──────────────────────────────────
-// A real LCU rune page needs exactly: 1 keystone, 3 primary minors, 1
-// secondary tree, 2 secondary picks, 3 shards. The pro-consensus sample can
-// legitimately be too thin to have all of that (e.g. a champion with only a
-// couple of tracked pro games, or one where every game shares a keystone but
-// splits 3 ways on the third minor). `missingRunePageReason` is the single
-// source of truth for "is this page complete" — both
-// `proConsensusRuneApplyInput` (returns null when it fires) and the card's
-// disabled-button tooltip (surfaces the SAME reason string) read off it, so
-// the two can never disagree about why the button is disabled.
+// A real LCU rune page needs exactly: 1 keystone, one primary minor per row
+// (rows 0/1/2), 1 secondary tree, 2 secondary picks from 2 DIFFERENT secondary
+// rows, and 3 shards. The pro-consensus sample can legitimately be too thin to
+// have all of that.
+//
+// 2026-07-22 SLOT-COHERENCE FIX: this now reads off `model.runePage` (the
+// per-row resolved page — one modal rune per perkstyles slot), NOT the flat
+// primaryMinors/secondaryPicks COUNTS it used before. The count check was the
+// bug: "3 primary minors present" could be TWO runes from the same row plus an
+// empty row, which passed the old `entries.length < 3` guard but produced an
+// invalid page the client rendered with an empty minor slot (live "Ashe Bot
+// Pro" report). Checking the resolved per-row structure catches a slot GAP,
+// not just a low total count. `missingRunePageReason` stays the single source
+// of truth — both `proConsensusRuneApplyInput` (returns null when it fires) and
+// the card's disabled-button tooltip read off it, so they can never disagree.
+//
+// THIN-DATA / "fill from real games" decision: per-row modal over the page
+// sample already realizes cross-game fill — a row missing from one game is
+// covered by any other sampled game that ran it, and a full soloq page is read
+// positionally so a SINGLE real soloq game fills all 3 rows. A row is `null`
+// (uncoverable) only when NO sampled game ran a resolvable rune there — which
+// no "modal game" could supply either — so we honestly DISABLE the button with
+// a reason rather than write a knowingly-incomplete page. This keeps the button
+// usable on any sample that contains at least one complete real page while
+// never fabricating a slot.
 /** Riot tree style ids are a closed 5-value set (lib/types.ts's `TreeId`);
  *  `ProConsensusModel.primaryTree`/`secondaryTree.treeId` are plain
  *  `number` (resolved from raw game data, see proConsensus.ts's own tree
@@ -756,18 +928,27 @@ function asTreeId(id: number): TreeId | null {
   return id in TREE_NAME ? (id as TreeId) : null;
 }
 
+const REQUIRED_SECONDARY_ROWS = 2;
+
 export function missingRunePageReason(model: ProConsensusModel): string | null {
-  if (!model.keystone) return "No pro keystone data for this matchup yet.";
-  if (model.primaryTree === null || asTreeId(model.primaryTree) === null) {
+  const page = model.runePage;
+  if (!model.keystone || page.keystoneId === null) return "No pro keystone data for this matchup yet.";
+  if (page.primaryTreeId === null || asTreeId(page.primaryTreeId) === null) {
     return "No pro primary-tree data for this matchup yet.";
   }
-  if (model.primaryMinors.entries.length < TOP_PRIMARY_MINORS_LIMIT) {
+  // Every primary minor ROW must resolve to exactly one rune. A `null` row is a
+  // slot GAP — the count-only check this replaced passed it (3 total minors
+  // could be 2-from-one-row + an empty row), which is exactly what wrote a page
+  // with an empty in-client slot.
+  if (page.primaryRows.some((r) => r === null)) {
     return "Incomplete primary rune data — not enough sampled pro games.";
   }
-  if (!model.secondaryTree || asTreeId(model.secondaryTree.treeId) === null) {
+  if (page.secondaryTreeId === null || asTreeId(page.secondaryTreeId) === null) {
     return "No pro secondary-tree data for this matchup yet.";
   }
-  if (model.secondaryPicks.entries.length < TOP_SECONDARY_PICKS_LIMIT) {
+  // Need 2 secondary picks from 2 DIFFERENT rows — count resolved rows, not raw
+  // picks, so two runes from the same row can never masquerade as a valid pair.
+  if (page.secondaryRows.filter((r) => r !== null).length < REQUIRED_SECONDARY_ROWS) {
     return "Incomplete secondary rune data — not enough sampled pro games.";
   }
   return null;
@@ -806,11 +987,13 @@ export interface ProConsensusRuneApplyResult {
  *  null, and the type doc above for why shards always come from
  *  `fallbackShards`.
  *
- *  Deterministic tie order: every id here is read off `model`'s own
- *  already-sorted arrays (proConsensus.ts's `sortEntries` — count desc,
- *  then id asc), taken in that order with a plain `.slice()` — this
- *  function never re-sorts or re-decides a tie, it just reads the model's
- *  existing order.
+ *  Slot-coherent by construction (2026-07-22): primary minors are the per-row
+ *  modals from `model.runePage.primaryRows`, emitted in ROW order (row 0 → 1 →
+ *  2); the 2 secondary picks are the 2 most-adopted secondary rows, emitted in
+ *  ascending row order. Because every id is the winner of ONE row, the assembled
+ *  page can never put two runes in the same slot — the exact failure the flat
+ *  frequency list allowed. (Emitting in row order also matches the WPA page's
+ *  ordering; the LCU is robust either way, but row-ordered is the honest shape.)
  *
  *  Non-goal: the returned Picks carry placeholder `name`/`icon`/`wpa`/
  *  `winrate` — `buildRuneApplyBody` only reads `.id` off every slot plus
@@ -824,15 +1007,15 @@ export function proConsensusRuneApplyInput(
   fallbackShards: ShardSet
 ): ProConsensusRuneApplyResult | null {
   if (missingRunePageReason(model) !== null) return null;
-  // Narrowed by the guard above (mirrors missingRunePageReason's own
-  // checks — including the asTreeId validity check), but TS can't see
-  // through a function-boundary null-check — local consts make the
-  // non-null-ness explicit here too.
+  const page = model.runePage;
+  // Narrowed by the guard above (missingRunePageReason validates keystone,
+  // both trees via asTreeId, all 3 primary rows non-null, and ≥2 secondary
+  // rows), but TS can't see through the function-boundary null-check — the
+  // local consts + defensive re-checks make the non-null-ness explicit.
   const keystone = model.keystone;
-  const secondaryTree = model.secondaryTree;
-  const primaryTreeId = model.primaryTree !== null ? asTreeId(model.primaryTree) : null;
-  const secondaryTreeId = secondaryTree ? asTreeId(secondaryTree.treeId) : null;
-  if (!keystone || !secondaryTree || primaryTreeId === null || secondaryTreeId === null) return null; // unreachable; satisfies TS
+  const primaryTreeId = page.primaryTreeId !== null ? asTreeId(page.primaryTreeId) : null;
+  const secondaryTreeId = page.secondaryTreeId !== null ? asTreeId(page.secondaryTreeId) : null;
+  if (!keystone || primaryTreeId === null || secondaryTreeId === null) return null; // unreachable; satisfies TS
 
   const toPick = (id: number, occurrence: number): PickType => ({
     id,
@@ -843,6 +1026,23 @@ export function proConsensusRuneApplyInput(
     occurrence,
   });
 
+  // All 3 primary rows are non-null (missingRunePageReason enforced it) — emit
+  // in row order (index 0 → 2).
+  const primaryPicks = page.primaryRows;
+  if (primaryPicks.some((r) => r === null)) return null; // unreachable; satisfies TS
+  const primary = (primaryPicks as RunePageSlotPick[]).map((p) => toPick(p.runeId, p.count));
+
+  // The 2 most-adopted secondary rows (games desc, row asc on ties), re-sorted
+  // into ascending row order for emission — a real secondary page's 2 picks are
+  // in row order.
+  const secondary = page.secondaryRows
+    .filter((r): r is RunePageSlotPick => r !== null)
+    .sort((a, b) => (b.count !== a.count ? b.count - a.count : a.row - b.row))
+    .slice(0, REQUIRED_SECONDARY_ROWS)
+    .sort((a, b) => a.row - b.row)
+    .map((p) => toPick(p.runeId, p.count));
+  if (secondary.length < REQUIRED_SECONDARY_ROWS) return null; // unreachable; satisfies TS
+
   const runes: RunesBlock = {
     primaryTree: { id: primaryTreeId, name: treeName(primaryTreeId), icon: treeIconUrl(primaryTreeId) },
     secondaryTree: {
@@ -851,12 +1051,8 @@ export function proConsensusRuneApplyInput(
       icon: treeIconUrl(secondaryTreeId),
     },
     keystone: toPick(keystone.keystoneId, keystone.count),
-    primary: model.primaryMinors.entries
-      .slice(0, TOP_PRIMARY_MINORS_LIMIT)
-      .map((e) => toPick(e.runeId, e.count)),
-    secondary: model.secondaryPicks.entries
-      .slice(0, TOP_SECONDARY_PICKS_LIMIT)
-      .map((e) => toPick(e.runeId, e.count)),
+    primary,
+    secondary,
     shards: fallbackShards,
   };
 

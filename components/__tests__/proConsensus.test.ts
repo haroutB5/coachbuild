@@ -15,6 +15,7 @@ import {
   proConsensusRuneApplyInput,
 } from "../hextech/proConsensus";
 import { buildRuneApplyBody } from "../hextech/runeApplyBody";
+import { isKeystoneOf, primaryMinorRow } from "../hextech/perkSlots";
 import type { ProGame, ProGameRunes } from "../proGames.types";
 import type { ItemDetail } from "../itemDetail";
 import type { ShardSet } from "@/lib/types";
@@ -26,9 +27,16 @@ const PRECISION = 8000;
 // Sorcery: keystone Deathfire Touch (8992), minors Manaflow Band (8226),
 // Celerity (8234), Transcendence (8210).
 const DEATHFIRE_TOUCH = 8992;
-const MANAFLOW_BAND = 8226;
-const CELERITY = 8234;
-const TRANSCENDENCE = 8210;
+// Sorcery minor rows (perkstyles): row0 [8224,8226,8275], row1 [8210,8234,8233],
+// row2 [8237,8232,8236]. NOTE Manaflow Band (8226)=row0, BUT Celerity (8234) AND
+// Transcendence (8210) are BOTH row1 — the pre-fix apply-path fixtures paired
+// them as if they were distinct minor rows, which is exactly the slot collision
+// the 2026-07-22 fix guards against. Row-coherent apply fixtures below use
+// MANAFLOW_BAND (row0) + TRANSCENDENCE (row1) + SCORCH (row2).
+const MANAFLOW_BAND = 8226; // Sorcery row0
+const CELERITY = 8234; // Sorcery row1
+const TRANSCENDENCE = 8210; // Sorcery row1
+const SCORCH = 8237; // Sorcery row2
 // Precision: keystone Press the Attack (8005), minors Presence of Mind (8009),
 // Triumph (9111), Coup de Grace (8014).
 const PRESS_THE_ATTACK = 8005;
@@ -778,15 +786,17 @@ describe("proConsensus.ts — pro-consensus rune-apply input (2026-07-22)", () =
     defense: { id: 5011, name: "Health", icon: "", wpa: 0, winrate: null, occurrence: 0 },
   };
 
-  // A complete, tree-coherent Sorcery page (keystone + 3 minors + Precision
-  // secondary w/ 2 picks) — the same fixture shape the v0.29.0 tree-
-  // conditioning tests above already establish for Deathfire Touch/Sorcery.
+  // A complete, SLOT-coherent Sorcery page: keystone + one minor per row
+  // (MANAFLOW_BAND row0, TRANSCENDENCE row1, SCORCH row2) + Precision secondary
+  // with 2 picks from 2 different rows (PRESENCE_OF_MIND secRow0, COUP_DE_GRACE
+  // secRow2). soloq source (game()'s default), so the 3 minors are read
+  // positionally as rows 0/1/2.
   const completePageGame = (overrides: Partial<ProGame> = {}) =>
     game({
       runes: {
         primaryTree: SORCERY,
         keystone: DEATHFIRE_TOUCH,
-        primary: [MANAFLOW_BAND, CELERITY, TRANSCENDENCE],
+        primary: [MANAFLOW_BAND, TRANSCENDENCE, SCORCH],
         secondaryTree: PRECISION,
         secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE],
         shards: [],
@@ -833,7 +843,7 @@ describe("proConsensus.ts — pro-consensus rune-apply input (2026-07-22)", () =
             ...NO_RUNES,
             primaryTree: SORCERY,
             keystone: DEATHFIRE_TOUCH,
-            primary: [MANAFLOW_BAND, CELERITY, TRANSCENDENCE],
+            primary: [MANAFLOW_BAND, TRANSCENDENCE, SCORCH],
             secondaryTree: 0,
             secondary: [],
           },
@@ -850,7 +860,7 @@ describe("proConsensus.ts — pro-consensus rune-apply input (2026-07-22)", () =
             ...NO_RUNES,
             primaryTree: SORCERY,
             keystone: DEATHFIRE_TOUCH,
-            primary: [MANAFLOW_BAND, CELERITY, TRANSCENDENCE],
+            primary: [MANAFLOW_BAND, TRANSCENDENCE, SCORCH],
             secondaryTree: PRECISION,
             secondary: [PRESENCE_OF_MIND], // only 1, needs 2
           },
@@ -876,14 +886,16 @@ describe("proConsensus.ts — pro-consensus rune-apply input (2026-07-22)", () =
       // SEPARATE LCU page from the WPA auto-export's — the two coexist instead
       // of one reverting the other (companion 1.6.3).
       const body = buildRuneApplyBody("Viktor", "Mid", result!.runes, { pageSuffix: "Pro" });
-      // All 3 minors are tied (every game runs the same 3), so the model's own
-      // sortEntries tie-break (count desc, id asc) puts them id-ascending:
-      // Transcendence (8210) < Manaflow Band (8226) < Celerity (8234).
+      // SLOT-COHERENT + ROW-ORDERED (2026-07-22): primary minors are emitted in
+      // perkstyles row order — MANAFLOW_BAND (row0), TRANSCENDENCE (row1), SCORCH
+      // (row2) — NOT frequency order, so no two ids can share a slot. Secondary
+      // picks are the 2 most-adopted secondary rows in ascending row order:
+      // PRESENCE_OF_MIND (Precision secRow0), COUP_DE_GRACE (Precision secRow2).
       expect(body.selectedPerkIds).toEqual([
         DEATHFIRE_TOUCH,
-        TRANSCENDENCE,
         MANAFLOW_BAND,
-        CELERITY,
+        TRANSCENDENCE,
+        SCORCH,
         PRESENCE_OF_MIND,
         COUP_DE_GRACE,
         5008,
@@ -909,28 +921,127 @@ describe("proConsensus.ts — pro-consensus rune-apply input (2026-07-22)", () =
       expect(result.runes.shards).toBe(fallbackShards);
     });
 
-    it("deterministic tie order: primary minors follow the model's own count-desc/id-asc order, never re-decided here", () => {
-      const A = MANAFLOW_BAND; // appears in all 3 games -> count 3, clear winner
-      const B = 9001; // count 2
-      const C = 9002; // count 2, tied with B — id-asc breaks the tie
-      const D = 9003; // count 2, tied too, but excluded (only top 3 kept)
+    it("per-row modal + row order: primary picks are one-per-row, in row order, never frequency order", () => {
+      // A soloq sample split WITHIN row0 while row1/row2 are stable — the exact
+      // shape the old flat top-3 broke on. soloq primary[] is read positionally
+      // (rows 0/1/2), so:
+      //   row0: MANAFLOW_BAND x2 vs NULLIFYING_ORB x1  -> MANAFLOW_BAND
+      //   row1: TRANSCENDENCE x3                       -> TRANSCENDENCE
+      //   row2: SCORCH x3                              -> SCORCH
+      const NULLIFYING_ORB = 8224; // Sorcery row0 (alternative to MANAFLOW_BAND)
       const games = [
-        game({
-          runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, primary: [A, B, C], secondaryTree: PRECISION, secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE] },
-        }),
-        game({
-          runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, primary: [A, B, D], secondaryTree: PRECISION, secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE] },
-        }),
-        game({
-          runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, primary: [A, C, D], secondaryTree: PRECISION, secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE] },
-        }),
+        game({ runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, primary: [MANAFLOW_BAND, TRANSCENDENCE, SCORCH], secondaryTree: PRECISION, secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE] } }),
+        game({ runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, primary: [MANAFLOW_BAND, TRANSCENDENCE, SCORCH], secondaryTree: PRECISION, secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE] } }),
+        game({ runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, primary: [NULLIFYING_ORB, TRANSCENDENCE, SCORCH], secondaryTree: PRECISION, secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE] } }),
       ];
       const model = aggregateProConsensus(games, itemMeta());
-      // Sanity: the model itself already resolved the tie B-before-C-before-D.
-      expect(model.primaryMinors.entries.map((e) => e.runeId)).toEqual([A, B, C]);
-
       const result = proConsensusRuneApplyInput(model, fallbackShards)!;
-      expect(result.runes.primary.map((p) => p.id)).toEqual([A, B, C]);
+      // Row-ordered, one per row — NULLIFYING_ORB (the row0 minority) is dropped
+      // in favor of the row0 modal, and no row is ever doubled or skipped.
+      expect(result.runes.primary.map((p) => p.id)).toEqual([MANAFLOW_BAND, TRANSCENDENCE, SCORCH]);
+      const rows = model.runePage.primaryRows.map((r) => r?.runeId);
+      expect(rows).toEqual([MANAFLOW_BAND, TRANSCENDENCE, SCORCH]);
+    });
+  });
+
+  // ── Slot coherence, validated against the real perkstyles map ──────────────
+  // The root-cause guard: every applied page must be a LEGAL LCU page — one
+  // rune per slot, each id valid for its slot. This is the invariant the flat
+  // top-N assembly broke (live "Ashe Bot Pro" empty-slots report).
+  describe("slot coherence — perkstyles-validated (2026-07-22 fix)", () => {
+    /** Asserts the 6 rune ids of an assembled apply body form a legal page:
+     *  keystone valid for the primary tree, one primary minor per row in row
+     *  order, 2 secondary picks from 2 DIFFERENT rows ascending, no dup id. */
+    function assertSlotCoherent(perkIds: number[], primaryStyleId: number, subStyleId: number) {
+      const [ks, m0, m1, m2, s0, s1] = perkIds;
+      expect(isKeystoneOf(primaryStyleId, ks)).toBe(true);
+      expect(primaryMinorRow(primaryStyleId, m0)).toBe(0);
+      expect(primaryMinorRow(primaryStyleId, m1)).toBe(1);
+      expect(primaryMinorRow(primaryStyleId, m2)).toBe(2);
+      const sr0 = primaryMinorRow(subStyleId, s0);
+      const sr1 = primaryMinorRow(subStyleId, s1);
+      expect(sr0).not.toBeNull();
+      expect(sr1).not.toBeNull();
+      expect(sr0 as number).toBeLessThan(sr1 as number);
+      expect(new Set(perkIds.slice(0, 6)).size).toBe(6); // no id shared across slots
+    }
+
+    it("a complete consensus builds a page valid for every perkstyles slot", () => {
+      const result = proConsensusRuneApplyInput(completeModel(), fallbackShards)!;
+      const body = buildRuneApplyBody("Viktor", "Mid", result.runes);
+      assertSlotCoherent(body.selectedPerkIds, body.primaryStyleId, body.subStyleId);
+    });
+
+    it("a thin 1-game consensus still yields a COMPLETE valid page (filled from the one real game, never empty slots)", () => {
+      const model = aggregateProConsensus([completePageGame()], itemMeta());
+      expect(model.gamesTotal).toBe(1);
+      expect(missingRunePageReason(model)).toBeNull(); // button stays usable on thin data
+      expect(model.runePage.primaryRows.every((r) => r !== null)).toBe(true);
+      const result = proConsensusRuneApplyInput(model, fallbackShards)!;
+      const body = buildRuneApplyBody("Ashe", "Bot", result.runes);
+      assertSlotCoherent(body.selectedPerkIds, body.primaryStyleId, body.subStyleId);
+    });
+
+    it("prostage sample colliding on one row resolves via perkstyles — no two ids share a slot (the Ashe-bot repro class)", () => {
+      // prostage primary[] is NOT row-ordered (Leaguepedia buckets by tree), so
+      // ids are resolved by the perkstyles MAP, not position. Two of three games
+      // disagree on row0 while row1/row2 are stable — the exact shape a naive
+      // flat top-3 could collide on (two row0 runes, row2 dropped).
+      const NULLIFYING_ORB = 8224; // Sorcery row0 (alternative to MANAFLOW_BAND)
+      const pg = (primary: number[]) =>
+        game({
+          source: "prostage",
+          tournament: "LCK",
+          runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, primary, secondaryTree: PRECISION, secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE] },
+        });
+      const model = aggregateProConsensus(
+        [pg([NULLIFYING_ORB, TRANSCENDENCE, SCORCH]), pg([MANAFLOW_BAND, TRANSCENDENCE, SCORCH]), pg([MANAFLOW_BAND, TRANSCENDENCE, SCORCH])],
+        itemMeta()
+      );
+      const result = proConsensusRuneApplyInput(model, fallbackShards)!;
+      const body = buildRuneApplyBody("Viktor", "Mid", result.runes);
+      assertSlotCoherent(body.selectedPerkIds, body.primaryStyleId, body.subStyleId);
+      // row0 modal wins (MANAFLOW_BAND x2 > NULLIFYING_ORB x1); no row doubled/skipped.
+      expect(result.runes.primary.map((p) => p.id)).toEqual([MANAFLOW_BAND, TRANSCENDENCE, SCORCH]);
+    });
+
+    it("missingRunePageReason fires ONLY when a slot is truly uncoverable (row2 absent from EVERY sampled game)", () => {
+      // Every prostage game maps rows 0 and 1 but never row2 -> genuinely
+      // uncoverable (no game supplies it, so no 'modal game' could either) ->
+      // disable, never write an empty slot.
+      const pg = game({
+        source: "prostage",
+        tournament: "LEC",
+        runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, primary: [MANAFLOW_BAND, TRANSCENDENCE], secondaryTree: PRECISION, secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE] },
+      });
+      const model = aggregateProConsensus([pg, pg, pg], itemMeta());
+      expect(model.runePage.primaryRows[2]).toBeNull();
+      expect(missingRunePageReason(model)).toMatch(/primary/i);
+      expect(proConsensusRuneApplyInput(model, fallbackShards)).toBeNull();
+    });
+
+    it("a full page IS resolvable when different games cover different rows (cross-game fill, not one perfect game)", () => {
+      // No single game has all 3 rows, but the per-row modal stitches a complete
+      // page across the sample — the 'fill from real games' behavior, done at
+      // the row level. Game A misses row2, game B misses row1; together all 3
+      // rows resolve.
+      const gA = game({ source: "prostage", tournament: "LCK", runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, primary: [MANAFLOW_BAND, TRANSCENDENCE], secondaryTree: PRECISION, secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE] } });
+      const gB = game({ source: "prostage", tournament: "LCK", runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, primary: [MANAFLOW_BAND, SCORCH], secondaryTree: PRECISION, secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE] } });
+      const model = aggregateProConsensus([gA, gA, gB, gB], itemMeta());
+      expect(missingRunePageReason(model)).toBeNull();
+      const result = proConsensusRuneApplyInput(model, fallbackShards)!;
+      expect(result.runes.primary.map((p) => p.id)).toEqual([MANAFLOW_BAND, TRANSCENDENCE, SCORCH]);
+    });
+
+    it("secondary collision: two picks from the SAME secondary row never masquerade as a valid pair", () => {
+      // Both secondary picks map to Precision secRow0 (8009 and 9101) -> only 1
+      // distinct secondary row -> incomplete -> disabled.
+      const ABSORB_LIFE = 9101; // Precision row0 (same row as PRESENCE_OF_MIND 8009)
+      const pg = game({ runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, primary: [MANAFLOW_BAND, TRANSCENDENCE, SCORCH], secondaryTree: PRECISION, secondary: [PRESENCE_OF_MIND, ABSORB_LIFE] } });
+      const model = aggregateProConsensus([pg, pg, pg], itemMeta());
+      expect(model.runePage.secondaryRows.filter((r) => r !== null).length).toBe(1);
+      expect(missingRunePageReason(model)).toMatch(/secondary/i);
+      expect(proConsensusRuneApplyInput(model, fallbackShards)).toBeNull();
     });
   });
 });
