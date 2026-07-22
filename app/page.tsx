@@ -12,6 +12,7 @@ import PlayerGamesSection from "@/components/hextech/PlayerGamesSection";
 import HextechTabs, { type HextechTab } from "@/components/hextech/HextechTabs";
 import BuildTabContent from "@/components/hextech/BuildTabContent";
 import ProBuildsTab from "@/components/hextech/ProBuildsTab";
+import ProsSearchPrompt from "@/components/hextech/ProsSearchPrompt";
 import dynamic from "next/dynamic";
 // Round-B P3 fix (companion CIM cost section, item 5c): code-split via
 // next/dynamic — LivePanel only ever mounts for a session with a paired
@@ -40,6 +41,7 @@ import {
   modeAfterLaneChange,
   modeAfterChampionSelect,
   modeAfterPlayerSelect,
+  isProsSearchEmpty,
   defaultSourceForKind,
   defaultSourceForPlayer,
   applyWireMainView,
@@ -114,6 +116,14 @@ export default function HomePage() {
   gamesSourceRef.current = gamesSource;
 
   const mainView = deriveMainView(searchMode, champ, activeLane, selectedPlayer);
+  // v0.44.3 (user-reported: "When searching for pro players, dont show the
+  // champion page UI"): a pure RENDER gate, checked ahead of mainView.kind at
+  // the composition site below. mainView/champ/activeLane are untouched by
+  // this — a PROS-mode search with nothing picked yet still carries the
+  // champion view's real state underneath (see deriveMainView's own doc
+  // comment for why that's deliberate), it's just not what's painted. See
+  // homeSearch.ts's isProsSearchEmpty doc comment for the full rationale.
+  const showProsSearchPrompt = isProsSearchEmpty(searchMode, selectedPlayer);
 
   // Back-gesture history integration for the home page (v0.23.0) — same
   // useSheetBackNav hook /history uses (extracted from its original
@@ -604,7 +614,9 @@ export default function HomePage() {
             `fixed inset-0 z-[100]`, unaffected either way since `<main>` has
             no fixed descendants). */}
         <div className="max-w-[900px] lg:max-w-none xl:max-w-[1440px] lg:mx-0 xl:mx-auto overflow-x-clip">
-          {mainView.kind === "champion" ? (
+          {showProsSearchPrompt ? (
+            <ProsSearchPrompt onSelectPlayer={handlePlayerSelect} />
+          ) : mainView.kind === "champion" ? (
             <>
               <ChampionHero champ={mainView.champ} lane={mainView.lane} />
 

@@ -135,6 +135,25 @@ export function modeAfterPlayerSelect(): SearchMode {
   return "pros";
 }
 
+/** v0.44.3: whether the main content area should render the dedicated
+ *  "search for a pro player" prompt INSTEAD of whatever deriveMainView
+ *  returns. Before this, deriveMainView's own PROS-mode-with-nothing-picked
+ *  fallthrough (still correct as documented above — champ/lane state is
+ *  genuinely untouched, and that's exactly what let the CHAMPIONS<->PROS
+ *  toggle round-trip losslessly) meant the RENDER layer had nothing else to
+ *  key off, so the full champion page (hero, tabs, rank bracket, runes,
+ *  every card) kept painting underneath an empty PROS search — user-
+ *  reported: "When searching for pro players, dont show the champion page
+ *  UI." This is a pure RENDER gate, checked ahead of mainView.kind at the
+ *  composition site (app/page.tsx) — it does not change what deriveMainView
+ *  returns, what state the main view carries, or how wireViewForChampion/
+ *  applyWireMainView/history restoration behave; toggling back to CHAMPIONS
+ *  (or picking a player) still lands on the exact same preserved
+ *  champion/lane or player view as before. */
+export function isProsSearchEmpty(mode: SearchMode, selectedPlayer: PlayerSubject | null): boolean {
+  return mode === "pros" && selectedPlayer === null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // v0.24.0: the All/Solo Queue/Pro Play source filter the pre-Hextech /history
 // page had (ProGamesSection.tsx, still live there) but the Hextech shell

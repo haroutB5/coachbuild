@@ -4,6 +4,7 @@ import {
   modeAfterLaneChange,
   modeAfterChampionSelect,
   modeAfterPlayerSelect,
+  isProsSearchEmpty,
   defaultSourceForKind,
   defaultSourceForPlayer,
   applyWireMainView,
@@ -130,6 +131,32 @@ describe("modeAfterChampionSelect", () => {
 describe("modeAfterPlayerSelect", () => {
   it("always lands in PROS mode", () => {
     expect(modeAfterPlayerSelect()).toBe("pros");
+  });
+});
+
+// v0.44.3: the render-layer gate for the "search for a pro player" prompt —
+// separate from deriveMainView (which intentionally keeps returning the
+// champion view's STATE in this situation, see its own doc comment/test
+// above). isProsSearchEmpty is what app/page.tsx checks BEFORE mainView.kind
+// at the composition site so the champion page's UI (hero/tabs/rank
+// bracket/runes/cards) no longer bleeds through underneath an empty PROS
+// search.
+describe("isProsSearchEmpty", () => {
+  it("is true in PROS mode with no player selected — exactly the state that used to leak the champion page", () => {
+    expect(isProsSearchEmpty("pros", null)).toBe(true);
+  });
+
+  it("is false in PROS mode once a tracked player is selected", () => {
+    expect(isProsSearchEmpty("pros", BWIPO_TRACKED)).toBe(false);
+  });
+
+  it("is false in PROS mode once a link-only player is selected", () => {
+    expect(isProsSearchEmpty("pros", DHOKLA_LINK)).toBe(false);
+  });
+
+  it("is always false in CHAMPIONS mode, regardless of any lingering selectedPlayer", () => {
+    expect(isProsSearchEmpty("champions", null)).toBe(false);
+    expect(isProsSearchEmpty("champions", BWIPO_TRACKED)).toBe(false);
   });
 });
 
