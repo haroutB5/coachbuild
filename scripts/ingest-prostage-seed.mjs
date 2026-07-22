@@ -66,6 +66,35 @@ async function cargoExportViaCurl(opts) {
 // pages first (the actual lever — most of their games are new to the DB),
 // already-ingested playoff/MSI pages last (paginate-only top-up, mostly a
 // no-op beyond catching any >500-row truncation).
+//
+// 2026-07-22 update: added the SUMMER-split pages, verified live via a Cargo
+// Tournaments probe (`OverviewPage LIKE "LEC/%" OR ... OR "LCS/%"` AND
+// DateStart >= 2026-01-01, ordered DateStart DESC — see HANDOFF-engo.md for
+// the full probe output) rather than guessed, since a wrong OverviewPage
+// string silently ingests 0 rows with no error. The Spring-era entries above
+// predate the 2026-07-13 seed and are now the same "already-ingested
+// top-up" class the old playoffs/MSI entries were — kept for the same
+// re-run-is-idempotent reason, not because they're expected to yield new
+// rows anymore.
+//   - "LPL/2026 Season/Split 3": DateStart 2026-07-22 (today) — genuinely
+//     live right now, the biggest new lever.
+//   - "LEC/2026 Season/Summer Season" (DateStart 2026-07-24) and
+//     "LCS/2026 Season/Summer Season" (DateStart 2026-07-25): start within
+//     days of this seed run. Included now so the NEXT manual re-run (per
+//     HANDOFF gotcha (o), the prostage cron has never landed in prod) picks
+//     up their games without another list edit — harmless if 0 rows today,
+//     idempotent upserts either way.
+//   - "LCK/2026 Season/Rounds 3-4" (DateStart 2026-07-29): LCK has no
+//     separate "Summer Season" page — Rounds 3-4 is the next regular-season
+//     bracket after Rounds 1-2 (confirmed via the same probe: LCK's actual
+//     page tree is Cup -> Rounds 1-2 -> Road to MSI -> Rounds 3-4 ->
+//     Season Play-In -> Season Playoffs, no "Summer" page exists).
+//   - Summer PLAYOFFS pages (LEC "Summer Playoffs" DateStart 2026-09-05,
+//     LCK "Season Play-In"/"Season Playoffs" late Aug, no LPL Split 3
+//     Playoffs page exists yet) were confirmed to exist as Tournament rows
+//     but are 1+ month out with certainly-zero ScoreboardPlayers rows today —
+//     deliberately NOT added; a future re-run once they're actually playing
+//     should add them the same way this one added the summer regular seasons.
 const SEED_TOURNAMENTS = [
   "LEC/2026 Season/Spring Season",
   "LCS/2026 Season/Spring Season",
@@ -76,6 +105,10 @@ const SEED_TOURNAMENTS = [
   "LPL/2026 Season/Split 2 Playoffs",
   "LCK/2026 Season/Road to MSI",
   "2026 Mid-Season Invitational",
+  "LPL/2026 Season/Split 3",
+  "LEC/2026 Season/Summer Season",
+  "LCS/2026 Season/Summer Season",
+  "LCK/2026 Season/Rounds 3-4",
 ];
 
 async function main() {
