@@ -364,7 +364,7 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
               (N=0) ProConsensusCard renders null, collapsing this grid cell
               to zero height cleanly — grid-template-areas doesn't reserve
               empty space for a null child. */}
-          <ProConsensusCard champ={champ} lane={lane} ver={ver} onOpenDetail={openDetail} />
+          <ProConsensusCard champ={champ} lane={lane} ver={ver} onOpenDetail={openDetail} build={build} />
         </div>
       </div>
 

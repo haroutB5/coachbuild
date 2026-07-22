@@ -159,8 +159,10 @@
 //       minors/secondary) rather than pairing it with a page it never ran.
 
 import type { ProGame } from "@/components/proGames.types";
-import { CONSUMABLE_ITEM_IDS } from "@/components/proAssets";
+import { CONSUMABLE_ITEM_IDS, treeIconUrl, treeName } from "@/components/proAssets";
 import type { ItemDetail } from "@/components/itemDetail";
+import { TREE_NAME } from "@/lib/types";
+import type { Pick as PickType, RunesBlock, ShardSet, TreeId } from "@/lib/types";
 
 export interface ItemFrequency {
   itemId: number;
@@ -722,4 +724,141 @@ function tournamentNamesSortedByFrequency(games: ProGame[], firstSeenOrder: stri
  *  never hand-rolls its own rounding. */
 export function formatSharePct(share: number): string {
   return `${Math.round(share * 100)}%`;
+}
+
+// ── Pro Consensus -> rune-apply input (2026-07-22, "manual pro push") ──────
+// USER DIRECTIVE: keep auto-exporting the WPA-recommended page exactly as
+// today, but let the user MANUALLY choose to push the pro-consensus page
+// instead via a button on the Pro Consensus card. This section is the pure
+// translation from ProConsensusModel -> the SAME RunesBlock shape
+// runeApplyBody.ts's buildRuneApplyBody() already consumes, so "apply the
+// pro page" is byte-for-byte the same wire path as "apply the WPA page" —
+// only the ids/tree differ. No auto behavior is touched by any of this.
+//
+// ── Honesty rules (never fabricate a slot) ──────────────────────────────────
+// A real LCU rune page needs exactly: 1 keystone, 3 primary minors, 1
+// secondary tree, 2 secondary picks, 3 shards. The pro-consensus sample can
+// legitimately be too thin to have all of that (e.g. a champion with only a
+// couple of tracked pro games, or one where every game shares a keystone but
+// splits 3 ways on the third minor). `missingRunePageReason` is the single
+// source of truth for "is this page complete" — both
+// `proConsensusRuneApplyInput` (returns null when it fires) and the card's
+// disabled-button tooltip (surfaces the SAME reason string) read off it, so
+// the two can never disagree about why the button is disabled.
+/** Riot tree style ids are a closed 5-value set (lib/types.ts's `TreeId`);
+ *  `ProConsensusModel.primaryTree`/`secondaryTree.treeId` are plain
+ *  `number` (resolved from raw game data, see proConsensus.ts's own tree
+ *  conditioning above), so this is the guard that turns "a number that
+ *  should be a tree id" into an actually-typed `TreeId` before it's used to
+ *  build a `TreeRef` — never assumed, always checked against the known
+ *  set. */
+function asTreeId(id: number): TreeId | null {
+  return id in TREE_NAME ? (id as TreeId) : null;
+}
+
+export function missingRunePageReason(model: ProConsensusModel): string | null {
+  if (!model.keystone) return "No pro keystone data for this matchup yet.";
+  if (model.primaryTree === null || asTreeId(model.primaryTree) === null) {
+    return "No pro primary-tree data for this matchup yet.";
+  }
+  if (model.primaryMinors.entries.length < TOP_PRIMARY_MINORS_LIMIT) {
+    return "Incomplete primary rune data — not enough sampled pro games.";
+  }
+  if (!model.secondaryTree || asTreeId(model.secondaryTree.treeId) === null) {
+    return "No pro secondary-tree data for this matchup yet.";
+  }
+  if (model.secondaryPicks.entries.length < TOP_SECONDARY_PICKS_LIMIT) {
+    return "Incomplete secondary rune data — not enough sampled pro games.";
+  }
+  return null;
+}
+
+export interface ProConsensusRuneApplyResult {
+  /** Same shape buildRuneApplyBody() consumes — feed straight into it
+   *  (`buildRuneApplyBody(champ.name, roleLabel, result.runes)`), which
+   *  keeps the "CoachBuild <champ> <role>" title convention (v0.35.0) and
+   *  the champ-scoped cleanup prefix intact — this never mints a new title
+   *  vocabulary. */
+  runes: RunesBlock;
+  /** Always `true` today. `model.shards` (proConsensus.ts's own
+   *  RuneSlotBreakdown for the shards row) is a FLAT top-3-by-frequency
+   *  count over every game's `runes.shards` array — it carries no
+   *  offense/flex/defense slot label, and real shard ids overlap between
+   *  slots (5008 Adaptive Force is valid in BOTH the offense and flex
+   *  rows), so assigning a bare id from that flat list to a specific slot
+   *  would be fabricating structure the model doesn't have — the exact
+   *  same "never assume, never invent" posture this module already applies
+   *  to primary/secondary row order (see the module header). The caller's
+   *  `fallbackShards` (the CURRENT WPA-recommended build's ShardSet,
+   *  already on screen) is used unconditionally instead; this flag lets
+   *  the caller render an honest "shards from CoachBuild's
+   *  recommendation — pro shard data unavailable" note rather than
+   *  implying the shards came from pro data too. */
+  shardsFromFallback: boolean;
+}
+
+/** Builds a RunesBlock for the "Apply pro runes" button
+ *  (ProConsensusCard.tsx) — pushes the pro-consensus page through the SAME
+ *  apply pipeline (companionClient.applyRunes via buildRuneApplyBody) the
+ *  WPA "Apply runes" button already uses. Pure: no fetch, no DOM, plain
+ *  ProConsensusModel + a caller-supplied fallback ShardSet in, a result or
+ *  `null` out — see `missingRunePageReason` for exactly when this returns
+ *  null, and the type doc above for why shards always come from
+ *  `fallbackShards`.
+ *
+ *  Deterministic tie order: every id here is read off `model`'s own
+ *  already-sorted arrays (proConsensus.ts's `sortEntries` — count desc,
+ *  then id asc), taken in that order with a plain `.slice()` — this
+ *  function never re-sorts or re-decides a tie, it just reads the model's
+ *  existing order.
+ *
+ *  Non-goal: the returned Picks carry placeholder `name`/`icon`/`wpa`/
+ *  `winrate` — `buildRuneApplyBody` only reads `.id` off every slot plus
+ *  `primaryTree.id`/`secondaryTree.id` (see that file), so this is
+ *  intentionally NOT a display model. A future caller that needs display
+ *  data too should resolve names/icons the same async way
+ *  ProConsensusCard already does (`resolveRuneDisplay`) rather than adding
+ *  that here — this stays pure and DOM-free. */
+export function proConsensusRuneApplyInput(
+  model: ProConsensusModel,
+  fallbackShards: ShardSet
+): ProConsensusRuneApplyResult | null {
+  if (missingRunePageReason(model) !== null) return null;
+  // Narrowed by the guard above (mirrors missingRunePageReason's own
+  // checks — including the asTreeId validity check), but TS can't see
+  // through a function-boundary null-check — local consts make the
+  // non-null-ness explicit here too.
+  const keystone = model.keystone;
+  const secondaryTree = model.secondaryTree;
+  const primaryTreeId = model.primaryTree !== null ? asTreeId(model.primaryTree) : null;
+  const secondaryTreeId = secondaryTree ? asTreeId(secondaryTree.treeId) : null;
+  if (!keystone || !secondaryTree || primaryTreeId === null || secondaryTreeId === null) return null; // unreachable; satisfies TS
+
+  const toPick = (id: number, occurrence: number): PickType => ({
+    id,
+    name: `Rune #${id}`,
+    icon: "",
+    wpa: 0,
+    winrate: null,
+    occurrence,
+  });
+
+  const runes: RunesBlock = {
+    primaryTree: { id: primaryTreeId, name: treeName(primaryTreeId), icon: treeIconUrl(primaryTreeId) },
+    secondaryTree: {
+      id: secondaryTreeId,
+      name: treeName(secondaryTreeId),
+      icon: treeIconUrl(secondaryTreeId),
+    },
+    keystone: toPick(keystone.keystoneId, keystone.count),
+    primary: model.primaryMinors.entries
+      .slice(0, TOP_PRIMARY_MINORS_LIMIT)
+      .map((e) => toPick(e.runeId, e.count)),
+    secondary: model.secondaryPicks.entries
+      .slice(0, TOP_SECONDARY_PICKS_LIMIT)
+      .map((e) => toPick(e.runeId, e.count)),
+    shards: fallbackShards,
+  };
+
+  return { runes, shardsFromFallback: true };
 }

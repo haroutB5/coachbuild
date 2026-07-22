@@ -5,9 +5,19 @@
  * ProGame[] + a fake item-metadata Map in, ProConsensusModel out.
  */
 import { describe, it, expect } from "vitest";
-import { aggregateProConsensus, isBuildItem, formatSharePct, resolvePrimaryTree, STARTING_ITEM_ALLOWLIST } from "../hextech/proConsensus";
+import {
+  aggregateProConsensus,
+  isBuildItem,
+  formatSharePct,
+  resolvePrimaryTree,
+  STARTING_ITEM_ALLOWLIST,
+  missingRunePageReason,
+  proConsensusRuneApplyInput,
+} from "../hextech/proConsensus";
+import { buildRuneApplyBody } from "../hextech/runeApplyBody";
 import type { ProGame, ProGameRunes } from "../proGames.types";
 import type { ItemDetail } from "../itemDetail";
+import type { ShardSet } from "@/lib/types";
 
 // Real rune tree + rune ids, used by the v0.29.0 tree-conditioning tests so
 // the fixtures read like an actual rune page.
@@ -753,5 +763,166 @@ describe("formatSharePct", () => {
     expect(formatSharePct(11 / 39)).toBe("28%");
     expect(formatSharePct(1)).toBe("100%");
     expect(formatSharePct(0)).toBe("0%");
+  });
+});
+
+// ── 2026-07-22: manual "push the pro-consensus page" ────────────────────────
+// missingRunePageReason / proConsensusRuneApplyInput — the pure translation
+// from ProConsensusModel into the SAME RunesBlock shape runeApplyBody.ts's
+// buildRuneApplyBody() consumes, feeding the Pro Consensus card's new
+// "Apply pro runes" button.
+describe("proConsensus.ts — pro-consensus rune-apply input (2026-07-22)", () => {
+  const fallbackShards: ShardSet = {
+    offense: { id: 5008, name: "Adaptive Force", icon: "", wpa: 0, winrate: null, occurrence: 0 },
+    flex: { id: 5010, name: "Move Speed", icon: "", wpa: 0, winrate: null, occurrence: 0 },
+    defense: { id: 5011, name: "Health", icon: "", wpa: 0, winrate: null, occurrence: 0 },
+  };
+
+  // A complete, tree-coherent Sorcery page (keystone + 3 minors + Precision
+  // secondary w/ 2 picks) — the same fixture shape the v0.29.0 tree-
+  // conditioning tests above already establish for Deathfire Touch/Sorcery.
+  const completePageGame = (overrides: Partial<ProGame> = {}) =>
+    game({
+      runes: {
+        primaryTree: SORCERY,
+        keystone: DEATHFIRE_TOUCH,
+        primary: [MANAFLOW_BAND, CELERITY, TRANSCENDENCE],
+        secondaryTree: PRECISION,
+        secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE],
+        shards: [],
+      },
+      ...overrides,
+    });
+
+  function completeModel() {
+    const games = Array.from({ length: 20 }, () => completePageGame());
+    return aggregateProConsensus(games, itemMeta());
+  }
+
+  describe("missingRunePageReason", () => {
+    it("is null for a complete page (keystone + 3 minors + secondary tree + 2 picks)", () => {
+      expect(missingRunePageReason(completeModel())).toBeNull();
+    });
+
+    it("flags a sample with no resolved keystone", () => {
+      const model = aggregateProConsensus([game({ runes: NO_RUNES })], itemMeta());
+      expect(missingRunePageReason(model)).toMatch(/keystone/i);
+    });
+
+    it("flags fewer than 3 primary minors", () => {
+      const games = Array.from({ length: 5 }, () =>
+        game({
+          runes: {
+            ...NO_RUNES,
+            primaryTree: SORCERY,
+            keystone: DEATHFIRE_TOUCH,
+            primary: [MANAFLOW_BAND], // only 1, needs 3
+            secondaryTree: PRECISION,
+            secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE],
+          },
+        })
+      );
+      const model = aggregateProConsensus(games, itemMeta());
+      expect(missingRunePageReason(model)).toMatch(/primary/i);
+    });
+
+    it("flags a sample with no resolved secondary tree", () => {
+      const games = Array.from({ length: 5 }, () =>
+        game({
+          runes: {
+            ...NO_RUNES,
+            primaryTree: SORCERY,
+            keystone: DEATHFIRE_TOUCH,
+            primary: [MANAFLOW_BAND, CELERITY, TRANSCENDENCE],
+            secondaryTree: 0,
+            secondary: [],
+          },
+        })
+      );
+      const model = aggregateProConsensus(games, itemMeta());
+      expect(missingRunePageReason(model)).toMatch(/secondary/i);
+    });
+
+    it("flags fewer than 2 secondary picks", () => {
+      const games = Array.from({ length: 5 }, () =>
+        game({
+          runes: {
+            ...NO_RUNES,
+            primaryTree: SORCERY,
+            keystone: DEATHFIRE_TOUCH,
+            primary: [MANAFLOW_BAND, CELERITY, TRANSCENDENCE],
+            secondaryTree: PRECISION,
+            secondary: [PRESENCE_OF_MIND], // only 1, needs 2
+          },
+        })
+      );
+      const model = aggregateProConsensus(games, itemMeta());
+      expect(missingRunePageReason(model)).toMatch(/secondary/i);
+    });
+  });
+
+  describe("proConsensusRuneApplyInput", () => {
+    it("returns null (never fabricates a slot) when the page is incomplete", () => {
+      const model = aggregateProConsensus([], itemMeta());
+      expect(proConsensusRuneApplyInput(model, fallbackShards)).toBeNull();
+    });
+
+    it("builds a RunesBlock whose buildRuneApplyBody() output is the correct 9-slot id order: keystone, 3 primary, 2 secondary, 3 shards", () => {
+      const model = completeModel();
+      const result = proConsensusRuneApplyInput(model, fallbackShards);
+      expect(result).not.toBeNull();
+
+      const body = buildRuneApplyBody("Viktor", "Mid", result!.runes);
+      // All 3 minors are tied (every game runs the same 3), so the model's own
+      // sortEntries tie-break (count desc, id asc) puts them id-ascending:
+      // Transcendence (8210) < Manaflow Band (8226) < Celerity (8234).
+      expect(body.selectedPerkIds).toEqual([
+        DEATHFIRE_TOUCH,
+        TRANSCENDENCE,
+        MANAFLOW_BAND,
+        CELERITY,
+        PRESENCE_OF_MIND,
+        COUP_DE_GRACE,
+        5008,
+        5010,
+        5011,
+      ]);
+      expect(body.primaryStyleId).toBe(SORCERY);
+      expect(body.subStyleId).toBe(PRECISION);
+      // Title convention unchanged (v0.35.0) — this REPLACES the WPA page,
+      // it never mints a new "CoachBuild Pro ..." title.
+      expect(body.name).toBe("CoachBuild Viktor Mid");
+    });
+
+    it("always sources shards from the caller's fallbackShards and flags shardsFromFallback (consensus shards aren't slot-labeled)", () => {
+      const model = completeModel();
+      const result = proConsensusRuneApplyInput(model, fallbackShards)!;
+      expect(result.shardsFromFallback).toBe(true);
+      expect(result.runes.shards).toBe(fallbackShards);
+    });
+
+    it("deterministic tie order: primary minors follow the model's own count-desc/id-asc order, never re-decided here", () => {
+      const A = MANAFLOW_BAND; // appears in all 3 games -> count 3, clear winner
+      const B = 9001; // count 2
+      const C = 9002; // count 2, tied with B — id-asc breaks the tie
+      const D = 9003; // count 2, tied too, but excluded (only top 3 kept)
+      const games = [
+        game({
+          runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, primary: [A, B, C], secondaryTree: PRECISION, secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE] },
+        }),
+        game({
+          runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, primary: [A, B, D], secondaryTree: PRECISION, secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE] },
+        }),
+        game({
+          runes: { ...NO_RUNES, primaryTree: SORCERY, keystone: DEATHFIRE_TOUCH, primary: [A, C, D], secondaryTree: PRECISION, secondary: [PRESENCE_OF_MIND, COUP_DE_GRACE] },
+        }),
+      ];
+      const model = aggregateProConsensus(games, itemMeta());
+      // Sanity: the model itself already resolved the tie B-before-C-before-D.
+      expect(model.primaryMinors.entries.map((e) => e.runeId)).toEqual([A, B, C]);
+
+      const result = proConsensusRuneApplyInput(model, fallbackShards)!;
+      expect(result.runes.primary.map((p) => p.id)).toEqual([A, B, C]);
+    });
   });
 });

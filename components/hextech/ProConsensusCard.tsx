@@ -1,14 +1,24 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { ChampionRef } from "@/lib/types";
+import type { ChampionRef, BuildResponse, ShardSet } from "@/lib/types";
 import type { ProGame, ProGamesApiResponse } from "@/components/proGames.types";
 import type { EntityKind } from "@/components/EntityDetailPopover";
 import { itemIconUrl, spellIconUrl, spellName, treeIconUrl, treeName, resolveRuneDisplay, shardIconUrl, shardName } from "@/components/proAssets";
 import { getItemDetailMap, type ItemDetail } from "@/components/itemDetail";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import { LANE_TO_ROLE_ID, type LaneId } from "./heroContracts";
-import { aggregateProConsensus, formatSharePct, type ProConsensusModel, type RuneSlotBreakdown } from "./proConsensus";
+import {
+  aggregateProConsensus,
+  formatSharePct,
+  missingRunePageReason,
+  proConsensusRuneApplyInput,
+  type ProConsensusModel,
+  type RuneSlotBreakdown,
+} from "./proConsensus";
+import { buildRuneApplyBody } from "./runeApplyBody";
+import { applyItemSetsForBuild } from "./itemSetsApply";
+import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/components/live/companionClient";
 
 // Sample size below which the fraction shown is more noise than signal — the
 // card still renders (a real user request, "Rocketbelt shows up a lot," can
@@ -34,6 +44,19 @@ interface ProConsensusCardProps {
    *  instead of triggering a second, possibly-different version resolution. */
   ver: string;
   onOpenDetail: (kind: "item" | EntityKind, id: number) => void;
+  /** 2026-07-22 (manual pro push) — the full BuildResponse for THIS champ+
+   *  lane, same object BuildTabContent already fetched and passed to
+   *  RunesSummonersCard. Optional, same degrade-quietly convention as that
+   *  card's own championName/roleLabel/build props — omitting it just
+   *  hides the two header buttons below (no companion session to push to
+   *  anyway, or a caller that has no BuildResponse at hand). Supplies:
+   *  champ.name + roleLabel for the "CoachBuild <champ> <role>" apply-body
+   *  title (runeApplyBody.ts), runes.shards as the fallback ShardSet when
+   *  pro shard data can't be slot-mapped (see proConsensus.ts's
+   *  proConsensusRuneApplyInput), and the whole build for the item-set
+   *  pipeline (itemSetsApply.ts's applyItemSetsForBuild, identical to
+   *  RunesSummonersCard's own "Add item builds" button). */
+  build?: BuildResponse;
 }
 
 type FetchState =
@@ -57,8 +80,202 @@ interface DisplayNames {
 }
 
 function CardHeader({ children }: { children: React.ReactNode }) {
+  // v-manual-pro-push: mb-3.5 moved OUT of here into the header row wrapper
+  // (see the default export's render) now that the row can hold header text
+  // + two buttons side by side — an own margin-bottom on a flex child looks
+  // uneven against taller/shorter siblings. Single call site (grep-verified)
+  // so this is a pure layout move, not a behavior change.
+  return <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">{children}</p>;
+}
+
+type ApplyUiState =
+  | { status: "idle" }
+  | { status: "applying" }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
+/** "Apply pro runes" — the manual pro-page counterpart to RunesSummonersCard's
+ *  "Apply runes" button. Same compliance posture (v0.32.0 plan §3: applyRunes
+ *  is only ever invoked from a user click, strictly manual mode, never a
+ *  poll/effect) and the SAME apply pipeline (companionClient.applyRunes via
+ *  buildRuneApplyBody) — only the RunesBlock fed into it differs (pro
+ *  consensus via proConsensusRuneApplyInput instead of the WPA
+ *  recommendation). Pushing this REPLACES the existing "CoachBuild <champ>
+ *  <role>" page rather than minting a second page (see runeApplyBody.ts's
+ *  title convention / v0.35.0's champ-scoped cleanup prefix) — the tooltip
+ *  says so explicitly. Disabled (with a reason tooltip, never fabricating a
+ *  slot) whenever the pro sample can't fill a complete page — see
+ *  proConsensus.ts's missingRunePageReason, the single source of truth this
+ *  button and proConsensusRuneApplyInput both read. */
+function ApplyProRunesButton({ champ, roleLabel, model, fallbackShards }: {
+  champ: ChampionRef;
+  roleLabel: string;
+  model: ProConsensusModel;
+  fallbackShards: ShardSet;
+}) {
+  const [ready, setReady] = useState(false);
+  const [state, setState] = useState<ApplyUiState>({ status: "idle" });
+
+  useEffect(() => {
+    setReady(hasSession());
+  }, []);
+
+  const reason = missingRunePageReason(model);
+  const input = reason === null ? proConsensusRuneApplyInput(model, fallbackShards) : null;
+  const disabled = state.status === "applying" || input === null;
+  const tooltip =
+    reason ??
+    (input?.shardsFromFallback
+      ? "Replaces the current rune page with the pro-consensus page. Shards from CoachBuild's recommendation — pro shard data unavailable."
+      : "Replaces the current rune page with the pro-consensus page.");
+
+  async function handleClick() {
+    if (!input) return;
+    const session = getStoredSession();
+    const port = getStoredPort();
+    if (!session || !port) {
+      setState({ status: "error", message: "Companion not connected — open /live-setup and reconnect." });
+      return;
+    }
+
+    let body: ReturnType<typeof buildRuneApplyBody>;
+    try {
+      body = buildRuneApplyBody(champ.name, roleLabel, input.runes);
+    } catch {
+      setState({ status: "error", message: "Couldn't build a pro rune page — try refreshing." });
+      return;
+    }
+
+    setState({ status: "applying" });
+    const result = await applyRunes(port, session, body, "manual");
+    if (result.ok) {
+      const message =
+        result.selected && result.verified
+          ? "Applied in-client."
+          : "Saved as a rune page — open the client to select it.";
+      setState({ status: "success", message });
+    } else {
+      setState({
+        status: "error",
+        message: result.hint ?? "Apply failed — try again, or set runes manually in-client.",
+      });
+    }
+    setTimeout(() => setState({ status: "idle" }), 4000);
+  }
+
+  if (!ready) return null;
+
   return (
-    <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold mb-3.5">{children}</p>
+    <div className="flex flex-col items-end gap-1.5">
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={disabled}
+        title={tooltip}
+        aria-label={`Apply pro runes — ${tooltip}`}
+        className="flex-shrink-0 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-bg bg-teal hover:bg-teal-hover disabled:opacity-60 disabled:cursor-not-allowed rounded-md px-2.5 py-1.5 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
+      >
+        {state.status === "applying" ? "Applying…" : "Apply pro runes"}
+      </button>
+      {state.status === "success" && (
+        <p role="status" className="text-[10.5px] text-teal">
+          {state.message}
+        </p>
+      )}
+      {state.status === "error" && (
+        <p role="status" className="text-[10.5px] text-bad max-w-[220px] text-right">
+          {state.message}
+        </p>
+      )}
+      {state.status === "idle" && input === null && reason && (
+        <p role="status" className="text-[9.5px] text-mut/60 max-w-[200px] text-right">
+          {reason}
+        </p>
+      )}
+    </div>
+  );
+}
+
+type ItemSetsUiState =
+  | { status: "idle" }
+  | { status: "applying" }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
+/** "Add pro item build" — a manual RE-PUSH of the SAME item-set export
+ *  pipeline RunesSummonersCard's "Add item builds" button already uses
+ *  (itemSetsApply.ts's applyItemSetsForBuild). Honest naming matters here:
+ *  the exported set is the full CoachBuild champ+role set (Core/Optimized/
+ *  Situational blocks) with the Pro consensus line already folded in
+ *  (itemSetBody.ts resolves pro data independently) — this button does NOT
+ *  export a pro-only set, it's a convenience re-trigger from the pro
+ *  section for a user who's looking at this card specifically. No new
+ *  plumbing: same gating (session-ready only), same result shape as
+ *  RunesSummonersCard's ItemSetsButton. */
+function AddProItemBuildButton({ champ, lane, roleLabel, build }: {
+  champ: ChampionRef;
+  lane: LaneId;
+  roleLabel: string;
+  build: BuildResponse;
+}) {
+  const [ready, setReady] = useState(false);
+  const [state, setState] = useState<ItemSetsUiState>({ status: "idle" });
+
+  useEffect(() => {
+    setReady(hasSession());
+  }, []);
+
+  async function handleClick() {
+    const session = getStoredSession();
+    const port = getStoredPort();
+    if (!session || !port) {
+      setState({ status: "error", message: "Companion not connected — open /live-setup and reconnect." });
+      return;
+    }
+
+    setState({ status: "applying" });
+    const result = await applyItemSetsForBuild({ champ, lane, roleLabel, build, port, session });
+    if (result.ok) {
+      setState({
+        status: "success",
+        message: "Item build added — check your shop in game.",
+      });
+    } else {
+      setState({
+        status: "error",
+        message: result.hint ?? "Couldn't add item builds — try again, or add them manually in-client.",
+      });
+    }
+    setTimeout(() => setState({ status: "idle" }), 4000);
+  }
+
+  if (!ready) return null;
+
+  const tooltip = "Adds the full CoachBuild item set (including the Pro consensus line) — check your shop in game.";
+
+  return (
+    <div className="flex flex-col items-end gap-1.5">
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={state.status === "applying"}
+        title={tooltip}
+        aria-label={`Add pro item build — ${tooltip}`}
+        className="flex-shrink-0 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-txt bg-panel2 border border-line hover:border-line-gold disabled:opacity-60 disabled:cursor-not-allowed rounded-md px-2.5 py-1.5 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
+      >
+        {state.status === "applying" ? "Adding…" : "Add pro item build"}
+      </button>
+      {state.status === "success" && (
+        <p role="status" className="text-[10.5px] text-teal max-w-[220px] text-right">
+          {state.message}
+        </p>
+      )}
+      {state.status === "error" && (
+        <p role="status" className="text-[10.5px] text-bad max-w-[220px] text-right">
+          {state.message}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -297,7 +514,7 @@ function slotSampleNote(breakdown: RuneSlotBreakdown): string {
   return `from ${sampleSize} games (${soloqCount} solo queue, ${prostageCount} pro play)`;
 }
 
-export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: ProConsensusCardProps) {
+export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build }: ProConsensusCardProps) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
   // v0.27.3 (live user report: the v0.27.2 error line showed up on-device and
   // then STUCK — the fetch only ever re-fired on champion/lane change, so one
@@ -478,8 +695,25 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail }: Pro
 
   return (
     <div className="bg-panel border border-line rounded-xl p-5">
-      <div className="flex items-baseline justify-between gap-3 mb-1">
+      <div className="flex items-start justify-between gap-3 mb-3.5">
         <CardHeader>Pro Consensus</CardHeader>
+        {/* 2026-07-22 (manual pro push) — visually parallel to
+            RunesSummonersCard's Apply-runes/Add-item-builds pair, same
+            visibility gate (hasSession(), checked inside each button so a
+            build without a live session renders neither). `build` is
+            optional (same degrade-quietly convention as the rest of this
+            tab) — omitting it just hides both buttons. */}
+        {build && (
+          <div className="flex items-start gap-2.5">
+            <ApplyProRunesButton
+              champ={champ}
+              roleLabel={build.roleLabel}
+              model={model}
+              fallbackShards={build.runes.shards}
+            />
+            <AddProItemBuildButton champ={champ} lane={lane} roleLabel={build.roleLabel} build={build} />
+          </div>
+        )}
       </div>
 
       {lowSample && (

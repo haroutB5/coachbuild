@@ -7736,3 +7736,33 @@ I deliberately did **not** touch, revert, or commit those files — `verify-fix.
 
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-22 09:22
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-22 08:12:21Z; previous content preserved there. Append new rounds below. -->
+
+## v0.45.0 deploy + prod smoke confirmation (2026-07-22, follow-up to the round merged above)
+
+Committed as `29c1011` (author `Harout <harout_b5@live.com>`), scope limited to this ship's own files (companion.ps1, companionClient.ts, CompanionProvider.tsx, app/draft/page.tsx, companionClient.test.ts, package.json, CHANGELOG.md, HANDOFF*.md) — the unrelated concurrently-dirty files noted in the round above (proConsensus.ts, ProConsensusCard.tsx, etc.) were deliberately left uncommitted and untouched by me. Deployed via `npx vercel --prod --archive=tgz --yes`, aliased to `https://coachbuild.vercel.app` (deployment `dpl_3zRqwNUrpUiKXjesEjzLQzgXvBZm`).
+
+**Prod smoke (puppeteer-core + system Chrome, isolated userDataDir — chrome-devtools MCP was profile-locked by a concurrent session, per the known fallback):**
+- Homepage footer: `v0.45.0` confirmed.
+- `curl https://coachbuild.vercel.app/companion.ps1` → `Version     = '1.6.0'`, and `diff` against the local `public/companion.ps1` source is byte-identical — since the local source was already byte-scanned 0-non-ASCII, the served copy is ASCII-clean by transitivity (a direct `iconv -f ASCII -t ASCII` re-check on the served copy hit a harness flag-ordering issue in this shell and is not authoritative on its own — the diff-identity check is).
+- `/draft?session=test` loaded cleanly (`Draft Recommender` heading present, footer `v0.45.0`), and `window.localStorage.getItem('coachbuild:companion:session')` read back `"test"` after load — confirms the new mount-only session-adoption effect fires and persists via `CompanionProvider.setSession`. No "LIVE — syncing" strip shown, as expected off-device (no real companion connected, `companion.phase` stays null, so the live-sync effect's `dirty` branch is never even evaluated) — this run cannot exercise the dirty-latch behavior itself (needs a real ChampSelect phase), but confirms by code inspection + the absence of any crash/redirect that the new effect touches nothing beyond `setSession`.
+- Smoke script kept at `.smoke-tools/smoke-045-draft-session.mjs` alongside the project's existing ad-hoc check-script convention.
+
+**Status:** deploy landed, all three requested smoke points verified. Two gated rounds can proceed.
+
+
+
