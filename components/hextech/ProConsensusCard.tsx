@@ -100,13 +100,18 @@ type ApplyUiState =
  *  poll/effect) and the SAME apply pipeline (companionClient.applyRunes via
  *  buildRuneApplyBody) — only the RunesBlock fed into it differs (pro
  *  consensus via proConsensusRuneApplyInput instead of the WPA
- *  recommendation). Pushing this REPLACES the existing "CoachBuild <champ>
- *  <role>" page rather than minting a second page (see runeApplyBody.ts's
- *  title convention / v0.35.0's champ-scoped cleanup prefix) — the tooltip
- *  says so explicitly. Disabled (with a reason tooltip, never fabricating a
- *  slot) whenever the pro sample can't fill a complete page — see
- *  proConsensus.ts's missingRunePageReason, the single source of truth this
- *  button and proConsensusRuneApplyInput both read. */
+ *  recommendation). companion 1.6.3 / 2026-07-22: this writes to a SEPARATE
+ *  page — "CoachBuild <champ> <role> Pro" (`pageSuffix:"Pro"` below) — that
+ *  coexists with the WPA auto-export's own "CoachBuild <champ> <role>" page,
+ *  instead of sharing one. Before, both used the same title, so the app-wide
+ *  WPA auto-export reverted the pro runes the user just applied (they fought
+ *  over one physical LCU page). The "Pro" suffix goes AFTER champ/role so the
+ *  champ-scoped cleanup prefix ("CoachBuild <champ> ") still matches both
+ *  pages — a champ change cleans up the old champ's Pro page too. Disabled
+ *  (with a reason tooltip, never fabricating a slot) whenever the pro sample
+ *  can't fill a complete page — see proConsensus.ts's missingRunePageReason,
+ *  the single source of truth this button and proConsensusRuneApplyInput both
+ *  read. */
 function ApplyProRunesButton({ champ, roleLabel, model, fallbackShards }: {
   champ: ChampionRef;
   roleLabel: string;
@@ -126,8 +131,8 @@ function ApplyProRunesButton({ champ, roleLabel, model, fallbackShards }: {
   const tooltip =
     reason ??
     (input?.shardsFromFallback
-      ? "Replaces the current rune page with the pro-consensus page. Shards from CoachBuild's recommendation — pro shard data unavailable."
-      : "Replaces the current rune page with the pro-consensus page.");
+      ? "Saves the pro-consensus runes as a separate \"Pro\" rune page (kept alongside the recommended page). Shards from CoachBuild's recommendation — pro shard data unavailable."
+      : "Saves the pro-consensus runes as a separate \"Pro\" rune page (kept alongside the recommended page).");
 
   async function handleClick() {
     if (!input) return;
@@ -140,7 +145,10 @@ function ApplyProRunesButton({ champ, roleLabel, model, fallbackShards }: {
 
     let body: ReturnType<typeof buildRuneApplyBody>;
     try {
-      body = buildRuneApplyBody(champ.name, roleLabel, input.runes);
+      // pageSuffix:"Pro" -> "CoachBuild <champ> <role> Pro", a SEPARATE page
+      // from the WPA auto-export's "CoachBuild <champ> <role>" so the two
+      // coexist and neither reverts the other (companion 1.6.3).
+      body = buildRuneApplyBody(champ.name, roleLabel, input.runes, { pageSuffix: "Pro" });
     } catch {
       setState({ status: "error", message: "Couldn't build a pro rune page — try refreshing." });
       return;

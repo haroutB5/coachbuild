@@ -24,9 +24,41 @@ export interface RuneApplyBody {
    *  selectedPerkIds contract (plan §1 / research §A). */
   selectedPerkIds: number[];
   current: true;
+  /** Champ-scoped (NOT champ+role-scoped) stale-removal prefix for the
+   *  companion's /apply-runes handler (companion 1.6.3+). Mirrors the
+   *  item-sets side's own `replacePrefix` (itemSetBody.ts's
+   *  champScopedReplacePrefix): `"CoachBuild <champ> "` — the trailing space
+   *  is load-bearing (stops `"CoachBuild Vi "` from also matching
+   *  `"CoachBuild Viktor …"`). The companion uses it to delete OUR OWN rune
+   *  pages for OTHER champions on a champ change while keeping BOTH of the
+   *  current champion's pages — the WPA page (`"CoachBuild <champ> <role>"`)
+   *  and the Pro page (`"CoachBuild <champ> <role> Pro"`), which both start
+   *  with this prefix. Deliberately champ-only (not role- or Pro-scoped) so a
+   *  champ change catches the Pro page too. See public/companion.ps1's
+   *  Invoke-ApplyRunes. */
+  replacePrefix: string;
 }
 
 const EXPECTED_PERK_COUNT = 9;
+
+/** Options for the two rune-page variants that share this builder:
+ *  - WPA recommendation (RunesSummonersCard / auto-export) — no `pageSuffix`,
+ *    title `"CoachBuild <champ> <role>"`.
+ *  - Pro consensus (ProConsensusCard's "Apply pro runes") — `pageSuffix:"Pro"`,
+ *    title `"CoachBuild <champ> <role> Pro"`.
+ *  The two titles are DELIBERATELY distinct so the companion writes them to
+ *  two separate LCU rune pages that coexist — before this, both used the same
+ *  `"CoachBuild <champ> <role>"` title, so the WPA auto-export and the manual
+ *  pro apply fought over ONE physical page (any WPA re-apply reverted the
+ *  pro runes the user just applied). The suffix goes AFTER champ/role so BOTH
+ *  titles still start with the champ-scoped `replacePrefix` (`"CoachBuild
+ *  <champ> "`) and the companion's champ-change stale-cleanup catches both. */
+export interface RuneApplyBodyOptions {
+  /** Appended after `"CoachBuild <champ> <role>"` (space-separated) to name a
+   *  distinct variant page — e.g. `"Pro"` -> `"CoachBuild <champ> <role> Pro"`.
+   *  Omit/empty for the default WPA page. */
+  pageSuffix?: string;
+}
 
 /** Builds the exact JSON body companionClient.applyRunes() POSTs to the
  *  bridge. Throws (does not silently truncate/pad) if `runes.primary`/
@@ -35,7 +67,12 @@ const EXPECTED_PERK_COUNT = 9;
  *  in-client, which is worse than a caught, user-facing "couldn't build a
  *  rune page" error. Callers (RunesSummonersCard's click handler) catch this
  *  and surface it rather than letting it reach the network call. */
-export function buildRuneApplyBody(championName: string, roleLabel: string, runes: RunesBlock): RuneApplyBody {
+export function buildRuneApplyBody(
+  championName: string,
+  roleLabel: string,
+  runes: RunesBlock,
+  opts: RuneApplyBodyOptions = {}
+): RuneApplyBody {
   const selectedPerkIds = [
     runes.keystone.id,
     ...runes.primary.map((p) => p.id),
@@ -52,11 +89,17 @@ export function buildRuneApplyBody(championName: string, roleLabel: string, rune
     );
   }
 
+  const baseName = `CoachBuild ${championName} ${roleLabel}`;
+  const suffix = opts.pageSuffix?.trim();
   return {
-    name: `CoachBuild ${championName} ${roleLabel}`,
+    name: suffix ? `${baseName} ${suffix}` : baseName,
     primaryStyleId: runes.primaryTree.id,
     subStyleId: runes.secondaryTree.id,
     selectedPerkIds,
     current: true,
+    // Champ-scoped, NOT role- or variant-scoped — see RuneApplyBody.replacePrefix.
+    // Kept identical for the WPA and Pro variants of the same champion so the
+    // companion protects both pages and only prunes OTHER champions' pages.
+    replacePrefix: `CoachBuild ${championName} `,
   };
 }

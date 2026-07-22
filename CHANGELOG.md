@@ -2,6 +2,25 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.48.2] — 2026-07-22 (COMPANION CHANGE → 1.6.3 — re-install required)
+### Fixed — pro runes get reverted (WPA and Pro now write SEPARATE rune pages)
+- **User-reported (screenshot, companion 1.6.2):** *"pro runes still not getting applied"* — clicking *Apply pro runes* appeared to apply, then the runes reverted; also asked to *"change the name of the rune page and add 'pro' to distinguish."*
+- **Root cause (traced):** the WPA auto-export and the *Apply pro runes* button BOTH built the SAME page title `"CoachBuild <champ> <role>"` (`buildRuneApplyBody`), and the pre-1.6.3 companion matched ANY `"CoachBuild*"`-prefixed page and edited the oldest **in place** — so the two writes fought over ONE physical LCU page. The app-wide WPA auto-export re-applying that shared page reverted the pro runes the user had just applied. (The user's secondary-tree mismatch — "consensus said Sorcery, page showed Resolve" — was this same revert: the WPA page's Resolve overwrote the pro page's Sorcery. The pro body construction itself is correct — `proConsensusRuneApplyInput` sends the conditioned secondary tree + picks, and the companion's byte-for-byte readback-verify still catches a genuine content mismatch.)
+- **Fix — two coexisting pages:**
+  - WPA keeps `"CoachBuild <champ> <role>"`; *Apply pro runes* now writes `"CoachBuild <champ> <role> Pro"` (web: `buildRuneApplyBody(..., { pageSuffix: "Pro" })`). The `"Pro"` suffix is AFTER champ/role so the champ-scoped cleanup prefix `"CoachBuild <champ> "` still matches BOTH pages.
+  - Companion 1.6.3 `Invoke-ApplyRunes`: each apply targets its OWN **exact-title** page — PUT-in-place if that exact title exists, else create. New champ-scoped stale cleanup (driven by a new `replacePrefix` field on the apply body) deletes OUR pages for OTHER champions on a champ change while protecting BOTH of the current champ's pages from cross-deletion; a page whose title starts with the current champ prefix is never deleted, and a non-`"CoachBuild"` page is never touched. Cleanup is fail-soft (a delete the LCU refuses — e.g. a selected stale page — is skipped, self-heals next cycle). Bounded at the current champ's ≤2 pages.
+- **HARD INVARIANT (unchanged, SelfTest-pinned):** never DELETE or PUT-overwrite a non-`"CoachBuild"` page; the auto 5-page/0-CoachBuild adversarial fixture still issues zero deletes — now also proven with `replacePrefix` present.
+- **Harness:** `-SelfTest` extended (6g–6k) — PRO creates a separate page leaving WPA untouched (zero deletes); WPA-with-both edits only the WPA page and never clobbers the Pro page; a champ change cleans up BOTH old-champ pages while a foreign hand-made page survives byte-for-byte; cleanup fail-soft; and AUTO+`replacePrefix`+foreign-pages still zero-delete. Both PS harnesses PASS; `companion.ps1` stays 100% ASCII.
+- **Caveat:** the LCU multi-page behavior is unreproducible without a live client — **please confirm on-device** that applying pro runes now leaves a distinct `"… Pro"` page that survives the WPA auto-export, and that switching champions cleans up the previous champion's pages.
+
+### Changed — `-Install` now launches the companion immediately (no click / reboot needed)
+- **User-reported:** running the install one-liner with `-Install` set up autostart but the user still had to click the Startup entry (or reboot) to actually START the companion.
+- **Fix (`public/companion.ps1` `Install-Companion`):** after writing the truly-hidden Startup `.vbs` (unchanged), `-Install` now ALSO launches the companion right away via the SAME truly-hidden path the `.vbs` uses at startup — `WScript.Shell.Run(cmd, 0, False)` (windowStyle 0 = hidden, honored even when Windows Terminal is the default terminal, unlike `-WindowStyle Hidden`). The launch command is shared (`Get-CompanionLaunchCommand`) so immediate-launch and autostart can never diverge.
+- **Double-launch guard:** a new `Test-CompanionAlreadyRunning` opens the companion's named single-instance mutex; if an instance is already live, `-Install` surfaces "already running" and does NOT spawn a second (the spawned instance's own single-instance mutex is the hard backstop regardless, so re-running `-Install` is idempotent — it never stacks instances).
+- **Harness:** `-SelfTest` extended (8b/8c) — the launch command is well-formed + 100% ASCII + byte-identical to the `.vbs` command; the guard reports false with no instance live and true while the mutex is held.
+- **Re-run the install one-liner** to pick up 1.6.3 — and note it now **auto-starts** the companion:
+  `& ([scriptblock]::Create((irm https://coachbuild.vercel.app/companion.ps1))) -Install`
+
 ## [0.48.1] — 2026-07-22 (COMPANION CHANGE → 1.6.2 — re-install required)
 ### Fixed — "Apply pro runes" failed when a CoachBuild rune page already existed (delete-failed)
 - **User-reported (twice, real device):** clicking *Apply pro runes* (or auto-runes) FAILED with a red error whenever a CoachBuild WPA rune page was already present in the client — nothing got applied.

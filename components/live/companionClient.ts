@@ -603,7 +603,7 @@ export async function getLive(
 export async function applyRunes(
   port: CompanionPort,
   session: string,
-  body: { name: string; primaryStyleId: number; subStyleId: number; selectedPerkIds: number[]; current: true },
+  body: { name: string; primaryStyleId: number; subStyleId: number; selectedPerkIds: number[]; current: true; replacePrefix?: string },
   mode: "auto" | "manual",
   deps: CompanionClientDeps = {}
 ): Promise<ApplyRunesResult> {

@@ -872,7 +872,10 @@ describe("proConsensus.ts — pro-consensus rune-apply input (2026-07-22)", () =
       const result = proConsensusRuneApplyInput(model, fallbackShards);
       expect(result).not.toBeNull();
 
-      const body = buildRuneApplyBody("Viktor", "Mid", result!.runes);
+      // ProConsensusCard applies with pageSuffix:"Pro" so the pro page is a
+      // SEPARATE LCU page from the WPA auto-export's — the two coexist instead
+      // of one reverting the other (companion 1.6.3).
+      const body = buildRuneApplyBody("Viktor", "Mid", result!.runes, { pageSuffix: "Pro" });
       // All 3 minors are tied (every game runs the same 3), so the model's own
       // sortEntries tie-break (count desc, id asc) puts them id-ascending:
       // Transcendence (8210) < Manaflow Band (8226) < Celerity (8234).
@@ -889,9 +892,14 @@ describe("proConsensus.ts — pro-consensus rune-apply input (2026-07-22)", () =
       ]);
       expect(body.primaryStyleId).toBe(SORCERY);
       expect(body.subStyleId).toBe(PRECISION);
-      // Title convention unchanged (v0.35.0) — this REPLACES the WPA page,
-      // it never mints a new "CoachBuild Pro ..." title.
-      expect(body.name).toBe("CoachBuild Viktor Mid");
+      // The Pro page has its OWN distinct title ("... Pro", suffix AFTER
+      // champ/role) so the WPA page ("CoachBuild Viktor Mid") is never
+      // overwritten by the pro apply, while the champ-scoped replacePrefix
+      // ("CoachBuild Viktor ") still matches BOTH pages for champ-change cleanup.
+      expect(body.name).toBe("CoachBuild Viktor Mid Pro");
+      expect(body.replacePrefix).toBe("CoachBuild Viktor ");
+      // The WPA variant (no suffix) keeps its own title, distinct from the Pro one.
+      expect(buildRuneApplyBody("Viktor", "Mid", result!.runes).name).toBe("CoachBuild Viktor Mid");
     });
 
     it("always sources shards from the caller's fallbackShards and flags shardsFromFallback (consensus shards aren't slot-labeled)", () => {

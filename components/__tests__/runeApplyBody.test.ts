@@ -89,7 +89,29 @@ describe("buildRuneApplyBody", () => {
       subStyleId: 8400,
       selectedPerkIds: [8005, 9111, 9104, 8014, 8446, 8453, 5005, 5008, 5001],
       current: true,
+      replacePrefix: "CoachBuild Jinx ",
     });
+  });
+
+  it("carries a champ-scoped replacePrefix ('CoachBuild <champ> ', trailing space) for the companion's champ-change cleanup", () => {
+    expect(buildRuneApplyBody("Lee Sin", "Jungle", baseRunes()).replacePrefix).toBe("CoachBuild Lee Sin ");
+  });
+
+  it("pageSuffix appends a distinct variant page name AFTER champ/role, keeping the same replacePrefix (WPA vs Pro coexist)", () => {
+    const wpa = buildRuneApplyBody("Viktor", "Mid", baseRunes());
+    const pro = buildRuneApplyBody("Viktor", "Mid", baseRunes(), { pageSuffix: "Pro" });
+    expect(wpa.name).toBe("CoachBuild Viktor Mid");
+    expect(pro.name).toBe("CoachBuild Viktor Mid Pro");
+    // Distinct titles -> two separate LCU pages; shared prefix -> both cleaned
+    // up together on a champ change.
+    expect(pro.name).not.toBe(wpa.name);
+    expect(pro.replacePrefix).toBe(wpa.replacePrefix);
+    expect(pro.replacePrefix).toBe("CoachBuild Viktor ");
+  });
+
+  it("ignores a blank/whitespace pageSuffix (falls back to the plain WPA title)", () => {
+    expect(buildRuneApplyBody("Viktor", "Mid", baseRunes(), { pageSuffix: "   " }).name).toBe("CoachBuild Viktor Mid");
+    expect(buildRuneApplyBody("Viktor", "Mid", baseRunes(), { pageSuffix: "" }).name).toBe("CoachBuild Viktor Mid");
   });
 });
 

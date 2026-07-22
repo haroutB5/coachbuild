@@ -86,32 +86,55 @@ WIRE CONTRACT (must match components/live/companionClient.ts exactly):
                               selectedPerkIds:number[9], current:true,
                               mode:'auto'|'manual' (optional, validated,
                                 defaults to 'manual' for back-compat with
-                                pre-1.3.0 web builds)}
+                                pre-1.3.0 web builds),
+                              replacePrefix?:string (v1.6.3 -- champ-scoped
+                                "CoachBuild <champ> "; if present MUST start
+                                with "CoachBuild" or it's ignored; drives the
+                                champ-change stale cleanup below. $null on an
+                                older web build -> no cleanup, exact-title
+                                match only)}
                        -> 200 {ok:true, selected:boolean, verified:boolean,
                                 mismatch:string[]}
                         | 200 {ok:false, reason:string, hint?:string}
+    v1.6.3 TWO-PAGE MODEL (user-reported: "pro runes get reverted"): the WPA
+    auto-export writes "CoachBuild <champ> <role>" and the manual "Apply pro
+    runes" button writes "CoachBuild <champ> <role> Pro" -- TWO distinct
+    titles that must COEXIST as two separate LCU rune pages. Before 1.6.3 the
+    handler matched ANY "CoachBuild"-prefixed page and edited the oldest in
+    place, so both writes fought over ONE physical page (each renamed/
+    overwrote the other -> the revert). Now each apply targets its OWN
+    EXACT-TITLE page.
     Page-selection logic (BOTH modes): GET /lol-perks/v1/pages (only
     isDeletable:true pages count -- preset/default pages never do).
-    v1.6.2 ROOT-CAUSE FIX (live-reported twice: "Apply pro runes" fails when
-    a CoachBuild page already exists): a page titled starting "CoachBuild"
-    already exists -> EDIT IT IN PLACE via PUT /lol-perks/v1/pages/{id}
+    STEP 1 -- champ-scoped stale cleanup (only when replacePrefix is present
+    and starts with "CoachBuild"): DELETE our OWN pages titled "CoachBuild*"
+    whose title does NOT start with replacePrefix (i.e. OTHER champions'
+    pages). This bounds us at the current champ's <=2 pages. A page starting
+    with replacePrefix is NEVER deleted -- that protects BOTH the current
+    champ's WPA and Pro pages from cross-deletion. A non-"CoachBuild" page is
+    NEVER touched (hard invariant). Fail-soft: a delete the LCU refuses (e.g.
+    a currently-selected stale page) is skipped, never aborts the apply (it
+    self-heals next cycle once it's no longer selected).
+    STEP 2 -- EXACT-TITLE match on body.name: a page whose title EQUALS
+    body.name exactly (never a mere prefix; the WPA page and the Pro page are
+    distinct exact titles) -> EDIT IT IN PLACE via PUT /lol-perks/v1/pages/{id}
     (full LolPerksPerkPageResource body: id + name + primaryStyleId +
     subStyleId + selectedPerkIds + current) -> then select + readback-verify.
-    NO delete of our own page. The old flow DELETEd then POSTed; when the
-    CoachBuild page was the CURRENTLY-SELECTED page the LCU refuses to DELETE
-    it -> delete-failed -> nothing applied (that's the exact user bug). Edit
-    fails -> {ok:false, reason:'edit-failed', hint (status-coded)}; we do NOT
-    fall back to delete+create on an edit failure (the page is likely still
-    selected, so a delete would fail the same way -- reintroducing the bug).
-    None exists -> is there a free slot (GET /lol-perks/v1/inventory
-    ownedPageCount vs the editable-page count when available; else a
-    speculative POST, since the LCU itself rejects a full inventory) -> POST
-    directly, no delete at all. Genuinely full AND no CoachBuild page to
-    edit: mode='manual' (a real user click = real consent) falls back to the
-    ORIGINAL behavior -- GET currentpage -> DELETE it -> POST; mode='auto'
-    NEVER deletes a page it doesn't own -> {ok:false, reason:'slots-full',
-    hint:'all rune pages are yours -- click Apply runes to replace the
-    current one'}.
+    NO delete of our own page (v1.6.2 root-cause fix: the LCU refuses to
+    DELETE the currently-selected page -> delete-failed -> nothing applied).
+    Edit fails -> {ok:false, reason:'edit-failed', hint (status-coded)}; we do
+    NOT fall back to delete+create on an edit failure (the page is likely
+    still selected, so a delete would fail the same way -- reintroducing the
+    bug).
+    STEP 3 -- no exact-title page yet -> is there a free slot (GET
+    /lol-perks/v1/inventory ownedPageCount vs the editable-page count after
+    cleanup when available; else a speculative POST, since the LCU itself
+    rejects a full inventory) -> POST directly, no delete at all. Genuinely
+    full AND no exact-title page to edit: mode='manual' (a real user click =
+    real consent) falls back to the ORIGINAL behavior -- GET currentpage ->
+    DELETE it -> POST; mode='auto' NEVER deletes a page it doesn't own ->
+    {ok:false, reason:'slots-full', hint:'all rune pages are yours -- click
+    Apply runes to replace the current one'}.
     Post-create SELECTION (v1.3.0 blocker fix, live-reported: a created page
     saved correctly but the client stayed on a fresh "ADD NEW PAGE" editor --
     `current:true` in the POST body alone does NOT select it): after every
@@ -239,7 +262,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.6.2'
+    Version     = '1.6.3'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -569,13 +592,19 @@ function Invoke-ApplyRunes {
     # v1.3.0 SAFETY REDESIGN: the original importer pattern (GET currentpage
     # -> DELETE it -> POST) deletes WHATEVER page happens to be selected --
     # fine under a real user click (real consent), unacceptable to ever
-    # auto-fire (could silently wipe a page that isn't ours at all). New
-    # page-selection logic, same for BOTH modes: prefer replacing a page WE
-    # created (title starts with "CoachBuild"); else use a genuinely free
-    # slot; only fall back to "delete whatever's selected" in manual mode,
-    # where a real click IS real consent. Auto mode NEVER deletes a
-    # non-CoachBuild page -- SelfTest-pinned (adversarial 5-page,
-    # 0-CoachBuild fixture must produce zero DELETE calls).
+    # auto-fire (could silently wipe a page that isn't ours at all). Auto mode
+    # NEVER deletes a non-CoachBuild page -- SelfTest-pinned (adversarial
+    # 5-page, 0-CoachBuild fixture must produce zero DELETE calls).
+    #
+    # v1.6.3 TWO-PAGE MODEL (user-reported "pro runes get reverted"): the WPA
+    # auto-export writes "CoachBuild <champ> <role>" and the manual "Apply pro
+    # runes" button writes "CoachBuild <champ> <role> Pro". Those two titles
+    # must coexist as TWO physical pages. The pre-1.6.3 handler edited the
+    # OLDEST "CoachBuild*"-prefixed page in place regardless of its exact
+    # title, so the two writes overwrote/renamed one shared page (the revert).
+    # New logic: (1) champ-scoped stale cleanup of OTHER champs' pages, then
+    # (2) EXACT-TITLE match (edit-in-place) or (3) create.
+    #
     # Bug #1013 (RiotGames/developer-relations): DELETE on an isDeletable
     # page can falsely fail -- fail SOFT everywhere (never attempt a POST
     # after a failed delete) and surface a manual-delete hint instead of
@@ -596,48 +625,61 @@ function Invoke-ApplyRunes {
     # CoachBuild-page targets -- preset/default pages that ship with the
     # client can't be removed and were never ours to begin with.
     $editablePages = @(@($pagesResult.Content) | Where-Object { $_.isDeletable -eq $true })
-    $coachPages = @($editablePages | Where-Object { $_.name -and ([string]$_.name).StartsWith('CoachBuild') })
 
-    if ($coachPages.Count -gt 0) {
-        # A CoachBuild page already exists -- EDIT THAT ONE IN PLACE (oldest
-        # by id if several), never anyone else's page, in EITHER mode.
-        #
-        # v1.6.2 ROOT-CAUSE FIX (live-reported twice: "Apply pro runes" fails
-        # when a CoachBuild page already exists). The prior flow DELETEd the
-        # existing CoachBuild page then POSTed a fresh one. When that page was
-        # the CURRENTLY-SELECTED page, the LCU refuses to DELETE it -> the
-        # whole apply returned {reason:'delete-failed'} and nothing landed
-        # (the v1.5.1-hinted delete-failed path the user was actually hitting).
-        # A rune page is a passive loadout suggestion, so overwriting OUR OWN
-        # page's contents is exactly as compliance-safe as delete+create --
-        # and it sidesteps the "can't delete the selected page" wall entirely.
-        #
-        # Endpoint: PUT /lol-perks/v1/pages/{id} with the full
-        # LolPerksPerkPageResource body (id + name + styles + selectedPerkIds
-        # + current). Verified present in the authoritative LCU OpenAPI schema
-        # (lol-perks plugin exposes get/put/delete on /pages/{id}); the
-        # community delete+create tutorials are a convention, not a sign the
-        # PUT is absent. We carry the target page's own id in the body so the
-        # LCU updates that exact resource rather than treating it as a create.
-        #
-        # DECISION TREE (documented per task):
-        #   CoachBuild page exists  -> PUT-in-place (here). NO delete, ever.
-        #   PUT edit fails          -> {reason:'edit-failed'} fail-soft, its
-        #                              own actionable hint. We deliberately do
-        #                              NOT fall back to delete+create on an
-        #                              edit failure: the page is very likely
-        #                              still the selected page (that's the
-        #                              whole bug), so a delete would just fail
-        #                              the same way -- reintroducing exactly
-        #                              the delete-failed symptom we're fixing.
-        #   No CoachBuild page      -> free slot? POST directly (below).
-        #   No CoachBuild + full    -> manual mode falls back to the ORIGINAL
-        #                              currentpage delete+create (real click =
-        #                              real consent); auto mode returns
-        #                              slots-full and touches NOTHING.
-        $target = ($coachPages | Sort-Object -Property id)[0]
-        # Overwrite our own page's contents in place. Include its id in the
-        # body (LolPerksPerkPageResource) so the LCU edits this exact page.
+    # -- STEP 1: champ-scoped stale cleanup (v1.6.3) ----------------------------
+    # Delete OUR OWN pages ("CoachBuild*") for OTHER champions so we stay
+    # bounded at the current champ's <=2 pages (WPA + Pro). Gated on a valid
+    # replacePrefix ("CoachBuild <champ> ", trailing space load-bearing).
+    #   - A page starting with replacePrefix is NEVER deleted -> protects BOTH
+    #     the current champ's WPA and Pro pages from cross-deletion (applying
+    #     WPA must not wipe the Pro page, and vice-versa).
+    #   - A non-"CoachBuild" page is NEVER touched (hard invariant, shared with
+    #     the auto-mode zero-foreign-mutation guarantee).
+    #   - Fail-soft: a delete the LCU refuses (e.g. a stale page that's still
+    #     the currently-selected page) is skipped, not fatal -- it self-heals
+    #     next cycle once our new page is selected instead.
+    # $null replacePrefix (older web build) -> skip cleanup entirely and rely on
+    # exact-title matching alone (no accumulation guarantee, but never a wrong
+    # deletion).
+    $prefix = if ($Body.replacePrefix) { [string]$Body.replacePrefix } else { $null }
+    if ($prefix -and $prefix.StartsWith('CoachBuild')) {
+        $stalePages = @($editablePages | Where-Object {
+            $_.name -and ([string]$_.name).StartsWith('CoachBuild') -and -not ([string]$_.name).StartsWith($prefix)
+        })
+        $anyDeleted = $false
+        foreach ($stale in $stalePages) {
+            $del = Invoke-LcuRaw -Method DELETE -Path "/lol-perks/v1/pages/$($stale.id)" -Port $LcuPort -Token $LcuToken -Scheme $Scheme
+            if ($del.Ok) { $anyDeleted = $true }
+            # fail-soft: ignore a failed delete (LCU refuses a selected page)
+        }
+        if ($anyDeleted) {
+            # Re-read so the slot math + exact-title match below reflect the
+            # freed slots. A failed re-read leaves $editablePages as-is (still
+            # correct enough -- worst case a spurious slots-full, never a wrong
+            # write).
+            $pagesResult = Invoke-LcuRaw -Method GET -Path '/lol-perks/v1/pages' -Port $LcuPort -Token $LcuToken -Scheme $Scheme
+            if ($pagesResult.Ok) {
+                $editablePages = @(@($pagesResult.Content) | Where-Object { $_.isDeletable -eq $true })
+            }
+        }
+    }
+
+    # -- STEP 2: EXACT-TITLE match -> edit-in-place -----------------------------
+    # This apply owns EXACTLY the page whose title EQUALS $Body.name (the WPA
+    # page "CoachBuild <champ> <role>" or the Pro page "... Pro" -- never the
+    # sibling, whose title differs). Match by exact equality, NOT StartsWith, so
+    # "CoachBuild Teemo Top" can never target "CoachBuild Teemo Top Pro".
+    $exactMatches = @($editablePages | Where-Object { $_.name -and ([string]$_.name -eq [string]$Body.name) })
+    if ($exactMatches.Count -gt 0) {
+        # v1.6.2 ROOT-CAUSE FIX: EDIT IN PLACE (never delete), oldest by id if
+        # somehow duplicated. Overwriting OUR OWN page's contents is exactly as
+        # compliance-safe as delete+create and sidesteps the "LCU refuses to
+        # delete the selected page" wall (the exact delete-failed bug). We do
+        # NOT fall back to delete+create on an edit failure: the page is likely
+        # still selected, so a delete would fail the same way.
+        $target = ($exactMatches | Sort-Object -Property id)[0]
+        # Include its id in the body (LolPerksPerkPageResource) so the LCU
+        # edits this exact page rather than treating it as a create.
         $editBody = @{
             id              = $target.id
             name            = $Body.name
@@ -651,13 +693,10 @@ function Invoke-ApplyRunes {
             return [pscustomobject]@{ ok = $false; reason = 'edit-failed'; hint = (Get-LcuFailureHint -StatusCode $put.StatusCode -Action 'rune page edit') }
         }
         # Select (reaffirm) + readback-verify against the page we just edited.
-        # It's usually already the current page, but the PUT/GET currentpage
-        # dance is unchanged from the create paths -- selected reflects the
-        # PUT currentpage, verified/mismatch reflect the readback compare.
         return Complete-RuneApply -PageId $target.id -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
     }
 
-    # No CoachBuild page yet -- is there a free slot? Prefer the
+    # -- STEP 3: no exact-title page yet -- is there a free slot? Prefer the
     # inventory-reported cap when available (avoids a doomed POST attempt);
     # fall back to a speculative POST when the endpoint's unavailable/
     # unreadable (the LCU itself authoritatively rejects a full inventory).
@@ -1586,6 +1625,15 @@ function Test-AutoUpdate {
 #endregion
 
 #region Install
+function Get-CompanionLaunchCommand {
+    # The single "start a hidden companion watcher" command string, shared by
+    # the .vbs autostart launcher AND the -Install immediate-launch path
+    # (v1.6.3) so both run byte-identical work: re-download this script and run
+    # it with no args (-> Start-Companion, the tray watcher). 100% ASCII.
+    param([string]$AppOrigin)
+    return 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm ' + $AppOrigin + '/companion.ps1 | iex"'
+}
+
 function New-CompanionAutostartVbs {
     # Windows Terminal is the default terminal on Win11 and IGNORES
     # -WindowStyle Hidden on the powershell.exe process it spawns -- a
@@ -1603,6 +1651,42 @@ function New-CompanionAutostartVbs {
     return $part1 + $AppOrigin + $part2
 }
 
+function Test-CompanionAlreadyRunning {
+    # Cheap, race-tolerant pre-check for the -Install immediate-launch guard
+    # (v1.6.3): a running companion holds the named mutex
+    # 'Local\CoachBuildCompanion' (Start-Companion -> Test-SingleInstance).
+    # OpenExisting SUCCEEDS -> an instance is live; it throws
+    # WaitHandleCannotBeOpenedException when nothing holds the name -> not
+    # running. Any other error -> treat as "not running" and let the spawned
+    # instance's OWN Test-SingleInstance be the hard backstop (this pre-check
+    # only avoids the noise of a doomed second launch; it is never the sole
+    # guarantee). The -Install process itself never holds this mutex (it runs
+    # Install-Companion, not Start-Companion), so there's no self-false-positive.
+    try {
+        $m = [System.Threading.Mutex]::OpenExisting('Local\CoachBuildCompanion')
+        $m.Dispose()
+        return $true
+    } catch [System.Threading.WaitHandleCannotBeOpenedException] {
+        return $false
+    } catch {
+        return $false
+    }
+}
+
+function Start-CompanionDetachedHidden {
+    # v1.6.3: launch the companion watcher RIGHT NOW, truly hidden, the exact
+    # same way the .vbs launcher does at startup -- WScript.Shell.Run(cmd, 0,
+    # False): windowStyle 0 = hidden (honored even when Windows Terminal is the
+    # default terminal, unlike -WindowStyle Hidden -- see New-CompanionAutostartVbs),
+    # bWaitOnReturn False = fire-and-forget so -Install returns immediately.
+    # The spawned process re-downloads this script and runs it with no args ->
+    # Start-Companion (tray watcher), which claims the single-instance mutex.
+    param([string]$AppOrigin)
+    $cmd = Get-CompanionLaunchCommand -AppOrigin $AppOrigin
+    $shell = New-Object -ComObject WScript.Shell
+    [void]$shell.Run($cmd, 0, $false)
+}
+
 function Install-Companion {
     $startup = [Environment]::GetFolderPath('Startup')
     $lnkPath = Join-Path $startup 'CoachBuildCompanion.lnk'
@@ -1617,10 +1701,31 @@ function Install-Companion {
     Set-Content -Path $vbsPath -Value $vbsContent -Encoding ASCII -NoNewline
     Write-Host "Installed silent startup launcher: $vbsPath"
 
-    # Install -> pair is one flow: open the pairing page immediately with a
-    # durable (persisted) session token, so Test Connection works right away
-    # instead of waiting for the first champ select.
+    # Persist the session token FIRST so BOTH the immediately-launched
+    # companion (below) and the pairing page resolve the SAME durable token
+    # (Get-OrCreateSessionToken is idempotent + file-backed).
     $token = Get-OrCreateSessionToken
+
+    # v1.6.3 (user request): -Install now LAUNCHES the companion immediately so
+    # the user doesn't have to click the Startup entry or reboot to actually
+    # start it. Double-launch guard: if an instance is already running, surface
+    # that and DON'T stack a second (the spawned instance's own single-instance
+    # mutex is the hard backstop regardless, so re-running -Install is always
+    # idempotent).
+    if (Test-CompanionAlreadyRunning) {
+        Write-Host 'CoachBuild companion is already running -- not starting a second instance.'
+    } else {
+        try {
+            Start-CompanionDetachedHidden -AppOrigin $script:Config.AppOrigin
+            Write-Host 'Started the CoachBuild companion (running hidden in the background).'
+        } catch {
+            Write-Host "Could not auto-start the companion now ($($_.Exception.Message)); it will start on next sign-in."
+        }
+    }
+
+    # Install -> pair is one flow: open the pairing page immediately with the
+    # durable session token, so Test Connection works right away instead of
+    # waiting for the first champ select.
     try { Start-Process "$($script:Config.AppOrigin)/live-setup?session=$token" | Out-Null } catch {}
 }
 
@@ -2142,6 +2247,141 @@ function Invoke-SelfTest {
     $mockLcu.Sync.PagePutShouldFail = $false
     $mockLcu.Sync.MockPages = @()
 
+    # -- v1.6.3 TWO-PAGE MODEL: WPA "CoachBuild <champ> <role>" and Pro
+    # "CoachBuild <champ> <role> Pro" must COEXIST as two separate pages, and a
+    # champ change must clean up BOTH old-champ pages while leaving foreign
+    # pages untouched. --------------------------------------------------------
+    $wpaPerks = @(8005, 9111, 9104, 8014, 8017, 8009, 8017, 5008, 5008)
+    $proPerks = @(8010, 8009, 9104, 8014, 8299, 8444, 8453, 5005, 5001)
+
+    # 6g. apply PRO when only the WPA page exists -> creates a SEPARATE
+    # "CoachBuild Teemo Top Pro" page, leaves the WPA page byte-for-byte
+    # untouched, issues ZERO deletes (both share the champ prefix). This is the
+    # core of the revert fix: the two pages coexist instead of one overwriting
+    # the other.
+    $mockLcu.Sync.MockPages = @([pscustomobject]@{ id = 700; name = 'CoachBuild Teemo Top'; isDeletable = $true; selectedPerkIds = $wpaPerks; current = $true })
+    $mockLcu.Sync.MockCurrentPageId = 700
+    $mockLcu.Sync.MockInventory = $null
+    $mockLcu.Sync.MockNextPageId = 40000
+    $mockLcu.Sync.Calls.Clear()
+    $proBody = @{ name = 'CoachBuild Teemo Top Pro'; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = $proPerks; current = $true; replacePrefix = 'CoachBuild Teemo '; mode = 'manual' }
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($proBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if (-not $obj.ok) { $failures.Add("apply-runes PRO separate-page expected ok:true, got $($r.Content)") }
+        if (@($mockLcu.Sync.Calls) -contains 'DELETE') { $failures.Add('apply-runes PRO separate-page issued a DELETE (WPA and Pro share the champ prefix -- neither is stale)') }
+        $wpaPage = @(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 700 })
+        if ($wpaPage.Count -ne 1 -or ((@($wpaPage[0].selectedPerkIds) -join ',') -ne ($wpaPerks -join ','))) {
+            $failures.Add('apply-runes PRO separate-page mutated the WPA page (must leave "CoachBuild Teemo Top" untouched)')
+        }
+        $proPage = @(@($mockLcu.Sync.MockPages) | Where-Object { $_.name -eq 'CoachBuild Teemo Top Pro' })
+        if ($proPage.Count -ne 1 -or ((@($proPage[0].selectedPerkIds) -join ',') -ne ($proPerks -join ','))) {
+            $failures.Add("apply-runes PRO separate-page did not create the distinct Pro page with pro perks, pages=$((@($mockLcu.Sync.MockPages) | ForEach-Object { $_.name }) -join '|')")
+        }
+        if (@($mockLcu.Sync.MockPages).Count -ne 2) { $failures.Add("apply-runes PRO separate-page expected 2 coexisting pages, got $(@($mockLcu.Sync.MockPages).Count)") }
+    } catch { $failures.Add("apply-runes PRO separate-page threw: $($_.Exception.Message)") }
+
+    # 6h. with BOTH pages present, applying WPA edits ONLY the exact-title WPA
+    # page in place and leaves the Pro page untouched (exact-title match, never
+    # a prefix match that would clobber the sibling). Zero deletes.
+    $mockLcu.Sync.MockPages = @(
+        [pscustomobject]@{ id = 700; name = 'CoachBuild Teemo Top'; isDeletable = $true; selectedPerkIds = @(1, 1, 1, 1, 1, 1, 1, 1, 1); current = $true }
+        [pscustomobject]@{ id = 701; name = 'CoachBuild Teemo Top Pro'; isDeletable = $true; selectedPerkIds = $proPerks; current = $false }
+    )
+    $mockLcu.Sync.MockCurrentPageId = 700
+    $mockLcu.Sync.Calls.Clear()
+    $wpaBody = @{ name = 'CoachBuild Teemo Top'; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = $wpaPerks; current = $true; replacePrefix = 'CoachBuild Teemo '; mode = 'auto' }
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($wpaBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if (-not $obj.ok) { $failures.Add("apply-runes WPA-with-both expected ok:true, got $($r.Content)") }
+        if (@($mockLcu.Sync.Calls) -contains 'DELETE') { $failures.Add('apply-runes WPA-with-both issued a DELETE (must edit WPA in place, never delete the Pro page)') }
+        $wpaPage = @(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 700 })
+        if ($wpaPage.Count -ne 1 -or ((@($wpaPage[0].selectedPerkIds) -join ',') -ne ($wpaPerks -join ','))) {
+            $failures.Add('apply-runes WPA-with-both did not overwrite the WPA page in place')
+        }
+        $proPage = @(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 701 })
+        if ($proPage.Count -ne 1 -or ((@($proPage[0].selectedPerkIds) -join ',') -ne ($proPerks -join ','))) {
+            $failures.Add('apply-runes WPA-with-both mutated the Pro page (cross-page clobber -- the exact bug this ship prevents)')
+        }
+    } catch { $failures.Add("apply-runes WPA-with-both threw: $($_.Exception.Message)") }
+
+    # 6i. champ CHANGE: applying for Zed cleans up BOTH stale Teemo pages (WPA +
+    # Pro) via the champ-scoped prefix, leaves a foreign non-CoachBuild page
+    # untouched, and creates the new champ's page.
+    $mockLcu.Sync.MockPages = @(
+        [pscustomobject]@{ id = 700; name = 'CoachBuild Teemo Top'; isDeletable = $true; selectedPerkIds = $wpaPerks; current = $false }
+        [pscustomobject]@{ id = 701; name = 'CoachBuild Teemo Top Pro'; isDeletable = $true; selectedPerkIds = $proPerks; current = $false }
+        [pscustomobject]@{ id = 800; name = 'My Hand-made Page'; isDeletable = $true; selectedPerkIds = @(2, 2, 2, 2, 2, 2, 2, 2, 2); current = $true }
+    )
+    $mockLcu.Sync.MockCurrentPageId = 800
+    $mockLcu.Sync.MockInventory = $null
+    $mockLcu.Sync.MockNextPageId = 41000
+    $mockLcu.Sync.Calls.Clear()
+    $zedBody = @{ name = 'CoachBuild Zed Mid'; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = $wpaPerks; current = $true; replacePrefix = 'CoachBuild Zed '; mode = 'manual' }
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($zedBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if (-not $obj.ok) { $failures.Add("apply-runes champ-change expected ok:true, got $($r.Content)") }
+        if (@(@($mockLcu.Sync.MockPages) | Where-Object { $_.name -like 'CoachBuild Teemo *' }).Count -ne 0) {
+            $failures.Add('apply-runes champ-change did not clean up BOTH stale Teemo pages')
+        }
+        $foreign = @(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 800 })
+        if ($foreign.Count -ne 1 -or ((@($foreign[0].selectedPerkIds) -join ',') -ne '2,2,2,2,2,2,2,2,2')) {
+            $failures.Add('apply-runes champ-change touched the foreign non-CoachBuild page (zero-foreign-mutation violated)')
+        }
+        if (@(@($mockLcu.Sync.MockPages) | Where-Object { $_.name -eq 'CoachBuild Zed Mid' }).Count -ne 1) {
+            $failures.Add("apply-runes champ-change did not create the new champ page, pages=$((@($mockLcu.Sync.MockPages) | ForEach-Object { $_.name }) -join '|')")
+        }
+    } catch { $failures.Add("apply-runes champ-change threw: $($_.Exception.Message)") }
+
+    # 6j. cleanup FAIL-SOFT: a stale foreign-champ page whose delete the LCU
+    # refuses (DeleteShouldFail) must NOT abort the apply -- the exact-title
+    # edit still lands, and the un-deletable stale page simply survives to
+    # self-heal next cycle.
+    $mockLcu.Sync.MockPages = @(
+        [pscustomobject]@{ id = 700; name = 'CoachBuild Teemo Top'; isDeletable = $true; selectedPerkIds = @(1, 1, 1, 1, 1, 1, 1, 1, 1); current = $true }
+        [pscustomobject]@{ id = 900; name = 'CoachBuild Zed Mid'; isDeletable = $true; selectedPerkIds = $proPerks; current = $false }
+    )
+    $mockLcu.Sync.MockCurrentPageId = 700
+    $mockLcu.Sync.MockInventory = $null
+    $mockLcu.Sync.DeleteShouldFail = $true
+    $mockLcu.Sync.Calls.Clear()
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($wpaBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if (-not $obj.ok -or $obj.selected -ne $true -or $obj.verified -ne $true) {
+            $failures.Add("apply-runes cleanup-fail-soft expected ok/selected/verified all true, got $($r.Content)")
+        }
+        if (@($mockLcu.Sync.Calls) -notcontains 'DELETE') { $failures.Add('apply-runes cleanup-fail-soft never attempted the stale delete') }
+        $edited = @(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 700 })
+        if ($edited.Count -ne 1 -or ((@($edited[0].selectedPerkIds) -join ',') -ne ($wpaPerks -join ','))) {
+            $failures.Add('apply-runes cleanup-fail-soft did not still edit the exact-title page after the failed cleanup delete')
+        }
+        if (@(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 900 }).Count -ne 1) {
+            $failures.Add('apply-runes cleanup-fail-soft lost the un-deletable stale page (delete was supposed to fail soft)')
+        }
+    } catch { $failures.Add("apply-runes cleanup-fail-soft threw: $($_.Exception.Message)") }
+    $mockLcu.Sync.DeleteShouldFail = $false
+
+    # 6k. AUTO mode + replacePrefix present + only FOREIGN pages, inventory full:
+    # the champ-scoped cleanup must NEVER delete a non-CoachBuild page (the
+    # compliance guarantee still holds with replacePrefix set) -> slots-full,
+    # zero deletes, user pages intact.
+    $mockLcu.Sync.MockPages = @(1..5 | ForEach-Object { [pscustomobject]@{ id = (1200 + $_); name = "User Page $_"; isDeletable = $true } })
+    $mockLcu.Sync.MockInventory = @{ ownedPageCount = 5 }
+    $mockLcu.Sync.Calls.Clear()
+    $autoPrefixBody = @{ name = 'CoachBuild Zed Mid'; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = $wpaPerks; current = $true; replacePrefix = 'CoachBuild Zed '; mode = 'auto' }
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($autoPrefixBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.ok -ne $false -or $obj.reason -ne 'slots-full') { $failures.Add("apply-runes AUTO+prefix adversarial expected slots-full, got $($r.Content)") }
+        if (@($mockLcu.Sync.Calls) -contains 'DELETE') { $failures.Add('apply-runes AUTO+prefix cleanup deleted a non-CoachBuild page -- compliance violation') }
+        if (@($mockLcu.Sync.MockPages).Count -ne 5) { $failures.Add('apply-runes AUTO+prefix adversarial mutated the user pages') }
+    } catch { $failures.Add("apply-runes AUTO+prefix adversarial threw: $($_.Exception.Message)") }
+    $mockLcu.Sync.MockInventory = $null
+    $mockLcu.Sync.MockPages = @()
+
     # 6b. apply-itemsets happy path: merge preserves a non-CoachBuild set
     # byte-for-byte, and stale CoachBuild sets for the SAME champ+role are
     # replaced, not duplicated.
@@ -2410,6 +2650,62 @@ function Invoke-SelfTest {
     }
     if ($vbs -notlike '*irm https://coachbuild.vercel.app/companion.ps1 | iex*') {
         $failures.Add("Autostart VBS missing expected install command: $vbs")
+    }
+
+    # 8b. v1.6.3 -Install immediate-launch command is well-formed, 100% ASCII,
+    # and byte-identical to the command the .vbs runs (same hidden watcher).
+    $launchCmd = Get-CompanionLaunchCommand -AppOrigin 'https://coachbuild.vercel.app'
+    if ($launchCmd -ne 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm https://coachbuild.vercel.app/companion.ps1 | iex"') {
+        $failures.Add("Install launch command malformed: $launchCmd")
+    }
+    if ($launchCmd -match '[^\x00-\x7F]') { $failures.Add("Install launch command is not ASCII: $launchCmd") }
+    # The .vbs must wrap this SAME command (so immediate launch and autostart
+    # can never diverge) -- the .vbs embeds it with doubled-quote escaping.
+    if ($vbs -notlike '*powershell.exe -NoProfile -ExecutionPolicy Bypass -Command *irm https://coachbuild.vercel.app/companion.ps1 | iex*') {
+        $failures.Add("Autostart VBS and Install launch command diverged: vbs=$vbs cmd=$launchCmd")
+    }
+
+    # 8c. v1.6.3 double-launch guard (Test-CompanionAlreadyRunning): false when
+    # nothing holds the named mutex, true while an instance holds it. Uses the
+    # SAME mutex name Start-Companion's Test-SingleInstance claims, so a real
+    # running companion is correctly detected and -Install won't stack a second.
+    if (Test-CompanionAlreadyRunning) {
+        $failures.Add('Double-launch guard: reported already-running with no companion instance live')
+    }
+    $guardCreatedNew = $false
+    $guardMutex = New-Object System.Threading.Mutex($true, 'Local\CoachBuildCompanion', [ref]$guardCreatedNew)
+    try {
+        if (-not $guardCreatedNew) {
+            $failures.Add('Double-launch guard: could not claim the mutex for the test (an actual companion may be running)')
+        }
+        if (-not (Test-CompanionAlreadyRunning)) {
+            $failures.Add('Double-launch guard: did NOT detect a held mutex -> -Install would spawn a duplicate')
+        }
+    } finally {
+        try { $guardMutex.ReleaseMutex() } catch {}
+        try { $guardMutex.Dispose() } catch {}
+    }
+    if (Test-CompanionAlreadyRunning) {
+        $failures.Add('Double-launch guard: still reported running after the mutex was released/disposed')
+    }
+
+    # 8d. WHOLE-FILE ASCII guard (v1.6.3): companion.ps1 must be 100% ASCII --
+    # PS 5.1 + the various encodings this script is downloaded/executed under
+    # (irm | iex) make any non-ASCII byte (a stray box-drawing char in a
+    # comment, a smart quote) a latent mojibake/parse risk. Read our own source
+    # and fail if ANY byte is >= 0x80. Skipped when the source path is
+    # unavailable (e.g. running via `irm | iex`, where $PSCommandPath is empty).
+    if ($PSCommandPath -and (Test-Path $PSCommandPath)) {
+        try {
+            $srcBytes = [System.IO.File]::ReadAllBytes($PSCommandPath)
+            $nonAscii = 0
+            foreach ($b in $srcBytes) { if ($b -ge 0x80) { $nonAscii++ } }
+            if ($nonAscii -gt 0) {
+                $failures.Add("Source is not 100% ASCII: $nonAscii non-ASCII byte(s) in $PSCommandPath")
+            }
+        } catch {
+            $failures.Add("Whole-file ASCII guard threw: $($_.Exception.Message)")
+        }
     }
 
     # 9. LCU credentials cache (Round-B P3 fix) -- resolver (stands in for
