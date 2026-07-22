@@ -2,19 +2,15 @@
   "crons": [
     {
       "path": "/api/ingest/matches",
-      "schedule": "0 6 * * *"
+      "schedule": "0 6 */2 * *"
     },
     {
       "path": "/api/ingest/prostage",
       "schedule": "0 7 * * *"
     },
     {
-      "path": "/api/ingest/draft",
-      "schedule": "0 8 * * *"
-    },
-    {
       "path": "/api/ingest/mystats",
-      "schedule": "0 20 * * *"
+      "schedule": "0 20 */2 * *"
     }
   ],
   "headers": [
