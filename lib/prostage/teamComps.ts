@@ -56,7 +56,18 @@ function asJson<T>(v: unknown, fallback: T): T {
  *  rows into game_id -> team -> TeamCompPlayer[]. Rows with a null team or
  *  champion_id are excluded by the caller's SQL WHERE clause, never here.
  *  Role resolution mirrors app/api/pros/route.ts's prostageRowToProGame
- *  roleValue (pro_role ?? role, unresolved stays null rather than guessed).
+ *  roleValue (role ?? pro_role, unresolved stays null rather than guessed —
+ *  P4 fix 2026-07-22: THIS game's own Cargo Role column must win over
+ *  pro_role, coachbuild.pros.role's generic/roster-level position, which can
+ *  silently drift from what a player actually played in a specific game —
+ *  role swaps, team transfers, or a stale lolpros.gg-sourced tag. Live-
+ *  confirmed: Viper is tagged role=1/jungle in coachbuild.pros while his
+ *  per-game Cargo role correctly says role=3/bot — under the old pro_role-
+ *  first precedence this collided with his team's real jungler, so the side
+ *  no longer resolved to 5 distinct roles and both the champion-id strip and
+ *  the per-player roster degraded to source order, i.e. "jungle shown twice,
+ *  lane order wrong" for that game's Teams box. pro_role now only fills in
+ *  when THIS row's own role is unresolved.).
  *  name prefers pro_name (this row links to a tracked pro, already clean)
  *  over the CLEANED player_link (strips Leaguepedia's real-name
  *  disambiguator, e.g. "Zeka (Kim Geon-woo)" -> "Zeka" — see
@@ -95,7 +106,7 @@ export function buildProstageCompsMap(
     const arr = byTeam.get(r.team) ?? [];
     arr.push({
       championId: r.champion_id,
-      role: r.pro_role ?? r.role ?? null,
+      role: r.role ?? r.pro_role ?? null,
       name: r.pro_name ?? (playerLink ? cleanLeaguepediaName(playerLink) : null),
       items: asJson<number[]>(r.final_items, []).filter((id) => id !== 0),
       trinket: r.trinket ?? null,

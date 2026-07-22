@@ -166,7 +166,13 @@ function prostageRowToProGame(
   if (!row?.game_id || !row.player_link || typeof row.champion_id !== "number") return null;
   const gameCreation = new Date(row.game_datetime);
   if (Number.isNaN(gameCreation.getTime())) return null;
-  const roleValue = ((row.pro_role ?? row.role) ?? -1) as DisplayRoleId;
+  // P4 fix (2026-07-22): row.role (this game's own Cargo Role column) must
+  // win over pro_role (coachbuild.pros.role, a generic roster-level position
+  // that can drift from what the player actually played in THIS game — see
+  // lib/prostage/teamComps.ts's buildProstageCompsMap doc comment for the
+  // live-confirmed Viper case). pro_role only fills in when this row's own
+  // role is unresolved.
+  const roleValue = ((row.role ?? row.pro_role) ?? -1) as DisplayRoleId;
   // prostage rows have no gameDurationSec — always 0, see field comment below.
 
   return {
