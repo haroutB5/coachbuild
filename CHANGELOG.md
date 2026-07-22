@@ -2,6 +2,12 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.45.2] — 2026-07-22 (companion unchanged at 1.6.0)
+### Added — favorite star on the home-shell player view + pinned Favorites before searching
+- The player header (`PlayerHero`) gains the favorite star for TRACKED pros — same `FavoriteStarButton` + `coachbuild:favPlayers:v1` storage the /history view uses (link-only players opened from team boxes stay star-less, preserving the v0.26.0 policy).
+- The empty PROS search state (`ProsSearchPrompt`, v0.44.3) now pins your starred players under a "Favorites" label; a `FAVORITES_CHANGED_EVENT` subscription keeps the star and the pinned chips in sync instantly (star Faker → clear the selection → he's pinned, no reload).
+- Implementation by the favorite-star round (agent transcript lost post-hold — ship steps executed by the orchestrator); `verify-fix.sh` green at 1400 tests.
+
 ## [0.45.1] — 2026-07-22 (companion unchanged at 1.6.0)
 ### Added — Pro Consensus card can push its OWN page/build to the client (manual, never auto)
 - **User ask:** the Pro Consensus card (`components/hextech/ProConsensusCard.tsx`) already shows what pros actually build/run, but only the WPA-recommended page (RunesSummonersCard) could be pushed to the League client. Two new header buttons, visually parallel to RunesSummonersCard's own Apply-runes/Add-item-builds pair, same `hasSession()` visibility gate and disabled/applying/success/error states:

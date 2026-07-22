@@ -76,6 +76,20 @@ export function subjectFromPendingPlayerSelect(pending: PendingPlayerSelect): Pl
   return { kind: "link", playerLink: pending.playerLink, name: pending.name };
 }
 
+/** v0.45.2: whether PlayerHero should render a favorite-star toggle for this
+ *  subject — TRACKED pros only (has a real `pros`/id-addressable identity to
+ *  key lib/favorites.ts off of), never a LINK-ONLY (untracked) subject. This
+ *  mirrors the exact same policy app/history/page.tsx already enforces for
+ *  its own player summary line ("Favorites are tracked-pros-only... a
+ *  link-only player has nothing to star" — see that file's FavoriteStarButton
+ *  call site) — kept as a pure, testable predicate here rather than an inline
+ *  `subject.kind === "tracked"` check duplicated at the render site, so the
+ *  v0.26.0 link-only-player policy can't silently drift between the two
+ *  surfaces. */
+export function canFavoritePlayerSubject(subject: PlayerSubject): subject is TrackedPlayerSubject {
+  return subject.kind === "tracked";
+}
+
 /** Games-list source-filter default for a player subject. A link-only
  *  (untracked) player has no soloq identity at all (see app/api/pros/
  *  route.ts's `player=` lookup, prostage-only by construction), so Pro Play

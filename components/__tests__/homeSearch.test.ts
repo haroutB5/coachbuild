@@ -5,6 +5,7 @@ import {
   modeAfterChampionSelect,
   modeAfterPlayerSelect,
   isProsSearchEmpty,
+  canFavoritePlayerSubject,
   defaultSourceForKind,
   defaultSourceForPlayer,
   applyWireMainView,
@@ -157,6 +158,19 @@ describe("isProsSearchEmpty", () => {
   it("is always false in CHAMPIONS mode, regardless of any lingering selectedPlayer", () => {
     expect(isProsSearchEmpty("champions", null)).toBe(false);
     expect(isProsSearchEmpty("champions", BWIPO_TRACKED)).toBe(false);
+  });
+});
+
+// v0.45.2: PlayerHero's favorite-star eligibility gate — TRACKED subjects
+// only, mirroring the v0.26.0 link-only-player policy app/history/page.tsx
+// already enforces for its own player summary line's star.
+describe("canFavoritePlayerSubject", () => {
+  it("is true for a tracked subject (has a real pros/id-addressable identity)", () => {
+    expect(canFavoritePlayerSubject(BWIPO_TRACKED)).toBe(true);
+  });
+
+  it("is false for a link-only (untracked) subject — nothing to key lib/favorites.ts off of", () => {
+    expect(canFavoritePlayerSubject(DHOKLA_LINK)).toBe(false);
   });
 });
 

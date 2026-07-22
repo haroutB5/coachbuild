@@ -2,7 +2,16 @@
 
 import { useEffect, useState } from "react";
 import type { PlayersApiResponse } from "@/components/proHistory.types";
-import type { PlayerSubject } from "./homeSearch";
+import FavoriteStarButton from "@/components/FavoriteStarButton";
+import { isFavorite } from "@/lib/favorites";
+import { FAVORITES_CHANGED_EVENT, toggleFavoritePlayer } from "@/components/favoritesSync";
+import { canFavoritePlayerSubject, type PlayerSubject } from "./homeSearch";
+
+// Module-level (stable reference) so FavoriteStarButton's subscribe effect
+// doesn't tear down + resubscribe its window listeners on every PlayerHero
+// re-render — same pattern app/history/page.tsx and ChampionPicker/
+// PlayerPicker already use for their own star instances.
+const checkPlayerFavorited = (id: string | number) => isFavorite(String(id));
 
 interface PlayerHeroProps {
   subject: PlayerSubject;
@@ -92,9 +101,28 @@ export default function PlayerHero({ subject }: PlayerHeroProps) {
         </div>
 
         <div className="min-w-0">
-          <h2 className="font-display text-teal text-[30px] sm:text-[36px] font-semibold uppercase tracking-[0.02em] leading-none truncate">
-            {subject.name}
-          </h2>
+          <div className="flex items-center gap-2 min-w-0">
+            <h2 className="font-display text-teal text-[30px] sm:text-[36px] font-semibold uppercase tracking-[0.02em] leading-none truncate">
+              {subject.name}
+            </h2>
+            {/* Star toggle, TRACKED subjects only — a link-only (untracked)
+                player has nothing to key lib/favorites.ts's store off of, and
+                showing one here would churn that store's shape for a player
+                it can never actually track (same v0.26.0 policy
+                app/history/page.tsx already enforces for its own player
+                summary line — see canFavoritePlayerSubject). */}
+            {canFavoritePlayerSubject(subject) && (
+              <FavoriteStarButton
+                id={subject.id}
+                name={subject.name}
+                changedEvent={FAVORITES_CHANGED_EVENT}
+                checkFavorited={checkPlayerFavorited}
+                onToggle={() => toggleFavoritePlayer({ id: subject.id, name: subject.name, team: subject.team })}
+                size="lg"
+                className="flex-shrink-0"
+              />
+            )}
+          </div>
           <div className="mt-2 flex items-center gap-2 text-[12.5px] tabular-nums">
             <span className="text-mut font-semibold uppercase tracking-[0.05em] truncate">
               {meta.team ?? (subject.kind === "link" ? "Untracked pro" : "Free agent")}

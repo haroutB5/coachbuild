@@ -7,6 +7,14 @@ import type { PlayerRef } from "./proHistory.types";
 
 interface FavoritePlayerChipsProps {
   onSelect: (player: PlayerRef) => void;
+  /** v0.45.2: optional small uppercase label rendered above the chip row,
+   *  only when there's at least one favorite to show (never rendered
+   *  alongside the "nothing favorited yet" no-op — this component still
+   *  returns null in that case, same as before). Opt-in and undefined by
+   *  default so existing callers (app/history/page.tsx) render byte-
+   *  identically to pre-v0.45.2 — only ProsSearchPrompt passes one, to read
+   *  its chip row as a pinned section on the empty PROS search state. */
+  label?: string;
 }
 
 /**
@@ -23,7 +31,7 @@ interface FavoritePlayerChipsProps {
  * default), and localStorage doesn't exist during SSR — reading it eagerly
  * would produce a server/client markup mismatch.
  */
-export default function FavoritePlayerChips({ onSelect }: FavoritePlayerChipsProps) {
+export default function FavoritePlayerChips({ onSelect, label }: FavoritePlayerChipsProps) {
   const [mounted, setMounted] = useState(false);
   const [favorites, setFavorites] = useState<FavoritePlayer[]>([]);
 
@@ -52,11 +60,17 @@ export default function FavoritePlayerChips({ onSelect }: FavoritePlayerChipsPro
   }
 
   return (
-    <div
-      className="flex flex-wrap items-center justify-center gap-2 mt-3"
-      role="list"
-      aria-label="Favorite players"
-    >
+    <div className="mt-3">
+      {label && (
+        <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-mut text-center mb-2">
+          {label}
+        </div>
+      )}
+      <div
+        className="flex flex-wrap items-center justify-center gap-2"
+        role="list"
+        aria-label="Favorite players"
+      >
       {favorites.map((p) => (
         <div
           key={p.id}
@@ -85,6 +99,7 @@ export default function FavoritePlayerChips({ onSelect }: FavoritePlayerChipsPro
           </button>
         </div>
       ))}
+      </div>
     </div>
   );
 }
