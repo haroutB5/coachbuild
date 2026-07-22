@@ -2,6 +2,19 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.47.0] — 2026-07-22 (WEB-ONLY — no companion change; no re-install needed)
+### Changed — item-set archetypes are now DAMAGE-TYPE-SCOPED (durable-AP "tank mage" Viktor now shows)
+- **User feedback** (screenshot of a durable-AP Viktor — Rylai's/Blackfire + Sorc + Riftmaker + Abyssal + Rabadon's): *"even if it categorically doesn't work for Viktor, still I want to see potential builds for 'tank mage' Viktor. something like this would defo be a build that works."* The v0.43.0 "sensible-for-champ" gate HID Tank from mages, suppressing exactly these off-meta-but-coherent builds.
+- **Redesign (`components/hextech/itemSetBody.ts`):** the five sensible-gated categories (Tank / AP/Mage / AD/Lethality / Attack Speed / Support-Utility) are replaced by a **damage-family** model. Each champion's family (AP vs AD) is inferred from their OWN recommended items' damage tags (classifies AP assassins/fighters like Fizz/Mordekaiser correctly, where their ddragon class tag would not); then **every** archetype INSIDE that family is emitted regardless of meta popularity, and a **cross-family** one is never emitted (no AD/Lethality or On-hit line for an AP mage — those items don't scale with AP).
+  - **AP family:** **AP/Mage** (balanced default), **AP Burst** (glass cannon — Luden's/Shadowflame/Rabadon's/Void Staff/Stormsurge), **Tank Mage** (durable AP — Rylai's/Riftmaker/Rod of Ages/Cosmic Drive/Zhonya's/Abyssal — the user's exact screenshot archetype).
+  - **AD family** (by sub-lean): **Bruiser (AD)** (Sterak's/Death's Dance/Black Cleaver), **Lethality/Assassin**, **Crit/Marksman**, **On-hit**.
+  - **Tank (pure):** universal, but now gated to ACTUAL tanks (Tank tag or high tankiness). Support/Utility is dropped — enchanters resolve to the AP family.
+  - Each line: real per-champ WPA/share data first, then a **curated per-archetype item pool** (hand-ranked from real LoL itemization), then a catalog-wide tag fallback — honestly titled "… (low data)" when data-thin. A damage archetype with no real per-champ item only fills when the family is item/tag-confirmed, so a pure tank never gets a hollow "AP/Mage (low data)" line.
+- **Invariants preserved:** 1-boots + full-item (`isFullItem`) rules, the v0.46.0 **4-item cap** per category line, `CATEGORY_MAX_EMIT = 4`, and the byte budget. **Highest WPA is byte-identical (unchanged).**
+- **Viktor acceptance (unit-verified):** emits **AP/Mage, AP Burst, AND Tank Mage** (durable-AP items), and never AD/On-hit/Attack-Speed. A bruiser emits the AD set; an actual tank emits pure Tank.
+- **Byte budget (unit-verified):** a Viktor set = **~1.05 KB / 7 blocks**; a maximally-full set (4 archetype blocks + all others) = **~1.65 KB / 10 blocks** — both far under the 4 KB per-set ceiling. **No companion change** — the family axis is entirely web-side, so users need no re-install for this feature.
+- `verify-fix.sh`: tests 1408 green (53 in `itemSetBody.test.ts`), lint/build/sw/manifest clean.
+
 ## [0.46.0] — 2026-07-22 (companion → 1.6.1 — re-run the install one-liner from /live-setup to update)
 ### Fixed — pushing item builds failed with "HTTP 413" AND the Tank/Mage category builds never showed in-game — ONE root cause, one fix
 - **User report:** "Add item builds" failed with `League client rejected the item-set write (HTTP 413)`, and separately "the Tank/Mage category builds aren't in the game — I don't see a Tank/Mage build for Viktor." **These are the same bug.** 413 = Payload Too Large; the LCU item-sets PUT **replaces the entire item-sets object atomically**, so a 413 rejects the *whole* write — none of the CoachBuild sets land, which is exactly why the category blocks never appeared in-client. Fixing the 413 fixes both symptoms.

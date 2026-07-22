@@ -73,6 +73,30 @@
 //      below exactly as before (byte-identical regression pin), still
 //      omitted below MIN_THEMED_POOL like every pre-v0.43.0 themed line.
 //
+// v0.47.0 — user feedback (screenshot of a durable-AP "tank mage" Viktor:
+// Rylai's/Blackfire + Sorc + Riftmaker + Abyssal + Rabadon's; "even if it
+// categorically doesn't work for Viktor, still I want to see potential builds
+// for 'tank mage' Viktor"): the v0.43.0 "sensible-for-champ" gate that HID
+// Tank from mages was too conservative — it suppressed off-meta-but-coherent
+// archetypes the user explicitly wants shown. REPLACED by a DAMAGE-FAMILY-
+// scoped model (see "Damage-type-scoped archetype vocabulary" below):
+//   1. A champion's damage family (AP vs AD) is inferred from their OWN
+//      recommended items' damage tags (resolveDamageFamily) — the strongest
+//      client-available signal (ChampionRef carries no ddragon info block;
+//      real itemization beats the coarse info.attack/magic scale anyway and
+//      classifies AP assassins/fighters like Fizz/Mordekaiser correctly).
+//   2. EVERY archetype inside the champ's family is emitted regardless of
+//      meta popularity; a cross-family one is NEVER emitted (no AD/Lethality
+//      or On-hit line for an AP mage — those items don't scale with AP). The
+//      correct exclusion the old gate had (no AD line for Viktor) is kept;
+//      the over-conservative one (no durable-AP line for Viktor) is not.
+//   3. Archetypes: AP family = AP/Mage (balanced default) / AP Burst (glass
+//      cannon) / Tank Mage (durable AP — the user's screenshot). AD family =
+//      Bruiser (AD) / Lethality-Assassin / Crit-Marksman / On-hit, emitted in
+//      the champ's AD sub-lean. Tank (pure) = universal, actual tanks only.
+//      Support/Utility is dropped (enchanters resolve to the AP family).
+//      Highest WPA is UNCHANGED (buildThemedLine, byte-identical pin).
+//
 // Item-set schema per set (LCU /lol-item-sets/v1/item-sets/{id}/sets
 // contract, community-standard importer shape — see companion.ps1's own
 // header comment for the full wire contract + PUT-replaces-all merge-safety
@@ -167,74 +191,168 @@ const SITUATIONAL_CAP = 6;
  *  (tag-matched, full-item) candidates exist. */
 const MIN_THEMED_POOL = 4;
 
-// v0.36.0 — real ddragon tag vocabulary, confirmed against a live
-// item.json pull (coachless CDN mirror, 16.13.1, 2026-07-20) before picking
-// these — NOT invented. Full tag set observed on purchasable items:
-// AbilityHaste, Active, Armor, ArmorPenetration, AttackSpeed, Aura,
-// Bilgewater, Boots, Consumable, CooldownReduction, CriticalStrike, Damage,
-// GoldPer, Health, HealthRegen, Jungle, Lane, LifeSteal, MagicPenetration,
-// MagicResist, Mana, ManaRegen, NonbootsMovement, OnHit, Slow, SpellBlock,
-// SpellDamage, SpellVamp, Stealth, Tenacity, Trinket, Vision.
-// There is NO "Lethality" tag (Lethality is a stat, not a ddragon tag) —
-// real Lethality-class items (Duskblade, Youmuu's, Prowler's, etc.) are
-// tagged ArmorPenetration, the closest real substitute for the brief's own
-// "Lethality-class" wording. "SpellBlock" (not the newer, much rarer
-// "MagicResist" tag — confirmed: SpellBlock covers Spirit Visage/Banshee's
-// Veil/Mercury's Treads/etc., MagicResist only a handful of newer items) is
-// the MR tag matching the brief's literal "Armor/SpellBlock-tagged" wording.
-// v0.43.0 — five archetype categories replacing the old Tanky/Burst pair.
-// TANK_TAGS is the old TANKY_TAGS verbatim; AP_TAGS/AD_TAGS split what used
-// to be one combined BURST_TAGS (SpellDamage/MagicPenetration are magic,
-// Damage/ArmorPenetration/CriticalStrike are physical); ATTACK_SPEED_TAGS
-// and SUPPORT_TAGS are new but drawn from the SAME confirmed tag list above
-// — no new fetch, no invented tags.
-const TANK_TAGS = new Set(["Health", "Armor", "SpellBlock"]);
-const AP_TAGS = new Set(["SpellDamage", "MagicPenetration"]);
-const AD_TAGS = new Set(["Damage", "ArmorPenetration", "CriticalStrike"]);
-const ATTACK_SPEED_TAGS = new Set(["AttackSpeed", "OnHit"]);
-const SUPPORT_TAGS = new Set(["Aura", "GoldPer", "CooldownReduction", "ManaRegen", "HealthRegen"]);
+// ── Damage-type-scoped archetype vocabulary (v0.47.0) ───────────────────────
+// Tags below are the real ddragon vocabulary, confirmed against a live
+// item.json pull (coachless CDN mirror, 16.13.1) — NOT invented. There is NO
+// "Lethality" tag (it's a stat); real Lethality-class items (Duskblade/
+// Youmuu's/Serylda's) are tagged ArmorPenetration. "SpellBlock" (not the
+// rarer "MagicResist") is the MR durability tag.
 
-/** One archetype category. `sensible` is the curated-rating/ddragon-tag
- *  gate; buildItemSets ALSO ORs it with a live-data escape hatch (the
- *  champ's own item pool already showing ≥1 tag-matched full item) — see
- *  buildCategoryLine's doc comment for why that matters (a champ who
- *  genuinely itemizes into a category should never be blocked from it by a
- *  gate that hasn't been curated for them yet). */
-interface CategoryDef {
-  title: string;
-  tags: ReadonlySet<string>;
-  sensible: (rating: RatedComp, champTags: string[]) => boolean;
+/** Damage-identifying tags — used ONLY to infer a champion's family from
+ *  their own recommended items (resolveDamageFamily). AttackSpeed/OnHit count
+ *  as AD (physical carries). */
+const AP_DAMAGE_TAGS = new Set(["SpellDamage", "MagicPenetration"]);
+const AD_DAMAGE_TAGS = new Set([
+  "Damage",
+  "CriticalStrike",
+  "ArmorPenetration",
+  "AttackSpeed",
+  "OnHit",
+]);
+/** Durability tags — the "tank" half of a durable build (tank mage / bruiser
+ *  / pure tank). */
+const DURABILITY_TAGS = new Set(["Health", "Armor", "SpellBlock"]);
+
+type DamageFamily = "AP" | "AD";
+
+/** True iff `meta` carries the given tag. */
+function metaHasTag(meta: ItemDetail | undefined, tag: string): boolean {
+  return !!meta && Array.isArray(meta.tags) && meta.tags.includes(tag);
 }
 
-const CATEGORY_DEFS: CategoryDef[] = [
-  { title: "Tank", tags: TANK_TAGS, sensible: (r, tags) => r.tankiness >= 1 || tags.includes("Tank") },
-  { title: "AP/Mage", tags: AP_TAGS, sensible: (_r, tags) => tags.includes("Mage") },
-  {
-    title: "AD/Lethality",
-    tags: AD_TAGS,
-    sensible: (_r, tags) =>
-      tags.includes("Marksman") || tags.includes("Assassin") || tags.includes("Fighter"),
-  },
-  {
-    title: "Attack Speed/On-hit",
-    tags: ATTACK_SPEED_TAGS,
-    sensible: (_r, tags) => tags.includes("Marksman") || tags.includes("Fighter"),
-  },
-  {
-    title: "Support/Utility",
-    tags: SUPPORT_TAGS,
-    sensible: (r, tags) => tags.includes("Support") || r.utility >= 2,
-  },
-];
+/** One damage-type archetype. `family` scopes it (AP/AD, or "universal" for
+ *  pure Tank). `match(meta)` recognises a champ's OWN real items that embody
+ *  the archetype (the MEASURED signal). `pool` is a curated list of real LoL
+ *  item ids that DEFINE the archetype — the FILL source when a champ's real
+ *  matched items are thin; every id is re-validated against itemMeta
+ *  (isFullItem), so a wrong/legacy id degrades to the catalog-wide `match`
+ *  fallback rather than surfacing garbage, and the curated list is trusted
+ *  verbatim (NOT re-filtered through `match`) so a genuinely-on-archetype
+ *  item whose tags don't literally satisfy the predicate — e.g. Abyssal Mask
+ *  in Tank Mage, a pure-MR item with no SpellDamage tag — is still included.
+ *  `fits(champTags, rating)` is the WITHIN-FAMILY sub-lean gate (AD only; AP
+ *  archetypes always emit their full set; pure Tank gates on real tankiness). */
+interface Archetype {
+  title: string;
+  family: DamageFamily | "universal";
+  match: (meta: ItemDetail) => boolean;
+  pool: number[];
+  fits: (champTags: string[], rating: RatedComp) => boolean;
+}
+
+// Curated item pools — hand-ranked best-first from real LoL itemization
+// knowledge (patch ~16.13). These are FILL sources for thin-data champs; the
+// primary content of every line is always the champ's own measured items, so
+// a wrong/legacy id degrades gracefully (see Archetype.pool doc) — it never
+// surfaces garbage, just falls through to the catalog-wide `match` fallback.
+const AP_MAGE: Archetype = {
+  title: "AP/Mage",
+  family: "AP",
+  match: (m) => hasAnyTag(m, AP_DAMAGE_TAGS),
+  // Luden's, Shadowflame, Rabadon's, Void Staff, Liandry's, Zhonya's,
+  // Rylai's, Riftmaker — a broad, standard mage core.
+  pool: [6655, 4645, 3089, 3135, 6653, 3157, 3116, 4633],
+  fits: () => true,
+};
+const AP_BURST: Archetype = {
+  title: "AP Burst",
+  family: "AP",
+  // Glass cannon: AP damage with NO durability tag.
+  match: (m) => hasAnyTag(m, AP_DAMAGE_TAGS) && !hasAnyTag(m, DURABILITY_TAGS),
+  // Luden's, Shadowflame, Rabadon's, Void Staff, Stormsurge, Horizon Focus,
+  // Lich Bane — pure penetration/amp burst.
+  pool: [6655, 4645, 3089, 3135, 4646, 4628, 3100],
+  fits: () => true,
+};
+const TANK_MAGE: Archetype = {
+  title: "Tank Mage",
+  family: "AP",
+  // Durable AP: an AP item that ALSO builds durability (the user's exact
+  // screenshot archetype — Rylai's/Riftmaker/Abyssal + Zhonya's Viktor).
+  match: (m) => metaHasTag(m, "SpellDamage") && hasAnyTag(m, DURABILITY_TAGS),
+  // Rylai's, Riftmaker, Rod of Ages, Cosmic Drive, Zhonya's, Abyssal Mask,
+  // Liandry's, Hextech Rocketbelt — AP + health/resist.
+  pool: [3116, 4633, 6657, 4629, 3157, 3001, 6653, 3152],
+  fits: () => true,
+};
+const BRUISER_AD: Archetype = {
+  title: "Bruiser (AD)",
+  family: "AD",
+  // Health + AD.
+  match: (m) =>
+    hasAnyTag(m, new Set(["Damage", "ArmorPenetration"])) && hasAnyTag(m, DURABILITY_TAGS),
+  // Sterak's, Death's Dance, Black Cleaver, Stridebreaker, Titanic Hydra,
+  // Trinity Force, Sundered Sky, Hullbreaker.
+  pool: [3053, 6333, 3071, 6631, 3748, 3078, 6610, 3181],
+  fits: (tags) => tags.includes("Fighter"),
+};
+const LETHALITY: Archetype = {
+  title: "Lethality/Assassin",
+  family: "AD",
+  // Squishy burst AD: armor-pen (lethality-class) OR pure Damage with no
+  // durability / attack-speed / crit (a caster-AD item, not a marksman or
+  // bruiser one).
+  match: (m) =>
+    metaHasTag(m, "ArmorPenetration") ||
+    (metaHasTag(m, "Damage") &&
+      !hasAnyTag(m, DURABILITY_TAGS) &&
+      !metaHasTag(m, "AttackSpeed") &&
+      !metaHasTag(m, "CriticalStrike")),
+  // Duskblade, Eclipse, Serylda's, Youmuu's, Profane Hydra, Hubris, Edge of
+  // Night, Serpent's Fang.
+  pool: [6691, 6692, 6694, 3142, 6698, 6697, 3814, 6695],
+  fits: (tags) => tags.includes("Assassin"),
+};
+const CRIT_MARKSMAN: Archetype = {
+  title: "Crit/Marksman",
+  family: "AD",
+  match: (m) => metaHasTag(m, "CriticalStrike"),
+  // Infinity Edge, Rapid Firecannon, Statikk Shiv, Lord Dominik's,
+  // Bloodthirster, Shieldbow, Phantom Dancer, The Collector, Mortal Reminder.
+  pool: [3031, 3094, 3087, 3036, 3072, 6673, 3046, 6676, 3033],
+  fits: (tags) => tags.includes("Marksman"),
+};
+const ON_HIT: Archetype = {
+  title: "On-hit",
+  family: "AD",
+  match: (m) => hasAnyTag(m, new Set(["AttackSpeed", "OnHit"])),
+  // Blade of the Ruined King, Wit's End, Guinsoo's, Kraken Slayer, Runaan's,
+  // Trinity Force.
+  pool: [3153, 3091, 3124, 6672, 3085, 3078],
+  fits: (tags) => tags.includes("Marksman") || tags.includes("Fighter"),
+};
+const TANK_PURE: Archetype = {
+  title: "Tank",
+  family: "universal",
+  // Pure durability, not primarily a damage item.
+  match: (m) =>
+    hasAnyTag(m, DURABILITY_TAGS) &&
+    !metaHasTag(m, "SpellDamage") &&
+    !hasAnyTag(m, new Set(["Damage", "CriticalStrike", "ArmorPenetration"])),
+  // Sunfire, Thornmail, Randuin's, Spirit Visage, Heartsteel, Frozen Heart,
+  // Gargoyle Stoneplate, Abyssal Mask.
+  pool: [3068, 3075, 3143, 3065, 3084, 3110, 3193, 3001],
+  // Actual tanks only (the v0.47.0 brief: "high tankiness rating").
+  fits: (tags, rating) => tags.includes("Tank") || rating.tankiness >= 3,
+};
+
+const AP_ARCHETYPES: Archetype[] = [AP_MAGE, AP_BURST, TANK_MAGE];
+const AD_ARCHETYPES: Archetype[] = [BRUISER_AD, LETHALITY, CRIT_MARKSMAN, ON_HIT];
+
+/** A real per-champ matched-item count at/above which an archetype line is
+ *  presented as MEASURED (no "(low data)" suffix). CATEGORY_LINE_LEN is 4
+ *  (3 non-boots + 1 boots), so 3 real non-boots matches fills the line from
+ *  the champ's own data alone. */
+const MIN_CATEGORY_MEASURED = 3;
 
 /** Worst-case block-count guard (companion side wants ~10 blocks max):
- *  Starting/Core/Buy order/Pro build/Highest WPA/Situational already
- *  account for up to 6 blocks; capping categories at 4 keeps the
- *  theoretical worst case at 10. Rarely hit in practice — "aim for 2-4
- *  category lines per champ, not all five always" is what the sensibility
- *  gate is already tuned for. When more than 4 pass the gate, keep the ones
- *  with the MOST real per-champ data (prefer a measured line over a
- *  low-data fill getting bumped), original CATEGORY_DEFS order otherwise. */
+ *  Starting/Core/Buy order/Pro build/Highest WPA/Situational already account
+ *  for up to 6 blocks; capping archetypes at 4 keeps the theoretical worst
+ *  case at 10. AP always selects <= 4 (pure Tank + 3 AP archetypes); only an
+ *  AD champ with no sub-lean tags (full AD spread) plus a pure-Tank gate can
+ *  reach 5. When more than 4 are selected, keep pure Tank plus the family
+ *  archetypes with the MOST real per-champ data; declaration order preserved
+ *  for the survivors. */
 const CATEGORY_MAX_EMIT = 4;
 
 function slugPart(s: string): string {
@@ -458,83 +576,156 @@ function buildThemedLine(
   return [...top.slice(0, insertAt), boots, ...top.slice(insertAt)];
 }
 
-/** v0.43.0 — catalog-wide (NOT champ-scoped) full-item pool for a
- *  category's low-data fill, ranked by total gold cost: a cheap, honest
- *  "this is a real, substantial item" proxy, deliberately NOT a claim of
- *  measured performance (the "(low data)" title suffix is what keeps this
- *  honest to the user — see buildCategoryLine). `tagSet: null` returns
- *  every full item regardless of tag — used as a catalog-wide boots/
- *  padding safety net, since boots rarely carry any of the five category
- *  tags themselves. */
+/** v0.47.0 — catalog-wide (NOT champ-scoped) full-item pool matching an
+ *  archetype's own `match` predicate, ranked by total gold cost: a cheap,
+ *  honest "this is a real, substantial item" proxy, deliberately NOT a claim
+ *  of measured performance (the "(low data)" title suffix is what keeps this
+ *  honest — see buildArchetypeLine). Last-resort fill when a champ has thin
+ *  real data AND the curated pool didn't resolve. */
 function categoryDefaultPool(
   itemMeta: ReadonlyMap<number, ItemDetail>,
-  tagSet: ReadonlySet<string> | null
+  match: (meta: ItemDetail) => boolean
 ): Candidate[] {
   const out: Candidate[] = [];
   itemMeta.forEach((m, id) => {
     if (!isFullItem(id, m)) return;
-    if (tagSet && !hasAnyTag(m, tagSet)) return;
+    if (!match(m)) return;
     out.push({ id, weight: m.goldTotal });
   });
   return out.sort((a, b) => b.weight - a.weight);
 }
 
-/** v0.43.0 — one archetype category line (Tank/AP-Mage/AD-Lethality/
- *  Attack Speed/Support-Utility). `pool` is `themedUnion` — the SAME
- *  full-item-filtered, any-tag union Highest WPA ranks within.
+/** v0.47.0 — the curated archetype pool resolved against real item metadata:
+ *  full items only, hand-ranked order preserved (best-first by construction,
+ *  which IS "ranked by quality + tag fit"). Trusted verbatim: NOT re-filtered
+ *  through the archetype's `match` predicate, so an on-archetype item whose
+ *  tags don't literally satisfy the predicate (Abyssal Mask in Tank Mage) is
+ *  kept. A wrong/legacy id absent from itemMeta simply drops out. */
+function curatedArchetypePool(
+  arch: Archetype,
+  itemMeta: ReadonlyMap<number, ItemDetail>
+): Candidate[] {
+  const out: Candidate[] = [];
+  for (const id of arch.pool) {
+    const m = itemMeta.get(id);
+    if (!m || !isFullItem(id, m)) continue;
+    out.push({ id, weight: m.goldTotal });
+  }
+  return out;
+}
+
+/** v0.47.0 — infer a champion's damage FAMILY. Primary signal: the champ's
+ *  OWN recommended full items' damage tags (the strongest client-available
+ *  signal — it reflects real itemization, so it classifies AP assassins/
+ *  fighters like Fizz/Mordekaiser correctly where their ddragon class tag
+ *  would not). Tie / no damage-tagged items -> ddragon class tags (Mage/
+ *  Support -> AP; Marksman/Assassin/Fighter -> AD). Last resort -> AP (a
+ *  tag-less, damage-item-less champ is almost always a utility/enchanter or
+ *  tank, AP-family).
  *
- *  >= MIN_THEMED_POOL real tag-matched candidates -> "measured": the exact
- *  top-N/boots-preference mechanic buildThemedLine already uses,
- *  DUPLICATED rather than shared — buildThemedLine itself must never
- *  change (Highest WPA's byte-identical regression pin).
+ *  NOTE (the v0.47.0 brief asked to "prefer info.magic>info.attack"): ddragon's
+ *  info block is SERVER-ONLY (lib/staticData.ts getChampionMeta) and NOT on
+ *  ChampionRef's wire contract, so it isn't available in this pure client
+ *  module without new API plumbing. The real-item signal used here is strictly
+ *  BETTER for this purpose than the coarse 1-10 info scale (info misclassifies
+ *  hybrid champs; actual recommended items do not), so no info plumbing was
+ *  added — see HANDOFF-engy for the tradeoff.
  *
- *  < MIN_THEMED_POOL (including 0) -> "low data": NEVER omitted (the
- *  user's explicit ask — a sensible category always ships something).
- *  Fills via `buildLine`, the same 6-items/1-boots machinery every other
- *  line in this file goes through:
- *   - `primary` = the real tag-matched candidates that DO exist, plus the
- *     champ's own overall best boots pick (any theme — folded in up front
- *     so a themed line doesn't strand itself boots-less just because no
- *     boots happens to carry that category's tag; buildLine's own
- *     primaryBoots branch then resolves it directly).
- *   - fallback pools are CATALOG-WIDE defaults only (tag-matched, then
- *     any-tag) — deliberately never the champ's own OFF-THEME real items;
- *     that would silently smuggle e.g. a real AP pick into a "Tank (low
- *     data)" line, exactly the honesty problem the title suffix exists to
- *     prevent. */
-function buildCategoryLine(
+ *  `confident` is true when the family came from real damage items OR a
+ *  damage class tag (Mage/Support/Marksman/Assassin/Fighter) — a genuine
+ *  signal that the champ deals that damage type. It's false ONLY for the
+ *  last-resort default (a champ with no damage items AND no damage class tag —
+ *  a pure tank/utility champ), which lets buildItemSets suppress catalog-fill
+ *  damage archetypes it can't stand behind (a pure tank should get its Tank
+ *  line, not a nonsensical "AP/Mage (low data)"). */
+function resolveDamageFamily(
+  champ: ChampionRef,
+  realFullItems: Candidate[],
+  itemMeta: ReadonlyMap<number, ItemDetail>
+): { family: DamageFamily; confident: boolean } {
+  let ap = 0;
+  let ad = 0;
+  for (const c of realFullItems) {
+    const m = itemMeta.get(c.id);
+    if (!m) continue;
+    if (hasAnyTag(m, AP_DAMAGE_TAGS)) ap++;
+    if (hasAnyTag(m, AD_DAMAGE_TAGS)) ad++;
+  }
+  if (ap !== ad) return { family: ap > ad ? "AP" : "AD", confident: true };
+  const tags = champ.tags ?? [];
+  if (tags.includes("Mage") || tags.includes("Support")) return { family: "AP", confident: true };
+  if (tags.includes("Marksman") || tags.includes("Assassin") || tags.includes("Fighter")) {
+    return { family: "AD", confident: true };
+  }
+  return { family: "AP", confident: false };
+}
+
+/** v0.47.0 — the ordered archetypes to emit for a champion: pure Tank (if an
+ *  ACTUAL tank) + the champ's damage family. AP always emits its full
+ *  3-archetype set (AP/Mage, AP Burst, Tank Mage); AD emits the sub-lean
+ *  archetypes its class tags fit, falling back to the full AD spread when a
+ *  champ has no AD sub-lean tag (e.g. resolved to AD purely via its items).
+ *  A cross-family archetype is NEVER included — the core of the redesign. */
+function selectArchetypes(
+  family: DamageFamily,
+  champTags: string[],
+  rating: RatedComp
+): Archetype[] {
+  const out: Archetype[] = [];
+  if (TANK_PURE.fits(champTags, rating)) out.push(TANK_PURE);
+  if (family === "AP") {
+    out.push(...AP_ARCHETYPES);
+  } else {
+    const subs = AD_ARCHETYPES.filter((a) => a.fits(champTags, rating));
+    out.push(...(subs.length > 0 ? subs : AD_ARCHETYPES));
+  }
+  return out;
+}
+
+/** v0.47.0 — build one archetype line. Real per-champ matched items (the
+ *  champ's OWN recommended items embodying this archetype) rank first; a line
+ *  with >= MIN_CATEGORY_MEASURED real non-boots matches is MEASURED, otherwise
+ *  it's a "(low data)" FILL: real matches, then the curated archetype pool,
+ *  then catalog-wide `match` defaults — all through the same one-boots/
+ *  isFullItem machinery every other line uses, capped at CATEGORY_LINE_LEN (4).
+ *  The champ's own real boots are always folded in so a fill never strands
+ *  itself boots-less. */
+function buildArchetypeLine(
   pool: Candidate[],
-  tagSet: ReadonlySet<string>,
+  arch: Archetype,
   itemMeta: ReadonlyMap<number, ItemDetail>,
   bootsIds: ReadonlySet<number>
 ): { line: Candidate[]; lowData: boolean } {
-  const themed = pool
-    .filter((c) => hasAnyTag(itemMeta.get(c.id), tagSet))
+  const realMatched = pool
+    .filter((c) => {
+      const m = itemMeta.get(c.id);
+      return m ? arch.match(m) : false;
+    })
     .sort((a, b) => b.weight - a.weight);
+  const realNonBoots = realMatched.filter((c) => !bootsIds.has(c.id));
+  const overallBoots =
+    pool.filter((c) => bootsIds.has(c.id)).sort((a, b) => b.weight - a.weight)[0] ?? null;
 
-  if (themed.length >= MIN_THEMED_POOL) {
-    const nonBoots = themed.filter((c) => !bootsIds.has(c.id));
-    const themedBoots = themed.filter((c) => bootsIds.has(c.id))[0] ?? null; // already sorted desc
-    const overallBoots =
-      pool.filter((c) => bootsIds.has(c.id)).sort((a, b) => b.weight - a.weight)[0] ?? null;
+  if (realNonBoots.length >= MIN_CATEGORY_MEASURED) {
+    const themedBoots = realMatched.filter((c) => bootsIds.has(c.id))[0] ?? null; // already weight-desc
     const boots = themedBoots ?? overallBoots;
-    // v0.46.0: category lines are capped at CATEGORY_LINE_LEN (4), not
-    // LINE_LEN (6) — see the constant's doc comment (413 payload fix).
     const target = CATEGORY_LINE_LEN - (boots ? 1 : 0);
-    const top = nonBoots.slice(0, target);
+    const top = realNonBoots.slice(0, target);
     if (!boots) return { line: top, lowData: false };
     const insertAt = Math.min(3, top.length);
     return { line: [...top.slice(0, insertAt), boots, ...top.slice(insertAt)], lowData: false };
   }
 
-  const overallBoots = pool.filter((c) => bootsIds.has(c.id)).sort((a, b) => b.weight - a.weight)[0];
-  const hasThemedBoots = themed.some((c) => bootsIds.has(c.id));
-  const primary = overallBoots && !hasThemedBoots ? [...themed, overallBoots] : themed;
-
-  const taggedDefaults = categoryDefaultPool(itemMeta, tagSet);
-  const anyDefaults = categoryDefaultPool(itemMeta, null);
-  // v0.46.0: category lines fill to CATEGORY_LINE_LEN (4), not LINE_LEN (6).
-  const line = buildLine(primary, [taggedDefaults, anyDefaults], bootsIds, CATEGORY_LINE_LEN);
+  const hasRealBoots = realMatched.some((c) => bootsIds.has(c.id));
+  const primary = overallBoots && !hasRealBoots ? [...realMatched, overallBoots] : realMatched;
+  const curatedFill = curatedArchetypePool(arch, itemMeta);
+  const catalogFill = categoryDefaultPool(itemMeta, arch.match);
+  const line = buildLine(primary, [curatedFill, catalogFill], bootsIds, CATEGORY_LINE_LEN);
+  // A line that resolved to boots-only (no real archetype content anywhere in
+  // reach — sparse itemMeta, or a family that the champ has zero on-archetype
+  // items for) is meaningless: return empty so buildItemSets omits the block
+  // rather than shipping a "shop line" that's just a pair of boots.
+  if (line.filter((c) => !bootsIds.has(c.id)).length === 0) return { line: [], lowData: true };
   return { line, lowData: true };
 }
 
@@ -608,11 +799,13 @@ function baseSet(champ: ChampionRef, roleLabel: string): Omit<ItemSet, "blocks">
  *  data resolves, boots-deduped to the single highest-share pick, padded
  *  via the general optimized→situational→consensus cascade) → Highest WPA
  *  (only when the whole pool has ≥4 qualifying full items — see
- *  buildThemedLine, UNCHANGED since v0.36.0) → up to CATEGORY_MAX_EMIT of
- *  Tank / AP/Mage / AD/Lethality / Attack Speed/On-hit / Support/Utility
- *  (v0.43.0 — archetype-gated, never omitted once sensible; thin data fills
- *  via buildCategoryLine and gets a "(low data)" title suffix instead of
- *  being dropped) → Situational swaps (the alternates pool, cap 6, exempt
+ *  buildThemedLine, UNCHANGED since v0.36.0) → up to CATEGORY_MAX_EMIT
+ *  damage-type archetypes (v0.47.0 — family-scoped: pure Tank if an actual
+ *  tank, then the champ's AP set [AP/Mage, AP Burst, Tank Mage] or AD set
+ *  [Bruiser (AD), Lethality/Assassin, Crit/Marksman, On-hit]; never a
+ *  cross-family line; thin data fills via buildArchetypeLine and gets a
+ *  "(low data)" title suffix instead of being dropped) → Situational swaps
+ *  (the alternates pool, cap 6, exempt
  *  from BOTH the one-boots rule AND the full-items rule — these are swap
  *  SUGGESTIONS, not a worn loadout, so a stacking item or several boots
  *  options side by side is the intended shape, not a bug). */
@@ -679,35 +872,55 @@ export function buildItemSets(
   // Themed lines — derived entirely from the pools already built above, no
   // new upstream data. All full-item-filtered already (every pool fed into
   // themedUnion is). Highest WPA (v0.36.0, UNCHANGED) uses buildThemedLine
-  // directly; the five archetype categories (v0.43.0) use buildCategoryLine
-  // — see that function's doc comment for why they're never shared code.
+  // directly; the damage-type archetypes (v0.47.0) use buildArchetypeLine.
   const themedUnion = unionPool(corePrimary, optimizedPrimary ?? [], situationalPoolFull, proPool);
   const highestWpaLine = buildThemedLine(themedUnion, null, meta, bootsIds);
   if (highestWpaLine) blocks.push({ type: "Highest WPA", items: toItemRefs(highestWpaLine) });
 
+  // v0.47.0 — damage-type-scoped archetypes. The champ's family (AP vs AD) is
+  // inferred from their OWN recommended items (themedUnion); every archetype
+  // inside that family is emitted (never a cross-family one), plus pure Tank
+  // when the champ is an actual tank. See the archetype vocabulary + the
+  // resolveDamageFamily/selectArchetypes helpers above.
   const rating = getCompRating(champ.id);
   const champTags = champ.tags ?? [];
-  const eligible = CATEGORY_DEFS.map((def) => {
-    const poolLen = themedUnion.filter((c) => hasAnyTag(meta.get(c.id), def.tags)).length;
-    const sensible = def.sensible(rating, champTags) || poolLen > 0;
-    return { def, sensible, poolLen };
-  }).filter((e) => e.sensible);
+  const { family, confident } = resolveDamageFamily(champ, themedUnion, meta);
+  const selected = selectArchetypes(family, champTags, rating);
 
-  const chosenDefs =
-    eligible.length > CATEGORY_MAX_EMIT
-      ? new Set(
-          [...eligible]
-            .sort((a, b) => b.poolLen - a.poolLen)
-            .slice(0, CATEGORY_MAX_EMIT)
-            .map((e) => e.def)
-        )
-      : new Set(eligible.map((e) => e.def));
+  // Trim to CATEGORY_MAX_EMIT: keep universal pure Tank, then the family
+  // archetypes with the most real per-champ data; declaration order preserved.
+  const withData = selected.map((arch) => ({
+    arch,
+    poolLen: themedUnion.filter((c) => {
+      const m = meta.get(c.id);
+      return m ? arch.match(m) : false;
+    }).length,
+  }));
+  let chosen = withData;
+  if (withData.length > CATEGORY_MAX_EMIT) {
+    const keep = new Set<Archetype>();
+    for (const w of withData) if (w.arch.family === "universal") keep.add(w.arch);
+    const ranked = withData
+      .filter((w) => w.arch.family !== "universal")
+      .sort((a, b) => b.poolLen - a.poolLen);
+    for (const w of ranked) {
+      if (keep.size >= CATEGORY_MAX_EMIT) break;
+      keep.add(w.arch);
+    }
+    chosen = withData.filter((w) => keep.has(w.arch));
+  }
 
-  for (const def of CATEGORY_DEFS) {
-    if (!chosenDefs.has(def)) continue;
-    const { line, lowData } = buildCategoryLine(themedUnion, def.tags, meta, bootsIds);
+  for (const { arch, poolLen } of chosen) {
+    // A damage archetype with NO real per-champ items is only worth a
+    // catalog-fill "(low data)" line when the champ's family is CONFIDENT
+    // (item- or class-tag-confirmed). A pure tank/utility champ that only
+    // defaulted into AP should get its Tank line, not a hollow "AP/Mage
+    // (low data)" filled from the catalog. Pure Tank (universal) is exempt —
+    // it's gated on real tankiness, not on a family guess.
+    if (arch.family !== "universal" && !confident && poolLen === 0) continue;
+    const { line, lowData } = buildArchetypeLine(themedUnion, arch, meta, bootsIds);
     if (line.length === 0) continue; // never a genuinely empty block
-    blocks.push({ type: lowData ? `${def.title} (low data)` : def.title, items: toItemRefs(line) });
+    blocks.push({ type: lowData ? `${arch.title} (low data)` : arch.title, items: toItemRefs(line) });
   }
 
   if (situationalPicks.length > 0) {

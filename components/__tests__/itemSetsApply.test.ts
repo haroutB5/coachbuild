@@ -223,20 +223,22 @@ describe("applyItemSetsForBuild", () => {
     expect(parsed.sets[0].title).toBe("CoachBuild Jinx Bot");
     // v0.36.0: "Highest WPA" has no tag requirement, only a ≥4-item pool
     // threshold -- Core alone (5 full items here) already clears it.
-    // v0.43.0: this fixture's own item tags legitimately open two archetype
-    // categories -- 3031/3036/3095/3072 are all CriticalStrike/Damage-tagged
-    // (exactly 4, clears MIN_THEMED_POOL -> a MEASURED "AD/Lethality" line)
-    // and boots 3006 carries "AttackSpeed" (1 real match -> the live-data
-    // escape hatch opens Attack Speed/On-hit as a "(low data)" fill line).
-    // Not a regression in this wiring test -- confirms real ItemDetail tags
-    // threaded through applyItemSetsForBuild actually drive category
+    // v0.47.0: this fixture's items are all physical (3031 CriticalStrike,
+    // 3036/3095/3072 Damage, boots 3006 AttackSpeed), so the champ resolves to
+    // the AD damage FAMILY -- and Jinx carries no sub-lean class tag, so the
+    // full AD spread is considered. Of it, only Lethality/Assassin (the 3
+    // caster-AD Damage items -> MEASURED) and Crit/Marksman (the 1 crit item
+    // -> "(low data)" fill) actually resolve; Bruiser (no durable-AD item) and
+    // On-hit (its only AttackSpeed item is boots) correctly stay omitted. NO
+    // AP line ever appears (cross-family exclusion). Confirms real ItemDetail
+    // tags threaded through applyItemSetsForBuild drive family-scoped archetype
     // emission end to end.
     expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).toEqual([
       "Starting",
       "Core build",
       "Highest WPA",
-      "AD/Lethality",
-      "Attack Speed/On-hit (low data)",
+      "Lethality/Assassin",
+      "Crit/Marksman (low data)",
     ]);
     // v0.35.0: champ-scoped (not role-scoped) stale-removal prefix, so a
     // later lane flip's export cleans up THIS lane's set too.
