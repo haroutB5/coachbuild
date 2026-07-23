@@ -14,9 +14,13 @@ vi.mock("@/lib/pro/db", () => ({ getSql: vi.fn(() => mockSql) }));
 const mockGetMyAccount = vi.fn();
 vi.mock("@/lib/mystats/account", () => ({ getMyAccount: (...args: unknown[]) => mockGetMyAccount(...args) }));
 
+const mockRunMyStatsRefresh = vi.fn();
+vi.mock("@/lib/mystats/refresh", () => ({ runMyStatsRefresh: (...args: unknown[]) => mockRunMyStatsRefresh(...args) }));
+
 import { GET as ingestGET } from "@/app/api/ingest/mystats/route";
 import { GET as summaryGET } from "@/app/api/mystats/summary/route";
 import { GET as matchupsGET } from "@/app/api/mystats/matchups/route";
+import { POST as refreshPOST } from "@/app/api/mystats/refresh/route";
 import { getSql } from "@/lib/pro/db";
 
 function req(url: string, headers: Record<string, string> = {}) {
@@ -144,5 +148,50 @@ describe("GET /api/mystats/matchups", () => {
     const body = await res.json();
     expect(body.matchups).toEqual([{ oppChampionId: 99, games: 1, wins: 1, winrate: 1 }]);
     expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+});
+
+describe("POST /api/mystats/refresh", () => {
+  beforeEach(() => {
+    mockRunMyStatsRefresh.mockReset();
+    mockSql.mockReset();
+    vi.mocked(getSql).mockReturnValue(mockSql as never);
+  });
+
+  it("503 with no-store when DATABASE_URL isn't configured, never calls runMyStatsRefresh", async () => {
+    vi.mocked(getSql).mockReturnValueOnce(null);
+    const res = await refreshPOST();
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(mockRunMyStatsRefresh).not.toHaveBeenCalled();
+  });
+
+  it("accountUnresolved passes through as-is, no-store", async () => {
+    mockRunMyStatsRefresh.mockResolvedValueOnce({ accountUnresolved: true });
+    const res = await refreshPOST();
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(await res.json()).toEqual({ accountUnresolved: true });
+  });
+
+  it("skipped:cooldown passes through as-is", async () => {
+    mockRunMyStatsRefresh.mockResolvedValueOnce({ refreshed: false, skipped: true, reason: "cooldown" });
+    const res = await refreshPOST();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ refreshed: false, skipped: true, reason: "cooldown" });
+  });
+
+  it("refreshed:true with newGames/latest passes through as-is", async () => {
+    mockRunMyStatsRefresh.mockResolvedValueOnce({ refreshed: true, skipped: false, newGames: 3, latest: "2026-07-24T11:00:00.000Z" });
+    const res = await refreshPOST();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ refreshed: true, skipped: false, newGames: 3, latest: "2026-07-24T11:00:00.000Z" });
+  });
+
+  it("fail-soft error:true is still a 200, never a 500", async () => {
+    mockRunMyStatsRefresh.mockResolvedValueOnce({ refreshed: false, skipped: false, error: true });
+    const res = await refreshPOST();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ refreshed: false, skipped: false, error: true });
   });
 });

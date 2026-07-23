@@ -2,6 +2,14 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.49.3] — 2026-07-24 (WEB-ONLY — no companion change, no re-install)
+### Added — My Stats on-demand incremental refresh (backend + standalone component; page-wiring lands post-nav)
+- Follow-up to 0.49.2's flagged item: "current on demand" instead of waiting for the daily cron. New `POST /api/mystats/refresh` (`app/api/mystats/refresh/route.ts`) runs `runMyStatsIngest({mode:"incremental"})` on demand, gated by a server-side cooldown (`REFRESH_COOLDOWN_MS` = 3 min, `lib/mystats/refresh.ts`) so it's safe to call on every My Stats page view without risking the shared Riot key budget (CLAUDE.md gotcha (d)) — worst case is one incremental run per cooldown window regardless of call volume. No auth (unlike the cron's `CRON_SECRET` gate) — that's the point, it's meant to be hit by every page view.
+- New column `coachbuild.my_ingest_cursor.last_incremental_at` (migration `0013_mystats_refresh_cooldown.sql`, applied to prod) tracks the cooldown clock server-side (not trustable to the client).
+- Response shapes: `{accountUnresolved:true}` (guard, does nothing — no Riot call); `{refreshed:false, skipped:true, reason:"cooldown"}`; `{refreshed:true, skipped:false, newGames, latest}`; `{refreshed:false, skipped:false, error:true}` (fail-soft — never a 500, page keeps showing cached data).
+- New standalone client component `components/hextech/MyStatsRefresher.tsx` (`"use client"`, POST-on-mount with a StrictMode-safe fire-once guard, small "Updating…" pill, calls `onRefreshed()` only when `newGames>0`) — NOT wired into `app/mystats/page.tsx` yet (a concurrent global-nav redesign owns that file this session); see HANDOFF-engy.md for the exact one-line mount instruction once nav lands.
+- 14 new tests (`lib/__tests__/mystats-refresh.test.ts`, `lib/__tests__/mystats-routes.test.ts`) — cooldown decision logic + all 4 route response branches. 1459 tests total.
+
 ## [0.49.2] — 2026-07-24 (companion unchanged at 1.6.3)
 ### Changed — My Stats ingest cron back to daily (was every-other-day)
 - My Stats was showing stale data (missing games played that day). Cause: the v0.48-era Vercel Active-CPU trim spaced the `/api/ingest/mystats` cron to every-other-day — too infrequent for personal stats the user actively checks (and one personal-account incremental fetch is a trivial CPU cost anyway). Restored to daily (`0 20 * * *`) — the Vercel free plan caps cron frequency at once/day, so daily is the max. (Today's games were also manually ingested via the incremental path — the manual `ingest-mystats.mjs` script only runs the backfill/history walk, not the newest-first incremental fetch, so a stale-mystats refresh needs the incremental run.) Proper "current on demand" fix = a My Stats page refresh that triggers the incremental ingest — flagged as a follow-up.
