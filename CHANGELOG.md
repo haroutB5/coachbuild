@@ -3,8 +3,8 @@
 All notable changes to CoachBuild are documented here.
 
 ## [0.49.2] — 2026-07-24 (companion unchanged at 1.6.3)
-### Changed — My Stats ingest cron back to frequent (twice daily)
-- My Stats was showing stale data (missing games played that day). Cause: the v0.48-era Vercel Active-CPU trim spaced the `/api/ingest/mystats` cron to every-other-day — too infrequent for personal stats the user actively checks (and one personal-account incremental fetch is a trivial CPU cost anyway). Restored to twice daily (`0 8,20 * * *`), so games land within ~12h. (Today's games were also manually ingested via the incremental path — the manual `ingest-mystats.mjs` script only runs the backfill/history walk, not the newest-first incremental fetch, so a stale-mystats refresh needs the incremental run.)
+### Changed — My Stats ingest cron back to daily (was every-other-day)
+- My Stats was showing stale data (missing games played that day). Cause: the v0.48-era Vercel Active-CPU trim spaced the `/api/ingest/mystats` cron to every-other-day — too infrequent for personal stats the user actively checks (and one personal-account incremental fetch is a trivial CPU cost anyway). Restored to daily (`0 20 * * *`) — the Vercel free plan caps cron frequency at once/day, so daily is the max. (Today's games were also manually ingested via the incremental path — the manual `ingest-mystats.mjs` script only runs the backfill/history walk, not the newest-first incremental fetch, so a stale-mystats refresh needs the incremental run.) Proper "current on demand" fix = a My Stats page refresh that triggers the incremental ingest — flagged as a follow-up.
 
 ## [0.49.1] — 2026-07-22 (WEB-ONLY — no companion change, no re-install)
 ### Fixed — Pro game Teams box: duplicate "Jg" + wrong lane order
