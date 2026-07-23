@@ -115,8 +115,11 @@ body {
    of plain CSS classes (`.dt-*`) rather than fighting Tailwind's static-hex
    `teal`/`gold` utilities. Every rule below lives under `.draft-tactical` so
    it can never leak onto any other page. Shared out-of-scope components
-   rendered inside this page (TabNav, ChampionPicker) deliberately keep their
-   app-wide gold accent — see HANDOFF-fronty.md for the reasoning. */
+   rendered inside this page (ChampionPicker) deliberately keep their
+   app-wide gold accent — see HANDOFF-fronty.md for the reasoning.
+   v0.50.0 (global nav redesign): TabNav is gone from this page (replaced by
+   the global DesktopRail/MobileTabBar, which live OUTSIDE `.draft-tactical`
+   entirely and must stay Hextech GOLD here too — see R5 below). */
 .draft-tactical {
   --dt-bg: #070d10;
   --dt-panel: #0d161a;
@@ -140,10 +143,19 @@ body {
 
 /* Circuit-board backdrop — pure CSS gradients (no SVG fetch, no filter
    blur, GPU-cheap: opacity/background only, no layout cost). A faint grid
-   of hairlines + node dots, layered under the content via a fixed pseudo
-   layer so it doesn't scroll-repaint per pixel. */
+   of hairlines + node dots, layered under the content.
+   v0.50.0 (global nav redesign, R5): was `position: fixed` (viewport-
+   relative), which visually bled the cyan HUD background under the new
+   global DesktopRail — a fixed element's painted position ignores DOM
+   ancestry, so it covered the FULL viewport width including the rail's
+   232px column, regardless of `.draft-tactical` only wrapping the draft
+   content column. Switched to `position: absolute`, which resolves against
+   `.draft-tactical`'s own box (that rule already sets `position: relative`
+   above) — confines the circuit bg to the draft content column only, never
+   under the rail. `.draft-tactical` keeps `min-h-screen` so this still has
+   a real height to fill even on a short page. */
 .dt-circuit-bg {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;

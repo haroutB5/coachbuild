@@ -5,7 +5,7 @@ import type { ChampionRef } from "@/lib/types";
 import type { PlayerRef } from "@/components/proHistory.types";
 import type { ProGameSource } from "@/components/proGames.types";
 import type { PendingPlayerSelect } from "@/components/playerSelectHandoff";
-import Sidebar from "@/components/hextech/Sidebar";
+import BuildsSearchBar from "@/components/hextech/BuildsSearchBar";
 import ChampionHero from "@/components/hextech/ChampionHero";
 import PlayerHero from "@/components/hextech/PlayerHero";
 import PlayerGamesSection from "@/components/hextech/PlayerGamesSection";
@@ -582,39 +582,33 @@ export default function HomePage() {
   );
 
   return (
-    <div className="min-h-screen lg:flex">
-      <Sidebar
-        activeLane={activeLane}
-        onLaneChange={handleLaneChange}
-        champ={champ}
-        onSearchSelect={handleChampionSelect}
-        searchMode={searchMode}
-        onSearchModeChange={setSearchMode}
-        onPlayerSelect={handlePlayerSelect}
-        patch={patch}
-        collapsed
-      />
-      <Sidebar
-        activeLane={activeLane}
-        onLaneChange={handleLaneChange}
-        champ={champ}
-        onSearchSelect={handleChampionSelect}
-        searchMode={searchMode}
-        onSearchModeChange={setSearchMode}
-        onPlayerSelect={handlePlayerSelect}
-        patch={patch}
-      />
+    <div className="px-4 sm:px-6 lg:px-8 py-6">
+      {/* v0.44.0 (Builds responsive plan §3a/§2e): frees desktop width
+          (the 900px cap wasted a real xl monitor's width) and adds a
+          defensive overflow-x-clip against any future horizontal-overflow
+          regression on THIS wrapper only — never the root or an ancestor
+          of a fixed-position overlay (GameDetailSheet's backdrop is
+          `fixed inset-0 z-[100]`, unaffected either way since this wrapper
+          has no fixed descendants).
+          v0.50.0 (global nav redesign): the old `min-h-screen lg:flex` +
+          two <Sidebar> renders + <main> are gone — AppShell.tsx (app/
+          layout.tsx) now owns that shell (branded rail + bottom tab bar);
+          this page only owns its own content, starting with
+          BuildsSearchBar at the top (same handlers the two Sidebar renders
+          used — R2). */}
+      <div className="max-w-[900px] lg:max-w-none xl:max-w-[1440px] lg:mx-0 xl:mx-auto overflow-x-clip">
+        <BuildsSearchBar
+          activeLane={activeLane}
+          onLaneChange={handleLaneChange}
+          champ={champ}
+          onSearchSelect={handleChampionSelect}
+          searchMode={searchMode}
+          onSearchModeChange={setSearchMode}
+          onPlayerSelect={handlePlayerSelect}
+          patch={patch}
+        />
 
-      <main className="flex-1 min-w-0 px-4 sm:px-6 lg:px-8 py-6 pb-16">
-        {/* v0.44.0 (Builds responsive plan §3a/§2e): frees desktop width
-            (the 900px cap wasted a real xl monitor's width) and adds a
-            defensive overflow-x-clip against any future horizontal-overflow
-            regression on THIS wrapper only — never the root or an ancestor
-            of a fixed-position overlay (GameDetailSheet's backdrop is
-            `fixed inset-0 z-[100]`, unaffected either way since `<main>` has
-            no fixed descendants). */}
-        <div className="max-w-[900px] lg:max-w-none xl:max-w-[1440px] lg:mx-0 xl:mx-auto overflow-x-clip">
-          {showProsSearchPrompt ? (
+        {showProsSearchPrompt ? (
             <ProsSearchPrompt onSelectPlayer={handlePlayerSelect} />
           ) : mainView.kind === "champion" ? (
             <>
@@ -686,7 +680,7 @@ export default function HomePage() {
             )}
           </footer>
         </div>
-      </main>
-    </div>
-  );
+      </div>
+    );
 }
+

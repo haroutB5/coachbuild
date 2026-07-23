@@ -31,7 +31,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ChampionRef } from "@/lib/types";
-import TabNav from "@/components/TabNav";
 import { LANE_TO_ROLE_ID, type LaneId } from "@/components/hextech/heroContracts";
 import { getChampionIconMap, type ChampionIconEntry } from "@/components/proAssets";
 import { useCompanion } from "@/components/live/CompanionProvider";
@@ -340,8 +339,6 @@ export default function DraftPage() {
       <div className="dt-circuit-bg" aria-hidden="true" />
       <div className="dt-content max-w-[900px] mx-auto px-4 sm:px-6">
         <header className="pt-8 pb-5 border-b border-[color:var(--dt-line)] mb-6">
-          <TabNav />
-
           <div className="text-center mb-4">
             <h1 className="dt-glow-text text-3xl font-extrabold tracking-tight text-balance">
               <span className="dt-accent-text">Draft</span> Recommender

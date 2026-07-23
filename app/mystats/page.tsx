@@ -3,8 +3,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // /mystats — "My Stats" personal match tracker (backend by engy, 2026-07-21 —
 // see HANDOFF.md's "My Stats" entries + lib/mystats/**). Standalone shell
-// page, same convention as /draft and /movers (not the two-Sidebar main
-// layout — an auxiliary surface reachable from TabNav/Sidebar).
+// page, same convention as /draft and /movers. v0.50.0: reachable from the
+// global DesktopRail/MobileTabBar (AppShell.tsx) instead of the old
+// TabNav/hextech-Sidebar pair.
 //
 // HARD USER DIRECTIVES this page must honor:
 //  (1) DISPLAY ONLY — this data never feeds any score/ranking anywhere (see
@@ -21,8 +22,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState } from "react";
-import TabNav from "@/components/TabNav";
 import { IconWithFallback } from "@/components/IconWithFallback";
+import MyStatsRefresher from "@/components/hextech/MyStatsRefresher";
 import { getChampionIconMap, type ChampionIconEntry } from "@/components/proAssets";
 import {
   fetchMyStatsSummary,
@@ -79,6 +80,13 @@ export default function MyStatsPage() {
   const [state, setState] = useState<SummaryState>({ status: "loading" });
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [detail, setDetail] = useState<DetailState>({ status: "idle" });
+  // v0.50.0: bumped by MyStatsRefresher's onRefreshed (below) when the
+  // on-demand incremental ingest actually found new games — re-runs the
+  // summary fetch effect below without duplicating its stale-response-guard
+  // logic (see engy's HANDOFF-engy.md wiring note, 2026-07-24: "bump a
+  // refetch-trigger state var or call the existing load() function
+  // directly" — this is the refetch-trigger variant).
+  const [refetchKey, setRefetchKey] = useState(0);
 
   useEffect(() => {
     getChampionIconMap().then(setChampIcons);
@@ -93,7 +101,7 @@ export default function MyStatsPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refetchKey]);
 
   useEffect(() => {
     if (expandedId === null) {
@@ -128,8 +136,6 @@ export default function MyStatsPage() {
     <div className="min-h-screen pb-16">
       <div className="max-w-[720px] mx-auto px-4 sm:px-6">
         <header className="pt-8 pb-5 border-b border-line mb-6">
-          <TabNav />
-
           <div className="text-center mb-2">
             <h1 className="text-3xl font-extrabold tracking-tight text-balance">
               My <span className="text-teal">Stats</span>
@@ -144,6 +150,7 @@ export default function MyStatsPage() {
                 <span aria-hidden="true"> &middot; </span>
                 <span className="text-teal-dim font-semibold">{state.summary.season || "Current season"}</span>
               </p>
+              <MyStatsRefresher onRefreshed={() => setRefetchKey((k) => k + 1)} />
               {overall && overall.games > 0 && (
                 <p className="text-[13.5px] font-bold tabular-nums text-txt">
                   {overall.games} games <span className="text-mut/60" aria-hidden="true">&middot;</span>{" "}

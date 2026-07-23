@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import type { ChampionRef } from "@/lib/types";
-import TabNav from "@/components/TabNav";
 import SegmentedControl from "@/components/SegmentedControl";
 import PlayerPicker from "@/components/PlayerPicker";
 import ChampionPicker from "@/components/ChampionPicker";
@@ -277,8 +276,6 @@ export default function HistoryPage() {
       <div className="max-w-[1080px] mx-auto px-4 sm:px-6">
         {/* ── Top bar ── */}
         <header className="pt-8 pb-5 border-b border-line mb-6">
-          <TabNav />
-
           <div className="text-center mb-4">
             <h1 className="text-3xl font-extrabold tracking-tight text-balance">
               Pro<span className="text-teal">&apos;s</span>

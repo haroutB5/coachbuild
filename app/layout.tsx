@@ -4,6 +4,7 @@ import "./globals.css";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 import CompanionProvider from "@/components/live/CompanionProvider";
 import AutoExporter from "@/components/live/AutoExporter";
+import AppShell from "@/components/hextech/AppShell";
 
 const plusJakarta = Plus_Jakarta_Sans({
   subsets: ["latin"],
@@ -73,8 +74,14 @@ export default function RootLayout({
             drafts from /draft (which suppresses opening the Builds page, where
             the exporter used to live). Exactly one owner app-wide; see
             components/live/autoExport.ts's header. */}
+        {/* v0.50.0 (global nav redesign): AppShell now owns the branded left
+            rail (desktop) + bottom tab bar (mobile) that replace the old
+            per-page TabNav + Builds-only hextech Sidebar + MobileNavMenu.
+            Stays INSIDE CompanionProvider so the rail's companion status
+            card can read the same app-wide useCompanion() poll every other
+            live-aware surface already uses. */}
         <CompanionProvider>
-          {children}
+          <AppShell>{children}</AppShell>
           <AutoExporter />
         </CompanionProvider>
         <ServiceWorkerRegister />

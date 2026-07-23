@@ -3,10 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MyStatsRefresher — standalone client component, NOT wired into
-// app/mystats/page.tsx yet (that file is owned by a concurrent global-nav
-// redesign — see HANDOFF-engy.md for the exact one-line mounting
-// instructions once that lands). On mount, fires ONE POST
+// MyStatsRefresher — wired into app/mystats/page.tsx (v0.50.0, global nav
+// redesign) per engy's HANDOFF-engy.md instructions (2026-07-24): mounted
+// near the riotId/season line, `onRefreshed` bumps a `refetchKey` state var
+// that the page's summary-fetch effect depends on. On mount, fires ONE POST
 // /api/mystats/refresh (lib/mystats/refresh.ts's server-side cooldown makes
 // this safe even if the page remounts the component repeatedly across
 // navigations) and shows a small "Updating…" pill for the duration of the
