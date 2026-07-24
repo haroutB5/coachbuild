@@ -2,6 +2,10 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.51.2] — 2026-07-24 (WEB-ONLY — no companion change, no re-install)
+### Removed — Pro Players "Recent competitive games" section (user directive)
+- `/history` drops the recent-competitive-games table added in 0.51.0; player/champion search is the page's primary view again. Deleted `ProPlayersTable.tsx`, `app/api/pros/recent/route.ts`, `lib/pros/recentModel.ts` + both test files (zero other consumers, grep-verified). Leaguepedia attribution remains in the page footer. 1512 tests. Gotcha: `verify-fix` tsc failed on a stale `.next/types` stub for the deleted route — cleared `.next/types/app/api/pros` and re-ran green (deleting an API route needs that sweep before the tsc gate).
+
 ## [0.51.1] — 2026-07-24 (WEB-ONLY — no companion change, no re-install)
 ### Fixed — three user-reported issues from the v0.51.0 ship
 - **My Stats match history invisible (P1):** `normalizeMyStatsSummary` (`components/hextech/myStats.ts`) rebuilt the summary with only the 4 legacy fields, silently dropping `recentGames`/`buildAdherencePct`/`winrateOnBuild`/`winrateOffBuild`/`priorSplitWinrate` that the API was already returning — the page's `?? []`/`?? null` fallbacks then rendered permanent empty states. Normalizer now passes all five through with per-entry validation (malformed rows dropped, never taint the list); test fixture built from the real prod payload. Cross-agent seam lesson: fronty typed the page against the extended API, engo extended the API — nobody owned the normalizer between them, and the audit verified both ends but not the seam.
