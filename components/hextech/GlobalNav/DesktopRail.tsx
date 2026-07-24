@@ -51,7 +51,17 @@ export default function DesktopRail({ patch }: DesktopRailProps) {
   const dataItems = NAV_ITEMS.filter((item) => item.group === "data");
 
   return (
-    <aside className="hidden lg:flex lg:flex-col w-[232px] flex-shrink-0 bg-sidebar border-r border-line min-h-screen px-4 py-5">
+    // sticky + h-screen (not min-h-screen) — the flex row (AppShell) stretches
+    // this aside to match <main>'s full scrollable height on any content-
+    // heavy page (BUILD tab, Pro Players, etc.), which pushed the mt-auto
+    // companion card + PATCH footer far below the fold, effectively
+    // unreachable without scrolling to the literal bottom of the page
+    // (caught via screenshot at 1280x900 — the rail rendered logo/PLAY/DATA
+    // correctly but the card+footer were nowhere in the viewport). `sticky
+    // top-0 h-screen overflow-y-auto` pins the rail to the viewport instead,
+    // independent of main's height; overflow-y-auto is a defensive guard in
+    // case the rail's OWN content (unlikely) ever exceeds one viewport.
+    <aside className="hidden lg:flex lg:flex-col w-[232px] flex-shrink-0 bg-sidebar border-r border-line sticky top-0 h-screen overflow-y-auto px-4 py-5">
       <Link href="/" className="flex items-center gap-2.5 px-0.5 mb-6">
         <span className="flex-shrink-0 w-8 h-8 rounded-md bg-teal/12 border border-line-gold flex items-center justify-center">
           <NavIcon iconKey="cb-tile" className="w-[18px] h-[18px] text-teal" />
