@@ -97,11 +97,6 @@ All notable changes to CoachBuild are documented here.
 - **Verified:** unit tests pin the Senna-class case (positional soloq shards `[Attack Speed, Move Speed, Health]` → apply input offense = Attack Speed, not the WPA fallback's Adaptive Force), per-slot majority resolution, the genuine all-fallback path (no soloq shard data anywhere → `shardsFromFallback: true`), and the per-slot-invalid-id guard (an id valid for a different slot never wins that slot, falls back for that slot only while other slots stay pro). 1425 tests green.
 - Web-only — no companion update needed, no user re-install.
 
-## [0.48.3] — 2026-07-22 (companion unchanged at 1.6.3)
-### Fixed — "Apply pro runes" produced an incomplete page (empty primary-tree slots)
-- **User-reported (Ashe bot Pro page):** the applied pro rune page had empty slots — only the keystone was selected, primary minor rows blank. Root cause: `proConsensusRuneApplyInput` assembled `selectedPerkIds` by overall rune frequency without guaranteeing exactly one valid pick PER slot-row, so it could emit two perks for one row and none for another; the LCU silently drops the invalid/duplicate-slot ids → empty rows. Thin samples (Ashe bot = 1 game) exposed it.
-- **Fix:** new `components/hextech/perkSlots.ts` maps every rune id → its (tree, slot-row) from the perkstyles data; the apply page is now assembled slot-coherently (modal keystone → conditioned primary rows 1/2/3 → modal secondary tree + 2 picks from 2 different rows → 3 shard slots), one valid perk per slot, conditioned on the modal tree first (the v0.29.0 tree-coherence lesson applied to the APPLY path). A slot with no consensus rune fills from the modal game's real page rather than leaving a gap; `missingRunePageReason` now also catches a genuinely uncoverable slot. Web-only — no companion update needed. 1422 tests.
-
 ## [0.48.3] — 2026-07-22 (WEB-ONLY — no companion change, no re-install)
 ### Fixed — *Apply pro runes* wrote an INVALID page with empty primary-tree slots
 - **User-reported (screenshot):** applying the in-client *"CoachBuild Ashe Bot Pro"* page left some primary-tree minor slots EMPTY — only the keystone (Lethal Tempo) showed selected. The `…Pro` page itself is correct (1.6.3); this was about the page CONTENTS.
