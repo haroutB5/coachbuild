@@ -15,7 +15,10 @@
 # Node.js dir FIRST or tsx resolves against the wrong runtime.
 
 $ErrorActionPreference = 'Continue'
-$repo = 'C:\Users\Harout\urgot-travel-bundle-2026-06-18\AI\coachbuild'
+# Self-locating (2026-07-24, machine-migration hardening): resolve the repo
+# from this script's own location instead of a hardcoded user path, so the
+# Task Scheduler job works on any machine/username the bundle lands on.
+$repo = Split-Path -Parent $PSScriptRoot
 $logDir = Join-Path $env:LOCALAPPDATA 'CoachBuild'
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
 $log = Join-Path $logDir 'draft-ingest.log'
