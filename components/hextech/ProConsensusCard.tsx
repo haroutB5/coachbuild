@@ -354,7 +354,15 @@ function ItemTile({
  *  as one ItemTile so it reflows in the same flex-wrap row; each row is its
  *  own tap target with its own icon/name/pct/count — the two counts are
  *  never merged into a fake combined stat (they're independent per-boot
- *  fractions against the same `denom`). */
+ *  fractions against the same `denom`).
+ *
+ *  v0.51.1 (user-reported: boots/starter icons render visibly smaller than
+ *  the main ITEMS grid icons): each entry now uses the EXACT SAME icon
+ *  size/box as ItemTile (w-11 h-11, size=44), stacked in a column instead of
+ *  the old horizontal icon-left/text-right row that only had room for a
+ *  20px icon. Still one flex-wrap slot overall (a `flex-col` wrapper), so
+ *  the "group boots under one slot" partition semantics are unchanged —
+ *  only the per-entry icon size and layout direction changed. */
 function BootsStackTile({
   boots,
   denom,
@@ -369,7 +377,7 @@ function BootsStackTile({
   onClick: (itemId: number) => void;
 }) {
   return (
-    <div className="flex flex-col gap-1 w-[72px] flex-shrink-0 justify-center">
+    <div className="flex flex-col gap-2.5 w-[72px] flex-shrink-0">
       {boots.map((b) => {
         const name = names.get(b.itemId) ?? `Item #${b.itemId}`;
         const pct = formatSharePct(denom > 0 ? b.count / denom : 0);
@@ -379,27 +387,14 @@ function BootsStackTile({
             type="button"
             onClick={() => onClick(b.itemId)}
             aria-label={`View details for ${name} — built in ${b.count} of ${denom} pro games (${pct})`}
-            className="flex items-center gap-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
+            className="flex flex-col items-center text-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
           >
-            <span className="w-5 h-5 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
-              <IconWithFallback src={icon(b.itemId)} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={20} />
+            <span className="w-11 h-11 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center">
+              <IconWithFallback src={icon(b.itemId)} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={44} />
             </span>
-            <span className="text-left leading-tight min-w-0 flex-1">
-              {/* flex-1 (not just min-w-0) gives this span a definite width
-                  before line-clamp is evaluated — without it, Chromium's
-                  -webkit-line-clamp height computation inside a flex row goes
-                  wrong (measured: button rendered ~44px tall for ~22px of
-                  real content) and the name clips mid-word with no ellipsis
-                  ("Spellslinge Shoes" for Spellslinger's Shoes). line-clamp-2
-                  + break-words matches ItemTile's own two-line name treatment
-                  instead of a single-line clamp that has no room to work with
-                  in this narrow icon+text column. */}
-              <span className="block text-[9px] text-txt leading-tight line-clamp-2 break-words">{name}</span>
-              <span className="block text-[8.5px] tabular-nums mt-0.5">
-                <span className="font-bold text-teal">{pct}</span>
-                <span className="text-mut/60"> · {b.count}/{denom}</span>
-              </span>
-            </span>
+            <span className="text-[10px] text-txt mt-1.5 leading-tight line-clamp-2 min-h-[24px]">{name}</span>
+            <span className="text-[10.5px] font-bold tabular-nums text-teal">{pct}</span>
+            <span className="text-[9.5px] text-mut/70 tabular-nums">{b.count}/{denom}</span>
           </button>
         );
       })}
@@ -415,7 +410,14 @@ function BootsStackTile({
  *  grid" shape. Hard user directive (screenshot-verified, 2026-07-22): a
  *  starter must NEVER render inside the main ITEMS grid — this is its
  *  dedicated home instead. Absent (not rendered) when `starters` is empty —
- *  see the render call site below. */
+ *  see the render call site below.
+ *
+ *  v0.51.1: mirrors BootsStackTile's same-day icon-size fix — each entry now
+ *  renders at ItemTile's exact icon size (w-11 h-11, size=44) in a vertical
+ *  icon-above-text layout instead of the old smaller (20px) horizontal row,
+ *  so Starting/boots tiles no longer look visibly smaller than the main
+ *  ITEMS grid. The starter-slot partition itself (never merging into the
+ *  completed-items row) is unchanged — only the tile's internal size/layout. */
 function StartersStackTile({
   starters,
   denom,
@@ -430,7 +432,7 @@ function StartersStackTile({
   onClick: (itemId: number) => void;
 }) {
   return (
-    <div className="flex flex-col gap-1 w-[72px] flex-shrink-0 justify-center">
+    <div className="flex flex-col gap-2.5 w-[72px] flex-shrink-0">
       {starters.map((s) => {
         const name = names.get(s.itemId) ?? `Item #${s.itemId}`;
         const pct = formatSharePct(denom > 0 ? s.count / denom : 0);
@@ -440,22 +442,14 @@ function StartersStackTile({
             type="button"
             onClick={() => onClick(s.itemId)}
             aria-label={`View details for ${name} — a starting item choice in ${s.count} of ${denom} pro games (${pct})`}
-            className="flex items-center gap-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
+            className="flex flex-col items-center text-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
           >
-            <span className="w-5 h-5 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
-              <IconWithFallback src={icon(s.itemId)} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={20} />
+            <span className="w-11 h-11 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center">
+              <IconWithFallback src={icon(s.itemId)} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={44} />
             </span>
-            <span className="text-left leading-tight min-w-0 flex-1">
-              {/* Same line-clamp/flex-1 recipe as BootsStackTile's name span
-                  — see that component's comment for why flex-1 (not just
-                  min-w-0) is load-bearing for -webkit-line-clamp inside a
-                  flex row. */}
-              <span className="block text-[9px] text-txt leading-tight line-clamp-2 break-words">{name}</span>
-              <span className="block text-[8.5px] tabular-nums mt-0.5">
-                <span className="font-bold text-teal">{pct}</span>
-                <span className="text-mut/60"> · {s.count}/{denom}</span>
-              </span>
-            </span>
+            <span className="text-[10px] text-txt mt-1.5 leading-tight line-clamp-2 min-h-[24px]">{name}</span>
+            <span className="text-[10.5px] font-bold tabular-nums text-teal">{pct}</span>
+            <span className="text-[9.5px] text-mut/70 tabular-nums">{s.count}/{denom}</span>
           </button>
         );
       })}

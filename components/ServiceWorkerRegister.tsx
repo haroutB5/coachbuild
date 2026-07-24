@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
+import { SW_UPDATE_DISMISSED_STORAGE_KEY, isUpdateDismissed } from "./swUpdateDismiss";
 
 // Registers the service worker with the current app version as a query param.
 // When the version bumps, the registration URL changes → the browser installs a
@@ -16,25 +17,27 @@ import { useEffect, useState, useRef } from "react";
 // below. A first-ever install (no existing controller yet) is unaffected: the
 // browser activates it immediately since there's nothing to wait for, so no
 // toast appears on a fresh install.
-// sessionStorage key: once the user dismisses the update toast, keep it hidden
-// for the rest of this tab session (survives the network-first re-renders, not
-// a full reload). During a heavy deploy day every new version legitimately
-// re-triggers the prompt; a session-scoped dismiss lets the user silence the
-// nag without a disruptive mid-champ-select refresh, while a fresh tab still
-// surfaces genuinely new versions. The app is network-first, so a dismissed
-// SW update just means slightly stale cached assets until the next natural load.
-const SW_TOAST_DISMISSED_KEY = "coachbuild:swUpdateDismissed";
+// v0.51.1: dismiss persistence moved to localStorage, keyed to the specific
+// waiting worker's scriptURL — see swUpdateDismiss.ts's header for the full
+// rationale (sessionStorage was per-tab and unreliable across iOS PWA
+// relaunches, which read to users as "the toast keeps re-appearing even
+// though I'm already on the latest version"). During a heavy deploy day
+// every new version still legitimately shows its own toast once; dismissing
+// one version never suppresses a later, genuinely different one. The app is
+// network-first, so a dismissed SW update just means slightly stale cached
+// assets until the next natural load.
 
 export default function ServiceWorkerRegister() {
   const [waitingWorker, setWaitingWorker] = useState<ServiceWorker | null>(null);
-  const [dismissed, setDismissed] = useState(false);
+  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
+  const dismissed = isUpdateDismissed(dismissedVersion, waitingWorker?.scriptURL ?? null);
 
-  // Hydrate the dismissed flag from sessionStorage on mount (SSR-safe).
+  // Hydrate the last-dismissed version from localStorage on mount (SSR-safe).
   useEffect(() => {
     try {
-      if (sessionStorage.getItem(SW_TOAST_DISMISSED_KEY) === "1") setDismissed(true);
+      setDismissedVersion(localStorage.getItem(SW_UPDATE_DISMISSED_STORAGE_KEY));
     } catch {
-      /* sessionStorage unavailable (private mode / disabled) — just show the toast */
+      /* localStorage unavailable (private mode / disabled) — just show the toast */
     }
   }, []);
   // Loop guard for the controllerchange -> reload below: controllerchange can
@@ -111,9 +114,11 @@ export default function ServiceWorkerRegister() {
   }
 
   function dismiss() {
-    setDismissed(true);
+    if (!waitingWorker) return;
+    const { scriptURL } = waitingWorker;
+    setDismissedVersion(scriptURL);
     try {
-      sessionStorage.setItem(SW_TOAST_DISMISSED_KEY, "1");
+      localStorage.setItem(SW_UPDATE_DISMISSED_STORAGE_KEY, scriptURL);
     } catch {
       /* best-effort — the in-memory state already hides it this render */
     }

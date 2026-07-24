@@ -41,11 +41,49 @@ export interface MyStatsMatchupRecord {
   winrate: number; // 0-1
 }
 
+/** v0.51 Wave B extended field (GET /api/mystats/summary — see
+ *  lib/mystats/aggregate.ts's RecentGame / app/api/mystats/summary/route.ts).
+ *  `onWpaBuild` mirrors the server's own null/false distinction (see
+ *  lib/mystats/adherence.ts's computeAdherence doc comment): null = no
+ *  recommendation was available to compare against at ingest time, never
+ *  coerced to false. Structurally identical to
+ *  components/hextech/mystats/RecentGamesList.tsx's `RecentGameRow` (that
+ *  file's own consumer type) on purpose — keeps the two interfaces mutually
+ *  assignable regardless of which extends which. */
+export interface MyStatsRecentGame {
+  championId: number;
+  role: number;
+  win: boolean;
+  kills: number;
+  deaths: number;
+  assists: number;
+  onWpaBuild: boolean | null | undefined;
+}
+
 export interface MyStatsSummary {
   accountUnresolved: boolean;
   season: string;
   riotId: string | null;
   records: MyStatsRecord[];
+  /** v0.51 Wave B additions — all optional (not just possibly-empty) so a
+   *  consumer's own extended interface (see app/mystats/page.tsx's
+   *  MyStatsSummaryExtended) can redeclare them without a TS2430
+   *  "incorrectly extends" error: a base interface can't declare a member
+   *  required when a derived interface declares the same member optional.
+   *  normalizeMyStatsSummary below ALWAYS populates real values for these
+   *  (never leaves them genuinely absent) — optional here is a type-level
+   *  compatibility choice, not a runtime gap.
+   *  BUG FIX (2026-07-24, P1): these five fields were previously dropped
+   *  entirely by normalizeMyStatsSummary, even though the server has sent
+   *  them since the same wave shipped — the page's cast to
+   *  MyStatsSummaryExtended silently degraded every one of them to
+   *  undefined/[] on every real load. Root-caused and fixed here; see this
+   *  file's test for the exact reproduction (a real prod payload fixture). */
+  buildAdherencePct?: number | null;
+  winrateOnBuild?: number | null;
+  winrateOffBuild?: number | null;
+  priorSplitWinrate?: number | null;
+  recentGames?: MyStatsRecentGame[];
 }
 
 export interface MyStatsMatchups {
@@ -75,18 +113,67 @@ function normalizeRecord(raw: unknown): MyStatsRecord | null {
   };
 }
 
+/** null when `v` isn't a finite number — distinct from `0`, which is a real
+ *  value every one of these fields can legitimately hold (0% adherence, 0%
+ *  win rate on a real 0-win sample). Never coerced to 0 as a fallback. */
+function numOrNull(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/** true/false pass through as-is; anything else (missing, null, a stray
+ *  string/number from a malformed payload) degrades to null — the server's
+ *  own "no recommendation available" signal, never fabricated as false. */
+function boolOrNull(v: unknown): boolean | null {
+  return typeof v === "boolean" ? v : null;
+}
+
+function normalizeRecentGame(raw: unknown): MyStatsRecentGame | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<MyStatsRecentGame>;
+  if (typeof r.championId !== "number") return null;
+  if (typeof r.win !== "boolean") return null;
+  return {
+    championId: r.championId,
+    role: typeof r.role === "number" ? r.role : -1,
+    win: r.win,
+    kills: num(r.kills),
+    deaths: num(r.deaths),
+    assists: num(r.assists),
+    onWpaBuild: boolOrNull(r.onWpaBuild),
+  };
+}
+
 /** Malformed payload (not even an object) -> null. A malformed individual
- *  record entry inside a well-formed envelope is dropped, never taints the
- *  rest of the list — same posture as normalizeDraftRecommendResponse. */
+ *  record/recentGame entry inside a well-formed envelope is dropped, never
+ *  taints the rest of the list — same posture as
+ *  normalizeDraftRecommendResponse.
+ *
+ *  BUG FIX (P1, 2026-07-24): previously rebuilt the return object with ONLY
+ *  the legacy accountUnresolved/season/riotId/records fields, silently
+ *  stripping buildAdherencePct/winrateOnBuild/winrateOffBuild/
+ *  priorSplitWinrate/recentGames even though the server had already been
+ *  sending them since this same wave shipped — app/mystats/page.tsx's cast
+ *  to its own extended type meant TypeScript never caught the mismatch, and
+ *  every one of those fields silently read as undefined/[] on a real page
+ *  load (reproduced in this file's test with an actual prod payload). Now
+ *  passed through with the same defensive per-entry validation posture as
+ *  every other field in this normalizer. */
 export function normalizeMyStatsSummary(raw: unknown): MyStatsSummary | null {
   if (!raw || typeof raw !== "object") return null;
-  const r = raw as Partial<MyStatsSummary> & { records?: unknown };
+  const r = raw as Partial<MyStatsSummary> & { records?: unknown; recentGames?: unknown };
   return {
     accountUnresolved: r.accountUnresolved === true,
     season: typeof r.season === "string" ? r.season : "",
     riotId: typeof r.riotId === "string" ? r.riotId : null,
     records: Array.isArray(r.records)
       ? r.records.map(normalizeRecord).filter((x): x is MyStatsRecord => x !== null)
+      : [],
+    buildAdherencePct: numOrNull(r.buildAdherencePct),
+    winrateOnBuild: numOrNull(r.winrateOnBuild),
+    winrateOffBuild: numOrNull(r.winrateOffBuild),
+    priorSplitWinrate: numOrNull(r.priorSplitWinrate),
+    recentGames: Array.isArray(r.recentGames)
+      ? r.recentGames.map(normalizeRecentGame).filter((x): x is MyStatsRecentGame => x !== null)
       : [],
   };
 }

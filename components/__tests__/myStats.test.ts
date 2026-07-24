@@ -14,13 +14,21 @@ import {
   type IconEntry,
 } from "../hextech/myStats";
 
+const EXTENDED_DEFAULTS = {
+  buildAdherencePct: null,
+  winrateOnBuild: null,
+  winrateOffBuild: null,
+  priorSplitWinrate: null,
+  recentGames: [],
+};
+
 describe("normalizeMyStatsSummary", () => {
   it("returns null for a non-object payload", () => {
     expect(normalizeMyStatsSummary(null)).toBeNull();
     expect(normalizeMyStatsSummary("<html>error</html>")).toBeNull();
   });
 
-  it("parses a full, well-formed envelope", () => {
+  it("parses a full, well-formed envelope (legacy fields only -- extended fields default to null/[])", () => {
     const result = normalizeMyStatsSummary({
       accountUnresolved: false,
       season: "Season 2026",
@@ -32,6 +40,7 @@ describe("normalizeMyStatsSummary", () => {
       season: "Season 2026",
       riotId: "MunsterHunter#EUW",
       records: [{ championId: 112, role: 2, games: 39, wins: 25, winrate: 0.641, lastPlayed: "2026-07-20T00:00:00.000Z" }],
+      ...EXTENDED_DEFAULTS,
     });
   });
 
@@ -54,12 +63,104 @@ describe("normalizeMyStatsSummary", () => {
 
   it("missing fields degrade to safe defaults rather than rejecting the whole response", () => {
     const result = normalizeMyStatsSummary({});
-    expect(result).toEqual({ accountUnresolved: false, season: "", riotId: null, records: [] });
+    expect(result).toEqual({ accountUnresolved: false, season: "", riotId: null, records: [], ...EXTENDED_DEFAULTS });
   });
 
   it("a record missing `role` degrades to -1 (unresolved), not a crash or a fabricated 0", () => {
     const result = normalizeMyStatsSummary({ records: [{ championId: 1, games: 1, wins: 1, winrate: 1 }] });
     expect(result?.records[0].role).toBe(-1);
+  });
+
+  // ── v0.51 Wave B P1 bug fix (2026-07-24): buildAdherencePct/winrateOnBuild/
+  // winrateOffBuild/priorSplitWinrate/recentGames were being silently
+  // stripped by this normalizer even though the server had already been
+  // sending them -- reproduced here with the ACTUAL prod response shape
+  // (fields/values as reported live: recentGames has 5 rows,
+  // priorSplitWinrate=0.5185) rather than a synthetic minimal fixture, so
+  // this test would have caught the real regression. ──────────────────────
+  const PROD_PAYLOAD = {
+    accountUnresolved: false,
+    season: "Season 2026",
+    riotId: "MunsterHunter#EUW",
+    records: [{ championId: 112, role: 2, games: 39, wins: 25, winrate: 0.641, lastPlayed: "2026-07-20T00:00:00.000Z" }],
+    matchup: null,
+    buildAdherencePct: 62.5,
+    winrateOnBuild: 0.68,
+    winrateOffBuild: 0.45,
+    priorSplitWinrate: 0.5185,
+    recentGames: [
+      { championId: 112, role: 2, win: true, kills: 8, deaths: 2, assists: 11, onWpaBuild: true },
+      { championId: 122, role: 0, win: false, kills: 3, deaths: 6, assists: 2, onWpaBuild: false },
+      { championId: 64, role: 1, win: true, kills: 12, deaths: 4, assists: 7, onWpaBuild: null },
+      { championId: 51, role: 3, win: true, kills: 6, deaths: 1, assists: 9, onWpaBuild: true },
+      { championId: 412, role: 4, win: false, kills: 0, deaths: 3, assists: 14, onWpaBuild: null },
+    ],
+  };
+
+  it("passes through the real prod extended payload (P1 repro): all 5 recentGames rows + every extended stat survive", () => {
+    const result = normalizeMyStatsSummary(PROD_PAYLOAD);
+    expect(result?.buildAdherencePct).toBe(62.5);
+    expect(result?.winrateOnBuild).toBe(0.68);
+    expect(result?.winrateOffBuild).toBe(0.45);
+    expect(result?.priorSplitWinrate).toBe(0.5185);
+    expect(result?.recentGames).toHaveLength(5);
+    expect(result?.recentGames).toEqual([
+      { championId: 112, role: 2, win: true, kills: 8, deaths: 2, assists: 11, onWpaBuild: true },
+      { championId: 122, role: 0, win: false, kills: 3, deaths: 6, assists: 2, onWpaBuild: false },
+      { championId: 64, role: 1, win: true, kills: 12, deaths: 4, assists: 7, onWpaBuild: null },
+      { championId: 51, role: 3, win: true, kills: 6, deaths: 1, assists: 9, onWpaBuild: true },
+      { championId: 412, role: 4, win: false, kills: 0, deaths: 3, assists: 14, onWpaBuild: null },
+    ]);
+  });
+
+  it("buildAdherencePct/winrateOnBuild/winrateOffBuild/priorSplitWinrate of exactly 0 survive (never coerced to null)", () => {
+    const result = normalizeMyStatsSummary({ buildAdherencePct: 0, winrateOnBuild: 0, winrateOffBuild: 0, priorSplitWinrate: 0 });
+    expect(result?.buildAdherencePct).toBe(0);
+    expect(result?.winrateOnBuild).toBe(0);
+    expect(result?.winrateOffBuild).toBe(0);
+    expect(result?.priorSplitWinrate).toBe(0);
+  });
+
+  it("a non-finite/wrong-typed extended stat degrades to null, never NaN or a string", () => {
+    const result = normalizeMyStatsSummary({ buildAdherencePct: NaN, winrateOnBuild: "0.5", priorSplitWinrate: undefined });
+    expect(result?.buildAdherencePct).toBeNull();
+    expect(result?.winrateOnBuild).toBeNull();
+    expect(result?.priorSplitWinrate).toBeNull();
+  });
+
+  it("drops a malformed recentGames entry without dropping the rest of the list", () => {
+    const result = normalizeMyStatsSummary({
+      recentGames: [
+        { championId: 112, role: 2, win: true, kills: 8, deaths: 2, assists: 11, onWpaBuild: true },
+        { role: 2, win: true }, // missing championId
+        { championId: 64, role: 1 }, // missing win
+      ],
+    });
+    expect(result?.recentGames).toHaveLength(1);
+    expect(result?.recentGames?.[0].championId).toBe(112);
+  });
+
+  it("a recentGames entry missing `role` degrades to -1, not a crash or a fabricated 0", () => {
+    const result = normalizeMyStatsSummary({
+      recentGames: [{ championId: 1, win: true, kills: 1, deaths: 1, assists: 1 }],
+    });
+    expect(result?.recentGames?.[0].role).toBe(-1);
+  });
+
+  it("a recentGames entry's onWpaBuild coerces anything non-boolean to null, never fabricated as false", () => {
+    const result = normalizeMyStatsSummary({
+      recentGames: [
+        { championId: 1, role: 0, win: true, onWpaBuild: undefined },
+        { championId: 2, role: 0, win: true, onWpaBuild: "true" },
+        { championId: 3, role: 0, win: true, onWpaBuild: false },
+        { championId: 4, role: 0, win: true, onWpaBuild: true },
+      ],
+    });
+    expect(result?.recentGames?.map((g) => g.onWpaBuild)).toEqual([null, null, false, true]);
+  });
+
+  it("a non-array recentGames degrades to [] rather than crashing", () => {
+    expect(normalizeMyStatsSummary({ recentGames: "not-an-array" })?.recentGames).toEqual([]);
   });
 });
 

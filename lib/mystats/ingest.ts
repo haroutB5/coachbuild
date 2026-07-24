@@ -82,12 +82,16 @@ import type { ExtractedMyMatch, MyRiotMatch } from "./types";
 // distinct combos actually seen in the batch, not one per match. Resolution
 // stays fully SEQUENTIAL (awaited inline in the same per-match loop that
 // already paces Riot calls) -- no parallel fan-out is added.
-interface RecommendedSignature {
+export interface RecommendedSignature {
   coreItemIds: number[];
   keystoneId: number;
 }
 
-async function resolveRecommendedBuild(
+/** Exported (not just used internally by ingestOnePage below) so
+ *  scripts/backfill-mystats-kda.mjs can reuse the EXACT same resolution +
+ *  patch-gate + per-run cache contract for old rows that predate migration
+ *  0014 — see that script's header for why reuse beats reimplementing this. */
+export async function resolveRecommendedBuild(
   cache: Map<string, RecommendedSignature | null>,
   currentPatchLabel: string,
   championId: number,
