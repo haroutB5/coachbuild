@@ -3,7 +3,12 @@ import {
   summarizeByChampion,
   summarizeMatchup,
   summarizeMatchupsByOpponent,
+  computeBuildAdherence,
+  computePriorSplitWinrate,
+  buildRecentGames,
   type MyMatchRecord,
+  type AdherenceRecord,
+  type RecentGameInput,
 } from "@/lib/mystats/aggregate";
 
 function rec(overrides: Partial<MyMatchRecord>): MyMatchRecord {
@@ -80,5 +85,115 @@ describe("summarizeMatchupsByOpponent", () => {
     ];
     const out = summarizeMatchupsByOpponent(rows);
     expect(out.map((o) => o.oppChampionId)).toEqual([20, 10]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.51 additions — build adherence, prior-split delta, recent games.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function adh(over: Partial<AdherenceRecord>): AdherenceRecord {
+  return { win: true, onWpaBuild: null, ...over };
+}
+
+describe("computeBuildAdherence", () => {
+  it("all null when there are zero rows with a resolved recommendation", () => {
+    const out = computeBuildAdherence([adh({ onWpaBuild: null }), adh({ onWpaBuild: null })]);
+    expect(out).toEqual({ buildAdherencePct: null, winrateOnBuild: null, winrateOffBuild: null });
+  });
+
+  it("excludes unresolved (null) rows from the denominator", () => {
+    const out = computeBuildAdherence([
+      adh({ onWpaBuild: null, win: true }), // excluded entirely
+      adh({ onWpaBuild: true, win: true }),
+      adh({ onWpaBuild: false, win: false }),
+    ]);
+    expect(out.buildAdherencePct).toBe(50); // 1 of 2 RESOLVED rows on-build
+  });
+
+  it("computes buildAdherencePct + separate on/off win rates", () => {
+    const out = computeBuildAdherence([
+      adh({ onWpaBuild: true, win: true }),
+      adh({ onWpaBuild: true, win: true }),
+      adh({ onWpaBuild: true, win: false }),
+      adh({ onWpaBuild: false, win: false }),
+    ]);
+    expect(out.buildAdherencePct).toBe(75); // 3 of 4
+    expect(out.winrateOnBuild).toBeCloseTo(2 / 3, 5);
+    expect(out.winrateOffBuild).toBe(0);
+  });
+
+  it("winrateOffBuild is null when every resolved row was on-build (no off-build rows to average)", () => {
+    const out = computeBuildAdherence([adh({ onWpaBuild: true, win: true })]);
+    expect(out.winrateOffBuild).toBeNull();
+    expect(out.winrateOnBuild).toBe(1);
+  });
+
+  it("empty input -> all null", () => {
+    expect(computeBuildAdherence([])).toEqual({
+      buildAdherencePct: null,
+      winrateOnBuild: null,
+      winrateOffBuild: null,
+    });
+  });
+});
+
+describe("computePriorSplitWinrate", () => {
+  it("null for zero rows (no prior-split data at all)", () => {
+    expect(computePriorSplitWinrate([])).toBeNull();
+  });
+
+  it("computes a plain win rate over whatever rows it's given", () => {
+    expect(computePriorSplitWinrate([{ win: true }, { win: true }, { win: false }, { win: false }])).toBe(0.5);
+  });
+});
+
+function recentRow(over: Partial<RecentGameInput>): RecentGameInput {
+  return {
+    championId: 1,
+    role: 2,
+    win: true,
+    kills: 5,
+    deaths: 2,
+    assists: 7,
+    onWpaBuild: null,
+    gameCreation: "2026-01-01T00:00:00.000Z",
+    ...over,
+  };
+}
+
+describe("buildRecentGames", () => {
+  it("sorts newest first regardless of input order", () => {
+    const rows = [
+      recentRow({ championId: 1, gameCreation: "2026-01-01T00:00:00.000Z" }),
+      recentRow({ championId: 2, gameCreation: "2026-03-01T00:00:00.000Z" }),
+      recentRow({ championId: 3, gameCreation: "2026-02-01T00:00:00.000Z" }),
+    ];
+    expect(buildRecentGames(rows).map((g) => g.championId)).toEqual([2, 3, 1]);
+  });
+
+  it("caps at the given limit (default 5)", () => {
+    const rows = Array.from({ length: 8 }, (_, i) =>
+      recentRow({ championId: i, gameCreation: `2026-01-0${i + 1}T00:00:00.000Z` })
+    );
+    expect(buildRecentGames(rows)).toHaveLength(5);
+    expect(buildRecentGames(rows, 3)).toHaveLength(3);
+  });
+
+  it("strips gameCreation from the output shape (display doesn't need it)", () => {
+    const [g] = buildRecentGames([recentRow({})]);
+    expect(g).toEqual({
+      championId: 1,
+      role: 2,
+      win: true,
+      kills: 5,
+      deaths: 2,
+      assists: 7,
+      onWpaBuild: null,
+    });
+  });
+
+  it("empty input -> empty output", () => {
+    expect(buildRecentGames([])).toEqual([]);
   });
 });

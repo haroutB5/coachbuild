@@ -17,21 +17,24 @@
 // below). No companion at all is simply the quiet default; nothing here
 // nags the user to connect one (manual-first UX, plan §6a).
 //
-// TACTICAL RESKIN (2026-07-21, draft-redesign-plan.md) — every state/ref/
-// effect/handler below this comment block is preserved BYTE-FOR-BYTE from
-// the pre-reskin version (plan §9's highest-risk item: the live-sync effect,
+// GOLD RESKIN (v0.51.0, CoachBuild redesign wave — mockup 3): every state/
+// ref/effect/handler below this comment block is preserved BYTE-FOR-BYTE from
+// the pre-reskin version (the highest-risk item: the live-sync effect,
 // entryStateRef, the dirty latch, and the debounced/race-guarded fetch must
-// survive verbatim). Only the `return` JSX changed: composition into
-// EnemyTeamPanel / MyChampionPanel / DraftCompRadar / DraftPicksTable /
-// DraftBansTable under a new `.draft-tactical` scoped theme (app/globals.css).
-// No pushState/history integration exists on this page (see gotchas (n)/(p))
-// and none was added — MatchupAnalysisPopover is rendered inline by
-// EnemyTeamPanel, never a routed/portalled surface.
+// survive verbatim). Only the `return` JSX changed: the retired cyan
+// `.draft-tactical`/`.dt-*` HUD theme (app/globals.css) is gone — this page
+// now uses the app-wide navy/gold tokens, same as Builds — and DraftCompRadar
+// is replaced by DraftCompBars (6 horizontal bars, mockup 3's "ENEMY COMP
+// PROFILE" card) and DraftBansTable's row rendering is absorbed into
+// MyChampionPanel (mockup 3 shows ban suggestions inline in that card, not a
+// separate page section). No pushState/history integration exists on this
+// page (see gotchas (n)/(p)) and none was added — MatchupAnalysisPopover is
+// rendered inline by EnemyTeamPanel, never a routed/portalled surface.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useRef, useState } from "react";
 import type { ChampionRef } from "@/lib/types";
-import { LANE_TO_ROLE_ID, type LaneId } from "@/components/hextech/heroContracts";
+import { LANE_TO_ROLE_ID, LANE_LABEL, type LaneId } from "@/components/hextech/heroContracts";
 import { getChampionIconMap, type ChampionIconEntry } from "@/components/proAssets";
 import { useCompanion } from "@/components/live/CompanionProvider";
 import {
@@ -51,9 +54,8 @@ import {
 import { filterToMyPool } from "@/components/live/personalBadge";
 import EnemyTeamPanel from "@/components/hextech/EnemyTeamPanel";
 import MyChampionPanel from "@/components/hextech/MyChampionPanel";
-import DraftCompRadar from "@/components/hextech/DraftCompRadar";
+import DraftCompBars from "@/components/hextech/DraftCompBars";
 import DraftPicksTable from "@/components/hextech/DraftPicksTable";
-import DraftBansTable from "@/components/hextech/DraftBansTable";
 
 const RECOMMEND_DEBOUNCE_MS = 300;
 
@@ -84,15 +86,15 @@ type FetchState =
 
 function ResultsSkeleton() {
   return (
-    <div className="dt-panel p-5 animate-pulse space-y-3">
+    <div className="bg-panel border border-line rounded-xl p-5 animate-pulse space-y-3">
       {Array.from({ length: 5 }).map((_, i) => (
         <div key={i} className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-black/30 flex-shrink-0" />
+          <div className="w-9 h-9 rounded-lg bg-panel2 flex-shrink-0" />
           <div className="flex-1 space-y-1.5">
-            <div className="h-2.5 w-24 bg-black/30 rounded" />
-            <div className="h-2 w-14 bg-black/30 rounded" />
+            <div className="h-2.5 w-24 bg-panel2 rounded" />
+            <div className="h-2 w-14 bg-panel2 rounded" />
           </div>
-          <div className="h-3 w-10 bg-black/30 rounded flex-shrink-0" />
+          <div className="h-3 w-10 bg-panel2 rounded flex-shrink-0" />
         </div>
       ))}
     </div>
@@ -101,9 +103,9 @@ function ResultsSkeleton() {
 
 function EmptyPanel({ title, body }: { title: string; body: string }) {
   return (
-    <div className="dt-panel p-8 text-center">
-      <div className="text-[color:var(--dt-txt)] font-semibold mb-1 text-[13.5px]">{title}</div>
-      <div className="text-[color:var(--dt-mut)] text-[12px]">{body}</div>
+    <div className="bg-panel border border-line rounded-xl p-8 text-center">
+      <div className="text-txt font-semibold mb-1 text-[13.5px]">{title}</div>
+      <div className="text-mut text-[12px]">{body}</div>
     </div>
   );
 }
@@ -334,199 +336,176 @@ export default function DraftPage() {
   // DraftRecommendResponse, always [] (never undefined) once normalized.
   const enemyAnalysisRaw = state.status === "ok" ? state.data.enemyAnalysis : undefined;
 
+  const bans = state.status === "ok" ? state.data.bans ?? [] : [];
+
   return (
-    <div className="draft-tactical min-h-screen pb-16">
-      <div className="dt-circuit-bg" aria-hidden="true" />
-      <div className="dt-content max-w-[900px] mx-auto px-4 sm:px-6">
-        <header className="pt-8 pb-5 border-b border-[color:var(--dt-line)] mb-6">
-          <div className="text-center mb-4">
-            <h1 className="dt-glow-text text-3xl font-extrabold tracking-tight text-balance">
-              <span className="dt-accent-text">Draft</span> Recommender
-            </h1>
-            <p className="text-[color:var(--dt-mut)] text-sm mt-1">Statistically favored picks and bans for the enemies you&apos;re up against.</p>
-            {state.status === "ok" && (
-              <p className="text-[color:var(--dt-mut)] text-[11px] mt-1 tabular-nums">
-                Patch {state.data.meta.patch || "—"} · {tierLabel(state.data.meta.tier)}
-                {state.data.meta.fetchedAt && ` · updated ${formatFetchedAt(state.data.meta.fetchedAt)}`}
-              </p>
-            )}
-            {isStalePatchData && (
-              <p className="text-[color:var(--dt-mut)] text-[10px] mt-0.5">
-                Patch {state.data.meta.currentPatch} data isn&apos;t ready yet — showing the last available patch (
-                {state.data.meta.patch}).
-              </p>
-            )}
+    <div className="px-4 sm:px-6 lg:px-8 py-6">
+      <div className="max-w-[1440px] mx-auto">
+        <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 mb-6">
+          <div>
+            <h1 className="font-display text-2xl font-bold text-txt tracking-[-0.01em]">Draft</h1>
+            <p className="text-mut text-[12.5px] mt-0.5">Statistically favored picks &amp; bans vs the enemy comp.</p>
           </div>
-
-          {/* Live-sync status strip — restyled per plan §2.5: a quiet "LIVE"
-              pulse while passively syncing, a glowing "UPDATE READY" control
-              when the user has gone manual mid a live champ select. Same
-              underlying booleans (showResetToLive/liveSyncing) as before the
-              reskin — only the markup changed. */}
-          {liveSyncing && (
-            <div className="flex items-center justify-center gap-2 mb-4">
-              <span className="inline-flex items-center gap-1.5 text-[11px] text-[color:var(--dt-cyan)]">
-                <span className="dt-node-pulse w-1.5 h-1.5 rounded-full" style={{ background: "var(--dt-cyan)" }} aria-hidden="true" />
-                LIVE — syncing from champ select
-              </span>
-            </div>
-          )}
-
-          {showResetToLive && (
-            <div role="status" className="flex justify-center mb-4">
-              <button
-                type="button"
-                onClick={handleResetToLive}
-                className="dt-chamfer-sm inline-flex items-center gap-2 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.06em] text-black active:scale-95 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--dt-cyan)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--dt-bg)]"
-                style={{ background: "var(--dt-cyan)", boxShadow: "0 0 16px var(--dt-cyan-glow)" }}
-              >
-                Update ready <span aria-hidden="true">⟳</span>
-              </button>
+          {state.status === "ok" && (
+            <div className="text-right text-[11px] text-mut tabular-nums pt-1">
+              Patch {state.data.meta.patch || "—"} · {tierLabel(state.data.meta.tier)}
+              {state.data.meta.fetchedAt && ` · Upd ${formatFetchedAt(state.data.meta.fetchedAt)}`}
+              {isStalePatchData && (
+                <p className="text-[10px] mt-0.5 normal-case">
+                  Patch {state.data.meta.currentPatch} data isn&apos;t ready yet — showing patch {state.data.meta.patch}.
+                </p>
+              )}
             </div>
           )}
         </header>
 
-        {/* Top row: Enemy Team + My Champion */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          <EnemyTeamPanel
-            enemyIds={enemyIds}
-            champIcons={champIcons}
-            effectiveLaneOpponentId={effectiveLaneOpponentId}
-            laneOpponentId={laneOpponentId}
-            serverInferredLaneOpponentId={serverInferredLaneOpponentId}
-            onAddEnemy={handleAddEnemy}
-            onRemoveEnemy={handleRemoveEnemy}
-            onToggleLaneOpponent={handleToggleLaneOpponent}
-            enemyAnalysis={enemyAnalysisRaw}
-            hoverSelected={hover !== null}
-          />
-          <MyChampionPanel
-            lane={lane}
-            onLaneChange={handleLaneChange}
-            hoverChamp={hoverChamp}
-            onHoverChange={handleHoverChange}
-            onClearHover={handleClearHover}
-          />
-        </div>
+        {/* Live-sync status strip — a quiet "LIVE" pulse while passively
+            syncing, a gold "UPDATE READY" control when the user has gone
+            manual mid a live champ select. Same underlying booleans
+            (showResetToLive/liveSyncing) as before the reskin — only the
+            markup/tokens changed. */}
+        {liveSyncing && (
+          <div className="flex items-center gap-2 mb-4">
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-teal">
+              <span className="w-1.5 h-1.5 rounded-full bg-teal animate-pulse" aria-hidden="true" />
+              Live — syncing from champ select
+            </span>
+          </div>
+        )}
 
-        {/* Team composition radar */}
-        <div className="mb-6">
-          <DraftCompRadar enemyIds={enemyIds} hoverChampId={hover} />
-        </div>
+        {showResetToLive && (
+          <div role="status" className="mb-4">
+            <button
+              type="button"
+              onClick={handleResetToLive}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-[12px] font-bold uppercase tracking-[0.06em] text-bg bg-teal hover:bg-teal-hover active:scale-95 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+            >
+              Update ready <span aria-hidden="true">⟳</span>
+            </button>
+          </div>
+        )}
 
-        {/* Results */}
-        <section className="mb-8">
-          <div className="flex items-center justify-between gap-2 mb-1">
-            <p className="text-[10px] tracking-[0.14em] uppercase text-[color:var(--dt-mut)] font-semibold px-0.5">Suggested picks</p>
-            {state.status === "ok" && hasAnyMyPoolData && (
-              <button
-                type="button"
-                onClick={() => setMyPoolOnly((v) => !v)}
-                aria-pressed={myPoolOnly}
-                title="Show only champions you've played this season — a filter, never a re-ranking"
-                className={`px-2 py-1 rounded-md text-[10.5px] font-semibold border transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--dt-cyan)] ${
-                  myPoolOnly
-                    ? "text-black border-[color:var(--dt-cyan)]"
-                    : "text-[color:var(--dt-mut)] border-[color:var(--dt-line)] hover:border-[color:var(--dt-cyan-dim)] hover:text-[color:var(--dt-txt)]"
-                }`}
-                style={myPoolOnly ? { background: "var(--dt-cyan)" } : undefined}
-              >
-                My pool
-              </button>
+        {/* v0.51.0 (mockup 3): two-column layout — LEFT: Enemy Team then My
+            Champion (bans rendered inline inside it); RIGHT: Enemy Comp
+            Profile then Suggested Picks. Mobile (`grid-cols-1`) stacks in DOM
+            order: enemy team → my champion → comp bars → picks. */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <div className="space-y-5">
+            <EnemyTeamPanel
+              enemyIds={enemyIds}
+              champIcons={champIcons}
+              effectiveLaneOpponentId={effectiveLaneOpponentId}
+              laneOpponentId={laneOpponentId}
+              serverInferredLaneOpponentId={serverInferredLaneOpponentId}
+              onAddEnemy={handleAddEnemy}
+              onRemoveEnemy={handleRemoveEnemy}
+              onToggleLaneOpponent={handleToggleLaneOpponent}
+              enemyAnalysis={enemyAnalysisRaw}
+              hoverSelected={hover !== null}
+            />
+            <MyChampionPanel
+              lane={lane}
+              onLaneChange={handleLaneChange}
+              hoverChamp={hoverChamp}
+              onHoverChange={handleHoverChange}
+              onClearHover={handleClearHover}
+              autoDetected={liveSyncing}
+              bans={bans}
+              champIcons={champIcons}
+            />
+          </div>
+
+          <div className="space-y-5">
+            <DraftCompBars enemyIds={enemyIds} />
+
+            <section>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <p className="text-[10px] tracking-[0.14em] uppercase text-mut font-semibold px-0.5">
+                  Suggested Picks — {LANE_LABEL[lane]}
+                </p>
+                {state.status === "ok" && hasAnyMyPoolData && (
+                  <button
+                    type="button"
+                    onClick={() => setMyPoolOnly((v) => !v)}
+                    aria-pressed={myPoolOnly}
+                    title="Show only champions you've played this season — a filter, never a re-ranking"
+                    className={`px-2 py-1 rounded-md text-[10.5px] font-semibold border transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal ${
+                      myPoolOnly ? "text-bg bg-teal border-teal" : "text-mut border-line hover:border-line-gold hover:text-txt"
+                    }`}
+                  >
+                    My pool
+                  </button>
+                )}
+              </div>
+              {state.status === "ok" && <p className="text-mut text-[11px] mb-1 px-0.5">{picksExplainer}</p>}
+              {state.status === "ok" && (
+                <p className="text-mut text-[10.5px] mb-2 px-0.5">
+                  Only champions with a well-sampled pool this patch in this lane are shown — a rare off-role pick won&apos;t
+                  out-rank a real lane staple.
+                </p>
+              )}
+
+              {state.status === "loading" && <ResultsSkeleton />}
+
+              {state.status === "pending" && (
+                <EmptyPanel
+                  title="Draft data being prepared"
+                  body={`Patch ${state.meta?.patch || "the current"} data is still being ingested — check back shortly.`}
+                />
+              )}
+
+              {state.status === "error" && (
+                <EmptyPanel title="Couldn't load — try again" body="Something went wrong fetching draft recommendations." />
+              )}
+
+              {state.status === "empty" && (
+                <EmptyPanel title="No data yet for this lane" body="Try a different lane, or add fewer/different enemies." />
+              )}
+
+              {state.status === "ok" && state.data.plays.length === 0 && state.data.potentialPlays.length > 0 && (
+                // v0.37.4: a laneOpp is resolved but nothing cleared the
+                // 1,000-game main-list floor yet -- real data exists (below,
+                // in Potential counters), so this is NOT the "empty" state.
+                <p className="text-mut text-[11px] px-0.5 py-2">
+                  No well-sampled (1,000+ game) counters yet for this matchup — see potential counters below.
+                </p>
+              )}
+
+              {state.status === "ok" && state.data.plays.length > 0 && myPoolOnly && displayedPlays.length === 0 && (
+                // My pool filter narrowed a non-empty list down to nothing --
+                // distinct from "no data yet" above (the server has data, the
+                // filter is just narrow right now).
+                <p className="text-mut text-[11px] px-0.5 py-2">
+                  None of your played champions are in this list yet. Toggle &quot;My pool&quot; off to see all suggestions.
+                </p>
+              )}
+
+              {state.status === "ok" && displayedPlays.length > 0 && (
+                <DraftPicksTable plays={displayedPlays} champIcons={champIcons} caption="Suggested picks" />
+              )}
+            </section>
+
+            {/* Potential counters (v0.37.4) — same scoring as the main list
+                above, just under the 1,000-game floor on this specific
+                matchup. Only rendered when there's something to show; never
+                conflated with the main "Suggested picks" empty/loading
+                states. */}
+            {state.status === "ok" && displayedPotentialPlays.length > 0 && (
+              <section>
+                <p className="text-[10px] tracking-[0.14em] uppercase text-mut font-semibold mb-1 px-0.5">Potential counters</p>
+                <p className="text-mut text-[10.5px] mb-2 px-0.5">
+                  Promising but under 1,000 games — treat as leads, not conclusions.
+                </p>
+                <DraftPicksTable plays={displayedPotentialPlays} champIcons={champIcons} caption="Potential counters" />
+              </section>
             )}
           </div>
-          {state.status === "ok" && (
-            <p className="text-[color:var(--dt-mut)] text-[11px] mb-1 px-0.5">{picksExplainer}</p>
-          )}
-          {state.status === "ok" && (
-            <p className="text-[color:var(--dt-mut)] text-[10.5px] mb-2 px-0.5">
-              Only champions with a well-sampled pool this patch in this lane are shown — a rare off-role pick won&apos;t
-              out-rank a real lane staple.
-            </p>
-          )}
+        </div>
 
-          {state.status === "loading" && <ResultsSkeleton />}
-
-          {state.status === "pending" && (
-            <EmptyPanel
-              title="Draft data being prepared"
-              body={`Patch ${state.meta?.patch || "the current"} data is still being ingested — check back shortly.`}
-            />
-          )}
-
-          {state.status === "error" && (
-            <EmptyPanel title="Couldn't load — try again" body="Something went wrong fetching draft recommendations." />
-          )}
-
-          {state.status === "empty" && (
-            <EmptyPanel title="No data yet for this lane" body="Try a different lane, or add fewer/different enemies." />
-          )}
-
-          {state.status === "ok" && state.data.plays.length === 0 && state.data.potentialPlays.length > 0 && (
-            // v0.37.4: a laneOpp is resolved but nothing cleared the
-            // 1,000-game main-list floor yet -- real data exists (below,
-            // in Potential counters), so this is NOT the "empty" state.
-            <p className="text-[color:var(--dt-mut)] text-[11px] px-0.5 py-2">
-              No well-sampled (1,000+ game) counters yet for this matchup — see potential counters below.
-            </p>
-          )}
-
-          {state.status === "ok" && state.data.plays.length > 0 && myPoolOnly && displayedPlays.length === 0 && (
-            // My pool filter narrowed a non-empty list down to nothing --
-            // distinct from "no data yet" above (the server has data, the
-            // filter is just narrow right now).
-            <p className="text-[color:var(--dt-mut)] text-[11px] px-0.5 py-2">
-              None of your played champions are in this list yet. Toggle &quot;My pool&quot; off to see all suggestions.
-            </p>
-          )}
-
-          {state.status === "ok" && displayedPlays.length > 0 && (
-            <DraftPicksTable plays={displayedPlays} champIcons={champIcons} caption="Suggested picks" />
-          )}
-        </section>
-
-        {/* Potential counters (v0.37.4) — same scoring as the main list
-            above, just under the 1,000-game floor on this specific matchup.
-            Only rendered when there's something to show; never conflated
-            with the main "Suggested picks" empty/loading states. */}
-        {state.status === "ok" && displayedPotentialPlays.length > 0 && (
-          <section className="mb-8">
-            <p className="text-[10px] tracking-[0.14em] uppercase text-[color:var(--dt-mut)] font-semibold mb-1 px-0.5">Potential counters</p>
-            <p className="text-[color:var(--dt-mut)] text-[10.5px] mb-2 px-0.5">
-              Promising but under 1,000 games — treat as leads, not conclusions.
-            </p>
-            <DraftPicksTable plays={displayedPotentialPlays} champIcons={champIcons} caption="Potential counters" />
-          </section>
-        )}
-
-        {/* Bans */}
-        {hover !== null && state.status === "ok" && state.data.bans && (
-          <section className="mb-8">
-            <p className="text-[10px] tracking-[0.14em] uppercase text-[color:var(--dt-mut)] font-semibold mb-1 px-0.5">Suggested bans</p>
-            <p className="text-[color:var(--dt-mut)] text-[10.5px] mb-2 px-0.5">
-              Champions most likely to beat your pick in this lane — ranked by how hard they counter you and how often
-              they&apos;re played.
-            </p>
-            {state.data.bans.length === 0 ? (
-              // v0.40.0: bans.length === 0 now specifically means no ban
-              // candidate cleared BAN_MIN_MATCHUP_GAMES (1000 games vs your
-              // pick) -- never a fabricated/low-sample ban, per user
-              // directive. Copy reflects that precisely rather than the old
-              // generic "nothing stands out."
-              <EmptyPanel
-                title="No well-sampled counters"
-                body="No well-sampled counters to your pick this patch — check back as more games are recorded."
-              />
-            ) : (
-              <DraftBansTable bans={state.data.bans} champIcons={champIcons} />
-            )}
-          </section>
-        )}
-
-        <footer className="mt-10 pt-4 border-t border-[color:var(--dt-line)] text-center text-[11px] text-[color:var(--dt-mut)] space-y-1">
+        <footer className="mt-10 pt-4 border-t border-line text-center text-[11px] text-mut space-y-1">
           <p>Suggestions only — statistical trends, not a recommendation to auto-pick. Never applied to the client automatically.</p>
           <p>Build data © coachless.gg / Riot Games. Not endorsed by Riot Games.</p>
-          {process.env.NEXT_PUBLIC_APP_VERSION && <p className="text-[color:var(--dt-mut)]">v{process.env.NEXT_PUBLIC_APP_VERSION}</p>}
+          {process.env.NEXT_PUBLIC_APP_VERSION && <p className="text-mut">v{process.env.NEXT_PUBLIC_APP_VERSION}</p>}
         </footer>
       </div>
     </div>

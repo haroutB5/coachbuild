@@ -5,18 +5,13 @@ import type { BuildResponse, ChampionRef } from "@/lib/types";
 import type { LaneId } from "./heroContracts";
 import { LANE_TO_ROLE_ID, LANE_LABEL } from "./heroContracts";
 import RunesSummonersCard from "./RunesSummonersCard";
-import StartingCard from "./StartingCard";
-import CoreBuildOrderCard from "./CoreBuildOrderCard";
-import SituationalCard from "./SituationalCard";
-import SupportItemCard from "./SupportItemCard";
+import ItemBuildCard from "./ItemBuildCard";
 import ProConsensusCard from "./ProConsensusCard";
 import { versionFromPatch } from "@/components/proAssets";
 import ItemDetailPopover from "@/components/ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "@/components/EntityDetailPopover";
 import { useBodyScrollLock } from "@/components/useBodyScrollLock";
-import SegmentedControl from "@/components/SegmentedControl";
-import { RANK_BRACKETS, DEFAULT_RANK_BRACKET, RANK_FILTERING_SUPPORTED } from "@/lib/rankBrackets";
-import { readStoredRankBracketId, writeStoredRankBracketId } from "./rankBracketStorage";
+import { DEFAULT_RANK_BRACKET } from "@/lib/rankBrackets";
 
 /** Which tap-for-detail popover is open — items share the "item" kind,
  *  runes/shards/summoner spells route through EntityDetailPopover's own
@@ -30,6 +25,15 @@ type DetailRef = { kind: "item" | EntityKind; id: number };
 interface BuildTabContentProps {
   champ: ChampionRef;
   lane: LaneId;
+  /** v0.51.0: rank-bracket selection LIFTED to app/page.tsx (ChampionHero's
+   *  own elo pill row now drives it — see that component). This tab no
+   *  longer owns the selector or its localStorage hydration; it just fetches
+   *  keyed on whatever the page hands down. */
+  rankBracket: string;
+  /** Mirrors the page's own hydrate-after-mount gate (see app/page.tsx) so
+   *  this tab doesn't fire a wasted/flashing fetch for the default bracket
+   *  before a returning user's stored bracket is read. */
+  rankHydrated: boolean;
   /** Fires once a build response resolves, so the sidebar footer can show
    *  the resolved data patch without a second fetch. */
   onPatchResolved?: (patch: string) => void;
@@ -57,100 +61,33 @@ function CardSkeleton({ className = "" }: { className?: string }) {
 }
 
 // v0.44.0 (Builds responsive plan §3c/§3d/§4): shared with the ok-branch's
-// grid below — grid-template-areas keeps a SINGLE set of area names
-// ("runes"/"starting"/"support"/"core"/"situational"/"pro") mapped to a
-// genuinely different layout per breakpoint (single column, plan's original
-// DOM order, below lg; a 7fr/5fr two-column composition — left: runes+core,
-// right: starting+support+pro+situational — at lg+) without duplicating any
-// component instance or relying on CSS Grid auto-placement (which can't
-// reproduce two independent-height columns from a flat DOM order). Every
-// grid consumer below (skeleton + the real ok-branch grid) must keep this
-// exact area map in sync, or the loading skeleton will reflow into a
-// different shape than the resolved content once it lands (defeats the whole
-// "skeleton mirrors the grid" point of this pass).
+// grid below — grid-template-areas keeps a SINGLE set of area names mapped
+// to a genuinely different layout per breakpoint (single column below lg; a
+// 7fr/5fr two-column composition at lg+, RUNES spanning both rows on the
+// left per mockup 4/5 — ITEM BUILD top-right, PRO CONSENSUS bottom-right).
 //
-// v0.49.0 — "support" is a NEW area added between "starting" and "core"/
-// "pro" for the support-item-upgrade card (user request: "for supp also
-// show which supp item to upgrade to"). Support-role-only: BuildLoadingSkeleton
-// and the ok-branch below both gate their "support" element on `lane ===
-// "support"` (known synchronously from the `lane` prop, no need to wait on
-// the fetch) rather than always rendering it — an UNCLAIMED
-// grid-template-areas cell contributes no track/height in this auto-sized
-// grid, so a non-support champ's layout is byte-identical to before this
-// change (verified: the area name existing in the template but never
-// claimed by an element does not reserve space, same principle
-// ProConsensusCard's own N=0 -> null already relies on for the "pro" area).
+// v0.51.0 (Builds redesign): Starting/Support/Core/Situational collapsed
+// from four separate grid areas into ONE "itembuild" area (ItemBuildCard.tsx
+// now owns their composition as labeled sub-sections inside a single bordered
+// card, matching the mockup's merged "ITEM BUILD" card) — a real
+// simplification over the previous per-card area map, not just a rename.
 const BUILD_GRID_CLASS =
-  "grid grid-cols-1 gap-5 [grid-template-areas:'runes'_'starting'_'support'_'core'_'situational'_'pro'] lg:grid-cols-[7fr_5fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_starting'_'core_support'_'core_pro'_'core_situational']";
+  "grid grid-cols-1 gap-5 [grid-template-areas:'runes'_'itembuild'_'pro'] lg:grid-cols-[7fr_5fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_itembuild'_'runes_pro']";
 
-function BuildLoadingSkeleton({ lane }: { lane: LaneId }) {
+function BuildLoadingSkeleton() {
   return (
     <div className={BUILD_GRID_CLASS}>
       <CardSkeleton className="[grid-area:runes]" />
-      <CardSkeleton className="[grid-area:starting]" />
-      {lane === "support" && <CardSkeleton className="[grid-area:support]" />}
-      <CardSkeleton className="[grid-area:core]" />
-      <CardSkeleton className="[grid-area:situational]" />
+      <CardSkeleton className="[grid-area:itembuild] min-h-[280px]" />
       <CardSkeleton className="[grid-area:pro]" />
     </div>
   );
 }
 
-/** Feature 3 (rank brackets) — compact selector rendered near the champion/
- *  lane pickers (ChampionHero/HextechTabs sit just above this tab's content
- *  on app/page.tsx). Rendered in every fetch state (loading/empty/error/ok)
- *  so a user who picks a bracket with no data for this champ+lane can switch
- *  right back without losing their place. Hidden entirely when
- *  RANK_FILTERING_SUPPORTED is false (defensive — see lib/rankBrackets.ts). */
-function RankBracketSelector({ value, onChange }: { value: string; onChange: (id: string) => void }) {
-  if (!RANK_FILTERING_SUPPORTED) return null;
-  return (
-    // v0.44.0 (Builds responsive plan §2c): below `sm`, 7 rank-bracket pills
-    // don't fit one inline row — SegmentedControl's new layout="scroll"
-    // (default "inline" everywhere else) renders a horizontally-scrollable,
-    // snap-scrolling strip with a static edge fade instead of wrapping to a
-    // ragged 4+3 or overflowing the viewport (the root cause of the mobile
-    // right-edge void — see plan §1). Single "scroll" render degrades to a
-    // normal non-scrolling row once the content fits (sm+, per §3e "inline
-    // right-aligned"), so no separate desktop-only render is needed.
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-      <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">Rank bracket</p>
-      <SegmentedControl
-        ariaLabel="Filter build data by rank bracket"
-        size="sm"
-        layout="scroll"
-        value={value}
-        onChange={onChange}
-        options={RANK_BRACKETS.map((b) => ({ value: b.id, label: b.label }))}
-      />
-    </div>
-  );
-}
-
-export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildTabContentProps) {
+export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated, onPatchResolved }: BuildTabContentProps) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
   const [activeDetail, setActiveDetail] = useState<DetailRef | null>(null);
   const [lastDetail, setLastDetail] = useState<DetailRef | null>(null);
-
-  // Feature 3 (rank brackets) — single source of truth for both the
-  // selector's shown value AND the `rank=` fetch param below (never two
-  // separate variables that could desync). Initialized to the default
-  // bracket (matches SSR, since `window` doesn't exist there) and corrected
-  // from localStorage in a mount-only effect — see rankBracketStorage.ts.
-  // `rankHydrated` gates the fetch effect so a returning user with a
-  // NON-default stored bracket doesn't briefly fetch (and flash) the
-  // default bracket's build before the corrected value lands — the fetch
-  // effect below waits one tick for this instead of firing twice.
-  const [rankBracket, setRankBracket] = useState<string>(DEFAULT_RANK_BRACKET.id);
-  const [rankHydrated, setRankHydrated] = useState(false);
-  useEffect(() => {
-    setRankBracket(readStoredRankBracketId());
-    setRankHydrated(true);
-  }, []);
-  function handleRankChange(id: string) {
-    setRankBracket(id);
-    writeStoredRankBracketId(id);
-  }
 
   function openDetail(kind: "item" | EntityKind, id: number) {
     setLastDetail({ kind, id });
@@ -279,8 +216,7 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
   if (state.status === "loading") {
     return (
       <div className="mt-5 space-y-5">
-        <RankBracketSelector value={rankBracket} onChange={handleRankChange} />
-        <BuildLoadingSkeleton lane={lane} />
+        <BuildLoadingSkeleton />
       </div>
     );
   }
@@ -288,7 +224,6 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
   if (state.status === "empty") {
     return (
       <div className="mt-5 space-y-5">
-        <RankBracketSelector value={rankBracket} onChange={handleRankChange} />
         <div className="bg-panel border border-line rounded-xl p-10 text-center">
           <div className="text-txt font-semibold mb-1">
             Not enough data for {champ.name} {LANE_LABEL[lane]}
@@ -313,7 +248,6 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
   if (state.status === "error") {
     return (
       <div className="mt-5 space-y-5">
-        <RankBracketSelector value={rankBracket} onChange={handleRankChange} />
         <div className="bg-panel border border-line rounded-xl p-10 text-center">
           <div className="text-txt font-semibold mb-1">Couldn&apos;t load — try again</div>
           <div className="text-mut text-sm">
@@ -330,20 +264,11 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
 
   return (
     <div className="mt-5 space-y-5">
-      <RankBracketSelector value={rankBracket} onChange={handleRankChange} />
-
-      {/* v0.44.0 (Builds responsive plan §3c/§3d): below `lg` this is a
-          plain single-column stack in the tab's original order (Runes,
-          Starting, Core, Situational, ProConsensus) — the retired
-          `md:grid-cols-3` Starting/Core pairing no longer kicks in at any
-          width below lg. At `lg`+ the SAME five cards reflow into a real
-          2-column composition (left: Runes+Core, right: Starting+
-          ProConsensus+Situational) via grid-template-areas — see
-          BUILD_GRID_CLASS's doc comment above for why areas were used
-          instead of two nested left/right wrapper divs (area assignment
-          lets each breakpoint have a genuinely different visual order from
-          the SAME DOM nodes, no duplicate mounts, no reordered fetch
-          effects). */}
+      {/* v0.51.0 (Builds redesign, mockup 4/5): below `lg` a plain
+          single-column stack (Runes, Item Build, Pro Consensus). At `lg`+ the
+          SAME three cards reflow into a 2-column composition — RUNES spans
+          both rows on the left, ITEM BUILD (top) + PRO CONSENSUS (bottom) on
+          the right — via grid-template-areas (BUILD_GRID_CLASS above). */}
       <div className={BUILD_GRID_CLASS}>
         <div className="[grid-area:runes]">
           <RunesSummonersCard
@@ -356,28 +281,8 @@ export default function BuildTabContent({ champ, lane, onPatchResolved }: BuildT
             lane={lane}
           />
         </div>
-        <div className="[grid-area:starting]">
-          <StartingCard starter={build.items.starter} onItemClick={openItemPopover} />
-        </div>
-        {/* v0.49.0 — support-role only (user request: "for supp also show
-            which supp item to upgrade to"). Gated on `lane` (known
-            synchronously, same value the fetch above requested this `build`
-            for) rather than `build.role` — both agree by construction since
-            `load()` fetches `role=LANE_TO_ROLE_ID[lane]`, but `lane` is the
-            simpler single source of truth already used for the skeleton
-            gate above. See components/hextech/supportItem.ts for the
-            resolver + SupportItemCard.tsx for why this is its own card
-            rather than folded into Core Build Order. */}
-        {lane === "support" && (
-          <div className="[grid-area:support]">
-            <SupportItemCard champ={champ} build={build} ver={ver} onItemClick={openItemPopover} />
-          </div>
-        )}
-        <div className="[grid-area:core]">
-          <CoreBuildOrderCard items={build.items} onItemClick={openItemPopover} />
-        </div>
-        <div className="[grid-area:situational]">
-          <SituationalCard items={build.items} onItemClick={openItemPopover} />
+        <div className="[grid-area:itembuild]">
+          <ItemBuildCard champ={champ} lane={lane} build={build} ver={ver} onItemClick={openItemPopover} />
         </div>
         <div className="[grid-area:pro]">
           {/* v0.27.0 (user request: "pro players seem to build Rocketbelt on

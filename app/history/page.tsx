@@ -15,6 +15,8 @@ import { FAVORITES_CHANGED_EVENT, CHAMPION_FAVORITES_CHANGED_EVENT, toggleFavori
 import type { PlayerRef } from "@/components/proHistory.types";
 import { consumePendingPlayerSelect, type PendingPlayerSelect } from "@/components/playerSelectHandoff";
 import { useSheetBackNav } from "@/components/useSheetBackNav";
+import PageHeader from "@/components/hextech/PageHeader";
+import ProPlayersTable from "@/components/hextech/ProPlayersTable";
 
 // Module-level (stable references) so FavoriteStarButton's subscribe effect
 // doesn't re-run on every page re-render.
@@ -273,17 +275,26 @@ export default function HistoryPage() {
 
   return (
     <div className="min-h-screen pb-16">
-      <div className="max-w-[1080px] mx-auto px-4 sm:px-6">
-        {/* ── Top bar ── */}
-        <header className="pt-8 pb-5 border-b border-line mb-6">
-          <div className="text-center mb-4">
-            <h1 className="text-3xl font-extrabold tracking-tight text-balance">
-              Pro<span className="text-teal">&apos;s</span>
-            </h1>
-            <p className="text-mut text-sm mt-1">
-              Recent games from tracked pros — search a player or champion.
-            </p>
-          </div>
+      <div className="max-w-[1100px] mx-auto px-4 sm:px-6">
+        {/* ── Top bar (v0.51 wave B, mockup 8.png) ── */}
+        <PageHeader
+          title="Pro Players"
+          subtitle="Recent competitive games — click any row for the full build"
+          right={
+            <a href="https://lol.fandom.com" target="_blank" rel="noopener noreferrer" className="hover:text-txt transition-colors">
+              Leaguepedia &middot; CC BY-SA
+            </a>
+          }
+        />
+
+        <div className="mb-8">
+          <ProPlayersTable />
+        </div>
+
+        {/* ── Search (pre-wave-B default view, kept fully functional as a
+            secondary section) ── */}
+        <section className="pt-2 pb-5 border-b border-line mb-6">
+          <p className="text-[11px] tracking-[0.12em] uppercase text-mut font-semibold mb-4">Search</p>
 
           {/* Mode toggle */}
           <div className="flex justify-center mb-4">
@@ -316,9 +327,9 @@ export default function HistoryPage() {
               below carries its own favorite star). */}
           {mode === "player" && player === null && <FavoritePlayerChips onSelect={choosePlayer} />}
           {mode === "champion" && champ === null && <FavoriteChampionChips onSelect={chooseChampion} />}
-        </header>
+        </section>
 
-        {/* ── Main content ── */}
+        {/* ── Search results ── */}
         {!selected && <PromptState />}
 
         {selected && (

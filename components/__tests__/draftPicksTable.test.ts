@@ -77,6 +77,21 @@ describe("buildPickRows", () => {
     const rows = buildPickRows([play({ champId: 1, minGames: 5000, winVsLaneOppGames: 1200 })], new Map());
     expect(rows[0].minGames).toBe(1200);
   });
+
+  it("games mirrors minGames's resolution (winVsLaneOppGames over the candidate's own minGames)", () => {
+    const rows = buildPickRows([play({ champId: 1, minGames: 5000, winVsLaneOppGames: 1200 })], new Map());
+    expect(rows[0].games).toBe(1200);
+  });
+
+  it("games falls back to the candidate's own minGames when no lane-matchup sample exists", () => {
+    const rows = buildPickRows([play({ champId: 1, minGames: 800, winVsLaneOppGames: null })], new Map());
+    expect(rows[0].games).toBe(800);
+  });
+
+  it("games is always a number, never null, even when both sources are absent", () => {
+    const rows = buildPickRows([play({ champId: 1, minGames: 0, winVsLaneOppGames: null })], new Map());
+    expect(rows[0].games).toBe(0);
+  });
 });
 
 function row(over: Partial<PickRow> & { champId: number; rank: number }): PickRow {
@@ -87,6 +102,7 @@ function row(over: Partial<PickRow> & { champId: number; rank: number }): PickRo
     winVsLaneOpp: null,
     confidence: "normal",
     minGames: 100,
+    games: 100,
     personal: null,
     personalOverall: { games: 0, wins: 0 },
     difficulty: null,
@@ -176,6 +192,6 @@ describe("synergyClass", () => {
   it("Strong -> good, Weak -> bad, Even -> neutral", () => {
     expect(synergyClass("Strong")).toBe("text-good");
     expect(synergyClass("Weak")).toBe("text-bad");
-    expect(synergyClass("Even")).toContain("dt-mut");
+    expect(synergyClass("Even")).toBe("text-mut");
   });
 });

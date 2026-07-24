@@ -37,6 +37,16 @@ export interface PickRow {
   winVsLaneOpp: number | null;
   confidence: DraftConfidence;
   minGames: number | null;
+  /** v0.51 redesign wave A (mockup's GAMES column) -- the same honest
+   *  per-row sample figure `minGames` already resolves (winVsLaneOppGames
+   *  when a real lane-matchup sample exists, else the candidate's own
+   *  minGames), just exposed under its own name so the picks table doesn't
+   *  have to reverse-engineer "is minGames actually a games count" from a
+   *  field whose name doesn't say so. Always equal to `minGames` today --
+   *  kept as a separate field (not a rename) so a future divergence (e.g.
+   *  minGames someday meaning a genuinely different threshold) doesn't
+   *  silently break the GAMES column. */
+  games: number;
   personal: PersonalRecord | null;
   personalOverall: PersonalRecord;
   difficulty: number | null;
@@ -66,6 +76,7 @@ export function buildPickRows(plays: DraftPlayResult[], champIcons: Map<number, 
       winVsLaneOpp: play.winVsLaneOpp,
       confidence: play.confidence,
       minGames: play.winVsLaneOppGames ?? play.minGames,
+      games: play.winVsLaneOppGames ?? play.minGames ?? 0,
       personal: play.personal,
       personalOverall: play.personalOverall,
       difficulty: entry?.difficulty ?? null,
@@ -162,5 +173,12 @@ export function synergyLabel(band: SynergyBand): string {
 export function synergyClass(band: SynergyBand): string {
   if (band === "Strong") return "text-good";
   if (band === "Weak") return "text-bad";
-  return "text-[color:var(--dt-mut)]";
+  // v0.51.0 fix (HANDOFF-fronty.md known follow-up): was the retired
+  // `.dt-*` HUD's "text-[color:var(--dt-mut)]" -- --dt-mut no longer exists
+  // (globals.css's .dt-* block was removed with the cyan HUD retheme), so
+  // that arbitrary-value class silently resolved to an invalid `color`
+  // declaration instead of a muted gray. `text-mut` is the shared app-wide
+  // token (--mut, "muted sage-gray") every other cell in DraftPicksTable.tsx
+  // already uses for its neutral text.
+  return "text-mut";
 }

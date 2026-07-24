@@ -24,6 +24,22 @@ vi.mock("@/lib/pro/riot", async () => {
 const mockEnsureMyAccount = vi.fn();
 vi.mock("@/lib/mystats/account", () => ({ ensureMyAccount: (...args: unknown[]) => mockEnsureMyAccount(...args) }));
 
+// v0.51 additions: ingest.ts now resolves a build-adherence recommendation
+// (lib/recommend.ts) gated on the CURRENT live patch (lib/staticData.ts's
+// getLatestPatch) -- mocked here so these tests never make a real network
+// call. Every existing fixture below plays out on patch "16.13" or an
+// explicitly pre-season/older patch, so defaulting getLatestPatch to "16.13"
+// keeps every pre-existing assertion (none of which check on_wpa_build)
+// unaffected -- see mystats-adherence.test.ts / lib/__tests__/patchMovers.test.ts
+// for dedicated coverage of the adherence/recommend-resolution logic itself.
+vi.mock("@/lib/staticData", () => ({
+  getLatestPatch: vi.fn(async () => ({ major: 16, patch: 13, patchAdditions: 0, label: "16.13" })),
+}));
+vi.mock("@/lib/recommend", () => {
+  class NotPlayedInRoleError extends Error {}
+  return { buildRecommendations: vi.fn(async () => []), NotPlayedInRoleError };
+});
+
 import { getSql } from "@/lib/pro/db";
 import { runMyStatsIngest, PAGE_SIZE } from "@/lib/mystats/ingest";
 import { seasonStartEpochSec } from "@/lib/mystats/season";

@@ -1,18 +1,27 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// /live-setup — install + pair the desktop companion (plan §2a). Reads
-// window.location.search directly (not useSearchParams) — no Suspense
-// boundary needed, and consistent with app/page.tsx's own deliberate
-// router-param avoidance for this feature (see that file's design note).
+// /live-setup — install + pair the desktop companion (mockup 2.png, v0.51
+// redesign wave B). Reads window.location.search directly (not
+// useSearchParams) — no Suspense boundary needed, consistent with
+// app/page.tsx's own deliberate router-param avoidance for this feature.
+//
+// v0.51 wave B: rebuilt around StatusHeroCard (gold hero + 4-node progress
+// rail) + InstallCommands + AutomationToggles (components/hextech/companion/)
+// per the mockup. The pre-redesign connection-test / LNA-help / error-log /
+// self-test machinery is KEPT, functionally unchanged, just demoted below the
+// fold into a collapsible <details> section — none of that capability is
+// dropped, only reordered.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useState, useCallback } from "react";
-import Link from "next/link";
+import { useEffect, useState, useCallback, useRef } from "react";
+import type { ChampionRef } from "@/lib/types";
 import {
   getStoredSession,
   setStoredSession,
   probeCompanion,
+  refreshStatus,
+  COMPANION_STATUS_POLL_MS,
   getAutoItemSetsEnabled,
   setAutoItemSetsEnabled,
   getAutoRunesEnabled,
@@ -22,16 +31,13 @@ import {
   type ProbeState,
   type CompanionErrorLogEntry,
 } from "@/components/live/companionClient";
-
-// Best-effort install commands per the companion's documented flag contract
-// (live-companion-plan.md §1: "-Install flag -> Startup-folder .lnk...
-// target powershell.exe ... -Command 'irm <ScriptUrl> | iex'"). The
-// persistent variant uses the standard PowerShell idiom for passing an
-// argument through a piped-script invocation — verify against engy's actual
-// companion.ps1 param binding once merged (flagged in HANDOFF-fronty.md).
-const INSTALL_ONE_LINER = "irm https://coachbuild.vercel.app/companion.ps1 | iex";
-const INSTALL_PERSISTENT =
-  '& ([scriptblock]::Create((irm https://coachbuild.vercel.app/companion.ps1))) -Install';
+import { resolveCurrentChampSelectChampionId, resolveChampSelectRoleId } from "@/components/live/champSelectFollow";
+import { roleIdToLane } from "@/components/live/deepLink";
+import { LANE_LABEL } from "@/components/hextech/heroContracts";
+import PageHeader from "@/components/hextech/PageHeader";
+import StatusHeroCard from "@/components/hextech/companion/StatusHeroCard";
+import InstallCommands from "@/components/hextech/companion/InstallCommands";
+import AutomationToggles from "@/components/hextech/companion/AutomationToggles";
 
 type Indicator = "off" | "partial" | "connected";
 
@@ -51,39 +57,6 @@ const INDICATOR_LABEL: Record<Indicator, string> = {
   connected: "Connected",
 };
 
-function CopyableCommand({ label, command }: { label: string; command: string }) {
-  const [copied, setCopied] = useState(false);
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    } catch {
-      /* Clipboard API unavailable/denied (insecure context, permission) —
-         the code block below is still selectable/copyable by hand. */
-    }
-  }
-
-  return (
-    <div className="space-y-1.5">
-      <p className="text-[10.5px] tracking-[0.1em] uppercase text-mut font-semibold">{label}</p>
-      <div className="flex items-stretch gap-2">
-        <code className="flex-1 min-w-0 overflow-x-auto whitespace-pre bg-black/30 border border-line rounded-lg px-3 py-2 text-[12px] text-txt">
-          {command}
-        </code>
-        <button
-          type="button"
-          onClick={copy}
-          className="flex-shrink-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-bg bg-teal hover:bg-teal-hover rounded-lg px-3 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
-        >
-          {copied ? "Copied" : "Copy"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export default function LiveSetupPage() {
   const [session, setSession] = useState<string | null>(null);
   const [probeState, setProbeState] = useState<ProbeState | null>(null);
@@ -98,6 +71,11 @@ export default function LiveSetupPage() {
   // even without PowerShell/log access. Hydrated post-mount same as the
   // toggles above (localStorage read).
   const [errorLog, setErrorLog] = useState<CompanionErrorLogEntry[]>([]);
+  // v0.51.0 wave B: champ-select champion id -> display name resolution for
+  // StatusHeroCard's headline — same lazy /api/champions fetch pattern
+  // GlobalNav/ChampSelectChip.tsx already uses (only fires once champ select
+  // is actually live and a championId has resolved).
+  const [champions, setChampions] = useState<ChampionRef[]>([]);
 
   // Mount-only: capture ?session= from a companion-opened link, else fall
   // back to whatever's already stored from a previous pairing.
@@ -115,6 +93,32 @@ export default function LiveSetupPage() {
     setAutoHydrated(true);
     setErrorLog(getCompanionErrorLog());
   }, []);
+
+  // v0.51.0 wave B: a periodic PASSIVE poll (never triggers its own LNA
+  // prompt UX — that's the "Test connection" button's job below) so
+  // StatusHeroCard's phase/version/last-poll fields update live without
+  // requiring a manual click, matching the mockup's already-connected state.
+  // Same cadence/shape as CompanionProvider's app-wide poll (COMPANION_
+  // STATUS_POLL_MS) — a second concurrent /status call on this one route is
+  // a negligible cost (loopback-local, ~3s cadence) for the diagnostic
+  // fields (version/lastPollAt/lastError) the app-wide context doesn't
+  // expose.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+
+    async function poll() {
+      const state = await refreshStatus(session as string, {}, null);
+      if (!cancelled) setProbeState(state);
+    }
+
+    poll();
+    const id = setInterval(poll, COMPANION_STATUS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [session]);
 
   function handleClearErrorLog() {
     clearCompanionErrorLog();
@@ -144,271 +148,247 @@ export default function LiveSetupPage() {
   }, [session]);
 
   const indicator = indicatorFor(probeState);
+  const connected = probeState?.kind === "connected";
+  const status = connected ? probeState.status : null;
+
+  // StatusHeroCard's champion/role resolution — mirrors ChampSelectChip.tsx's
+  // id -> display-string approach exactly.
+  const championId = status ? resolveCurrentChampSelectChampionId(status.champSelect) : null;
+  const roleId = status ? resolveChampSelectRoleId(status.champSelect) : undefined;
+  useEffect(() => {
+    if (championId === null || champions.length > 0) return;
+    fetch("/api/champions")
+      .then((r) => (r.ok ? (r.json() as Promise<ChampionRef[]>) : []))
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) setChampions(data);
+      })
+      .catch(() => {
+        /* stays unresolved this tick — StatusHeroCard degrades to the honest
+           "still picking" label rather than a guessed name */
+      });
+  }, [championId, champions.length]);
+  const champSelectChampionName =
+    championId !== null ? champions.find((c) => c.id === championId)?.name ?? null : null;
+  const champSelectRoleLabel = roleId !== undefined ? LANE_LABEL[roleIdToLane(roleId)] : null;
 
   return (
-    <main className="min-h-screen px-4 sm:px-6 lg:px-8 py-10">
-      <div className="max-w-[640px] mx-auto space-y-6">
-        <header>
-          <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold mb-2">
-            CoachBuild Live
-          </p>
-          <h1 className="text-2xl font-semibold text-txt tracking-[-0.02em]">
-            Connect the desktop companion
-          </h1>
-          <p className="text-[13px] text-mut mt-2 leading-relaxed">
-            A small PowerShell script that watches your League client for champ select and live
-            games — no install, no login, no ads. Everything runs on your PC; CoachBuild only ever
-            reads champion picks, roles, and item builds — never summoner names, cooldowns, or
-            ability timers.
-          </p>
-          <p className="mt-2">
-            <Link href="/" className="text-[12px] text-teal hover:underline">
-              &larr; Back to Builds
-            </Link>
-          </p>
-        </header>
+    <div className="min-h-screen pb-16">
+      <div className="max-w-[820px] mx-auto px-4 sm:px-6">
+        <PageHeader
+          title="Companion"
+          subtitle="Watches your League client — no install, no login, runs on your PC"
+        />
 
-        <section className="bg-panel border border-line rounded-xl p-5 space-y-5">
-          <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">Install</p>
-          <CopyableCommand label="Run now (this session)" command={INSTALL_ONE_LINER} />
-          <CopyableCommand label="Run now + auto-start on login" command={INSTALL_PERSISTENT} />
-          <p className="text-[11px] text-mut leading-relaxed">
-            Paste into PowerShell (Win+X &rarr; Terminal). Runs entirely in memory — nothing is
-            written to disk unless you use the auto-start variant, which only adds a Startup
-            shortcut (no admin rights needed).
-          </p>
-        </section>
+        <div className="space-y-5">
+          <StatusHeroCard
+            clientConnected={status?.clientConnected ?? false}
+            phase={status?.phase ?? null}
+            champSelectChampionName={champSelectChampionName}
+            champSelectRoleLabel={champSelectRoleLabel}
+            scriptVersion={status?.version ?? null}
+            lastPollAt={status?.lastPollAt ?? null}
+          />
 
-        <section className="bg-panel border border-line rounded-xl p-5 space-y-4">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">
-              Connection
-            </p>
-            <span className="flex items-center gap-1.5 text-[11px] text-mut">
-              <span className={`w-2 h-2 rounded-full ${INDICATOR_DOT[indicator]}`} aria-hidden="true" />
-              {INDICATOR_LABEL[indicator]}
-            </span>
-          </div>
+          <InstallCommands />
 
-          <p className="text-[12px] text-mut leading-relaxed">
-            Your browser will ask to allow CoachBuild to reach a local app on this PC (Chrome&apos;s
-            Local Network Access permission) — this is expected the first time. Click{" "}
-            <strong className="text-txt">Allow</strong>.
-          </p>
+          <AutomationToggles
+            autoItemSets={autoItemSets}
+            autoRunes={autoRunes}
+            hydrated={autoHydrated}
+            onToggleItemSets={handleAutoItemSetsToggle}
+            onToggleRunes={handleAutoRunesToggle}
+          />
 
-          <button
-            type="button"
-            onClick={runTest}
-            disabled={!session || probing}
-            className="text-[12px] font-semibold uppercase tracking-[0.06em] text-bg bg-teal hover:bg-teal-hover disabled:opacity-50 disabled:cursor-not-allowed rounded-lg px-4 py-2 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
-          >
-            {probing ? "Testing…" : "Test connection"}
-          </button>
+          {/* Pre-redesign diagnostics — connection test, LNA-denied help,
+              error log, self-test. Functionally unchanged, only demoted
+              below the fold behind a native <details> disclosure (zero-JS
+              accessible, keyboard/AT-friendly) per the brief's "keep,
+              restyled/demoted, collapsible" instruction. */}
+          <details className="bg-panel border border-line rounded-xl overflow-hidden group">
+            <summary className="cursor-pointer select-none px-5 sm:px-6 py-4 text-[11px] tracking-[0.12em] uppercase text-mut font-semibold flex items-center justify-between gap-3 hover:text-txt transition-colors">
+              Diagnostics &amp; manual connection test
+              <span className="text-mut transition-transform duration-150 group-open:rotate-180" aria-hidden="true">
+                &#9662;
+              </span>
+            </summary>
 
-          {!session && (
-            <p className="text-[11px] text-mut">
-              No pairing session yet — open this page from the companion&apos;s tray menu, or from a
-              champ-select auto-open link, first.
-            </p>
-          )}
-
-          {probeState?.kind === "connected" && (
-            <>
-              <dl className="grid grid-cols-3 gap-3 text-[11px]">
-                <div>
-                  <dt className="text-mut uppercase tracking-[0.08em] text-[9.5px]">Version</dt>
-                  <dd className="text-txt font-medium tabular-nums">{probeState.status.version}</dd>
+            <div className="px-5 sm:px-6 pb-6 space-y-5 border-t border-line/60 pt-5">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">Connection</p>
+                  <span className="flex items-center gap-1.5 text-[11px] text-mut">
+                    <span className={`w-2 h-2 rounded-full ${INDICATOR_DOT[indicator]}`} aria-hidden="true" />
+                    {INDICATOR_LABEL[indicator]}
+                  </span>
                 </div>
-                <div>
-                  <dt className="text-mut uppercase tracking-[0.08em] text-[9.5px]">Phase</dt>
-                  <dd className="text-txt font-medium">{probeState.status.phase}</dd>
-                </div>
-                <div>
-                  <dt className="text-mut uppercase tracking-[0.08em] text-[9.5px]">Client</dt>
-                  <dd className="text-txt font-medium">
-                    {probeState.status.clientConnected ? "Connected" : "Not detected"}
-                  </dd>
-                </div>
-              </dl>
 
-              {/* Diagnosability (v1.2.0-1.2.2) — lets us debug a "nothing
-                  opens" report remotely from ONE screenshot, without a
-                  screen-share: the most recent deep-link this companion
-                  opened THIS launch, a live champ-select resolution
-                  snapshot while phase is ChampSelect, the last poll-loop
-                  heartbeat (the single most telling field — if this is
-                  missing or stale, the real-mode loop itself is dead), and
-                  the most recent unexpected failure message (e.g. an LCU
-                  call dying at the TLS handshake). Subtle by design — this
-                  is a debugging aid, not a feature most users need day to
-                  day. */}
-              {(probeState.status.lastOpen ||
-                probeState.status.champSelect ||
-                probeState.status.lastPollAt ||
-                probeState.status.lastError) && (
-                <div className="text-[10px] text-mut/70 space-y-0.5 pt-1 border-t border-line/50">
-                  {probeState.status.lastPollAt && (
-                    <p>Last poll: {new Date(probeState.status.lastPollAt).toLocaleTimeString()}</p>
-                  )}
-                  {probeState.status.lastOpen && (
+                <p className="text-[12px] text-mut leading-relaxed">
+                  Your browser will ask to allow CoachBuild to reach a local app on this PC
+                  (Chrome&apos;s Local Network Access permission) — this is expected the first time.
+                  Click <strong className="text-txt">Allow</strong>.
+                </p>
+
+                <button
+                  type="button"
+                  onClick={runTest}
+                  disabled={!session || probing}
+                  className="text-[12px] font-semibold uppercase tracking-[0.06em] text-bg bg-teal hover:bg-teal-hover disabled:opacity-50 disabled:cursor-not-allowed rounded-lg px-4 py-2 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
+                >
+                  {probing ? "Testing…" : "Test connection"}
+                </button>
+
+                {!session && (
+                  <p className="text-[11px] text-mut">
+                    No pairing session yet — open this page from the companion&apos;s tray menu, or
+                    from a champ-select auto-open link, first.
+                  </p>
+                )}
+
+                {status && (
+                  <>
+                    <dl className="grid grid-cols-3 gap-3 text-[11px]">
+                      <div>
+                        <dt className="text-mut uppercase tracking-[0.08em] text-[9.5px]">Version</dt>
+                        <dd className="text-txt font-medium tabular-nums">{status.version}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-mut uppercase tracking-[0.08em] text-[9.5px]">Phase</dt>
+                        <dd className="text-txt font-medium">{status.phase}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-mut uppercase tracking-[0.08em] text-[9.5px]">Client</dt>
+                        <dd className="text-txt font-medium">
+                          {status.clientConnected ? "Connected" : "Not detected"}
+                        </dd>
+                      </div>
+                    </dl>
+
+                    {/* Diagnosability (v1.2.0-1.2.2) — lets us debug a "nothing
+                        opens" report remotely from ONE screenshot, without a
+                        screen-share. */}
+                    {(status.lastOpen || status.champSelect || status.lastPollAt || status.lastError) && (
+                      <div className="text-[10px] text-mut/70 space-y-0.5 pt-1 border-t border-line/50">
+                        {status.lastPollAt && (
+                          <p>Last poll: {new Date(status.lastPollAt).toLocaleTimeString()}</p>
+                        )}
+                        {status.lastOpen && (
+                          <p>
+                            Last opened: champion #{status.lastOpen.championId}, role{" "}
+                            {status.lastOpen.roleId ?? "auto"} at{" "}
+                            {new Date(status.lastOpen.at).toLocaleTimeString()}
+                          </p>
+                        )}
+                        {status.champSelect && (
+                          <p>
+                            Champ select: cell #{status.champSelect.localPlayerCellId}, champion{" "}
+                            {status.champSelect.cellChampionId ??
+                              status.champSelect.pickIntent ??
+                              status.champSelect.actionChampionId ??
+                              "none yet"}
+                            , role {status.champSelect.roleId ?? "auto"}
+                          </p>
+                        )}
+                        {status.lastError && <p className="text-bad/80">Last error: {status.lastError}</p>}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {probeState?.kind === "lna-denied" && (
+                  <div className="text-[11.5px] text-bad space-y-1">
+                    <p>Blocked by your browser.</p>
                     <p>
-                      Last opened: champion #{probeState.status.lastOpen.championId}, role{" "}
-                      {probeState.status.lastOpen.roleId ?? "auto"} at{" "}
-                      {new Date(probeState.status.lastOpen.at).toLocaleTimeString()}
+                      <span className="font-semibold">Chrome / Edge:</span> click the lock icon in
+                      the address bar &rarr; Site settings &rarr; allow &quot;Local network
+                      access&quot;, then test again.
                     </p>
-                  )}
-                  {probeState.status.champSelect && (
                     <p>
-                      Champ select: cell #{probeState.status.champSelect.localPlayerCellId}, champion{" "}
-                      {probeState.status.champSelect.cellChampionId ??
-                        probeState.status.champSelect.pickIntent ??
-                        probeState.status.champSelect.actionChampionId ??
-                        "none yet"}
-                      , role {probeState.status.champSelect.roleId ?? "auto"}
+                      <span className="font-semibold">Brave:</span> open{" "}
+                      <code className="text-[10.5px]">brave://settings/content/localhostAccess</code>{" "}
+                      and add <code className="text-[10.5px]">https://coachbuild.vercel.app</code>{" "}
+                      under &quot;Allowed to access localhost&quot; (Brave blocks silently instead of
+                      prompting), then reload and test again.
                     </p>
-                  )}
-                  {probeState.status.lastError && (
-                    <p className="text-bad/80">Last error: {probeState.status.lastError}</p>
-                  )}
+                    <p className="text-mut">
+                      This can also appear when the companion simply isn&apos;t running — check the
+                      system tray first before changing browser settings.
+                    </p>
+                  </div>
+                )}
+
+                {probeState?.kind === "no-companion" && (
+                  <p className="text-[11.5px] text-mut">
+                    Couldn&apos;t reach the companion. Make sure it&apos;s running (check your system
+                    tray) and try again.
+                  </p>
+                )}
+              </div>
+
+              {errorLog.length > 0 && (
+                <div className="space-y-3 pt-4 border-t border-line/60">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">Recent errors</p>
+                    <button
+                      type="button"
+                      onClick={handleClearErrorLog}
+                      className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-mut hover:text-txt transition-colors"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-mut leading-relaxed">
+                    The last few times an &quot;Apply runes&quot; or &quot;Add item builds&quot; write
+                    failed on this device -- kept here so you can share it (a screenshot works)
+                    without needing PowerShell access to the companion&apos;s own log.
+                  </p>
+                  <ul className="space-y-1.5 text-[11px]">
+                    {[...errorLog]
+                      .reverse()
+                      .slice(0, 5)
+                      .map((entry, i) => (
+                        <li
+                          key={`${entry.ts}-${i}`}
+                          className="border-t border-line/50 pt-1.5 first:border-t-0 first:pt-0"
+                        >
+                          <p className="text-mut/70 text-[10px]">
+                            {new Date(entry.ts).toLocaleString()} &middot; {entry.kind}
+                          </p>
+                          <p className="text-bad/80">{entry.detail}</p>
+                        </li>
+                      ))}
+                  </ul>
                 </div>
               )}
-            </>
-          )}
 
-          {probeState?.kind === "lna-denied" && (
-            <div className="text-[11.5px] text-bad space-y-1">
-              <p>
-                Blocked by your browser.
-              </p>
-              <p>
-                <span className="font-semibold">Chrome / Edge:</span> click the lock icon in the
-                address bar &rarr; Site settings &rarr; allow &quot;Local network access&quot;, then test again.
-              </p>
-              <p>
-                <span className="font-semibold">Brave:</span> open{" "}
-                <code className="text-[10.5px]">brave://settings/content/localhostAccess</code> and add{" "}
-                <code className="text-[10.5px]">https://coachbuild.vercel.app</code> under
-                &quot;Allowed to access localhost&quot; (Brave blocks silently instead of prompting), then reload
-                and test again.
-              </p>
-              <p className="text-mut">
-                This can also appear when the companion simply isn&apos;t running — check the system
-                tray first before changing browser settings.
-              </p>
-            </div>
-          )}
-
-          {probeState?.kind === "no-companion" && (
-            <p className="text-[11.5px] text-mut">
-              Couldn&apos;t reach the companion. Make sure it&apos;s running (check your system tray)
-              and try again.
-            </p>
-          )}
-        </section>
-
-        <section className="bg-panel border border-line rounded-xl p-5 space-y-3">
-          <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">Automation</p>
-          <label className="flex items-start gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={autoHydrated && autoItemSets}
-              onChange={(e) => handleAutoItemSetsToggle(e.target.checked)}
-              className="mt-0.5 w-4 h-4 accent-teal cursor-pointer"
-            />
-            <span>
-              <span className="block text-[12.5px] text-txt font-medium">
-                Auto-add item builds on champ select
-              </span>
-              <span className="block text-[11px] text-mut leading-relaxed mt-0.5">
-                When you enter champ select, up to 3 item builds (Core, Optimized, Pro) are added to
-                your in-client shop automatically — no click needed. This is a passive shop
-                suggestion, same as Blitz/u.gg&apos;s auto-import; it never acts in the game for you.
-              </span>
-            </span>
-          </label>
-
-          <label className="flex items-start gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={autoHydrated && autoRunes}
-              onChange={(e) => handleAutoRunesToggle(e.target.checked)}
-              className="mt-0.5 w-4 h-4 accent-teal cursor-pointer"
-            />
-            <span>
-              <span className="block text-[12.5px] text-txt font-medium">Auto-apply runes on champ select</span>
-              <span className="block text-[11px] text-mut leading-relaxed mt-0.5">
-                Applies your recommended rune page automatically as you pick — <strong className="text-txt">your
-                own pages are never touched automatically</strong>: it only ever replaces a page CoachBuild
-                itself created before, or uses one of your free rune-page slots. If neither is available,
-                nothing is touched and you&apos;ll get a quiet notice to click{" "}
-                <strong className="text-txt">Apply runes</strong> instead, which can replace the current page
-                (that&apos;s a real click, so that&apos;s always allowed).
-              </span>
-            </span>
-          </label>
-        </section>
-
-        {errorLog.length > 0 && (
-          <section className="bg-panel border border-line rounded-xl p-5 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">
-                Recent errors
-              </p>
-              <button
-                type="button"
-                onClick={handleClearErrorLog}
-                className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-mut hover:text-txt transition-colors"
-              >
-                Clear
-              </button>
-            </div>
-            <p className="text-[11px] text-mut leading-relaxed">
-              The last few times an &quot;Apply runes&quot; or &quot;Add item builds&quot; write failed on this
-              device -- kept here so you can share it (a screenshot works) without needing PowerShell
-              access to the companion&apos;s own log.
-            </p>
-            <ul className="space-y-1.5 text-[11px]">
-              {[...errorLog]
-                .reverse()
-                .slice(0, 5)
-                .map((entry, i) => (
-                  <li key={`${entry.ts}-${i}`} className="border-t border-line/50 pt-1.5 first:border-t-0 first:pt-0">
-                    <p className="text-mut/70 text-[10px]">
-                      {new Date(entry.ts).toLocaleString()} &middot; {entry.kind}
-                    </p>
-                    <p className="text-bad/80">{entry.detail}</p>
+              <div className="space-y-3 pt-4 border-t border-line/60">
+                <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">5-minute self-test</p>
+                <ol className="space-y-2.5 text-[12.5px] text-txt list-decimal list-inside">
+                  <li>Run the one-liner above — a tray icon appears, no console window.</li>
+                  <li>
+                    Click <strong>Test connection</strong> above &rarr; allow the browser prompt
+                    &rarr; version and client status show above.
                   </li>
-                ))}
-            </ul>
-          </section>
-        )}
-
-        <section className="bg-panel border border-line rounded-xl p-5 space-y-3">
-          <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">
-            5-minute self-test
-          </p>
-          <ol className="space-y-2.5 text-[12.5px] text-txt list-decimal list-inside">
-            <li>Run the one-liner above — a tray icon appears, no console window.</li>
-            <li>
-              Click <strong>Test connection</strong> above &rarr; allow the browser prompt &rarr;
-              version and client status show above.
-            </li>
-            <li>
-              Enter champ select in League — the Builds page opens automatically for your pick +
-              role; changing your hover updates it; re-picking the same champion does not reopen it.
-            </li>
-            <li>
-              On the Builds page, click <strong>Apply runes</strong> &rarr; your in-client rune page
-              is replaced with &quot;CoachBuild &lt;champ&gt; &lt;role&gt;&quot; (a failed delete
-              prompts you to remove the old page manually, then retry).
-            </li>
-            <li>
-              Once the game starts, a live panel appears showing the enemy champions and roles —
-              never names or timers — with build suggestions that highlight for the matchup when that data is available.
-            </li>
-          </ol>
-        </section>
+                  <li>
+                    Enter champ select in League — the Builds page opens automatically for your
+                    pick + role; changing your hover updates it; re-picking the same champion does
+                    not reopen it.
+                  </li>
+                  <li>
+                    On the Builds page, click <strong>Apply runes</strong> &rarr; your in-client
+                    rune page is replaced with &quot;CoachBuild &lt;champ&gt; &lt;role&gt;&quot; (a
+                    failed delete prompts you to remove the old page manually, then retry).
+                  </li>
+                  <li>
+                    Once the game starts, a live panel appears showing the enemy champions and
+                    roles — never names or timers — with build suggestions that highlight for the
+                    matchup when that data is available.
+                  </li>
+                </ol>
+              </div>
+            </div>
+          </details>
+        </div>
       </div>
-    </main>
+    </div>
   );
 }

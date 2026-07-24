@@ -2,19 +2,20 @@
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /mystats — "My Stats" personal match tracker (backend by engy, 2026-07-21 —
-// see HANDOFF.md's "My Stats" entries + lib/mystats/**). Standalone shell
-// page, same convention as /draft and /movers. v0.50.0: reachable from the
-// global DesktopRail/MobileTabBar (AppShell.tsx) instead of the old
-// TabNav/hextech-Sidebar pair.
+// see HANDOFF.md's "My Stats" entries + lib/mystats/**). v0.51 wave B:
+// rebuilt around StatTiles/RecentGamesList/ChampionPoolCard (mockup 6.png),
+// consuming the EXTENDED /api/mystats/summary (buildAdherencePct,
+// winrateOnBuild, winrateOffBuild, priorSplitWinrate, recentGames[]) engo is
+// adding concurrently in myStats.ts's normalizer. Every extended field is
+// read through MyStatsSummaryExtended (declared locally below, NOT added to
+// myStats.ts itself — that file is engo's pure-.ts contract territory this
+// wave) and defaults to null/[] when absent, so this page renders correctly
+// whether or not that normalizer update has landed yet in the working tree.
 //
 // HARD USER DIRECTIVES this page must honor:
-//  (1) DISPLAY ONLY — this data never feeds any score/ranking anywhere (see
-//      components/hextech/myStats.ts's header + lib/draft/recommend.ts's
-//      PersonalPlayResult doc comment for where this same data resurfaces,
-//      additively, on the Draft page).
-//  (2) CURRENT SEASON ONLY — the "Season 2026" label (SEASON_LABEL, echoed
-//      on the wire so this page never re-derives the boundary constant) is
-//      shown wherever personal stats render.
+//  (1) DISPLAY ONLY — this data never feeds any score/ranking anywhere.
+//  (2) CURRENT SEASON ONLY — the "Season 2026" label is shown wherever
+//      personal stats render.
 //
 // Both /api/mystats/* routes are `no-store` unconditionally (private
 // per-user data) — fetched client-side only, no server-side caching
@@ -24,6 +25,10 @@
 import { useEffect, useState } from "react";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import MyStatsRefresher from "@/components/hextech/MyStatsRefresher";
+import PageHeader from "@/components/hextech/PageHeader";
+import StatTiles from "@/components/hextech/mystats/StatTiles";
+import RecentGamesList, { type RecentGameRow } from "@/components/hextech/mystats/RecentGamesList";
+import ChampionPoolCard from "@/components/hextech/mystats/ChampionPoolCard";
 import { getChampionIconMap, type ChampionIconEntry } from "@/components/proAssets";
 import {
   fetchMyStatsSummary,
@@ -36,11 +41,21 @@ import {
   type MyStatsMatchupRow,
 } from "@/components/hextech/myStats";
 
+// ── v0.51 wave-B extended wire contract (declared here, not in myStats.ts —
+// see header comment above) ─────────────────────────────────────────────────
+interface MyStatsSummaryExtended extends MyStatsSummary {
+  buildAdherencePct?: number | null;
+  winrateOnBuild?: number | null;
+  winrateOffBuild?: number | null;
+  priorSplitWinrate?: number | null;
+  recentGames?: RecentGameRow[];
+}
+
 function pct(fraction: number): string {
   return `${(fraction * 100).toFixed(1)}%`;
 }
 
-type SummaryState = { status: "loading" } | { status: "error" } | { status: "ok"; summary: MyStatsSummary };
+type SummaryState = { status: "loading" } | { status: "error" } | { status: "ok"; summary: MyStatsSummaryExtended };
 
 type DetailState =
   | { status: "idle" }
@@ -58,17 +73,13 @@ function EmptyPanel({ title, body }: { title: string; body: string }) {
   );
 }
 
-function TableSkeleton() {
+function TilesSkeleton() {
   return (
-    <div className="bg-panel border border-line rounded-xl px-5 py-4 animate-pulse space-y-3">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-panel2 flex-shrink-0" />
-          <div className="flex-1 space-y-1.5">
-            <div className="h-2.5 w-24 bg-panel2 rounded" />
-            <div className="h-2 w-16 bg-panel2 rounded" />
-          </div>
-          <div className="h-3 w-12 bg-panel2 rounded flex-shrink-0" />
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-pulse">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div key={i} className="bg-panel border border-line rounded-xl p-4 space-y-2">
+          <div className="h-2 w-14 bg-panel2 rounded" />
+          <div className="h-5 w-16 bg-panel2 rounded" />
         </div>
       ))}
     </div>
@@ -80,12 +91,8 @@ export default function MyStatsPage() {
   const [state, setState] = useState<SummaryState>({ status: "loading" });
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [detail, setDetail] = useState<DetailState>({ status: "idle" });
-  // v0.50.0: bumped by MyStatsRefresher's onRefreshed (below) when the
-  // on-demand incremental ingest actually found new games — re-runs the
-  // summary fetch effect below without duplicating its stale-response-guard
-  // logic (see engy's HANDOFF-engy.md wiring note, 2026-07-24: "bump a
-  // refetch-trigger state var or call the existing load() function
-  // directly" — this is the refetch-trigger variant).
+  // v0.50.0: bumped by MyStatsRefresher's onRefreshed when the on-demand
+  // incremental ingest actually found new games.
   const [refetchKey, setRefetchKey] = useState(0);
 
   useEffect(() => {
@@ -95,8 +102,8 @@ export default function MyStatsPage() {
   useEffect(() => {
     let cancelled = false;
     fetchMyStatsSummary().then((data) => {
-      if (cancelled) return; // gotcha (q): stale-response guard, same pattern as BuildTabContent/draft page
-      setState(data ? { status: "ok", summary: data } : { status: "error" });
+      if (cancelled) return; // stale-response guard, same pattern as BuildTabContent/draft page
+      setState(data ? { status: "ok", summary: data as MyStatsSummaryExtended } : { status: "error" });
     });
     return () => {
       cancelled = true;
@@ -131,37 +138,23 @@ export default function MyStatsPage() {
   const rows: MyStatsChampionRow[] =
     state.status === "ok" ? buildMyStatsRows(state.summary.records, (id) => champIcons.get(id)) : [];
   const overall = state.status === "ok" ? computeMyStatsOverall(state.summary.records) : null;
+  const mainRow = rows.length > 0 ? rows[0] : null;
+  const recentGames = state.status === "ok" ? state.summary.recentGames ?? [] : [];
 
   return (
     <div className="min-h-screen pb-16">
-      <div className="max-w-[720px] mx-auto px-4 sm:px-6">
-        <header className="pt-8 pb-5 border-b border-line mb-6">
-          <div className="text-center mb-2">
-            <h1 className="text-3xl font-extrabold tracking-tight text-balance">
-              My <span className="text-teal">Stats</span>
-            </h1>
-            <p className="text-mut text-sm mt-1">Your own personal match history — for context, never for ranking.</p>
-          </div>
+      <div className="max-w-[1100px] mx-auto px-4 sm:px-6">
+        <PageHeader
+          title="My Stats"
+          subtitle={
+            state.status === "ok" && !state.summary.accountUnresolved
+              ? `${state.summary.season || "Season"} · ${state.summary.riotId ?? "Account"} · from your local match history`
+              : "Your own personal match history — for context, never for ranking."
+          }
+          right={<MyStatsRefresher onRefreshed={() => setRefetchKey((k) => k + 1)} />}
+        />
 
-          {state.status === "ok" && !state.summary.accountUnresolved && (
-            <div className="flex flex-col items-center gap-1 mt-3">
-              <p className="text-[11px] text-mut/80 tabular-nums">
-                {state.summary.riotId ?? "Account"}
-                <span aria-hidden="true"> &middot; </span>
-                <span className="text-teal-dim font-semibold">{state.summary.season || "Current season"}</span>
-              </p>
-              <MyStatsRefresher onRefreshed={() => setRefetchKey((k) => k + 1)} />
-              {overall && overall.games > 0 && (
-                <p className="text-[13.5px] font-bold tabular-nums text-txt">
-                  {overall.games} games <span className="text-mut/60" aria-hidden="true">&middot;</span>{" "}
-                  <span className={overall.winrate >= 0.5 ? "text-good" : "text-bad"}>{pct(overall.winrate)}</span> overall
-                </p>
-              )}
-            </div>
-          )}
-        </header>
-
-        {state.status === "loading" && <TableSkeleton />}
+        {state.status === "loading" && <TilesSkeleton />}
 
         {state.status === "error" && (
           <EmptyPanel
@@ -184,100 +177,123 @@ export default function MyStatsPage() {
           />
         )}
 
-        {state.status === "ok" && !state.summary.accountUnresolved && rows.length > 0 && (
-          <div className="bg-panel border border-line rounded-xl px-5">
-            <p className="sr-only" role="status">
-              {rows.length} champions with recorded games this season, sorted by games played.
-            </p>
-            {rows.map((row) => {
-              const expanded = expandedId === row.championId;
-              const detailId = `mystats-detail-${row.championId}`;
-              return (
-                <div key={row.championId} className="border-b border-line last:border-b-0">
-                  <button
-                    type="button"
-                    onClick={() => toggleRow(row.championId)}
-                    aria-expanded={expanded}
-                    aria-controls={detailId}
-                    className="w-full flex items-center gap-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg rounded-lg"
-                  >
-                    <span className="w-9 h-9 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
-                      <IconWithFallback src={row.icon} alt="" fallbackGlyph={row.name} className="w-full h-full object-cover" size={36} />
-                    </span>
+        {state.status === "ok" && !state.summary.accountUnresolved && rows.length > 0 && overall && (
+          <div className="space-y-5">
+            <StatTiles
+              games={overall.games}
+              seasonLabel={state.summary.season || ""}
+              winrate={overall.winrate}
+              priorSplitWinrate={state.summary.priorSplitWinrate ?? null}
+              mainChampionName={mainRow?.name ?? null}
+              mainChampionGames={mainRow?.games ?? null}
+              mainChampionWinrate={mainRow?.winrate ?? null}
+              buildAdherencePct={state.summary.buildAdherencePct ?? null}
+            />
 
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[13px] text-txt font-semibold truncate">{row.name}</span>
-                        <span className="text-[9px] tracking-[0.06em] uppercase font-bold px-1.5 py-0.5 rounded bg-panel2 text-mut border border-line flex-shrink-0">
-                          {row.roleLabel}
-                        </span>
-                        {row.lowSample && (
-                          <span className="text-[9px] tracking-[0.06em] uppercase font-bold px-1.5 py-0.5 rounded bg-panel2 text-mut border border-line flex-shrink-0">
-                            Low sample
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-[10.5px] text-mut tabular-nums mt-0.5">
-                        {row.games}g &middot; {row.wins}W-{row.losses}L
-                      </div>
-                    </div>
+            <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-5">
+              <RecentGamesList games={recentGames} iconOf={(id) => champIcons.get(id)} />
+              <ChampionPoolCard
+                rows={rows}
+                winrateOnBuild={state.summary.winrateOnBuild ?? null}
+                winrateOffBuild={state.summary.winrateOffBuild ?? null}
+              />
+            </div>
 
-                    <div className="text-right flex-shrink-0">
-                      <div
-                        className={`text-[13.5px] font-bold tabular-nums ${
-                          row.lowSample ? "text-mut" : row.winrate >= 0.5 ? "text-good" : "text-bad"
-                        }`}
-                      >
-                        {pct(row.winrate)}
-                      </div>
-                    </div>
-
-                    <span
-                      className={`text-mut text-[11px] transition-transform duration-150 flex-shrink-0 ${expanded ? "rotate-180" : ""}`}
-                      aria-hidden="true"
+            {/* Secondary section — the pre-wave-B per-champion expandable
+                matchup table, lightly restyled. Capability preserved
+                verbatim (same fetch/toggle logic), just demoted below the
+                new tiles/lists as a secondary drill-down. */}
+            <div className="bg-panel border border-line rounded-xl px-5">
+              <p className="pt-4 pb-2 text-[11px] tracking-[0.12em] uppercase text-mut font-semibold">
+                Matchup history
+              </p>
+              <p className="sr-only" role="status">
+                {rows.length} champions with recorded games this season, sorted by games played.
+              </p>
+              {rows.map((row) => {
+                const expanded = expandedId === row.championId;
+                const detailId = `mystats-detail-${row.championId}`;
+                return (
+                  <div key={row.championId} className="border-b border-line last:border-b-0">
+                    <button
+                      type="button"
+                      onClick={() => toggleRow(row.championId)}
+                      aria-expanded={expanded}
+                      aria-controls={detailId}
+                      className="w-full flex items-center gap-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg rounded-lg"
                     >
-                      &#9662;
-                    </span>
-                  </button>
+                      <span className="w-9 h-9 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
+                        <IconWithFallback src={row.icon} alt="" fallbackGlyph={row.name} className="w-full h-full object-cover" size={36} />
+                      </span>
 
-                  {/* Always mounted (hidden via the `hidden` attribute, not
-                      unmounted) so aria-controls always resolves to a real
-                      element for assistive tech, per fixing-accessibility's
-                      disclosure-widget guidance. The matchup fetch itself is
-                      still gated on `expandedId`, so collapsing never keeps
-                      a stale fetch running. */}
-                  <div id={detailId} hidden={!expanded} className="pb-3 pl-12 pr-1">
-                    {expanded && detail.status === "loading" && <p className="text-[11px] text-mut py-2">Loading matchups…</p>}
-                    {expanded && detail.status === "error" && (
-                      <p className="text-[11px] text-bad py-2">Couldn&apos;t load matchups — try again.</p>
-                    )}
-                    {expanded && detail.status === "empty" && (
-                      <p className="text-[11px] text-mut py-2">No lane-opponent data recorded for this champion.</p>
-                    )}
-                    {expanded && detail.status === "ok" && (
-                      <div className="space-y-1.5 py-1">
-                        {detail.matchups.map((m) => (
-                          <div key={m.oppChampionId} className="flex items-center gap-2.5">
-                            <span className="w-6 h-6 rounded bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
-                              <IconWithFallback src={m.icon} alt="" fallbackGlyph={m.name} className="w-full h-full object-cover" size={24} />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[13px] text-txt font-semibold truncate">{row.name}</span>
+                          <span className="text-[9px] tracking-[0.06em] uppercase font-bold px-1.5 py-0.5 rounded bg-panel2 text-mut border border-line flex-shrink-0">
+                            {row.roleLabel}
+                          </span>
+                          {row.lowSample && (
+                            <span className="text-[9px] tracking-[0.06em] uppercase font-bold px-1.5 py-0.5 rounded bg-panel2 text-mut border border-line flex-shrink-0">
+                              Low sample
                             </span>
-                            <span className="text-[11.5px] text-txt flex-1 truncate">vs {m.name}</span>
-                            <span className="text-[10.5px] text-mut tabular-nums flex-shrink-0">{m.games}g</span>
-                            <span
-                              className={`text-[11px] font-semibold tabular-nums w-20 text-right flex-shrink-0 ${
-                                m.lowSample ? "text-mut" : m.winrate >= 0.5 ? "text-good" : "text-bad"
-                              }`}
-                            >
-                              {m.wins}-{m.losses} ({pct(m.winrate)})
-                            </span>
-                          </div>
-                        ))}
+                          )}
+                        </div>
+                        <div className="text-[10.5px] text-mut tabular-nums mt-0.5">
+                          {row.games}g &middot; {row.wins}W-{row.losses}L
+                        </div>
                       </div>
-                    )}
+
+                      <div className="text-right flex-shrink-0">
+                        <div
+                          className={`text-[13.5px] font-bold tabular-nums ${
+                            row.lowSample ? "text-mut" : row.winrate >= 0.5 ? "text-good" : "text-bad"
+                          }`}
+                        >
+                          {pct(row.winrate)}
+                        </div>
+                      </div>
+
+                      <span
+                        className={`text-mut text-[11px] transition-transform duration-150 flex-shrink-0 ${expanded ? "rotate-180" : ""}`}
+                        aria-hidden="true"
+                      >
+                        &#9662;
+                      </span>
+                    </button>
+
+                    <div id={detailId} hidden={!expanded} className="pb-3 pl-12 pr-1">
+                      {expanded && detail.status === "loading" && <p className="text-[11px] text-mut py-2">Loading matchups…</p>}
+                      {expanded && detail.status === "error" && (
+                        <p className="text-[11px] text-bad py-2">Couldn&apos;t load matchups — try again.</p>
+                      )}
+                      {expanded && detail.status === "empty" && (
+                        <p className="text-[11px] text-mut py-2">No lane-opponent data recorded for this champion.</p>
+                      )}
+                      {expanded && detail.status === "ok" && (
+                        <div className="space-y-1.5 py-1">
+                          {detail.matchups.map((m) => (
+                            <div key={m.oppChampionId} className="flex items-center gap-2.5">
+                              <span className="w-6 h-6 rounded bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
+                                <IconWithFallback src={m.icon} alt="" fallbackGlyph={m.name} className="w-full h-full object-cover" size={24} />
+                              </span>
+                              <span className="text-[11.5px] text-txt flex-1 truncate">vs {m.name}</span>
+                              <span className="text-[10.5px] text-mut tabular-nums flex-shrink-0">{m.games}g</span>
+                              <span
+                                className={`text-[11px] font-semibold tabular-nums w-20 text-right flex-shrink-0 ${
+                                  m.lowSample ? "text-mut" : m.winrate >= 0.5 ? "text-good" : "text-bad"
+                                }`}
+                              >
+                                {m.wins}-{m.losses} ({pct(m.winrate)})
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         )}
 

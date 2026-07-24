@@ -11,6 +11,16 @@ function participant(overrides: Partial<MyRiotParticipant>): MyRiotParticipant {
     championId: 1,
     teamPosition: "TOP",
     win: true,
+    kills: 5,
+    deaths: 2,
+    assists: 7,
+    item0: 3078,
+    item1: 3072,
+    item2: 3053,
+    item3: 3006,
+    item4: 3025,
+    item5: 0,
+    perks: { styles: [{ description: "primaryStyle", selections: [{ perk: 8005 }] }, { description: "subStyle", selections: [{ perk: 8226 }] }] },
     ...overrides,
   };
 }
@@ -50,6 +60,42 @@ describe("extractMyMatch", () => {
     expect(row!.queueId).toBe(420);
     expect(row!.patch).toBe("16.13");
     expect(row!.matchId).toBe("EUW1_1");
+  });
+
+  describe("v0.51 additions: KDA/items/keystone/split", () => {
+    it("pulls kills/deaths/assists and the 6 final item slots verbatim (trinket excluded)", () => {
+      const m = match([participant({ puuid: SELF_PUUID, kills: 8, deaths: 3, assists: 12 })]);
+      const row = extractMyMatch(m, SELF_PUUID)!;
+      expect(row.kills).toBe(8);
+      expect(row.deaths).toBe(3);
+      expect(row.assists).toBe(12);
+      expect(row.itemIds).toEqual([3078, 3072, 3053, 3006, 3025, 0]); // item6/trinket never read
+    });
+
+    it("resolves the primary-tree keystone (first selection of the primaryStyle row)", () => {
+      const m = match([
+        participant({
+          puuid: SELF_PUUID,
+          perks: {
+            styles: [
+              { description: "subStyle", selections: [{ perk: 8210 }] },
+              { description: "primaryStyle", selections: [{ perk: 8005 }, { perk: 9111 }] },
+            ],
+          },
+        }),
+      ]);
+      expect(extractMyMatch(m, SELF_PUUID)!.primaryKeystone).toBe(8005);
+    });
+
+    it("missing/malformed perks degrade to a null primaryKeystone, never a throw", () => {
+      const m = match([participant({ puuid: SELF_PUUID, perks: undefined })]);
+      expect(extractMyMatch(m, SELF_PUUID)!.primaryKeystone).toBeNull();
+    });
+
+    it("tags the row with its split (pure function of gameCreation)", () => {
+      const m = match([participant({ puuid: SELF_PUUID })], { gameCreation: Date.UTC(2026, 5, 1) }); // 2026-06-01, within split 2
+      expect(extractMyMatch(m, SELF_PUUID)!.split).toBe(2);
+    });
   });
 
   it("ARAM / missing-position: blank teamPosition on every participant -> role -1, oppChampionId null, row still stored", () => {

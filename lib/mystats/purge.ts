@@ -1,25 +1,50 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// lib/mystats/purge.ts — season-boundary purge orchestration for
+// lib/mystats/purge.ts — season/split-boundary purge orchestration for
 // coachbuild.my_matches, extracted out of scripts/purge-mystats-preseason.mjs
 // so it's testable with a mocked sql (same "queries in an orchestration
 // function, script just calls + prints" split as lib/mystats/ingest.ts).
 //
 // IDEMPOTENT BY CONSTRUCTION: the DELETE's WHERE clause re-evaluates
-// game_creation < SEASON_START_MS against whatever rows currently exist — a
-// second run simply finds nothing left to delete (rowsDeleted: 0) rather
+// game_creation < the purge boundary against whatever rows currently exist —
+// a second run simply finds nothing left to delete (rowsDeleted: 0) rather
 // than erroring or double-counting, and the cursor reset is a plain
 // INSERT ... ON CONFLICT DO UPDATE (safe to run any number of times).
+//
+// PURGE BOUNDARY (v0.51, split tagging): the cutoff used to actually DELETE
+// rows is now max(SEASON_START_MS, prior-split start) — see
+// lib/mystats/season.ts's SPLIT_BOUNDARIES/priorSplitStartMs. This ALWAYS
+// keeps the current split + the prior split intact (the prior split is what
+// the My Stats delta compares against — see lib/mystats/aggregate.ts's
+// computePriorSplitWinrate) and only retires data from splits before that.
+// Right now (still within split 2) this boundary is numerically IDENTICAL to
+// SEASON_START_MS (split 1's start, the only split preceding split 2) — it
+// only diverges once a 4th split exists and split 3 becomes current. Both
+// `seasonStartIso` (unchanged, back-compat) and the new `purgeBoundaryIso`
+// are reported so a caller can tell the two apart once they do diverge.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { getSql } from "@/lib/pro/db";
-import { SEASON_START_MS, SEASON_PATCH_PREFIX, checkSeasonAnomaly, type MySeasonCheckRow } from "./season";
+import {
+  SEASON_START_MS,
+  SEASON_PATCH_PREFIX,
+  checkSeasonAnomaly,
+  priorSplitStartMs,
+  type MySeasonCheckRow,
+} from "./season";
 
 export interface SeasonAnomaly extends MySeasonCheckRow {
   reason: string;
 }
 
 export interface SeasonPurgeResult {
+  /** The season boundary constant — UNCHANGED meaning, kept for back-compat.
+   *  See `purgeBoundaryIso` for the boundary actually used by this run's
+   *  DELETE (the two coincide today; see this file's header). */
   seasonStartIso: string;
+  /** The actual DELETE cutoff for this run: max(SEASON_START_MS, prior-split
+   *  start). Rows with game_creation before this are purged; the prior split
+   *  and everything newer always survive. */
+  purgeBoundaryIso: string;
   rowsBefore: number;
   rowsDeleted: number;
   rowsKept: number;
@@ -40,7 +65,10 @@ interface RawMatchRow {
   patch: string;
 }
 
-export async function runSeasonPurge(sql: NonNullable<ReturnType<typeof getSql>>): Promise<SeasonPurgeResult> {
+export async function runSeasonPurge(
+  sql: NonNullable<ReturnType<typeof getSql>>,
+  now: () => number = Date.now
+): Promise<SeasonPurgeResult> {
   const before = (await sql`
     SELECT match_id, game_creation, patch FROM coachbuild.my_matches
   `) as unknown as RawMatchRow[];
@@ -53,8 +81,13 @@ export async function runSeasonPurge(sql: NonNullable<ReturnType<typeof getSql>>
   }
 
   const seasonStartIso = new Date(SEASON_START_MS).toISOString();
+  // See this file's header — the boundary is never allowed to move EARLIER
+  // than SEASON_START_MS (Math.max), so a misconfigured/future split table
+  // can never resurrect genuinely pre-season data.
+  const purgeBoundaryMs = Math.max(SEASON_START_MS, priorSplitStartMs(now) ?? SEASON_START_MS);
+  const purgeBoundaryIso = new Date(purgeBoundaryMs).toISOString();
   const deleted = (await sql`
-    DELETE FROM coachbuild.my_matches WHERE game_creation < ${seasonStartIso}::timestamptz
+    DELETE FROM coachbuild.my_matches WHERE game_creation < ${purgeBoundaryIso}::timestamptz
     RETURNING match_id
   `) as unknown as { match_id: string }[];
 
@@ -72,6 +105,7 @@ export async function runSeasonPurge(sql: NonNullable<ReturnType<typeof getSql>>
 
   return {
     seasonStartIso,
+    purgeBoundaryIso,
     rowsBefore: before.length,
     rowsDeleted: deleted.length,
     rowsKept: remainingRows[0]?.n ?? 0,

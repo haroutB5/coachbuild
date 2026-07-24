@@ -48,9 +48,80 @@ import { getSql } from "@/lib/pro/db";
 import { DbUnavailableError, RiotUnavailableError } from "@/lib/pro/errors";
 import { getMatch, getMatchIdsByPuuid, RiotRequestError } from "@/lib/pro/riot";
 import { extractMyMatch } from "./extract";
+import { computeAdherence } from "./adherence";
 import { ensureMyAccount, type ResolvedMyAccount } from "./account";
 import { SEASON_START_MS, isInSeason, seasonStartEpochSec } from "./season";
-import type { MyRiotMatch } from "./types";
+import { buildRecommendations, NotPlayedInRoleError } from "../recommend";
+import { getLatestPatch } from "../staticData";
+import type { RoleId } from "../types";
+import type { ExtractedMyMatch, MyRiotMatch } from "./types";
+
+// ── Build-adherence resolution (v0.51) ──────────────────────────────────────
+//
+// "Is this match on the recommended WPA build?" needs the SAME recommendation
+// the Builds page itself shows -- reusing lib/recommend.ts's buildRecommendations
+// directly (no self-HTTP-fetch of /api/build) is both cheaper and can't drift
+// from what /api/build actually returns.
+//
+// CRITICAL LIMITATION (document, don't paper over): buildRecommendations has
+// NO historical-patch override -- it always evaluates against
+// getLatestPatch()'s CURRENT resolved patch internally, regardless of what
+// patch is passed here. Comparing a match played on an OLDER patch against
+// today's current-patch recommendation would be a dishonest signal (the
+// recommended build for 16.9 is not "the recommended build" for a 16.5 game).
+// So resolution below is gated on `patch === currentPatchLabel` -- in
+// practice this means only matches from TODAY's live patch (overwhelmingly
+// incremental-mode games; a long backfill walk spans many older patches and
+// gets `on_wpa_build: null` for almost all of it, which is the honest
+// outcome, not a bug). Once/if lib/recommend.ts grows a patch parameter, this
+// gate can be dropped and every in-season row can be resolved.
+//
+// Cached per (championId, role, patch) WITHIN one ingest run -- a personal
+// account plays a small, repeated champion pool, so this keeps the number of
+// (expensive, multi-endpoint) buildRecommendations calls bounded to the
+// distinct combos actually seen in the batch, not one per match. Resolution
+// stays fully SEQUENTIAL (awaited inline in the same per-match loop that
+// already paces Riot calls) -- no parallel fan-out is added.
+interface RecommendedSignature {
+  coreItemIds: number[];
+  keystoneId: number;
+}
+
+async function resolveRecommendedBuild(
+  cache: Map<string, RecommendedSignature | null>,
+  currentPatchLabel: string,
+  championId: number,
+  role: number,
+  patch: string,
+  log: (msg: string) => void
+): Promise<RecommendedSignature | null> {
+  if (role < 0 || role > 4) return null; // unresolved lane (ARAM/remake) -- no per-role recommendation exists
+  if (patch !== currentPatchLabel) return null; // see this file's header -- only today's live patch is comparable
+
+  const key = `${championId}:${role}:${patch}`;
+  if (cache.has(key)) return cache.get(key)!;
+
+  try {
+    const [top] = await buildRecommendations(championId, role as RoleId);
+    const sig: RecommendedSignature | null = top
+      ? {
+          coreItemIds: [top.items.first.id, top.items.second.id, top.items.third.id],
+          keystoneId: top.runes.keystone.id,
+        }
+      : null;
+    cache.set(key, sig);
+    return sig;
+  } catch (err) {
+    // NotPlayedInRoleError (no coachless data for this champ/role/patch) or
+    // any other transient failure -- both mean "no recommendation available",
+    // never a thrown error that would sink the whole ingest run.
+    if (!(err instanceof NotPlayedInRoleError)) {
+      log(`recommend lookup for champ ${championId} role ${role}: ${err instanceof Error ? err.message : "unknown error"}`);
+    }
+    cache.set(key, null);
+    return null;
+  }
+}
 
 /** Riot match-v5 ids endpoint's own documented max `count` per call. */
 export const PAGE_SIZE = 100;
@@ -131,7 +202,9 @@ async function ingestOnePage(
   start: number,
   pageSize: number,
   errors: string[],
-  log: (msg: string) => void
+  log: (msg: string) => void,
+  buildCache: Map<string, RecommendedSignature | null>,
+  currentPatchLabel: string
 ): Promise<{ seen: number; upserted: number }> {
   const ids = await getMatchIdsByPuuid(account.routing.regional, account.puuid, {
     start,
@@ -151,7 +224,7 @@ async function ingestOnePage(
     try {
       const raw = await getMatch(account.routing.regional, matchId);
       const match = raw as unknown as MyRiotMatch;
-      const row = extractMyMatch(match, account.puuid);
+      const row: ExtractedMyMatch | null = extractMyMatch(match, account.puuid);
       if (!row) {
         log(`match ${matchId}: puuid not found in participants, skipping`);
         continue;
@@ -160,12 +233,30 @@ async function ingestOnePage(
         log(`match ${matchId}: pre-season (game_creation < ${new Date(SEASON_START_MS).toISOString()}), skipping`);
         continue;
       }
+      // SEQUENTIAL, cached per (champ, role, patch) -- see resolveRecommendedBuild's header.
+      const recommended = await resolveRecommendedBuild(
+        buildCache,
+        currentPatchLabel,
+        row.championId,
+        row.role,
+        row.patch,
+        log
+      );
+      const onWpaBuild = computeAdherence({
+        matchItemIds: row.itemIds,
+        matchKeystone: row.primaryKeystone,
+        recommendedCoreItemIds: recommended?.coreItemIds ?? [],
+        recommendedKeystoneId: recommended?.keystoneId ?? null,
+      });
       await sql`
         INSERT INTO coachbuild.my_matches (
-          match_id, queue_id, game_creation, patch, champion_id, role, opp_champion_id, win
+          match_id, queue_id, game_creation, patch, champion_id, role, opp_champion_id, win,
+          kills, deaths, assists, item_ids, primary_keystone, on_wpa_build, split
         ) VALUES (
           ${row.matchId}, ${row.queueId}, ${row.gameCreation}, ${row.patch},
-          ${row.championId}, ${row.role}, ${row.oppChampionId}, ${row.win}
+          ${row.championId}, ${row.role}, ${row.oppChampionId}, ${row.win},
+          ${row.kills}, ${row.deaths}, ${row.assists}, ${row.itemIds}::integer[], ${row.primaryKeystone},
+          ${onWpaBuild}, ${row.split}
         )
         ON CONFLICT (match_id) DO NOTHING
       `;
@@ -194,10 +285,14 @@ export async function runMyStatsIngest(opts: MyStatsIngestOptions): Promise<MySt
   }
 
   const errors: string[] = [];
+  // Per-run cache, shared across every page's per-match loop below -- see
+  // resolveRecommendedBuild's header for why this is keyed AND scoped this way.
+  const buildCache = new Map<string, RecommendedSignature | null>();
+  const currentPatchLabel = (await getLatestPatch()).label;
 
   if (opts.mode === "incremental") {
     const pageSize = opts.pageSize ?? INCREMENTAL_PAGE_SIZE;
-    const { seen, upserted } = await ingestOnePage(sql, account, 0, pageSize, errors, log);
+    const { seen, upserted } = await ingestOnePage(sql, account, 0, pageSize, errors, log, buildCache, currentPatchLabel);
     return { accountUnresolved: false, matchesSeen: seen, matchesUpserted: upserted, nextStart: null, errors };
   }
 
@@ -219,7 +314,7 @@ export async function runMyStatsIngest(opts: MyStatsIngestOptions): Promise<MySt
     const remaining = BACKFILL_CAP - totalSeen;
     const thisPageSize = Math.min(pageSize, remaining);
     log(`backfill page: start=${start} count=${thisPageSize}`);
-    const { seen, upserted } = await ingestOnePage(sql, account, start, thisPageSize, errors, log);
+    const { seen, upserted } = await ingestOnePage(sql, account, start, thisPageSize, errors, log, buildCache, currentPatchLabel);
     totalSeen += seen;
     totalUpserted += upserted;
     if (seen === 0 || seen < thisPageSize) {

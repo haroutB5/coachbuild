@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import DesktopRail from "./GlobalNav/DesktopRail";
 import MobileTabBar from "./GlobalNav/MobileTabBar";
+import TopBar from "./GlobalNav/TopBar";
 
 export default function AppShell({ children }: { children: ReactNode }) {
   // R7: best-effort GET /api/patch, once. A failure (or a slow cold start)
@@ -35,7 +36,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="lg:flex min-h-screen">
       <DesktopRail patch={patch} />
-      <main className="flex-1 min-w-0 pb-16 lg:pb-0">{children}</main>
+      {/* v0.51.0 (global top bar): TopBar is chrome on EVERY route — mounted
+          above <main>'s own content, inside the flex-1 column so it never
+          overlaps DesktopRail's fixed-width column. Sticky to the viewport
+          top of this scroll container; z-30 keeps it under any modal/sheet
+          overlay (GameDetailSheet's backdrop is z-[100]) but above normal
+          page content. Never changes which routes are follow-capable — it's
+          pure chrome, the champion-search emit is consumed opportunistically
+          by whichever page is mounted (today, only "/"). */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        <TopBar />
+        <main className="flex-1 min-w-0 pb-16 lg:pb-0">{children}</main>
+      </div>
       <MobileTabBar />
     </div>
   );

@@ -14,9 +14,15 @@ interface StartingCardProps {
 // ONE `starter` Pick on the wire — there is no second starting-item slot in
 // the /api/build contract to render honestly, so this card shows exactly
 // one row rather than fabricating a second.
+//
+// v0.51.0: no longer its own bordered card — nested as a labeled section
+// inside ItemBuildCard.tsx (mockup 4/5's merged "ITEM BUILD" card). `py-4
+// first:pt-0` is a position-agnostic pad (resolves against real DOM order
+// via `:first-child`, correct regardless of whether SupportItemCard renders
+// before/after this in the parent's divide-y stack).
 export default function StartingCard({ starter, onItemClick }: StartingCardProps) {
   return (
-    <div className="bg-panel border border-line rounded-xl p-5 h-full">
+    <div className="py-4 first:pt-0 last:pb-0">
       <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold mb-3.5">
         Starting
       </p>

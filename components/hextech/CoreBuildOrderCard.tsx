@@ -42,10 +42,13 @@ export default function CoreBuildOrderCard({ items, onItemClick }: CoreBuildOrde
   // own card and the spec screenshot shows boots landing after the core 3.
   const order: PickType[] = [items.first, items.second, items.third, items.boots, ...items.fourthPlus];
 
+  // v0.51.0: no longer its own bordered card — nested inside ItemBuildCard.tsx
+  // (mockup 4/5's merged "ITEM BUILD" card). Label updated to match the
+  // mockup's "CORE ORDER — HIGHEST WPA" wording exactly.
   return (
-    <div className="bg-panel border border-line rounded-xl p-5">
+    <div className="py-4 first:pt-0 last:pb-0">
       <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold mb-4">
-        Core Build Order
+        Core Order <span className="text-mut/60 normal-case tracking-normal font-normal">— Highest WPA</span>
       </p>
       <div className="flex items-start flex-wrap gap-x-1 gap-y-4">
         {order.map((pick, i) => (

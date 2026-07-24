@@ -337,3 +337,12 @@ export function aggregateEnemyComp(enemyIds: number[]): AggregatedComp {
   for (const axis of AXES) out[axis] = sums[axis] / n;
   return out;
 }
+
+/** Rescales a 0-3 axis value (curated rubric scale, see this file's header)
+ *  onto a 0-100 display scale for the mockup's radar/bar-style presentation.
+ *  Rounds to the nearest whole percent and clamps to [0,100] so an
+ *  out-of-rubric input (defensive only -- every producer in this file already
+ *  clamps to [0,3]) can never render a bar past full or negative. */
+export function scaleTo100(v: number): number {
+  return Math.min(100, Math.max(0, Math.round((v * 100) / 3)));
+}

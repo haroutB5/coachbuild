@@ -12,6 +12,7 @@ import {
   aggregateEnemyComp,
   deriveFallbackRating,
   getCompRating,
+  scaleTo100,
 } from "../draft/compRatings";
 
 const AXES = ["cc", "damage", "tankiness", "mobility", "utility", "engage"] as const;
@@ -191,5 +192,23 @@ describe("exemplar spot-checks (archetype sanity, plan §2.2 header worked examp
     expect(r.engage).toBe(3);
     expect(r.damage).toBeLessThanOrEqual(1);
     expect(r.utility).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("scaleTo100", () => {
+  it("0 -> 0, 3 -> 100 (full rubric range)", () => {
+    expect(scaleTo100(0)).toBe(0);
+    expect(scaleTo100(3)).toBe(100);
+  });
+
+  it("mid-scale values round to the nearest whole percent", () => {
+    expect(scaleTo100(1)).toBe(33);
+    expect(scaleTo100(2)).toBe(67);
+    expect(scaleTo100(1.5)).toBe(50);
+  });
+
+  it("clamps below 0 and above 3, never producing an out-of-range percent", () => {
+    expect(scaleTo100(-1)).toBe(0);
+    expect(scaleTo100(4)).toBe(100);
   });
 });

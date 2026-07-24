@@ -2,14 +2,18 @@
 
 // Branded left rail (v0.50.0, global-nav-plan.md Decision 1/4). Desktop-only
 // chrome (`hidden lg:flex`) — mobile gets MobileTabBar instead. Rendered by
-// AppShell.tsx, OUTSIDE `.draft-tactical`'s scoped cyan theme (plan §5/R5),
-// so it stays Hextech GOLD on every route including /draft.
+// AppShell.tsx above every route's own content; stays Hextech GOLD on every
+// route including /draft (v0.51.0 retired /draft's separate cyan
+// `.draft-tactical` HUD theme entirely — the whole app is one gold palette
+// now, so this was never a real risk to begin with, just historically true).
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { NAV_ITEMS, type NavItem } from "./navItems";
 import { isActiveNav } from "./activeNav";
 import NavIcon from "./NavIcon";
 import CompanionStatusCard from "./CompanionStatusCard";
+import { useCompanion } from "@/components/live/CompanionProvider";
+import { buildsPickBadge } from "./navBadgeModel";
 
 interface DesktopRailProps {
   /** e.g. "16.13" — fed by AppShell's own best-effort GET /api/patch fetch.
@@ -17,7 +21,21 @@ interface DesktopRailProps {
   patch: string | null;
 }
 
-function NavGroup({ label, items, pathname }: { label: string; items: NavItem[]; pathname: string }) {
+function NavGroup({
+  label,
+  items,
+  pathname,
+  showPickBadge,
+}: {
+  label: string;
+  items: NavItem[];
+  pathname: string;
+  /** v0.51.0 — gold "PICK" pill on the Builds item while a live champ select
+   *  is in progress (navBadgeModel.buildsPickBadge, engo's pinned contract).
+   *  Rendered on every route (this rail is mounted app-wide by AppShell), not
+   *  just while the user happens to be on "/". */
+  showPickBadge: boolean;
+}) {
   return (
     <div>
       <p className="text-[10px] tracking-[0.14em] uppercase text-mut font-semibold mb-2 px-2.5">{label}</p>
@@ -36,7 +54,15 @@ function NavGroup({ label, items, pathname }: { label: string; items: NavItem[];
               }`}
             >
               <NavIcon iconKey={item.iconKey} className="w-4 h-4 flex-shrink-0" />
-              {item.label}
+              <span className="flex-1 min-w-0 truncate">{item.label}</span>
+              {item.id === "builds" && showPickBadge && (
+                <span
+                  aria-label="Champion locked in champ select"
+                  className="flex-shrink-0 text-[9px] font-bold uppercase tracking-[0.04em] px-1.5 py-0.5 rounded bg-teal text-bg"
+                >
+                  Pick
+                </span>
+              )}
             </Link>
           );
         })}
@@ -47,6 +73,8 @@ function NavGroup({ label, items, pathname }: { label: string; items: NavItem[];
 
 export default function DesktopRail({ patch }: DesktopRailProps) {
   const pathname = usePathname();
+  const companion = useCompanion();
+  const showPickBadge = buildsPickBadge(companion.phase);
   const playItems = NAV_ITEMS.filter((item) => item.group === "play");
   const dataItems = NAV_ITEMS.filter((item) => item.group === "data");
 
@@ -79,9 +107,9 @@ export default function DesktopRail({ patch }: DesktopRailProps) {
         </span>
       </Link>
 
-      <NavGroup label="Play" items={playItems} pathname={pathname} />
+      <NavGroup label="Play" items={playItems} pathname={pathname} showPickBadge={showPickBadge} />
       <div className="mt-5">
-        <NavGroup label="Data" items={dataItems} pathname={pathname} />
+        <NavGroup label="Data" items={dataItems} pathname={pathname} showPickBadge={false} />
       </div>
 
       <div className="mt-auto pt-5 space-y-3">

@@ -28,11 +28,13 @@ const ARCHETYPE_LABEL: Record<SupportArchetype, string> = {
  *  folded into CoreBuildOrderCard: that card renders build.items verbatim
  *  from the API contract, and mutating it here would misrepresent what the
  *  API actually returned — see HANDOFF-engy.md's v0.49.0 entry. */
+// v0.51.0: no longer its own bordered card — nested inside ItemBuildCard.tsx
+// (mockup 4/5's merged "ITEM BUILD" card), support-role-only.
 export default function SupportItemCard({ champ, build, ver, onItemClick }: SupportItemCardProps) {
   const suggestion = resolveSupportItemSuggestion(champ, build, ver);
 
   return (
-    <div className="bg-panel border border-line rounded-xl p-5 h-full">
+    <div className="py-4 first:pt-0 last:pb-0">
       <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold mb-3.5">
         Support Item Upgrade
       </p>

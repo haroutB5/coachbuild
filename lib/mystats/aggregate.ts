@@ -93,3 +93,91 @@ export function summarizeMatchupsByOpponent(rows: MyMatchRecord[]): OpponentMatc
     .map(([oppChampionId, e]) => ({ oppChampionId, games: e.games, wins: e.wins, winrate: e.wins / e.games }))
     .sort((a, b) => b.games - a.games || a.oppChampionId - b.oppChampionId);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.51 additions — My Stats build-adherence + KDA (see lib/mystats/
+// adherence.ts / ingest.ts / season.ts for the upstream pieces these
+// aggregate). Same pure-arithmetic posture as everything else in this file.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface AdherenceRecord {
+  win: boolean;
+  /** null = no recommendation was available for this row at ingest time
+   *  (see lib/mystats/adherence.ts's computeAdherence doc comment) — these
+   *  rows are excluded from EVERY figure below, not counted as "off build". */
+  onWpaBuild: boolean | null;
+}
+
+export interface BuildAdherenceSummary {
+  /** % (0-100, one decimal) of rows WITH a resolved recommendation that were
+   *  on-build. null when there are zero such rows (e.g. brand-new account,
+   *  or every row predates the v0.51 ship / recommend resolution). */
+  buildAdherencePct: number | null;
+  /** Win rate (0-1) restricted to on-build rows; null when there are none. */
+  winrateOnBuild: number | null;
+  /** Win rate (0-1) restricted to off-build rows; null when there are none. */
+  winrateOffBuild: number | null;
+}
+
+function round1(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+
+/** DISPLAY ONLY (see lib/mystats/adherence.ts's header) — never feeds any
+ *  score/ranking. */
+export function computeBuildAdherence(rows: AdherenceRecord[]): BuildAdherenceSummary {
+  const resolved = rows.filter((r) => r.onWpaBuild !== null);
+  if (resolved.length === 0) {
+    return { buildAdherencePct: null, winrateOnBuild: null, winrateOffBuild: null };
+  }
+  const onBuild = resolved.filter((r) => r.onWpaBuild === true);
+  const offBuild = resolved.filter((r) => r.onWpaBuild === false);
+  return {
+    buildAdherencePct: round1((onBuild.length / resolved.length) * 100),
+    winrateOnBuild: onBuild.length > 0 ? onBuild.filter((r) => r.win).length / onBuild.length : null,
+    winrateOffBuild: offBuild.length > 0 ? offBuild.filter((r) => r.win).length / offBuild.length : null,
+  };
+}
+
+/** Overall win rate (0-1) for a set of rows, all assumed already scoped to
+ *  the prior split by the caller (this function itself is split-agnostic —
+ *  it just averages whatever rows it's given). null when there are zero rows
+ *  (no prior-split data at all — e.g. the account is still in its first
+ *  split) rather than 0, so the UI can render "—" instead of a misleading
+ *  0% delta. */
+export function computePriorSplitWinrate(rows: { win: boolean }[]): number | null {
+  if (rows.length === 0) return null;
+  return rows.filter((r) => r.win).length / rows.length;
+}
+
+export interface RecentGameInput {
+  championId: number;
+  role: number;
+  win: boolean;
+  kills: number;
+  deaths: number;
+  assists: number;
+  onWpaBuild: boolean | null;
+  gameCreation: string; // ISO
+}
+
+export interface RecentGame {
+  championId: number;
+  role: number;
+  win: boolean;
+  kills: number;
+  deaths: number;
+  assists: number;
+  onWpaBuild: boolean | null;
+}
+
+/** Latest `limit` games, newest first — sorts here (rather than trusting the
+ *  caller's SQL ORDER BY) so this stays independently correct/testable with
+ *  out-of-order fixtures, same posture as every other function in this file. */
+export function buildRecentGames(rows: RecentGameInput[], limit = 5): RecentGame[] {
+  return rows
+    .slice()
+    .sort((a, b) => (a.gameCreation < b.gameCreation ? 1 : a.gameCreation > b.gameCreation ? -1 : 0))
+    .slice(0, limit)
+    .map(({ gameCreation: _gameCreation, ...rest }) => rest);
+}
