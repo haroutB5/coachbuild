@@ -36,6 +36,7 @@ import {
   MATCHUP_MIN_TOTAL,
 } from "./buildConditioning";
 import { DEFAULT_RANK_BRACKET, type RankBracket } from "./rankBrackets";
+import { capExtraFullItems } from "./buildSlotCap";
 import {
   getLatestPatch,
   getChampionById,
@@ -385,7 +386,18 @@ export async function buildRecommendations(
   const leg1Best = orderedLegendaries[0].entry;
   const leg2Best = orderedLegendaries[1].entry;
   const leg3Best = orderedLegendaries[2].entry;
-  const fourthPlusBests = orderedLegendaries.slice(3, 6).map((o) => o.entry);
+  // 6-slot game reality (user hard directive, 2026-07-24): first/second/third
+  // above are the confirmed core (3 full items, never trimmed); everything
+  // beyond that is "extra" and must respect the role's slot budget on top of
+  // that fixed-3 prefix + the always-present boots slot (bootsBest, checked
+  // below) — see buildSlotCap.ts. orderedLegendaries is already WPA-sorted
+  // best-first per slot (topItems), so slicing the tail off here drops the
+  // LOWEST-value surplus, preserving relative order — never a reorder.
+  const fourthPlusBests = capExtraFullItems(
+    orderedLegendaries.slice(3).map((o) => o.entry),
+    /* fixedCount = */ 3,
+    role
+  );
 
   // Per-slot alternatives (situational swaps): top items in the slot's pool by
   // WPA above the noise floor, excluding the items already in the core path.
@@ -485,7 +497,13 @@ export async function buildRecommendations(
     [leg1Best.itemId],
     OPTIMIZER_ADOPT_FRAC
   );
-  const optimizedEntries = [leg1Best, ...optimizedRest];
+  // Defensive: the optimizer's own depth cap (buildOptimizedPath's maxDepth=2
+  // beyond the seed) already keeps this at <=3 entries today, well under any
+  // role's full-item budget (5 or 6) — but route it through the same
+  // buildSlotCap choke point so a future depth increase can't reopen the
+  // 6-slot violation on this line too (OPTIMIZED ORDER is one of the two
+  // surfaces the cap directive explicitly names).
+  const optimizedEntries = [leg1Best, ...capExtraFullItems(optimizedRest, 1, role)];
   if (optimizedEntries.length >= 2) {
     items.optimizedPath = await Promise.all(
       optimizedEntries.map((e) => itemEntryToPick(e, bar))

@@ -95,7 +95,14 @@ export interface ItemsBlock {
   first: Pick;
   second: Pick;
   third: Pick;
-  fourthPlus: Pick[]; // 2-3 items
+  /** 4th+ legendary picks, WPA-sorted best-first. Combined with
+   *  first/second/third + boots, the total full-item count is capped at
+   *  assembly time (lib/buildSlotCap.ts) to the 6-slot game reality: at most
+   *  2 entries here for non-bot lanes (5 full items + boots total), at most 3
+   *  for bot/ADC (6 full items + boots — the late-game boots-sell exception).
+   *  Never longer than 3 regardless of lane (recommend.ts only ever sources
+   *  up to 3 candidates for this slot). */
+  fourthPlus: Pick[];
   /** Ranked alternatives per slot key: "starter"|"boots"|"first"|... (v0.2). */
   alts?: Record<string, Pick[]>;
   /** Feature 2 (sequential item optimizer): a greedy WPA-optimal core-item

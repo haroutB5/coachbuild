@@ -2,6 +2,10 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.51.3] — 2026-07-24 (WEB-ONLY — no companion change, no re-install)
+### Fixed — build lines respect the 6-slot game reality (HARD USER RULE)
+- Galio MID core order rendered 6 full items + boots (7 tiles — impossible in game). Root cause: `lib/recommend.ts` sliced `fourthPlus` from ordered legendaries with no lane awareness. New single choke point `lib/buildSlotCap.ts`: **5 full items + boots for all lanes; bot lane may show 6 full + boots** (late-game boots-sell exception, user directive — see memory feedback_build_lines_six_item_cap). Drops the lowest-value surplus, never reorders, never fabricates. Wired at both assembly points (core-order `fourthPlusBests`, optimized-order chain); render components inherit untouched. LCU item-set export verified already hard-capped at 6 (a set is a real loadout — no bot exception there, by design). Frequency lists (pro consensus) and situational menus exempt (menus, not builds). 12 new tests incl. the exact Galio fixture + bot-lane exception; 1524 total.
+
 ## [0.51.2] — 2026-07-24 (WEB-ONLY — no companion change, no re-install)
 ### Removed — Pro Players "Recent competitive games" section (user directive)
 - `/history` drops the recent-competitive-games table added in 0.51.0; player/champion search is the page's primary view again. Deleted `ProPlayersTable.tsx`, `app/api/pros/recent/route.ts`, `lib/pros/recentModel.ts` + both test files (zero other consumers, grep-verified). Leaguepedia attribution remains in the page footer. 1512 tests. Gotcha: `verify-fix` tsc failed on a stale `.next/types` stub for the deleted route — cleared `.next/types/app/api/pros` and re-ran green (deleting an API route needs that sweep before the tsc gate).
