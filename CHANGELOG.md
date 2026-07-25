@@ -2,6 +2,53 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.53.0] — 2026-07-25 — pro data is refreshed on demand; solo-queue sweep moved off Vercel
+
+**User reports:** "TheShy's games aren't showing" and "Bwipo's soloQ isn't up to date."
+Both were the same root cause, and it was not specific to either player.
+
+### Root cause — the background sweep could never reach most pros
+Measured live against production:
+
+| | |
+|---|---|
+| `pro_accounts` rows | **2801** |
+| never fetched | **2440** (87%) |
+| fetched in the last 2 days | **1** |
+
+`runMatchIngest` walks `batch = 5` accounts per invocation and returns a cursor for an external
+pinger to drain — but nothing pings it, and the Vercel Hobby cron fires once every 2 days.
+**5 accounts / 2 days against 2801 accounts is a ~3-year full cycle.** Bwipo's accounts were last
+fetched 2026-07-11 (14 days stale); most pros had never been fetched at all. Nothing was broken
+in the sense of throwing an error — the throughput was simply orders of magnitude short.
+
+### Fixed — freshness is now pulled to the moment of interest
+- **New `GET /api/pros/refresh?proId=…`** ingests solo queue for ONE pro on demand. Unlike
+  Leaguepedia (Cloudflare-blocked from Vercel — see 0.52.0), Riot's API is reachable from
+  Vercel, so this runs serverless. Bounded and polite: active accounts only, 4 accounts max,
+  10 matches each, and a 10-minute per-pro cooldown so re-opening a player doesn't re-hit Riot.
+  A per-account failure (e.g. Riot 429) is caught and reported without sinking the others.
+- **`ProHistoryResults` calls it when a player is opened**, without blocking the render: the list
+  paints from what we already hold, and only re-fetches if the refresh actually inserted games.
+  Verified live: Bwipo refreshed 2 accounts → **10 new games**, newest 2026-07-25 03:42.
+- **Solo-queue sweep moved to a local Scheduled Task** — `CoachBuildMatchIngest`, every 6 hours
+  (`scripts/ingest-matches-scheduled.ps1`). The Vercel path is throughput-bound by a 60s budget
+  and a daily cron; locally the script drains its own cursor to completion. This builds broad
+  coverage for pros nobody has opened recently.
+
+### Honest empty states
+`/api/pros/refresh` distinguishes **`no_active_accounts`** (every mapped account retired by the
+roster audit — TheShy's single account is `active = false`) from **`no_accounts`** (never mapped)
+and from a normal empty refresh. Separately confirmed via Leaguepedia that **TheShy has no 2026
+pro games at all** — his most recent are 2025 Worlds Play-In and LPL 2025 Regional Finals, and
+Invictus Gaming's 2026 top laner is Breathe. His empty state was therefore *correct*, just
+unexplained.
+
+### Also confirmed, not a bug
+`LPL/2026 Season/Split 3` (started 07-22) still has **zero** ScoreboardPlayers rows upstream on
+Leaguepedia. Our ingest is resolving and attempting it correctly; the wiki simply has no data
+entered yet.
+
 ## [0.52.0] — 2026-07-25 — pro-play ingest: gotcha (o) diagnosed and made loud
 
 **User report:** Caps's recent games were missing from Pro Players — his newest showed as EWC,

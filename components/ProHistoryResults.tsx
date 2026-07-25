@@ -67,6 +67,10 @@ export default function ProHistoryResults({
   const [iconMap, setIconMap] = useState<Map<number, ChampionIconEntry> | null>(null);
   const [source, setSource] = useState<ProGameSource>("all");
 
+  // Bumped when an on-demand refresh actually inserted new games, to re-run the
+  // fetch below (see the refresh effect).
+  const [refreshTick, setRefreshTick] = useState(0);
+
   // A link-only player (no `pros` row — see proHistory.types.ts) has no
   // soloq data at all: the source is forced to Pro Play regardless of the
   // (unrendered, see sourceFilterRow below) `source` toggle state.
@@ -99,7 +103,38 @@ export default function ProHistoryResults({
     return () => {
       cancelled = true;
     };
-  }, [mode, playerId, playerLink, championId, role, limit, source]);
+  }, [mode, playerId, playerLink, championId, role, limit, source, refreshTick]);
+
+  // On-demand solo-queue refresh for the player being opened.
+  //
+  // The background sweep cannot keep everyone current — it walks 5 accounts per
+  // invocation behind a 2-daily Hobby cron with no pinger draining its cursor,
+  // which against 2801 accounts is a ~3-year cycle (measured 2026-07-25: 2440
+  // accounts NEVER fetched, 1 fetched in the prior 2 days). That is what
+  // "Bwipo's soloQ isn't up to date" and "TheShy has no games" actually were.
+  // Pull freshness to the moment of interest instead.
+  //
+  // Deliberately does NOT block the render: the list above paints from whatever
+  // we already hold, and we only re-fetch if the refresh actually inserted
+  // something. Server-side cooldown keeps repeat opens off Riot's API.
+  // `cancelled` guard per gotcha (q) — prop-keyed effect, stale-response risk.
+  useEffect(() => {
+    if (mode !== "player" || !playerId) return;
+    let cancelled = false;
+
+    fetch(`/api/pros/refresh?proId=${encodeURIComponent(playerId)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { inserted?: number } | null) => {
+        if (!cancelled && (data?.inserted ?? 0) > 0) setRefreshTick((tick) => tick + 1);
+      })
+      .catch(() => {
+        // A failed refresh is non-fatal — we still show what we have.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, playerId]);
 
   // Both modes need the id->name/icon map: player mode for icons across
   // champions, and EVERY mode for display names — match-v5 stores Riot's
