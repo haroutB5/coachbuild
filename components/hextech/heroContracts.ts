@@ -21,6 +21,7 @@
 
 import type { ChampionRef } from "@/lib/types";
 import { getSplashUrl as getSplashUrlPure } from "@/lib/splash";
+import { DEFAULT_RANK_BRACKET } from "@/lib/rankBrackets";
 
 export type LaneId = "top" | "jungle" | "mid" | "bot" | "support";
 
@@ -82,14 +83,26 @@ export interface HeroStats {
   gamesCount: number | null;
 }
 
-/** GET /api/hero-stats?champ=&lane= — thin client fetch wrapper around
+/** GET /api/hero-stats?champ=&lane=&rank= — thin client fetch wrapper around
  *  engo's lib/heroStats.ts (proxied through the route since coachless has
  *  no CORS header for a direct client call). Never throws — degrades to
  *  nulls, same posture as the route/lib themselves, so ChampionHero never
- *  needs a try/catch of its own. */
-export async function getHeroStats(championId: number, lane: LaneId): Promise<HeroStats> {
+ *  needs a try/catch of its own.
+ *
+ *  `rankBracket` (P1-1 fix, 2026-07-25 audit): OPTIONAL, and only appended
+ *  when non-default — same "byte-identical historical request" rule
+ *  BuildTabContent's load()/AutoExporter's fetchBuildFor already apply to
+ *  `/api/build?rank=`, so this stays the SAME cache key as before whenever
+ *  the caller doesn't pass one. `getMostPlayedLane` below deliberately calls
+ *  this with no third argument at all (needs the widest un-bracketed sample
+ *  to compare lanes fairly) — passing `undefined` here would produce the
+ *  exact same request, but omitting it entirely keeps that caller's intent
+ *  obvious at the call site. */
+export async function getHeroStats(championId: number, lane: LaneId, rankBracket?: string): Promise<HeroStats> {
   try {
-    const res = await fetch(`/api/hero-stats?champ=${championId}&lane=${lane}`);
+    const rankParam =
+      rankBracket && rankBracket !== DEFAULT_RANK_BRACKET.id ? `&rank=${rankBracket}` : "";
+    const res = await fetch(`/api/hero-stats?champ=${championId}&lane=${lane}${rankParam}`);
     if (!res.ok) return { winRatePct: null, gamesCount: null };
     const data = (await res.json()) as HeroStats;
     return {

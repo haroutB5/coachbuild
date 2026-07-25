@@ -110,6 +110,13 @@ async function main() {
 
   for (;;) {
     console.log(`batch: cursor=${cursor} tournament=${tournaments[cursor]}`);
+    // No `paginate` key passed deliberately — `runProstageIngest` now
+    // defaults it to true (2026-07-25, P1-1 fix). This IS the recurring
+    // production path (the 3-hourly scheduled task runs this script
+    // --via-export), and it used to be the exact caller that silently
+    // truncated any >500-row tournament to its 500 newest rows because
+    // pagination was opt-in and nothing here opted in. See
+    // lib/prostage/ingest.ts's `paginate` doc comment for the full story.
     const result = await runProstageIngest({
       cursor,
       tournaments,

@@ -122,7 +122,9 @@ export default function ProHistoryResults({
     if (mode !== "player" || !playerId) return;
     let cancelled = false;
 
-    fetch(`/api/pros/refresh?proId=${encodeURIComponent(playerId)}`)
+    // POST: the route mutates and spends the Riot key, so it must not be a
+    // safe method (a GET was cross-origin-triggerable via a bare <img> tag).
+    fetch(`/api/pros/refresh?proId=${encodeURIComponent(playerId)}`, { method: "POST" })
       .then((res) => (res.ok ? res.json() : null))
       .then((data: { inserted?: number } | null) => {
         if (!cancelled && (data?.inserted ?? 0) > 0) setRefreshTick((tick) => tick + 1);

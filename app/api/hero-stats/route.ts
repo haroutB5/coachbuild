@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { ApiError } from "@/lib/types";
 import { getHeroStats } from "@/lib/heroStats";
+import { resolveRankBracket } from "@/lib/rankBrackets";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,8 +30,21 @@ export async function GET(req: NextRequest) {
   }
   const champId = parseInt(champParam, 10);
 
+  // P1-1 fix (2026-07-25 audit): thread the rank bracket through, same
+  // contract as /api/build's own `rank` param. Absent/'' resolves to the
+  // DEFAULT bracket (High Elo, [5,6,7]) via resolveRankBracket — byte-
+  // identical to this route's pre-fix behavior, so getMostPlayedLane's
+  // no-rank-arg calls (heroContracts.ts) are unaffected. An unknown id is a
+  // client error (400), matching /api/build's posture.
+  const rankParam = searchParams.get("rank");
+  const bracket = resolveRankBracket(rankParam);
+  if (bracket === null) {
+    const body: ApiError = { error: "Invalid rank bracket" };
+    return NextResponse.json(body, { status: 400 });
+  }
+
   try {
-    const stats = await getHeroStats(champId, laneParam);
+    const stats = await getHeroStats(champId, laneParam, { leagueTiers: bracket.apiValue });
     const { winRatePct, gamesCount, degraded } = stats;
     // P1 fix (2026-07-17 Fable review): getHeroStats degrades ANY upstream
     // failure to the SAME {null, null} shape genuine no-data uses — this

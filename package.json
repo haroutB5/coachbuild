@@ -1,6 +1,6 @@
 {
   "name": "coachbuild",
-  "version": "0.55.0",
+  "version": "0.56.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -13,7 +13,8 @@
     "ingest:roster": "tsx scripts/ingest-roster.mjs",
     "ingest:matches": "tsx scripts/ingest-matches.mjs",
     "ingest:draft": "tsx scripts/ingest-draft.mjs",
-    "ingest:mystats": "tsx scripts/ingest-mystats.mjs"
+    "ingest:mystats": "tsx scripts/ingest-mystats.mjs",
+    "prebuild": "node scripts/sync-companion-version.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",

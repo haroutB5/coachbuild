@@ -27,6 +27,8 @@ import { flattenSituational } from "@/components/hextech/situational";
 import { getStoredSession, getStoredPort, getLive, isLiveError, LIVE_POLL_MS } from "./companionClient";
 import { buildLivePanelModel, indexChampionsByKey, sameLivePanelModel, type LivePanelModel } from "./livePanelModel";
 import { selectCompAwareHighlights } from "./compHighlight";
+import { readStoredRankBracketId } from "@/components/hextech/rankBracketStorage";
+import { DEFAULT_RANK_BRACKET } from "@/lib/rankBrackets";
 
 interface LivePanelProps {
   champ: ChampionRef;
@@ -49,7 +51,16 @@ export default function LivePanel({ champ, lane }: LivePanelProps) {
   useEffect(() => {
     let cancelled = false;
     const roleId = LANE_TO_ROLE_ID[lane];
-    fetch(`/api/build?champ=${champ.id}&role=${roleId}`)
+    // P2-5 fix (2026-07-25 audit, same class as P1-2's ApplyRunesButton):
+    // this fetch used to always take the no-rank (High-Elo) default, so the
+    // in-game situational panel showed High-Elo item alternatives while the
+    // Builds page sat on another bracket — display-only here (no LCU write),
+    // but still "beside the Builds page, showing different numbers for the
+    // same champion+lane." Two lines, copied verbatim from
+    // AutoExporter.fetchBuildFor.
+    const rank = readStoredRankBracketId();
+    const rankParam = rank && rank !== DEFAULT_RANK_BRACKET.id ? `&rank=${rank}` : "";
+    fetch(`/api/build?champ=${champ.id}&role=${roleId}${rankParam}`)
       .then((r) => (r.ok ? (r.json() as Promise<BuildResponse[]>) : null))
       .then((data) => {
         if (cancelled) return;

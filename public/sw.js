@@ -102,7 +102,13 @@ self.addEventListener("fetch", (event) => {
           // champs/items/runes/patches a user actually views; revisit if
           // storage quota ever becomes a real complaint.
           if (res.ok || res.type === "opaque") {
-            cache.put(req, res.clone());
+            // Un-awaited on purpose (the response must not wait on the write),
+            // which means a rejection has nowhere to go: on quota exhaustion
+            // this throws an unhandled rejection inside the SW. Swallow it —
+            // a failed icon cache write is not worth surfacing, and this cache
+            // is deliberately unbounded (see above), so quota is its expected
+            // long-run failure mode rather than a surprise.
+            cache.put(req, res.clone()).catch(() => {});
           }
           return res;
         } catch {
@@ -119,12 +125,26 @@ self.addEventListener("fetch", (event) => {
   // cross-origin CDNs manage their own caching.
   if (url.origin !== self.location.origin) return;
 
+  // The SW must honour `Cache-Control: no-store`, or it silently re-introduces
+  // at the client exactly what the server set the header to prevent. Two real
+  // cases, both live before this guard existed:
+  //   - /api/mystats/* is `no-store` because it is PRIVATE (Riot ID, per-game
+  //     KDA, champion pool). The SW was writing it verbatim into CacheStorage
+  //     on disk, where it survived until the next version bump evicted it.
+  //   - degraded/empty responses are deliberately `no-store` per gotcha (b) so
+  //     a transient upstream glitch can't get pinned. The SW pinned them anyway
+  //     and replayed them offline.
+  // Checked here rather than by URL prefix so the header stays the single
+  // source of truth: a future `no-store` route is covered without touching this.
+  const isCacheable = (res) =>
+    res.ok && !(res.headers.get("cache-control") || "").includes("no-store");
+
   // Live build data: network-first (fresh ok responses only), offline fallback to cache.
   if (url.pathname.startsWith("/api/")) {
     event.respondWith(
       fetch(req)
         .then((res) => {
-          if (res.ok) {
+          if (isCacheable(res)) {
             const copy = res.clone();
             caches.open(CACHE).then((c) => c.put(req, copy));
           }
@@ -140,7 +160,7 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     fetch(req)
       .then((res) => {
-        if (res.ok) {
+        if (isCacheable(res)) {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(req, copy));
         }

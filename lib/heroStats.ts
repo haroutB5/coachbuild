@@ -36,7 +36,7 @@
 // 16.12.1 — coachless has zero WPA rows for it yet.
 
 import type { RoleId } from "./types";
-import { getKeystoneData, getGlobalItemStatistics } from "./coachless";
+import { getKeystoneData, getGlobalItemStatistics, type FilterOpts } from "./coachless";
 import { getLatestPatch } from "./staticData";
 
 export type LaneKey = "top" | "jungle" | "mid" | "bot" | "support";
@@ -79,10 +79,25 @@ function round1(n: number): number {
  * shaped) rather than the narrower `LaneKey` so an invalid/unknown lane
  * degrades to nulls instead of a type error at the API boundary — the UI
  * hides the banner gracefully either way.
+ *
+ * `opts` (P1-1 fix, 2026-07-25 audit): OPTIONAL rank-bracket passthrough —
+ * `opts.leagueTiers` rides straight into both coachless calls' `buildFilters`
+ * exactly like BuildTabContent's `/api/build?rank=` already does. Before this
+ * fix, this function always queried HIGH_ELO_TIERS regardless of which elo
+ * pill was active on the hero, so the WIN%/GAMES/CONFIDENCE line one row
+ * above the build panel silently described a different (always High-Elo)
+ * sample than the build shown beneath it — live probe caught 329,099 games
+ * (High Elo) rendered beside an active "Platinum" pill whose own build panel
+ * was built from 194,981 games (see lib/rankBrackets.ts's header comment).
+ * Kept OPTIONAL and defaulted through to coachless's own `buildFilters`
+ * (`opts.leagueTiers ?? HIGH_ELO_TIERS`) so `getMostPlayedLane` — which needs
+ * the WIDEST sample to compare lanes fairly, not one bracket's slice of it —
+ * can keep calling this with no third argument at all and stay unbracketed.
  */
 export async function getHeroStats(
   championId: number,
-  lane: string
+  lane: string,
+  opts?: FilterOpts
 ): Promise<HeroStats> {
   const role = LANE_ROLE[lane as LaneKey];
   if (role === undefined) {
@@ -98,8 +113,8 @@ export async function getHeroStats(
 
   try {
     const [keystoneData, starterData] = await Promise.all([
-      getKeystoneData(championId, role, patch),
-      getGlobalItemStatistics(championId, role, patch, null, STARTER_ITEM_TYPE),
+      getKeystoneData(championId, role, patch, undefined, opts),
+      getGlobalItemStatistics(championId, role, patch, null, STARTER_ITEM_TYPE, {}, opts),
     ]);
 
     const gamesCount = keystoneData.reduce((s, e) => s + e.occurrence, 0);

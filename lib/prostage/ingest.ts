@@ -71,38 +71,73 @@ export interface ProstageIngestOptions {
    *  Playoffs has 680 real ScoreboardPlayers rows, only 500 of which a
    *  single call ever returned. Capped at MAX_PAGES (10 = 5000 rows) as a
    *  safety backstop against a pathological/looping response, not because
-   *  any real tournament is expected to approach it. Defaults to false —
-   *  the route (60s maxDuration, api.php's 30s-per-call pacing) can't afford
-   *  extra pages; only the script (long-running, 5s CargoExport pacing)
-   *  opts in. */
+   *  any real tournament is expected to approach it.
+   *
+   *  DEFAULTS TO TRUE as of 2026-07-25 (P1-1 audit fix). It used to default
+   *  to false with the reasoning "only the script opts in, the route can't
+   *  afford extra pages" — but the ONLY caller that ever actually passed
+   *  `paginate: true` was scripts/ingest-prostage-seed.mjs, a deletable
+   *  one-off. The RECURRING production path — the 3-hourly scheduled task
+   *  (scripts/ingest-prostage-scheduled.ps1 -> scripts/ingest-prostage.mjs
+   *  --via-export) — never passed it, so every real run silently truncated
+   *  any tournament over 500 rows to its 500 newest, and because Leaguepedia
+   *  backfills OUT OF ORDER (the entire premise of live ingest), an
+   *  older-but-late-arriving row would sit below that cutoff forever, not
+   *  just until the next run. LPL/2026 Season/Split 3 hits 500 rows at only
+   *  ~50 games. Flipping the default (rather than fixing call sites one by
+   *  one) means every current AND future caller is safe by construction;
+   *  pass `paginate: false` explicitly if a future caller genuinely can't
+   *  afford extra pages (e.g. a tight-maxDuration route). */
   paginate?: boolean;
 }
 
 const PAGE_SIZE = 500;
 const MAX_PAGES = 10; // safety backstop (5000 rows) — see `paginate` doc comment above
 
-/** Fetches ALL ScoreboardPlayers rows for one tournament by walking
- *  `offset` in PAGE_SIZE steps until a short page signals the end. A single
- *  unpaginated call (paginate=false, the default) is just the paginate=true
- *  loop with MAX_PAGES effectively 1 — kept as a separate non-looping path
- *  so the default route behavior's call shape (exactly one queryFn
- *  invocation, no `offset` key at all) is byte-identical to before this
- *  option existed, matching the existing test's `toMatchObject` assertion. */
+/** One tournament's ScoreboardPlayers rows plus whether the fetch may have
+ *  been cut off before confirming it saw everything — see
+ *  `possiblyTruncated`'s doc comment. */
+interface ScoreboardFetchResult {
+  rows: CargoScoreboardPlayerRow[];
+  /** True when we can't PROVE this is the full row set — either a single
+   *  unpaginated call landed exactly on PAGE_SIZE (paginate=false, an
+   *  explicit opt-out — see the `paginate` doc comment), or the paginated
+   *  walk exhausted MAX_PAGES without ever seeing a short page (the
+   *  safety backstop capped us, not the data). Both are the same shape:
+   *  `rowsSeen` looks identical to "nothing more to fetch," which is
+   *  exactly the ambiguity the maxGames cap fix (v0.55.0,
+   *  lib/prostage/liveIngest.ts) closed for live ingest — the caller turns
+   *  this into a loud `result.errors` entry instead of a silent undercount. */
+  possiblyTruncated: boolean;
+}
+
+/** Fetches ScoreboardPlayers rows for one tournament. When `paginate` is
+ *  true (the default — see that option's doc comment), walks `offset` in
+ *  PAGE_SIZE steps until a short page signals the end; when false (an
+ *  explicit caller opt-out), issues the single legacy unpaginated call. */
 async function fetchScoreboardRows(
   queryFn: (opts: CargoQueryOptions) => Promise<CargoScoreboardPlayerRow[]>,
   baseOpts: Omit<CargoQueryOptions, "offset">,
   paginate: boolean
-): Promise<CargoScoreboardPlayerRow[]> {
-  if (!paginate) return queryFn(baseOpts);
+): Promise<ScoreboardFetchResult> {
+  if (!paginate) {
+    const rows = await queryFn(baseOpts);
+    return { rows, possiblyTruncated: rows.length === PAGE_SIZE };
+  }
 
   const all: CargoScoreboardPlayerRow[] = [];
+  let possiblyTruncated = false;
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const offset = page * PAGE_SIZE;
     const rows = await queryFn(offset > 0 ? { ...baseOpts, offset } : baseOpts);
     all.push(...rows);
-    if (rows.length < PAGE_SIZE) break; // short page = last page
+    if (rows.length < PAGE_SIZE) {
+      possiblyTruncated = false;
+      break; // short page = last page — proven complete
+    }
+    if (page === MAX_PAGES - 1) possiblyTruncated = true; // ran out of pages, never saw a short one
   }
-  return all;
+  return { rows: all, possiblyTruncated };
 }
 
 export interface ProstageIngestResult {
@@ -201,7 +236,8 @@ export async function runProstageIngest(opts: ProstageIngestOptions = {}): Promi
   }
 
   try {
-    const [maps, proByName, rows] = await Promise.all([
+    const paginate = opts.paginate ?? true;
+    const [maps, proByName, scoreboard] = await Promise.all([
       getDdragonMaps(),
       loadProNameIndex(sql),
       fetchScoreboardRows(
@@ -213,11 +249,30 @@ export async function runProstageIngest(opts: ProstageIngestOptions = {}): Promi
           orderBy: "DateTime_UTC DESC",
           limit: PAGE_SIZE,
         },
-        opts.paginate ?? false
+        paginate
       ),
     ]);
 
+    const rows = scoreboard.rows;
     result.rowsSeen = rows.length;
+
+    // Never let a cap hit look identical to "nothing new" — the same
+    // ambiguity the maxGames cap fix (v0.55.0, lib/prostage/liveIngest.ts)
+    // closed for live ingest. See ScoreboardFetchResult.possiblyTruncated's
+    // doc comment for exactly which two shapes this covers (an explicit
+    // paginate:false landing on PAGE_SIZE, or the paginate:true walk
+    // exhausting MAX_PAGES without a confirmed short final page).
+    if (scoreboard.possiblyTruncated) {
+      const msg = paginate
+        ? `tournament ${overviewPage}: rowsSeen (${rows.length}) hit the MAX_PAGES safety backstop ` +
+          `(${MAX_PAGES} pages) without ever seeing a short final page — more rows may remain ` +
+          `un-ingested; raise MAX_PAGES or re-run`
+        : `tournament ${overviewPage}: rowsSeen (${rows.length}) hit the exact ${PAGE_SIZE}-row ` +
+          `single-call cap with pagination disabled — more rows may remain un-ingested; pass ` +
+          `paginate:true (now the default) instead of an explicit paginate:false`;
+      result.errors.push(msg);
+      log(msg);
+    }
 
     let extractedCount = 0;
     let nullRoleCount = 0;

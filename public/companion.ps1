@@ -611,6 +611,13 @@ function Invoke-ApplyRunes {
     # retrying or forcing anything.
     param($Body, [int]$LcuPort, [string]$LcuToken, [string]$Scheme = 'https', [string]$Mode = 'manual')
 
+    # Title gate FIRST, before a single LCU call: an unownable title must never
+    # reach STEP 2's exact-title PUT. See Test-RunePayload for why this was
+    # missing and why SelfTest could not see it.
+    if (-not (Test-RunePayload -Body $Body)) {
+        return @{ ok = $false; reason = 'invalid-page' }
+    }
+
     $pagesResult = Invoke-LcuRaw -Method GET -Path '/lol-perks/v1/pages' -Port $LcuPort -Token $LcuToken -Scheme $Scheme
     if (-not $pagesResult.Ok) {
         # NOTE: only $pagesResult.Ok gates this -- a genuinely EMPTY pages
@@ -774,6 +781,38 @@ function Write-CompanionLog {
             if ($sync) { $sync.LastError = $Message }
         } catch {}
     }
+}
+
+function Test-RunePayload {
+    # Defense-in-depth, the rune-side twin of Test-ItemSetsPayload.
+    #
+    # WHY THIS WAS MISSING AND WHY IT MATTERS. This file's header and CLAUDE.md
+    # HARD RULE 5 both state the bright line as "only ever replaces a page it
+    # PREVIOUSLY created (title starts with CoachBuild) or uses a genuinely free
+    # slot" -- but Invoke-ApplyRunes STEP 2 only ever matched
+    # `$_.name -eq $Body.name` with $Body.name caller-supplied and unchecked.
+    # A POST of {name:"Ranked Page 1", mode:"auto", ...} therefore exact-title
+    # matched the user's OWN hand-made page and PUT-overwrote its perks in place.
+    #
+    # It issues no DELETE, which is exactly why the adversarial SelfTest suite
+    # never caught it: every assertion guarding this invariant is DELETE-shaped
+    # ("$mockLcu.Sync.Calls -contains 'DELETE'"). A guarantee the docs assert and
+    # the code does not implement is worse than no guarantee, because it stops
+    # anyone from looking. The item-set path has had this gate since v1.3.1; the
+    # rune path never got its counterpart.
+    #
+    # Not reachable from the shipped web build (runeApplyBody.ts hardcodes the
+    # "CoachBuild <champ> <role>" title), so this closes a defense-in-depth hole
+    # rather than a live exploit -- it costs 3 lines and removes the asymmetry.
+    param($Body)
+    if (-not $Body) { return $false }
+    if (-not $Body.name) { return $false }
+    if (-not ([string]$Body.name).StartsWith('CoachBuild')) { return $false }
+    # Same treatment as the item-set path: an explicit stale-removal prefix can
+    # touch arbitrary existing pages, so a PRESENT-but-wrong prefix is rejected
+    # while an absent one ($null, older web build) passes.
+    if ($Body.replacePrefix -and -not ([string]$Body.replacePrefix).StartsWith('CoachBuild')) { return $false }
+    return $true
 }
 
 function Test-ItemSetsPayload {
@@ -2226,6 +2265,44 @@ function Invoke-SelfTest {
         if (@($mockLcu.Sync.Calls) -contains 'DELETE') { $failures.Add('apply-runes AUTO mode issued a DELETE on a non-CoachBuild page -- compliance violation') }
         if (@($mockLcu.Sync.MockPages).Count -ne 5) { $failures.Add('apply-runes AUTO-mode adversarial mutated the user pages') }
     } catch { $failures.Add("apply-runes AUTO-mode adversarial threw: $($_.Exception.Message)") }
+
+    # 6b-PUT. The gap every OTHER adversarial rune case missed: an unownable
+    # title that overwrites a user page IN PLACE, issuing ZERO DELETEs. Cases
+    # 6b/6c/6i/6j/6k all assert on DELETE, so a PUT-shaped violation walked
+    # straight past the whole suite -- which is how Invoke-ApplyRunes shipped
+    # for six versions with no title gate at all while the docs claimed one.
+    # The fixture puts a page whose title EXACTLY equals the request name in
+    # front of it, so a missing guard is guaranteed to hit STEP 2's in-place PUT.
+    $mockLcu.Sync.MockPages = @(
+        [pscustomobject]@{ id = 1001; name = 'Ranked Page 1'; isDeletable = $true; selectedPerkIds = @(1, 2, 3) }
+    )
+    $mockLcu.Sync.MockInventory = @{ ownedPageCount = 1 }
+    $mockLcu.Sync.MockCurrentPageId = 1001
+    $mockLcu.Sync.Calls.Clear()
+    $foreignBody = @{ name = 'Ranked Page 1'; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = @(8005, 9111, 9104, 8014, 8017, 8009, 8017, 5008, 5008); current = $true; mode = 'auto' }
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($foreignBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.ok -ne $false -or $obj.reason -ne 'invalid-page') {
+            $failures.Add("apply-runes foreign-title expected ok:false/invalid-page, got $($r.Content)")
+        }
+        if (@($mockLcu.Sync.Calls) -contains 'PUT') {
+            $failures.Add('apply-runes foreign-title issued a PUT -- overwrote a non-CoachBuild page in place, compliance violation')
+        }
+        if (@($mockLcu.Sync.Calls) -contains 'DELETE') {
+            $failures.Add('apply-runes foreign-title issued a DELETE on a non-CoachBuild page -- compliance violation')
+        }
+        $page1001 = @($mockLcu.Sync.MockPages | Where-Object { $_.id -eq 1001 })
+        if (@($page1001[0].selectedPerkIds) -join ',' -ne '1,2,3') {
+            $failures.Add("apply-runes foreign-title mutated the user page perks, got $(@($page1001[0].selectedPerkIds) -join ',')")
+        }
+    } catch { $failures.Add("apply-runes foreign-title threw: $($_.Exception.Message)") }
+
+    # Restore 6b's fixture: 6c below says "SAME adversarial 5-page/full
+    # fixture" and inherits it from 6b rather than building its own, so this
+    # case must hand it back exactly as it found it.
+    $mockLcu.Sync.MockPages = @(1..5 | ForEach-Object { [pscustomobject]@{ id = (1000 + $_); name = "User Page $_"; isDeletable = $true } })
+    $mockLcu.Sync.MockInventory = @{ ownedPageCount = 5 }
 
     # 6c. apply-runes MANUAL mode, SAME adversarial 5-page/full fixture --
     # falls back to the ORIGINAL consented behavior (delete currentpage,

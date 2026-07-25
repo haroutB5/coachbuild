@@ -16,7 +16,7 @@
  * is a module-level singleton cache.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { isBuildForLane, LANE_TO_ROLE_ID } from "../hextech/heroContracts";
+import { isBuildForLane, LANE_TO_ROLE_ID, getHeroStats } from "../hextech/heroContracts";
 
 function jsonResponse(body: unknown, ok = true) {
   return { ok, json: async () => body };
@@ -126,6 +126,44 @@ describe("getLaneDefaultChampions — live icon-version threading", () => {
     const { getLaneDefaultChampions } = await import("../hextech/heroContracts");
     const result = await getLaneDefaultChampions();
     expect(result).toBeNull();
+  });
+});
+
+// P1-1 fix (2026-07-25 audit): getHeroStats' client wrapper used to have no
+// third argument at all, so ChampionHero's hero-banner fetch always hit
+// /api/hero-stats un-bracketed regardless of the active elo pill. Pin the
+// "only append &rank= when non-default" contract (same rule
+// BuildTabContent's load() applies to /api/build?rank=) at the unit level.
+describe("getHeroStats — rank-bracket query param threading", () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("omits &rank= when no bracket is passed (getMostPlayedLane's contract — widest, un-bracketed sample)", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ winRatePct: 50, gamesCount: 100 }) }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getHeroStats(112, "mid");
+    expect(fetchMock).toHaveBeenCalledWith("/api/hero-stats?champ=112&lane=mid");
+  });
+
+  it("omits &rank= when the DEFAULT ('all'/High Elo) bracket is passed explicitly — byte-identical request", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ winRatePct: 50, gamesCount: 100 }) }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getHeroStats(112, "mid", "all");
+    expect(fetchMock).toHaveBeenCalledWith("/api/hero-stats?champ=112&lane=mid");
+  });
+
+  it("appends &rank= for a non-default bracket", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ winRatePct: 50, gamesCount: 100 }) }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getHeroStats(112, "mid", "platinum");
+    expect(fetchMock).toHaveBeenCalledWith("/api/hero-stats?champ=112&lane=mid&rank=platinum");
   });
 });
 

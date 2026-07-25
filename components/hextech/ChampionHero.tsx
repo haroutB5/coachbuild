@@ -50,15 +50,24 @@ interface ChampionHeroProps {
 export default function ChampionHero({ champ, lane, onLaneChange, rankBracket, onRankChange }: ChampionHeroProps) {
   const [stats, setStats] = useState<HeroStats>({ winRatePct: null, gamesCount: null });
 
+  // P1-1 fix (2026-07-25 audit): `rankBracket` MUST be in this effect's deps
+  // and threaded into getHeroStats — this row renders the elo pill row right
+  // above the build panel, but until this fix the stats effect was keyed
+  // `[champ.id, lane]` only, so tapping "Platinum" changed the build panel
+  // (BuildTabContent DOES append `&rank=`) while this line kept showing the
+  // un-bracketed High-Elo WIN%/GAMES (verified live: 329,099 High-Elo games
+  // vs. Platinum's 194,981 — see lib/rankBrackets.ts) beside a visibly-active
+  // Platinum pill, and could flip the confidence chip to HIGH off that
+  // inflated count while the shown build rested on a MEDIUM-band sample.
   useEffect(() => {
     let cancelled = false;
-    getHeroStats(champ.id, lane).then((s) => {
+    getHeroStats(champ.id, lane, rankBracket).then((s) => {
       if (!cancelled) setStats(s);
     });
     return () => {
       cancelled = true;
     };
-  }, [champ.id, lane]);
+  }, [champ.id, lane, rankBracket]);
 
   const splash = getSplashUrl(champ.key);
   const band = confidenceBand(stats.gamesCount);

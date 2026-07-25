@@ -201,7 +201,11 @@ describe("aggregateProConsensus", () => {
     expect(model.shards).toEqual({ entries: [], sampleSize: 0, soloqCount: 0, prostageCount: 0 });
   });
 
-  it("counts item pick rate against gamesTotal, excluding consumables", () => {
+  it("counts item pick rate against itemsSampleSize, excluding consumables", () => {
+    // Every game here carries a non-empty finalItems array, so itemsSampleSize
+    // == gamesTotal (== 3) and the shares below are numerically unchanged from
+    // before the 2026-07-25 fix — see the dedicated dilution test below for the
+    // case where the two denominators actually diverge.
     const meta = itemMeta(
       item(ROCKETBELT, { from: ["x"] }),
       item(3020, { into: ["3175"], from: ["1001"], tags: ["Boots"] }) // Sorc Shoes
@@ -213,6 +217,7 @@ describe("aggregateProConsensus", () => {
     ];
     const model = aggregateProConsensus(games, meta);
     expect(model.gamesTotal).toBe(3);
+    expect(model.itemsSampleSize).toBe(3);
     const rocketbelt = model.items.find((i) => i.itemId === ROCKETBELT);
     expect(rocketbelt).toEqual({ itemId: ROCKETBELT, count: 2, share: 2 / 3 });
     // Health Potion (2003) is a consumable — must never appear in item counts.
@@ -223,6 +228,33 @@ describe("aggregateProConsensus", () => {
     expect(sorcShoes?.count).toBe(2);
     // 4645 has no metadata and isn't allowlisted -> excluded, not just "unnamed".
     expect(model.items.find((i) => i.itemId === 4645)).toBeUndefined();
+  });
+
+  it("2026-07-25 P1-2 fix: itemless (live-ingested) rows dilute itemsSampleSize, not gamesTotal — item shares stay honest", () => {
+    // Regression for the P1-2 audit finding: live-ingested prostage rows
+    // (lib/prostage/liveIngest.ts) write final_items='[]' before a human
+    // opens that game's detail sheet. Before this fix, every ItemFrequency
+    // share divided by gamesTotal, so those itemless rows silently understated
+    // every item/boots/starter percentage.
+    const meta = itemMeta(
+      item(ROCKETBELT, { from: ["x"] }),
+      item(3020, { into: ["3175"], from: ["1001"], tags: ["Boots"] }), // Sorc Shoes
+      item(DARK_SEAL, { into: ["3041"] })
+    );
+    const games = [
+      game({ finalItems: [ROCKETBELT, 3020, DARK_SEAL] }),
+      game({ finalItems: [ROCKETBELT, 3020, DARK_SEAL] }),
+      game({ finalItems: [] }), // live row, item data not resolved yet
+      game({ finalItems: [] }), // live row, item data not resolved yet
+    ];
+    const model = aggregateProConsensus(games, meta);
+    expect(model.gamesTotal).toBe(4);
+    expect(model.itemsSampleSize).toBe(2); // only the 2 games that actually carried item data
+    // 2 of 2 item-bearing games -> 100%, NOT 2 of 4 gamesTotal (50%, the
+    // pre-fix understated number).
+    expect(model.items.find((i) => i.itemId === ROCKETBELT)).toEqual({ itemId: ROCKETBELT, count: 2, share: 1 });
+    expect(model.boots.find((i) => i.itemId === 3020)).toEqual({ itemId: 3020, count: 2, share: 1 });
+    expect(model.starters.find((i) => i.itemId === DARK_SEAL)).toEqual({ itemId: DARK_SEAL, count: 2, share: 1 });
   });
 
   it("real-data regression: Needlessly Large Rod never appears even when frequently bought as a component", () => {

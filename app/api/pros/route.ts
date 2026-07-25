@@ -397,6 +397,29 @@ export async function GET(req: NextRequest) {
     // known yet) since a soloq-only request has no use for it. The
     // gameIds-dependent grouped comps query below still MUST stay sequential
     // (it needs prostageRows' game_ids to build its WHERE ANY(...) clause).
+    // SUPERSEDE RULE (rewritten v0.55.1). All three prostage queries below carry
+    // the same predicate: hide a shallow `lolesports:` live row once the richer
+    // Leaguepedia row for that game exists.
+    //
+    // It used to key on `sup.lolesports_game_id = pm.lolesports_game_id`, which
+    // could NEVER match: lib/prostage/ingest.ts does not write that column, so a
+    // Leaguepedia row carries NULL until a human happens to open that game's
+    // detail sheet, and NULL = NULL is never true. Every live row therefore
+    // rendered next to its twin — with a DIFFERENT timestamp, so they did not
+    // even look like duplicates — and the itemless twin diluted Pro Consensus
+    // denominators and pushed real games off the `limit`-capped list.
+    //
+    // The key is now (normalised player, champion, +/-12h), all of which BOTH
+    // writers populate unconditionally. `split_part(..., ' (', 1)` is the SQL
+    // spelling of cleanLeaguepediaName: Leaguepedia player_links carry real-name
+    // disambiguators ("Zeka (Kim Geon-woo)") that the live feed's stripped
+    // summoner name never has. Indexed to match in migrations/0015.
+    //
+    // Same champion twice in one Bo5 is safe: each live row matches SOME
+    // Leaguepedia row for that pair, so both hide and both real rows show. The
+    // one lossy case is a HALF-ingested series (Leaguepedia has game 1 but not
+    // game 3), where game 3's live row hides early; it reappears as soon as
+    // Leaguepedia completes, and the hidden row was itemless anyway.
     const [soloqRows, prostageRows, prosNameRows] = await Promise.all([
       wantSoloq
         ? proId
@@ -454,9 +477,13 @@ export async function GET(req: NextRequest) {
                 AND pm.game_datetime > now() - make_interval(days => ${FRESH_WINDOW_DAYS})
                 AND NOT (pm.game_id LIKE 'lolesports:%' AND EXISTS (
                   SELECT 1 FROM coachbuild.prostage_matches sup
-                  WHERE sup.lolesports_game_id = pm.lolesports_game_id
-                    AND sup.player_link = pm.player_link
-                    AND sup.game_id NOT LIKE 'lolesports:%'))
+                  WHERE sup.game_id NOT LIKE 'lolesports:%'
+                    AND sup.champion_id = pm.champion_id
+                    AND lower(btrim(split_part(sup.player_link, ' (', 1)))
+                      = lower(btrim(split_part(pm.player_link, ' (', 1)))
+                    AND sup.game_datetime
+                      BETWEEN pm.game_datetime - interval '12 hours'
+                          AND pm.game_datetime + interval '12 hours'))
               ORDER BY pm.game_datetime DESC
               LIMIT ${limit}
             `
@@ -473,9 +500,13 @@ export async function GET(req: NextRequest) {
                 AND pm.game_datetime > now() - make_interval(days => ${FRESH_WINDOW_DAYS})
                 AND NOT (pm.game_id LIKE 'lolesports:%' AND EXISTS (
                   SELECT 1 FROM coachbuild.prostage_matches sup
-                  WHERE sup.lolesports_game_id = pm.lolesports_game_id
-                    AND sup.player_link = pm.player_link
-                    AND sup.game_id NOT LIKE 'lolesports:%'))
+                  WHERE sup.game_id NOT LIKE 'lolesports:%'
+                    AND sup.champion_id = pm.champion_id
+                    AND lower(btrim(split_part(sup.player_link, ' (', 1)))
+                      = lower(btrim(split_part(pm.player_link, ' (', 1)))
+                    AND sup.game_datetime
+                      BETWEEN pm.game_datetime - interval '12 hours'
+                          AND pm.game_datetime + interval '12 hours'))
               ORDER BY pm.game_datetime DESC
               LIMIT ${limit}
             `
@@ -491,9 +522,13 @@ export async function GET(req: NextRequest) {
                 AND pm.game_datetime > now() - make_interval(days => ${FRESH_WINDOW_DAYS})
                 AND NOT (pm.game_id LIKE 'lolesports:%' AND EXISTS (
                   SELECT 1 FROM coachbuild.prostage_matches sup
-                  WHERE sup.lolesports_game_id = pm.lolesports_game_id
-                    AND sup.player_link = pm.player_link
-                    AND sup.game_id NOT LIKE 'lolesports:%'))
+                  WHERE sup.game_id NOT LIKE 'lolesports:%'
+                    AND sup.champion_id = pm.champion_id
+                    AND lower(btrim(split_part(sup.player_link, ' (', 1)))
+                      = lower(btrim(split_part(pm.player_link, ' (', 1)))
+                    AND sup.game_datetime
+                      BETWEEN pm.game_datetime - interval '12 hours'
+                          AND pm.game_datetime + interval '12 hours'))
               ORDER BY pm.game_datetime DESC
               LIMIT ${limit}
             `

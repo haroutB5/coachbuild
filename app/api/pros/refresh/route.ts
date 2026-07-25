@@ -1,5 +1,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /api/pros/refresh?proId=<uuid>  — on-demand solo-queue refresh for ONE pro.
+// POST /api/pros/refresh?proId=<uuid> — on-demand solo-queue refresh for ONE pro.
+//
+// POST, not GET, because this MUTATES (writes pro_matches) and SPENDS a
+// third-party budget (the shared Riot key, whose cap suspends the key for every
+// surface — see gotcha (d)). As a GET it was fireable cross-origin with no CORS
+// involvement at all: any `<img src=".../api/pros/refresh?proId=...">` on any
+// page on the internet would trigger a real Riot spend for every visitor who
+// loaded it. Safe-method semantics are not decoration; a GET must not do this.
 //
 // WHY THIS EXISTS (2026-07-25, v0.53.0): the background sweep can never keep
 // every pro current. It walks `batch = 5` accounts per invocation and the Vercel
@@ -48,7 +55,7 @@ interface AccountRow {
   last_fetched_at: string | null;
 }
 
-export async function GET(req: NextRequest) {
+export async function POST(req: NextRequest) {
   const sql = getSql();
   if (!sql) {
     // Degrade quietly: the caller treats a failed refresh as "show what we have".

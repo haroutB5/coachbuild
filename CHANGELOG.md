@@ -2,6 +2,150 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.56.0] — 2026-07-25 — Audit wave 1: the same pro game rendered twice, and two hard rules broken in prod
+
+A full-system cold-start audit (six read-only agents, findings in `AUDIT-2026-07-25.md`) ran against
+this codebase. Every fix below was verified against LIVE production data or the real item catalog,
+not fixtures — because in all three P0 cases the existing test suite was green and structurally
+incapable of catching the bug.
+
+### Fixed — P0: the live/Leaguepedia supersede rule had never fired, once, in production
+
+A pro game ingested from the live lolesports feed is supposed to disappear once the richer
+Leaguepedia row arrives. The rule matched on `sup.lolesports_game_id = pm.lolesports_game_id` — but
+`runProstageIngest`'s INSERT never writes that column. Only the on-demand timeline route and a
+backfill script do, so a freshly-ingested Leaguepedia row carries NULL, and `NULL = NULL` is never
+true. **A supersede rule keyed on a field the superseding writer never writes is not a rule.**
+
+Measured live before the fix: 9040 prostage rows, 7840 Leaguepedia rows with the column NULL,
+**0 live rows ever superseded, 86 duplicate rows being served.** Caps' 07-24 LEC series rendered
+twice on `/history` — and because live rows stored the MATCH start while Leaguepedia stores the real
+per-game start, the two cards showed different times and didn't even look like duplicates.
+
+Not merely cosmetic: `proConsensus` computes item share as `count / games.length`, so the itemless
+duplicates **under-reported every Pro Consensus item percentage by ~27% for actively-played
+champions**, double-counted the "From N pro games" denominator, and pushed real games off the
+`limit`-capped list.
+
+The key is now `(normalised player, champion, ±12h)` — all of which both writers populate
+unconditionally. `split_part(player_link, ' (', 1)` is the SQL spelling of `cleanLeaguepediaName`:
+Leaguepedia carries real-name disambiguators ("Zeka (Kim Geon-woo)") the live feed's stripped
+summoner name never has. Migration `0015` indexes the expression the query actually uses.
+**Verified in prod: 0 → 100 rows correctly superseded**, including the disambiguator case
+(live `FIESTA` → `FIESTA (An Hyeon-seo)`).
+
+Folded into the same fix, since they share the key: live rows now stamp the real per-game start
+(`opened.gameStartTs`, not `ev.startTime`) — which makes `game_datetime` load-bearing rather than
+cosmetic — and the write-path skip requires all **10** rows rather than any single row, so a game
+left partial by an unresolved champion or a mid-loop throw can be completed by a later run instead
+of being skipped forever while the run reports clean.
+
+### Fixed — P0: starter items were reaching completed build lines (HARD RULE 1)
+
+`isFullItem`'s only structural test was `into.length === 0`, documented as excluding "every
+`STARTING_ITEM_ALLOWLIST` id". Against the real catalog that was false: **7 of those 9 ids have
+`into: []`** and passed as genuine recipe-tree leaves. Only Dark Seal and Tear were ever caught
+there. The class was actually held out by the allowlist — an ENUMERATION, which rotted: **Doran's
+Bow (1086) and Doran's Helm (1120) were missing from it**, and both shipped inside completed 6-item
+build lines in production (Ashe/Jinx/Caitlyn/Lucian/Ezreal Bot; Ornn/Darius/Malphite Top), with
+`ProConsensusCard` rendering "Doran's Bow 43%" in its completed-items grid — precisely the display
+the 2026-07-22 Dark Seal directive banned.
+
+`isFullItem` now applies a STRUCTURAL lane-starter rule — bought from nothing, cheap, and carrying
+the catalog's own `Lane` tag — so the class is caught without anyone maintaining a list. Verified
+against the real 16.13.1 catalog: **0 starter leaks, 0 support-final regressions** (3869/3870/3871/
+3876/3877 are also ~400g and Lane-tagged but are BUILT from World Atlas, so the `from.length === 0`
+clause protects them), and it independently catches **five more Guardian's starters the allowlist
+still doesn't list** (222051/223112/223177/223184/223185). 1086 and 1120 were added to the allowlist
+too, as belt-and-braces.
+
+### Fixed — P0: "Pro build" could ship with zero boots (HARD RULE 2)
+
+`generalFallback` omits `corePrimary`, which is the only pool carrying `items.boots`. A champion
+with no `alts.boots` and no `pro.boots` therefore left `findBestBoots` with nothing to find,
+`buildLine` took its never-invent branch, and the line emitted **six full items and no boots at
+all** — live on Yuumi Support, whose Pro build listed six 2500-3000g items and never told the user
+to buy boots. Every other line for that champion carried them. `corePrimary` is now appended last to
+the Pro line's fallbacks, so it supplies the missing boots without reordering what the pro data
+ranked.
+
+### Fixed — the "(low data)" honesty threshold had silently unlabelled itself
+
+`MIN_CATEGORY_MEASURED` was a hardcoded 3, justified by a comment reading "CATEGORY_LINE_LEN is 4".
+The line length went 4 → 6 in v0.48.0 and the constant didn't, so a line needing 5 real items
+cleared the bar with 3 measured + 2 curated fill and shipped WITHOUT the suffix — Yuumi Support's
+"AP Burst" presented Luden's Echo and Shadowflame, pure fill on an enchanter, as measured. Now
+derived as `CATEGORY_LINE_LEN - 1` so a future length change can't unlabel them again. The test that
+asserted the old behaviour was corrected rather than deleted, and gained a complementary case
+pinning that a genuinely full line stays unlabelled.
+
+### Fixed — Pro Consensus item percentages diluted by itemless rows
+
+`gamesTotal = games.length` divided item/boots/starter shares by every game including live-ingested
+rows that write `final_items = '[]'`. Rune slots already avoided this with their own denominators.
+Items now divide by `itemsSampleSize` (games with non-empty `finalItems`), and the "From N pro
+games" footer states its item coverage honestly when the two denominators diverge.
+
+### Fixed — Builds hero stats ignored the elo tab
+
+`ChampionHero` rendered the elo pills and received `rankBracket`, but its effect was keyed
+`[champ.id, lane]` and `getHeroStats` took no bracket, so WIN%/GAMES/CONFIDENCE always described
+High-Elo. Tap "Platinum" and the build panel changed while the line above it still read the
+High-Elo numbers (329,099 games vs Platinum's 194,981) beside a visibly-active Platinum pill. The
+confidence chip could read HIGH CONFIDENCE off the un-bracketed count while the build shown rested
+on a MEDIUM-band sample. `/api/hero-stats` now accepts `rank`; the param is deliberately OPTIONAL so
+`getMostPlayedLane`'s lane inference stays un-bracketed on the widest sample.
+
+### Fixed — APPLY RUNES overwrote the bracket-correct page it had just written
+
+`AutoExporter` appends `&rank=` so the export matches the Builds page; `ApplyRunesButton` never did,
+and both produce the IDENTICAL page title, which the companion PUTs in place on an exact-title
+match. Tapping APPLY RUNES therefore replaced the correct page with a High-Elo one and reported
+"Applied in-client." `LivePanel` had the same omission (display-only). Both now read the stored
+bracket.
+
+### Fixed — the scheduled Leaguepedia ingest truncated at 500 rows
+
+`fetchScoreboardRows` paginated only when `opts.paginate` was true, and the only caller passing it
+was a deletable one-off seed script — the 3-hourly production path never did. `LPL/2026 Season/
+Split 3` hits 500 rows at ~50 games, and since Leaguepedia backfills OUT OF ORDER, a late-entered
+week-1 row sat below the cutoff forever. `rowsSeen` was exactly 500 and nothing checked for it: the
+same "cap hit looks identical to nothing-new" signature v0.55.0 had just fixed one file over.
+Pagination is now the default and an exact cap hit raises a loud error.
+
+### Fixed — security and correctness of the companion surface
+
+- **`/apply-runes` had no `CoachBuild` title guard.** This file's header and HARD RULE 5 both state
+  the bright line, but STEP 2 matched only on exact page name with a caller-supplied title, so a
+  request naming "Ranked Page 1" would PUT-overwrite the user's own page. It issues no DELETE —
+  which is exactly why the adversarial SelfTest suite missed it, since every assertion guarding this
+  invariant is DELETE-shaped. Added `Test-RunePayload` (the twin of `Test-ItemSetsPayload`) plus the
+  first PUT-shaped SelfTest case.
+- **`/api/pros/refresh` is now POST.** It mutates and spends the shared Riot key, whose cap suspends
+  the key for every surface; as a GET, any `<img src>` on any page on the internet triggered a real
+  spend for every visitor.
+- **The service worker now honours `Cache-Control: no-store`.** It was writing `/api/mystats/*`
+  responses — Riot ID, per-game KDA, champion pool — verbatim into CacheStorage on disk, and pinning
+  deliberately-`no-store` degraded responses to replay them offline. Checked by header rather than
+  URL prefix, so a future `no-store` route is covered automatically. The icon cache's un-awaited
+  `cache.put` also no longer throws an unhandled rejection on quota exhaustion.
+- **`companion.version` was frozen at 1.4.1 against a shipped 1.6.4**, which inverted the update
+  prompt in both directions at once: everyone current got a permanent false "1.4.1 is available" nag,
+  and users genuinely stuck on 1.4.1 matched it exactly and were never prompted. It is now GENERATED
+  from `companion.ps1` by a `prebuild` step, so it cannot drift again.
+- `getDdragonMaps` no longer memoizes a REJECTED promise — one ddragon blip on a warm lambda used to
+  poison every later invocation on that instance, and in `runLiveProstageIngest` the call sits above
+  the try, so it aborted the whole run.
+
+### Docs
+
+HARD RULE 5 gained its manual-mode carve-out (the DELETE on a real click is deliberate, documented
+in `companion.ps1`, and SelfTest-pinned — it was the doc that was wrong, not the code). Corrected the
+matches-cron cadence (every 2 days, not daily), the `/api/build` contract (`champ`, not `championId`),
+and removed the false claim that TheShy has no 2026 pro games — he played IG vs WBG in the LPL that
+day; Leaguepedia simply hadn't been written yet, which is the entire reason the live-ingest path
+exists.
+
 ## [0.55.0] — 2026-07-25 — Builds never opens on a champion you didn't pick
 
 ### Added — the first-run pick state

@@ -197,6 +197,27 @@
 // slot that resolved `null` -- a per-slot fallback, not an all-or-nothing
 // one. `shardsFromFallback` is true only in the genuine "no pro shard data
 // at all" case (all 3 slots null, e.g. an all-prostage sample).
+//
+// -- itemsSampleSize: items/boots/starters get their OWN denominator too
+// (2026-07-25, P1-2 audit fix) --------------------------------------------
+// BUG THIS FIXES: `gamesTotal = games.length` was ALSO the denominator for
+// every `ItemFrequency.share` (items, boots, starters alike). Rune slots
+// deliberately never made this mistake -- each `RuneSlotBreakdown` carries
+// its own `sampleSize` precisely "so keystone-only prostage rows don't
+// dilute the fraction" (see the "Rune slot aggregation" section above).
+// Items never got the same treatment because, until v0.54.0, every prostage
+// row genuinely carried Cargo's `Items` column -- but live-ingested rows
+// (lib/prostage/liveIngest.ts) write `final_items = '[]'` before a human
+// opens that game's detail sheet to resolve it. A live row is real pro data
+// for keystone/spells/tournament purposes but structurally has NO item data
+// yet, same as a rune-less prostage row has no rune data -- diluting
+// `items`/`boots`/`starters` with it is the exact class of bug the rune
+// denominators already avoid.
+// FIX: `itemsSampleSize` counts only games whose RAW `finalItems` array is
+// non-empty (mirrors `RuneSlotAccumulator.add`'s own gate), and every
+// `ItemFrequency.share` divides by it instead of `gamesTotal`. Concretely:
+// 100 games, 15 of them itemless -> an item in 40 of the 85 item-bearing
+// games now renders the honest "47%" instead of the understated "40%".
 
 import type { ProGame } from "@/components/proGames.types";
 import { CONSUMABLE_ITEM_IDS, treeIconUrl, treeName, shardIconUrl, shardName } from "@/components/proAssets";
@@ -208,7 +229,7 @@ import type { Pick as PickType, RunesBlock, ShardSet, TreeId } from "@/lib/types
 export interface ItemFrequency {
   itemId: number;
   count: number;
-  share: number; // count / gamesTotal
+  share: number; // count / itemsSampleSize (NOT gamesTotal — see that field's doc comment)
 }
 
 export interface KeystoneFrequency {
@@ -311,9 +332,10 @@ export interface ProConsensusModel {
    *  CONSUMABLE_ITEM_IDS. Deduplicated per game — a game that somehow lists
    *  the same id twice only counts once, so this is a true "N of M games"
    *  pick rate, not a raw occurrence tally. Sorted by count desc, then
-   *  itemId asc for a deterministic tie order. share is against gamesTotal
-   *  (unchanged denominator — filtering removes disqualified items, it
-   *  doesn't shrink the sample). Boots are carved out into `boots` below
+   *  itemId asc for a deterministic tie order. share is against
+   *  `itemsSampleSize` (see that field's doc comment — 2026-07-25 fix; it
+   *  used to be gamesTotal, which understated every share by the sample's
+   *  itemless-row fraction). Boots are carved out into `boots` below
    *  (v0.28.0 user report: Crimson Lucidity + Spellslinger's Shoes each ate a
    *  full item slot on the same champion — a real item couldn't fit) and
    *  STARTING_ITEM_ALLOWLIST entries (Dark Seal, Tear of the Goddess, etc.)
@@ -331,7 +353,7 @@ export interface ProConsensusModel {
    *  defensive guard `isBootsFinal` uses) — an item with no metadata at all
    *  is never classified as boots (stays out of this list, same "never
    *  assume" posture as the rest of this module). share is against
-   *  gamesTotal, same denominator as `items` — these are still two
+   *  `itemsSampleSize`, same denominator as `items` — these are still two
    *  independent per-boot fractions, not a merged combined stat. */
   boots: ItemFrequency[];
   /** 2026-07-22 — top starter-class items (STARTING_ITEM_ALLOWLIST — Dark
@@ -346,12 +368,28 @@ export interface ProConsensusModel {
    *  `STARTING_ITEM_ALLOWLIST.has(itemId)`, checked AFTER the boots check —
    *  no current allowlist entry carries the "Boots" tag, but boots takes
    *  precedence by construction if that ever changed). share is against
-   *  gamesTotal, same denominator as `items`/`boots`. Empty when the sample
-   *  never built a starter-class item (e.g. matchups where every game
-   *  reached a full recipe-tree item instead) — the card renders no slot at
-   *  all in that case, same "absent, not empty" convention `boots` already
-   *  established. */
+   *  `itemsSampleSize`, same denominator as `items`/`boots`. Empty when the
+   *  sample never built a starter-class item (e.g. matchups where every
+   *  game reached a full recipe-tree item instead) — the card renders no
+   *  slot at all in that case, same "absent, not empty" convention `boots`
+   *  already established. */
   starters: ItemFrequency[];
+  /** 2026-07-25 (P1-2 audit fix) — denominator for `items`/`boots`/
+   *  `starters` shares: games whose `finalItems` array is non-empty, NOT
+   *  `gamesTotal`. Before this field existed, every item-family share was
+   *  `count / gamesTotal`, but live-ingested prostage rows (lib/prostage/
+   *  liveIngest.ts) write `final_items = '[]'` — a real prostage row with
+   *  no item data yet, not "this champion has fewer builds." Mixing those
+   *  itemless rows into `gamesTotal` understated every single item/boots/
+   *  starter percentage by exactly the itemless share (100 games, 15 of them
+   *  itemless, an item in 40 of the 85 item-bearing games rendered "40%"
+   *  instead of the honest 47%). Rune slots already avoid this exact trap —
+   *  each `RuneSlotBreakdown` carries its own `sampleSize` — items never did
+   *  because until v0.54.0 every prostage row carried Cargo `Items`. Same
+   *  fix, same shape: count only games that COULD have supplied an item,
+   *  same "never dilute a fraction with rows that structurally can't
+   *  contribute to it" posture as the rune-slot denominators above. */
+  itemsSampleSize: number;
   /** Null when no game in the sample carries a resolved keystone (id 0 is
    *  the "unresolved/missing" sentinel — real for prostage rows Leaguepedia
    *  never populated a Runes column for, see lib/prostage/extract.ts).
@@ -458,11 +496,29 @@ export const STARTING_ITEM_ALLOWLIST = new Set<number>([
   1056, // Doran's Ring
   1082, // Dark Seal — upgrades into Mejai's Soulstealer; still a real build choice
   1083, // Cull
+  1086, // Doran's Bow — MISSING until 2026-07-25; see the note below
+  1120, // Doran's Helm — MISSING until 2026-07-25; see the note below
   3070, // Tear of the Goddess — upgrades into Manamune/Archangel's/Winter's Approach/Whispering Circlet
   3865, // World Atlas (support starter)
   2049, // Guardian's Amulet (support starter)
   2050, // Guardian's Shroud (support starter)
 ]);
+
+/* WHY 1086/1120 WERE MISSING FOR SO LONG, AND WHY THIS LIST IS NO LONGER THE
+ * ONLY GUARD. Both are `into: []`, so `isFullItem` in itemSetBody.ts passed
+ * them as genuine recipe-tree leaves, and this list was the only thing that
+ * would have held them out — except neither was on it. They shipped inside
+ * completed 6-item build lines in production: Doran's Bow in Ashe/Jinx/
+ * Caitlyn/Lucian/Ezreal "Pro build", Doran's Helm in Ornn/Darius/Malphite,
+ * and ProConsensusCard rendered "Doran's Bow 43%" in its completed-items grid
+ * — exactly the display the 2026-07-22 Dark Seal directive banned.
+ *
+ * An enumeration that must be updated by hand every time Riot ships an item is
+ * a guard that will rot again, and this one now has twice. `isFullItem` grew a
+ * STRUCTURAL lane-starter rule (from-nothing + cheap + "Lane"-tagged) so the
+ * class is caught without anyone maintaining a list; this stays as
+ * belt-and-braces and as the partition key for the `starters` field. Add new
+ * ids here when you notice them, but do not rely on that being sufficient. */
 
 /** Boots special case — see module header (b). A tier-2 boot (e.g.
  *  Sorcerer's Shoes) still has an `into` pointing at its optional tier-3
@@ -771,6 +827,14 @@ export function aggregateProConsensus(
   const tournamentSeen = new Set<string>();
   let soloqCount = 0;
   let prostageCount = 0;
+  // 2026-07-25 (P1-2 fix) — see ProConsensusModel.itemsSampleSize's doc
+  // comment. Bumped once per game whose RAW finalItems array is non-empty
+  // (mirrors RuneSlotAccumulator.add's `if (ids.length === 0) return` —
+  // "did this game structurally carry item data at all", not "did any of
+  // its items pass isBuildItem"), so it's the honest denominator for
+  // items/boots/starters the same way each RuneSlotBreakdown.sampleSize is
+  // for its own slot group.
+  let itemsSampleSize = 0;
 
   // ── Phase A: tree-INDEPENDENT aggregates over every game ───────────────────
   // items, keystone, shards, spells, source/tournament split. The
@@ -778,8 +842,10 @@ export function aggregateProConsensus(
   // be computed until the modal keystone — and therefore the page's primary
   // tree — is known, so they run in Phase B over a filtered page sample.
   for (const game of games) {
+    const rawFinalItems = game.finalItems ?? [];
+    if (rawFinalItems.length > 0) itemsSampleSize += 1;
     const seenItems = new Set<number>();
-    for (const itemId of game.finalItems ?? []) {
+    for (const itemId of rawFinalItems) {
       if (!itemId || CONSUMABLE_ITEM_IDS.has(itemId)) continue;
       if (!isBuildItem(itemId, itemMeta.get(itemId))) continue;
       seenItems.add(itemId);
@@ -823,10 +889,12 @@ export function aggregateProConsensus(
   // also carried the "Boots" tag would still land in `boots`, not double up
   // in both lists (no current entry does; see STARTING_ITEM_ALLOWLIST above).
   const sortedItemEntries = sortEntries(itemCounts);
+  // itemsSampleSize, not gamesTotal — see ProConsensusModel.itemsSampleSize's
+  // doc comment (2026-07-25 P1-2 fix).
   const toFrequency = ([itemId, count]: [number, number]): ItemFrequency => ({
     itemId,
     count,
-    share: gamesTotal > 0 ? count / gamesTotal : 0,
+    share: itemsSampleSize > 0 ? count / itemsSampleSize : 0,
   });
   const items: ItemFrequency[] = sortedItemEntries
     .filter(([itemId]) => !isBootsTag(itemMeta.get(itemId)) && !STARTING_ITEM_ALLOWLIST.has(itemId))
@@ -964,6 +1032,7 @@ export function aggregateProConsensus(
     items,
     boots,
     starters,
+    itemsSampleSize,
     keystone: effectiveKeystone,
     runesSampleSize: effectiveRunesSampleSize,
     // primaryTreeSampleSize (== pageSample.length) is the authority here, not

@@ -656,6 +656,7 @@ const TK1 = 5101; // pure tank (Health + Armor)
 const TK2 = 5102; // pure tank (Armor)
 const TK3 = 5103; // pure tank (Health + SpellBlock)
 const TK4 = 5104; // pure tank (Health)
+const TK5 = 5105; // pure tank (Health + Armor) — 5th item, fills a 6-slot line
 const LE1 = 5301; // lethality (Damage + ArmorPenetration)
 const LE2 = 5302; // lethality (ArmorPenetration)
 const LE3 = 5303; // lethality (Damage, no durability/AS/crit)
@@ -687,6 +688,7 @@ function damageMeta(): Map<number, ItemDetail> {
     meta(TK2, { tags: ["Armor"] }),
     meta(TK3, { tags: ["Health", "SpellBlock"] }),
     meta(TK4, { tags: ["Health"] }),
+    meta(TK5, { tags: ["Health", "Armor"] }),
     meta(LE1, { tags: ["Damage", "ArmorPenetration"] }),
     meta(LE2, { tags: ["ArmorPenetration"] }),
     meta(LE3, { tags: ["Damage"] }),
@@ -1015,8 +1017,32 @@ describe("buildItemSets — v0.47.0 pure Tank (universal, actual tanks only)", (
     expect(present).not.toContain("AP/Mage");
     expect(present).not.toContain("AP Burst");
     expect(present).not.toContain("Bruiser (AD)");
-    const tank = sets[0].blocks.find((b) => b.type === "Tank")!;
-    expect(tank.type).toBe("Tank"); // measured (4 tank items), no "(low data)"
+    // 4 real tank items against a 6-slot line (5 non-boots + boots) means one
+    // slot is curated FILL, so the line must carry "(low data)".
+    //
+    // This assertion used to read `toBe("Tank")` with the comment "measured (4
+    // tank items)". That was written when CATEGORY_LINE_LEN was 4 and 3 real
+    // items genuinely filled the line; the length went 4 -> 6 in v0.48.0 and
+    // MIN_CATEGORY_MEASURED stayed at a hardcoded 3, so this test went on
+    // asserting that a partially-fabricated line was measured. The threshold is
+    // now derived from the line length, and the assertion follows the rule
+    // rather than the old constant.
+    const tank = sets[0].blocks.find((b) => b.type.startsWith("Tank"))!;
+    expect(tank.type).toBe("Tank (low data)");
+  });
+
+  it("a tank with a FULL line of its own items is measured — no '(low data)' suffix", () => {
+    // The complement of the case above, and the reason the threshold is
+    // `CATEGORY_LINE_LEN - 1` rather than a literal: 5 real non-boots items
+    // fill every non-boots slot, so nothing is padded in from judgment and the
+    // line is honestly titled plain.
+    const ornn: ChampionRef = { id: 516, key: "Ornn", name: "Ornn", icon: "o.png", tags: ["Tank"] };
+    const build = famBuild(ornn, [STARTER, BOOTS, TK1, TK2, TK3], {
+      first: [pick(TK4, 0.06), pick(TK5, 0.05)],
+    });
+    const sets = buildItemSets(ornn, "Top", build, null, damageMeta());
+    const tank = sets[0].blocks.find((b) => b.type.startsWith("Tank"))!;
+    expect(tank.type).toBe("Tank");
   });
 
   it("a squishy mage (Viktor) does NOT get a pure Tank line even with an Armor-carrying AP item", () => {

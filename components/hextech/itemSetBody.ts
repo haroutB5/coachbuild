@@ -495,10 +495,20 @@ function dedupeArchetypeLines<T extends { arch: Archetype; line: Candidate[] }>(
 }
 
 /** A real per-champ matched-item count at/above which an archetype line is
- *  presented as MEASURED (no "(low data)" suffix). CATEGORY_LINE_LEN is 4
- *  (3 non-boots + 1 boots), so 3 real non-boots matches fills the line from
- *  the champ's own data alone. */
-const MIN_CATEGORY_MEASURED = 3;
+ *  presented as MEASURED (no "(low data)" suffix): enough of the champ's OWN
+ *  data to fill every non-boots slot, so nothing is padded in from judgment.
+ *
+ *  Derived from CATEGORY_LINE_LEN rather than hardcoded, because hardcoding it
+ *  is what broke it. It was a literal 3, justified by a comment reading
+ *  "CATEGORY_LINE_LEN is 4 (3 non-boots + 1 boots)" — true when written, but
+ *  the line length was raised 4 -> 6 in v0.48.0 and this constant was not.
+ *  A line then needed 5 real non-boots items, so 3 measured + 2 curated-fill
+ *  cleared the bar and shipped WITHOUT the "(low data)" suffix: Yuumi Support's
+ *  "AP Burst" presented Luden's Echo and Shadowflame — pure fill on an
+ *  enchanter — as measured. Judgment-filled entries must be labelled; tying the
+ *  threshold to the length means the next length change can't silently unlabel
+ *  them again. */
+const MIN_CATEGORY_MEASURED = CATEGORY_LINE_LEN - 1;
 
 /** Worst-case block-count guard (companion side wants ~10 blocks max):
  *  Starting/Core/Buy order/Pro build/Highest WPA/Situational already account
@@ -577,9 +587,32 @@ function dedupeById(cands: Candidate[]): Candidate[] {
  *    a legitimate final choice even though the 2026 boots rework gives
  *    every tier-2 boot an optional tier-3 enchant `into` — "stopped at
  *    tier 2" is a normal final build state, not an unfinished component.
- *  - Everything else: a genuine recipe-tree leaf (`into` empty) is full;
- *    ANY non-empty `into` — including every STARTING_ITEM_ALLOWLIST id —
- *    is excluded. No allowlist escape hatch here. */
+ *  - LANE STARTERS -> EXCLUDE, structurally (see below).
+ *  - Everything else: a genuine recipe-tree leaf (`into` empty) is full.
+ *
+ *  THE `into`-ONLY RULE WAS NOT ENOUGH. It was documented as excluding "every
+ *  STARTING_ITEM_ALLOWLIST id", which was simply false against the real
+ *  catalog: 7 of those 9 ids have `into: []` and passed as genuine recipe-tree
+ *  leaves. Only Dark Seal (into: Mejai's) and Tear (into: its upgrades) were
+ *  ever caught here. The class was held out one layer up, by
+ *  proConsensus.ts's STARTING_ITEM_ALLOWLIST partition — and that list is an
+ *  ENUMERATION, which rotted: it was missing Doran's Bow (1086) and Doran's
+ *  Helm (1120), so both shipped inside completed 6-item build lines in
+ *  production (Ashe/Jinx/Caitlyn/Lucian/Ezreal Bot carried Doran's Bow in
+ *  "Pro build"; Ornn/Darius/Malphite Top carried Doran's Helm), and
+ *  ProConsensusCard rendered "Doran's Bow 43%" in its completed-items grid.
+ *  That is the display the 2026-07-22 Dark Seal directive banned outright.
+ *
+ *  So the rule is structural now, matching how a lane starter actually looks
+ *  rather than which ids someone remembered: bought from nothing
+ *  (`from` empty), cheap, and carrying the catalog's own "Lane" tag. The
+ *  `from.length === 0` clause is load-bearing in the other direction — the
+ *  support finals (3869/3870/3871/3876/3877) are also ~400g and Lane-tagged,
+ *  but they are BUILT from World Atlas, so they stay full items.
+ *  The allowlist upstream stays as belt-and-braces; this is the guard that
+ *  does not depend on anyone maintaining a list. */
+const LANE_STARTER_MAX_GOLD = 500;
+
 function isFullItem(itemId: number, meta: ItemDetail | undefined): boolean {
   if (!meta) return false;
   if (meta.purchasable === false) return false;
@@ -587,6 +620,8 @@ function isFullItem(itemId: number, meta: ItemDetail | undefined): boolean {
   const from = Array.isArray(meta.from) ? meta.from : [];
   const into = Array.isArray(meta.into) ? meta.into : [];
   if (tags.includes("Boots") && from.length > 0) return true;
+  const goldTotal = typeof meta.goldTotal === "number" ? meta.goldTotal : Number.POSITIVE_INFINITY;
+  if (from.length === 0 && goldTotal <= LANE_STARTER_MAX_GOLD && tags.includes("Lane")) return false;
   return into.length === 0;
 }
 
@@ -1038,7 +1073,17 @@ export function buildItemSets(
   }
 
   if (hasPro) {
-    const proLine = buildLine(proPool, generalFallback, bootsIds);
+    // `corePrimary` LAST, and only for this line: it is the only pool carrying
+    // `items.boots`, and without it a champ with no `alts.boots` and no
+    // `pro.boots` leaves `findBestBoots` with nothing to find. `buildLine` then
+    // takes its never-invent branch and emits SIX full items and no boots at
+    // all — live on Yuumi Support, whose Pro build read Dream Maker / Ardent
+    // Censer / Mikael's / Moonstone / Echoes / Staff and never told the user to
+    // buy boots. Every other line for that champ carried them, because every
+    // other line already reaches `corePrimary` one way or another.
+    // Last in the cascade so it can supply the missing boots without
+    // reordering anything the pro data actually ranked.
+    const proLine = buildLine(proPool, [...generalFallback, corePrimary], bootsIds);
     // Same "never a genuinely empty block" guard as Buy order above --
     // `hasPro` only means the SOURCE pro-consensus data was non-empty, not
     // that anything survived the full-items-only filter.

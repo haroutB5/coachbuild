@@ -63,3 +63,30 @@ describe("GET /api/hero-stats Cache-Control policy", () => {
     expect("degraded" in json).toBe(false);
   });
 });
+
+// P1-1 fix (2026-07-25 audit): the route used to never read a `rank` param
+// at all, so getHeroStats always ran un-bracketed (HIGH_ELO_TIERS) regardless
+// of which elo pill ChampionHero had active. Pin the threading + validation
+// contract here, mirroring app/api/build/route.ts's own `rank` tests.
+describe("GET /api/hero-stats rank-bracket threading", () => {
+  beforeEach(() => {
+    vi.mocked(getHeroStats).mockReset();
+    vi.mocked(getHeroStats).mockResolvedValue({ winRatePct: 50, gamesCount: 1000 });
+  });
+
+  it("no rank param resolves to the DEFAULT bracket's apiValue (High Elo, [5,6,7]) — byte-identical to pre-fix behavior", async () => {
+    await GET(req("?champ=112&lane=mid"));
+    expect(getHeroStats).toHaveBeenCalledWith(112, "mid", { leagueTiers: [5, 6, 7] });
+  });
+
+  it("rank=platinum threads that bracket's apiValue ([3]) through to getHeroStats", async () => {
+    await GET(req("?champ=112&lane=mid&rank=platinum"));
+    expect(getHeroStats).toHaveBeenCalledWith(112, "mid", { leagueTiers: [3] });
+  });
+
+  it("an unknown rank id is a 400, matching /api/build's posture", async () => {
+    const res = await GET(req("?champ=112&lane=mid&rank=not-a-bracket"));
+    expect(res.status).toBe(400);
+    expect(getHeroStats).not.toHaveBeenCalled();
+  });
+});

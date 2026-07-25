@@ -677,9 +677,24 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
         ? model.tournaments.names.join(", ")
         : `${model.tournaments.names.slice(0, 3).join(", ")} +${model.tournaments.names.length - 3} more`
       : null;
+  // 2026-07-25 (P1-2 fix) — the footer used to read as if EVERY fraction on
+  // the card (including the items/boots/starting grid above it) was against
+  // gamesTotal. That's still true for keystone/spells/tournament mix, but
+  // items/boots/starting now divide by itemsSampleSize (live-ingested
+  // prostage rows carry no item data yet — see proConsensus.ts's
+  // itemsSampleSize doc comment), so a card whose sample includes several
+  // itemless rows would otherwise claim item coverage it doesn't have. Only
+  // rendered when the two denominators actually diverge (the common case —
+  // an all-soloq or fully-backfilled prostage sample — stays a single line).
+  const itemsCoverageNote =
+    model.itemsSampleSize === model.gamesTotal
+      ? ""
+      : model.itemsSampleSize > 0
+        ? ` · items/boots/starting from ${model.itemsSampleSize} game${model.itemsSampleSize === 1 ? "" : "s"} with item data`
+        : " · no item data in this sample yet";
   const sampleLine = `From ${model.gamesTotal} pro game${model.gamesTotal === 1 ? "" : "s"} (${sourceNote}) · fresh window${
     tournamentNote ? ` · ${tournamentNote}` : ""
-  }`;
+  }${itemsCoverageNote}`;
 
   // v0.28.0 — one consolidated caption for the additional-runes sample sizes
   // (minors/picks/shards each carry their OWN denominator, see proConsensus.ts
@@ -739,9 +754,14 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
         <div className="mb-4">
           <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">Starting</p>
           <div className="flex flex-wrap gap-2.5">
+            {/* denom is itemsSampleSize, NOT gamesTotal (2026-07-25 P1-2 fix)
+                — see proConsensus.ts's ProConsensusModel.itemsSampleSize doc
+                comment. Live-ingested prostage rows write finalItems=[], so
+                dividing by every game in the sample understated every
+                item/boots/starter percentage by the itemless-row share. */}
             <StartersStackTile
               starters={model.starters}
-              denom={model.gamesTotal}
+              denom={model.itemsSampleSize}
               names={names.items}
               icon={(id) => itemIconUrl(id, ver)}
               onClick={(id) => onOpenDetail("item", id)}
@@ -763,7 +783,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
             {model.boots.length > 0 && (
               <BootsStackTile
                 boots={model.boots}
-                denom={model.gamesTotal}
+                denom={model.itemsSampleSize}
                 names={names.items}
                 icon={(id) => itemIconUrl(id, ver)}
                 onClick={(id) => onOpenDetail("item", id)}
@@ -774,7 +794,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
                 key={entry.itemId}
                 itemId={entry.itemId}
                 count={entry.count}
-                denom={model.gamesTotal}
+                denom={model.itemsSampleSize}
                 name={names.items.get(entry.itemId) ?? `Item #${entry.itemId}`}
                 icon={itemIconUrl(entry.itemId, ver)}
                 onClick={() => onOpenDetail("item", entry.itemId)}

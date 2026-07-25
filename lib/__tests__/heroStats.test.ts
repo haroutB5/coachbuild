@@ -118,14 +118,76 @@ describe("getHeroStats", () => {
     expect(getKeystoneData).toHaveBeenCalledWith(
       412,
       4,
-      { major: 16, patch: 12, patchAdditions: 0 }
+      { major: 16, patch: 12, patchAdditions: 0 },
+      undefined,
+      undefined
     );
     expect(getGlobalItemStatistics).toHaveBeenCalledWith(
       412,
       4,
       { major: 16, patch: 12, patchAdditions: 0 },
       null,
-      6
+      6,
+      {},
+      undefined
+    );
+  });
+
+  // P1-1 fix (2026-07-25 audit): getHeroStats' `opts` param used to not
+  // exist at all, so /api/hero-stats always queried HIGH_ELO_TIERS
+  // regardless of which elo pill was active in ChampionHero. Pin the
+  // passthrough at the unit level so a future refactor can't silently drop
+  // the third argument again.
+  it("threads opts.leagueTiers through to BOTH coachless calls when a rank bracket is supplied", async () => {
+    vi.mocked(getKeystoneData).mockResolvedValue([
+      { rune: 1, runeType: 0, wpaOverall: 0.1, occurrence: 1000 },
+    ]);
+    vi.mocked(getGlobalItemStatistics).mockResolvedValue([
+      {
+        itemId: 1,
+        wpaOverall: 0,
+        wpaStandalone: 0,
+        occurrence: 1000,
+        occurrenceRelative: 0,
+        winrateExpected: 50,
+        winrateObserved: 50,
+        averagePurchaseTime: 0,
+        bias: 0,
+      },
+    ]);
+
+    await getHeroStats(112, "mid", { leagueTiers: [3] }); // Platinum
+
+    expect(getKeystoneData).toHaveBeenCalledWith(
+      112,
+      2,
+      { major: 16, patch: 12, patchAdditions: 0 },
+      undefined,
+      { leagueTiers: [3] }
+    );
+    expect(getGlobalItemStatistics).toHaveBeenCalledWith(
+      112,
+      2,
+      { major: 16, patch: 12, patchAdditions: 0 },
+      null,
+      6,
+      {},
+      { leagueTiers: [3] }
+    );
+  });
+
+  it("stays un-bracketed (opts omitted) when called with no third argument — the getMostPlayedLane contract", async () => {
+    vi.mocked(getKeystoneData).mockResolvedValue([]);
+    vi.mocked(getGlobalItemStatistics).mockResolvedValue([]);
+
+    await getHeroStats(112, "mid");
+
+    expect(getKeystoneData).toHaveBeenCalledWith(
+      112,
+      2,
+      { major: 16, patch: 12, patchAdditions: 0 },
+      undefined,
+      undefined
     );
   });
 });

@@ -19,6 +19,8 @@ import { useCompanion } from "@/components/live/CompanionProvider";
 import { resolveCurrentChampSelectChampionId, resolveChampSelectRoleId } from "@/components/live/champSelectFollow";
 import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/components/live/companionClient";
 import { buildRuneApplyBody } from "../runeApplyBody";
+import { readStoredRankBracketId } from "@/components/hextech/rankBracketStorage";
+import { DEFAULT_RANK_BRACKET } from "@/lib/rankBrackets";
 import type { BuildResponse } from "@/lib/types";
 
 type UiState = "idle" | "applying" | "success" | "error";
@@ -51,7 +53,19 @@ export default function ApplyRunesButton() {
 
     setState("applying");
     try {
-      const res = await fetch(`/api/build?champ=${championId}&role=${roleId}`);
+      // P1-2 fix (2026-07-25 audit): this fetch used to always take the
+      // no-rank (High-Elo) default, while AutoExporter.fetchBuildFor honors
+      // the user's persisted rank bracket — both then call
+      // buildRuneApplyBody with no pageSuffix, so this button and the
+      // auto-exporter target the IDENTICAL LCU page title and the companion
+      // PUTs in place on that exact-title match. Result: tapping this button
+      // silently overwrote the bracket-correct page AutoExporter just wrote
+      // with a High-Elo build, while still reporting "Applied in-client."
+      // Two lines, copied verbatim from AutoExporter.fetchBuildFor so both
+      // call sites can never drift apart again.
+      const rank = readStoredRankBracketId();
+      const rankParam = rank && rank !== DEFAULT_RANK_BRACKET.id ? `&rank=${rank}` : "";
+      const res = await fetch(`/api/build?champ=${championId}&role=${roleId}${rankParam}`);
       if (!res.ok) throw new Error(`build ${res.status}`);
       const data: BuildResponse[] = await res.json();
       const build = Array.isArray(data) ? data[0] : undefined;

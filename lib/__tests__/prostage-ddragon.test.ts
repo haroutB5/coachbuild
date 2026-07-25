@@ -98,4 +98,25 @@ describe("getDdragonMaps", () => {
     // 1 versions + 4 data files = 5 fetches total for the whole memoized lifetime
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(5);
   });
+
+  it("2026-07-25 P2-1 fix: a rejected fetch is NOT memoized — a later call gets a fresh attempt, not the same rejection forever", async () => {
+    // Regression for the audit finding: getDdragonMaps used to assign the
+    // pending (eventually-rejecting) promise to cachedMaps with no .catch, so
+    // one ddragon blip poisoned every later call on the same warm lambda —
+    // getLeagues (lib/prostage/lolesports.ts) and getChampionKeyByInternalId
+    // (lib/prostage/tournaments.ts) already self-clear on failure for this
+    // exact reason.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("network blip")))
+    );
+
+    await expect(getDdragonMaps()).rejects.toThrow("network blip");
+
+    // A second call after the rejection must attempt a FRESH fetch (proving
+    // the cache was cleared), not resolve/reject instantly off a memoized
+    // rejected promise.
+    mockFetchSequence();
+    await expect(getDdragonMaps()).resolves.toMatchObject({ version: "16.13.1" });
+  });
 });

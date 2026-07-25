@@ -217,18 +217,58 @@ describe("runProstageIngest", () => {
     expect(proIdArg).toBe("pro-raw-exact");
   });
 
-  it("paginate:false (default) makes exactly one queryFn call with no offset key", async () => {
+  it("paginate defaults to true (2026-07-25 P1-1 fix) — walks past a single page with NO explicit paginate option", async () => {
+    // Regression for P1-1: the recurring production path (scripts/ingest-
+    // prostage.mjs --via-export, the 3-hourly scheduled task) never passed
+    // `paginate: true`, so a >500-row tournament silently lost its older
+    // rows forever (Leaguepedia backfills out of order). Flipping the
+    // default closes this for every current AND future caller without
+    // needing each call site updated — this test proves the default itself
+    // changed, not just that `paginate: true` still works when passed.
+    vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
+    vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce(undefined); // ingest-attempt stamp
+    mockSql.mockResolvedValueOnce([]); // pro-name index
+    const page1 = Array.from({ length: 500 }, (_, i) => scoreboardRow({ GameId: `g${i}` }));
+    const page2 = Array.from({ length: 180 }, (_, i) => scoreboardRow({ GameId: `g${500 + i}` }));
+    const queryFn = vi.fn().mockResolvedValueOnce(page1).mockResolvedValueOnce(page2);
+
+    const result = await runProstageIngest({ cursor: 0, queryFn }); // no `paginate` key at all
+
+    expect(queryFn).toHaveBeenCalledTimes(2);
+    expect(queryFn.mock.calls[1][0]).toMatchObject({ offset: 500 });
+    expect(result.rowsSeen).toBe(680);
+    // Proven complete (short final page) — no cap-hit warning, regardless of
+    // whatever per-row extraction errors these bare fixture rows produce.
+    expect(result.errors.some((e) => e.includes("safety backstop") || e.includes("single-call cap"))).toBe(false);
+  });
+
+  it("paginate:false is still honored as an explicit opt-out — exactly one queryFn call with no offset key", async () => {
     vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
     vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
     mockSql.mockResolvedValueOnce(undefined); // ingest-attempt stamp
     mockSql.mockResolvedValueOnce([]);
     const queryFn = vi.fn().mockResolvedValue([scoreboardRow({ GameId: "g1", Role: "Top" })]);
 
-    const result = await runProstageIngest({ cursor: 0, queryFn });
+    const result = await runProstageIngest({ cursor: 0, queryFn, paginate: false });
 
     expect(queryFn).toHaveBeenCalledTimes(1);
     expect(queryFn.mock.calls[0][0]).not.toHaveProperty("offset");
     expect(result.rowsSeen).toBe(1);
+  });
+
+  it("paginate:false hitting the exact PAGE_SIZE cap raises a loud error — a cap hit must never look like nothing-new", async () => {
+    vi.mocked(resolveActiveTournaments).mockResolvedValue(["A"]);
+    vi.mocked(orderByStaleness).mockResolvedValue(["A"]);
+    mockSql.mockResolvedValueOnce(undefined); // ingest-attempt stamp
+    mockSql.mockResolvedValueOnce([]);
+    const fullPage = Array.from({ length: 500 }, (_, i) => scoreboardRow({ GameId: `g${i}` }));
+    const queryFn = vi.fn().mockResolvedValueOnce(fullPage);
+
+    const result = await runProstageIngest({ cursor: 0, queryFn, paginate: false });
+
+    expect(result.rowsSeen).toBe(500);
+    expect(result.errors.some((e) => e.includes("500-row") && e.includes("single-call cap"))).toBe(true);
   });
 
   it("paginate:true walks offset in 500-row pages until a short page ends the walk", async () => {
@@ -277,6 +317,10 @@ describe("runProstageIngest", () => {
 
     expect(queryFn).toHaveBeenCalledTimes(10); // MAX_PAGES, not an infinite loop
     expect(result.rowsSeen).toBe(5000);
+    // Hitting the backstop without ever seeing a short page means we can't
+    // PROVE the tournament is actually done — same "cap hit must be loud"
+    // rule as the paginate:false single-call case.
+    expect(result.errors.some((e) => e.includes("MAX_PAGES safety backstop"))).toBe(true);
   });
 
   it("does NOT warn when unresolved role is at or below 50%", async () => {

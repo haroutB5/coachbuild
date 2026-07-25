@@ -108,7 +108,20 @@ let cachedMaps: Promise<DdragonMaps> | null = null;
 
 /** Fetches + memoizes champion/item/summoner/rune name->id maps from ddragon.
  *  Call __resetDdragonCacheForTests() between test cases that need a fresh
- *  fetch (e.g. to swap the mock). */
+ *  fetch (e.g. to swap the mock).
+ *
+ *  Self-clears the cache on failure (2026-07-25 fix, P2-1 audit) — without
+ *  this, a REJECTED promise was memoized forever: `cachedMaps` was assigned
+ *  the pending promise synchronously, and a rejection never got a chance to
+ *  reset it (nothing awaited it before the `if (!cachedMaps)` check ran
+ *  again). One ddragon blip on a warm serverless lambda would then poison
+ *  every later invocation on that instance for the rest of its life. Both
+ *  siblings (`getLeagues` in lib/prostage/lolesports.ts, `getChampionKeyByInternalId`
+ *  in lib/prostage/tournaments.ts) already self-clear on failure for the same
+ *  reason — this brings getDdragonMaps in line with that convention.
+ *  Doubly important here because `runLiveProstageIngest` calls this ABOVE
+ *  its own try block, so an unrecovered rejection would abort the whole
+ *  live-ingest run, not just this one lookup. */
 export function getDdragonMaps(): Promise<DdragonMaps> {
   if (!cachedMaps) {
     cachedMaps = (async () => {
@@ -120,7 +133,10 @@ export function getDdragonMaps(): Promise<DdragonMaps> {
         fetchJson<DdragonRunesReforged>(`${DDRAGON_BASE}/cdn/${version}/data/en_US/runesReforged.json`),
       ]);
       return buildDdragonMaps(version, championData, itemData, summonerData, runesData);
-    })();
+    })().catch((err) => {
+      cachedMaps = null;
+      throw err;
+    });
   }
   return cachedMaps;
 }

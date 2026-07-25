@@ -17,9 +17,18 @@
 //
 // RECONCILIATION with the Leaguepedia ingest. Rows written here use a
 // `lolesports:<gameId>` game_id and always set `lolesports_game_id`. The read
-// path (app/api/pros) hides a live row once a Leaguepedia-sourced row exists for
-// the same `lolesports_game_id` (resolveGame.ts is what links those), so the
-// richer row wins automatically and the two sources never double-render.
+// path (app/api/pros) hides a live row once the richer Leaguepedia row for that
+// game exists, so the two sources never double-render.
+//
+// That supersede rule is keyed on (normalised player, champion, +/-12h) — NOT on
+// `lolesports_game_id`, which was the v0.54.0 bug: the Leaguepedia ingest never
+// writes that column, so the match could never fire and every live row rendered
+// beside its twin. See the comment in app/api/pros/route.ts.
+//
+// Which makes `game_datetime` load-bearing, not cosmetic: it must be the real
+// PER-GAME start (`opened.gameStartTs`), never the match/series start
+// (`ev.startTime`) — a Bo5's five games all stamped with the series start put
+// game 5 up to ~4h from its Leaguepedia twin, outside the window.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getSql } from "@/lib/pro/db";
@@ -208,13 +217,23 @@ export async function runLiveProstageIngest(opts: LiveIngestOptions = {}): Promi
         if (game.state !== "completed" || !game.id) continue;
         result.gamesSeen += 1;
 
-        // Skip if ALREADY held from either source — the Leaguepedia row is
-        // richer, so its presence means there is nothing to add here.
-        const existing = (await sql`
-          SELECT 1 FROM coachbuild.prostage_matches
-          WHERE lolesports_game_id = ${game.id} LIMIT 1
-        `) as unknown as unknown[];
-        if (existing.length > 0) continue;
+        // Skip only when this game is ALREADY COMPLETE here — all 10 rows.
+        //
+        // This used to be `SELECT 1 ... LIMIT 1`, i.e. "any row at all". Two
+        // paths leave a game short: an unresolved champion `continue`s (exactly
+        // what MonkeyKing did), or a mid-loop throw commits the earlier
+        // participants and abandons the rest. Under the old check that game was
+        // then skipped forever and the run reported clean, so it could never be
+        // completed — and a 9-row game also fails orderedSidesForGame's 5/5 gate,
+        // silently costing the other nine players their comp strip and Teams box.
+        //
+        // Re-walking a permanently-short game costs ~3 feed calls per run. That
+        // is the deliberate trade: cheap and self-healing beats silently partial.
+        const heldRows = (await sql`
+          SELECT count(*)::int AS n FROM coachbuild.prostage_matches
+          WHERE lolesports_game_id = ${game.id}
+        `) as unknown as Array<{ n: number }>;
+        if ((heldRows[0]?.n ?? 0) >= 10) continue;
 
         try {
           const opened = await fetchOpeningWindow(game.id);
@@ -293,12 +312,13 @@ export async function runLiveProstageIngest(opts: LiveIngestOptions = {}): Promi
                   ${championId}, ${maps.championNameById.get(championId) ?? championRaw},
                   ${ROLE_ORDER[part.role ?? ""] ?? null},
                   ${win}, ${stats.kills ?? 0}, ${stats.deaths ?? 0}, ${stats.assists ?? 0},
-                  ${ev.startTime}, ${"[]"}::jsonb, ${"[]"}::jsonb, ${EMPTY_RUNES}::jsonb,
+                  ${opened.gameStartTs}, ${"[]"}::jsonb, ${"[]"}::jsonb, ${EMPTY_RUNES}::jsonb,
                   ${proId}, ${game.id}, now()
                 )
                 ON CONFLICT (game_id, player_link) DO UPDATE SET
                   win = EXCLUDED.win, kills = EXCLUDED.kills, deaths = EXCLUDED.deaths,
-                  assists = EXCLUDED.assists, pro_id = EXCLUDED.pro_id, ingested_at = now()
+                  assists = EXCLUDED.assists, pro_id = EXCLUDED.pro_id,
+                  game_datetime = EXCLUDED.game_datetime, ingested_at = now()
               `;
               wroteForGame += 1;
             }
