@@ -2,6 +2,45 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.52.0] — 2026-07-25 — pro-play ingest: gotcha (o) diagnosed and made loud
+
+**User report:** Caps's recent games were missing from Pro Players — his newest showed as EWC,
+9 days old. Ground truth (Leaguepedia, via curl): Caps had 5 `LEC/2026 Season/Summer Season`
+games, three on 07-24 and **two on 07-25 itself**.
+
+### Root cause — the long-standing gotcha (o), finally triaged
+`resolveActiveTournaments` returns `[]` on **either** a Cargo failure **or** a legitimate
+zero-row result. `runProstageIngest` then found `cursor 0` out of range on an empty list and
+returned `{tournament: null, rowsSeen: 0, errors: [], errorCount: 0}` — **a clean HTTP 200,
+indistinguishable from a healthy no-op run.** Verified live against production on 07-25: the
+endpoint returned exactly that. The cron had been "succeeding" while ingesting nothing.
+
+Nothing was wrong with the tournament *names*: `LEC/2026 Season/Summer Season` is exactly what
+the resolver produces and exactly what Leaguepedia uses. The last successful pass (07-22, a
+manual script run) legitimately found 0 rows for it — **LEC Summer did not start until 07-24.**
+Every pass since then was the silent-empty failure.
+
+### Fixed
+- **An empty tournament list is now an ERROR, not a clean run.** `runProstageIngest` pushes an
+  explicit error and the route reports `errorCount ≥ 1`, so this failure mode can never again be
+  invisible in the response or the Vercel function logs.
+- **`PROSTAGE_TOURNAMENT_SEED` is now a FALLBACK, not an override.** It used to short-circuit
+  ahead of live resolution, which meant setting it once to work around an outage would **pin the
+  tournament list forever** — the app would silently stop following new splits (LEC Summer
+  starting, Summer Playoffs in September, next season) with no failure of any kind. Live
+  resolution is tried first; the seed catches only the failure case, and a seeded result is
+  deliberately **not cached** so the next call retries live.
+
+### Tests
+`prostage-ingest.test.ts` gains a regression guard asserting zero-tournaments produces a
+non-empty `errors` array. `prostage-tournaments.test.ts`'s seed test is inverted to the new
+contract (seed ignored while live resolution works) plus three new cases: fallback on throw,
+fallback on zero rows, and no-caching of a seeded fallback.
+
+### Data
+A manual `--via-export` ingest was run to land the missing games immediately: 120 rows upserted,
+Caps current through 2026-07-25 15:40 (Ahri).
+
 ## [0.51.4] — 2026-07-25 (COMPANION CHANGE → 1.6.4 — re-install required)
 ### Fixed — companion opened a fresh pair of tabs every game (user-reported, screenshot: 4 stacked tabs)
 - **Root cause (measured, not inferred):** `Test-CompanionHasAttachedTab` treated a tab as attached only if it had polled `/status?...&follow=builds|draft` within **8 seconds**. That window was justified against the web poll's 3s cadence — but that cadence only holds for a *foreground* tab, and this feature is used precisely while the tab sits behind a fullscreen game. Chrome applies **intensive throttling** to a hidden tab after 5 minutes, collapsing its timers to roughly **one tick per minute**. A 60s cadence can never satisfy an 8s window, so every champ-select concluded "no tab attached" and `Start-Process`'d both pages again — piling up across games.

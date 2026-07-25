@@ -148,8 +148,24 @@ export async function runProstageIngest(opts: ProstageIngestOptions = {}): Promi
     errors: [],
   };
 
+  // An EMPTY tournament list is a failure, not a completed drain. This is the
+  // exact shape gotcha (o) took in production for weeks: resolveActiveTournaments
+  // swallows a Cargo failure (and a legitimate zero-row result) by returning [],
+  // the cursor is then out of range, and the route answered
+  // {tournament:null, rowsSeen:0, errors:[], errorCount:0} — a clean HTTP 200
+  // that looked like a successful no-op run. Nothing in prod ever reported a
+  // problem while pro-play data silently went stale. Surface it loudly instead;
+  // an empty list at cursor 0 can only mean resolution failed or matched nothing.
+  if (tournaments.length === 0) {
+    result.errors.push(
+      "resolveActiveTournaments returned 0 tournaments — Cargo lookup failed or matched nothing. " +
+        "Pro-play ingest did NOTHING this run. Set PROSTAGE_TOURNAMENT_SEED as a fallback list.",
+    );
+    return result;
+  }
+
   if (cursor < 0 || cursor >= tournaments.length) {
-    return result; // nextCursor stays null -> caller knows the drain is done (or list was empty)
+    return result; // nextCursor stays null -> caller knows the drain is done
   }
 
   const overviewPage = tournaments[cursor];

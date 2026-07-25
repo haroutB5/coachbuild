@@ -65,6 +65,23 @@ describe("runProstageIngest", () => {
     vi.mocked(cargoQueryWithRetry).mockReset();
   });
 
+  // Regression guard for gotcha (o). For weeks the prod cron resolved ZERO
+  // tournaments and answered {tournament:null, rowsSeen:0, errors:[]} — an
+  // HTTP 200 indistinguishable from a healthy no-op, while pro-play data went
+  // stale (LEC Summer started 2026-07-24 and never landed; a user reported
+  // Caps's games missing on 07-25). An empty list must be LOUD.
+  it("reports an ERROR when zero tournaments resolve — never a silent clean run", async () => {
+    vi.mocked(resolveActiveTournaments).mockResolvedValue([]);
+    vi.mocked(orderByStaleness).mockResolvedValue([]);
+
+    const result = await runProstageIngest({ cursor: 0 });
+
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0]).toMatch(/0 tournaments/i);
+    expect(result.tournament).toBeNull();
+    expect(result.rowsUpserted).toBe(0);
+  });
+
   it("applies staleness ordering when tournaments are resolved fresh (no override)", async () => {
     vi.mocked(resolveActiveTournaments).mockResolvedValue(["B", "A"]);
     vi.mocked(orderByStaleness).mockResolvedValue(["A", "B"]); // stalest-first reorder

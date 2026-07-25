@@ -30,11 +30,43 @@ describe("resolveActiveTournaments", () => {
     expect(cargoQueryWithRetry).not.toHaveBeenCalled();
   });
 
-  it("PROSTAGE_TOURNAMENT_SEED env var short-circuits — no Cargo call", async () => {
+  // Contract changed 2026-07-25: the env seed is a FALLBACK, not an override.
+  // As an override it would pin the tournament list forever — set once to work
+  // around an outage, and the app silently stops following new splits (LEC
+  // Summer starting, Summer Playoffs, next season) with no failure signal.
+  it("PROSTAGE_TOURNAMENT_SEED is IGNORED while live resolution works", async () => {
+    process.env.PROSTAGE_TOURNAMENT_SEED = "STALE SEED";
+    vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([
+      { OverviewPage: "LEC/2026 Season/Summer Season" },
+    ] as never);
+    const pages = await resolveActiveTournaments();
+    expect(pages).toEqual(["LEC/2026 Season/Summer Season"]);
+    expect(cargoQueryWithRetry).toHaveBeenCalled();
+  });
+
+  it("falls back to PROSTAGE_TOURNAMENT_SEED when the lookup THROWS", async () => {
     process.env.PROSTAGE_TOURNAMENT_SEED = "LEC 2026 Summer, LCK 2026 Summer";
+    vi.mocked(cargoQueryWithRetry).mockRejectedValueOnce(new Error("ratelimited"));
     const pages = await resolveActiveTournaments();
     expect(pages).toEqual(["LEC 2026 Summer", "LCK 2026 Summer"]);
-    expect(cargoQueryWithRetry).not.toHaveBeenCalled();
+  });
+
+  it("falls back to PROSTAGE_TOURNAMENT_SEED when the lookup returns 0 rows", async () => {
+    process.env.PROSTAGE_TOURNAMENT_SEED = "LEC 2026 Summer";
+    vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([] as never);
+    const pages = await resolveActiveTournaments();
+    expect(pages).toEqual(["LEC 2026 Summer"]);
+  });
+
+  it("does NOT cache a seeded fallback — the next call retries live resolution", async () => {
+    process.env.PROSTAGE_TOURNAMENT_SEED = "LEC 2026 Summer";
+    vi.mocked(cargoQueryWithRetry).mockRejectedValueOnce(new Error("ratelimited"));
+    expect(await resolveActiveTournaments()).toEqual(["LEC 2026 Summer"]);
+
+    vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([
+      { OverviewPage: "LEC/2026 Season/Summer Season" },
+    ] as never);
+    expect(await resolveActiveTournaments()).toEqual(["LEC/2026 Season/Summer Season"]);
   });
 
   it("queries Tournaments and returns resolved OverviewPages", async () => {

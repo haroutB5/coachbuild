@@ -134,14 +134,13 @@ export async function resolveActiveTournaments(opts: ResolveTournamentsOptions =
 
   if (opts.seedOverride?.length) return dedupe(opts.seedOverride).slice(0, MAX_TOURNAMENTS);
 
-  const envSeed = process.env.PROSTAGE_TOURNAMENT_SEED;
-  if (envSeed) {
-    const seeded = envSeed
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (seeded.length) return dedupe(seeded).slice(0, MAX_TOURNAMENTS);
-  }
+  // PROSTAGE_TOURNAMENT_SEED is a FALLBACK, not an override (changed
+  // 2026-07-25). It used to short-circuit here, ahead of the live lookup —
+  // which meant setting it to unblock an outage would PIN the tournament list
+  // forever, and the app would silently stop following new splits (LEC Summer
+  // starting, Summer Playoffs in September, next season) with no failure of any
+  // kind. Live resolution is tried first; the seed catches the failure case.
+  const envSeed = parseSeed(process.env.PROSTAGE_TOURNAMENT_SEED);
 
   if (cache && cache.expiresAt > Date.now()) return cache.pages;
 
@@ -158,11 +157,29 @@ export async function resolveActiveTournaments(opts: ResolveTournamentsOptions =
       cache = { pages: result, expiresAt: Date.now() + CACHE_TTL_MS };
       return result;
     }
-    log("Tournaments lookup returned 0 usable rows; set PROSTAGE_TOURNAMENT_SEED to override");
+    log("Tournaments lookup returned 0 usable rows; falling back to PROSTAGE_TOURNAMENT_SEED");
   } catch (err) {
-    log(`Tournaments lookup failed (${(err as Error).message}); set PROSTAGE_TOURNAMENT_SEED to override`);
+    log(`Tournaments lookup failed (${(err as Error).message}); falling back to PROSTAGE_TOURNAMENT_SEED`);
+  }
+
+  // Fallback path. Deliberately NOT cached: a seeded list is a degraded mode,
+  // so every subsequent call retries live resolution rather than settling into
+  // the seed for the cache TTL.
+  if (envSeed.length) {
+    log(`Using PROSTAGE_TOURNAMENT_SEED fallback (${envSeed.length} tournaments)`);
+    return envSeed;
   }
   return [];
+}
+
+/** Parses the comma-separated PROSTAGE_TOURNAMENT_SEED env var. */
+function parseSeed(raw: string | undefined): string[] {
+  if (!raw) return [];
+  const seeded = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return seeded.length ? dedupe(seeded).slice(0, MAX_TOURNAMENTS) : [];
 }
 
 export function __resetTournamentCacheForTests(): void {
