@@ -5,6 +5,7 @@ import type { ChampionRef } from "@/lib/types";
 import ChampionHero from "@/components/hextech/ChampionHero";
 import type { HextechTab } from "@/components/hextech/HextechTabs";
 import BuildTabContent from "@/components/hextech/BuildTabContent";
+import ChampionPickPrompt from "@/components/hextech/ChampionPickPrompt";
 import dynamic from "next/dynamic";
 // Round-B P3 fix (companion CIM cost section, item 5c): code-split via
 // next/dynamic — LivePanel only ever mounts for a session with a paired
@@ -65,11 +66,17 @@ export default function HomePage() {
   // which is the best available predictor between games. Mount-only, so it never
   // fights a champ-select follow or a deep link that lands later.
   const [lastChampHydrated, setLastChampHydrated] = useState(false);
+  // False until the user has an actual selection — a restored one, a search, a
+  // deep link, or a champ-select follow. While false the page shows the pick
+  // prompt instead of the Viktor seed. `champ` stays non-null throughout so no
+  // downstream component has to learn a nullable contract.
+  const [champChosen, setChampChosen] = useState(false);
   useEffect(() => {
     const stored = readLastChampion();
     if (stored) {
       setChamp(stored.champ);
       setActiveLane(stored.lane);
+      setChampChosen(true);
     }
     setLastChampHydrated(true);
   }, []);
@@ -181,6 +188,7 @@ export default function HomePage() {
           mostPlayedLaneRequestRef.current++;
           const lane = roleIdToLane(parsed.role);
           setChamp(found);
+          setChampChosen(true);
           setActiveLane(lane);
           sheetNav.replaceSelection(wireViewForChampion(found, lane, FIXED_TAB, source));
           return;
@@ -193,6 +201,7 @@ export default function HomePage() {
         // place.
         const landedLane = activeLane;
         setChamp(found);
+        setChampChosen(true);
         setActiveLane(landedLane);
         sheetNav.replaceSelection(wireViewForChampion(found, landedLane, FIXED_TAB, source));
 
@@ -236,6 +245,7 @@ export default function HomePage() {
           mostPlayedLaneRequestRef.current++;
           const lane = roleIdToLane(target.roleId);
           setChamp(found);
+          setChampChosen(true);
           setActiveLane(lane);
           sheetNav.replaceSelection(wireViewForChampion(found, lane, FIXED_TAB, source));
           return;
@@ -243,6 +253,7 @@ export default function HomePage() {
 
         const landedLane = activeLane;
         setChamp(found);
+        setChampChosen(true);
         sheetNav.replaceSelection(wireViewForChampion(found, landedLane, FIXED_TAB, source));
         const requestId = ++mostPlayedLaneRequestRef.current;
         getMostPlayedLane(found.id).then((bestLane) => {
@@ -277,6 +288,16 @@ export default function HomePage() {
     if (applied.activeLane !== undefined && applied.champ !== undefined) {
       setActiveLane(applied.activeLane);
       setChamp(applied.champ);
+      // NOT an unconditional "the user chose something". useSheetBackNav seeds
+      // its initial selection from current state on mount and applies it right
+      // back through here — with the Viktor seed still in `champ`. Marking
+      // chosen there defeated the pick prompt entirely (caught in the browser:
+      // fresh install still rendered VIKTOR). A genuine back-navigation TO a
+      // Viktor view can only happen after a real pick, which has already set
+      // this flag, so the id check costs nothing in that case.
+      if (applied.champ.id !== STATIC_FALLBACK_LANE_CHAMPIONS[INITIAL_LANE].id) {
+        setChampChosen(true);
+      }
     }
   }
 
@@ -297,6 +318,7 @@ export default function HomePage() {
     (selected: ChampionRef) => {
       if (sheetNav.isRestoring()) return;
       setChamp(selected);
+      setChampChosen(true);
       // Land on the CURRENT lane first — an instant, non-flashing
       // transition, corrected below if a better lane resolves.
       const landedLane = activeLane;
@@ -338,21 +360,30 @@ export default function HomePage() {
           (mockup 4/5), and the BUILD/PRO BUILDS tab strip + PROS search mode
           are retired (D1) in favor of one unified build view. */}
       <div className="max-w-[900px] lg:max-w-none xl:max-w-[1440px] lg:mx-0 xl:mx-auto overflow-x-clip">
-        <ChampionHero
-          champ={champ}
-          lane={activeLane}
-          onLaneChange={handleLaneChange}
-          rankBracket={rankBracket}
-          onRankChange={handleRankChange}
-        />
+        {/* Nothing picked yet (fresh install / cleared storage) — prompt rather
+            than assert a champion. Gated on lastChampHydrated so the restored
+            selection isn't flashed past on the way in. */}
+        {lastChampHydrated && !champChosen ? (
+          <ChampionPickPrompt />
+        ) : (
+          <>
+            <ChampionHero
+              champ={champ}
+              lane={activeLane}
+              onLaneChange={handleLaneChange}
+              rankBracket={rankBracket}
+              onRankChange={handleRankChange}
+            />
 
-        <BuildTabContent
-          champ={champ}
-          lane={activeLane}
-          rankBracket={rankBracket}
-          rankHydrated={rankHydrated}
-          onPatchResolved={setPatch}
-        />
+            <BuildTabContent
+              champ={champ}
+              lane={activeLane}
+              rankBracket={rankBracket}
+              rankHydrated={rankHydrated}
+              onPatchResolved={setPatch}
+            />
+          </>
+        )}
         {/* v0.32.0 (Live mode; provider-lifted v0.37.0): only mounted while
             the companion reports gameflow phase InProgress — owns its own
             1s live-client-data poll once mounted. Absent entirely

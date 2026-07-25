@@ -2,6 +2,48 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.55.0] — 2026-07-25 — Builds never opens on a champion you didn't pick
+
+### Added — the first-run pick state
+`ChampionPickPrompt` replaces the hero + build panels when nothing has been chosen yet (fresh
+install, cleared storage). v0.54.1 only restored your LAST champion, so a brand-new install still
+landed on Viktor once — this closes that.
+
+`champ` stays non-null throughout, so no downstream component learns a nullable contract; a
+separate `champChosen` flag drives the prompt.
+
+**Deliberately does not suggest champions.** "Popular picks" here would be Viktor with extra
+steps — still the app choosing. Favourite-champion shortcuts were built and then **removed**:
+`lib/favorites.ts` stores only `{id, name}` while `ChampionRef` needs the ddragon `key`, and
+inventing one risks a wrong build fetch. Wiring those from the champion list the app already
+loads is a clean follow-up, not something to fake.
+
+### Fixed — a bug in my own first attempt at this
+`restoreMainView` marked the champion as "chosen" unconditionally. `useSheetBackNav` seeds its
+initial selection from current state on mount and applies it straight back through that function —
+with the Viktor seed still in `champ` — so the prompt never rendered. **Caught in the browser, not
+by reading the code**: a fresh profile still showed VIKTOR while every unit check passed. Now only
+a non-seed champion counts as a real selection.
+
+### Bug sweep (data integrity, all 9,040 prostage rows)
+- `runes` object / `spells` array / `final_items` array — **100% correct types**, no survivors of
+  the 0.54.0 array bug.
+- Live-ingested rows: **zero** null champions, negative KDA, future timestamps, empty player links
+  or null roles.
+- **Zero** duplicate `(lolesports_game_id, player_link)` pairs — the live/Leaguepedia supersede
+  rule holds, nothing double-renders.
+- Every live game has **exactly 2 teams and a 5/5 win split** — the inverted-team bug from 0.54.0
+  cannot recur unnoticed.
+
+### Fixed — two silent failure modes found by that sweep
+- **`runLiveProstageIngest` truncated silently at `maxGames`.** Hitting the cap looked identical
+  to "nothing new to fetch" — the exact ambiguity that let the Leaguepedia cron rot unnoticed for
+  weeks. It now reports an explicit error saying games remain.
+- **`/api/pros/refresh` accepted any `proId` string.** It is unauthenticated and spends Riot API
+  budget, so a malformed id now costs one regex instead of a DB query and a Riot call. (Abuse is
+  otherwise bounded by the per-pro cooldown and `MAX_ACCOUNTS`; a public deployment would want a
+  real rate limit.)
+
 ## [0.54.1] — 2026-07-25 — fix the /history crash my own live ingest shipped
 
 **User report:** "I also see this error when searching for TheShy" — the whole page replaced by

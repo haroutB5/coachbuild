@@ -316,5 +316,14 @@ export async function runLiveProstageIngest(opts: LiveIngestOptions = {}): Promi
     }
   }
 
+  // Never truncate silently. Hitting the cap means games were left un-ingested,
+  // which would otherwise look identical to "nothing new to fetch" — the exact
+  // ambiguity that let the Leaguepedia cron rot unnoticed for weeks.
+  if (result.gamesIngested >= maxGames) {
+    const msg = `hit maxGames cap (${maxGames}) — more completed games remain un-ingested; re-run or raise the cap`;
+    result.errors.push(msg);
+    log(msg);
+  }
+
   return result;
 }

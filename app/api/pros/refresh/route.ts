@@ -59,6 +59,14 @@ export async function GET(req: NextRequest) {
   if (!proId) {
     return NextResponse.json({ error: "proId required" }, { status: 400 });
   }
+  // Reject anything that isn't a UUID before it reaches the DB or Riot. This is
+  // an UNAUTHENTICATED endpoint that spends Riot API budget, so the shape check
+  // is the cheap first gate — a malformed id must cost one regex, not a query.
+  // (Abuse beyond that is bounded by the per-pro cooldown and MAX_ACCOUNTS
+  // below; a public deployment would want a rate limit here too.)
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(proId)) {
+    return NextResponse.json({ error: "invalid proId" }, { status: 400 });
+  }
 
   // `active = false` accounts are dead/renamed smurfs the roster audit retired
   // (scripts/audit-accounts.mjs). The background sweep skips them and so must
