@@ -37,9 +37,34 @@ non-empty `errors` array. `prostage-tournaments.test.ts`'s seed test is inverted
 contract (seed ignored while live resolution works) plus three new cases: fallback on throw,
 fallback on zero rows, and no-caching of a seeded fallback.
 
+### The bigger finding — Vercel cannot reach Leaguepedia at all
+With the silent failure made loud, both transports were probed against production for the first
+time:
+
+| transport | result from Vercel |
+|---|---|
+| `api.php` (`action=cargoquery`) | `"You've exceeded your rate limit"` on the **first call of a run** — shared datacenter IP pool |
+| `Special:CargoExport` | **HTTP 403** — Cloudflare bot challenge (TLS/JA3 fingerprint block) |
+
+The repo had *assumed* CargoExport would be blocked from Vercel but never tested it; it is. So
+`/api/ingest/prostage` **physically cannot ingest pro-play data from Vercel**, by either path.
+No amount of scheduling or seeding fixes that.
+
+### Therefore: pro-play ingest now runs locally on a schedule
+`scripts/ingest-prostage-scheduled.ps1` + Windows Scheduled Task **`CoachBuildProstageIngest`**,
+every 3 hours — the same pattern (and for the same reason) as the existing
+`CoachBuildDraftIngest`, whose u.gg ingest is Cloudflare-blocked from Vercel too. This machine is
+not blocked. Verified end-to-end through Task Scheduler's own environment, which needs the real
+Node.js pinned ahead of the corporate `node64` shadow in PATH or `tsx` resolves to the wrong
+runtime.
+
+The route keeps `useExport: true` — it will not succeed from Vercel today, but it now fails
+*loudly*, and CargoExport is the better transport if that block ever lifts.
+
 ### Data
-A manual `--via-export` ingest was run to land the missing games immediately: 120 rows upserted,
-Caps current through 2026-07-25 15:40 (Ahri).
+A manual `--via-export` ingest landed the missing games immediately: 120 rows upserted, Caps
+current through 2026-07-25 15:40 (Ahri). Verified through the production API: `/api/pros` now
+returns his five LEC Summer games ahead of the stale EWC one.
 
 ## [0.51.4] — 2026-07-25 (COMPANION CHANGE → 1.6.4 — re-install required)
 ### Fixed — companion opened a fresh pair of tabs every game (user-reported, screenshot: 4 stacked tabs)

@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
     // An external pinger loops this endpoint with the returned cursor until
     // it's null — same POLLING pattern as /api/ingest/matches, different
     // cursor TYPE (see the header note above).
-    const result = await runProstageIngest({ cursor, fastFailOnRatelimit: true });
+    const result = await runProstageIngest({ cursor, fastFailOnRatelimit: true, useExport: true });
     // P3(g) fix (2026-07-17 Fable review): the prostage cron (gotcha (o) in
     // CLAUDE.md) has never landed data in production despite the route
     // itself working on manual invocation — a PLAUSIBLE, UNVERIFIED root

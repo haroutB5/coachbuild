@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { getSql } from "@/lib/pro/db";
-import { cargoField, cargoQueryWithRetry } from "./cargo";
+import { cargoExportQuery, cargoField, cargoQueryWithRetry } from "./cargo";
 import type { CargoTournamentRow } from "./types";
 
 // LEAGUE CODES: matched as a PREFIX (`"LCK/%"`), not a bare substring.
@@ -121,6 +121,12 @@ export interface ResolveTournamentsOptions {
    *  through so the route path doesn't eat a ~4.5min cooldown on its own
    *  Tournaments lookup either. */
   fastFailOnRatelimit?: boolean;
+  /** Routes the Tournaments lookup through Special:CargoExport instead of
+   *  api.php. api.php is effectively unusable from Vercel: a live probe on
+   *  2026-07-25 returned "You've exceeded your rate limit" for the very first
+   *  call of a run (shared datacenter IP pool), which is what left the resolved
+   *  list empty and the cron silently ingesting nothing for weeks. */
+  useExport?: boolean;
 }
 
 /** Returns the OverviewPages to ingest ScoreboardPlayers for, in priority
@@ -148,7 +154,9 @@ export async function resolveActiveTournaments(opts: ResolveTournamentsOptions =
   const spec = buildTournamentsQuerySpec(withinDays);
 
   try {
-    const rows = await cargoQueryWithRetry<CargoTournamentRow>(spec, { fastFail: opts.fastFailOnRatelimit });
+    const rows = opts.useExport
+      ? await cargoExportQuery<CargoTournamentRow>(spec)
+      : await cargoQueryWithRetry<CargoTournamentRow>(spec, { fastFail: opts.fastFailOnRatelimit });
     const pages = rows
       .map((r) => cargoField(r, "OverviewPage"))
       .filter((p): p is string => Boolean(p));

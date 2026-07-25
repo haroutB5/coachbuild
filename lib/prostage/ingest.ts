@@ -14,7 +14,7 @@
 
 import { getSql } from "@/lib/pro/db";
 import { DbUnavailableError } from "@/lib/pro/errors";
-import { cargoQueryWithRetry } from "./cargo";
+import { cargoExportQuery, cargoQueryWithRetry } from "./cargo";
 import type { CargoQueryOptions } from "./cargo";
 import { cleanLeaguepediaName } from "./displayName";
 import { getDdragonMaps } from "./ddragon";
@@ -56,6 +56,12 @@ export interface ProstageIngestOptions {
    *  The route (app/api/ingest/prostage/route.ts) is intentionally left on
    *  the default api.php path; only the script opts in. */
   queryFn?: (opts: CargoQueryOptions) => Promise<CargoScoreboardPlayerRow[]>;
+  /** Routes BOTH the Tournaments lookup and the ScoreboardPlayers fetch through
+   *  Special:CargoExport rather than api.php. Now the ROUTE default (2026-07-25)
+   *  — api.php answered "You've exceeded your rate limit" on the first call of a
+   *  live probe from Vercel, which is precisely why the cron ingested nothing
+   *  for weeks. Ignored when an explicit queryFn is supplied. */
+  useExport?: boolean;
   /** When true, walks queryFn with increasing `offset` (PAGE_SIZE=500 per
    *  call) until a page returns fewer than PAGE_SIZE rows, instead of the
    *  single unpaginated 500-row call. Closes a real truncation bug
@@ -128,7 +134,10 @@ export async function runProstageIngest(opts: ProstageIngestOptions = {}): Promi
   const fastFailOnRatelimit = opts.fastFailOnRatelimit ?? false;
   const queryFn: (qopts: CargoQueryOptions) => Promise<CargoScoreboardPlayerRow[]> =
     opts.queryFn ??
-    ((qopts) => cargoQueryWithRetry<CargoScoreboardPlayerRow>(qopts, { fastFail: fastFailOnRatelimit }));
+    (opts.useExport
+      ? (qopts) => cargoExportQuery<CargoScoreboardPlayerRow>(qopts)
+      : (qopts) =>
+          cargoQueryWithRetry<CargoScoreboardPlayerRow>(qopts, { fastFail: fastFailOnRatelimit }));
 
   // Staleness reordering ONLY applies to a fresh resolution — an explicit
   // `opts.tournaments` override (tests, and the script's own once-per-run
@@ -138,7 +147,10 @@ export async function runProstageIngest(opts: ProstageIngestOptions = {}): Promi
   // orderByStaleness's doc comment in lib/prostage/tournaments.ts.
   const tournaments = opts.tournaments
     ? opts.tournaments
-    : await orderByStaleness(sql, await resolveActiveTournaments({ log, fastFailOnRatelimit }));
+    : await orderByStaleness(
+        sql,
+        await resolveActiveTournaments({ log, fastFailOnRatelimit, useExport: opts.useExport }),
+      );
 
   const result: ProstageIngestResult = {
     tournament: null,
