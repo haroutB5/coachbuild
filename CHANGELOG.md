@@ -2,6 +2,52 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.54.0] — 2026-07-25 — pro play ingests from the LIVE lolesports feed
+
+**User report:** "TheShy does have pro games played today with IG in LPL, I can see it in Matchday."
+He was right, and my previous conclusion (0.53.0, "TheShy has no 2026 pro games") was **wrong** —
+it described Leaguepedia's table, not reality.
+
+### Root cause — a single lagging source
+Leaguepedia's `ScoreboardPlayers` is **editor-populated and lags days-to-weeks**. `LPL/2026
+Season/Split 3` started 07-22 and still had **zero** rows on 07-25. Matchday showed the games
+because it reads the live **lolesports** feed; CoachBuild's pro-play ingest read only Leaguepedia.
+No ingest cadence can fix that — **absence in one source is not evidence a game wasn't played.**
+
+### Added — `lib/prostage/liveIngest.ts`
+Ingests completed games straight from lolesports (schedule → `getEventDetails` → livestats
+window), for the same tier-1 + targeted tier-2 league set as the Cargo path. Deliberately shallow:
+champion, role, KDA, result, team, date. **No items/runes** — those need the per-10s `details`
+walk, and Leaguepedia backfills them anyway.
+
+**Reconciliation:** live rows use a `lolesports:<gameId>` game_id and always set
+`lolesports_game_id`. The ingest skips any game Leaguepedia already holds, and the read path
+(`/api/pros`, all three player/champion queries) hides a live row once a Leaguepedia row exists
+for the same `lolesports_game_id` + player. The richer row wins automatically; neither source
+double-renders.
+
+Verified live — **TheShy, IG, 2026-07-25: Ambessa (loss), Olaf (win), Yorick (win)**, matching
+IG's 2-1 series win over WBG. 28 games / 280 rows ingested across LEC, LPL and CD.
+
+### Three real bugs found by running it, not by reading it
+- **Unaligned `startingTime` → every game skipped.** `fetchLatestFrameTs` returns a
+  millisecond-precision frame timestamp; the window feed requires **10-second alignment** (that is
+  what `timeline.ts`'s `iso10s` is for). Passing it through verbatim returned an empty body, which
+  the winner vote correctly read as undecidable — so the first run ingested *nothing* and said so.
+- **Team/side mapping was INVERTED.** Deriving team from `game.teams[].side` → team id does not
+  line up with the livestats blue/red arrays: every IG player was written as team `WBG` and vice
+  versa. Because the code was wrong the prefix never stripped, so `IGTheShy` was never findable as
+  `TheShy`. Team is now derived from the summoner-name prefix itself, which is self-consistent.
+  (`win` was never affected — it comes from the blue/red arrays, not this mapping.)
+- **`MonkeyKing` was unresolvable.** lolesports reports champions by Riot's **internal** key while
+  the ddragon map was keyed on display name (`Wukong`). `buildDdragonMaps` now indexes both;
+  display name is set first and never overwritten, so canonical mapping still wins.
+
+The 279 rows written before the team fix were deleted and re-ingested.
+
+### Scheduling
+`CoachBuildProstageIngest` (every 3h) now runs the live feed **first**, then Leaguepedia.
+
 ## [0.53.0] — 2026-07-25 — pro data is refreshed on demand; solo-queue sweep moved off Vercel
 
 **User reports:** "TheShy's games aren't showing" and "Bwipo's soloQ isn't up to date."

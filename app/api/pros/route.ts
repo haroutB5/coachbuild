@@ -452,6 +452,11 @@ export async function GET(req: NextRequest) {
               LEFT JOIN coachbuild.pros p ON p.id = pm.pro_id
               WHERE pm.player_link = ${playerLinkParam} AND (${role} = 5 OR pm.role = ${role})
                 AND pm.game_datetime > now() - make_interval(days => ${FRESH_WINDOW_DAYS})
+                AND NOT (pm.game_id LIKE 'lolesports:%' AND EXISTS (
+                  SELECT 1 FROM coachbuild.prostage_matches sup
+                  WHERE sup.lolesports_game_id = pm.lolesports_game_id
+                    AND sup.player_link = pm.player_link
+                    AND sup.game_id NOT LIKE 'lolesports:%'))
               ORDER BY pm.game_datetime DESC
               LIMIT ${limit}
             `
@@ -466,6 +471,11 @@ export async function GET(req: NextRequest) {
               JOIN coachbuild.pros p ON p.id = pm.pro_id
               WHERE pm.pro_id = ${proId} AND (${role} = 5 OR pm.role = ${role})
                 AND pm.game_datetime > now() - make_interval(days => ${FRESH_WINDOW_DAYS})
+                AND NOT (pm.game_id LIKE 'lolesports:%' AND EXISTS (
+                  SELECT 1 FROM coachbuild.prostage_matches sup
+                  WHERE sup.lolesports_game_id = pm.lolesports_game_id
+                    AND sup.player_link = pm.player_link
+                    AND sup.game_id NOT LIKE 'lolesports:%'))
               ORDER BY pm.game_datetime DESC
               LIMIT ${limit}
             `
@@ -479,6 +489,11 @@ export async function GET(req: NextRequest) {
               LEFT JOIN coachbuild.pros p ON p.id = pm.pro_id
               WHERE pm.champion_id = ${championId} AND (${role} = 5 OR pm.role = ${role})
                 AND pm.game_datetime > now() - make_interval(days => ${FRESH_WINDOW_DAYS})
+                AND NOT (pm.game_id LIKE 'lolesports:%' AND EXISTS (
+                  SELECT 1 FROM coachbuild.prostage_matches sup
+                  WHERE sup.lolesports_game_id = pm.lolesports_game_id
+                    AND sup.player_link = pm.player_link
+                    AND sup.game_id NOT LIKE 'lolesports:%'))
               ORDER BY pm.game_datetime DESC
               LIMIT ${limit}
             `

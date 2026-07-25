@@ -52,11 +52,18 @@ function buildDdragonMaps(
 ): DdragonMaps {
   const championByName = new Map<string, number>();
   const championNameById = new Map<number, string>();
-  for (const entry of Object.values(championData.data)) {
+  for (const [dataKey, entry] of Object.entries(championData.data)) {
     const id = parseInt(entry.key, 10);
     if (Number.isNaN(id)) continue;
     championByName.set(normalizeName(entry.name), id);
     championNameById.set(id, entry.name);
+    // ALSO index ddragon's internal data key ("MonkeyKing", "Fiddlesticks"),
+    // not just the display name ("Wukong"). The lolesports livestats feed
+    // reports championId as the INTERNAL key, so a live-ingested Wukong game
+    // was unresolvable until this existed. Display name is set first and never
+    // overwritten, so the canonical mapping still wins on any collision.
+    const keyNorm = normalizeName(dataKey);
+    if (!championByName.has(keyNorm)) championByName.set(keyNorm, id);
   }
   for (const [alias, canonical] of Object.entries(CHAMPION_ALIASES)) {
     const id = championByName.get(normalizeName(canonical));

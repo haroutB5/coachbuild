@@ -50,6 +50,16 @@ Set-Location $repo
 $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 Add-Content $log "[$stamp] prostage ingest starting" -Encoding utf8
 
+# 1) LIVE lolesports feed FIRST — this is what makes "always up to date" true.
+# Leaguepedia lags days-to-weeks (LPL Split 3 started 07-22 and still had zero
+# rows on 07-25), so a Leaguepedia-only pipeline can never show today's games.
+& npx tsx scripts/ingest-prostage-live.mjs 3 60 2>&1 | Out-File -FilePath $log -Append -Encoding utf8
+Add-Content $log "live feed exit $LASTEXITCODE" -Encoding utf8
+
+# 2) THEN Leaguepedia, which later supersedes each live row with a richer one
+# (items/runes). The read path hides the live row once its richer twin exists —
+# see lib/prostage/liveIngest.ts's reconciliation note.
+#
 # --via-export is REQUIRED, not optional: it selects Special:CargoExport (light
 # rate limit) AND the curl-subprocess transport, which is the only combination
 # that gets past Cloudflare from any environment we have. The default api.php
