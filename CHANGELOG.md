@@ -44,6 +44,11 @@ pro games at all** — his most recent are 2025 Worlds Play-In and LPL 2025 Regi
 Invictus Gaming's 2026 top laner is Breathe. His empty state was therefore *correct*, just
 unexplained.
 
+### CORRECTION (same day, see 0.54.0 plan)
+The claim below that TheShy has no 2026 games was WRONG — it described Leaguepedia's table, not
+reality. He played IG vs WBG in LPL on 2026-07-25 (Ambessa). Leaguepedia is editor-populated and
+lags; absence there is not evidence a player did not play.
+
 ### Also confirmed, not a bug
 `LPL/2026 Season/Split 3` (started 07-22) still has **zero** ScoreboardPlayers rows upstream on
 Leaguepedia. Our ingest is resolving and attempting it correctly; the wiki simply has no data
