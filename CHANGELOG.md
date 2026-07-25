@@ -2,6 +2,40 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.54.1] — 2026-07-25 — fix the /history crash my own live ingest shipped
+
+**User report:** "I also see this error when searching for TheShy" — the whole page replaced by
+*"Application error: a client-side exception has occurred."*
+
+### Root cause — my bug, introduced hours earlier in 0.54.0
+`prostage_matches.runes` is an **object** (`ProGameRunes`: primaryTree/keystone/primary[]/
+secondaryTree/secondary[]/shards[]). The new live ingest wrote `'[]'::jsonb` — an **array** — for
+games with no rune data. `GameDetailSheet` then read `game.runes.primary.length` on a value with
+no `primary` key, threw `Cannot read properties of undefined (reading 'length')`, and took the
+**entire /history route** down with it.
+
+Diagnosed by reproducing against the local dev server, where React reports a real component name
+(production's minified frame was just `at ei (...)`). The prod payload shapes were byte-identical
+between a live-sourced and a Leaguepedia-sourced game, so inspecting JSON alone would never have
+found it.
+
+### Fixed
+- **Live ingest writes the correct empty rune OBJECT** (`EMPTY_RUNES`), carrying every key the
+  renderer reads.
+- **280 already-written rows repaired** in place (`jsonb_typeof(runes) = 'array'` → the empty
+  object). Zero array-typed rune rows remain across all 9,040 prostage rows.
+- **`GameDetailSheet` no longer trusts the shape.** It normalises `runes` defensively before use,
+  so a malformed field degrades to "no runes recorded" instead of white-screening a whole route.
+  The data bug is fixed at the source; this is the second line of defence that should have existed.
+
+### Also — Builds no longer opens on Viktor
+Per user directive. `app/page.tsx` seeded its champion state with
+`STATIC_FALLBACK_LANE_CHAMPIONS.mid` (Viktor) purely so first paint matched the original design
+mockup, so **every** session landed on a champion nobody picked. It now restores the champion and
+lane **you** last viewed (`lib/lastChampion.ts`, localStorage, shape-validated and failure-safe).
+That is not the app deciding — it is your own most recent choice, which between games is the best
+available predictor.
+
 ## [0.54.0] — 2026-07-25 — pro play ingests from the LIVE lolesports feed
 
 **User report:** "TheShy does have pro games played today with IG in LPL, I can see it in Matchday."

@@ -114,6 +114,20 @@ export function stripTeamPrefix(summonerName: string, teamCode: string | undefin
 
 const ROLE_ORDER: Record<string, number> = { top: 0, jungle: 1, mid: 2, bottom: 3, support: 4 };
 
+/** `runes` is an OBJECT (ProGameRunes), not an array. Writing `[]` here shipped a
+ *  crash: GameDetailSheet reads `game.runes.primary.length`, which is undefined
+ *  on an array, and the whole /history page white-screened with "a client-side
+ *  exception has occurred" the moment a live-ingested game's sheet opened.
+ *  The empty shape must still carry every key the renderer reads. */
+const EMPTY_RUNES = JSON.stringify({
+  primaryTree: 0,
+  keystone: 0,
+  primary: [],
+  secondaryTree: 0,
+  secondary: [],
+  shards: [],
+});
+
 async function fetchWindowAt(gameId: string, ts: string) {
   // startingTime MUST be 10s-aligned. fetchLatestFrameTs returns a real frame
   // timestamp (millisecond precision), and passing that through verbatim
@@ -279,7 +293,7 @@ export async function runLiveProstageIngest(opts: LiveIngestOptions = {}): Promi
                   ${championId}, ${maps.championNameById.get(championId) ?? championRaw},
                   ${ROLE_ORDER[part.role ?? ""] ?? null},
                   ${win}, ${stats.kills ?? 0}, ${stats.deaths ?? 0}, ${stats.assists ?? 0},
-                  ${ev.startTime}, ${"[]"}::jsonb, ${"[]"}::jsonb, ${"[]"}::jsonb,
+                  ${ev.startTime}, ${"[]"}::jsonb, ${"[]"}::jsonb, ${EMPTY_RUNES}::jsonb,
                   ${proId}, ${game.id}, now()
                 )
                 ON CONFLICT (game_id, player_link) DO UPDATE SET

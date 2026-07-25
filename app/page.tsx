@@ -15,6 +15,7 @@ import dynamic from "next/dynamic";
 // fetch/poll effects) with nothing to render server-side.
 const LivePanel = dynamic(() => import("@/components/live/LivePanel"), { ssr: false });
 import { parseLiveDeepLink, roleIdToLane } from "@/components/live/deepLink";
+import { readLastChampion, writeLastChampion } from "@/lib/lastChampion";
 import { resolveCurrentChampSelectChampionId, resolveChampSelectRoleId } from "@/components/live/champSelectFollow";
 import {
   markCompanionDriven,
@@ -54,6 +55,32 @@ export default function HomePage() {
   // fallback data lib/laneDefaults.ts/heroContracts.ts already share) so the
   // page pixel-matches the spec screenshot on first paint.
   const [champ, setChamp] = useState<ChampionRef>(STATIC_FALLBACK_LANE_CHAMPIONS[INITIAL_LANE]);
+
+  // Open on the champion YOU last looked at, not on the mockup's Viktor.
+  //
+  // The seed above exists so SSR/first paint has something concrete; leaving it
+  // as the landing state meant every session opened on a champion the user never
+  // picked (user directive 2026-07-25: "stop showing viktor by default"). This
+  // is not the app choosing — it restores the user's own most recent choice,
+  // which is the best available predictor between games. Mount-only, so it never
+  // fights a champ-select follow or a deep link that lands later.
+  const [lastChampHydrated, setLastChampHydrated] = useState(false);
+  useEffect(() => {
+    const stored = readLastChampion();
+    if (stored) {
+      setChamp(stored.champ);
+      setActiveLane(stored.lane);
+    }
+    setLastChampHydrated(true);
+  }, []);
+
+  // Persist every settled selection (champion or lane) once hydration has run —
+  // writing before that would immediately overwrite the stored value with the
+  // Viktor seed on first paint.
+  useEffect(() => {
+    if (!lastChampHydrated) return;
+    writeLastChampion(champ, activeLane);
+  }, [champ, activeLane, lastChampHydrated]);
   const [patch, setPatch] = useState<string | null>(null);
 
   // Feature 3 (rank brackets) — LIFTED from BuildTabContent (v0.51.0) so

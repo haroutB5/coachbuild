@@ -450,8 +450,22 @@ export default function GameDetailSheet({
   // narrowing survives into the onClick closure below.
   const trinketId = game.trinket;
   const isProstage = game.source === "prostage";
-  const hasFullRunes = game.runes.primary.length > 0 || game.runes.secondary.length > 0;
-  const hasAnyRunes = game.runes.keystone > 0 || hasFullRunes || game.runes.shards.length > 0;
+  // Defensive normalisation. `runes` is typed as an OBJECT, but a row written
+  // with an array (v0.54.0's live ingest did exactly that) made
+  // `game.runes.primary` undefined and the `.length` read below took down the
+  // ENTIRE /history page with "a client-side exception has occurred" — a whole
+  // screen lost to one malformed field. The data bug is fixed at the source,
+  // but a detail sheet should degrade to "no runes recorded", never white-screen.
+  const runes = {
+    primaryTree: game.runes?.primaryTree ?? 0,
+    keystone: game.runes?.keystone ?? 0,
+    primary: Array.isArray(game.runes?.primary) ? game.runes.primary : [],
+    secondaryTree: game.runes?.secondaryTree ?? 0,
+    secondary: Array.isArray(game.runes?.secondary) ? game.runes.secondary : [],
+    shards: Array.isArray(game.runes?.shards) ? game.runes.shards : [],
+  };
+  const hasFullRunes = runes.primary.length > 0 || runes.secondary.length > 0;
+  const hasAnyRunes = runes.keystone > 0 || hasFullRunes || runes.shards.length > 0;
 
   const skillGrid = buildSkillOrderGrid(game.skillOrder);
 
@@ -739,29 +753,29 @@ export default function GameDetailSheet({
             <section className="mb-6">
               <SectionLabel>Runes</SectionLabel>
               <div className="flex items-start gap-4 flex-wrap">
-                {game.runes.keystone > 0 && (
+                {runes.keystone > 0 && (
                   <div className="flex items-start gap-2">
-                    <RunePerkTile runeId={game.runes.keystone} ver={ver} size="lg" onOpenDetail={openDetail} />
-                    {game.runes.primary.length > 0 && (
+                    <RunePerkTile runeId={runes.keystone} ver={ver} size="lg" onOpenDetail={openDetail} />
+                    {runes.primary.length > 0 && (
                       <div className="flex items-start gap-2 pt-1">
-                        {game.runes.primary.map((id, i) => (
+                        {runes.primary.map((id, i) => (
                           <RunePerkTile key={`p-${id}-${i}`} runeId={id} ver={ver} size="sm" onOpenDetail={openDetail} />
                         ))}
                       </div>
                     )}
                   </div>
                 )}
-                {(game.runes.secondaryTree > 0 || game.runes.secondary.length > 0) && (
+                {(runes.secondaryTree > 0 || runes.secondary.length > 0) && (
                   <div className="flex items-start gap-2">
-                    <TreeTile treeId={game.runes.secondaryTree} size="sm" />
-                    {game.runes.secondary.map((id, i) => (
+                    <TreeTile treeId={runes.secondaryTree} size="sm" />
+                    {runes.secondary.map((id, i) => (
                       <RunePerkTile key={`s-${id}-${i}`} runeId={id} ver={ver} size="sm" onOpenDetail={openDetail} />
                     ))}
                   </div>
                 )}
-                {game.runes.shards.length > 0 && (
+                {runes.shards.length > 0 && (
                   <div className="flex items-start gap-2">
-                    {game.runes.shards.map((id, i) => (
+                    {runes.shards.map((id, i) => (
                       <button
                         key={`shard-${id}-${i}`}
                         type="button"
