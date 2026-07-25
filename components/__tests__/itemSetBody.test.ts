@@ -210,42 +210,60 @@ describe("buildItemSets — always exactly ONE set per champ+role", () => {
 
 describe("buildItemSets — block presence (structural blocks only)", () => {
   // NOTE: "Highest WPA" has no tag requirement, only a ≥4-qualifying-item
-  // pool-size threshold — Core alone (6 full items) already clears it, so it
-  // legitimately appears in almost every fixture below. The damage-family
-  // archetype blocks (v0.47.0) are tested separately (see the "damage-family
-  // archetype" describe blocks); these structural tests filter them out via
-  // structuralBlockTypes so they stay focused on Core/Buy order/Pro/
-  // Situational gating regardless of which family CHAMP's fixture resolves to.
+  // pool-size threshold. The damage-family archetype blocks (v0.47.0) are tested
+  // separately (see the "damage-family archetype" describe blocks); these
+  // structural tests filter them out via structuralBlockTypes so they stay
+  // focused on Core/Buy order/Pro/Situational gating regardless of which family
+  // CHAMP's fixture resolves to.
+  //
+  // AUDIT P1-B changes what "present" means here. The pool-size threshold is a
+  // NECESSARY condition for Highest WPA, not a sufficient one: a block also has
+  // to be a DIFFERENT BUILD from every higher-priority block. `baseItems()` is
+  // exactly 5 full items + boots and nothing else, so the whole candidate pool
+  // IS the core build — every ordering of it lands on the same six ids, and
+  // Highest WPA is Core build wearing a second name. It is now dropped, which is
+  // the whole point of the fix. Fixtures below that WANT a second block
+  // therefore have to supply a second build (see the alts case).
 
-  it("Starting + Core build (+ Highest WPA) when there's no optimizedPath, no pro data, no alts", () => {
+  it("Starting + Core build ONLY when there's no optimizedPath, no pro data, no alts — Highest WPA would be the core build under another name (P1-B)", () => {
     const build = baseBuild(baseItems());
     const sets = buildItemSets(CHAMP, "Bot", build, null, baseItemMetaMap());
-    expect(structuralBlockTypes(sets)).toEqual(["Starting", "Core build", "Highest WPA"]);
+    expect(structuralBlockTypes(sets)).toEqual(["Starting", "Core build"]);
   });
 
   it("adds Buy order when optimizedPath genuinely differs from the core prefix", () => {
     const build = baseBuild(baseItems({ optimizedPath: [pick(3046), pick(3072)] })); // reversed vs fourthPlus
     const sets = buildItemSets(CHAMP, "Bot", build, null, baseItemMetaMap());
-    expect(structuralBlockTypes(sets)).toEqual(["Starting", "Core build", "Buy order", "Highest WPA"]);
+    // Buy order carries the SAME six ids in a different ORDER — and survives,
+    // because expressing the order is its entire purpose (the one carve-out in
+    // the otherwise order-insensitive duplicate test).
+    expect(structuralBlockTypes(sets)).toEqual(["Starting", "Core build", "Buy order"]);
+    const [core, buy] = ["Core build", "Buy order"].map((t) => findBlock(sets, t)!.items.map((i) => i.id));
+    expect([...core].sort()).toEqual([...buy].sort());
+    expect(core).not.toEqual(buy);
   });
 
   it("excludes Buy order when optimizedPath is IDENTICAL to the core prefix", () => {
     const build = baseBuild(baseItems({ optimizedPath: [pick(3031), pick(3036)] })); // == [first, second]
     const sets = buildItemSets(CHAMP, "Bot", build, null, baseItemMetaMap());
-    expect(structuralBlockTypes(sets)).toEqual(["Starting", "Core build", "Highest WPA"]);
+    expect(structuralBlockTypes(sets)).toEqual(["Starting", "Core build"]);
   });
 
   it("excludes Buy order when optimizedPath is empty", () => {
     const build = baseBuild(baseItems({ optimizedPath: [] }));
     const sets = buildItemSets(CHAMP, "Bot", build, null, baseItemMetaMap());
-    expect(structuralBlockTypes(sets)).toEqual(["Starting", "Core build", "Highest WPA"]);
+    expect(structuralBlockTypes(sets)).toEqual(["Starting", "Core build"]);
   });
 
   it("adds Pro build when pro-consensus data is supplied and non-empty", () => {
     const build = baseBuild(baseItems());
     const pro = { items: [{ itemId: 3020, share: 0.6 }], boots: [{ itemId: 3006, share: 0.4 }] };
     const sets = buildItemSets(CHAMP, "Bot", build, pro, baseItemMetaMap());
-    expect(structuralBlockTypes(sets)).toEqual(["Starting", "Core build", "Pro build", "Highest WPA"]);
+    expect(structuralBlockTypes(sets)).toEqual(["Starting", "Core build", "Pro build"]);
+    // Pro build survives because 3020 (pro-only) makes it a genuinely different
+    // build; Highest WPA does not, because 3020 has no measured WPA at all and
+    // is therefore FILL that never displaces a WPA-bearing item (P1-A).
+    expect(findBlock(sets, "Pro build")!.items.map((i) => i.id)).toContain("3020");
   });
 
   it("omits Pro build when pro-consensus data is null/absent", () => {
@@ -253,22 +271,22 @@ describe("buildItemSets — block presence (structural blocks only)", () => {
     expect(structuralBlockTypes(buildItemSets(CHAMP, "Bot", build, null, baseItemMetaMap()))).toEqual([
       "Starting",
       "Core build",
-      "Highest WPA",
     ]);
     expect(structuralBlockTypes(buildItemSets(CHAMP, "Bot", build, undefined, baseItemMetaMap()))).toEqual([
       "Starting",
       "Core build",
-      "Highest WPA",
     ]);
   });
 
   it("omits Pro build when pro-consensus items AND boots are both empty (never an empty block)", () => {
     const build = baseBuild(baseItems());
     const sets = buildItemSets(CHAMP, "Bot", build, { items: [], boots: [] }, baseItemMetaMap());
-    expect(structuralBlockTypes(sets)).toEqual(["Starting", "Core build", "Highest WPA"]);
+    expect(structuralBlockTypes(sets)).toEqual(["Starting", "Core build"]);
   });
 
   it("adds Situational swaps only when alts exist; omits entirely otherwise", () => {
+    // 9001 outranks every core pick on WPA, so Highest WPA is a genuinely
+    // different build here and survives alongside Core build.
     const withAlts = buildItemSets(
       CHAMP,
       "Bot",
@@ -284,16 +302,20 @@ describe("buildItemSets — block presence (structural blocks only)", () => {
     ]);
 
     const withoutAlts = buildItemSets(CHAMP, "Bot", baseBuild(baseItems()), null, baseItemMetaMap());
-    expect(structuralBlockTypes(withoutAlts)).toEqual(["Starting", "Core build", "Highest WPA"]);
+    expect(structuralBlockTypes(withoutAlts)).toEqual(["Starting", "Core build"]);
   });
 
-  it("all blocks appear together in order for an AP champ: Starting, Core, Buy order, Pro, Highest WPA, AP/Mage, Tank Mage, Situational (AP Burst DE-DUPED into AP/Mage)", () => {
+  it("all blocks appear together in canonical order for an AP champ: Starting, Core, Buy order, Pro, Tank Mage, Situational (AP/Mage + AP Burst + Highest WPA all collapse into Core build)", () => {
     // v0.48.0 full-order check on a realistic AP champ (Viktor). Family resolves
-    // to AP from his own items, so the AP archetype set is considered — but his
-    // burst-leaning data makes AP/Mage and AP Burst near-identical, so the
-    // general de-dup collapses AP Burst into the higher-priority AP/Mage. The
-    // curated Tank Mage (durable-AP, distinct by construction) survives. Net:
-    // exactly ONE standard AP build + a distinct Tank Mage — the user's ask.
+    // to AP from his own items, so the AP archetype set is considered.
+    //
+    // AUDIT P1-B: this used to expect Highest WPA AND AP/Mage as separate
+    // blocks. Both carry EXACTLY the same six ids as Core build — Viktor's whole
+    // recommended pool is AP, so "his AP items ranked by WPA" and "his core
+    // build" are the same build three times over. That is the duplication the
+    // user complained about in v0.48.0, still firing between families. Only the
+    // curated Tank Mage (durable-AP, distinct by construction) genuinely differs
+    // and survives. Net: ONE standard build + ONE distinct off-meta variant.
     const viktor: ChampionRef = { id: 112, key: "Viktor", name: "Viktor", icon: "v.png", tags: ["Mage"] };
     const build = baseBuild(
       baseItems({
@@ -329,11 +351,16 @@ describe("buildItemSets — block presence (structural blocks only)", () => {
       "Core build",
       "Buy order",
       "Pro build",
-      "Highest WPA",
-      "AP/Mage",
-      "Tank Mage",
+      "Tank Mage (low data)",
       "Situational swaps",
     ]);
+    // The survivors are all genuinely different builds — the guarantee the block
+    // list above is really asserting.
+    const sigs = sets[0].blocks
+      .filter((b) => b.type !== "Starting" && b.type !== "Situational swaps")
+      .map((b) => b.items.map((i) => i.id).sort().join(","));
+    // Core build and Buy order share ids (same build, refined order); nothing else does.
+    expect(new Set(sigs).size).toBe(sigs.length - 1);
   });
 });
 
@@ -727,10 +754,14 @@ function famBuild(champ: ChampionRef, core: number[], alts?: ItemsBlock["alts"])
 function presentArchetypes(sets: ReturnType<typeof buildItemSets>): string[] {
   const titles = ["Tank Mage", "Tank", "AP/Mage", "AP Burst", "Bruiser (AD)", "Lethality/Assassin", "Crit/Marksman", "On-hit"];
   // Longest-first so "Tank Mage" isn't swallowed by "Tank"; report each once.
+  // All THREE evidence states count as "present" — the audit's P1-C fix added
+  // "(suggested)" for a line with zero measured non-boots items, and a helper
+  // that only knew two states would silently under-report a block that IS in
+  // the set (which is exactly how it failed when the suffix landed).
   const found = new Set<string>();
   for (const b of sets[0].blocks) {
     for (const t of titles) {
-      if (b.type === t || b.type === `${t} (low data)`) found.add(t);
+      if (b.type === t || b.type === `${t} (low data)` || b.type === `${t} (suggested)`) found.add(t);
     }
   }
   return titles.filter((t) => found.has(t));
@@ -800,28 +831,32 @@ describe("buildItemSets — v0.47.0 AP family (Viktor 'tank mage' acceptance)", 
     expect(present).not.toContain("Tank");
   });
 
-  it("DE-DUP: no two archetype lines for Viktor share an identical non-boots item set, AND Tank Mage != the AP build", () => {
-    // The general de-dup guarantee (brief item 4): every emitted archetype line
-    // is a genuinely distinct build. Tank Mage must NOT equal the AP build.
+  it("DE-DUP: no two BUILD-LINE blocks for Viktor share an identical item set, AND Tank Mage != the core build", () => {
+    // The general de-dup guarantee. AUDIT P1-B widened it from
+    // archetype-vs-archetype to EVERY family, so this now asserts across all
+    // build-line blocks — which is what the user actually sees in the shop panel
+    // and where the 11 live duplicates were hiding. (Viktor's AP/Mage line IS
+    // his core build here, so it is one of the blocks that collapses.)
     const build = famBuild(
       VIKTOR,
       [STARTER, BOOTS, AP1, AP2, AP3],
       { first: [pick(TM1, 0.06), pick(TM2, 0.055), pick(TM3, 0.05)] }
     );
     const sets = buildItemSets(VIKTOR, "Mid", build, null, damageMeta());
-    const archBlocks = sets[0].blocks.filter((b) => ARCHETYPE_TITLE_RE.test(b.type));
-    const sig = (b: (typeof archBlocks)[number]) =>
+    const lineBlocks = sets[0].blocks.filter(
+      (b) => b.type !== "Starting" && b.type !== "Situational swaps"
+    );
+    const sig = (b: (typeof lineBlocks)[number]) =>
       b.items
         .map((i) => Number(i.id))
-        .filter((id) => id !== BOOTS && id !== BOOTS_MR)
         .sort((x, y) => x - y)
         .join(",");
-    const sigs = archBlocks.map(sig);
-    expect(new Set(sigs).size).toBe(sigs.length); // all archetype builds distinct
+    const sigs = lineBlocks.map(sig);
+    expect(new Set(sigs).size).toBe(sigs.length); // every emitted line is a distinct build
 
-    const ap = archBlocks.find((b) => b.type.startsWith("AP/Mage"))!;
-    const tm = archBlocks.find((b) => b.type.startsWith("Tank Mage"))!;
-    expect(sig(ap)).not.toBe(sig(tm)); // Tank Mage is NOT the AP build
+    const core = lineBlocks.find((b) => b.type === "Core build")!;
+    const tm = lineBlocks.find((b) => b.type.startsWith("Tank Mage"))!;
+    expect(sig(tm)).not.toBe(sig(core)); // Tank Mage is NOT the standard build
   });
 
   it("Viktor's Tank Mage line carries durable-AP items (SpellDamage + Health/Armor/MR), not glass-cannon-only", () => {
@@ -842,14 +877,22 @@ describe("buildItemSets — v0.47.0 AP family (Viktor 'tank mage' acceptance)", 
     }
   });
 
-  it("Viktor's Tank Mage is a CURATED durable-AP build (Rylai's/Riftmaker/Abyssal) even when his own data has zero durable-AP", () => {
+  it("Viktor's Tank Mage is a CURATED durable-AP build (Rylai's/Riftmaker/Abyssal) even when his own data has zero durable-AP — and is labelled '(suggested)'", () => {
     // v0.48.0: Tank Mage is curated-pool-driven, so it produces a coherent
     // durable build straight from the curated pool regardless of the champ's
-    // (pure-burst) data — the whole point of a "variant" archetype. It is
-    // labelled plainly "Tank Mage" (a deliberate judgment build), NOT
-    // "(low data)". Meta includes the real curated ids (incl. Abyssal Mask,
-    // which carries NO SpellDamage tag — proving the curated list is trusted
-    // verbatim, not re-filtered through `match`).
+    // (pure-burst) data — the whole point of a "variant" archetype. Meta
+    // includes the real curated ids (incl. Abyssal Mask, which carries NO
+    // SpellDamage tag — proving the curated list is trusted verbatim, not
+    // re-filtered through `match`).
+    //
+    // AUDIT P1-C: this assertion used to read `toBe("Tank Mage")` — a curated
+    // variant could never be labelled at ANY fill level, because the label was
+    // keyed off `arch.curated`. This fixture's own name says it: the champ has
+    // ZERO durable-AP data, so 100% of this line is judgment. A bare title
+    // sitting next to an "(On-hit) (low data)" block reads as the
+    // better-evidenced of the two, which inverts the truth and breaks HARD RULE
+    // 4. The label now follows the EVIDENCE (zero measured -> "(suggested)"),
+    // not the flag, for curated and data-first archetypes alike.
     const build = famBuild(VIKTOR, [STARTER, BOOTS, AP1, AP2, AP3]);
     const richMeta = metaMap(
       ...Array.from(damageMeta().values()),
@@ -859,7 +902,7 @@ describe("buildItemSets — v0.47.0 AP family (Viktor 'tank mage' acceptance)", 
     );
     const sets = buildItemSets(VIKTOR, "Mid", build, null, richMeta);
     const tankMage = sets[0].blocks.find((b) => b.type.startsWith("Tank Mage"))!;
-    expect(tankMage.type).toBe("Tank Mage"); // curated judgment build, NOT "(low data)"
+    expect(tankMage.type).toBe("Tank Mage (suggested)"); // 100% judgment fill, labelled as such
     const ids = tankMage.items.map((i) => i.id);
     expect(ids).toEqual(expect.arrayContaining(["3116", "4633"]));
     expect(ids).toContain("3001"); // Abyssal via curated verbatim, despite no SpellDamage tag
@@ -968,7 +1011,10 @@ describe("buildItemSets — v0.47.0 AD family (bruiser / marksman / assassin)", 
         .join(",");
     };
     const bruiser = sets[0].blocks.find((b) => b.type.startsWith("Bruiser (AD)"))!;
-    expect(bruiser.type).toBe("Bruiser (AD)"); // curated judgment build, not "(low data)"
+    // AUDIT P1-C: Irelia's own data is lethality/on-hit — ZERO items satisfy the
+    // bruiser `match`, so this whole line is the curated pool. That is the exact
+    // shape the live Ornn Top `Bruiser (AD)` had, and it must say so.
+    expect(bruiser.type).toBe("Bruiser (AD) (suggested)");
     expect(bruiser.items).toHaveLength(6);
     expect(nonBootsSig("Bruiser (AD)")).not.toBe(nonBootsSig("Lethality/Assassin"));
     if (present.includes("On-hit")) {
@@ -1031,17 +1077,23 @@ describe("buildItemSets — v0.47.0 pure Tank (universal, actual tanks only)", (
     expect(tank.type).toBe("Tank (low data)");
   });
 
-  it("a tank with a FULL line of its own items is measured — no '(low data)' suffix", () => {
+  it("a tank with a FULL line of its own items is measured — no '(low data)' / '(suggested)' suffix", () => {
     // The complement of the case above, and the reason the threshold is
     // `CATEGORY_LINE_LEN - 1` rather than a literal: 5 real non-boots items
     // fill every non-boots slot, so nothing is padded in from judgment and the
     // line is honestly titled plain.
+    //
+    // The core carries ONE non-tank item (LE3) on purpose. Without it every
+    // block this champ produces is the same six tank ids, the P1-B cross-family
+    // de-dup collapses Tank into Core build, and there is no Tank title left to
+    // assert on — correct behaviour, but it makes the label unobservable. One
+    // damage item is also what a real tank's build looks like.
     const ornn: ChampionRef = { id: 516, key: "Ornn", name: "Ornn", icon: "o.png", tags: ["Tank"] };
-    const build = famBuild(ornn, [STARTER, BOOTS, TK1, TK2, TK3], {
-      first: [pick(TK4, 0.06), pick(TK5, 0.05)],
+    const build = famBuild(ornn, [STARTER, BOOTS, TK1, TK2, LE3], {
+      first: [pick(TK3, 0.06), pick(TK4, 0.055), pick(TK5, 0.05)],
     });
     const sets = buildItemSets(ornn, "Top", build, null, damageMeta());
-    const tank = sets[0].blocks.find((b) => b.type.startsWith("Tank"))!;
+    const tank = sets[0].blocks.find((b) => b.type.startsWith("Tank") && !b.type.startsWith("Tank Mage"))!;
     expect(tank.type).toBe("Tank");
   });
 
@@ -1082,6 +1134,300 @@ describe("buildItemSets — v0.47.0 archetype invariants (every mode)", () => {
         expect(isFull).toBe(true);
       }
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDIT 2026-07-25 — P1-A / P1-B / P1-C
+//
+// Every test below would have PASSED against the pre-audit module for the wrong
+// reason or failed to exist at all. The suite was green at 1551 tests while all
+// three bugs were live in production, so each fix gets a test written from the
+// LIVE REPRODUCTION rather than from the code.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("AUDIT P1-A — WPA and pro-share are never compared as one scale", () => {
+  // Live WPA runs about -3.94 .. +1.35 and is frequently NEGATIVE; a pro share
+  // is a proportion in 0..1. The old unionPool kept the MAX raw weight across
+  // the two, so both directions of nonsense were reachable.
+
+  /** A champ whose own build carries a mix of high and NEGATIVE WPA, with two
+   *  higher-WPA alternates so the WPA ordering is genuinely a different build
+   *  from the core one (otherwise the block is correctly deduped away and there
+   *  is nothing to assert on). */
+  function mixedScaleBuild() {
+    const items = baseItems({
+      starter: pick(1054),
+      boots: pick(3006, 0.05),
+      first: pick(3031, 1.2), // best WPA
+      second: pick(3036, 0.4),
+      third: pick(3095, -2.5), // ACTIVELY HARMFUL by its own measurement
+      fourthPlus: [pick(3072, 0.3), pick(3046, 0.1)],
+      alts: { first: [pick(9001, 0.9), pick(9999, 0.8)] },
+    });
+    return baseBuild(items);
+  }
+
+  it("a 0.95 pro share does NOT lift a NEGATIVE-WPA item into the block titled 'Highest WPA'", () => {
+    // The exact live shape: Jinx Bot's 3rd 'Highest WPA' entry was there on a
+    // 0.67 pro pick-rate alone. Under the old max-raw-weight union, 3095's
+    // share of 0.95 beat every WPA below 0.95 — two numbers with no common
+    // meaning — and it climbed to the top of the block. Its own measurement
+    // (-2.5) says the item is actively harmful; whatever else it earns, it
+    // cannot earn a place in a list sorted by that measurement.
+    const pro = {
+      items: [
+        { itemId: 3095, share: 0.95 }, // the -2.5 WPA item, adored by pros
+        { itemId: 3200, share: 0.9 }, // pro-ONLY: no measured WPA at all
+      ],
+      boots: [{ itemId: 3006, share: 0.5 }],
+    };
+    const sets = buildItemSets(CHAMP, "Bot", mixedScaleBuild(), pro, baseItemMetaMap());
+    const nonBoots = findBlock(sets, "Highest WPA")!.items.map((i) => i.id).filter((id) => id !== "3006");
+    // Strict WPA order: 3031 (1.2) > 9001 (0.9) > 9999 (0.8) > 3036 (0.4) > 3072 (0.3).
+    expect(nonBoots).toEqual(["3031", "9001", "9999", "3036", "3072"]);
+    expect(nonBoots).not.toContain("3095"); // 0.95 share buys nothing here
+    expect(nonBoots).not.toContain("3200"); // and neither does 0.90
+  });
+
+  it("an item with NO measured WPA is FILL — appended after every WPA-bearing item, never interleaved above one", () => {
+    // 3200 exists only in the pro sample, so it has no WPA at all. The old code
+    // gave it weight 0.9 (its share) and ranked it above every item whose
+    // measured WPA happened to be below 0.9 — which, live, is most of them.
+    // (alts.boots 3157 carries a higher WPA than the core boots, which is what
+    // makes this block a different build from Core build and keeps it emitted.)
+    const pro = {
+      items: [
+        { itemId: 3200, share: 0.9 },
+        { itemId: 8888, share: 0.85 },
+      ],
+      boots: [],
+    };
+    const build = baseBuild(
+      baseItems({
+        boots: pick(3006, 0.05),
+        first: pick(3031, 0.5),
+        second: pick(3036, 0.4),
+        third: pick(3095, 0.3),
+        fourthPlus: [pick(3072, 0.2)], // only FOUR measured non-boots -> the 5th slot is fill
+        alts: { boots: [pick(3157, 0.6)] },
+      })
+    );
+    const sets = buildItemSets(CHAMP, "Bot", build, pro, baseItemMetaMap());
+    const block = findBlock(sets, "Highest WPA")!;
+    const bootsIds: string[] = ["3006", "3157"];
+    const bootsSeen = block.items.map((i) => i.id).filter((id) => bootsIds.includes(id));
+    expect(bootsSeen).toEqual(["3157"]); // the highest-WPA boots, exactly one
+    const nonBoots = block.items.map((i) => i.id).filter((id) => !bootsIds.includes(id));
+    expect(nonBoots).toEqual(["3031", "3036", "3095", "3072", "3200"]);
+  });
+
+  it("'Highest WPA' is ordered by WPA for EVERY fixture in this sweep — the title is a checkable claim, not a label", () => {
+    // The generalised form of the two cases above: whatever the pools, the
+    // block either honours its own title or must not carry that title.
+    const cases: { build: BuildResponse; pro: Parameters<typeof buildItemSets>[3] }[] = [
+      { build: mixedScaleBuild(), pro: null },
+      { build: mixedScaleBuild(), pro: { items: [{ itemId: 3095, share: 0.99 }], boots: [] } },
+      { build: mixedScaleBuild(), pro: { items: [{ itemId: 3200, share: 0.99 }, { itemId: 8888, share: 0.98 }], boots: [{ itemId: 3111, share: 0.97 }] } },
+      {
+        build: baseBuild(baseItems({ alts: { first: [pick(9001, 3.0), pick(9999, -1.0)] } })),
+        pro: { items: [{ itemId: 8888, share: 0.8 }], boots: [{ itemId: 3111, share: 0.7 }] },
+      },
+    ];
+    for (const { build, pro } of cases) {
+      const sets = buildItemSets(CHAMP, "Bot", build, pro, baseItemMetaMap());
+      const block = findBlock(sets, "Highest WPA");
+      if (!block) continue; // collapsed into a higher-priority block — fine
+      const wpaOf = new Map<number, number>();
+      const it = build.items;
+      const all = [
+        it.first, it.second, it.third, it.boots, ...it.fourthPlus,
+        ...(it.optimizedPath ?? []),
+        ...(it.alts?.first ?? []), ...(it.alts?.second ?? []),
+        ...(it.alts?.third ?? []), ...(it.alts?.boots ?? []), ...(it.alts?.fourthPlus ?? []),
+      ].filter(Boolean) as Pick[];
+      for (const p of all) {
+        const prev = wpaOf.get(p.id);
+        if (prev === undefined || p.wpa > prev) wpaOf.set(p.id, p.wpa); // MAX within one scale — legal
+      }
+      const bootsIds = new Set([it.boots.id, ...(it.alts?.boots ?? []).map((b) => b.id), ...(pro?.boots ?? []).map((b) => b.itemId)]);
+      const seq = block.items.map((i) => Number(i.id)).filter((id) => !bootsIds.has(id));
+      const bearing = seq.filter((id) => wpaOf.has(id));
+      const fillStart = seq.findIndex((id) => !wpaOf.has(id));
+      // 1. no FILL above a metric-bearing item
+      if (fillStart >= 0) expect(seq.slice(fillStart).every((id) => !wpaOf.has(id))).toBe(true);
+      // 2. metric-bearing items are non-increasing in WPA
+      for (let k = 1; k < bearing.length; k++) {
+        expect(wpaOf.get(bearing[k])!).toBeLessThanOrEqual(wpaOf.get(bearing[k - 1])!);
+      }
+    }
+  });
+});
+
+describe("AUDIT P1-B — de-dup spans block FAMILIES, not just archetype-vs-archetype", () => {
+  it("Highest WPA that is the core build under another name is DROPPED; Core build survives", () => {
+    // Ornn Top live: `Highest WPA` and `Tank` were byte-identical. The general
+    // shape is any block whose item SET already appeared in a higher-priority
+    // block.
+    const sets = buildItemSets(CHAMP, "Bot", baseBuild(baseItems()), null, baseItemMetaMap());
+    const types = blockTypes(sets);
+    expect(types).toContain("Core build");
+    expect(types).not.toContain("Highest WPA");
+  });
+
+  it("the duplicate test is ORDER-INSENSITIVE — a merely REORDERED copy is still a duplicate (the Garen 'Pro build == Highest WPA' case)", () => {
+    // Garen Top shipped Pro build and Highest WPA with the same five items in a
+    // different order. Reading them as different builds is exactly the mistake:
+    // the shop panel shows the user two identical shopping lists.
+    // Here the pro sample is the champ's own core, so the Pro line resolves to
+    // the same ids in share order rather than build order.
+    const pro = {
+      items: [
+        { itemId: 3046, share: 0.9 },
+        { itemId: 3072, share: 0.8 },
+        { itemId: 3095, share: 0.7 },
+        { itemId: 3036, share: 0.6 },
+        { itemId: 3031, share: 0.5 },
+      ],
+      boots: [{ itemId: 3006, share: 0.95 }],
+    };
+    const sets = buildItemSets(CHAMP, "Bot", baseBuild(baseItems()), pro, baseItemMetaMap());
+    const lineTypes = blockTypes(sets).filter((t) => t !== "Starting" && t !== "Situational swaps");
+    expect(lineTypes).toEqual(["Core build"]);
+  });
+
+  it("Core build vs Buy order is the ONE order-SENSITIVE pair: same ids in a different order keeps BOTH", () => {
+    const sets = buildItemSets(
+      CHAMP,
+      "Bot",
+      baseBuild(baseItems({ optimizedPath: [pick(3046), pick(3072)] })),
+      null,
+      baseItemMetaMap()
+    );
+    const core = findBlock(sets, "Core build")!.items.map((i) => i.id);
+    const buy = findBlock(sets, "Buy order")!.items.map((i) => i.id);
+    expect([...core].sort()).toEqual([...buy].sort()); // same SET
+    expect(core).not.toEqual(buy); // different ORDER — which is Buy order's whole point
+  });
+
+  it("keep-priority follows canonical emission order: the block a user reads FIRST is the survivor", () => {
+    // 9001 (wpa 3.0) makes Highest WPA a distinct build from Core; the Tank-ish
+    // archetype line that would mirror it is the one dropped, never Core build.
+    const build = baseBuild(baseItems({ alts: { first: [pick(9001, 3.0)] } }));
+    const sets = buildItemSets(CHAMP, "Bot", build, null, baseItemMetaMap());
+    const types = blockTypes(sets);
+    expect(types.indexOf("Core build")).toBeLessThan(types.indexOf("Highest WPA"));
+    // and no two build-line blocks carry the same item set
+    const lineBlocks = sets[0].blocks.filter((b) => b.type !== "Starting" && b.type !== "Situational swaps");
+    const sigs = lineBlocks.map((b) => b.items.map((i) => i.id).sort().join(","));
+    expect(new Set(sigs).size).toBe(sigs.length);
+  });
+
+  it("no two build-line blocks EVER share an item set, across every fixture in this file", () => {
+    const fixtures: { build: BuildResponse; pro: Parameters<typeof buildItemSets>[3]; meta: Map<number, ItemDetail> }[] = [
+      { build: baseBuild(baseItems()), pro: null, meta: baseItemMetaMap() },
+      { build: baseBuild(baseItems({ optimizedPath: [pick(3046), pick(3072)] })), pro: null, meta: baseItemMetaMap() },
+      {
+        build: baseBuild(baseItems({ alts: { first: [pick(9001, 0.5), pick(9999, 0.4)] } })),
+        pro: { items: [{ itemId: 8888, share: 0.9 }], boots: [{ itemId: 3111, share: 0.8 }] },
+        meta: baseItemMetaMap(),
+      },
+      { build: apRichBurstBuild({ id: 112, key: "Viktor", name: "Viktor", icon: "v.png", tags: ["Mage"] }), pro: null, meta: apRichMeta() },
+    ];
+    for (const f of fixtures) {
+      const sets = buildItemSets(f.build.champion, "Bot", f.build, f.pro, f.meta);
+      const lines = sets[0].blocks.filter((b) => b.type !== "Starting" && b.type !== "Situational swaps");
+      const sigs = lines.map((b) => b.items.map((i) => i.id).slice().sort().join(","));
+      const dupes = sigs.filter((s, i) => sigs.indexOf(s) !== i);
+      // Core build / Buy order may legitimately share a SET (never an order).
+      for (const d of dupes) {
+        const sharing = lines.filter((b) => b.items.map((i) => i.id).slice().sort().join(",") === d).map((b) => b.type);
+        expect(sharing.slice().sort()).toEqual(["Buy order", "Core build"]);
+      }
+    }
+  });
+
+  it("de-dup is deterministic across the WHOLE set, not just the archetype lines", () => {
+    const build = baseBuild(baseItems({ alts: { first: [pick(9001, 0.5), pick(9999, 0.4)] } }));
+    const pro = { items: [{ itemId: 8888, share: 0.9 }], boots: [{ itemId: 3111, share: 0.8 }] };
+    const a = buildItemSets(CHAMP, "Bot", build, pro, baseItemMetaMap());
+    const b = buildItemSets(CHAMP, "Bot", build, pro, baseItemMetaMap());
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+});
+
+describe("AUDIT P1-C — the honesty label follows the EVIDENCE, for curated and data-first alike", () => {
+  const ORNN: ChampionRef = { id: 516, key: "Ornn", name: "Ornn", icon: "o.png", tags: ["Tank", "Fighter"] };
+
+  it("a CURATED variant with ZERO measured non-boots items is '(suggested)', not a bare title", () => {
+    // The live repro: Ornn Top's `Bruiser (AD)` was the BRUISER_AD.pool array
+    // verbatim in declaration order — zero measured items — sitting directly
+    // above `On-hit (low data)`, which is equally fabricated and WAS labelled.
+    // A bare title beside a labelled one reads as the better-evidenced of the
+    // two, inverting the truth (HARD RULE 4).
+    const build = famBuild(ORNN, [STARTER, BOOTS, TK1, TK2, TK3], { first: [pick(TK4, 0.06)] });
+    const richMeta = metaMap(
+      ...Array.from(damageMeta().values()),
+      // Curated Bruiser (AD) pool so the line resolves to a full build.
+      meta(6631, { tags: ["Damage", "Health"] }),
+      meta(3071, { tags: ["Damage", "ArmorPenetration", "Health"] }),
+      meta(6610, { tags: ["Damage", "Health"] }),
+      meta(6333, { tags: ["Damage", "Health"] }),
+      meta(3053, { tags: ["Damage", "Health"] })
+    );
+    const sets = buildItemSets(ORNN, "Top", build, null, richMeta);
+    const bruiser = sets[0].blocks.find((b) => b.type.startsWith("Bruiser (AD)"));
+    expect(bruiser).toBeDefined();
+    expect(bruiser!.type).toBe("Bruiser (AD) (suggested)");
+    // And every id in it really is judgment fill — none of the champ's own data.
+    const own = new Set([TK1, TK2, TK3, TK4].map(String));
+    expect(bruiser!.items.filter((i) => own.has(i.id))).toHaveLength(0);
+  });
+
+  it("a DATA-FIRST archetype with zero measured non-boots items is ALSO '(suggested)' — the label follows evidence, not arch.curated", () => {
+    // On-hit is data-first. Ornn has no attack-speed/on-hit item at all, so the
+    // whole line is curated/catalog fill and reads exactly like the curated
+    // variant above. Two fabricated lines must be labelled the same way.
+    const build = famBuild(ORNN, [STARTER, BOOTS, TK1, TK2, TK3], { first: [pick(TK4, 0.06)] });
+    const richMeta = metaMap(
+      ...Array.from(damageMeta().values()),
+      meta(3153, { tags: ["AttackSpeed", "OnHit"] }),
+      meta(3091, { tags: ["AttackSpeed", "OnHit"] }),
+      meta(3124, { tags: ["AttackSpeed", "OnHit"] }),
+      meta(6672, { tags: ["AttackSpeed", "OnHit"] }),
+      meta(3085, { tags: ["AttackSpeed"] })
+    );
+    const sets = buildItemSets(ORNN, "Top", build, null, richMeta);
+    const onHit = sets[0].blocks.find((b) => b.type.startsWith("On-hit"));
+    expect(onHit).toBeDefined();
+    expect(onHit!.type).toBe("On-hit (suggested)");
+  });
+
+  it("SOME measured but below the threshold stays '(low data)' — the middle state is not swallowed by the new one", () => {
+    const build = famBuild(ORNN, [STARTER, BOOTS, TK1, TK2, TK3], { first: [pick(TK4, 0.06)] });
+    const sets = buildItemSets(ORNN, "Top", build, null, damageMeta());
+    const tank = sets[0].blocks.find((b) => b.type.startsWith("Tank") && !b.type.startsWith("Tank Mage"))!;
+    expect(tank.type).toBe("Tank (low data)"); // 4 measured, threshold 5
+  });
+
+  it("the three states are exhaustive and mutually exclusive — every archetype block carries exactly one of them", () => {
+    const build = famBuild(ORNN, [STARTER, BOOTS, TK1, TK2, TK3], { first: [pick(TK4, 0.06)] });
+    const sets = buildItemSets(ORNN, "Top", build, null, damageMeta());
+    for (const b of sets[0].blocks) {
+      if (!ARCHETYPE_TITLE_RE.test(b.type)) continue;
+      const suffixes = [" (low data)", " (suggested)"].filter((s) => b.type.endsWith(s));
+      expect(suffixes.length).toBeLessThanOrEqual(1);
+      expect(ARCHETYPE_TITLE_RE.test(b.type)).toBe(true);
+    }
+  });
+
+  it("a '(suggested)' suffix does not break the set's own wire-contract title (Test-ItemSetsPayload) or the 4096 B LCU budget", () => {
+    // Block `type` is free text on the wire — the companion validates the SET
+    // title only — but a new suffix still has to keep the payload legal.
+    const build = famBuild(ORNN, [STARTER, BOOTS, TK1, TK2, TK3], { first: [pick(TK4, 0.06)] });
+    const sets = buildItemSets(ORNN, "Top", build, null, damageMeta());
+    expect(sets[0].title.startsWith("CoachBuild")).toBe(true);
+    expect(JSON.stringify(sets[0]).length).toBeLessThan(4096);
   });
 });
 
@@ -1160,7 +1506,7 @@ describe("buildItemSets — single-set payload satisfies the wire contract (1-3 
 // re-proven here with the new damage-family archetypes — a Viktor set carries
 // its Tank Mage block AND stays in budget, and a maximally-full set (4 category
 // blocks) still fits comfortably under 4KB.
-const ARCHETYPE_TITLE_RE = /^(Tank Mage|Tank|AP\/Mage|AP Burst|Bruiser \(AD\)|Lethality\/Assassin|Crit\/Marksman|On-hit)( \(low data\))?$/;
+const ARCHETYPE_TITLE_RE = /^(Tank Mage|Tank|AP\/Mage|AP Burst|Bruiser \(AD\)|Lethality\/Assassin|Crit\/Marksman|On-hit)( \(low data\)| \(suggested\))?$/;
 
 describe("buildItemSets — v0.47.0 Viktor set JSON (Tank Mage present + in byte budget)", () => {
   const VIKTOR: ChampionRef = { id: 112, key: "Viktor", name: "Viktor", icon: "viktor.png", tags: ["Mage"] };

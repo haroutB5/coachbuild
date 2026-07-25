@@ -239,10 +239,13 @@ describe("applyItemSetsForBuild", () => {
     // (cross-family exclusion). Confirms real ItemDetail tags threaded through
     // applyItemSetsForBuild drive family-scoped archetype emission + de-dup
     // end to end.
+    // AUDIT P1-B: "Highest WPA" is gone from this list. It carried the exact
+    // same ids as Core build (this fixture's whole pool IS the core build), and
+    // the cross-family de-dup now collapses identical builds regardless of which
+    // block family they came from.
     expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).toEqual([
       "Starting",
       "Core build",
-      "Highest WPA",
       "Crit/Marksman (low data)",
     ]);
     // v0.35.0: champ-scoped (not role-scoped) stale-removal prefix, so a
@@ -262,8 +265,24 @@ describe("applyItemSetsForBuild", () => {
         // that ONLY ever carried the allowlisted starter would resolve to
         // null and never produce a Pro build block at all -- this test needs
         // a genuine non-starter item to exercise "Pro build block appears."
-        if (url.startsWith("/api/pros")) return jsonResponse({ games: [PRO_GAME(3031), PRO_GAME(3031)] });
-        if (url.startsWith("https://cdn.coachless.gg")) return jsonResponse(ITEM_JSON_FIXTURE);
+        // AUDIT P1-B: the pro item must be one the champ's OWN build does NOT
+        // already contain, AND the champ's own build must be long enough not to
+        // pad itself with it. With PRO_GAME(3031) the Pro line padded out to the
+        // exact same six ids as Core build and the cross-family de-dup
+        // (correctly) collapsed it — leaving this wiring test asserting the
+        // absence of a block for a reason that had nothing to do with wiring.
+        // 3094 is pro-only; the 5th core item (3046, added below) is what stops
+        // Core build reaching into the pro pool to fill its last slot.
+        if (url.startsWith("/api/pros")) return jsonResponse({ games: [PRO_GAME(3094), PRO_GAME(3094)] });
+        if (url.startsWith("https://cdn.coachless.gg"))
+          return jsonResponse({
+            ...ITEM_JSON_FIXTURE,
+            data: {
+              ...ITEM_JSON_FIXTURE.data,
+              "3046": { name: "Phantom Dancer", tags: ["AttackSpeed"], into: [], from: ["1018"] },
+              "3094": { name: "Rapid Firecannon", tags: ["CriticalStrike"], into: [], from: ["1038"] },
+            },
+          });
         if (url.includes("/apply-itemsets")) {
           capturedBridgeBody = init?.body as string;
           return jsonResponse({ ok: true, count: 1 });
@@ -272,17 +291,22 @@ describe("applyItemSetsForBuild", () => {
       })
     );
     const { applyItemSetsForBuild } = await import("../hextech/itemSetsApply");
+    const build = baseBuild();
+    build.items.fourthPlus = [...build.items.fourthPlus, pick(3046)]; // 5th core item — see the fetch stub
     await applyItemSetsForBuild({
       champ: CHAMP,
       lane: "bot",
       roleLabel: "Bot",
-      build: baseBuild(),
+      build,
       port: 48291,
       session: "sess-1",
     });
     const parsed = JSON.parse(capturedBridgeBody!);
     expect(parsed.sets).toHaveLength(1);
-    expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).toContain("Pro build");
+    const types = parsed.sets[0].blocks.map((b: { type: string }) => b.type);
+    expect(types).toContain("Pro build");
+    const proBlock = parsed.sets[0].blocks.find((b: { type: string }) => b.type === "Pro build");
+    expect(proBlock.items.map((i: { id: string }) => i.id)).toContain("3094");
   });
 
   it("REGRESSION (Dark Seal reaching a Pro build line via pro-consensus) -- a totally degraded item-metadata fetch degrades build lines to empty rather than shipping an unfiltered item", async () => {

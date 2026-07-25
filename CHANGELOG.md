@@ -2,6 +2,98 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.57.0] — 2026-07-25 — Item-set honesty: a block title now describes its own contents
+
+Wave 2 of the `AUDIT-2026-07-25.md` findings, all three in `components/hextech/itemSetBody.ts`.
+One theme: **every block title was making a claim the block didn't keep** — about its ordering, about
+being distinct from the block above it, or about being measured. Verified by driving the real
+`buildItemSets` against live production data across 49 champions, not fixtures.
+
+| | before | after |
+|---|---|---|
+| duplicate block pairs across families | 13 | **0** |
+| blocks whose title claims a metric they aren't ordered by | 19 | **0** |
+| blocks 100% judgment fill yet unlabelled | 6 | **0** |
+| over-6 lines / duplicate ids / wrong boots count / starters in a line | 0 | 0 |
+| max item-set bytes (4096 limit) | 1842 | 1710 |
+
+### Fixed — WPA and pro pick-rate were being compared as if they were one number
+
+`fromPicks` weighted candidates by WPA, `fromShares` by pro share, and `unionPool` kept the MAX
+across both. Those are not the same scale: live WPA runs roughly **-3.94 to +1.35 and is frequently
+negative**, while shares are 0..1. So a pro pick-rate could rescue an item whose own WPA said it was
+actively harmful, and any item above +1 WPA outranked every pro pick regardless of adoption. The
+module header asserted the two "have always been this module's one shared ranking axis" — they never
+were.
+
+Each scale (`wpa`, `share`, `gold`) is now ranked ONCE over its own full union of sources, and a
+candidate's ranking score is its **reciprocal rank** `1/(1+rank)` within that pool. Reciprocal rank
+rather than a linear `1 - idx/len` on purpose: linear normalisation is pool-size sensitive (last of
+3 scores 0.0, tenth of 20 scores 0.5), which is the same incommensurability this change exists to
+remove. Ties share a rank, so two equal weights are never ordered by an accident of input order.
+
+`Candidate` carries `{id, score, raw: {weight, scale}}`. `score` is the only ranking axis; `raw` is
+provenance. The nesting is deliberate — `c.raw.weight` is loud in review where the old bare
+`c.weight` read like a neutral number. Exactly one function reads a raw weight, and it takes the
+scale as a parameter.
+
+### Fixed — "Highest WPA" was not ordered by WPA
+
+Live, Jinx Bot's Doran's Bow ranked **3rd in a block titled "Highest WPA"** on its 0.67 pro
+pick-rate alone (it has no WPA in the union at all). New general rule: **in a block whose title
+claims a metric, items carrying that metric rank first and are ordered by it; items lacking it are
+appended as FILL and can never interleave above a metric-bearing item.** The boots pick is likewise
+the highest-WPA boots rather than the highest raw mixed weight.
+
+The name was KEPT rather than softened to "Top picks", because the block can now honestly make the
+claim — verified across all 49 champions.
+
+### Fixed — 13 pairs of duplicate blocks, shown one above the other
+
+The v0.48.0 de-dup only ever compared archetype against archetype, and ran after Core build / Buy
+order / Pro build / Highest WPA were already emitted. So the exact complaint that fixed ("don't
+duplicate, show one and name it appropriately") came back between block FAMILIES: Ornn Top's
+`Highest WPA` and `Tank` were byte-identical, and Lee Sin shipped `Core == Buy order == Pro build`.
+
+`dedupeLineBlocks` now runs across every family, on order-insensitive set equality — order-insensitive
+because Garen's `Pro build` and `Highest WPA` held the same five items merely reordered. One
+carve-out: the Core build / Buy order pair only counts as duplicate when the ORDER matches too, since
+expressing order is Buy order's entire purpose. Keep-priority follows canonical emission order. It
+runs BEFORE the archetype-count trim, so a freed slot goes to real content rather than being lost.
+The fuzzy v0.48.0 pass stays — it catches near-misses an exact test cannot.
+
+Much of this was downstream of the ranking fix: with mixed scales, "top 6 by weight" converged on
+whatever the dominant archetype had already selected.
+
+### Fixed — a 100%-fabricated line looked better evidenced than a partly-measured one
+
+`buildArchetypeLine` hardcoded curated variants to never carry a suffix, so Ornn Top's
+`Bruiser (AD)` — the curated pool array verbatim, in declaration order, **zero measured items** —
+sat directly above `On-hit (low data)`, which is equally fabricated and was labelled. A reader
+reasonably concludes Bruiser is the better-supported of the two. The signal was inverted, and HARD
+RULE 4 ("a curated/estimated value is always labeled as such — never presented as measured") was
+already being violated: a bare title beside a "(low data)" one reads as measured by implication.
+
+Flipping the flag would have lied in the other direction — curated is a judgment build, not a thin
+measurement — so there are now three states, driven by the evidence rather than by `arch.curated`,
+which no longer touches the label at all:
+
+- **zero measured non-boots items** → `"<Archetype> (suggested)"`
+- **some, but below the threshold** → `"<Archetype> (low data)"`
+- **fills the line from the champ's own data** → plain title
+
+`(suggested)` is not new vocabulary: `SupportItemCard` already renders "Suggested — … not measured"
+for exactly this situation. The item-set lines simply never adopted it.
+
+### Notes
+
+- 8 of the 14 new tests fail against the previous module — verified by swapping the old file back in.
+  They are regression pins, not restatements of current behaviour.
+- **Surfaced, deliberately not fixed:** Leona Support resolves to the AD damage family, so she now
+  ships `Bruiser (AD) (suggested)` and `Lethality/Assassin (suggested)`. That archetype SELECTION is
+  unchanged v0.47.0 behaviour — it was simply hidden behind bare titles until now. The labels are
+  honest; the selection for tank-supports is a separate open question, recorded in the audit file.
+
 ## [0.56.0] — 2026-07-25 — Audit wave 1: the same pro game rendered twice, and two hard rules broken in prod
 
 A full-system cold-start audit (six read-only agents, findings in `AUDIT-2026-07-25.md`) ran against

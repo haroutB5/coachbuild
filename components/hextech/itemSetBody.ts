@@ -125,6 +125,73 @@
 //      excluded them) — it was starved (only the champ's 1-2 real durable
 //      items) and capped at 4; the fix is the curated pool + 6 items.
 //
+// AUDIT 2026-07-25 follow-up — P1-A / P1-B / P1-C. All three were found by
+// driving THIS module against live prod data + the real 16.13.1 catalog; the
+// 1551-test suite was green throughout and caught none of them. Each one is a
+// class of silent failure, not a one-off, so each is closed structurally:
+//
+//   P1-A — TWO DIFFERENT SCALES WERE MERGED AS ONE RANKING AXIS. `fromPicks`
+//     set weight = Pick.wpa; `fromShares` set weight = pro pick-share. The
+//     Candidate doc below used to claim "wpa and share have always been this
+//     module's one shared ranking axis." They are not the same axis and never
+//     were: live WPA runs about -3.94 .. +1.35 and is FREQUENTLY NEGATIVE,
+//     while a share is a proportion in 0..1. `unionPool` kept the MAX across
+//     the two, so (a) a pro pick-rate could rescue an item whose own WPA says
+//     it is actively harmful, and (b) any item with wpa > 1 outranked EVERY
+//     pro pick regardless of adoption. Live symptom: a block titled
+//     "Highest WPA" whose 3rd entry was there on a 0.67 pro pick-rate alone —
+//     the title was a false claim about the block's own ordering.
+//     FIX, two parts:
+//       1. `Candidate.score` is now the ONE ranking axis, and it is
+//          scale-free: each SCALE (wpa / share / gold) is ranked in its own
+//          pool, best-first, and the merged score is the reciprocal RANK
+//          POSITION within that pool (see buildScaleRanking). Rank positions
+//          from different scales are commensurable; raw weights are not. The
+//          raw number survives only as `Candidate.raw = {weight, scale}` —
+//          PROVENANCE, never an ordering key. Comparing `raw.weight` across
+//          two candidates is legal ONLY when both carry the same `raw.scale`,
+//          and exactly one place in this file does it (orderByMetric, which
+//          takes the scale as an explicit parameter). The nesting is
+//          deliberate: `c.raw.weight` is loud enough to catch in review, where
+//          the old bare `c.weight` read like a neutral ranking number.
+//       2. A block whose TITLE claims a metric is now ORDERED BY THAT METRIC
+//          (orderByMetric): items carrying the metric rank first, sorted by
+//          it; items that do not carry it are appended as FILL and can never
+//          interleave above a metric-bearing item. "Highest WPA" keeps its
+//          name because it can now honestly claim it.
+//
+//   P1-B — DE-DUP ONLY COVERED ARCHETYPE-vs-ARCHETYPE. dedupeArchetypeLines
+//     (v0.48.0) runs over the archetype lines only, and it runs AFTER Core
+//     build / Buy order / Pro build / Highest WPA have already been emitted —
+//     so the exact user complaint that motivated it ("don't duplicate, show
+//     one and name it appropriately") kept firing BETWEEN BLOCK FAMILIES.
+//     11 live instances, e.g. Ornn Top's `Highest WPA` and `Tank` byte-
+//     identical, Garen's `Pro build` == `Highest WPA` (same 5 items, merely
+//     REORDERED), Lee Sin's `Core == Buy order == Pro`. dedupeLineBlocks now
+//     runs over EVERY build-line block. The duplicate test is the identical
+//     item SET, ORDER-INSENSITIVE (Garen's case is why order can't be part of
+//     it) with ONE carve-out: the Core build / Buy order pair counts as a
+//     duplicate only when the order matches too, because expressing the order
+//     is Buy order's entire reason to exist.
+//
+//   P1-C — A CURATED VARIANT COULD NEVER BE LABELLED, AT ANY FILL LEVEL.
+//     `buildArchetypeLine` had `const lowData = arch.curated ? false : ...`.
+//     Live: Ornn Top's `Bruiser (AD)` was the BRUISER_AD.pool array verbatim
+//     in declaration order — zero measured items — sitting directly above
+//     `On-hit (low data)`, which is equally fabricated and IS labelled. A bare
+//     title next to a "(low data)" one reads as measured by implication, which
+//     is HARD RULE 4 ("a curated/estimated value is always labeled as such")
+//     violated in the user's client. The old code's REASONING was sound
+//     though — a curated variant is a judgment build, not a thin measurement —
+//     so flipping the boolean would just lie in the other direction. The fix
+//     is a THIRD state driven by the real reason (see ArchetypeEvidence):
+//     zero measured non-boots items -> "(suggested)"; some but below
+//     MIN_CATEGORY_MEASURED -> "(low data)"; a line the champ's own data fills
+//     -> plain title. It applies to CURATED and DATA-FIRST archetypes alike —
+//     the label follows the evidence, not the flag. "Suggested" is not new
+//     vocabulary: components/hextech/SupportItemCard.tsx already renders
+//     "Suggested — <archetype> build, not measured" for exactly this case.
+//
 // Item-set schema per set (LCU /lol-item-sets/v1/item-sets/{id}/sets
 // contract, community-standard importer shape — see companion.ps1's own
 // header comment for the full wire contract + PUT-replaces-all merge-safety
@@ -190,10 +257,18 @@ export interface ItemSet {
  *  header for why "Pro" here needs its own fetch, since pro-consensus data
  *  isn't part of the /api/build BuildResponse contract at all). `boots` is
  *  ALREADY partitioned out of `items` by aggregateProConsensus's own
- *  tags-based check — see this module's header for why that matters. Note
- *  `items`/`boots` are ALLOWLIST-INCLUSIVE (proConsensus.ts's
- *  STARTING_ITEM_ALLOWLIST) — this module's own `isFullItem` re-filters
- *  before anything reaches a build LINE; see the v0.36.0 header note. */
+ *  tags-based check — see this module's header for why that matters.
+ *
+ *  CORRECTION (this doc said the opposite until the 2026-07-25 audit): these
+ *  arrays are NOT allowlist-inclusive. Since the 2026-07-22 partition,
+ *  aggregateProConsensus carves STARTING_ITEM_ALLOWLIST entries into their own
+ *  `starters` field, which this input shape does not carry at all. The old
+ *  wording ("ALLOWLIST-INCLUSIVE — this module's own `isFullItem` re-filters")
+ *  told the next reader that isFullItem was the live guard for lane starters.
+ *  It was not, and believing it is why Doran's Bow and Doran's Helm shipped
+ *  inside completed build lines in production (v0.56.0 P0-A). isFullItem's
+ *  starter rule is a STRUCTURAL backstop, not a re-filter of a list that is
+ *  already applied upstream. */
 export interface ProConsensusItemsInput {
   items: { itemId: number; share: number }[];
   boots: { itemId: number; share: number }[];
@@ -494,6 +569,87 @@ function dedupeArchetypeLines<T extends { arch: Archetype; line: Candidate[] }>(
   return entries.filter((e) => keptArch.has(e.arch));
 }
 
+// ── Cross-FAMILY de-dup (audit P1-B) ────────────────────────────────────────
+// dedupeArchetypeLines above only ever compared archetype lines to each other,
+// and only after Core build / Buy order / Pro build / Highest WPA had already
+// been pushed — so the v0.48.0 user complaint ("don't duplicate, show one and
+// name it appropriately, and make sure it doesn't happen for other champs")
+// kept firing BETWEEN families, 11 times across 23 live champions. The two
+// dedups are complementary and both stay: the archetype one is FUZZY (collapses
+// near-misses that differ by a single padded slot, boots ignored — that is the
+// Viktor AP/Mage-vs-AP-Burst case it was built for), this one is EXACT and
+// spans every family.
+
+/** Which build-line family a block belongs to. Order of declaration is the
+ *  canonical EMISSION order and, for everything but the archetypes, also the
+ *  keep-priority order — the block a user reads first is the one that survives
+ *  a collision. Archetypes break the tie among themselves by
+ *  ARCHETYPE_PRIORITY, not by emission order (unchanged from v0.48.0). */
+type LineFamily = "core" | "buy" | "pro" | "themed" | "archetype";
+
+const FAMILY_KEEP_RANK: Record<LineFamily, number> = {
+  core: 0,
+  buy: 1,
+  pro: 2,
+  themed: 3,
+  archetype: 4,
+};
+
+interface LineBlock {
+  type: string;
+  family: LineFamily;
+  /** Lower survives a collision. */
+  keep: number;
+  /** Position in canonical emission order — preserved for the surviving set. */
+  emit: number;
+  line: Candidate[];
+}
+
+function idSetKey(line: Candidate[]): string {
+  return Array.from(new Set(line.map((c) => c.id))).sort((a, b) => a - b).join(",");
+}
+
+function idOrderKey(line: Candidate[]): string {
+  return line.map((c) => c.id).join(",");
+}
+
+/** Two blocks are duplicates when they carry the IDENTICAL ITEM SET,
+ *  ORDER-INSENSITIVE.
+ *
+ *  Order-insensitive is load-bearing: Garen Top shipped `Pro build` and
+ *  `Highest WPA` with the same five items merely REORDERED, and a user reading
+ *  two blocks with identical contents does not care which permutation each one
+ *  chose — it is the same build shown twice.
+ *
+ *  ONE carve-out: the Core build / Buy order pair. Buy order exists ONLY to
+ *  express the ORDER of the same items, so for that pair the order is part of
+ *  the content and they are duplicates only when it matches too. (The gate that
+ *  emits Buy order at all — resolveOptimizedPathView differing from the core
+ *  prefix — is upstream of padding, so the two lines can still converge after
+ *  buildLine fills them out; that is the case this catches.) */
+function duplicateBlocks(a: LineBlock, b: LineBlock): boolean {
+  if (idSetKey(a.line) !== idSetKey(b.line)) return false;
+  const pair = new Set<LineFamily>([a.family, b.family]);
+  if (pair.has("core") && pair.has("buy")) return idOrderKey(a.line) === idOrderKey(b.line);
+  return true;
+}
+
+/** Collapse duplicate build-line blocks across ALL families, keeping whichever
+ *  comes first in canonical emission order. Deterministic: `keep` is a total
+ *  order (family rank, then ARCHETYPE_PRIORITY within archetypes, then the
+ *  emission index as a final tiebreak), and the survivors are returned in
+ *  emission order so the block layout the user sees never depends on the
+ *  dedup's internal traversal. */
+function dedupeLineBlocks(blocks: LineBlock[]): LineBlock[] {
+  const byKeep = [...blocks].sort((x, y) => x.keep - y.keep || x.emit - y.emit);
+  const kept: LineBlock[] = [];
+  for (const cand of byKeep) {
+    if (kept.some((k) => duplicateBlocks(k, cand))) continue;
+    kept.push(cand);
+  }
+  return kept.sort((x, y) => x.emit - y.emit);
+}
+
 /** A real per-champ matched-item count at/above which an archetype line is
  *  presented as MEASURED (no "(low data)" suffix): enough of the champ's OWN
  *  data to fill every non-boots slot, so nothing is padded in from judgment.
@@ -509,6 +665,45 @@ function dedupeArchetypeLines<T extends { arch: Archetype; line: Candidate[] }>(
  *  threshold to the length means the next length change can't silently unlabel
  *  them again. */
 const MIN_CATEGORY_MEASURED = CATEGORY_LINE_LEN - 1;
+
+/** How much of an archetype line the CHAMPION'S OWN DATA actually paid for
+ *  (audit P1-C). Three states, because two could not tell the truth:
+ *
+ *  - `measured`  — the champ's own matched items fill every non-boots slot.
+ *                  Plain title.
+ *  - `low-data`  — some measured items, but below MIN_CATEGORY_MEASURED, so
+ *                  curated/catalog judgment filled the rest. "(low data)".
+ *  - `suggested` — ZERO measured non-boots items. The line is the curated pool
+ *                  verbatim: a build we think is coherent, not one this champ's
+ *                  data shows anyone playing. "(suggested)".
+ *
+ *  WHY A THIRD STATE. The old rule was `arch.curated ? false : ...` — a
+ *  curated variant could never be labelled at ANY fill level, so Ornn Top's
+ *  100%-fabricated `Bruiser (AD)` sat bare directly above the equally
+ *  fabricated `On-hit (low data)`, inviting the user to read Bruiser as the
+ *  better-evidenced of the two. The signal was inverted. But flipping the flag
+ *  would have been just as wrong in the other direction: the old code's
+ *  reasoning ("a judgment build is not a thin measurement") is correct, it was
+ *  only attached to the wrong variable. `curated` describes where the ITEMS
+ *  came from; the label has to describe what the EVIDENCE is — so the label
+ *  now follows the evidence for curated and data-first archetypes alike.
+ *
+ *  "Suggested" is the house word for exactly this, not new vocabulary:
+ *  components/hextech/SupportItemCard.tsx already renders
+ *  "Suggested — <archetype> build, not measured". */
+type ArchetypeEvidence = "measured" | "low-data" | "suggested";
+
+function evidenceFor(realNonBootsCount: number): ArchetypeEvidence {
+  if (realNonBootsCount === 0) return "suggested";
+  if (realNonBootsCount < MIN_CATEGORY_MEASURED) return "low-data";
+  return "measured";
+}
+
+function archetypeBlockTitle(title: string, evidence: ArchetypeEvidence): string {
+  if (evidence === "suggested") return `${title} (suggested)`;
+  if (evidence === "low-data") return `${title} (low data)`;
+  return title;
+}
 
 /** Worst-case block-count guard (companion side wants ~10 blocks max):
  *  Starting/Core/Buy order/Pro build/Highest WPA/Situational already account
@@ -530,23 +725,135 @@ function itemRef(id: number, count = 1): ItemSetItem {
 
 // ── Candidate: the one shape `buildLine`/themed-line construction operate
 // on ───────────────────────────────────────────────────────────────────────
-// Unifies Pick (wpa-ranked — Core/Optimized/Situational's native shape) and
-// pro-consensus entries (share-ranked) behind {id, weight} so the dedup/
-// boots-fix/padding/ranking logic below is written ONCE, not once per pool
-// type. "Top-6 by WPA" (the themed-line spec's own wording) means "top-6 by
-// `weight`" in this model — wpa and share have always been this module's
-// one shared ranking axis, not something themed lines need to reinterpret.
+// Unifies Pick (wpa-ranked — Core/Optimized/Situational's native shape),
+// pro-consensus entries (share-ranked) and the curated/catalog fill pools
+// (gold-ranked) behind one type, so the dedup/boots-fix/padding/ranking logic
+// below is written ONCE, not once per pool type.
+//
+// THE INVARIANT THIS TYPE EXISTS TO ENFORCE (audit P1-A, see header):
+//   `score` is the ONLY ranking axis. `raw.weight` is PROVENANCE and must
+//   never be compared against another candidate's unless `raw.scale` is
+//   identical — because -3.94 (a real live WPA) and 0.67 (a real live pro
+//   share) are not two points on one number line, and the module spent three
+//   releases pretending they were.
+//   Exactly ONE function in this file compares raw weights (orderByMetric),
+//   and it takes the scale as an explicit parameter so the comparison is
+//   provably within-scale. Everything else — unionPool, buildLine,
+//   findBestBoots, buildThemedLine, buildArchetypeLine — sorts on `score`.
+
+/** Which number line a raw weight lives on. `wpa` can be negative and is
+ *  unbounded; `share` is a proportion in 0..1; `gold` is an item's total cost.
+ *  No two of these are comparable. */
+type WeightScale = "wpa" | "share" | "gold";
+
+interface RawWeight {
+  weight: number;
+  scale: WeightScale;
+}
+
 interface Candidate {
   id: number;
-  weight: number;
+  /** THE ranking axis: this id's reciprocal rank position WITHIN its own
+   *  scale's pool (1 for the best, 1/2 for the runner-up, ...). Scale-free by
+   *  construction, so a candidate ranked out of the WPA pool and one ranked
+   *  out of the pro-share pool can be compared without inventing a conversion
+   *  between win-probability points and pick rates. */
+  score: number;
+  /** Provenance only — NEVER an ordering key. See the invariant above. */
+  raw: RawWeight;
 }
 
-function fromPicks(picks: PickType[]): Candidate[] {
-  return picks.map((p) => ({ id: p.id, weight: p.wpa }));
+/** One scale's full ranking table for this champion: id -> {raw weight, rank
+ *  score}. Built ONCE per scale over EVERY source that speaks that scale, so
+ *  a WPA rank means the same thing whether the item came from the core build,
+ *  the optimized path or the situational pool — the old code ranked pools
+ *  independently, which made "best in a 3-item pool" and "best in a 20-item
+ *  pool" the same number. */
+type ScaleRanking = ReadonlyMap<number, RawWeight & { score: number }>;
+
+/** Rank `entries` best-first within a single scale and hand back the rank
+ *  table. Reciprocal rank (`1/(1+rank)`) rather than the position-normalised
+ *  `1 - i/len` on purpose: `1 - i/len` is POOL-SIZE SENSITIVE (last place in a
+ *  3-item pool scores 0 while 10th of 20 scores 0.5), which would hand small
+ *  pools an inflated merge weight — the same class of incommensurability this
+ *  whole change exists to remove. Reciprocal rank depends only on position.
+ *
+ *  Duplicate ids collapse to their MAX weight — legal here and only here,
+ *  because both weights are on the same scale by construction (this is the
+ *  "credit an item its best evidence" rule unionPool used to apply ACROSS
+ *  scales, which is what made it a bug).
+ *
+ *  Ties share a rank (competition ranking), so two items with identical
+ *  weights are never ordered by an accident of input order; the id tiebreak in
+ *  the sort keeps the table itself deterministic. */
+function buildScaleRanking(
+  scale: WeightScale,
+  entries: { id: number; weight: number }[]
+): ScaleRanking {
+  const best = new Map<number, number>();
+  for (const e of entries) {
+    const prev = best.get(e.id);
+    if (prev === undefined || e.weight > prev) best.set(e.id, e.weight);
+  }
+  const sorted = Array.from(best.entries()).sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+  const out = new Map<number, RawWeight & { score: number }>();
+  let rank = 0;
+  let prevWeight = Number.NaN;
+  sorted.forEach(([id, weight], idx) => {
+    if (weight !== prevWeight) {
+      rank = idx;
+      prevWeight = weight;
+    }
+    out.set(id, { weight, scale, score: 1 / (1 + rank) });
+  });
+  return out;
 }
 
-function fromShares(entries: { itemId: number; share: number }[]): Candidate[] {
-  return entries.map((e) => ({ id: e.itemId, weight: e.share }));
+/** Resolve one id against its scale's ranking table.
+ *  The `fallback` branch is unreachable by construction — every ranking in
+ *  buildItemSets is built from the exact union of the pick/share sources the
+ *  pools are then derived from — but it degrades deterministically (rank last
+ *  within its own scale, provenance preserved) rather than throwing on a
+ *  future call site that forgets to feed its source into the ranking. */
+function toCandidate(id: number, ranking: ScaleRanking, fallback: RawWeight): Candidate {
+  const r = ranking.get(id);
+  if (!r) return { id, score: 0, raw: fallback };
+  return { id, score: r.score, raw: { weight: r.weight, scale: r.scale } };
+}
+
+function fromPicks(picks: PickType[], ranking: ScaleRanking): Candidate[] {
+  return picks.map((p) => toCandidate(p.id, ranking, { weight: p.wpa, scale: "wpa" }));
+}
+
+function fromShares(
+  entries: { itemId: number; share: number }[],
+  ranking: ScaleRanking
+): Candidate[] {
+  return entries.map((e) => toCandidate(e.itemId, ranking, { weight: e.share, scale: "share" }));
+}
+
+/** Score an ALREADY-ORDERED gold-scale fill pool by its position. The curated
+ *  archetype pools are hand-ranked best-first (the declaration order IS the
+ *  ranking, not the gold cost), and categoryDefaultPool sorts by gold before
+ *  calling this — either way the array order is the intended ranking, so the
+ *  score is derived from it directly. */
+function scoreByPosition(entries: { id: number; goldTotal: number }[]): Candidate[] {
+  return entries.map((e, i) => ({
+    id: e.id,
+    score: 1 / (1 + i),
+    raw: { weight: e.goldTotal, scale: "gold" as const },
+  }));
+}
+
+/** Sort a candidate list best-first on the ONE legal axis. The original array
+ *  index is the tiebreak, so equal scores keep the caller's order (which is
+ *  itself deterministic: pool priority, then within-pool rank) instead of
+ *  depending on the engine's sort being stable. */
+function byScoreDesc(cands: Candidate[]): Candidate[] {
+  return cands
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => b.c.score - a.c.score || a.i - b.i)
+    .map((x) => x.c);
 }
 
 function dedupeById(cands: Candidate[]): Candidate[] {
@@ -645,9 +952,7 @@ function findBestBoots(
 ): Candidate | null {
   for (const pool of pools) {
     const options = pool.filter((c) => bootsIds.has(c.id) && !excludeIds.has(c.id));
-    if (options.length > 0) {
-      return options.reduce((best, c) => (c.weight > best.weight ? c : best));
-    }
+    if (options.length > 0) return byScoreDesc(options)[0];
   }
   return null;
 }
@@ -685,10 +990,7 @@ function buildLine(
   const primaryBoots = dedup.filter((c) => bootsIds.has(c.id));
   let others = dedup.filter((c) => !bootsIds.has(c.id));
 
-  let boots: Candidate | null =
-    primaryBoots.length > 0
-      ? primaryBoots.reduce((best, c) => (c.weight > best.weight ? c : best))
-      : null;
+  let boots: Candidate | null = primaryBoots.length > 0 ? byScoreDesc(primaryBoots)[0] : null;
 
   const used = new Set<number>(dedup.map((c) => c.id));
 
@@ -715,48 +1017,90 @@ function buildLine(
   return [...others.slice(0, insertAt), boots, ...others.slice(insertAt)];
 }
 
-/** Highest-weight-wins union of several already full-item-filtered pools,
- *  deduped by id — the shared candidate pool every themed line ranks
- *  within. Keeping the MAX weight seen for an id (not first-seen) credits
- *  an item its best evidence when it shows up in multiple sources (e.g.
- *  both Core and Pro-consensus) with different weights. */
+/** Best-RANK-wins union of several already full-item-filtered pools, deduped
+ *  by id — the shared candidate pool every themed/archetype line ranks within.
+ *  Keeping the best evidence an id has across sources is the original,
+ *  correct intent; what was wrong (audit P1-A) is that it used to compare RAW
+ *  weights, so a 0.67 pro share lost to a 2.11 WPA and a 0.9 pro share beat a
+ *  0.4 WPA — comparisons with no meaning. It now compares `score`, the
+ *  reciprocal rank WITHIN each id's own scale, which is commensurable.
+ *
+ *  Ties keep the EARLIER pool's candidate (strict `>`), and callers pass pools
+ *  in a fixed priority order, so the union is deterministic. Note that an id
+ *  present in two scales keeps whichever scale ranked it better — which is why
+ *  a metric-claiming block must resolve its metric from the scale's own
+ *  ranking table (orderByMetric) and not from the winning candidate's `raw`. */
 function unionPool(...pools: Candidate[][]): Candidate[] {
   const best = new Map<number, Candidate>();
   for (const pool of pools) {
     for (const c of pool) {
       const existing = best.get(c.id);
-      if (!existing || c.weight > existing.weight) best.set(c.id, c);
+      if (!existing || c.score > existing.score) best.set(c.id, c);
     }
   }
   return Array.from(best.values());
 }
 
-/** v0.36.0 — Highest WPA / Tanky / Burst themed lines. `pool` is already
- *  full-item-filtered (buildItemSets's themedUnion); `tagSet === null`
- *  means "Highest WPA" (no tag filter, just top-6 by weight across the
- *  whole pool). Boots: prefer the highest-weight boots candidate that ALSO
- *  matches the theme (a themed boots pick, when one exists); otherwise fall
- *  back to the overall best boots in `pool` (any theme) rather than
- *  shipping a themed line with zero boots. Omits the line entirely (returns
- *  null — never pads with off-theme junk) when fewer than MIN_THEMED_POOL
- *  qualifying (tag-matched, full-item) candidates exist. */
+/** A metric a block's TITLE claims. `valueOf` returns the metric's raw value
+ *  for an id, or undefined when the item simply does not carry that metric
+ *  (e.g. a pro-consensus-only item has no WPA — the champ's own build data
+ *  never scored it). `scale` is what makes the raw comparison below legal:
+ *  every value `valueOf` returns lives on that one number line. */
+interface MetricLens {
+  scale: WeightScale;
+  valueOf: (id: number) => number | undefined;
+}
+
+/** Order a pool for a block whose title CLAIMS a metric (audit P1-A).
+ *
+ *  Rule: items carrying the metric come FIRST, ordered by it; items lacking it
+ *  are appended as FILL and may NEVER interleave above a metric-bearing item.
+ *  Before this existed, "Highest WPA" ranked on the mixed weight axis, so a
+ *  pro-consensus item with no measured WPA at all could sit 3rd in a block
+ *  whose name is a claim about WPA ordering. A block that silently means
+ *  something other than its own title is a lie the user has no way to detect,
+ *  which is the class this closes.
+ *
+ *  The `b.v - a.v` comparison is the ONE raw-weight comparison in this file,
+ *  and it is safe because every value came from the same `metric.scale`. */
+function orderByMetric(pool: Candidate[], metric: MetricLens): Candidate[] {
+  const bearing: { c: Candidate; v: number; i: number }[] = [];
+  const fill: { c: Candidate; i: number }[] = [];
+  pool.forEach((c, i) => {
+    const v = metric.valueOf(c.id);
+    if (v === undefined) fill.push({ c, i });
+    else bearing.push({ c, v, i });
+  });
+  bearing.sort((a, b) => b.v - a.v || a.i - b.i);
+  fill.sort((a, b) => b.c.score - a.c.score || a.i - b.i);
+  return [...bearing.map((x) => x.c), ...fill.map((x) => x.c)];
+}
+
+/** v0.36.0 — the "Highest WPA" line. `pool` is already full-item-filtered
+ *  (buildItemSets's themedUnion). Omitted entirely (returns null) below
+ *  MIN_THEMED_POOL candidates rather than padded with judgment fill.
+ *
+ *  Audit P1-A: the ordering now goes through `orderByMetric`, so the block
+ *  genuinely IS ordered by the metric its title names — measured WPA first in
+ *  descending order, then any pro-consensus-only item as trailing FILL. The
+ *  boots pick is likewise the highest-WPA boots rather than the highest raw
+ *  mixed weight.
+ *
+ *  The one thing the title does NOT claim is the boots SLOT position: boots is
+ *  reinserted after the first 3 items by the same layout convention every
+ *  other line in this module uses (see buildLine step 5) — that is a shop-panel
+ *  reading order, not a ranking statement, and the boots chosen is still the
+ *  metric's own best. */
 function buildThemedLine(
   pool: Candidate[],
-  tagSet: ReadonlySet<string> | null,
-  itemMeta: ReadonlyMap<number, ItemDetail>,
+  metric: MetricLens,
   bootsIds: ReadonlySet<number>
 ): Candidate[] | null {
-  const themed = tagSet ? pool.filter((c) => hasAnyTag(itemMeta.get(c.id), tagSet)) : pool;
-  if (themed.length < MIN_THEMED_POOL) return null;
+  if (pool.length < MIN_THEMED_POOL) return null;
 
-  const nonBoots = themed.filter((c) => !bootsIds.has(c.id)).sort((a, b) => b.weight - a.weight);
-  const themedBoots = themed
-    .filter((c) => bootsIds.has(c.id))
-    .sort((a, b) => b.weight - a.weight)[0];
-  const overallBoots = pool
-    .filter((c) => bootsIds.has(c.id))
-    .sort((a, b) => b.weight - a.weight)[0];
-  const boots = themedBoots ?? overallBoots ?? null;
+  const ordered = orderByMetric(pool, metric);
+  const nonBoots = ordered.filter((c) => !bootsIds.has(c.id));
+  const boots = ordered.find((c) => bootsIds.has(c.id)) ?? null;
 
   const target = LINE_LEN - (boots ? 1 : 0);
   const top = nonBoots.slice(0, target);
@@ -776,7 +1120,7 @@ function categoryDefaultPool(
   itemMeta: ReadonlyMap<number, ItemDetail>,
   match: (meta: ItemDetail) => boolean
 ): Candidate[] {
-  const out: Candidate[] = [];
+  const out: { id: number; goldTotal: number }[] = [];
   itemMeta.forEach((m, id) => {
     if (!isFullItem(id, m)) return;
     // A fill pool only ever supplies NON-BOOTS padding slots (the one-boots
@@ -789,9 +1133,12 @@ function categoryDefaultPool(
     // recommended boots only) doesn't know this catalog boot is boots.
     if (metaHasTag(m, "Boots")) return;
     if (!match(m)) return;
-    out.push({ id, weight: m.goldTotal });
+    out.push({ id, goldTotal: m.goldTotal });
   });
-  return out.sort((a, b) => b.weight - a.weight);
+  // Gold desc IS this pool's ranking (see doc above); the id tiebreak keeps a
+  // catalog sweep deterministic across Map-iteration orders.
+  out.sort((a, b) => b.goldTotal - a.goldTotal || a.id - b.id);
+  return scoreByPosition(out);
 }
 
 /** v0.47.0 — the curated archetype pool resolved against real item metadata:
@@ -804,14 +1151,17 @@ function curatedArchetypePool(
   arch: Archetype,
   itemMeta: ReadonlyMap<number, ItemDetail>
 ): Candidate[] {
-  const out: Candidate[] = [];
+  const out: { id: number; goldTotal: number }[] = [];
   for (const id of arch.pool) {
     const m = itemMeta.get(id);
     if (!m || !isFullItem(id, m)) continue;
     if (metaHasTag(m, "Boots")) continue; // fill pools never supply boots (see categoryDefaultPool)
-    out.push({ id, weight: m.goldTotal });
+    out.push({ id, goldTotal: m.goldTotal });
   }
-  return out;
+  // Hand-ranked declaration order IS the ranking here — scored by POSITION, not
+  // by gold, so a cheap-but-core item (Black Cleaver) is never demoted beneath
+  // an expensive late one just because it costs less.
+  return scoreByPosition(out);
 }
 
 /** v0.47.0 — infer a champion's damage FAMILY. Primary signal: the champ's
@@ -888,38 +1238,36 @@ function selectArchetypes(
  *
  *  DATA-FIRST (AP/Mage, AP Burst, Crit/Marksman, Lethality, On-hit, pure Tank):
  *  the champ's OWN matched items rank first, then the line is PADDED to a full
- *  build from the curated pool, then catalog `match` defaults. A line with
- *  >= MIN_CATEGORY_MEASURED real non-boots matches is MEASURED; otherwise it's
- *  "(low data)" — the padding filled in what the champ's thin data could not.
+ *  build from the curated pool, then catalog `match` defaults.
  *
  *  CURATED-DRIVEN (Tank Mage, Bruiser (AD)): the build is defined by the
  *  curated pool, NOT the champ's (off-archetype) real data. The champ's own
  *  items that genuinely satisfy `match` (durable-AP items a mage actually
  *  builds) still rank first — on-archetype AND measured — but his
  *  off-archetype burst items are never pulled in (they fail `match`), and the
- *  curated pool defines the rest of a coherent, ordered durable build. Always
- *  labelled as the plain archetype (never "(low data)"): a deliberate judgment
- *  build, not a thin measurement.
+ *  curated pool defines the rest of a coherent, ordered durable build.
  *
  *  Either way the champ's own real boots are folded in so a line never strands
  *  itself boots-less, and a line that resolves to boots-only (no archetype
- *  content anywhere in reach) returns empty so buildItemSets omits the block. */
+ *  content anywhere in reach) returns empty so buildItemSets omits the block.
+ *
+ *  Audit P1-C: the honesty label is now THREE-state and is computed the SAME
+ *  WAY for curated and data-first archetypes — see ArchetypeEvidence. */
 function buildArchetypeLine(
   pool: Candidate[],
   arch: Archetype,
   itemMeta: ReadonlyMap<number, ItemDetail>,
   bootsIds: ReadonlySet<number>
-): { line: Candidate[]; lowData: boolean } {
-  const realMatched = pool
-    .filter((c) => {
+): { line: Candidate[]; evidence: ArchetypeEvidence } {
+  const realMatched = byScoreDesc(
+    pool.filter((c) => {
       const m = itemMeta.get(c.id);
       return m ? arch.match(m) : false;
     })
-    .sort((a, b) => b.weight - a.weight);
+  );
   const realNonBoots = realMatched.filter((c) => !bootsIds.has(c.id));
   const hasRealBoots = realMatched.some((c) => bootsIds.has(c.id));
-  const overallBoots =
-    pool.filter((c) => bootsIds.has(c.id)).sort((a, b) => b.weight - a.weight)[0] ?? null;
+  const overallBoots = byScoreDesc(pool.filter((c) => bootsIds.has(c.id)))[0] ?? null;
 
   const curatedFill = curatedArchetypePool(arch, itemMeta);
   const catalogFill = categoryDefaultPool(itemMeta, arch.match);
@@ -931,13 +1279,10 @@ function buildArchetypeLine(
   // short standard line to a full 6.
   const primary = overallBoots && !hasRealBoots ? [...realMatched, overallBoots] : realMatched;
   const line = buildLine(primary, [curatedFill, catalogFill], bootsIds, CATEGORY_LINE_LEN);
-  if (line.filter((c) => !bootsIds.has(c.id)).length === 0) return { line: [], lowData: false };
+  if (line.filter((c) => !bootsIds.has(c.id)).length === 0)
+    return { line: [], evidence: "measured" };
 
-  // A curated variant is a judgment build — never "(low data)". A data-first
-  // line is "(low data)" only when the champ's own matched items were thin
-  // (below the measured threshold) so the curated/catalog padding carried it.
-  const lowData = arch.curated ? false : realNonBoots.length < MIN_CATEGORY_MEASURED;
-  return { line, lowData };
+  return { line, evidence: evidenceFor(realNonBoots.length) };
 }
 
 function toItemRefs(cands: Candidate[]): ItemSetItem[] {
@@ -1001,8 +1346,15 @@ function baseSet(champ: ChampionRef, roleLabel: string): Omit<ItemSet, "blocks">
  *  (isFullItem), (2) themed-line tag classification (hasAnyTag). Starting
  *  and Situational swaps never consult it — unaffected either way.
  *
+ *  EVERY build-line block below is additionally subject to the cross-family
+ *  de-dup (audit P1-B, dedupeLineBlocks): a block whose ITEM SET already
+ *  appeared in a higher-priority block is dropped, so "the gate says emit it"
+ *  is necessary but not sufficient. Keep-priority is the emission order below;
+ *  the Core build / Buy order pair is the one order-SENSITIVE comparison.
+ *
  *  Block order: Starting (exempt from the 6-rule — 1-3 items) → Core build
- *  (always, 6 full items/1 boots) → Buy order (only when
+ *  (always — the ONE block emitted even when empty, see its push site) → Buy
+ *  order (only when
  *  resolveOptimizedPathView says it genuinely differs from Core — same rule
  *  the old buildOptimizedSet used — padded to 6 with the CORE remainder
  *  specifically, so it reads as "same build, refined order" rather than
@@ -1010,12 +1362,14 @@ function baseSet(champ: ChampionRef, roleLabel: string): Omit<ItemSet, "blocks">
  *  data resolves, boots-deduped to the single highest-share pick, padded
  *  via the general optimized→situational→consensus cascade) → Highest WPA
  *  (only when the whole pool has ≥4 qualifying full items — see
- *  buildThemedLine, UNCHANGED since v0.36.0) → up to CATEGORY_MAX_EMIT
- *  damage-type archetypes (v0.47.0 — family-scoped: pure Tank if an actual
- *  tank, then the champ's AP set [AP/Mage, AP Burst, Tank Mage] or AD set
- *  [Bruiser (AD), Lethality/Assassin, Crit/Marksman, On-hit]; never a
- *  cross-family line; thin data fills via buildArchetypeLine and gets a
- *  "(low data)" title suffix instead of being dropped) → Situational swaps
+ *  buildThemedLine; ORDERED BY WPA since the audit, so the title is a
+ *  checkable claim) → up to CATEGORY_MAX_EMIT damage-type archetypes
+ *  (v0.47.0 — family-scoped: pure Tank if an actual tank, then the champ's AP
+ *  set [AP/Mage, AP Burst, Tank Mage] or AD set [Bruiser (AD),
+ *  Lethality/Assassin, Crit/Marksman, On-hit]; never a cross-family line; thin
+ *  data fills via buildArchetypeLine and gets a "(low data)" or "(suggested)"
+ *  title suffix instead of being dropped — see ArchetypeEvidence)
+ *  → Situational swaps
  *  (the alternates pool, cap 6, exempt
  *  from BOTH the one-boots rule AND the full-items rule — these are swap
  *  SUGGESTIONS, not a worn loadout, so a stacking item or several boots
@@ -1032,24 +1386,45 @@ export function buildItemSets(
   const hasPro = !!pro && (pro.items.length > 0 || pro.boots.length > 0);
   const bootsIds = collectBootsIds(items, hasPro ? pro : null);
 
-  const corePrimaryRaw = fromPicks([items.first, items.second, items.third, items.boots, ...items.fourthPlus]);
-  const corePrimary = fullItemsOnly(corePrimaryRaw, meta);
-
+  const corePicks = [items.first, items.second, items.third, items.boots, ...items.fourthPlus];
   const optimizedView = resolveOptimizedPathView(items);
-  const optimizedPrimaryRaw = optimizedView.kind === "path" ? fromPicks(optimizedView.path) : null;
-  const optimizedPrimary = optimizedPrimaryRaw ? fullItemsOnly(optimizedPrimaryRaw, meta) : null;
-
+  const optimizedPicks = optimizedView.kind === "path" ? optimizedView.path : null;
   // UNFILTERED — Situational swaps deliberately allows non-full items (Dark
   // Seal etc. are exactly where they belong here).
   const situationalPicks = flattenSituational(items);
+  const proEntries = hasPro ? [...pro!.boots, ...pro!.items] : [];
+
+  // ── The TWO scale rankings (audit P1-A) ───────────────────────────────────
+  // Each is built ONCE, over the ENTIRE union of sources speaking that scale,
+  // so a WPA rank means the same thing whether the item surfaced in the core
+  // build, the optimized path or the situational pool — and so every candidate
+  // below is guaranteed to resolve against its own ranking (toCandidate's
+  // fallback branch is unreachable by construction, not by luck).
+  // The two rankings are NEVER merged; `Candidate.score` is what crosses
+  // between them, and it is a rank position, not a weight.
+  const wpaRanking = buildScaleRanking(
+    "wpa",
+    [...corePicks, ...(optimizedPicks ?? []), ...situationalPicks].map((p) => ({
+      id: p.id,
+      weight: p.wpa,
+    }))
+  );
+  const shareRanking = buildScaleRanking(
+    "share",
+    proEntries.map((e) => ({ id: e.itemId, weight: e.share }))
+  );
+
+  const corePrimary = fullItemsOnly(fromPicks(corePicks, wpaRanking), meta);
+  const optimizedPrimary = optimizedPicks
+    ? fullItemsOnly(fromPicks(optimizedPicks, wpaRanking), meta)
+    : null;
   // FULL-FILTERED — used only as a fallback/padding pool for the 6-item
   // build lines below, never for the Situational swaps block itself.
-  const situationalPoolFull = fullItemsOnly(fromPicks(situationalPicks), meta);
-
-  const proPoolRaw = hasPro
-    ? fromShares([...pro!.boots, ...pro!.items].sort((a, b) => b.share - a.share))
-    : [];
-  const proPool = fullItemsOnly(proPoolRaw, meta);
+  const situationalPoolFull = fullItemsOnly(fromPicks(situationalPicks, wpaRanking), meta);
+  const proPool = fullItemsOnly(
+    fromShares([...proEntries].sort((a, b) => b.share - a.share), shareRanking),
+    meta
+  );
 
   // General padding priority for any short line: optimized -> situational ->
   // consensus, per the spec's cascade. Buy order's OWN padding overrides this
@@ -1057,19 +1432,39 @@ export function buildItemSets(
   // stay "this build, reordered/filled out," not reach into situational/pro.
   const generalFallback = [optimizedPrimary ?? [], situationalPoolFull, proPool];
 
-  const blocks: ItemSetBlock[] = [
-    { type: "Starting", items: [itemRef(items.starter.id)] },
-    { type: "Core build", items: toItemRefs(buildLine(corePrimary, generalFallback, bootsIds)) },
-  ];
+  // Every build-line block is COLLECTED first and emitted last, so the
+  // cross-family de-dup (audit P1-B) can see all of them at once. Emitting
+  // them inline is what made the old de-dup archetype-only: by the time it
+  // ran, Core build / Buy order / Pro build / Highest WPA were already in the
+  // output array as opaque {type, items} records.
+  const lines: LineBlock[] = [];
+  let emit = 0;
+  const pushLine = (type: string, family: LineFamily, keep: number, line: Candidate[]) => {
+    if (line.length === 0) return; // never a genuinely empty shop-panel block
+    lines.push({ type, family, keep, emit: emit++, line });
+  };
+
+  // Core build is the ONE block emitted unconditionally, EVEN WHEN EMPTY. That
+  // is not an oversight: a total itemMeta fetch failure makes every id unknown,
+  // isFullItem excludes them all, and the documented degradation (see its doc
+  // comment) is an empty Core build rather than a set with no build in it at
+  // all — the block's presence is what tells the user the export ran and found
+  // nothing, instead of silently shipping Starting + Situational.
+  lines.push({
+    type: "Core build",
+    family: "core",
+    keep: FAMILY_KEEP_RANK.core,
+    emit: emit++,
+    line: buildLine(corePrimary, generalFallback, bootsIds),
+  });
 
   if (optimizedPrimary) {
-    const optimizedLine = buildLine(optimizedPrimary, [corePrimary], bootsIds);
     // v0.36.0: the data-availability gate above (optimizedView differs from
     // core) is independent of the NEW full-items-only filter -- if every
     // candidate here happens to fail isFullItem (e.g. a totally degraded
     // itemMeta fetch), don't ship a technically-present but genuinely empty
     // shop-panel line.
-    if (optimizedLine.length > 0) blocks.push({ type: "Buy order", items: toItemRefs(optimizedLine) });
+    pushLine("Buy order", "buy", FAMILY_KEEP_RANK.buy, buildLine(optimizedPrimary, [corePrimary], bootsIds));
   }
 
   if (hasPro) {
@@ -1083,20 +1478,29 @@ export function buildItemSets(
     // other line already reaches `corePrimary` one way or another.
     // Last in the cascade so it can supply the missing boots without
     // reordering anything the pro data actually ranked.
-    const proLine = buildLine(proPool, [...generalFallback, corePrimary], bootsIds);
     // Same "never a genuinely empty block" guard as Buy order above --
     // `hasPro` only means the SOURCE pro-consensus data was non-empty, not
     // that anything survived the full-items-only filter.
-    if (proLine.length > 0) blocks.push({ type: "Pro build", items: toItemRefs(proLine) });
+    pushLine("Pro build", "pro", FAMILY_KEEP_RANK.pro, buildLine(proPool, [...generalFallback, corePrimary], bootsIds));
   }
 
   // Themed lines — derived entirely from the pools already built above, no
   // new upstream data. All full-item-filtered already (every pool fed into
-  // themedUnion is). Highest WPA (v0.36.0, UNCHANGED) uses buildThemedLine
-  // directly; the damage-type archetypes (v0.47.0) use buildArchetypeLine.
+  // themedUnion is). Highest WPA uses buildThemedLine directly; the damage-type
+  // archetypes (v0.47.0) use buildArchetypeLine.
   const themedUnion = unionPool(corePrimary, optimizedPrimary ?? [], situationalPoolFull, proPool);
-  const highestWpaLine = buildThemedLine(themedUnion, null, meta, bootsIds);
-  if (highestWpaLine) blocks.push({ type: "Highest WPA", items: toItemRefs(highestWpaLine) });
+  // The metric the "Highest WPA" TITLE claims, read from the WPA ranking table
+  // rather than from the winning candidate's `raw` — an item that ranked better
+  // on pro share carries `raw.scale === "share"` in the union even though the
+  // champ's build data does score it, and the title's claim is about the latter.
+  // `undefined` here means genuinely no measured WPA (a pro-consensus-only
+  // item), which is what makes it FILL rather than a zero-WPA entry.
+  const wpaMetric: MetricLens = {
+    scale: "wpa",
+    valueOf: (id) => wpaRanking.get(id)?.weight,
+  };
+  const highestWpaLine = buildThemedLine(themedUnion, wpaMetric, bootsIds);
+  if (highestWpaLine) pushLine("Highest WPA", "themed", FAMILY_KEEP_RANK.themed, highestWpaLine);
 
   // v0.47.0 — damage-type-scoped archetypes. The champ's family (AP vs AD) is
   // inferred from their OWN recommended items (themedUnion); every archetype
@@ -1123,37 +1527,68 @@ export function buildItemSets(
       // into AP should get its Tank line, not a hollow filled damage archetype.
       // Pure Tank (universal) is exempt — gated on real tankiness, not a guess.
       if (arch.family !== "universal" && !confident && poolLen === 0) return null;
-      const { line, lowData } = buildArchetypeLine(themedUnion, arch, meta, bootsIds);
+      const { line, evidence } = buildArchetypeLine(themedUnion, arch, meta, bootsIds);
       if (line.length === 0) return null; // never a genuinely empty block
-      return { arch, line, lowData, poolLen };
+      return { arch, line, evidence, poolLen };
     })
     .filter((x): x is NonNullable<typeof x> => x !== null);
 
-  // v0.48.0 — GENERAL de-dup: collapse near-duplicate lines (the user-reported
-  // Viktor "AP/Mage == AP Burst" bug — both data-first, same real burst items),
-  // keeping the higher-priority archetype name. Runs for EVERY champ: a champ
-  // whose builds genuinely differ (a curated Tank Mage vs the standard AP
-  // build) keeps both; identical/near-identical ones collapse to one.
+  // v0.48.0 — FUZZY archetype-vs-archetype de-dup: collapse NEAR-duplicate
+  // lines (the user-reported Viktor "AP/Mage == AP Burst" bug — both data-first,
+  // same real burst items, differing only in the last padded slot), keeping the
+  // higher-priority archetype name. Still needed alongside the exact
+  // cross-family pass below, which by design only collapses identical sets.
   const deduped = dedupeArchetypeLines(built, bootsIds);
 
-  // Trim to CATEGORY_MAX_EMIT: keep universal pure Tank, then the family
-  // archetypes with the most real per-champ data; emission order preserved.
-  let chosen = deduped;
-  if (deduped.length > CATEGORY_MAX_EMIT) {
-    const keep = new Set<Archetype>();
-    for (const w of deduped) if (w.arch.family === "universal") keep.add(w.arch);
-    const ranked = deduped
-      .filter((w) => w.arch.family !== "universal")
-      .sort((a, b) => b.poolLen - a.poolLen);
-    for (const w of ranked) {
-      if (keep.size >= CATEGORY_MAX_EMIT) break;
-      keep.add(w.arch);
-    }
-    chosen = deduped.filter((w) => keep.has(w.arch));
+  // Keyed by `emit` INDEX, not by block title. Titles happen to be unique today
+  // (8 distinct archetype names x a deterministic evidence suffix), but keying
+  // the trim below on a display string means the day two blocks ever collide on
+  // one, BOTH get dropped — a silent-content-loss bug for a saving of nothing.
+  // The emit index is unique by construction.
+  const archMeta = new Map<number, { arch: Archetype; poolLen: number }>();
+  for (const { arch, line, evidence, poolLen } of deduped) {
+    if (line.length === 0) continue;
+    archMeta.set(emit, { arch, poolLen });
+    pushLine(
+      archetypeBlockTitle(arch.title, evidence),
+      "archetype",
+      FAMILY_KEEP_RANK.archetype + archetypePriority(arch.title),
+      line
+    );
   }
 
-  for (const { arch, line, lowData } of chosen) {
-    blocks.push({ type: lowData ? `${arch.title} (low data)` : arch.title, items: toItemRefs(line) });
+  // ── Cross-FAMILY de-dup (audit P1-B) ──────────────────────────────────────
+  // Runs BEFORE the CATEGORY_MAX_EMIT trim on purpose: if an archetype is
+  // dropped for duplicating Core build or Highest WPA, the budget it was
+  // occupying should go to an archetype that actually shows the user something
+  // new, not be spent on a block that is no longer emitted.
+  const survivors = dedupeLineBlocks(lines);
+
+  // Trim surviving ARCHETYPE blocks to CATEGORY_MAX_EMIT (the worst-case
+  // block-count guard — the other families are at most one block each): keep
+  // universal pure Tank, then the archetypes with the most real per-champ data;
+  // emission order preserved.
+  const survivingArch = survivors.filter((b) => b.family === "archetype");
+  const dropped = new Set<number>();
+  if (survivingArch.length > CATEGORY_MAX_EMIT) {
+    const keep = new Set<number>();
+    for (const b of survivingArch) {
+      if (archMeta.get(b.emit)?.arch.family === "universal") keep.add(b.emit);
+    }
+    const ranked = [...survivingArch]
+      .filter((b) => archMeta.get(b.emit)?.arch.family !== "universal")
+      .sort((a, b) => archMeta.get(b.emit)!.poolLen - archMeta.get(a.emit)!.poolLen || a.emit - b.emit);
+    for (const b of ranked) {
+      if (keep.size >= CATEGORY_MAX_EMIT) break;
+      keep.add(b.emit);
+    }
+    for (const b of survivingArch) if (!keep.has(b.emit)) dropped.add(b.emit);
+  }
+
+  const blocks: ItemSetBlock[] = [{ type: "Starting", items: [itemRef(items.starter.id)] }];
+  for (const b of survivors) {
+    if (dropped.has(b.emit)) continue;
+    blocks.push({ type: b.type, items: toItemRefs(b.line) });
   }
 
   if (situationalPicks.length > 0) {
