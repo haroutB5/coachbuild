@@ -1,6 +1,6 @@
 # CoachBuild — handoff
 
-**Current state: 2026-07-24, v0.51.3.** Prod: `coachbuild.vercel.app`. Companion: 1.6.3.
+**Current state: 2026-07-25, v0.51.4.** Prod: `coachbuild.vercel.app`. Companion: 1.6.4.
 
 This file describes where things stand now. Full release-by-release detail lives in `CHANGELOG.md` (every 0.32.0→0.51.3 entry is there in depth) — this file is deliberately NOT an append-only log anymore; per-agent `HANDOFF-<agent>.md` files get merged in here and then reset to a one-line pointer (see the bottom of each of those files). If this file is passing ~150-200 lines again, roll the older-than-today content into `CHANGELOG.md`-referenced footnotes rather than deleting the open-items list.
 

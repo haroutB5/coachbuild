@@ -262,7 +262,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.6.3'
+    Version     = '1.6.4'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -1131,6 +1131,51 @@ function Set-LastOpen {
     $script:LastOpenRecord = $entry
 }
 
+# v1.6.4 (tab-spam fix). Two tunables, deliberately named rather than inline:
+#
+# AttachWindowSeconds -- how recently a follow-capable page must have polled
+#   for it to count as attached. Was an inline 8, justified against the web
+#   poll's ~3s cadence. That justification only holds for a FOREGROUND tab:
+#   this feature is used precisely while the tab is backgrounded behind a
+#   fullscreen game, where Chrome's intensive throttling drops hidden-tab
+#   timers to roughly once per MINUTE after 5 minutes hidden. 8s could not
+#   survive that, so every champ-select re-opened both tabs and they piled up
+#   (live-reported 2026-07-25, screenshot: 4 stacked tabs). 150s clears a
+#   60s throttled cadence with room for jitter.
+#
+# OpenGraceSeconds -- a tab that was JUST opened has not had time to load,
+#   boot React and send its first follow poll (browser cold start is
+#   seconds). Without this, a champion change inside that gap sees "not
+#   attached" and opens a SECOND pair -- the open->attach race, which is how
+#   one champ-select alone could produce 4 tabs. Treat a just-opened kind as
+#   attached until it has had a fair chance to answer; if it never does (the
+#   open genuinely failed), the grace lapses and the next champion change
+#   opens again.
+$script:AttachWindowSeconds = 150
+$script:OpenGraceSeconds = 25
+$script:LastTabOpenAt = @{ builds = $null; draft = $null }
+
+function Reset-TabOpenGrace {
+    # Called on champ-select ENTRY alongside Reset-ChampSelectState: a grace
+    # left over from a previous game must never suppress the first open of a
+    # new one.
+    $script:LastTabOpenAt = @{ builds = $null; draft = $null }
+}
+
+function Set-TabOpenedNow {
+    param([ValidateSet('builds', 'draft')][string]$Kind)
+    if (-not $script:LastTabOpenAt) { Reset-TabOpenGrace }
+    $script:LastTabOpenAt[$Kind] = Get-Date
+}
+
+function Test-TabOpenGraceActive {
+    param([ValidateSet('builds', 'draft')][string]$Kind)
+    if (-not $script:LastTabOpenAt) { return $false }
+    $at = $script:LastTabOpenAt[$Kind]
+    if (-not $at) { return $false }
+    return ((Get-Date) - $at).TotalSeconds -lt $script:OpenGraceSeconds
+}
+
 function Test-CompanionHasAttachedTab {
     # v1.3.0 (attached-tab live-follow), NARROWED in v1.5.0 to follow-capable
     # pollers only, split PER-KIND in v1.6.0 ("two pages simultaneously"
@@ -1170,11 +1215,15 @@ function Test-CompanionHasAttachedTab {
     # optimization (skip redundant opens) when the two sides disagree on the
     # contract.
     param([ValidateSet('builds', 'draft')][string]$Kind)
+    # Open->attach race guard (v1.6.4): checked BEFORE the bridge state so it
+    # still holds on the very first open of a launch, when the follow field is
+    # legitimately still $null and the tab is mid-cold-start.
+    if (Test-TabOpenGraceActive -Kind $Kind) { return $true }
     if (-not $script:Bridge -or -not $script:Bridge.Sync) { return $false }
     $ts = if ($Kind -eq 'draft') { $script:Bridge.Sync.LastDraftFollowAt } else { $script:Bridge.Sync.LastBuildsFollowAt }
     if (-not $ts) { return $false }
     try {
-        return (New-TimeSpan -Start ([datetime]$ts) -End (Get-Date)).TotalSeconds -lt 8
+        return (New-TimeSpan -Start ([datetime]$ts) -End (Get-Date)).TotalSeconds -lt $script:AttachWindowSeconds
     } catch {
         return $false
     }
@@ -1245,10 +1294,12 @@ function Update-ChampSelectState {
     if (-not $hasBuilds) {
         $url = Get-DeepLinkUrl -AppOrigin $AppOrigin -SessionToken $SessionToken -ChampionId $champId -RoleId $roleId
         Open-CompanionUrl -Url $url
+        Set-TabOpenedNow -Kind builds
     }
     if (-not $hasDraft) {
         $draftUrl = Get-DraftDeepLinkUrl -AppOrigin $AppOrigin -SessionToken $SessionToken
         Open-CompanionUrl -Url $draftUrl
+        Set-TabOpenedNow -Kind draft
     }
     Set-LastOpen -ChampionId $champId -RoleId $roleId
     Write-CompanionLog "champ-select champ=$champId role=$(if ($null -ne $roleId) { $roleId } else { 'none' }) builds=$(if ($hasBuilds) { 'attached' } else { 'opened' }) draft=$(if ($hasDraft) { 'attached' } else { 'opened' })"
@@ -1295,7 +1346,10 @@ function Invoke-GameflowTick {
     $script:Bridge.Sync.Phase = $phase
 
     if ($phase -eq 'ChampSelect') {
-        if (-not $script:WasChampSelect) { Reset-ChampSelectState -State $script:ChampSelectState }
+        if (-not $script:WasChampSelect) {
+            Reset-ChampSelectState -State $script:ChampSelectState
+            Reset-TabOpenGrace
+        }
         $script:WasChampSelect = $true
         if ($creds) {
             $sessRaw = Invoke-LcuRaw -Method GET -Path '/lol-champ-select/v1/session' -Port $creds.Port -Token $creds.Token
@@ -2874,18 +2928,34 @@ function Invoke-MockRun {
     $script:Bridge = [pscustomobject]@{ Sync = @{ LastBuildsFollowAt = $null; LastDraftFollowAt = (Get-Date).ToUniversalTime().ToString('o') } }
 
     Reset-ChampSelectState -State $state
+    Reset-TabOpenGrace
     Update-ChampSelectState -State $state -Session (New-MockChampSelectSession -ChampId 0 -IntentId 103 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
     Update-ChampSelectState -State $state -Session (New-MockChampSelectSession -ChampId 0 -IntentId 103 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
     Update-ChampSelectState -State $state -Session (New-MockChampSelectSession -ChampId 103 -IntentId 103 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
-    Update-ChampSelectState -State $state -Session (New-MockChampSelectSession -ChampId 7 -IntentId 7 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
 
+    # v1.6.4 BEHAVIOUR CHANGE (deliberate, this is the tab-spam fix): swapping
+    # champion seconds after the Builds tab was opened must NOT open a second
+    # tab. The tab opened for 103 is still cold-starting; once it boots it
+    # live-follows champ select to 7 on its own (app/page.tsx's follow effect
+    # off companion.tick), so a second open is pure tab spam. Pre-1.6.4 this
+    # asserted 2 opens, which is how one champ-select could stack tabs.
+    Update-ChampSelectState -State $state -Session (New-MockChampSelectSession -ChampId 7 -IntentId 7 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
+    $expected1 = "$appOrigin/?championId=103&role=0&session=$sessionToken"
+    if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expected1) {
+        $failures.Add("Champ swap during cold-start expected exactly 1 open ('$expected1'), got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
+    }
+
+    # The debounce contract itself is unchanged: once the just-opened tab has
+    # had its chance and demonstrably never attached (grace lapsed, no follow
+    # poll), a genuine champion change DOES still re-open, with the role param
+    # formatted exactly as before.
+    Reset-TabOpenGrace
+    Update-ChampSelectState -State $state -Session (New-MockChampSelectSession -ChampId 34 -IntentId 34 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
+    $expected2 = "$appOrigin/?championId=34&role=0&session=$sessionToken"
     if ($script:OpenActions.Count -ne 2) {
-        $failures.Add("Expected exactly 2 opens (initial hover + champ swap), got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
-    } else {
-        $expected1 = "$appOrigin/?championId=103&role=0&session=$sessionToken"
-        $expected2 = "$appOrigin/?championId=7&role=0&session=$sessionToken"
-        if ($script:OpenActions[0] -ne $expected1) { $failures.Add("Open #1 mismatch: got $($script:OpenActions[0]) want $expected1") }
-        if ($script:OpenActions[1] -ne $expected2) { $failures.Add("Open #2 mismatch: got $($script:OpenActions[1]) want $expected2") }
+        $failures.Add("Champ swap after grace lapse expected a 2nd open, got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
+    } elseif ($script:OpenActions[1] -ne $expected2) {
+        $failures.Add("Open #2 mismatch: got $($script:OpenActions[1]) want $expected2")
     }
 
     # Role-LESS check (v1.2.0 fix -- was a live-reported bug: v1.1.0 silently
@@ -2893,6 +2963,7 @@ function Invoke-MockRun {
     # every custom lobby, blind pick, and ARAM game). Must still open, just
     # WITHOUT a role param.
     $script:OpenActions.Clear()
+    Reset-TabOpenGrace  # independent scenario -- the previous block's opens must not suppress it
     $roleLessState = @{ LastOpenedChampId = $null }
     Update-ChampSelectState -State $roleLessState -Session (New-MockChampSelectSession -ChampId 99 -IntentId 99 -Position '') -AppOrigin $appOrigin -SessionToken $sessionToken
     $expectedRoleLess = "$appOrigin/?championId=99&session=$sessionToken"
@@ -2914,6 +2985,7 @@ function Invoke-MockRun {
     # is the standard PS idiom preventing a single-element array from being
     # silently unwrapped/flattened).
     $script:OpenActions.Clear()
+    Reset-TabOpenGrace  # independent scenario -- see the role-less block above
     $actionsOnlyState = @{ LastOpenedChampId = $null }
     $actionRow = @([pscustomobject]@{ actorCellId = 0; type = 'pick'; championId = 64; completed = $false })
     $actionsSession = New-MockChampSelectSession -ChampId 0 -IntentId 0 -Position 'jungle' -Actions (, $actionRow)
@@ -2961,8 +3033,13 @@ function Invoke-MockRun {
     # have stamped from `follow=builds`/`follow=draft`/legacy `follow=1`
     # (that HTTP-level parsing itself is covered by -SelfTest, which runs a
     # real bridge; see Invoke-SelfTest's own "follow=<kind> stamping" case).
+    # v1.6.4: each sub-test below isolates the FOLLOW-STAMP gate, so the
+    # open->attach grace is reset before each one -- otherwise the opens
+    # performed by the previous sub-test would legitimately suppress the next
+    # one's expected open. The grace has its own dedicated cases further down.
     $script:Bridge = [pscustomobject]@{ Sync = @{ LastBuildsFollowAt = $null; LastDraftFollowAt = $null } }
     $attachState = @{ LastOpenedChampId = $null }
+    Reset-TabOpenGrace
 
     # Neither attached -> open BOTH, Builds first then /draft last (exact
     # order asserted -- Start-Process order is the best-effort OS focus
@@ -2983,6 +3060,7 @@ function Invoke-MockRun {
     }
 
     # Only draft attached -> open Builds only.
+    Reset-TabOpenGrace
     $script:Bridge.Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().ToString('o')
     $script:Bridge.Sync.LastBuildsFollowAt = $null
     $script:OpenActions.Clear()
@@ -2993,6 +3071,7 @@ function Invoke-MockRun {
     }
 
     # Only Builds attached -> open /draft only.
+    Reset-TabOpenGrace
     $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().ToString('o')
     $script:Bridge.Sync.LastDraftFollowAt = $null
     $script:OpenActions.Clear()
@@ -3003,6 +3082,7 @@ function Invoke-MockRun {
 
     # Both attached -> no opens at all, but debounce state still advances
     # (both tabs already live-follow via their own polls).
+    Reset-TabOpenGrace
     $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().ToString('o')
     $script:Bridge.Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().ToString('o')
     $script:OpenActions.Clear()
@@ -3014,15 +3094,55 @@ function Invoke-MockRun {
         $failures.Add('Attached-tab gate (both attached): debounce state did not advance even though both tab-follow paths are responsible for it')
     }
 
-    # Both polls go stale (tabs presumably closed) -> the NEXT champion
-    # change resumes opening both fresh, in the same Builds-then-draft order.
-    $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().AddSeconds(-30).ToString('o')
-    $script:Bridge.Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().AddSeconds(-30).ToString('o')
+    # v1.6.4 THROTTLED-TAB REGRESSION: a hidden tab behind a fullscreen game
+    # is throttled by Chrome to roughly one timer tick per MINUTE. A 60s-old
+    # follow poll therefore means "alive and following", not "gone" -- under
+    # the old 8s window this was the tab-spam bug (both tabs re-opened every
+    # champ-select, piling up across games). Must count as ATTACHED.
+    Reset-TabOpenGrace
+    $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().AddSeconds(-60).ToString('o')
+    $script:Bridge.Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().AddSeconds(-60).ToString('o')
+    $script:OpenActions.Clear()
+    Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 51 -IntentId 51 -Position 'middle') -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 0) {
+        $failures.Add("Throttled-tab gate (60s-old follow polls): expected NO opens -- a background-throttled tab is still attached -- got $($script:OpenActions.Count)")
+    }
+
+    # Both polls genuinely stale (tabs actually closed, well past the widened
+    # window) -> the NEXT champion change resumes opening both fresh, in the
+    # same Builds-then-draft order.
+    Reset-TabOpenGrace
+    $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().AddSeconds(-300).ToString('o')
+    $script:Bridge.Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().AddSeconds(-300).ToString('o')
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 45 -IntentId 45 -Position 'utility') -AppOrigin $appOrigin -SessionToken $sessionToken
     if ($script:OpenActions.Count -ne 2) {
         $failures.Add("Attached-tab gate (both stale): expected 2 opens to resume once both polls go stale, got $($script:OpenActions.Count)")
     }
+
+    # v1.6.4 OPEN->ATTACH RACE: the two opens above just happened, and a
+    # freshly opened tab cannot have polled yet. A champion change inside that
+    # cold-start gap must NOT open a second pair -- that race is how a single
+    # champ-select could produce 4 tabs. Follow fields deliberately left at
+    # their stale 300s values: the grace alone must carry this.
+    $script:OpenActions.Clear()
+    Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 67 -IntentId 67 -Position 'bottom') -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 0) {
+        $failures.Add("Open->attach race: a champion change right after opening must not re-open (tabs are still cold-starting), got $($script:OpenActions.Count) extra opens")
+    }
+
+    # ...but the grace is not a permanent suppressor: once it lapses with the
+    # tabs still never having polled, the open genuinely failed and the next
+    # champion change must try again.
+    $script:LastTabOpenAt.builds = (Get-Date).AddSeconds(-($script:OpenGraceSeconds + 5))
+    $script:LastTabOpenAt.draft = (Get-Date).AddSeconds(-($script:OpenGraceSeconds + 5))
+    $script:OpenActions.Clear()
+    Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 89 -IntentId 89 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 2) {
+        $failures.Add("Open grace lapse: after the grace expires with no follow poll the open must be retried, got $($script:OpenActions.Count)")
+    }
+
+    Reset-TabOpenGrace
     $script:Bridge = $null
 
     if ($failures.Count -gt 0) {
