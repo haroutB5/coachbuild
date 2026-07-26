@@ -21,6 +21,7 @@
 // 2-decimal "+1.80pp". wrText below does NOT multiply by 100.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import Link from "next/link";
 import { IconWithFallback } from "@/components/IconWithFallback";
 
 export interface Mover {
@@ -57,8 +58,22 @@ export default function MoverRow({ mover, championIcon }: MoverRowProps) {
   const positive = mover.deltaPp >= 0;
   const deltaClass = positive ? "text-good" : "text-bad";
 
+  // Every row is a route into the thing this app is FOR. Twenty-odd champions
+  // with a win-rate swing and no way to reach their build was a dead end on the
+  // app's own primary surface. `role` only rides along when it is a real lane
+  // (0-4) — parseLiveDeepLink rejects the entire link on a malformed role, so a
+  // bad value would break the navigation rather than degrade it.
+  const href =
+    mover.role >= 0 && mover.role <= 4
+      ? `/?championId=${mover.championId}&role=${mover.role}`
+      : `/?championId=${mover.championId}`;
+
   return (
-    <>
+    <Link
+      href={href}
+      aria-label={`See the build for ${mover.championName}`}
+      className="block rounded-md transition-colors hover:bg-white/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal"
+    >
       {/* Desktop / tablet — single-line table row, columns match the header
           row rendered by app/movers/page.tsx. */}
       <div className="hidden sm:grid grid-cols-[1.7fr_110px_90px_80px_1.4fr] items-center gap-3 py-3 border-b border-line last:border-b-0">
@@ -106,6 +121,6 @@ export default function MoverRow({ mover, championIcon }: MoverRowProps) {
         </div>
         {mover.note && <p className="mt-1 pl-[42px] text-[11px] text-mut truncate">{mover.note}</p>}
       </div>
-    </>
+    </Link>
   );
 }

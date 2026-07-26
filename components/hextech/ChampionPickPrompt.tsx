@@ -20,9 +20,14 @@
 // already loads) is a clean follow-up, not something to fake here.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// LAYOUT NOTE (2026-07-26 audit): the card itself was fine; the PAGE was ~85%
+// empty at 1440x900, with the footer stranded mid-screen and a few hundred
+// pixels of nothing under it. Filling the viewport is a layout fix and stays
+// inside the rule above — it adds no content, suggests no champion, and does
+// not pretend the app knows something it doesn't.
 export default function ChampionPickPrompt() {
   return (
-    <div className="mt-2 rounded-2xl border border-line bg-panel/60 px-5 py-12 text-center">
+    <div className="mt-2 flex min-h-[62vh] flex-col justify-center rounded-2xl border border-line bg-panel/60 px-5 py-12 text-center">
       <p className="text-[10.5px] tracking-[1.5px] uppercase text-teal font-bold">Builds</p>
       <h2 className="mt-2 font-display text-2xl sm:text-3xl text-txt">
         Search a champion to see their build.

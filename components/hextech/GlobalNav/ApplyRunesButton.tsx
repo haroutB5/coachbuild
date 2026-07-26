@@ -99,7 +99,7 @@ export default function ApplyRunesButton() {
       disabled={disabled}
       title={message ?? (liveReady ? "Apply this champion's recommended runes" : "Waiting for champ select…")}
       aria-label="Apply runes for the current champ-select champion"
-      className={`flex-shrink-0 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.05em] rounded-lg px-3 py-2 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar ${
+      className={`flex-shrink-0 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.05em] rounded-lg px-3 py-[11px] min-h-[44px] transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar ${
         disabled ? "bg-panel2 text-mut cursor-not-allowed" : "bg-teal text-bg hover:bg-teal-hover"
       }`}
     >

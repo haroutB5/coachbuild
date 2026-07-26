@@ -136,7 +136,7 @@ export default function EnemyTeamPanel({
         ))}
       </div>
 
-      {enemyIds.length < MAX_DRAFT_ENEMIES && <ChampionPicker value={null} onChange={onAddEnemy} />}
+      {enemyIds.length < MAX_DRAFT_ENEMIES && <ChampionPicker value={null} onChange={onAddEnemy} placeholder="Add an enemy champion…" />}
 
       {popoverOpen && effectiveLaneOpponentId !== null && (
         <MatchupAnalysisPopover

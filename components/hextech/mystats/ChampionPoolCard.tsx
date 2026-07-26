@@ -7,6 +7,7 @@
 // EXTENDED summary's winrateOnBuild/winrateOffBuild for the insight line.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import Link from "next/link";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import type { MyStatsChampionRow } from "@/components/hextech/myStats";
 
@@ -53,7 +54,14 @@ export default function ChampionPoolCard({ rows, winrateOnBuild, winrateOffBuild
     <div className="bg-panel border border-line rounded-xl px-5">
       <p className="pt-4 pb-2 text-[11px] tracking-[0.12em] uppercase text-mut font-semibold">Champion pool</p>
       {rows.map((row) => (
-        <div key={row.championId} className="flex items-center gap-3 py-2.5 border-b border-line last:border-b-0">
+        // Your own most-played champions are the shortest possible route into a
+        // build — leaving them inert made this the third dead-end list in the app.
+        <Link
+          key={row.championId}
+          href={`/?championId=${row.championId}`}
+          aria-label={`See the build for ${row.name}`}
+          className="flex items-center gap-3 py-2.5 border-b border-line last:border-b-0 rounded-md transition-colors hover:bg-white/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal"
+        >
           <span className="w-8 h-8 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
             <IconWithFallback src={row.icon} alt="" fallbackGlyph={row.name} className="w-full h-full object-cover" size={32} />
           </span>
@@ -73,7 +81,7 @@ export default function ChampionPoolCard({ rows, winrateOnBuild, winrateOffBuild
           <span className={`text-[12.5px] font-bold tabular-nums w-12 text-right flex-shrink-0 ${wrColorClass(row.winrate)}`}>
             {pctText(row.winrate)}
           </span>
-        </div>
+        </Link>
       ))}
 
       {showInsight && (

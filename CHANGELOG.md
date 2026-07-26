@@ -2,6 +2,38 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.61.0] — 2026-07-26 — The rest of the audit list
+
+### Fixed — three lists that dead-ended
+- **Patch Movers rows are links.** Twenty-plus champions with a win-rate swing and no way to reach
+  their build, on the app whose entire purpose is champion → build. Each row now routes to
+  `/?championId=&role=`; `role` only rides along when it is a real lane (0-4), because
+  `parseLiveDeepLink` rejects the whole link on a malformed role rather than degrading.
+- **My Stats champion-pool rows are links.** Your own most-played champions are the shortest route
+  into a build.
+
+### Fixed — /draft
+- **Three inputs, three behaviours, one placeholder.** The page showed the global TopBar search plus
+  two `ChampionPicker`s, all reading "Search champion…". They now read "Add an enemy champion…" and
+  "Set your champion…". `ChampionPicker` gained an optional `placeholder` that defaults to the old
+  wording, so every other call site is untouched.
+- **The picks table clipped its Synergy column at 1440px** — a very common laptop width — because
+  the table forced `min-w-[620px]` inside the right-hand column. 540px fits without a horizontal
+  scroll; the container keeps `overflow-x-auto` for genuinely narrow viewports.
+- **The page title used the Cinzel display face** while Pro Players, Patch Movers, My Stats and
+  Companion all use the sans `PageHeader` treatment. The display face is for champion names.
+
+### Fixed — touch targets and the empty landing
+- **Sub-44px tap targets on mobile**: the TopBar search input (37px), its suggestion rows (36px) and
+  the Apply-runes button (33px) now clear 44px.
+- **The Builds landing was ~85% empty at 1440x900**, footer stranded mid-screen with a few hundred
+  pixels of nothing beneath it. The empty state now fills the viewport.
+
+  Deliberately still suggests no champions. `ChampionPickPrompt` carries a standing directive —
+  "stop showing Viktor by default" — and its own note that recommending popular picks would be
+  "Viktor with extra steps, still the app choosing for you". This is a layout fix only: no content
+  added, nothing implied that the app does not know.
+
 ## [0.60.1] — 2026-07-26 — WPA gets defined; the desktop shell comes back out
 
 ### Added

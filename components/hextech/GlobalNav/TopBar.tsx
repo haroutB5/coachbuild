@@ -145,7 +145,7 @@ function TopBarChampionSearch() {
           aria-controls={LISTBOX_ID}
           aria-autocomplete="list"
           aria-activedescendant={open && filtered[activeIndex] ? optId(activeIndex) : undefined}
-          className="w-full bg-panel2/70 border border-line hover:border-line-gold rounded-lg py-2 pl-8 pr-3 text-[12.5px] text-txt placeholder:text-mut outline-none transition-colors focus:border-teal-dim focus-visible:ring-1 focus-visible:ring-teal"
+          className="w-full bg-panel2/70 border border-line hover:border-line-gold rounded-lg py-[11px] pl-8 pr-3 text-[12.5px] text-txt placeholder:text-mut outline-none transition-colors focus:border-teal-dim focus-visible:ring-1 focus-visible:ring-teal"
         />
       </div>
 
@@ -162,7 +162,7 @@ function TopBarChampionSearch() {
                     tabIndex={-1}
                     onClick={() => select(champ)}
                     onMouseEnter={() => setActiveIndex(i)}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-[12.5px] text-left transition-colors text-txt ${isActive ? "bg-teal/12" : ""}`}
+                    className={`w-full flex items-center gap-2.5 px-3 py-3 text-[12.5px] text-left transition-colors text-txt ${isActive ? "bg-teal/12" : ""}`}
                   >
                     <span className="flex-shrink-0 w-5 h-5 rounded overflow-hidden bg-black/30">
                       {/* eslint-disable-next-line @next/next/no-img-element */}

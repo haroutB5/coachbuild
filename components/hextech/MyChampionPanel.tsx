@@ -115,7 +115,7 @@ export default function MyChampionPanel({
 
       <div className="flex items-center gap-2">
         <div className="flex-1 min-w-0">
-          <ChampionPicker value={hoverChamp} onChange={onHoverChange} />
+          <ChampionPicker value={hoverChamp} onChange={onHoverChange} placeholder="Set your champion…" />
         </div>
       </div>
 

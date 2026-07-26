@@ -116,7 +116,11 @@ export default function DraftPicksTable({ plays, champIcons, caption }: DraftPic
     <div className="bg-panel border border-line rounded-xl overflow-hidden">
       {captionText && <p className="text-[10.5px] text-teal px-3 pt-2.5">{captionText}</p>}
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[620px] border-collapse" aria-label={caption}>
+        {/* 620px forced a horizontal scroll (and a visually clipped Synergy column)
+            inside the right-hand column at 1440px — a very common laptop width.
+            540 fits without one; the container keeps overflow-x-auto for the
+            genuinely narrow case. */}
+        <table className="w-full min-w-[540px] border-collapse" aria-label={caption}>
           <thead>
             <tr className="border-b border-line">
               <SortHeader column="rank" label="#" sort={sort} onSort={handleSort} align="left" />

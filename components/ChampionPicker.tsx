@@ -28,12 +28,18 @@ interface ChampionPickerProps {
    *  so the Builds page's ChampionPicker instance is unaffected — only the
    *  /history champion picker passes this. */
   withFavorites?: boolean;
+  /** What this particular picker DOES. /draft renders two of these plus the
+   *  global TopBar search, and all three carried the identical "Search
+   *  champion…" placeholder for three different behaviours — the page gave you
+   *  no way to tell which box did what. Defaults to the generic wording, so
+   *  every other call site is unchanged. */
+  placeholder?: string;
 }
 
 const LISTBOX_ID = "champ-listbox";
 const optId = (i: number) => `champ-opt-${i}`;
 
-export default function ChampionPicker({ value, onChange, withFavorites = false }: ChampionPickerProps) {
+export default function ChampionPicker({ value, onChange, withFavorites = false, placeholder }: ChampionPickerProps) {
   const [champions, setChampions] = useState<ChampionRef[]>(FALLBACK_CHAMPIONS);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);

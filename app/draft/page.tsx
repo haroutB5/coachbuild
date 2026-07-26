@@ -343,7 +343,9 @@ export default function DraftPage() {
       <div className="max-w-[1440px] mx-auto">
         <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 mb-6">
           <div>
-            <h1 className="font-display text-2xl font-bold text-txt tracking-[-0.01em]">Draft</h1>
+            {/* Sans, matching PageHeader on every other route — the display face is for
+                champion names, not page titles. */}
+            <h1 className="text-[22px] sm:text-2xl font-extrabold tracking-[-0.02em] text-txt">Draft</h1>
             <p className="text-mut text-[12.5px] mt-0.5">Statistically favored picks &amp; bans vs the enemy comp.</p>
           </div>
           {state.status === "ok" && (
