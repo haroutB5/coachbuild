@@ -440,8 +440,9 @@ export default function DraftPage() {
               {state.status === "ok" && <p className="text-mut text-[11px] mb-1 px-0.5">{picksExplainer}</p>}
               {state.status === "ok" && (
                 <p className="text-mut text-[10.5px] mb-2 px-0.5">
-                  Only champions with a well-sampled pool this patch in this lane are shown — a rare off-role pick won&apos;t
-                  out-rank a real lane staple.
+                  Champions need 5,000+ games in this lane this patch to appear, which filters out one-trick noise.
+                  Within that, ranking is by win rate — so a genuinely strong niche pick can sit above a popular
+                  staple. Check the games column before you trust a name you don&apos;t recognise here.
                 </p>
               )}
 

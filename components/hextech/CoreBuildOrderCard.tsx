@@ -47,8 +47,18 @@ export default function CoreBuildOrderCard({ items, onItemClick }: CoreBuildOrde
   // mockup's "CORE ORDER — HIGHEST WPA" wording exactly.
   return (
     <div className="py-4 first:pt-0 last:pb-0">
-      <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold mb-4">
-        Core Order <span className="text-mut/60 normal-case tracking-normal font-normal">— Highest WPA</span>
+      {/* The qualifier describes how each SLOT is filled (the highest-WPA
+          option for that slot), not the sequence — the sequence is buy order.
+          Read as "the whole list is sorted by WPA" it contradicts itself the
+          moment a late slot's best available option is negative, which is a
+          real state and one users have seen (Jinx's 6th item at -0.02). Say
+          what it means instead of letting the number look like a bug. */}
+      <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold mb-1">
+        Core Order <span className="text-mut/60 normal-case tracking-normal font-normal">— buy order</span>
+      </p>
+      <p className="text-[10.5px] text-mut/70 normal-case mb-4">
+        Each slot shows the highest-WPA option for that point in the build. A negative value means even the best
+        option there trends slightly below average.
       </p>
       <div className="flex items-start flex-wrap gap-x-1 gap-y-4">
         {order.map((pick, i) => (

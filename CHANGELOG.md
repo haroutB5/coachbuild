@@ -2,6 +2,28 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.59.1] — 2026-07-26 — Two claims the data does not keep
+
+### Fixed — Draft told you off-role picks could not out-rank lane staples, while showing exactly that
+
+The picks explainer read "a rare off-role pick won't out-rank a real lane staple." On an empty MID
+board the top four were Singed, Tryndamere, Garen and Heimerdinger. The filter is not broken — all
+four clear the 5,000-game floor honestly (Singed mid has 11.5k games this patch) — but within that
+pool the ranking is by win rate, so a genuinely strong niche pick sits above a popular staple by
+design. The copy promised a guarantee the model never made.
+
+Copy now states what the list actually is: the 5,000-game floor, win-rate ranking inside it, and a
+pointer at the games column. The scoring model is untouched — retuning a quant layer to make a
+sentence true is the wrong direction, and any change there wants live data, not a guess.
+
+### Fixed — "CORE ORDER — HIGHEST WPA" ending on a negative number
+
+Jinx's core order finishes with Mortal Reminder at −0.02. The qualifier describes how each SLOT is
+filled (the highest-WPA option available at that point), not the sequence — the sequence is buy
+order — but read as "sorted by WPA" the label contradicts itself the moment a late slot's best
+option is negative. Now labelled "buy order", with one line explaining that a negative value means
+even the best option there trends slightly below average.
+
 ## [0.59.0] — 2026-07-26 — The browser was closed, so the pages never opened (COMPANION CHANGE → 1.7.0 — re-install required)
 
 User report: "if the browser isn't open, it doesn't automatically detect and open it and have the
