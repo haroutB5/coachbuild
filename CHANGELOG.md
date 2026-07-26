@@ -2,6 +2,20 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.61.1] — 2026-07-26 — The support quest item is one of the six
+
+### Fixed
+- **Support builds could show seven real item slots.**  treated support as an
+  ordinary lane at 5 full items + boots. But a support permanently carries the quest item (World
+  Atlas → Zaz Zak s Realmspike / Bloodsong), which SupportItemCard renders in its own section — so
+  the surfaces together added up to support item + boots + 5 full = **seven**, the same impossible
+  inventory the Galio MID fixture was written to catch, arriving by a different route.
+
+  Support now caps at **4** full items, so the loadout reads support item + boots + 4 full = six.
+  Top/Jungle/Mid/Auto stay at 5 + boots. Bot keeps its deliberate exception (6 full + boots) for the
+  late-game boots-sell pattern. A new test asserts the totals per role rather than the cap numbers
+  alone, so the next lane rule has to state what it adds up to in the game.
+
 ## [0.61.0] — 2026-07-26 — The rest of the audit list
 
 ### Fixed — three lists that dead-ended

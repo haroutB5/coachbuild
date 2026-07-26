@@ -30,12 +30,27 @@ import type { RoleId } from "./types";
 /** Bot/ADC lane id per the coachless role enum (lib/types.ts's RoleId):
  *  0=TOP, 1=JUNGLE, 2=MIDDLE, 3=BOTTOM(ADC), 4=UTILITY(SUPPORT), 5=auto. */
 const BOT_ROLE_ID: RoleId = 3;
+/** Utility/support lane id — same enum. */
+const SUPPORT_ROLE_ID: RoleId = 4;
 
-/** Full-item budget EXCLUDING boots. Non-bot lanes: 5. Bot lane: 6 (the
- *  boots-sell exception). Role 5 ("auto") is treated as non-bot — it is not
- *  an explicit ADC selection. */
+/** Full-item budget EXCLUDING boots.
+ *
+ *  - Non-bot, non-support: **5** (+ boots = the 6 slots the game has).
+ *  - Bot/ADC: **6** (+ boots = 7 tiles) — the boots-sell exception, honest in
+ *    a PROGRESSION line even though no single moment holds all seven.
+ *  - Support: **4**. A support's quest item (World Atlas → Zaz'Zak's
+ *    Realmspike / Bloodsong / …) permanently OCCUPIES one of the six slots and
+ *    is surfaced separately by SupportItemCard, so a 5-full-item core order
+ *    plus boots plus the support item is 7 real slots — the same impossible
+ *    inventory the Galio fixture caught, arriving by a different route (user
+ *    report, 2026-07-26: "should be 6 including supp items and boots").
+ *
+ *  Role 5 ("auto") is treated as non-bot, non-support: it is not an explicit
+ *  lane selection, and 5 is the safe budget for an unknown lane. */
 export function fullItemCapForRole(role: RoleId): number {
-  return role === BOT_ROLE_ID ? 6 : 5;
+  if (role === BOT_ROLE_ID) return 6;
+  if (role === SUPPORT_ROLE_ID) return 4;
+  return 5;
 }
 
 /** Caps an ordered "extra" full-item list (already best-value-first, e.g.

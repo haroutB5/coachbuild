@@ -26,13 +26,31 @@ const galioFourthPlus = [
 ];
 
 describe("fullItemCapForRole (6-slot budget)", () => {
-  it("non-bot lanes (Top/Jungle/Mid/Support/Auto) cap at 5 full items", () => {
-    const nonBot: RoleId[] = [0, 1, 2, 4, 5];
-    for (const role of nonBot) expect(fullItemCapForRole(role)).toBe(5);
+  it("Top/Jungle/Mid/Auto cap at 5 full items (+ boots = the game's 6 slots)", () => {
+    const standard: RoleId[] = [0, 1, 2, 5];
+    for (const role of standard) expect(fullItemCapForRole(role)).toBe(5);
   });
 
   it("bot lane (ADC, role 3) caps at 6 full items — the boots-sell exception", () => {
     expect(fullItemCapForRole(3)).toBe(6);
+  });
+
+  it("SUPPORT (role 4) caps at 4 full items — the quest item owns a slot too", () => {
+    // A support's quest item (World Atlas -> Zaz'Zak's Realmspike / Bloodsong)
+    // permanently occupies one of the six and is rendered separately by
+    // SupportItemCard. At the old cap of 5 the surfaces together showed
+    // support item + boots + 5 full = SEVEN real slots — the same impossible
+    // inventory the Galio fixture below catches, by a different route.
+    expect(fullItemCapForRole(4)).toBe(4);
+  });
+
+  it("every role's total stays inside the six slots the game actually has", () => {
+    const SUPPORT_QUEST_SLOT = 1;
+    const BOOTS_SLOT = 1;
+    expect(fullItemCapForRole(0) + BOOTS_SLOT).toBe(6);
+    expect(fullItemCapForRole(4) + BOOTS_SLOT + SUPPORT_QUEST_SLOT).toBe(6);
+    // Bot is the one deliberate exception: 7 tiles in a PROGRESSION line.
+    expect(fullItemCapForRole(3) + BOOTS_SLOT).toBe(7);
   });
 });
 
