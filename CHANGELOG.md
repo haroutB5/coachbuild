@@ -2,6 +2,38 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.62.0] — 2026-07-26 — One support item, not two
+
+### Fixed
+- **Pro Consensus counted two support items at once.** On Brand support the ITEMS grid showed
+  Zaz'Zak's Realmspike 80% *and* Solstice Sleigh 20%. Both are support-quest finals, and Bounty of
+  Worlds upgrades into exactly one of the five — so that grid was never showing two things a pro
+  built together. It was showing one choice split across the sample, while spending two of six item
+  slots on it and pushing a real item out (Brand's sixth slot now holds Morellonomicon again).
+
+  The five finals are now partitioned out of `items` into their own `supportFinals` field and render
+  as ONE slot: the modal pick, then the runners-up beneath an OR divider. Each keeps its own honest
+  percentage — the fractions are deliberately never merged into a combined "the family was built X%"
+  figure, which would describe a choice nobody made. Same carve-out shape as the v0.28.0 boots stack
+  and the 2026-07-22 starters slot. Capped at the top pick plus two alternatives so the slot matches
+  the boots/starters stacks beside it.
+
+  The collapse logic lives in a new pure module, `components/hextech/supportFinalGroup.ts`
+  (membership + ranking, no rendering, no aggregation), covered by 16 new unit tests.
+
+- **The exported LCU "Pro" build line had the same duplication**, for the same reason — both finals
+  flowed into it. It now carries the top pick only.
+
+### Notes
+- Runic Compass (3866) is held out of the item grid *only* by `purchasable === false`, not by the
+  empty-`into` leaf rule: ddragon ships it with no `into` field at all, which normalizes to `[]` and
+  would otherwise pass as a finished item. There is now a test pinning that per-id shape. Do not
+  "simplify" the filter chain on the assumption that the recipe tree covers the intermediate tiers.
+- Support-final de-duplication is scoped to Pro Consensus and the LCU Pro line in this release. The
+  WPA build lines and the Situational swaps block still de-duplicate by exact id only; they avoid
+  the bug today because nothing in the app requests coachless `ItemType: 3`, which is a one-line
+  change away rather than a guarantee. Tracked in HANDOFF-engy.md.
+
 ## [0.61.2] — 2026-07-26 — Three from the second UI pass
 
 ### Fixed

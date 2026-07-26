@@ -10,14 +10,36 @@
 // instead get recommended a completely SEPARATE pool of standalone
 // "enchanter"/tank items (Staff of Flowing Water, Echoes of Helia, Knight's
 // Vow, Locket of the Iron Solari, ...) built from generic components, not
-// from the support-quest chain. This is an UPSTREAM DATA GAP (coachless's
-// pipeline apparently doesn't observe/attribute a quest-completion pick the
-// same way as a normal purchase) — NOT something this app's own filters
+// from the support-quest chain. NOT something this app's own filters
 // (isFullItem/isBuildItem, which don't even run on this page — those live in
 // itemSetBody.ts's companion item-set export, a separate pipeline) are
 // excluding. `findSupportFinalInBuildData` below is a real, honest scan (not
-// a stub) so this activates automatically the moment upstream data ever
-// starts surfacing one — but expect it to return null in practice today.
+// a stub) so this activates automatically the moment the data ever starts
+// surfacing one — but expect it to return null in practice today.
+//
+// ── CORRECTION (2026-07-26): this is OUR gap, not coachless's ──────────────
+// This header used to call the absence "an UPSTREAM DATA GAP (coachless's
+// pipeline apparently doesn't observe/attribute a quest-completion pick the
+// same way as a normal purchase)". That attribution is WRONG, and believing
+// it makes the gap look far more permanent than it is. The real mechanism is
+// entirely in this repo, one request parameter wide:
+//   - coachless's own catalog (`_research/items.json`) classifies all five
+//     finals as `ItemType: 3`. World Atlas is 6, Runic Compass / Bounty of
+//     Worlds are 4, legendaries are 1, boots are 2.
+//   - `getGlobalItemStatistics` (lib/coachless.ts) takes `itemType` as a
+//     REQUEST parameter and does zero client-side filtering — it is a raw
+//     passthrough of whatever the endpoint returns.
+//   - Every call site in lib/recommend.ts requests itemType 6 (starter), 2
+//     (boots) or 1 (legendary). NOTHING anywhere requests itemType 3.
+// So the finals can never appear in /api/build because nobody ever asks for
+// them — which is also exactly why `items.starter` is ALWAYS World Atlas
+// (type 6 IS requested) while the finals never show. Adding a type-3 fetch is
+// a one-line change someone might make deliberately to light up the
+// `measured` branch below. DO NOT make it without reading the "what breaks"
+// list in HANDOFF-engy.md (2026-07-26): the recommend.ts slot loops,
+// buildSlotCap.ts's support reservation, and every card that renders
+// items.first/second/third/alts all dedupe by EXACT ID ONLY and would each
+// happily show two mutually-exclusive finals side by side.
 //
 // ── The real upgrade tree (verified live, NOT assumed from the brief) ──────
 // Pulled from the coachless CDN mirror's item.json (patch 16.13.1,

@@ -218,11 +218,47 @@
 // `ItemFrequency.share` divides by it instead of `gamesTotal`. Concretely:
 // 100 games, 15 of them itemless -> an item in 40 of the 85 item-bearing
 // games now renders the honest "47%" instead of the understated "40%".
+//
+// -- Support-quest finals get ONE slot, never several (2026-07-26) ----------
+// USER BUG (screenshot-confirmed, Builds page): the ITEMS grid rendered
+// Zaz'Zak's Realmspike 80% AND Solstice Sleigh 20% at once. Both are
+// support-quest FINALS, and a player can only ever own ONE of the five --
+// Bounty of Worlds (3867) has `into: [3869,3870,3871,3876,3877]` and upgrades
+// into exactly one of them (live 16.13.1 item.json, re-verified 2026-07-26).
+// Two of the six item slots were therefore spent on ONE choice split across
+// the sample, pushing a real item out of the grid.
+//
+// This is the same failure the v0.28.0 boots carve-out fixed (a split boots
+// preference eating two slots) and gets the same fix: `SUPPORT_FINAL_ITEMS`
+// ids are partitioned OUT of `items` into their own `supportFinals` field --
+// top pick plus the runners-up it beat, ONE grid slot -- via the pure
+// `rankSupportFinals` helper (components/hextech/supportFinalGroup.ts). The
+// runners-up keep their OWN honest per-item percentages; the fractions are
+// never merged or re-normalised into a combined "the family was built X%"
+// stat, which would describe a choice nobody made.
+//
+// Partition ORDER is boots -> starters -> support finals, and that order is a
+// construction guarantee rather than luck: none of the five finals carries
+// the "Boots" tag or sits in STARTING_ITEM_ALLOWLIST (all five are
+// `tags: [Health, HealthRegen, ManaRegen, Vision, GoldPer, Lane]`,
+// `from: ["3867"]`), so the earlier checks cannot claim one. World Atlas
+// (3865) is allowlisted and still lands in `starters`, unaffected.
+//
+// The intermediate tiers never reach this partition at all, but NOT for the
+// reason you would guess (verified, do not "simplify" this): Bounty of Worlds
+// (3867) is excluded by `isBuildItem` because it is BOTH non-purchasable and
+// has a populated `into`, whereas Runic Compass (3866) has NO `into` field in
+// ddragon at all -- itemDetail.ts normalizes that to `[]`, which the
+// empty-into leaf rule would happily accept. The ONLY thing holding 3866 out
+// is `purchasable === false`. Both are also `specialRecipe` upgrades rather
+// than `from`-recipe ones, so nothing else in this module's filter chain
+// would have caught them either.
 
 import type { ProGame } from "@/components/proGames.types";
 import { CONSUMABLE_ITEM_IDS, treeIconUrl, treeName, shardIconUrl, shardName } from "@/components/proAssets";
 import type { ItemDetail } from "@/components/itemDetail";
 import { primaryMinorRow } from "./perkSlots";
+import { isSupportFinalItem, rankSupportFinals, type SupportFinalRanking } from "./supportFinalGroup";
 import { TREE_NAME } from "@/lib/types";
 import type { Pick as PickType, RunesBlock, ShardSet, TreeId } from "@/lib/types";
 
@@ -342,7 +378,10 @@ export interface ProConsensusModel {
    *  are carved out into `starters` below (2026-07-22 hard user directive —
    *  "Dark Seal must NEVER appear as a full/completed item ANYWHERE in the
    *  app" — live repro was exactly this list mixing Dark Seal in with
-   *  Blackfire Torch/Rabadon's/etc.) so this list is never diluted by either. */
+   *  Blackfire Torch/Rabadon's/etc.) so this list is never diluted by either.
+   *  2026-07-26: the five support-quest FINALS are likewise carved out into
+   *  `supportFinals` below — they are mutually exclusive, so listing more
+   *  than one of them here spent multiple slots on a single choice. */
   items: ItemFrequency[];
   /** v0.28.0 — top 2 boots choices by pick rate, carved out of `items` so a
    *  champion with a split boots preference (e.g. Crimson Lucidity 35% vs.
@@ -374,6 +413,29 @@ export interface ProConsensusModel {
    *  slot at all in that case, same "absent, not empty" convention `boots`
    *  already established. */
   starters: ItemFrequency[];
+  /** 2026-07-26 — the support-quest FINAL family (Dream Maker / Zaz'Zak's /
+   *  Bloodsong / Celestial Opposition / Solstice Sleigh), carved out of
+   *  `items` for the same reason `boots` was in v0.28.0 and `starters` were
+   *  on 2026-07-22: it is ONE choice, so it gets ONE grid slot. The five are
+   *  MUTUALLY EXCLUSIVE by construction (Bounty of Worlds upgrades into
+   *  exactly one — see the module header), so a grid listing two of them was
+   *  never showing two things a pro built; it was showing one choice split
+   *  across the sample while burning two of six slots. Live user report
+   *  (screenshot-confirmed): "Zaz'Zak's Realmspike 80%" next to "Solstice
+   *  Sleigh 20%".
+   *
+   *  `null` — not an empty object — when the sample never built a support
+   *  final, so the card renders no slot at all: the same "absent, not empty"
+   *  convention `boots`/`starters` already established. `top` is the modal
+   *  pick; `alternatives` are the other finals the sample actually observed,
+   *  each keeping its OWN count and share. Those shares are deliberately NOT
+   *  merged or re-normalised into a combined family percentage — that number
+   *  would describe a choice nobody made. Both ranked count desc, itemId asc
+   *  (the same deterministic tie-break the rest of this module uses), and
+   *  both divide by `itemsSampleSize`, the same denominator as `items`/
+   *  `boots`/`starters`. Capped at `TOP_SUPPORT_FINALS_LIMIT` total entries
+   *  so the slot's footprint matches the boots/starters stacks beside it. */
+  supportFinals: SupportFinalRanking<ItemFrequency> | null;
   /** 2026-07-25 (P1-2 audit fix) — denominator for `items`/`boots`/
    *  `starters` shares: games whose `finalItems` array is non-empty, NOT
    *  `gamesTotal`. Before this field existed, every item-family share was
@@ -481,6 +543,16 @@ const TOP_BOOTS_LIMIT = 2;
 // stacked way BootsStackTile already does. 2 keeps the slot's footprint
 // identical to the boots slot it sits beside.
 const TOP_STARTERS_LIMIT = 2;
+/** DISPLAY cap on the support-final slot — the top pick plus at most 2
+ *  alternatives. The family has 5 members, but a sample split 4-5 ways across
+ *  a set of mutually-exclusive items is long-tail noise, and an uncapped
+ *  stack would grow the slot to 5 tiles against the boots/starters stacks'
+ *  2 sitting beside it. Applied HERE, at the model boundary, not inside
+ *  `rankSupportFinals` — that helper reports what the sample genuinely
+ *  contained; capping is a rendering decision (same split of concerns as
+ *  TOP_ITEMS_LIMIT/TOP_BOOTS_LIMIT slicing an otherwise-complete sorted
+ *  list). */
+const TOP_SUPPORT_FINALS_LIMIT = 3;
 const TOP_PRIMARY_MINORS_LIMIT = 3;
 const TOP_SECONDARY_PICKS_LIMIT = 2;
 const TOP_SHARDS_LIMIT = 3;
@@ -896,8 +968,19 @@ export function aggregateProConsensus(
     count,
     share: itemsSampleSize > 0 ? count / itemsSampleSize : 0,
   });
+  // 2026-07-26: support-quest FINALS partitioned out the same way, checked
+  // AFTER boots and starters. Order is a construction guarantee, not luck —
+  // none of the five finals is Boots-tagged or allowlisted (verified against
+  // live 16.13.1 item.json), and World Atlas (3865, the chain's STARTER) is
+  // allowlisted and so still lands in `starters`, where it belongs. See the
+  // module header's "Support-quest finals get ONE slot" section.
   const items: ItemFrequency[] = sortedItemEntries
-    .filter(([itemId]) => !isBootsTag(itemMeta.get(itemId)) && !STARTING_ITEM_ALLOWLIST.has(itemId))
+    .filter(
+      ([itemId]) =>
+        !isBootsTag(itemMeta.get(itemId)) &&
+        !STARTING_ITEM_ALLOWLIST.has(itemId) &&
+        !isSupportFinalItem(itemId)
+    )
     .slice(0, TOP_ITEMS_LIMIT)
     .map(toFrequency);
   const boots: ItemFrequency[] = sortedItemEntries
@@ -908,6 +991,29 @@ export function aggregateProConsensus(
     .filter(([itemId]) => !isBootsTag(itemMeta.get(itemId)) && STARTING_ITEM_ALLOWLIST.has(itemId))
     .slice(0, TOP_STARTERS_LIMIT)
     .map(toFrequency);
+  // The boots/starter exclusions are repeated here rather than assumed away:
+  // if a future patch ever DID tag a final "Boots" or add one to the
+  // allowlist, it must land in exactly one list, and the earlier partition
+  // wins — same precedence rule `starters` already documents against `boots`.
+  // rankSupportFinals applies no cap of its own (it reports what the sample
+  // held); TOP_SUPPORT_FINALS_LIMIT is applied here, to the flattened
+  // top-then-alternatives order, so the cap trims the weakest runners-up and
+  // can never drop the top pick.
+  const supportFinalEntries: ItemFrequency[] = sortedItemEntries
+    .filter(
+      ([itemId]) =>
+        !isBootsTag(itemMeta.get(itemId)) &&
+        !STARTING_ITEM_ALLOWLIST.has(itemId) &&
+        isSupportFinalItem(itemId)
+    )
+    .map(toFrequency);
+  const rankedSupportFinals = rankSupportFinals(supportFinalEntries);
+  const supportFinals: SupportFinalRanking<ItemFrequency> | null = rankedSupportFinals
+    ? {
+        top: rankedSupportFinals.top,
+        alternatives: rankedSupportFinals.alternatives.slice(0, TOP_SUPPORT_FINALS_LIMIT - 1),
+      }
+    : null;
 
   const topKeystone = sortEntries(keystoneCounts)[0];
   const keystone: KeystoneFrequency | null = topKeystone
@@ -1032,6 +1138,7 @@ export function aggregateProConsensus(
     items,
     boots,
     starters,
+    supportFinals,
     itemsSampleSize,
     keystone: effectiveKeystone,
     runesSampleSize: effectiveRunesSampleSize,

@@ -268,7 +268,16 @@ export interface ItemSet {
  *  It was not, and believing it is why Doran's Bow and Doran's Helm shipped
  *  inside completed build lines in production (v0.56.0 P0-A). isFullItem's
  *  starter rule is a STRUCTURAL backstop, not a re-filter of a list that is
- *  already applied upstream. */
+ *  already applied upstream.
+ *
+ *  2026-07-26: `items` carries AT MOST ONE support-quest final. The five are
+ *  mutually exclusive (Bounty of Worlds upgrades into exactly one), and
+ *  aggregateProConsensus now partitions them into their own
+ *  `ProConsensusModel.supportFinals` field; itemSetsApply.ts folds only the
+ *  top pick back in here. Before that partition this array could carry two of
+ *  them, and a 6-item Pro shop line could genuinely recommend both — the same
+ *  bug the Pro Consensus card was reported for. Nothing in THIS module
+ *  deduplicates the family, so do not reintroduce more than one upstream. */
 export interface ProConsensusItemsInput {
   items: { itemId: number; share: number }[];
   boots: { itemId: number; share: number }[];

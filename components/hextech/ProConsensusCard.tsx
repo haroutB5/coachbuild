@@ -457,6 +457,87 @@ function StartersStackTile({
   );
 }
 
+/** 2026-07-26 — ONE grid slot for the support-quest FINAL family (user bug,
+ *  screenshot-confirmed: the ITEMS grid showed Zaz'Zak's Realmspike 80% AND
+ *  Solstice Sleigh 20% at once, two of six slots spent on a single choice).
+ *  Only ONE of the five finals can ever be owned — Bounty of Worlds upgrades
+ *  into exactly one — so this renders the modal pick as the primary tile with
+ *  the runners-up stacked beneath it, labelled as the alternatives they are.
+ *
+ *  Visually a BootsStackTile (same w-[72px] column, same w-11 h-11 / size=44
+ *  tiles, so it reflows in the same flex-wrap Items row and matches the boots
+ *  and starter stacks beside it). Two deliberate differences:
+ *   - an "or" rule between the top pick and the alternatives, because these
+ *     entries are MUTUALLY EXCLUSIVE, where stacked boots/starters are merely
+ *     a split preference among things a build could in principle contain;
+ *   - alternatives render dimmed (opacity-70) and say so in their aria-label,
+ *     so the primary reads as the pick rather than as first-of-a-list.
+ *  Each entry keeps its OWN honest percentage against the same `denom` — the
+ *  fractions are never summed into a combined family stat (see
+ *  proConsensus.ts's `supportFinals` doc comment). */
+function SupportFinalStackTile({
+  top,
+  alternatives,
+  denom,
+  names,
+  icon,
+  onClick,
+}: {
+  top: { itemId: number; count: number };
+  alternatives: { itemId: number; count: number }[];
+  denom: number;
+  names: Map<number, string>;
+  icon: (itemId: number) => string;
+  onClick: (itemId: number) => void;
+}) {
+  const tile = (entry: { itemId: number; count: number }, isAlternative: boolean) => {
+    const name = names.get(entry.itemId) ?? `Item #${entry.itemId}`;
+    const pct = formatSharePct(denom > 0 ? entry.count / denom : 0);
+    return (
+      <button
+        key={entry.itemId}
+        type="button"
+        onClick={() => onClick(entry.itemId)}
+        aria-label={
+          isAlternative
+            ? `View details for ${name} — an alternative support-quest upgrade, built in ${entry.count} of ${denom} pro games (${pct})`
+            : `View details for ${name} — the most-built support-quest upgrade, in ${entry.count} of ${denom} pro games (${pct})`
+        }
+        className={`flex flex-col items-center text-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform ${
+          isAlternative ? "opacity-70" : ""
+        }`}
+      >
+        <span className="w-11 h-11 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center">
+          <IconWithFallback src={icon(entry.itemId)} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={44} />
+        </span>
+        <span className="text-[10px] text-txt mt-1.5 leading-tight line-clamp-2 min-h-[24px]">{name}</span>
+        <span className="text-[10.5px] font-bold tabular-nums text-teal">{pct}</span>
+        <span className="text-[9.5px] text-mut/70 tabular-nums">{entry.count}/{denom}</span>
+      </button>
+    );
+  };
+
+  return (
+    <div className="flex flex-col gap-2.5 w-[72px] flex-shrink-0">
+      {tile(top, false)}
+      {alternatives.length > 0 && (
+        <>
+          {/* "or", not a bare gap — these are mutually exclusive, and the
+              card should say so rather than leave the reader to infer it
+              from two stacked icons. aria-hidden: the exclusivity is already
+              carried explicitly in each alternative's aria-label above. */}
+          <span aria-hidden="true" className="flex items-center gap-1.5 text-[9px] uppercase tracking-[0.1em] text-mut/50">
+            <span className="h-px flex-1 bg-line" />
+            or
+            <span className="h-px flex-1 bg-line" />
+          </span>
+          {alternatives.map((a) => tile(a, true))}
+        </>
+      )}
+    </div>
+  );
+}
+
 /** In-game-page rune tile — icon above name above percentage, the same
  *  vocabulary RunesSummonersCard's RuneTile uses on the BUILD tab, just
  *  driven by a pick-rate fraction instead of a WPA score (requirement: "put
@@ -770,7 +851,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
         </div>
       )}
 
-      {(model.items.length > 0 || model.boots.length > 0) && (
+      {(model.items.length > 0 || model.boots.length > 0 || model.supportFinals !== null) && (
         <div className="mb-4">
           <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">Items</p>
           {/* flex-wrap, not overflow-x-auto — matches CoreBuildOrderCard/
@@ -783,6 +864,21 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
             {model.boots.length > 0 && (
               <BootsStackTile
                 boots={model.boots}
+                denom={model.itemsSampleSize}
+                names={names.items}
+                icon={(id) => itemIconUrl(id, ver)}
+                onClick={(id) => onOpenDetail("item", id)}
+              />
+            )}
+            {/* 2026-07-26 — the support-quest final family as ONE slot,
+                beside the boots stack and ahead of the main items (it is a
+                single core build decision for the role, not a filler slot).
+                Absent entirely — no empty block — when the sample never
+                built one, same convention as boots/starters. */}
+            {model.supportFinals && (
+              <SupportFinalStackTile
+                top={model.supportFinals.top}
+                alternatives={model.supportFinals.alternatives}
                 denom={model.itemsSampleSize}
                 names={names.items}
                 icon={(id) => itemIconUrl(id, ver)}

@@ -34,6 +34,12 @@ const ITEM_JSON_FIXTURE = {
     "3036": { name: "Lord Dominik's Regards", tags: ["Damage"], into: [], from: ["3035"] },
     "3095": { name: "Item 3095", tags: ["Damage"], into: [], from: ["1038"] },
     "3072": { name: "Bloodthirster", tags: ["Damage", "LifeSteal"], into: [], from: ["1038"] },
+    // Two support-quest FINALS (2026-07-26). Real 16.13.1 shape: built from
+    // the quest hub 3867, recipe-tree leaves, purchasable, not Boots-tagged
+    // — so isBuildItem counts both, which is exactly how two mutually
+    // exclusive items used to reach one 6-item Pro build line.
+    "3871": { name: "Zaz'Zak's Realmspike", tags: ["Health", "GoldPer", "Lane"], into: [], from: ["3867"] },
+    "3876": { name: "Solstice Sleigh", tags: ["Health", "GoldPer", "Lane"], into: [], from: ["3867"] },
   },
 };
 
@@ -158,6 +164,34 @@ describe("resolveProConsensusForSets", () => {
     // starter, now partitioned out) -> resolveProConsensusForSets' own
     // "empty sample" contract returns null, same as a genuinely N=0 sample.
     expect(await resolveProConsensusForSets(CHAMP, "bot", "16.13")).toBeNull();
+  });
+
+  it("2026-07-26: exactly ONE support-quest final reaches the Pro build line — the modal pick, never both", async () => {
+    // Two mutually-exclusive finals in one sample (Zaz'Zak's 2 games, Solstice
+    // Sleigh 1). Before the supportFinals partition BOTH flowed through
+    // model.items into itemSetBody's 6-item Pro line, which could then
+    // recommend two items a player can never own together — the same bug the
+    // Pro Consensus card was reported for, on the in-game shop surface.
+    vi.stubGlobal(
+      "fetch",
+      routedFetch([
+        ["/api/pros", { games: [PRO_GAME(3871), PRO_GAME(3871), PRO_GAME(3876)] }],
+        ["https://cdn.coachless.gg", ITEM_JSON_FIXTURE],
+      ])
+    );
+    const { resolveProConsensusForSets } = await import("../hextech/itemSetsApply");
+    const result = await resolveProConsensusForSets(CHAMP, "bot", "16.13");
+    expect(result).not.toBeNull();
+    expect(result!.items.filter((i) => i.itemId === 3871 || i.itemId === 3876)).toEqual([
+      { itemId: 3871, share: 2 / 3 },
+    ]);
+    // NON-REGRESSION half: the top pick must still be PRESENT. Carving the
+    // family out of model.items without folding `top` back in here would have
+    // dropped the support item from every support champ's Pro line entirely.
+    expect(result!.items.some((i) => i.itemId === 3871)).toBe(true);
+    // Documented invariant of this shape: share desc, itemId asc.
+    const shares = result!.items.map((i) => i.share);
+    expect([...shares].sort((a, b) => b - a)).toEqual(shares);
   });
 
   it("returns null when the pro-games sample is empty", async () => {

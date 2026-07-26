@@ -14,6 +14,13 @@ import {
   missingRunePageReason,
   proConsensusRuneApplyInput,
 } from "../hextech/proConsensus";
+import { isSupportFinalItem, rankSupportFinals, SUPPORT_FINAL_ITEM_IDS } from "../hextech/supportFinalGroup";
+import {
+  SUPPORT_FINAL_ITEMS,
+  SUPPORT_STARTER_ID,
+  SUPPORT_TIER2_ID,
+  SUPPORT_QUEST_HUB_ID,
+} from "../hextech/supportItem";
 import { buildRuneApplyBody } from "../hextech/runeApplyBody";
 import { isKeystoneOf, primaryMinorRow } from "../hextech/perkSlots";
 import type { ProGame, ProGameRunes } from "../proGames.types";
@@ -115,6 +122,29 @@ const SORCERERS_SHOES = 3020; // tier-2 boots — into:["3175"], from:["1001"], 
 const RAW_BOOTS = 1001; // tier-1 boots — into: many, from: [] — must NOT count
 const SWIFTMARCH = 3170; // tier-3 boots enchant — from:["3009"], into:[] — completed either way
 
+// Support-quest FINALS (2026-07-26 collapse). Ids come from the real
+// SUPPORT_FINAL_ITEMS export, never re-typed here — same rule the production
+// module follows, so a patch that moves an id can't leave the tests asserting
+// against a stale number that still passes.
+const ZAZZAKS = SUPPORT_FINAL_ITEMS.zazzaks.id; // 3871
+const SOLSTICE_SLEIGH = SUPPORT_FINAL_ITEMS.solsticeSleigh.id; // 3876
+const BLOODSONG = SUPPORT_FINAL_ITEMS.bloodsong.id; // 3877
+const DREAM_MAKER = SUPPORT_FINAL_ITEMS.dreamMaker.id; // 3870
+/** Ascending id order — several tests below rely on the itemId-asc tie-break,
+ *  so a stable, explicit order beats Set/Object iteration order. */
+const ALL_SUPPORT_FINAL_IDS = Array.from(SUPPORT_FINAL_ITEM_IDS).sort((a, b) => a - b);
+/** The real 16.13.1 ddragon shape for all five finals (verified 2026-07-26
+ *  against the coachless CDN mirror): built FROM the quest hub, a recipe-tree
+ *  leaf, purchasable, and NOT Boots-tagged — i.e. they pass `isBuildItem` and
+ *  reach the items partition on their own merits, which is exactly why the
+ *  duplication bug was possible. */
+const SUPPORT_FINAL_META = {
+  from: ["3867"],
+  into: [],
+  purchasable: true,
+  tags: ["Health", "HealthRegen", "ManaRegen", "Vision", "GoldPer", "Lane"],
+};
+
 describe("isBuildItem", () => {
   it("excludes a component with a populated `into` (Needlessly Large Rod)", () => {
     const meta = itemMeta(item(NEEDLESSLY_LARGE_ROD, { into: ["3157", "4645", "3089", "3102", "3128", "4403"], tags: ["SpellDamage"] }));
@@ -190,6 +220,7 @@ describe("aggregateProConsensus", () => {
     expect(model.items).toEqual([]);
     expect(model.boots).toEqual([]);
     expect(model.starters).toEqual([]);
+    expect(model.supportFinals).toBeNull();
     expect(model.keystone).toBeNull();
     expect(model.primaryTree).toBeNull();
     expect(model.primaryTreeSampleSize).toBe(0);
@@ -565,6 +596,215 @@ describe("aggregateProConsensus", () => {
     const model = aggregateProConsensus(games, meta);
     expect(model.items).toEqual([{ itemId: ROCKETBELT, count: 1, share: 1 / 21 }]);
     expect(model.starters).toEqual([{ itemId: DARK_SEAL, count: 20, share: 20 / 21 }]);
+  });
+
+  // ── 2026-07-26: support-quest FINALS collapsed into ONE slot ──────────────
+  // Live user report, screenshot-confirmed: the ITEMS grid rendered Zaz'Zak's
+  // Realmspike 80% AND Solstice Sleigh 20% at once. Only ONE of the five
+  // finals can ever be owned (Bounty of Worlds upgrades into exactly one), so
+  // that was one choice split across the sample burning two of six slots.
+  // Mirrors the v0.28.0 boots and 2026-07-22 starters partitions exactly.
+
+  it("USER BUG REPRO: two support finals in one sample collapse to one slot plus an alternative, freeing an items slot", () => {
+    // The exact reported shape: Zaz'Zak's in 8 of 10 item-bearing games,
+    // Solstice Sleigh in the other 2. Real 16.13.1 metadata (from:["3867"],
+    // into:[], purchasable, no Boots tag) so isBuildItem counts both.
+    const meta = itemMeta(
+      item(ROCKETBELT, { from: ["x"] }),
+      item(ZAZZAKS, SUPPORT_FINAL_META),
+      item(SOLSTICE_SLEIGH, SUPPORT_FINAL_META)
+    );
+    const games = [
+      ...Array.from({ length: 8 }, () => game({ finalItems: [ROCKETBELT, ZAZZAKS] })),
+      ...Array.from({ length: 2 }, () => game({ finalItems: [ROCKETBELT, SOLSTICE_SLEIGH] })),
+    ];
+    const model = aggregateProConsensus(games, meta);
+
+    // Neither final may appear in the main grid any more.
+    expect(model.items.find((i) => i.itemId === ZAZZAKS)).toBeUndefined();
+    expect(model.items.find((i) => i.itemId === SOLSTICE_SLEIGH)).toBeUndefined();
+    expect(model.items.find((i) => i.itemId === ROCKETBELT)?.count).toBe(10);
+
+    // One slot: the modal pick, with the runner-up as an alternative.
+    expect(model.supportFinals).toEqual({
+      top: { itemId: ZAZZAKS, count: 8, share: 8 / 10 },
+      alternatives: [{ itemId: SOLSTICE_SLEIGH, count: 2, share: 2 / 10 }],
+    });
+    // Each keeps its OWN honest percentage — never merged/re-normalised into
+    // a combined "the family was built 100%" stat describing nobody's build.
+    expect(model.supportFinals!.top.share + model.supportFinals!.alternatives[0].share).toBe(1);
+    expect(model.supportFinals!.top.share).not.toBe(1);
+  });
+
+  it("a single support final still renders: top pick, no alternatives", () => {
+    const meta = itemMeta(item(ROCKETBELT, { from: ["x"] }), item(DREAM_MAKER, SUPPORT_FINAL_META));
+    const games = Array.from({ length: 4 }, () => game({ finalItems: [ROCKETBELT, DREAM_MAKER] }));
+    const model = aggregateProConsensus(games, meta);
+    expect(model.supportFinals).toEqual({
+      top: { itemId: DREAM_MAKER, count: 4, share: 1 },
+      alternatives: [],
+    });
+    expect(model.items.find((i) => i.itemId === DREAM_MAKER)).toBeUndefined();
+  });
+
+  it("zero support finals renders NOTHING — null, not an empty object (absent-not-empty, same as boots/starters)", () => {
+    const meta = itemMeta(item(ROCKETBELT, { from: ["x"] }));
+    const model = aggregateProConsensus([game({ finalItems: [ROCKETBELT] })], meta);
+    expect(model.supportFinals).toBeNull();
+  });
+
+  it("REGRESSION PIN: no support final can ever reach `items`, across all five family ids", () => {
+    // Generic across the real SUPPORT_FINAL_ITEMS export rather than only the
+    // two ids the bug report named — a future 6th final, or a reordered
+    // partition, is caught here rather than in production.
+    const meta = itemMeta(item(ROCKETBELT, { from: ["x"] }), ...ALL_SUPPORT_FINAL_IDS.map((id) => item(id, SUPPORT_FINAL_META)));
+    for (const id of ALL_SUPPORT_FINAL_IDS) {
+      const model = aggregateProConsensus([game({ finalItems: [ROCKETBELT, id] })], meta);
+      expect(model.items.some((i) => i.itemId === id)).toBe(false);
+      expect(model.supportFinals?.top.itemId).toBe(id);
+    }
+  });
+
+  it("tie-break is deterministic: equal counts resolve by itemId asc, regardless of first-seen order", () => {
+    const meta = itemMeta(item(ZAZZAKS, SUPPORT_FINAL_META), item(SOLSTICE_SLEIGH, SUPPORT_FINAL_META));
+    // Solstice Sleigh (3876) is seen FIRST, so it leads the underlying Map's
+    // insertion order; Zaz'Zak's (3871) is the lower id and must still win.
+    const games = [game({ finalItems: [SOLSTICE_SLEIGH] }), game({ finalItems: [ZAZZAKS] })];
+    const model = aggregateProConsensus(games, meta);
+    expect(model.supportFinals?.top.itemId).toBe(ZAZZAKS);
+    expect(model.supportFinals?.alternatives.map((a) => a.itemId)).toEqual([SOLSTICE_SLEIGH]);
+  });
+
+  it("caps the slot at 3 entries (top + 2 alternatives) and never drops the top pick", () => {
+    // All five finals at DISTINCT counts so the ranking is unambiguous and
+    // the cap trims the weakest runners-up, not the winner.
+    const meta = itemMeta(...ALL_SUPPORT_FINAL_IDS.map((id) => item(id, SUPPORT_FINAL_META)));
+    const ranked = [...ALL_SUPPORT_FINAL_IDS];
+    const games = ranked.flatMap((id, i) =>
+      Array.from({ length: ranked.length - i }, () => game({ finalItems: [id] }))
+    );
+    const model = aggregateProConsensus(games, meta);
+    expect(model.supportFinals?.top.itemId).toBe(ranked[0]);
+    expect(model.supportFinals?.alternatives).toHaveLength(2);
+    expect(model.supportFinals?.alternatives.map((a) => a.itemId)).toEqual([ranked[1], ranked[2]]);
+  });
+
+  it("the quest chain's other tiers are unaffected: World Atlas stays a STARTER, 3866/3867 stay excluded entirely", () => {
+    // Order-of-checks guard. World Atlas (3865) is in STARTING_ITEM_ALLOWLIST
+    // and must keep landing in `starters`, never in the new slot.
+    //
+    // 3866/3867 are excluded by isBuildItem — but NOT the way you'd assume,
+    // and this fixture encodes the LIVE 16.13.1 shape rather than the
+    // intuitive one: Bounty of Worlds (3867) has a populated `into` AND is
+    // non-purchasable, while Runic Compass (3866) has NO `into` at all
+    // (normalized to []) and is held out by `purchasable: false` ALONE. If a
+    // future refactor drops the purchasable check believing `into` covers the
+    // intermediate tiers, this test is what fails.
+    const meta = itemMeta(
+      item(SUPPORT_STARTER_ID, { from: [], into: [], tags: ["Health", "ManaRegen", "Vision", "GoldPer", "Lane"] }),
+      item(SUPPORT_TIER2_ID, { from: [], into: [], purchasable: false, tags: ["SpellDamage", "Lane"] }),
+      item(SUPPORT_QUEST_HUB_ID, {
+        from: [],
+        into: ["3869", "3870", "3871", "3876", "3877"],
+        purchasable: false,
+        tags: ["SpellDamage", "Lane"],
+      }),
+      item(ZAZZAKS, SUPPORT_FINAL_META)
+    );
+    const games = Array.from({ length: 3 }, () =>
+      game({ finalItems: [SUPPORT_STARTER_ID, SUPPORT_TIER2_ID, SUPPORT_QUEST_HUB_ID, ZAZZAKS] })
+    );
+    const model = aggregateProConsensus(games, meta);
+
+    expect(model.starters.map((s) => s.itemId)).toEqual([SUPPORT_STARTER_ID]);
+    expect(model.supportFinals?.top.itemId).toBe(ZAZZAKS);
+    expect(model.supportFinals?.alternatives).toEqual([]);
+    for (const id of [SUPPORT_TIER2_ID, SUPPORT_QUEST_HUB_ID]) {
+      expect(model.items.some((i) => i.itemId === id)).toBe(false);
+      expect(model.starters.some((s) => s.itemId === id)).toBe(false);
+      expect(model.supportFinals?.top.itemId).not.toBe(id);
+      expect(model.supportFinals?.alternatives.some((a) => a.itemId === id)).toBe(false);
+      expect(isBuildItem(id, meta.get(id))).toBe(false);
+    }
+  });
+
+  it("the boots and starters partitions are unaffected by the support-final carve-out", () => {
+    const meta = itemMeta(
+      item(ROCKETBELT, { from: ["x"] }),
+      item(SORCERERS_SHOES, { into: ["3175"], from: ["1001"], tags: ["Boots", "MagicPenetration"] }),
+      item(ZAZZAKS, SUPPORT_FINAL_META)
+    );
+    const games = Array.from({ length: 5 }, () =>
+      game({ finalItems: [ROCKETBELT, SORCERERS_SHOES, DARK_SEAL, ZAZZAKS] })
+    );
+    const model = aggregateProConsensus(games, meta);
+    expect(model.boots).toEqual([{ itemId: SORCERERS_SHOES, count: 5, share: 1 }]);
+    expect(model.starters).toEqual([{ itemId: DARK_SEAL, count: 5, share: 1 }]);
+    expect(model.items).toEqual([{ itemId: ROCKETBELT, count: 5, share: 1 }]);
+    expect(model.supportFinals?.top).toEqual({ itemId: ZAZZAKS, count: 5, share: 1 });
+  });
+
+  it("support-final shares use itemsSampleSize, the same denominator as items/boots/starters", () => {
+    const meta = itemMeta(item(ZAZZAKS, SUPPORT_FINAL_META));
+    const games = [
+      ...Array.from({ length: 3 }, () => game({ finalItems: [ZAZZAKS] })),
+      // Live-ingested prostage rows carry no item data — they must not dilute
+      // this fraction any more than they dilute items/boots/starters.
+      ...Array.from({ length: 2 }, () => game({ source: "prostage", finalItems: [] })),
+    ];
+    const model = aggregateProConsensus(games, meta);
+    expect(model.gamesTotal).toBe(5);
+    expect(model.itemsSampleSize).toBe(3);
+    expect(model.supportFinals?.top).toEqual({ itemId: ZAZZAKS, count: 3, share: 1 });
+  });
+});
+
+// ── rankSupportFinals — the pure collapse helper ────────────────────────────
+
+describe("rankSupportFinals (supportFinalGroup.ts)", () => {
+  const e = (itemId: number, count: number) => ({ itemId, count });
+
+  it("returns null for an empty list", () => {
+    expect(rankSupportFinals([])).toBeNull();
+  });
+
+  it("returns null when no entry belongs to the family", () => {
+    expect(rankSupportFinals([e(ROCKETBELT, 10), e(DARK_SEAL, 5), e(SORCERERS_SHOES, 3)])).toBeNull();
+  });
+
+  it("ignores non-family ids and never returns them", () => {
+    const ranking = rankSupportFinals([e(ROCKETBELT, 99), e(ZAZZAKS, 1)]);
+    expect(ranking).toEqual({ top: e(ZAZZAKS, 1), alternatives: [] });
+  });
+
+  it("ranks count desc then itemId asc, sorting the input itself rather than trusting its order", () => {
+    // Deliberately handed over in the WORST order: ascending count, and with
+    // the higher id ahead of the lower one at the tied count.
+    const ranking = rankSupportFinals([e(SOLSTICE_SLEIGH, 2), e(BLOODSONG, 2), e(ZAZZAKS, 9)]);
+    expect(ranking?.top).toEqual(e(ZAZZAKS, 9));
+    // 3871 Zaz'Zak's > tie between 3877 Bloodsong and 3876 Solstice Sleigh,
+    // broken by itemId asc -> 3876 first.
+    expect(ranking?.alternatives).toEqual([e(SOLSTICE_SLEIGH, 2), e(BLOODSONG, 2)]);
+  });
+
+  it("does not mutate the caller's array", () => {
+    const input = [e(SOLSTICE_SLEIGH, 1), e(ZAZZAKS, 5)];
+    const snapshot = input.map((x) => ({ ...x }));
+    rankSupportFinals(input);
+    expect(input).toEqual(snapshot);
+  });
+
+  it("applies no cap of its own — capping is the model boundary's job", () => {
+    const all = ALL_SUPPORT_FINAL_IDS.map((id, i) => e(id, ALL_SUPPORT_FINAL_IDS.length - i));
+    const ranking = rankSupportFinals(all);
+    expect(1 + (ranking?.alternatives.length ?? 0)).toBe(ALL_SUPPORT_FINAL_IDS.length);
+  });
+
+  it("isSupportFinalItem recognises exactly the five finals and nothing adjacent in the quest chain", () => {
+    for (const id of ALL_SUPPORT_FINAL_IDS) expect(isSupportFinalItem(id)).toBe(true);
+    for (const id of [SUPPORT_STARTER_ID, SUPPORT_TIER2_ID, SUPPORT_QUEST_HUB_ID, ROCKETBELT, DARK_SEAL]) {
+      expect(isSupportFinalItem(id)).toBe(false);
+    }
   });
 });
 

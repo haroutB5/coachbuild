@@ -38,7 +38,20 @@ const PRO_CONSENSUS_LIMIT = 100;
  *  failure (fetch error, empty sample) — the caller then simply omits the
  *  Pro set (buildItemSets already treats `pro: null` as "no Pro variant
  *  this time"), never a thrown error surfacing to the user for what is, at
- *  most, one of three optional variants. */
+ *  most, one of three optional variants.
+ *
+ *  2026-07-26 — `model.supportFinals.top` is folded back into `items` here.
+ *  This is a NON-REGRESSION, not a new feature: until the support-final
+ *  partition landed, both the family's members flowed into `model.items` and
+ *  therefore into the Pro build line — which is itself the same duplication
+ *  bug the card had (an in-game 6-item shop line could carry TWO
+ *  mutually-exclusive support finals). Carving them out of `model.items`
+ *  without re-adding one here would have swung the fix past correct and
+ *  dropped the support item from every support champion's Pro line
+ *  altogether. Only `top` is folded in — the alternatives are, by
+ *  definition, items the player cannot also own. Merged then re-sorted with
+ *  this input's documented share-desc / itemId-asc order rather than
+ *  appended, so the invariant the shape's doc comment states still holds. */
 export async function resolveProConsensusForSets(
   champ: ChampionRef,
   lane: LaneId,
@@ -58,9 +71,12 @@ export async function resolveProConsensusForSets(
     const games2 = games as ProGame[];
     if (games2.length === 0) return null;
     const model = aggregateProConsensus(games2, itemMeta);
-    if (model.items.length === 0 && model.boots.length === 0) return null;
+    if (model.items.length === 0 && model.boots.length === 0 && model.supportFinals === null) return null;
+    const items = [...model.items, ...(model.supportFinals ? [model.supportFinals.top] : [])].sort((a, b) =>
+      b.share !== a.share ? b.share - a.share : a.itemId - b.itemId
+    );
     return {
-      items: model.items.map((e) => ({ itemId: e.itemId, share: e.share })),
+      items: items.map((e) => ({ itemId: e.itemId, share: e.share })),
       boots: model.boots.map((e) => ({ itemId: e.itemId, share: e.share })),
     };
   } catch {
