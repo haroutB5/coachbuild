@@ -2,6 +2,31 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.63.0] — 2026-07-26 — BUILD | PRO on mobile
+
+### Changed
+- **The Builds page was one ~2,900px scroll on a phone.** Runes → starting → support item → core
+  order → optimized → situational → pro consensus, all stacked, when peak usage is a 30-second champ
+  select. Mobile now gets a **BUILD | PRO** tab strip: BUILD holds everything you act on during the
+  pick, PRO holds the consensus card you consult deliberately. BUILD is the default.
+
+  Measured on Brand support at 390px: 2,861px before → **2,031px** on BUILD, **1,688px** on PRO.
+
+  Desktop is deliberately untouched — it has the horizontal room, and the tab strip is removed from
+  the layout *and* the accessibility tree above the `lg` breakpoint.
+
+### Notes
+- Reuses `HextechTabs`, not the role selector's `SegmentedControl`. `SegmentedControl` is a
+  `role="group"` / `aria-pressed` pill track; this is a genuine tab interface, and `HextechTabs`
+  already carried `role="tablist"` / `role="tab"` / `aria-selected` from the page-level toggle that
+  v0.51.0 retired. It was generalized to take an `options` array rather than a hardcoded pair.
+- Both panels stay **mounted** and toggle via `hidden`, so switching tabs never refetches
+  `/api/pros` or drops loaded state (verified: the request count does not move across
+  BUILD → PRO → BUILD).
+- The tab control is scoped to the loaded state. The loading skeleton keeps its single fixed layout
+  at every width — the 3,000px problem only exists once real data is in.
+- `/compact` is unaffected; it imports the cards directly and never touches `BuildTabContent`.
+
 ## [0.62.0] — 2026-07-26 — One support item, not two
 
 ### Fixed

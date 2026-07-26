@@ -7,6 +7,7 @@ import { LANE_TO_ROLE_ID, LANE_LABEL } from "./heroContracts";
 import RunesSummonersCard from "./RunesSummonersCard";
 import ItemBuildCard from "./ItemBuildCard";
 import ProConsensusCard from "./ProConsensusCard";
+import HextechTabs from "./HextechTabs";
 import { versionFromPatch } from "@/components/proAssets";
 import ItemDetailPopover from "@/components/ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "@/components/EntityDetailPopover";
@@ -74,6 +75,19 @@ function CardSkeleton({ className = "" }: { className?: string }) {
 const BUILD_GRID_CLASS =
   "grid grid-cols-1 gap-5 [grid-template-areas:'runes'_'itembuild'_'pro'] lg:grid-cols-[7fr_5fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_itembuild'_'runes_pro']";
 
+// Mobile-only BUILD|PRO segmented control (peak usage is a 30s champ select —
+// the pre-existing shape here was one ~3,000px scroll: Runes -> Starting ->
+// Support -> Core -> Optimized -> Situational -> Pro Consensus). `lg:hidden`
+// below matches BUILD_GRID_CLASS's own breakpoint exactly: below `lg` this
+// tab renders one column at a time; at `lg`+ the grid already reflows into
+// the existing 2-column desktop composition and the control disappears
+// entirely, per spec ("desktop keeps the current single-scroll layout").
+type MobileBuildTab = "build" | "pro";
+const MOBILE_TAB_OPTIONS: { value: MobileBuildTab; label: string }[] = [
+  { value: "build", label: "Build" },
+  { value: "pro", label: "Pro" },
+];
+
 function BuildLoadingSkeleton() {
   return (
     <div className={BUILD_GRID_CLASS}>
@@ -88,6 +102,13 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
   const [state, setState] = useState<FetchState>({ status: "loading" });
   const [activeDetail, setActiveDetail] = useState<DetailRef | null>(null);
   const [lastDetail, setLastDetail] = useState<DetailRef | null>(null);
+  // Mobile BUILD|PRO split (defaults to BUILD on load, per spec). Below `lg`
+  // only one of the two card groups is VISIBLE at a time — both stay
+  // mounted (see the [grid-area:*] wrappers in the render below), so
+  // switching tabs never re-triggers ProConsensusCard's /api/pros fetch or
+  // loses RunesSummonersCard/ItemBuildCard state. Desktop (`lg`+) ignores
+  // this entirely — both groups always render there, same as before.
+  const [mobileTab, setMobileTab] = useState<MobileBuildTab>("build");
 
   function openDetail(kind: "item" | EntityKind, id: number) {
     setLastDetail({ kind, id });
@@ -269,8 +290,44 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
           SAME three cards reflow into a 2-column composition — RUNES spans
           both rows on the left, ITEM BUILD (top) + PRO CONSENSUS (bottom) on
           the right — via grid-template-areas (BUILD_GRID_CLASS above). */}
+      {/* Mobile-only (lg:hidden matches BUILD_GRID_CLASS's own breakpoint) —
+          real tab semantics (role=tablist/tab/aria-selected via HextechTabs,
+          generalized for this reuse — see that file's own comment), not a
+          decorative toggle. Absent entirely at `lg`+, where both groups
+          below always render regardless of `mobileTab`. */}
+      <div className="lg:hidden mb-1">
+        <HextechTabs
+          options={MOBILE_TAB_OPTIONS}
+          value={mobileTab}
+          onChange={setMobileTab}
+          ariaLabel="Build view"
+        />
+      </div>
+
       <div className={BUILD_GRID_CLASS}>
-        <div className="[grid-area:runes]">
+        {/* v0.62.x: `hidden lg:block` mirrors the codebase's standard
+            responsive-visibility idiom (same mechanism as e.g. `hidden
+            sm:block`) — below `lg` this collapses the group to zero layout
+            footprint via display:none (also correctly pulling it out of the
+            tab order/a11y tree) whenever the OTHER mobile tab is active; at
+            `lg`+ the override always wins, so desktop is unaffected by
+            `mobileTab`. RunesSummonersCard/ItemBuildCard/ProConsensusCard
+            stay mounted the whole time — only visibility toggles, so
+            switching BUILD -> PRO -> BUILD never re-fires ProConsensusCard's
+            /api/pros fetch or drops any of the three cards' own state.
+            role=tabpanel/aria-labelledby wire these to HextechTabs' own
+            auto-generated tab ids (hextech-tab-build/hextech-tab-pro) —
+            correct below `lg` where the tablist is live; at `lg`+ the
+            tablist itself is `lg:hidden` (removed from the a11y tree), so
+            the reference is inert rather than wrong — an accepted, common
+            trade-off for a mobile-only control that stays mounted at every
+            breakpoint (see HANDOFF-fronty.md for the full reasoning). */}
+        <div
+          className={`[grid-area:runes] ${mobileTab === "pro" ? "hidden lg:block" : ""}`}
+          role="tabpanel"
+          id="hextech-tabpanel-build"
+          aria-labelledby="hextech-tab-build"
+        >
           <RunesSummonersCard
             runes={build.runes}
             spells={build.spells}
@@ -281,10 +338,19 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
             lane={lane}
           />
         </div>
-        <div className="[grid-area:itembuild]">
+        <div
+          className={`[grid-area:itembuild] ${mobileTab === "pro" ? "hidden lg:block" : ""}`}
+          role="tabpanel"
+          aria-labelledby="hextech-tab-build"
+        >
           <ItemBuildCard champ={champ} lane={lane} build={build} ver={ver} onItemClick={openItemPopover} />
         </div>
-        <div className="[grid-area:pro]">
+        <div
+          className={`[grid-area:pro] ${mobileTab === "build" ? "hidden lg:block" : ""}`}
+          role="tabpanel"
+          id="hextech-tabpanel-pro"
+          aria-labelledby="hextech-tab-pro"
+        >
           {/* v0.27.0 (user request: "pro players seem to build Rocketbelt on
               Viktor — create another builds and runes space based on what pro
               players are often building"). Complements the WPA recommendation
