@@ -25,6 +25,7 @@ import {
   setAutoItemSetsEnabled,
   isFollowCapableRoute,
   followKindForRoute,
+  detachFollow,
   recordCompanionError,
   getCompanionErrorLog,
   clearCompanionErrorLog,
@@ -661,6 +662,80 @@ describe("companionClient — follow=<kind> query param plumbing (v1.5.0, widene
     await probeCompanion("sess", "passive", { fetchImpl }, "builds");
     expect(urls.length).toBeGreaterThan(0);
     expect(urls.every((u) => u.includes("follow=builds"))).toBe(true);
+  });
+});
+
+describe("companionClient — detachFollow (v0.59.0 / companion 1.7.0)", () => {
+  afterEach(() => unstubWindow());
+
+  function captureFetch(urls: string[], inits: (RequestInit | undefined)[]) {
+    return vi.fn(async (url: string, init?: RequestInit) => {
+      urls.push(url);
+      inits.push(init);
+      return { ok: true, json: async () => ({}) } as Response;
+    }) as unknown as typeof fetch;
+  }
+
+  it("sends follow=<kind>&detach=1 to the stored port — the whole point is that the companion stops counting this tab as attached", () => {
+    stubWindow(makeLocalStorageShim());
+    setStoredPort(48292);
+    const urls: string[] = [];
+    const inits: (RequestInit | undefined)[] = [];
+    expect(detachFollow("builds", "sess", { fetchImpl: captureFetch(urls, inits) })).toBe(true);
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toBe("http://127.0.0.1:48292/status?session=sess&follow=builds&detach=1");
+  });
+
+  it("uses keepalive so the request survives the unload that triggered it", () => {
+    stubWindow(makeLocalStorageShim());
+    setStoredPort(48291);
+    const urls: string[] = [];
+    const inits: (RequestInit | undefined)[] = [];
+    detachFollow("draft", "sess", { fetchImpl: captureFetch(urls, inits) });
+    expect(urls[0]).toContain("follow=draft&detach=1");
+    expect(inits[0]?.keepalive).toBe(true);
+    expect(inits[0]?.method).toBe("GET"); // stays a CORS-simple request — no preflight to survive unload
+  });
+
+  it("is a no-op with no stored port (this tab never reached the bridge, so it never attached)", () => {
+    stubWindow(makeLocalStorageShim());
+    const urls: string[] = [];
+    const inits: (RequestInit | undefined)[] = [];
+    expect(detachFollow("builds", "sess", { fetchImpl: captureFetch(urls, inits) })).toBe(false);
+    expect(urls).toHaveLength(0);
+  });
+
+  it("is a no-op for a null kind (a non-follow-capable route was never attached)", () => {
+    stubWindow(makeLocalStorageShim());
+    setStoredPort(48291);
+    const urls: string[] = [];
+    const inits: (RequestInit | undefined)[] = [];
+    expect(detachFollow(null, "sess", { fetchImpl: captureFetch(urls, inits) })).toBe(false);
+    expect(urls).toHaveLength(0);
+  });
+
+  it("never throws or rejects — a failed beacon during unload must stay silent (the companion's browser-liveness guard is the backstop)", async () => {
+    stubWindow(makeLocalStorageShim());
+    setStoredPort(48291);
+    const rejecting = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    }) as unknown as typeof fetch;
+    expect(() => detachFollow("builds", "sess", { fetchImpl: rejecting })).not.toThrow();
+    // let the swallowed rejection settle — an unhandled one would fail the run
+    await Promise.resolve();
+  });
+
+  it("does not attach detach=1 to an ordinary follow poll (the suppression path must keep working)", async () => {
+    stubWindow(makeLocalStorageShim());
+    setStoredPort(48291);
+    let calledUrl = "";
+    const fetchImpl = vi.fn(async (url: string) => {
+      calledUrl = url;
+      return { ok: true, json: async () => ({ version: "1.7.0", phase: "None", clientConnected: false }) } as Response;
+    }) as unknown as typeof fetch;
+    await refreshStatus("sess", { fetchImpl }, "builds");
+    expect(calledUrl).toContain("follow=builds");
+    expect(calledUrl).not.toContain("detach=");
   });
 });
 

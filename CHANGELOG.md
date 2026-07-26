@@ -2,6 +2,50 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.59.0] — 2026-07-26 — The browser was closed, so the pages never opened (COMPANION CHANGE → 1.7.0 — re-install required)
+
+User report: "if the browser isn't open, it doesn't automatically detect and open it and have the
+pages ready."
+
+### Fixed — a closed browser looked "attached" for 150 seconds, which is most of a champ-select
+
+The companion only opens a page it believes isn't already open, and it inferred that from how
+recently the page polled `/status`. v1.6.4 widened that window from 8s to 150s for a good reason —
+Chrome throttles a hidden tab behind a fullscreen game to roughly one timer tick per minute, and the
+8s window made every champ-select stack up another pair of tabs. But a *closed* browser is
+indistinguishable from a throttled one by poll cadence alone, so closing the browser left both kinds
+looking attached for up to 150s and the companion opened **nothing at all** for the rest of that
+champ-select. The debounce made it worse: opening is decided only on a champion *change*, so if the
+one resolution of that game fell inside the shadow, no later tick retried it.
+
+A cadence can't answer this, so the page now says it outright. `detachFollow` sends
+`follow=<kind>&detach=1` (keepalive GET, so it survives the unload) on `pagehide` and whenever a
+client-side nav leaves a follow-capable route; the bridge clears that kind's attach stamp and
+records `LastBuildsDetachAt`/`LastDraftDetachAt`, which also voids an open→attach grace it
+postdates. Deliberately **not** wired to `visibilitychange` — a hidden tab is the normal state for
+this feature and is still following; detaching on hide would rebuild the exact tab-spam bug v1.6.4
+fixed.
+
+For the hard-kill case where no `pagehide` can fire (task-kill, crash, sign-out),
+`Test-BrowserProcessRunning` gates the stamp: no browser process, no attached tab. It can only ever
+*widen* opening — it never suppresses an open the old logic would have made — so it cannot regress
+the tab-spam fix either.
+
+### Added — the pages are opened on champ-select ENTRY, not at the first hover
+
+"Ready" means loaded before the pick, not booting during it. `Invoke-ChampSelectPrewarm` runs once
+on entry and opens whichever of Builds / `/draft` is missing, so a cold browser starts up during
+bans. Builds gets a session-only `/?session=` — there is no champion to link to yet, and inventing
+one would show a champion nobody hovered; the tab adopts the session (`app/page.tsx`'s mount effect
+now takes a session-only link, previously discarded because `parseLiveDeepLink` requires a
+`championId`) and live-follows the first hover in place, which is what an attached tab has always
+done. Each pre-warm open stamps the grace, so the first champion resolution suppresses instead of
+opening a second pair — verified by `-Mock`, along with the both-attached and one-attached cases.
+
+Companion `-SelfTest` covers the detach wire contract against a real bridge (per-kind clearing,
+cross-kind isolation, and a kind-less `detach=1` touching nothing); `-Mock` covers the state machine
+(detach re-opens, detach vs grace ordering, the liveness guard both ways, and pre-warm).
+
 ## [0.58.0] — 2026-07-26 — Audit wave 3: the unauthenticated cost amplifiers, and a support who was never AD
 
 Wave 3 of `AUDIT-2026-07-25.md`. Two independent lanes: the security cluster (Agent 3's findings)

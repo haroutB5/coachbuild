@@ -61,6 +61,7 @@ import {
   setStoredSession,
   refreshStatus,
   followKindForRoute,
+  detachFollow,
   COMPANION_STATUS_POLL_MS,
   type CompanionChampSelectSnapshot,
   type FollowKind,
@@ -123,8 +124,39 @@ export default function CompanionProvider({ children }: { children: ReactNode })
   const pathname = usePathname();
   const followRef = useRef<FollowKind>(followKindForRoute(pathname));
   useEffect(() => {
-    followRef.current = followKindForRoute(pathname);
-  }, [pathname]);
+    const next = followKindForRoute(pathname);
+    const prev = followRef.current;
+    followRef.current = next;
+    // v0.59.0 / companion 1.7.0 — a client-side nav OFF a follow-capable route
+    // (Builds -> /mystats, or Builds -> /draft) leaves the companion believing
+    // the page it just left is still attached and listening for champ-select,
+    // for the full 150s attach window. It isn't: only `/` and `/draft` react to
+    // a champ-select change at all. Tell the companion the moment it stops
+    // being true, so its next open decision is made on the truth.
+    if (prev && prev !== next && session) detachFollow(prev, session);
+  }, [pathname, session]);
+
+  // v0.59.0 / companion 1.7.0 — THE fix for "the browser wasn't open, so the
+  // pages never opened" (live-reported 2026-07-26). Closing the browser stopped
+  // this tab's /status poll silently, and a stopped poll is indistinguishable
+  // from a poll throttled by Chrome behind a fullscreen game — so the companion
+  // kept suppressing the opens for up to 150s, which is most of a champ-select.
+  // `pagehide` is where the page gets to say which one it is. See
+  // detachFollow's own doc comment for why pagehide + keepalive specifically.
+  //
+  // Deliberately NOT wired to `visibilitychange`: a hidden tab is the NORMAL
+  // state for this feature (it lives behind a fullscreen game) and is still
+  // following. Detaching on hide would re-open a tab on every single hover,
+  // which is exactly the v1.6.4 tab-spam bug this must not resurrect.
+  useEffect(() => {
+    if (!session) return;
+    function handlePageHide(): void {
+      const kind = followRef.current;
+      if (kind) detachFollow(kind, session as string);
+    }
+    window.addEventListener("pagehide", handlePageHide);
+    return () => window.removeEventListener("pagehide", handlePageHide);
+  }, [session]);
 
   // Hydrate any previously-paired session on mount. A companion-opened deep
   // link's OWN `?session=` (app/page.tsx's mount effect) calls setSession

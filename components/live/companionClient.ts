@@ -23,7 +23,15 @@
 //                          server-side as builds-kind (back-compat — see
 //                          companion.ps1's /status handler). Omitting it
 //                          (older web build, or a non-follow-capable route)
-//                          sends no follow param at all.
+//                          sends no follow param at all. v1.7.0 adds
+//                          `&detach=1` ALONGSIDE `follow=<kind>`: the page
+//                          declaring it is going away, which CLEARS that
+//                          kind's attach stamp server-side instead of
+//                          refreshing it (see detachFollow below). An older
+//                          companion ignores the unknown param and re-stamps
+//                          instead, which pushes its stale-attach window out
+//                          by the ~3s since that tab's last poll and no more
+//                          — the pre-1.7.0 behaviour, not a new failure mode.
 //   GET  /live         -> raw allgamedata passthrough | {error:'no-live'}
 //   POST /apply-runes  body {..., mode:'auto'|'manual'} ->
 //                          {ok:true, selected, verified, mismatch} |
@@ -384,9 +392,51 @@ export function setAutoRunesEnabled(enabled: boolean): void {
 
 // ── Wire calls ──────────────────────────────────────────────────────────────
 
-function bridgeUrl(port: number, path: string, session: string, followKind: FollowKind = null): string {
+function bridgeUrl(port: number, path: string, session: string, followKind: FollowKind = null, detach = false): string {
   const base = `http://127.0.0.1:${port}${path}?session=${encodeURIComponent(session)}`;
-  return followKind ? `${base}&follow=${followKind}` : base;
+  if (!followKind) return base;
+  return detach ? `${base}&follow=${followKind}&detach=1` : `${base}&follow=${followKind}`;
+}
+
+/** v1.7.0 (companion 1.7.0) — tells the companion this page is GOING AWAY, so
+ *  it stops counting as an attached tab immediately instead of decaying out of
+ *  the companion's 150s attach window.
+ *
+ *  WHY IT EXISTS. The companion suppresses opening a page it believes is
+ *  already open, and "already open" is inferred from how recently that page
+ *  polled /status. The window has to be generous (150s) because Chrome
+ *  throttles a hidden tab behind a fullscreen game to roughly one timer tick
+ *  per minute — which means a CLOSED browser also looked attached for up to
+ *  150s, i.e. most of a champ-select, and the companion opened nothing at all
+ *  (live-reported 2026-07-26). A poll cadence cannot distinguish "throttled"
+ *  from "gone"; only the page itself can say which, and this is it.
+ *
+ *  Fired on `pagehide` (tab/window close, browser exit, bfcache eviction — the
+ *  one unload event that is actually reliable on mobile and modern Chrome) and
+ *  when a client-side nav leaves a follow-capable route. `keepalive` is what
+ *  lets the request outlive the document; a GET with no custom headers stays a
+ *  CORS-simple request, so no preflight has to survive the unload either.
+ *
+ *  Fire-and-forget by construction: it returns whether the beacon was ATTEMPTED
+ *  (for tests), never whether it arrived — the companion's browser-liveness
+ *  guard is the backstop for the hard-kill case where nothing could be sent. */
+export function detachFollow(kind: FollowKind, session: string, deps: CompanionClientDeps = {}): boolean {
+  if (!kind || !session) return false;
+  const port = getStoredPort();
+  // No known-good port means this tab never reached the bridge, so it never
+  // stamped an attach either — there is nothing to detach from, and a 3-port
+  // walk during unload would not complete anyway.
+  if (port == null) return false;
+  const f = deps.fetchImpl ?? fetch;
+  try {
+    const p = f(bridgeUrl(port, "/status", session, kind, true), { method: "GET", keepalive: true }) as
+      | Promise<unknown>
+      | undefined;
+    if (p && typeof p.catch === "function") p.catch(() => {});
+    return true;
+  } catch {
+    return false; // unload-time throw (fetch unavailable, blocked) — nothing to do
+  }
 }
 
 /** v1.6.0 (companion 1.6.0, "two pages simultaneously" ship) — PAGE IDENTITY

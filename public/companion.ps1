@@ -210,6 +210,31 @@ WIRE CONTRACT (must match components/live/companionClient.ts exactly):
     both-missing case); both attached -> no opens (both already live-follow
     via their own polls). See Update-ChampSelectState's own comment for the
     exact decision table.
+  - v1.7.0 ("browser closed -> pages never open", live-reported 2026-07-26):
+    three related fixes to "the pages are ready when champ-select starts."
+    (a) PRE-WARM. Both pages are now opened on champ-select ENTRY
+    (Invoke-ChampSelectPrewarm), not on the first champion resolution --
+    Builds via a session-only "<AppOrigin>/?session=<token>" (no championId
+    yet; the tab adopts the session and then live-follows the hover in
+    place, exactly like a manually-opened tab always could) and /draft via
+    its usual URL. A cold browser therefore boots during bans instead of
+    mid-hover, which is what "ready" means. Update-ChampSelectState's
+    decision table is UNCHANGED -- the pre-warm just means its opens are
+    normally already covered by the open->attach grace / a real follow poll.
+    (b) EXPLICIT DETACH. `follow=<kind>&detach=1` on /status clears that
+    kind's attach stamp and records LastBuildsDetachAt/LastDraftDetachAt.
+    The web side sends it on `pagehide` and when a client-side nav leaves a
+    follow-capable route (CompanionProvider.tsx). Without this, closing the
+    browser left a stamp that looked attached for the full
+    AttachWindowSeconds (150s, i.e. most of a champ-select) and NOTHING
+    opened -- the exact live-reported symptom. A detach newer than the last
+    open also voids the open->attach grace (the tab is provably gone, so
+    the grace has nothing left to protect).
+    (c) BROWSER-LIVENESS GUARD. A stamp is only trusted while some browser
+    process actually exists (Test-BrowserProcessRunning). This catches the
+    hard-kill case where no pagehide ever fires (task-kill, crash, sign-out).
+    It can only ever WIDEN opening -- it never suppresses an open that the
+    old logic would have made -- so it cannot regress v1.6.4's tab-spam fix.
 
 LOGGING (diagnosability -- remote-debugging without a screen-share):
   - Rolling log at %LOCALAPPDATA%\CoachBuild\companion.log: one line per
@@ -262,7 +287,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.6.4'
+    Version     = '1.7.0'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -1092,6 +1117,20 @@ function Get-DraftDeepLinkUrl {
     return "$AppOrigin/draft?session=$SessionToken"
 }
 
+function Get-PrewarmBuildsUrl {
+    # v1.7.0 -- the Builds URL for the champ-select ENTRY pre-warm, before any
+    # champion has resolved. Session-only, deliberately WITHOUT championId/role:
+    # there is nothing to deep-link to yet, and inventing a placeholder id would
+    # make the page render a champion the user never hovered. The tab adopts the
+    # session (app/page.tsx's mount effect takes a session-only link since
+    # v0.59.0; a previously-paired browser also rehydrates it from localStorage)
+    # and then live-follows the first hover IN PLACE via its own /status poll --
+    # champSelectFollow.ts works for any tab holding a session, deep-linked or
+    # not. Same shape as Get-DraftDeepLinkUrl, and for the same reason.
+    param([string]$AppOrigin, [string]$SessionToken)
+    return "$AppOrigin/?session=$SessionToken"
+}
+
 function Open-CompanionUrl {
     # Testable seam: -Mock records opens instead of actually launching a
     # browser, so debounce/deep-link logic is asserted without a real
@@ -1231,15 +1270,87 @@ function Set-LastOpen {
 #   attached until it has had a fair chance to answer; if it never does (the
 #   open genuinely failed), the grace lapses and the next champion change
 #   opens again.
+#
+# Neither tunable can tell "backgrounded and throttled" apart from "closed" on
+# its own -- that ambiguity IS the v1.7.0 bug (a closed browser kept looking
+# attached for up to AttachWindowSeconds, so a whole champ-select could pass
+# with nothing opening). The two v1.7.0 additions below resolve it with real
+# signal instead of a shorter timeout: an EXPLICIT detach from the page, and a
+# browser-process liveness check for when no detach could be sent.
 $script:AttachWindowSeconds = 150
 $script:OpenGraceSeconds = 25
 $script:LastTabOpenAt = @{ builds = $null; draft = $null }
+
+# v1.7.0 -- process names checked by Test-BrowserProcessRunning. A miss here
+# costs at most ONE extra tab open (the guard only ever widens opening), so the
+# list is deliberately common-case rather than exhaustive, and the user's actual
+# default browser is resolved from the registry on top of it.
+$script:KnownBrowserProcessNames = @(
+    'chrome', 'msedge', 'firefox', 'brave', 'opera', 'opera_gx', 'vivaldi',
+    'chromium', 'thorium', 'librewolf', 'waterfox', 'floorp', 'arc', 'zen', 'iexplore'
+)
+# Test seam: $null = really probe. -Mock/-SelfTest set $true so the existing
+# attach-gate cases keep asserting the follow-stamp logic on a machine with no
+# browser running, and the dedicated liveness cases flip it to $false.
+$script:BrowserProbeOverride = $null
 
 function Reset-TabOpenGrace {
     # Called on champ-select ENTRY alongside Reset-ChampSelectState: a grace
     # left over from a previous game must never suppress the first open of a
     # new one.
     $script:LastTabOpenAt = @{ builds = $null; draft = $null }
+}
+
+function Get-DefaultBrowserProcessName {
+    # HKCU UrlAssociations\https\UserChoice -> ProgId -> HKCR shell\open\command
+    # -> the exe basename. Best-effort: every failure mode (no key, a ProgId with
+    # no command, a command line this regex doesn't recognise) returns $null and
+    # leaves Test-BrowserProcessRunning on the known-names list alone.
+    try {
+        $progId = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice' -ErrorAction Stop).ProgId
+        if (-not $progId) { return $null }
+        $cmd = (Get-ItemProperty -Path "Registry::HKEY_CLASSES_ROOT\$progId\shell\open\command" -ErrorAction Stop).'(default)'
+        if (-not $cmd) { return $null }
+        if ($cmd -match '([^\\/"]+)\.exe') { return $matches[1] }
+    } catch {}
+    return $null
+}
+
+function Test-BrowserProcessRunning {
+    # v1.7.0 hard-kill fallback. `pagehide` covers a closed tab/window and an
+    # orderly browser exit; it does NOT fire on a task-kill, a crash, or a
+    # sign-out. Without this, those cases keep a stale attach stamp alive for
+    # the full AttachWindowSeconds and suppress the open the user is waiting
+    # for. Only ever used to make an attached kind count as DETACHED, never the
+    # other way round -- so a false negative costs one redundant tab, and it
+    # cannot resurrect the v1.6.4 tab-spam bug (which required suppression to
+    # fail while a browser WAS running, where this returns $true and is inert).
+    # Called only on champ-select entry and on a champion CHANGE, so the process
+    # enumeration is rare -- not a per-tick cost.
+    if ($null -ne $script:BrowserProbeOverride) { return [bool]$script:BrowserProbeOverride }
+    $names = @($script:KnownBrowserProcessNames)
+    $default = Get-DefaultBrowserProcessName
+    if ($default -and ($names -notcontains $default)) { $names += $default }
+    try {
+        return @(Get-Process -Name $names -ErrorAction SilentlyContinue).Count -gt 0
+    } catch {
+        # Never let a process-enumeration failure decide anything: fall back to
+        # the pre-v1.7.0 behaviour (trust the stamp).
+        return $true
+    }
+}
+
+function Get-TabDetachAt {
+    # The bridge runspace records detaches as ISO-8601 UTC strings in $Sync;
+    # parsed here to a LOCAL DateTime, matching Test-CompanionHasAttachedTab's
+    # existing `[datetime]$ts` vs `Get-Date` convention. $null when no detach has
+    # ever been recorded for this kind (including on the mock bridge, whose
+    # hashtable simply has no such key).
+    param([ValidateSet('builds', 'draft')][string]$Kind)
+    if (-not $script:Bridge -or -not $script:Bridge.Sync) { return $null }
+    $raw = if ($Kind -eq 'draft') { $script:Bridge.Sync.LastDraftDetachAt } else { $script:Bridge.Sync.LastBuildsDetachAt }
+    if (-not $raw) { return $null }
+    try { return [datetime]$raw } catch { return $null }
 }
 
 function Set-TabOpenedNow {
@@ -1253,6 +1364,13 @@ function Test-TabOpenGraceActive {
     if (-not $script:LastTabOpenAt) { return $false }
     $at = $script:LastTabOpenAt[$Kind]
     if (-not $at) { return $false }
+    # v1.7.0: an explicit detach AFTER the open ends the grace immediately. The
+    # grace exists to cover a tab that hasn't answered YET; a detach is the tab
+    # answering "I'm gone", so there is nothing left to wait for. Without this,
+    # opening a tab and closing it inside the 25s window left the kind
+    # suppressed for the rest of that window.
+    $detachAt = Get-TabDetachAt -Kind $Kind
+    if ($detachAt -and $detachAt -gt $at) { return $false }
     return ((Get-Date) - $at).TotalSeconds -lt $script:OpenGraceSeconds
 }
 
@@ -1302,11 +1420,53 @@ function Test-CompanionHasAttachedTab {
     if (-not $script:Bridge -or -not $script:Bridge.Sync) { return $false }
     $ts = if ($Kind -eq 'draft') { $script:Bridge.Sync.LastDraftFollowAt } else { $script:Bridge.Sync.LastBuildsFollowAt }
     if (-not $ts) { return $false }
+    # v1.7.0 hard-kill fallback -- see Test-BrowserProcessRunning. Checked AFTER
+    # the grace deliberately: a browser launched microseconds ago may not have a
+    # process yet, and voiding the grace on that would re-open a second pair,
+    # which is precisely the race the grace exists to prevent.
+    if (-not (Test-BrowserProcessRunning)) { return $false }
     try {
         return (New-TimeSpan -Start ([datetime]$ts) -End (Get-Date)).TotalSeconds -lt $script:AttachWindowSeconds
     } catch {
         return $false
     }
+}
+
+function Invoke-ChampSelectPrewarm {
+    # v1.7.0 -- "have the pages ready" (live-reported 2026-07-26: with the
+    # browser closed, nothing opened at all for a whole champ-select).
+    #
+    # Runs ONCE on champ-select ENTRY, before any champion has resolved, and
+    # opens whichever of {Builds, /draft} is currently missing -- same per-kind
+    # decision (Test-CompanionHasAttachedTab), same Builds-then-/draft order and
+    # therefore the same best-effort focus outcome as Update-ChampSelectState's
+    # own opens. The point is TIMING, not new behaviour: a cold browser now
+    # boots during bans instead of at the first hover, so the pages are loaded
+    # and attached by the time the user picks.
+    #
+    # Interaction with Update-ChampSelectState (deliberate, no double-open):
+    # each open here stamps the open->attach grace, so the first champion
+    # resolution inside the next OpenGraceSeconds sees both kinds "attached" and
+    # opens nothing -- it just advances the debounce, and the pre-warmed tab
+    # picks the champion up in place via its own live-follow poll. A resolution
+    # AFTER the grace lapses sees the real follow stamps those tabs have been
+    # sending for ~25s, which is the same suppression by a different route. If
+    # the pre-warmed tab never polls (session never paired on this browser
+    # profile, open genuinely failed), both fall through and the champion change
+    # opens a proper deep link -- the pre-v1.7.0 behaviour, never worse.
+    param([string]$AppOrigin, [string]$SessionToken)
+    $hasBuilds = Test-CompanionHasAttachedTab -Kind builds
+    $hasDraft = Test-CompanionHasAttachedTab -Kind draft
+    if ($hasBuilds -and $hasDraft) { return }
+    if (-not $hasBuilds) {
+        Open-CompanionUrl -Url (Get-PrewarmBuildsUrl -AppOrigin $AppOrigin -SessionToken $SessionToken)
+        Set-TabOpenedNow -Kind builds
+    }
+    if (-not $hasDraft) {
+        Open-CompanionUrl -Url (Get-DraftDeepLinkUrl -AppOrigin $AppOrigin -SessionToken $SessionToken)
+        Set-TabOpenedNow -Kind draft
+    }
+    Write-CompanionLog "champ-select entry prewarm builds=$(if ($hasBuilds) { 'attached' } else { 'opened' }) draft=$(if ($hasDraft) { 'attached' } else { 'opened' })"
 }
 
 function Update-ChampSelectState {
@@ -1429,6 +1589,11 @@ function Invoke-GameflowTick {
         if (-not $script:WasChampSelect) {
             Reset-ChampSelectState -State $script:ChampSelectState
             Reset-TabOpenGrace
+            # v1.7.0 -- open the pages NOW, not at the first hover, so a cold
+            # browser is loaded and attached before the user picks. Ordered
+            # after Reset-TabOpenGrace so the previous game's grace can never
+            # suppress this entry's opens.
+            Invoke-ChampSelectPrewarm -AppOrigin $script:Config.AppOrigin -SessionToken $script:Config.Session
         }
         $script:WasChampSelect = $true
         if ($creds) {
@@ -1508,8 +1673,28 @@ while ($Sync.Running) {
             # suppressing at least that open, never a /draft one it was
             # never capable of signaling for (never tab-spam a legacy
             # client that's already open and polling).
+            # v1.7.0: `&detach=1` alongside `follow=<kind>` is the page saying
+            # "I am going away" -- sent on pagehide and when a client-side nav
+            # leaves a follow-capable route (CompanionProvider.tsx). It CLEARS
+            # that kind's attach stamp rather than refreshing it, and records
+            # when, so Test-TabOpenGraceActive can also void an open->attach
+            # grace the tab has already answered. This is the fix for "browser
+            # closed, so nothing opens": without it the last poll before the
+            # close kept the kind looking attached for the whole
+            # AttachWindowSeconds (150s), which is most of a champ-select.
+            # A detach carrying no follow kind touches nothing -- same
+            # "prove which page you are" rule as the stamping path.
             $follow = $req.QueryString['follow']
-            if ($follow -eq 'builds' -or $follow -eq '1') {
+            $detach = $req.QueryString['detach']
+            if ($detach -eq '1') {
+                if ($follow -eq 'builds' -or $follow -eq '1') {
+                    $Sync.LastBuildsFollowAt = $null
+                    $Sync.LastBuildsDetachAt = (Get-Date).ToUniversalTime().ToString('o')
+                } elseif ($follow -eq 'draft') {
+                    $Sync.LastDraftFollowAt = $null
+                    $Sync.LastDraftDetachAt = (Get-Date).ToUniversalTime().ToString('o')
+                }
+            } elseif ($follow -eq 'builds' -or $follow -eq '1') {
                 $Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().ToString('o')
             } elseif ($follow -eq 'draft') {
                 $Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().ToString('o')
@@ -1617,6 +1802,8 @@ function Start-BridgeServer {
         LastStatusPollAt    = $null
         LastBuildsFollowAt  = $null
         LastDraftFollowAt   = $null
+        LastBuildsDetachAt  = $null
+        LastDraftDetachAt   = $null
     })
 
     $rs = [runspacefactory]::CreateRunspace()
@@ -2225,6 +2412,53 @@ function Invoke-SelfTest {
     } catch { $failures.Add("legacy follow=1 request threw: $($_.Exception.Message)") }
     $bridge.Sync.LastBuildsFollowAt = $null
     $bridge.Sync.LastDraftFollowAt = $null
+
+    # 4e. v1.7.0 DETACH beacon (`follow=<kind>&detach=1`, sent by the page on
+    # pagehide / on navigating away from a follow-capable route). Must CLEAR
+    # that kind's attach stamp, record LastXDetachAt, and leave the OTHER kind
+    # entirely alone -- a Builds tab closing must never make /draft re-open.
+    # This is the fix for the live-reported "browser closed, so the pages never
+    # opened for the whole champ-select".
+    $now = (Get-Date).ToUniversalTime().ToString('o')
+    $bridge.Sync.LastBuildsFollowAt = $now
+    $bridge.Sync.LastDraftFollowAt = $now
+    $bridge.Sync.LastBuildsDetachAt = $null
+    $bridge.Sync.LastDraftDetachAt = $null
+    try {
+        [void](Invoke-WebRequest -Uri "$base/status?session=$session&follow=builds&detach=1" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing)
+        if ($bridge.Sync.LastBuildsFollowAt) { $failures.Add('detach=1 follow=builds did not CLEAR LastBuildsFollowAt') }
+        if (-not $bridge.Sync.LastBuildsDetachAt) { $failures.Add('detach=1 follow=builds did not record LastBuildsDetachAt') }
+        if (-not $bridge.Sync.LastDraftFollowAt) { $failures.Add('detach=1 follow=builds wrongly cleared the DRAFT attach stamp') }
+        if ($bridge.Sync.LastDraftDetachAt) { $failures.Add('detach=1 follow=builds wrongly recorded LastDraftDetachAt') }
+    } catch { $failures.Add("detach=1 follow=builds request threw: $($_.Exception.Message)") }
+
+    $bridge.Sync.LastBuildsFollowAt = $now
+    $bridge.Sync.LastDraftFollowAt = $now
+    $bridge.Sync.LastBuildsDetachAt = $null
+    $bridge.Sync.LastDraftDetachAt = $null
+    try {
+        [void](Invoke-WebRequest -Uri "$base/status?session=$session&follow=draft&detach=1" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing)
+        if ($bridge.Sync.LastDraftFollowAt) { $failures.Add('detach=1 follow=draft did not CLEAR LastDraftFollowAt') }
+        if (-not $bridge.Sync.LastDraftDetachAt) { $failures.Add('detach=1 follow=draft did not record LastDraftDetachAt') }
+        if (-not $bridge.Sync.LastBuildsFollowAt) { $failures.Add('detach=1 follow=draft wrongly cleared the BUILDS attach stamp') }
+        if ($bridge.Sync.LastBuildsDetachAt) { $failures.Add('detach=1 follow=draft wrongly recorded LastBuildsDetachAt') }
+    } catch { $failures.Add("detach=1 follow=draft request threw: $($_.Exception.Message)") }
+
+    # A detach that doesn't say WHICH page it is proves nothing -- same rule as
+    # the stamping path, so it must touch neither kind.
+    $bridge.Sync.LastBuildsFollowAt = $now
+    $bridge.Sync.LastDraftFollowAt = $now
+    $bridge.Sync.LastBuildsDetachAt = $null
+    $bridge.Sync.LastDraftDetachAt = $null
+    try {
+        [void](Invoke-WebRequest -Uri "$base/status?session=$session&detach=1" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing)
+        if (-not $bridge.Sync.LastBuildsFollowAt -or -not $bridge.Sync.LastDraftFollowAt) { $failures.Add('a kind-less detach=1 wrongly cleared an attach stamp') }
+        if ($bridge.Sync.LastBuildsDetachAt -or $bridge.Sync.LastDraftDetachAt) { $failures.Add('a kind-less detach=1 wrongly recorded a detach timestamp') }
+    } catch { $failures.Add("kind-less detach=1 request threw: $($_.Exception.Message)") }
+    $bridge.Sync.LastBuildsFollowAt = $null
+    $bridge.Sync.LastDraftFollowAt = $null
+    $bridge.Sync.LastBuildsDetachAt = $null
+    $bridge.Sync.LastDraftDetachAt = $null
 
     $applyBody = @{ name = 'CoachBuild Test Mid'; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = @(8005, 9111, 9104, 8014, 8017, 8009, 8017, 5008, 5008); current = $true }
 
@@ -3015,6 +3249,12 @@ function Invoke-MockRun {
     # with the debounce collapsing the same-champ hover/lock/re-poll steps
     # into a single open, and the deep-link URL format is exact.
     $script:MockMode = $true
+    # v1.7.0 -- pin the browser-liveness guard ON for the whole mock run. Every
+    # case here asserts the champ-select OPEN LOGIC; whether this dev/CI machine
+    # happens to have a browser process running is irrelevant to that and must
+    # never change an assertion's meaning. The guard's own behaviour is covered
+    # by dedicated cases at the end, which flip this deliberately.
+    $script:BrowserProbeOverride = $true
     $script:OpenActions = New-Object System.Collections.Generic.List[string]
     $appOrigin = 'https://coachbuild.vercel.app'
     $sessionToken = 'mock-session-token'
@@ -3155,7 +3395,13 @@ function Invoke-MockRun {
     # open->attach grace is reset before each one -- otherwise the opens
     # performed by the previous sub-test would legitimately suppress the next
     # one's expected open. The grace has its own dedicated cases further down.
-    $script:Bridge = [pscustomobject]@{ Sync = @{ LastBuildsFollowAt = $null; LastDraftFollowAt = $null } }
+    # v1.7.0: these cases isolate the FOLLOW-STAMP gate, so the browser-liveness
+    # guard is pinned to "a browser is running" -- otherwise every "attached"
+    # assertion below would flip on a machine with no browser open (CI, or a
+    # dev box mid-restart), asserting the wrong thing entirely. The guard has
+    # its own dedicated cases further down, which flip this to $false.
+    $script:BrowserProbeOverride = $true
+    $script:Bridge = [pscustomobject]@{ Sync = @{ LastBuildsFollowAt = $null; LastDraftFollowAt = $null; LastBuildsDetachAt = $null; LastDraftDetachAt = $null } }
     $attachState = @{ LastOpenedChampId = $null }
     Reset-TabOpenGrace
 
@@ -3260,7 +3506,151 @@ function Invoke-MockRun {
         $failures.Add("Open grace lapse: after the grace expires with no follow poll the open must be retried, got $($script:OpenActions.Count)")
     }
 
+    # -- v1.7.0: "the browser was closed, so nothing ever opened" -------------
+    # THE live-reported bug (2026-07-26). A tab that polled seconds before the
+    # browser closed leaves a stamp that stays fresh for AttachWindowSeconds
+    # (150s) -- most of a champ-select -- so every kind looked attached and the
+    # companion opened nothing at all. Two independent signals now break that.
+
+    # (a) EXPLICIT DETACH (pagehide / nav away from a follow-capable route).
+    # Stamps are seconds old, i.e. maximally "attached" by the old rule; the
+    # detach must still make the next champion change open both.
     Reset-TabOpenGrace
+    $script:Bridge.Sync.LastBuildsFollowAt = $null
+    $script:Bridge.Sync.LastDraftFollowAt = $null
+    $script:Bridge.Sync.LastBuildsDetachAt = $null
+    $script:Bridge.Sync.LastDraftDetachAt = $null
+    $script:OpenActions.Clear()
+    Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 12 -IntentId 12 -Position 'utility') -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 2) {
+        $failures.Add("Detach precondition: expected the initial 2 opens, got $($script:OpenActions.Count)")
+    }
+    # Both tabs now report in (as a real browser would), then the user closes
+    # the browser and each page fires its detach beacon on pagehide.
+    $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().ToString('o')
+    $script:Bridge.Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().ToString('o')
+    $script:OpenActions.Clear()
+    Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 55 -IntentId 55 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 0) {
+        $failures.Add("Detach setup: with both tabs freshly polling, a champion change must not open anything, got $($script:OpenActions.Count)")
+    }
+    # The bridge handler's detach branch, replayed at the state level (its HTTP
+    # parsing has its own -SelfTest cases against a real bridge). The sleep is
+    # load-bearing, not padding: Get-Date's resolution on Windows is ~15.6ms, so
+    # without it the detach can land on the exact same tick as the open above
+    # and the "detach must be strictly AFTER the open" rule (deliberately
+    # strict -- see Test-TabOpenGraceActive) would read it as a stale detach.
+    Start-Sleep -Milliseconds 30
+    $script:Bridge.Sync.LastBuildsFollowAt = $null
+    $script:Bridge.Sync.LastDraftFollowAt = $null
+    $script:Bridge.Sync.LastBuildsDetachAt = (Get-Date).ToUniversalTime().ToString('o')
+    $script:Bridge.Sync.LastDraftDetachAt = (Get-Date).ToUniversalTime().ToString('o')
+    $script:OpenActions.Clear()
+    Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 99 -IntentId 99 -Position 'jungle') -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 2) {
+        $failures.Add("Detach: after both pages detached, the next champion change must re-open BOTH (this is the live-reported browser-closed bug), got $($script:OpenActions.Count)")
+    }
+
+    # (b) A detach ALSO voids an open->attach grace. Opening a tab and closing
+    # it inside the 25s grace previously left that kind suppressed for the rest
+    # of the window -- the grace is there to wait for an answer, and a detach IS
+    # the answer.
+    Reset-TabOpenGrace
+    $script:Bridge.Sync.LastBuildsFollowAt = $null
+    $script:Bridge.Sync.LastDraftFollowAt = $null
+    $script:Bridge.Sync.LastBuildsDetachAt = $null
+    $script:Bridge.Sync.LastDraftDetachAt = $null
+    Set-TabOpenedNow -Kind builds
+    Set-TabOpenedNow -Kind draft
+    if (-not (Test-TabOpenGraceActive -Kind builds)) {
+        $failures.Add('Grace precondition: a just-opened kind must be inside its grace')
+    }
+    Start-Sleep -Milliseconds 30  # same ~15.6ms Get-Date resolution reason as above
+    $script:Bridge.Sync.LastBuildsDetachAt = (Get-Date).ToUniversalTime().ToString('o')
+    if (Test-TabOpenGraceActive -Kind builds) {
+        $failures.Add('Detach vs grace: a detach recorded AFTER the open must void the grace for that kind')
+    }
+    if (-not (Test-TabOpenGraceActive -Kind draft)) {
+        $failures.Add('Detach vs grace: a Builds detach must not void the DRAFT grace')
+    }
+    # A detach from BEFORE the open (a previous game's close) must not void it.
+    $script:Bridge.Sync.LastBuildsDetachAt = (Get-Date).ToUniversalTime().AddSeconds(-600).ToString('o')
+    if (-not (Test-TabOpenGraceActive -Kind builds)) {
+        $failures.Add('Detach vs grace: a STALE detach predating the open must not void the grace')
+    }
+
+    # (c) BROWSER-LIVENESS GUARD -- the hard-kill case, where no pagehide ever
+    # fires (task-kill, crash, sign-out). Fresh stamps, no detach: with a
+    # browser running these count as attached; with none running they must not.
+    Reset-TabOpenGrace
+    $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().ToString('o')
+    $script:Bridge.Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().ToString('o')
+    $script:Bridge.Sync.LastBuildsDetachAt = $null
+    $script:Bridge.Sync.LastDraftDetachAt = $null
+    $script:BrowserProbeOverride = $false
+    $script:OpenActions.Clear()
+    Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 33 -IntentId 33 -Position 'middle') -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 2) {
+        $failures.Add("Browser-liveness guard: with NO browser process running, fresh follow stamps must not suppress the opens, got $($script:OpenActions.Count)")
+    }
+    $script:BrowserProbeOverride = $true
+    Reset-TabOpenGrace
+    $script:OpenActions.Clear()
+    Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 34 -IntentId 34 -Position 'middle') -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 0) {
+        $failures.Add("Browser-liveness guard: with a browser running, fresh follow stamps must still suppress (the guard only ever WIDENS opening), got $($script:OpenActions.Count)")
+    }
+
+    # -- v1.7.0 PRE-WARM: champ-select ENTRY opens the pages, before any hover -
+    # "Have the pages ready" -- a cold browser boots during bans instead of at
+    # the first pick. Builds is session-only here (no championId exists yet).
+    Reset-TabOpenGrace
+    $script:Bridge.Sync.LastBuildsFollowAt = $null
+    $script:Bridge.Sync.LastDraftFollowAt = $null
+    $script:Bridge.Sync.LastBuildsDetachAt = $null
+    $script:Bridge.Sync.LastDraftDetachAt = $null
+    $script:OpenActions.Clear()
+    Invoke-ChampSelectPrewarm -AppOrigin $appOrigin -SessionToken $sessionToken
+    $expectedPrewarmBuilds = "$appOrigin/?session=$sessionToken"
+    if ($script:OpenActions.Count -ne 2) {
+        $failures.Add("Prewarm (nothing attached): expected 2 opens, got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
+    } else {
+        if ($script:OpenActions[0] -ne $expectedPrewarmBuilds) { $failures.Add("Prewarm: open #1 must be the session-only Builds URL (no championId exists yet), got $($script:OpenActions[0])") }
+        if ($script:OpenActions[1] -ne $expectedDraft) { $failures.Add("Prewarm: open #2 must be /draft, got $($script:OpenActions[1])") }
+    }
+    # The pre-warm stamped the grace, so the first champion resolution must NOT
+    # open a second pair -- the pre-warmed tab live-follows it in place. This is
+    # the interaction that would otherwise turn "ready earlier" into tab spam.
+    $prewarmState = @{ LastOpenedChampId = $null }
+    $script:OpenActions.Clear()
+    Update-ChampSelectState -State $prewarmState -Session (New-MockChampSelectSession -ChampId 84 -IntentId 84 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 0) {
+        $failures.Add("Prewarm: the first champion resolution after a prewarm must not open a second pair, got $($script:OpenActions.Count)")
+    }
+    if ($prewarmState.LastOpenedChampId -ne 84) {
+        $failures.Add('Prewarm: debounce state must still advance on the suppressed resolution')
+    }
+    # Already-attached tabs: the pre-warm must be a no-op, not two more tabs.
+    Reset-TabOpenGrace
+    $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().ToString('o')
+    $script:Bridge.Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().ToString('o')
+    $script:OpenActions.Clear()
+    Invoke-ChampSelectPrewarm -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 0) {
+        $failures.Add("Prewarm (both attached): expected NO opens, got $($script:OpenActions.Count)")
+    }
+    # Only one side attached -> pre-warm opens only the missing one.
+    Reset-TabOpenGrace
+    $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().ToString('o')
+    $script:Bridge.Sync.LastDraftFollowAt = $null
+    $script:OpenActions.Clear()
+    Invoke-ChampSelectPrewarm -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedDraft) {
+        $failures.Add("Prewarm (Builds attached): expected exactly 1 open (/draft), got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
+    }
+
+    Reset-TabOpenGrace
+    $script:BrowserProbeOverride = $null
     $script:Bridge = $null
 
     if ($failures.Count -gt 0) {

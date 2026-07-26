@@ -160,16 +160,24 @@ export default function HomePage() {
     // router params / useSearchParams) — composing a second history-
     // mutation source with useSheetBackNav's raw pushState is a real risk,
     // and this only needs to run once at mount. Companion's champ-select
-    // Start-Process always opens `/?championId=&role=&session=`.
+    // Start-Process opens `/?championId=&role=&session=` once a champion has
+    // resolved, and — since companion 1.7.0 — a SESSION-ONLY `/?session=` on
+    // champ-select entry (the pre-warm, before anyone has hovered anything).
     if (deepLinkAppliedRef.current) return;
     deepLinkAppliedRef.current = true;
 
-    const parsed = parseLiveDeepLink(window.location.search);
-    if (!parsed) return; // not a live deep link — default view stands, untouched
+    // Session adoption is deliberately SEPARATE from (and ahead of) the
+    // deep-link parse: the pre-warm link has no championId, so parseLiveDeepLink
+    // correctly rejects it as "not a champion deep link" — but the token on it
+    // is exactly as real, and pairing is what makes this tab poll /status,
+    // count as attached, and live-follow the first hover in place. Dropping it
+    // here would leave the pre-warmed tab inert and get a SECOND tab opened at
+    // the first pick, which is the tab-spam this whole area exists to avoid.
+    const sessionParam = new URLSearchParams(window.location.search).get("session");
+    if (sessionParam) companion.setSession(sessionParam);
 
-    if (parsed.session) {
-      companion.setSession(parsed.session);
-    }
+    const parsed = parseLiveDeepLink(window.location.search);
+    if (!parsed) return; // no champion to apply — default view stands, untouched
 
     fetch("/api/champions")
       .then((r) => (r.ok ? (r.json() as Promise<ChampionRef[]>) : []))
