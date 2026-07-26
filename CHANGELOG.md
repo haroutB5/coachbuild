@@ -2,6 +2,37 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.60.0] — 2026-07-26 — /compact: one mini view, two hosts
+
+### Added
+- **A chrome-free  route** — champion, runes + summoners, buy order, and the Apply-runes /
+  Add-item-builds buttons, at ~380px with no rail and no tab bar. Pop it out onto a second monitor
+  in any browser; the desktop shell loads the SAME route in its always-on-top champ-select overlay.
+  It live-follows champ select through the existing companion poll, so it tracks hovers in place.
+
+  Deliberately one route rather than shell-native UI: an overlay is the one thing a browser cannot
+  do, but its CONTENT must not be desktop-only or the web app forks and the phone drifts behind.
+  The shell contributes window behaviour and nothing else.  gained a 
+  set for this — the only structural change, and it is pathname-driven web code, not host detection.
+
+  Not follow-capable on purpose:  still maps only  and , so having
+  the mini view open never suppresses the companion opening Builds for a browser user. Worst case
+  is one redundant tab, which is the right side of that trade.
+
+### Groundwork — desktop shell (, not yet shippable)
+-  lifts the rune-page/item-set WRITE RULES out of  into
+  shared, pure TypeScript — the title gates, the never-touch-a-page-we-do-not-own decision, and the
+  O(1) item-set prune whose boundary keeps the user’s own sets sacred. **31 tests** in the normal
+  gate now pin what only a PowerShell  pinned before, including the adversarial fixture
+  (5 pages, none ours, auto mode → write nothing, delete nothing).
+- An Electron shell that typechecks and bundles: LCU discovery with loopback-scoped TLS, the
+  identical companion wire contract (/ accepted and ignored, additive ), an
+  owned window that navigates instead of opening tabs, , an LNA
+  permission grant, a navigation allowlist, its own minted session token, and a startup probe that
+  refuses to run silently alongside the PowerShell companion.
+- **Unverified against a real League client** — there is none on the build machine. No packaging,
+  no installer, no auto-update. Do not treat it as shippable.
+
 ## [0.59.1] — 2026-07-26 — Two claims the data does not keep
 
 ### Fixed — Draft told you off-role picks could not out-rank lane staples, while showing exactly that

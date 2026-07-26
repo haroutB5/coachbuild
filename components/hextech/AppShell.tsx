@@ -6,12 +6,21 @@
 // tab bar (mobile), replacing the old per-page TabNav + Builds-only hextech
 // Sidebar + MobileNavMenu trio.
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import DesktopRail from "./GlobalNav/DesktopRail";
 import MobileTabBar from "./GlobalNav/MobileTabBar";
 import TopBar from "./GlobalNav/TopBar";
 
+/** Routes that render WITHOUT the nav shell. /compact is a deliberately
+ *  chrome-free mini view: a browser user can pop it out onto a second monitor,
+ *  and the desktop shell loads this same route in its always-on-top champ-select
+ *  overlay. It is a normal web route either way — nothing here is desktop-only,
+ *  and nothing about the shell leaks into the app. */
+const CHROMELESS_ROUTES = new Set(["/compact"]);
+
 export default function AppShell({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
   // R7: best-effort GET /api/patch, once. A failure (or a slow cold start)
   // must never crash the shell or block first paint — null just renders
   // "PATCH —" in the rail footer.
@@ -32,6 +41,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, []);
+
+  // Hooks above run unconditionally — the early return is placed after them
+  // so the rules of hooks hold on every route.
+  if (pathname != null && CHROMELESS_ROUTES.has(pathname)) {
+    return <>{children}</>;
+  }
 
   return (
     <div className="lg:flex min-h-screen">
