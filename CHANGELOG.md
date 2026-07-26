@@ -2,6 +2,27 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.61.2] — 2026-07-26 — Three from the second UI pass
+
+### Fixed
+- **Apply Runes was icon-only on mobile.** Its text label was `hidden sm:inline`, so the one control
+  on the page with an effect OUTSIDE the browser — it writes rune pages into your game client — was
+  also the least labelled thing on screen. The label now shows at every width.
+- **Situational item names truncated at phone widths.** Two-up cards at 390px gave "Plated
+  Steelca…" and "Berserker's Gr…". They stack one-up below 420px and go two-up above it.
+- **The companion hero showed "SCRIPT —" / "LAST POLL —" before anything had ever connected.** On
+  mobile that block wraps under the headline and left-aligns, so a pair of labels with nothing in
+  them read as broken markup rather than as absent data. It renders only once there is at least one
+  real value to put in it.
+
+### Not in this release, from the same pass
+- The Builds page is still a ~3,000px single scroll on mobile (runes → items → pro consensus), which
+  is the wrong shape for a 30-second champ select. Splitting it (a BUILD | PRO segmented control, or
+  a collapsed pro block) changes information architecture, not styling, and wants a decision rather
+  than a patch.
+- The desktop runes card still ends ~150px short of the item column beside it, and its shard row and
+  summoner tiles sit loosely rather than on a grid.
+
 ## [0.61.1] — 2026-07-26 — The support quest item is one of the six
 
 ### Fixed

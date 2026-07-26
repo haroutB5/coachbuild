@@ -147,10 +147,18 @@ export default function StatusHeroCard({
             <p className="text-[12.5px] text-mut mt-1 leading-relaxed max-w-[48ch]">{headline.sub}</p>
           </div>
         </div>
-        <div className="text-right flex-shrink-0 text-[10.5px] text-mut uppercase tracking-[0.06em] leading-relaxed tabular-nums">
-          <p>Script {scriptVersion ? `v${scriptVersion}` : "—"}</p>
-          <p>Last poll {formatClock(lastPollAt)}</p>
-        </div>
+        {/* Before anything has ever connected, both of these are "—". On mobile
+            the block wraps under the headline and left-aligns, so it rendered as
+            a bare "SCRIPT —" / "LAST POLL —" pair that reads as broken markup
+            rather than as absent data. A label with nothing to label is worth
+            less than the space it costs: show the pair only once there is at
+            least one real value to put in it. */}
+        {(scriptVersion || lastPollAt) && (
+          <div className="text-right flex-shrink-0 text-[10.5px] text-mut uppercase tracking-[0.06em] leading-relaxed tabular-nums">
+            <p>Script {scriptVersion ? `v${scriptVersion}` : "—"}</p>
+            <p>Last poll {formatClock(lastPollAt)}</p>
+          </div>
+        )}
       </div>
 
       <div className="flex items-start w-full mt-5 pt-4 border-t border-line/60">

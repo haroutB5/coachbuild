@@ -46,7 +46,7 @@ export default function SituationalCard({ items, onItemClick, highlightIds }: Si
       <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold mb-4">
         Situational
       </p>
-      <div className="grid grid-cols-2 gap-2.5">
+      <div className="grid grid-cols-1 min-[420px]:grid-cols-2 gap-2.5">
         {situational.map((pick) => {
           const isHighlighted = highlightIds?.includes(pick.id) ?? false;
           return (

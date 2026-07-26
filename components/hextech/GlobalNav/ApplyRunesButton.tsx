@@ -104,7 +104,7 @@ export default function ApplyRunesButton() {
       }`}
     >
       <span aria-hidden="true">⚡</span>
-      <span className="hidden sm:inline">{label}</span>
+      <span>{label}</span>
     </button>
   );
 }
