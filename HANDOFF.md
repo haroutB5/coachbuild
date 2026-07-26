@@ -1,6 +1,18 @@
 # CoachBuild — handoff
 
-**Current state: 2026-07-25, v0.51.4.** Prod: `coachbuild.vercel.app`. Companion: 1.6.4.
+**Current state: 2026-07-26, v0.58.0.** Prod: `coachbuild.vercel.app`. Companion: 1.6.4. All gates green, prod-smoked.
+
+> ⚠️ **This file is at ~880 lines, well past its own 150-200 rollup threshold** (the merged per-agent rounds are most of it). A rollup into `CHANGELOG.md`-referenced footnotes is DUE — do it deliberately, keeping the open-items list intact, rather than trimming ad hoc.
+
+## What shipped 2026-07-26 — v0.58.0 (audit wave 3)
+
+Two parallel lanes against the `AUDIT-2026-07-25.md` still-open list. **The audit is still not re-runnable — read `AUDIT-2026-07-25.md`, do not re-dispatch its agents.** Waves 4 (frontend/UX) and 5 (infra) were deliberately SKIPPED at user request, not forgotten.
+
+- **Security cluster** — `/api/prostage/timeline` atomic claim + exponential backoff (migration `0016`; a concurrent or too-soon request 429s having made **zero** outbound calls, instead of launching its own ~750-request walk); `lib/fetchTimeout.ts` wired through every previously-bare `fetch`; `/api/patch-movers` junk-param 308 + single-flight cache; companion TLS bypass scoped to loopback. See CLAUDE.md gotchas (v), (w), (z).
+- **Item sets / archetypes** — `resolveDamageFamily` now needs a margin of ≥2 before an item tally beats class tags (one incidentally-tagged item was making tank supports "AD"); three curated ids dead since 16.13.1 corrected (`3001`→`8020`); the rule-1 test fixture replaced with a real pinned catalog slice. See gotchas (x), (y).
+- **Prod-verified:** Leona renders Tank/Engage with no `Bruiser (AD)`/`Lethality` lines, Abyssal Mask resolves at +1.93 WPA, `?zzz=1` on patch-movers 308s to canonical.
+
+**⚠️ ONE THING SHIPPED WITHOUT PROOF — top of the open list:** the TLS loopback-scoping change has **never run against a real self-signed LCU certificate**. No League client in the build environment, and `-SelfTest`'s mock LCU is plain HTTP, so the one code path it touches is exactly the one SelfTest cannot reach. `-SelfTest` passing is NOT proof here. Verify on a live client before trusting the companion's TLS posture.
 
 This file describes where things stand now. Full release-by-release detail lives in `CHANGELOG.md` (every 0.32.0→0.51.3 entry is there in depth) — this file is deliberately NOT an append-only log anymore; per-agent `HANDOFF-<agent>.md` files get merged in here and then reset to a one-line pointer (see the bottom of each of those files). If this file is passing ~150-200 lines again, roll the older-than-today content into `CHANGELOG.md`-referenced footnotes rather than deleting the open-items list.
 
@@ -382,4 +394,490 @@ Scope: build-engine + UI files only, per dispatch brief. Did NOT touch lib/prost
 - No version bump, no CHANGELOG edit, no deploy — per constraints.
 
 Files touched: `lib/heroStats.ts`, `app/api/hero-stats/route.ts`, `components/hextech/heroContracts.ts`, `components/hextech/ChampionHero.tsx`, `components/hextech/GlobalNav/ApplyRunesButton.tsx`, `components/live/LivePanel.tsx`, `lib/__tests__/heroStats.test.ts`, `lib/__tests__/hero-stats-route.test.ts`, `components/__tests__/heroContracts.test.ts`.
+
+
+
+---
+
+## Latest dispatch -- 2026-07-26 12:44
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-26T01:46:18Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-26 (engo) — STILL-OPEN items 1, 5, 6 (item-set archetype family + dead curated ids + fabricated test fixture)
+
+Scope: `components/hextech/itemSetBody.ts` + `components/__tests__/itemSetBody.test.ts` only, per brief.
+No version bump, no CHANGELOG edit, no deploy, no commit. Working tree carries exactly these two
+files (verified `git status` before/after; engy's concurrent security-cluster edits under
+`app/api/**`, `lib/prostage/**`, `lib/pro/**`, `public/companion.ps1`, `migrations/**` were never
+opened).
+
+### Files touched
+
+- `C:/Claude/AI/coachbuild/components/hextech/itemSetBody.ts`
+- `C:/Claude/AI/coachbuild/components/__tests__/itemSetBody.test.ts`
+
+### Method note
+
+All three items were investigated by driving the REAL `buildItemSets` against LIVE data — prod
+`/api/champions` + `/api/build` + `/api/pros`, and the real 16.13.1 item catalog via
+`getItemDetailMap` (same `cdn.coachless.gg` mirror `itemDetail.ts` uses in prod) — from a temporary
+vitest test file under `components/__tests__/` (vitest's `@` alias + tsx are what make the real
+module importable outside a build; a bare Node script can't resolve `@/lib/types`). Every probe file
+was deleted before finishing; `git status` never shows one mid-session diff had it been checked.
+
+### ITEM 1 — tank/enchanter supports resolving to the AD damage family
+
+**Root cause found, and it was NOT what the brief's own hypothesis implied.** The brief said "look at
+`resolveDamageFamily`/`selectArchetypes`" as if the selection logic itself was mis-wired for supports.
+It isn't — `selectArchetypes` correctly emits the family it's told. The bug is one level up, in
+`resolveDamageFamily`'s tie-break: `if (ap !== ad) return { family: ap > ad ? "AP" : "AD", confident:
+true }`. Live probe on Leona: her REAL recommended-item pool (core + optimized + situational + pro,
+i.e. `themedUnion`) tallies `ap=0, ad=1`. The ONE item responsible is id **2524 "Bandlepipes"** — a
+generic support Artifact item any support can pick regardless of their own damage type, whose only
+AD-signalling tag (`AttackSpeed`) is incidental to its kit (`Health, SpellBlock, Armor, AttackSpeed,
+NonbootsMovement, AbilityHaste`). A single incidentally-tagged item was enough to satisfy `ap !== ad`
+and claim `confident: true`, which skips the tag-based fallback entirely — the fallback would have
+correctly read her real ddragon tags `["Tank","Support"]` → AP. Braum and Rell (also `["Tank",
+"Support"]`) showed the identical `ap=0/ad=1` shape from the same item.
+
+**Fix (`resolveDamageFamily`, ~15 lines incl. comment):** require a decisive margin, not a bare
+inequality: `Math.abs(ap - ad) >= FAMILY_TALLY_MARGIN` (constant = 2) before trusting the item tally
+over the champion's own class tags. Verified against **27 live champions** (the brief's exact 8
+supports — Leona/Braum/Nautilus/Alistar/Yuumi/Lulu/Soraka/Milio — plus Rell/Rakan/Thresh/Pyke/Senna/
+Karma/Sona and AD/AP control champs Draven/Vayne/Yasuo/Riven/Viktor/Ahri, plus a wider non-support tank
+spot-check: Amumu/Sejuani/Malphite/Ornn/Shen):
+
+- Every genuine AD/AP carry in the sample clears margin=2 with huge room (Draven ad=15, Ahri ap=14,
+  Pyke ad=10/ap=0, Senna ad=10/ap=2) — completely unaffected.
+- Every single-item false positive (Leona, Braum, Nautilus\*, Rell — margin=1) now falls through to
+  the tag branch and resolves correctly. (\*Nautilus/Alistar were already correct by luck — their
+  single item happened to be AP-tagged, e.g. Redemption's `SpellDamage` tag; unaffected either way.)
+- A margin of exactly 2 (Shen: `ad=3/ap=1`, tags `["Tank"]` only) is left item-driven, unchanged from
+  today — Shen is outside the brief's named scope and this was not demonstrated wrong, so I didn't
+  chase it further. Documented in the code comment as the boundary case.
+
+**Did NOT weaken the honesty labelling.** `evidenceFor`/`ArchetypeEvidence` (measured/low-data/
+suggested) are untouched; the fixed archetypes still carry `(suggested)` where the fill is 100%
+judgment, same as before — the fix changes WHICH archetype family is offered, never how honestly it's
+labelled.
+
+#### BEFORE / AFTER — live prod data (16.13.1)
+
+| Champion | Tags | BEFORE | AFTER |
+|---|---|---|---|
+| Leona (Support) | Tank, Support | `Tank \| Bruiser (AD) (suggested) \| Lethality/Assassin (suggested) \| On-hit (low data)` | `Tank \| AP/Mage (suggested) \| Tank Mage (suggested)` |
+| Braum (Support) | Tank, Support | `Tank \| Bruiser (AD) (suggested) \| Lethality/Assassin (suggested) \| On-hit (low data)` | `AP/Mage (suggested) \| Tank Mage (suggested)`* |
+| Nautilus (Support) | Tank, Support | `Tank \| AP/Mage (low data) \| Tank Mage (suggested)` | unchanged (already correct) |
+| Alistar (Support) | Tank, Support | `Tank \| AP/Mage (suggested) \| Tank Mage (suggested)` | unchanged (already correct) |
+| Yuumi (Support) | Support, Mage | `AP/Mage \| AP Burst (low data) \| Tank Mage (low data)` | unchanged (already correct) |
+| Lulu (Support) | Support, Mage | `AP/Mage \| Tank Mage (low data)` | unchanged |
+| Soraka (Support) | Support, Mage | `Tank Mage (low data)` (AP/Mage deduped into Core this call) | unchanged |
+| Milio (Support) | Support, Mage | `AP/Mage \| AP Burst \| Tank Mage (low data)` | unchanged |
+| Draven (Bot) | Marksman | `Crit/Marksman \| On-hit (low data)` | unchanged (control) |
+| Vayne (Bot) | Marksman, Assassin | `Lethality/Assassin (low data) \| Crit/Marksman \| On-hit` | unchanged (control) |
+| Yasuo (Mid) | Fighter, Assassin | `Bruiser (AD) (low data) \| Lethality/Assassin (low data) \| On-hit` | unchanged (control) |
+| Riven (Top) | Fighter, Assassin | `Bruiser (AD) (low data) \| Lethality/Assassin \| On-hit (low data)` | unchanged (control) |
+
+\*Braum's "Tank" line is cross-family-deduped against Core build on the AFTER run's particular live
+data (not a bug — same documented Ornn-style collision the P1-B de-dup already handles); the important
+change is the archetype titles switching from Bruiser/Lethality to AP/Mage/Tank Mage.
+
+### ITEM 5 — dead curated pool ids in patch 16.13.1
+
+Verified all three against the real catalog myself (not trusted blind, per the brief): `getItemDetailMap("16.13.1")` against the live coachless CDN mirror.
+
+- `3001` = **Evenshroud**, `purchasable: false`. Confirmed. The audit's framing ("3001 is Evenshroud,
+  not Abyssal Mask") is right but the deeper issue is the id was ALWAYS wrong for what the comment
+  said — real Abyssal Mask id is **8020** (confirmed `purchasable: true`).
+- `6691` = **Duskblade of Draktharr**, `purchasable: false`. Confirmed dead. Also checked its 2026
+  reworked successor **Opportunity (6701)** as a candidate replacement — also dead this patch.
+- `3193` = **Gargoyle Stoneplate**, `purchasable: false`. Confirmed dead.
+
+**isFullItem already had a `purchasable === false` check** (added by an earlier session), so these
+three ids never actually surfaced garbage in a live build — the real symptom was exactly what the
+audit described: a curated pool silently resolving to 6/8 or 7/8 real entries, invisible unless you
+counted.
+
+**Fix, two parts:**
+
+1. **Corrected the three ids**, verified live: `TANK_MAGE.pool` and `TANK_PURE.pool` both had `3001`
+   meaning "Abyssal Mask" in the comment — both now use `8020`. `TANK_PURE.pool`'s `3193` (Gargoyle
+   Stoneplate) is replaced with `3083` (Warmog's Armor, confirmed `purchasable: true`, same "pure
+   durability, not primarily a damage item" theme). `LETHALITY.pool`'s `6691` (Duskblade) is replaced
+   with `6676` (The Collector, confirmed `purchasable: true`) — already in `CRIT_MARKSMAN`'s own pool,
+   which is fine; nothing forbids an item belonging to two thematically-adjacent curated pools.
+2. **Structural guard, not another enumeration** — per the audit's own recorded lesson ("an
+   enumeration used as a safety guard rots"), I didn't just patch the three ids and stop.
+   `curatedArchetypePool` now warns (`console.warn`, once per id per process via a module-level dedup
+   `Set`, so a warm Vercel lambda doesn't spam) whenever a curated pool id resolves to a catalog entry
+   that IS `purchasable: false`. This is generic — it fires for ANY future patch casualty in ANY of
+   the 5 curated pools (`TANK_MAGE`, `BRUISER_AD`, `TANK_PURE`, plus any future one), not just today's
+   three. The id list stays (belt-and-braces, as the brief asked), but it's no longer the only guard.
+
+Regression tests prove the warn fires (content-checked: mentions the id and the archetype title),
+fires exactly once across repeated calls in the same process, and that none of the three OLD dead ids
+(3001/3193/6691) remain referenced by any curated pool (checked by planting them as
+`purchasable:false` in a rich test catalog and confirming zero warns for those specific ids, plus
+confirming the real replacements 8020/3083/6676 show up in the corresponding live blocks).
+
+### ITEM 6 — the rule-1 test fabricated `into` metadata
+
+Confirmed the audit's exact claim: `STARTING_ITEM_ALLOWLIST` has 11 real ids
+(1054/1055/1056/1082/1083/1086/1120/2049/2050/3070/3865). Fetched the real 16.13.1 shape for all 11.
+**9 of 11 have `into: []`** (genuine recipe-tree leaves — Doran's x4, Cull, Guardian's x2, World
+Atlas) and are excluded ONLY by `isFullItem`'s structural Lane-starter rule (`from.length===0 &&
+goldTotal<=500 && tags.includes("Lane")`). Only **2 of 11** (Dark Seal `into:["3041"]`, Tear of the
+Goddess `into:["3003","3004","2526","3119"]`) have a real non-empty `into`.
+
+The old fixture set `into: ["999999"]` on **every** allowlist id. That's not just "false for 9 of
+11" — it means the test could **never** have exercised the Lane-starter structural rule at all: a
+non-empty `into` makes `isFullItem` return `false` via the ordinary `into.length === 0` check on its
+own, before the Lane-starter branch is even relevant. I proved this concretely rather than just
+asserting it: disabled the Lane-starter branch in `isFullItem` (`if (false && from.length===0 && …)`)
+and re-ran —
+- **with the OLD fabricated fixture: still green.** The test could not have caught this regression.
+- **with the NEW real fixture (`realStarterMeta()`): fails**, `AssertionError: expected [...] to not
+  include '1054'` — the discriminating power the test always claimed to have.
+
+**Verdict: the TEST was wrong, not the code.** The code's structural rule is correct against real
+data (all 11 ids resolve to the right non-full-item verdict, for the right structural reason in each
+case). Fixed by replacing the fabricated per-id fixture with `realStarterMeta()` — a pinned literal
+slice of the real 16.13.1 catalog for exactly these 11 ids (name/goldTotal/into/from/tags,
+hand-transcribed from a live `getItemDetailMap` fetch, not re-derived or guessed). Re-enabled the
+Lane-starter rule and confirmed the full suite green again before finishing.
+
+### Tests added (all in `components/__tests__/itemSetBody.test.ts`)
+
+New describe blocks, placed after the existing `AUDIT P1-C` section:
+
+**"AUDIT follow-up — resolveDamageFamily requires a decisive item margin"** (4 tests):
+1. Tank support (Tank+Support, single incidental AD-tagged item) resolves AP, not AD.
+2. Enchanter support (Support+Mage, same shape) resolves AP.
+3. A REAL AD-carry support (Support+Assassin, decisive margin) still resolves AD — proves the fix
+   doesn't blanket-flip every support, only the thin-evidence case.
+4. Margin boundary: margin=1 falls to tags, margin=2 stays item-driven, same champ tags/shape
+   otherwise.
+
+**Fails against HEAD:** tests 1, 2, and 4 (3 of 4) — verified by swapping the pre-fix module back in
+(`git show HEAD:...`) and re-running with `-t "AUDIT follow-up"`. Test 3 (decisive-margin AD support)
+passes on both HEAD and the fix, by design — it's an invariant guard proving the item-driven path
+still works for genuine evidence, not a restatement of the bug.
+
+**"AUDIT follow-up — dead curated pool ids are loud, not silent"** (3 tests):
+1. A curated id that resolves to `purchasable:false` in the catalog triggers a `console.warn` naming
+   the id and archetype, and the warn dedupes to exactly one call across 3 repeated invocations in the
+   same test (avoids depending on cross-test module-state ordering).
+2. All old dead ids (3001/3193/6691) confirmed absent from every emitted block, and their live
+   replacements (8020/3083/6676) confirmed present, using a rich meta map with the OLD ids planted as
+   `purchasable:false` — if a pool still referenced them, isFullItem would silently drop them (as
+   before) and the presence assertions would fail.
+
+**Fails against HEAD:** both (verified the same way — pre-fix module produces 0 warn calls and the
+old dead ids' replacements are absent since they were never in the old pools).
+
+**Item 6:** no NEW test — the existing `VERIFY-NOT-ASSUME (2026-07-22)` test's fixture was replaced
+with `realStarterMeta()`. Confirmed it still discriminates (see the disable/re-enable proof above),
+so no separate regression pin was needed; it IS the regression pin now, on real data.
+
+Two pre-existing tests updated for the id fix (item 5): the Viktor "Tank Mage curated" test
+(`3001` → `8020` throughout, comment updated) and — no other pre-existing tests referenced the old
+ids.
+
+### Gate results
+
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` (full suite) — **1593 passed / 112 files** (up from the 1565/111 baseline this
+  session started from; the delta includes both my +25 new tests and engy's concurrent additions in
+  other files).
+- `npx next lint` — only pre-existing `<img>` warnings (ChampionPicker/ChampionHero/IconWithFallback/
+  ItemPath/SpellRow), none in files I touched.
+- Did NOT run `verify-fix.sh` or `next build`, per the brief's explicit instruction (stray build risks
+  a `.next/trace` lock) — ran the three gates individually instead, as directed.
+
+### What I deliberately did NOT do
+
+- **Did not chase Shen/Sejuani/Ornn/Malphite/Amumu beyond a sanity spot-check.** These are real
+  non-support tanks I probed for margin-threshold safety, not named in the brief. Shen (margin=2,
+  stays AD) is a genuine boundary case I flagged in a code comment but didn't "fix" — no live evidence
+  it's wrong, and pushing the margin higher to chase it risks under-margining the real signal for
+  genuine AD carries elsewhere. Sejuani (margin=1, now falls to Tank-only rather than getting
+  Bruiser/Lethality suggestions) changed as a side effect of the general fix — arguably an
+  improvement, not validated against the brief's scope either way.
+- **Did not touch `resolveDamageFamily`'s tag-fallback branch itself** (Mage/Support→AP,
+  Marksman/Assassin/Fighter→AD) — untouched, still exactly the v0.47.0 logic. Only the GATE for
+  trusting the item tally over that fallback changed.
+- **Did not expand FAMILY_TALLY_MARGIN's use to any other threshold in the file** (e.g. `MIN_THEMED_POOL`,
+  `CATEGORY_MAX_EMIT`) — out of scope, unrelated invariants.
+- **Did not add a replacement for every possible future dead curated id preemptively** — only the
+  three confirmed-dead ones. The new `console.warn` guard is what covers the future case generically;
+  I didn't speculatively swap other pool ids that are currently alive.
+- **Did not touch `categoryDefaultPool`** (the non-curated catalog-wide fallback) — it already scans
+  the live `itemMeta` map directly and inherits `isFullItem`'s purchasable check for free; no dead-id
+  risk exists there the way it does for a hardcoded `arch.pool` array.
+- **No probe/harness scripts left in the repo.** Three temporary vitest files were used during
+  investigation (`_tmp_liveprobe.test.ts`, `_tmp_itemcheck.test.ts`, `_tmp_starterfetch.test.ts`,
+  `_tmp_finalcheck.test.ts`) — all deleted before finishing; `git status` shows exactly the two
+  intended files.
+- **Did not run `verify-fix.sh` / `next build`** — per brief's explicit instruction (gotcha i,
+  `.next/trace` lock risk). Ran the three component gates individually instead.
+
+### What my verification CANNOT see
+
+- **Live pro-consensus data changes over time.** The BEFORE/AFTER table and the 27-champion margin
+  sweep were run against whatever `/api/pros` returned at the moment I probed (2026-07-26, prod). A
+  different pro-game sample on a different day could shift an individual champion's `ap`/`ad` tally
+  by ±1-2, which is exactly the boundary my fix is calibrated around (margin=2). I verified the
+  MECHANISM is sound (decisive real evidence always clears the threshold by a wide margin in every
+  sample I pulled — smallest genuine-AD margin observed was Pyke's ad=10/ap=0), not that every
+  champion's classification is permanently pinned — that was never true even before this fix, since
+  `themedUnion` is itself live-data-driven.
+- **I did not audit every one of the ~170 champions in the catalog** — the brief's named 8 supports +
+  my own +19-champion spot-check is a sample, not exhaustive. A support I didn't check (e.g. Bard,
+  Zilean, Renata Glasc) could theoretically have its own single-item false positive from a DIFFERENT
+  generic item than Bandlepipes; the margin fix should generically cover it (same mechanism), but I
+  did not individually verify each one.
+- **The dead-curated-id catalog check is a snapshot of 16.13.1.** If the live patch has moved on by
+  the time this ships, some of my "confirmed live" ids could themselves need re-verification — this
+  is exactly the class of drift the new `console.warn` guard exists to catch going forward, but it
+  doesn't retroactively validate today's ids against a FUTURE patch.
+- **I did not verify the companion-side (`companion.ps1`) rendering of these changed blocks in an
+  actual League client** — out of scope (I never opened that file, per the brief's ownership split),
+  and item-set generation here is pure-function tested end-to-end at the `ItemSet[]` JSON level, not
+  through a live LCU apply.
+
+engo
+
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-26T01:46:18Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-26 — Security cluster (audit "STILL OPEN" items 2-4; items 5-6 already fixed, see below)
+
+Scope was `app/api/**`, `lib/prostage/**`, `lib/pro/**`, `public/companion.*`, `migrations/**`.
+`components/**` was engo's concurrent workstream — untouched, confirmed via `git status` before and
+after. One pre-existing test failure (`components/__tests__/itemSetBody.test.ts`, "Abyssal via curated
+verbatim") is inside that scope and was already failing before I started (engo's in-progress P2 fix) —
+not something I broke.
+
+### 1. P1-3 security — `/api/prostage/timeline` unauthenticated cost amplifier — FIXED
+
+**Files:** `migrations/0016_prostage_timeline_backoff.sql` (new), `app/api/prostage/timeline/route.ts`,
+`lib/prostage/timelineBackoff.ts` (new), `scripts/backfill-prostage-timelines.mjs`,
+`lib/__tests__/prostage-timeline-route.test.ts` (new).
+
+Added two columns (`timeline_next_attempt_at`, `timeline_attempt_count`) that do ONE job with two
+effects:
+- **In-flight de-dup.** Before touching the network, the route atomically claims the game via
+  `UPDATE ... SET timeline_next_attempt_at = now() + 45s WHERE game_id=$1 AND timeline_status IS NULL
+  AND (timeline_next_attempt_at IS NULL OR timeline_next_attempt_at <= now()) RETURNING ...`. Postgres
+  row-level locking makes this race-safe: a concurrent request's UPDATE blocks until the winner
+  commits, then re-evaluates the WHERE clause against the now-advanced timestamp and returns 0 rows —
+  no walk, no network call, just an immediate 429. This is what stops a BURST of simultaneous requests
+  for the same never-resolved game from each independently launching their own ~750-request walk.
+- **Cooldown after `transient`.** On a `transient` result the same column is pushed out with
+  exponential backoff (`computeBackoffSeconds`: 60s, 120s, 240s, ... capped at 1h, keyed off a
+  persisted `timeline_attempt_count`) — so the next identical request can no longer re-trigger the
+  walk immediately. **`timeline_status` is never touched on a transient result — it stays exactly
+  NULL, same as before the fix.** I did not touch the transient-vs-terminal taint discipline the audit
+  flagged as "do not touch" (verified: `resolveGame.ts` / `timeline.ts` are otherwise unmodified except
+  for the fetch-timeout wrapping in item 2 below).
+- **Self-healing lease.** If the function dies mid-walk (crash / maxDuration kill), the 45s lease
+  simply expires and the row becomes claimable again — no separate unlock step.
+
+Route now returns 429 (with a `Retry-After` header) for "already computing" / "still cooling down",
+distinct from the 500 "transient, just failed" and 503 "DB unavailable" it already had.
+
+Also patched `scripts/backfill-prostage-timelines.mjs`'s cursor query to skip a game whose lease/backoff
+is still active (`AND (timeline_next_attempt_at IS NULL OR timeline_next_attempt_at <= now())`) — this
+script isn't in the named scope but writes the exact same columns/rows the route does, and without this
+it could stomp an active claim and reopen the double-walk problem from a different caller. It does NOT
+independently set backoff on its own transient results (left as pre-existing behavior: "leaves NULL for
+retry") — acceptable since this is a human-run, deliberately-small-limit tool, not the unauthenticated
+internet-facing surface the audit is about.
+
+**Tests (7 new, all in the "cooldown / in-flight claim / backoff" describe block explicitly FAIL
+against pre-fix HEAD — that code had no such column/claim/cooldown and fell straight through to
+compute):** future-cooldown bounces 429 with zero DB writes beyond the read; losing the claim race
+bounces 429; a transient result sets backoff=60s at attempt 1 and verifies the exact SQL values
+(`backoffSec`, `attemptCount`, `gameId`) reaching the UPDATE; a repeated transient failure compounds
+backoff to 480s from a persisted `timeline_attempt_count=3`; an `unavailable` result clears the backoff
+columns alongside the terminal status; an `ok` result persists every claimed row and clears backoff.
+Plus 3 pure unit tests for `computeBackoffSeconds` (doubling, 1h cap, non-positive input floors to
+attempt 1) — pure/no DB. Existing "ok"/"unavailable"/400/503 contract tests were preserved unchanged
+and still pass (they don't exercise the new column at all).
+
+**Verification gap, stated plainly:** the atomic-claim race-safety relies on standard Postgres
+row-level-lock semantics for `UPDATE ... WHERE ...`, which I did not independently verify against a
+live Postgres instance this session (route tests mock `sql` — they prove the route ISSUES the right
+query, not that Postgres's locking behaves as documented under real concurrent load). This is standard,
+well-documented Postgres behavior, not a novel claim, but it's still untested-live.
+
+### 2. P2 security — no timeouts on any hot outbound fetch path — FIXED
+
+**New:** `lib/fetchTimeout.ts` — single `fetchWithTimeout(url, init?, timeoutMs?)` helper (default 8s,
+`FAST_FETCH_TIMEOUT_MS`=4s for high-fanout paths). Layers an abort on top of any caller-supplied
+`signal` rather than replacing it (matters for `lib/coachless.ts`'s `post()`, which already accepted an
+optional signal from `staticData.ts`'s ~4s patch-candidate probe).
+
+**Wired into every bare `fetch(url)` I could find under my owned directories, plus the two
+cross-cutting choke points the audit named (`lib/coachless.ts`, `lib/staticData.ts`) that
+`heroStats.ts`/`patchMovers.ts` funnel through without calling `fetch` themselves:**
+`lib/pro/riot.ts`, `lib/pro/lolpros.ts`, `lib/prostage/timeline.ts` (all 3 call sites, at
+`FAST_FETCH_TIMEOUT_MS`), `lib/prostage/resolveGame.ts` (`ddragonJson`), `lib/prostage/lolesports.ts`,
+`lib/prostage/ddragon.ts`, `lib/prostage/cargo.ts` (both `cargoQuery` and the CargoExport transport),
+`lib/prostage/liveIngest.ts` (`fetchWindowAt`, at `FAST_FETCH_TIMEOUT_MS`), `lib/coachless.ts` (`post` —
+the shared choke point behind `/api/build`, `heroStats.ts`, `patchMovers.ts`, `draft/recommend.ts`),
+`lib/staticData.ts` (`fetchJson`).
+
+**Deliberately NOT touched:** `lib/pro/seedCrossregion.ts` (one-off backfill-script utility, not a
+live/hot request path — see its own header); `lib/draft/**` and `lib/mystats/**` (outside my named
+scope and outside the audit's security-cluster findings). `lib/prostage/cargo.ts` already has its own
+rate-limit/pacer discipline (30s floor, sticky-limit backoff) — the timeout there is a hung-socket
+guard on top of that, not a replacement for it; confirmed the 429/ratelimit detection path (`res.status
+=== 429` / body-text sniffing) is untouched and still works off the real HTTP response, not the abort
+path.
+
+**Verification:** `npx tsc --noEmit` clean, full `npx vitest run` shows no regressions from this change
+(1591/1592 pass; the 1 failure is the pre-existing engo-scope one above) — several existing tests
+exercise these modules' injectable-`deps` seams rather than the raw `fetch`, so this is necessary but
+not sufficient proof; I did not spin up a real slow/hanging endpoint to confirm the abort actually
+fires in ~4s/8s wall-clock in this session (would need a live network double, out of scope for a unit
+gate run).
+
+### 3. P2 security — `/api/patch-movers` amplification — FIXED
+
+**Files:** `app/api/patch-movers/route.ts`, `lib/patchMoversCache.ts` (new),
+`lib/__tests__/patch-movers-route.test.ts`.
+
+Two independent problems:
+- **Cache-key bypass.** The route now reads `req: NextRequest` and 308-redirects ANY request carrying
+  a query string (including the legacy accepted-but-ignored `?role=`) to the canonical bare path
+  *before* touching the compute path — the redirect itself makes zero coachless calls, so junk-param
+  spam can no longer buy a free pass around the CDN's 24h edge cache. A real client's plain
+  `fetch('/api/patch-movers')` (the only way `app/movers/page.tsx` calls it) is never redirected.
+- **Outage amplification.** `computePatchMoversBounded()` in the new `lib/patchMoversCache.ts` adds an
+  instance-scoped module-level cache + single-flight guard, mirroring the existing pattern in
+  `staticData.ts`'s patch-resolution cache: a healthy result is reused for 6h, a degraded
+  (`unsupported`/empty-movers) result for only 2m so a real outage recovers fast, and concurrent
+  requests on one warm instance collapse into ONE `computePatchMovers()` call via a shared in-flight
+  promise. A rejected compute is explicitly NOT cached (next request retries immediately rather than
+  looping on a poisoned entry).
+
+I split the cache/bound logic out of the route file into `lib/patchMoversCache.ts` (same for
+`lib/prostage/timelineBackoff.ts` in item 1) after `tsc --noEmit` caught that Next's generated
+`.next/types/app/**/route.ts` checker rejects ANY export from a route file outside the small
+GET/POST/config/runtime/dynamic/maxDuration whitelist — a test-only export like
+`__resetPatchMoversCacheForTests` or `computeBackoffSeconds` fails that generated-type check. Both
+route files now only export `GET` + the Next config constants; the testable logic lives in `lib/`.
+
+**Tests (8 new, split across two describe blocks explicitly FAILING against pre-fix HEAD — that route
+had no `req` param, no redirect, and called `computePatchMovers()` unconditionally on every request):**
+a junk-query-param request redirects with zero calls to the engine; a legacy `?role=2` bookmark also
+redirects; the bare canonical URL is NOT redirected; a burst of 3 concurrent requests during an outage
+collapses to exactly 1 engine call; a degraded result is reused on an immediately-following request
+(no re-compute); a successful result is likewise reused; a rejected compute is NOT cached and the next
+request retries. The 4 pre-existing contract tests (unsupported/empty/real-movers/no-args) were updated
+only to pass a `NextRequest` and to call `__resetPatchMoversCacheForTests()` in `beforeEach` (module-level
+cache state persists across tests in the same file otherwise) — their assertions are unchanged.
+
+**Verification gap, stated plainly:** the amplification bound is scoped to a single warm serverless
+instance and resets on cold start — it does NOT coordinate across many concurrently-cold Vercel
+instances during a real outage spike. This is the same limitation `staticData.ts`'s existing
+patch-resolution cache already has in this codebase (I followed that precedent rather than introducing
+a new cross-instance mechanism like Redis, which would be new infra for this app). The CDN's own 24h
+cache remains the cross-instance defense for the healthy case; this bound only helps the
+degraded/bypassed case, and only per-instance.
+
+### 4. P2 security — TLS validation disabled process-wide rather than loopback-scoped — FIXED (with a stated verification gap)
+
+**File:** `public/companion.ps1`, `Initialize-TlsShim`.
+
+Replaced the `AlwaysTrue` compiled delegate with `ValidateLoopbackOnly`: it inspects the TLS callback's
+`sender` (cast to `HttpWebRequest` first, then `ServicePoint` — PS 5.1's `Invoke-WebRequest`/
+`Invoke-RestMethod` on .NET Framework can hand back either shape depending on the call path) to
+determine the target host, and only bypasses certificate validation when that host `IsLoopback`. Every
+other target — concretely, the one non-loopback HTTPS call this script ever makes,
+`Test-AutoUpdate`'s `companion.version` check against `coachbuild.vercel.app` — now gets REAL
+certificate validation (`sslPolicyErrors == None`). Any unrecognized `sender` shape (cast fails on both
+attempts, or any exception) falls through to strict validation rather than widening trust — a
+type-inspection miss can only make the shim STRICTER than before, never introduce a new hole. Stayed a
+COMPILED `Add-Type` delegate (not a scriptblock) to preserve the v1.2.2 runspace-affinity fix the file's
+header documents — the TLS handshake callback runs on a threadpool thread with no PowerShell runspace,
+and a scriptblock would throw there.
+
+Confirmed the audit's other two findings about this shim are unaffected and don't need touching: the
+`irm|iex` install/update chain still isn't MITM-able via this shim (every such call spawns a FRESH
+`powershell.exe` where the shim hasn't run — I didn't change the install/update code path at all), and
+`Test-AutoUpdate` still only feeds the fetched version string into a balloon-tip string, never
+downloads/executes anything.
+
+**Ran `powershell -File public/companion.ps1 -SelfTest`** after the edit — `SELFTEST PASSED`. This
+confirms the script still parses/compiles cleanly (the C# `Add-Type` block is syntactically valid) and
+every non-TLS-dependent bridge/gameflow/rune/item-set assertion still holds.
+
+**Verification gap, stated plainly: I could NOT exercise the actual loopback-vs-non-loopback branching
+logic against a real self-signed certificate in this session.** `-SelfTest`'s mock LCU (per the file's
+own header) is a plain `HttpListener` over HTTP, not HTTPS — it never triggers
+`ServerCertificateValidationCallback` at all, so SelfTest passing does NOT prove `ValidateLoopbackOnly`
+correctly (a) accepts the LCU's real self-signed loopback cert or (b) correctly rejects/validates a
+real non-loopback cert. There is no League client / real LCU available in this environment to test
+against. This is a real gap — the change is reasoned from documented .NET behavior (the `sender`
+parameter shapes for `HttpWebRequest`-backed calls) and a safe fail-toward-strict-validation design, not
+live-verified. Flag for whoever ships this to smoke-test on a machine with a real League client before
+calling it done: open the companion, enter champ select, confirm the rune/item-set apply still works
+(proves the loopback branch still accepts the LCU), and check the update-nag balloon still behaves
+sanely (proves the non-loopback branch didn't break the version check).
+
+**Ship note:** this is a "COMPANION CHANGE" per this repo's existing convention (see CLAUDE.md's
+companion-bump checklist / CHANGELOG's "(COMPANION CHANGE → x.y.z — re-install required)" tag) — I did
+NOT bump `$script:Config.Version` (currently `'1.6.4'`) per the "no version bump" constraint, but
+whoever ships this needs to bump it before running `prebuild` (`sync-companion-version.mjs` derives
+`companion.version` from that literal), and users need the re-install nudge since the fix only takes
+effect in a freshly-launched companion process.
+
+### 5 & 6. P1-1 (`/apply-runes` body.name guard) and P1-2 (`companion.version` frozen) — ALREADY FIXED, no action taken
+
+My brief listed these as items 5-6 to fix, but they are **not** in `AUDIT-2026-07-25.md`'s own "STILL
+OPEN — next session" list at the top of the file, and I verified why before touching anything:
+
+- **`Test-RunePayload`** (public/companion.ps1, ~line 786) already exists, is already wired into
+  `Invoke-ApplyRunes` STEP 2 (`if (-not (Test-RunePayload -Body $Body)) { return @{ ok=$false;
+  reason='invalid-page' } }`), and already enforces the `CoachBuild`-prefix gate mirroring
+  `Test-ItemSetsPayload`. The audit's own FIX PROGRESS table confirms this shipped in v0.56.0.
+- **`public/companion.version`** already reads `{"version":"1.6.4"}`, matching
+  `$script:Config.Version`, and `scripts/sync-companion-version.mjs` (which runs as a `prebuild` step,
+  wired in `package.json`) now derives it structurally from the `companion.ps1` literal so it can't
+  drift again — also already shipped per the FIX PROGRESS table.
+
+I did not modify either file for these two items. Flagging this so the brief can be corrected for next
+time — the "STILL OPEN" list should have been the authoritative source I was pointed at, and it was
+right; my dispatch brief just hadn't been refreshed against it.
+
+### Gate results
+
+- `PATH="/c/Program Files/nodejs:$PATH" npx tsc --noEmit` — clean, 0 errors.
+- `PATH="/c/Program Files/nodejs:$PATH" npx vitest run` — 1591/1592 pass. The 1 failure
+  (`components/__tests__/itemSetBody.test.ts`, Abyssal-via-3001) is pre-existing, inside engo's
+  concurrent `components/**` scope, and unrelated to any file I touched (confirmed via `git status`
+  before starting — that file and `components/hextech/itemSetBody.ts` were already modified, plus an
+  untracked `components/__tests__/_tmp_itemcheck.test.ts` scratch file, all engo's).
+- `PATH="/c/Program Files/nodejs:$PATH" npx next lint` — clean, only pre-existing `<img>`
+  perf-suggestion warnings in `components/**` files I never touched.
+- Did NOT run `next build` (per constraint) and did NOT run `node scripts/db-migrate.mjs` against the
+  live DB (migration 0016 is written but not applied — ship-time task, consistent with "I handle the
+  ship").
+
+### Files touched (mine)
+
+New: `lib/fetchTimeout.ts`, `lib/patchMoversCache.ts`, `lib/prostage/timelineBackoff.ts`,
+`migrations/0016_prostage_timeline_backoff.sql`, `lib/__tests__/prostage-timeline-route.test.ts`.
+Edited: `app/api/prostage/timeline/route.ts`, `app/api/patch-movers/route.ts`, `lib/coachless.ts`,
+`lib/staticData.ts`, `lib/pro/riot.ts`, `lib/pro/lolpros.ts`, `lib/prostage/timeline.ts`,
+`lib/prostage/resolveGame.ts`, `lib/prostage/lolesports.ts`, `lib/prostage/ddragon.ts`,
+`lib/prostage/cargo.ts`, `lib/prostage/liveIngest.ts`, `scripts/backfill-prostage-timelines.mjs`,
+`public/companion.ps1`, `lib/__tests__/patch-movers-route.test.ts`.
+
 

@@ -32,11 +32,13 @@ app/api/champions/route.ts          GET  /api/champions
 app/api/draft/recommend/route.ts    GET  /api/draft/recommend?lane=&enemies=&laneOpp=&hover=
 app/api/hero-stats/route.ts         GET  /api/hero-stats?championId=
 app/api/patch/route.ts              GET  /api/patch  (best-effort, feeds the rail's patch footer, s-maxage=3600)
-app/api/patch-movers/route.ts       GET  /api/patch-movers  (no `role` param since v0.51.0 — whole-roster response)
+app/api/patch-movers/route.ts       GET  /api/patch-movers  (no `role` param since v0.51.0 — whole-roster response;
+                                          any unrecognised query param 308s to the canonical path before compute, v0.58.0)
 app/api/players/route.ts            GET  /api/players?q=
 app/api/pros/route.ts               GET  /api/pros?championId=|proId=|player=&role=&source=
 app/api/pros/team-players/route.ts  GET  /api/pros/team-players?source=&gameId=&championId=|player=
-app/api/prostage/timeline/route.ts  GET  /api/prostage/timeline?player=&game=
+app/api/prostage/timeline/route.ts  GET  /api/prostage/timeline?player=&game=  (claim-gated + backoff since v0.58.0 — 429s
+                                          a concurrent/too-soon request without any outbound call; see gotcha (w))
 app/api/mystats/summary/route.ts    GET  /api/mystats/summary  (no-store, private)
 app/api/mystats/matchups/route.ts   GET  /api/mystats/matchups  (no-store, private)
 app/api/mystats/refresh/route.ts    POST /api/mystats/refresh  (on-demand incremental, cooldown-gated, no auth by design)
@@ -49,6 +51,13 @@ Vercel crons (`vercel.json`): `/api/ingest/matches` 06:00 UTC **every 2 days** (
 ## Data pipeline map
 
 ```
+lib/fetchTimeout.ts            — THE outbound fetch wrapper (v0.58.0). 8s default, 4s for the high-fanout
+                                  timeline walk. Every hot path in lib/pro/** and lib/prostage/** goes through
+                                  it, plus the coachless.ts/staticData.ts choke points. New outbound calls
+                                  must use it — see gotcha (v).
+lib/patchMoversCache.ts        — 6h/2m single-flight cache bounding /api/patch-movers' ~400-call fan-out.
+lib/prostage/timelineBackoff.ts — claim/backoff logic for the timeline compute path (extracted from the route
+                                  because Next's route-type checker rejects non-whitelisted exports).
 lib/pro/                       — solo-queue pipeline (see prior structure, unchanged since v0.31)
 lib/prostage/                  — pro-play (Leaguepedia) pipeline; cargo.ts now supports `offset` pagination
                                   past Cargo's 500-row-per-call cap (both api.php and CargoExport) — the
@@ -149,6 +158,16 @@ Vitest, pure-function-only — **no JSX rendering harness** (no jsdom/RTL config
 **(s) A flat "top-N by frequency" aggregate must never be assumed positional.** Multiple real bugs (Pro Consensus rune-apply writing empty/wrong-slot pages, v0.48.3/0.48.4) came from treating a frequency-ranked list as if it preserved per-slot/per-row structure. Anything that needs slot-coherence (a full LCU rune page) must resolve per-ROW/per-SLOT modals explicitly (see `components/hextech/perkSlots.ts`), never derive it from a flat top-3.
 
 **(t) A curated/frequency-based data-quality precedence must prefer the MORE SPECIFIC signal.** The `pro_role ?? role` vs `role ?? pro_role` bug (v0.49.1) — a roster-level attribute silently overrode a per-game one, corrupting team ordering. When merging two sources of the same fact at different granularity, the finer-grained one should generally win.
+
+**(v) Every outbound `fetch` must go through `lib/fetchTimeout.ts`.** Before v0.58.0 not one hot path had a timeout, so a single hung socket burned the whole `maxDuration` (90s on patch-movers) instead of failing in ~4s. A bare `fetch(url)` in `lib/pro/**` or `lib/prostage/**` is now a bug, not a style choice.
+
+**(w) The timeline claim is what stops `/api/prostage/timeline` being a free DDoS amplifier — don't "simplify" it.** The route atomically claims a game (`UPDATE ... WHERE timeline_status IS NULL AND (timeline_next_attempt_at IS NULL OR <= now()) ... RETURNING`) BEFORE any network call; a loser of that race gets 0 rows back (Postgres re-evaluates the predicate after the winner commits) and 429s having made zero outbound requests. On `transient` the same column moves out on exponential backoff (60s→1h). Two invariants: (1) the claim must stay BEFORE the walk, or the amplifier is back; (2) `timeline_status` must stay NULL on a transient result — `timeline_next_attempt_at` gates *when* a row may be retried, never *whether* it may be. Migration `0016`.
+
+**(x) A classifier that tie-breaks on a bare count can be flipped by ONE data point.** `resolveDamageFamily` used `ap !== ad` and marked the result `confident: true` at a margin of 1 — so a single item (`2524` Bandlepipes, an incidental `AttackSpeed` tag) made Leona/Braum/Rell "AD" and suppressed the correct `Support`→AP class-tag fallback, which is how tank supports ended up shipping `Bruiser (AD)` lines. It now requires a margin of ≥2. This is a heuristic, not a proof: a second off-family-tagged support item would clear it. Confidence must be derived from the margin, never asserted beside it.
+
+**(y) Curated item ids rot every patch, silently.** `3001` was labelled "Abyssal Mask" in two curated pools; in 16.13.1 `3001` is **Evenshroud** and Abyssal Mask is `8020`. `6691`/`3193` are unpurchasable. The tank pool ran at 6/8 with no signal. `curatedArchetypePool` now warns once per process on any curated id resolving to `purchasable: false` — but a WARN is belt-and-braces, not a guarantee; verify curated ids against the live catalog on every patch bump.
+
+**(z) The companion's TLS bypass is scoped to loopback ONLY.** `Initialize-TlsShim`'s certificate callback inspects the sender's host; it exists solely for the League client's self-signed loopback endpoints. Everything else — including the `companion.version` check against `coachbuild.vercel.app` — gets real validation. Never widen this back to a blanket bypass. **NOT yet verified against a real self-signed LCU cert** (no League client in CI, and `-SelfTest`'s mock LCU is plain HTTP, so it cannot reach this path) — see `HANDOFF.md`.
 
 ## Environment
 
