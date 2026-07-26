@@ -821,86 +821,109 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
         </p>
       )}
 
-      {/* 2026-07-22 — starters render in their OWN labeled slot, entirely
-          separate from the Items block below (hard user directive: a
-          starter must never render as a completed item, "keep it as a
-          starting item in a separate slot"). "Starting" matches the card's
-          existing label vocabulary (itemSetBody.ts's "Starting" block type /
-          StartingCard.tsx on the BUILD tab above this card use the same
-          word for the same concept). Visually parallel to the boots stack
-          below — same StartersStackTile/BootsStackTile shape — just in its
-          own section instead of sharing the Items header. Absent entirely
-          when there are zero starters in the sample (no empty block). */}
-      {model.starters.length > 0 && (
-        <div className="mb-4">
-          <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">Starting</p>
-          <div className="flex flex-wrap gap-2.5">
-            {/* denom is itemsSampleSize, NOT gamesTotal (2026-07-25 P1-2 fix)
-                — see proConsensus.ts's ProConsensusModel.itemsSampleSize doc
-                comment. Live-ingested prostage rows write finalItems=[], so
-                dividing by every game in the sample understated every
-                item/boots/starter percentage by the itemless-row share. */}
-            <StartersStackTile
-              starters={model.starters}
-              denom={model.itemsSampleSize}
-              names={names.items}
-              icon={(id) => itemIconUrl(id, ver)}
-              onClick={(id) => onOpenDetail("item", id)}
-            />
-          </div>
-        </div>
-      )}
+      {/* v0.63.2 (desktop Pro Consensus sprawl fix) — this card's row went
+          from ~466px (narrow right column, pre-v0.63.1) to 1138px full-width
+          (v0.63.1's bottom-rag fix), but its own content was never adapted:
+          the ITEMS block is flex-wrap and only ever needed ~480px, so it
+          left ~45% of the row empty; the rune/summoner grid below it used
+          fr-stretched columns (md:grid-cols-[1.5fr_1.1fr_auto]) that
+          stretched to fill the full row and scattered Primary/Secondary/
+          Summoners apart with large dead gaps between them. Fix: split
+          Starting+Items and the rune/summoner grid into two REAL side-by-
+          side columns at `lg`+ (measured against the actual content, not a
+          guess — ITEMS content maxes out well under half the row, the
+          rune/summoner group needs the other ~60% once its own columns stop
+          stretching, see the lg:grid-cols-[auto_auto_auto] override in the
+          IIFE below). This wrapper carries NO un-prefixed grid/flex classes
+          — below `lg` it is a plain block and both children stack exactly
+          as before (byte-identical to pre-v0.63.2). */}
+      <div className="lg:grid lg:grid-cols-[5fr_7fr] lg:gap-x-10 lg:items-start">
+        <div>
+          {/* 2026-07-22 — starters render in their OWN labeled slot, entirely
+              separate from the Items block below (hard user directive: a
+              starter must never render as a completed item, "keep it as a
+              starting item in a separate slot"). "Starting" matches the card's
+              existing label vocabulary (itemSetBody.ts's "Starting" block type /
+              StartingCard.tsx on the BUILD tab above this card use the same
+              word for the same concept). Visually parallel to the boots stack
+              below — same StartersStackTile/BootsStackTile shape — just in its
+              own section instead of sharing the Items header. Absent entirely
+              when there are zero starters in the sample (no empty block). */}
+          {model.starters.length > 0 && (
+            <div className="mb-4">
+              <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">Starting</p>
+              <div className="flex flex-wrap gap-2.5">
+                {/* denom is itemsSampleSize, NOT gamesTotal (2026-07-25 P1-2 fix)
+                    — see proConsensus.ts's ProConsensusModel.itemsSampleSize doc
+                    comment. Live-ingested prostage rows write finalItems=[], so
+                    dividing by every game in the sample understated every
+                    item/boots/starter percentage by the itemless-row share. */}
+                <StartersStackTile
+                  starters={model.starters}
+                  denom={model.itemsSampleSize}
+                  names={names.items}
+                  icon={(id) => itemIconUrl(id, ver)}
+                  onClick={(id) => onOpenDetail("item", id)}
+                />
+              </div>
+            </div>
+          )}
 
-      {(model.items.length > 0 || model.boots.length > 0 || model.supportFinals !== null) && (
-        <div className="mb-4">
-          <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">Items</p>
-          {/* flex-wrap, not overflow-x-auto — matches CoreBuildOrderCard/
-              SituationalCard's own item-row convention on this tab (no
-              horizontal scroll strips anywhere on BUILD), so tiles reflow
-              to a second row instead of hiding behind a scrollbar at 390px.
-              v0.28.0: boots render as ONE stacked slot (see BootsStackTile)
-              instead of eating two separate item slots. */}
-          <div className="flex flex-wrap gap-2.5">
-            {model.boots.length > 0 && (
-              <BootsStackTile
-                boots={model.boots}
-                denom={model.itemsSampleSize}
-                names={names.items}
-                icon={(id) => itemIconUrl(id, ver)}
-                onClick={(id) => onOpenDetail("item", id)}
-              />
-            )}
-            {/* 2026-07-26 — the support-quest final family as ONE slot,
-                beside the boots stack and ahead of the main items (it is a
-                single core build decision for the role, not a filler slot).
-                Absent entirely — no empty block — when the sample never
-                built one, same convention as boots/starters. */}
-            {model.supportFinals && (
-              <SupportFinalStackTile
-                top={model.supportFinals.top}
-                alternatives={model.supportFinals.alternatives}
-                denom={model.itemsSampleSize}
-                names={names.items}
-                icon={(id) => itemIconUrl(id, ver)}
-                onClick={(id) => onOpenDetail("item", id)}
-              />
-            )}
-            {model.items.map((entry) => (
-              <ItemTile
-                key={entry.itemId}
-                itemId={entry.itemId}
-                count={entry.count}
-                denom={model.itemsSampleSize}
-                name={names.items.get(entry.itemId) ?? `Item #${entry.itemId}`}
-                icon={itemIconUrl(entry.itemId, ver)}
-                onClick={() => onOpenDetail("item", entry.itemId)}
-              />
-            ))}
-          </div>
+          {(model.items.length > 0 || model.boots.length > 0 || model.supportFinals !== null) && (
+            <div className="mb-4 lg:mb-0">
+              <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">Items</p>
+              {/* flex-wrap, not overflow-x-auto — matches CoreBuildOrderCard/
+                  SituationalCard's own item-row convention on this tab (no
+                  horizontal scroll strips anywhere on BUILD), so tiles reflow
+                  to a second row instead of hiding behind a scrollbar at 390px.
+                  v0.28.0: boots render as ONE stacked slot (see BootsStackTile)
+                  instead of eating two separate item slots. Now that this
+                  block is its OWN column (v0.63.2, ~40% of the row instead of
+                  the full width), wrapping to a second row here is expected
+                  and reads as an honest icon grid, not sprawl. */}
+              <div className="flex flex-wrap gap-2.5">
+                {model.boots.length > 0 && (
+                  <BootsStackTile
+                    boots={model.boots}
+                    denom={model.itemsSampleSize}
+                    names={names.items}
+                    icon={(id) => itemIconUrl(id, ver)}
+                    onClick={(id) => onOpenDetail("item", id)}
+                  />
+                )}
+                {/* 2026-07-26 — the support-quest final family as ONE slot,
+                    beside the boots stack and ahead of the main items (it is a
+                    single core build decision for the role, not a filler slot).
+                    Absent entirely — no empty block — when the sample never
+                    built one, same convention as boots/starters. */}
+                {model.supportFinals && (
+                  <SupportFinalStackTile
+                    top={model.supportFinals.top}
+                    alternatives={model.supportFinals.alternatives}
+                    denom={model.itemsSampleSize}
+                    names={names.items}
+                    icon={(id) => itemIconUrl(id, ver)}
+                    onClick={(id) => onOpenDetail("item", id)}
+                  />
+                )}
+                {model.items.map((entry) => (
+                  <ItemTile
+                    key={entry.itemId}
+                    itemId={entry.itemId}
+                    count={entry.count}
+                    denom={model.itemsSampleSize}
+                    name={names.items.get(entry.itemId) ?? `Item #${entry.itemId}`}
+                    icon={itemIconUrl(entry.itemId, ver)}
+                    onClick={() => onOpenDetail("item", entry.itemId)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
-      )}
 
-      {(() => {
+        <div>
+        {(() => {
         // Local consts (not `model.keystone` inline) so TS's null-narrowing
         // survives into the nested onClick closures below — narrowing a
         // property access does NOT persist across a function boundary, only
@@ -921,7 +944,23 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
         // instead of a WPA score. No "Additional Runes" sub-section anymore —
         // minors/picks/shards render directly under their owning tree.
         return (
-        <div className="grid grid-cols-1 md:grid-cols-[1.5fr_1.1fr_auto] gap-x-8 gap-y-5 mb-1">
+        // v0.63.2: `lg:grid-cols-[auto_auto_auto] lg:justify-start` overrides
+        // the md:1.5fr/1.1fr/auto fr-stretch ONLY at `lg`+ (this card's own
+        // column is now narrower than the full row there — see the split
+        // above). Verified via computed style (Chrome): with three `auto`
+        // tracks and no `fr` track present, the grid sizing algorithm still
+        // distributes the container's free space across all three columns
+        // in the Maximize Tracks step, but PROPORTIONAL TO EACH COLUMN'S OWN
+        // max-content contribution — a heavier column (e.g. a 4-tile Primary
+        // rune row) claims more of the extra space than a 2-tile Summoners
+        // column, unlike the old fixed 1.5fr/1.1fr/auto ratio which had NO
+        // relationship to actual content and produced arbitrary, unrelated
+        // gaps. Screenshot-verified across three champion shapes (Brand
+        // support, Viktor mid, Ornn top) — the proportional growth reads as
+        // evenly distributed, not stretched-then-abandoned. Below `lg`
+        // (including the existing md/tablet range) this is untouched — same
+        // 1.5fr/1.1fr/auto stretch as before.
+        <div className="grid grid-cols-1 md:grid-cols-[1.5fr_1.1fr_auto] lg:grid-cols-[auto_auto_auto] lg:justify-start gap-x-8 gap-y-5 mb-1">
           {hasPrimaryCol && (
             <div>
               {/* v0.29.0: the page is now conditioned on the modal keystone's
@@ -1064,6 +1103,8 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
         </div>
         );
       })()}
+        </div>
+      </div>
 
       {additionalRuneNotes.length > 0 && (
         <p className="text-[9.5px] text-mut/50 mt-1 mb-1">{additionalRuneNotes.join(" · ")}</p>

@@ -64,16 +64,44 @@ function CardSkeleton({ className = "" }: { className?: string }) {
 // v0.44.0 (Builds responsive plan §3c/§3d/§4): shared with the ok-branch's
 // grid below — grid-template-areas keeps a SINGLE set of area names mapped
 // to a genuinely different layout per breakpoint (single column below lg; a
-// 7fr/5fr two-column composition at lg+, RUNES spanning both rows on the
-// left per mockup 4/5 — ITEM BUILD top-right, PRO CONSENSUS bottom-right).
+// 7fr/5fr two-column composition at lg+).
 //
 // v0.51.0 (Builds redesign): Starting/Support/Core/Situational collapsed
 // from four separate grid areas into ONE "itembuild" area (ItemBuildCard.tsx
 // now owns their composition as labeled sub-sections inside a single bordered
 // card, matching the mockup's merged "ITEM BUILD" card) — a real
 // simplification over the previous per-card area map, not just a rename.
+//
+// v0.63.1 (desktop bottom-rag fix): at lg+, "runes" USED TO span both rows
+// (`'runes_itembuild'_'runes_pro'`) so RUNES & SUMMONERS sat beside ITEM
+// BUILD *and* PRO CONSENSUS combined. RunesSummonersCard's own content is
+// short and roughly fixed-height (same rune/shard/summoner tile count on
+// every champion — measured ~315px regardless of champ) while ITEM BUILD
+// alone already runs 800-900px, so pairing RUNES against the itembuild+pro
+// combined height (1400-2000px+) made the dead space under it hopeless to
+// close honestly. Now PRO CONSENSUS spans the full row width below BOTH
+// columns instead (`'pro_pro'`) — RUNES only has to match ITEM BUILD's
+// height, which RunesSummonersCard's own `lg:h-full` + internal rhythm (see
+// that file) closes the rest of the way. This is a genuine grid rebalance,
+// not "pulling Pro Consensus up as filler" — it becomes its own full-width
+// row, not squeezed into the runes column.
+//
+// v0.63.2 (column-proportion fix, measured on Brand support @ 1440x900):
+// the column split stayed `7fr_5fr` (RUNES wider, 652px, ITEM BUILD
+// narrower, 466px) even after v0.63.1 removed RUNES' row-span — backwards,
+// since ITEM BUILD carries far more content (Starting/Support/Core/
+// Situational, 800px+) than RunesSummonersCard's fixed ~315px. Measured
+// BOTH orderings directly (not just reasoned about the box model): at
+// `7fr_5fr` the row-1 height was 804px with ~490px of dead space under
+// RUNES' content. Flipping to `5fr_7fr` (RUNES 466px, ITEM BUILD 652px)
+// improved BOTH sides at once — RUNES' own content naturally wraps more at
+// the narrower width, cutting its dead space to ~155px, AND ItemBuildCard
+// renders MORE compactly with the extra width (fewer forced wraps in its
+// item rows), dropping row-1 height 804px -> 674px. Not a tradeoff: the
+// narrower column was never earning its width, and the wider one badly
+// needed it.
 const BUILD_GRID_CLASS =
-  "grid grid-cols-1 gap-5 [grid-template-areas:'runes'_'itembuild'_'pro'] lg:grid-cols-[7fr_5fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_itembuild'_'runes_pro']";
+  "grid grid-cols-1 gap-5 [grid-template-areas:'runes'_'itembuild'_'pro'] lg:grid-cols-[5fr_7fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_itembuild'_'pro_pro']";
 
 // Mobile-only BUILD|PRO segmented control (peak usage is a 30s champ select —
 // the pre-existing shape here was one ~3,000px scroll: Runes -> Starting ->

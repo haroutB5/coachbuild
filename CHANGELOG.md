@@ -2,6 +2,44 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.63.1] — 2026-07-26 — The desktop Builds layout stops bottoming out ragged
+
+### Fixed
+- **The RUNES & SUMMONERS card ended far short of the column beside it.** At 1440x900 on a support
+  champion it stopped ~490px above ITEM BUILD's bottom edge, leaving a dead void with no border
+  around it. The cause was structural, not cosmetic: at `lg`+ the `runes` grid area spanned BOTH
+  rows, so a card whose content height is essentially fixed — League always yields one keystone,
+  three minors, two secondary picks, three shards and two summoners, measured ~315px on every
+  champion — was being stretched against ITEM BUILD *plus* PRO CONSENSUS combined, a 1,400–2,000px
+  target it could never fill.
+
+  PRO CONSENSUS now occupies its own full-width row beneath both columns, so RUNES only has to match
+  ITEM BUILD. The two columns also swapped proportions, `7fr/5fr` → `5fr/7fr`: ITEM BUILD carries far
+  more content and had been getting the *narrower* half, which forced item rows to wrap. Giving it
+  the wider share made it more compact, and narrowing RUNES let its own content wrap to fill.
+
+  Both changes pull the same direction rather than trading off — the row went from 804px to **674px**
+  tall with the dead space inside the runes card down from ~490px to ~155px, and the two columns now
+  bottom out on exactly the same pixel (Brand support, Viktor mid and Ornn top all measured at a 0px
+  gap).
+
+- **The shard row and summoner tiles floated loosely inside the runes card.** Shards now sit under
+  their own SHARDS label behind a hairline divider (the same `divide-y` rhythm ITEM BUILD uses), and
+  the summoner tiles are labelled and top-aligned instead of vertically centred mid-column,
+  disconnected from the rune rows above them.
+
+- **Pro Consensus sprawled once it went full width.** Composed for a ~466px column and suddenly given
+  1,138px, its items filled only the left ~55% while SUMMONERS stranded at the far right. It is now a
+  real two-column split at `lg`+ — starting items and the item grid on the left, the rune and
+  summoner picture on the right.
+
+### Notes
+- Every change is `lg:`-gated. Mobile is untouched and verified identical at 390x844: BUILD tab
+  2,031px, PRO tab 1,688px, 44px touch targets — the same numbers v0.63.0 shipped with.
+- The support-item OR slot from v0.62.0 survives the narrower items column intact; all six consensus
+  items still render, wrapping rather than truncating.
+- `/compact` is unaffected — it imports the cards directly and never enters this grid.
+
 ## [0.63.0] — 2026-07-26 — BUILD | PRO on mobile
 
 ### Changed

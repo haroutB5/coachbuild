@@ -907,3 +907,440 @@ three second-pass UI fixes (v0.61.2).
 **Do not:** add champion suggestions to the empty Builds landing (standing directive in
 `ChampionPickPrompt.tsx`), treat `/history`'s empty search state as a bug (deliberate, v0.51.2), or
 resurrect the desktop shell (cancelled and removed in v0.60.1).
+
+
+---
+
+## Latest dispatch -- 2026-07-26 18:48
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-26 11:44:39Z; previous content preserved there. Append new rounds below. -->
+
+# HANDOFF — engy — support-quest final collapse (Pro Consensus)
+
+**Date:** 2026-07-26
+**Model:** claude-opus-5
+**Version:** unchanged at v0.61.2 (no bump, no CHANGELOG edit, no commit, no deploy — urgot ships)
+
+---
+
+## The bug
+
+Pro Consensus's ITEMS grid rendered **Zaz'Zak's Realmspike 80%** and **Solstice Sleigh 20%** at the
+same time. Both are support-quest FINALS. Bounty of Worlds (3867) has
+`into: [3869, 3870, 3871, 3876, 3877]` and upgrades into **exactly one** of them, so a player can
+never own two. The grid was spending two of its six slots on a single choice split across the
+sample, pushing a real item out.
+
+Structurally identical to the v0.28.0 boots carve-out (a split boots preference eating two slots)
+and the 2026-07-22 starters carve-out. Same fix shape, deliberately.
+
+---
+
+## Probe findings — TWO corrections to documented assumptions
+
+Re-pulled the live `16.13.1` `item.json` from the coachless CDN mirror before writing anything
+(`cdn.coachless.gg/static-files/16.13.1/16.13.1/data/en_US/item.json`).
+
+### Correction 1 — what actually excludes 3866/3867 is NOT `into`
+
+The briefed mechanism ("they have non-empty `into`") is only half true, and the false half is the
+load-bearing half.
+
+| id | name | `into` | `purchasable` | what actually excludes it |
+|---|---|---|---|---|
+| 3866 | Runic Compass | **absent entirely** | `false` | `purchasable === false` — **ONLY** |
+| 3867 | Bounty of Worlds | `[3869,3870,3871,3876,3877]` | `false` | either check |
+
+`itemDetail.ts`'s `normalizeCachedItemDetail` coerces a missing `into` to `[]`, and `isBuildItem`'s
+final rule is `Array.isArray(meta.into) && meta.into.length === 0` → **true**. So if anyone removes
+or reorders the `purchasable === false` check believing the `into` rule covers the intermediate
+tiers, **Runic Compass leaks straight into the items grid**. Both tiers are also `specialRecipe`
+upgrades, not `from`-recipe ones, so nothing else in the filter chain would catch them either. Now
+pinned by a test that encodes the real per-id shape rather than the intuitive one.
+
+Also confirmed: **all five finals pass `isBuildItem` on their own merits** — `from: ["3867"]`, `into`
+absent (→ `[]`), `purchasable: true`, no `Boots` tag. That is *why* the duplication was possible; it
+was never a filter failure, it was a missing partition. World Atlas (3865) is `purchasable: true` and
+allowlisted, so it still lands in `starters`. Partition precedence (boots → starters → support
+finals) is a **construction guarantee**, not luck: no final carries the `Boots` tag or sits in the
+allowlist.
+
+### Correction 2 — the "upstream data gap" is OURS, one parameter wide
+
+`supportItem.ts`'s header claimed the finals never appear in `/api/build` because of "an UPSTREAM
+DATA GAP (coachless's pipeline apparently doesn't observe/attribute a quest-completion pick...)".
+**That attribution is wrong.** Verified in-repo, three facts:
+
+1. Coachless's own catalog (`_research/items.json`) classifies all five finals as **`ItemType: 3`**.
+   World Atlas is `6`, Runic Compass / Bounty of Worlds are `4`, legendaries `1`, boots `2`.
+2. `getGlobalItemStatistics` (`lib/coachless.ts`) takes `itemType` as a **request parameter** and
+   does zero client-side filtering — raw passthrough.
+3. Every call site in `lib/recommend.ts` requests itemType `6`, `2` or `1`.
+   **Nothing anywhere requests itemType 3.** (`coachless.ts`'s own doc comment only enumerates
+   `1=legendary, 2=boots, 6=starter` — type 3 is not even named.)
+
+The finals can never appear because nobody asks for them. That also cleanly explains why
+`items.starter` is *always* World Atlas (type 6 IS requested) while the finals never show. This makes
+"upstream starts supplying it tomorrow" **much more likely than the header implied** — it is a
+one-line change someone might make deliberately, to light up `SupportItemCard`'s `measured` branch.
+
+**I corrected that header comment in `supportItem.ts` (doc-only, zero behavior change)** and pointed
+it at the "what breaks" list below. Revert with `git checkout components/hextech/supportItem.ts` if
+you'd rather ship it separately.
+
+---
+
+## Files changed
+
+| File | Change |
+|---|---|
+| `components/hextech/supportFinalGroup.ts` | **NEW** — the pure helper (membership + collapse) |
+| `components/hextech/proConsensus.ts` | new `supportFinals` model field + partition + module-header section |
+| `components/hextech/ProConsensusCard.tsx` | new `SupportFinalStackTile`, rendered as ONE slot in the Items row |
+| `components/hextech/itemSetsApply.ts` | folds `supportFinals.top` back into the LCU Pro-line input (non-regression) |
+| `components/hextech/itemSetBody.ts` | doc-only: `ProConsensusItemsInput.items` now carries at most one final |
+| `components/hextech/supportItem.ts` | **doc-only** — corrected the false "upstream data gap" root cause |
+| `components/__tests__/proConsensus.test.ts` | +15 tests |
+| `components/__tests__/itemSetsApply.test.ts` | +1 test, fixture gains the two final ids |
+
+No version bump, no CHANGELOG, no commit, no deploy.
+
+---
+
+## The helper's exact contract
+
+`components/hextech/supportFinalGroup.ts`
+
+```ts
+export const SUPPORT_FINAL_ITEM_IDS: ReadonlySet<number>
+export function isSupportFinalItem(itemId: number): boolean
+export interface SupportFinalRankable { itemId: number; count: number }
+export interface SupportFinalRanking<T extends SupportFinalRankable> { top: T; alternatives: T[] }
+export function rankSupportFinals<T extends SupportFinalRankable>(
+  entries: readonly T[]
+): SupportFinalRanking<T> | null
+```
+
+- **Ids imported from `SUPPORT_FINAL_ITEMS` (`supportItem.ts`), never re-declared.** Dependency runs
+  one way (`supportFinalGroup` → `supportItem`), no cycle; `supportItem`'s private `ALL_FINAL_IDS`
+  left untouched.
+- `isSupportFinalItem` is **id-only, needs no ddragon metadata** — the family is a closed known set,
+  not something inferred from a recipe tree. Unlike `isBootsTag` it therefore cannot silently degrade
+  when the item-metadata fetch fails.
+- `rankSupportFinals` filters to family members, **re-sorts them itself** (count desc, then `itemId`
+  asc — the same deterministic tie-break as `sortEntries`), returns `top` + `alternatives`. Sorting
+  internally means a caller handing over an unsorted list still gets a correct answer.
+- Returns **`null`, not an empty object**, when the sample has no family member — that is what makes
+  "absent, not empty" expressible at the call site (a champion who never built a final renders **no
+  slot at all**, same convention as `boots`/`starters`).
+- **Does not mutate** the input. **Applies no display cap** — it reports what the sample genuinely
+  contained; capping is a rendering decision.
+
+### Why its own module, not `supportItem.ts`
+
+`supportItem.ts` is the BUILD-page **archetype resolver** — it pulls `lib/draft/compRatings` +
+`components/proAssets` to answer *"which final should this champion upgrade to"*, a judgment call
+over champion kits. This module answers a different, purely mechanical question over already-measured
+data. `proConsensus.ts` is a pure frequency aggregator and has no business importing the first.
+
+Checked the import direction first as instructed: only **one** file under `lib/` imports from
+`@/components/` (`lib/lastChampion.ts`, type-only), so `components → lib` is the house direction and
+a `lib/` home would have been backwards. Both new/edited modules stay under `components/`.
+
+---
+
+## Model + render
+
+```ts
+supportFinals: SupportFinalRanking<ItemFrequency> | null   // on ProConsensusModel
+```
+
+- Shares divide by **`itemsSampleSize`**, same denominator as `items`/`boots`/`starters` (that
+  field's doc comment explains why: live-ingested prostage rows carry `final_items = '[]'`).
+- **Percentages are never merged or re-normalised** into a combined family stat. 80% and 20% stay
+  80% and 20%; a "the family was built 100% of the time" number would describe a choice nobody made.
+  Pinned by an explicit assertion.
+- Capped at `TOP_SUPPORT_FINALS_LIMIT = 3` (top + 2 alternatives), applied **at the model boundary**,
+  never inside the helper. Applied to the flattened top-then-alternatives order, so the cap trims the
+  weakest runners-up and **can never drop the top pick**.
+- `SupportFinalStackTile` follows `BootsStackTile` exactly (same `w-[72px]` column, same `w-11 h-11`
+  / `size=44` tiles) so it reflows in the same Items flex-wrap row. Two deliberate differences: an
+  **"or" rule** between the top pick and the alternatives, because these are mutually exclusive where
+  stacked boots are merely a split preference; and alternatives render dimmed with an aria-label
+  reading "an alternative support-quest upgrade" (the "or" rule is `aria-hidden` — the exclusivity is
+  already in each label, so screen readers don't hear it twice).
+- Renders between the boots stack and the main items. For every non-support champion `supportFinals`
+  is `null` and **the card's layout is byte-identical to before**.
+
+---
+
+## Tests
+
+`components/__tests__/proConsensus.test.ts` — 15 new:
+
+- **USER BUG REPRO** — the literal 8/2 Zaz'Zak's/Solstice split → one slot + one alternative, both
+  finals gone from `items`, Rocketbelt's slot freed, shares un-merged.
+- single final → top, no alternatives; zero finals → `null` (absent-not-empty), plus the N=0 model
+  assertion.
+- **REGRESSION PIN** — generic over all five real ids from `SUPPORT_FINAL_ITEMS`, so a future 6th
+  final or a reordered partition fails here rather than in production.
+- deterministic tie-break — the *higher* id is seen first (so it leads Map insertion order) and the
+  lower id must still win.
+- cap at 3, top pick never dropped.
+- **order-of-checks guard** — World Atlas stays a `starter`; 3866/3867 stay excluded, with the
+  fixture encoding the real per-id exclusion mechanism (Correction 1 above).
+- boots/starters partitions unaffected; `itemsSampleSize` is the denominator.
+
+Plus 7 direct `rankSupportFinals` unit tests (empty, no-family, ignores non-family, sorts an
+adversarially-ordered input, non-mutating, no self-cap, `isSupportFinalItem` boundary).
+
+`components/__tests__/itemSetsApply.test.ts` — 1 new: exactly one final reaches the Pro build line,
+it *is* present (the non-regression half), and the share-desc invariant still holds.
+
+### Live-metadata runtime probe (throwaway, deleted after running)
+
+Drove the reported shape through the real aggregation using the **actual live `item.json`**, not a
+hand-written fixture:
+
+```
+items      : [ "Shurelya's Battlesong 100%", 'Locket of the Iron Solari 100%',
+               "Mikael's Blessing 100%", 'Dawncore 100%' ]
+boots      : []
+starters   : [ 'World Atlas 100%' ]
+supportTop : Zaz'Zak's Realmspike 80%
+supportAlts: [ 'Solstice Sleigh 20%' ]
+```
+
+Exactly the reported symptom, gone: one slot, honest 80/20, 3866/3867 absent from every list, World
+Atlas still a starter.
+
+---
+
+## Gate result — `verify-fix.sh`, verbatim
+
+```
+=== verify-fix: coachbuild ===
+
+  [PASS] tsc -b clean
+  [PASS] lint clean (warnings: 0)
+  [PASS] tests 1618 passed
+  [PASS] build clean
+  [PASS] sw (public/sw.js) versioned via ?v= registration param (side cache coachbuild-icons-v1 is deliberately unversioned)
+  [PASS] manifest present (public/manifest.webmanifest)
+
+verify-fix: ALL CHECKS PASSED
+```
+
+*(Re-run after the doc-only `supportItem.ts` edit — see the final run in the session log.)*
+
+---
+
+## What I did NOT verify
+
+**No browser smoke test.** The repo has **zero `.test.tsx` files** — component rendering is
+deliberately untested here (vitest 4's oxc transform can't parse JSX outside its default scope, a
+constraint `proConsensus.ts`'s own header documents), so there was no render-test harness to extend.
+Reproducing the visual on a dev server would also need a live `/api/pros` sample that actually
+contains two finals for one champion, which I can't force locally. The JSX compiles (`build clean`)
+and the model layer is pinned by the live-metadata probe above, but **`SupportFinalStackTile` has not
+been seen rendered.** Worth one puppeteer pass on a support champion before ship.
+
+---
+
+## ALSO REPORTED — family-duplication on other surfaces (NOT fixed)
+
+**Separate ship decision.** Headline: **nothing in `lib/` or `components/hextech/` de-duplicates by
+upgrade family except today's two fixes.** Every other guard is exact-id only. The family is kept off
+those surfaces today purely by the missing `itemType: 3` request (Correction 2), which is *not* a
+correctness guard.
+
+| Surface (file · symbol) | Status | Mechanism |
+|---|---|---|
+| `lib/recommend.ts` · `buildRecommendations` | **POSSIBLE in code**, unreachable today | Dedup is exact-id only in three places — `usedItems`, `pathItemIds`, `usedM` (all `Set<number>` of raw ids). A 3870 in the slot-1 pool and a 3871 in the slot-2 pool both clear every filter. Nothing in the file knows 3867 exists. |
+| `lib/buildSlotCap.ts` · `capExtraFullItems` / `fullItemCapForRole` | **Cannot help** | Generic `<T>`, only `.slice(0, budget)` — a *count* cap, never inspects ids. Worse: `fullItemCapForRole` returns 4 for role 4 *because it assumes the final is absent from the list* ("surfaced separately by SupportItemCard"). If a final ever appears inline, that reservation double-counts. Structurally the right choke point, but it has no family logic to lean on. |
+| `components/hextech/itemSetBody.ts` · `buildLine` | **POSSIBLE in code** | The "no duplicates" invariant is `dedupeById` — exact ids. The only *grouped* concept is `bootsIds`. Two finals are, to `buildLine`, two ordinary distinct full items; the padding loop's `used.has(id) \|\| bootsIds.has(id)` skip passes the second one. |
+| `itemSetBody.ts` · `isFullItem` | **Deliberately admits the family** | The `from.length === 0` clause in the lane-starter rule is documented as load-bearing precisely so the 400g `Lane`-tagged finals stay full items (they're built *from* World Atlas). Confirmed live: all five return `true`. |
+| `itemSetBody.ts` · Core / Buy order / Highest WPA | **POSSIBLE if type-3 lands** | `themedUnion = unionPool(corePrimary, optimizedPrimary, situationalPoolFull, proPool)` could then hold two or three finals at once (one from core, one from alts, one from pro) and emit them side by side. |
+| `itemSetBody.ts` · Situational swaps block | **Weakest surface** | `situationalPicks.slice(0, SITUATIONAL_CAP).map(itemRef)` runs on raw `flattenSituational` output with **no** `isFullItem` filter, no `bootsIds` handling, no family dedup — all documented as intentional ("swap SUGGESTIONS, not a worn loadout"). Defensible for boots; **wrong for this family** — you can't swap between 3870 and 3871, you can only ever have built one. |
+| `itemSetBody.ts` · archetype lines (`TANK_PURE`) | **Latent** | All five carry `Health` and no damage tag → all five match `TANK_PURE`, and `categoryDefaultPool` sweeps them in. Today they sort last (gold desc, 400g) and `curatedFill`'s 8 valid Tank ids are reached before `catalogFill` — unreachable **by arithmetic, not by a guard**. A partially-loaded `itemMeta` that drops enough curated Tank ids would pad two 400g finals into a Tank line. Precedent exists: `categoryDefaultPool`'s own `metaHasTag(m, "Boots")` early-return was added because catalog fill previously leaked a second pair of boots. |
+| `components/hextech/situational.ts` · `flattenSituational` | exact-id only (`seen: Set<number>`) | Shared root of both the LCU Situational block and the web card. |
+| `CoreBuildOrderCard.tsx`, `ItemPath.tsx`, `SituationalCard.tsx`, `live/LivePanel.tsx` + `live/compHighlight.ts` | all exact-id at best | Render `items.first/second/third/fourthPlus/alts` (and `alts.*`) verbatim; `selectCompAwareHighlights` is contractually a *reorder*, so it inherits and can promote a second final to the front. |
+| `components/hextech/supportItem.ts` · `findSupportFinalInBuildData` | **Correct by construction** | Scans every slot and returns the single highest-`wpa` match — collapses to one. The only build-page reader that already understands the family. |
+| Pro Consensus card + LCU Pro build line | **FIXED today** | Real guard: `aggregateProConsensus`'s `isSupportFinalItem` partition + `resolveProConsensusForSets` folding only `supportFinals.top`. Note the guard lives *entirely upstream* — any future caller hand-constructing `ProConsensusItemsInput` reopens it, which is why I added that warning to the shape's doc comment. |
+
+### If someone adds the `itemType: 3` fetch tomorrow
+
+In severity order: (a) `recommend.ts`'s slot loops emit two finals into `first`/`second`/
+`fourthPlus`/`alts`; (b) `buildSlotCap.ts`'s support budget of 4 becomes wrong because its
+reservation assumption is violated; (c) `CoreBuildOrderCard`, `ItemPath`, `SituationalCard` and the
+LCU `Core build` / `Buy order` / `Highest WPA` / `Situational swaps` blocks all render both;
+(d) `SupportItemCard` starts showing `measured: true` for one final while the core order shows a
+different one — a **visible self-contradiction on the same page**. Only the Pro Consensus card and
+the LCU Pro build line stay correct.
+
+**Recommendation for the separate ship:** the fix is cheap and already built — `isSupportFinalItem`
+is pure, id-only and needs no metadata, so `rankSupportFinals` (or just the membership test) can drop
+straight into `flattenSituational`'s `seen` loop and `recommend.ts`'s `usedItems` gate. Doing it
+*before* anyone adds the type-3 fetch is far cheaper than after.
+
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-24 14:43:02Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-26 — Mobile BUILD | PRO segmented control on the Builds page
+
+Fixed the ~3,000px single mobile scroll (Runes -> Starting -> Support -> Core
+-> Optimized -> Situational -> Pro Consensus) by splitting it into a
+BUILD | PRO tab pair, mobile only (`lg:hidden`, matching BUILD_GRID_CLASS's
+own existing breakpoint). Default tab is BUILD. Desktop (`lg`+) is untouched —
+verified pixel-identical at 1440x900, no control rendered, both blocks still
+in the existing 2-column composition.
+
+**Files changed:**
+- `components/hextech/HextechTabs.tsx` — generalized. This component's
+  render call sites were ALL gone (grep-verified) after the v0.51.0 D1
+  retirement of the "/" BUILD/PRO BUILDS mode toggle — only its `HextechTab`
+  type was still imported (app/page.tsx's `FIXED_TAB`, homeSearch.ts's
+  `WireMainView`). Changed the default export from a hardcoded build/
+  proBuilds pair to a generic `options` list (same generics pattern
+  SegmentedControl.tsx already uses), so it could be reused for THIS
+  unrelated BUILD/PRO pair without a second hand-rolled tab primitive. The
+  `HextechTab` type export is untouched — no risk to the existing type
+  imports. Added `id`/`aria-controls` (auto-derived from each option's
+  `value`: `hextech-tab-<value>` / `hextech-tabpanel-<value>`) and bumped
+  the button to `min-h-[44px]` (the original py-3/text-[13px] combo landed
+  under 44px — v0.61.0's touch-target fix would have regressed here
+  otherwise). Added `motion-reduce:transition-none` on the color transition.
+- `components/hextech/BuildTabContent.tsx` — added `mobileTab` state
+  (`"build" | "pro"`, defaults `"build"`), renders `<HextechTabs>` in an
+  `lg:hidden` wrapper above `BUILD_GRID_CLASS`, and added conditional
+  `hidden lg:block` classes (the codebase's standard responsive-visibility
+  idiom, same mechanism as any `hidden sm:block`) to the three existing
+  `[grid-area:*]` wrapper divs (runes, itembuild, pro) instead of building
+  a new panel structure — same class-toggle approach the file already used
+  for the 1-col/2-col grid switch.
+
+**Existing control reused:** HextechTabs (generalized), not SegmentedControl.
+The role selector (TOP/JG/MID/BOT/SUP) uses SegmentedControl — a pill-in-
+track `role="group"` widget with `aria-pressed`, not real tab semantics.
+HextechTabs already had `role="tablist"`/`role="tab"`/`aria-selected` (built
+for the ORIGINAL Build/Pro Builds page-level toggle, later retired) — the
+better-matched primitive for a task that explicitly required "a real tab
+interface... not decorative." Kept the hextech gold-underline visual
+language byte-identical to its prior look, just made the tab list generic.
+
+**Mount-vs-visibility:** kept ALL THREE cards (RunesSummonersCard,
+ItemBuildCard, ProConsensusCard) mounted at all times; only CSS visibility
+(`hidden`/`display:none`) toggles per `mobileTab`. Verified via
+chrome-devtools network log: `/api/pros` fires exactly once on initial load
+(2 requests total incl. item-meta fetch) and does NOT re-fire after
+BUILD -> PRO -> BUILD. Did not attempt conditional unmounting — no evidence
+mount cost here is free (ProConsensusCard's fetch/effect chain + name
+resolution is nontrivial), and the constraint explicitly steered toward
+"keep both mounted" as the default.
+
+**A11y:** `role="tablist"`/`role="tab"`/`aria-selected` via HextechTabs
+(confirmed in Chrome's own a11y-tree snapshot: `tab "BUILD" selectable
+selected` / `tab "PRO" selectable`). Each `[grid-area:*]` wrapper carries
+`role="tabpanel"` + `aria-labelledby` pointing at the matching tab's
+auto-generated id. One deliberate, disclosed deviation from the textbook
+1-tab:1-panel ARIA pattern: the BUILD tab controls TWO physical wrapper
+divs (runes + itembuild — they can't be merged into one panel element
+without breaking the desktop 2-column grid-template-areas, where runes
+spans both rows on the left while itembuild/pro stack independently on the
+right), so `aria-labelledby="hextech-tab-build"` is applied to both,
+sharing one id given to only the first. A second disclosed trade-off: since
+these wrapper divs stay mounted (not remounted) at every breakpoint, their
+`role="tabpanel"`/`aria-labelledby` attributes are present even at desktop,
+where the tablist itself is `lg:hidden` (i.e. removed from the a11y tree) —
+so at `lg`+ the `aria-labelledby` reference is inert (points at an id not in
+the a11y tree) rather than semantically wrong. Considered gating the ARIA
+attributes behind a `matchMedia`-driven "isMobile" boolean to avoid this,
+rejected it — adds an SSR/CSR hydration-mismatch risk (classic Next.js
+viewport-at-mount gotcha) for a cosmetic ARIA-purity gain on a breakpoint
+where the control isn't even visible. Flagging here in case a future a11y
+audit wants it done properly.
+
+Not done: did not add the tab control to the "loading"/"empty"/"error"
+branches of BuildTabContent's render — `BuildLoadingSkeleton` still shows
+the old single fixed 3-box skeleton at every breakpoint. The control only
+appears in the "ok" branch once real content exists to switch between.
+Chose not to touch the skeleton since the height problem this task fixes
+is specifically about the LOADED page's scroll length, and adding tab
+plumbing to a data-less skeleton state seemed like unrequested scope.
+
+**Verify-fix.sh:** ALL CHECKS PASSED (tsc clean, lint 0 warnings, 1618
+tests passed, build clean, sw/manifest versioned).
+
+**Browser verification (390px, `/?championId=63&role=4`, Brand support —
+chosen because its Pro Consensus card has the support-item OR divider
+called out in the brief):**
+- BUILD tab is the default on load (confirmed via a11y snapshot:
+  `tab "BUILD" ... selected`).
+- Switching to PRO renders the Pro Consensus card, including the
+  Zaz'Zak's Realmspike / Solstice Sleigh "or" divider — survived the move
+  intact.
+- Switching PRO -> BUILD -> PRO fired ZERO additional `/api/pros` or
+  `/api/build` requests (network log identical request-id set before/after).
+- Tab buttons measured 44px tall via `getBoundingClientRect()` (was ~40px
+  before the `min-h-[44px]` fix).
+- No console errors/warnings on load or on tab switching.
+- Desktop (1440x900): tablist computed `display: none`; screenshot confirms
+  the pre-existing 2-column composition unchanged (Runes left, Item Build
+  top-right, Pro Consensus bottom-right).
+
+**Mobile scroll height (390px, Brand support, `document.body.scrollHeight`):**
+- Before (both sections forced visible, simulating the old always-stacked
+  layout): **2,861px**.
+- After — BUILD tab (default): **1,847px**.
+- After — PRO tab: **1,687px**.
+
+Did NOT bump version/CHANGELOG/commit/deploy per the standing instruction —
+left that to the user.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-26 19:06
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-26 17:48:15Z; previous content preserved there. Append new rounds below. -->
+
+## v0.63.1 (uncommitted, urgot ships) — Builds desktop bottom-rag fix
+
+Ran as Sonnet 5.
+
+**Defect confirmed on disk before touching anything.** Measured via chrome-devtools getBoundingClientRect at 1440x900, Brand support (`?championId=63&role=4`): RUNES & SUMMONERS bottom=557.75, ITEM BUILD bottom=1046.5 — gap 488.75px, matching the brief almost exactly. Root cause: `BUILD_GRID_CLASS`'s lg grid-template-areas had `'runes' span BOTH rows (`'runes_itembuild'_'runes_pro'`), so the [grid-area:runes] wrapper (a normal CSS Grid item, `align-items:stretch` default) DOES stretch to the full itembuild+pro combined height — I verified this directly (wrapper rect height 2054px vs the visible card's own height 314.75px) — but RunesSummonersCard's own root div never claimed that stretched height, so the visible bordered box stopped at its natural content height while empty space sat below it, outside any card border.
+
+**Also verified: RunesSummonersCard's content height is structurally invariant.** Tested Brand (support), Viktor (mid), Lee Sin (jungle), Ornn (top) — all four produced the exact same natural card height (314.75-315px unstretched). This is inherent to the LoL rune system (every build is always 1 keystone + 3 primary minors + 2 secondary picks + 3 shards + 2 summoners, tile sizes fixed via `min-h`/`line-clamp-2`), not a per-champion variable — so there is no naturally "tall" runes card to find; the mismatch is always ITEM BUILD (800-900px, support builds ~803px, non-support ~887px) vs RUNES (~315px), regardless of champion.
+
+**Fix, two parts:**
+
+1. **Grid rebalance (`components/hextech/BuildTabContent.tsx`, `BUILD_GRID_CLASS`)** — changed lg grid-template-areas from `'runes_itembuild'_'runes_pro'` to `'runes_itembuild'_'pro_pro'`. PRO CONSENSUS now spans the full row width below BOTH columns instead of pairing with RUNES in a second row. This is a genuine structural rebalance, not "pulling Pro Consensus up as filler" — it becomes its OWN full-width row (verified via getBoundingClientRect: pro card left=264, width=1137.99 post-fix, spanning the full content width). Side benefit: Pro Consensus's own item/rune grids now reflow with fewer wrapped rows at the wider width (verified visually — the Items row went from 2 wrapped rows to 1 full row for Ornn).
+   - This also shrinks the RUNES-vs-neighbor mismatch from ~1500-2000px (spanning itembuild+pro combined) down to ~490-570px (spanning itembuild alone) — most of the fix is this rebalance, not the stretch below.
+2. **Card stretch + internal rhythm (`components/hextech/RunesSummonersCard.tsx`)**:
+   - Root div: added `lg:h-full lg:flex lg:flex-col` — claims the already-stretched grid row height, so the visible border now matches ITEM BUILD's bottom exactly (verified gap=0 on all 4 test champions, was 488-572px before). Chose **stretch**, not "relocate content into the left column" (there's nothing legitimate to relocate — forbidden from inventing content or moving Pro Consensus) — content stays top-anchored (matches ITEM BUILD's own top-anchored Starting section), extra space becomes bottom breathing room INSIDE the card's own border instead of a void between two cards' borders.
+   - Task 2 (shard/summoner rhythm): shard row now gets its own "SHARDS" label + a `border-t` hairline divider (mirrors ItemBuildCard's own `divide-y` rhythm between Starting/Core/Situational) instead of a bare `mb-4` gap. Summoner column gets its own "SUMMONERS" label and top-aligns (`lg:justify-start`) instead of `md:justify-center`, which vertically centered the tiles against the combined Secondary+Shards column height and made them read as floating, disconnected from the rune rows beside them.
+   - **All new classes/labels gated behind `lg:` specifically** (not the pre-existing `md:` breakpoint already in this file) and label wrappers use `hidden lg:block` — below `lg` (mobile stack AND the untouched 768-1023px md-tablet range) the DOM gets zero-styled wrapper divs around the exact same rows, i.e. byte-identical rendered box model to before. Verified via git-stash A/B test at 390px (see below) rather than assumed.
+
+**Three champions checked** (all at 1440x900): Brand support (`63/4`) gap 0 (was 488.75), Viktor mid (`112/2`) gap 0 (was 572.125), Lee Sin jungle (`64/1`) gap 0 (was 572.125). Added a 4th, Ornn top (`516/0`), also gap 0 — used it as the "unusually tall" probe since I'd already established the runes card's content height doesn't vary; confirmed the fix generalizes regardless of which column ends up taller.
+
+**Mobile re-measured at 390px, Brand support, and regression-checked properly** — not just re-measured in isolation, A/B'd via `git stash` / `git stash pop` against the unmodified code on the SAME dev server: BUILD tab scrollHeight = **1846px** both before and after my change (byte-identical), PRO tab = **1687px** after (not independently re-tested pre-fix since ProConsensusCard/that tab's code path is untouched by this diff). The brief's cited baseline (2031/1688) does not match 1846 for Brand — that number was evidently measured against a different default champion in an earlier session, not a regression I introduced; the stash A/B is the actual proof of no-regression here, not the raw number match.
+
+**verify-fix.sh: ALL CHECKS PASSED** (tsc clean, lint 0 warnings, 1618 tests passed, build clean, sw/manifest present). Ran twice — once before, once after a `.next` cache clear (see gotcha below) — both clean.
+
+**Gotcha hit mid-task (not a regression, just noting for future sessions):** did a `git stash` / `git stash pop` cycle to A/B the mobile scroll heights against pre-fix code on a LIVE dev server (port 3001). The file-swap under a running `next dev` corrupted its webpack dev cache (`Cannot find module './787.js'`) — page started 500ing. Fix: kill that dev server process (found via `Get-NetTCPConnection -LocalPort <port> -State Listen`), `rm -rf .next`, restart on a fresh port. Don't stash/pop against a live dev server if avoidable — stop the server first, or use a second worktree/checkout for A/B comparisons instead.
+
+**Left alone, deliberately:**
+- `/compact` (`app/compact/page.tsx`) — imports RunesSummonersCard directly, outside any grid. `lg:h-full` resolves against its `<div className="space-y-3">` ancestor which has no explicit height, so per the CSS height:100%-against-auto spec it's a no-op there; confirmed by reading the file, not just assumed. Not touched, not re-screenshotted (out of scope per the brief).
+- The pre-existing `md:grid-cols-[auto_auto_auto]` 3-column tablet shape (768-1023px) — untouched. My new classes are `lg:`-gated specifically so that range keeps today's exact appearance; it wasn't part of the reported defect and wasn't asked for.
+- Did not touch version, CHANGELOG, or commit — per the brief, urgot ships.
+- Did not add any "SHARDS"/"SUMMONERS" labels below `lg` — would have changed mobile content/height, which the brief pinned as a hard constraint.
+
+

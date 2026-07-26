@@ -373,7 +373,18 @@ export default function RunesSummonersCard({
   const model = buildRunesPageModel(runes);
 
   return (
-    <div className="bg-panel border border-line rounded-xl p-5">
+    // v0.63.1 (desktop bottom-rag fix): `lg:h-full` fills the grid row's
+    // stretched height (BuildTabContent's [grid-area:runes] wrapper is
+    // already a stretched grid item by default — this card's own root just
+    // never claimed that height before, leaving the visible border short of
+    // the ITEM BUILD card beside it). `lg:flex lg:flex-col` establishes the
+    // formatting context so the extra height reads as a single continuous
+    // bordered panel (content anchored top, breathing room below, INSIDE
+    // the card's own border) rather than a gap floating between two cards.
+    // No-op below `lg` (mobile stack / the /compact route, neither a
+    // stretched grid item) and no-op against an auto-height ancestor per
+    // the CSS height:100% spec, so this never affects mobile or /compact.
+    <div className="bg-panel border border-line rounded-xl p-5 lg:h-full lg:flex lg:flex-col">
       <div className="flex items-start justify-between gap-3 mb-3.5">
         <CardHeader>Runes &amp; Summoners</CardHeader>
         <div className="flex items-start gap-2.5">
@@ -407,27 +418,54 @@ export default function RunesSummonersCard({
           </div>
         </div>
 
-        {/* Secondary tree: 2 picks + stat shards */}
+        {/* Secondary tree: 2 picks + stat shards. v0.63.1 (desktop
+            bottom-rag fix, task 2): at `lg`+ the shard row gets its own
+            "Shards" label + a hairline top divider (mirrors ItemBuildCard's
+            divide-y rhythm between Starting/Core/Situational) instead of a
+            bare `mb-4` gap that read as loosely tacked onto the rune row
+            above it. The extra wrapping div carries ONLY `lg:` classes, so
+            below `lg` (mobile + the existing md-tablet 3-col shape) it's an
+            unstyled div around the same shard row — zero box-model change,
+            byte-identical rendered height to before. */}
         <div>
           <TreeLabel icon={model.secondaryTree.icon} name={model.secondaryTree.name} />
-          <div className="flex flex-wrap gap-2.5 mb-4">
+          <div className="flex flex-wrap gap-2.5 mb-4 lg:mb-0">
             {model.secondaryPicks.map((p) => (
               <RuneTile key={p.id} pick={p} onOpenDetail={onOpenDetail} />
             ))}
           </div>
-          <div className="flex gap-2.5">
-            {model.shards.map((s) => (
-              <ShardTile key={`${s.label}-${s.pick.id}`} label={s.label} pick={s.pick} onOpenDetail={onOpenDetail} />
-            ))}
+          <div className="lg:mt-4 lg:pt-4 lg:border-t lg:border-line/60">
+            <div className="hidden lg:block lg:mb-2">
+              <CardHeader>Shards</CardHeader>
+            </div>
+            <div className="flex gap-2.5">
+              {model.shards.map((s) => (
+                <ShardTile key={`${s.label}-${s.pick.id}`} label={s.label} pick={s.pick} onOpenDetail={onOpenDetail} />
+              ))}
+            </div>
           </div>
         </div>
 
         {/* Summoner spells: full-width third row on mobile (col-span-2),
-            back to its own column on md+ */}
-        <div className="col-span-2 flex flex-row gap-2 md:col-span-1 md:flex-col md:justify-center">
-          {spells.map((spell) => (
-            <SummonerTile key={spell.id} spell={spell} onOpenDetail={onOpenDetail} />
-          ))}
+            back to its own column on md+. v0.63.1: at `lg`+ this column gets
+            its own "Summoners" label (mirrors the Primary/Secondary tree
+            labels) and top-aligns (`lg:justify-start`) instead of
+            `md:justify-center`, which vertically centered the tiles against
+            the combined Secondary+Shards column height and made them read
+            as floating, disconnected from the rune rows beside them. Below
+            `lg` (mobile + md-tablet) keeps the exact pre-existing shape —
+            the label is `hidden` there and `md:justify-center` still wins
+            in the 768-1023px range since `lg:justify-start` only overrides
+            at `lg`+. */}
+        <div className="col-span-2 md:col-span-1">
+          <div className="hidden lg:block lg:mb-3">
+            <CardHeader>Summoners</CardHeader>
+          </div>
+          <div className="flex flex-row gap-2 md:flex-col md:justify-center lg:justify-start">
+            {spells.map((spell) => (
+              <SummonerTile key={spell.id} spell={spell} onOpenDetail={onOpenDetail} />
+            ))}
+          </div>
         </div>
       </div>
     </div>
