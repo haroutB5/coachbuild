@@ -2,6 +2,41 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.63.3] — 2026-07-26 — A test that loads the page twice
+
+### Added
+- **Regression cover for the v0.63.2 P0.** That bug — the Builds page persisting the Viktor seed
+  with no user action, so the pick prompt appeared once per device and every later visit opened on
+  VIKTOR MID — shipped to production past 1,632 passing tests. Not because the tests were weak, but
+  because the defect is **invisible on the visit that creates it**. Visit one looked perfect.
+  Nothing in the suite had ever loaded the page twice.
+
+  The lifecycle rules moved out of `app/page.tsx`'s effects into `lib/lastChampionSession.ts`
+  (`resolveVisitSession`, `shouldPersistLastChampion`) — plain data-in/data-out functions with no
+  React in them. This is the same pattern the codebase already uses to keep logic testable under
+  vitest's JSX constraint, not a new dependency: the suite stays `environment: "node"` with no
+  jsdom, no testing-library, no browser runner added.
+
+  `lib/__tests__/lastChampionSession.test.ts` then replays the component's actual wiring across
+  **separate visits**, through the real `readLastChampion`/`writeLastChampion` against a fake
+  `localStorage`, and asserts on what a returning user sees rather than on a boolean. Nine tests
+  covering: a first visit writing nothing, the prompt surviving a second and third visit, a real
+  selection being restored with its lane, a lane change alone never laundering the seed into
+  storage, and a corrupt stored value degrading to the prompt instead of being overwritten.
+
+  **Verified to actually catch the regression:** with the rule reverted to the pre-fix
+  `state.hydrated`, six of the nine fail — including the exact production symptom, a stored
+  `{"champ":{"id":112,"key":"Viktor"…}}` where `null` was expected. A regression test that does not
+  fail on the regression is decoration.
+
+### Notes
+- The extraction is a refactor of live behaviour, so it was re-verified in a browser against a
+  **production build** rather than trusted to the green suite — two clean visits keep the prompt and
+  write nothing, and a real search-box pick is still restored on the next load, lane included.
+- Residual gap, stated rather than papered over: these tests cover the *rules*. If someone rewires
+  the effect in `app/page.tsx` to stop calling `shouldPersistLastChampion` altogether, the suite
+  will still pass. Closing that needs a browser-level check in CI, which this release does not add.
+
 ## [0.63.2] — 2026-07-26 — Builds stops opening on a champion you never picked
 
 ### Fixed

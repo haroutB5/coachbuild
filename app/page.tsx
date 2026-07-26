@@ -17,6 +17,7 @@ import dynamic from "next/dynamic";
 const LivePanel = dynamic(() => import("@/components/live/LivePanel"), { ssr: false });
 import { parseLiveDeepLink, roleIdToLane } from "@/components/live/deepLink";
 import { readLastChampion, writeLastChampion } from "@/lib/lastChampion";
+import { resolveVisitSession, shouldPersistLastChampion } from "@/lib/lastChampionSession";
 import { resolveCurrentChampSelectChampionId, resolveChampSelectRoleId } from "@/components/live/champSelectFollow";
 import {
   markCompanionDriven,
@@ -72,10 +73,14 @@ export default function HomePage() {
   // downstream component has to learn a nullable contract.
   const [champChosen, setChampChosen] = useState(false);
   useEffect(() => {
-    const stored = readLastChampion();
-    if (stored) {
-      setChamp(stored.champ);
-      setActiveLane(stored.lane);
+    const session = resolveVisitSession(
+      STATIC_FALLBACK_LANE_CHAMPIONS[INITIAL_LANE],
+      INITIAL_LANE,
+      readLastChampion()
+    );
+    if (session.chosen) {
+      setChamp(session.champ);
+      setActiveLane(session.lane);
       setChampChosen(true);
     }
     setLastChampHydrated(true);
@@ -95,8 +100,12 @@ export default function HomePage() {
   // 2026-07-25 ("stop showing viktor by default") removed. Nothing in the test
   // suite or a code-clean read catches it; it only shows up on a second visit.
   // Persist a selection the USER made, never the seed that stands in for one.
+  //
+  // The rule itself lives in lib/lastChampionSession.ts so it is covered by a
+  // real two-visit regression test — see that module's header for why an
+  // inline guard here was untestable and therefore able to regress silently.
   useEffect(() => {
-    if (!lastChampHydrated || !champChosen) return;
+    if (!shouldPersistLastChampion({ hydrated: lastChampHydrated, chosen: champChosen })) return;
     writeLastChampion(champ, activeLane);
   }, [champ, activeLane, lastChampHydrated, champChosen]);
   const [patch, setPatch] = useState<string | null>(null);
