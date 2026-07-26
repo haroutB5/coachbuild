@@ -2,6 +2,67 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.63.2] — 2026-07-26 — Builds stops opening on a champion you never picked
+
+### Fixed
+- **P0 — the Viktor default came back, silently.** On a brand-new device the pick prompt rendered
+  correctly *once* and then never again: the page persisted `Viktor / mid` to
+  `coachbuild:lastChampion:v1` with **no user action at all**, so one reload later Builds opened on
+  VIKTOR MID. That is precisely the behaviour user directive 2026-07-25 removed, and the whole reason
+  `lib/lastChampion.ts` and `ChampionPickPrompt.tsx` exist.
+
+  The persist effect guarded on hydration but not on whether the user had actually *chosen*. When
+  hydration finds nothing stored, `champ` is still sitting on the Viktor seed and `champChosen` is
+  false — and it wrote that seed anyway. The guard is now `!lastChampHydrated || !champChosen`.
+
+  Reproduced on production before the fix and verified after against a **production build**, across
+  two clean visits: first visit shows the prompt and writes nothing, second visit still shows the
+  prompt. The persistence promise itself is unaffected — pick a champion through the search box and
+  it is still restored on the next load, lane included.
+
+  Nothing in the test suite or a code-clean read would have caught this. It is invisible on the visit
+  that creates it and only shows up on the next one.
+
+- **P1 — `ChampionPicker` ignored its own `placeholder` prop.** It declared the prop, destructured
+  it, then hardcoded `"Search champion…"` and `aria-label="Search champion"` on the input. Two
+  callers passed it and were silently ignored, so `/draft` showed three visually identical boxes —
+  global search, add-an-enemy, and set-your-champion — all with the same accessible name. The prop's
+  own doc comment describes exactly this problem as its reason for existing; the diagnosis and the
+  wiring had landed, the consumer never did. The accessible name now tracks the visible placeholder,
+  so screen-reader users get the same distinction sighted users do.
+
+- **P1 — the draft picks copy contradicted the column it told you to trust.** The static note
+  promised "5,000+ games in this lane" and said to *check the games column* — but once a lane
+  opponent resolves, that column switches to games against **that opponent**, so the table showed
+  "#1 Swain, GAMES 1568" directly beneath a sentence promising 5,000+. The number was never wrong;
+  the label described a different population than the one on screen. The note now adapts the way the
+  sibling `picksExplainer` line already did. The 5,000-game pool floor is unconditional and still
+  stated, because it is still true.
+
+### Changed
+- **Hardening, no visible effect today: one support-quest final per build, guarded at the pool
+  boundary.** The five finals are mutually exclusive, and only Pro Consensus enforced that. Probing
+  the live API established that `itemType` is a hard server-side partition — types 1/2/6 return none
+  of the five, type 3 returns exactly those five — so the WPA build lines and the Situational swaps
+  block cannot reach one as the app is currently wired. With the guard disabled, tests reproduce the
+  real failures: a core line of `[3876, 3869]`, two mutually-exclusive items in one build, and a
+  situational *swap* between two items only one of which is ownable. `collapseSupportFinalPools`
+  states the invariant once, where data enters.
+
+  `supportFinalGroup.ts` moved from `components/hextech/` to `lib/` — a `lib` module importing a
+  value from `components` inverts the dependency direction, and the old chain would have pulled a
+  CDN-fetching browser asset helper into the server engine's graph for five integers.
+  `supportItem.ts` re-exports, so there is still exactly one declaration.
+
+### Notes
+- `lib/buildSlotCap.ts` was evaluated as the choke point for the above and rejected: it is a pure
+  count cap over an opaque array, never sees item ids, and runs only on the 4th+ tail and the
+  optimizer chain — never slots 1-3, where a support final would land. Its assumption is now
+  documented in place rather than silently relied upon.
+- Not covered by the guard, deliberately: the optimizer's own conditioned fetches and the
+  matchup-conditioned pools, which mix a fresh pool with an already-committed pick and so need
+  cross-source family state rather than a pool filter.
+
 ## [0.63.1] — 2026-07-26 — The desktop Builds layout stops bottoming out ragged
 
 ### Fixed

@@ -39,7 +39,18 @@ interface ChampionPickerProps {
 const LISTBOX_ID = "champ-listbox";
 const optId = (i: number) => `champ-opt-${i}`;
 
-export default function ChampionPicker({ value, onChange, withFavorites = false, placeholder }: ChampionPickerProps) {
+export default function ChampionPicker({
+  value,
+  onChange,
+  withFavorites = false,
+  placeholder = "Search champion…",
+}: ChampionPickerProps) {
+  // The accessible name tracks the visible placeholder rather than being pinned
+  // to the generic wording — otherwise a screen-reader user hears "Search
+  // champion" three times on /draft with no way to tell the boxes apart, which
+  // is the same defect sighted users had. Trailing ellipsis is prompt
+  // punctuation, not part of the name.
+  const pickerLabel = placeholder.replace(/[….]+$/, "");
   const [champions, setChampions] = useState<ChampionRef[]>(FALLBACK_CHAMPIONS);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -217,8 +228,8 @@ export default function ChampionPicker({ value, onChange, withFavorites = false,
           }}
           onFocus={onInputFocus}
           onKeyDown={onInputKeyDown}
-          placeholder="Search champion…"
-          aria-label="Search champion"
+          placeholder={placeholder}
+          aria-label={pickerLabel}
           role="combobox"
           aria-expanded={open}
           aria-controls={LISTBOX_ID}

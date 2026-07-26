@@ -84,10 +84,21 @@ export default function HomePage() {
   // Persist every settled selection (champion or lane) once hydration has run —
   // writing before that would immediately overwrite the stored value with the
   // Viktor seed on first paint.
+  //
+  // `champChosen` is the second half of that guard and is NOT optional (P0 fix,
+  // 2026-07-26, reproduced on prod). Hydration completing does not mean the user
+  // has a selection: when nothing is stored, this effect still runs with `champ`
+  // sitting on the Viktor seed and `champChosen` false, so it persisted Viktor
+  // on a brand-new device with no user action at all. The pick prompt rendered
+  // correctly on that first visit and then never again — one reload later the
+  // page opened on VIKTOR MID, which is exactly the behaviour user directive
+  // 2026-07-25 ("stop showing viktor by default") removed. Nothing in the test
+  // suite or a code-clean read catches it; it only shows up on a second visit.
+  // Persist a selection the USER made, never the seed that stands in for one.
   useEffect(() => {
-    if (!lastChampHydrated) return;
+    if (!lastChampHydrated || !champChosen) return;
     writeLastChampion(champ, activeLane);
-  }, [champ, activeLane, lastChampHydrated]);
+  }, [champ, activeLane, lastChampHydrated, champChosen]);
   const [patch, setPatch] = useState<string | null>(null);
 
   // Feature 3 (rank brackets) — LIFTED from BuildTabContent (v0.51.0) so

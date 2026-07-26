@@ -323,6 +323,22 @@ export default function DraftPage() {
         ? `Win rate in this lane, adjusted by matchup records against the enemy team — weighted heaviest against your lane opponent (${laneOppName}).`
         : "Win rate in this lane, adjusted by each champion's matchup records against the enemies you've added.";
 
+  // The sample-size note has to adapt for the same reason picksExplainer does
+  // (P1 fix, 2026-07-26). The 5,000-game pool floor is unconditional — it gates
+  // on `totalGames` via filterPoolByTotalGames in either mode, so that sentence
+  // stays true throughout. What changes is the GAMES COLUMN: once a lane
+  // opponent resolves, draftPicksModel switches it to
+  // `winVsLaneOppGames ?? minGames`, i.e. games against THAT opponent rather
+  // than total lane games. The old static copy pointed at the column as the
+  // trust signal while the column had quietly changed population underneath it
+  // — live repro was "#1 Swain, GAMES 1568" sitting directly under a sentence
+  // promising 5,000+, when Swain's real mid sample is ~22,639. The number was
+  // never wrong; the label described a different population than the one shown.
+  const picksSampleNote =
+    laneOppName !== null
+      ? `Champions still need 5,000+ games in this lane this patch to appear, which filters out one-trick noise. Within that, ranking is by win rate — so a genuinely strong niche pick can sit above a popular staple. The games column now counts games against ${laneOppName} specifically, not total lane games, so expect much smaller numbers than that floor.`
+      : "Champions need 5,000+ games in this lane this patch to appear, which filters out one-trick noise. Within that, ranking is by win rate — so a genuinely strong niche pick can sit above a popular staple. Check the games column before you trust a name you don't recognise here.";
+
   // My pool filter — applied to a DISPLAY copy only; state.data.plays/
   // potentialPlays (and their order) are never mutated, so toggling this off
   // always restores the exact server-ranked list.
@@ -441,11 +457,7 @@ export default function DraftPage() {
               </div>
               {state.status === "ok" && <p className="text-mut text-[11px] mb-1 px-0.5">{picksExplainer}</p>}
               {state.status === "ok" && (
-                <p className="text-mut text-[10.5px] mb-2 px-0.5">
-                  Champions need 5,000+ games in this lane this patch to appear, which filters out one-trick noise.
-                  Within that, ranking is by win rate — so a genuinely strong niche pick can sit above a popular
-                  staple. Check the games column before you trust a name you don&apos;t recognise here.
-                </p>
+                <p className="text-mut text-[10.5px] mb-2 px-0.5">{picksSampleNote}</p>
               )}
 
               {state.status === "loading" && <ResultsSkeleton />}
