@@ -14,7 +14,7 @@ import {
   missingRunePageReason,
   proConsensusRuneApplyInput,
 } from "../hextech/proConsensus";
-import { isSupportFinalItem, rankSupportFinals, SUPPORT_FINAL_ITEM_IDS } from "../hextech/supportFinalGroup";
+import { isSupportFinalItem, rankSupportFinals, SUPPORT_FINAL_ITEM_IDS } from "@/lib/supportFinalGroup";
 import {
   SUPPORT_FINAL_ITEMS,
   SUPPORT_STARTER_ID,

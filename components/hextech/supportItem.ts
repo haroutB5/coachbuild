@@ -64,6 +64,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { BuildResponse, ChampionRef, Pick as PickType } from "@/lib/types";
+import {
+  SUPPORT_FINAL_ITEMS,
+  SUPPORT_FINAL_ITEM_IDS,
+  isSupportFinalItem,
+  type SupportItemOption,
+} from "@/lib/supportFinalGroup";
 import { getCompRating, deriveFallbackRating, type RatedComp } from "@/lib/draft/compRatings";
 import { itemIconUrl } from "@/components/proAssets";
 
@@ -79,24 +85,26 @@ function champRating(champ: ChampionRef): RatedComp {
   return { ...deriveFallbackRating(champ.tags ?? []), estimated: true };
 }
 
-export interface SupportItemOption {
-  id: number;
-  name: string;
-}
+/** The five finals + their shape are DECLARED in lib/supportFinalGroup.ts and
+ *  re-exported here, not declared twice. They moved out of this file on
+ *  2026-07-26 when lib/recommend.ts needed the same family semantics: lib/
+ *  importing a value out of components/ inverts the dependency direction, and
+ *  reaching them through this module would have pulled compRatings and
+ *  proAssets into the server engine's graph for the sake of five integers.
+ *  This re-export keeps this module's public API (SupportItemCard, the tests)
+ *  byte-identical. See that module's header for the full rationale. */
+export {
+  SUPPORT_FINAL_ITEMS,
+  SUPPORT_FINAL_ITEM_IDS,
+  isSupportFinalItem,
+  type SupportItemOption,
+};
 
 export const SUPPORT_STARTER_ID = 3865; // World Atlas
 export const SUPPORT_TIER2_ID = 3866; // Runic Compass
 export const SUPPORT_QUEST_HUB_ID = 3867; // Bounty of Worlds (into -> the 5 finals)
 
-export const SUPPORT_FINAL_ITEMS = {
-  dreamMaker: { id: 3870, name: "Dream Maker" },
-  zazzaks: { id: 3871, name: "Zaz'Zak's Realmspike" },
-  bloodsong: { id: 3877, name: "Bloodsong" },
-  celestialOpposition: { id: 3869, name: "Celestial Opposition" },
-  solsticeSleigh: { id: 3876, name: "Solstice Sleigh" },
-} satisfies Record<string, SupportItemOption>;
-
-const ALL_FINAL_IDS = new Set<number>(Object.values(SUPPORT_FINAL_ITEMS).map((i) => i.id));
+const ALL_FINAL_IDS = SUPPORT_FINAL_ITEM_IDS;
 const FINAL_BY_ID = new Map<number, SupportItemOption>(
   Object.values(SUPPORT_FINAL_ITEMS).map((i) => [i.id, i])
 );

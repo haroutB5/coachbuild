@@ -37,6 +37,7 @@ import {
 } from "./buildConditioning";
 import { DEFAULT_RANK_BRACKET, type RankBracket } from "./rankBrackets";
 import { capExtraFullItems } from "./buildSlotCap";
+import { collapseSupportFinalPools } from "./supportFinalGroup";
 import {
   getLatestPatch,
   getChampionById,
@@ -294,12 +295,12 @@ export async function buildRecommendations(
   const [
     keystoneData,
     shardsData,
-    starterData,
-    bootsData,
-    leg1Data,
-    leg2Data,
-    leg3Data,
-    leg456Data,
+    rawStarterData,
+    rawBootsData,
+    rawLeg1Data,
+    rawLeg2Data,
+    rawLeg3Data,
+    rawLeg456Data,
     spellData,
   ] = await Promise.all([
     getKeystoneData(champId, role, patch, undefined, filterOpts),
@@ -318,6 +319,35 @@ export async function buildRecommendations(
       `Champion ${champion.name} has no data for role ${role}`
     );
   }
+
+  // ── Mutually-exclusive support-quest finals: one family, one entry ─────────
+  // The five support-quest finals (Dream Maker / Zaz'Zak's / Bloodsong /
+  // Celestial Opposition / Solstice Sleigh) are ONE choice — Bounty of Worlds
+  // upgrades into exactly one — so the engine must never reason over two of
+  // them. Every gate below (`usedItems`, `pathItemIds`, `usedM`) dedupes by
+  // EXACT ID and cannot see the family, so the invariant is enforced HERE, at
+  // the data boundary, once, where every consumer inherits it.
+  //
+  // This is an identity transform against today's live data and is expected to
+  // stay one: the finals are coachless ItemType 3, and nothing here requests
+  // type 3 (probe evidence in supportFinalGroup.ts's header). It is the guard
+  // for the day that changes — by an added type-3 fetch or an upstream
+  // reclassification — not a fix for something currently visible.
+  //
+  // NOT covered, deliberately (see HANDOFF-engy.md): the optimizer's own
+  // conditioned fetches and the matchup-conditioned pools below. Both mix a
+  // freshly-fetched pool with an already-committed pick from these pools, so
+  // making them correct needs cross-source family state rather than a pool
+  // filter, and the matchup path is verified-403 dead code today.
+  const [starterData, bootsData, leg1Data, leg2Data, leg3Data, leg456Data] =
+    collapseSupportFinalPools([
+      rawStarterData,
+      rawBootsData,
+      rawLeg1Data,
+      rawLeg2Data,
+      rawLeg3Data,
+      rawLeg456Data,
+    ]);
 
   const totalGames = keystoneData.reduce((s, e) => s + e.occurrence, 0);
   const bar = adoptionBar(totalGames);

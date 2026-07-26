@@ -232,7 +232,9 @@
 // preference eating two slots) and gets the same fix: `SUPPORT_FINAL_ITEMS`
 // ids are partitioned OUT of `items` into their own `supportFinals` field --
 // top pick plus the runners-up it beat, ONE grid slot -- via the pure
-// `rankSupportFinals` helper (components/hextech/supportFinalGroup.ts). The
+// `rankSupportFinals` helper (lib/supportFinalGroup.ts — moved out of
+// components/ 2026-07-26 so the server-side engine can share it; see that
+// module's header). The
 // runners-up keep their OWN honest per-item percentages; the fractions are
 // never merged or re-normalised into a combined "the family was built X%"
 // stat, which would describe a choice nobody made.
@@ -258,7 +260,7 @@ import type { ProGame } from "@/components/proGames.types";
 import { CONSUMABLE_ITEM_IDS, treeIconUrl, treeName, shardIconUrl, shardName } from "@/components/proAssets";
 import type { ItemDetail } from "@/components/itemDetail";
 import { primaryMinorRow } from "./perkSlots";
-import { isSupportFinalItem, rankSupportFinals, type SupportFinalRanking } from "./supportFinalGroup";
+import { isSupportFinalItem, rankSupportFinals, type SupportFinalRanking } from "@/lib/supportFinalGroup";
 import { TREE_NAME } from "@/lib/types";
 import type { Pick as PickType, RunesBlock, ShardSet, TreeId } from "@/lib/types";
 

@@ -1344,3 +1344,195 @@ Ran as Sonnet 5.
 - Did not add any "SHARDS"/"SUMMONERS" labels below `lg` — would have changed mobile content/height, which the brief pinned as a hard constraint.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-26 19:30
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-26 18:06:31Z; previous content preserved there. Append new rounds below. -->
+
+## v0.63.2 (fronty, sonnet) — Pro Consensus sprawl + RUNES/ITEM BUILD column flip
+
+Built on top of the (already-committed-to-disk, uncommitted) v0.63.1 bottom-rag fix — did not touch its `'pro_pro'` full-width-row area map or `RunesSummonersCard`'s `lg:h-full`, both stay.
+
+**Fix 1 — Pro Consensus sprawl (`components/hextech/ProConsensusCard.tsx`).** At `lg`+ the card's row went from ~466px (old narrow right column) to 1138px (new full-width row), but the content was never adapted: the ITEMS block (flex-wrap) only ever needed ~480px, leaving ~45% of the row empty; the rune/summoner grid used fixed `md:grid-cols-[1.5fr_1.1fr_auto]`, which stretched Primary/Secondary apart from Summoners with large arbitrary gaps unrelated to actual content.
+
+Chose **a real two-column split** over a max-width constrain (approach B in the brief), because a centered/left-aligned max-width just relocates the dead space rather than removing it. At `lg`+ only: Starting+Items become the left column (`lg:grid-cols-[5fr_7fr]`, items ~40%), the rune/summoner grid becomes the right column (~60%). Below `lg` the wrapper carries zero un-prefixed grid/flex classes — plain block stack, byte-identical to before.
+
+Also changed the inner rune/summoner grid from `md:grid-cols-[1.5fr_1.1fr_auto]` (unconditional) to add `lg:grid-cols-[auto_auto_auto] lg:justify-start` (lg-only override). **Verified via computed style, not box-model guessing**: with 3 `auto` tracks and no `fr` track, Chrome's grid sizing algorithm still distributes the container's free space across the 3 columns in the Maximize Tracks step — but proportional to each column's own max-content weight, not the old arbitrary 1.5:1.1:auto ratio. `getComputedStyle(...).gridTemplateColumns` showed fractional pixel track sizes (e.g. `189.859px 212px 153.641px`) summing exactly to the container width across all 3 test champions — confirms it's real content-weighted distribution, not leftover-collects-at-the-end as I originally assumed (comment corrected in the code to match).
+
+Screenshot + pixel-measured (`getBoundingClientRect`) on all three required champion shapes at 1440x900:
+- Brand support (63/4, has the support-item OR stack): items wrap 5+1 in the left column, rune group (Sorcery/Precision/Summoners) fills the right column evenly, no dead voids.
+- Viktor mid (112/2, no support block): same composition holds, Resolve/Sorcery/Summoners spread evenly.
+- Ornn top (516/0): same, no overflow, no sprawl.
+
+**Fix 2 — RUNES/ITEM BUILD column proportion (`components/hextech/BuildTabContent.tsx`).** `BUILD_GRID_CLASS`'s `lg:grid-cols-[7fr_5fr]` flipped to **`lg:grid-cols-[5fr_7fr]`** (RUNES now narrower at ~466px, ITEM BUILD wider at ~652px). Measured BOTH orderings directly on Brand support before deciding, not just reasoned about:
+- At `7fr_5fr` (old): row-1 height 804px, RunesSummonersCard content height ~243px (content-grid measured, excludes header) → ~490px dead space under RUNES.
+- At `5fr_7fr` (new): row-1 height 674px, RunesSummonersCard content height ~448px → ~155px dead space. **Both metrics improved simultaneously** — RUNES' content wraps more at the narrower width (closing its own gap), AND ItemBuildCard renders MORE compactly with more width (fewer forced item-row wraps), shrinking row height by 130px. Not a tradeoff — the old 7fr/5fr split was actively working against both cards.
+- Verified bottom-rag still holds after the flip: both cards measured to the same height/bottom pixel (0px gap) on all three champions, since `RunesSummonersCard`'s `lg:h-full` still stretches to match whatever ItemBuildCard's content now drives.
+- Viktor (more situational items -> taller ItemBuildCard) leaves a bigger residual RUNES gap (~238px) than Brand (~155px) since RunesSummonersCard's own content is roughly fixed regardless of champion — expected, still far better than the ~490px+ baseline.
+
+**Constraints honored:**
+- Mobile (390x844): re-measured `document.documentElement.scrollHeight` — BUILD tab 2031, PRO tab 1688. **Identical to the stated baseline**, confirming zero mobile regression (all changes are `lg:`-prefixed only; the mobile card stack never touches the new classes).
+- Did not touch `/compact`.
+- Did not invent new content — no new stats/filler modules added anywhere.
+- Did not bump version, edit CHANGELOG, commit, or deploy.
+- Used the already-running dev server on port 3001 (chrome-devtools MCP, `new_page`/`emulate` for viewport control — `resize_page` didn't actually resize the OS window in this environment, `emulate({viewport: "390x844x2,mobile,touch"})` was the reliable path).
+
+**verify-fix.sh: ALL CHECKS PASSED** (tsc clean, lint 0 warnings, 1618 tests passed, build clean, sw/manifest versioned).
+
+**Left alone deliberately:** the floating "Update ready / Refresh" dev-server toast that overlaps the ITEM BUILD card's SITUATIONAL label in the Viktor/Ornn screenshots — pre-existing HMR/SW-update banner (`position: fixed`, unrelated to this task's grid changes), not a regression from this change; did not investigate further since it's a dev-only artifact tied to me editing files, not a layout bug.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-26 22:11
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-26 17:48:15Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-26 — support-quest final family: Phase 1 probe + boundary guard (engy, opus)
+
+Follow-up to v0.62.0's Pro Consensus fix. Brief was explicit: establish what can
+ACTUALLY happen before writing code. Answer: **nothing can, today** — and the
+only thing holding it is somebody else's taxonomy plus a comment.
+
+### Phase 1 — live probe evidence (api.coachless.gg, patch 16.13.0)
+
+6 support champs (Thresh/Nami/Yuumi/Leona/Braum/Senna) x 10 requests each:
+
+- `itemType` is a HARD server-side partition, not a hint. Every type 1
+  (legendary) / 2 (boots) / 6 (starter) response held ZERO of the five finals.
+  The type-3 response held EXACTLY the five and nothing else.
+- Widening `itemSlots` does NOT widen it: `type3 slot[1]` == `type3 null-slots`,
+  same 5 rows. So slot scope is not a second way in.
+- `type1 slot[1]` is EMPTY (n=0) for every support champ — that is why the
+  ordered-legendary loop starts effectively at slot 2 for supports.
+- `_research/items.json` confirms the classification: 3869/3870/3871/3876/3877
+  = ItemType 3; World Atlas 3865 = 6; Runic Compass 3866 / Bounty of Worlds
+  3867 = 4; legendaries 1; boots 2.
+- Re-confirmed at v0.63.1: all 7 `getGlobalItemStatistics` call sites in
+  `lib/recommend.ts` request 6, 2 or 1. `heroStats.ts` and `patchMovers.ts`
+  request only 6. Nothing anywhere requests 3.
+
+Per-surface verdict:
+
+| Surface | Reachable today? | Evidence |
+|---|---|---|
+| WPA build lines (Core order / Buy order) | **NO** | pools are type 1/2/6 only; probe above |
+| Situational swaps | **NO** | `flattenSituational` reads `items.alts` only, itself built from the same type-1/2 pools — no independent source |
+| Exported LCU item set | **YES, and already correct** | `itemSetsApply.ts` folds `model.supportFinals.top` (only `top`) into `pro.items`; that is real pro match data, which genuinely does contain finals. At-most-one is guaranteed by the v0.62.0 partition, and every downstream line inherits it |
+
+Other routes checked and ruled out:
+
+- No curated/hardcoded pool contains a final. `ENCHANTER_ITEM_IDS` /
+  `TANK_SUPPORT_ITEM_IDS` (supportItem.ts) and every `Archetype` pool in
+  `itemSetBody.ts` are clean — the only mentions of the five ids in that file
+  are comments.
+- The judgment-fill path (`finalForArchetype`) returns exactly ONE final by
+  construction (a `switch`) and writes to `SupportItemCard`'s own surface,
+  never into `items`.
+- Personal stats / match history: `lib/mystats` only READS
+  `items.first/second/third` ids for adherence scoring. It never writes a
+  build line.
+
+### Phase 1 — what breaks if one DOES land (this is why the guard is worth it)
+
+The type-3 pool arrives carrying **all five** finals at enormous occurrence
+(measured, Thresh Support: Solstice Sleigh 282,980 / Celestial Opposition
+233,952 / Bloodsong 4,741 / Zaz'Zak's 1,904 / Dream Maker 1,376). The top two
+clear any adoption bar by two orders of magnitude, so the failure is immediate
+and loud, not marginal.
+
+- `usedItems` (core order) — exact-id only. Two different finals from two
+  different slot pools both get seated. **Reproduced in a test: the build line
+  came back `[3876, 3869]`.**
+- `pathItemIds` -> `itemAlts` — the final NOT chosen for the core still clears
+  `noiseFloor` (233,952 vs 400) and lands in `alts`. The Situational chip row
+  then offers a swap between two items only one of which is ownable, and which
+  cannot be bought without selling the other. **Reproduced: Celestial
+  Opposition appeared in `alts`.**
+- `usedM` (matchup) — same exact-id gate, same failure. Unreachable separately
+  (the matchup path 403s).
+- `itemSetBody.ts` `buildLine` — `dedupeById` is exact-id; only `bootsIds` is
+  grouped. `isFullItem` passes both finals (they are built from World Atlas, so
+  `from.length > 0`; see that function's own note at the LANE_STARTER rule), so
+  an unbuyable 6-item shop line would be exported.
+- `buildSlotCap.ts` — breaks in the OTHER direction. The support budget of 4
+  reserves the 6th slot for the quest item **on the assumption it is not in the
+  line**. If it is, the line spends 4 items + boots = 5 real slots, the 6th is
+  double-reserved and never filled, the user loses a genuine 6th-item
+  recommendation, and `SupportItemCard` renders the same final a second time.
+
+### Phase 2 — what changed
+
+**The guard (the 3 lines that matter):** `collapseSupportFinalPools` in the new
+`lib/supportFinalGroup.ts`, applied ONCE in `recommend.ts` to the six fetched
+item pools before anything reads them. Chose the pool boundary over patching
+`usedItems`/`pathItemIds`/`usedM` individually: it states the invariant ("the
+engine never reasons over more than one member of the family") once, where the
+data enters, so every consumer — including ones that do not exist yet —
+inherits it. Patching the gates would have fixed three instances and left the
+invariant unwritten. Winner is picked by **reusing `rankSupportFinals`** (count
+DESC / itemId ASC — the same collapse the Pro Consensus card already uses), over
+each id's BEST occurrence in any single pool. Max-per-id rather than a
+cross-pool sum because the pools are a mix of slot-scoped and null-slot queries;
+summing would double-count and let the SHAPE of the pool list pick the winner.
+
+**Module move (required, not cosmetic).** `components/hextech/supportFinalGroup.ts`
+-> `lib/supportFinalGroup.ts`, and `SUPPORT_FINAL_ITEMS` moved into it from
+`supportItem.ts`. `lib/` importing a value out of `components/` inverts the
+dependency direction, and following the old chain (supportFinalGroup ->
+supportItem -> `lib/draft/compRatings` + `components/proAssets`) would have
+dragged a CDN-fetching browser asset helper and a curated draft-ratings table
+into the server engine's module graph for the sake of five integers. The new
+module has **zero imports**. Still exactly ONE declaration of the five ids:
+`supportItem.ts` imports and re-exports them, so its public API is unchanged
+(SupportItemCard + its tests needed no edits). Only `proConsensus.ts` and its
+test needed an import-path update.
+
+**Comment-only:** `buildSlotCap.ts` now states the support-slot assumption and
+its failure mode explicitly, and says why it is NOT the place to fix it (it is a
+pure count cap over an opaque `T[]` — it never sees ids, and runs only on the
+4th+ tail and the optimizer chain, never on slots 1-3 where a final would land).
+
+### Deliberately NOT changed
+
+- **`itemSetsApply.ts` / `itemSetBody.ts`** — already correct. At most one final
+  can arrive via `pro.items`, so everything downstream is safe by construction.
+  Adding a second family filter there would be duplicate logic guarding an
+  invariant already held upstream.
+- **`lib/coachless.ts`** — a raw passthrough by design. Filtering there would
+  break a future deliberate type-3 fetch, which is exactly the thing
+  `supportItem.ts`'s `measured` branch exists to light up.
+- **The matchup-conditioned pools** (`m1/m2/m3`) and **the optimizer's
+  conditioned fetches**. Both mix a freshly-fetched pool with an
+  already-committed pick from the guarded pools, so correctness needs
+  cross-source family state, not a pool filter — and the matchup path is
+  verified-403 dead code. Noted at the call site in `recommend.ts`.
+- **`buildSlotCap.ts` behaviour.** Bumping the support budget when a final is in
+  the line would be designing for a state that cannot occur. Documented instead.
+- **No broad `recommend.ts` refactor.** The logic delta is one destructuring
+  rename plus one function call; the rest of the diff there is the comment
+  explaining why.
+
+### Tests
+
+`lib/__tests__/supportFinalGroup.test.ts`, 14 tests, two layers. Layer 1 is the
+pure collapse. Layer 2 drives the REAL `buildRecommendations` against mocked
+coachless + staticData — because a green unit test for a guard that was never
+wired in would be precisely the "can't happen" claim this work exists to
+disprove. **Verified by neutering the call to an identity function: the two
+integration tests fail exactly as predicted** (`expected [3876, 3869] to deeply
+equal [3876]`, and `expected [3869, 3089] to not include 3869`), then pass with
+it restored. Full suite 1632 passed / 113 files.
+
+Version NOT bumped, CHANGELOG untouched, nothing committed — per brief.
+
+

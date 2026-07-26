@@ -46,7 +46,26 @@ const SUPPORT_ROLE_ID: RoleId = 4;
  *    report, 2026-07-26: "should be 6 including supp items and boots").
  *
  *  Role 5 ("auto") is treated as non-bot, non-support: it is not an explicit
- *  lane selection, and 5 is the safe budget for an unknown lane. */
+ *  lane selection, and 5 is the safe budget for an unknown lane.
+ *
+ *  ── The support budget ASSUMES the quest item is absent from the line ──────
+ *  4 is only correct while no support final can appear in the build line
+ *  itself. That holds today and is enforced upstream, not here: coachless
+ *  classifies the five finals as ItemType 3, lib/recommend.ts requests only
+ *  types 6/2/1, and lib/supportFinalGroup.ts's `collapseSupportFinalPools`
+ *  guards the boundary if that ever changes (probe evidence in that module's
+ *  header). If one DOES reach the line, this reserves the sixth slot for an
+ *  item that is already occupying one of the four — the line spends 4 items +
+ *  boots = 5 real slots, the sixth is double-reserved and never filled, and
+ *  the user loses a genuine sixth-item recommendation while SupportItemCard
+ *  renders the same final a second time on its own surface.
+ *
+ *  This function is deliberately NOT the place to fix that. It is a pure COUNT
+ *  cap over an opaque `T[]` — it never sees item ids, and it runs only on the
+ *  4th+ tail and the optimizer chain, never on the first/second/third slots
+ *  where a final would actually land. Making it id-aware would break its
+ *  generic signature to catch a case it cannot observe. The membership
+ *  invariant belongs at the data boundary; the count invariant belongs here. */
 export function fullItemCapForRole(role: RoleId): number {
   if (role === BOT_ROLE_ID) return 6;
   if (role === SUPPORT_ROLE_ID) return 4;
