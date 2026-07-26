@@ -881,3 +881,29 @@ Edited: `app/api/prostage/timeline/route.ts`, `app/api/patch-movers/route.ts`, `
 `public/companion.ps1`, `lib/__tests__/patch-movers-route.test.ts`.
 
 
+
+---
+
+## 2026-07-26 (afternoon) — v0.61.2 shipped; next up is the pro-consensus support-item dedupe
+
+State: **v0.61.2 live, gates green, prod-verified, working tree clean.** Full detail in
+`C:/Claude/AI/urgot/data/SESSION-HANDOFF.md`.
+
+Shipped since v0.58.0: companion 1.7.0 closed-browser fix (v0.59.0), two honesty fixes to Draft and
+the core-order label (v0.59.1), the `/compact` mini view (v0.60.0), WPA defined + the Electron shell
+removed (v0.60.1), the UI/UX audit list (v0.61.0), the support-quest-item slot cap (v0.61.1), and
+three second-pass UI fixes (v0.61.2).
+
+**Next, in order:**
+1. **Pro consensus counts two support items** (Zaz'Zak's 80% AND Solstice Sleigh 20% — a player owns
+   one). Ids are in `components/hextech/supportItem.ts` (`SUPPORT_FINAL_ITEMS`). The aggregation
+   producer is NOT yet traced — `ProConsensusCard.tsx` takes `items: Map<number,string>` from
+   upstream; check `BuildTabContent.tsx` and `/api/pros`. Collapse the family to one slot and offer
+   the runners-up as alternatives. Put the logic in a pure tested `lib/` helper.
+2. **Builds is ~3,000px of single scroll on mobile** — needs a user decision (BUILD | PRO segmented
+   control vs collapsing the pro block), not a unilateral patch.
+3. Desktop polish: the runes card ends ~150px short of the item column at 1440x900.
+
+**Do not:** add champion suggestions to the empty Builds landing (standing directive in
+`ChampionPickPrompt.tsx`), treat `/history`'s empty search state as a bug (deliberate, v0.51.2), or
+resurrect the desktop shell (cancelled and removed in v0.60.1).
