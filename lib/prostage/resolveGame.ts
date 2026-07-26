@@ -19,6 +19,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { ProGamePurchase } from "@/lib/pro/types";
+import { fetchWithTimeout } from "@/lib/fetchTimeout";
 import { normalizeName } from "./ddragon";
 import {
   getEventDetails as realGetEventDetails,
@@ -153,7 +154,7 @@ const DDRAGON_BASE = "https://ddragon.leagueoflegends.com";
 let championKeyCache: Promise<Map<string, number>> | null = null;
 
 async function ddragonJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  const res = await fetchWithTimeout(url, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`ddragon fetch failed: ${url} -> HTTP ${res.status}`);
   return (await res.json()) as T;
 }

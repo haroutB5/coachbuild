@@ -7,6 +7,7 @@
 // static for the life of a serverless invocation / script run.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { fetchWithTimeout } from "../fetchTimeout";
 import type {
   DdragonChampionData,
   DdragonItemData,
@@ -25,7 +26,7 @@ export function normalizeName(name: string): string {
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  const res = await fetchWithTimeout(url, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`ddragon fetch failed: ${url} -> HTTP ${res.status}`);
   return (await res.json()) as T;
 }

@@ -1,6 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import type { ApiError } from "@/lib/types";
-import { computePatchMovers } from "@/lib/patchMovers";
+import { computePatchMoversBounded } from "@/lib/patchMoversCache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,6 +13,16 @@ export const dynamic = "force-dynamic";
 // timeout every cold hit either way (audit 2026-07-18 P1, same rationale).
 export const maxDuration = 90;
 
+// ── Amplification bound (2026-07-26 audit P2) ────────────────────────────────
+// Cache-key bypass: the route's own Cache-Control is keyed by the CDN on the
+// full request URL, so `?<anything>=1` was a free ticket past the 24h edge
+// cache straight to the ~400-coachless-call compute path. Any request
+// carrying a query string is redirected to the canonical bare path BEFORE
+// touching the compute path at all — the redirect itself does zero coachless
+// calls, so no amount of junk-param spam can reach the expensive branch.
+// The other half — bounding how often the compute itself can re-run during a
+// degraded/outage window — lives in lib/patchMoversCache.ts (see its header).
+
 /**
  * GET /api/patch-movers
  * v0.51 rewrite: biggest per-champion ROLE win-rate shifts between the
@@ -22,7 +32,9 @@ export const maxDuration = 90;
  *
  * `role` is no longer required -- accepted-but-ignored for a transition
  * period (a stale client/bookmark passing `?role=2` still gets a 200, not a
- * 400) since the response now always covers every lane in one shot.
+ * 400) since the response now always covers every lane in one shot. Any
+ * query string at all (including `?role=`) is redirected to the canonical
+ * bare path first — see the cache-key-bypass note above.
  *
  * - 200 + { patch, prevPatch, movers[] } when computed → cached hard (24h
  *   SWR), since patch data is immutable once populated. movers capped at ~12.
@@ -32,9 +44,14 @@ export const maxDuration = 90;
  * - Empty movers → treated as degraded (fetches largely failed) → no-store, so a
  *   transient upstream glitch can't get pinned at the edge (repo Gotcha (b)).
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const url = new URL(req.url);
+  if (url.search) {
+    return NextResponse.redirect(new URL(url.pathname, url.origin), 308);
+  }
+
   try {
-    const result = await computePatchMovers();
+    const result = await computePatchMoversBounded();
 
     if ("unsupported" in result) {
       // Prior-patch data unavailable → tell the UI to hide, never CDN-cache it.

@@ -6,6 +6,7 @@
 
 import { pacedCall } from "./pacer";
 import { RiotUnavailableError } from "./errors";
+import { fetchWithTimeout } from "../fetchTimeout";
 import type { RiotAccountDto, RiotMatch, RiotTimeline } from "./types";
 
 function requireKey(): string {
@@ -29,7 +30,7 @@ export class RiotRequestError extends Error {
 async function riotFetch<T>(url: string): Promise<T> {
   const key = requireKey();
   return pacedCall(async () => {
-    const res = await fetch(url, { headers: { "X-Riot-Token": key } });
+    const res = await fetchWithTimeout(url, { headers: { "X-Riot-Token": key } });
     if (!res.ok) throw new RiotRequestError(url, res.status, res.statusText);
     return res.json() as Promise<T>;
   });

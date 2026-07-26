@@ -11,7 +11,7 @@
 // order". New coverage: the Dark Seal regression (a non-full item must
 // never reach a build LINE but IS allowed in Situational), and the three
 // themed lines (Highest WPA / Tanky / Burst).
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { buildItemSets, champScopedReplacePrefix } from "../hextech/itemSetBody";
 import { STARTING_ITEM_ALLOWLIST } from "../hextech/proConsensus";
 import type { ChampionRef, BuildResponse, ItemsBlock, Pick, RunesBlock } from "@/lib/types";
@@ -47,6 +47,33 @@ function bootsMeta(id: number, overrides: Partial<ItemDetail> = {}): ItemDetail 
 
 function metaMap(...entries: ItemDetail[]): Map<number, ItemDetail> {
   return new Map(entries.map((e) => [e.id, e]));
+}
+
+// ── AUDIT follow-up 2026-07-26 — a REAL pinned slice of item.json ──────────
+// The 11 STARTING_ITEM_ALLOWLIST ids' actual 16.13.1 shape, fetched live via
+// getItemDetailMap against the same cdn.coachless.gg mirror itemDetail.ts
+// uses in prod (a scratchpad probe, not committed). Replaces a fixture that
+// used to set `into: ["999999"]` on every allowlist id — false for 9 of the
+// 11 real ids (only Dark Seal and Tear of the Goddess genuinely have a
+// non-empty `into`; its own comment conceded the gap). This slice is REAL:
+// two ids (1082, 3070) are excluded by isFullItem's plain `into.length===0`
+// rule; the other nine are excluded ONLY by the from-empty/gold<=500/"Lane"-
+// tag structural rule, which is the actual invariant this test claims to
+// prove and the old fabricated fixture never exercised.
+function realStarterMeta(): Map<number, ItemDetail> {
+  return metaMap(
+    meta(1054, { name: "Doran's Shield", goldTotal: 450, into: [], from: [], tags: ["Health", "HealthRegen", "Lane"] }),
+    meta(1055, { name: "Doran's Blade", goldTotal: 450, into: [], from: [], tags: ["Health", "Damage", "LifeSteal", "SpellVamp", "Lane"] }),
+    meta(1056, { name: "Doran's Ring", goldTotal: 400, into: [], from: [], tags: ["Health", "Lane", "ManaRegen", "SpellDamage"] }),
+    meta(1082, { name: "Dark Seal", goldTotal: 350, into: ["3041"], from: [], tags: ["Health", "SpellDamage", "Lane"] }),
+    meta(1083, { name: "Cull", goldTotal: 450, into: [], from: [], tags: ["Damage", "OnHit", "Lane"] }),
+    meta(1086, { name: "Doran's Bow", goldTotal: 400, into: [], from: [], tags: ["Damage", "AttackSpeed", "SpellVamp", "Lane"] }),
+    meta(1120, { name: "Doran's Helm", goldTotal: 450, into: [], from: [], tags: ["Health", "SpellBlock", "Armor", "Lane"] }),
+    meta(2049, { name: "Guardian's Amulet", goldTotal: 500, into: [], from: [], tags: ["SpellDamage", "ManaRegen", "CooldownReduction", "Lane", "AbilityHaste"] }),
+    meta(2050, { name: "Guardian's Shroud", goldTotal: 500, into: [], from: [], tags: ["Health", "SpellDamage", "CooldownReduction", "Lane", "AbilityHaste"] }),
+    meta(3070, { name: "Tear of the Goddess", goldTotal: 400, into: ["3003", "3004", "2526", "3119"], from: [], tags: ["Mana", "ManaRegen"] }),
+    meta(3865, { name: "World Atlas", goldTotal: 400, into: [], from: [], tags: ["Health", "ManaRegen", "Vision", "GoldPer", "Lane"] })
+  );
 }
 
 /** Every id the file's DEFAULT fixtures (baseItems/baseBuild + the common
@@ -556,15 +583,19 @@ describe("buildItemSets — Pro build: 6 items, exactly 1 boots, no dupes, full 
     // the two ids hardcoded in the tests above. Real allowlist ids imported
     // directly from proConsensus.ts -- never re-derived/hardcoded here.
     const allowlistIds = Array.from(STARTING_ITEM_ALLOWLIST);
-    // Worst-case-for-the-bug metadata: a real, non-empty `into` on every id
-    // (the shape that actually needs isFullItem's rule, not the allowlist,
-    // to exclude it -- an empty-into allowlist entry, e.g. Doran's Ring,
-    // would pass as a genuine recipe-tree leaf regardless of the allowlist,
-    // which is correct, separate behavior this test isn't exercising).
-    const richMeta = metaMap(
-      ...Array.from(baseItemMetaMap().values()),
-      ...allowlistIds.map((id) => meta(id, { tags: ["Health"], into: ["999999"] }))
-    );
+    // AUDIT 2026-07-26: this used to fabricate `into: ["999999"]` on every id
+    // -- false for 9 of these 11 in the real 16.13.1 catalog (only Dark Seal
+    // and Tear of the Goddess genuinely have a non-empty `into`; the other 9
+    // are empty-into REAL recipe-tree leaves, e.g. Doran's Ring). A fabricated
+    // non-empty `into` makes isFullItem exclude an id via the ORDINARY
+    // "into.length===0" check, which every non-full item satisfies -- it
+    // never actually exercised the from-empty/gold<=500/"Lane"-tag
+    // structural rule this test claims to prove, so it could not have caught
+    // a regression in that rule specifically. realStarterMeta() is the real
+    // pinned catalog slice: 9 of the 11 ids now genuinely require the
+    // structural rule to be excluded, and 2 (1082, 3070) exercise the
+    // ordinary into-based path, matching their real shape.
+    const richMeta = metaMap(...Array.from(baseItemMetaMap().values()), ...Array.from(realStarterMeta().values()));
     const build = baseBuild(
       baseItems({
         fourthPlus: allowlistIds.map((id) => pick(id, 0.09)),
@@ -893,19 +924,24 @@ describe("buildItemSets — v0.47.0 AP family (Viktor 'tank mage' acceptance)", 
     // better-evidenced of the two, which inverts the truth and breaks HARD RULE
     // 4. The label now follows the EVIDENCE (zero measured -> "(suggested)"),
     // not the flag, for curated and data-first archetypes alike.
+    //
+    // AUDIT 2026-07-26 follow-up: the pool id here is 8020, not 3001 — 3001 is
+    // Evenshroud (purchasable:false), confirmed against the real 16.13.1
+    // catalog; 8020 is the real Abyssal Mask id. See the dedicated "dead
+    // curated pool ids" describe block below for the live-repro regression.
     const build = famBuild(VIKTOR, [STARTER, BOOTS, AP1, AP2, AP3]);
     const richMeta = metaMap(
       ...Array.from(damageMeta().values()),
       meta(3116, { tags: ["SpellDamage", "Health"] }), // Rylai's
       meta(4633, { tags: ["SpellDamage", "Health"] }), // Riftmaker
-      meta(3001, { tags: ["MagicResist", "Health"] }) // Abyssal Mask (no SpellDamage tag)
+      meta(8020, { tags: ["MagicResist", "Health"] }) // Abyssal Mask (no SpellDamage tag)
     );
     const sets = buildItemSets(VIKTOR, "Mid", build, null, richMeta);
     const tankMage = sets[0].blocks.find((b) => b.type.startsWith("Tank Mage"))!;
     expect(tankMage.type).toBe("Tank Mage (suggested)"); // 100% judgment fill, labelled as such
     const ids = tankMage.items.map((i) => i.id);
     expect(ids).toEqual(expect.arrayContaining(["3116", "4633"]));
-    expect(ids).toContain("3001"); // Abyssal via curated verbatim, despite no SpellDamage tag
+    expect(ids).toContain("8020"); // Abyssal via curated verbatim, despite no SpellDamage tag
   });
 });
 
@@ -1428,6 +1464,212 @@ describe("AUDIT P1-C — the honesty label follows the EVIDENCE, for curated and
     const sets = buildItemSets(ORNN, "Top", build, null, damageMeta());
     expect(sets[0].title.startsWith("CoachBuild")).toBe(true);
     expect(JSON.stringify(sets[0]).length).toBeLessThan(4096);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDIT follow-up 2026-07-26 — STILL OPEN item 1: tank/enchanter supports
+// resolving to the AD damage family.
+//
+// Live repro (via a scratchpad probe driving the real buildItemSets against
+// prod /api/build + /api/pros + the real 16.13.1 catalog): Leona/Braum/Rell,
+// all real ddragon tags ["Tank","Support"], landed at realFullItems ap=0/ad=1.
+// The single AD-tagged item was id 2524 "Bandlepipes" — a generic support
+// Artifact item any support can pick regardless of the champion's own damage
+// type, whose only AD-signalling tag (AttackSpeed) is incidental to its kit.
+// The old `ap !== ad` tie-break trusted that ONE item as a decisive,
+// `confident: true` signal and never consulted the champion's own class tags
+// — Leona shipped "Bruiser (AD) (suggested)" + "Lethality/Assassin
+// (suggested)", both wrong-family for a support whose entire kit is CC/tank.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("AUDIT follow-up — resolveDamageFamily requires a decisive item margin", () => {
+  // A synthetic stand-in for Bandlepipes: a support item that is fundamentally
+  // durability (Health/SpellBlock/Armor) but carries ONE incidental AD-family
+  // tag (AttackSpeed) — real ddragon shape, not a hypothetical.
+  const SUPPORT_ARTIFACT = 5701;
+  const supportArtifactMeta = () =>
+    meta(SUPPORT_ARTIFACT, { tags: ["Health", "SpellBlock", "Armor", "AttackSpeed"] });
+
+  it("a tank support (Tank+Support tags) whose ONLY damage-tagged item is one incidentally AD-tagged support item resolves AP, not AD", () => {
+    // Leona-shaped: 4 pure-tank real items (no damage tag at all) + the one
+    // support-artifact item that is the sole reason ad=1/ap=0 under the old
+    // bare ap!==ad check.
+    const leona: ChampionRef = { id: 89, key: "Leona", name: "Leona", icon: "l.png", tags: ["Tank", "Support"] };
+    const build = famBuild(
+      leona,
+      [STARTER, BOOTS, TK1, TK2, TK3],
+      { first: [pick(TK4, 0.06), pick(SUPPORT_ARTIFACT, 0.055)] }
+    );
+    const richMeta = metaMap(...Array.from(damageMeta().values()), supportArtifactMeta());
+    const sets = buildItemSets(leona, "Support", build, null, richMeta);
+    const present = presentArchetypes(sets);
+    // (Not asserting "Tank" here: with every real item shared between the
+    // pure-Tank match and Core build's own pool, the two lines resolve to the
+    // identical id set and the cross-family de-dup correctly collapses Tank
+    // into Core build — see the Ornn tests above for the same documented
+    // shape. That collision is orthogonal to what this test checks.)
+    expect(present).toContain("AP/Mage"); // family resolves AP via the Support tag fallback
+    // Never the AD family — this is the exact live-reported wrong-family bug.
+    expect(present).not.toContain("Bruiser (AD)");
+    expect(present).not.toContain("Lethality/Assassin");
+    expect(present).not.toContain("Crit/Marksman");
+    expect(present).not.toContain("On-hit");
+  });
+
+  it("an enchanter support (Support+Mage tags) with the same single incidental AD-tagged item still resolves AP", () => {
+    // Yuumi/Lulu/Soraka/Milio-shaped: no real damage-tagged item of her own
+    // beyond the support artifact.
+    const milio: ChampionRef = { id: 902, key: "Milio", name: "Milio", icon: "m.png", tags: ["Support", "Mage"] };
+    const build = famBuild(
+      milio,
+      [STARTER, BOOTS, TK1, TK3, SUPPORT_ARTIFACT],
+      { first: [pick(TK4, 0.06)] }
+    );
+    const richMeta = metaMap(...Array.from(damageMeta().values()), supportArtifactMeta());
+    const sets = buildItemSets(milio, "Support", build, null, richMeta);
+    const present = presentArchetypes(sets);
+    expect(present).toContain("AP/Mage");
+    expect(present).not.toContain("Bruiser (AD)");
+    expect(present).not.toContain("Lethality/Assassin");
+  });
+
+  it("a REAL AD-carry support (Support+Assassin tags, decisive item margin) still resolves AD — the fix does not blanket-flip every support", () => {
+    // Pyke-shaped: several genuinely lethality-tagged real items, margin >= 2.
+    // Must stay AD via the item signal itself (not just the Assassin tag
+    // fallback, which would also agree here — this proves the item path
+    // still works when the evidence is decisive).
+    const pyke: ChampionRef = { id: 555, key: "Pyke", name: "Pyke", icon: "p.png", tags: ["Support", "Assassin"] };
+    const build = famBuild(pyke, [STARTER, BOOTS, LE1, LE2, LE3]);
+    const sets = buildItemSets(pyke, "Support", build, null, damageMeta());
+    const present = presentArchetypes(sets);
+    expect(present).toContain("Lethality/Assassin");
+    expect(present).not.toContain("AP/Mage");
+    expect(present).not.toContain("Tank Mage");
+  });
+
+  it("margin boundary: exactly one net item of evidence is NOT decisive (falls to class tags); two net items IS decisive (stays item-driven)", () => {
+    // margin = 1 (LE1 only): a Fighter+Assassin champ has no Tank/Support/
+    // Mage/Marksman tag priority issue either way since Fighter/Assassin are
+    // both AD-mapped tags -- use a Tank+Support champ so the two paths
+    // (item-driven vs tag-driven) would disagree if margin=1 were trusted.
+    const champTags = ["Tank", "Support"];
+    const champ = (id: number, name: string): ChampionRef => ({ id, key: name, name, icon: `${name}.png`, tags: champTags });
+
+    // margin = 1 -> falls through to tags (Support -> AP).
+    const c1 = champ(9001, "MarginOne");
+    const b1 = famBuild(c1, [STARTER, BOOTS, TK1, TK2, TK3], { first: [pick(TK4, 0.06), pick(LE1, 0.05)] });
+    const s1 = buildItemSets(c1, "Support", b1, null, damageMeta());
+    expect(presentArchetypes(s1)).toContain("AP/Mage");
+    expect(presentArchetypes(s1)).not.toContain("Lethality/Assassin");
+
+    // margin = 2 -> stays item-driven (AD), same tags, same pool shape otherwise.
+    const c2 = champ(9002, "MarginTwo");
+    const b2 = famBuild(c2, [STARTER, BOOTS, TK1, TK2, TK3], { first: [pick(TK4, 0.06), pick(LE1, 0.05), pick(LE2, 0.045)] });
+    const s2 = buildItemSets(c2, "Support", b2, null, damageMeta());
+    expect(presentArchetypes(s2)).toContain("Lethality/Assassin");
+    expect(presentArchetypes(s2)).not.toContain("AP/Mage");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDIT follow-up 2026-07-26 — STILL OPEN item 5: dead curated pool ids.
+// Verified live against the real 16.13.1 ddragon catalog (via getItemDetailMap
+// against cdn.coachless.gg, the same source itemDetail.ts uses in prod):
+//   3001 -> Evenshroud (purchasable:false) -- was mislabelled "Abyssal Mask"
+//           in two curated pools; real Abyssal Mask id is 8020 (purchasable).
+//   6691 -> Duskblade of Draktharr (purchasable:false) -- its reworked
+//           successor Opportunity (6701) is ALSO dead this patch.
+//   3193 -> Gargoyle Stoneplate (purchasable:false).
+// isFullItem's own `purchasable === false` check already kept these OUT of
+// any rendered build line -- the live symptom was never garbage output, it
+// was a curated pool silently resolving to 6/8 or 7/8 real items. Fixed two
+// ways: (1) swap the three ids for verified-live replacements, (2)
+// curatedArchetypePool now warns (once per id per process) whenever a
+// curated id resolves to a catalog entry that IS purchasable:false, so the
+// NEXT patch's casualties show up in logs instead of a silent pool shrink.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("AUDIT follow-up — dead curated pool ids are loud, not silent", () => {
+  it("a curated id that IS in the catalog but purchasable:false triggers a console.warn naming the archetype/id/item", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // 8020 (real Abyssal Mask) is TANK_MAGE's curated pool now -- mark it
+    // dead in this test's own itemMeta to prove the WARN fires generically,
+    // not just for the three ids fixed today.
+    const richMeta = metaMap(
+      ...Array.from(damageMeta().values()),
+      meta(8020, { name: "Abyssal Mask", tags: ["Health", "SpellBlock"], purchasable: false }),
+      meta(3116, { tags: ["SpellDamage", "Health"] }), // Rylai's -- real TANK_MAGE id, still alive
+      meta(4633, { tags: ["SpellDamage", "Health"] }) // Riftmaker -- real TANK_MAGE id, still alive
+    );
+    const viktor: ChampionRef = { id: 112, key: "Viktor", name: "Viktor", icon: "v.png", tags: ["Mage"] };
+    const build = famBuild(viktor, [STARTER, BOOTS, AP1, AP2, AP3]);
+    buildItemSets(viktor, "Mid", build, null, richMeta);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("8020"));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Tank Mage"));
+
+    // Same call again, twice more, within this ONE test (so the module-level
+    // dedup Set's cross-test lifetime can't make this pass/fail depending on
+    // suite run order): still exactly one warn total for id 8020.
+    buildItemSets(viktor, "Mid", build, null, richMeta);
+    buildItemSets(viktor, "Mid", build, null, richMeta);
+    const calls8020 = warnSpy.mock.calls.filter((args) => String(args[0]).includes("8020"));
+    expect(calls8020).toHaveLength(1);
+    warnSpy.mockRestore();
+  });
+
+  it("no dead id from the 2026-07-25 audit remains in the curated pools that fed live builds", () => {
+    // Regression pin: feed the REAL replacements (8020 Abyssal Mask, 3083
+    // Warmog's, 6676 The Collector) as purchasable:true, and confirm the
+    // OLD dead ids (3001, 3193, 6691) never appear in any emitted block --
+    // proving the pools were actually edited, not just warned-about.
+    const richMeta = metaMap(
+      ...Array.from(damageMeta().values()),
+      meta(8020, { tags: ["Health", "SpellBlock"] }),
+      meta(3083, { tags: ["Health"] }),
+      meta(6676, { tags: ["Damage", "CriticalStrike", "ArmorPenetration"] }),
+      // The old dead ids, present in the catalog but genuinely unpurchasable
+      // (their real 16.13.1 shape) -- if a pool still referenced them,
+      // isFullItem would silently drop them (as it always did); this proves
+      // they are not even LISTED any more, via the warn-count staying at 0
+      // for a run whose meta never marks any REAL pool id as dead.
+      meta(3001, { tags: ["Health", "SpellBlock", "Armor"], purchasable: false }),
+      meta(3193, { tags: ["SpellBlock", "Armor"], purchasable: false }),
+      meta(6691, { tags: ["Damage", "ArmorPenetration"], purchasable: false })
+    );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const viktor: ChampionRef = { id: 112, key: "Viktor", name: "Viktor", icon: "v.png", tags: ["Mage"] };
+    const viktorBuild = famBuild(viktor, [STARTER, BOOTS, AP1, AP2, AP3]);
+    const viktorSets = buildItemSets(viktor, "Mid", viktorBuild, null, richMeta);
+    const tankMage = viktorSets[0].blocks.find((b) => b.type.startsWith("Tank Mage"));
+    expect(tankMage?.items.map((i) => i.id)).not.toContain("3001");
+    expect(tankMage?.items.map((i) => i.id)).toContain("8020");
+
+    // Only 3 real tank items (vs. the usual 4) -- 2 non-boots fill slots are
+    // needed, which is exactly enough room for BOTH curated replacements
+    // (3083, 8020) to show up, not just whichever is ranked first.
+    const ornn: ChampionRef = { id: 516, key: "Ornn", name: "Ornn", icon: "o.png", tags: ["Tank"] };
+    const ornnBuild = famBuild(ornn, [STARTER, BOOTS, TK1, TK2, TK3]);
+    const ornnSets = buildItemSets(ornn, "Top", ornnBuild, null, richMeta);
+    const tank = ornnSets[0].blocks.find((b) => b.type.startsWith("Tank") && !b.type.startsWith("Tank Mage"));
+    expect(tank?.items.map((i) => i.id)).not.toContain("3193");
+    expect(tank?.items.map((i) => i.id)).not.toContain("3001");
+    expect(tank?.items.map((i) => i.id)).toContain("3083");
+    expect(tank?.items.map((i) => i.id)).toContain("8020");
+
+    const irelia: ChampionRef = { id: 39, key: "Irelia", name: "Irelia", icon: "i.png", tags: ["Fighter", "Assassin"] };
+    const ireliaBuild = famBuild(irelia, [STARTER, BOOTS, LE1, LE2, LE3]);
+    const ireliaSets = buildItemSets(irelia, "Top", ireliaBuild, null, richMeta);
+    const lethality = ireliaSets[0].blocks.find((b) => b.type.startsWith("Lethality/Assassin"));
+    expect(lethality?.items.map((i) => i.id)).not.toContain("6691");
+    expect(lethality?.items.map((i) => i.id)).toContain("6676");
+
+    // None of the three genuinely-dead ids we planted (3001/3193/6691, all
+    // marked purchasable:false in this fixture) triggered the loud warn --
+    // proof they are no longer referenced by ANY curated pool.
+    for (const dead of ["3001", "3193", "6691"]) {
+      expect(warnSpy.mock.calls.some((args) => String(args[0]).includes(dead))).toBe(false);
+    }
+    warnSpy.mockRestore();
   });
 });
 

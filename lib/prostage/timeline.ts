@@ -26,6 +26,8 @@
 // caller re-attempts later (self-healing), never records it as "unavailable".
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { fetchWithTimeout, FAST_FETCH_TIMEOUT_MS } from "../fetchTimeout";
+
 const FEED_BASE = "https://feed.lolesports.com/livestats/v1";
 
 // Walk tuning — identical rationale to matchday's (verified against the real
@@ -128,7 +130,7 @@ function secondsBetween(startIso: string, endIso: string): number {
  *  handled the same by the candidate ladder (it just tries the next offset). */
 async function fetchWindowJson(url: string): Promise<WindowResponse | null> {
   try {
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url, {}, FAST_FETCH_TIMEOUT_MS);
     if (!res.ok) return null;
     return (await res.json()) as WindowResponse;
   } catch {
@@ -153,8 +155,10 @@ export async function fetchDetailsPage(
   startingTime: string
 ): Promise<DetailsResponse | null> {
   try {
-    const res = await fetch(
-      `${FEED_BASE}/details/${encodeURIComponent(gameId)}?startingTime=${encodeURIComponent(startingTime)}`
+    const res = await fetchWithTimeout(
+      `${FEED_BASE}/details/${encodeURIComponent(gameId)}?startingTime=${encodeURIComponent(startingTime)}`,
+      {},
+      FAST_FETCH_TIMEOUT_MS
     );
     if (res.status === 204) return { frames: [] };
     if (!res.ok) return null;
@@ -189,7 +193,7 @@ export async function fetchOpeningWindow(
 > {
   let res: Response;
   try {
-    res = await fetch(`${FEED_BASE}/window/${encodeURIComponent(gameId)}`);
+    res = await fetchWithTimeout(`${FEED_BASE}/window/${encodeURIComponent(gameId)}`, {}, FAST_FETCH_TIMEOUT_MS);
   } catch {
     return { ok: false, transient: true };
   }

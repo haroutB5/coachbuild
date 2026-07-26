@@ -33,6 +33,7 @@
 
 import { getSql } from "@/lib/pro/db";
 import { DbUnavailableError } from "@/lib/pro/errors";
+import { fetchWithTimeout, FAST_FETCH_TIMEOUT_MS } from "@/lib/fetchTimeout";
 import { getDdragonMaps } from "./ddragon";
 import { getEventDetails, getLeagues, getScheduleForLeague } from "./lolesports";
 import { fetchLatestFrameTs, fetchOpeningWindow, iso10s } from "./timeline";
@@ -143,8 +144,10 @@ async function fetchWindowAt(gameId: string, ts: string) {
   // returns an EMPTY body — which read as "winner undecidable" for every game
   // on the first run. iso10s is the canonical aligner (see timeline.ts).
   const aligned = iso10s(new Date(ts).getTime());
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${FEED_BASE}/window/${encodeURIComponent(gameId)}?startingTime=${encodeURIComponent(aligned)}`,
+    {},
+    FAST_FETCH_TIMEOUT_MS
   );
   if (!res.ok) return null;
   return (await res.json()) as {

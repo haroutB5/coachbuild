@@ -400,7 +400,13 @@ const TANK_MAGE: Archetype = {
   // Liandry's (durable damage) / Zhonya's, Abyssal Mask (defense) / Rabadon's
   // (damage cap). Abyssal is a pure-MR item with NO SpellDamage tag — trusted
   // verbatim (curatedArchetypePool does NOT re-filter through `match`).
-  pool: [6657, 4633, 3116, 4629, 6653, 3157, 3001, 3089],
+  // AUDIT 2026-07-26: id was 3001, which the comment always meant as "Abyssal
+  // Mask" but is really Evenshroud (purchasable:false in 16.13.1 regardless —
+  // confirmed live against the real ddragon catalog). Abyssal Mask's real id
+  // is 8020. isFullItem's purchasable check already kept the wrong/dead id
+  // from ever surfacing in a build — it just silently shrank the pool to 7/8 —
+  // see curatedArchetypePool's dead-id warn for the structural guard.
+  pool: [6657, 4633, 3116, 4629, 6653, 3157, 8020, 3089],
   fits: () => true,
   curated: true,
 };
@@ -430,9 +436,15 @@ const LETHALITY: Archetype = {
       !hasAnyTag(m, DURABILITY_TAGS) &&
       !metaHasTag(m, "AttackSpeed") &&
       !metaHasTag(m, "CriticalStrike")),
-  // Duskblade, Eclipse, Serylda's, Youmuu's, Profane Hydra, Hubris, Edge of
-  // Night, Serpent's Fang.
-  pool: [6691, 6692, 6694, 3142, 6698, 6697, 3814, 6695],
+  // The Collector, Eclipse, Serylda's, Youmuu's, Profane Hydra, Hubris, Edge
+  // of Night, Serpent's Fang.
+  // AUDIT 2026-07-26: id was 6691 (Duskblade of Draktharr) — confirmed dead,
+  // purchasable:false in 16.13.1 against the real ddragon catalog (its
+  // reworked successor, Opportunity/6701, is ALSO dead this patch). Swapped
+  // for The Collector (6676) — same execute/burst-AD niche, purchasable,
+  // already trusted verbatim elsewhere in this module (Crit/Marksman's own
+  // curated pool) so sharing it across two adjacent archetypes is not new.
+  pool: [6676, 6692, 6694, 3142, 6698, 6697, 3814, 6695],
   fits: (tags) => tags.includes("Assassin"),
   curated: false,
 };
@@ -465,8 +477,13 @@ const TANK_PURE: Archetype = {
     !metaHasTag(m, "SpellDamage") &&
     !hasAnyTag(m, new Set(["Damage", "CriticalStrike", "ArmorPenetration"])),
   // Sunfire, Thornmail, Randuin's, Spirit Visage, Heartsteel, Frozen Heart,
-  // Gargoyle Stoneplate, Abyssal Mask.
-  pool: [3068, 3075, 3143, 3065, 3084, 3110, 3193, 3001],
+  // Warmog's Armor, Abyssal Mask.
+  // AUDIT 2026-07-26: TWO ids were wrong here, both confirmed live against
+  // the real 16.13.1 catalog. (1) 3193 (Gargoyle Stoneplate) is dead
+  // (purchasable:false) — swapped for Warmog's Armor (3083), a live pure-HP
+  // tank staple, same "not primarily a damage item" theme. (2) 3001 — same
+  // Evenshroud-vs-Abyssal-Mask id mix-up as TANK_MAGE above; fixed to 8020.
+  pool: [3068, 3075, 3143, 3065, 3084, 3110, 3083, 8020],
   // Actual tanks only (the v0.47.0 brief: "high tankiness rating").
   fits: (tags, rating) => tags.includes("Tank") || rating.tankiness >= 3,
   curated: false,
@@ -1141,6 +1158,22 @@ function categoryDefaultPool(
   return scoreByPosition(out);
 }
 
+/** AUDIT 2026-07-26 — a curated pool id going dead (purchasable:false in a
+ *  later patch) used to fail completely silently: isFullItem already
+ *  excludes it (see its own `meta.purchasable === false` check), so the pool
+ *  just quietly shrank by one — exactly how ids 3001/6691/3193 rotted in
+ *  16.13.1 without anyone noticing until a live audit compared them by hand
+ *  against the real ddragon catalog. A hardcoded id LIST is what rotted here
+ *  (the lesson recorded 2026-07-25 for isFullItem's starter partition); the
+ *  structural fix is to check the catalog's own `purchasable` field and warn
+ *  on the class, not just patch the three known instances. Dedupes per
+ *  process (a warm lambda serving many requests only warns once per id) —
+ *  this is a loud dev/ops signal, not a per-request budget concern. Absence
+ *  from the map entirely is NOT warned here — that's the ordinary
+ *  not-yet-loaded/version-mismatch case every other lookup in this module
+ *  already tolerates silently, not evidence of a dead id. */
+const warnedDeadCuratedIds = new Set<number>();
+
 /** v0.47.0 — the curated archetype pool resolved against real item metadata:
  *  full items only, hand-ranked order preserved (best-first by construction,
  *  which IS "ranked by quality + tag fit"). Trusted verbatim: NOT re-filtered
@@ -1154,6 +1187,12 @@ function curatedArchetypePool(
   const out: { id: number; goldTotal: number }[] = [];
   for (const id of arch.pool) {
     const m = itemMeta.get(id);
+    if (m && m.purchasable === false && !warnedDeadCuratedIds.has(id)) {
+      warnedDeadCuratedIds.add(id);
+      console.warn(
+        `[itemSetBody] curated pool id ${id} ("${m.name}") in archetype "${arch.title}" is purchasable:false in the current catalog — the pool has silently shrunk by one. Replace it.`
+      );
+    }
     if (!m || !isFullItem(id, m)) continue;
     if (metaHasTag(m, "Boots")) continue; // fill pools never supply boots (see categoryDefaultPool)
     out.push({ id, goldTotal: m.goldTotal });
@@ -1201,7 +1240,30 @@ function resolveDamageFamily(
     if (hasAnyTag(m, AP_DAMAGE_TAGS)) ap++;
     if (hasAnyTag(m, AD_DAMAGE_TAGS)) ad++;
   }
-  if (ap !== ad) return { family: ap > ad ? "AP" : "AD", confident: true };
+  // Audit follow-up (2026-07-26) — a bare ap!==ad tie-break let a SINGLE
+  // incidentally-tagged item decide the whole family. Live repro: Leona/Braum/
+  // Nautilus/Rell (real ddragon tags ["Tank","Support"]) all landed at
+  // ap=0/ad=1 or ap=1/ad=0 -- one item each, e.g. the support Artifact item
+  // Bandlepipes (id 2524), which is a generic durability item every support
+  // can pick regardless of the champion's own damage type, but carries an
+  // incidental "AttackSpeed" stat tag -- enough to satisfy AD_DAMAGE_TAGS and
+  // (because ap!==ad was the ONLY gate) claim `confident: true`, skipping the
+  // tag-based fallback that would have correctly read "Support" -> AP.
+  // FAMILY_TALLY_MARGIN requires the item signal to be a real majority (>=2
+  // more matched items on one side) before it overrides the champion's own
+  // ddragon class tags. Verified live across 27 champions (8 supports named
+  // in the brief + Rell/Rakan/Thresh/Pyke/Senna/Karma/Sona + AD/AP controls +
+  // 5 non-support tanks): every genuine AD/AP carry (Draven ad=15, Ahri
+  // ap=14, Pyke ad=10, Senna ad=10 vs ap=2) clears this margin by a wide
+  // margin untouched; every single-item false positive (Leona, Braum,
+  // Nautilus, Rell, all margin=1) now falls through to the tag branch below
+  // and resolves correctly. A margin of exactly 2 (Shen: ad=3/ap=1) is left
+  // item-driven, unchanged from today -- outside the briefed scope and not
+  // demonstrated wrong.
+  const FAMILY_TALLY_MARGIN = 2;
+  if (Math.abs(ap - ad) >= FAMILY_TALLY_MARGIN) {
+    return { family: ap > ad ? "AP" : "AD", confident: true };
+  }
   const tags = champ.tags ?? [];
   if (tags.includes("Mage") || tags.includes("Support")) return { family: "AP", confident: true };
   if (tags.includes("Marksman") || tags.includes("Assassin") || tags.includes("Fighter")) {

@@ -24,6 +24,8 @@
 // never records a transient outage as a permanent "unavailable".
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { fetchWithTimeout } from "../fetchTimeout";
+
 const BASE = "https://esports-api.lolesports.com/persisted/gw";
 // Well-known public web-client key (identical to matchday's default). Overridable
 // via LOLESPORTS_API_KEY if it ever rotates.
@@ -52,7 +54,7 @@ export class LolesportsFetchError extends Error {
 async function getJson<T>(path: string): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`${BASE}${path}`, { headers: { "x-api-key": apiKey() } });
+    res = await fetchWithTimeout(`${BASE}${path}`, { headers: { "x-api-key": apiKey() } });
   } catch (err) {
     throw new LolesportsFetchError(`network error: ${(err as Error).message}`);
   }

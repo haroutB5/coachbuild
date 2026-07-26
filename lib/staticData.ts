@@ -4,6 +4,7 @@
 
 import type { ChampionRef, RoleId } from "./types";
 import { getKeystoneData } from "./coachless";
+import { fetchWithTimeout } from "./fetchTimeout";
 
 // ── CDN bases ────────────────────────────────────────────────────────────────
 //
@@ -175,7 +176,7 @@ let summonersMap: SummonerDataEntry[] | null = null;
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     next: { revalidate: 86400 }, // cache 24 h
   });
   if (!res.ok) throw new Error(`staticData fetch ${url} → ${res.status}`);

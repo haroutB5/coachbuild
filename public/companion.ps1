@@ -316,7 +316,8 @@ function Test-SingleInstance {
 function Initialize-TlsShim {
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
     # PS 5.1 has no -SkipCertificateCheck; the LCU + Live Client Data APIs
-    # both serve self-signed loopback certs, so accept-all is the only path.
+    # both serve self-signed loopback certs, so an accept-all callback is
+    # needed for THOSE two targets.
     #
     # v1.2.2 FIX (live-reported: real champ select stuck at Phase:None with
     # Client:Connected, even after the v1.2.1 loop-harness rewrite): a
@@ -335,14 +336,54 @@ function Initialize-TlsShim {
     # Fix: a COMPILED .NET delegate (via Add-Type), not a scriptblock --
     # compiled code has no runspace affinity and runs correctly on any
     # thread, including the handshake's threadpool thread.
+    #
+    # v1.6.5 SCOPING FIX (2026-07-26 audit P2 security): ServicePointManager
+    # .ServerCertificateValidationCallback is PROCESS-WIDE -- the old
+    # AlwaysTrue delegate accepted ANY server's cert, including the ONE
+    # non-loopback HTTPS target this script ever calls, coachbuild.vercel.app
+    # (Test-AutoUpdate's companion.version check). Blast radius was already
+    # small (a version-check GET, response only ever feeds a balloon-tip
+    # string -- see this file's SelfTest/CLAUDE.md audit notes; the
+    # irm|iex install/update chain is separately proven NOT MITM-able via
+    # this shim, since it always spawns a FRESH powershell.exe where the
+    # shim hasn't run) but real: a network attacker could MITM that one call
+    # today. ValidateLoopbackOnly below scopes the accept-all behaviour to
+    # loopback targets (127.0.0.1 -- the LCU and Live Client Data APIs) only;
+    # every other host gets REAL certificate validation
+    # (sslPolicyErrors == None). The sender .NET hands the callback for an
+    # HttpWebRequest-backed call (what Invoke-WebRequest/Invoke-RestMethod
+    # use on PS 5.1 Desktop) is commonly the ServicePoint, not the
+    # HttpWebRequest itself -- both shapes are checked, and ANY unrecognized
+    # sender shape falls through to standard validation rather than widening
+    # trust, so a type-inspection miss can only ever make the shim STRICTER
+    # than before, never looser. This still avoids the scriptblock
+    # runspace-affinity trap above: the whole callback is compiled code.
     if (-not ([System.Management.Automation.PSTypeName]'CoachBuildCertPolicy').Type) {
         Add-Type -TypeDefinition @"
 using System.Net;
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 public static class CoachBuildCertPolicy {
-    public static bool AlwaysTrue(object s, X509Certificate c, X509Chain ch, SslPolicyErrors e) { return true; }
-    public static void Apply() { ServicePointManager.ServerCertificateValidationCallback = AlwaysTrue; }
+    public static bool ValidateLoopbackOnly(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors) {
+        try {
+            System.Uri targetUri = null;
+            HttpWebRequest req = sender as HttpWebRequest;
+            if (req != null) {
+                targetUri = req.RequestUri;
+            } else {
+                ServicePoint sp = sender as ServicePoint;
+                if (sp != null) { targetUri = sp.Address; }
+            }
+            if (targetUri != null && targetUri.IsLoopback) {
+                return true;
+            }
+        } catch {
+            // Any unexpected sender shape falls through to real validation
+            // below -- never widen trust on a type-inspection failure.
+        }
+        return sslPolicyErrors == SslPolicyErrors.None;
+    }
+    public static void Apply() { ServicePointManager.ServerCertificateValidationCallback = ValidateLoopbackOnly; }
 }
 "@
     }

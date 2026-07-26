@@ -50,6 +50,8 @@
 // and this note as the code-side acknowledgment.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { fetchWithTimeout } from "@/lib/fetchTimeout";
+
 const CARGO_ENDPOINT = "https://lol.fandom.com/api.php";
 const CARGO_EXPORT_ENDPOINT = "https://lol.fandom.com/index.php";
 const USER_AGENT = "CoachBuild/0.7 (personal project; contact via GitHub haroutB5)";
@@ -174,7 +176,7 @@ export async function cargoQuery<T = Record<string, string | undefined>>(
     if (opts.orderBy) params.set("order_by", opts.orderBy);
     if (opts.offset) params.set("offset", String(opts.offset));
 
-    const res = await fetch(`${CARGO_ENDPOINT}?${params.toString()}`, {
+    const res = await fetchWithTimeout(`${CARGO_ENDPOINT}?${params.toString()}`, {
       headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
     });
     if (!res.ok) {
@@ -205,7 +207,7 @@ export type CargoExportTransport = (url: string) => Promise<string>;
  *  curl), but callers that CAN shell out (scripts/ingest-prostage.mjs) should
  *  inject a curl-based transport instead (see scripts/_curl-transport.mjs). */
 async function fetchExportTransport(url: string): Promise<string> {
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
     redirect: "follow",
   });

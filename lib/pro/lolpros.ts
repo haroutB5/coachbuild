@@ -19,13 +19,14 @@
 // shape, never throw on a single malformed entry (log-and-skip instead).
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { fetchWithTimeout } from "../fetchTimeout";
 import type { LolProsAccountRaw, LolProsLadderEntry, LolProsProfile, LolProsTeamRaw } from "./types";
 
 const BASE = "https://api.lolpros.gg/es";
 const UA = "coachbuild-personal-use/0.1 (+https://coachbuild.vercel.app)";
 
 async function getJson(url: string): Promise<unknown> {
-  const res = await fetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
+  const res = await fetchWithTimeout(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`lolpros ${url} -> ${res.status} ${res.statusText}`);
   return res.json();

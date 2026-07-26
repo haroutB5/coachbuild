@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { RoleId } from "./types";
+import { fetchWithTimeout } from "./fetchTimeout";
 
 const BASE = "https://api.coachless.gg/api/";
 const HIGH_ELO_TIERS = [5, 6, 7];
@@ -63,7 +64,12 @@ export { HIGH_ELO_TIERS };
 // ── Low-level fetch ──────────────────────────────────────────────────────────
 
 async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(BASE + path, {
+  // fetchWithTimeout layers an 8s abort on top of any caller-supplied signal
+  // (e.g. staticData.ts's ~4s patch-candidate probe) rather than replacing it
+  // — a hung coachless socket used to be able to burn the whole route
+  // maxDuration (90s for /api/patch-movers, which fans out up to ~400 of
+  // these calls) instead of failing fast (2026-07-25 audit P2).
+  const res = await fetchWithTimeout(BASE + path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

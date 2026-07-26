@@ -14,17 +14,49 @@
 //        (ts = SECONDS into the game).
 //   200 {status:"unavailable", reason:"..."}
 //        terminal: game maps to no lolesports id / feed genuinely has no data.
-//   500 {error:"..."}  a TRANSIENT feed/API failure — retry later; never
-//        persisted as unavailable.
+//   429 {error:"..."}  the compute path is on cooldown (either genuinely
+//        in-flight on another request, or backing off after a recent
+//        `transient` failure) — retry after the `Retry-After` header, no
+//        network call was made for this response.
+//   500 {error:"..."}  a TRANSIENT feed/API failure just happened on THIS
+//        request — retry later; never persisted as unavailable.
 //   400 {error:"..."}  bad/missing params, or player not in this game.
 //
 // The compute runs synchronously within the request (maxDuration raised, like
 // matchday's route) — no async "pending" state machine.
+//
+// ── Cost-amplification fix (2026-07-26 audit, P1-3 security) ────────────────
+// Unauthenticated + previously no rate limit/cooldown: a cold resolve+walk is
+// ~750 outbound requests (lolesports schedule/event calls + up to
+// WALK_MAX_POINTS=500 livestats detail pages + ddragon — see
+// lib/prostage/resolveGame.ts / timeline.ts), and a `transient` result used
+// to persist nothing at all, so the very next identical request re-walked
+// everything from scratch. `timeline_next_attempt_at` (migration 0016) closes
+// both the "re-trigger a transient result immediately" hole AND a burst of
+// CONCURRENT requests for the same never-resolved game:
+//   - Before doing anything, a fast read-only check on the already-fetched
+//     row's `timeline_next_attempt_at` bounces a request still in cooldown
+//     WITHOUT any further DB write or network call.
+//   - The actual "may I start walking" decision is an ATOMIC claim: an
+//     UPDATE ... WHERE timeline_status IS NULL AND (next_attempt_at IS NULL
+//     OR next_attempt_at <= now()) ... RETURNING that advances
+//     next_attempt_at to a short lease BEFORE the walk starts. Postgres
+//     row-level locking makes this race-safe: a concurrent request's UPDATE
+//     blocks until the winner's commits, then re-evaluates the WHERE clause
+//     against the now-advanced value and returns 0 rows — no walk, no
+//     network call, just a 429.
+//   - On a `transient` result the SAME column is pushed out further with
+//     exponential backoff (computeBackoffSeconds) while `timeline_status`
+//     stays NULL exactly as before — the transient-vs-terminal taint
+//     discipline is untouched, only WHEN a retry is allowed changes.
+//   - If the function dies mid-walk (crash/maxDuration kill), the lease
+//     simply expires — no separate unlock/cleanup step needed.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
 import { computeGameTimelines, type TimelineDbRow } from "@/lib/prostage/resolveGame";
+import { CLAIM_LEASE_SEC, computeBackoffSeconds, retryAfterHeaders } from "@/lib/prostage/timelineBackoff";
 import type { ProGamePurchase } from "@/lib/pro/types";
 
 export const runtime = "nodejs";
@@ -53,14 +85,16 @@ function asPurchaseOrder(v: unknown): ProGamePurchase[] {
 interface RequestedRow {
   purchase_order: unknown;
   timeline_status: string | null;
+  timeline_next_attempt_at: string | Date | null;
 }
 
-interface GameRow {
+interface ClaimedRow {
   player_link: string;
   team: string | null;
   champion_id: number;
   game_datetime: string | Date;
   overview_page: string;
+  timeline_attempt_count: number;
 }
 
 export async function GET(req: NextRequest) {
@@ -83,9 +117,10 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    // 1. Fast path: the requested player's row already resolved.
+    // 1. Fast path: the requested player's row already resolved (or is on a
+    //    cooldown/lease we can read without touching the network at all).
     const requested = (await sql`
-      SELECT purchase_order, timeline_status
+      SELECT purchase_order, timeline_status, timeline_next_attempt_at
       FROM coachbuild.prostage_matches
       WHERE game_id = ${gameId} AND player_link = ${player}
     `) as unknown as RequestedRow[];
@@ -107,21 +142,47 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // 2. Compute path (timeline_status IS NULL): resolve + walk + persist all 10.
-    const gameRows = (await sql`
-      SELECT player_link, team, champion_id, game_datetime, overview_page
-      FROM coachbuild.prostage_matches
-      WHERE game_id = ${gameId}
-    `) as unknown as GameRow[];
-
-    if (gameRows.length === 0) {
-      // Race: row vanished between the two selects — treat as bad request.
-      return NextResponse.json({ error: "player not in this game" }, { status: 400 });
+    // status is NULL from here — either never attempted, in flight on another
+    // request, or backing off after a recent transient failure. A future
+    // timeline_next_attempt_at read here is a cheap early-out; the atomic
+    // claim below is what's actually race-safe (this check alone is not —
+    // see the claim's own comment).
+    const cooldownUntil = requested[0].timeline_next_attempt_at
+      ? new Date(requested[0].timeline_next_attempt_at).getTime()
+      : null;
+    if (cooldownUntil !== null && cooldownUntil > Date.now()) {
+      return NextResponse.json(
+        { error: "timeline temporarily unavailable, retry shortly" },
+        { status: 429, headers: retryAfterHeaders((cooldownUntil - Date.now()) / 1000) }
+      );
     }
 
-    const gameDatetime = new Date(gameRows[0].game_datetime).toISOString();
-    const overviewPage = gameRows[0].overview_page;
-    const dbRows: TimelineDbRow[] = gameRows.map((r) => ({
+    // 2. Atomic claim: advance the lease BEFORE starting the walk. Scoped by
+    //    game_id only (no player_link filter) so ONE claim covers every row
+    //    of the game — matches the fact that one livestats walk resolves all
+    //    10 players at once. 0 rows back means a concurrent request already
+    //    holds the lease (or, rarely, the game resolved between step 1 and
+    //    here) — either way, bounce without any outbound call.
+    const claimed = (await sql`
+      UPDATE coachbuild.prostage_matches
+      SET timeline_next_attempt_at = now() + (${CLAIM_LEASE_SEC}::int * interval '1 second')
+      WHERE game_id = ${gameId}
+        AND timeline_status IS NULL
+        AND (timeline_next_attempt_at IS NULL OR timeline_next_attempt_at <= now())
+      RETURNING player_link, team, champion_id, game_datetime, overview_page, timeline_attempt_count
+    `) as unknown as ClaimedRow[];
+
+    if (claimed.length === 0) {
+      return NextResponse.json(
+        { error: "timeline already being computed, retry shortly" },
+        { status: 429, headers: retryAfterHeaders(CLAIM_LEASE_SEC) }
+      );
+    }
+
+    const gameDatetime = new Date(claimed[0].game_datetime).toISOString();
+    const overviewPage = claimed[0].overview_page;
+    const priorAttemptCount = claimed[0].timeline_attempt_count ?? 0;
+    const dbRows: TimelineDbRow[] = claimed.map((r) => ({
       player_link: r.player_link,
       team: r.team,
       champion_id: r.champion_id,
@@ -130,14 +191,30 @@ export async function GET(req: NextRequest) {
     const result = await computeGameTimelines(gameId, gameDatetime, overviewPage, dbRows);
 
     if (result.status === "transient") {
-      // Persist NOTHING — a transient failure must re-attempt next request.
-      return NextResponse.json({ error: "timeline temporarily unavailable, retry shortly" }, { status: 500 });
+      // Persist NOTHING as a terminal state — a transient failure must
+      // re-attempt eventually. Only WHEN it may re-attempt changes: push the
+      // lease out with exponential backoff instead of leaving it expired
+      // (which would let the very next request re-walk everything again).
+      const attemptCount = priorAttemptCount + 1;
+      const backoffSec = computeBackoffSeconds(attemptCount);
+      await sql`
+        UPDATE coachbuild.prostage_matches
+        SET timeline_next_attempt_at = now() + (${backoffSec}::int * interval '1 second'),
+            timeline_attempt_count = ${attemptCount}
+        WHERE game_id = ${gameId}
+      `;
+      return NextResponse.json(
+        { error: "timeline temporarily unavailable, retry shortly" },
+        { status: 500, headers: retryAfterHeaders(backoffSec) }
+      );
     }
 
     if (result.status === "unavailable") {
       await sql`
         UPDATE coachbuild.prostage_matches
-        SET timeline_status = 'unavailable'
+        SET timeline_status = 'unavailable',
+            timeline_next_attempt_at = NULL,
+            timeline_attempt_count = 0
         WHERE game_id = ${gameId}
       `;
       return NextResponse.json(
@@ -148,13 +225,15 @@ export async function GET(req: NextRequest) {
 
     // result.status === "ok": persist every player's build order (unmatched
     // players get [] — the game still resolved for them, don't re-walk).
-    for (const r of gameRows) {
+    for (const r of claimed) {
       const order = result.byPlayer.get(r.player_link) ?? [];
       await sql`
         UPDATE coachbuild.prostage_matches
         SET purchase_order = ${JSON.stringify(order)}::jsonb,
             lolesports_game_id = ${result.lolesportsGameId},
-            timeline_status = 'ok'
+            timeline_status = 'ok',
+            timeline_next_attempt_at = NULL,
+            timeline_attempt_count = 0
         WHERE game_id = ${gameId} AND player_link = ${r.player_link}
       `;
     }

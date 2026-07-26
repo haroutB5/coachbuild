@@ -11,6 +11,13 @@
 // after a partial run / crash just picks up where it left off — no separate
 // cursor bookkeeping.
 //
+// 2026-07-26: also skips a game whose `timeline_next_attempt_at` lease/
+// backoff (migration 0016) is still in the future — the GET route uses that
+// column as an atomic in-flight claim + post-transient-failure cooldown; this
+// script must not walk a game some other caller (a live request, or a
+// concurrent run of this same script) currently holds, or the exact
+// double-walk amplification the route fix closes would just reopen here.
+//
 // Sequential by design (ONE game at a time): each game's livestats walk already
 // fires WALK_CONCURRENCY (12) parallel details fetches at feed.lolesports.com;
 // parallelizing games on top would invite the 429s that TAINT a once-only
@@ -39,6 +46,7 @@ async function main() {
            min(overview_page) AS overview_page
     FROM coachbuild.prostage_matches
     WHERE timeline_status IS NULL
+      AND (timeline_next_attempt_at IS NULL OR timeline_next_attempt_at <= now())
     GROUP BY game_id
     ORDER BY min(game_datetime) DESC
     LIMIT ${limit}

@@ -2,6 +2,90 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.58.0] — 2026-07-26 — Audit wave 3: the unauthenticated cost amplifiers, and a support who was never AD
+
+Wave 3 of `AUDIT-2026-07-25.md`. Two independent lanes: the security cluster (Agent 3's findings)
+and the last of the item-set/archetype list. No P0s — the posture was already good; these are the
+"one bad day upstream and the app is down" class, plus one long-standing misclassification that
+v0.57.0's honest labelling finally made visible.
+
+### Fixed — `/api/prostage/timeline` could be made to fan out ~750 outbound requests, by anyone, repeatedly
+
+No auth, no cooldown, no rate limit. On `timeline_status IS NULL` the route synchronously resolved
+the game then walked up to `WALK_MAX_POINTS=500` detail points at `WALK_CONCURRENCY=12` with
+retries, then ddragon. A `transient` outcome correctly persists nothing — which meant the next
+identical request re-walked the whole thing, and a burst of concurrent requests for the same
+unresolved game each launched their own independent walk.
+
+Migration `0016` adds `timeline_next_attempt_at` + `timeline_attempt_count`. The route now claims a
+game with an atomic `UPDATE ... WHERE timeline_status IS NULL AND (next_attempt IS NULL OR
+next_attempt <= now()) ... RETURNING` before touching the network. A concurrent request loses the
+race — 0 rows back, courtesy of Postgres re-evaluating the predicate after the winner commits — and
+bounces `429` having made **zero** outbound calls. On `transient`, the same column moves out on
+exponential backoff (60s → 1h cap). If the walk crashes mid-flight the lease simply expires, so
+there is no unlock step to forget.
+
+**The transient-vs-terminal taint discipline is untouched** — `timeline_status` still stays NULL on
+a transient result. The new column gates *when* a NULL-status row may be retried, never *whether*
+it may be. Backoff logic lives in `lib/prostage/timelineBackoff.ts` because Next's route-type
+checker rejects non-whitelisted exports from a route file.
+
+### Fixed — not one outbound fetch on any hot path had a timeout
+
+Bare `fetch(url)` throughout `lib/pro/**` and `lib/prostage/**`. A single hung socket burned the
+entire `maxDuration` — 90s on patch-movers — instead of failing fast. New `lib/fetchTimeout.ts`
+(8s default, 4s for the high-fanout timeline walk), wired through every call site plus the
+`lib/coachless.ts` / `lib/staticData.ts` choke points behind `heroStats` and `patchMovers`.
+
+### Fixed — `/api/patch-movers` amplified an upstream outage and its CDN cache was trivially bypassed
+
+~400 coachless calls at concurrency 10 per cold request, and *any* junk query param produced a fresh
+cache key and therefore a fresh cold compute. Junk params now `308` to the canonical path before any
+work happens, and `lib/patchMoversCache.ts` adds a 6h/2m single-flight cache. The realistic damage
+this avoids is coachless rate-limiting the deployment's egress IP, which takes out the Builds page —
+its only data source.
+
+### Fixed — the companion disabled TLS validation process-wide, not just for the LCU
+
+`Initialize-TlsShim` installed a blanket certificate-validation bypass so it could talk to the
+League client's self-signed loopback endpoints. The callback now inspects the sender's host and
+bypasses validation for loopback only; everything else — including the `companion.version` check
+against `coachbuild.vercel.app` — gets real validation again.
+
+### Fixed — Leona, Braum and Rell were classified as AD champions by a single support item
+
+v0.57.0 did not cause this; it exposed it. `resolveDamageFamily` tie-broke on a bare `ap !== ad`
+item tally, so **one** item — id `2524` Bandlepipes, a generic support Artifact carrying an
+incidental `AttackSpeed` tag — took tank supports from `ap=0/ad=1` to a `confident: true` AD
+verdict, skipping the correct `Support` → AP class-tag fallback. That's how Leona ended up shipping
+`Bruiser (AD)` and `Lethality/Assassin` lines. The tally must now clear a margin of 2 before it
+outranks class tags. Checked against 27 live champions: genuine AD and AP carries win their tally by
+margins of 8–15, so none of them move.
+
+### Fixed — three curated pool ids have been dead since 16.13.1
+
+`3001` is **Evenshroud**, not Abyssal Mask (which is `8020`) and was mislabelled in two pools;
+`6691` Duskblade and `3193` Gargoyle Stoneplate are both unpurchasable. The tank pool was quietly
+running at 6/8. All three verified against the live 16.13.1 catalog rather than taken on trust.
+`curatedArchetypePool` now warns once per process when any curated id resolves to
+`purchasable: false`, so the next patch's casualties are loud — an enumeration used as a guard rots,
+which this audit had already learned once.
+
+### Fixed — a test fixture that made its own rule untestable
+
+`itemSetBody.test.ts` fabricated `into: ["999999"]` on allowlist ids that really have `into: []`,
+and its own comment conceded the gap. Proved the blind spot by disabling the Lane-starter structural
+rule: the old fixture stayed green, a real pinned catalog slice correctly failed. The test was
+wrong, not the code — replaced with `realStarterMeta()`, a transcribed 16.13.1 slice for all 11
+allowlist ids.
+
+### Known verification gap
+
+The TLS change has **not** been exercised against a real self-signed LCU certificate. There is no
+League client in the build environment and `-SelfTest`'s mock LCU is plain HTTP, so the one code
+path this change touches is the one SelfTest cannot reach. `-SelfTest` passes; that is not the same
+as proven. Needs a live client round trip.
+
 ## [0.57.0] — 2026-07-25 — Item-set honesty: a block title now describes its own contents
 
 Wave 2 of the `AUDIT-2026-07-25.md` findings, all three in `components/hextech/itemSetBody.ts`.
