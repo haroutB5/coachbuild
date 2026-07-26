@@ -56,9 +56,14 @@ export default function CoreBuildOrderCard({ items, onItemClick }: CoreBuildOrde
       <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold mb-1">
         Core Order <span className="text-mut/60 normal-case tracking-normal font-normal">— buy order</span>
       </p>
-      <p className="text-[10.5px] text-mut/70 normal-case mb-4">
-        Each slot shows the highest-WPA option for that point in the build. A negative value means even the best
-        option there trends slightly below average.
+      {/* WPA is the app's central number and appeared NOWHERE in prose before
+          v0.60.1 — every green/red figure on this page is one, on a scale
+          nothing explained. Defined once, here, where the first labelled WPA
+          lives; /compact renders this same card and inherits it. */}
+      <p className="text-[10.5px] text-mut/70 normal-case mb-4 leading-relaxed">
+        <span className="text-txt/80">WPA is Win Probability Added</span> — how much a pick shifts your chance of
+        winning, measured by coachless.gg. Each slot shows the highest-WPA option for that point in the build; a
+        negative value means even the best option there trends slightly below average.
       </p>
       <div className="flex items-start flex-wrap gap-x-1 gap-y-4">
         {order.map((pick, i) => (

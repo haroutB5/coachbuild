@@ -2,6 +2,31 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.60.1] — 2026-07-26 — WPA gets defined; the desktop shell comes back out
+
+### Added
+- **WPA is defined on the page for the first time.** Every green and red figure on Builds is a WPA
+  delta, and the string "WPA" appeared exactly once in the whole surface — as a section label, on a
+  scale nothing explained. It now reads: *WPA is Win Probability Added — how much a pick shifts your
+  chance of winning, measured by coachless.gg.* Defined once, where the first labelled WPA sits;
+  `/compact` renders the same card and inherits it.
+
+### Removed
+- **The Electron desktop shell (`desktop/`), `lib/lcu/applySafety.ts` and the plan document.**
+  Building it was the right call to investigate and the wrong call to finish: it cannot be verified
+  without a machine running the League client, and this one has none. Shipping an unverified process
+  that writes into a user's rune pages on the strength of a typecheck is not a trade worth taking.
+
+  What survives is the part that stood on its own: `/compact` (v0.60.0) is a normal web route and
+  keeps working as a pop-out mini view. `companion.ps1` continues as the only companion, so the
+  freeze-or-sunset question the shell raised is moot — there is no second implementation to drift
+  against.
+
+  The 31 tests removed with `applySafety.ts` pinned a TypeScript re-implementation of rules that
+  only `companion.ps1` actually runs. Keeping them would have meant a green suite proving something
+  no user ever executes, which is worse than no suite: it reads as coverage. The rules stay pinned
+  where they are enforced, by the companion's own `-SelfTest`.
+
 ## [0.60.0] — 2026-07-26 — /compact: one mini view, two hosts
 
 ### Added
