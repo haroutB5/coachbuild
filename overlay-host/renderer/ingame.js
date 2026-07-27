@@ -117,6 +117,13 @@ import { resolveNextSkill } from "../vendor/skillEngine.js";
 // by hand.
 const TOTAL_LEVELS = 18;
 
+// Mirrors lib/skillOrderModel.ts's SOURCE_LEVELS on the same hand-sync terms as
+// TOTAL_LEVELS above. Used ONLY by observedLevelCount's back-compat fallback --
+// i.e. for a cached /api/skill-order payload written before `observedLevels`
+// existed, where "completed" implied a tail derived from exactly 15 published
+// levels. A current payload states its own count and never reaches this.
+const SOURCE_LEVELS = 15;
+
 // Q=0, W=1, E=2, R=3 -- the fixed left-to-right order engy's calibration
 // geometry assumes (see applyCalibration below): slot i's screen center is
 // `firstBoxCenterX + i*spacing`.
@@ -338,6 +345,7 @@ function renderResolved(data) {
   // would be a fabricated claim contradicting the grid directly above it.
   const order = Array.isArray(model.order) ? model.order : [];
   const parts = [];
+  const observed = observedLevelCount(model);
   // Quiet, compact, non-imperative source label -- the FIRST thing a user
   // needs when the shown lane looks wrong is whether this app detected it or
   // they pinned it themselves (2026-07-27 fix). Kept in the footer, not a new
@@ -345,7 +353,16 @@ function renderResolved(data) {
   // typed with no ambiguity would be noise).
   const laneNote = laneSourceNote(data.lane, data.laneSource);
   if (laneNote) parts.push(laneNote);
-  if (order.length < TOTAL_LEVELS) parts.push("Levels 16–18 not published");
+  if (order.length < TOTAL_LEVELS) {
+    parts.push("Levels 16–18 not published");
+  } else if (observed < order.length) {
+    // The order IS 18 long, but the tail is ours. Hatched columns in the grid
+    // above carry the same message visually; this is the words half, because a
+    // hatch pattern nobody explained is a decoration, not a disclosure. Says
+    // which levels rather than just "some", so a player can see at a glance
+    // that everything they are looking at right now is source data.
+    parts.push(`Levels ${observed + 1}–${order.length} derived`);
+  }
   if (Number.isFinite(model.sampleSize) && model.sampleSize > 0) {
     parts.push(`${formatGames(model.sampleSize)} games`);
   }
@@ -371,9 +388,38 @@ function formatGames(n) {
   return String(n);
 }
 
+/**
+ * How many leading entries of `model.order` came VERBATIM from op.gg.
+ *
+ * Mirrors lib/skillOrderModel.ts's `observedLevelCount`, INCLUDING its
+ * back-compat fallback, and is duplicated here rather than imported for the
+ * same reason this renderer duplicates TOTAL_LEVELS: vendor/skillEngine.js is
+ * an esbuild bundle of lib/nextSkill.ts specifically, and it only re-exports
+ * what that module exports. Adding a re-export there purely to reach this
+ * eight-line function would couple the resolver's public surface to the
+ * overlay's rendering. If the two ever disagree the symptom is cosmetic (a
+ * column hatched or not), never a wrong recommendation — resolveNextSkill does
+ * not consult this.
+ *
+ * @param {{order?: unknown, completed?: unknown, observedLevels?: unknown}} model
+ * @returns {number}
+ */
+function observedLevelCount(model) {
+  const len = Array.isArray(model.order) ? model.order.length : 0;
+  const raw = model.observedLevels;
+  if (Number.isInteger(raw) && raw >= 0) return Math.min(raw, len);
+  // Pre-`observedLevels` payload: a completed order was completed from the 15
+  // the source publishes; an uncompleted one is entirely source.
+  return model.completed ? Math.min(SOURCE_LEVELS, len) : len;
+}
+
 function buildGrid(model, championLevel) {
   const order = Array.isArray(model.order) ? model.order : [];
   const known = order.length;
+  // Columns past this are OURS, not op.gg's. They are still shown — a derived
+  // tail is the useful answer to "what do I level at 17" — but they must not
+  // look identical to a published one.
+  const observed = observedLevelCount(model);
   // See the header comment: highlight column is CHAMPION LEVEL, never
   // points-spent. `championLevel` is already validated to be an integer
   // 1..18 or null by skillOrderData.js's normalizeLevel.
@@ -403,6 +449,11 @@ function buildGrid(model, championLevel) {
       const idx = lvl - 1;
       if (idx < known) {
         if (order[idx] === ability) cell.classList.add("cb-marked");
+        // Three distinct states now, not two: PUBLISHED (solid), DERIVED
+        // (outlined), UNKNOWN (hatched). `cb-derived` is applied to the whole
+        // column, marked or not, so the boundary reads as a boundary rather
+        // than as one odd-looking cell.
+        if (idx >= observed) cell.classList.add("cb-derived");
       } else {
         cell.classList.add("cb-unknown");
       }

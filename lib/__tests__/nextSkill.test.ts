@@ -578,16 +578,40 @@ describe("resolveNextSkill — per-champion kits", () => {
     });
   });
 
-  it("UDYR: advises through all 15 published levels, six ranks on a basic included", () => {
+  it("UDYR: advises at EVERY level 1-18 — the user report that reached 15 and stopped", () => {
     const udyr = kitModel(UDYR_15, KIT.udyr);
-    // He cannot max everything (24 purchasable ranks, 18 points), so the tail
-    // is honestly not derivable — but the published 15 are all advisable.
-    expect(udyr.completed).toBe(false);
-    const walked = walk(udyr, KIT.udyr, 15);
-    expect(walked.join("")).toBe(UDYR_15.join(""));
-    expect(countRanks(walked as Ability[])).toEqual({ Q: 6, W: 2, E: 6, R: 1 });
-    // Past the published 15 we still say nothing.
-    expectNone(resolveNextSkill({ model: udyr, level: 16, ranks: ranks(6, 2, 6, 1) }), "model-incomplete");
+    // THE REGRESSION THIS TEST PINS. He has 24 purchasable ranks against 18
+    // points, so subtraction alone cannot say which three he skips — and this
+    // used to be `completed: false`, which made the panel go permanently dark
+    // from level 16 on. The max-priority order resolves it: Q and E are maxed
+    // at 15, so the last three points are W's.
+    expect(udyr.completed).toBe(true);
+    const walked = walk(udyr, KIT.udyr, 18);
+    expect(walked).toHaveLength(18);
+    expect(walked.slice(0, 15).join("")).toBe(UDYR_15.join(""));
+    expect(walked.slice(15).join("")).toBe("WWW");
+    expect(countRanks(walked as Ability[])).toEqual({ Q: 6, W: 5, E: 6, R: 1 });
+  });
+
+  it("UDYR: `model-incomplete` no longer fires merely because the source stopped at 15", () => {
+    // The refusal still EXISTS and is still correct — it is what keeps the
+    // overlay silent when a tail genuinely could not be derived. What changed
+    // is that "the source published only 15 levels" is no longer sufficient
+    // reason for it. A level-16 Udyr now gets a real answer.
+    const udyr = kitModel(UDYR_15, KIT.udyr);
+    expect(resolveNextSkill({ model: udyr, level: 16, ranks: ranks(6, 2, 6, 1) })).toMatchObject({
+      kind: "recommend",
+      ability: "W",
+      fromRank: 2,
+      toRank: 3,
+      atLevel: 16,
+    });
+
+    // ...and it DOES still fire on a model that really is incomplete. Kha'Zix
+    // is the live example: lib/opgg.ts refuses his evolution tokens outright,
+    // but a hand-truncated order stands in for any future refusal shape.
+    const short: SkillOrderModel = { ...udyr, order: UDYR_15, completed: false, observedLevels: 15 };
+    expectNone(resolveNextSkill({ model: short, level: 16, ranks: ranks(6, 2, 6, 1) }), "model-incomplete");
   });
 
   it("UDYR: a seventh rank is still incoherent", () => {

@@ -54,6 +54,7 @@ import { fetchWithTimeout } from "./fetchTimeout";
 import {
   buildSkillOrderModel,
   isAbility,
+  isWellFormedPriority,
   type Ability,
   type SkillOrderModel,
   type SkillOrderSource,
@@ -151,6 +152,39 @@ export function opggChampionName(riotKey: string): string {
 /** Field sets we require, BY NAME. A payload declaring anything else is
  *  treated as "shape changed" → null, never best-effort. */
 const REQUIRED_SKILLS_FIELDS = ["order", "play", "win", "pick_rate"] as const;
+
+/**
+ * The same gate for `class SkillMasteries:` — the published MAX-PRIORITY
+ * order, which is now load-bearing rather than a nicety.
+ *
+ * It is what lets lib/skillOrderModel.ts complete Udyr/Yuumi/Aphelios to 18
+ * levels instead of refusing them, so mis-reading it would produce a
+ * confidently wrong tail rather than a missing card. Hence the same
+ * map-by-name discipline note 2 applies to `Skills`: the declared field SET
+ * must be exactly this, or we take NO priority from the payload.
+ *
+ * Note the asymmetric consequence, which is deliberate. An unexpected
+ * `Skills` field set kills the whole card (we cannot read the order at all).
+ * An unexpected `SkillMasteries` field set kills only the PRIORITY — the
+ * order still parses, and the model falls back to deriving a priority from
+ * the observed path. Failing to null, at the smallest granularity the data
+ * allows, rather than failing to wrong.
+ *
+ * TWO sets, both captured live, because this class has two real shapes and
+ * asserting only one would have silently dropped the priority off half the
+ * payloads this repo has on disk:
+ *   * the SLIM four, what `desired_output_fields` returns — the only shape
+ *     production ever sees, since buildSkillOrderRpc always sends that field;
+ *   * the FULL five, which additionally carries `builds` (the per-variant
+ *     `Skills(...)` breakdown). That is what an unrestricted call returns and
+ *     what lib/__tests__/fixtures/opggPayloads.ts's full captures contain.
+ * `splitTopLevelArgs` already respects the nesting inside `builds`, so the
+ * five-field form parses by name exactly like the four-field one.
+ */
+const MASTERIES_FIELD_SETS: readonly (readonly string[])[] = [
+  ["ids", "play", "win", "pick_rate"],
+  ["ids", "play", "win", "pick_rate", "builds"],
+] as const;
 
 function parseClassHeader(text: string): Map<string, string[]> {
   const classes = new Map<string, string[]>();
@@ -305,16 +339,31 @@ export function parseSkillsFromAnalysis(text: string): SkillOrderSource | null {
   if (play == null || play <= 0) return null;
   if (win == null || win < 0 || win > play) return null;
 
-  // Priority ("max order") — optional. Its absence costs us nothing: the
-  // model derives a priority from the observed path instead.
+  // Priority ("max order"). Optional in the sense that its absence costs us a
+  // card only for the three surplus-kit champions — everyone else's tail is
+  // determined by their caps and the model derives a priority from the
+  // observed path. Present in every live payload probed to date (Udyr,
+  // Ahri, Yuumi, Aphelios, 2026-07-27).
+  //
+  // Read BY NAME off the `class SkillMasteries:` header, exactly like Skills,
+  // and gated on the declared field SET. `ids` is the first field in every
+  // payload seen so far, which is precisely the sort of thing that makes a
+  // positional read look correct until the day it silently is not: op.gg has
+  // already been observed re-emitting `Skills` in a different field order
+  // within the same minute (module note 2).
   let priorityIds: Ability[] | undefined;
   const masteriesFields = classes.get("SkillMasteries");
-  if (masteries && masteriesFields?.includes("ids")) {
+  const masteriesShapeKnown =
+    !!masteriesFields && MASTERIES_FIELD_SETS.some((set) => sameFieldSet(masteriesFields, set));
+  if (masteries && masteriesFields && masteriesShapeKnown) {
     const mArgs = splitTopLevelArgs(masteries.inner);
     if (mArgs.length === masteriesFields.length) {
       const rawIds = mArgs[masteriesFields.indexOf("ids")];
       const ids = parseQuotedList(rawIds ?? "");
-      if (ids && ids.length && ids.every(isAbility)) priorityIds = ids as Ability[];
+      // Well-formedness is judged by the model, not here — one definition of
+      // "a usable priority" (non-empty, real abilities, no repeats), living
+      // next to the code that consumes it.
+      if (isWellFormedPriority(ids)) priorityIds = ids;
     }
   }
 

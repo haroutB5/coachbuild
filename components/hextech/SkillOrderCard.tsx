@@ -11,6 +11,8 @@ import {
   fetchSkillOrder,
   formatPriorityString,
   formatSkillOrderSampleLine,
+  isDerivedLevel,
+  observedLevelCount,
   sortedLevels,
   type Ability,
   type SkillOrderModel,
@@ -53,9 +55,20 @@ function SkillOrderSkeleton() {
  *  levels — same "R reads as the hero ability" treatment GameDetailSheet's
  *  own SkillGridRow already uses for its filled cells, reused here rather
  *  than invented fresh so the two skill-order surfaces read consistently. */
-function AbilityRow({ ability, levels }: { ability: Ability; levels: number[] }) {
+function AbilityRow({
+  ability,
+  levels,
+  isDerived,
+}: {
+  ability: Ability;
+  levels: number[];
+  /** True for a level this app DERIVED rather than the source publishing it.
+   *  Rendered as an outline instead of a fill — see the card's footnote. */
+  isDerived: (level: number) => boolean;
+}) {
   const isUlt = ability === "R";
   const sorted = sortedLevels(levels);
+  const derived = sorted.filter(isDerived);
   return (
     <div className="flex items-center gap-2.5 py-1">
       <span
@@ -65,14 +78,28 @@ function AbilityRow({ ability, levels }: { ability: Ability; levels: number[] })
         {ability}
       </span>
       {sorted.length > 0 ? (
-        <div className="flex flex-wrap gap-1" aria-label={`${ability} ranked at level${sorted.length === 1 ? "" : "s"} ${sorted.join(", ")}`}>
+        <div
+          className="flex flex-wrap gap-1"
+          aria-label={
+            // The screen-reader label carries the provenance too. A visual-only
+            // distinction would tell sighted users the tail is derived and tell
+            // everyone else it was measured — which is the fabrication hard
+            // rule #4 forbids, just aimed at a subset of the audience.
+            `${ability} ranked at level${sorted.length === 1 ? "" : "s"} ${sorted.join(", ")}` +
+            (derived.length
+              ? `. Level${derived.length === 1 ? "" : "s"} ${derived.join(", ")} derived, not recorded`
+              : "")
+          }
+        >
           {sorted.map((lvl) => (
             <span
               key={lvl}
               className={`inline-flex items-center justify-center min-w-[22px] px-1 py-0.5 rounded-[4px] text-[10.5px] font-semibold tabular-nums leading-none ${
-                isUlt
-                  ? "bg-teal text-bg"
-                  : "bg-teal-dim/20 border border-teal-dim/60 text-teal-hover"
+                isDerived(lvl)
+                  ? "bg-transparent border border-dashed border-mut/50 text-mut"
+                  : isUlt
+                    ? "bg-teal text-bg"
+                    : "bg-teal-dim/20 border border-teal-dim/60 text-teal-hover"
               }`}
             >
               {lvl}
@@ -139,6 +166,12 @@ export default function SkillOrderCard({ champ, lane }: SkillOrderCardProps) {
 
   const { model } = state;
   const lowSample = model.sampleSize < LOW_SAMPLE_THRESHOLD;
+  // Levels this app derived rather than the source publishing them. One
+  // implementation, imported from lib/skillOrderModel.ts (see skillOrder.ts's
+  // re-export note) so the card and the desktop overlay cannot disagree about
+  // which levels are ours.
+  const derivedAt = (level: number) => isDerivedLevel(model, level);
+  const hasDerivedTail = model.order.length > observedLevelCount(model);
 
   return (
     <div className="bg-panel border border-line rounded-xl p-5">
@@ -157,7 +190,12 @@ export default function SkillOrderCard({ champ, lane }: SkillOrderCardProps) {
           ranked at (NOT an 18-column grid — see module header). */}
       <div className="space-y-0.5">
         {ABILITY_ROWS.map((ability) => (
-          <AbilityRow key={ability} ability={ability} levels={model.levels[ability] ?? []} />
+          <AbilityRow
+            key={ability}
+            ability={ability}
+            levels={model.levels[ability] ?? []}
+            isDerived={derivedAt}
+          />
         ))}
       </div>
 
@@ -170,6 +208,20 @@ export default function SkillOrderCard({ champ, lane }: SkillOrderCardProps) {
         <p className="text-[10.5px] text-gold/70 mt-3 flex items-center gap-1">
           <span aria-hidden="true">⚠</span>
           Only levels 1–15 are confirmed for this sample — 16–18 aren&apos;t recorded.
+        </p>
+      )}
+
+      {/* The other half of the same honesty requirement, and the one that is
+          easy to forget: a COMPLETED order shows all 18 levels, and three of
+          them are ours. The dashed chips above already say so visually; this
+          says it in words, because a visual convention nobody explained is
+          not a disclosure. Deliberately not styled as a warning — a derived
+          tail is a legitimate, useful answer, just not a measured one. */}
+      {hasDerivedTail && (
+        <p className="text-[10.5px] text-mut/70 mt-3">
+          Dashed levels are derived from this champion&apos;s
+          {model.completionBasis === "published" ? " published max order" : " levelling path"}, not
+          recorded — the source publishes levels 1–15 only.
         </p>
       )}
 

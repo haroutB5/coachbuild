@@ -198,6 +198,28 @@ export interface SkillOrderModel {
   /** True only when levels 16-18 were derived by the completion rule.
    *  False means the source's 15 are all we honestly know. */
   completed: boolean;
+  /**
+   * How many LEADING entries of `order` came VERBATIM from the source.
+   * Everything at a higher index was DERIVED by lib/skillOrderModel.ts's
+   * completion rule and must not be rendered as measured (CLAUDE.md hard
+   * rule #4). 15 on a completed order, `order.length` when nothing was
+   * derived.
+   *
+   * Optional ONLY for back-compat — a response cached before this field
+   * existed, or a hand-built fixture, omits it. Never read it raw: call
+   * `observedLevelCount(model)` / `isDerivedLevel(model, level)`, which
+   * reproduce the old meaning when it is absent.
+   */
+  observedLevels?: number;
+  /**
+   * WHICH priority resolved the derived tail:
+   *   * `"published"` — op.gg's own `skill_masteries.ids` max order, measured
+   *                     over a larger sample than the levelling order itself.
+   *   * `"derived"`   — inferred from the observed path by `derivePriority`,
+   *                     because the source published none we could validate.
+   * Absent when nothing was derived. Diagnostic/provenance, not a score.
+   */
+  completionBasis?: "published" | "derived";
   /** Games behind this order. */
   sampleSize: number;
   /** 0..1, or null when not supplied. */

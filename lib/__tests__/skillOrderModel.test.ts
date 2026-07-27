@@ -3,6 +3,10 @@ import {
   completeSkillOrder,
   derivePriority,
   resolvePriority,
+  resolveAllocationPriority,
+  isWellFormedPriority,
+  observedLevelCount,
+  isDerivedLevel,
   levelsByAbility,
   countRanks,
   buildSkillOrderModel,
@@ -14,6 +18,7 @@ import {
   type Ability,
 } from "@/lib/skillOrderModel";
 import { kitFromMaxRanks } from "@/lib/championKit";
+import type { ChampionKit, SkillOrderModel } from "@/lib/types";
 
 const A = (s: string): Ability[] => s.split("") as Ability[];
 
@@ -356,24 +361,105 @@ describe("completeSkillOrder — with the champion's OWN caps", () => {
     expect(res.order[15], name).toBe("R");
   });
 
-  it.each([
-    ["UDYR", "QRWEQQQEQEQEEEW", "udyr"],
-    ["YUUMI", "QEQEQRQEQERQEWW", "yuumi"],
-    ["APHELIOS", "QQQEQREQEQEEREW", "aphelios"],
-  ])(
-    "%s refuses as kit-not-derivable — more purchasable ranks than points",
-    (name, path, key) => {
+  // ── THE SURPLUS KITS. Every order and every `ids` list below was probed
+  // LIVE against op.gg 2026-07-27 (patch 16.14) — not copied from a prior
+  // transcript. These three used to refuse as `kit-not-derivable`.
+  const SURPLUS: Array<[string, string, keyof typeof KIT, string, string, string]> = [
+    // name       observed 15        kit         published ids  tail   final counts
+    ["UDYR", "QRWEQQQEQEQEEEW", "udyr", "QEWR", "WWW", "6/5/6/1"],
+    ["YUUMI", "QEQEQRQEQERQEWW", "yuumi", "QEW", "RWW", "6/4/5/3"],
+    ["APHELIOS", "QQQEQREQEQEEREW", "aphelios", "QEW", "RWW", "6/3/6/3"],
+  ];
+
+  it.each(SURPLUS)(
+    "%s completes to 18 via the PUBLISHED max-priority order",
+    (name, path, key, ids, tail, counts) => {
       const observed = A(path);
       const kit = KIT[key as keyof typeof KIT];
+      // The premise: subtraction alone genuinely cannot resolve these.
       expect(kit.purchasableTotal, name).toBeGreaterThan(18);
-      const res = completeSkillOrder(observed, undefined, kit);
-      expect(res.completed, name).toBe(false);
-      // The honest reason: the player must skip a point and we cannot know
-      // which. NOT "you broke a cap" — they broke no cap of their own.
-      expect(res.refusedBecause, name).toBe("kit-not-derivable");
-      expect(res.order, name).toEqual(observed);
+
+      const res = completeSkillOrder(observed, A(ids), kit);
+      expect(res.completed, name).toBe(true);
+      expect(res.basis, name).toBe("published");
+      expect(res.order, name).toHaveLength(18);
+      // The observed 15 pass through byte-for-byte — completion APPENDS, it
+      // never edits what the source published.
+      expect(res.order.slice(0, 15), name).toEqual(observed);
+      expect(res.order.slice(15).join(""), name).toBe(tail);
+      expect(res.observedLevels, name).toBe(15);
+
+      const [q, w, e, r] = counts.split("/").map(Number);
+      expect(countRanks(res.order), name).toEqual({ Q: q, W: w, E: e, R: r });
+      // 18 points, all of them legal for THIS champion.
+      expect(q + w + e + r, name).toBe(18);
+      for (const a of ["Q", "W", "E"] as const) {
+        expect(countRanks(res.order)[a], `${name} ${a}`).toBeLessThanOrEqual(kit.maxRanks[a]);
+      }
+      expect(countRanks(res.order).R, name).toBeLessThanOrEqual(
+        kit.maxRanks.R - kit.freeRanks.R
+      );
     }
   );
+
+  it("UDYR is the report: Q6 W5 E6 R1, and the last three points are W", () => {
+    // The user's symptom was a path that stopped at 15. This is the exact
+    // arithmetic that ends it, spelled out rather than parameterised.
+    const res = completeSkillOrder(UDYR_15, A("QEWR"), KIT.udyr);
+    expect(countRanks(UDYR_15)).toEqual({ Q: 6, W: 2, E: 6, R: 1 });
+    // Q and E are ALREADY at their caps by level 15 — that is why the tail was
+    // ambiguous, and why the priority is what settles it.
+    expect(countRanks(UDYR_15).Q).toBe(KIT.udyr.maxRanks.Q);
+    expect(countRanks(UDYR_15).E).toBe(KIT.udyr.maxRanks.E);
+    expect(res.order.join("")).toBe("QRWEQQQEQEQEEEWWWW");
+    expect(levelsByAbility(res.order).W).toEqual([3, 15, 16, 17, 18]);
+    expect(countRanks(res.order)).toEqual({ Q: 6, W: 5, E: 6, R: 1 });
+  });
+
+  it.each(SURPLUS)(
+    "%s still completes without a published priority, and says the basis was derived",
+    (name, path, key, _ids, tail) => {
+      // The fallback is not a second-class path — for these three the derived
+      // priority happens to agree with the published one. It is reported as
+      // `derived` anyway, because WHERE the answer came from is the thing a
+      // consumer needs and "it agreed this time" is not a guarantee.
+      const res = completeSkillOrder(A(path), undefined, KIT[key as keyof typeof KIT]);
+      expect(res.completed, name).toBe(true);
+      expect(res.basis, name).toBe("derived");
+      expect(res.order.slice(15).join(""), name).toBe(tail);
+    }
+  );
+
+  it("prefers the PUBLISHED priority over the derived one when they disagree", () => {
+    // Udyr's derived priority omits R entirely (derivePriority only ranks
+    // basics), so a published list is the ONLY way R can ever receive a
+    // derived point. Construct the disagreement explicitly: a synthetic Udyr
+    // path with W already maxed, where the published "R before W" is the only
+    // thing that can place the tail.
+    const wMaxed = A("QQQQQQWWWWWWEEE"); // Q6 W6 E3 R0
+    expect(countRanks(wMaxed)).toEqual({ Q: 6, W: 6, E: 3, R: 0 });
+
+    const rNext = completeSkillOrder(wMaxed, A("QWRE"), KIT.udyr);
+    expect(rNext.completed).toBe(true);
+    expect(rNext.basis).toBe("published");
+    expect(rNext.order.slice(15).join("")).toBe("RRR");
+
+    // Same path, no published priority: the derived list names only basics, so
+    // the three points fall to E instead. Different answer, same input — which
+    // is exactly why the basis is reported rather than assumed.
+    const eNext = completeSkillOrder(wMaxed, undefined, KIT.udyr);
+    expect(eNext.completed).toBe(true);
+    expect(eNext.basis).toBe("derived");
+    expect(eNext.order.slice(15).join("")).toBe("EEE");
+  });
+
+  it("falls back to derived on a MALFORMED published priority rather than half-using it", () => {
+    for (const bad of [[], ["Q", "Q", "W"], ["Q", "X"], ["r"]] as unknown as Ability[][]) {
+      const res = completeSkillOrder(UDYR_15, bad, KIT.udyr);
+      expect(res.completed, JSON.stringify(bad)).toBe(true);
+      expect(res.basis, JSON.stringify(bad)).toBe("derived");
+    }
+  });
 
   it("still refuses a path that breaks the champion's OWN cap", () => {
     // Seven Q on a six-Q champion is incoherent for Jayce too.
@@ -432,6 +518,284 @@ describe("completeSkillOrder — with the champion's OWN caps", () => {
     expect(m.kit).toBeNull();
     expect(m.completed).toBe(false);
     expect(m.order).toHaveLength(15);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROVENANCE. A derived tail is a legitimate answer; a derived tail presented
+// as measured is the thing CLAUDE.md hard rule #4 forbids. These assert the
+// model can always be asked which levels are the source's and which are ours.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("provenance — observedLevels / completionBasis", () => {
+  const AHRI_SRC = { order: AHRI_15, priorityIds: A("QWE"), play: 71667, win: 41408, pickRate: 0.57 };
+  const UDYR_KIT = kitFromMaxRanks([6, 6, 6, 6])!;
+
+  it("a completed model reports 15 observed levels and 3 derived ones", () => {
+    const m = buildSkillOrderModel(AHRI_SRC)!;
+    expect(m.order).toHaveLength(18);
+    expect(m.observedLevels).toBe(15);
+    expect(observedLevelCount(m)).toBe(15);
+    for (const lvl of [1, 8, 15]) expect(isDerivedLevel(m, lvl), `level ${lvl}`).toBe(false);
+    for (const lvl of [16, 17, 18]) expect(isDerivedLevel(m, lvl), `level ${lvl}`).toBe(true);
+  });
+
+  it("an UNCOMPLETED model claims nothing as derived — it claims nothing at all past 15", () => {
+    // Kha'Zix-shaped: refused, so the order IS the source.
+    const m = buildSkillOrderModel({ ...AHRI_SRC, order: A("QQQQQQWWWWWEEEE") })!;
+    expect(m.completed).toBe(false);
+    expect(m.observedLevels).toBe(15);
+    expect(observedLevelCount(m)).toBe(15);
+    // Level 16 is not derived — it is ABSENT. A UI must render neither.
+    expect(isDerivedLevel(m, 16)).toBe(false);
+  });
+
+  it("reports WHICH priority decided the tail", () => {
+    expect(buildSkillOrderModel(AHRI_SRC)!.completionBasis).toBe("published");
+    expect(buildSkillOrderModel({ ...AHRI_SRC, priorityIds: undefined })!.completionBasis).toBe(
+      "derived"
+    );
+    // Nothing derived → no basis. Naming a priority that decided nothing would
+    // imply a derivation that never happened.
+    const refused = buildSkillOrderModel({ ...AHRI_SRC, order: UDYR_15 })!;
+    expect(refused.completed).toBe(false);
+    expect("completionBasis" in refused).toBe(false);
+  });
+
+  it("Udyr's model carries the published basis end to end", () => {
+    const m = buildSkillOrderModel(
+      { order: UDYR_15, priorityIds: A("QEWR"), play: 9670, win: 5927, pickRate: 0.3 },
+      UDYR_KIT
+    )!;
+    expect(m.completed).toBe(true);
+    expect(m.completionBasis).toBe("published");
+    expect(m.observedLevels).toBe(15);
+    expect(m.levels.W).toEqual([3, 15, 16, 17, 18]);
+    // The DISPLAY priority stays basics-only ("Q › E › W") — allocation and
+    // display are deliberately different lists; see resolveAllocationPriority.
+    expect(m.priority).toEqual(A("QEW"));
+  });
+
+  it("observedLevelCount reproduces the old meaning for a payload that predates the field", () => {
+    // A response cached before `observedLevels` existed. Absent must not mean
+    // "all 18 measured" — that is precisely the fabrication being prevented.
+    const legacy = {
+      order: [...AHRI_15, ...A("REE")],
+      completed: true,
+    } as unknown as SkillOrderModel;
+    expect(observedLevelCount(legacy)).toBe(15);
+    expect(isDerivedLevel(legacy, 16)).toBe(true);
+
+    const legacyShort = { order: [...UDYR_15], completed: false } as unknown as SkillOrderModel;
+    expect(observedLevelCount(legacyShort)).toBe(15);
+    expect(isDerivedLevel(legacyShort, 16)).toBe(false);
+  });
+
+  it("clamps a nonsense observedLevels rather than trusting it", () => {
+    const m = {
+      order: [...AHRI_15],
+      completed: false,
+      observedLevels: 99,
+    } as unknown as SkillOrderModel;
+    expect(observedLevelCount(m)).toBe(15);
+    expect(isDerivedLevel(m, 15)).toBe(false);
+  });
+});
+
+describe("isWellFormedPriority / resolveAllocationPriority", () => {
+  it("accepts the two shapes op.gg actually publishes", () => {
+    expect(isWellFormedPriority(A("QWE"))).toBe(true); // every standard champion
+    expect(isWellFormedPriority(A("QEWR"))).toBe(true); // Udyr
+  });
+
+  it("rejects empty, repeated, and non-ability entries", () => {
+    for (const bad of [[], ["Q", "Q"], ["Q", "x"], ["QW"], null, undefined, "QWE", 3]) {
+      expect(isWellFormedPriority(bad), JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it("KEEPS R, unlike the display priority, and appends missing basics", () => {
+    const udyrKit = kitFromMaxRanks([6, 6, 6, 6])!;
+    expect(resolveAllocationPriority(A("QEWR"), UDYR_15, udyrKit)).toEqual({
+      priority: A("QEWR"),
+      basis: "published",
+    });
+    // Display priority for the same input drops R. Both are correct; they
+    // answer different questions.
+    expect(resolvePriority(A("QEWR"), UDYR_15, udyrKit)).toEqual(A("QEW"));
+
+    // A partial published list still cannot leave a point unplaceable.
+    expect(resolveAllocationPriority(A("R"), UDYR_15, udyrKit).priority).toEqual(A("RQEW"));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE "CAN'T HAPPEN" REFUSALS. Every one below is unreachable from real roster
+// data. Each is proven to FIRE against a synthetic input, so "unreachable" is
+// a measured claim rather than a comment.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("completeSkillOrder — the unreachable refusals, proven reachable", () => {
+  it("kit-not-derivable fires on a kit that cannot fill 18 points", () => {
+    // No real champion is this shape (the roster minimum is exactly 18), so it
+    // is constructed. 5/5/5/1 with a free R = 15 purchasable ranks.
+    const starved: ChampionKit = {
+      maxRanks: { Q: 5, W: 5, E: 5, R: 1 },
+      freeRanks: { Q: 0, W: 0, E: 0, R: 1 },
+      ultimateLevels: [1],
+      purchasableTotal: 15,
+    };
+    const res = completeSkillOrder(A("QQQQQWWWWWEEEEE"), A("QWE"), starved);
+    expect(res.completed).toBe(false);
+    expect(res.refusedBecause).toBe("kit-not-derivable");
+    expect(res.order).toHaveLength(15);
+  });
+
+  it("priority-exhausted fires when nothing named is under its cap", () => {
+    // Requires a kit with spare ranks ONLY in a slot the priority never names.
+    // Real Udyr cannot reach this (Q+W+E = 18 > 15, so a basic is always
+    // under cap at level 15), so the caps are shrunk to make it reachable.
+    const narrow: ChampionKit = {
+      maxRanks: { Q: 5, W: 5, E: 5, R: 6 },
+      freeRanks: { Q: 0, W: 0, E: 0, R: 0 },
+      ultimateLevels: null, // ungated, like Udyr's fourth basic
+      purchasableTotal: 21,
+    };
+    // Q5 W5 E5 R0 — every basic maxed at level 15, spare only in R.
+    const maxedBasics = A("QQQQQWWWWWEEEEE");
+    const res = completeSkillOrder(maxedBasics, undefined, narrow);
+    expect(res.completed).toBe(false);
+    expect(res.refusedBecause).toBe("priority-exhausted");
+    expect(res.order).toEqual(maxedBasics);
+
+    // ...and a PUBLISHED priority naming R resolves the very same input. This
+    // is the whole feature in two assertions.
+    const withR = completeSkillOrder(maxedBasics, A("QWER"), narrow);
+    expect(withR.completed).toBe(true);
+    expect(withR.order.slice(15).join("")).toBe("RRR");
+  });
+
+  it("ultimate-illegal-tail fires when a schedule gates a rank past level 16", () => {
+    // No published schedule gates anything later than 16, which is why the
+    // check never fires on real data. A synthetic one proves it is wired up
+    // rather than decorative.
+    const lateGate: ChampionKit = {
+      maxRanks: { Q: 5, W: 5, E: 5, R: 3 },
+      freeRanks: { Q: 0, W: 0, E: 0, R: 0 },
+      ultimateLevels: [6, 11, 18], // third rank not legal until 18
+      purchasableTotal: 18,
+    };
+    // Q5 W5 E3 R2 — the tail needs R at level 16, which this kit forbids.
+    const res = completeSkillOrder(AHRI_15, A("QWE"), lateGate);
+    expect(res.completed).toBe(false);
+    expect(res.refusedBecause).toBe("ultimate-illegal-tail");
+    expect(res.order).toEqual([...AHRI_15]);
+  });
+
+  it("every refusal returns observedLevels equal to the untouched input length", () => {
+    const cases: Array<readonly Ability[]> = [
+      A("QW"), // unexpected-length
+      [...AHRI_15, ...A("REE")], // already-complete
+      A("QQQQQQWWWWWEEEE"), // rank-over-cap
+      A("RRRQQQQQWWWWWEE"), // ultimate-remainder
+    ];
+    for (const observed of cases) {
+      const res = completeSkillOrder(observed);
+      expect(res.completed).toBe(false);
+      expect(res.observedLevels, res.refusedBecause).toBe(observed.length);
+      expect(res.basis).toBeUndefined();
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE ROSTER-WIDE PROPERTY. The live 173-champion sweep is a one-off script
+// (see HANDOFF-engy.md); this is the offline equivalent and it is STRICTER —
+// it runs every rank distribution that can reach 15 levels against every kit
+// shape ddragon publishes, which is a superset of what any one patch's orders
+// exercise. The invariant is the one that matters: exactly 18 legal points, or
+// an explicit refusal. Never a silently short or illegal order.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("ALL KIT SHAPES × ALL 15-level distributions — 18 legal points, or refuse", () => {
+  // Every R maxrank kitFromMaxRanks accepts, paired with the basic caps that
+  // actually occur (ddragon 16.14.1 full-roster sweep).
+  const KITS: Array<[string, ChampionKit]> = [
+    ["standard 5/5/5/3", kitFromMaxRanks([5, 5, 5, 3])!],
+    ["jayce 6/6/6/1", kitFromMaxRanks([6, 6, 6, 1])!],
+    ["karma 5/5/5/4", kitFromMaxRanks([5, 5, 5, 4])!],
+    ["udyr 6/6/6/6", kitFromMaxRanks([6, 6, 6, 6])!],
+    ["yuumi 6/5/5/3", kitFromMaxRanks([6, 5, 5, 3])!],
+    ["aphelios 6/6/6/3", kitFromMaxRanks([6, 6, 6, 3])!],
+  ];
+
+  const tuples: Array<[number, number, number, number]> = [];
+  for (let q = 0; q <= 7; q += 1)
+    for (let w = 0; w <= 7; w += 1)
+      for (let e = 0; e <= 7; e += 1) {
+        const r = SOURCE_LEVELS - q - w - e;
+        if (r >= 0 && r <= 7) tuples.push([q, w, e, r]);
+      }
+
+  const orderFrom = ([q, w, e, r]: [number, number, number, number]): Ability[] => [
+    ...Array<Ability>(q).fill("Q"),
+    ...Array<Ability>(w).fill("W"),
+    ...Array<Ability>(e).fill("E"),
+    ...Array<Ability>(r).fill("R"),
+  ];
+
+  // Both priority sources, because the allocator's behaviour depends on which
+  // one it got and a sweep over only one would miss half the paths.
+  const PRIORITIES: Array<[string, Ability[] | undefined]> = [
+    ["derived (none supplied)", undefined],
+    ["published QWE", A("QWE")],
+    ["published QEWR", A("QEWR")],
+  ];
+
+  it.each(KITS)("%s: never emits a short or illegal order", (kitName, kit) => {
+    let completed = 0;
+    let refused = 0;
+
+    for (const [, priority] of PRIORITIES) {
+      for (const t of tuples) {
+        const observed = orderFrom(t);
+        const res = completeSkillOrder(observed, priority, kit);
+        const label = `${kitName} ${t.join("/")}`;
+
+        if (!res.completed) {
+          refused += 1;
+          // A refusal returns the input untouched and says why.
+          expect(res.order, label).toEqual(observed);
+          expect(res.refusedBecause, label).toBeTruthy();
+          expect(res.observedLevels, label).toBe(observed.length);
+          continue;
+        }
+
+        completed += 1;
+        // ── The invariant, in full. ──
+        expect(res.order, label).toHaveLength(TOTAL_LEVELS);
+        expect(res.observedLevels, label).toBe(SOURCE_LEVELS);
+        expect(res.order.slice(0, SOURCE_LEVELS), label).toEqual(observed);
+        expect(res.basis, label).toBeTruthy();
+
+        const c = countRanks(res.order);
+        // 18 points spent, none of them over a cap this champion has.
+        expect(c.Q + c.W + c.E + c.R, label).toBe(TOTAL_LEVELS);
+        for (const a of ["Q", "W", "E"] as const) {
+          expect(c[a], `${label} ${a}`).toBeLessThanOrEqual(kit.maxRanks[a]);
+        }
+        expect(c.R, `${label} R`).toBeLessThanOrEqual(kit.maxRanks.R - kit.freeRanks.R);
+
+        // Every R rank in the DERIVED tail lands at a level the game allows.
+        if (kit.ultimateLevels !== null) {
+          levelsByAbility(res.order).R.forEach((lvl, i) => {
+            const gameRank = i + 1 + kit.freeRanks.R;
+            if (lvl <= SOURCE_LEVELS) return; // source's own aggregate, not ours
+            expect(kit.ultimateLevels![gameRank - 1], `${label} R@${lvl}`).toBeLessThanOrEqual(lvl);
+          });
+        }
+      }
+    }
+
+    expect(completed, `${kitName} completed`).toBeGreaterThan(0);
+    expect(refused, `${kitName} refused`).toBeGreaterThan(0);
   });
 });
 

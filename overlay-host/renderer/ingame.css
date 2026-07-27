@@ -48,6 +48,8 @@
   --cb-mut: #9aa39b;
   --cb-cell: rgba(255, 255, 255, 0.07);
   --cb-cell-unknown: rgba(255, 255, 255, 0.03);
+  --cb-cell-derived: rgba(255, 255, 255, 0.04); /* between "empty" and "unknown" --
+                                                    a derived column is neither */
   --cb-current-band: rgba(200, 170, 110, 0.22);
   --cb-interactive: #4fb0e0; /* deliberately a DIFFERENT hue from the gold accent --
                                  "editable" must never be mistaken for "recommended" */
@@ -282,6 +284,28 @@ body {
     transparent 2px,
     transparent 4px
   );
+}
+
+/* Levels 16-18 on a COMPLETED order: DERIVED by this app from the champion's
+   own published rank caps plus op.gg's published max-priority order -- op.gg
+   does NOT publish a levelling order at those levels. Shown, because "what do
+   I level at 17" is a real question with a defensible answer, but never with
+   the same weight as a measured column: the mark becomes an OUTLINE instead of
+   a fill, and the whole column carries a faint tint so the boundary reads as a
+   boundary rather than as one odd-looking cell.
+
+   Placed BEFORE the .cb-current block on purpose. The current-level band is
+   the single most important glance signal on this screen, and CSS source order
+   is what lets it keep winning at equal specificity. The mark uses `box-shadow`
+   rather than `outline` for the same reason -- .cb-current owns `outline`, and
+   two rules fighting over one property is how a band silently stops rendering. */
+.cb-grid td.cb-derived {
+  background: var(--cb-cell-derived);
+}
+
+.cb-grid td.cb-marked.cb-derived {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--cb-gold-dim);
 }
 
 /* The player's OWN current champion level -- descriptive, not instructive.

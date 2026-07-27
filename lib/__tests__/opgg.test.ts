@@ -251,6 +251,55 @@ describe("parseSkillsFromAnalysis — refuses rather than mis-parses", () => {
     expect(s!.play).toBe(71667);
     expect(s!.priorityIds).toBeUndefined();
   });
+
+  // ── The priority is LOAD-BEARING now (it completes Udyr/Yuumi/Aphelios to
+  // 18 levels), so it gets the same map-by-name treatment `Skills` has always
+  // had. These pin that it is read by NAME and that an unrecognised shape
+  // costs the priority only — never the whole card, and never a mis-read.
+  it("maps skill_masteries fields BY NAME, not by position", () => {
+    // The slim payload declares `ids,pick_rate,play,win,builds`. Swap the
+    // first two in BOTH the header and the call, exactly as op.gg has already
+    // been observed doing to `Skills`. A reader hardcoding index 0 now picks
+    // up `0.92` — a rate — as the priority list. A by-name reader is unmoved.
+    const reordered = AHRI_MID_SLIM.replace(
+      "class SkillMasteries: ids,pick_rate,play,win,builds",
+      "class SkillMasteries: pick_rate,ids,play,win,builds"
+    ).replace('SkillMasteries(["Q","W","E"],0.92,', 'SkillMasteries(0.92,["Q","W","E"],');
+    expect(reordered).not.toBe(AHRI_MID_SLIM);
+    const s = parseSkillsFromAnalysis(reordered);
+    expect(s).toBeTruthy();
+    expect(s!.priorityIds).toEqual(["Q", "W", "E"]);
+  });
+
+  it("drops ONLY the priority when skill_masteries declares an unknown field set", () => {
+    // `builds` → `tier`: the field COUNT is unchanged (so the arity check
+    // still passes and a laxer parser would happily read ids), but the SET is
+    // one we have never seen and therefore do not claim to understand.
+    const unknownSet = AHRI_MID_SLIM.replace(
+      "class SkillMasteries: ids,pick_rate,play,win,builds",
+      "class SkillMasteries: ids,pick_rate,play,win,tier"
+    );
+    expect(unknownSet).not.toBe(AHRI_MID_SLIM);
+    const s = parseSkillsFromAnalysis(unknownSet);
+    // The card SURVIVES — the order parsed fine and the model derives a
+    // priority from it. Only the published ranking is discarded. That
+    // asymmetry against `Skills` (whose unknown set nulls everything) is the
+    // point: refuse at the smallest granularity the data allows.
+    expect(s).toBeTruthy();
+    expect(s!.order).toHaveLength(15);
+    expect(s!.play).toBe(71667);
+    expect(s!.priorityIds).toBeUndefined();
+  });
+
+  it("drops a malformed ids list rather than half-using it", () => {
+    for (const bad of ['["Q","Q","W"]', '["Q","X"]', "[]"]) {
+      const broken = AHRI_MID_SLIM.replace('SkillMasteries(["Q","W","E"],0.92,', `SkillMasteries(${bad},0.92,`);
+      expect(broken, bad).not.toBe(AHRI_MID_SLIM);
+      const s = parseSkillsFromAnalysis(broken);
+      expect(s, bad).toBeTruthy();
+      expect(s!.priorityIds, bad).toBeUndefined();
+    }
+  });
 });
 
 describe("extractEnvelopeText", () => {

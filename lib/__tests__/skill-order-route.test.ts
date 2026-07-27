@@ -240,8 +240,21 @@ describe("CROSS-HALF INTEGRATION — this route's body vs fronty's real guard", 
   it("the two halves' field names have not drifted apart", async () => {
     // If either side renames a field, this fails loudly instead of rendering
     // an empty card in production.
-    expect(Object.keys(AHRI_MODEL).sort()).toEqual(
-      ["completed", "levels", "order", "priority", "sampleSize", "share", "winRate"]
-    );
+    // `observedLevels` + `completionBasis` joined the contract when the
+    // completion rule started deriving levels 16-18 for surplus kits — both
+    // are PROVENANCE, and the frontend renders the derived tail differently
+    // because of them, so a rename on either side must fail here rather than
+    // silently downgrade a derived tail into a measured-looking one.
+    expect(Object.keys(AHRI_MODEL).sort()).toEqual([
+      "completed",
+      "completionBasis",
+      "levels",
+      "observedLevels",
+      "order",
+      "priority",
+      "sampleSize",
+      "share",
+      "winRate",
+    ]);
   });
 });

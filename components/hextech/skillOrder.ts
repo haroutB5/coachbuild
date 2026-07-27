@@ -31,6 +31,17 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { ChampionKit } from "@/lib/types";
+import { isDerivedLevel, observedLevelCount } from "@/lib/skillOrderModel";
+
+// Provenance is NOT duplicated the way the model shape above is. The rule for
+// "which levels did we derive" has exactly one correct implementation
+// (including the back-compat fallback for payloads cached before
+// `observedLevels` existed), and two copies of it would be a real correctness
+// hole rather than the cosmetic type duplication this file otherwise accepts
+// — the same reasoning the `kit` field's comment already sets out.
+// lib/skillOrderModel.ts is pure (no fetch, no I/O), so importing it into a
+// client component costs nothing at runtime.
+export { isDerivedLevel, observedLevelCount };
 
 export type Ability = "Q" | "W" | "E" | "R";
 
@@ -44,6 +55,16 @@ export interface SkillOrderModel {
   /** True only when levels 16-18 were derived by the completion rule.
    *  False means the source's 15 are all we honestly know. */
   completed: boolean;
+  /** How many LEADING entries of `order` came VERBATIM from the source;
+   *  anything past that index was DERIVED and must not be rendered as
+   *  measured. Optional on the wire for back-compat — read it through
+   *  `isDerivedLevel` / `observedLevelCount`, never raw. See the same field on
+   *  lib/types.ts's SkillOrderModel. */
+  observedLevels?: number;
+  /** Which priority resolved the derived tail — op.gg's own published max
+   *  order, or one inferred from the observed path. Absent when nothing was
+   *  derived. Provenance, never a score. */
+  completionBasis?: "published" | "derived";
   /** Games behind this order. */
   sampleSize: number;
   /** 0..1, or null when not supplied. */

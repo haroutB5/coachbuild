@@ -172,7 +172,15 @@ export type CompletionRefusal =
   /** Walking the max-priority order ran out of abilities still under their
    *  cap before all 18 points were placed. The tail is then genuinely
    *  unresolved — the priority we hold does not name anything left to spend
-   *  on — so the observed 15 are returned untouched. */
+   *  on — so the observed 15 are returned untouched.
+   *
+   *  REACHABLE, unlike the two "can't happen" refusals below and above it. A
+   *  DERIVED priority never names R, so a surplus champion whose spare ranks
+   *  sit mostly in the R slot can exhaust its three basics; that is precisely
+   *  the case a published `ids` list rescues. Not hit by any champion's live
+   *  order today, but the difference between "not hit today" and "cannot
+   *  happen" is the whole reason this is a named refusal rather than an
+   *  assertion. */
   | "priority-exhausted"
   /** A derived tail entry would rank the ultimate at a level this champion's
    *  own schedule does not allow. Distinct from lib/nextSkill.ts's
@@ -278,13 +286,32 @@ export interface CompletionResult {
  *      points a game grants (Yuumi/Aphelios/Udyr), so the tail depends on
  *      which point the player chooses to skip. Checked BEFORE the cap check
  *      so these three report why they are really undecidable.
- *  (4) `ultimate-remainder` — the tail needs a different number of ultimate
- *      ranks than the champion's own legality schedule leaves room for in
- *      levels 16-18. For every gated kit that room is exactly one (level 16);
- *      for Jayce, whose only R rank is free at level 1, it is zero.
+ *  (4) `ultimate-remainder` — CASE-1 KITS ONLY. The tail needs a different
+ *      number of ultimate ranks than the champion's own legality schedule
+ *      leaves room for in levels 16-18. For every gated kit that room is
+ *      exactly one (level 16); for Jayce, whose only R rank is free at level
+ *      1, it is zero. A surplus kit cannot be judged this way — it has spare
+ *      ranks everywhere by construction — so the allocator's own
+ *      `priority-exhausted`/`ultimate-illegal-tail` checks cover it instead.
  *  (5) `tail-mismatch`    — belt-and-braces: the computed remainder doesn't
  *      total 3. Unreachable if (1)+(3) hold, and asserted in tests precisely
  *      because "can't happen" is a claim worth testing rather than trusting.
+ *  (6) `priority-exhausted` — the abilities NAMED by the priority have fewer
+ *      ranks left between them than the tail needs. Not reached by any
+ *      champion's published order on the current roster (checked against the
+ *      live 15 of all three surplus kits), but NOT unreachable in principle,
+ *      and the sweep test finds it: a Yuumi-shaped kit whose observed 15
+ *      spends no point on R leaves only ONE basic rank under a cap while the
+ *      tail needs two, and a DERIVED priority — which never names R — cannot
+ *      place the rest. A published priority naming R resolves that same
+ *      input, which is the clearest available statement of what the ids buy.
+ *      Refusing is mandatory: the alternative is a short order flagged
+ *      `completed`, the one outcome this module exists to prevent.
+ *  (7) `ultimate-illegal-tail` — a tail entry would rank R at a level the
+ *      champion's own schedule forbids. Unreachable by arithmetic on real
+ *      data (no published schedule gates a rank past level 16, and the tail
+ *      is levels 16-18), and proven to fire against a synthetic later-gated
+ *      kit in the tests rather than assumed to be wired up.
  *
  * ── NON-STANDARD CHAMPIONS — MEASURED, not guessed ─────────────────────────
  * Full 172-champion sweep against live op.gg data, each on its primary lane
@@ -294,15 +321,21 @@ export interface CompletionResult {
  *   164  complete cleanly  (160 standard + JAYCE, KARMA, ELISE, NIDALEE,
  *                           which the old hardcoded 5/5/5/3 wrongly refused)
  *     7  complete, but their published order ranks R at level 12 (see below)
- *     3  refused, `kit-not-derivable` — UDYR, YUUMI, APHELIOS
+ *     3  complete via the PUBLISHED max-priority order — UDYR, YUUMI,
+ *                           APHELIOS. These three were `kit-not-derivable`
+ *                           refusals until the surplus path landed; their
+ *                           orders and `skill_masteries.ids` were re-probed
+ *                           live on 2026-07-27 to confirm.
  *     1  refused, `bad-token`         — KHAZIX
  *
  *  * UDYR    — four basics, no true ultimate; 6/6/6/6 = 24 purchasable ranks
  *              against 18 points. His published order ranks "R" at LEVEL 2,
  *              which is legal for him and is no longer refused as an illegal
- *              ultimate.
+ *              ultimate. ids ["Q","E","W","R"] → tail WWW → Q6 W5 E6 R1.
  *  * APHELIOS— W is a fixed 1-rank mechanic; 6/6/6/3 = 21 purchasable.
+ *              ids ["Q","E","W"] → tail R@16,W,W → Q6 W3 E6 R3.
  *  * YUUMI   — 6/5/5/3 = 19 purchasable; she skips exactly one point.
+ *              ids ["Q","E","W"] → tail R@16,W,W → Q6 W4 E5 R3.
  *  * JAYCE   — 6/6/6/1. Now COMPLETES: his Transform is granted free at level
  *              1, leaving 6+6+6 = 18 purchasable basics, so his tail is E,E,E
  *              at 16/17/18 with no ultimate. Previously refused outright,
@@ -324,7 +357,11 @@ export interface CompletionResult {
  *              his ranks ARE standard 5/5/5/3, so he completes normally. The
  *              arithmetic decides, never a reputation-based blocklist.
  *
- * ── Why there is NO ultimate-level legality check ──────────────────────────
+ * ── Why the OBSERVED path gets no ultimate-level legality check ────────────
+ * (The DERIVED tail does — check (7). The distinction is the whole point: we
+ * are not entitled to correct the source's aggregate, but we are absolutely
+ * responsible for the three levels we choose ourselves.)
+ *
  * An earlier draft was going to refuse any observed path ranking R outside
  * League's legal 6/11/16. The sweep killed that idea: SEVEN champions — JINX,
  * ZED, KASSADIN, SIVIR, CORKI, ZERI, QIYANA — publish R at levels 6 and *12*.
@@ -341,27 +378,25 @@ export function completeSkillOrder(
   priority?: readonly Ability[],
   kit: ChampionKit = STANDARD_KIT
 ): CompletionResult {
+  const refuse = (because: CompletionRefusal): CompletionResult => ({
+    order: [...observed],
+    completed: false,
+    refusedBecause: because,
+    observedLevels: observed.length,
+  });
+
   // (2) token validity first — everything below assumes real abilities.
-  if (!observed.every(isAbility)) {
-    return { order: [...observed], completed: false, refusedBecause: "bad-token" };
-  }
+  if (!observed.every(isAbility)) return refuse("bad-token");
 
   // (1) length.
-  if (observed.length === TOTAL_LEVELS) {
-    return { order: [...observed], completed: false, refusedBecause: "already-complete" };
-  }
-  if (observed.length !== SOURCE_LEVELS) {
-    return { order: [...observed], completed: false, refusedBecause: "unexpected-length" };
-  }
+  if (observed.length === TOTAL_LEVELS) return refuse("already-complete");
+  if (observed.length !== SOURCE_LEVELS) return refuse("unexpected-length");
 
-  // (3b) The champion must be able to spend all 18 points without waste. When
-  // their purchasable ranks exceed 18 (Yuumi 19, Aphelios 21, Udyr 24) the
-  // player MUST skip something, and which point they skip is a choice the
-  // source's per-level aggregate cannot resolve. Checked before the cap check
-  // so these three report the real reason rather than a cap they never broke.
-  if (kit.purchasableTotal !== TOTAL_LEVELS) {
-    return { order: [...observed], completed: false, refusedBecause: "kit-not-derivable" };
-  }
+  // (3b) A kit whose purchasable ranks total FEWER than 18 has no complete
+  // path at all — there would be nothing left to spend the last points on.
+  // A kit with MORE than 18 (Yuumi/Aphelios/Udyr) is fine and is resolved by
+  // the priority walk below; see this function's "case 2".
+  if (kit.purchasableTotal < TOTAL_LEVELS) return refuse("kit-not-derivable");
 
   const counts = countRanks(observed);
 
@@ -376,9 +411,7 @@ export function completeSkillOrder(
     R: purchasableUltimateRanks(kit),
   };
   for (const ability of ["Q", "W", "E", "R"] as const) {
-    if (counts[ability] > caps[ability]) {
-      return { order: [...observed], completed: false, refusedBecause: "rank-over-cap" };
-    }
+    if (counts[ability] > caps[ability]) return refuse("rank-over-cap");
   }
 
   const remaining: Record<Ability, number> = {
@@ -388,43 +421,163 @@ export function completeSkillOrder(
     R: caps.R - counts.R,
   };
 
+  const tailSlots = TOTAL_LEVELS - SOURCE_LEVELS;
+  // Case 1 vs case 2 (see this function's header). A kit whose purchasable
+  // ranks total exactly 18 has a tail FULLY DETERMINED by subtraction, and the
+  // two checks below are what make that determinacy a checked property rather
+  // than a hope. A surplus kit has spare ranks by construction, so neither
+  // check means anything for it and applying them would refuse three
+  // champions whose tails the priority can in fact resolve.
+  const determinate = kit.purchasableTotal === TOTAL_LEVELS;
+
   // (4) The tail must need exactly as many ultimate ranks as this champion's
   // OWN legality schedule leaves room for in levels 16-18 — one (level 16)
   // for every gated kit, zero for Jayce whose single R rank is free at level
   // 1. Derived from the schedule, not assumed to be 1.
   const tailUlts = tailUltimateRanks(kit, SOURCE_LEVELS);
-  if (remaining.R !== tailUlts) {
-    return { order: [...observed], completed: false, refusedBecause: "ultimate-remainder" };
+  if (determinate && remaining.R !== tailUlts) return refuse("ultimate-remainder");
+
+  // (5) unreachable given (1)+(3), asserted anyway.
+  if (determinate && remaining.Q + remaining.W + remaining.E + remaining.R !== tailSlots) {
+    return refuse("tail-mismatch");
   }
 
-  const basicsRemaining = remaining.Q + remaining.W + remaining.E;
-  // (5) unreachable given the above, asserted anyway.
-  if (basicsRemaining + remaining.R !== TOTAL_LEVELS - SOURCE_LEVELS) {
-    return { order: [...observed], completed: false, refusedBecause: "tail-mismatch" };
+  // Any ultimate rank the schedule opens up inside 16-18 is taken FIRST, i.e.
+  // at level 16 — conventionally, and for a determinate kit necessarily, since
+  // 16 is the only ultimate level in the tail and the rank has to go
+  // somewhere. Bounded by what R actually has left so a surplus kit whose
+  // published order already spent every R rank cannot be handed a 4th.
+  const forcedUlts = Math.min(tailUlts, remaining.R);
+
+  // ── The allocator ────────────────────────────────────────────────────────
+  // Walk the max-priority order, giving each ability as many of the remaining
+  // points as ITS OWN cap allows, until all 18 are placed. For a determinate
+  // kit this places exactly what subtraction already fixed (the caps leave
+  // precisely `tailSlots` points), so standard champions are unaffected; for a
+  // surplus kit it is the step that decides which point gets skipped, and it
+  // decides it from published data rather than from taste.
+  const { priority: allocationPriority, basis } = resolveAllocationPriority(priority, observed, kit);
+  const spare: Record<Ability, number> = { ...remaining, R: remaining.R - forcedUlts };
+  const tail: Ability[] = Array<Ability>(forcedUlts).fill("R");
+  for (const ability of allocationPriority) {
+    while (spare[ability] > 0 && tail.length < tailSlots) {
+      tail.push(ability);
+      spare[ability] -= 1;
+    }
+    if (tail.length >= tailSlots) break;
   }
 
-  // Order the leftover basic points by the champion's OWN max priority.
-  const effectivePriority = resolvePriority(priority, observed, kit);
-  const tailBasics: Ability[] = [];
-  for (const ability of effectivePriority) {
-    if (ability === "R") continue;
-    for (let i = 0; i < remaining[ability]; i += 1) tailBasics.push(ability);
+  // (6) The priority named nothing left to spend on. A short "completed" order
+  // is the one outcome this module exists to prevent, so refuse instead.
+  if (tail.length !== tailSlots) return refuse("priority-exhausted");
+
+  // (7) Ultimate legality across the levels WE chose. `isUltimateRankLegal`
+  // wants the rank the game would report, so the champion's free level-1 rank
+  // is added back in — `counts` only ever holds ranks that cost a point.
+  const running: Record<Ability, number> = { ...counts };
+  for (let i = 0; i < tail.length; i += 1) {
+    const ability = tail[i];
+    running[ability] += 1;
+    if (ability !== "R") continue;
+    if (!isUltimateRankLegal(running.R + kit.freeRanks.R, SOURCE_LEVELS + 1 + i, kit)) {
+      return refuse("ultimate-illegal-tail");
+    }
   }
 
-  // Any remaining ultimate rank is taken at 16 — conventionally, and for
-  // levels 16-18 necessarily, since 16 is the only ultimate level in the tail.
-  const order: Ability[] = [
-    ...observed,
-    ...Array<Ability>(tailUlts).fill("R"),
-    ...tailBasics,
-  ];
+  const order: Ability[] = [...observed, ...tail];
 
   // Final structural guarantee before we dare set completed: true.
-  if (order.length !== TOTAL_LEVELS) {
-    return { order: [...observed], completed: false, refusedBecause: "tail-mismatch" };
-  }
+  if (order.length !== TOTAL_LEVELS) return refuse("tail-mismatch");
 
-  return { order, completed: true };
+  return { order, completed: true, observedLevels: observed.length, basis };
+}
+
+/**
+ * Is a supplied priority list well-formed enough to be preferred over a
+ * derived one?
+ *
+ * Non-empty, every entry a real ability, no repeats. Deliberately NOT "a full
+ * permutation of Q/W/E/R": op.gg publishes THREE ids for almost every champion
+ * (the basics — Ahri mid is `["Q","W","E"]`) and four only where the R slot is
+ * a fourth basic rather than an ultimate (Udyr: `["Q","E","W","R"]`). Both
+ * were probed live 2026-07-27. Demanding four would throw away the signal for
+ * the entire roster to satisfy a shape the source does not publish.
+ *
+ * A repeat is treated as malformed rather than deduped: the ids are supposed
+ * to be a ranking, and a ranking that names an ability twice is a payload we
+ * do not understand. Falling back to the derived priority there is the honest
+ * degrade — it costs the R-slot ranking and nothing else.
+ */
+export function isWellFormedPriority(supplied: unknown): supplied is Ability[] {
+  if (!Array.isArray(supplied) || !supplied.length) return false;
+  if (!supplied.every(isAbility)) return false;
+  return new Set(supplied).size === supplied.length;
+}
+
+/**
+ * The priority used to ALLOCATE a derived tail — deliberately a different
+ * function from `resolvePriority`, which produces the basics-only "Q › W › E"
+ * string the UI displays.
+ *
+ * Two differences, and both are load-bearing:
+ *
+ *  1. R IS KEPT. `resolvePriority` strips it, correctly, because the display
+ *     string is about maxing basics. But for a champion whose R slot is a
+ *     fourth basic (Udyr) the R entry is a real ranking of a real ability, and
+ *     dropping it would mean R could never receive a derived point no matter
+ *     what the source says.
+ *  2. IT REPORTS WHICH SOURCE IT USED. The published ids win whenever they are
+ *     well-formed; `derivePriority`'s reading of the observed path is the
+ *     fallback. Callers surface that distinction rather than presenting both
+ *     as equally grounded.
+ *
+ * Missing basics are appended in derived order, so no remaining point can
+ * become unplaceable just because the source ranked fewer abilities than the
+ * champion has.
+ */
+export function resolveAllocationPriority(
+  supplied: readonly Ability[] | undefined,
+  observed: readonly Ability[],
+  kit: ChampionKit = STANDARD_KIT
+): { priority: Ability[]; basis: PriorityBasis } {
+  const derived = derivePriority(observed, kit);
+  if (!isWellFormedPriority(supplied)) return { priority: derived, basis: "derived" };
+
+  const out: Ability[] = [];
+  for (const a of supplied) if (!out.includes(a)) out.push(a);
+  for (const a of derived) if (!out.includes(a)) out.push(a);
+  return { priority: out, basis: "published" };
+}
+
+/**
+ * How many leading entries of a model's `order` came verbatim from the source.
+ *
+ * Read provenance through this rather than off the raw field: `observedLevels`
+ * is optional on the wire so that a payload cached before it existed (or a
+ * hand-built fixture) still type-checks, and the fallback below reproduces
+ * exactly what such a payload meant — a completed order was completed from
+ * SOURCE_LEVELS, and an uncompleted one is entirely source.
+ */
+export function observedLevelCount(
+  model: Pick<SkillOrderModel, "order" | "completed"> & { observedLevels?: number }
+): number {
+  const len = Array.isArray(model.order) ? model.order.length : 0;
+  const raw = model.observedLevels;
+  if (Number.isInteger(raw) && (raw as number) >= 0) return Math.min(raw as number, len);
+  return model.completed ? Math.min(SOURCE_LEVELS, len) : len;
+}
+
+/** Was this 1-based level DERIVED by the completion rule rather than published
+ *  by the source? False for anything outside the order entirely — an absent
+ *  level is not a derived one, and a UI must not render it as either. */
+export function isDerivedLevel(
+  model: Pick<SkillOrderModel, "order" | "completed"> & { observedLevels?: number },
+  level: number
+): boolean {
+  if (!Number.isInteger(level) || level < 1) return false;
+  const len = Array.isArray(model.order) ? model.order.length : 0;
+  if (level > len) return false;
+  return level > observedLevelCount(model);
 }
 
 /** Use the source's own priority when it is a usable permutation of the basic
@@ -501,10 +654,11 @@ export function buildSkillOrderModel(
   // exactly what is missing. It degrades to the observed 15 with
   // `completed:false`, which is the honest "the source's 15 are all we know".
   const effectiveKit = kit ?? STANDARD_KIT;
-  const { order, completed } =
+  const completion: CompletionResult =
     kit === null
-      ? { order: [...src.order], completed: false }
+      ? { order: [...src.order], completed: false, observedLevels: src.order.length }
       : completeSkillOrder(src.order, src.priorityIds, effectiveKit);
+  const { order, completed, observedLevels, basis } = completion;
 
   // Win rate is DERIVED, and only when the counts can actually support it.
   const winRate =
@@ -520,6 +674,11 @@ export function buildSkillOrderModel(
     levels: levelsByAbility(order),
     order,
     completed,
+    // Provenance. `observedLevels` is always emitted; `completionBasis` only
+    // when something was actually derived, because naming a priority that
+    // decided nothing would imply a derivation that did not happen.
+    observedLevels,
+    ...(basis ? { completionBasis: basis } : {}),
     sampleSize: src.play,
     winRate,
     share,
