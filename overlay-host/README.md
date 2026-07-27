@@ -45,8 +45,8 @@ Check League's video settings before testing: **Settings → Video → Display M
   - **Ctrl+F10** — show/hide the overlay
   - **Ctrl+F11** — toggle interactive mode (lane buttons become clickable; the
     overlay is click-through the rest of the time)
-- **Adjust-in-place mode** (Ctrl+F12, or tray → "Adjust overlay position") — **the
-  PRIMARY alignment path (2026-07-27 round 8)**, replacing the separate calibration
+- **Adjust-in-place mode** (**Ctrl+Shift+A**, or tray → "Adjust overlay position") —
+  **the PRIMARY alignment path (2026-07-27 round 8)**, replacing the separate calibration
   window for real use. A real user report made the problem concrete: on one
   monitor, a SEPARATE calibration window covers the game, so you're aiming boxes at
   ability icons you can no longer see. Adjust mode instead nudges the SAME boxes
@@ -56,7 +56,10 @@ Check League's video settings before testing: **Settings → Video → Display M
   the app, not the game) and returns to click-through the instant you exit. This is
   a MAIN-PROCESS + IPC-contract feature — the actual box-drawing/key-handling lives
   in `renderer/ingame.js` (engo's file); see `HANDOFF-engy.md` for the exact
-  contract if that's still in progress.
+  contract if that's still in progress. **Was Ctrl+F12 until 2026-07-27 round 9** —
+  changed because F12 is permanently reserved by Windows for the debugger and can
+  never be registered as a global hotkey on any Windows machine; see "Hotkeys and
+  bind status" below for the full story.
 - **Calibrate ability bar (separate window, fallback)** — the original approach,
   kept for a second monitor or a dry run without a game running. Four draggable
   Q/W/E/R boxes, modelled as one rigid group (`{firstBoxCenterX, centerY, boxSize,
@@ -133,43 +136,76 @@ tell at a glance whether this app detected it, you pinned it, or it's a best gue
 (`likely` is deliberately a lower-confidence word than `auto`: Tier 2 is Riot's own
 reported position, a fact; Tier 3 is this app's own inference from win/play counts).
 
-## Hotkeys and elevation
+## Hotkeys and bind status
 
-**If Ctrl+F10 / Ctrl+F11 / Ctrl+F12 do nothing while a League game has focus, you
-need to run this app as Administrator — run `npm run start:admin` (or
-double-click `start-admin.cmd`) once, and keep using that from then on.** The tray
-icon works either way and does not need this — see below.
+**If a hotkey does nothing, check the tray menu or "Open log file" FIRST** — both
+now show the ACTUAL measured bind status per hotkey (`register()`'s real return
+value plus a follow-up `isRegistered()` check, added 2026-07-27 round 9), not a
+guess. A hotkey that failed to register will never respond no matter what else you
+try; a hotkey that DID register but still doesn't respond in-game is a different
+problem (see elevation below).
 
-**Why:** League/Vanguard runs elevated. Windows' UIPI (User Interface Privilege
-Isolation) does not deliver global-hotkey input from a lower-integrity process to a
-higher-integrity foreground window — so the three hotkeys are expected to not
-respond while League has focus, unless this app is also running elevated. This is
-not a bug; every hotkey registers successfully on every launch (confirmed in every
-test run below) and simply may not receive the keypress once a higher-privilege
-window is focused.
+**Root cause found 2026-07-27 round 9 for the specific "Ctrl+F12 does nothing"
+report, even genuinely elevated:** F12 is **permanently reserved by Windows for the
+debugger**, verbatim from Microsoft's own `RegisterHotKey` documentation — *"F12 is
+reserved for use by the debugger at all times, so it should not be registered as a
+hot key. Even when you are not debugging an application, F12 is reserved in case a
+kernel-mode debugger or a just-in-time debugger is resident."*
+(https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey).
+Electron's `globalShortcut` is a thin wrapper over `RegisterHotKey`, so
+`register('...F12', ...)` returns `false` on **every** Windows machine,
+unconditionally — this had nothing to do with elevation, and the elevation
+investigation that preceded this finding was chasing the wrong mechanism. The
+adjust-in-place hotkey is now **Ctrl+Shift+A** instead (not reserved, not a League
+default bind, mnemonic). `main.js`'s `registerHotkeys()` also now refuses to even
+attempt registering any accelerator containing F12 and fails loudly (console + log
+file + a dedicated tray row) — so if a future edit picks F12 again, it's caught at
+startup, not silently dead for an hour like this one was.
 
-- **Primary fix regardless of elevation: use the tray icon.** Every hotkey has a
+- **The tray menu shows one row per hotkey** with its real status, e.g. `Hotkeys:
+  Ctrl+Shift+A (adjust overlay position) — active` or `— FAILED to bind` /
+  `— FAILED, reserved by Windows`. This is ground truth, not a heuristic.
+- **A separate "Elevation: …" row** gives the same best-effort elevation guess as
+  before (see below), but is now worded as *one possible factor if a hotkey fails
+  only in-game* — not presented as the explanation, because it wasn't one for the
+  actual bug found this round. Do not trust it as definitive either way — it's a
+  heuristic (attempts to write a throwaway file into `C:\Windows`), and Windows UAC
+  virtualization can make it wrong in either direction.
+- **Primary fix regardless of any of this: use the tray icon.** Every hotkey has a
   tray equivalent (show/hide, "Adjust overlay position", interactive mode), and the
-  tray does not depend on elevation at all.
-- **The tray menu itself tells you the elevation guess** — a row reading either
-  "Hotkeys: probably active (elevated)" or "Hotkeys: may not respond in-game (not
-  elevated)". The app also logs the same best-effort (NOT certain) guess on every
-  startup. Do not trust either as definitive — it's a heuristic (attempts to write
-  a throwaway file into `C:\Windows`), and Windows UAC virtualization can make it
-  wrong in either direction.
+  tray does not depend on hotkey registration or elevation at all.
+
+**Still open, not yet retested since elevating:** whether Ctrl+F10/Ctrl+F11
+specifically respond while League (which runs elevated under Vanguard) has focus.
+Those two are NOT reserved keys, so Windows' UIPI (User Interface Privilege
+Isolation) not delivering global-hotkey input from a lower-integrity process to a
+higher-integrity foreground window remains a live, untested hypothesis for THEM
+specifically — just no longer assumed to be the explanation for every hotkey
+problem. The tray's per-hotkey rows plus the log file are exactly what will settle
+this on the next real test.
+
 - To run elevated: `npm run start:admin`, or double-click `start-admin.cmd`, or
   right-click `node_modules/electron/dist/electron.exe` in a shortcut and choose
-  "Run as administrator." **Verified this round that the underlying mechanism
-  genuinely works**: running it triggered a real Windows UAC consent prompt,
-  confirmed three independent ways — a `consent.exe` process appeared, a
+  "Run as administrator." **Verified in an earlier round that the underlying
+  mechanism genuinely works**: running it triggered a real Windows UAC consent
+  prompt, confirmed three independent ways — a `consent.exe` process appeared, a
   screenshot attempt during the prompt failed with "the handle is invalid" (Windows'
   Secure Desktop blocks screen capture during a genuine UAC prompt — a
   fake/scripted dialog would not do this), and the process could not be
   force-killed from an unelevated PowerShell ("Access is denied" — again, real UAC
-  prompts are protected this way). **What could NOT be verified**: actually
-  clicking "Yes" and confirming the app relaunches elevated — that needs a human at
-  the keyboard, which this automated test cannot provide. The prompt was left to
-  time out on its own (Windows' default ~150s UAC timeout) rather than force-closed.
+  prompts are protected this way).
+
+## Log file
+
+`main.js`'s `log()`/`warn()` write to BOTH the console (when one exists) AND a file
+at `coachbuild-overlay.log` inside this app's `userData` directory (path logged at
+startup, and shown via tray → **"Open log file"**, which opens it in your default
+text editor). This exists because `npm run start:admin` launches detached with no
+console, and a packaged app (see "Install on another PC" below) has no console at
+all — without this, every diagnostic (including the hotkey bind-status lines above)
+would be invisible exactly when you need them most. The file is **truncated at
+every startup** (not rolled) — it holds one run's worth of lines, so the workflow
+is: relaunch, reproduce the issue, then read (or send) the log file.
 
 ## Reused from the Overwolf build (not rewritten)
 
@@ -193,6 +229,127 @@ window is focused.
   main process instead of a browser context. Extended (2026-07-27) with
   `extractLocalPosition()` for lane auto-detection, off the same playerlist fetch
   already used for champion resolution — no extra request.
+
+## Install on another PC (2026-07-27, packaging round)
+
+The user doesn't play League on this dev machine — they have a separate gaming
+desktop. A git checkout + Node + npm + a held-open terminal is the wrong shape for
+that, so this app can be packaged into a normal installable Windows app via
+[`electron-builder`](https://www.electron.build/) (the one new devDependency added
+this round).
+
+**Build it (on the dev machine, once per release):**
+
+```
+cd overlay-host
+npm install
+npm run dist
+```
+
+This is a three-step chain (`npm run dist:unpacked && npm run dist:resources &&
+npm run dist:package` — see "Why packaging needs a workaround" below for why it's
+three steps instead of electron-builder's normal one-liner) and produces, in
+`overlay-host/dist/` (gitignored — build artifacts, never committed):
+
+- **`CoachBuild Overlay-Setup-0.1.0.exe`** — a normal NSIS installer. Recommended:
+  double-click, choose an install directory (or accept the default), done. Installs
+  per-user (no admin needed to INSTALL), to `%LOCALAPPDATA%\Programs\CoachBuild
+  Overlay\` by default.
+- **`CoachBuild Overlay-0.1.0-portable.exe`** — a single self-contained exe, no
+  installer. Copy it anywhere (a USB stick, a folder) and run it directly. Use this
+  if the user would rather not install anything.
+
+**Copy ONE of those two files to the gaming PC** (a USB stick, cloud drive, network
+share — however is convenient) and run it there. Nothing else from this repo needs
+to go with it — the exe is fully self-contained (Electron runtime + this app's code
+bundled inside).
+
+**League of Legends must be running on THAT SAME machine.** This app talks to
+`https://127.0.0.1:2999/liveclientdata/*` — Riot's own local API, loopback-only by
+design. There is no remote/network mode and there never will be one; running the
+overlay on one PC cannot show data for a game running on a different PC.
+
+**The packaged app always launches elevated (Administrator).** This is
+intentional and is the primary reason this app is packaged at all — see the exe's
+embedded manifest (`requestedExecutionLevel: requireAdministrator` in
+`package.json`'s `build.win` config). Every launch triggers a UAC prompt; this is
+expected, not a bug or malware warning.
+
+**SmartScreen will warn on first run** — the exe is genuinely unsigned (no code
+signing certificate; this is a personal, single-user tool, not a distributed
+product). Windows will show "Windows protected your PC". This is expected, not a
+sign anything is broken: click **"More info"**, then **"Run anyway"**. This only
+happens once per machine per exe (SmartScreen remembers after the first
+approval).
+
+**Settings do NOT carry over from a dev-machine test run.** `app.getPath('userData')`
+keys off the app's `productName`/`appId` (`CoachBuild Overlay` /
+`com.coachbuild.overlay`), which differs from running unpackaged via `npm start`
+(which uses the Electron dev default, `Electron`). This means lane override and
+ability-bar calibration will be UNSET the first time the packaged app runs on the
+gaming PC — expected, not a bug. Just recalibrate once (tray → "Adjust overlay
+position" or "Calibrate ability bar…") and it persists from then on, same as any
+other run.
+
+### Why packaging needs a workaround (read if `npm run dist` ever breaks)
+
+electron-builder's normal one-command build (`electron-builder --win nsis
+portable`) tries to edit the exe's icon/version-info/manifest via a `rcedit`
+tool bundled inside its "winCodeSign" vendor package — **even though this app is
+deliberately unsigned and no certificate is configured.** That vendor package
+also contains macOS-only tooling (2 `.dylib` symlinks under `darwin/10.12/lib/`),
+and extracting a `.7z` archive containing Windows symlinks requires either Windows
+Developer Mode or an elevated process — confirmed directly on this machine (`mklink`
+failed with "You do not have sufficient privilege to perform this operation").
+electron-builder treats that as a hard failure and retries the ENTIRE
+download+extract forever rather than proceeding without the 2 irrelevant files —
+confirmed hanging 280+ seconds with no sign of recovering.
+
+The fix (`scripts/apply-exe-resources.js`, full reasoning in its header comment)
+splits the build into three steps:
+1. `dist:unpacked` — `electron-builder --dir --win` with
+   `build.win.signAndEditExecutable: false`, so electron-builder never attempts its
+   own (blocking) resource-edit step.
+2. `dist:resources` — `scripts/apply-exe-resources.js` downloads the SAME public
+   `winCodeSign-2.6.0.7z` electron-builder would have, but extracts ONLY
+   `rcedit-x64.exe`/`rcedit-ia32.exe` **by name** (skipping the macOS symlink
+   entries entirely, so the privilege error never triggers), then runs rcedit
+   directly with the same flags electron-builder's own code would use — setting
+   the icon, version strings, AND (the actual point of packaging this app)
+   `requestedExecutionLevel: requireAdministrator`.
+3. `dist:package` — `electron-builder --win nsis portable --prepackaged
+   dist/win-unpacked` builds the NSIS installer and portable exe from the
+   already-edited directory (`--prepackaged` skips electron-builder's own
+   packaging/signing step, since it already happened correctly in step 2).
+
+This uses ONLY things already present after `npm install` (electron-builder's own
+bundled `7zip-bin` for extraction, plus one HTTPS download of a public GitHub
+release asset) — no second new dependency was added. If Windows Developer Mode is
+ever turned on for this machine, electron-builder's normal single-command build
+would likely work directly and this workaround becomes unnecessary (though it
+would still work fine alongside it, just redundantly).
+
+**Verified this round**: built clean from a completely fresh state (`dist/`
+removed, the rcedit download cache cleared) — `npm run dist` completed in well
+under a minute, produced both a working NSIS installer and a working portable exe,
+each independently confirmed (`asar list`, extracting the NSIS/portable payloads
+with 7-Zip, and running the unpacked app directly) to: contain every required file
+(`main.js`, `preload.js`, `calibratePreload.js`, `lib/**`, `js/**`,
+`vendor/skillEngine.js`, `assets/**`, `renderer/**`), carry the
+`requireAdministrator` manifest on the ACTUAL app exe (not just the installer/
+portable launcher stub, which correctly stays `asInvoker` — per-user installs
+don't need elevation to install, only the app itself needs it to run), and launch
+successfully end-to-end (renderer ready, IPC handshake completed, hotkeys attempted)
+when run non-elevated with a temporary `asInvoker` copy used purely to sidestep UAC
+for headless testing. Separately confirmed the REAL (requireAdministrator) exe
+genuinely triggers Windows' UAC subsystem at launch — attempting to launch it via
+PowerShell's `Start-Process` returned `"This command cannot be run due to the
+error: The operation was canceled by the user"`, which is UAC's own cancellation
+message after its prompt times out unattended, the same class of evidence used to
+verify `start-admin.cmd` earlier in this project. **Not verified**: actually
+clicking "Yes" on that prompt and confirming the app opens fully elevated end-to-end
+on a real desktop session — that needs a human at the keyboard, same limitation as
+every other UAC verification in this README.
 
 ## Load & test
 

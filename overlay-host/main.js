@@ -54,7 +54,7 @@
 // champion by riotId. That line is not the user's to move, and it stays.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, globalShortcut, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, globalShortcut, ipcMain, screen, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -107,7 +107,25 @@ const HOTKEY_TOGGLE_INTERACTIVE = 'Control+F11';
 // Adjust-in-place mode (2026-07-27 round 8) -- see the big comment block near
 // toggleAdjustOverlay() for why this exists and replaces the separate
 // calibration window as the PRIMARY alignment path.
-const HOTKEY_TOGGLE_ADJUST = 'Control+F12';
+//
+// CHANGED (2026-07-27 round 9) from 'Control+F12' -- ROOT CAUSE of "Ctrl+F12
+// does nothing, even genuinely elevated": F12 is PERMANENTLY reserved by
+// Windows for the debugger, verbatim from Microsoft's own RegisterHotKey
+// docs: "F12 is reserved for use by the debugger at all times, so it should
+// not be registered as a hot key. Even when you are not debugging an
+// application, F12 is reserved in case a kernel-mode debugger or a
+// just-in-time debugger is resident."
+// (https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey)
+// Electron's globalShortcut is a thin wrapper over RegisterHotKey, so
+// register('...F12', ...) returns false on EVERY Windows machine,
+// unconditionally -- elevation was never the mechanism. See
+// registerHotkeys()'s guard below, which now refuses to even attempt
+// registering any accelerator containing F12 and fails loudly instead of
+// silently, so this exact mistake can't recur invisibly.
+// Control+Shift+A chosen as the replacement: not reserved by Windows, not a
+// League of Legends default keybind, and mnemonic (A for Adjust). Deliberately
+// NOT Control+Q/W/E/R -- those are League's own ability-level binds.
+const HOTKEY_TOGGLE_ADJUST = 'Control+Shift+A';
 
 // Poll less often when idle (no game) so this never spins the CPU or hammers
 // the loopback socket while the user is just browsing/queuing. Faster while a
@@ -144,7 +162,26 @@ let inGame = false;
 // (see bestEffortElevationGuess()'s own header), but "computed once" is correct:
 // elevation cannot change mid-process, only across a relaunch (e.g. start:admin).
 let elevationGuessText = null;
+// Per-hotkey bind status, populated by registerHotkeys() -- read by
+// buildTrayMenuTemplate() so a dead hotkey is visible in the tray, not just
+// the log file. [{accel, label, registered, reservedByWindows}]
+let hotkeyRegistrationResults = [];
 const userDataDir = app.getPath('userData');
+// File logging (2026-07-27 round 9) -- `npm run start:admin` launches detached
+// with NO console, and a PACKAGED app has no console at all, so console.log
+// alone was silently discarding every diagnostic exactly when it mattered
+// most (the Ctrl+F12-doesn't-fire investigation -- see HOTKEY_TOGGLE_ADJUST's
+// header for the actual root cause, a reserved key, found after this file's
+// logging shipped). Tees
+// log()/warn() to this file, console output UNCHANGED alongside it.
+//
+// Bounded by TRUNCATING AT STARTUP, not rolling mid-run -- chosen over a
+// ~1MB rolling log because this is a per-launch diagnostic file, not a
+// historical audit trail: the intended workflow is relaunch, reproduce the
+// bug, then read this file, so one run's worth of lines is exactly the right
+// amount of history and there is no risk of unbounded growth across many
+// sessions sitting untouched.
+const LOG_FILE_PATH = path.join(userDataDir, 'coachbuild-overlay.log');
 let currentLane = loadLane(userDataDir); // string lane, or null = "Auto"
 // UI toggle, not per-game state -- loaded here (fs-only, safe before
 // app.whenReady) same as currentLane. Defaults OFF this round: the table is
@@ -167,11 +204,56 @@ let calibrationGeometry = null;
 let calibrationWindow = null;
 let isCalibrating = false;
 
+let logStream = null;
+
+// Truncates (create-or-overwrite) then opens in append mode. Must run before
+// the FIRST log()/warn() call anywhere in this file -- called explicitly,
+// early, right before the single-instance-lock check below, rather than
+// relying on call order of the (hoisted) function declarations here.
+function initLogFile() {
+  try {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(LOG_FILE_PATH, ''); // truncate at startup -- see the constant's header comment
+    logStream = fs.createWriteStream(LOG_FILE_PATH, { flags: 'a' });
+    logStream.on('error', (err) => {
+      // Best-effort only -- a log-file write failure must never crash the
+      // overlay itself. Falls back to console-only for the rest of the run.
+      console.warn('[CoachBuild:main] log file write stream error:', err.message);
+      logStream = null;
+    });
+  } catch (err) {
+    console.warn('[CoachBuild:main] failed to initialize log file at', LOG_FILE_PATH, '--', err.message);
+    logStream = null;
+  }
+}
+
+function safeStringifyArg(value) {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function writeLogLine(level, args) {
+  if (!logStream) return;
+  try {
+    const ts = new Date().toISOString();
+    const msg = args.map(safeStringifyArg).join(' ');
+    logStream.write(`${ts} [${level}] ${msg}\n`);
+  } catch {
+    // Best-effort only, same as above.
+  }
+}
+
 function log(...args) {
   console.log('[CoachBuild:main]', ...args);
+  writeLogLine('INFO', args);
 }
 function warn(...args) {
   console.warn('[CoachBuild:main]', ...args);
+  writeLogLine('WARN', args);
 }
 
 // ---------------------------------------------------------------------------
@@ -645,16 +727,70 @@ async function resolveChampionNameNow(riotId) {
 // Hotkeys — global, so they work while League has focus.
 // ---------------------------------------------------------------------------
 
+// Logs BOTH the return value of register() AND a follow-up isRegistered()
+// check for every hotkey (2026-07-27 round 9, diagnostic request) -- the
+// Ctrl+F12-does-nothing-in-game bug (root cause: F12 is permanently reserved
+// by Windows for the debugger -- see HOTKEY_TOGGLE_ADJUST's header, and the
+// guard below) needs this to distinguish "never bound" from "bound at
+// startup, then silently lost/stolen later" from "bound fine, UIPI/focus is
+// eating the keypress downstream." `hotkeyRegistrationResults` (module-scope,
+// declared with the other mutable state above) is READ by
+// buildTrayMenuTemplate() so a dead hotkey is visible in the tray, not just
+// this log file -- a detached/packaged launch has no console at all, so a
+// log-only signal was exactly how this bug stayed invisible for an hour.
 function registerHotkeys() {
-  const okOverlay = globalShortcut.register(HOTKEY_TOGGLE_OVERLAY, toggleOverlayVisibility);
-  const okInteractive = globalShortcut.register(HOTKEY_TOGGLE_INTERACTIVE, toggleInteractive);
-  const okAdjust = globalShortcut.register(HOTKEY_TOGGLE_ADJUST, toggleAdjustOverlay);
-  if (!okOverlay) warn(`failed to register hotkey ${HOTKEY_TOGGLE_OVERLAY} — likely already bound by another app`);
-  if (!okInteractive) warn(`failed to register hotkey ${HOTKEY_TOGGLE_INTERACTIVE} — likely already bound by another app`);
-  if (!okAdjust) warn(`failed to register hotkey ${HOTKEY_TOGGLE_ADJUST} — likely already bound by another app`);
-  if (okOverlay && okInteractive && okAdjust) {
+  const hotkeys = [
+    { accel: HOTKEY_TOGGLE_OVERLAY, label: 'show/hide', handler: toggleOverlayVisibility },
+    { accel: HOTKEY_TOGGLE_INTERACTIVE, label: 'interactive toggle', handler: toggleInteractive },
+    { accel: HOTKEY_TOGGLE_ADJUST, label: 'adjust overlay position', handler: toggleAdjustOverlay },
+  ];
+
+  hotkeyRegistrationResults = [];
+  let allOk = true;
+  for (const { accel, label, handler } of hotkeys) {
+    // GUARD (2026-07-27 round 9): F12 in ANY modifier combination is
+    // permanently reserved by Windows for the debugger (Microsoft's
+    // RegisterHotKey docs, quoted at HOTKEY_TOGGLE_ADJUST's declaration) --
+    // globalShortcut.register() will return false for it unconditionally, on
+    // every Windows machine, regardless of elevation or what else is
+    // running. Refuse to even attempt it and fail LOUDLY (console + log file
+    // + tray, via hotkeyRegistrationResults below) so a future edit that
+    // picks F12 again is caught at startup instead of producing a silently
+    // dead hotkey again.
+    if (/\bF12\b/i.test(accel)) {
+      warn(
+        `refusing to register ${accel} (${label}) — F12 is permanently reserved by Windows for the debugger (see RegisterHotKey docs) and would always fail; pick a different accelerator`
+      );
+      hotkeyRegistrationResults.push({ accel, label, registered: false, reservedByWindows: true });
+      allOk = false;
+      continue;
+    }
+
+    const registerReturn = globalShortcut.register(accel, handler);
+    const isRegisteredNow = globalShortcut.isRegistered(accel);
+    const registered = registerReturn && isRegisteredNow;
+    log(`hotkey ${accel} (${label}): register() returned ${registerReturn}, isRegistered() reports ${isRegisteredNow}`);
+    if (!registerReturn) {
+      warn(`failed to register hotkey ${accel} — likely already bound by another app`);
+      allOk = false;
+    } else if (!isRegisteredNow) {
+      // Registered successfully but isRegistered() disagrees a moment later
+      // -- inconsistent state worth flagging loudly rather than assuming
+      // register()'s true return is the whole story.
+      warn(`hotkey ${accel} registered but isRegistered() reports false immediately after — inconsistent state`);
+      allOk = false;
+    }
+    hotkeyRegistrationResults.push({ accel, label, registered, reservedByWindows: false });
+  }
+
+  if (allOk) {
     log(`hotkeys registered: ${HOTKEY_TOGGLE_OVERLAY} (show/hide), ${HOTKEY_TOGGLE_INTERACTIVE} (interactive toggle), ${HOTKEY_TOGGLE_ADJUST} (adjust overlay position)`);
   }
+  // Tray was already built once (createWindow/createTray runs before
+  // registerHotkeys() in app.whenReady()) -- refresh it now that the real
+  // per-hotkey status is known. Guarded no-op if called before the tray
+  // exists (defensive; not expected given current call order).
+  rebuildTrayMenu();
 }
 
 function toggleOverlayVisibility() {
@@ -734,7 +870,9 @@ function toggleInteractive() {
 // globally would either be stolen from the game outright, or (with
 // `passthrough: true`) fire in BOTH places at once -- both wrong for a mode
 // whose whole point is precise nudging. Instead: ONE global hotkey
-// (Ctrl+F12) toggles the mode; while it's on, the window is made
+// (Ctrl+Shift+A, see HOTKEY_TOGGLE_ADJUST -- was Ctrl+F12 until 2026-07-27
+// round 9, changed because F12 is permanently reserved by Windows) toggles
+// the mode; while it's on, the window is made
 // interactive+focusable+focused (applyMainWindowInteractivity() above) so
 // ordinary `keydown` listeners in the RENDERER receive the nudge keys and
 // the game does not. This is why this file only toggles the MODE FLAG and
@@ -861,7 +999,19 @@ function logElevationGuidance() {
   elevationGuessElevated = guess.elevated;
   elevationGuessText = guess.detail;
   log(`elevation check (best-effort, not certain): ${guess.detail}`);
-  log('if Ctrl+F10/Ctrl+F11/Ctrl+F12 do not respond while League has focus, this is the expected cause -- use the SYSTEM TRAY ICON instead (works regardless of elevation), or relaunch via "npm run start:admin" / right-click this app -> Run as administrator.');
+  // REWORDED 2026-07-27 round 9: this used to assert elevation as THE
+  // explanation for a non-responding hotkey. That sent a real debugging
+  // session an hour down the wrong path -- the actual Ctrl+F12 cause was a
+  // Windows-reserved key, nothing to do with elevation at all (see
+  // HOTKEY_TOGGLE_ADJUST's header). Elevation/UIPI may still matter for
+  // Ctrl+F10/Ctrl+F11 specifically while League (which runs elevated under
+  // Vanguard) has focus -- that remains untested and is NOT ruled out here --
+  // but it is now presented as one possible factor among several, not a
+  // diagnosis. Always check "Open log file" / the tray's hotkey rows first:
+  // those report the ACTUAL bind status, which is a fact, not a guess.
+  log(
+    'if Ctrl+F10/Ctrl+F11/Ctrl+Shift+A do not respond while League has focus: check the tray menu or "Open log file" first for the actual per-hotkey bind status (a hotkey that failed to register will never respond regardless of elevation). If it DID bind but still does not respond in-game, elevation/UIPI is one possible remaining factor -- try "npm run start:admin" / right-click -> Run as administrator. The SYSTEM TRAY ICON works regardless of any of this and is the reliable fallback either way.'
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -869,6 +1019,12 @@ function logElevationGuidance() {
 // Windows notification area even while League is fullscreen-borderless and
 // focused, and does not depend on the elevation question at all.
 // ---------------------------------------------------------------------------
+
+// Cosmetic only, for tray display -- matches the README's own "Ctrl+F10"
+// style rather than Electron's internal "Control+F10" accelerator spelling.
+function humanizeAccel(accel) {
+  return accel.replace(/\bControl\b/g, 'Ctrl');
+}
 
 function buildTrayMenuTemplate() {
   const laneSubmenu = [
@@ -926,14 +1082,46 @@ function buildTrayMenuTemplate() {
       click: () => enterCalibration(),
     },
     { type: 'separator' },
+    // Non-clickable status rows (2026-07-27 round 8, REWORKED round 9) -- a
+    // log line in a terminal the user isn't looking at mid-match is not
+    // communication, and a packaged app has no console/log-file-in-view at
+    // all. One row per hotkey with its ACTUAL measured bind status
+    // (hotkeyRegistrationResults, set by registerHotkeys()) -- this used to
+    // be a single elevation guess presented as the explanation for a hotkey
+    // not responding, which sent a real debugging session down the wrong
+    // path when the true cause (F12 permanently reserved by Windows) had
+    // nothing to do with elevation. See logElevationGuidance()'s header for
+    // the full reasoning.
+    ...(hotkeyRegistrationResults.length > 0
+      ? hotkeyRegistrationResults.map(({ accel, label, registered, reservedByWindows }) => ({
+          label: registered
+            ? `Hotkeys: ${humanizeAccel(accel)} (${label}) — active`
+            : reservedByWindows
+            ? `Hotkeys: ${humanizeAccel(accel)} (${label}) — FAILED, reserved by Windows`
+            : `Hotkeys: ${humanizeAccel(accel)} (${label}) — FAILED to bind`,
+          enabled: false,
+        }))
+      : [{ label: 'Hotkeys: not yet registered', enabled: false }]),
     {
-      // Non-clickable status row (2026-07-27 round 8) -- a log line in a
-      // terminal the user isn't looking at mid-match is not communication.
-      // Same best-effort heuristic as the startup log; see
-      // bestEffortElevationGuess()'s header for why this hedges rather than
-      // asserting a verdict.
-      label: elevationGuessElevated ? 'Hotkeys: probably active (elevated)' : 'Hotkeys: may not respond in-game (not elevated)',
+      // Best-effort heuristic ONLY, and no longer presented as an
+      // explanation for a hotkey failure -- see logElevationGuidance().
+      label: elevationGuessElevated
+        ? 'Elevation: probably elevated (one possible factor if a hotkey fails only in-game)'
+        : 'Elevation: most likely NOT elevated (one possible factor if a hotkey fails only in-game)',
       enabled: false,
+    },
+    {
+      // 2026-07-27 round 9 -- so the user can retrieve diagnostics (e.g. the
+      // hotkey register()/isRegistered() lines) without hunting for
+      // app.getPath('userData') themselves, especially once packaged (no
+      // console at all then). shell.openPath opens it in the user's default
+      // text-file handler (Notepad, by default on a stock Windows install).
+      label: 'Open log file',
+      click: () => {
+        shell.openPath(LOG_FILE_PATH).then((errMsg) => {
+          if (errMsg) warn('failed to open log file via shell.openPath:', errMsg);
+        });
+      },
     },
     { type: 'separator' },
     {
@@ -978,6 +1166,8 @@ function createTray() {
 // Single-instance lock — an always-on-top overlay is meaningless duplicated;
 // a second launch should hand off to the first instance, not draw a second
 // window on top of it.
+initLogFile(); // must run before the first log()/warn() call below
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
   log('another instance is already running — quitting');
@@ -989,6 +1179,18 @@ if (!gotSingleInstanceLock) {
 
   app.whenReady().then(() => {
     log('CoachBuild Overlay Host starting');
+    log(`app version: ${app.getVersion()} -- packaged: ${app.isPackaged} -- log file: ${LOG_FILE_PATH}`);
+    // Moved BEFORE createTray() (2026-07-27 round 9, was after) so the tray's
+    // own elevation-guess row is correct from its very first render, not just
+    // after the next rebuildTrayMenu() call -- a genuine small fix, not just
+    // a reorder for logging's sake: `elevationGuessElevated` was previously
+    // read by buildTrayMenuTemplate() inside createTray() while still at its
+    // initial `false` default.
+    logElevationGuidance();
+    const startupDisplay = screen.getPrimaryDisplay();
+    log(
+      `primary display: bounds=${JSON.stringify(startupDisplay.bounds)} scaleFactor=${startupDisplay.scaleFactor} -- for reference, this dev machine is 200% scaled (physical 3072x1920, logical 1536x960); the gaming PC this is packaged for will differ`
+    );
     log(`lane override at startup: ${currentLane === null ? 'Auto (none set)' : currentLane}`);
     log(`show skill table at startup: ${showSkillTable}`);
     applyCalibrationForCurrentDisplay(); // populates calibrationGeometry + merges into gameState
@@ -996,7 +1198,6 @@ if (!gotSingleInstanceLock) {
     createWindow();
     createTray();
     registerHotkeys();
-    logElevationGuidance();
     schedulePoll();
 
     // Test seam, not a feature: this desktop session has no visible taskbar
@@ -1036,5 +1237,12 @@ if (!gotSingleInstanceLock) {
     stopPlayerListPolling();
     if (tray && !tray.isDestroyed()) tray.destroy();
     if (calibrationWindow && !calibrationWindow.isDestroyed()) calibrationWindow.close();
+    if (logStream) {
+      try {
+        logStream.end();
+      } catch {
+        // best-effort only
+      }
+    }
   });
 }

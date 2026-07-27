@@ -7,9 +7,60 @@
   "scripts": {
     "start": "electron .",
     "start:admin": "start-admin.cmd",
-    "vendor:bundle": "esbuild ../lib/nextSkill.ts --bundle --format=esm --platform=browser --outfile=vendor/skillEngine.js"
+    "vendor:bundle": "esbuild ../lib/nextSkill.ts --bundle --format=esm --platform=browser --outfile=vendor/skillEngine.js",
+    "dist:unpacked": "electron-builder --dir --win",
+    "dist:resources": "node scripts/apply-exe-resources.js",
+    "dist:package": "electron-builder --win nsis portable --prepackaged dist/win-unpacked",
+    "dist": "npm run dist:unpacked && npm run dist:resources && npm run dist:package"
   },
   "devDependencies": {
-    "electron": "^32.0.0"
+    "electron": "^32.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.coachbuild.overlay",
+    "productName": "CoachBuild Overlay",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "calibratePreload.js",
+      "lib/**/*",
+      "js/**/*",
+      "vendor/skillEngine.js",
+      "assets/**/*",
+      "renderer/**/*",
+      "package.json",
+      "!vendor/_selfTest-highlight.mjs"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "requestedExecutionLevel": "requireAdministrator",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
+    }
   }
 }
