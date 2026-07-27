@@ -4,17 +4,42 @@
 // why: Overwolf requires developer-whitelist approval that mandates integrating
 // Overwolf ads/subscriptions, which this personal one-machine tool cannot and
 // should not clear). This file owns everything the old background.js owned:
-//   - the always-on-top overlay window's lifecycle
+//   - the always-on-top overlay window's lifecycle (now FULLSCREEN, see below)
 //   - polling Riot's Live Client Data API directly (no GEP, no Overwolf)
 //   - both global hotkeys (must work while League has focus)
 //   - pushing state to the renderer over Electron IPC
 //   - the readiness handshake
+//   - the calibration window + geometry persistence (2026-07-27 round)
+//   - the system tray (primary control surface, and now calibration entry)
 //
 // Everything game-shape-specific (parsing, the Passive-key exclusion, the
 // all-or-nothing rule, riotId-matched champion-name resolution) lives in
 // lib/gameState.js, ported verbatim in logic from the Overwolf build's
 // overwolf/js/gameState.js and already verified against the real captured
 // Practice Tool payload (see that file's header + HANDOFF-engy.md).
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPLIANCE FLAG — read before wiring anything into the calibration geometry
+// this file pushes. This file computes and persists ONLY geometry: WHERE the
+// four ability-icon boxes sit on screen. It does NOT compute, store, or push
+// WHICH ability (if any) should be highlighted, and it never will from this
+// file. That determination is explicitly out of scope here, because "a pink
+// box on the real ability icon telling the player which one to press next,
+// computed from their current live ranks" is the exact feature this project's
+// own CHANGELOG already ruled out on POLICY grounds, not a technical one:
+//   CHANGELOG.md, v0.65.0: "Every app that appears to highlight abilities in
+//   the HUD is drawing an Overwolf-style overlay over the game, which stays
+//   out of scope here."
+//   CHANGELOG.md, the Overwolf groundwork entry above it: Riot's policy
+//   approves "Game overlays that provide static data that is available prior
+//   to the game" and bans "Apps that dictate player decisions."
+// `overlay-host/vendor/skillEngine.js` (present on disk as of this round,
+// bundling `lib/nextSkill.ts`'s `resolveNextSkill`) is the exact banned
+// engine this file must never import, call, or accept a result from over
+// IPC. See HANDOFF-engy.md for the full flag raised to the coordinator this
+// round -- this comment exists so the next person editing THIS file sees the
+// same warning at the point where it would be easiest to quietly wire in.
+// ─────────────────────────────────────────────────────────────────────────────
 
 const { app, BrowserWindow, Tray, Menu, nativeImage, globalShortcut, ipcMain, screen } = require('electron');
 const path = require('path');
@@ -22,6 +47,8 @@ const fs = require('fs');
 
 const { fetchActivePlayer, fetchPlayerList } = require('./lib/liveClientHttp.js');
 const { loadLane, saveLane, VALID_LANES } = require('./lib/laneSettings.js');
+const { readSettingsFile, writeSettingsPatch } = require('./lib/settingsFile.js');
+const { loadCalibration, saveCalibration } = require('./lib/calibrationSettings.js');
 const {
   parseLevelAndAbilities,
   extractLocalRiotId,
@@ -35,17 +62,32 @@ const {
 // Constants
 // ---------------------------------------------------------------------------
 
-// Same reasoning as the Overwolf build's manifest.README.md "Overlay position"
-// note, ported verbatim: upper-left, clear of the minimap + shop panel
-// (bottom-right), the ability/item bar (bottom-center), the
-// scoreboard/kill-feed/objective banners (top-center/top-right), and the chat
-// log (bottom-left). Still NOT verified against an actual rendered game window
-// on this machine -- general LoL HUD-layout knowledge, not an observed
-// screenshot. First thing worth checking in a live test.
-const OVERLAY_WIDTH = 340;
-const OVERLAY_HEIGHT = 520;
-const OVERLAY_TOP = 110;
-const OVERLAY_LEFT = 24;
+// FULLSCREEN (2026-07-27 round -- replaces the old 340x520 upper-left panel).
+// To draw a highlight box over the real ability icons at the bottom-centre of
+// the game, the window must cover the WHOLE primary display, not a corner
+// panel. Uses `display.bounds`, deliberately NOT `workArea` -- a running game
+// covers the taskbar, so the taskbar-excluded workArea would leave a
+// window-sized gap right where a fullscreen game actually renders.
+//
+// The old top-left skill TABLE (`renderer/ingame.html`'s existing panel) is
+// NOT deleted -- it's good, working, already-verified-live code, kept behind
+// a tray toggle (`showSkillTable`, default OFF this round) exactly as
+// instructed ("instead of", not "delete"). It still renders inside this same
+// fullscreen window at its own fixed position; engo's renderer code decides
+// whether to paint it based on the pushed `calibration.showTable` flag (see
+// buildCalibrationPayload() -- nested there, not a top-level field, to match
+// what ingame.js actually reads).
+const TRAY_ICON_PATH = path.join(__dirname, 'assets', 'tray-icon.png');
+const CALIBRATE_PRELOAD_PATH = path.join(__dirname, 'calibratePreload.js');
+
+// Fully transparent (alpha 0) explicitly, in addition to `transparent: true`
+// on the constructor -- a known Electron/Chromium gotcha is a fullscreen
+// transparent window painting a faint grey/white sheet instead of true
+// transparency unless the background colour is pinned to full-zero-alpha.
+// Verified this round that it renders genuinely invisible when idle (see
+// HANDOFF-engy.md) -- kept explicit rather than relying on `transparent: true`
+// alone in case that verification doesn't hold on a different Windows build.
+const TRANSPARENT_BACKGROUND_COLOR = '#00000000';
 
 const HOTKEY_TOGGLE_OVERLAY = 'Control+F10';
 const HOTKEY_TOGGLE_INTERACTIVE = 'Control+F11';
@@ -70,8 +112,6 @@ const LANE_MENU_ITEMS = [
   { lane: 'SUPPORT', label: 'Support' },
 ];
 
-const TRAY_ICON_PATH = path.join(__dirname, 'assets', 'tray-icon.png');
-
 // ---------------------------------------------------------------------------
 // Mutable state
 // ---------------------------------------------------------------------------
@@ -83,12 +123,26 @@ let overlayVisibleWanted = true;
 let inGame = false;
 const userDataDir = app.getPath('userData');
 let currentLane = loadLane(userDataDir); // string lane, or null = "Auto"
-let gameState = mergeState(emptyStateFor(false), { lane: currentLane });
+// UI toggle, not per-game state -- loaded here (fs-only, safe before
+// app.whenReady) same as currentLane. Defaults OFF this round: the table is
+// kept, not deleted, but the highlight box (engo's renderer work) is the new
+// primary surface. See buildTrayMenuTemplate() for the toggle.
+let showSkillTable = readSettingsFile(userDataDir).showSkillTable === true;
+let gameState = mergeState(emptyStateFor(false), { lane: currentLane, calibration: null });
 let lastKnownRiotId = null;
 let positionLoggedThisGame = false; // logs the raw detected `position` ONCE per game
 
 let pollTimer = null;
 let playerListTimer = null;
+
+// Calibration -- geometry itself is loaded inside app.whenReady() (it needs
+// `screen.getPrimaryDisplay()`, which Electron does not allow calling before
+// the app is ready; unlike `app.getPath`/`fs` above, this can't happen at
+// module scope). See the COMPLIANCE FLAG at the top of this file before
+// touching anything calibration-related.
+let calibrationGeometry = null;
+let calibrationWindow = null;
+let isCalibrating = false;
 
 function log(...args) {
   console.log('[CoachBuild:main]', ...args);
@@ -101,16 +155,27 @@ function warn(...args) {
 // Window
 // ---------------------------------------------------------------------------
 
+// Electron's `screen` module is unusable before app 'ready' -- this is only
+// ever called from inside app.whenReady() or a later handler, never at
+// module scope (that constraint is WHY calibrationGeometry/etc. above are
+// initialized to `null` at module scope and populated inside whenReady()
+// instead of at declaration, unlike currentLane/showSkillTable which only
+// need `app.getPath`/`fs`, both fine early).
+function getPrimaryDisplayBounds() {
+  return screen.getPrimaryDisplay().bounds;
+}
+
 function createWindow() {
-  const display = screen.getPrimaryDisplay();
+  const bounds = getPrimaryDisplayBounds();
 
   mainWindow = new BrowserWindow({
-    width: OVERLAY_WIDTH,
-    height: OVERLAY_HEIGHT,
-    x: display.bounds.x + OVERLAY_LEFT,
-    y: display.bounds.y + OVERLAY_TOP,
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
     frame: false,
     transparent: true,
+    backgroundColor: TRANSPARENT_BACKGROUND_COLOR,
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,
@@ -131,8 +196,10 @@ function createWindow() {
   // constructor's plain `alwaysOnTop: true` alone.
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
 
-  // Click-through by default, matching the Overwolf build's `clickthrough:
-  // true` initial window style. `forward: true` lets the OS still deliver
+  // Click-through by default. NOW SAFETY-CRITICAL, not a nicety: this window
+  // covers the ENTIRE primary display, so if it ever fails to be click-through
+  // the game underneath becomes unplayable (every click/move would hit this
+  // window instead of the game). `forward: true` lets the OS still deliver
   // move/enter/leave events needed for correct rendering without capturing
   // clicks -- same intent as Overwolf's InputPassThrough, different API.
   mainWindow.setIgnoreMouseEvents(true, { forward: true });
@@ -145,6 +212,15 @@ function createWindow() {
     if (overlayVisibleWanted) {
       mainWindow.showInactive();
     }
+    // Re-assert bounds after show. OBSERVED this round (see HANDOFF-engy.md):
+    // on this dev machine, a frameless fullscreen window's actual content
+    // area came back ~48px SHORTER than the `height` passed to the
+    // constructor (Windows silently clamping to something work-area-like
+    // despite `display.bounds`, not `workArea`, being requested) -- a
+    // post-show setBounds is the standard mitigation for this class of
+    // Windows quirk. Cheap and harmless if the constructor bounds already
+    // stuck correctly.
+    mainWindow.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
   });
 
   mainWindow.on('closed', () => {
@@ -152,6 +228,46 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'ingame.html'));
+}
+
+// Display change (resolution switch, monitor reconfigured, DPI change) --
+// resize/reposition the fullscreen window to match the new primary display,
+// and re-validate calibration against the new resolution (stale coordinates
+// from the OLD resolution must not silently keep being used -- same "fall
+// back to the scaled default, log it" rule as a normal startup mismatch, see
+// applyCalibrationForCurrentDisplay() below).
+function repositionMainWindowToDisplay() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const bounds = getPrimaryDisplayBounds();
+  mainWindow.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
+}
+
+function applyCalibrationForCurrentDisplay() {
+  const bounds = getPrimaryDisplayBounds();
+  const loaded = loadCalibration(userDataDir, bounds.width, bounds.height);
+  if (loaded.isDefault) {
+    log(
+      `no saved calibration for ${bounds.width}x${bounds.height} -- using the scaled starting default until you calibrate (tray -> "Calibrate ability bar…")`
+    );
+  }
+  calibrationGeometry = loaded.geometry;
+  gameState = mergeState(gameState, { calibration: buildCalibrationPayload() });
+  return bounds;
+}
+
+// The `calibration` field pushed to the renderer carries BOTH the ability-box
+// geometry (this file's own concern, from lib/calibrationSettings.js) AND
+// `showTable` (the "Show skill table" toggle) NESTED together in one object
+// -- CONTRACT FIX (2026-07-27, same day as the round that added both): the
+// renderer (engo's ingame.js) reads `geometry.showTable` off the calibration
+// payload, not a separate top-level field. `showSkillTable` stays its own
+// separate SETTING (own key in the settings file, own tray checkbox, own
+// toggle function below) -- only the OUTGOING WIRE SHAPE nests it inside
+// `calibration`, so the two concerns don't have to merge in storage, only in
+// what gets pushed over IPC.
+function buildCalibrationPayload() {
+  if (!calibrationGeometry) return null;
+  return { ...calibrationGeometry, showTable: showSkillTable };
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +285,25 @@ function pushState() {
   mainWindow.webContents.send('coachbuild-state', gameState);
 }
 
+// The calibration geometry was being COMPUTED (buildCalibrationPayload) but
+// never SENT: there was no channel, no push, and no preload bridge. The
+// renderer listens for `onCalibration` and, finding it absent, logs that "the
+// highlight box has no geometry to draw with and will stay hidden" -- so the
+// whole pink-box feature was silently inert while every individual piece
+// looked correct in isolation. Exactly the failure mode the Overwolf merge
+// had: two halves, each right, never joined.
+//
+// Sent on the SAME occasions as state (ready handshake, calibration save,
+// table toggle), because a geometry push dropped before the renderer attached
+// its listener is lost the same way a state push is -- webContents.send has no
+// queue.
+function pushCalibration() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const payload = buildCalibrationPayload();
+  if (!payload) return; // no geometry yet: renderer keeps the box hidden, correctly
+  mainWindow.webContents.send('coachbuild-calibration', payload);
+}
+
 function pushInteractiveChange() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('coachbuild-interactive', isInteractive);
@@ -178,6 +313,7 @@ ipcMain.on('coachbuild-ready', () => {
   log('renderer announced ready — replaying current state');
   pushState();
   pushInteractiveChange();
+  pushCalibration();
 });
 
 // ---------------------------------------------------------------------------
@@ -208,6 +344,144 @@ function setLane(nextLane) {
 
 ipcMain.on('coachbuild-set-lane', (_event, lane) => {
   setLane(lane);
+});
+
+// ---------------------------------------------------------------------------
+// Show/hide the top-left skill table -- kept, not deleted (2026-07-27 round),
+// behind a tray toggle defaulting OFF. Same settings-file pattern as lane.
+// ---------------------------------------------------------------------------
+
+function toggleShowSkillTable() {
+  showSkillTable = !showSkillTable;
+  writeSettingsPatch(userDataDir, { showSkillTable }); // storage key, unrelated to the wire shape below
+  log('show skill table ->', showSkillTable);
+  // Nested under `calibration.showTable` on the wire -- see
+  // buildCalibrationPayload()'s comment for why.
+  gameState = mergeState(gameState, { calibration: buildCalibrationPayload() });
+  pushState();
+  pushCalibration(); // `showTable` rides on the calibration payload, not state
+  rebuildTrayMenu();
+}
+
+// ---------------------------------------------------------------------------
+// Calibration — see the COMPLIANCE FLAG at the top of this file. This section
+// owns ONLY where the four ability-icon boxes sit on screen (geometry), never
+// which one (if any) should be highlighted.
+//
+// A separate, temporary, fullscreen BrowserWindow (renderer/calibrate.html),
+// created on entry and destroyed on exit -- kept independent of `mainWindow`
+// so calibration can never interfere with the main overlay's own IPC
+// contract (state pushes, interactive toggle) that engo's ingame.js depends
+// on. Interactive + focusable ONLY while calibrating (same
+// setIgnoreMouseEvents/setFocusable pairing already proven correct for the
+// main window's interactive mode, ported here) -- a fullscreen focusable
+// window is fine for the few seconds a user spends dragging boxes, but must
+// never be left that way once calibration ends.
+// ---------------------------------------------------------------------------
+
+function enterCalibration() {
+  if (isCalibrating) return;
+  isCalibrating = true;
+  log('entering calibration mode');
+
+  const bounds = getPrimaryDisplayBounds();
+  calibrationWindow = new BrowserWindow({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    frame: false,
+    transparent: true,
+    backgroundColor: TRANSPARENT_BACKGROUND_COLOR,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    focusable: true, // interactive for the duration of calibration ONLY
+    hasShadow: false,
+    show: false,
+    webPreferences: {
+      preload: CALIBRATE_PRELOAD_PATH,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  calibrationWindow.setAlwaysOnTop(true, 'screen-saver');
+
+  calibrationWindow.once('ready-to-show', () => {
+    if (!calibrationWindow || calibrationWindow.isDestroyed()) return;
+    calibrationWindow.showInactive();
+    calibrationWindow.setFocusable(true);
+    calibrationWindow.focus();
+    // See createWindow()'s matching comment -- same post-show bounds
+    // re-assertion, same observed Windows quirk.
+    calibrationWindow.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
+  });
+
+  calibrationWindow.on('closed', () => {
+    calibrationWindow = null;
+    if (isCalibrating) {
+      // Window closed some other way (Alt+F4, task manager) without going
+      // through exitCalibration()'s save/cancel path -- still must clear the
+      // flag so the tray menu and future enterCalibration() calls recover.
+      isCalibrating = false;
+      rebuildTrayMenu();
+    }
+  });
+
+  // Diagnostic: forward the renderer's own console to this process's stdout.
+  // A calibrate.js exception wouldn't otherwise be visible outside DevTools.
+  calibrationWindow.webContents.on('console-message', (_event, _level, message) => {
+    log('[calibrate renderer console]', message);
+  });
+
+  calibrationWindow.loadFile(path.join(__dirname, 'renderer', 'calibrate.html'));
+  rebuildTrayMenu();
+}
+
+function exitCalibration(saved) {
+  // saved: {geometry, width, height} on Save, or null/undefined on Cancel.
+  if (!isCalibrating) return;
+
+  if (saved && saved.geometry) {
+    calibrationGeometry = saveCalibration(userDataDir, saved.geometry, saved.width, saved.height);
+    log(`calibration saved for ${saved.width}x${saved.height}:`, JSON.stringify(calibrationGeometry));
+  } else {
+    log('calibration cancelled -- keeping the previous geometry');
+  }
+  gameState = mergeState(gameState, { calibration: buildCalibrationPayload() });
+  pushState();
+  // The renderer reads geometry ONLY off the dedicated calibration channel --
+  // it never looks at `state.calibration` -- so the mergeState above alone
+  // would leave the box drawing at the OLD position after a save.
+  pushCalibration();
+
+  isCalibrating = false;
+  if (calibrationWindow && !calibrationWindow.isDestroyed()) {
+    calibrationWindow.close();
+  }
+  rebuildTrayMenu();
+}
+
+ipcMain.on('coachbuild-calibrate-ready', () => {
+  if (!calibrationWindow || calibrationWindow.isDestroyed()) return;
+  const bounds = getPrimaryDisplayBounds();
+  const loaded = loadCalibration(userDataDir, bounds.width, bounds.height);
+  calibrationWindow.webContents.send('coachbuild-calibrate-init', {
+    geometry: loaded.geometry,
+    displayWidth: bounds.width,
+    displayHeight: bounds.height,
+    isDefault: loaded.isDefault,
+  });
+});
+
+ipcMain.on('coachbuild-calibrate-save', (_event, geometry) => {
+  const bounds = getPrimaryDisplayBounds();
+  exitCalibration({ geometry, width: bounds.width, height: bounds.height });
+});
+
+ipcMain.on('coachbuild-calibrate-cancel', () => {
+  exitCalibration(null);
 });
 
 // ---------------------------------------------------------------------------
@@ -260,10 +534,17 @@ async function pollActivePlayer() {
       inGame = false;
       log('game no longer detected — ending session');
       stopPlayerListPolling();
-      // `lane` (the manual override) deliberately survives a game exit --
-      // it's a user preference, not per-game state. Only session-scoped
-      // fields reset.
-      gameState = mergeState(emptyStateFor(false), { lane: currentLane });
+      // `lane` (the manual override) and `calibration` (which itself now
+      // carries `showTable` nested inside it -- see buildCalibrationPayload)
+      // deliberately survive a game exit -- they're user preferences /
+      // display config, not per-game state. Only session-scoped fields
+      // (championLevel, championName, abilityRanks, detectedPosition) reset.
+      // BUG FIX (this round): emptyStateFor(false) only carries EMPTY_STATE's
+      // own keys (lane, detectedPosition, plus the base fields) -- it does
+      // NOT know about `calibration`, which is this file's own addition to
+      // the pushed object, not lib/gameState.js's. Omitting it here would
+      // have silently dropped it to `undefined` on every single game exit.
+      gameState = mergeState(emptyStateFor(false), { lane: currentLane, calibration: buildCalibrationPayload() });
       lastKnownRiotId = null;
       positionLoggedThisGame = false;
       pushState();
@@ -470,6 +751,20 @@ function buildTrayMenuTemplate() {
     },
     { type: 'separator' },
     {
+      // Kept, not deleted -- default OFF this round (2026-07-27). See the
+      // "FULLSCREEN" comment on TRAY_ICON_PATH's block for why.
+      label: 'Show skill table',
+      type: 'checkbox',
+      checked: showSkillTable,
+      click: () => toggleShowSkillTable(),
+    },
+    {
+      label: isCalibrating ? 'Calibrating… (use the on-screen Save/Cancel)' : 'Calibrate ability bar…',
+      enabled: !isCalibrating,
+      click: () => enterCalibration(),
+    },
+    { type: 'separator' },
+    {
       label: 'Lane override',
       submenu: laneSubmenu,
     },
@@ -523,11 +818,34 @@ if (!gotSingleInstanceLock) {
   app.whenReady().then(() => {
     log('CoachBuild Overlay Host starting');
     log(`lane override at startup: ${currentLane === null ? 'Auto (none set)' : currentLane}`);
+    log(`show skill table at startup: ${showSkillTable}`);
+    applyCalibrationForCurrentDisplay(); // populates calibrationGeometry + merges into gameState
+    log('calibration payload at startup:', JSON.stringify(buildCalibrationPayload()));
     createWindow();
     createTray();
     registerHotkeys();
     logElevationGuidance();
     schedulePoll();
+
+    // Test seam, not a feature: this desktop session has no visible taskbar
+    // (confirmed across multiple rounds' screenshots), so the tray menu can't
+    // be clicked to verify calibration mode end-to-end. Guarded behind an
+    // explicit env var nobody sets by accident -- documented in
+    // HANDOFF-engy.md and overlay-host/README.md, not a hidden backdoor.
+    if (process.env.COACHBUILD_AUTO_CALIBRATE === '1') {
+      log('COACHBUILD_AUTO_CALIBRATE=1 -- auto-entering calibration mode (test seam, see README)');
+      enterCalibration();
+    }
+
+    // Resolution/monitor change while running -- resize the fullscreen window
+    // and re-validate calibration against the new resolution (never keep
+    // using coordinates calibrated for a different screen size silently).
+    screen.on('display-metrics-changed', () => {
+      log('display metrics changed -- repositioning overlay window and re-checking calibration');
+      repositionMainWindowToDisplay();
+      applyCalibrationForCurrentDisplay();
+      pushState();
+    });
   });
 
   // A tray-only app should NOT quit when its (taskbar-invisible, non-closable
@@ -545,5 +863,6 @@ if (!gotSingleInstanceLock) {
     clearTimeout(pollTimer);
     stopPlayerListPolling();
     if (tray && !tray.isDestroyed()) tray.destroy();
+    if (calibrationWindow && !calibrationWindow.isDestroyed()) calibrationWindow.close();
   });
 }

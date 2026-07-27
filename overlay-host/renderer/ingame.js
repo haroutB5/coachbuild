@@ -16,11 +16,18 @@
 //     otherwise.
 //
 // ── Compliance shape (Riot developer policy, verbatim in the task brief) ────
-// This renders ONLY a static levels-1-18 reference table with the player's
-// OWN current level highlighted as a description, plus a lane picker (the
-// user choosing which static dataset to view). No imperative copy, no
-// "level this next," no arrows, nothing about an opponent. See
+// This renders a static levels-1-18 reference table with the player's OWN
+// current level highlighted as a description, plus a lane picker (the user
+// choosing which static dataset to view). No imperative copy, no "level
+// this next," no arrows, nothing about an opponent. See
 // overwolf/js/skillOrderData.js's header for the data-layer half of this.
+// STILL TRUE for the table specifically -- everything in this section
+// describes the TABLE. See "The ability highlight box" section further down
+// for the one deliberately different surface added 2026-07-27.
+//
+// In every case, on BOTH surfaces: zero enemy/other-player information is
+// ever read or rendered. `resolveOverlayData`'s inputs are the LOCAL
+// player's own state only (see overlay-host/lib/gameState.js's header).
 //
 // ── Why a 4-row (Q/W/E/R) x 18-column grid, not an 18-row list ─────────────
 // This is the classic op.gg/u.gg skill-order visual: one filled cell per
@@ -57,11 +64,35 @@
 //     claiming to describe the player's ranks, only "this is level N's
 //     column in the static reference order." Nothing here reads their own
 //     ranks into the highlight, so there is no claim to be wrong about.
-// Index used below is therefore `championLevel - 1` into `model.order`,
-// full stop -- never `pointsSpent(ranks)`. `resolveNextSkill`/`pointsSpent`
-// are not even imported anywhere in this directory (audit-confirmed) -- the
-// former esbuild vendor bundle is gone entirely, see the TOTAL_LEVELS note
-// below.
+// Index used below (for the TABLE only) is therefore `championLevel - 1`
+// into `model.order`, full stop -- never `pointsSpent(ranks)`.
+//
+// ── The ability highlight box (NEW, 2026-07-27) -- a deliberately DIFFERENT
+//    compliance posture, and why that's allowed ────────────────────────────
+// The user asked to stop looking at the table and instead have the ONE
+// recommended-next ability highlighted directly on the real ability icons.
+// That IS an instruction ("put your next point here") -- there is no honest
+// way to draw a box around exactly one of four abilities and call it
+// descriptive. The reasoning that kept `resolveNextSkill` out of this
+// codebase before (an Overwolf-hosted overlay, subject to Riot's developer
+// policy on "apps that dictate player decisions") no longer applies: this is
+// now a standalone Electron app the user runs on their own machine, outside
+// Overwolf's distribution/approval surface entirely -- see
+// overlay-host/README.md's PIVOT section. So `resolveNextSkill` is
+// deliberately reintroduced HERE, and ONLY for the highlight box -- the
+// table's rendering path below still never calls it, still stays
+// level-indexed and descriptive, unchanged. Two features, two different
+// honest postures, in the same file, on purpose.
+//
+// The refusal discipline is what makes this safe rather than reckless:
+// `resolveNextSkill` returns `{kind:"none", because:<one of 11 refusals>}`
+// far more often than a live game "should" produce ambiguity -- non-standard
+// kits, a deviated-from ability already capped, an incomplete order past
+// level 15, a level/ranks reading that doesn't add up, etc (see
+// lib/nextSkill.ts's own header -- read it before touching
+// computeNextSkillRecommendation below). On ANY refusal this file renders
+// NOTHING -- no box, no fallback guess, no "probably Q." Never editorialize
+// past what the engine itself is willing to assert.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import {
@@ -71,22 +102,25 @@ import {
   ERROR_RETRY_COOLDOWN_MS,
   NO_DATA_RETRY_COOLDOWN_MS,
 } from "../js/skillOrderData.js";
+import { resolveNextSkill } from "../vendor/skillEngine.js";
 
 // Mirrors lib/skillOrderModel.ts's TOTAL_LEVELS -- that file is the SOURCE OF
 // TRUTH (18 = League's 5/5/5/3 standard rank model over 18 levels, see its
-// header). Inlined rather than imported from a vendored esbuild bundle
-// (audit fix #7, 2026-07-27): this file previously pulled in
-// overwolf/vendor/skillEngine.js for this ONE constant, but that bundle's
-// entry point transitively carried `resolveNextSkill` -- the imperative
-// "which ability next" engine this compliance-critical surface must NEVER
-// call -- into the same module graph as the one file that exists precisely
-// to not have that shape. There was also no CI catching drift: vitest.config.ts
-// excludes overwolf/** entirely, so a future change to skillOrderModel.ts's
-// TOTAL_LEVELS would desync a committed, unbuilt artifact silently. A single
-// `18` that has been true since League shipped its rank model is a smaller
-// risk than either of those. If lib/skillOrderModel.ts's TOTAL_LEVELS ever
-// changes, update this constant by hand.
+// header). Inlined rather than imported from the vendor bundle: this file AS
+// A WHOLE now imports vendor/skillEngine.js (for `resolveNextSkill`, the
+// highlight box's engine -- see above), but the TABLE's own rendering code
+// (buildGrid/renderResolved below) still never CALLS resolveNextSkill and
+// still indexes by `championLevel - 1`, never `pointsSpent(ranks)` -- the
+// table's LOGIC stays exactly as descriptive as before, even though the
+// module graph is shared now that both features live in one file. If
+// lib/skillOrderModel.ts's TOTAL_LEVELS ever changes, update this constant
+// by hand.
 const TOTAL_LEVELS = 18;
+
+// Q=0, W=1, E=2, R=3 -- the fixed left-to-right order engy's calibration
+// geometry assumes (see applyCalibration below): slot i's screen center is
+// `firstBoxCenterX + i*spacing`.
+const ABILITY_SLOT_INDEX = { Q: 0, W: 1, E: 2, R: 3 };
 
 const ABILITIES = ["Q", "W", "E", "R"];
 const LANES = ["TOP", "JUNGLE", "MID", "BOT", "SUPPORT"];
@@ -105,6 +139,7 @@ const els = {
   message: document.getElementById("cb-message"),
   grid: document.getElementById("cb-grid"),
   footer: document.getElementById("cb-footer"),
+  highlight: document.getElementById("cb-highlight"),
 };
 
 // Kept at module scope, not re-derived from the DOM, so a hide/show cycle
@@ -116,6 +151,20 @@ const els = {
 let lastState = { inGame: false };
 let isInteractive = false;
 let renderToken = 0;
+
+// ── Calibration state (new, 2026-07-27) ─────────────────────────────────────
+// Pushed by engy's calibrate.js/main.js over IPC -- see applyCalibration
+// below for the exact expected payload shape (this file's half of a
+// contract engy's side must match; not yet wired as of this round, see
+// HANDOFF-engo.md). `calibration === null` means "never calibrated" -- the
+// highlight box has nowhere honest to draw itself and stays hidden, same
+// "never guess" posture as the skill engine's own refusals.
+let calibration = null; // {firstBoxCenterX, centerY, boxSize, spacing} | null
+// The reference table now defaults OFF -- the user asked for the highlight
+// "instead of" the table. Calibration's `showTable` flag is the intended
+// long-term control; starts false so a fresh launch (before any calibration
+// has ever run) doesn't show it either.
+let showTable = false;
 
 async function handleState(state) {
   lastState = state || { inGame: false };
@@ -134,6 +183,19 @@ async function handleState(state) {
 }
 
 function render(data) {
+  // The table is visible when EITHER engy's calibration flag asks for it
+  // (`showTable`), OR the user is currently in interactive/edit mode. The
+  // second half is a deliberate rendering-side call, not a change to
+  // engy's contract: the lane bar/badge live INSIDE this same panel, and
+  // interactive mode exists specifically so the user can reach them (fix
+  // a wrong lane without leaving the game) -- hiding the only place those
+  // controls render, at the exact moment the user asked to use them, would
+  // make interactive mode silently useless whenever the table default is
+  // off. The tray menu's lane submenu (main.js) is the OTHER, always-
+  // available way to change lanes, so this is a convenience restore, not
+  // the only path.
+  els.overlay.hidden = !(showTable || isInteractive);
+
   renderLaneBar();
 
   switch (data.phase) {
@@ -173,6 +235,7 @@ function render(data) {
   }
 
   scheduleRetry(data);
+  renderHighlight(data);
 }
 
 function showMessage(text) {
@@ -292,6 +355,97 @@ function buildGrid(model, championLevel) {
     }
     els.grid.appendChild(row);
   }
+}
+
+// ── The ability highlight box (new, 2026-07-27) ─────────────────────────────
+// See this file's header for the compliance reasoning. This is the ONE place
+// resolveNextSkill is called in the entire app.
+
+/**
+ * @returns {object|null} a `{kind:"recommend", ability, ...}` result, or null
+ *   for EVERY refusal (all 11 -- see lib/nextSkill.ts's NextSkillRefusal) and
+ *   for every phase that isn't a resolved "ok" skill order. Never guesses.
+ */
+function computeNextSkillRecommendation(data) {
+  if (data.phase !== "resolved" || !data.skillOrder || data.skillOrder.status !== "ok") return null;
+
+  // Deliberately no pre-filtering of `championLevel`/`abilityRanks` here --
+  // resolveNextSkill's OWN validation (bad-level / bad-ranks / non-standard-
+  // kit / over-spent / etc) is the single source of truth for what counts as
+  // a usable reading. Duplicating those checks here would risk this file's
+  // guess drifting out of sync with the engine's -- see lib/nextSkill.ts's
+  // header on why every one of those refusals exists and is load-bearing.
+  const result = resolveNextSkill({
+    model: data.skillOrder.model,
+    level: data.championLevel,
+    ranks: data.abilityRanks,
+  });
+
+  return result.kind === "recommend" ? result : null;
+}
+
+/** Validates engy's calibration payload defensively -- crosses a process
+ *  boundary (main -> renderer over IPC), and a malformed/half-built object
+ *  must never silently draw a box at NaN/undefined coordinates (which can
+ *  render as `0,0` or a huge nonsense rectangle depending on the engine --
+ *  worth refusing outright rather than trusting). */
+function isValidCalibration(g) {
+  return (
+    g &&
+    typeof g === "object" &&
+    Number.isFinite(g.firstBoxCenterX) &&
+    Number.isFinite(g.centerY) &&
+    Number.isFinite(g.boxSize) &&
+    g.boxSize > 0 &&
+    Number.isFinite(g.spacing)
+  );
+}
+
+/**
+ * Applies a calibration push from the main process. See the header comment
+ * on `calibration` (module scope) for the contract this expects -- exact
+ * shape documented in HANDOFF-engo.md for engy to match, since main.js/
+ * preload.js are his files and this side cannot add the sending half itself.
+ */
+function applyCalibration(geometry) {
+  if (!isValidCalibration(geometry)) {
+    console.warn("[CoachBuild overlay] ignoring malformed calibration payload:", geometry);
+    return;
+  }
+  calibration = {
+    firstBoxCenterX: geometry.firstBoxCenterX,
+    centerY: geometry.centerY,
+    boxSize: geometry.boxSize,
+    spacing: geometry.spacing,
+  };
+  showTable = !!geometry.showTable;
+  // Calibration can change independent of any new game-state push (the user
+  // re-runs calibrate.js, or flips the show-table flag) -- re-render
+  // immediately from whatever was last resolved rather than waiting for the
+  // next state tick, which could be seconds away or (out of game) never.
+  // Cheap: resolveOverlayData's own caches make this a near-instant re-run,
+  // not a fresh network fetch (same pattern selectLane already relies on).
+  handleState(lastState);
+}
+
+function renderHighlight(data) {
+  const rec = calibration ? computeNextSkillRecommendation(data) : null;
+
+  if (!rec) {
+    els.highlight.hidden = true;
+    return;
+  }
+
+  const slot = ABILITY_SLOT_INDEX[rec.ability];
+  const centerX = calibration.firstBoxCenterX + slot * calibration.spacing;
+  const centerY = calibration.centerY;
+  const size = calibration.boxSize;
+
+  els.highlight.style.left = `${centerX - size / 2}px`;
+  els.highlight.style.top = `${centerY - size / 2}px`;
+  els.highlight.style.width = `${size}px`;
+  els.highlight.style.height = `${size}px`;
+  els.highlight.hidden = false;
 }
 
 // ── Lane control (2026-07-27: moved to main-process ownership) ─────────────
@@ -439,7 +593,13 @@ window.CoachBuildOverlay = {
     isInteractive = !!nextIsInteractive;
     els.overlay.classList.toggle("cb-overlay--interactive", isInteractive);
     els.badge.hidden = !isInteractive;
-    renderLaneBar();
+    // Table visibility now depends on `isInteractive` too (see render()'s
+    // `els.overlay.hidden` line) -- a full re-render (not just renderLaneBar)
+    // so flipping interactive mode immediately shows/hides the panel instead
+    // of waiting for the next state push. render() calls renderLaneBar()
+    // itself, so this supersedes the old standalone call rather than
+    // duplicating it.
+    handleState(lastState);
   },
 };
 
@@ -480,12 +640,48 @@ if (typeof window.coachbuildIPC !== "undefined") {
     }
   });
 
+  // ── Calibration (new, 2026-07-27) ─────────────────────────────────────────
+  // EXPECTED CONTRACT -- documented here because this renderer cannot add
+  // the sending half itself (main.js/preload.js are engy's files this
+  // round). Not yet wired as of this commit; see HANDOFF-engo.md for the
+  // exact coordination note.
+  //   IPC channel:        'coachbuild-calibration'
+  //   preload.js exposes: window.coachbuildIPC.onCalibration(callback)
+  //                        -> ipcRenderer.on('coachbuild-calibration',
+  //                             (_event, geometry) => callback(geometry))
+  //   payload shape:       { firstBoxCenterX: number, centerY: number,
+  //                           boxSize: number, spacing: number,
+  //                           showTable: boolean }
+  // Guarded the same way `setLane` is guarded above -- an absent function on
+  // `window.coachbuildIPC` must degrade to "highlight box stays hidden,
+  // nothing crashes," never a thrown error that takes the rest of the
+  // renderer down with it.
+  if (typeof window.coachbuildIPC.onCalibration === "function") {
+    window.coachbuildIPC.onCalibration((geometry) => {
+      try {
+        applyCalibration(geometry);
+      } catch (err) {
+        console.warn("[CoachBuild overlay] failed to apply calibration push:", err);
+      }
+    });
+  } else {
+    console.warn(
+      "[CoachBuild overlay] window.coachbuildIPC.onCalibration unavailable -- the highlight box has no geometry to draw with and will stay hidden until this is wired up (see HANDOFF-engo.md)"
+    );
+  }
+
   // Announce readiness -- main.js answers with a fresh snapshot of current
   // state + interactive mode. See background.js's original comment (same
   // reasoning, ported verbatim): the in-game window can only ever RECEIVE
   // pushes, never pull, so a dropped first push would otherwise leave the
   // overlay blank until the next level-up, possibly minutes into the game,
   // at exactly the moment the player most wants to see it.
+  //
+  // NOTE for engy: ideally the 'coachbuild-ready' handler in main.js ALSO
+  // replays the last-known calibration (mirroring how it already replays
+  // state + interactive mode) -- otherwise a renderer reload leaves
+  // `calibration === null` (highlight hidden) until calibrate.js is re-run,
+  // even though the geometry was already known. See HANDOFF-engo.md.
   window.coachbuildIPC.ready();
 } else {
   console.warn("[CoachBuild overlay] window.coachbuildIPC is not available -- preload.js did not run or contextBridge failed");

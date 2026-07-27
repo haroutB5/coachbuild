@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CoachBuild — Calibrate ability bar</title>
+    <link rel="stylesheet" href="calibrate.css" />
+  </head>
+  <body>
+    <!--
+      Fullscreen, mostly-transparent calibration surface. The body MUST stay
+      transparent outside the four boxes + the panel -- the whole point is to
+      see the REAL game (or desktop, for a dry run with no game) underneath
+      and drag the boxes to match it. This window only exists while
+      calibrating (created/destroyed by main.js) and is interactive/focusable
+      for that duration only -- see main.js's enterCalibration/exitCalibration.
+    -->
+    <div id="cal-boxes" aria-hidden="true">
+      <div class="cal-box" data-ability="Q"><span class="cal-box__label">Q</span></div>
+      <div class="cal-box" data-ability="W"><span class="cal-box__label">W</span></div>
+      <div class="cal-box" data-ability="E"><span class="cal-box__label">E</span></div>
+      <div class="cal-box" data-ability="R"><span class="cal-box__label">R</span></div>
+    </div>
+
+    <div id="cal-panel" class="cal-panel" role="dialog" aria-label="Ability bar calibration">
+      <h1 class="cal-panel__title">Calibrate ability bar</h1>
+      <p class="cal-panel__hint" id="cal-status-hint">Loading…</p>
+      <p class="cal-panel__hint">
+        Drag any box to line all four up with your Q/W/E/R icons. Arrow keys
+        nudge 1px, <kbd>Shift</kbd>+Arrow nudges 10px.
+      </p>
+
+      <div class="cal-field">
+        <label for="cal-box-size">Box size</label>
+        <input id="cal-box-size" type="number" min="10" max="200" step="1" />
+      </div>
+      <div class="cal-field">
+        <label for="cal-spacing">Spacing</label>
+        <input id="cal-spacing" type="number" min="10" max="300" step="1" />
+      </div>
+
+      <div class="cal-actions">
+        <button id="cal-reset" type="button" class="cal-btn cal-btn--ghost">Reset to default</button>
+        <button id="cal-cancel" type="button" class="cal-btn cal-btn--ghost">Cancel (Esc)</button>
+        <button id="cal-save" type="button" class="cal-btn cal-btn--primary">Save &amp; exit</button>
+      </div>
+    </div>
+
+    <script type="module" src="calibrate.js"></script>
+  </body>
+</html>

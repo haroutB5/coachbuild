@@ -19,6 +19,20 @@
      - All 18 levels visible without scrolling -- a 4-row (Q/W/E/R) x
        18-column grid (levels as columns) is the compact shape chosen; see
        ingame.js's header for why over an 18-row list.
+
+   ── FULLSCREEN pivot (2026-07-27) -- READ BEFORE ADDING ANY NEW RULE ───────
+   The window used to be a small 340x520 OS window, pre-positioned by
+   main.js, so anything painted here only ever covered its own small
+   surface. It is now the FULL SCREEN. That changes what "safe" CSS means:
+     - `html`/`body` must NEVER end up with a visible background, box-shadow,
+       border, or filter of any kind -- at full-viewport size, even a barely
+       visible tint would wash out the entire game underneath it. Every rule
+       below that paints something is scoped to a small, explicitly sized
+       and positioned element (`.cb-overlay`, `.cb-highlight`), never to
+       `html`/`body`/a full-bleed wrapper.
+     - Every visible element needs an EXPLICIT `position: fixed` + explicit
+       coordinates now -- there is no small window boundary implicitly
+       containing anything to "the corner" any more.
    ───────────────────────────────────────────────────────────────────────── */
 
 :root {
@@ -37,6 +51,15 @@
   --cb-current-band: rgba(200, 170, 110, 0.22);
   --cb-interactive: #4fb0e0; /* deliberately a DIFFERENT hue from the gold accent --
                                  "editable" must never be mistaken for "recommended" */
+  --cb-pink: #ff2f9e; /* the highlight box -- unmistakably pink, distinct from any
+                          in-game red (danger/CC) or purple (void/epic-item) hue */
+  --cb-pink-glow: rgba(255, 47, 158, 0.85);
+  --cb-pink-fill: rgba(255, 47, 158, 0.1); /* mostly-transparent -- the ability art
+                                               underneath must stay readable */
+  --cb-highlight-dark-edge: rgba(0, 0, 0, 0.85); /* see .cb-highlight's comment:
+                                                     the dark separator ring that
+                                                     keeps the pink legible against
+                                                     a BRIGHT patch of HUD/VFX */
 }
 
 * {
@@ -47,8 +70,14 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background: transparent; /* the Overwolf window itself supplies the transparent
-                               chrome; this page must never paint an opaque body */
+  width: 100%;
+  height: 100%;
+  overflow: hidden; /* fullscreen pivot: a scrollbar would be a visible seam
+                        painted over the game -- there is nothing to scroll to
+                        anyway, every child is position:fixed */
+  background: transparent; /* the window itself supplies the transparent chrome;
+                               this page must NEVER paint a background over the
+                               whole viewport -- see this file's header */
   font-family: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
   color: var(--cb-txt);
   -webkit-font-smoothing: antialiased;
@@ -56,6 +85,19 @@ body {
 }
 
 .cb-overlay {
+  /* Fullscreen pivot: this used to be positioned implicitly by the small OS
+     window itself (top:110/left:24 was the WINDOW's position). The window is
+     now the whole screen, so this element positions itself, at the SAME
+     pixel offset the window used to sit at (main.js's OVERLAY_TOP/
+     OVERLAY_LEFT, 110/24 -- upper-left, clear of minimap/shop/ability bar/
+     scoreboard/chat, see that file's comment) so the table's on-screen
+     placement is unchanged from before this pivot. Defaults OFF (`hidden`
+     in the HTML) now that the highlight box is the primary surface -- see
+     ingame.js's `showTable` handling. */
+  position: fixed;
+  top: 110px;
+  left: 24px;
+  z-index: 10;
   display: inline-flex;
   flex-direction: column;
   gap: 6px;
@@ -66,6 +108,10 @@ body {
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
   min-width: 320px;
   max-width: 440px;
+}
+
+.cb-overlay[hidden] {
+  display: none;
 }
 
 /* Interactive mode: the ONE unmistakable at-a-glance signal that input is
@@ -263,6 +309,61 @@ body {
   display: none;
 }
 
+/* ── The ability highlight box (new feature, 2026-07-27) ────────────────────
+   Draws directly on top of ONE real Q/W/E/R ability icon at the bottom-
+   center of the game HUD -- the recommended next point, and ONLY that one.
+   Position/size come entirely from engy's calibration push (left/top/width/
+   height are set inline by ingame.js, in the fullscreen window's pixel
+   space) -- nothing here decides WHERE it sits, only how it LOOKS.
+
+   Design reasoning, spelled out per the task brief's "reason about it
+   explicitly":
+     - MOSTLY-TRANSPARENT FILL, not a solid block: a solid pink rectangle
+       would hide the exact ability art the player needs to recognize at a
+       glance (cooldown swirl, charge state). `--cb-pink-fill` is only 10%
+       opaque -- present enough to read as "boxed," not enough to obscure
+       what's under it.
+     - OUTLINE + GLOW carries the actual signal instead: a crisp
+       `--cb-pink` border plus an outer `box-shadow` blur reads as
+       unmistakably "a box drawn around this," fast, without painting over
+       the icon.
+     - LEGIBILITY AGAINST BOTH BRIGHT AND DARK HUD: the League ability bar
+       sits over gameplay that swings from near-black (night/base) to very
+       bright (teamfight VFX, a ready-to-cast glow, tower/turret flashes)
+       within the same second. A pure bright-pink outline can wash out
+       against a bright frame the instant it matters most. The fix is a
+       LAYERED box-shadow: an inner dark ring (`--cb-highlight-dark-edge`,
+       near-black, tight radius) separates the pink from whatever bright
+       color is directly behind it, and an outer pink glow
+       (`--cb-pink-glow`) is what actually reads against a DARK background.
+       Together the box has a consistent silhouette regardless of what's
+       under it -- neither layer alone would cover both cases.
+     - SQUARE-ISH corners (`border-radius` small, not circular): ability
+       icons are square. A heavily rounded/circular highlight would look
+       like it's marking a different shape than the thing underneath it.
+   ─────────────────────────────────────────────────────────────────────── */
+.cb-highlight {
+  position: fixed;
+  z-index: 20; /* above the table -- never expected to overlap it in practice
+                  (table sits upper-left, ability bar is bottom-center), but
+                  the highlight is the higher-priority surface if it ever did */
+  box-sizing: border-box;
+  border-radius: 8px;
+  pointer-events: none; /* never intercepts a click even if the window is in
+                            interactive mode -- this box is not a control */
+  background: var(--cb-pink-fill);
+  border: 3px solid var(--cb-pink);
+  box-shadow:
+    0 0 0 2px var(--cb-highlight-dark-edge),
+    /* dark separator ring -- keeps the pink from washing out against a bright HUD/VFX patch */ 0
+      0 12px 3px var(--cb-pink-glow),
+    /* outer glow -- keeps it visible against a dark patch */ inset 0 0 10px rgba(255, 47, 158, 0.4);
+}
+
+.cb-highlight[hidden] {
+  display: none;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   /* Deliberately near-zero motion everywhere regardless of the media query --
      this sits over a game, not a marketing page. The one transition kept is
@@ -271,10 +372,40 @@ body {
   .cb-overlay {
     transition: opacity 120ms ease-out, border-color 120ms ease-out, box-shadow 120ms ease-out;
   }
+
+  /* The ONE deliberate motion in this file: a gentle pulse on the highlight
+     box specifically, because -- unlike the table, which sits on screen for
+     the whole game -- this appears exactly when there is a real point to
+     act on, so a small amount of motion drawing the eye is earning its
+     place rather than being decoration. Kept subtle: opacity/scale only, no
+     color shift, no rotation, 1.6s (slow enough not to feel like an alarm). */
+  .cb-highlight {
+    animation: cb-highlight-pulse 1.6s ease-in-out infinite;
+  }
+}
+
+@keyframes cb-highlight-pulse {
+  0%,
+  100% {
+    opacity: 0.78;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.045);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .cb-overlay {
     transition: none !important;
+  }
+
+  /* Falls back to a static outline, exactly as required -- no animation,
+     full opacity, box stays put. */
+  .cb-highlight {
+    animation: none !important;
+    opacity: 1;
+    transform: none;
   }
 }

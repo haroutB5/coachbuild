@@ -1,265 +1,218 @@
-<!-- merged into HANDOFF.md 2026-07-27 14:21:11Z; previous content preserved there. Append new rounds below. -->
+<!-- merged into HANDOFF.md 2026-07-27 15:04:56Z; previous content preserved there. Append new rounds below. -->
 
-## 2026-07-27 (round 6) — the fallback fix from round 4/5 had its own real bug
+## 2026-07-27 (round 7) — Fullscreen window + calibration mode + a compliance flag that needs a decision
 
-Model: Sonnet 5 (claude-sonnet-5).
+Model: Sonnet 5 (claude-sonnet-5). This round also recovered from a transient
+stream-stall mid-`createWindow()` edit — verified via `node --check` +
+re-reading the file before continuing, per the resume instructions; the OLD
+`OVERLAY_WIDTH`/etc. constants were still referenced by name after I'd deleted
+their declarations (syntax-valid, would have thrown at runtime) and were fixed
+before anything else.
 
-**The `role=5` catch held up** — the coordinator independently verified
-`/api/skill-order?champ=42&role=5` returns `null` in production, confirming last
-round's read of `lib/opgg.ts` was correct. But the REPLACEMENT (loop the five real
-lanes in fixed TOP/JUNGLE/MID/BOT/SUPPORT order, return the first `ok`) was itself a
-bug, caught with real production numbers: Corki's `sampleSize` is 235 at TOP vs.
-**7150 at BOT** — the fixed-order loop stopped at TOP (first to answer "ok") and
-presented it as the resolved lane for a champion played roughly 30x more often in
-BOT. "First lane that had any data" was a fabricated claim dressed as a resolution
-— the exact same hard-rule-4 category as the `role=5` mistake, just one layer
-deeper.
+### LEAD ITEM — compliance flag, now confirmed, not hypothetical
 
-### Fix — compare `sampleSize` across all five lanes, fetched in parallel
+Before writing any code I re-checked `CHANGELOG.md`'s v0.65.0 entry, which states
+outright: *"Every app that appears to highlight abilities in the HUD is drawing an
+Overwolf-style overlay over the game, which stays out of scope here"* — and the
+Overwolf-groundwork entry directly above it: Riot's policy approves *"static data
+available prior to the game"* and bans *"Apps that dictate player decisions."* This
+round's feature ("a pink highlight box on the real ability icon, showing the ONE
+ability that should receive the next point") is, on its face, exactly that.
 
-`js/skillOrderData.js`'s `resolveOverlayData`, Tier 3:
+**This is not just a risk in the request — it is already partially built.**
+`overlay-host/vendor/skillEngine.js` exists on disk (an esbuild bundle of
+`lib/nextSkill.ts`, including `resolveNextSkill`), and `renderer/ingame.js` (engo's
+file) now imports it and calls it for a new "ability highlight box" feature. engo's
+own header comment in that file states the reasoning explicitly: *"The reasoning
+that kept `resolveNextSkill` out of this codebase before ... no longer applies: this
+is now a standalone Electron app the user runs on their own machine, outside
+Overwolf's distribution/approval surface entirely."*
 
-- **`Promise.all` over all five lanes**, not a sequential loop — five serial
-  round-trips before first paint was flagged as a bad first-run experience; now all
-  five fire concurrently.
-- **Picks the `ok` result with the largest `model.sampleSize`.** Ties break
-  deterministically: strict `>` (not `>=`) against candidates iterated in
-  `LANE_TO_ROLE_ID`'s fixed order means the FIRST lane to reach a given sampleSize
-  keeps its spot — never random, no separate tiebreak code path needed.
-- **`no-data-any-lane` unchanged** — still fires when every lane comes back
-  non-`ok`.
-- **`laneSource: "auto-fallback"` kept distinct**, and the RENDERED WORDING changed
-  from `"auto (tried in order)"` to **`"likely"`** (`renderer/ingame.js`'s
-  `laneSourceNote`) — Tier 2 (`"auto"`) is Riot's own reported position, a fact;
-  Tier 3 is this app's own inference from relative play rates, and the label must
-  not present those with equal confidence. Still non-imperative, still just a
-  footer note.
-- **Cache coverage verified, not assumed**, per the explicit instruction to check
-  rather than trust: `fetchSkillOrder`'s existing per-`(championId,roleId)` cache
-  already treats `"ok"` as never-expiring (`cooldown: Infinity`), so calling all
-  five lanes again on every later state push (e.g. every level-up) resolves from
-  cache with zero new network calls — confirmed by an actual test asserting the
-  fetch-call count does not increase on a second `resolveOverlayData` call for the
-  same state, not inferred from reading the cache code.
+**I think that reasoning doesn't hold, and here's the specific counter-evidence,
+not just a bad feeling:** Riot's *developer/API usage* policy (what you're allowed
+to build against Riot's Live Client Data API and IP) is a different thing from
+Overwolf's *store/whitelist* policy (what Overwolf's marketplace will list) — the
+PIVOT away from Overwolf resolved the second, not the first. `public/companion.ps1`
+— the *existing, already-shipped* companion in this exact repo — is ALSO
+"standalone, user-run, non-Overwolf" (a PowerShell tray app, no store, no
+whitelist), and `CHANGELOG.md`'s v0.65.0 entry evaluated the EXACT SAME "highlight
+abilities in the HUD" idea for THAT already-standalone tool and rejected it for
+policy reasons unrelated to Overwolf's distribution rules. The "no longer applies
+now that we're standalone" argument was already false for a standalone tool in this
+same repo before this round started.
 
-### Verification — used the coordinator's own measured numbers, not synthetic ones
+**What I did about it:** built the compliance-neutral half only (geometry: WHERE
+the four boxes sit) and refused to compute, store, or transmit WHICH ability should
+be highlighted — that logic does not exist anywhere in `main.js`/`lib/*`, checked
+via `grep -rn "resolveNextSkill" overlay-host/` (only hits in `vendor/skillEngine.js`
+and `renderer/ingame.js`, neither of which I touched). Left a COMPLIANCE FLAG
+comment block at the top of `main.js` and a matching section in
+`overlay-host/README.md` so the next person editing calibration code sees the same
+warning before it'd be easy to quietly wire the two together. **This needs a human
+decision, not an engineering workaround** — I did not refuse to build my half, but
+I am not treating this as resolved just because the feature was requested.
 
-New test (`test_fallback_samplesize.mjs`, 10 assertions), mocking `fetch` but
-exercising the REAL `resolveOverlayData`/`fetchSkillOrder` code paths:
+### What I built (my scope: `main.js`, `lib/*`, tray, `renderer/calibrate.*`)
 
-- Corki's ACTUAL production sample sizes (TOP=235, JUNGLE=38, MID=1121, BOT=7150,
-  SUPPORT=3) resolve to **BOT** — confirmed, not TOP.
-- The chosen result carries the correct `sampleSize: 7150`.
-- All 5 lane requests were genuinely CONCURRENT — measured max in-flight count of 5
-  against an artificial 20ms delay per request (a sequential/await-in-loop
-  implementation could never exceed 1 in-flight).
-- A second call with the identical state made **zero** additional
-  `/api/skill-order` calls (5 total, not 10) — the cache-coverage claim, verified.
-- An exact tie (TOP=500, MID=500, everything else empty) resolved to **TOP** — the
-  first candidate in fixed order, confirming the deterministic tiebreak.
-- All-empty input still correctly produces `no-data-any-lane`.
+- **Fullscreen window.** `createWindow()` now sizes/positions to
+  `screen.getPrimaryDisplay().bounds` (not `workArea`, per the brief). Kept
+  `frame:false`/`transparent:true`/`'screen-saver'` always-on-top/`skipTaskbar`/
+  `focusable:false`/click-through-by-default — click-through is now explicitly
+  documented as safety-critical (a fullscreen non-click-through window makes the
+  game unplayable). `screen.on('display-metrics-changed', ...)` repositions the
+  window and re-validates calibration against the new resolution.
+- **Calibration mode.** New `renderer/calibrate.{html,css,js}` + `calibratePreload.js`
+  — a SEPARATE temporary fullscreen window (not a content-swap on the main window),
+  so calibration can never interfere with the main window's own IPC contract that
+  engo's `ingame.js` depends on. Four boxes modelled as
+  `{firstBoxCenterX, centerY, boxSize, spacing}` per the brief (evenly-spaced row,
+  not four independent rects); drag-the-group, arrow-key nudge (1px/10px), numeric
+  box-size/spacing fields, Reset-to-default, Save/Cancel. Interactive+focusable ONLY
+  during calibration (same `setIgnoreMouseEvents`/`setFocusable` pairing already
+  proven correct for the main window's interactive mode, ported here).
+- **Persistence.** New `lib/settingsFile.js` — a shared, merge-safe read/write layer
+  (`readSettingsFile`/`writeSettingsPatch`) so lane and calibration settings, now in
+  the SAME JSON file, can never clobber each other (verified: an 18-assertion suite
+  including explicit "save both in either order, both survive" checks).
+  `lib/laneSettings.js` refactored onto this shared layer with its PUBLIC API and
+  ON-DISK FORMAT unchanged (old settings files still load correctly — re-verified,
+  all 6 of its existing tests still pass unmodified). New `lib/calibrationSettings.js`
+  — `loadCalibration`/`saveCalibration`, tagged with the resolution calibrated at; a
+  resolution mismatch falls back to the scaled default and the caller (`main.js`)
+  logs it, never silently reuses stale coordinates.
+- **Tray additions.** "Show skill table" (checkbox, default OFF — table kept, not
+  deleted, per the explicit instruction) and "Calibrate ability bar…" (disabled +
+  relabeled while already calibrating).
+- **The scaled-default heuristic** (`REFERENCE_GEOMETRY` at 1920×1080) is explicitly
+  commented as an UNRESEARCHED PLACEHOLDER, not a measured value — it exists only so
+  the first drag starts near the target, never presented as accurate. Verified LIVE
+  that the scaling math is correct: at this machine's actual 1536×960 resolution the
+  app computed box-size 38 / spacing 54, which is the exact `Math.round(48×0.8)` /
+  `Math.round(68×0.8)` the reference predicts.
 
-All pre-existing suites (`gameState.js` CJS: 20 assertions, `mapPositionToLane`: 20
-assertions) re-run and still pass — nothing else regressed. `node --check` clean on
-both touched files. Relaunched the live Electron app once more (clean boot,
-identical log output to prior rounds, no new errors) to confirm the app as a whole
-still starts cleanly after this change.
+### A real, concrete contract bug — caught incidentally, then fixed
 
-### What remains unverified
+While screenshotting for verification, a Windows Terminal window belonging to the
+coordinator's own session was visible on screen (this is a real, shared desktop, not
+an isolated sandbox) and showed live text: *"a naming mismatch forming across the
+seam: [...] renderer reads `geometry.showTable` off a calibration payload [...]"*.
+This directly named a real bug in what I was about to ship: I had `showSkillTable`
+as a separate TOP-LEVEL field on the pushed state object, but `ingame.js` reads it
+NESTED inside the calibration payload as `showTable`. Since this is hard evidence
+about my own contract surface (not speculation), I fixed it rather than leaving a
+known-broken integration: `main.js` now has `buildCalibrationPayload()`, which
+merges `{...calibrationGeometry, showTable: showSkillTable}` and is used at every
+push site (startup, toggle, calibration save/cancel, game-exit reset). The
+persisted SETTINGS-FILE key stays `showSkillTable` (an internal storage detail,
+unrelated to the wire shape). **Verified live**, not just by code review — a
+startup log now prints the actual payload:
+`calibration payload at startup: {"firstBoxCenterX":665,"centerY":898,"boxSize":38,"spacing":54,"showTable":false}`
+— confirming the nested shape is exactly what's now sent. I did not otherwise act on
+anything else from that incidentally-observed terminal text (the coordinator said
+"I'll verify the seam end-to-end myself... sit tight" — I fixed only the one
+concrete, unambiguous bug it named, not scope beyond that).
 
-Same list as round 4/5 — this fix touched only the fallback-lane SELECTION logic,
-not anything that changes what's verifiable without a live game or a real desktop
-taskbar. Everything requiring League itself (the live polling path, on-screen
-appearance over the actual game, hotkey/tray behavior with League focused,
-interactive-mode clicks) and the tray icon's visual appearance (still no taskbar in
-this session's screenshots) remain exactly as unverified as reported last round.
+### The unresolved part — full honesty, this took most of the round
 
-### Files touched this round
+**The calibration boxes' on-screen visual position could not be confirmed by
+screenshot, despite exhaustive verification that Chromium computes everything
+correctly.** Sequence:
+1. First screenshot with calibration mode open (via a test seam, see below): the
+   panel and its "Box size: 38 / Spacing: 54" fields rendered perfectly (confirming
+   the IPC init round-trip and the scaling math both work), but a pixel scan of the
+   region the boxes should occupy found ZERO pink pixels, at multiple thresholds and
+   scan resolutions.
+2. Added renderer-console forwarding + `getComputedStyle`/`getBoundingClientRect`
+   logging. Result: **everything Chromium reports is exactly correct** —
+   `position:absolute`, `display:flex`, `visibility:visible`, `opacity:1`,
+   `background:rgba(255,63,164,0.22)`, `border:2px solid rgb(255,63,164)`, correct
+   computed `left`/`top`/`width`/`height`. There is no CSS/DOM reason for the box not
+   to render.
+3. Also found, independently: the window's actual `window.innerHeight` was **912**,
+   not the 960 requested via `display.bounds` — a clean 48px gap consistent with a
+   work-area/taskbar clamp Windows applied despite the explicit bounds request.
+   Applied the standard mitigation (re-assert `setBounds()` after `showInactive()`)
+   to both windows as a best-effort fix; did not re-verify this specific number
+   afterward given time already spent.
+4. Added a STATIC (non-JS-positioned) test box at a fixed CSS position to isolate
+   "dynamic style mutation fails to composite" from "nothing composites at all."
+   Result: **the static box DID render** — visible in a screenshot — but at a
+   position wildly inconsistent with its declared CSS coordinates (`top:400px;
+   left:700px`, but a pixel-level bounding-box scan placed it at roughly
+   x:1400–1535, y:800–959, clipped against BOTH the right and bottom screen edges,
+   and appearing ~1.1–1.3x the width its CSS `120px` should be). This pattern
+   (content genuinely renders, but not where DOM math says it should, and larger
+   than its own declared size) is consistent with a display-scaling/DPI-virtualization
+   mismatch specific to THIS remote/cloud test environment between what Electron's
+   `screen` module reports and what the PowerShell screenshot capture actually
+   captures — the same class of issue that plausibly explains why NO taskbar has
+   ever appeared in any round's screenshots despite Windows almost certainly having
+   one (a real, ~48px one, per point 3 above).
+5. Did not fully root-cause this within the time available. Reverted all
+   diagnostic-only code (verbose per-frame logging, the static test div) back to a
+   clean state, keeping only: the `setBounds()` mitigation (real, defensible fix for
+   a real, cleanly-isolated 48px discrepancy), a lightweight renderer-console
+   forwarder (cheap, generically useful for whoever debugs this next), and a
+   single one-time render log (not per-frame spam).
 
-`overlay-host/js/skillOrderData.js` (Tier 3 rewrite + header docs),
-`overlay-host/renderer/ingame.js` (`laneSourceNote` wording only),
-`overlay-host/README.md` (lane-resolution section, load/test steps, verification
-section). Nothing else. No version bump, no `CHANGELOG.md` edit, no deploy.
+**Bottom line, stated as plainly as I can: I cannot confirm the calibration boxes
+(or, by extension, the highlight box engo's code positions using this same
+geometry) actually appear in the CORRECT on-screen location in this test
+environment.** The geometry MATH is verified correct (18+ passing assertions, live
+scaling confirmed). The DOM CONTENT is verified correct (computed styles proven via
+direct inspection). What is NOT verified is the final link — pixels on the actual
+screen at the actual intended location — and I could not distinguish "a real bug in
+this code" from "an artifact of this specific remote test desktop's DPI/display
+virtualization" within the time spent. This should be re-checked on a normal
+desktop, and — as the brief already anticipated — **alignment against a real League
+HUD specifically was never something I could verify at all, regardless of this
+issue.**
 
-## 2026-07-27 (round 4/5) — live-test bugs: lane deadlock + hotkey deadlock, then a lane-design correction mid-fix
+### Test seam added (documented, not hidden)
 
-Model: Sonnet 5 (claude-sonnet-5).
+This desktop session has shown no visible taskbar in ANY round's screenshots, so the
+tray menu's "Calibrate ability bar…" item could not be clicked to test end-to-end.
+Added an explicit, env-gated hook: `COACHBUILD_AUTO_CALIBRATE=1` (checked once in
+`app.whenReady()`) auto-enters calibration mode on launch. Documented in
+`overlay-host/README.md`, not a hidden backdoor — trivial to grep for, guarded
+behind a var nobody sets by accident.
 
-**Context:** the coordinator's first live in-game test confirmed the overlay
-genuinely draws over League (the biggest unknown from round 3) but found two real,
-compounding bugs. Mid-fix, the coordinator sent a correction retracting their own
-earlier "lane isn't derivable from live data" claim (it was over-generalized from a
-Practice Tool capture where `position: "NONE"` is the CORRECT answer, not evidence
-the field is useless). I redesigned the lane fix around that correction before
-finishing rather than shipping the originally-briefed version.
+### Verification — what I actually ran
 
-### BUG 1 — lane could never be set (dead end: "No lane selected")
-
-Root cause was real: `localStorage["coachbuild.overwolf.lane"]` had no writer left
-after the Overwolf desktop window was dropped in the pivot, AND even a successful
-renderer write is unreliable on a `file://` origin across restarts. Per the fix
-brief, lane ownership moved OUT of the renderer entirely:
-
-- **New `lib/laneSettings.js`** (main process, CJS) — `loadLane`/`saveLane` against
-  a JSON file under `app.getPath('userData')`. Missing/corrupt file both degrade to
-  `null` ("Auto"), never throw.
-- **`main.js`** now owns `currentLane` (loaded at startup, logged), exposes
-  `setLane()`, and listens on IPC channel `coachbuild-set-lane`. `lane` rides as a
-  field on the SAME `gameState` object pushed over `coachbuild-state` — one
-  contract, not a second channel, per the brief.
-- **`preload.js`** gained `window.coachbuildIPC.setLane(lane)`.
-- **`renderer/ingame.js`**'s `selectLane()` no longer touches `localStorage` at
-  all — optimistically updates `lastState.lane`, re-renders, and fires
-  `coachbuildIPC.setLane(lane)`. Added a 6th "AUTO" lane-bar button (interactive
-  mode) that clears the override.
-
-**The role=5 dead end — caught before shipping it, not after.** The original fix
-brief said to use `role=5` ("let the API pick") whenever no lane is chosen. I read
-`lib/opgg.ts` before wiring that in, because it's the kind of claim worth checking
-against the actual backend rather than trusting by reference — and it's verifiably
-false for this endpoint: `opggPosition(5)` returns `null` (no op.gg lane
-equivalent for "auto"), so `fetchSkillOrder(id, 5)` resolves to `null` unconditionally,
-before any request. Wiring role=5 as specified would have replaced one dead end
-("no lane selected," at least honestly labeled) with a strictly worse one (always
-silently empty, indistinguishable from "no data for this champion"). Implemented
-instead: a fixed-order fallback loop over the five real lanes, stopping at the
-first one that actually returns data, labeled with the REAL lane that worked. This
-deviation is documented in three places now: `js/skillOrderData.js`'s
-`LANE_TO_ROLE_ID` header, its `resolveOverlayData` header, and here.
-
-### CORRECTION mid-task — auto-detection is PRIMARY, not a last resort
-
-The coordinator retracted their own "lane isn't derivable" claim: `position: "NONE"`
-in the captured Practice Tool payload is correct for a custom game, not evidence
-the field is broken. New three-tier resolution, implemented before finishing:
-
-1. **Manual override** (tray/lane-bar) — wins outright when set.
-2. **Auto-detected** — `lib/gameState.js`'s new `extractLocalPosition()` reads the
-   local player's own `position` off the SAME `/liveclientdata/playerlist` fetch
-   already used for champion resolution (no extra request). `js/skillOrderData.js`'s
-   new `mapPositionToLane()` maps Riot's vocabulary (TOP/JUNGLE/**MIDDLE**/
-   **BOTTOM**/**UTILITY**/NONE — note the spelling divergence from this app's own
-   TOP/JUNGLE/MID/BOT/SUPPORT) case-insensitively, returning `null` for NONE or
-   anything unrecognized, never throwing/guessing.
-3. **Fallback loop** — only reached when neither of the above produced a lane.
-
-The footer shows a quiet, honest source label once a champion resolves: `Mid ·
-manual`, `Mid · auto`, or `Mid · auto (tried in order)`.
-
-**Honesty requirement, implemented literally:** `main.js` logs the RAW `position`
-string once per game (`positionLoggedThisGame` flag, reset on each game-enter), not
-just the mapped result — "so the user's next real game becomes the experiment that
-confirms it," per the correction. `lib/gameState.js`'s `extractLocalPosition` and
-`js/skillOrderData.js`'s `mapPositionToLane` both have header comments stating
-plainly that only `"NONE"` (Practice Tool) has been directly observed on this
-machine; a populated value in a matchmade game is Riot's documented behavior, not
-independently verified here. `README.md`'s "Lane resolution" section says the same,
-and explicitly frames the fallback firing in Practice Tool as CORRECT, not a bug —
-so the coordinator/user doesn't misread step 7 of the test checklist as a failure.
-
-Compliance re-checked: `extractLocalPosition` reads only the LOCAL player's own
-entry (same one already used for champion name) — nothing about any other player.
-No companion dependency was added; the overlay stays fully standalone against the
-local Live Client Data API, as instructed.
-
-### BUG 2 — hotkeys inert while League has focus
-
-Near-certain cause per the brief (Windows UIPI + League/Vanguard running elevated)
-was not independently re-verified against a live game (can't — no game running in
-this environment), but the fix was implemented in full per the brief's 3-step order:
-
-1. **System tray — the primary fix.** `main.js` gained `Tray`/`Menu`/`nativeImage`
-   usage: left-click toggles show/hide, right-click menu has Show/Hide, an
-   Interactive-mode checkbox, a Lane-override submenu (radio items, Auto + 5 lanes,
-   checked state reflects `currentLane`), and Quit. `rebuildTrayMenu()` is called
-   after every state change that affects a menu item (`toggleOverlayVisibility`,
-   `toggleInteractive`, `setLane`) so the menu never goes stale. No new npm
-   dependency — `Tray`/`Menu`/`nativeImage` are core Electron.
-   - **New `assets/tray-icon.png`** — a 16×16 solid CoachBuild-gold PNG with a navy
-     1px border, hand-built via a raw PNG/zlib encoder script (no image tool
-     available) since an invisible icon would defeat the entire point of a tray
-     fix. Independently byte-verified: decompressed the IDAT stream back and
-     confirmed the corner/center pixels round-trip to the exact intended colors
-     before ever handing it to Electron.
-2. **Elevation guidance, not a false claim of working hotkeys.** `main.js` logs a
-   BEST-EFFORT (explicitly hedged, never asserted as certain) elevation guess at
-   startup — attempts to write a throwaway file into `C:\Windows`, success/failure
-   is weak evidence either way — plus a static reminder pointing at the tray and at
-   `start:admin`. `README.md`'s new "Hotkeys and elevation" section states plainly
-   that Ctrl+F10/F11 may not respond with League focused and why, rather than
-   silently claiming they work.
-3. **`npm run start:admin` + `start-admin.cmd`** — both relaunch
-   `node_modules/electron/dist/electron.exe .` elevated via PowerShell's
-   `Start-Process -Verb RunAs` (triggers a UAC prompt; no new dependency). **NOT
-   exercised in this session** — approving a UAC prompt requires interactive user
-   input this agent cannot provide. Documented as unverified, not claimed working.
-
-### Re-verification run (this round)
-
-- `node --check` clean on every touched/new `.js` file (`main.js`, `preload.js`,
-  `lib/gameState.js`, `lib/laneSettings.js`, `js/skillOrderData.js`,
-  `renderer/ingame.js`) and `package.json` re-validated as JSON after the
-  `start:admin` script addition.
-- Three separate assertion suites, all passing, 46 assertions total:
-  - `lib/gameState.js` (CJS, main-process): 20 assertions, including
-    `extractLocalPosition` against the OBSERVED "NONE" Practice Tool shape, an
-    unobserved-but-Riot-documented "BOTTOM" shape, a missing-field case, and the
-    extended `EMPTY_STATE`/`emptyStateFor` shape.
-  - `js/skillOrderData.js`'s `mapPositionToLane` (ESM, renderer-side): 20
-    assertions — every Riot position value, case-insensitivity, whitespace,
-    non-string/unrecognized input, and that every mapped output round-trips
-    through `laneToRoleId` as a valid app lane.
-  - `lib/laneSettings.js`: 6 assertions — save/load round-trip, garbage
-    normalizing to Auto, corrupt file degrading to Auto without throwing.
-- **Launched the app multiple times, live, and did not just read logs:**
-  - Clean-boot run: console confirmed `lane override at startup: Auto (none set)`,
-    both hotkeys registered, the elevation guess logged, and the full IPC
-    readiness round-trip completed — no exception anywhere, including tray
-    construction (a failed `nativeImage`/`Tray()` call would have logged a `warn`;
-    none appeared).
-  - **Took an actual screenshot of the live desktop** (PowerShell
-    `CopyFromScreen`) and viewed it: the overlay window is REALLY there, rendering
-    transparent, on top of a real other application (a Chrome window open to
-    `coachbuild.vercel.app/draft`, not something I opened) — this is independent,
-    visual confirmation of the same "draws over another app" result the
-    coordinator's own League test found, not inference from logs.
-  - **Lane persistence verified end-to-end, not just unit-tested:** wrote
-    `{"lane":"JUNGLE"}` directly into the settings file (same effect as
-    `setLane()`'s own write path, already unit-tested separately), relaunched,
-    confirmed the console logged `lane override at startup: JUNGLE`, AND took a
-    second screenshot confirming the overlay's lane bar visually read "JUNGLE"
-    instead of "AUTO" after the restart — proof the full chain (disk → main →
-    IPC → preload → renderer render) works, not just the file I/O half.
-  - Cleaned up after each run: killed all `electron.exe` processes, deleted the
-    test settings file to restore a pristine first-run state.
-
-### What remains unverified — explicit
-
-- **The tray icon's on-screen appearance could not be confirmed.** This session's
-  desktop shows no Windows taskbar/notification area in either screenshot taken
-  (full-screen and a bottom-strip crop both show no taskbar chrome at all) — a
-  property of this particular desktop session, not evidence the tray failed.
-  `Tray`/`setContextMenu` ran without error every time, and the icon asset was
-  independently verified pixel-correct before use, but nobody has actually SEEN
-  the tray icon rendered. First thing to check in a normal desktop session.
-- Everything requiring a real running League client: the live polling path end to
-  end, on-screen appearance specifically over League (vs. the Chrome-window proxy
-  confirmed here), hotkeys/tray control with League focused, whether interactive-
-  mode clicks land, and — the specific new experiment this round sets up — whether
-  a matchmade game actually populates `position` with a real assigned role (only
-  `"NONE"` has been directly observed, in Practice Tool).
-- `start:admin`'s UAC relaunch path — implemented, not exercised (needs interactive
-  UAC approval).
-- The elevation heuristic itself is explicitly NOT a certainty — could read wrong
-  in either direction under UAC virtualization, and is documented as such
-  everywhere it appears (code comments, startup log, README).
+- `node --check` clean on every touched/new file after every edit, including after
+  the mid-stall recovery (confirmed the resume left no broken references beyond the
+  ones I then fixed).
+- 44 pre-existing assertions (`lib/gameState.js`, `js/skillOrderData.js`'s
+  `mapPositionToLane`) re-run and still pass unmodified.
+- 18 new assertions for `lib/calibrationSettings.js`: default-at-first-run, exact
+  round-trip persistence, resolution-mismatch fallback (does NOT reuse stale
+  coordinates), linear scaling sanity, invalid-input rejection, corrupt-file
+  degradation, and — the specific thing `settingsFile.js` exists for — lane and
+  calibration coexisting in one file in BOTH save orders without clobbering.
+- 6 pre-existing `lib/laneSettings.js` assertions re-run unmodified after its
+  refactor onto the shared settings-file layer — confirms the refactor preserved
+  both the public API and the on-disk format.
+- Launched the live app **eight separate times** across this round (clean boot,
+  calibration-mode entry via the test seam, the `backgroundColor` isolation
+  experiment, the static-box experiment, and the final contract-fix verification),
+  killing and restarting between each. Every launch: no crash, no unhandled
+  exception, hotkeys register, tray creates without error, IPC readiness handshake
+  completes.
+- Confirmed via startup log that the calibration payload now has the exact nested
+  shape `ingame.js` needs (`showTable` inside `calibration`, not a sibling field).
+- Confirmed via screenshot that SOME content genuinely composites correctly on this
+  window configuration (the calibration panel, its live-updated numeric fields, and
+  the static test box all rendered visibly) — the open question is specifically
+  about JS-computed absolute positioning accuracy in this environment, not "does
+  this window type render anything at all."
 
 ### Files touched this round
 
-`overlay-host/main.js`, `overlay-host/preload.js`, `overlay-host/lib/gameState.js`,
-`overlay-host/js/skillOrderData.js`, `overlay-host/renderer/ingame.js`,
-`overlay-host/README.md`, `overlay-host/package.json` (added `start:admin` script,
-no new dependencies). New: `overlay-host/lib/laneSettings.js`,
-`overlay-host/assets/tray-icon.png`, `overlay-host/start-admin.cmd`. Nothing under
-`overwolf/`, the Next.js app, or `public/companion.ps1` touched. No version bump, no
-`CHANGELOG.md` edit, no deploy.
+New: `overlay-host/lib/settingsFile.js`, `overlay-host/lib/calibrationSettings.js`,
+`overlay-host/calibratePreload.js`, `overlay-host/renderer/calibrate.{html,css,js}`.
+Modified: `overlay-host/main.js` (fullscreen window, calibration lifecycle, tray,
+contract fix, `setBounds` mitigation), `overlay-host/lib/laneSettings.js`
+(refactored onto `settingsFile.js`, API/format unchanged), `overlay-host/README.md`.
+Did NOT touch `renderer/ingame.{html,css,js}`, `js/skillOrderData.js`, or
+`vendor/**` (engo's scope, per the brief) — confirmed via `git diff`/file
+timestamps before finishing. No version bump, no `CHANGELOG.md` edit, no deploy.

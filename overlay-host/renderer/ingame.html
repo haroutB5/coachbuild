@@ -8,17 +8,26 @@
   </head>
   <body>
     <!--
-      Single-monitor revision (2026-07-27): this window is the ONLY surface,
-      so it now owns its own lane control (writes back to the same
-      localStorage key the desktop window uses) instead of assuming a second
-      screen picked the lane already. See overwolf/js/skillOrderData.js and
-      ingame.js headers for the compliance posture this file must not
-      regress: still a passive, static levels 1-18 reference table with the
-      current level highlighted -- no imperative copy, no arrows, nothing
-      about an opponent. Choosing which static dataset to view (the lane) is
-      the user's own choice, not the app telling them what to do.
+      FULLSCREEN pivot (2026-07-27): this document now fills the whole
+      screen (engy's window change) instead of a small 340x520 window
+      pre-positioned by the OS -- everything below is absolutely positioned
+      within a fully transparent viewport. See ingame.css's header for the
+      "must never tint the game" constraint this implies.
+
+      NEW: window.CoachBuildOverlay behaviour is unchanged as a public
+      contract, but the DEFAULT on-screen presentation flipped -- the
+      ability highlight box (#cb-highlight) is now the primary surface; the
+      reference table (#cb-overlay) is kept, unchanged in content, but
+      defaults OFF and only renders when engy's calibration push says to
+      (see ingame.js). Choosing which static dataset to view (the lane) is
+      still the user's own choice, not the app telling them what to do --
+      that posture is unchanged for the table. The highlight box IS
+      imperative by design now -- see ingame.js's header for why that
+      reasoning is allowed to be different for this one surface.
     -->
-    <main id="cb-overlay" class="cb-overlay" aria-live="polite">
+    <div id="cb-highlight" class="cb-highlight" hidden></div>
+
+    <main id="cb-overlay" class="cb-overlay" aria-live="polite" hidden>
       <header id="cb-header" class="cb-header">
         <span id="cb-champion" class="cb-champion">CoachBuild</span>
         <span id="cb-interactive-badge" class="cb-interactive-badge" hidden>editable</span>

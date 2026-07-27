@@ -24,26 +24,63 @@ Check League's video settings before testing: **Settings → Video → Display M
 
 ## What it is
 
-- One transparent, click-through, always-on-top window in the upper-left of the
-  screen showing a static levels 1–18 skill-order table (Q/W/E/R × 18 columns),
-  with the player's own current level highlighted. Never imperative copy — see
-  "Compliance" below.
+- **The overlay window is FULLSCREEN** (2026-07-27 round), covering the entire
+  primary display (`screen.getPrimaryDisplay().bounds`, not `workArea` — a running
+  game covers the taskbar). Transparent, click-through, always-on-top at the
+  `'screen-saver'` level. Click-through is safety-critical at this size: a fullscreen
+  window that ever fails to be click-through makes the game unplayable.
+- The old top-left levels 1–18 skill table still exists (never deleted), now behind
+  a tray toggle **"Show skill table" — defaults OFF**. The new default surface is a
+  highlight box drawn directly over the real Q/W/E/R ability icons (engo's renderer
+  work, `renderer/ingame.js` — this file does not draw it, only supplies WHERE the
+  icons are, see "Compliance" below).
 - A **system tray icon** (notification area) — the PRIMARY control surface. Left-click
-  toggles show/hide; right-click opens a menu: show/hide, interactive mode, a lane
-  override submenu (Top/Jungle/Mid/Bot/Support + "Auto"), and Quit. This exists
-  because global hotkeys are expected to be unreliable while League has focus — see
-  "Hotkeys and elevation" below — and the tray works regardless.
+  toggles show/hide; right-click opens a menu: show/hide, interactive mode, "Show
+  skill table", "Calibrate ability bar…", a lane override submenu
+  (Top/Jungle/Mid/Bot/Support + "Auto"), and Quit. This exists because global
+  hotkeys are expected to be unreliable while League has focus — see "Hotkeys and
+  elevation" below — and the tray works regardless.
 - Two global hotkeys as a secondary/convenience path — **may require running as
   Administrator to work while League has focus, see below**:
   - **Ctrl+F10** — show/hide the overlay
   - **Ctrl+F11** — toggle interactive mode (lane buttons become clickable; the
     overlay is click-through the rest of the time)
+- **Calibration mode** (tray → "Calibrate ability bar…") — a separate, temporary
+  fullscreen window with four draggable Q/W/E/R boxes, modelled as one rigid group
+  (`{firstBoxCenterX, centerY, boxSize, spacing}`) since the real icons sit evenly
+  spaced on one row. Drag any box to move all four; arrow keys nudge 1px (Shift:
+  10px); number fields adjust box size/spacing; "Reset to default" recomputes a
+  resolution-scaled starting point (from an UNRESEARCHED 1920×1080 reference — see
+  `lib/calibrationSettings.js`'s header, this is a rough starting drag point, never
+  presented as accurate). Persisted to the same settings file as lane, tagged with
+  the resolution it was calibrated at — a resolution change falls back to the
+  scaled default (logged) rather than silently reusing stale coordinates.
 - Polls Riot's local Live Client Data API directly
   (`https://127.0.0.1:2999/liveclientdata/*`) — no GEP, no Overwolf, no companion
   bridge. Silent when no game is running (that's the normal state). This also means
   lane auto-detection is fully standalone — no companion app needed.
 - The Riot disclaimer is rendered in the overlay's footer once a skill order is
   showing (ported from the Overwolf build's `ingame.js`/`ingame.css`, unchanged).
+
+## COMPLIANCE — read this before touching main.js's calibration code
+
+`main.js` computes and pushes ONLY geometry (WHERE the four ability boxes sit). It
+does NOT compute, store, or push WHICH ability should be highlighted, and never
+will from this file. A live pink box on the real ability icon, computed from
+current ranks, telling the player which one to press next, is the exact feature
+`CHANGELOG.md`'s v0.65.0 entry already ruled out on POLICY grounds: *"Every app
+that appears to highlight abilities in the HUD is drawing an Overwolf-style overlay
+over the game, which stays out of scope here."* `renderer/ingame.js` (engo's file,
+not this one) has reintroduced `resolveNextSkill` for the highlight box, reasoning
+that leaving Overwolf's distribution/approval surface changes the policy calculus.
+See `HANDOFF-engy.md`'s round-7 entry for the full flag raised on this, including
+why that reasoning is contestable (Riot's *developer/API* policy is separate from
+Overwolf's *store/whitelist* policy, and `public/companion.ps1` — already
+standalone, already non-Overwolf — was evaluated against the SAME "highlight
+abilities in the HUD" question and rejected for the same policy reason, undercutting
+the "no longer applies once standalone" argument). This file's own scope stayed
+compliance-neutral throughout; the concern is about `renderer/ingame.js`, not
+anything in `main.js`/`lib/*`.
 
 ## Lane resolution — three tiers, auto-detection first
 

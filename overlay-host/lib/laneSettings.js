@@ -8,16 +8,18 @@
 // than a real https origin. Moving ownership to a plain JSON file under
 // `app.getPath('userData')` sidesteps both problems entirely rather than
 // fighting `file://`.
+//
+// REFACTORED (2026-07-27, calibration round) to route through
+// lib/settingsFile.js's shared read/merge-write helpers rather than owning
+// its own file I/O -- calibration settings now live in the SAME file, and a
+// second independent owner reading+writing the whole file directly would
+// have reintroduced a clobber race. Public API (`loadLane`/`saveLane`/
+// `VALID_LANES`) and the on-disk `{"lane": "..."}` shape are UNCHANGED --
+// existing settings files from before this refactor still load correctly.
 
-const fs = require('fs');
-const path = require('path');
+const { readSettingsFile, writeSettingsPatch } = require('./settingsFile.js');
 
 const VALID_LANES = new Set(['TOP', 'JUNGLE', 'MID', 'BOT', 'SUPPORT']);
-const SETTINGS_FILENAME = 'coachbuild-overlay-settings.json';
-
-function settingsPath(userDataDir) {
-  return path.join(userDataDir, SETTINGS_FILENAME);
-}
 
 /**
  * @returns {string|null} a valid lane, or null meaning "unset / Auto" -- a
@@ -26,13 +28,8 @@ function settingsPath(userDataDir) {
  *   not an error worth logging loudly.
  */
 function loadLane(userDataDir) {
-  try {
-    const raw = fs.readFileSync(settingsPath(userDataDir), 'utf8');
-    const parsed = JSON.parse(raw);
-    return typeof parsed.lane === 'string' && VALID_LANES.has(parsed.lane) ? parsed.lane : null;
-  } catch {
-    return null;
-  }
+  const settings = readSettingsFile(userDataDir);
+  return typeof settings.lane === 'string' && VALID_LANES.has(settings.lane) ? settings.lane : null;
 }
 
 /**
@@ -46,12 +43,7 @@ function loadLane(userDataDir) {
  */
 function saveLane(userDataDir, lane) {
   const value = typeof lane === 'string' && VALID_LANES.has(lane) ? lane : null;
-  try {
-    fs.mkdirSync(userDataDir, { recursive: true });
-    fs.writeFileSync(settingsPath(userDataDir), JSON.stringify({ lane: value }, null, 2), 'utf8');
-  } catch (err) {
-    console.warn('[CoachBuild:main] failed to persist lane setting (kept in-memory only):', err.message);
-  }
+  writeSettingsPatch(userDataDir, { lane: value });
   return value;
 }
 

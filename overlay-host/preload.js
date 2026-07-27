@@ -17,6 +17,7 @@ const CHANNELS = {
   INTERACTIVE: 'coachbuild-interactive',
   READY: 'coachbuild-ready',
   SET_LANE: 'coachbuild-set-lane',
+  CALIBRATION: 'coachbuild-calibration',
 };
 
 contextBridge.exposeInMainWorld('coachbuildIPC', {
@@ -25,6 +26,15 @@ contextBridge.exposeInMainWorld('coachbuildIPC', {
   },
   onInteractiveChange(callback) {
     ipcRenderer.on(CHANNELS.INTERACTIVE, (_event, isInteractive) => callback(isInteractive));
+  },
+  // Ability-box geometry for the highlight, plus the `showTable` flag nested
+  // alongside it. Without this bridge the renderer's own guard fires and it
+  // logs that it "has no geometry to draw with and will stay hidden" -- which
+  // is precisely what the whole pink-box feature did before this was added:
+  // main computed the payload, nothing carried it, the renderer waited
+  // forever, and every piece looked correct read on its own.
+  onCalibration(callback) {
+    ipcRenderer.on(CHANNELS.CALIBRATION, (_event, geometry) => callback(geometry));
   },
   ready() {
     ipcRenderer.send(CHANNELS.READY);
