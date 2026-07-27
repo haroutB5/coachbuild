@@ -230,6 +230,149 @@ is: relaunch, reproduce the issue, then read (or send) the log file.
   `extractLocalPosition()` for lane auto-detection, off the same playerlist fetch
   already used for champion resolution — no extra request.
 
+## Auto-update (2026-07-27, seamless-update round)
+
+The gaming PC this runs on is a separate machine from the dev machine, and the
+user does not want to copy folders or manually reinstall for every change
+("make the update seamless so i dont have to quit and then install it every
+new version" — their exact ask). This app now checks for, downloads, and
+installs updates on its own, via [`electron-updater`](https://www.electron.build/auto-update)
+(the one new runtime dependency added this round — everything above stays
+unchanged) reading the SAME `build.publish` config electron-builder already
+uses for packaging. See `lib/autoUpdater.js` for the full implementation and
+its header comment for the reasoning; this section is the operational
+summary.
+
+**Where updates are published:** `haroutB5/coachbuild-overlay-releases` — a
+separate, PUBLIC GitHub repo containing only built binaries (installer +
+portable exe + `latest.yml`). The source stays in this private repo. Configured
+via `build.publish` in `package.json`:
+```json
+"publish": [{ "provider": "github", "owner": "haroutB5", "repo": "coachbuild-overlay-releases" }]
+```
+
+**The one hard rule: never interrupt a game.** `main.js` already tracks
+`inGame` (true iff the last poll of `/liveclientdata/activeplayer` succeeded —
+see "Polling" above). The updater:
+- Checks for updates ~10s after launch, then every 4 hours, always in the
+  background (`autoDownload = true` — the new version downloads silently
+  whether or not a game is running; only the INSTALL step waits).
+- On `update-downloaded`, installs immediately ONLY if `inGame` is false at
+  that moment. If a game is in progress, the update is held as
+  "ready to install" and nothing more happens until the game ends.
+- `pollActivePlayer()`'s existing "game no longer detected" branch (the
+  `inGame = false` transition) now also calls
+  `autoUpdaterModule.notifyGameEnded()`, which installs any pending update
+  right then — not on the next 4-hour timer tick.
+- Install itself is `autoUpdater.quitAndInstall(true, true)` — `isSilent`
+  (no NSIS wizard UI) + `isForceRunAfter` (relaunches automatically). No
+  dialogs, no prompts, no manual reinstall step.
+
+**Nothing about this can crash or block the app.** Every `autoUpdater` event
+(`checking-for-update`, `update-available`, `update-not-available`,
+`download-progress`, `update-downloaded`, `error`) is logged to the same file
+logger (`main.js`'s `log()`/`warn()`, tee'd into `coachbuild-overlay.log`) —
+an update check failure (no network, GitHub down, rate-limited, no releases
+published yet) logs a line and does nothing else. `checkForUpdates()`'s
+returned promise is also caught directly as a second net on top of the
+`error` event, so nothing here can throw uncaught.
+
+**State is always visible, never mysterious** — a non-clickable tray row
+(`buildTrayMenuTemplate()`) shows the live phase: `Update: checking…` /
+`Update: v0.2.1 found, downloading…` / `Update: downloading 42%` / `Update:
+v0.2.1 ready — installs when you finish your game` / `Up to date (v0.2.0)` /
+`Update: check failed (…)`. A `Check for updates now` tray item triggers an
+immediate manual check (disabled in dev — see below). Both update live via
+`onStatusChange -> rebuildTrayMenu()`, the same pattern the hotkey
+bind-status rows already use.
+
+**Disabled (loudly, not silently) when unpackaged.** `electron-updater` has
+no meaningful feed to check against a plain `npm start` run — no
+`app-update.yml`, no installed location to replace. `autoUpdaterModule.init()`
+checks `app.isPackaged` and, if false, logs "auto-update is disabled in dev,
+this is expected" and sets the tray row to `Update: n/a (dev build, run npm
+run dist to test)` rather than either attempting a check that can only fail
+or silently doing nothing unexplained. **Verified this round**: ran `npm
+start` and confirmed exactly that log line appears, with no error, no crash,
+and the rest of the app (window, tray, hotkeys, IPC handshake) unaffected.
+
+**Elevation — reasoned through, not fully verified.** The packaged app runs
+`requestedExecutionLevel: requireAdministrator`, meaning the currently
+running process already holds an elevated token. Windows child processes
+inherit their parent's access token by default (there is no automatic
+de-elevation), and the NSIS installer this app's own build already produces
+is `asInvoker` (confirmed earlier in this README via `asar`/7-Zip extraction)
+— a per-user install, no separate elevation requested by the installer
+itself. Reasoning from those two facts: when the already-elevated running app
+spawns the downloaded installer to self-update, Windows should hand it the
+same already-elevated token with no NEW UAC consent prompt, because the
+elevation was already granted to the parent and nothing here asks Windows to
+re-prompt. **This has NOT been observed end-to-end** — it requires two
+published releases and a real update cycle, which does not exist yet (see
+"Not yet verified" below). If a UAC prompt does turn out to be unavoidable on
+a real machine, that is acceptable per the brief — it must simply never
+appear mid-game, which the `inGame` guard already ensures structurally (the
+install step, and therefore any prompt it could trigger, cannot run at all
+while `inGame` is true).
+
+**Portable target caveat.** `electron-updater`'s NSIS updater targets an
+*installed* app with a known install location to replace: the portable exe
+has no installed location (it's a self-contained single file the user runs
+from wherever they put it). Whether `autoUpdater` behaves sanely against the
+portable build was not tested this round — the NSIS-installed build (already
+this README's "Recommended" path) is the one this auto-update work targets
+and was verified against.
+
+**Publishing a release (I did NOT do this — you asked to handle the actual
+publish yourself):**
+```
+cd overlay-host
+set GH_TOKEN=<a GitHub PAT with repo scope on haroutB5/coachbuild-overlay-releases>
+npm run dist:publish
+```
+This runs the same `dist:unpacked` → `dist:resources` chain as `npm run dist`
+(see "Why packaging needs a workaround" below — the `--prepackaged` risk
+applies identically here, see "Verified this round" below for why it's fine),
+then a final `electron-builder --win nsis portable --prepackaged
+dist/win-unpacked --publish always`, which uploads the installer, the
+portable exe, and `latest.yml` to a new GitHub Release on
+`haroutB5/coachbuild-overlay-releases` tagged with the version in
+`package.json`. `GH_TOKEN` is read from the environment by electron-builder
+itself — nothing is hardcoded anywhere in this repo. Bump the version in
+`package.json` before publishing (already at `0.2.0` this round, up from
+`0.1.0`, specifically so there is a real version delta to test an update
+against once a second version exists).
+
+**Verified this round:** ran the full three-step chain
+(`dist:unpacked`/`dist:resources`/`dist:package`, no `--publish`, since
+publishing itself was explicitly left to you) from a clean `dist/`. Confirmed
+`electron-updater` and its dependencies are bundled into `app.asar`
+automatically (`npx asar list`) even though `build.files` doesn't explicitly
+list `node_modules` — electron-builder includes production `dependencies`'
+`node_modules` regardless of a custom `files` array; only `devDependencies`
+(`electron`, `electron-builder`) are excluded, which is correct, since those
+must never ship inside the app. Confirmed `dist/latest.yml` is generated by
+the `--prepackaged` NSIS build step and contains the real version (`0.2.0`),
+a real `sha512`, and the correct file size — this is the exact "silent
+failure nobody surfaced" risk flagged in the brief, and it does NOT occur:
+the `--prepackaged` flow produces a correct `latest.yml` same as
+electron-builder's normal one-command build would. Re-confirmed the packaged
+exe still carries `requestedExecutionLevel: requireAdministrator` after this
+round's changes (`findstr`/`grep` against the built exe). Ran the unpackaged
+app (`npm start`) and confirmed the auto-updater initializes, logs its
+disabled-in-dev state, and does not affect any other part of startup.
+
+**NOT verified — anything requiring two published releases.** There is
+exactly one version in existence right now (`0.2.0`, unpublished). A real
+end-to-end update cycle (checking against a real `latest.yml` on GitHub,
+downloading, the `inGame` defer/install-on-game-end logic actually firing,
+whether a UAC prompt appears during the silent install of an
+already-elevated process, and whether `quitAndInstall`'s relaunch genuinely
+comes back up cleanly) cannot be verified until at least two versions are
+published to `haroutB5/coachbuild-overlay-releases` and the gaming PC has the
+first one installed. That is the natural next real-world test once you
+publish this version and, later, a `0.2.1`.
+
 ## Install on another PC (2026-07-27, packaging round)
 
 The user doesn't play League on this dev machine — they have a separate gaming

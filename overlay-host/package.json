@@ -1,6 +1,6 @@
 {
   "name": "coachbuild-overlay-host",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Always-on-top Electron overlay host for CoachBuild's League of Legends skill-order reference. Replaces the Overwolf app (blocked by Overwolf's developer-whitelist/ads-integration requirement) -- see HANDOFF-engy.md's 2026-07-27 PIVOT entry. Independent of the Next.js app: its own package.json/node_modules on purpose, not part of the Next build.",
   "main": "main.js",
@@ -11,7 +11,8 @@
     "dist:unpacked": "electron-builder --dir --win",
     "dist:resources": "node scripts/apply-exe-resources.js",
     "dist:package": "electron-builder --win nsis portable --prepackaged dist/win-unpacked",
-    "dist": "npm run dist:unpacked && npm run dist:resources && npm run dist:package"
+    "dist": "npm run dist:unpacked && npm run dist:resources && npm run dist:package",
+    "dist:publish": "npm run dist:unpacked && npm run dist:resources && electron-builder --win nsis portable --prepackaged dist/win-unpacked --publish always"
   },
   "devDependencies": {
     "electron": "^32.0.0",
@@ -34,6 +35,13 @@
       "renderer/**/*",
       "package.json",
       "!vendor/_selfTest-highlight.mjs"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "haroutB5",
+        "repo": "coachbuild-overlay-releases"
+      }
     ],
     "win": {
       "target": [
@@ -62,5 +70,8 @@
     "portable": {
       "artifactName": "${productName}-${version}-portable.${ext}"
     }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

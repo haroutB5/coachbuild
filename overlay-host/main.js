@@ -62,6 +62,7 @@ const { fetchActivePlayer, fetchPlayerList } = require('./lib/liveClientHttp.js'
 const { loadLane, saveLane, VALID_LANES } = require('./lib/laneSettings.js');
 const { readSettingsFile, writeSettingsPatch } = require('./lib/settingsFile.js');
 const { loadCalibration, saveCalibration } = require('./lib/calibrationSettings.js');
+const autoUpdaterModule = require('./lib/autoUpdater.js');
 const {
   parseLevelAndAbilities,
   extractLocalRiotId,
@@ -643,6 +644,11 @@ async function pollActivePlayer() {
       inGame = false;
       log('game no longer detected — ending session');
       stopPlayerListPolling();
+      // The game that was blocking a deferred update install, if any, just
+      // ended -- try installing now instead of waiting for the next periodic
+      // check (which could be hours away). Safe no-op if no update is
+      // pending. See lib/autoUpdater.js's header for the full rule.
+      autoUpdaterModule.notifyGameEnded();
       // `lane` (the manual override) and `calibration` (which itself now
       // carries `showTable` nested inside it -- see buildCalibrationPayload)
       // deliberately survive a game exit -- they're user preferences /
@@ -1111,6 +1117,19 @@ function buildTrayMenuTemplate() {
       enabled: false,
     },
     {
+      // Same "surfaced, not silent" bar as the hotkey rows above -- see
+      // lib/autoUpdater.js's getStatusLabel(). Non-clickable status row,
+      // live-updated via onStatusChange -> rebuildTrayMenu() wired in
+      // app.whenReady().
+      label: autoUpdaterModule.getStatusLabel(app.getVersion()),
+      enabled: false,
+    },
+    {
+      label: 'Check for updates now',
+      enabled: app.isPackaged,
+      click: () => autoUpdaterModule.checkForUpdates('manual, from tray'),
+    },
+    {
       // 2026-07-27 round 9 -- so the user can retrieve diagnostics (e.g. the
       // hotkey register()/isRegistered() lines) without hunting for
       // app.getPath('userData') themselves, especially once packaged (no
@@ -1200,6 +1219,21 @@ if (!gotSingleInstanceLock) {
     registerHotkeys();
     schedulePoll();
 
+    // Seamless auto-update (2026-07-27) -- see lib/autoUpdater.js's header
+    // for the full "never interrupt a game" contract. `onStatusChange` wired
+    // to rebuildTrayMenu() so the tray's status row (see
+    // buildTrayMenuTemplate()) reflects checking/downloading/ready/error
+    // live, without polling -- same "surfaced, not silent" bar as the hotkey
+    // bind-status rows above it.
+    autoUpdaterModule.init({
+      log,
+      warn,
+      getInGame: () => inGame,
+      onStatusChange: () => rebuildTrayMenu(),
+      isPackaged: app.isPackaged,
+      appVersion: app.getVersion(),
+    });
+
     // Test seam, not a feature: this desktop session has no visible taskbar
     // (confirmed across multiple rounds' screenshots), so the tray menu can't
     // be clicked to verify calibration mode end-to-end. Guarded behind an
@@ -1235,6 +1269,7 @@ if (!gotSingleInstanceLock) {
     globalShortcut.unregisterAll();
     clearTimeout(pollTimer);
     stopPlayerListPolling();
+    autoUpdaterModule.shutdown();
     if (tray && !tray.isDestroyed()) tray.destroy();
     if (calibrationWindow && !calibrationWindow.isDestroyed()) calibrationWindow.close();
     if (logStream) {

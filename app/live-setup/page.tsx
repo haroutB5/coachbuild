@@ -38,6 +38,7 @@ import PageHeader from "@/components/hextech/PageHeader";
 import StatusHeroCard from "@/components/hextech/companion/StatusHeroCard";
 import InstallCommands from "@/components/hextech/companion/InstallCommands";
 import AutomationToggles from "@/components/hextech/companion/AutomationToggles";
+import OverlayDownload from "@/components/hextech/companion/OverlayDownload";
 
 type Indicator = "off" | "partial" | "connected";
 
@@ -198,6 +199,8 @@ export default function LiveSetupPage() {
             onToggleItemSets={handleAutoItemSetsToggle}
             onToggleRunes={handleAutoRunesToggle}
           />
+
+          <OverlayDownload />
 
           {/* Pre-redesign diagnostics — connection test, LNA-denied help,
               error log, self-test. Functionally unchanged, only demoted
