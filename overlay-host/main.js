@@ -19,26 +19,39 @@
 // Practice Tool payload (see that file's header + HANDOFF-engy.md).
 //
 // ─────────────────────────────────────────────────────────────────────────────
-// COMPLIANCE FLAG — read before wiring anything into the calibration geometry
-// this file pushes. This file computes and persists ONLY geometry: WHERE the
-// four ability-icon boxes sit on screen. It does NOT compute, store, or push
-// WHICH ability (if any) should be highlighted, and it never will from this
-// file. That determination is explicitly out of scope here, because "a pink
-// box on the real ability icon telling the player which one to press next,
-// computed from their current live ranks" is the exact feature this project's
-// own CHANGELOG already ruled out on POLICY grounds, not a technical one:
-//   CHANGELOG.md, v0.65.0: "Every app that appears to highlight abilities in
-//   the HUD is drawing an Overwolf-style overlay over the game, which stays
-//   out of scope here."
-//   CHANGELOG.md, the Overwolf groundwork entry above it: Riot's policy
-//   approves "Game overlays that provide static data that is available prior
-//   to the game" and bans "Apps that dictate player decisions."
-// `overlay-host/vendor/skillEngine.js` (present on disk as of this round,
-// bundling `lib/nextSkill.ts`'s `resolveNextSkill`) is the exact banned
-// engine this file must never import, call, or accept a result from over
-// IPC. See HANDOFF-engy.md for the full flag raised to the coordinator this
-// round -- this comment exists so the next person editing THIS file sees the
-// same warning at the point where it would be easiest to quietly wire in.
+// SEPARATION OF CONCERNS (and a compliance note, stated accurately).
+//
+// This file computes and persists ONLY geometry: WHERE the four ability-icon
+// boxes sit on screen. WHICH ability is highlighted is decided renderer-side
+// by `lib/nextSkill.ts`'s `resolveNextSkill` (bundled into
+// `overlay-host/vendor/skillEngine.js`). That split is a clean architectural
+// boundary and worth keeping: geometry is a display concern, the
+// recommendation is a data concern, and they change for different reasons.
+//
+// CORRECTION TO A PRIOR VERSION OF THIS COMMENT, which claimed this project's
+// CHANGELOG "already ruled out" in-HUD ability highlighting on POLICY grounds
+// and cited v0.65.0. It does not, and a false precedent in a load-bearing
+// comment is worse than no comment. What v0.65.0 actually says is a TECHNICAL
+// SCOPE statement: "nothing is drawn inside the game. That is impossible --
+// the LCU has no ability/skill endpoint (970 checked) and structurally cannot
+// ... Every app that appears to highlight abilities in the HUD is drawing an
+// Overwolf-style overlay over the game, which stays out of scope here." That
+// is "we cannot do this from the LCU, so it is out of scope", not "policy
+// forbids it". Do not cite it as a policy ruling.
+//
+// The REAL policy tension is genuine and independently verified verbatim at
+// https://developer.riotgames.com/docs/lol -- Riot approves "Game overlays
+// that provide static data that is available prior to the game" and bans
+// "Apps that dictate player decisions". A passive 1-18 table sits comfortably
+// in the first category; a marker on the live ability bar at the moment a
+// point becomes available sits closer to the second. That was raised
+// explicitly with the user, who asked for this feature anyway. It is a
+// personal, single-machine, unpublished tool and the call is theirs to make.
+// Recorded here so the reasoning is legible, not re-litigated every round.
+//
+// What has NOT changed: no enemy or other-player information is ever read or
+// displayed. The player list is fetched solely to find the local player's own
+// champion by riotId. That line is not the user's to move, and it stays.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const { app, BrowserWindow, Tray, Menu, nativeImage, globalShortcut, ipcMain, screen } = require('electron');
@@ -91,6 +104,10 @@ const TRANSPARENT_BACKGROUND_COLOR = '#00000000';
 
 const HOTKEY_TOGGLE_OVERLAY = 'Control+F10';
 const HOTKEY_TOGGLE_INTERACTIVE = 'Control+F11';
+// Adjust-in-place mode (2026-07-27 round 8) -- see the big comment block near
+// toggleAdjustOverlay() for why this exists and replaces the separate
+// calibration window as the PRIMARY alignment path.
+const HOTKEY_TOGGLE_ADJUST = 'Control+F12';
 
 // Poll less often when idle (no game) so this never spins the CPU or hammers
 // the loopback socket while the user is just browsing/queuing. Faster while a
@@ -119,8 +136,14 @@ const LANE_MENU_ITEMS = [
 let mainWindow = null;
 let tray = null;
 let isInteractive = false; // starts click-through
+let isAdjustingOverlay = false; // adjust-in-place mode, see toggleAdjustOverlay()
 let overlayVisibleWanted = true;
 let inGame = false;
+// Computed once at startup (not re-checked live) and surfaced in the tray menu
+// AND the startup log -- see logElevationGuidance(). A guess, never a certainty
+// (see bestEffortElevationGuess()'s own header), but "computed once" is correct:
+// elevation cannot change mid-process, only across a relaunch (e.g. start:admin).
+let elevationGuessText = null;
 const userDataDir = app.getPath('userData');
 let currentLane = loadLane(userDataDir); // string lane, or null = "Auto"
 // UI toggle, not per-game state -- loaded here (fs-only, safe before
@@ -381,8 +404,12 @@ function toggleShowSkillTable() {
 
 function enterCalibration() {
   if (isCalibrating) return;
+  if (isAdjustingOverlay) {
+    warn('cannot open the separate calibration window while adjust-in-place mode is active -- exit adjust mode first');
+    return;
+  }
   isCalibrating = true;
-  log('entering calibration mode');
+  log('entering calibration mode (fallback, separate window)');
 
   const bounds = getPrimaryDisplayBounds();
   calibrationWindow = new BrowserWindow({
@@ -621,9 +648,13 @@ async function resolveChampionNameNow(riotId) {
 function registerHotkeys() {
   const okOverlay = globalShortcut.register(HOTKEY_TOGGLE_OVERLAY, toggleOverlayVisibility);
   const okInteractive = globalShortcut.register(HOTKEY_TOGGLE_INTERACTIVE, toggleInteractive);
+  const okAdjust = globalShortcut.register(HOTKEY_TOGGLE_ADJUST, toggleAdjustOverlay);
   if (!okOverlay) warn(`failed to register hotkey ${HOTKEY_TOGGLE_OVERLAY} — likely already bound by another app`);
   if (!okInteractive) warn(`failed to register hotkey ${HOTKEY_TOGGLE_INTERACTIVE} — likely already bound by another app`);
-  if (okOverlay && okInteractive) log(`hotkeys registered: ${HOTKEY_TOGGLE_OVERLAY} (show/hide), ${HOTKEY_TOGGLE_INTERACTIVE} (interactive toggle)`);
+  if (!okAdjust) warn(`failed to register hotkey ${HOTKEY_TOGGLE_ADJUST} — likely already bound by another app`);
+  if (okOverlay && okInteractive && okAdjust) {
+    log(`hotkeys registered: ${HOTKEY_TOGGLE_OVERLAY} (show/hide), ${HOTKEY_TOGGLE_INTERACTIVE} (interactive toggle), ${HOTKEY_TOGGLE_ADJUST} (adjust overlay position)`);
+  }
 }
 
 function toggleOverlayVisibility() {
@@ -640,47 +671,155 @@ function toggleOverlayVisibility() {
   rebuildTrayMenu();
 }
 
+// FOCUSABILITY MUST FOLLOW INTERACTIVITY, and this is the non-obvious half.
+//
+// The window is created `focusable: false` so it can never steal focus from
+// the game — correct, and load-bearing, for the 99% of the time it is a
+// read-only table/highlight box. But on Windows that maps to WS_EX_NOACTIVATE,
+// and a non-activatable window does not reliably deliver clicks OR KEYS to
+// DOM content: letting mouse events through via setIgnoreMouseEvents(false)
+// is necessary but NOT sufficient. Toggling only that would produce the
+// single worst failure this overlay could have — controls LOOK usable (the
+// interactive badge is showing) and silently do nothing.
+//
+// Extracted into one shared helper (2026-07-27 round 8) because TWO
+// independent modes now want this exact pairing -- the lane-button
+// "interactive" toggle (mouse) and the new adjust-in-place mode (keyboard,
+// see toggleAdjustOverlay() below). Either wanting it is enough; the window
+// is interactive+focused whenever `isInteractive || isAdjustingOverlay` is
+// true, so the two modes can never fight over the window's own state.
+function applyMainWindowInteractivity() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const wantInteractive = isInteractive || isAdjustingOverlay;
+
+  // Equivalent intent to the Overwolf build's setWindowStyle/removeWindowStyle
+  // with WindowStyle.InputPassThrough — ported to Electron's own API, not a
+  // literal translation of the Overwolf call.
+  mainWindow.setIgnoreMouseEvents(!wantInteractive, { forward: !wantInteractive });
+
+  // `setFocusable` is supported on Windows and macOS; guarded because it is
+  // absent on some platforms.
+  if (typeof mainWindow.setFocusable === 'function') {
+    mainWindow.setFocusable(wantInteractive);
+  }
+  if (wantInteractive) {
+    // Without an explicit focus() the freshly-focusable window still sits
+    // unactivated, so the first click/keypress would be spent activating it
+    // rather than reaching the control/listener underneath.
+    mainWindow.focus();
+  }
+}
+
 function toggleInteractive() {
   isInteractive = !isInteractive;
   log('toggle_interactive ->', isInteractive ? 'interactive (clickable)' : 'clickthrough');
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    // Equivalent intent to the Overwolf build's setWindowStyle/removeWindowStyle
-    // with WindowStyle.InputPassThrough — ported to Electron's own API, not a
-    // literal translation of the Overwolf call.
-    mainWindow.setIgnoreMouseEvents(!isInteractive, { forward: !isInteractive });
-
-    // FOCUSABILITY MUST FOLLOW INTERACTIVITY, and this is the non-obvious half.
-    //
-    // The window is created `focusable: false` so it can never steal focus from
-    // the game — correct, and load-bearing, for the 99% of the time it is a
-    // read-only table. But on Windows that maps to WS_EX_NOACTIVATE, and a
-    // non-activatable window does not reliably deliver clicks to DOM controls:
-    // letting mouse events through via setIgnoreMouseEvents(false) is necessary
-    // but NOT sufficient. Toggling only the former would produce the single
-    // worst failure this overlay could have — the lane buttons LOOK pressable
-    // (the interactive badge is showing, the affordances are on) and silently
-    // do nothing.
-    //
-    // That matters more here than it would elsewhere: for a one-monitor user
-    // this control is the only way to correct a wrong lane without leaving the
-    // game, and a wrong lane means a wrong skill path for the whole match.
-    //
-    // So focus is granted only for the duration of interactive mode, and handed
-    // straight back. `setFocusable` is supported on Windows and macOS; guarded
-    // because it is absent on some platforms.
-    if (typeof mainWindow.setFocusable === 'function') {
-      mainWindow.setFocusable(isInteractive);
-    }
-    if (isInteractive) {
-      // Without an explicit focus() the freshly-focusable window still sits
-      // unactivated, so the first click would be spent activating it rather than
-      // hitting the button under the cursor.
-      mainWindow.focus();
-    }
-  }
+  applyMainWindowInteractivity();
   pushInteractiveChange();
   rebuildTrayMenu();
 }
+
+// ---------------------------------------------------------------------------
+// Adjust-in-place mode (2026-07-27 round 8) -- REPLACES the separate
+// calibration window as the PRIMARY alignment path.
+//
+// WHY: the separate window (renderer/calibrate.*, still kept as a fallback)
+// covers the game, so a one-monitor user aiming boxes at ability icons they
+// can no longer see cannot actually align them -- confirmed by a real user
+// report ("the overlay isnt exactly on top of each skill box... i couldnt
+// change their places in game"). The fix is to let the user nudge the SAME
+// boxes that are already drawn over the SAME running game, live, in the MAIN
+// overlay window -- never a surface that occludes what they're aligning to.
+//
+// KEY HANDLING, and why it is NOT global shortcuts: arrow keys registered
+// globally would either be stolen from the game outright, or (with
+// `passthrough: true`) fire in BOTH places at once -- both wrong for a mode
+// whose whole point is precise nudging. Instead: ONE global hotkey
+// (Ctrl+F12) toggles the mode; while it's on, the window is made
+// interactive+focusable+focused (applyMainWindowInteractivity() above) so
+// ordinary `keydown` listeners in the RENDERER receive the nudge keys and
+// the game does not. This is why this file only toggles the MODE FLAG and
+// leaves ALL key handling (arrows/shift/+-/[]/Tab/Enter/Esc) and the
+// on-screen legend to the renderer -- see the IPC+DOM contract in
+// HANDOFF-engy.md for exactly what engo's ingame.js needs to implement; I do
+// not own or edit that file.
+function toggleAdjustOverlay() {
+  if (isCalibrating) {
+    warn('cannot enter adjust-in-place mode while the separate calibration window is open -- close it first');
+    return;
+  }
+
+  isAdjustingOverlay = !isAdjustingOverlay;
+  log('adjust overlay position ->', isAdjustingOverlay ? 'ON (main window now captures keyboard input)' : 'off');
+
+  if (isAdjustingOverlay && !overlayVisibleWanted) {
+    // The user can't align boxes they can't see -- force the overlay visible
+    // rather than silently doing nothing.
+    overlayVisibleWanted = true;
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.showInactive();
+  }
+
+  applyMainWindowInteractivity();
+  // Pushed on BOTH directions, not just entry:
+  //  - Entering: seeds the renderer's local working copy from the current
+  //    authoritative value, in case something changed (e.g. a
+  //    display-metrics-changed re-scale) since its last push.
+  //  - Exiting via this SAME toggle (hotkey/tray) rather than the renderer's
+  //    own Enter/Esc: there is no "save" here, so this must behave like a
+  //    cancel -- re-push the last SAVED geometry so any unsaved local nudges
+  //    the renderer was rendering live get discarded, not silently kept on
+  //    screen while main's own state disagrees with what's displayed.
+  pushCalibration();
+  pushAdjustModeChange();
+  rebuildTrayMenu();
+}
+
+function pushAdjustModeChange() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('coachbuild-adjust-mode', isAdjustingOverlay);
+}
+
+// Renderer -> main: the user pressed Enter in adjust mode. `geometry` is the
+// renderer's locally-nudged working copy -- validated again here
+// (saveCalibration -> lib/calibrationSettings.js's isValidGeometry) before
+// persisting, same as the separate-window path; never trust a cross-process
+// payload as-is.
+ipcMain.on('coachbuild-adjust-save', (_event, geometry) => {
+  const bounds = getPrimaryDisplayBounds();
+  calibrationGeometry = saveCalibration(userDataDir, geometry, bounds.width, bounds.height);
+  log(`adjust-in-place geometry saved for ${bounds.width}x${bounds.height}:`, JSON.stringify(calibrationGeometry));
+  gameState = mergeState(gameState, { calibration: buildCalibrationPayload() });
+  pushState();
+  // CRITICAL (matches exitCalibration()'s own fix, same day): the renderer's
+  // highlight box reads geometry ONLY off the dedicated 'coachbuild-calibration'
+  // channel, never `state.calibration` -- pushState() alone would have saved
+  // the new geometry to disk while the on-screen box silently kept using the
+  // OLD position until the next unrelated push happened to fire.
+  pushCalibration();
+  if (isAdjustingOverlay) {
+    isAdjustingOverlay = false;
+    applyMainWindowInteractivity();
+    pushAdjustModeChange();
+    rebuildTrayMenu();
+  }
+});
+
+// Renderer -> main: the user pressed Esc. Discards whatever the renderer's
+// local working copy had -- `calibrationGeometry` (this process's own
+// authoritative value) is untouched. Still re-pushes the calibration channel
+// on the way out: while adjusting, the renderer was rendering its OWN local
+// (unsaved) nudges live -- on cancel it needs to be told the real, saved
+// geometry again so the box snaps back rather than staying at the discarded
+// position.
+ipcMain.on('coachbuild-adjust-cancel', () => {
+  log('adjust-in-place cancelled -- keeping the previous geometry');
+  pushCalibration();
+  if (isAdjustingOverlay) {
+    isAdjustingOverlay = false;
+    applyMainWindowInteractivity();
+    pushAdjustModeChange();
+    rebuildTrayMenu();
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Elevation heuristic — global hotkeys are expected to be UNRELIABLE while
@@ -703,16 +842,26 @@ function bestEffortElevationGuess() {
   try {
     fs.writeFileSync(probePath, 'probe');
     fs.unlinkSync(probePath);
-    return 'possibly elevated (could write to C:\\Windows)';
+    return { elevated: true, detail: 'possibly elevated (could write to C:\\Windows)' };
   } catch {
-    return 'most likely NOT elevated (could not write to C:\\Windows)';
+    return { elevated: false, detail: 'most likely NOT elevated (could not write to C:\\Windows)' };
   }
 }
 
+// Computed ONCE at startup into module-scope `elevationGuessText`/`elevationGuessElevated`
+// (see the "Mutable state" section) rather than re-run on every tray rebuild --
+// elevation cannot change mid-process, only across a relaunch. Surfaced in
+// TWO places (2026-07-27 round 8 addition): the startup log (this function),
+// AND a tray menu row (buildTrayMenuTemplate()) -- a log line in a terminal
+// the user isn't looking at mid-match is not communication on its own.
+let elevationGuessElevated = false;
+
 function logElevationGuidance() {
   const guess = bestEffortElevationGuess();
-  log(`elevation check (best-effort, not certain): ${guess}`);
-  log('if Ctrl+F10/Ctrl+F11 do not respond while League has focus, this is the expected cause -- use the SYSTEM TRAY ICON instead (works regardless of elevation), or relaunch via "npm run start:admin" / right-click this app -> Run as administrator.');
+  elevationGuessElevated = guess.elevated;
+  elevationGuessText = guess.detail;
+  log(`elevation check (best-effort, not certain): ${guess.detail}`);
+  log('if Ctrl+F10/Ctrl+F11/Ctrl+F12 do not respond while League has focus, this is the expected cause -- use the SYSTEM TRAY ICON instead (works regardless of elevation), or relaunch via "npm run start:admin" / right-click this app -> Run as administrator.');
 }
 
 // ---------------------------------------------------------------------------
@@ -751,6 +900,16 @@ function buildTrayMenuTemplate() {
     },
     { type: 'separator' },
     {
+      // PRIMARY alignment path as of 2026-07-27 round 8 -- adjusts the SAME
+      // boxes already drawn over the running game, live, instead of a
+      // separate window that covers it. See toggleAdjustOverlay()'s header.
+      label: isAdjustingOverlay ? 'Adjusting… (Enter to save, Esc to cancel)' : 'Adjust overlay position',
+      type: 'checkbox',
+      checked: isAdjustingOverlay,
+      enabled: !isCalibrating,
+      click: () => toggleAdjustOverlay(),
+    },
+    {
       // Kept, not deleted -- default OFF this round (2026-07-27). See the
       // "FULLSCREEN" comment on TRAY_ICON_PATH's block for why.
       label: 'Show skill table',
@@ -759,9 +918,22 @@ function buildTrayMenuTemplate() {
       click: () => toggleShowSkillTable(),
     },
     {
-      label: isCalibrating ? 'Calibrating… (use the on-screen Save/Cancel)' : 'Calibrate ability bar…',
-      enabled: !isCalibrating,
+      // FALLBACK path now, not primary (round 8) -- a separate window covers
+      // the game, so a one-monitor user can't see what they're aligning to.
+      // Kept for a second monitor / dry-run-without-a-game use case.
+      label: isCalibrating ? 'Calibrating… (use the on-screen Save/Cancel)' : 'Calibrate ability bar (separate window, fallback)…',
+      enabled: !isCalibrating && !isAdjustingOverlay,
       click: () => enterCalibration(),
+    },
+    { type: 'separator' },
+    {
+      // Non-clickable status row (2026-07-27 round 8) -- a log line in a
+      // terminal the user isn't looking at mid-match is not communication.
+      // Same best-effort heuristic as the startup log; see
+      // bestEffortElevationGuess()'s header for why this hedges rather than
+      // asserting a verdict.
+      label: elevationGuessElevated ? 'Hotkeys: probably active (elevated)' : 'Hotkeys: may not respond in-game (not elevated)',
+      enabled: false,
     },
     { type: 'separator' },
     {

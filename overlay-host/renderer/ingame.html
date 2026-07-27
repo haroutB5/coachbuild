@@ -27,6 +27,32 @@
     -->
     <div id="cb-highlight" class="cb-highlight" hidden></div>
 
+    <!--
+      Adjust-in-place mode (round 8, 2026-07-27): the calibration WINDOW
+      approach failed live -- on one monitor the user was aiming boxes at an
+      ability bar the calibration window itself was covering. This replaces
+      it: nudge the SAME four boxes, live, directly over the running game.
+      main.js drives `hidden` here indirectly via
+      window.coachbuildIPC.onAdjustModeChange (see ingame.js) -- this markup
+      just provides the four boxes + the legend; all positioning is inline
+      styles set by ingame.js from the locally-nudged working geometry.
+      Not a Q/W/E/R-specific single recommendation like #cb-highlight -- all
+      four render at once so the user aligns the whole row against the real
+      HUD in one pass.
+    -->
+    <div id="cb-adjust" class="cb-adjust" hidden>
+      <div class="cb-adjust-box" id="cb-adjust-box-Q"><span class="cb-adjust-box-label">Q</span></div>
+      <div class="cb-adjust-box" id="cb-adjust-box-W"><span class="cb-adjust-box-label">W</span></div>
+      <div class="cb-adjust-box" id="cb-adjust-box-E"><span class="cb-adjust-box-label">E</span></div>
+      <div class="cb-adjust-box" id="cb-adjust-box-R"><span class="cb-adjust-box-label">R</span></div>
+      <div id="cb-adjust-legend" class="cb-adjust-legend">
+        <strong>Adjusting overlay position</strong>
+        <div><kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> move &middot; +<kbd>Shift</kbd> = &times;10</div>
+        <div><kbd>+</kbd>/<kbd>-</kbd> box size &middot; <kbd>[</kbd>/<kbd>]</kbd> spacing</div>
+        <div><kbd>Enter</kbd> save &middot; <kbd>Esc</kbd> cancel</div>
+      </div>
+    </div>
+
     <main id="cb-overlay" class="cb-overlay" aria-live="polite" hidden>
       <header id="cb-header" class="cb-header">
         <span id="cb-champion" class="cb-champion">CoachBuild</span>

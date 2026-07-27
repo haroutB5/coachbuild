@@ -18,6 +18,9 @@ const CHANNELS = {
   READY: 'coachbuild-ready',
   SET_LANE: 'coachbuild-set-lane',
   CALIBRATION: 'coachbuild-calibration',
+  ADJUST_MODE: 'coachbuild-adjust-mode',
+  ADJUST_SAVE: 'coachbuild-adjust-save',
+  ADJUST_CANCEL: 'coachbuild-adjust-cancel',
 };
 
 contextBridge.exposeInMainWorld('coachbuildIPC', {
@@ -36,6 +39,16 @@ contextBridge.exposeInMainWorld('coachbuildIPC', {
   onCalibration(callback) {
     ipcRenderer.on(CHANNELS.CALIBRATION, (_event, geometry) => callback(geometry));
   },
+  // Adjust-in-place mode (2026-07-27 round 8) -- fires true/false when the
+  // user toggles it via Ctrl+F12 or the tray ("Adjust overlay position").
+  // While true, the renderer OWNS keyboard handling (arrows/shift/+-/[]/
+  // Tab/Enter/Esc) via ordinary `keydown` listeners -- main.js only flips the
+  // window to interactive+focused, it does not intercept or forward keys.
+  // See HANDOFF-engy.md for the full contract engo needs to implement this
+  // against (I do not own/edit renderer/ingame.js).
+  onAdjustModeChange(callback) {
+    ipcRenderer.on(CHANNELS.ADJUST_MODE, (_event, isAdjusting) => callback(isAdjusting));
+  },
   ready() {
     ipcRenderer.send(CHANNELS.READY);
   },
@@ -45,5 +58,19 @@ contextBridge.exposeInMainWorld('coachbuildIPC', {
   // this bridge does not trust the renderer's value as-is.
   setLane(lane) {
     ipcRenderer.send(CHANNELS.SET_LANE, lane);
+  },
+  // `geometry`: {firstBoxCenterX, centerY, boxSize, spacing} -- the
+  // renderer's locally-nudged working copy, sent on Enter. Main re-validates
+  // before persisting (never trusts this payload as-is) and replies by
+  // exiting adjust mode (`onAdjustModeChange(false)`) and re-pushing the
+  // saved geometry (`onCalibration`).
+  saveAdjustedGeometry(geometry) {
+    ipcRenderer.send(CHANNELS.ADJUST_SAVE, geometry);
+  },
+  // Sent on Esc. Main discards the renderer's local edits, exits adjust mode,
+  // and re-pushes the LAST SAVED geometry via `onCalibration` so the box
+  // snaps back to it rather than staying at the discarded position.
+  cancelAdjustedGeometry() {
+    ipcRenderer.send(CHANNELS.ADJUST_CANCEL);
   },
 });

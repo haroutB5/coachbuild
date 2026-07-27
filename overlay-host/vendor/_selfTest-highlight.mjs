@@ -107,18 +107,60 @@ const KNOWN_IDS = [
   "cb-grid",
   "cb-footer",
   "cb-highlight",
+  "cb-adjust",
+  "cb-adjust-legend",
+  "cb-adjust-box-Q",
+  "cb-adjust-box-W",
+  "cb-adjust-box-E",
+  "cb-adjust-box-R",
 ];
+// Elements that carry a literal `hidden` attribute in the real ingame.html
+// markup -- this shim never parses the HTML file, so anything ingame.js
+// doesn't set `hidden` on itself at load time (unlike #cb-overlay/#cb-grid,
+// which render({phase:"not-in-game"}) touches on import) needs its true
+// initial state seeded here, or a "starts hidden" assertion would pass
+// vacuously against a shim default that just happens to also be `false`.
+const INITIALLY_HIDDEN_IDS = new Set(["cb-highlight", "cb-adjust", "cb-overlay", "cb-interactive-badge", "cb-grid"]);
+
 const elementsById = new Map();
 for (const id of KNOWN_IDS) {
   const el = makeElement(id === "cb-grid" ? "table" : "div");
   el.id = id;
+  el.hidden = INITIALLY_HIDDEN_IDS.has(id);
   elementsById.set(id, el);
 }
 
+// document.addEventListener/removeEventListener + a dispatch helper -- round
+// 8 needs this to drive setAdjustMode's real `keydown` listener the same way
+// a real browser would (attach/detach through the actual DOM API, not a
+// hand-simulated call into handleAdjustKeydown directly).
+const documentListeners = {};
 globalThis.document = {
   getElementById: (id) => elementsById.get(id) || null,
   createElement: (tag) => makeElement(tag),
+  addEventListener(type, fn) {
+    documentListeners[type] = documentListeners[type] || [];
+    if (!documentListeners[type].includes(fn)) documentListeners[type].push(fn);
+  },
+  removeEventListener(type, fn) {
+    if (!documentListeners[type]) return;
+    documentListeners[type] = documentListeners[type].filter((f) => f !== fn);
+  },
 };
+
+function dispatchKeydown(key, opts = {}) {
+  const listeners = documentListeners.keydown || [];
+  const event = {
+    key,
+    shiftKey: !!opts.shiftKey,
+    defaultPrevented: false,
+    preventDefault() {
+      this.defaultPrevented = true;
+    },
+  };
+  for (const fn of listeners.slice()) fn(event);
+  return event;
+}
 
 // Capture whatever ingame.js registers so this test can drive pushes exactly
 // the way main.js will (real callback references, not reimplemented dispatch).
@@ -134,10 +176,20 @@ globalThis.window = {
     onCalibration(cb) {
       registered.onCalibration = cb;
     },
+    onAdjustModeChange(cb) {
+      registered.onAdjustModeChange = cb;
+    },
     ready() {
       registered.readyCalled = true;
     },
     setLane() {},
+    saveAdjustedGeometry(geometry) {
+      registered.savedGeometry = geometry;
+      registered.saveCallCount = (registered.saveCallCount || 0) + 1;
+    },
+    cancelAdjustedGeometry() {
+      registered.cancelCallCount = (registered.cancelCallCount || 0) + 1;
+    },
   },
 };
 
@@ -269,6 +321,123 @@ async function main() {
   });
   await new Promise((r) => setTimeout(r, 0));
   assertEq(highlight.style.width, "60px", "malformed calibration payload ignored -- previous valid calibration survives untouched");
+
+  // ── Adjust-in-place mode (round 8, 2026-07-27) ─────────────────────────────
+  const adjust = elementsById.get("cb-adjust");
+  const boxQ = elementsById.get("cb-adjust-box-Q");
+  const boxW = elementsById.get("cb-adjust-box-W");
+  const legend = elementsById.get("cb-adjust-legend");
+
+  assertTrue(typeof registered.onAdjustModeChange === "function", "ingame.js registered window.coachbuildIPC.onAdjustModeChange");
+  assertTrue(adjust.hidden === true, "adjust UI starts hidden");
+
+  // Current committed calibration at this point is still {800,950,60,70}
+  // (the malformed push above was rejected, see the assertion just above).
+  registered.onAdjustModeChange(true);
+  await new Promise((r) => setTimeout(r, 0));
+
+  assertTrue(adjust.hidden === false, "adjust UI becomes visible on onAdjustModeChange(true)");
+  assertTrue(highlight.hidden === true, "the single recommendation highlight is suppressed while adjusting (4-box preview owns the surface)");
+  // Q slot 0: left=800-30=770,top=950-30=920,60x60. W slot 1: left=870-30=840.
+  assertEq(boxQ.style.left, "770px", "adjust box Q snapshotted from the current committed calibration, not a guess");
+  assertEq(boxW.style.left, "840px", "adjust box W position generalizes correctly");
+  assertEq(boxQ.style.width, "60px", "adjust box size snapshotted from calibration");
+  // Legend anchor: rowCenterX = 800 + 1.5*70 = 905; top = 950 - 30 = 920.
+  assertEq(legend.style.left, "905px", "legend anchored to the box row's horizontal midpoint");
+  assertEq(legend.style.top, "920px", "legend anchored just above the row's top edge");
+
+  // ── Keyboard: fine nudge ────────────────────────────────────────────────
+  let ev = dispatchKeydown("ArrowRight");
+  assertTrue(ev.defaultPrevented, "ArrowRight calls preventDefault (never leaks to the game)");
+  assertEq(boxQ.style.left, "771px", "ArrowRight nudges firstBoxCenterX by 1 (fine step)");
+
+  // ── Keyboard: coarse (Shift) nudge ──────────────────────────────────────
+  dispatchKeydown("ArrowRight", { shiftKey: true });
+  assertEq(boxQ.style.left, "781px", "Shift+ArrowRight nudges by 10 (coarse step) -- matters at 200% OS scale per the brief");
+
+  // ── Keyboard: vertical nudge ─────────────────────────────────────────────
+  dispatchKeydown("ArrowDown", { shiftKey: true });
+  assertEq(boxQ.style.top, "930px", "Shift+ArrowDown nudges centerY by 10");
+
+  // ── Keyboard: box size, clamped ──────────────────────────────────────────
+  dispatchKeydown("+");
+  assertEq(boxQ.style.width, "61px", "'+' grows boxSize by 1");
+  dispatchKeydown("=");
+  assertEq(boxQ.style.width, "62px", "'=' (unshifted +) also grows boxSize by 1");
+  dispatchKeydown("-");
+  dispatchKeydown("-");
+  assertEq(boxQ.style.width, "60px", "'-' shrinks boxSize by 1");
+
+  // ── Keyboard: spacing, affects W but not Q ───────────────────────────────
+  // State at this point: firstBoxCenterX=811 (801 after the fine step, +10
+  // for the coarse step), centerY=960, boxSize back down to 60, spacing
+  // still 70.
+  const qLeftBeforeSpacing = boxQ.style.left;
+  dispatchKeydown("]");
+  assertEq(boxQ.style.left, qLeftBeforeSpacing, "']' (spacing) does not move Q -- Q is slot 0, spacing only affects slots 1-3");
+  // spacing 70 -> 71; W center = 811 + 1*71 = 882 -> left = 882 - 30 = 852.
+  assertEq(boxW.style.left, "852px", "']' grows spacing, correctly shifts W's slot-1 position");
+  dispatchKeydown("[");
+
+  // ── Tab: deliberate no-op, but still preventDefault ──────────────────────
+  const qLeftBeforeTab = boxQ.style.left;
+  ev = dispatchKeydown("Tab");
+  assertTrue(ev.defaultPrevented, "Tab calls preventDefault (never leaks focus out of the window)");
+  assertEq(boxQ.style.left, qLeftBeforeTab, "Tab is a genuine no-op on geometry -- whole-row model, nothing to cycle between");
+
+  // ── An unrelated key passes through untouched ────────────────────────────
+  ev = dispatchKeydown("a");
+  assertTrue(ev.defaultPrevented === false, "an unrelated key is NOT preventDefault'd -- must not swallow normal input");
+  assertEq(boxQ.style.left, qLeftBeforeTab, "an unrelated key changes nothing");
+
+  // ── Enter: saves the CURRENT nudged geometry, reactive-only (no local
+  //    teardown until onAdjustModeChange(false) actually arrives) ──────────
+  // Full trace into this point: {800,950,60,70} -> ArrowRight (+1 fine) ->
+  // {801,950,60,70} -> Shift+ArrowRight (+10 coarse) -> {811,950,60,70} ->
+  // Shift+ArrowDown (+10 coarse) -> {811,960,60,70} -> +/=/-/- net 0 on
+  // boxSize -> still 60 -> ]/[ net 0 on spacing -> still 70.
+  dispatchKeydown("Enter");
+  assertEq(registered.saveCallCount, 1, "Enter calls window.coachbuildIPC.saveAdjustedGeometry exactly once");
+  assertEq(
+    registered.savedGeometry,
+    { firstBoxCenterX: 811, centerY: 960, boxSize: 60, spacing: 70 },
+    "the saved geometry matches every nudge applied above, and carries ONLY the four geometry fields (no showTable)"
+  );
+  assertTrue(adjust.hidden === false, "adjust UI stays open after Enter until main.js's own onAdjustModeChange(false) arrives (reactive-only, no optimistic local teardown)");
+
+  // Main.js's real response to a save: re-push calibration with the new
+  // geometry, then close adjust mode.
+  registered.onCalibration({ firstBoxCenterX: 811, centerY: 960, boxSize: 60, spacing: 70, showTable: false });
+  registered.onAdjustModeChange(false);
+  await new Promise((r) => setTimeout(r, 0));
+
+  assertTrue(adjust.hidden === true, "adjust UI closes once onAdjustModeChange(false) actually arrives");
+  const qLeftAfterClose = boxQ.style.left;
+  dispatchKeydown("ArrowRight");
+  assertEq(boxQ.style.left, qLeftAfterClose, "keydown listener was detached on close -- further key presses do nothing to the (now-hidden) adjust boxes");
+  assertTrue(highlight.hidden === false, "the single highlight box is restored after leaving adjust mode");
+  // firstBoxCenterX is now 811 (the saved value) -- left = 811-30 = 781.
+  assertEq(highlight.style.left, "781px", "restored single highlight reflects the NEWLY SAVED calibration, not the pre-adjustment one");
+
+  // ── Reopening snapshots from the LATEST calibration, not stale state ─────
+  registered.onAdjustModeChange(true);
+  await new Promise((r) => setTimeout(r, 0));
+  assertEq(boxQ.style.left, "781px", "reopening adjust mode snapshots the newly-saved calibration (811), not the original (800)");
+
+  // ── Escape: cancels, same reactive-only teardown discipline ─────────────
+  dispatchKeydown("ArrowLeft"); // nudge something so cancel has an edit to discard
+  ev = dispatchKeydown("Escape");
+  assertTrue(ev.defaultPrevented, "Escape calls preventDefault");
+  assertEq(registered.cancelCallCount, 1, "Escape calls window.coachbuildIPC.cancelAdjustedGeometry exactly once");
+  assertTrue(adjust.hidden === false, "adjust UI stays open after Escape until onAdjustModeChange(false) actually arrives");
+
+  // Main.js's real response to a cancel: re-push the LAST SAVED geometry
+  // (unchanged, since nothing was actually saved this time) and close.
+  registered.onCalibration({ firstBoxCenterX: 811, centerY: 960, boxSize: 60, spacing: 70, showTable: false });
+  registered.onAdjustModeChange(false);
+  await new Promise((r) => setTimeout(r, 0));
+  assertTrue(adjust.hidden === true, "adjust UI closes after a cancel too");
+  assertEq(highlight.style.left, "781px", "cancel leaves the highlight at the LAST SAVED geometry -- the discarded nudge never took effect");
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failures.length) {

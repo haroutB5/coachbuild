@@ -45,16 +45,29 @@ Check League's video settings before testing: **Settings → Video → Display M
   - **Ctrl+F10** — show/hide the overlay
   - **Ctrl+F11** — toggle interactive mode (lane buttons become clickable; the
     overlay is click-through the rest of the time)
-- **Calibration mode** (tray → "Calibrate ability bar…") — a separate, temporary
-  fullscreen window with four draggable Q/W/E/R boxes, modelled as one rigid group
-  (`{firstBoxCenterX, centerY, boxSize, spacing}`) since the real icons sit evenly
-  spaced on one row. Drag any box to move all four; arrow keys nudge 1px (Shift:
-  10px); number fields adjust box size/spacing; "Reset to default" recomputes a
-  resolution-scaled starting point (from an UNRESEARCHED 1920×1080 reference — see
-  `lib/calibrationSettings.js`'s header, this is a rough starting drag point, never
-  presented as accurate). Persisted to the same settings file as lane, tagged with
-  the resolution it was calibrated at — a resolution change falls back to the
-  scaled default (logged) rather than silently reusing stale coordinates.
+- **Adjust-in-place mode** (Ctrl+F12, or tray → "Adjust overlay position") — **the
+  PRIMARY alignment path (2026-07-27 round 8)**, replacing the separate calibration
+  window for real use. A real user report made the problem concrete: on one
+  monitor, a SEPARATE calibration window covers the game, so you're aiming boxes at
+  ability icons you can no longer see. Adjust mode instead nudges the SAME boxes
+  already drawn over the SAME running game, live: arrows nudge 1px (Shift: 10px),
+  `+`/`-` resize, `[`/`]` adjust spacing, `Enter` saves, `Esc` cancels. The overlay
+  becomes interactive+focused only while adjusting (keyboard input is captured by
+  the app, not the game) and returns to click-through the instant you exit. This is
+  a MAIN-PROCESS + IPC-contract feature — the actual box-drawing/key-handling lives
+  in `renderer/ingame.js` (engo's file); see `HANDOFF-engy.md` for the exact
+  contract if that's still in progress.
+- **Calibrate ability bar (separate window, fallback)** — the original approach,
+  kept for a second monitor or a dry run without a game running. Four draggable
+  Q/W/E/R boxes, modelled as one rigid group (`{firstBoxCenterX, centerY, boxSize,
+  spacing}`) since the real icons sit evenly spaced on one row. Drag any box to move
+  all four; arrow keys nudge 1px (Shift: 10px); number fields adjust box
+  size/spacing; "Reset to default" recomputes a resolution-scaled starting point
+  (from an UNRESEARCHED 1920×1080 reference — see `lib/calibrationSettings.js`'s
+  header, this is a rough starting drag point, never presented as accurate). Both
+  paths persist to the same settings file, tagged with the resolution calibrated
+  at — a resolution change falls back to the scaled default (logged) rather than
+  silently reusing stale coordinates.
 - Polls Riot's local Live Client Data API directly
   (`https://127.0.0.1:2999/liveclientdata/*`) — no GEP, no Overwolf, no companion
   bridge. Silent when no game is running (that's the normal state). This also means
@@ -122,24 +135,41 @@ reported position, a fact; Tier 3 is this app's own inference from win/play coun
 
 ## Hotkeys and elevation
 
-League/Vanguard runs elevated. Windows' UIPI (User Interface Privilege Isolation)
-does not deliver global-hotkey input from a lower-integrity process to a
-higher-integrity foreground window — so **Ctrl+F10/Ctrl+F11 are expected to not
-respond while League has focus, unless this app is also running elevated.** This
-was not something introduced by a bug; it registers successfully every time
-(confirmed in every test run below) and simply may not receive the keypress once a
-higher-privilege window is focused.
+**If Ctrl+F10 / Ctrl+F11 / Ctrl+F12 do nothing while a League game has focus, you
+need to run this app as Administrator — run `npm run start:admin` (or
+double-click `start-admin.cmd`) once, and keep using that from then on.** The tray
+icon works either way and does not need this — see below.
 
-- **Primary fix: use the tray icon.** It does not depend on elevation at all.
-- The app logs a best-effort (NOT certain) elevation guess on every startup, plus a
-  static reminder either way. Do not trust the guess as definitive — it is a
-  heuristic (attempts to write a throwaway file into `C:\Windows`), and Windows UAC
-  virtualization can make it wrong in either direction.
+**Why:** League/Vanguard runs elevated. Windows' UIPI (User Interface Privilege
+Isolation) does not deliver global-hotkey input from a lower-integrity process to a
+higher-integrity foreground window — so the three hotkeys are expected to not
+respond while League has focus, unless this app is also running elevated. This is
+not a bug; every hotkey registers successfully on every launch (confirmed in every
+test run below) and simply may not receive the keypress once a higher-privilege
+window is focused.
+
+- **Primary fix regardless of elevation: use the tray icon.** Every hotkey has a
+  tray equivalent (show/hide, "Adjust overlay position", interactive mode), and the
+  tray does not depend on elevation at all.
+- **The tray menu itself tells you the elevation guess** — a row reading either
+  "Hotkeys: probably active (elevated)" or "Hotkeys: may not respond in-game (not
+  elevated)". The app also logs the same best-effort (NOT certain) guess on every
+  startup. Do not trust either as definitive — it's a heuristic (attempts to write
+  a throwaway file into `C:\Windows`), and Windows UAC virtualization can make it
+  wrong in either direction.
 - To run elevated: `npm run start:admin`, or double-click `start-admin.cmd`, or
   right-click `node_modules/electron/dist/electron.exe` in a shortcut and choose
-  "Run as administrator." All three trigger a UAC prompt — **not exercised in this
-  session's automated verification**, since approving a UAC prompt requires
-  interactive user input this agent cannot provide.
+  "Run as administrator." **Verified this round that the underlying mechanism
+  genuinely works**: running it triggered a real Windows UAC consent prompt,
+  confirmed three independent ways — a `consent.exe` process appeared, a
+  screenshot attempt during the prompt failed with "the handle is invalid" (Windows'
+  Secure Desktop blocks screen capture during a genuine UAC prompt — a
+  fake/scripted dialog would not do this), and the process could not be
+  force-killed from an unelevated PowerShell ("Access is denied" — again, real UAC
+  prompts are protected this way). **What could NOT be verified**: actually
+  clicking "Yes" and confirming the app relaunches elevated — that needs a human at
+  the keyboard, which this automated test cannot provide. The prompt was left to
+  time out on its own (Windows' default ~150s UAC timeout) rather than force-closed.
 
 ## Reused from the Overwolf build (not rewritten)
 

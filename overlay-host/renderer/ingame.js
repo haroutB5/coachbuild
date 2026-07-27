@@ -140,6 +140,14 @@ const els = {
   grid: document.getElementById("cb-grid"),
   footer: document.getElementById("cb-footer"),
   highlight: document.getElementById("cb-highlight"),
+  adjust: document.getElementById("cb-adjust"),
+  adjustLegend: document.getElementById("cb-adjust-legend"),
+  adjustBoxes: {
+    Q: document.getElementById("cb-adjust-box-Q"),
+    W: document.getElementById("cb-adjust-box-W"),
+    E: document.getElementById("cb-adjust-box-E"),
+    R: document.getElementById("cb-adjust-box-R"),
+  },
 };
 
 // Kept at module scope, not re-derived from the DOM, so a hide/show cycle
@@ -152,11 +160,11 @@ let lastState = { inGame: false };
 let isInteractive = false;
 let renderToken = 0;
 
-// ── Calibration state (new, 2026-07-27) ─────────────────────────────────────
-// Pushed by engy's calibrate.js/main.js over IPC -- see applyCalibration
-// below for the exact expected payload shape (this file's half of a
-// contract engy's side must match; not yet wired as of this round, see
-// HANDOFF-engo.md). `calibration === null` means "never calibrated" -- the
+// ── Calibration state ────────────────────────────────────────────────────────
+// Pushed by main.js over IPC (`window.coachbuildIPC.onCalibration`, wired
+// and CONFIRMED LIVE in a real game as of round 8 -- the highlight box
+// appears correctly on every level-up). See applyCalibration below for the
+// payload shape. `calibration === null` means "never calibrated" -- the
 // highlight box has nowhere honest to draw itself and stays hidden, same
 // "never guess" posture as the skill engine's own refusals.
 let calibration = null; // {firstBoxCenterX, centerY, boxSize, spacing} | null
@@ -165,6 +173,44 @@ let calibration = null; // {firstBoxCenterX, centerY, boxSize, spacing} | null
 // long-term control; starts false so a fresh launch (before any calibration
 // has ever run) doesn't show it either.
 let showTable = false;
+
+// ── Adjust-in-place mode (round 8, 2026-07-27) ──────────────────────────────
+// The calibration WINDOW (a separate BrowserWindow the user dragged boxes
+// in) failed live: on one monitor, that window covered the exact ability
+// bar the user needed to see to aim at it -- they were calibrating against
+// something they could not look at. Root-caused by the coordinator as a
+// design mistake in HAVING a separate window at all, not a bug in either
+// side's code. Fix: adjust the SAME geometry live, in THIS window, directly
+// over the running game, via ordinary keyboard input this renderer owns
+// itself (main.js only flips the window to interactive+focused -- it does
+// not intercept or forward keys, specifically so arrows are never stolen
+// from the game AND never double-fire in both places).
+//
+// `workingGeometry` is a LOCAL, UNSAVED copy -- nudging it never touches
+// `calibration` (the committed value driving the normal single highlight
+// box) until the user presses Enter, and main.js re-validates before
+// persisting even then (this bridge does not trust the renderer's value as
+// final, per preload.js's own comment on `saveAdjustedGeometry`).
+let isAdjusting = false;
+let workingGeometry = null; // {firstBoxCenterX, centerY, boxSize, spacing} | null
+
+// Fine step is 1 (CSS/logical pixel), coarse (Shift) is 10. Deliberately NO
+// DPI compensation anywhere in this file -- the whole app operates in CSS
+// pixels end-to-end (main.js's window bounds, calibration geometry, this
+// arithmetic), which is already consistent regardless of the OS scale
+// factor. On a 200%-scaled display a 1px nudge is a 2px PHYSICAL step,
+// which is exactly why the 10px coarse step exists and matters -- not a bug
+// to "fix" by scaling these numbers.
+const ADJUST_STEP_FINE = 1;
+const ADJUST_STEP_COARSE = 10;
+const ADJUST_BOX_SIZE_MIN = 10;
+const ADJUST_BOX_SIZE_MAX = 200;
+const ADJUST_SPACING_MIN = 10;
+const ADJUST_SPACING_MAX = 300;
+
+function clampAdjust(v, min, max) {
+  return Math.min(max, Math.max(min, v));
+}
 
 async function handleState(state) {
   lastState = state || { inGame: false };
@@ -429,6 +475,15 @@ function applyCalibration(geometry) {
 }
 
 function renderHighlight(data) {
+  if (isAdjusting) {
+    // The 4-box adjust preview (renderAdjustBoxes) owns this surface
+    // entirely while active -- a single "current recommendation" box would
+    // be redundant with, and visually conflict with, the full-row preview
+    // the user is actively aligning against the real HUD.
+    els.highlight.hidden = true;
+    return;
+  }
+
   const rec = calibration ? computeNextSkillRecommendation(data) : null;
 
   if (!rec) {
@@ -446,6 +501,170 @@ function renderHighlight(data) {
   els.highlight.style.width = `${size}px`;
   els.highlight.style.height = `${size}px`;
   els.highlight.hidden = false;
+}
+
+// ── Adjust-in-place mode (round 8, 2026-07-27) ──────────────────────────────
+// See the module-scope comment above `isAdjusting` for the why. This is the
+// renderer's ENTIRE half of the feature: main.js drives entry/exit via
+// `onAdjustModeChange`; everything about what happens while it's open --
+// snapshotting, the 4-box preview, keyboard handling, save/cancel -- lives
+// here.
+
+/**
+ * Entry point for `window.coachbuildIPC.onAdjustModeChange`. Reactive only
+ * -- this file never sets `isAdjusting` itself outside this function, even
+ * from its own Enter/Escape handlers (see handleAdjustKeydown): main.js is
+ * the single source of truth for whether adjust mode is open, and
+ * preload.js's own comment confirms save/cancel are just two more paths
+ * that lead back here with `false`, not something this file should race by
+ * tearing itself down optimistically.
+ */
+function setAdjustMode(next) {
+  isAdjusting = !!next;
+
+  if (isAdjusting) {
+    // Snapshot the most recently committed calibration into a local working
+    // copy -- nudging this NEVER touches `calibration` itself until Enter.
+    // Falls back to main.js's own scaled-default reference geometry
+    // (lib/calibrationSettings.js's REFERENCE_GEOMETRY, 1920x1080 baseline)
+    // only in the shouldn't-happen case that adjust mode somehow opened
+    // before any onCalibration push ever arrived -- main.js always has SOME
+    // geometry (persisted or freshly scaled) before offering adjust mode in
+    // practice, but this file never trusts that from the renderer side.
+    workingGeometry = calibration
+      ? { ...calibration }
+      : { firstBoxCenterX: 830, centerY: 1010, boxSize: 48, spacing: 68 };
+    document.addEventListener("keydown", handleAdjustKeydown);
+    els.adjust.hidden = false;
+    renderAdjustBoxes();
+  } else {
+    document.removeEventListener("keydown", handleAdjustKeydown);
+    els.adjust.hidden = true;
+    workingGeometry = null;
+  }
+
+  // Single re-render path for both directions: entering hides the single
+  // highlight box (renderHighlight's own isAdjusting check) without needing
+  // a separate call here, and leaving restores it from `calibration` --
+  // which, on the SAVE path, may already reflect the new value if
+  // `onCalibration`'s push happened to arrive first, or still be the old
+  // one for one frame until it does (harmless, self-correcting).
+  handleState(lastState);
+}
+
+function renderAdjustBoxes() {
+  if (!workingGeometry) return;
+  const { firstBoxCenterX, centerY, boxSize, spacing } = workingGeometry;
+
+  for (const ability of ABILITIES) {
+    const slot = ABILITY_SLOT_INDEX[ability];
+    const centerX = firstBoxCenterX + slot * spacing;
+    const box = els.adjustBoxes[ability];
+    box.style.left = `${centerX - boxSize / 2}px`;
+    box.style.top = `${centerY - boxSize / 2}px`;
+    box.style.width = `${boxSize}px`;
+    box.style.height = `${boxSize}px`;
+  }
+
+  // Anchors the legend's BOTTOM-CENTER at the row's horizontal midpoint
+  // (slot 1.5 -- halfway between W and E, i.e. the middle of a 4-box row)
+  // just above the row's top edge. `.cb-adjust-legend`'s own
+  // `transform: translate(-50%, -100%)` does the actual centering/upward
+  // offset, so this only ever needs to set the anchor POINT, never the
+  // legend's own rendered width/height.
+  const rowCenterX = firstBoxCenterX + 1.5 * spacing;
+  els.adjustLegend.style.left = `${rowCenterX}px`;
+  els.adjustLegend.style.top = `${centerY - boxSize / 2}px`;
+}
+
+/**
+ * Keyboard handling for adjust mode -- attached/detached entirely by
+ * setAdjustMode above, never left registered outside an active session.
+ * main.js deliberately does NOT intercept or forward keys (see preload.js's
+ * comment: global shortcuts here would either steal input from the game or
+ * double-fire), so this is the renderer's own `keydown` listener, exactly
+ * as the contract specifies.
+ */
+function handleAdjustKeydown(e) {
+  if (!workingGeometry) return;
+  const step = e.shiftKey ? ADJUST_STEP_COARSE : ADJUST_STEP_FINE;
+
+  switch (e.key) {
+    case "ArrowLeft":
+      e.preventDefault();
+      workingGeometry.firstBoxCenterX -= step;
+      renderAdjustBoxes();
+      return;
+    case "ArrowRight":
+      e.preventDefault();
+      workingGeometry.firstBoxCenterX += step;
+      renderAdjustBoxes();
+      return;
+    case "ArrowUp":
+      e.preventDefault();
+      workingGeometry.centerY -= step;
+      renderAdjustBoxes();
+      return;
+    case "ArrowDown":
+      e.preventDefault();
+      workingGeometry.centerY += step;
+      renderAdjustBoxes();
+      return;
+    case "+":
+    case "=":
+      e.preventDefault();
+      workingGeometry.boxSize = clampAdjust(workingGeometry.boxSize + 1, ADJUST_BOX_SIZE_MIN, ADJUST_BOX_SIZE_MAX);
+      renderAdjustBoxes();
+      return;
+    case "-":
+    case "_":
+      e.preventDefault();
+      workingGeometry.boxSize = clampAdjust(workingGeometry.boxSize - 1, ADJUST_BOX_SIZE_MIN, ADJUST_BOX_SIZE_MAX);
+      renderAdjustBoxes();
+      return;
+    case "[":
+      e.preventDefault();
+      workingGeometry.spacing = clampAdjust(workingGeometry.spacing - 1, ADJUST_SPACING_MIN, ADJUST_SPACING_MAX);
+      renderAdjustBoxes();
+      return;
+    case "]":
+      e.preventDefault();
+      workingGeometry.spacing = clampAdjust(workingGeometry.spacing + 1, ADJUST_SPACING_MIN, ADJUST_SPACING_MAX);
+      renderAdjustBoxes();
+      return;
+    case "Tab":
+      // Deliberate no-op (engy's suggestion, agreed): the geometry model is
+      // ONE rigid row ({firstBoxCenterX, centerY, boxSize, spacing}), the
+      // same shape used everywhere else including the now-retired
+      // calibration window -- there is no per-box independent position to
+      // Tab between. preventDefault anyway so Tab can never leak focus out
+      // of this window into whatever's behind it while adjust mode holds
+      // keyboard input.
+      e.preventDefault();
+      return;
+    case "Enter":
+      e.preventDefault();
+      if (typeof window.coachbuildIPC.saveAdjustedGeometry === "function") {
+        // Pure geometry only -- no `showTable` -- per the contract: that
+        // flag isn't part of what adjust mode edits.
+        window.coachbuildIPC.saveAdjustedGeometry({ ...workingGeometry });
+      } else {
+        console.warn("[CoachBuild overlay] window.coachbuildIPC.saveAdjustedGeometry unavailable -- cannot save the adjustment");
+      }
+      // No local teardown here -- wait for main.js's own onAdjustModeChange(false)
+      // (see setAdjustMode's header comment on why this stays reactive-only).
+      return;
+    case "Escape":
+      e.preventDefault();
+      if (typeof window.coachbuildIPC.cancelAdjustedGeometry === "function") {
+        window.coachbuildIPC.cancelAdjustedGeometry();
+      } else {
+        console.warn("[CoachBuild overlay] window.coachbuildIPC.cancelAdjustedGeometry unavailable -- cannot cancel the adjustment");
+      }
+      return;
+    default:
+      return; // every other key passes through untouched
+  }
 }
 
 // ── Lane control (2026-07-27: moved to main-process ownership) ─────────────
@@ -640,22 +859,15 @@ if (typeof window.coachbuildIPC !== "undefined") {
     }
   });
 
-  // ── Calibration (new, 2026-07-27) ─────────────────────────────────────────
-  // EXPECTED CONTRACT -- documented here because this renderer cannot add
-  // the sending half itself (main.js/preload.js are engy's files this
-  // round). Not yet wired as of this commit; see HANDOFF-engo.md for the
-  // exact coordination note.
+  // ── Calibration -- WIRED AND CONFIRMED LIVE (round 8) ───────────────────────
   //   IPC channel:        'coachbuild-calibration'
   //   preload.js exposes: window.coachbuildIPC.onCalibration(callback)
-  //                        -> ipcRenderer.on('coachbuild-calibration',
-  //                             (_event, geometry) => callback(geometry))
-  //   payload shape:       { firstBoxCenterX: number, centerY: number,
-  //                           boxSize: number, spacing: number,
-  //                           showTable: boolean }
+  //   payload shape:       { firstBoxCenterX, centerY, boxSize, spacing, showTable }
   // Guarded the same way `setLane` is guarded above -- an absent function on
   // `window.coachbuildIPC` must degrade to "highlight box stays hidden,
   // nothing crashes," never a thrown error that takes the rest of the
-  // renderer down with it.
+  // renderer down with it. Kept even though main.js now always exposes this:
+  // belt-and-braces costs nothing and matches every other IPC call site here.
   if (typeof window.coachbuildIPC.onCalibration === "function") {
     window.coachbuildIPC.onCalibration((geometry) => {
       try {
@@ -670,18 +882,34 @@ if (typeof window.coachbuildIPC !== "undefined") {
     );
   }
 
+  // ── Adjust-in-place mode (round 8, 2026-07-27) ──────────────────────────────
+  //   IPC channel:        'coachbuild-adjust-mode'
+  //   preload.js exposes: window.coachbuildIPC.onAdjustModeChange(callback)
+  //   payload:             boolean -- true on open, false on close by ANY path
+  //                         (Ctrl+F12, tray, or this file's own save/cancel).
+  // See setAdjustMode/handleAdjustKeydown above for the renderer's entire
+  // half of this feature. Same defensive guard pattern as onCalibration.
+  if (typeof window.coachbuildIPC.onAdjustModeChange === "function") {
+    window.coachbuildIPC.onAdjustModeChange((isAdjustingNext) => {
+      try {
+        setAdjustMode(isAdjustingNext);
+      } catch (err) {
+        console.warn("[CoachBuild overlay] failed to apply adjust-mode change:", err);
+      }
+    });
+  } else {
+    console.warn(
+      "[CoachBuild overlay] window.coachbuildIPC.onAdjustModeChange unavailable -- adjust-in-place will not open"
+    );
+  }
+
   // Announce readiness -- main.js answers with a fresh snapshot of current
-  // state + interactive mode. See background.js's original comment (same
-  // reasoning, ported verbatim): the in-game window can only ever RECEIVE
-  // pushes, never pull, so a dropped first push would otherwise leave the
-  // overlay blank until the next level-up, possibly minutes into the game,
-  // at exactly the moment the player most wants to see it.
-  //
-  // NOTE for engy: ideally the 'coachbuild-ready' handler in main.js ALSO
-  // replays the last-known calibration (mirroring how it already replays
-  // state + interactive mode) -- otherwise a renderer reload leaves
-  // `calibration === null` (highlight hidden) until calibrate.js is re-run,
-  // even though the geometry was already known. See HANDOFF-engo.md.
+  // state + interactive mode (+ calibration, confirmed live). See
+  // background.js's original comment (same reasoning, ported verbatim): the
+  // in-game window can only ever RECEIVE pushes, never pull, so a dropped
+  // first push would otherwise leave the overlay blank until the next
+  // level-up, possibly minutes into the game, at exactly the moment the
+  // player most wants to see it.
   window.coachbuildIPC.ready();
 } else {
   console.warn("[CoachBuild overlay] window.coachbuildIPC is not available -- preload.js did not run or contextBridge failed");
