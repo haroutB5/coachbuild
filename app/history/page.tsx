@@ -16,6 +16,7 @@ import type { PlayerRef } from "@/components/proHistory.types";
 import { consumePendingPlayerSelect, type PendingPlayerSelect } from "@/components/playerSelectHandoff";
 import { useSheetBackNav } from "@/components/useSheetBackNav";
 import PageHeader from "@/components/hextech/PageHeader";
+import ProPlayersSpotlight from "@/components/ProPlayersSpotlight";
 
 // Module-level (stable references) so FavoriteStarButton's subscribe effect
 // doesn't re-run on every page re-render.
@@ -130,22 +131,6 @@ function toPlayerSubject(ref: PendingPlayerSelect): PlayerSubject {
     };
   }
   return { kind: "link", playerLink: ref.playerLink, name: ref.name };
-}
-
-function PromptState() {
-  return (
-    <div className="mt-6 glass-card rounded-2xl p-12 text-center">
-      <div className="text-4xl mb-3 opacity-40" aria-hidden="true">
-        🔍
-      </div>
-      <div className="text-txt font-semibold mb-1">
-        Search a pro player or champion to see their recent games
-      </div>
-      <div className="text-mut text-sm">
-        Try a name like &ldquo;Faker&rdquo; or a champion like &ldquo;Viktor&rdquo;.
-      </div>
-    </div>
-  );
 }
 
 export default function HistoryPage() {
@@ -317,7 +302,9 @@ export default function HistoryPage() {
         </section>
 
         {/* ── Search results ── */}
-        {!selected && <PromptState />}
+        {!selected && (
+          <ProPlayersSpotlight mode={mode} onSelectPlayer={choosePlayer} onSelectChampion={chooseChampion} />
+        )}
 
         {selected && (
           <>

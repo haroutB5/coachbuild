@@ -17,6 +17,7 @@ import dynamic from "next/dynamic";
 const LivePanel = dynamic(() => import("@/components/live/LivePanel"), { ssr: false });
 import { parseLiveDeepLink, roleIdToLane } from "@/components/live/deepLink";
 import { readLastChampion, writeLastChampion } from "@/lib/lastChampion";
+import { pushRecentChampion } from "@/lib/recentChampions";
 import { resolveVisitSession, shouldPersistLastChampion } from "@/lib/lastChampionSession";
 import { resolveCurrentChampSelectChampionId, resolveChampSelectRoleId } from "@/components/live/champSelectFollow";
 import {
@@ -107,6 +108,12 @@ export default function HomePage() {
   useEffect(() => {
     if (!shouldPersistLastChampion({ hydrated: lastChampHydrated, chosen: champChosen })) return;
     writeLastChampion(champ, activeLane);
+    // Same settled-selection guard as the write above — feeds the empty
+    // state's "Recently Viewed" strip (lib/recentChampions.ts). Separate
+    // storage key/shape from lastChampion.ts on purpose: that one remembers
+    // exactly ONE champion (what to restore on next visit); this keeps a
+    // short deduped list so the empty state has more than one thing to show.
+    pushRecentChampion(champ.id, activeLane);
   }, [champ, activeLane, lastChampHydrated, champChosen]);
   const [patch, setPatch] = useState<string | null>(null);
 
@@ -368,6 +375,34 @@ export default function HomePage() {
     [activeLane, sheetNav, source]
   );
 
+  // Empty-state quick picks (2026-07-27 redesign — see ChampionPickPrompt.tsx's
+  // header) — "Your Lanes" / "Recently Viewed" / "Trending This Patch" all
+  // already know BOTH the championId and the exact lane to land on, so this
+  // skips handleChampionSelect's async most-played-lane lookup entirely
+  // (that lookup exists for a BLIND pick from search, where the lane isn't
+  // known yet — it's not needed here). Resolves the id against the same
+  // /api/champions list the deep-link/live-follow effects already use.
+  const handleQuickPick = useCallback(
+    (championId: number, lane: LaneId) => {
+      if (sheetNav.isRestoring()) return;
+      fetch("/api/champions")
+        .then((r) => (r.ok ? (r.json() as Promise<ChampionRef[]>) : []))
+        .then((champs) => {
+          const found = Array.isArray(champs) ? champs.find((c) => c.id === championId) : undefined;
+          if (!found) return; // unresolvable id — no-op, the prompt stays as-is
+          mostPlayedLaneRequestRef.current++; // cancel any in-flight lane correction
+          setChamp(found);
+          setChampChosen(true);
+          setActiveLane(lane);
+          sheetNav.pushSelection(wireViewForChampion(found, lane, FIXED_TAB, source));
+        })
+        .catch(() => {
+          /* network hiccup — quick pick silently no-ops */
+        });
+    },
+    [sheetNav, source]
+  );
+
   // v0.51.0 (global top bar): the TopBar's champion search lives OUTSIDE this
   // page (AppShell, every route) and communicates via a tiny pub/sub bus
   // (championSearchBus.ts, engo's pinned contract) rather than prop drilling
@@ -392,7 +427,7 @@ export default function HomePage() {
             than assert a champion. Gated on lastChampHydrated so the restored
             selection isn't flashed past on the way in. */}
         {lastChampHydrated && !champChosen ? (
-          <ChampionPickPrompt />
+          <ChampionPickPrompt onQuickPick={handleQuickPick} />
         ) : (
           <>
             <ChampionHero
