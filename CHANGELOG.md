@@ -2,6 +2,44 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.66.0] — 2026-07-27 — The in-game overlay ships, and updates itself
+
+### Added
+- **A download section on `/live-setup` for the CoachBuild Overlay** — a new, separate desktop app
+  that draws a highlight over your own Q/W/E/R ability icons **inside the game**, marking which
+  ability takes your next point. Deliberately its own card rather than folded into the PowerShell
+  companion UI: they are two independent installs doing different jobs, and neither requires the
+  other. Links to `releases/latest`, never a versioned filename that would rot on the next build.
+
+  The copy states the four things that otherwise generate confused bug reports: the installer is
+  unsigned so SmartScreen warns once, it must live on the same PC as League (it reads a
+  localhost-only API — nothing works remotely), it updates itself, and League must be in Borderless
+  or Windowed because an always-on-top window cannot draw over exclusive fullscreen.
+
+### The overlay itself (`overlay-host/`, v0.2.0 — separate repo for binaries)
+Started as an Overwolf app and is not one. Overwolf requires a **whitelisted developer account**,
+whitelisting requires a **public app proposal** approved by a human, and approval requires
+integrating **Overwolf's ads or subscriptions** — it "currently doesn't approve private apps".
+Verified verbatim after hitting "Unauthorized App" on a real machine while logged in. A personal
+one-machine tool cannot clear that gate, so it became an Electron always-on-top window instead.
+
+That turned out better. GEP — Overwolf's game-event layer — was the least-verified part of the
+design (stringified payloads, an empty TypeScript interface guaranteeing nothing, an unresolved
+question about `getInfo`'s envelope). The replacement reads `127.0.0.1:2999` directly, which is the
+exact path a real Practice Tool capture had already proven.
+
+**Two hotkey bugs worth recording, because both were invisible by construction.** `Ctrl+F12` could
+never bind: Windows reserves F12 permanently for the debugger, so `RegisterHotKey` — which Electron
+wraps — always refuses it. And `Ctrl+F10`/`F11` bind fine, but a stale instance already held them
+globally. Neither surfaced, because `register()`'s `false` return was never checked and a detached
+app has no console. There is now a per-launch log file, a tray status row per hotkey, and a startup
+guard that refuses any future F12 accelerator loudly.
+
+**Seamless auto-update**, with the rule that matters on a gaming machine: it **never interrupts a
+game**. The app already knows whether one is running — a successful `/liveclientdata/activeplayer`
+call *is* the definition — so an update that finishes downloading mid-match is held until the game
+ends, then installs silently and relaunches.
+
 ## [0.65.2] — 2026-07-27 — Stop blaming the user's connection for someone else's outage
 
 ### Fixed

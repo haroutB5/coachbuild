@@ -40,7 +40,8 @@
       {
         "provider": "github",
         "owner": "haroutB5",
-        "repo": "coachbuild-overlay-releases"
+        "repo": "coachbuild-overlay-releases",
+        "releaseType": "release"
       }
     ],
     "win": {
