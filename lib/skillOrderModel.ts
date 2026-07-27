@@ -165,9 +165,18 @@ export type CompletionRefusal =
    *  order itself, and walking it under the champion's own caps decides which
    *  point is skipped without inventing anything. Surplus kits now complete
    *  when that walk lands exactly 18 legal points, and refuse as
-   *  `priority-exhausted` when it does not. No champion on the current roster
-   *  reaches this refusal; it is the honest answer for a kit shape that
-   *  cannot fill 18, and it is asserted in tests rather than assumed absent. */
+   *  `priority-exhausted` when it does not.
+   *
+   *  TWO triggers, and the second is the load-bearing one:
+   *    (a) `purchasableTotal < 18` — a kit that cannot fill 18 points at all.
+   *        No champion on the current roster is like this; it is asserted in
+   *        tests rather than assumed absent.
+   *    (b) a SURPLUS kit with no well-formed PUBLISHED priority. A derived
+   *        priority cannot rank R (see (3c) in `completeSkillOrder`), so for
+   *        a surplus kit it is not a weaker signal — it is a blind one, and
+   *        completing from it would invent the very choice this module exists
+   *        to refuse. Reachable in principle whenever op.gg omits or reshapes
+   *        `skill_masteries`; not reached by any live payload probed to date. */
   | "kit-not-derivable"
   /** Walking the max-priority order ran out of abilities still under their
    *  cap before all 18 points were placed. The tail is then genuinely
@@ -314,26 +323,40 @@ export interface CompletionResult {
  *      kit in the tests rather than assumed to be wired up.
  *
  * ── NON-STANDARD CHAMPIONS — MEASURED, not guessed ─────────────────────────
- * Full 172-champion sweep against live op.gg data, each on its primary lane
+ * Sweep against live op.gg data, each champion on its primary lane
  * (2026-07-27), re-read against ddragon's published caps (see
- * lib/championKit.ts). Result WITH per-champion caps threaded in:
+ * lib/championKit.ts). Behaviour WITH per-champion caps threaded in:
  *
- *   164  complete cleanly  (160 standard + JAYCE, KARMA, ELISE, NIDALEE,
- *                           which the old hardcoded 5/5/5/3 wrongly refused)
- *     7  complete, but their published order ranks R at level 12 (see below)
- *     3  complete via the PUBLISHED max-priority order — UDYR, YUUMI,
- *                           APHELIOS. These three were `kit-not-derivable`
- *                           refusals until the surplus path landed; their
- *                           orders and `skill_masteries.ids` were re-probed
- *                           live on 2026-07-27 to confirm.
- *     1  refused, `bad-token`         — KHAZIX
+ *   most  complete cleanly — the standard 5/5/5/3 majority, PLUS JAYCE,
+ *         KARMA, ELISE and NIDALEE, which the old hardcoded 5/5/5/3 refused
+ *         outright.
+ *      7  complete, but their published order ranks R at level 12 (see below).
+ *      3  complete via the PUBLISHED max-priority order — UDYR, YUUMI,
+ *         APHELIOS. These were `kit-not-derivable` refusals until the surplus
+ *         path landed; their orders and `skill_masteries.ids` were re-probed
+ *         live on 2026-07-27 to confirm. They REFUSE again, deliberately, if
+ *         that publication is ever absent or malformed — see (3c) below.
+ *      1  refused, `bad-token` — KHAZIX (his `R-Q`/`R-W` evolution tokens).
+ *
+ * DELIBERATELY NOT GIVING EXACT PER-BUCKET COUNTS. This block previously read
+ * "172-champion sweep / 164 + 7 + 3 + 1", which sums to 175 against a 173-champion
+ * roster, and the buckets overlap ambiguously (do the seven R-at-12 champions sit
+ * inside "complete cleanly" or beside it?). An audit caught it 2026-07-27. Rather
+ * than reshuffle the numbers until they add up — which would read as measured
+ * while being reconstructed — the counts that were not re-verified are stated as
+ * shapes. The per-champion facts below WERE re-probed live and are exact.
+ * Re-running the full sweep is the only way to restore honest totals.
  *
  *  * UDYR    — four basics, no true ultimate; 6/6/6/6 = 24 purchasable ranks
  *              against 18 points. His published order ranks "R" at LEVEL 2,
  *              which is legal for him and is no longer refused as an illegal
  *              ultimate. ids ["Q","E","W","R"] → tail WWW → Q6 W5 E6 R1.
- *  * APHELIOS— W is a fixed 1-rank mechanic; 6/6/6/3 = 21 purchasable.
- *              ids ["Q","E","W"] → tail R@16,W,W → Q6 W3 E6 R3.
+ *  * APHELIOS— 6/6/6/3 = 21 purchasable ranks against 18 points, so he must
+ *              skip three. ids ["Q","E","W"] → tail R@16,W,W → Q6 W3 E6 R3.
+ *              (This line used to claim "W is a fixed 1-rank mechanic", which
+ *              contradicted both the 6-rank W cap on the same line and the W3
+ *              final count on the next one. His W is rankable like any basic;
+ *              it simply ends at 3 because Q and E out-rank it in the order.)
  *  * YUUMI   — 6/5/5/3 = 19 purchasable; she skips exactly one point.
  *              ids ["Q","E","W"] → tail R@16,W,W → Q6 W4 E5 R3.
  *  * JAYCE   — 6/6/6/1. Now COMPLETES: his Transform is granted free at level
@@ -429,6 +452,37 @@ export function completeSkillOrder(
   // check means anything for it and applying them would refuse three
   // champions whose tails the priority can in fact resolve.
   const determinate = kit.purchasableTotal === TOTAL_LEVELS;
+
+  // (3c) A SURPLUS kit may only be completed from a PUBLISHED priority.
+  //
+  // This is the gate that makes "data-backed, not invented" true rather than
+  // merely intended, and it is subtle enough to be worth the paragraph.
+  // `derivePriority` sorts `BASIC_ABILITIES` — Q/W/E — so it can NEVER rank R.
+  // For a determinate kit that is harmless: subtraction has already fixed the
+  // multiset, and the priority only ORDERS points that were forced anyway.
+  // For a surplus kit it is decisive, because the spare ranks are exactly what
+  // the walk has to choose between.
+  //
+  // Udyr is the worked example. `kitFromMaxRanks([6,6,6,6])` yields
+  // `ultimateLevels: null`, so `tailUltimateRanks` is 0 — there is no forced
+  // level-16 R, and all three tail slots are genuinely contested between W
+  // (4 spare) and R (5 spare). A derived priority yields `WWW`; a published
+  // `["Q","E","R","W"]` yields `RRR`. The derived answer is not W-beats-R, it
+  // is R-was-never-on-the-ballot — so when it happens to agree with the
+  // published order that is agreement by blindness, not corroboration.
+  //
+  // `priority-exhausted` below does NOT cover this. It fires only when the
+  // walk runs out of abilities under their cap; Udyr's derived W has 4 spare
+  // for 3 slots, so it never exhausts — it silently completes, wrongly.
+  // Compounding it, `determinate` has just switched OFF both `ultimate-
+  // remainder` and `tail-mismatch`, so this path would run with every other
+  // structural guard already disabled.
+  //
+  // Refusing costs nothing real: op.gg publishes `skill_masteries.ids` for all
+  // three surplus champions (probed live 2026-07-27, samples 1.8-4.3x larger
+  // than the levelling order). This fires only when that publication is
+  // ABSENT or malformed — i.e. exactly when we would otherwise be guessing.
+  if (!determinate && !isWellFormedPriority(priority)) return refuse("kit-not-derivable");
 
   // (4) The tail must need exactly as many ultimate ranks as this champion's
   // OWN legality schedule leaves room for in levels 16-18 — one (level 16)

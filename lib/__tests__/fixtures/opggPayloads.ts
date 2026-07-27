@@ -43,6 +43,36 @@ class SkillMasteries: ids,pick_rate,play,win,builds
 
 LolGetChampionAnalysis("AHRI","MID",Data(Skills(["W","Q","E","Q","Q","R","Q","W","Q","W","R","W","W","E","E"],0.57,71667,41408),SkillMasteries(["Q","W","E"],0.92,116034,67041,[Skills(["W","Q","E","Q","Q","R","Q","W","Q","W","R","W","W","E","E"],0.62,71667,41408),Skills(["Q","W","E","Q","Q","R","Q","W","Q","W","R","W","W","E","E"],0.11,12917,7391),Skills(["W","E","Q","Q","Q","R","Q","W","Q","W","R","W","W","E","E"],0.08,9541,5603),Skills(["W","Q","Q","E","Q","R","Q","W","Q","W","R","W","W","E","E"],0.03,3097,1812),Skills(["Q","E","W","Q","Q","R","Q","W","Q","W","R","W","W","E","E"],0.03,3025,1738)])))`;
 
+/**
+ * THE SHAPE PRODUCTION ACTUALLY RECEIVES, and until 2026-07-27 the only one no
+ * fixture covered.
+ *
+ * Every other fixture here declares `class SkillMasteries` with FIVE fields
+ * (…,builds) — that is what an UNRESTRICTED call returns. But `buildSkillOrderRpc`
+ * always sends `desired_output_fields`, and the live response to THAT request
+ * declares only FOUR: `ids,play,win,pick_rate`, with no `builds`. Both forms are
+ * accepted by `MASTERIES_FIELD_SETS`, so the gap was invisible — the tests were
+ * green against a shape production never sees while the shape it always sees was
+ * untested.
+ *
+ * That gap became load-bearing when the surplus-kit gate landed. If the declared
+ * set ever falls outside `MASTERIES_FIELD_SETS`, the priority is dropped, and a
+ * surplus champion (Udyr/Yuumi/Aphelios) then REFUSES as `kit-not-derivable`
+ * rather than merely downgrading its basis — i.e. the user's original bug
+ * ("Skill path only published to level 15") comes straight back. Udyr is used
+ * here deliberately: he is the champion that regression would hit first.
+ *
+ * Values are verbatim from a live probe (patch 16.14, 2026-07-27), including the
+ * four-id priority — Udyr is the ONLY champion observed publishing four ids,
+ * because his R slot is a fourth basic rather than an ultimate.
+ */
+export const UDYR_JUNGLE_PROD = `class LolGetChampionAnalysis: champion,position,data
+class Data: skills,skill_masteries
+class Skills: order,play,win,pick_rate
+class SkillMasteries: ids,play,win,pick_rate
+
+LolGetChampionAnalysis("UDYR","JUNGLE",Data(Skills(["Q","R","W","E","Q","Q","Q","E","Q","E","Q","E","E","E","W"],9670,5927,0.3),SkillMasteries(["Q","E","W","R"],17186,10521,0.53)))`;
+
 /** Udyr: four basics, no true ultimate. Q and E reach SIX ranks by level 15
  *  and "R" is ranked at level 2 — not the standard 5/5/5/3 model. */
 export const UDYR_JUNGLE = `class LolGetChampionAnalysis: champion,position,data

@@ -2,6 +2,50 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.68.0] — 2026-07-27 — Skill orders reach level 18 (overlay 0.4.1)
+
+### Added
+- **Skill paths now run to level 18 instead of stopping at 15.** op.gg publishes exactly 15 levels.
+  For a standard 5/5/5/3 champion that is lossless — 18 points exactly fill 18 ranks, so the last
+  three are forced by subtraction. For the *surplus* kits it is a real gap: Udyr has 6/6/6/6 = 24
+  possible ranks over 18 points, with Q and E already maxed at level 15 and three points that could
+  legally go several ways. The app refused, and a user correctly objected.
+
+  The tail is now derived from op.gg's **published max-priority order** (`skill_masteries.ids`) —
+  measured over a *larger* sample than the levelling order itself (17,186 games for Udyr vs 9,670).
+  Udyr resolves to Q6 W5 E6 R1, tail WWW.
+
+  **The trap, found independently by two agents:** for standard champions op.gg's `ids` is
+  `["Q","W","E"]` — **R is not in it**. A naive priority fill therefore spends level 16 on a basic
+  and silently drops the third ultimate point. The allocator takes the ultimate schedule from
+  `championKit.ts` rather than trusting the list to contain R.
+
+  Validated against u.gg's independent 18-level data: **164 of 173 champions match exactly**, and
+  Udyr jungle, Udyr top and Yuumi support come out byte-identical. The mismatches are the same rank
+  multiset with R placed at 16 rather than 17/18 — on champions where u.gg's own aggregate ranks R
+  at an *illegal* level, so enforcing legality is the better answer.
+
+### Fixed
+- **A surplus champion is now refused rather than guessed at when the published priority is missing.**
+  The fallback priority is inferred from the observed path, and that inference ranks only Q/W/E — it
+  can never rank R. For the 170 champions whose ranks total exactly 18 that is harmless, since
+  subtraction has already fixed which points remain and the priority only orders them. For Udyr it is
+  decisive: his spare W and R ranks are exactly what the choice is between, so an R-blind priority
+  isn't a weaker signal, it's a blind one. It would have answered `WWW` while a published `Q E R W`
+  answers `RRR` — agreement by blindness, not corroboration. op.gg publishes the priority for all
+  three surplus champions, so this costs nothing today and prevents a confident wrong answer if that
+  ever changes.
+
+### Changed
+- Derived levels are visually and audibly distinct from published ones — dashed chips, a footnote
+  naming which source resolved the tail, and a screen-reader label saying "derived, not recorded".
+  A payload cached before this shipped carries no provenance, and now says only that the levels are
+  derived rather than naming a source we don't hold.
+- Added the four-field `SkillMasteries` response shape as a test fixture. Every existing fixture
+  declared the five-field form returned by an unrestricted call; the app always sends
+  `desired_output_fields` and receives four. The shape production always sees was the one shape no
+  test covered.
+
 ## [0.67.0] — 2026-07-27 — Seven champions stop being refused, for the right reason
 
 ### Fixed

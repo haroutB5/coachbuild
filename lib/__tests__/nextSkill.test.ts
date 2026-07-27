@@ -431,11 +431,31 @@ describe("resolveNextSkill — per-champion kits", () => {
   };
 
   /** A model carrying a specific champion's kit. */
-  const kitModel = (order: Ability[], kit: ChampionKit): SkillOrderModel => {
-    const m = buildSkillOrderModel({ order, play: 1000, win: 550, pickRate: 0.4 }, kit);
+  /**
+   * `priorityIds` mirrors op.gg's published `skill_masteries.ids`, which the
+   * live payload carries for every champion probed. It is OPTIONAL here
+   * because determinate kits (the 170-champion majority) complete without it —
+   * but a SURPLUS kit (Udyr/Yuumi/Aphelios) now refuses as `kit-not-derivable`
+   * without one, since a derived priority cannot rank R and would be deciding
+   * their tail blind. Omitting it for those three tests a refusal path, not
+   * the behaviour a user gets; pass the real ids there.
+   */
+  const kitModel = (
+    order: Ability[],
+    kit: ChampionKit,
+    priorityIds?: Ability[]
+  ): SkillOrderModel => {
+    const m = buildSkillOrderModel(
+      { order, play: 1000, win: 550, pickRate: 0.4, priorityIds },
+      kit
+    );
     if (!m) throw new Error("fixture produced no model");
     return m;
   };
+
+  /** op.gg's live published max-priority ids for the surplus champions
+   *  (probed 2026-07-27, patch 16.14). Udyr publishes four; the others three. */
+  const IDS = { udyr: A("QEWR"), yuumi: A("QEW"), aphelios: A("QEW") };
 
   /**
    * Walk a full game for a player who follows the published order exactly,
@@ -561,7 +581,7 @@ describe("resolveNextSkill — per-champion kits", () => {
 
   // ── UDYR — no true ultimate at all ───────────────────────────────────────
   it("UDYR: his R is a fourth basic — legal at level 1 and at level 2", () => {
-    const udyr = kitModel(UDYR_15, KIT.udyr);
+    const udyr = kitModel(UDYR_15, KIT.udyr, IDS.udyr);
     // His published order ranks R at level 2. Previously `ultimate-illegal`.
     expect(udyr.order[1]).toBe("R");
     expect(resolveNextSkill({ model: udyr, level: 2, ranks: ranks(1, 0, 0, 0) })).toMatchObject({
@@ -579,7 +599,7 @@ describe("resolveNextSkill — per-champion kits", () => {
   });
 
   it("UDYR: advises at EVERY level 1-18 — the user report that reached 15 and stopped", () => {
-    const udyr = kitModel(UDYR_15, KIT.udyr);
+    const udyr = kitModel(UDYR_15, KIT.udyr, IDS.udyr);
     // THE REGRESSION THIS TEST PINS. He has 24 purchasable ranks against 18
     // points, so subtraction alone cannot say which three he skips — and this
     // used to be `completed: false`, which made the panel go permanently dark
@@ -598,7 +618,7 @@ describe("resolveNextSkill — per-champion kits", () => {
     // overlay silent when a tail genuinely could not be derived. What changed
     // is that "the source published only 15 levels" is no longer sufficient
     // reason for it. A level-16 Udyr now gets a real answer.
-    const udyr = kitModel(UDYR_15, KIT.udyr);
+    const udyr = kitModel(UDYR_15, KIT.udyr, IDS.udyr);
     expect(resolveNextSkill({ model: udyr, level: 16, ranks: ranks(6, 2, 6, 1) })).toMatchObject({
       kind: "recommend",
       ability: "W",
@@ -615,13 +635,13 @@ describe("resolveNextSkill — per-champion kits", () => {
   });
 
   it("UDYR: a seventh rank is still incoherent", () => {
-    const udyr = kitModel(UDYR_15, KIT.udyr);
+    const udyr = kitModel(UDYR_15, KIT.udyr, IDS.udyr);
     expectNone(resolveNextSkill({ model: udyr, level: 18, ranks: ranks(7, 0, 0, 0) }), "non-standard-kit");
   });
 
   // ── YUUMI / APHELIOS — real ultimate, six-rank basics ────────────────────
   it("YUUMI: Q reaches six ranks while W/E cap at five, and R stays gated at 6/11/16", () => {
-    const yuumi = kitModel(A("QEQEQRQEQERQEWW"), KIT.yuumi);
+    const yuumi = kitModel(A("QEQEQRQEQERQEWW"), KIT.yuumi, IDS.yuumi);
     const walked = walk(yuumi, KIT.yuumi, 15);
     expect(countRanks(walked as Ability[])).toEqual({ Q: 6, W: 2, E: 5, R: 2 });
     // Her ultimate is a true ultimate — no level-1 exception.
@@ -632,7 +652,7 @@ describe("resolveNextSkill — per-champion kits", () => {
   });
 
   it("APHELIOS: Q and E reach six, W caps at six too, R gated normally", () => {
-    const aphelios = kitModel(A("QQQEQREQEQEEREW"), KIT.aphelios);
+    const aphelios = kitModel(A("QQQEQREQEQEEREW"), KIT.aphelios, IDS.aphelios);
     const walked = walk(aphelios, KIT.aphelios, 15);
     expect(countRanks(walked as Ability[])).toEqual({ Q: 6, W: 1, E: 6, R: 2 });
     expectNone(resolveNextSkill({ model: aphelios, level: 18, ranks: ranks(0, 0, 0, 4) }), "non-standard-kit");

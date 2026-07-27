@@ -417,25 +417,55 @@ describe("completeSkillOrder — with the champion's OWN caps", () => {
   });
 
   it.each(SURPLUS)(
-    "%s still completes without a published priority, and says the basis was derived",
-    (name, path, key, _ids, tail) => {
-      // The fallback is not a second-class path — for these three the derived
-      // priority happens to agree with the published one. It is reported as
-      // `derived` anyway, because WHERE the answer came from is the thing a
-      // consumer needs and "it agreed this time" is not a guarantee.
+    "%s REFUSES without a published priority — a derived one is blind to R, not merely weaker",
+    (name, path, key) => {
+      // Reversed 2026-07-27, deliberately. This previously asserted that the
+      // three still complete on a derived priority, on the reasoning that "for
+      // these three the derived priority happens to agree with the published
+      // one". Agreeing is not the same as deciding: `derivePriority` sorts
+      // BASIC_ABILITIES, so R is not on the ballot at all. For a DETERMINATE
+      // kit that is harmless (subtraction already fixed the multiset); for a
+      // SURPLUS kit the spare ranks are exactly what the walk must choose
+      // between, so a blind priority fabricates the choice.
+      //
+      // The sibling test below proves the stakes: same Udyr input, published
+      // "R before W" gives RRR and the derived list gives EEE. Whenever those
+      // two can differ, "it agreed this time" is not a property we hold.
       const res = completeSkillOrder(A(path), undefined, KIT[key as keyof typeof KIT]);
-      expect(res.completed, name).toBe(true);
-      expect(res.basis, name).toBe("derived");
-      expect(res.order.slice(15).join(""), name).toBe(tail);
+      expect(res.completed, name).toBe(false);
+      expect(res.refusedBecause, name).toBe("kit-not-derivable");
+      // A refusal returns the source's 15 untouched — never a truncated or
+      // half-built order.
+      expect(res.order, name).toEqual(A(path));
+      expect(res.observedLevels, name).toBe(15);
     }
   );
+
+  it("the surplus refusal is NOT reached in production — op.gg publishes ids for all three", () => {
+    // The gate above only bites when the publication is absent or malformed.
+    // Every surplus champion's live payload carries a well-formed `ids` list
+    // (probed 2026-07-27, patch 16.14), so the user-visible behaviour is
+    // completion, not refusal. This pins that the gate is a safety net rather
+    // than a regression to the old "Skill path only published to level 15".
+    for (const [name, path, key, ids] of SURPLUS) {
+      const res = completeSkillOrder(A(path), A(ids), KIT[key as keyof typeof KIT]);
+      expect(res.completed, name).toBe(true);
+      expect(res.basis, name).toBe("published");
+    }
+  });
 
   it("prefers the PUBLISHED priority over the derived one when they disagree", () => {
     // Udyr's derived priority omits R entirely (derivePriority only ranks
     // basics), so a published list is the ONLY way R can ever receive a
     // derived point. Construct the disagreement explicitly: a synthetic Udyr
-    // path with W already maxed, where the published "R before W" is the only
-    // thing that can place the tail.
+    // path with W already maxed.
+    //
+    // A published "R before W" is now literally the only thing that can place
+    // this tail — but note WHY, because the reason changed. It is not that the
+    // derived priority runs out (it does not; it would happily place EEE). It
+    // is that gate (3c) refuses a surplus kit without a published priority, so
+    // the derived answer is never reached at all. The second half of this test
+    // pins that refusal.
     const wMaxed = A("QQQQQQWWWWWWEEE"); // Q6 W6 E3 R0
     expect(countRanks(wMaxed)).toEqual({ Q: 6, W: 6, E: 3, R: 0 });
 
@@ -447,17 +477,43 @@ describe("completeSkillOrder — with the champion's OWN caps", () => {
     // Same path, no published priority: the derived list names only basics, so
     // the three points fall to E instead. Different answer, same input — which
     // is exactly why the basis is reported rather than assumed.
+    // Same path, no published priority. The derived list names only basics, so
+    // R cannot be chosen and the tail would silently fall to E — a DIFFERENT
+    // answer from the same input. That difference is the whole argument for
+    // refusing rather than reporting: the consumer cannot tell "R lost" from
+    // "R was never considered", and only one of those is a recommendation.
     const eNext = completeSkillOrder(wMaxed, undefined, KIT.udyr);
-    expect(eNext.completed).toBe(true);
-    expect(eNext.basis).toBe("derived");
-    expect(eNext.order.slice(15).join("")).toBe("EEE");
+    expect(eNext.completed).toBe(false);
+    expect(eNext.refusedBecause).toBe("kit-not-derivable");
   });
 
-  it("falls back to derived on a MALFORMED published priority rather than half-using it", () => {
+  it("refuses a MALFORMED published priority on a surplus kit rather than half-using it", () => {
+    // Malformed is treated as ABSENT, not as partial signal — the ids are
+    // meant to be a ranking, and one that repeats or names a non-ability is a
+    // payload we do not understand. On a surplus kit "absent" now means refuse.
     for (const bad of [[], ["Q", "Q", "W"], ["Q", "X"], ["r"]] as unknown as Ability[][]) {
       const res = completeSkillOrder(UDYR_15, bad, KIT.udyr);
-      expect(res.completed, JSON.stringify(bad)).toBe(true);
-      expect(res.basis, JSON.stringify(bad)).toBe("derived");
+      expect(res.completed, JSON.stringify(bad)).toBe(false);
+      expect(res.refusedBecause, JSON.stringify(bad)).toBe("kit-not-derivable");
+    }
+  });
+
+  it("a DETERMINATE kit is unaffected by the surplus gate — derived priority still completes", () => {
+    // The gate is scoped to surplus kits on purpose. For the 170 champions
+    // whose purchasable ranks total exactly 18, subtraction fixes the multiset
+    // and the priority only ORDERS points that were forced anyway — so a
+    // missing publication costs nothing and must NOT refuse. This is the
+    // regression guard for the overwhelming majority of the roster.
+    for (const [label, path, kit] of [
+      ["standard", "WQEQQRQWQWRWWEE", STANDARD_KIT],
+      ["jayce", "QWEQQWQWQWQWWEE", KIT.jayce],
+      ["karma", "QEWQQRQEQEREEWW", KIT.karma],
+    ] as const) {
+      expect(kit.purchasableTotal, label).toBe(18);
+      const res = completeSkillOrder(A(path), undefined, kit);
+      expect(res.completed, label).toBe(true);
+      expect(res.basis, label).toBe("derived");
+      expect(res.order, label).toHaveLength(18);
     }
   });
 
@@ -661,7 +717,12 @@ describe("completeSkillOrder — the unreachable refusals, proven reachable", ()
     };
     // Q5 W5 E5 R0 — every basic maxed at level 15, spare only in R.
     const maxedBasics = A("QQQQQWWWWWEEEEE");
-    const res = completeSkillOrder(maxedBasics, undefined, narrow);
+    // The priority must be PUBLISHED and well-formed to get past the surplus
+    // gate (3c) — otherwise this input refuses as `kit-not-derivable` and
+    // never reaches the allocator, which is the thing under test. "QWE" is
+    // well-formed and names only abilities already at their cap, so the walk
+    // starts and then runs dry: exactly `priority-exhausted`.
+    const res = completeSkillOrder(maxedBasics, A("QWE"), narrow);
     expect(res.completed).toBe(false);
     expect(res.refusedBecause).toBe("priority-exhausted");
     expect(res.order).toEqual(maxedBasics);

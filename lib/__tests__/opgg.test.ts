@@ -12,9 +12,12 @@ import {
   type OpggTransport,
 } from "@/lib/opgg";
 import type { RoleId } from "@/lib/types";
+import { buildSkillOrderModel } from "@/lib/skillOrderModel";
+import { kitFromMaxRanks } from "@/lib/championKit";
 import {
   AHRI_MID_FULL,
   AHRI_MID_SLIM,
+  UDYR_JUNGLE_PROD,
   UDYR_JUNGLE,
   APHELIOS_ADC,
   KAYN_JUNGLE,
@@ -24,6 +27,9 @@ import {
   JINX_ADC,
   JAYCE_TOP,
 } from "./fixtures/opggPayloads";
+
+/** Udyr's real caps: four basics at six ranks each, no true ultimate. */
+const UDYR_KIT = kitFromMaxRanks([6, 6, 6, 6])!;
 
 describe("opggChampionName", () => {
   it("upper-snakes a camelCase Riot key", () => {
@@ -122,6 +128,39 @@ describe("parseSkillsFromAnalysis — real payloads", () => {
     expect(s.play).toBe(71667);
     expect(s.win).toBe(41408);
     expect(s.pickRate).toBe(0.57);
+  });
+
+  it("parses the FOUR-field SkillMasteries — the shape production actually receives", () => {
+    // Added 2026-07-27 after an audit found every fixture declared the FIVE-field
+    // masteries header (…,builds), which is what an UNRESTRICTED call returns.
+    // `buildSkillOrderRpc` always sends desired_output_fields, and that response
+    // declares four. So the one shape production always sees was the one shape no
+    // test covered.
+    expect(UDYR_JUNGLE_PROD).toContain("class SkillMasteries: ids,play,win,pick_rate");
+    expect(UDYR_JUNGLE_PROD).not.toContain("builds");
+
+    const s = parseSkillsFromAnalysis(UDYR_JUNGLE_PROD)!;
+    expect(s).toBeTruthy();
+    expect(s.order.join("")).toBe("QRWEQQQEQEQEEEW");
+    expect(s.play).toBe(9670);
+    expect(s.win).toBe(5927);
+    // The load-bearing assertion: the priority SURVIVES this shape. If the field
+    // set ever drifts outside MASTERIES_FIELD_SETS this goes undefined, and Udyr
+    // regresses to the user's original "only published to level 15" refusal.
+    expect(s.priorityIds).toEqual(["Q", "E", "W", "R"]);
+  });
+
+  it("the production shape carries Udyr all the way to a completed 18-level order", () => {
+    // End-to-end through the real assembler, on the real wire shape, for the
+    // champion whose bug started this. Guards the whole chain in one assertion:
+    // parse -> priorityIds -> surplus gate -> allocator.
+    const s = parseSkillsFromAnalysis(UDYR_JUNGLE_PROD)!;
+    const m = buildSkillOrderModel(s, UDYR_KIT);
+    expect(m).toBeTruthy();
+    expect(m!.completed).toBe(true);
+    expect(m!.completionBasis).toBe("published");
+    expect(m!.order.join("")).toBe("QRWEQQQEQEQEEEWWWW");
+    expect(m!.observedLevels).toBe(15);
   });
 
   it("agrees between the two field orderings — byte-different, value-identical", () => {

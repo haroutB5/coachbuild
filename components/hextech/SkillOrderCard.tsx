@@ -219,9 +219,18 @@ export default function SkillOrderCard({ champ, lane }: SkillOrderCardProps) {
           tail is a legitimate, useful answer, just not a measured one. */}
       {hasDerivedTail && (
         <p className="text-[10.5px] text-mut/70 mt-3">
-          Dashed levels are derived from this champion&apos;s
-          {model.completionBasis === "published" ? " published max order" : " levelling path"}, not
-          recorded — the source publishes levels 1–15 only.
+          {/* Three states, not two. A payload cached before `completionBasis`
+              existed carries no basis at all, and the old two-way ternary
+              silently called those "levelling path" — naming a provenance we
+              do not actually hold, which is the same fabrication the dashed
+              chips exist to prevent, just in prose. When we don't know, we say
+              only what we do know: these levels are ours, not the source's. */}
+          {model.completionBasis === "published"
+            ? "Dashed levels are derived from this champion's published max order, not recorded"
+            : model.completionBasis === "derived"
+              ? "Dashed levels are derived from this champion's levelling path, not recorded"
+              : "Dashed levels are derived, not recorded"}
+          {" — the source publishes levels 1–15 only."}
         </p>
       )}
 

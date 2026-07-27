@@ -1,6 +1,6 @@
 {
   "name": "coachbuild-overlay-host",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Always-on-top Electron overlay host for CoachBuild's League of Legends skill-order reference. Replaces the Overwolf app (blocked by Overwolf's developer-whitelist/ads-integration requirement) -- see HANDOFF-engy.md's 2026-07-27 PIVOT entry. Independent of the Next.js app: its own package.json/node_modules on purpose, not part of the Next build.",
   "main": "main.js",
