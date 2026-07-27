@@ -57,6 +57,8 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, globalShortcut, ipcMain, screen, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const { spawn, spawnSync } = require('child_process');
 
 const { fetchActivePlayer, fetchPlayerList } = require('./lib/liveClientHttp.js');
 const { loadLane, saveLane, VALID_LANES } = require('./lib/laneSettings.js');
@@ -135,6 +137,37 @@ const IDLE_POLL_MS = 5000;
 const ACTIVE_POLL_MS = 1500;
 const PLAYERLIST_POLL_MS = 4000;
 
+// ---------------------------------------------------------------------------
+// Companion supervision (2026-07-27, "one app" round). This app becomes the
+// single visible surface and supervises public/companion.ps1 -- the LCU
+// bridge that actually writes runes/item sets to the user's real account --
+// as a hidden headless child. NONE of that writing logic is ported here; see
+// CLAUDE.md's "Companion integration" section and the Hard Rules before
+// touching anything companion-adjacent.
+// ---------------------------------------------------------------------------
+
+// Must match companion.ps1's $script:Config.AppOrigin EXACTLY -- the bridge's
+// CORS check is `$origin -ne $Sync.AppOrigin` (see companion.ps1's
+// BridgeServer worker), so a request with no Origin header (Node's http
+// module doesn't send one by default) or a mismatched one gets a flat 403
+// 'bad-origin'. This constant exists so this file's poll requests pass that
+// check the same way a real browser tab would.
+const COMPANION_APP_ORIGIN = 'https://coachbuild.vercel.app';
+// Mirrors companion.ps1's $script:Config.BridgePorts -- first free port of
+// these three is where the bridge actually ends up listening.
+const COMPANION_BRIDGE_PORTS = [48291, 48292, 48293];
+const COMPANION_STATUS_POLL_MS = 3000;
+// Exponential-ish backoff for an unexpected child exit, capped at 60s -- NOT
+// used for the "another copy is already running" case (mutex race), which is
+// a distinct state that does not auto-retry at all (see spawnCompanion()).
+const COMPANION_RESTART_BACKOFF_MS = [2000, 5000, 15000, 30000, 60000];
+// A child that exits THIS fast after spawn didn't crash mid-run -- it lost
+// Test-SingleInstance's mutex race to another already-running copy (most
+// likely the OLD .vbs autostart, if the user hasn't rebooted since this app
+// removed it -- see removeLegacyVbsAutostartOnce()). Surfaced distinctly in
+// the tray rather than silently retried forever.
+const COMPANION_MUTEX_RACE_EXIT_MS = 5000;
+
 // TOP/JUNGLE/MID/BOT/SUPPORT with the exact labels the tray menu shows.
 // Mirrors js/skillOrderData.js's LANE_TO_ROLE_ID key order/spelling -- kept as
 // a small literal here rather than importing that ESM module into this
@@ -195,6 +228,18 @@ let positionLoggedThisGame = false; // logs the raw detected `position` ONCE per
 
 let pollTimer = null;
 let playerListTimer = null;
+
+// Companion child-process supervision state (see the constants block above).
+let companionChild = null;
+let companionQuitting = false; // set true in will-quit -- suppresses the exit handler's auto-restart
+let companionStartedAt = 0;
+let companionRestartAttempts = 0;
+let companionRestartTimer = null;
+let companionRestartPendingAfterGame = false; // set when a restart was due but deferred because inGame was true
+let companionStatusPollTimer = null;
+let companionKnownPort = null; // last port /status answered on, tried first next poll
+// phase: 'starting' | 'ok' | 'already-running' | 'restarting' | 'restart-deferred' | 'unreachable' | 'error' | 'not-found'
+let companionStatus = { phase: 'starting', clientConnected: null, lastPollAt: null, lastPollAtAdvancing: null, message: null };
 
 // Calibration -- geometry itself is loaded inside app.whenReady() (it needs
 // `screen.getPrimaryDisplay()`, which Electron does not allow calling before
@@ -649,6 +694,7 @@ async function pollActivePlayer() {
       // check (which could be hours away). Safe no-op if no update is
       // pending. See lib/autoUpdater.js's header for the full rule.
       autoUpdaterModule.notifyGameEnded();
+      notifyGameEndedForCompanion();
       // `lane` (the manual override) and `calibration` (which itself now
       // carries `showTable` nested inside it -- see buildCalibrationPayload)
       // deliberately survive a game exit -- they're user preferences /
@@ -726,6 +772,385 @@ async function resolveChampionNameNow(riotId) {
     // Expected transiently (endpoint not fully up yet at the very start of a
     // match) — never surfaced to the user, just retried on the next tick.
     log('playerlist fetch not ready yet:', err.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Companion supervision — spawns public/companion.ps1 as a hidden headless
+// child (`-NoTray`, see that script's param block) and keeps it running.
+//
+// This file NEVER speaks the LCU/rune/item-set protocol itself -- it only
+// starts the process, watches whether it exits, and polls its OWN `/status`
+// endpoint (the same wire contract components/live/companionClient.ts uses)
+// to show a status row in this app's tray. See CLAUDE.md's Hard Rules before
+// touching anything about WHAT the companion does once it's running.
+// ---------------------------------------------------------------------------
+
+// Resolves to the bundled script both in dev (npm start, reads straight from
+// the sibling public/ dir in this monorepo checkout) and packaged (an
+// extraResources copy placed at process.resourcesPath/companion.ps1 -- see
+// package.json's build.extraResources). Deliberately NOT `files`+asarUnpack:
+// extraResources never enters app.asar in the first place, which sidesteps
+// the "a .ps1 cannot run from inside an asar" problem entirely rather than
+// working around it after the fact. Verified by running the packaged exe --
+// see the HANDOFF entry for the confirmed on-disk resources-dir listing.
+function getCompanionScriptPath() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'companion.ps1');
+  }
+  return path.join(__dirname, '..', 'public', 'companion.ps1');
+}
+
+function setCompanionStatus(patch) {
+  companionStatus = { ...companionStatus, ...patch };
+  rebuildTrayMenu();
+}
+
+function spawnCompanion() {
+  const scriptPath = getCompanionScriptPath();
+  if (!fs.existsSync(scriptPath)) {
+    warn(`companion script not found at ${scriptPath} -- cannot supervise it`);
+    setCompanionStatus({ phase: 'not-found', clientConnected: null, lastPollAt: null, lastPollAtAdvancing: null, message: 'companion.ps1 not found in this build' });
+    return;
+  }
+
+  companionStartedAt = Date.now();
+  log(`companion: spawning powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}" -NoTray`);
+  setCompanionStatus({ phase: 'starting', clientConnected: null, lastPollAt: null, lastPollAtAdvancing: null, message: null });
+  companionKnownPort = null;
+
+  // stdio: 'ignore', deliberately -- a PowerShell child that fills an unread
+  // stdout pipe BLOCKS (a real hazard for a long-running always-on process
+  // whose parent never reads it). The alternative considered was tee-ing
+  // stdout into this file's own log()/warn() -- rejected because
+  // companion.ps1 already has its OWN independent file logger
+  // (%LOCALAPPDATA%\CoachBuild\companion.log, unaffected by -NoTray) that
+  // captures every phase transition / apply result / internal error, so
+  // piping stdout here would be redundant diagnostics with a real blocking
+  // risk attached, for no signal this app doesn't already get some other way
+  // (the /status poll below, or that log file directly).
+  companionChild = spawn(
+    'powershell.exe',
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-NoTray'],
+    { stdio: 'ignore', windowsHide: true }
+  );
+
+  companionChild.on('error', (err) => {
+    warn('companion: failed to spawn child process:', err.message);
+    companionChild = null;
+    setCompanionStatus({ phase: 'error', clientConnected: null, lastPollAt: null, lastPollAtAdvancing: null, message: err.message });
+  });
+
+  companionChild.on('exit', (code, signal) => {
+    const ranMs = Date.now() - companionStartedAt;
+    log(`companion: child exited (code=${code}, signal=${signal}) after ${ranMs}ms`);
+    companionChild = null;
+    stopCompanionStatusPolling();
+    if (companionQuitting) return; // app is shutting down -- do not restart
+
+    if (ranMs < COMPANION_MUTEX_RACE_EXIT_MS) {
+      // MUTEX-RACE CASE, distinct from a crash: Test-SingleInstance inside
+      // companion.ps1 lost the 'Local\CoachBuildCompanion' mutex to another
+      // already-running copy (most likely the old .vbs autostart, if the
+      // user hasn't rebooted since install/first-run removed it -- see
+      // removeLegacyVbsAutostartOnce()) and exited immediately by design.
+      // Surfaced as its own tray state, NOT silently retried forever.
+      warn('companion: exited within ' + COMPANION_MUTEX_RACE_EXIT_MS + 'ms of spawn -- likely another copy is already running (mutex race), not auto-retrying');
+      setCompanionStatus({ phase: 'already-running', clientConnected: null, lastPollAt: null, lastPollAtAdvancing: null, message: 'Companion: another copy is already running' });
+      return;
+    }
+
+    scheduleCompanionRestart();
+  });
+
+  companionRestartAttempts = 0; // a fresh spawn attempt -- backoff counter only grows on repeated failures from here
+  startCompanionStatusPolling();
+}
+
+function scheduleCompanionRestart() {
+  clearTimeout(companionRestartTimer);
+  const delay = COMPANION_RESTART_BACKOFF_MS[Math.min(companionRestartAttempts, COMPANION_RESTART_BACKOFF_MS.length - 1)];
+  companionRestartAttempts++;
+  log(`companion: scheduling restart in ${delay}ms (attempt ${companionRestartAttempts})`);
+  setCompanionStatus({ phase: 'restarting', clientConnected: null, lastPollAt: null, lastPollAtAdvancing: null, message: `Companion: restarting in ${Math.round(delay / 1000)}s…` });
+  companionRestartTimer = setTimeout(attemptCompanionRestart, delay);
+}
+
+// The actual restart attempt, gated on `inGame`. NEVER restart the LCU
+// writer mid-match -- same class of mistake as installing an update
+// mid-match (see lib/autoUpdater.js's header), and for the same reason: this
+// process is what applies runes/item sets, and killing/relaunching it while
+// a game (and therefore possibly champ-select-adjacent activity) is live
+// risks a torn write. If deferred, notifyGameEndedForCompanion() (wired into
+// pollActivePlayer's game-ended branch, alongside autoUpdaterModule's own
+// notifyGameEnded()) retries immediately once `inGame` flips back to false,
+// rather than waiting out the rest of the backoff delay.
+function attemptCompanionRestart() {
+  if (inGame) {
+    log('companion: restart due, but a game is in progress -- deferring until it ends');
+    companionRestartPendingAfterGame = true;
+    setCompanionStatus({ phase: 'restart-deferred', clientConnected: null, lastPollAt: null, lastPollAtAdvancing: null, message: 'Companion: restart deferred (game in progress)' });
+    return;
+  }
+  spawnCompanion();
+}
+
+function notifyGameEndedForCompanion() {
+  if (!companionRestartPendingAfterGame) return;
+  companionRestartPendingAfterGame = false;
+  log('companion: game ended -- retrying the deferred restart now');
+  spawnCompanion();
+}
+
+function killCompanionChild() {
+  companionQuitting = true;
+  stopCompanionStatusPolling();
+  clearTimeout(companionRestartTimer);
+  if (!companionChild || companionChild.exitCode !== null) return;
+  const pid = companionChild.pid;
+  log(`companion: killing child process (pid ${pid}) on quit`);
+  // taskkill /T /F rather than child.kill(): powershell.exe -File spawns no
+  // children of its own in this codepath, but /T is cheap insurance against
+  // ever leaving an orphan behind -- an orphaned companion.ps1 process holds
+  // the Local\CoachBuildCompanion mutex, and the NEXT launch (of either this
+  // app's supervised child, or a manually-run companion) would silently lose
+  // the mutex race and exit immediately (the "already-running" state above),
+  // for no reason the user could see. Verified on this machine: see the
+  // HANDOFF entry for the Get-Process check confirming no orphan survives.
+  const result = spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
+  if (result.error) {
+    warn('companion: taskkill failed, falling back to child.kill():', result.error.message);
+    try {
+      companionChild.kill();
+    } catch (err) {
+      warn('companion: child.kill() also failed:', err.message);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Companion status polling — GET /status on loopback, the SAME wire contract
+// components/live/companionClient.ts uses. Read-only: this file never calls
+// any endpoint that writes runes/item sets/anything else to the LCU.
+// ---------------------------------------------------------------------------
+
+function getCompanionSessionToken() {
+  // Get-OrCreateSessionToken (companion.ps1) persists here -- read it, never
+  // invent a second token. Missing (companion hasn't written it yet, e.g.
+  // during the first second after spawn) is expected and handled by the
+  // caller, not an error.
+  try {
+    const tokenPath = path.join(process.env.LOCALAPPDATA, 'CoachBuild', 'companion-session.txt');
+    const token = fs.readFileSync(tokenPath, 'utf8').trim();
+    return token || null;
+  } catch {
+    return null;
+  }
+}
+
+function fetchCompanionStatusOnce(port, token) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port,
+        path: `/status?session=${encodeURIComponent(token)}`,
+        method: 'GET',
+        // REQUIRED: companion.ps1's bridge does exact-Origin CORS on every
+        // request (`$origin -ne $Sync.AppOrigin` -> 403 'bad-origin'), and
+        // Node's http module sends no Origin header at all by default -- so
+        // without this header every poll from this process would 403.
+        headers: { Origin: COMPANION_APP_ORIGIN },
+        timeout: 2000,
+      },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => {
+          if (res.statusCode !== 200) {
+            reject(new Error(`status ${res.statusCode}`));
+            return;
+          }
+          try {
+            resolve(JSON.parse(body));
+          } catch (err) {
+            reject(err);
+          }
+        });
+      }
+    );
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.end();
+  });
+}
+
+async function pollCompanionStatusOnce() {
+  const token = getCompanionSessionToken();
+  if (!token) {
+    // Expected transiently right after spawn -- Get-OrCreateSessionToken
+    // runs early in Start-Companion, but there's a real window before the
+    // file exists. Not an error state; the next poll tick resolves it.
+    setCompanionStatus({ clientConnected: null, lastPollAt: null, lastPollAtAdvancing: null });
+    return;
+  }
+
+  const ports = companionKnownPort
+    ? [companionKnownPort, ...COMPANION_BRIDGE_PORTS.filter((p) => p !== companionKnownPort)]
+    : COMPANION_BRIDGE_PORTS;
+
+  for (const port of ports) {
+    try {
+      const data = await fetchCompanionStatusOnce(port, token);
+      companionKnownPort = port;
+      const prevLastPollAt = companionStatus.lastPollAt;
+      // THE DOCUMENTED DEAD-LOOP SIGNAL: lastPollAt not advancing across two
+      // reads means the real gameflow-poll loop inside the companion has
+      // stopped ticking even though the process and its HTTP bridge are both
+      // still alive -- the exact blind spot companion.ps1's own -HarnessTest
+      // exists to catch at build time (see that script's header). This is
+      // the runtime equivalent, surfaced live in the tray.
+      const advancing =
+        prevLastPollAt && data.lastPollAt ? new Date(data.lastPollAt).getTime() > new Date(prevLastPollAt).getTime() : null;
+      setCompanionStatus({
+        phase: data.phase || 'Unknown',
+        clientConnected: !!data.clientConnected,
+        lastPollAt: data.lastPollAt || null,
+        lastPollAtAdvancing: advancing,
+        message: null,
+      });
+      companionRestartAttempts = 0; // a real successful status poll is proof of health -- reset the backoff counter
+      return;
+    } catch {
+      // try the next candidate port
+    }
+  }
+
+  // No configured port answered -- the child may still be starting up (the
+  // bridge server takes a beat to bind), or it exited between spawn and this
+  // tick (the 'exit' handler above will already be handling that case).
+  setCompanionStatus({ clientConnected: null, lastPollAt: null, lastPollAtAdvancing: null });
+}
+
+function startCompanionStatusPolling() {
+  stopCompanionStatusPolling();
+  companionStatusPollTimer = setInterval(pollCompanionStatusOnce, COMPANION_STATUS_POLL_MS);
+  pollCompanionStatusOnce();
+}
+
+function stopCompanionStatusPolling() {
+  if (companionStatusPollTimer) {
+    clearInterval(companionStatusPollTimer);
+    companionStatusPollTimer = null;
+  }
+}
+
+function buildCompanionStatusLabel() {
+  switch (companionStatus.phase) {
+    case 'not-found':
+      return `Companion: ${companionStatus.message || 'script not found'}`;
+    case 'already-running':
+      return 'Companion: another copy is already running';
+    case 'restarting':
+    case 'restart-deferred':
+      return companionStatus.message || 'Companion: restarting…';
+    case 'error':
+      return `Companion: error (${companionStatus.message || 'see log file'})`;
+    case 'starting':
+      return 'Companion: starting…';
+    default: {
+      if (!companionStatus.lastPollAt) {
+        return 'Companion: unreachable (bridge not responding yet)';
+      }
+      const connected = companionStatus.clientConnected ? 'client connected' : 'client not connected';
+      return `Companion: ${companionStatus.phase} — ${connected}`;
+    }
+  }
+}
+
+// Separate, more alarming row shown ONLY while genuinely stalled -- per the
+// brief, "lastPollAt not advancing across two reads is the single most
+// useful thing to show." Kept as its own row rather than folded into the
+// summary line above so it doesn't get lost among routine phase text.
+function buildCompanionPollHealthLabel() {
+  if (companionStatus.lastPollAtAdvancing === false) {
+    return 'Companion: POLL STALLED — lastPollAt is not advancing';
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy autostart cleanup + this app's own autostart registration.
+//
+// requestedExecutionLevel: requireAdministrator was REMOVED from
+// package.json's build.win config this round -- it was added chasing a
+// hotkey-vs-Vanguard theory that root-caused elsewhere (F12 is permanently
+// reserved by Windows, see HOTKEY_TOGGLE_ADJUST's header), and an elevated
+// app cannot be silently autostarted (UAC prompts at every sign-in), which is
+// strictly worse than the companion's previous silent .vbs. See
+// HANDOFF-engy.md for the full reasoning; this is not the file to re-litigate
+// it in.
+// ---------------------------------------------------------------------------
+
+// Runs the companion's OWN -Uninstall path (removes
+// %APPDATA%\...\Startup\CoachBuildCompanion.lnk/.vbs, nothing else -- no
+// account-writing logic involved) rather than deleting files by hand here.
+// Gated to run once (a settings-file flag) since it's a real (cheap)
+// subprocess spawn -- idempotent either way (Uninstall-Companion no-ops with
+// "No startup entry found" on a second run), but there's no reason to pay
+// that cost on every single launch.
+function removeLegacyVbsAutostartOnce() {
+  // GATED TO PACKAGED ONLY (found the hard way, this round): this deletes a
+  // REAL file in the REAL Windows Startup folder -- %APPDATA%\...\Startup\
+  // CoachBuildCompanion.vbs is not sandboxed per-app, it's the one real
+  // machine-wide autostart entry. Running this unconditionally during `npm
+  // start` on a dev machine that ALSO has a real companion install (this one
+  // does) deletes that machine's real autostart entry as a side effect of
+  // testing, which is what happened during this round's manual verification
+  // (see HANDOFF-engy.md) -- restored by hand afterward, but it should never
+  // have been at risk. Only the packaged app -- which is the thing actually
+  // taking over autostart duty via configureAutostart() below -- gets to
+  // retire the old mechanism it's replacing.
+  if (!app.isPackaged) return;
+  if (readSettingsFile(userDataDir).legacyVbsAutostartRemoved === true) return;
+  const scriptPath = getCompanionScriptPath();
+  if (!fs.existsSync(scriptPath)) {
+    warn('companion: cannot run -Uninstall to clear the old .vbs autostart -- script not found at', scriptPath);
+    return;
+  }
+  log('companion: running -Uninstall once to remove the old silent .vbs autostart (this app now owns autostart)');
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-Uninstall'], {
+    windowsHide: true,
+    encoding: 'utf8',
+  });
+  if (result.error) {
+    warn('companion: -Uninstall spawn failed:', result.error.message);
+    return;
+  }
+  log('companion: -Uninstall output:', (result.stdout || '').trim() || '(no output)');
+  writeSettingsPatch(userDataDir, { legacyVbsAutostartRemoved: true });
+}
+
+// This app now owns autostart (replacing the companion's own .vbs, removed
+// above). openAsHidden is a macOS-only concept for Electron login items --
+// on Windows there is no separate "start hidden" flag to pass, but none is
+// needed here: the overlay window is transparent/click-through/skipTaskbar
+// by construction (see createWindow()) and the tray icon appearing is the
+// intended always-visible control surface, not a "flash" of UI.
+function configureAutostart() {
+  if (!app.isPackaged) {
+    log('autostart: skipping app.setLoginItemSettings in dev (unpackaged) -- only meaningful for an installed app');
+    return;
+  }
+  try {
+    app.setLoginItemSettings({ openAtLogin: true, path: process.execPath });
+    const settings = app.getLoginItemSettings();
+    log(`autostart: openAtLogin=${settings.openAtLogin}`);
+  } catch (err) {
+    warn('autostart: setLoginItemSettings failed:', err.message);
   }
 }
 
@@ -1088,6 +1513,14 @@ function buildTrayMenuTemplate() {
       click: () => enterCalibration(),
     },
     { type: 'separator' },
+    // Companion supervision status (2026-07-27, "one app" round) -- see the
+    // "Companion supervision" section above. Non-clickable, same pattern as
+    // the hotkey/elevation/updater rows below: a fact reported live, not a
+    // guess. The second row only appears while genuinely stalled (see
+    // buildCompanionPollHealthLabel()'s header for why it's split out).
+    { label: buildCompanionStatusLabel(), enabled: false },
+    ...(buildCompanionPollHealthLabel() ? [{ label: buildCompanionPollHealthLabel(), enabled: false }] : []),
+    { type: 'separator' },
     // Non-clickable status rows (2026-07-27 round 8, REWORKED round 9) -- a
     // log line in a terminal the user isn't looking at mid-match is not
     // communication, and a packaged app has no console/log-file-in-view at
@@ -1219,6 +1652,15 @@ if (!gotSingleInstanceLock) {
     registerHotkeys();
     schedulePoll();
 
+    // Companion supervision (2026-07-27, "one app" round) -- see the
+    // "Companion supervision" / "Legacy autostart cleanup" sections above.
+    // Order matters: remove the OLD silent .vbs autostart before registering
+    // THIS app's own, so a machine that hasn't rebooted yet never has both
+    // racing for the mutex at the next sign-in.
+    removeLegacyVbsAutostartOnce();
+    configureAutostart();
+    spawnCompanion();
+
     // Seamless auto-update (2026-07-27) -- see lib/autoUpdater.js's header
     // for the full "never interrupt a game" contract. `onStatusChange` wired
     // to rebuildTrayMenu() so the tray's status row (see
@@ -1270,6 +1712,7 @@ if (!gotSingleInstanceLock) {
     clearTimeout(pollTimer);
     stopPlayerListPolling();
     autoUpdaterModule.shutdown();
+    killCompanionChild();
     if (tray && !tray.isDestroyed()) tray.destroy();
     if (calibrationWindow && !calibrationWindow.isDestroyed()) calibrationWindow.close();
     if (logStream) {

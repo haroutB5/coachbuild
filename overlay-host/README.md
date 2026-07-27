@@ -78,6 +78,54 @@ Check League's video settings before testing: **Settings → Video → Display M
 - The Riot disclaimer is rendered in the overlay's footer once a skill order is
   showing (ported from the Overwolf build's `ingame.js`/`ingame.css`, unchanged).
 
+## Companion supervision — "one app" (2026-07-27)
+
+The user has TWO desktop things: this overlay (skill-order/highlight box,
+talks directly to Riot's Live Client Data API, no companion needed) and
+`public/companion.ps1` (a separate PowerShell tray app -- the LCU bridge:
+champ-select follow, rune apply, item-set apply). They play on a separate
+gaming desktop and want ONE app, ONE tray icon, ONE thing to quit.
+
+**This app is now the single visible surface and supervises companion.ps1 as
+a hidden child process.** `main.js` spawns it on `app.whenReady()` via
+`powershell.exe -NoProfile -ExecutionPolicy Bypass -File <bundled
+companion.ps1> -NoTray` (`-NoTray` is companion.ps1 v1.9.0+ -- suppresses its
+own NotifyIcon/menu and runs indefinitely, unlike the pre-existing
+`-DebugRunSeconds` test seam which auto-exits). Kills it (`taskkill /T /F`)
+on `will-quit`. Restarts it with backoff on an unexpected exit, but NEVER
+while `inGame` is true (same rule as the auto-updater's install gate --
+see `lib/autoUpdater.js`). Polls the child's own `GET /status` on loopback
+(same wire contract `components/live/companionClient.ts` uses) and surfaces
+`phase`/`clientConnected`/whether `lastPollAt` is advancing as tray rows.
+
+**What this app does NOT do**: it never ports or re-implements any of
+companion.ps1's rune/item-set-writing logic (`Invoke-ApplyRunes`,
+`Invoke-ApplyItemSets`, `Merge-ItemSets`, etc.) -- that code writes to the
+user's real League account, and a prior TypeScript port of its rules was
+found to contain six divergences (two destructive) while passing 31 green
+tests. This file only starts/stops/watches the process and reads its status
+endpoint; the companion script itself is untouched except for the minimal
+`-NoTray` param addition.
+
+**The script is bundled, not fetched.** `companion.ps1` ships inside the
+installer via `package.json`'s `build.extraResources` (copied from
+`../public/companion.ps1` to `resources/companion.ps1` in the packaged app --
+main.js resolves it via `process.resourcesPath` when `app.isPackaged`, or
+straight from the sibling `public/` dir in a dev checkout otherwise).
+Deliberately `extraResources`, not `files`+`asarUnpack`: `extraResources`
+never enters `app.asar` in the first place, so there's no "can a .ps1 run
+from inside an asar" question to answer -- verified by building and running
+the real packaged exe (see HANDOFF-engy.md).
+
+**Autostart moved from companion.ps1's silent `.vbs` to this app.** This app
+now registers itself via `app.setLoginItemSettings({ openAtLogin: true })`
+(packaged builds only) and removes the old
+`%APPDATA%\...\Startup\CoachBuildCompanion.vbs` once, by shelling out to
+companion.ps1's own `-Uninstall` (never hand-deletes files). This is why
+`requestedExecutionLevel: requireAdministrator` had to go -- see the
+"Install on another PC" section below; an elevated app cannot be silently
+autostarted.
+
 ## COMPLIANCE — read this before touching main.js's calibration code
 
 `main.js` computes and pushes ONLY geometry (WHERE the four ability boxes sit). It
@@ -412,11 +460,24 @@ bundled inside).
 design. There is no remote/network mode and there never will be one; running the
 overlay on one PC cannot show data for a game running on a different PC.
 
-**The packaged app always launches elevated (Administrator).** This is
-intentional and is the primary reason this app is packaged at all — see the exe's
-embedded manifest (`requestedExecutionLevel: requireAdministrator` in
-`package.json`'s `build.win` config). Every launch triggers a UAC prompt; this is
-expected, not a bug or malware warning.
+**REMOVED 2026-07-27 ("one app" round): the packaged app no longer launches
+elevated.** It used to (`requestedExecutionLevel: requireAdministrator`),
+added chasing a hotkey-vs-Vanguard theory that turned out NOT to be the cause
+of the bug it was chasing (root cause was F12 being permanently reserved by
+Windows, see `HOTKEY_TOGGLE_ADJUST`'s header in `main.js`) and was never
+verified to fix anything. It was actively wrong for this round's goal: this
+app now supervises `public/companion.ps1` as a hidden child and registers
+itself for silent autostart (`app.setLoginItemSettings`) so the user has one
+app to run instead of two — and an elevated app CANNOT be silently
+autostarted, it UAC-prompts at every sign-in. The manifest is now
+`asInvoker`. **Gotcha found while shipping this**: `package.json`'s
+`build.win.requestedExecutionLevel` alone does NOT control the real built
+exe's manifest — `signAndEditExecutable: false` means electron-builder never
+runs its own manifest step at all, so the ONLY place that actually stamps the
+manifest is `scripts/apply-exe-resources.js`'s `--set-requested-execution-level`
+rcedit flag. Verify any future change to this with `findstr
+requestedExecutionLevel "dist\win-unpacked\CoachBuild Overlay.exe"` against
+the REAL built exe, not by reading package.json.
 
 **SmartScreen will warn on first run** — the exe is genuinely unsigned (no code
 signing certificate; this is a personal, single-user tool, not a distributed
@@ -425,14 +486,22 @@ sign anything is broken: click **"More info"**, then **"Run anyway"**. This only
 happens once per machine per exe (SmartScreen remembers after the first
 approval).
 
-**Settings do NOT carry over from a dev-machine test run.** `app.getPath('userData')`
-keys off the app's `productName`/`appId` (`CoachBuild Overlay` /
-`com.coachbuild.overlay`), which differs from running unpackaged via `npm start`
-(which uses the Electron dev default, `Electron`). This means lane override and
-ability-bar calibration will be UNSET the first time the packaged app runs on the
-gaming PC — expected, not a bug. Just recalibrate once (tray → "Adjust overlay
-position" or "Calibrate ability bar…") and it persists from then on, same as any
-other run.
+**"Settings do NOT carry over from a dev-machine test run" -- CORRECTED
+2026-07-27, this was wrong.** This used to claim `app.getPath('userData')` keys
+off `productName`/`appId`, differing between `npm start` and a packaged run.
+Measured directly this round (see HANDOFF-engy.md): neither `main.js` nor
+`package.json` ever calls `app.setName()`, and Electron's default `userData`
+folder comes from `app.name`, which defaults to package.json's `name` field
+(`coachbuild-overlay-host`) -- NOT `productName`. Running both unpackaged
+(`npm start`) and the real packaged exe on the SAME machine produced the
+IDENTICAL log line `log file: ...\Roaming\coachbuild-overlay-host\...`. So on
+a machine that has run BOTH a dev build and the packaged build, lane
+override/calibration/companion-cleanup-flag settings DO carry over between
+them -- they are not actually isolated. This has no known negative
+consequence (harmless to inherit a dev-tested lane/calibration value) but the
+old claim was backwards; don't repeat it. On a gaming PC that has only ever
+run the packaged exe, first-run behavior is unaffected either way (no prior
+settings file exists there regardless).
 
 ### Why packaging needs a workaround (read if `npm run dist` ever breaks)
 

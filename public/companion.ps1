@@ -299,12 +299,18 @@ param(
     # drives the champ-select logic directly; -SelfTest only exercises the
     # bridge; neither ever ran Start-Companion's real loop until now).
     [int]$DebugRunSeconds = 0,
-    [switch]$HarnessTest
+    [switch]$HarnessTest,
+    # v1.9.0 -- suppresses the tray/NotifyIcon and runs indefinitely (unlike
+    # -DebugRunSeconds, which is a fixed-duration test seam that auto-exits).
+    # This is the route the Electron overlay-host supervisor uses to run this
+    # script as a hidden child process: same tick loop, same bridge server,
+    # just no NotifyIcon/menu because the Electron tray is the visible one.
+    [switch]$NoTray
 )
 
 #region Config
 $script:Config = @{
-    Version     = '1.8.0'
+    Version     = '1.9.0'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -3974,6 +3980,8 @@ if ($SelfTest) {
     Uninstall-Companion
 } elseif ($DebugRunSeconds -gt 0) {
     Start-Companion -RunSeconds $DebugRunSeconds -SuppressTray
+} elseif ($NoTray) {
+    Start-Companion -SuppressTray:$NoTray
 } else {
     Start-Companion
 }

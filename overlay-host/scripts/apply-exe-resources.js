@@ -56,6 +56,17 @@ const { execFileSync } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 const WIN_UNPACKED_EXE = path.join(ROOT, 'dist', 'win-unpacked', 'CoachBuild Overlay.exe');
 const ICON_PATH = path.join(ROOT, 'assets', 'icon.ico');
+
+/** Windows version resources are a 4-part numeric tuple; package.json's semver
+ *  is 3 parts, so pad. Anything non-numeric (a `-beta` suffix) is stripped —
+ *  rcedit rejects a non-numeric component outright, and failing the whole build
+ *  over a prerelease tag would be a worse outcome than dropping it. */
+const EXE_VERSION = (() => {
+  const semver = String(require(path.join(ROOT, 'package.json')).version || '0.0.0');
+  const parts = semver.split('.').map((p) => parseInt(p, 10)).filter((n) => Number.isFinite(n));
+  while (parts.length < 4) parts.push(0);
+  return parts.slice(0, 4).join('.');
+})();
 const SEVEN_ZA = path.join(ROOT, 'node_modules', '7zip-bin', 'win', 'x64', '7za.exe');
 
 // Same public archive + version electron-builder's own codeSign/windowsSignToolManager.js
@@ -147,14 +158,29 @@ async function main() {
     '--set-version-string', 'LegalCopyright', 'Personal use',
     '--set-version-string', 'InternalName', 'CoachBuild Overlay',
     '--set-version-string', 'OriginalFilename', 'CoachBuild Overlay.exe',
-    '--set-file-version', '0.1.0.0',
-    '--set-product-version', '0.1.0.0',
+    // Read from package.json, NOT hardcoded. These were pinned at '0.1.0.0'
+    // and stayed there when the app moved to 0.2.0 -- a hardcoded version in
+    // the one step that stamps the exe is a value that can only ever drift,
+    // and it drifts SILENTLY: nothing fails, the exe just misreports itself in
+    // its properties dialog and in any crash report keyed on file version.
+    // (It does not affect auto-update, which compares package.json/latest.yml.)
+    '--set-file-version', EXE_VERSION,
+    '--set-product-version', EXE_VERSION,
     '--set-icon', ICON_PATH,
-    // The whole reason this app is packaged as an installer in the first
-    // place -- see README's "Hotkeys and bind status" / main.js's
-    // HOTKEY_TOGGLE_ADJUST header for why this must never regress to
-    // "asInvoker" silently.
-    '--set-requested-execution-level', 'requireAdministrator',
+    // CHANGED 2026-07-27 ("one app" round) from 'requireAdministrator' to
+    // 'asInvoker'. This is the ACTUAL stamping step for the built exe --
+    // package.json's build.win.requestedExecutionLevel does nothing here,
+    // because signAndEditExecutable:false means electron-builder never runs
+    // its own manifest step at all; THIS rcedit call is the only place the
+    // manifest gets set (found by building and checking the real exe with
+    // findstr, exactly as instructed -- the package.json edit alone silently
+    // did not take effect the first time). requireAdministrator was added
+    // chasing a hotkey-vs-Vanguard theory that root-caused elsewhere (F12 is
+    // permanently reserved by Windows, see main.js's HOTKEY_TOGGLE_ADJUST
+    // header) and is strictly worse for autostart: an elevated app cannot be
+    // silently autostarted, it UAC-prompts at every sign-in. See
+    // HANDOFF-engy.md for the full reasoning.
+    '--set-requested-execution-level', 'asInvoker',
   ];
 
   log(`applying resources to ${WIN_UNPACKED_EXE}`);

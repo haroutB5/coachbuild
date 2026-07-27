@@ -36,6 +36,12 @@
       "package.json",
       "!vendor/_selfTest-highlight.mjs"
     ],
+    "extraResources": [
+      {
+        "from": "../public/companion.ps1",
+        "to": "companion.ps1"
+      }
+    ],
     "publish": [
       {
         "provider": "github",
@@ -60,7 +66,6 @@
         }
       ],
       "icon": "assets/icon.ico",
-      "requestedExecutionLevel": "requireAdministrator",
       "signAndEditExecutable": false
     },
     "nsis": {
