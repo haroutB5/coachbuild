@@ -186,6 +186,62 @@ async function main() {
   log(`applying resources to ${WIN_UNPACKED_EXE}`);
   execFileSync(rcedit, args, { stdio: 'inherit' });
   log('done -- verify with: findstr /c:"requireAdministrator" "' + WIN_UNPACKED_EXE + '" (or see README)');
+
+  writeAppUpdateYml();
+}
+
+/**
+ * Write `resources/app-update.yml` — the file electron-updater reads at runtime
+ * to learn WHERE to check for updates.
+ *
+ * WHY THIS IS HERE AND NOT ELECTRON-BUILDER'S JOB
+ * -----------------------------------------------
+ * Normally it IS electron-builder's job: it emits this during its packaging
+ * step. But this project cannot use that step (see the long comment at the top
+ * of this file), and packages via `--prepackaged` against an already-built
+ * directory — which electron-builder does not inject into. So the file was
+ * simply never produced, and the shipped app failed at runtime with:
+ *
+ *   Update: check failed (ENOENT: no such file or directory,
+ *                         open '...\resources\app-update.yml')
+ *
+ * Caught only because the tray surfaces updater errors. With the error confined
+ * to a log file nobody opens, this would have looked exactly like "auto-update
+ * silently does nothing" — the failure mode the whole feature exists to avoid,
+ * and one that would have been indistinguishable from "no update available".
+ *
+ * Derived from package.json's `build.publish` so it can never disagree with
+ * where the release was actually published to.
+ */
+function writeAppUpdateYml() {
+  const pkg = require(path.join(ROOT, 'package.json'));
+  const publish = Array.isArray(pkg.build && pkg.build.publish)
+    ? pkg.build.publish[0]
+    : (pkg.build || {}).publish;
+
+  if (!publish || publish.provider !== 'github' || !publish.owner || !publish.repo) {
+    // Loud, not silent: shipping without this file produces an app that looks
+    // fine and can never update itself.
+    throw new Error(
+      'build.publish is missing or not a complete github provider — refusing to ' +
+      'build an app that cannot check for updates. Fix package.json.'
+    );
+  }
+
+  const lines = [
+    'provider: github',
+    `owner: ${publish.owner}`,
+    `repo: ${publish.repo}`,
+    // electron-updater namespaces its download cache by this; it defaults to
+    // the app name, and a stable explicit value avoids a surprise rename
+    // stranding a half-downloaded update in an orphaned folder.
+    `updaterCacheDirName: ${pkg.name}-updater`,
+    '',
+  ];
+
+  const target = path.join(ROOT, 'dist', 'win-unpacked', 'resources', 'app-update.yml');
+  fs.writeFileSync(target, lines.join('\n'), 'utf8');
+  log(`wrote ${target}`);
 }
 
 main().catch((err) => {

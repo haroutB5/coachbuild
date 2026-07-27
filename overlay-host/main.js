@@ -1476,6 +1476,16 @@ function buildTrayMenuTemplate() {
 
   return [
     {
+      // Version, first and non-clickable. Cheap to add and it answers the
+      // question every other diagnostic row depends on: WHICH BUILD is this?
+      // Without it, "auto-update is working" is unfalsifiable from the UI --
+      // the user cannot tell an app that updated from one that silently did
+      // not, which is exactly the failure the app-update.yml bug produced.
+      label: `CoachBuild Overlay v${app.getVersion()}`,
+      enabled: false,
+    },
+    { type: 'separator' },
+    {
       label: overlayVisibleWanted ? 'Hide overlay' : 'Show overlay',
       click: () => toggleOverlayVisibility(),
     },
