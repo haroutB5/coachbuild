@@ -309,7 +309,12 @@ export default function ChampionPickPrompt({ onQuickPick }: ChampionPickPromptPr
               </div>
               <Link
                 href="/movers"
-                className="mt-2 inline-block text-[11.5px] text-teal hover:underline px-0.5"
+                // min-h-[44px] + vertical padding: measured at 17px tall on a
+                // 390px viewport, well under the 44px touch guideline, and this
+                // is the only tap target on the redesigned Builds surface that
+                // was. `inline-flex items-center` keeps it reading as a text
+                // link while giving the tappable box real height.
+                className="mt-1 inline-flex items-center min-h-[44px] py-2 text-[11.5px] text-teal hover:underline px-0.5"
               >
                 See all patch movers &rarr;
               </Link>
