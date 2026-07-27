@@ -6,7 +6,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "start:admin": "powershell -NoProfile -Command \"Start-Process -FilePath 'node_modules/electron/dist/electron.exe' -ArgumentList '.' -Verb RunAs\"",
+    "start:admin": "start-admin.cmd",
     "vendor:bundle": "esbuild ../lib/nextSkill.ts --bundle --format=esm --platform=browser --outfile=vendor/skillEngine.js"
   },
   "devDependencies": {
