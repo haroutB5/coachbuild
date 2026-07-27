@@ -28,33 +28,104 @@ Check League's video settings before testing: **Settings → Video → Display M
   screen showing a static levels 1–18 skill-order table (Q/W/E/R × 18 columns),
   with the player's own current level highlighted. Never imperative copy — see
   "Compliance" below.
-- Two global hotkeys, working even while League has focus:
+- A **system tray icon** (notification area) — the PRIMARY control surface. Left-click
+  toggles show/hide; right-click opens a menu: show/hide, interactive mode, a lane
+  override submenu (Top/Jungle/Mid/Bot/Support + "Auto"), and Quit. This exists
+  because global hotkeys are expected to be unreliable while League has focus — see
+  "Hotkeys and elevation" below — and the tray works regardless.
+- Two global hotkeys as a secondary/convenience path — **may require running as
+  Administrator to work while League has focus, see below**:
   - **Ctrl+F10** — show/hide the overlay
   - **Ctrl+F11** — toggle interactive mode (lane buttons become clickable; the
     overlay is click-through the rest of the time)
 - Polls Riot's local Live Client Data API directly
   (`https://127.0.0.1:2999/liveclientdata/*`) — no GEP, no Overwolf, no companion
-  bridge. Silent when no game is running (that's the normal state).
+  bridge. Silent when no game is running (that's the normal state). This also means
+  lane auto-detection is fully standalone — no companion app needed.
 - The Riot disclaimer is rendered in the overlay's footer once a skill order is
   showing (ported from the Overwolf build's `ingame.js`/`ingame.css`, unchanged).
 
+## Lane resolution — three tiers, auto-detection first
+
+1. **Manual override** (tray menu or the in-overlay lane buttons, in interactive
+   mode) — wins outright whenever set. Persisted to disk, survives a restart, and
+   holds until you clear it back to "Auto."
+2. **Auto-detected** from the local player's own `position` field on
+   `/liveclientdata/playerlist` (TOP/JUNGLE/MIDDLE/BOTTOM/UTILITY → this app's
+   TOP/JUNGLE/MID/BOT/SUPPORT). **Expected to work in a real matchmade game** (Riot's
+   documented behavior — assigned role). **Expected to come back empty ("NONE") in
+   Practice Tool, custom games, and ARAM**, where League genuinely has no assigned
+   role to report — if you test in Practice Tool and see the fallback tier kick in
+   instead of a detected lane, that is CORRECT behavior, not a bug. The main process
+   logs the raw value once per game (`detected local player position (raw, from
+   /liveclientdata/playerlist): "..."`) so your next real match is the point where
+   this gets independently confirmed against a real assigned role — it has only
+   been directly observed as "NONE" (Practice Tool) so far.
+3. **Fallback by highest sample size** — no override, nothing usable detected:
+   queries all five real lanes IN PARALLEL and picks whichever comes back with the
+   LARGEST `sampleSize`, labeled `<lane> · likely` (deliberately not "auto" — see
+   below). (Role `5`, "let the API pick," is NOT used here — verified dead against
+   this backend: `lib/opgg.ts`'s `opggPosition(5)` returns `null`, so
+   `/api/skill-order?role=5` always answers empty.)
+
+   **Corrected 2026-07-27** from an earlier, real bug: the first version returned
+   the FIRST lane (fixed Top→Jungle→Mid→Bot→Support order) that had ANY data,
+   which is a fabricated claim, not an answer. Measured live: Corki (champion 42)
+   has `sampleSize: 235` at TOP vs. `sampleSize: 7150` at BOT — the old logic
+   picked TOP and presented it with full confidence. Ties (possible with tiny
+   samples) break deterministically by sample size first, then the fixed lane
+   order — never randomly. See `js/skillOrderData.js`'s `resolveOverlayData`
+   header for the full trace.
+
+The overlay's footer shows a quiet source label once a champion resolves — `Mid ·
+manual`, `Mid · auto`, or `Mid · likely` — so if the shown lane looks wrong, you can
+tell at a glance whether this app detected it, you pinned it, or it's a best guess
+(`likely` is deliberately a lower-confidence word than `auto`: Tier 2 is Riot's own
+reported position, a fact; Tier 3 is this app's own inference from win/play counts).
+
+## Hotkeys and elevation
+
+League/Vanguard runs elevated. Windows' UIPI (User Interface Privilege Isolation)
+does not deliver global-hotkey input from a lower-integrity process to a
+higher-integrity foreground window — so **Ctrl+F10/Ctrl+F11 are expected to not
+respond while League has focus, unless this app is also running elevated.** This
+was not something introduced by a bug; it registers successfully every time
+(confirmed in every test run below) and simply may not receive the keypress once a
+higher-privilege window is focused.
+
+- **Primary fix: use the tray icon.** It does not depend on elevation at all.
+- The app logs a best-effort (NOT certain) elevation guess on every startup, plus a
+  static reminder either way. Do not trust the guess as definitive — it is a
+  heuristic (attempts to write a throwaway file into `C:\Windows`), and Windows UAC
+  virtualization can make it wrong in either direction.
+- To run elevated: `npm run start:admin`, or double-click `start-admin.cmd`, or
+  right-click `node_modules/electron/dist/electron.exe` in a shortcut and choose
+  "Run as administrator." All three trigger a UAC prompt — **not exercised in this
+  session's automated verification**, since approving a UAC prompt requires
+  interactive user input this agent cannot provide.
+
 ## Reused from the Overwolf build (not rewritten)
 
+- `renderer/ingame.html`, `renderer/ingame.css` — copied byte-for-byte, untouched.
+- `renderer/ingame.js` — copied from `overwolf/ingame/ingame.js`; changed sections:
+  the bottom "Transport" block (now Electron IPC via `window.coachbuildIPC`, exposed
+  by `preload.js`, instead of `overwolf.windows.onMessageReceived`/`sendMessage`;
+  public contract `window.CoachBuildOverlay.onState`/`.onInteractiveChange` is
+  unchanged), and the lane-control section (2026-07-27 fix: lane buttons now send an
+  IPC message instead of writing `localStorage`, plus a 6th "AUTO" button to clear
+  an override).
 - `js/skillOrderData.js` — the data layer (champion resolution, skill-order fetch +
-  cache, lane persistence). Copied byte-for-byte from `overwolf/js/skillOrderData.js`.
-- `renderer/ingame.html`, `renderer/ingame.css` — copied byte-for-byte.
-- `renderer/ingame.js` — copied from `overwolf/ingame/ingame.js`; the ONLY section
-  changed is the bottom "Transport" block, which now talks to Electron IPC
-  (`window.coachbuildIPC`, exposed by `preload.js`) instead of
-  `overwolf.windows.onMessageReceived`/`sendMessage`. The public contract
-  (`window.CoachBuildOverlay.onState(state)` /
-  `window.CoachBuildOverlay.onInteractiveChange(isInteractive)`) is byte-for-byte
-  identical.
+  cache). Originally copied byte-for-byte from `overwolf/js/skillOrderData.js`;
+  since diverged (2026-07-27 lane fix) to read the lane from pushed state instead of
+  `localStorage`, add `mapPositionToLane()` for auto-detection, and replace the old
+  "no lane selected" dead end with the three-tier resolution described above.
 - `lib/gameState.js` — ported from `overwolf/js/gameState.js`. Same parsing logic
   (Passive-key exclusion, all-or-nothing level/ability gate, riotId-matched
   champion-name resolution preferring `rawChampionName`), converted from ES module
   exports to CommonJS `module.exports` because it now runs in Electron's Node-based
-  main process instead of a browser context.
+  main process instead of a browser context. Extended (2026-07-27) with
+  `extractLocalPosition()` for lane auto-detection, off the same playerlist fetch
+  already used for champion resolution — no extra request.
 
 ## Load & test
 
@@ -62,43 +133,95 @@ Check League's video settings before testing: **Settings → Video → Display M
    does NOT touch or affect the Next.js app's own `package.json`/`node_modules`).
 2. `npm start` (runs `electron .`).
 3. Confirm the window appears in the upper-left of the screen (340×520 at
-   top:110, left:24) — it should be visible even with no game running (idle
-   state), since Electron windows aren't gated on `in_game_only` the way the
-   Overwolf build's were. It should NOT appear in the taskbar (`skipTaskbar:
-   true`).
-4. Press **Ctrl+F10** — window hides. Press again — reappears.
-5. Press **Ctrl+F11** — nothing should visually change with no game running (the
-   overlay shows nothing but the "waiting" message either way), but if you check
-   the main process console you should NOT see a crash; the interactive-mode flag
-   flips silently.
-6. **Set League's display mode to Borderless or Windowed** (see prerequisite
+   top:110, left:24), showing "CoachBuild" / "AUTO" with no game running. It
+   should NOT appear in the taskbar (`skipTaskbar: true`). Confirm a tray icon
+   appears in the Windows notification area (a solid gold square with a dark
+   border) — check the overflow/"show hidden icons" chevron if it's not
+   immediately visible; Windows often defaults a new app's tray icon there.
+4. Right-click the tray icon: confirm the menu shows Show/Hide overlay,
+   Interactive mode (checkbox), a Lane override submenu (Auto + the 5 lanes, with
+   the current one checked), and Quit.
+5. Pick a lane from the tray submenu. Confirm the overlay's lane bar updates (it
+   will only be visibly different from "AUTO" once you check — with no game
+   running the body stays empty either way, only the small lane-bar text changes).
+   Quit and relaunch (`npm start` again) — confirm the console logs `lane override
+   at startup: <the lane you picked>`, not `Auto`.
+6. Press **Ctrl+F10** — window hides. Press again — reappears. Press **Ctrl+F11** —
+   no crash, interactive-mode flag flips silently (confirm via console or the tray
+   menu's checkbox).
+7. **Set League's display mode to Borderless or Windowed** (see prerequisite
    above), launch a Practice Tool game, and confirm:
    - The overlay updates with your champion's skill table once champion name +
-     level resolve (champion name can lag level by a beat or two — see
-     `lib/gameState.js`'s header for why that's expected, not a bug).
+     level resolve (champion name can lag level by a beat or two — expected).
+   - The lane bar reads "AUTO" and the footer (once a champion resolves) shows
+     `<lane> · likely` — Practice Tool is EXPECTED to report no assigned position
+     (see "Lane resolution" above), so falling to the sample-size fallback tier
+     is correct here, not a bug. The lane shown should be the one with the most
+     games behind it, not necessarily the first one alphabetically/positionally.
    - The overlay stays on top of the game.
-   - Ctrl+F10/F11 still work with League focused.
-   - In interactive mode (Ctrl+F11), the lane buttons are actually clickable —
-     **this specific interaction was NOT verified against a live game; see
-     HANDOFF-engy.md's honesty section.**
-7. Close League (or exit to the loading screen / client) and confirm the overlay
+   - The tray icon's Show/Hide and Interactive-mode controls work with League
+     focused. Ctrl+F10/F11 may not — see "Hotkeys and elevation" above.
+   - In interactive mode, the lane buttons are actually clickable — **not verified
+     against a live game; see HANDOFF-engy.md's honesty section.**
+8. In a REAL matchmade game (not Practice Tool), check the console for `detected
+   local player position (raw, ...): "..."` — this is the first real-world
+   confirmation of whether Riot populates `position` with an actual assigned role
+   outside Practice Tool. Confirm the lane bar/footer reflect it as `<lane> · auto`
+   (not `<lane> · likely`) if it resolves to a real lane.
+9. Close League (or exit to the loading screen / client) and confirm the overlay
    quietly returns to the "no game" state — no error dialog, nothing alarming.
 
 ## What was actually verified before a live game (see HANDOFF-engy.md for full detail)
 
 - `node --check` passes on every `.js` file.
-- `lib/gameState.js`'s parsing logic re-verified with a 13-assertion suite,
-  including the exact real captured Practice Tool payload shape from
-  `_capture/live-client-raw-20260727-140136.jsonl`.
-- The Electron app was actually launched (`node_modules/electron/dist/electron.exe .`)
-  on this machine with no game running. Confirmed via the process log: it started,
-  registered both global hotkeys successfully, created the window, and completed a
-  full IPC round-trip (renderer → preload → main → renderer) via the readiness
-  handshake — not just "the process didn't crash." Confirmed via `Get-Process` that
-  a real OS window (title "CoachBuild Overlay", non-zero window handle) existed.
-  Single-instance locking was also verified by launching a second copy, which
-  correctly detected the first and exited.
-- **NOT verified:** anything requiring a running League client — the live polling
-  path, champion/level resolution end-to-end, on-screen appearance over an actual
-  game, hotkeys with League focused, and whether clicks actually land in
-  interactive mode.
+- `lib/gameState.js`'s parsing logic verified with a 20-assertion suite (level/
+  ability parsing, the real captured Practice Tool payload shape, champion-name
+  resolution, and the new `extractLocalPosition`/`EMPTY_STATE` lane fields).
+- `js/skillOrderData.js`'s `mapPositionToLane()` verified with a 20-assertion suite
+  (every Riot position value, case-insensitivity, whitespace, unrecognized/non-string
+  input, and that every mapped output is a valid app lane).
+- `lib/laneSettings.js` verified with a 6-assertion suite: save/load round-trip,
+  garbage input normalizing to Auto, and a corrupted settings file degrading to
+  Auto rather than throwing.
+- **The sample-size fallback fix verified with real measured numbers, against a
+  mocked-but-code-real `resolveOverlayData`** (10 assertions): using Corki's
+  ACTUAL production `sampleSize` per role as measured by the coordinator (TOP=235,
+  JUNGLE=38, MID=1121, BOT=7150, SUPPORT=3), confirmed the fallback resolves to
+  BOT — not TOP, which the earlier first-match version would have picked.
+  Separately confirmed: all 5 lane requests are genuinely CONCURRENT (observed
+  max in-flight count of 5 against an artificial network delay, not sequential);
+  a second `resolveOverlayData` call for the same champion makes ZERO additional
+  network calls (the existing per-lane cache covers the fan-out, verified rather
+  than assumed); an exact sample-size tie breaks deterministically to the fixed
+  TOP/JUNGLE/MID/BOT/SUPPORT order; and `no-data-any-lane` still fires correctly
+  when every lane is genuinely empty.
+- The Electron app was actually launched multiple times on this machine with no
+  game running. Confirmed via console log: starts clean, registers both hotkeys,
+  logs the elevation guess, completes a full IPC round-trip (readiness handshake).
+  Confirmed via `Get-Process` in an earlier round that a real OS window exists.
+  **Confirmed via an actual screenshot** (this round) that the overlay window
+  genuinely renders transparent and always-on-top over another real application
+  window on this machine (a Chrome window, standing in for what a live test
+  separately confirmed works over League itself) — visible proof, not inference
+  from logs alone.
+- **Lane persistence verified end-to-end, live, not just unit-tested**: wrote a
+  lane value to the settings file the same way `setLane()` would, relaunched the
+  app, confirmed the startup log reported the correct loaded value, AND confirmed
+  via a second screenshot that the overlay's lane bar visually updated from "AUTO"
+  to the persisted lane after the restart.
+- **NOT verified — the tray icon's on-screen appearance specifically.** This
+  session's desktop has no visible Windows taskbar/notification area in a
+  screenshot (checked both the full screen and a bottom-strip crop — neither shows
+  a taskbar at all, in either test run), so the tray icon's actual visual
+  appearance could not be confirmed by screenshot. This is a limitation of this
+  particular desktop session, not evidence the tray failed — `new Tray(icon)` and
+  `setContextMenu()` both ran with no exception/warning across every launch, and
+  the icon file itself was independently byte-verified as a valid, correctly
+  round-tripping 16×16 PNG before ever being loaded by Electron.
+- **NOT verified — anything requiring a running League client or a UAC prompt.**
+  The live polling path, champion/level resolution end-to-end, on-screen
+  appearance over League specifically, hotkeys/tray with League focused, whether
+  clicks land in interactive mode, `start:admin`'s UAC relaunch (requires
+  interactive approval this agent cannot give), and whether a matchmade game
+  actually populates `position` with a real role (only "NONE" in Practice Tool has
+  been directly observed).

@@ -1,15 +1,19 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // ingame.js — renders the transparent in-game overlay.
 //
-// Public contract with engy's background controller (window is the ONLY
-// surface on a single-monitor setup, revised 2026-07-27):
+// Public contract with the Electron main process (overlay-host/main.js,
+// PORTED 2026-07-27 from the Overwolf background controller -- window is
+// still the ONLY surface on a single-monitor setup):
 //   window.CoachBuildOverlay.onState(state)
 //     state: { championLevel: number|null, championName: string|null,
-//              abilityRanks: {Q,W,E,R}|null, inGame: boolean }
+//              abilityRanks: {Q,W,E,R}|null, inGame: boolean,
+//              lane: string|null (MANUAL override, tray/lane-bar-set),
+//              detectedPosition: string|null (RAW Riot position, unmapped) }
 //   window.CoachBuildOverlay.onInteractiveChange(isInteractive)
-//     isInteractive: boolean -- true while engy's hotkey has made the window
-//     clickable (input reaches this page instead of passing through to the
-//     game). Default assumed false (clickthrough) until told otherwise.
+//     isInteractive: boolean -- true while the hotkey/tray has made the
+//     window clickable (input reaches this page instead of passing through
+//     to the game). Default assumed false (clickthrough) until told
+//     otherwise.
 //
 // ── Compliance shape (Riot developer policy, verbatim in the task brief) ────
 // This renders ONLY a static levels-1-18 reference table with the player's
@@ -62,7 +66,6 @@
 
 import {
   resolveOverlayData,
-  readLane,
   laneLabel,
   CHAMPION_LIST_RETRY_COOLDOWN_MS,
   ERROR_RETRY_COOLDOWN_MS,
@@ -138,9 +141,13 @@ function render(data) {
       showMessage("");
       els.champion.textContent = "CoachBuild";
       break;
-    case "no-lane":
-      els.champion.textContent = "CoachBuild";
-      showMessage("No lane selected.");
+    case "no-data-any-lane":
+      // Rare: no manual override, no usable auto-detected position, AND none
+      // of the five real lanes had data for this champion. Distinct from the
+      // old "no lane selected" dead end this replaces -- that used to be the
+      // NORMAL first-run state; this is a genuine, uncommon miss.
+      els.champion.textContent = data.championName || "CoachBuild";
+      showMessage("No recommended skill order found for this champion in any lane.");
       break;
     case "waiting-for-champion":
       els.champion.textContent = "CoachBuild";
@@ -212,11 +219,32 @@ function renderResolved(data) {
   // would be a fabricated claim contradicting the grid directly above it.
   const order = Array.isArray(model.order) ? model.order : [];
   const parts = [];
+  // Quiet, compact, non-imperative source label -- the FIRST thing a user
+  // needs when the shown lane looks wrong is whether this app detected it or
+  // they pinned it themselves (2026-07-27 fix). Kept in the footer, not a new
+  // UI element, and never renders anything for the ordinary case (a lane
+  // typed with no ambiguity would be noise).
+  const laneNote = laneSourceNote(data.lane, data.laneSource);
+  if (laneNote) parts.push(laneNote);
   if (order.length < TOTAL_LEVELS) parts.push("Levels 16–18 not published");
   if (Number.isFinite(model.sampleSize) && model.sampleSize > 0) {
     parts.push(`${formatGames(model.sampleSize)} games`);
   }
   els.footer.textContent = parts.join(" · ");
+}
+
+function laneSourceNote(lane, laneSource) {
+  if (!lane) return null;
+  const label = laneLabel(lane);
+  if (laneSource === "manual") return `${label} · manual`;
+  if (laneSource === "auto") return `${label} · auto`;
+  // Deliberately NOT "auto" -- "auto" is Riot's own reported position (Tier 2),
+  // a fact. This is a best-guess picked by comparing sample sizes across all
+  // five lanes (Tier 3, see skillOrderData.js's resolveOverlayData header for
+  // why the wording must not blur the confidence difference) -- "likely" reads
+  // as an estimate, not a claim, and stays non-imperative (2026-07-27 fix #2).
+  if (laneSource === "auto-fallback") return `${label} · likely`;
+  return null;
 }
 
 function formatGames(n) {
@@ -266,21 +294,28 @@ function buildGrid(model, championLevel) {
   }
 }
 
-// ── Lane control ─────────────────────────────────────────────────────────────
-// Single-monitor revision: the overlay now owns lane selection directly
-// (writes the same localStorage key the desktop window reads/writes) rather
-// than assuming a second screen set it correctly before load-in. Always
-// reads storage fresh (never trusts a cached value) so it stays correct even
-// if something else writes the key between renders.
+// ── Lane control (2026-07-27: moved to main-process ownership) ─────────────
+// This bar edits the MANUAL OVERRIDE only -- `lastState.lane` -- not the
+// auto-detected lane (`lastState.detectedPosition`), which the data layer
+// consults on its own when there's no override (see skillOrderData.js's
+// resolveOverlayData). Persistence is main.js's job now: selecting a lane
+// here sends an IPC message and main.js writes it to disk (under
+// app.getPath('userData'), not localStorage -- this window's `file://`
+// origin makes localStorage unreliable across restarts, and localStorage was
+// also the wrong OWNER once the Overwolf desktop window (the only other
+// writer) was dropped in the Electron pivot). `lastState` is updated
+// optimistically here so the bar/grid react immediately without waiting for
+// the IPC round-trip; main.js's own push (which will arrive a beat later)
+// then just confirms the same value.
 let lastLaneBarSignature = null; // audit fix #3, see renderLaneBar below
 
 function renderLaneBar() {
-  const lane = readLane();
+  const lane = lastState && typeof lastState.lane === "string" ? lastState.lane : null;
   const signature = `${isInteractive}:${lane}`;
 
   // Audit fix #3: `render()` calls this on EVERY state push, which -- before
-  // this guard -- meant `innerHTML = ""` + 5 fresh <button> elements every
-  // single GEP tick, including ticks that change nothing about the lane or
+  // this guard -- meant `innerHTML = ""` + fresh <button> elements every
+  // single tick, including ticks that change nothing about the lane or
   // interactive mode. A `click` only fires when mousedown and mouseup land on
   // the SAME element, so a push landing between the two silently ate the
   // click. Short-circuiting when nothing the lane bar actually depends on has
@@ -295,13 +330,28 @@ function renderLaneBar() {
   if (!isInteractive) {
     // Clickthrough: a PLAIN LABEL, deliberately not styled or behaving like
     // a button -- input doesn't reach this page right now, so anything that
-    // looks pressable here would be actively misleading.
+    // looks pressable here would be actively misleading. "Auto" here means
+    // "no override set" -- NOT "broken"; the data layer still resolves a real
+    // lane via auto-detection or the fallback loop, shown in the footer's
+    // source note once a champion resolves.
     const span = document.createElement("span");
     span.className = "cb-lane-static";
-    span.textContent = lane ? laneLabel(lane) : "No lane set";
+    span.textContent = lane ? laneLabel(lane) : "Auto";
     els.lanebar.appendChild(span);
     return;
   }
+
+  // "AUTO" button first -- clears the override, handing lane resolution back
+  // to auto-detection/fallback. Distinct from the five real lane buttons,
+  // never labeled as if it were a sixth lane.
+  const autoBtn = document.createElement("button");
+  autoBtn.type = "button";
+  autoBtn.className = "cb-lane-btn";
+  if (lane === null) autoBtn.classList.add("cb-lane-btn--active");
+  autoBtn.textContent = "AUTO";
+  autoBtn.setAttribute("aria-pressed", String(lane === null));
+  autoBtn.addEventListener("click", () => selectLane(null));
+  els.lanebar.appendChild(autoBtn);
 
   for (const l of LANES) {
     const btn = document.createElement("button");
@@ -316,21 +366,19 @@ function renderLaneBar() {
 }
 
 function selectLane(lane) {
-  try {
-    window.localStorage.setItem("coachbuild.overwolf.lane", lane);
-  } catch (err) {
-    // Storage can be unavailable in some Overwolf window contexts; the
-    // selection just won't persist past this render -- not worth crashing
-    // the overlay over, and renderLaneBar() below still reflects the choice
-    // for the current session via the immediate re-fetch.
-    console.warn("[CoachBuild overlay] failed to persist lane selection:", err);
-  }
+  lastState = { ...lastState, lane };
   renderLaneBar(); // the lane just changed -> signature differs -> rebuilds,
   // reflecting the new active lane immediately.
   handleState(lastState); // re-resolve under the new lane -- this is the
   // "immediately refetches the order" requirement; fetchSkillOrder's cache
   // is keyed by (championId, roleId), so a lane the player already visited
   // this game resolves instantly from cache instead of a fresh request.
+
+  if (typeof window.coachbuildIPC !== "undefined" && typeof window.coachbuildIPC.setLane === "function") {
+    window.coachbuildIPC.setLane(lane);
+  } else {
+    console.warn("[CoachBuild overlay] window.coachbuildIPC.setLane unavailable -- lane change will not persist");
+  }
 }
 
 // ── Retry timer (audit fix #2) ──────────────────────────────────────────────
@@ -349,6 +397,11 @@ let retryTimer = null;
 
 function retryDelayMs(data) {
   if (data.phase === "unavailable") return CHAMPION_LIST_RETRY_COOLDOWN_MS;
+  // Same underlying claim class as a single lane's "no-data" (see
+  // skillOrderData.js's NO_DATA_RETRY_COOLDOWN_MS comment on why a null is
+  // retried at all) -- the fallback loop tried all five lanes and none had
+  // data THIS TIME, which upstream flakiness can still resolve on a retry.
+  if (data.phase === "no-data-any-lane") return NO_DATA_RETRY_COOLDOWN_MS;
   if (data.phase === "resolved") {
     if (data.skillOrder.status === "error") return ERROR_RETRY_COOLDOWN_MS;
     if (data.skillOrder.status === "no-data") return NO_DATA_RETRY_COOLDOWN_MS;

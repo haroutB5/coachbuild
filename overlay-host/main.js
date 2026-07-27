@@ -16,14 +16,17 @@
 // overwolf/js/gameState.js and already verified against the real captured
 // Practice Tool payload (see that file's header + HANDOFF-engy.md).
 
-const { app, BrowserWindow, globalShortcut, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, globalShortcut, ipcMain, screen } = require('electron');
 const path = require('path');
+const fs = require('fs');
 
 const { fetchActivePlayer, fetchPlayerList } = require('./lib/liveClientHttp.js');
+const { loadLane, saveLane, VALID_LANES } = require('./lib/laneSettings.js');
 const {
   parseLevelAndAbilities,
   extractLocalRiotId,
   resolveChampionName,
+  extractLocalPosition,
   mergeState,
   emptyStateFor,
 } = require('./lib/gameState.js');
@@ -54,16 +57,35 @@ const IDLE_POLL_MS = 5000;
 const ACTIVE_POLL_MS = 1500;
 const PLAYERLIST_POLL_MS = 4000;
 
+// TOP/JUNGLE/MID/BOT/SUPPORT with the exact labels the tray menu shows.
+// Mirrors js/skillOrderData.js's LANE_TO_ROLE_ID key order/spelling -- kept as
+// a small literal here rather than importing that ESM module into this
+// CommonJS main process (see lib/gameState.js's header for why the two
+// module systems don't mix directly).
+const LANE_MENU_ITEMS = [
+  { lane: 'TOP', label: 'Top' },
+  { lane: 'JUNGLE', label: 'Jungle' },
+  { lane: 'MID', label: 'Mid' },
+  { lane: 'BOT', label: 'Bot' },
+  { lane: 'SUPPORT', label: 'Support' },
+];
+
+const TRAY_ICON_PATH = path.join(__dirname, 'assets', 'tray-icon.png');
+
 // ---------------------------------------------------------------------------
 // Mutable state
 // ---------------------------------------------------------------------------
 
 let mainWindow = null;
+let tray = null;
 let isInteractive = false; // starts click-through
 let overlayVisibleWanted = true;
 let inGame = false;
-let gameState = emptyStateFor(false);
+const userDataDir = app.getPath('userData');
+let currentLane = loadLane(userDataDir); // string lane, or null = "Auto"
+let gameState = mergeState(emptyStateFor(false), { lane: currentLane });
 let lastKnownRiotId = null;
+let positionLoggedThisGame = false; // logs the raw detected `position` ONCE per game
 
 let pollTimer = null;
 let playerListTimer = null;
@@ -159,6 +181,36 @@ ipcMain.on('coachbuild-ready', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Lane — MAIN PROCESS owns the OVERRIDE now (2026-07-27 fix, see
+// HANDOFF-engy.md rounds 4-5). Persisted to a JSON file (lib/laneSettings.js),
+// not localStorage: the renderer's `file://` origin makes localStorage
+// unreliable across restarts, and with the Overwolf desktop window gone there
+// was nothing left to ever write the key in the first place -- the lane was
+// PERMANENTLY unset.
+//
+// RESOLUTION ORDER (corrected 2026-07-27 -- auto-detect is now PRIMARY, not a
+// last resort): `currentLane` here is a MANUAL OVERRIDE ONLY -- null means
+// "no override, defer to auto-detection." The actual lane shown is resolved
+// in the RENDERER (js/skillOrderData.js's resolveOverlayData), which prefers
+// this override when set, else maps the local player's own
+// `detectedPosition` (below) to a lane, else falls back to trying each real
+// lane in a fixed order. `lane` (override) and `detectedPosition` (raw
+// observation) both travel as fields on the same `gameState` object pushed
+// over 'coachbuild-state' -- one contract, not two channels.
+
+function setLane(nextLane) {
+  currentLane = saveLane(userDataDir, nextLane);
+  log('lane OVERRIDE set to', currentLane === null ? 'Auto (cleared -- defers to auto-detection)' : currentLane);
+  gameState = mergeState(gameState, { lane: currentLane });
+  pushState();
+  rebuildTrayMenu();
+}
+
+ipcMain.on('coachbuild-set-lane', (_event, lane) => {
+  setLane(lane);
+});
+
+// ---------------------------------------------------------------------------
 // Polling Riot's Live Client Data API directly (no GEP, no Overwolf)
 // ---------------------------------------------------------------------------
 //
@@ -174,6 +226,7 @@ async function pollActivePlayer() {
     if (!inGame) {
       inGame = true;
       log('game detected — entering session');
+      positionLoggedThisGame = false;
       startPlayerListPolling();
     }
 
@@ -207,8 +260,12 @@ async function pollActivePlayer() {
       inGame = false;
       log('game no longer detected — ending session');
       stopPlayerListPolling();
-      gameState = emptyStateFor(false);
+      // `lane` (the manual override) deliberately survives a game exit --
+      // it's a user preference, not per-game state. Only session-scoped
+      // fields reset.
+      gameState = mergeState(emptyStateFor(false), { lane: currentLane });
       lastKnownRiotId = null;
+      positionLoggedThisGame = false;
       pushState();
     }
   } finally {
@@ -241,14 +298,33 @@ async function pollPlayerList() {
 async function resolveChampionNameNow(riotId) {
   try {
     const playerList = await fetchPlayerList();
-    // Compliance: resolveChampionName() only ever reads the ONE entry
-    // matching our own riotId; `playerList` (which includes every other
-    // player) is discarded here and never stored, logged, or rendered beyond
-    // that single lookup.
+    // Compliance: resolveChampionName()/extractLocalPosition() ONLY ever read
+    // the ONE entry matching our own riotId -- the local player's own
+    // champion and own assigned role. `playerList` (which includes every
+    // other player) is discarded here and never stored, logged, or rendered
+    // beyond that single lookup. Both reads come off this ONE fetch -- no
+    // extra request for position.
     const championName = resolveChampionName(playerList, riotId);
-    if (championName) {
-      gameState = mergeState(gameState, { championName });
+    const detectedPosition = extractLocalPosition(playerList, riotId);
+
+    const patch = {};
+    if (championName) patch.championName = championName;
+    if (detectedPosition !== null) patch.detectedPosition = detectedPosition;
+
+    if (Object.keys(patch).length > 0) {
+      gameState = mergeState(gameState, patch);
       pushState();
+    }
+
+    // Logged ONCE per game, regardless of value -- "NONE" is a legitimate,
+    // informative answer (expected in Practice Tool/customs), not something
+    // to keep re-logging. See lib/gameState.js's extractLocalPosition header:
+    // only "NONE" has actually been observed on this machine; a real role in
+    // a matchmade game is Riot's documented behaviour, not yet verified here.
+    // This line is what turns the next real match into that verification.
+    if (!positionLoggedThisGame && detectedPosition !== null) {
+      positionLoggedThisGame = true;
+      log(`detected local player position (raw, from /liveclientdata/playerlist): "${detectedPosition}"`);
     }
   } catch (err) {
     // Expected transiently (endpoint not fully up yet at the very start of a
@@ -272,13 +348,15 @@ function registerHotkeys() {
 function toggleOverlayVisibility() {
   overlayVisibleWanted = !overlayVisibleWanted;
   log('toggle_overlay ->', overlayVisibleWanted ? 'show' : 'hide');
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (overlayVisibleWanted) {
-    mainWindow.showInactive();
-    pushState(); // resend last known state so it isn't blank on reappear
-  } else {
-    mainWindow.hide();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (overlayVisibleWanted) {
+      mainWindow.showInactive();
+      pushState(); // resend last known state so it isn't blank on reappear
+    } else {
+      mainWindow.hide();
+    }
   }
+  rebuildTrayMenu();
 }
 
 function toggleInteractive() {
@@ -320,6 +398,110 @@ function toggleInteractive() {
     }
   }
   pushInteractiveChange();
+  rebuildTrayMenu();
+}
+
+// ---------------------------------------------------------------------------
+// Elevation heuristic — global hotkeys are expected to be UNRELIABLE while
+// League has focus, because League/Vanguard runs elevated and Windows UIPI
+// does not deliver global hotkey input from a lower-integrity process to a
+// higher-integrity foreground window. This is why the tray (below) is the
+// PRIMARY fix, not the hotkeys.
+// ---------------------------------------------------------------------------
+//
+// There is no reliable, dependency-free way to definitively detect "is this
+// process elevated" from Node on Windows (no is-elevated package -- that
+// would be a new dependency, disallowed). This is a BEST-EFFORT heuristic
+// only, explicitly logged as such -- never asserted as certain. It attempts
+// to write a throwaway file into a normally-protected system directory;
+// success is weak evidence of elevation, failure is weak evidence against it.
+// UAC virtualization can make this unreliable in either direction, which is
+// exactly why the log line hedges instead of stating a verdict.
+function bestEffortElevationGuess() {
+  const probePath = path.join('C:', 'Windows', 'coachbuild-elevation-probe.tmp');
+  try {
+    fs.writeFileSync(probePath, 'probe');
+    fs.unlinkSync(probePath);
+    return 'possibly elevated (could write to C:\\Windows)';
+  } catch {
+    return 'most likely NOT elevated (could not write to C:\\Windows)';
+  }
+}
+
+function logElevationGuidance() {
+  const guess = bestEffortElevationGuess();
+  log(`elevation check (best-effort, not certain): ${guess}`);
+  log('if Ctrl+F10/Ctrl+F11 do not respond while League has focus, this is the expected cause -- use the SYSTEM TRAY ICON instead (works regardless of elevation), or relaunch via "npm run start:admin" / right-click this app -> Run as administrator.');
+}
+
+// ---------------------------------------------------------------------------
+// System tray — the PRIMARY fix for the hotkey deadlock. Reachable from the
+// Windows notification area even while League is fullscreen-borderless and
+// focused, and does not depend on the elevation question at all.
+// ---------------------------------------------------------------------------
+
+function buildTrayMenuTemplate() {
+  const laneSubmenu = [
+    {
+      label: 'Auto (let the app detect / pick)',
+      type: 'radio',
+      checked: currentLane === null,
+      click: () => setLane(null),
+    },
+    { type: 'separator' },
+    ...LANE_MENU_ITEMS.map(({ lane, label }) => ({
+      label,
+      type: 'radio',
+      checked: currentLane === lane,
+      click: () => setLane(lane),
+    })),
+  ];
+
+  return [
+    {
+      label: overlayVisibleWanted ? 'Hide overlay' : 'Show overlay',
+      click: () => toggleOverlayVisibility(),
+    },
+    {
+      label: 'Interactive mode (clickable)',
+      type: 'checkbox',
+      checked: isInteractive,
+      click: () => toggleInteractive(),
+    },
+    { type: 'separator' },
+    {
+      label: 'Lane override',
+      submenu: laneSubmenu,
+    },
+    { type: 'separator' },
+    {
+      label: 'Quit CoachBuild Overlay',
+      click: () => app.quit(),
+    },
+  ];
+}
+
+function rebuildTrayMenu() {
+  if (!tray || tray.isDestroyed()) return;
+  tray.setContextMenu(Menu.buildFromTemplate(buildTrayMenuTemplate()));
+}
+
+function createTray() {
+  let icon;
+  try {
+    icon = nativeImage.createFromPath(TRAY_ICON_PATH);
+    if (icon.isEmpty()) throw new Error('tray icon decoded empty');
+  } catch (err) {
+    warn('failed to load tray icon, falling back to a blank image:', err.message);
+    icon = nativeImage.createEmpty();
+  }
+  tray = new Tray(icon);
+  tray.setToolTip('CoachBuild Overlay');
+  rebuildTrayMenu();
+  // Left-click also toggles show/hide, matching how most tray utilities
+  // behave -- the menu (right-click, or left-click depending on platform
+  // convention) covers everything else.
+  tray.on('click', () => toggleOverlayVisibility());
 }
 
 // ---------------------------------------------------------------------------
@@ -340,16 +522,21 @@ if (!gotSingleInstanceLock) {
 
   app.whenReady().then(() => {
     log('CoachBuild Overlay Host starting');
+    log(`lane override at startup: ${currentLane === null ? 'Auto (none set)' : currentLane}`);
     createWindow();
+    createTray();
     registerHotkeys();
+    logElevationGuidance();
     schedulePoll();
   });
 
+  // A tray-only app should NOT quit when its (taskbar-invisible, non-closable
+  // via any window-chrome button since frame:false) window "closes" -- there
+  // is no user-facing close button on this window at all, so window-all-closed
+  // firing here would only ever mean the process crashed the window
+  // unexpectedly. Quitting is still correct in that case; it's just no longer
+  // the ONLY way to quit now that the tray has its own Quit item.
   app.on('window-all-closed', () => {
-    // This is a single-purpose overlay utility, not a general app — no reason
-    // to keep the process alive with no window (the macOS "apps stay open"
-    // convention doesn't apply to a Windows-only tool built for this repo's
-    // dev machine).
     app.quit();
   });
 
@@ -357,5 +544,6 @@ if (!gotSingleInstanceLock) {
     globalShortcut.unregisterAll();
     clearTimeout(pollTimer);
     stopPlayerListPolling();
+    if (tray && !tray.isDestroyed()) tray.destroy();
   });
 }

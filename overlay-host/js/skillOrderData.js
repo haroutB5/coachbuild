@@ -42,11 +42,19 @@ const RAW_CHAMPION_PREFIX = "game_character_displayname_";
 
 /** TOP|JUNGLE|MID|BOT|SUPPORT -> RoleId (0-4). Confirmed against
  *  components/hextech/heroContracts.ts's LANE_TO_ROLE_ID (top:0, jungle:1,
- *  mid:2, bot:3, support:4) -- same numbers, upper-cased keys to match the
- *  exact values engy's desktop window persists to
- *  `localStorage["coachbuild.overwolf.lane"]`. Role id 5 ("let the API
- *  pick") is deliberately NOT reachable from here: the overlay only ever
- *  renders a table for the lane the user explicitly selected. */
+ *  mid:2, bot:3, support:4) -- same numbers.
+ *
+ *  Role id 5 ("let the API pick") is NOT used anywhere in this module,
+ *  despite existing as a general RoleId concept elsewhere in the app
+ *  (lib/types.ts). VERIFIED (2026-07-27, read lib/opgg.ts directly, not
+ *  assumed): `opggPosition(5)` returns `null` -- there is no op.gg lane
+ *  equivalent for "auto" -- so `fetchSkillOrder(id, 5)` always resolves to
+ *  `null` before making any request. Wiring role=5 for an unset lane would
+ *  not degrade gracefully, it would ALWAYS silently return nothing, forever,
+ *  for every champion, indistinguishable from "no data for this specific
+ *  champion+role." resolveOverlayData() below uses a different fallback (try
+ *  each real lane in a fixed order) for exactly this reason -- see its
+ *  header. */
 export const LANE_TO_ROLE_ID = Object.freeze({
   TOP: 0,
   JUNGLE: 1,
@@ -75,19 +83,34 @@ export function laneToRoleId(lane) {
   return roleId === undefined ? null : roleId;
 }
 
-/** Re-read on every call, deliberately never cached across calls -- the task
- *  brief is explicit that the lane can change between games and the desktop
- *  window is the source of truth, not this overlay's own memory of it. */
-export function readLane() {
-  try {
-    const raw = window.localStorage.getItem("coachbuild.overwolf.lane");
-    return laneToRoleId(raw) !== null ? raw : null;
-  } catch {
-    // localStorage can throw in some Overwolf window contexts (privacy mode,
-    // storage disabled) -- degrade to "no lane selected", never crash the
-    // overlay over a read that isn't essential to anything else on screen.
-    return null;
-  }
+/** Riot's OWN vocabulary on /liveclientdata/playerlist[].position: "TOP",
+ *  "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY", "NONE" -- deliberately NOT the
+ *  same spellings this app's own LANE_TO_ROLE_ID uses (MID not MIDDLE, BOT
+ *  not BOTTOM, SUPPORT not UTILITY). Mapping lives here, not in main.js,
+ *  which passes the raw string through unmapped (see overlay-host's
+ *  lib/gameState.js's extractLocalPosition header). */
+const RIOT_POSITION_TO_LANE = Object.freeze({
+  TOP: "TOP",
+  JUNGLE: "JUNGLE",
+  MIDDLE: "MID",
+  BOTTOM: "BOT",
+  UTILITY: "SUPPORT",
+});
+
+/** Pure. Case-insensitive, defensive against anything unrecognized --
+ *  including the ordinary "NONE" (Practice Tool/customs) and a genuinely
+ *  unknown future value. Never throws, never guesses a lane it wasn't told.
+ *  ONLY "NONE" has actually been OBSERVED on this machine (a Practice Tool
+ *  capture, where NONE is the objectively correct answer for a custom game
+ *  with no assigned roles -- see
+ *  _capture/live-client-report-20260727-140136.txt). That a matchmade game
+ *  populates this with a real role is Riot's documented behaviour, not
+ *  independently verified here -- main.js logs the raw value once per game
+ *  so the next real match is the experiment that confirms it. */
+export function mapPositionToLane(position) {
+  if (typeof position !== "string") return null;
+  const key = position.trim().toUpperCase();
+  return RIOT_POSITION_TO_LANE[key] || null;
 }
 
 function normalizeName(s) {
@@ -332,11 +355,9 @@ function normalizeRanks(ranks) {
 
 /**
  * Top-level entry point. Called on every `window.CoachBuildOverlay.onState`
- * push from engy's background controller (and, per audit fix #2, from
- * ingame.js's own retry timer when a prior call landed on a transient
- * failure). Re-reads the lane from localStorage every call (never cached
- * across calls, see readLane) and clears the per-game skill-order cache on
- * every inGame false -> true transition.
+ * push from main.js (and, per audit fix #2, from ingame.js's own retry timer
+ * when a prior call landed on a transient failure). Clears the per-game
+ * skill-order cache on every inGame false -> true transition.
  *
  * `championName` arriving as null/undefined while `championLevel` is already
  * populated is a REAL, ORDINARY state (confirmed live: champion identity
@@ -344,11 +365,57 @@ function normalizeRanks(ranks) {
  * on /liveclientdata/activeplayer, so one can legitimately land before the
  * other) -- handled as "waiting-for-champion", never as an error.
  *
+ * ── LANE RESOLUTION (corrected 2026-07-27 -- auto-detection is PRIMARY) ────
+ * Three-tier, in this exact priority order:
+ *   1. MANUAL OVERRIDE (`state.lane`, set via the tray menu or the in-overlay
+ *      lane buttons, persisted by main.js) -- if present, wins outright.
+ *   2. AUTO-DETECTED (`state.detectedPosition`, the local player's own raw
+ *      `position` off /liveclientdata/playerlist, mapped by
+ *      mapPositionToLane()) -- used whenever there's no override and the
+ *      mapping produces a real lane. This is expected to work in matchmade
+ *      games and expected to come back null in Practice Tool/customs, where
+ *      Riot legitimately reports "NONE" (see mapPositionToLane's header) --
+ *      that is CORRECT fallback-triggering behaviour, not a bug.
+ *   3. FALLBACK BY HIGHEST SAMPLE SIZE (corrected 2026-07-27, see below) --
+ *      neither of the above produced a lane (customs, or a field genuinely
+ *      missing). Queries all five of the app's real lanes IN PARALLEL and
+ *      picks whichever comes back "ok" with the LARGEST `sampleSize`, and
+ *      labels the result with that lane. Role=5 ("let the API pick") is
+ *      deliberately NOT used here -- see LANE_TO_ROLE_ID's header for the
+ *      verified reason it would silently never work at all.
+ *
+ *      **This replaced a real bug, not a style choice.** The first version of
+ *      this tier looped the five lanes in LANE_TO_ROLE_ID's fixed order
+ *      (TOP/JUNGLE/MID/BOT/SUPPORT) and returned the FIRST one that answered
+ *      "ok" -- which is a fabricated claim dressed as a resolution (repo hard
+ *      rule 4 territory), not an actual answer. Measured live against
+ *      production: Corki (champion 42) at role=0 TOP has `sampleSize: 235`,
+ *      at role=3 BOT `sampleSize: 7150` -- the old fixed-order loop picked
+ *      TOP, roughly 30x less played than the real answer, and presented it
+ *      with the same confidence as a correct one. This is now the correction:
+ *      compare `sampleSize` across every lane that resolved, not the first.
+ *      Ties (genuinely possible with tiny samples) break deterministically --
+ *      highest sampleSize wins; on an exact tie, LANE_TO_ROLE_ID's fixed
+ *      iteration order (`>` not `>=` below) keeps whichever candidate was
+ *      checked first -- never random.
+ * The resolved `lane` and `laneSource` ("manual" | "auto" | "auto-fallback")
+ * both ride along on the "resolved" phase so ingame.js can render an honest,
+ * quiet "MID · auto" / "MID · manual" / "MID · likely" label -- the FIRST
+ * thing a user needs when the shown lane looks wrong is whether this app
+ * detected it, they pinned it themselves, or it's a best-guess. `"likely"`
+ * (not "auto") is deliberate: a fallback pick, even the best-supported one
+ * available, is a lower-confidence claim than a position Riot actually
+ * reported, and the label must not blur that distinction.
+ *
  * @returns {Promise<object>} a `{ phase, ... }` object for ingame.js to render.
- *   Phases: "not-in-game" | "no-lane" | "waiting-for-champion" |
+ *   Phases: "not-in-game" | "waiting-for-champion" |
  *   "unresolved-champion" (champion list loaded, name not in it) |
  *   "unavailable" (champion list itself couldn't be fetched -- audit fix #1) |
- *   "resolved" (carries `skillOrder: {status: "ok"|"no-data"|"error", ...}`).
+ *   "no-data-any-lane" (fallback loop exhausted all five lanes, no data for
+ *   any of them -- a genuine, rare dead end, distinct from the old "no lane
+ *   selected" state this replaces) |
+ *   "resolved" (carries `skillOrder: {status: "ok"|"no-data"|"error", ...}`,
+ *   `lane`, `laneSource`).
  */
 export async function resolveOverlayData(state) {
   const inGame = !!(state && state.inGame);
@@ -357,27 +424,74 @@ export async function resolveOverlayData(state) {
 
   if (!inGame) return { phase: "not-in-game" };
 
-  const lane = readLane();
-  if (lane === null) return { phase: "no-lane" };
-
   const championName = state && state.championName;
-  if (!championName) return { phase: "waiting-for-champion", lane };
+  if (!championName) return { phase: "waiting-for-champion" };
 
   const champResult = await resolveChampionId(championName);
-  if (champResult.status === "unavailable") return { phase: "unavailable", championName, lane };
-  if (champResult.status === "not-found") return { phase: "unresolved-champion", championName, lane };
+  if (champResult.status === "unavailable") return { phase: "unavailable", championName };
+  if (champResult.status === "not-found") return { phase: "unresolved-champion", championName };
 
-  const roleId = laneToRoleId(lane);
-  const skillOrder = await fetchSkillOrder(champResult.id, roleId);
-
-  return {
-    phase: "resolved",
+  const commonFields = {
     championName,
     championDisplayName: champResult.name,
     championId: champResult.id,
-    lane,
-    skillOrder,
     championLevel: normalizeLevel(state.championLevel),
     abilityRanks: normalizeRanks(state.abilityRanks),
   };
+
+  // Tier 1: manual override.
+  const overrideLane = state && typeof state.lane === "string" && laneToRoleId(state.lane) !== null ? state.lane : null;
+  // Tier 2: auto-detected, only consulted when there's no override.
+  const detectedLane = overrideLane === null ? mapPositionToLane(state && state.detectedPosition) : null;
+
+  const effectiveLane = overrideLane !== null ? overrideLane : detectedLane;
+  const laneSource = overrideLane !== null ? "manual" : detectedLane !== null ? "auto" : null;
+
+  if (effectiveLane !== null) {
+    const skillOrder = await fetchSkillOrder(champResult.id, laneToRoleId(effectiveLane));
+    return { phase: "resolved", ...commonFields, lane: effectiveLane, laneSource, skillOrder };
+  }
+
+  // Tier 3: query all five lanes IN PARALLEL -- five serial round-trips
+  // before the first paint is a bad first-run experience -- and pick the one
+  // with the LARGEST sampleSize among those that resolved "ok". See this
+  // function's header for why (a real, measured bug in the previous
+  // first-match version) and for why role=5 is not used here either.
+  //
+  // No extra request cost versus the old sequential loop in the worst case
+  // (still five fetchSkillOrder calls), and CHEAPER on every subsequent call
+  // this game: fetchSkillOrder's own cache treats "ok" as never-expiring
+  // (cooldown: Infinity, see its cache-read branch above), so once each lane
+  // has been fetched once, every later call -- including this Promise.all --
+  // resolves five cache hits with zero network calls. Verified by a live
+  // test, not assumed (see HANDOFF-engy.md).
+  const fallbackLanes = Object.keys(LANE_TO_ROLE_ID);
+  const fallbackResults = await Promise.all(
+    fallbackLanes.map((candidateLane) => fetchSkillOrder(champResult.id, LANE_TO_ROLE_ID[candidateLane]))
+  );
+
+  let bestLane = null;
+  let bestSkillOrder = null;
+  let bestSampleSize = -Infinity;
+  for (let i = 0; i < fallbackLanes.length; i++) {
+    const skillOrder = fallbackResults[i];
+    if (skillOrder.status !== "ok") continue;
+    const sampleSize = Number.isFinite(skillOrder.model.sampleSize) ? skillOrder.model.sampleSize : 0;
+    // Strict `>` -- fallbackLanes iterates in the fixed TOP/JUNGLE/MID/BOT/
+    // SUPPORT order, so on an exact tie the FIRST candidate to reach that
+    // sampleSize keeps its spot. That IS the deterministic tiebreak; `>=`
+    // here would silently let a later, equal-strength lane displace an
+    // earlier one for no reason.
+    if (sampleSize > bestSampleSize) {
+      bestSampleSize = sampleSize;
+      bestLane = fallbackLanes[i];
+      bestSkillOrder = skillOrder;
+    }
+  }
+
+  if (bestLane !== null) {
+    return { phase: "resolved", ...commonFields, lane: bestLane, laneSource: "auto-fallback", skillOrder: bestSkillOrder };
+  }
+
+  return { phase: "no-data-any-lane", ...commonFields };
 }
