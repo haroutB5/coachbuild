@@ -661,6 +661,34 @@ ipcMain.on('coachbuild-calibrate-cancel', () => {
 // ECONNREFUSED (no game) is the NORMAL state and is silent by design — never
 // surfaced as an error, never a dialog.
 
+// B8 FIX (2026-07-27 audit) -- signature of every field the RENDERER actually
+// reads off a 'coachbuild-state' push (js/skillOrderData.js's
+// resolveOverlayData reads exactly these six: inGame, championName,
+// championLevel, abilityRanks.{Q,W,E,R}, lane, detectedPosition -- confirmed
+// by reading that function directly, not assumed). Deliberately does NOT
+// include `calibration`: that field rides along on `gameState` too, but the
+// renderer is contractually forbidden from reading it off the state channel
+// (see pushCalibration()'s own comment) -- it has its own dedicated
+// 'coachbuild-calibration' channel and its own push call, so including it
+// here would make this function report a change the renderer would never
+// actually see, and skip a push it might.
+//
+// Same pattern as ingame.js's own `lastLaneBarSignature` (renderLaneBar) --
+// stringify the fields that matter and compare against the last-pushed
+// signature, skip the (expensive, ~100-element) rebuild when nothing the
+// renderer would draw differently has changed.
+function computeGameStateSignature(state) {
+  const r = state.abilityRanks;
+  return JSON.stringify([
+    state.inGame,
+    state.championName,
+    state.championLevel,
+    r ? [r.Q, r.W, r.E, r.R] : null,
+    state.lane,
+    state.detectedPosition,
+  ]);
+}
+
 async function pollActivePlayer() {
   try {
     const activePlayer = await fetchActivePlayer();
@@ -674,12 +702,24 @@ async function pollActivePlayer() {
 
     const parsed = parseLevelAndAbilities(activePlayer);
     if (parsed) {
-      gameState = mergeState(gameState, {
+      // B8 FIX: this used to merge + pushState() on EVERY successful poll
+      // tick (ACTIVE_POLL_MS = 1500ms) regardless of whether the level or any
+      // ability rank actually changed since the last push -- over a 40-minute
+      // game that's ~1,600 full IPC round trips, each triggering the
+      // renderer's handleState -> render -> renderResolved -> buildGrid,
+      // which does `els.grid.innerHTML = ""` and rebuilds ~100 DOM elements,
+      // even while the overlay is hidden (the default). Change-check first;
+      // only merge+push when the candidate state would actually render
+      // differently.
+      const candidate = mergeState(gameState, {
         inGame: true,
         championLevel: parsed.level,
         abilityRanks: parsed.abilityRanks,
       });
-      pushState();
+      if (computeGameStateSignature(candidate) !== computeGameStateSignature(gameState)) {
+        gameState = candidate;
+        pushState();
+      }
     }
 
     const riotId = extractLocalRiotId(activePlayer);
@@ -858,8 +898,10 @@ function spawnCompanion() {
     const ranMs = Date.now() - companionStartedAt;
     log(`companion: child exited (code=${code}, signal=${signal}) after ${ranMs}ms`);
     companionChild = null;
-    stopCompanionStatusPolling();
-    if (companionQuitting) return; // app is shutting down -- do not restart
+    if (companionQuitting) {
+      stopCompanionStatusPolling();
+      return; // app is shutting down -- do not restart
+    }
 
     if (ranMs < COMPANION_MUTEX_RACE_EXIT_MS) {
       // MUTEX-RACE CASE, distinct from a crash: Test-SingleInstance inside
@@ -870,13 +912,40 @@ function spawnCompanion() {
       // Surfaced as its own tray state, NOT silently retried forever.
       warn('companion: exited within ' + COMPANION_MUTEX_RACE_EXIT_MS + 'ms of spawn -- likely another copy is already running (mutex race), not auto-retrying');
       setCompanionStatus({ phase: 'already-running', clientConnected: null, lastPollAt: null, lastPollAtAdvancing: null, message: 'Companion: another copy is already running' });
+      // B1 FIX (2026-07-27 audit): this branch used to inherit an
+      // UNCONDITIONAL stopCompanionStatusPolling() call that ran before this
+      // if/else even checked which case it was -- so the supervisor went
+      // permanently blind the moment a standalone companion already held the
+      // mutex: no phase, no clientConnected, no lastPollAtAdvancing, for the
+      // rest of the session, even though a REAL companion is right there
+      // answering /status on loopback (this is not the copy we spawned, but
+      // the bridge port answers for whichever process is bound to it,
+      // regardless of who started it). Start polling instead of stopping it
+      // -- startCompanionStatusPolling() is itself idempotent (it clears any
+      // existing timer before arming a new one), so this is always safe to
+      // call here even if a poll loop somehow survived. Never auto-retry the
+      // spawn in this branch -- that part of the original diagnosis is
+      // correct and unchanged.
+      startCompanionStatusPolling();
       return;
     }
 
+    stopCompanionStatusPolling();
     scheduleCompanionRestart();
   });
 
-  companionRestartAttempts = 0; // a fresh spawn attempt -- backoff counter only grows on repeated failures from here
+  // B4 FIX (2026-07-27 audit): this used to unconditionally reset
+  // companionRestartAttempts to 0 on EVERY spawn, including a spawn that is
+  // ITSELF the restart attempt scheduleCompanionRestart() just backed off
+  // for -- so the sequence was always attempts=0 -> delay 2000ms -> spawn()
+  // resets to 0 -> next failure -> delay 2000ms again, forever, regardless of
+  // how many times it had already failed. The backoff table
+  // (COMPANION_RESTART_BACKOFF_MS) never got to escalate past its first
+  // entry. The reset that actually belongs here is the one already in
+  // pollCompanionStatusOnce() ("a real successful status poll is proof of
+  // health") -- that is the correct signal for "the backoff counter should
+  // go back to zero," not merely "a spawn was attempted." Removed; do not
+  // reintroduce a reset at spawn time.
   startCompanionStatusPolling();
 }
 
@@ -889,18 +958,49 @@ function scheduleCompanionRestart() {
   companionRestartTimer = setTimeout(attemptCompanionRestart, delay);
 }
 
-// The actual restart attempt, gated on `inGame`. NEVER restart the LCU
-// writer mid-match -- same class of mistake as installing an update
-// mid-match (see lib/autoUpdater.js's header), and for the same reason: this
-// process is what applies runes/item sets, and killing/relaunching it while
-// a game (and therefore possibly champ-select-adjacent activity) is live
-// risks a torn write. If deferred, notifyGameEndedForCompanion() (wired into
-// pollActivePlayer's game-ended branch, alongside autoUpdaterModule's own
-// notifyGameEnded()) retries immediately once `inGame` flips back to false,
-// rather than waiting out the rest of the backoff delay.
+// B2 FIX (2026-07-27 audit) -- ONE shared source of truth for "is it unsafe
+// to interrupt the companion right now", consulted by BOTH call sites that
+// need it (this file's attemptCompanionRestart below, and
+// lib/autoUpdater.js's maybeInstallIfIdle via the getIsBusy callback wired
+// in app.whenReady()'s autoUpdaterModule.init() call).
+//
+// `inGame` alone (true only while /liveclientdata/activeplayer succeeds --
+// i.e. a match is already IN PROGRESS) is too narrow: it says nothing about
+// CHAMP SELECT, which is exactly when companion.ps1 writes to the LCU
+// (Invoke-ApplyRunes does DELETE /lol-perks/v1/pages/<id> then POST). A
+// `taskkill /F` landing between those two calls (restart) or a
+// quitAndInstall mid-champ-select (update) destroys the user's own rune page
+// with nothing created in its place.
+//
+// The champ-select signal already exists and was going unused:
+// pollCompanionStatusOnce() writes the raw LCU gameflow phase straight into
+// `companionStatus.phase` (see its own comment, and B6's
+// GAMEFLOW_PHASE_LABELS for the presentation-only mapping layered on top of
+// this same raw value for the tray -- that mapping must never replace the
+// raw value stored here, or this check would break).
+function isCompanionBusy() {
+  return inGame || companionStatus.phase === 'ChampSelect';
+}
+
+function companionBusyReason() {
+  if (inGame) return 'a game is in progress';
+  if (companionStatus.phase === 'ChampSelect') return 'champ select is in progress';
+  return 'busy';
+}
+
+// The actual restart attempt, gated on isCompanionBusy() (widened from a
+// bare `inGame` check, see B2 above). NEVER restart the LCU writer mid-match
+// OR mid-champ-select -- same class of mistake as installing an update at
+// either of those moments (see lib/autoUpdater.js's header), and for the
+// same reason: this process is what applies runes/item sets, and
+// killing/relaunching it while either is live risks a torn write. If
+// deferred, notifyGameEndedForCompanion() (wired into pollActivePlayer's
+// game-ended branch, alongside autoUpdaterModule's own notifyGameEnded())
+// retries immediately once `inGame` flips back to false, rather than waiting
+// out the rest of the backoff delay.
 function attemptCompanionRestart() {
-  if (inGame) {
-    log('companion: restart due, but a game is in progress -- deferring until it ends');
+  if (isCompanionBusy()) {
+    log(`companion: restart due, but ${companionBusyReason()} -- deferring until it ends`);
     companionRestartPendingAfterGame = true;
     setCompanionStatus({ phase: 'restart-deferred', clientConnected: null, lastPollAt: null, lastPollAtAdvancing: null, message: 'Companion: restart deferred (game in progress)' });
     return;
@@ -1061,6 +1161,34 @@ function stopCompanionStatusPolling() {
   }
 }
 
+// B6 FIX (2026-07-27 audit) -- presentation-only map from the RAW League
+// client gameflow vocabulary (Riot's own phase names, as reported by the
+// companion's /status and stored VERBATIM in companionStatus.phase by
+// pollCompanionStatusOnce) to words a user reads as status. This must stay
+// presentation-only: `companionStatus.phase` itself is NOT touched here or
+// anywhere else -- B2's isCompanionBusy() depends on that field staying the
+// raw gameflow value (`=== 'ChampSelect'`), so collapsing it into a
+// different vocabulary here would silently break that check. `'None'` is the
+// ORDINARY idle state (League client open, no lobby/game) and must read as
+// healthy -- before this fix it fell into buildCompanionStatusLabel's
+// `default` branch and rendered verbatim as "Companion: None — client
+// connected," which reads as a failure to anyone who doesn't already know
+// "None" is gameflow-speak for idle.
+const GAMEFLOW_PHASE_LABELS = {
+  None: 'idle (client open, no lobby)',
+  Lobby: 'in lobby',
+  Matchmaking: 'in queue',
+  CheckedIntoTournament: 'checked into tournament',
+  ReadyCheck: 'ready check',
+  ChampSelect: 'champ select',
+  GameStart: 'game starting',
+  Reconnect: 'reconnecting',
+  InProgress: 'in game',
+  WaitingForStats: 'game ended, waiting for stats',
+  PreEndOfGame: 'post-game',
+  EndOfGame: 'post-game',
+};
+
 function buildCompanionStatusLabel() {
   switch (companionStatus.phase) {
     case 'not-found':
@@ -1079,7 +1207,8 @@ function buildCompanionStatusLabel() {
         return 'Companion: unreachable (bridge not responding yet)';
       }
       const connected = companionStatus.clientConnected ? 'client connected' : 'client not connected';
-      return `Companion: ${companionStatus.phase} — ${connected}`;
+      const phaseLabel = GAMEFLOW_PHASE_LABELS[companionStatus.phase] || companionStatus.phase;
+      return `Companion: ${phaseLabel} — ${connected}`;
     }
   }
 }
@@ -1723,6 +1852,35 @@ function humanizeAccel(accel) {
   return accel.replace(/\bControl\b/g, 'Ctrl');
 }
 
+// ---------------------------------------------------------------------------
+// Tray menu redesign (2026-07-27, A1) -- see HANDOFF-engy.md for the full
+// brief. The tray is this app's PRIMARY control surface: the window is
+// transparent/click-through/skipTaskbar (see createWindow()'s header) and
+// the global hotkeys are unreliable under Vanguard's UIPI (see
+// logElevationGuidance()'s header), so a user reaching for a control mid-game
+// has nowhere else to go. The OLD menu was a single flat list of 17 labels
+// and 6 separators -- everything got equal weight regardless of how often
+// it's actually touched mid-match versus once-ever setup/diagnostics.
+//
+// The reorganisation below is a REGROUPING, not a feature cull -- every
+// capability the old menu had is still reachable, several are literally
+// unchanged (Lane override still has its five lanes plus Auto; the
+// transient "Adjusting…"/"Calibrating…" labels still work exactly as
+// before). What moved:
+//   - Companion status: TWO disabled rows (buildCompanionStatusLabel +
+//     buildCompanionPollHealthLabel) collapsed to ONE at top level -- the
+//     "is this thing working" summary stays where it's always visible; the
+//     rarely-needed stall detail moved into Troubleshooting.
+//   - Interactive mode / Show skill table / Lane override / Calibrate
+//     (fallback) / Run elevated at login -- all setup-once toggles, not
+//     mid-game actions -- moved under "Settings".
+//   - The update status line + "Check for updates now" moved under
+//     "Updates".
+//   - Open log file / the per-hotkey bind-status rows / the elevation guess
+//     row -- all diagnostics for when something is already wrong, never
+//     touched on a healthy run -- moved under "Troubleshooting".
+// What STAYED top-level, one click away, because they're the things a user
+// reaches for mid-game: Hide/Show overlay and Adjust overlay position.
 function buildTrayMenuTemplate() {
   const laneSubmenu = [
     {
@@ -1740,37 +1898,12 @@ function buildTrayMenuTemplate() {
     })),
   ];
 
-  return [
-    {
-      // Version, first and non-clickable. Cheap to add and it answers the
-      // question every other diagnostic row depends on: WHICH BUILD is this?
-      // Without it, "auto-update is working" is unfalsifiable from the UI --
-      // the user cannot tell an app that updated from one that silently did
-      // not, which is exactly the failure the app-update.yml bug produced.
-      label: `CoachBuild Overlay v${app.getVersion()}`,
-      enabled: false,
-    },
-    { type: 'separator' },
-    {
-      label: overlayVisibleWanted ? 'Hide overlay' : 'Show overlay',
-      click: () => toggleOverlayVisibility(),
-    },
+  const settingsSubmenu = [
     {
       label: 'Interactive mode (clickable)',
       type: 'checkbox',
       checked: isInteractive,
       click: () => toggleInteractive(),
-    },
-    { type: 'separator' },
-    {
-      // PRIMARY alignment path as of 2026-07-27 round 8 -- adjusts the SAME
-      // boxes already drawn over the running game, live, instead of a
-      // separate window that covers it. See toggleAdjustOverlay()'s header.
-      label: isAdjustingOverlay ? 'Adjusting… (Enter to save, Esc to cancel)' : 'Adjust overlay position',
-      type: 'checkbox',
-      checked: isAdjustingOverlay,
-      enabled: !isCalibrating,
-      click: () => toggleAdjustOverlay(),
     },
     {
       // Kept, not deleted -- default OFF this round (2026-07-27). See the
@@ -1781,6 +1914,11 @@ function buildTrayMenuTemplate() {
       click: () => toggleShowSkillTable(),
     },
     {
+      label: 'Lane override',
+      submenu: laneSubmenu,
+    },
+    { type: 'separator' },
+    {
       // FALLBACK path now, not primary (round 8) -- a separate window covers
       // the game, so a one-monitor user can't see what they're aligning to.
       // Kept for a second monitor / dry-run-without-a-game use case.
@@ -1789,14 +1927,64 @@ function buildTrayMenuTemplate() {
       click: () => enterCalibration(),
     },
     { type: 'separator' },
-    // Companion supervision status (2026-07-27, "one app" round) -- see the
-    // "Companion supervision" section above. Non-clickable, same pattern as
-    // the hotkey/elevation/updater rows below: a fact reported live, not a
-    // guess. The second row only appears while genuinely stalled (see
-    // buildCompanionPollHealthLabel()'s header for why it's split out).
-    { label: buildCompanionStatusLabel(), enabled: false },
-    ...(buildCompanionPollHealthLabel() ? [{ label: buildCompanionPollHealthLabel(), enabled: false }] : []),
+    {
+      // Fix 1 (2026-07-27 round 10) -- the actual answer to "hotkeys/adjust-
+      // mode work outside the game but not in it": League runs elevated
+      // under Vanguard, this app runs asInvoker, Windows UIPI blocks input
+      // delivery across that gap. This task, not requireAdministrator in the
+      // manifest, is how elevation is obtained WITHOUT a UAC prompt on every
+      // manual launch. See enableElevatedAutostart()'s header for the full
+      // reasoning. Relabeled "Start with Windows" (A1) -- its net effect
+      // from the user's seat, and the wording the brief's suggested shape
+      // used -- while keeping the full original parenthetical so the "why"
+      // (in-game hotkeys) isn't lost.
+      label: elevatedAutostartEnabled
+        ? 'Start with Windows (elevated, fixes in-game hotkeys) — ENABLED'
+        : 'Start with Windows (elevated, fixes in-game hotkeys)…',
+      type: 'checkbox',
+      checked: elevatedAutostartEnabled,
+      enabled: app.isPackaged,
+      click: () => toggleElevatedAutostart(),
+    },
+  ];
+
+  const updatesSubmenu = [
+    {
+      // Same "surfaced, not silent" bar as the diagnostics rows in
+      // Troubleshooting -- see lib/autoUpdater.js's getStatusLabel().
+      // Non-clickable status row, live-updated via onStatusChange ->
+      // rebuildTrayMenu() wired in app.whenReady().
+      label: autoUpdaterModule.getStatusLabel(app.getVersion()),
+      enabled: false,
+    },
+    {
+      label: 'Check for updates now',
+      enabled: app.isPackaged,
+      click: () => autoUpdaterModule.checkForUpdates('manual, from tray'),
+    },
+  ];
+
+  const troubleshootingSubmenu = [
+    {
+      // 2026-07-27 round 9 -- so the user can retrieve diagnostics (e.g. the
+      // hotkey register()/isRegistered() lines) without hunting for
+      // app.getPath('userData') themselves, especially once packaged (no
+      // console at all then). shell.openPath opens it in the user's default
+      // text-file handler (Notepad, by default on a stock Windows install).
+      label: 'Open log file',
+      click: () => {
+        shell.openPath(LOG_FILE_PATH).then((errMsg) => {
+          if (errMsg) warn('failed to open log file via shell.openPath:', errMsg);
+        });
+      },
+    },
     { type: 'separator' },
+    // B1/B6-aware companion poll-stall detail (A1) -- the second companion
+    // row from the old flat menu, moved here per the brief ("collapse to one
+    // clear line at top level and put any detail in Troubleshooting"). Only
+    // rendered while genuinely stalled -- see buildCompanionPollHealthLabel()'s
+    // own header for why it's split out from the top-level summary line.
+    ...(buildCompanionPollHealthLabel() ? [{ label: buildCompanionPollHealthLabel(), enabled: false }, { type: 'separator' }] : []),
     // Non-clickable status rows (2026-07-27 round 8, REWORKED round 9) -- a
     // log line in a terminal the user isn't looking at mid-match is not
     // communication, and a packaged app has no console/log-file-in-view at
@@ -1825,53 +2013,44 @@ function buildTrayMenuTemplate() {
         : 'Elevation: most likely NOT elevated (one possible factor if a hotkey fails only in-game)',
       enabled: false,
     },
+  ];
+
+  return [
     {
-      // Fix 1 (2026-07-27 round 10) -- the actual answer to "hotkeys/adjust-
-      // mode work outside the game but not in it": League runs elevated
-      // under Vanguard, this app runs asInvoker, Windows UIPI blocks input
-      // delivery across that gap. This task, not requireAdministrator in the
-      // manifest, is how elevation is obtained WITHOUT a UAC prompt on every
-      // manual launch. See enableElevatedAutostart()'s header for the full
-      // reasoning.
-      label: elevatedAutostartEnabled
-        ? 'Run elevated at login (fixes in-game hotkeys) — ENABLED'
-        : 'Run elevated at login (fixes in-game hotkeys)…',
-      type: 'checkbox',
-      checked: elevatedAutostartEnabled,
-      enabled: app.isPackaged,
-      click: () => toggleElevatedAutostart(),
-    },
-    {
-      // Same "surfaced, not silent" bar as the hotkey rows above -- see
-      // lib/autoUpdater.js's getStatusLabel(). Non-clickable status row,
-      // live-updated via onStatusChange -> rebuildTrayMenu() wired in
-      // app.whenReady().
-      label: autoUpdaterModule.getStatusLabel(app.getVersion()),
+      // Version, first and non-clickable. Cheap to add and it answers the
+      // question every other diagnostic row depends on: WHICH BUILD is this?
+      // Without it, "auto-update is working" is unfalsifiable from the UI --
+      // the user cannot tell an app that updated from one that silently did
+      // not, which is exactly the failure the app-update.yml bug produced.
+      label: `CoachBuild Overlay v${app.getVersion()}`,
       enabled: false,
     },
-    {
-      label: 'Check for updates now',
-      enabled: app.isPackaged,
-      click: () => autoUpdaterModule.checkForUpdates('manual, from tray'),
-    },
-    {
-      // 2026-07-27 round 9 -- so the user can retrieve diagnostics (e.g. the
-      // hotkey register()/isRegistered() lines) without hunting for
-      // app.getPath('userData') themselves, especially once packaged (no
-      // console at all then). shell.openPath opens it in the user's default
-      // text-file handler (Notepad, by default on a stock Windows install).
-      label: 'Open log file',
-      click: () => {
-        shell.openPath(LOG_FILE_PATH).then((errMsg) => {
-          if (errMsg) warn('failed to open log file via shell.openPath:', errMsg);
-        });
-      },
-    },
+    // Companion status (2026-07-27, "one app" round; collapsed to one line
+    // in the A1 redesign -- see this function's header comment). Stays at
+    // TOP level, right under the version, because it's the main "is this
+    // thing working" signal and must never be buried behind a submenu click.
+    { label: buildCompanionStatusLabel(), enabled: false },
     { type: 'separator' },
     {
-      label: 'Lane override',
-      submenu: laneSubmenu,
+      label: overlayVisibleWanted ? 'Hide overlay' : 'Show overlay',
+      click: () => toggleOverlayVisibility(),
     },
+    {
+      // PRIMARY alignment path as of 2026-07-27 round 8 -- adjusts the SAME
+      // boxes already drawn over the running game, live, instead of a
+      // separate window that covers it. See toggleAdjustOverlay()'s header.
+      // Kept top-level (A1): this and Hide/Show overlay are the only two
+      // things a user reaches for mid-game.
+      label: isAdjustingOverlay ? 'Adjusting… (Enter to save, Esc to cancel)' : 'Adjust overlay position',
+      type: 'checkbox',
+      checked: isAdjustingOverlay,
+      enabled: !isCalibrating,
+      click: () => toggleAdjustOverlay(),
+    },
+    { type: 'separator' },
+    { label: 'Settings', submenu: settingsSubmenu },
+    { label: 'Updates', submenu: updatesSubmenu },
+    { label: 'Troubleshooting', submenu: troubleshootingSubmenu },
     { type: 'separator' },
     {
       label: 'Quit CoachBuild Overlay',
@@ -1910,13 +2089,28 @@ function createTray() {
 // Single-instance lock — an always-on-top overlay is meaningless duplicated;
 // a second launch should hand off to the first instance, not draw a second
 // window on top of it.
-initLogFile(); // must run before the first log()/warn() call below
-
+//
+// B5 FIX (2026-07-27 audit): initLogFile() used to run HERE, unconditionally,
+// BEFORE this lock check -- so a second launch (a double-click while the app
+// is already running, a stray shortcut, Explorer re-opening it: all ordinary,
+// harmless events) truncated LOG_FILE_PATH (fs.writeFileSync(path, '') --
+// see initLogFile()'s own header) out from under the REAL running instance's
+// already-open append-mode write stream, destroying its diagnostics, right
+// before the second copy discovered it had lost the lock race and quit. "Open
+// log file" then showed an empty file for the copy the user actually cares
+// about. Moved inside the `else` branch below, so it only runs once this
+// process actually holds the lock.
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
-  log('another instance is already running — quitting');
+  // Console-only here (deliberately no initLogFile()/log() call -- see the
+  // comment above): this losing instance never touches the log file at all,
+  // so the running instance's own history stays intact.
+  console.warn('[CoachBuild:main] another instance is already running — quitting');
   app.quit();
 } else {
+  initLogFile(); // must run before the first log()/warn() call below, and only
+  // once this process holds the single-instance lock (see the comment above).
+
   app.on('second-instance', () => {
     log('second instance launched — ignoring (this instance keeps running)');
   });
@@ -1972,7 +2166,11 @@ if (!gotSingleInstanceLock) {
     autoUpdaterModule.init({
       log,
       warn,
-      getInGame: () => inGame,
+      // B2 FIX (2026-07-27 audit): was `() => inGame` -- widened to the
+      // shared isCompanionBusy() so a seamless update can never
+      // quitAndInstall() during champ select either, not just mid-match. See
+      // isCompanionBusy()'s own comment above for the full reasoning.
+      getIsBusy: () => isCompanionBusy(),
       onStatusChange: () => rebuildTrayMenu(),
       isPackaged: app.isPackaged,
       appVersion: app.getVersion(),
@@ -2025,6 +2223,18 @@ if (!gotSingleInstanceLock) {
       repositionMainWindowToDisplay();
       applyCalibrationForCurrentDisplay();
       pushState();
+      // B3 FIX (2026-07-27 audit): this handler is the THIRD place that broke
+      // the renderer/main contract stated three times elsewhere in this file
+      // (exitCalibration, coachbuild-adjust-save) -- the renderer reads
+      // highlight-box geometry ONLY off the dedicated 'coachbuild-calibration'
+      // channel, never off `state.calibration`. applyCalibrationForCurrentDisplay()
+      // can swap in a scaled default geometry when the new resolution has no
+      // saved calibration, and without this call the renderer was never told
+      // -- boxes kept drawing at the OLD resolution's position until some
+      // unrelated event happened to fire pushCalibration(), then visibly
+      // jumped. pushState() alone (above) is not enough, same as at the other
+      // two sites.
+      pushCalibration();
     });
   });
 

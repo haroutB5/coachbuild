@@ -667,6 +667,25 @@ function renderHighlight(data) {
   els.highlight.style.top = `${centerY - size / 2}px`;
   els.highlight.style.width = `${size}px`;
   els.highlight.style.height = `${size}px`;
+  // B7 FIX (2026-07-27 audit): levels 16-18 are DERIVED by this app, not
+  // published by op.gg -- the table already discloses this per-column
+  // (buildGrid's `cb-derived` class, "Levels N–M derived" footer text), but
+  // that disclosure lives on a surface that defaults OFF (`showTable`), and
+  // the highlight box -- the PRIMARY surface now (see this file's header) --
+  // drew a derived-level recommendation identically to a published one. No
+  // provenance was visible at all on the default config.
+  //
+  // `rec.atLevel` is the 1-based order-slot index resolveNextSkill resolved
+  // this recommendation from (see lib/nextSkill.ts's own doc comment on
+  // NextSkillRecommendation.atLevel) -- the SAME index buildGrid/
+  // observedLevelCount compare against `observedLevelCount(model)` to decide
+  // a column is derived (see buildGrid above: `if (idx >= observed)
+  // cell.classList.add("cb-derived")`). Reusing that exact rule here, rather
+  // than inventing a second one, is what keeps the box and the table from
+  // ever disagreeing about which levels are derived.
+  const model = data.skillOrder && data.skillOrder.model;
+  const isDerived = !!model && rec.atLevel - 1 >= observedLevelCount(model);
+  els.highlight.classList.toggle('cb-highlight--derived', isDerived);
   els.highlight.hidden = false;
 }
 

@@ -393,6 +393,21 @@ body {
   display: none;
 }
 
+/* B7 (2026-07-27 audit) -- provenance for a DERIVED (levels 16-18) highlight
+   recommendation, applied via ingame.js's renderHighlight (see its comment
+   for the exact rule -- reuses the same observedLevelCount() index the
+   table's own `.cb-grid td.cb-derived` treatment is keyed off, so the two
+   surfaces can never disagree about which levels are derived). Same pink
+   hue/glow as a published recommendation -- still unmistakably "the
+   recommendation box," not a second color meaning a second thing -- but a
+   DASHED border in place of the solid one signals "less certain" the same
+   way the grid's own derived-column treatment trades a solid fill for an
+   outline. Kept to border-style only (no reduced glow, no added label) so
+   it stays legible over a running game at a glance. */
+.cb-highlight--derived {
+  border-style: dashed;
+}
+
 /* ── Adjust-in-place mode (round 8, 2026-07-27) ──────────────────────────────
    The calibration WINDOW approach failed live: on one monitor the user was
    aiming boxes at an ability bar that window itself was covering. This is

@@ -5,13 +5,19 @@
 // "Auto-update" section).
 //
 // THE ONE HARD RULE (from the brief this shipped under): never interrupt a
-// game. `getInGame()` (a callback into main.js's `inGame`, true iff the last
-// poll of /liveclientdata/activeplayer succeeded) is the single source of
-// truth for "is it safe to install right now." A finished download NEVER
-// installs immediately -- it only sets `updateReadyToInstall` and waits for
-// `notifyGameEnded()` (main.js calls this the instant `inGame` flips back to
-// false) or the initial check `update-downloaded` itself performs (a no-op if
-// a game happens to be running at that exact moment).
+// game -- WIDENED (2026-07-27 audit, B2) to also cover champ select, not just
+// an in-progress match. `getIsBusy()` (a callback into main.js's shared
+// `isCompanionBusy()` -- true while `inGame` OR the companion's polled LCU
+// gameflow phase is `'ChampSelect'`) is the single source of truth for "is it
+// safe to install right now." Was `getInGame()` / bare `inGame` before this
+// fix: champ select is exactly when companion.ps1 writes to the LCU
+// (Invoke-ApplyRunes's DELETE-then-POST), so quitAndInstall() firing between
+// those two calls could destroy the user's own rune page with nothing
+// created in its place. A finished download NEVER installs immediately -- it
+// only sets `updateReadyToInstall` and waits for `notifyGameEnded()` (main.js
+// calls this the instant `inGame` flips back to false) or the initial check
+// `update-downloaded` itself performs (a no-op if the app is busy at that
+// exact moment).
 //
 // autoInstallOnAppQuit is left at electron-updater's default (true): if the
 // user quits the app manually via the tray while a downloaded update is
@@ -39,7 +45,10 @@ const INITIAL_CHECK_DELAY_MS = 10 * 1000;
 
 let log = (...args) => console.log('[CoachBuild:autoUpdater]', ...args);
 let warn = (...args) => console.warn('[CoachBuild:autoUpdater]', ...args);
-let getInGame = () => false;
+// B2 (2026-07-27 audit): renamed from getInGame -- the callback now answers
+// "is it unsafe to interrupt the companion" (inGame OR champ select), not
+// literally "is a game in progress." See main.js's isCompanionBusy().
+let getIsBusy = () => false;
 let onStatusChange = () => {};
 
 // Surfaced to the tray menu -- see main.js's buildTrayMenuTemplate().
@@ -92,8 +101,8 @@ function getStatusLabel(appVersion) {
 
 function maybeInstallIfIdle() {
   if (!updateReadyToInstall) return;
-  if (getInGame()) {
-    log('update downloaded but a game is in progress -- deferring install until it ends');
+  if (getIsBusy()) {
+    log('update downloaded but a game or champ select is in progress -- deferring install until it ends');
     return;
   }
   log('installing deferred update now (not in game) -- quitAndInstall(isSilent=true, isForceRunAfter=true)');
@@ -140,10 +149,10 @@ function checkForUpdates(reason) {
 // run (there is no app-update.yml, no installed location, nothing to
 // replace), so attempting real checks there would just be noisy failures
 // with zero signal. Real verification only happens via a packaged build.
-function init({ log: logFn, warn: warnFn, getInGame: getInGameFn, onStatusChange: onStatusChangeFn, isPackaged, appVersion }) {
+function init({ log: logFn, warn: warnFn, getIsBusy: getIsBusyFn, onStatusChange: onStatusChangeFn, isPackaged, appVersion }) {
   if (logFn) log = logFn;
   if (warnFn) warn = warnFn;
-  if (getInGameFn) getInGame = getInGameFn;
+  if (getIsBusyFn) getIsBusy = getIsBusyFn;
   if (onStatusChangeFn) onStatusChange = onStatusChangeFn;
 
   if (!isPackaged) {
@@ -188,8 +197,8 @@ function init({ log: logFn, warn: warnFn, getInGame: getInGameFn, onStatusChange
     log(`event: update-downloaded v${info && info.version} -- will install once no game is in progress`);
     updateReadyToInstall = true;
     setStatus({ phase: 'ready', version: info && info.version });
-    // In case no game happens to be running right now. maybeInstallIfIdle()
-    // re-checks getInGame() itself and is a safe no-op if one is.
+    // In case nothing is running right now. maybeInstallIfIdle() re-checks
+    // getIsBusy() itself and is a safe no-op if it is.
     maybeInstallIfIdle();
   });
 
