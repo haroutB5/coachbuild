@@ -2,6 +2,22 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.65.2] — 2026-07-27 — Stop blaming the user's connection for someone else's outage
+
+### Fixed
+- **A failed build fetch said "Check your connection and refresh" no matter what actually broke.**
+  Found live: `api.coachless.gg` began returning **502** while `coachless.gg` itself stayed up, so
+  `/api/build` correctly 500'd — and the page told the user to go debug the one thing that was fine.
+
+  The distinction was already available in the code and simply unused: `!res.ok` means the request
+  REACHED us and the server failed, while a `catch` means `fetch` never completed. Only the second
+  is plausibly the user's network. The error state now carries `reason: "network" | "upstream"` and
+  says which: an upstream failure reports that the stats source isn't responding and that refreshing
+  may not help, rather than sending the user to their router.
+
+  Same defect class an audit caught in the overlay's data layer the same day — a network failure
+  rendered as a confident claim about the data. Worth naming as a pattern rather than two bugs.
+
 ## [0.65.1] — 2026-07-27 — The wire format stops being an assumption; overlay groundwork
 
 ### Verified — v0.65.0's contract, confirmed against a real game for the first time

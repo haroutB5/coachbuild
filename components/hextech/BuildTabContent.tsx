@@ -45,7 +45,14 @@ type FetchState =
   | { status: "loading" }
   | { status: "ok"; build: BuildResponse }
   | { status: "empty" }
-  | { status: "error" };
+  /** `network` = the request never completed (fetch threw) — the user's
+   *  connection genuinely might be the problem. `upstream` = the request
+   *  reached us and the SERVER failed, which in practice is almost always
+   *  api.coachless.gg being down (observed returning 502 while its own
+   *  website stayed up). Telling a user with a working connection to "check
+   *  your connection" sends them to debug the one thing that is fine, so the
+   *  two cases must not share a message. */
+  | { status: "error"; reason: "network" | "upstream" };
 
 function CardSkeleton({ className = "" }: { className?: string }) {
   return (
@@ -230,7 +237,9 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
           return;
         }
         if (!res.ok) {
-          setState({ status: "error" });
+          // The request REACHED us and the server answered badly — not a
+          // client-side connectivity problem. Do not blame the user's network.
+          setState({ status: "error", reason: "upstream" });
           return;
         }
         const data: BuildResponse[] = await res.json();
@@ -244,7 +253,9 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
         setState({ status: "ok", build: data[0] });
         onPatchResolved?.(data[0].patch);
       } catch {
-        if (!isCancelled()) setState({ status: "error" });
+        // fetch() itself threw, so the request never completed — this is the
+        // only case where the user's connection is a plausible cause.
+        if (!isCancelled()) setState({ status: "error", reason: "network" });
       }
     },
     [onPatchResolved]
@@ -309,10 +320,21 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
     return (
       <div className="mt-5 space-y-5">
         <div className="bg-panel border border-line rounded-xl p-10 text-center">
-          <div className="text-txt font-semibold mb-1">Couldn&apos;t load — try again</div>
+          <div className="text-txt font-semibold mb-1">
+            {state.reason === "upstream" ? "Build data is unavailable right now" : "Couldn't load — try again"}
+          </div>
           <div className="text-mut text-sm">
-            Something went wrong fetching {champ.name} {LANE_LABEL[lane]}. Check your connection and
-            refresh.
+            {state.reason === "upstream" ? (
+              <>
+                The stats source this app reads ({champ.name} {LANE_LABEL[lane]}) isn&apos;t responding.
+                That&apos;s upstream of CoachBuild, so refreshing may not help until it recovers.
+              </>
+            ) : (
+              <>
+                Couldn&apos;t reach CoachBuild while fetching {champ.name} {LANE_LABEL[lane]}. Check your
+                connection and refresh.
+              </>
+            )}
           </div>
         </div>
       </div>
