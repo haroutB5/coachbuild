@@ -95,7 +95,12 @@ body {
      in the HTML) now that the highlight box is the primary surface -- see
      ingame.js's `showTable` handling. */
   position: fixed;
-  top: 110px;
+  /* Raised 110px -> 12px (2026-07-27): at 110 it sat squarely over the League
+     CLIENT's PLAY button and the top of the in-game view. Hard against the top
+     edge is the safest strip on both surfaces -- the client's own nav sits
+     lower, and in game the top-centre scoreboard and top-right objective
+     banners are horizontally clear of a left-anchored panel. */
+  top: 12px;
   left: 24px;
   z-index: 10;
   display: inline-flex;

@@ -240,7 +240,17 @@ function render(data) {
   // off. The tray menu's lane submenu (main.js) is the OTHER, always-
   // available way to change lanes, so this is a convenience restore, not
   // the only path.
-  els.overlay.hidden = !(showTable || isInteractive);
+  // ...but NOT when there is no game at all. Outside a match the panel has
+  // literally nothing to say -- `not-in-game` renders an empty message and the
+  // word "CoachBuild" -- and it was sitting on top of the League CLIENT,
+  // covering the PLAY button. An overlay that obscures the thing you use to
+  // start a game, in order to display nothing, is strictly worse than absent.
+  // Interactive/adjust mode still forces it visible, because that is when the
+  // user is deliberately reaching for the controls inside it (and needs to see
+  // the boxes to align them) -- including on the desktop, where aligning is
+  // actually easier than mid-match.
+  const hasSomethingToSay = data.phase !== "not-in-game";
+  els.overlay.hidden = !((showTable && hasSomethingToSay) || isInteractive);
 
   renderLaneBar();
 
