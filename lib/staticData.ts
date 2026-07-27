@@ -2,9 +2,14 @@
 // staticData.ts — fetch + in-memory cache CDN maps; id→{name,icon} resolvers
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { ChampionRef, RoleId } from "./types";
+import type { ChampionKit, ChampionRef, RoleId } from "./types";
 import { getKeystoneData } from "./coachless";
 import { fetchWithTimeout } from "./fetchTimeout";
+import {
+  KNOWN_NON_STANDARD_CHAMPION_IDS,
+  STANDARD_KIT,
+  kitFromMaxRanks,
+} from "./championKit";
 
 // ── CDN bases ────────────────────────────────────────────────────────────────
 //
@@ -539,6 +544,116 @@ async function loadDdragonChampionGaps(existingIds: Set<number>): Promise<ChampD
   } catch {
     return [];
   }
+}
+
+// ── Per-champion ability rank rules (ddragon `spells[i].maxrank`) ───────────
+//
+// Backs lib/championKit.ts — read that header for what the numbers MEAN and
+// the evidence behind the interpretation. This half is only the fetch.
+//
+// WHY ddragon's OWN latest version, not the coachless-resolved patch: the
+// caller is a player in a LIVE game, so the caps must match the client they
+// are actually playing on. The resolved patch deliberately lags to whatever
+// coachless has computed WPA for (see "Patch resolution" above) and can sit a
+// patch or two behind. Same reasoning as the champion gap-fill below it.
+//
+// CACHING: one module-level Map, populated lazily per champion, exactly like
+// runeMap/itemsMap/champsMap above — plus fetchJson's own 24 h `revalidate`.
+// Deliberately per-champion rather than a single championFull.json pull: that
+// file is ~1.5 MB for data we need four integers of, and every caller
+// (/api/skill-order) asks about exactly one champion. No second cache layer,
+// and no per-render network call: a warm instance answers from the Map.
+
+const DDRAGON_CHAMPION_DETAIL = (ver: string, key: string) =>
+  `https://ddragon.leagueoflegends.com/cdn/${ver}/data/en_US/champion/${key}.json`;
+
+interface DdragonSpellRaw {
+  maxrank?: unknown;
+}
+
+/** Memoized per champion KEY (e.g. "Jayce"). A resolved-to-null entry is
+ *  cached too, so a champion ddragon genuinely has no usable data for does not
+ *  re-fetch on every request. */
+const championKitCache = new Map<string, ChampionKit | null>();
+
+/** Test-only: clear the module-level champion-kit cache between test cases. */
+export function __resetChampionKitCacheForTests(): void {
+  championKitCache.clear();
+}
+
+/** Pure: ddragon's champion-detail payload → the four maxrank integers → a
+ *  ChampionKit. Exported for direct unit testing against captured fixtures,
+ *  no network. Returns null on ANY deviation — a missing `spells`, a ragged
+ *  array, a non-integer maxrank, or an R shape championKit.ts has no verified
+ *  semantics for. Never a partial or best-effort kit.
+ *
+ *  (The full-roster sweep found every one of the 173 champions carrying
+ *  exactly 4 spells, so the length check has no live counterexample today —
+ *  it is the contract boundary against a CDN reshape, not a known case.) */
+export function parseChampionKit(raw: unknown, championKey: string): ChampionKit | null {
+  if (!raw || typeof raw !== "object") return null;
+  const data = (raw as { data?: unknown }).data;
+  if (!data || typeof data !== "object") return null;
+  const entry = (data as Record<string, unknown>)[championKey];
+  if (!entry || typeof entry !== "object") return null;
+  const spells = (entry as { spells?: unknown }).spells;
+  if (!Array.isArray(spells)) return null;
+  const maxranks = (spells as DdragonSpellRaw[]).map((s) =>
+    typeof s?.maxrank === "number" ? s.maxrank : NaN
+  );
+  return kitFromMaxRanks(maxranks);
+}
+
+/**
+ * Resolve one champion's real rank rules.
+ *
+ * Returns `ChampionKit | null`, and the null is LOAD-BEARING — see the `kit`
+ * field on SkillOrderModel. The degraded path is deliberately asymmetric:
+ *
+ *   * ddragon reachable  → the champion's real, published caps.
+ *   * unreachable, and the champion is on the measured non-standard list
+ *                        → null. Consumers REFUSE. Handing a Jayce player
+ *                          5/5/5/3 would make every recommendation off by one
+ *                          for the whole game, which is worse than silence.
+ *   * unreachable, any other champion
+ *                        → STANDARD_KIT. This is not a new guess: it is
+ *                          exactly what the app already assumed for all 173
+ *                          champions before per-champion caps existed, so the
+ *                          degraded path is no worse than the old happy path.
+ *
+ * Never throws.
+ */
+export async function resolveChampionKit(
+  championId: number,
+  championKey: string
+): Promise<ChampionKit | null> {
+  const cached = championKitCache.get(championKey);
+  if (cached !== undefined) return cached;
+
+  let kit: ChampionKit | null = null;
+  try {
+    const versions = await fetchJson<string[]>(CDN.versions);
+    const ver = versions[0];
+    if (ver) {
+      const raw = await fetchJson<unknown>(DDRAGON_CHAMPION_DETAIL(ver, championKey));
+      kit = parseChampionKit(raw, championKey);
+    }
+  } catch {
+    kit = null;
+  }
+
+  if (!kit) {
+    // Resolution failed. Refuse for the champions we have MEASURED to be
+    // non-standard; fall back to the standard model for everyone else.
+    kit = KNOWN_NON_STANDARD_CHAMPION_IDS.has(championId) ? null : STANDARD_KIT;
+    // A failed resolution is NOT cached: it is a transient network outcome,
+    // and pinning a whole serverless instance to the fallback until it
+    // recycles would turn a blip into hours of degraded advice.
+    return kit;
+  }
+
+  championKitCache.set(championKey, kit);
+  return kit;
 }
 
 export async function loadSummonersData(): Promise<SummonerDataEntry[]> {

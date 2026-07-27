@@ -160,6 +160,34 @@ export type BuildsResponse = BuildResponse[];
 
 export type Ability = "Q" | "W" | "E" | "R";
 
+/**
+ * A champion's REAL per-ability rank rules, sourced from Data Dragon's
+ * `spells[i].maxrank`. See lib/championKit.ts for how each field is derived
+ * and what evidence backs it — that header is the reference, this is the wire
+ * shape it travels in.
+ *
+ * This rides on SkillOrderModel (and therefore across /api/skill-order)
+ * deliberately: both the /compact panel and the desktop overlay already pass
+ * the API payload through verbatim, so shipping the rules WITH the order means
+ * every consumer becomes champion-correct without its own ddragon call.
+ */
+export interface ChampionKit {
+  /** Max ranks per slot, verbatim from ddragon. 5/5/5/3 for 166 champions. */
+  maxRanks: Readonly<Record<Ability, number>>;
+  /** Ranks granted at level 1 WITHOUT spending a skill point. Nonzero only in
+   *  the R slot, and only for form-swap kits (Jayce, Karma, Elise, Nidalee).
+   *  Load-bearing: `unspent = level − Σ(spent)` is off by one all game if a
+   *  free rank is counted as spent. */
+  freeRanks: Readonly<Record<Ability, number>>;
+  /** Minimum champion level for each R rank (1-based, counting free ranks),
+   *  or null when the R slot is not level-gated at all (Udyr's fourth basic). */
+  ultimateLevels: readonly number[] | null;
+  /** Σ ranks that cost a point. Equals 18 for the 170 champions who can spend
+   *  every point; >18 for Yuumi/Aphelios/Udyr, who must skip something — which
+   *  is exactly why their level 16-18 tail is not derivable. */
+  purchasableTotal: number;
+}
+
 export interface SkillOrderModel {
   /** Max-priority order of the basic abilities, e.g. ["Q","W","E"]. */
   priority: Ability[];
@@ -176,6 +204,21 @@ export interface SkillOrderModel {
   winRate: number | null;
   /** Share of games using this order, 0..1, or null. */
   share: number | null;
+  /**
+   * This champion's real rank rules. THREE distinct states, and the
+   * difference between them is the difference between advising and guessing:
+   *
+   *   * a ChampionKit — resolved from ddragon for THIS champion. Use it.
+   *   * `null`        — could not resolve, AND this champion is known to be
+   *                     off the 5/5/5/3 model. Consumers must REFUSE; falling
+   *                     back to standard here is what produced the blank-Jayce
+   *                     bug's wrong arithmetic.
+   *   * absent        — no kit travelled with this model (an API response
+   *                     cached before this field existed, or a hand-built test
+   *                     fixture). Treated as STANDARD_KIT, which is the exact
+   *                     behaviour every consumer had before this field.
+   */
+  kit?: ChampionKit | null;
 }
 
 export interface ApiError {

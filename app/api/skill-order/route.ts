@@ -22,7 +22,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import type { ApiError, RoleId, SkillOrderModel } from "@/lib/types";
-import { getChampionById } from "@/lib/staticData";
+import { getChampionById, resolveChampionKit } from "@/lib/staticData";
 import { fetchSkillOrder, CACHE_TTL_SECONDS } from "@/lib/opgg";
 
 export const runtime = "nodejs";
@@ -82,7 +82,14 @@ export async function GET(req: NextRequest) {
     const champion = await getChampionById(championId);
     if (!champion?.key) return empty();
 
-    const model = await fetchSkillOrder(champion.key, roleId);
+    // This champion's REAL per-ability rank rules, from ddragon. Shipping them
+    // with the order is what makes both consumers (the /compact panel and the
+    // desktop overlay) champion-correct without either doing its own ddragon
+    // call — see SkillOrderModel.kit. Never throws; a null here is a
+    // deliberate "refuse rather than assume 5/5/5/3", not a failure.
+    const kit = await resolveChampionKit(championId, champion.key);
+
+    const model = await fetchSkillOrder(champion.key, roleId, undefined, kit);
     if (!model) return empty();
 
     return NextResponse.json<SkillOrderModel>(model, { headers: PAYLOAD_HEADERS });

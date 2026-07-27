@@ -10,8 +10,10 @@ import {
   MAX_RANKS,
   TOTAL_LEVELS,
   SOURCE_LEVELS,
+  STANDARD_KIT,
   type Ability,
 } from "@/lib/skillOrderModel";
+import { kitFromMaxRanks } from "@/lib/championKit";
 
 const A = (s: string): Ability[] => s.split("") as Ability[];
 
@@ -268,7 +270,11 @@ describe("full-roster sweep findings (172 champions, 2026-07-27)", () => {
     }
   );
 
-  // The four champions refused on the cap check.
+  // The four champions the STANDARD kit refuses on the cap check. This is now
+  // the FALLBACK path (no kit supplied), not what production does for them —
+  // see the per-champion block below for their real behaviour. Kept because
+  // the fallback is still live whenever ddragon cannot be reached for a
+  // champion we have no reason to believe is non-standard.
   const OVER_CAP: Array<[string, string]> = [
     ["UDYR", "QRWEQQQEQEQEEEW"],
     ["JAYCE", "QWEQQWQWQWQWWEE"],
@@ -276,14 +282,17 @@ describe("full-roster sweep findings (172 champions, 2026-07-27)", () => {
     ["APHELIOS", "QQQEQREQEQEEREW"],
   ];
 
-  it.each(OVER_CAP)("%s is refused by arithmetic, never completed", (_name, path) => {
-    const observed = A(path);
-    expect(observed).toHaveLength(15);
-    const res = completeSkillOrder(observed);
-    expect(res.completed).toBe(false);
-    expect(res.refusedBecause).toBe("rank-over-cap");
-    expect(res.order).toEqual(observed);
-  });
+  it.each(OVER_CAP)(
+    "%s is refused under the STANDARD-kit fallback, by arithmetic, never completed",
+    (_name, path) => {
+      const observed = A(path);
+      expect(observed).toHaveLength(15);
+      const res = completeSkillOrder(observed);
+      expect(res.completed).toBe(false);
+      expect(res.refusedBecause).toBe("rank-over-cap");
+      expect(res.order).toEqual(observed);
+    }
+  );
 
   it("Kha'Zix's evolution tokens are refused as bad-token", () => {
     const khazix = ["Q", "W", "E", "Q", "Q", "R-Q", "Q", "W", "Q", "W", "W", "R-W", "W", "E", "E"];
@@ -297,6 +306,132 @@ describe("full-roster sweep findings (172 champions, 2026-07-27)", () => {
       (p) => !completeSkillOrder(A(p)).completed
     );
     expect(refused).toHaveLength(4); // + Kha'Zix, refused earlier at parse time
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PER-CHAMPION CAPS. Every order below is the REAL op.gg published 15, probed
+// live 2026-07-27; every kit is ddragon 16.14.1's real maxranks. This block is
+// what the hardcoded 5/5/5/3 model got wrong.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("completeSkillOrder — with the champion's OWN caps", () => {
+  const KIT = {
+    jayce: kitFromMaxRanks([6, 6, 6, 1])!,
+    karma: kitFromMaxRanks([5, 5, 5, 4])!,
+    elise: kitFromMaxRanks([5, 5, 5, 4])!,
+    nidalee: kitFromMaxRanks([5, 5, 5, 4])!,
+    udyr: kitFromMaxRanks([6, 6, 6, 6])!,
+    yuumi: kitFromMaxRanks([6, 5, 5, 3])!,
+    aphelios: kitFromMaxRanks([6, 6, 6, 3])!,
+  };
+
+  it("JAYCE completes — six Q, six W, and NO ultimate in the tail", () => {
+    // The champion from the actual bug report. His Transform is granted free
+    // at level 1, so all 18 points go into basics and the tail is three E.
+    const observed = A("QWEQQWQWQWQWWEE");
+    expect(countRanks(observed)).toEqual({ Q: 6, W: 6, E: 3, R: 0 });
+
+    const res = completeSkillOrder(observed, A("QWE"), KIT.jayce);
+    expect(res.completed).toBe(true);
+    expect(res.order).toHaveLength(18);
+    expect(res.order.slice(15)).toEqual(A("EEE"));
+    expect(countRanks(res.order)).toEqual({ Q: 6, W: 6, E: 6, R: 0 });
+    // Ranking Q six times must NOT trip rank-over-cap.
+    expect(res.refusedBecause).toBeUndefined();
+  });
+
+  it.each([
+    ["KARMA", "QEWQQRQEQEREEWW"],
+    ["NIDALEE", "QEWQQRQEQEREEWW"],
+    ["ELISE", "WQEQQRQWQWRWWEE"],
+  ])("%s (5/5/5/4, one free R rank) completes exactly like a standard champion", (name, path) => {
+    const observed = A(path);
+    const kit = name === "ELISE" ? KIT.elise : KIT.karma;
+    const res = completeSkillOrder(observed, A("QWE"), kit);
+    expect(res.completed, name).toBe(true);
+    expect(res.order, name).toHaveLength(18);
+    // Their order counts PURCHASED points, so R appears 3 times across 18
+    // levels — the 4th rank was granted at level 1 and never cost a point.
+    expect(countRanks(res.order).R, name).toBe(3);
+    expect(res.order[15], name).toBe("R");
+  });
+
+  it.each([
+    ["UDYR", "QRWEQQQEQEQEEEW", "udyr"],
+    ["YUUMI", "QEQEQRQEQERQEWW", "yuumi"],
+    ["APHELIOS", "QQQEQREQEQEEREW", "aphelios"],
+  ])(
+    "%s refuses as kit-not-derivable — more purchasable ranks than points",
+    (name, path, key) => {
+      const observed = A(path);
+      const kit = KIT[key as keyof typeof KIT];
+      expect(kit.purchasableTotal, name).toBeGreaterThan(18);
+      const res = completeSkillOrder(observed, undefined, kit);
+      expect(res.completed, name).toBe(false);
+      // The honest reason: the player must skip a point and we cannot know
+      // which. NOT "you broke a cap" — they broke no cap of their own.
+      expect(res.refusedBecause, name).toBe("kit-not-derivable");
+      expect(res.order, name).toEqual(observed);
+    }
+  );
+
+  it("still refuses a path that breaks the champion's OWN cap", () => {
+    // Seven Q on a six-Q champion is incoherent for Jayce too.
+    const observed = A("QQQQQQQWWWWEEEE");
+    expect(countRanks(observed).Q).toBe(7);
+    const res = completeSkillOrder(observed, A("QWE"), KIT.jayce);
+    expect(res.completed).toBe(false);
+    expect(res.refusedBecause).toBe("rank-over-cap");
+  });
+
+  it("every completion still lands on exactly 18 levels within the kit's caps", () => {
+    for (const [path, kit] of [
+      ["QWEQQWQWQWQWWEE", KIT.jayce],
+      ["QEWQQRQEQEREEWW", KIT.karma],
+      ["WQEQQRQWQWRWWEE", STANDARD_KIT],
+    ] as const) {
+      const res = completeSkillOrder(A(path), A("QWE"), kit);
+      expect(res.completed).toBe(true);
+      expect(res.order).toHaveLength(TOTAL_LEVELS);
+      const counts = countRanks(res.order);
+      for (const a of ["Q", "W", "E"] as const) {
+        expect(counts[a]).toBeLessThanOrEqual(kit.maxRanks[a]);
+      }
+      expect(counts.R).toBeLessThanOrEqual(kit.maxRanks.R - kit.freeRanks.R);
+    }
+  });
+
+  it("derivePriority reads per-ability caps — Yuumi's Q maxes at 6, not 5", () => {
+    // A shared basic cap of 5 would call her Q "maxed" at its 5th point
+    // (level 9) rather than its 6th (level 12), ranking priority off a level
+    // she has not reached. Q still wins here, but for the right reason.
+    const yuumi = A("QEQEQRQEQERQEWW");
+    expect(levelsByAbility(yuumi).Q).toEqual([1, 3, 5, 7, 9, 12]);
+    expect(derivePriority(yuumi, KIT.yuumi)).toEqual(A("QEW"));
+  });
+
+  it("buildSkillOrderModel attaches the kit it was given, and omits it when given none", () => {
+    const base = { order: A("QWEQQWQWQWQWWEE"), play: 100, win: 55, pickRate: 0.3 };
+    const withKit = buildSkillOrderModel(base, KIT.jayce)!;
+    expect(withKit.kit).toEqual(KIT.jayce);
+    expect(withKit.completed).toBe(true);
+
+    const withoutKit = buildSkillOrderModel(base)!;
+    expect("kit" in withoutKit).toBe(false);
+    // Unchanged fallback behaviour: standard caps refuse this order.
+    expect(withoutKit.completed).toBe(false);
+  });
+
+  it("a NULL kit carries through and refuses to complete anything", () => {
+    // "Known non-standard, could not resolve." Completing under standard caps
+    // here is exactly the wrong answer, so it does not try.
+    const m = buildSkillOrderModel(
+      { order: A("WQEQQRQWQWRWWEE"), play: 100, win: 55, pickRate: 0.3 },
+      null
+    )!;
+    expect(m.kit).toBeNull();
+    expect(m.completed).toBe(false);
+    expect(m.order).toHaveLength(15);
   });
 });
 

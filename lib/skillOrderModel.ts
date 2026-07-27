@@ -28,33 +28,34 @@
 // in" — the whole point is that we do not know them.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { Ability, SkillOrderModel } from "./types";
+import type { Ability, ChampionKit, SkillOrderModel } from "./types";
+import {
+  STANDARD_KIT,
+  TOTAL_LEVELS,
+  ULTIMATE_LEVELS,
+  purchasableUltimateRanks,
+  tailUltimateRanks,
+} from "./championKit";
 
-export type { Ability, SkillOrderModel };
+export type { Ability, ChampionKit, SkillOrderModel };
+export { STANDARD_KIT, TOTAL_LEVELS, ULTIMATE_LEVELS };
 
 /** The three basic abilities, in Riot's canonical slot order. Used as the
  *  last-resort tie-break so the output is deterministic, never arbitrary. */
 export const BASIC_ABILITIES: readonly Ability[] = ["Q", "W", "E"] as const;
 
-/** League's standard rank model. A basic ability caps at 5 ranks, the
- *  ultimate at 3 — 5+5+5+3 = 18 = exactly the 18 levels of a game. Champions
- *  that do NOT obey this (see NON-STANDARD CHAMPIONS below) are precisely the
- *  ones completeSkillOrder must refuse rather than guess at. */
-export const MAX_RANKS: Readonly<Record<Ability, number>> = Object.freeze({
-  Q: 5,
-  W: 5,
-  E: 5,
-  R: 3,
-});
+/** League's standard rank model — 5/5/5/3, correct for 166 of 173 champions.
+ *
+ *  NO LONGER THE ONLY MODEL. It is now the DEFAULT kit, not a universal
+ *  truth: the real caps are published per champion by Data Dragon and are
+ *  threaded in as `kit` (see lib/championKit.ts's header for the seven
+ *  champions this is wrong for, and the evidence behind each). Retained as an
+ *  export because it is still the honest fallback when no kit is supplied,
+ *  and because tests and callers legitimately reference the standard caps. */
+export const MAX_RANKS: Readonly<Record<Ability, number>> = STANDARD_KIT.maxRanks;
 
-export const TOTAL_LEVELS = 18;
 /** What the upstream source actually publishes: levels 1-15 only. */
 export const SOURCE_LEVELS = 15;
-/** The only levels at which an ultimate may be ranked in a real game. Levels
- *  16-18 contain exactly ONE of them (16), which is why a derivation that
- *  needs to place two or more ultimate ranks in the tail is impossible and
- *  is refused rather than fudged. */
-export const ULTIMATE_LEVELS: readonly number[] = [6, 11, 16] as const;
 
 const ABILITY_SET = new Set<string>(["Q", "W", "E", "R"]);
 
@@ -97,17 +98,26 @@ export function levelsByAbility(order: readonly Ability[]): Record<Ability, numb
  * real priority is Q>W>E. A count-based sort would tie and then fall back to
  * first-appearance, where W (level 1) precedes Q (level 2), yielding W>Q>E —
  * backwards. Verified against Ahri mid, 2026-07-27.
+ *
+ * "Maxed" is now read PER ABILITY off the kit rather than off one shared
+ * basic cap. That matters for Yuumi, whose Q caps at 6 while W and E cap at 5:
+ * a shared cap of 5 would call her Q "maxed" at its 5th point and rank her
+ * priority off a level she has not actually reached yet.
  */
-export function derivePriority(order: readonly Ability[]): Ability[] {
+export function derivePriority(
+  order: readonly Ability[],
+  kit: ChampionKit = STANDARD_KIT
+): Ability[] {
   const seenAt: Record<Ability, number[]> = levelsByAbility(order);
-  const maxRank = MAX_RANKS.Q; // basics all share the same cap in the standard model
 
   return [...BASIC_ABILITIES].sort((a, b) => {
     const la = seenAt[a];
     const lb = seenAt[b];
     // Level at which the ability was maxed; Infinity when it never was.
-    const maxedA = la.length >= maxRank ? la[maxRank - 1] : Infinity;
-    const maxedB = lb.length >= maxRank ? lb[maxRank - 1] : Infinity;
+    const capA = kit.maxRanks[a];
+    const capB = kit.maxRanks[b];
+    const maxedA = la.length >= capA ? la[capA - 1] : Infinity;
+    const maxedB = lb.length >= capB ? lb[capB - 1] : Infinity;
     if (maxedA !== maxedB) return maxedA - maxedB;
     const firstA = la.length ? la[0] : Infinity;
     const firstB = lb.length ? lb[0] : Infinity;
@@ -124,7 +134,14 @@ export type CompletionRefusal =
   | "bad-token"
   | "rank-over-cap"
   | "ultimate-remainder"
-  | "tail-mismatch";
+  | "tail-mismatch"
+  /** The champion has MORE purchasable ranks than the 18 points a game
+   *  grants, so they must skip something — and which point they skip is a
+   *  player choice the source's aggregate cannot tell us. Yuumi (19),
+   *  Aphelios (21), Udyr (24). Distinct from `rank-over-cap`, which means the
+   *  observed path broke this champion's OWN caps; this one means the caps
+   *  themselves leave the tail genuinely undetermined. */
+  | "kit-not-derivable";
 
 export interface CompletionResult {
   order: Ability[];
@@ -138,14 +155,35 @@ export interface CompletionResult {
  * NEVER BY GUESSING.
  *
  * ── The derivation ─────────────────────────────────────────────────────────
- * Under League's standard model a champion has exactly 18 ability points and
- * caps at Q5/W5/E5/R3. So given a provably-standard first 15 levels, the
- * remaining 3 points are fully DETERMINED by subtraction — there is nothing
- * to guess. Ahri mid, for example, has Q:5 W:5 E:3 R:2 across levels 1-15,
- * leaving exactly R×1 and E×2. The ultimate takes level 16 (6/11/16 are the
- * only ultimate levels), and the two E points fall at 17 and 18. That is
- * arithmetic, not opinion, and it reproduces U.GG's published Ahri path
- * exactly (cross-checked 2026-07-27).
+ * A champion has exactly 18 ability points. So given a first 15 levels that
+ * provably fit THIS CHAMPION'S OWN caps, the remaining 3 points are fully
+ * DETERMINED by subtraction — there is nothing to guess. Ahri mid, for
+ * example, has Q:5 W:5 E:3 R:2 across levels 1-15, leaving exactly R×1 and
+ * E×2. The ultimate takes level 16 (6/11/16 are the only ultimate levels),
+ * and the two E points fall at 17 and 18. That is arithmetic, not opinion,
+ * and it reproduces U.GG's published Ahri path exactly (cross-checked
+ * 2026-07-27).
+ *
+ * ── The caps are now the CHAMPION'S, not a constant ────────────────────────
+ * This used to hardcode 5/5/5/3 and therefore refused four popular champions
+ * outright. The caps arrive as `kit` (lib/championKit.ts, sourced from
+ * ddragon); omitting it falls back to STANDARD_KIT, which is what every
+ * caller got before. Two consequences worth stating, because both are
+ * champions that USED to be refused and now complete cleanly:
+ *
+ *   * JAYCE (6/6/6/1) — his basics alone total 18 and his Transform is free
+ *     at level 1, so his tail is three BASIC points and no ultimate at all.
+ *     `tailUltimateRanks` returns 0 for him, straight off his own legality
+ *     schedule, so the "exactly one R at level 16" rule generalises instead
+ *     of being special-cased.
+ *   * KARMA / ELISE / NIDALEE (5/5/5/4) — one free R rank at level 1 plus
+ *     three purchased, so they have 18 purchasable ranks and behave exactly
+ *     like a standard champion from this function's point of view.
+ *
+ * Yuumi, Aphelios and Udyr still refuse, but for the HONEST reason now
+ * (`kit-not-derivable`: more purchasable ranks than points, so the player
+ * must skip something and we cannot know what) rather than because their
+ * ranks broke a cap that was never theirs.
  *
  * ── The refusals (this is the important half) ──────────────────────────────
  * Every one of these returns the observed 15 with `completed: false` rather
@@ -156,34 +194,48 @@ export interface CompletionResult {
  *      untouched and STILL flags `completed: false`, because `completed`
  *      means "we derived 16-18", and there we derived nothing.
  *  (2) `bad-token`        — something that isn't Q/W/E/R.
- *  (3) `rank-over-cap`    — an ability already exceeds its standard cap by
- *      level 15, so the champion is not on the 5/5/5/3 model at all and the
- *      subtraction would go negative. This is the check that catches the
- *      genuinely non-standard kits (see below) — and it catches them by
- *      ARITHMETIC, from their own data, not from a hardcoded champion
- *      blocklist that would rot the moment Riot reworks someone.
- *  (4) `ultimate-remainder` — the tail would need a number of ultimate ranks
- *      other than exactly 1. Levels 16-18 contain exactly one ultimate level
- *      (16), so needing 0 or 2+ means the observed path is not a legal
- *      standard path and its tail is not derivable.
+ *  (3) `rank-over-cap`    — an ability already exceeds ITS OWN cap by level
+ *      15, so the subtraction would go negative. Still arithmetic on the
+ *      champion's own data, never a hardcoded blocklist — but the number it
+ *      compares against is now that champion's real published cap, so a Jayce
+ *      ranking Q six times is correct rather than a refusal.
+ *  (3b) `kit-not-derivable` — the champion's purchasable ranks exceed the 18
+ *      points a game grants (Yuumi/Aphelios/Udyr), so the tail depends on
+ *      which point the player chooses to skip. Checked BEFORE the cap check
+ *      so these three report why they are really undecidable.
+ *  (4) `ultimate-remainder` — the tail needs a different number of ultimate
+ *      ranks than the champion's own legality schedule leaves room for in
+ *      levels 16-18. For every gated kit that room is exactly one (level 16);
+ *      for Jayce, whose only R rank is free at level 1, it is zero.
  *  (5) `tail-mismatch`    — belt-and-braces: the computed remainder doesn't
  *      total 3. Unreachable if (1)+(3) hold, and asserted in tests precisely
  *      because "can't happen" is a claim worth testing rather than trusting.
  *
  * ── NON-STANDARD CHAMPIONS — MEASURED, not guessed ─────────────────────────
  * Full 172-champion sweep against live op.gg data, each on its primary lane
- * (2026-07-27). Exhaustive result:
+ * (2026-07-27), re-read against ddragon's published caps (see
+ * lib/championKit.ts). Result WITH per-champion caps threaded in:
  *
- *   160  complete cleanly
+ *   164  complete cleanly  (160 standard + JAYCE, KARMA, ELISE, NIDALEE,
+ *                           which the old hardcoded 5/5/5/3 wrongly refused)
  *     7  complete, but their published order ranks R at level 12 (see below)
- *     4  refused, `rank-over-cap`   — UDYR, JAYCE, YUUMI, APHELIOS
- *     1  refused, `bad-token`       — KHAZIX
+ *     3  refused, `kit-not-derivable` — UDYR, YUUMI, APHELIOS
+ *     1  refused, `bad-token`         — KHAZIX
  *
- *  * UDYR    — four basics, no true ultimate; Q:6 E:6 W:2 and "R" ranked at
- *              LEVEL 2. Caught by the cap check (Q=6 > 5).
- *  * APHELIOS— W is a fixed 1-rank mechanic, so Q and E reach 6.
- *  * JAYCE   — transform kit; Q:6 W:6 and R never ranked in the published 15.
- *  * YUUMI   — Q:6.
+ *  * UDYR    — four basics, no true ultimate; 6/6/6/6 = 24 purchasable ranks
+ *              against 18 points. His published order ranks "R" at LEVEL 2,
+ *              which is legal for him and is no longer refused as an illegal
+ *              ultimate.
+ *  * APHELIOS— W is a fixed 1-rank mechanic; 6/6/6/3 = 21 purchasable.
+ *  * YUUMI   — 6/5/5/3 = 19 purchasable; she skips exactly one point.
+ *  * JAYCE   — 6/6/6/1. Now COMPLETES: his Transform is granted free at level
+ *              1, leaving 6+6+6 = 18 purchasable basics, so his tail is E,E,E
+ *              at 16/17/18 with no ultimate. Previously refused outright,
+ *              which is the bug a real user reported.
+ *  * KARMA / ELISE / NIDALEE — 5/5/5/4, one free R rank at level 1. Now
+ *              complete cleanly. These three were NOT in the original sweep's
+ *              refusal list because their observed 15 fit the standard caps;
+ *              they were instead mishandled LIVE (see lib/nextSkill.ts).
  *  * KHAZIX  — the one nobody would have predicted: his ultimate ranks carry
  *              EVOLUTION suffixes, so the order contains the literal tokens
  *              "R-Q" and "R-W" rather than "R". lib/opgg.ts rejects the whole
@@ -211,7 +263,8 @@ export interface CompletionResult {
  */
 export function completeSkillOrder(
   observed: readonly Ability[],
-  priority?: readonly Ability[]
+  priority?: readonly Ability[],
+  kit: ChampionKit = STANDARD_KIT
 ): CompletionResult {
   // (2) token validity first — everything below assumes real abilities.
   if (!observed.every(isAbility)) {
@@ -226,24 +279,46 @@ export function completeSkillOrder(
     return { order: [...observed], completed: false, refusedBecause: "unexpected-length" };
   }
 
+  // (3b) The champion must be able to spend all 18 points without waste. When
+  // their purchasable ranks exceed 18 (Yuumi 19, Aphelios 21, Udyr 24) the
+  // player MUST skip something, and which point they skip is a choice the
+  // source's per-level aggregate cannot resolve. Checked before the cap check
+  // so these three report the real reason rather than a cap they never broke.
+  if (kit.purchasableTotal !== TOTAL_LEVELS) {
+    return { order: [...observed], completed: false, refusedBecause: "kit-not-derivable" };
+  }
+
   const counts = countRanks(observed);
 
-  // (3) standard-model cap check — the real non-standard-champion detector.
+  // (3) cap check, against THIS CHAMPION'S caps. The `order` counts points
+  // SPENT, so the R slot is compared against purchasable ranks — a free
+  // level-1 form-swap rank never appears in the order and must not be
+  // budgeted for here (Jayce's purchasable R is 0, not 1).
+  const caps: Record<Ability, number> = {
+    Q: kit.maxRanks.Q,
+    W: kit.maxRanks.W,
+    E: kit.maxRanks.E,
+    R: purchasableUltimateRanks(kit),
+  };
   for (const ability of ["Q", "W", "E", "R"] as const) {
-    if (counts[ability] > MAX_RANKS[ability]) {
+    if (counts[ability] > caps[ability]) {
       return { order: [...observed], completed: false, refusedBecause: "rank-over-cap" };
     }
   }
 
   const remaining: Record<Ability, number> = {
-    Q: MAX_RANKS.Q - counts.Q,
-    W: MAX_RANKS.W - counts.W,
-    E: MAX_RANKS.E - counts.E,
-    R: MAX_RANKS.R - counts.R,
+    Q: caps.Q - counts.Q,
+    W: caps.W - counts.W,
+    E: caps.E - counts.E,
+    R: caps.R - counts.R,
   };
 
-  // (4) exactly one ultimate rank must be left for level 16.
-  if (remaining.R !== 1) {
+  // (4) The tail must need exactly as many ultimate ranks as this champion's
+  // OWN legality schedule leaves room for in levels 16-18 — one (level 16)
+  // for every gated kit, zero for Jayce whose single R rank is free at level
+  // 1. Derived from the schedule, not assumed to be 1.
+  const tailUlts = tailUltimateRanks(kit, SOURCE_LEVELS);
+  if (remaining.R !== tailUlts) {
     return { order: [...observed], completed: false, refusedBecause: "ultimate-remainder" };
   }
 
@@ -254,15 +329,20 @@ export function completeSkillOrder(
   }
 
   // Order the leftover basic points by the champion's OWN max priority.
-  const effectivePriority = resolvePriority(priority, observed);
+  const effectivePriority = resolvePriority(priority, observed, kit);
   const tailBasics: Ability[] = [];
   for (const ability of effectivePriority) {
     if (ability === "R") continue;
     for (let i = 0; i < remaining[ability]; i += 1) tailBasics.push(ability);
   }
 
-  // R is conventionally (and, for levels 16-18, necessarily) taken at 16.
-  const order: Ability[] = [...observed, "R", ...tailBasics];
+  // Any remaining ultimate rank is taken at 16 — conventionally, and for
+  // levels 16-18 necessarily, since 16 is the only ultimate level in the tail.
+  const order: Ability[] = [
+    ...observed,
+    ...Array<Ability>(tailUlts).fill("R"),
+    ...tailBasics,
+  ];
 
   // Final structural guarantee before we dare set completed: true.
   if (order.length !== TOTAL_LEVELS) {
@@ -278,9 +358,10 @@ export function completeSkillOrder(
  *  derived order, so no remaining point is ever silently dropped. */
 export function resolvePriority(
   supplied: readonly Ability[] | undefined,
-  observed: readonly Ability[]
+  observed: readonly Ability[],
+  kit: ChampionKit = STANDARD_KIT
 ): Ability[] {
-  const derived = derivePriority(observed);
+  const derived = derivePriority(observed, kit);
   if (!supplied || !supplied.length || !supplied.every(isAbility)) return derived;
 
   const out: Ability[] = [];
@@ -329,11 +410,26 @@ export interface SkillOrderSource {
  * exactly the fabrication this codebase forbids. Passing the source's number
  * through as the source's number is the honest option.
  */
-export function buildSkillOrderModel(src: SkillOrderSource): SkillOrderModel | null {
+export function buildSkillOrderModel(
+  src: SkillOrderSource,
+  /** This champion's real rank rules. `undefined` falls back to STANDARD_KIT
+   *  (pre-existing behaviour); `null` means "could not resolve, and this
+   *  champion is known non-standard" and is carried through to the model so
+   *  live consumers refuse rather than assume 5/5/5/3 — see the `kit` field
+   *  on SkillOrderModel. */
+  kit?: ChampionKit | null
+): SkillOrderModel | null {
   if (!Array.isArray(src.order) || !src.order.length || !src.order.every(isAbility)) return null;
   if (!Number.isFinite(src.play) || src.play <= 0) return null;
 
-  const { order, completed } = completeSkillOrder(src.order, src.priorityIds);
+  // A null kit cannot complete an order either — the caps it would need are
+  // exactly what is missing. It degrades to the observed 15 with
+  // `completed:false`, which is the honest "the source's 15 are all we know".
+  const effectiveKit = kit ?? STANDARD_KIT;
+  const { order, completed } =
+    kit === null
+      ? { order: [...src.order], completed: false }
+      : completeSkillOrder(src.order, src.priorityIds, effectiveKit);
 
   // Win rate is DERIVED, and only when the counts can actually support it.
   const winRate =
@@ -345,13 +441,17 @@ export function buildSkillOrderModel(src: SkillOrderSource): SkillOrderModel | n
     src.pickRate != null && Number.isFinite(src.pickRate) ? clamp01(src.pickRate) : null;
 
   return {
-    priority: resolvePriority(src.priorityIds, src.order),
+    priority: resolvePriority(src.priorityIds, src.order, effectiveKit),
     levels: levelsByAbility(order),
     order,
     completed,
     sampleSize: src.play,
     winRate,
     share,
+    // Only attach when the caller actually resolved something (including an
+    // explicit null "known non-standard, unresolved"). Omitting it entirely
+    // when undefined keeps a pre-existing model byte-identical to before.
+    ...(kit !== undefined ? { kit } : {}),
   };
 }
 

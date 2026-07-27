@@ -49,7 +49,7 @@
 //     from ~5.8 kB to ~1.0 kB by asking only for the skills fields.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { RoleId } from "./types";
+import type { ChampionKit, RoleId } from "./types";
 import { fetchWithTimeout } from "./fetchTimeout";
 import {
   buildSkillOrderModel,
@@ -418,7 +418,13 @@ export function buildSkillOrderRpc(req: SkillOrderRequest): unknown {
 export async function fetchSkillOrder(
   championKey: string,
   role: RoleId,
-  transport: OpggTransport = defaultTransport
+  transport: OpggTransport = defaultTransport,
+  /** This champion's real rank rules (lib/championKit.ts). Appended rather
+   *  than inserted so every existing 2- and 3-arg call site is unchanged.
+   *  `undefined` = standard model, the pre-existing behaviour; `null` =
+   *  known-non-standard champion whose caps could not be resolved, carried
+   *  through to the model so live consumers refuse instead of guessing. */
+  kit?: ChampionKit | null
 ): Promise<SkillOrderModel | null> {
   const position = opggPosition(role);
   if (!position) return null;
@@ -432,7 +438,7 @@ export async function fetchSkillOrder(
     if (!text) return null;
     const source = parseSkillsFromAnalysis(text);
     if (!source) return null;
-    return buildSkillOrderModel(source);
+    return buildSkillOrderModel(source, kit);
   } catch (err) {
     // Degrade to "no card". Logged server-side only — never surfaced.
     console.error("[opgg] skill-order fetch failed:", err);

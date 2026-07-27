@@ -130,6 +130,14 @@ const HOTKEY_TOGGLE_INTERACTIVE = 'Control+F11';
 // NOT Control+Q/W/E/R -- those are League's own ability-level binds.
 const HOTKEY_TOGGLE_ADJUST = 'Control+Shift+A';
 
+// Elevated-at-login Scheduled Task (2026-07-27 round 10, Fix 1) -- see the
+// big comment block near enableElevatedAutostart() below for the full
+// reasoning. Name is deliberately distinctive (unlikely to collide with any
+// other task on the user's machine) and stable across versions -- it is both
+// created AND queried/deleted by this exact string, so it must never change
+// without also migrating/deleting the old one.
+const ELEVATED_TASK_NAME = 'CoachBuild Overlay Elevated Autostart';
+
 // Poll less often when idle (no game) so this never spins the CPU or hammers
 // the loopback socket while the user is just browsing/queuing. Faster while a
 // game is live so a level-up shows up promptly.
@@ -200,6 +208,11 @@ let elevationGuessText = null;
 // buildTrayMenuTemplate() so a dead hotkey is visible in the tray, not just
 // the log file. [{accel, label, registered, reservedByWindows}]
 let hotkeyRegistrationResults = [];
+// Whether the elevated-at-login Scheduled Task (see ELEVATED_TASK_NAME) is
+// currently registered -- computed at startup via isElevatedTaskRegistered()
+// and kept in sync by toggleElevatedAutostart(), so the tray checkbox always
+// reflects real on-disk state rather than an assumed one.
+let elevatedAutostartEnabled = false;
 const userDataDir = app.getPath('userData');
 // File logging (2026-07-27 round 9) -- `npm run start:admin` launches detached
 // with NO console, and a PACKAGED app has no console at all, so console.log
@@ -1155,6 +1168,183 @@ function configureAutostart() {
 }
 
 // ---------------------------------------------------------------------------
+// Elevated-at-login autostart via a Scheduled Task (2026-07-27 round 10,
+// Fix 1) -- resolves the tradeoff between "silent autostart" and "elevated,
+// so global hotkeys/window-focus work while League has focus" instead of
+// choosing one side, which is what this app did twice before (added
+// requireAdministrator chasing a hotkey theory that root-caused elsewhere,
+// then removed it entirely for silent autostart -- see README's "Install on
+// another PC" section and HANDOFF-engy.md).
+//
+// THE REAL MECHANISM, confirmed with real evidence this round: League runs
+// ELEVATED under Vanguard; this app runs asInvoker. Windows UIPI (User
+// Interface Privilege Isolation) blocks a lower-integrity process from
+// receiving input while a higher-integrity window is foreground -- this
+// explains BOTH symptoms in one shot: global hotkeys never fire in-game
+// (Ctrl+F10/F11/Shift+A all register() === true, isRegistered() === true,
+// yet do nothing while League has focus), AND adjust-mode saves never
+// happen (the renderer's keydown listeners never receive Enter/arrows
+// because the window can never actually gain OS focus from a
+// higher-integrity foreground app -- see toggleAdjustOverlay()'s focus-check
+// log, added this same round).
+//
+// THE FIX: a Scheduled Task with "Run with highest privileges" (/RL HIGHEST)
+// and an at-logon trigger (/SC ONLOGON) launches the app ELEVATED with NO
+// UAC prompt at sign-in -- this is the standard, documented Windows
+// mechanism for "start elevated, silently, every login." UAC's consent
+// requirement is specifically for INTERACTIVE launches; a task already
+// configured with RunLevel=HighestAvailable is the built-in exception.
+//
+// CREATING the task itself DOES require elevation (schtasks.exe checks the
+// CALLER's own privilege for /RL HIGHEST, it does not self-elevate) -- so
+// enableElevatedAutostart() below shells out through PowerShell's
+// Start-Process -Verb RunAs, which raises exactly ONE real UAC prompt, once,
+// the moment the user opts in from the tray. Every subsequent login after
+// that is silent.
+//
+// DELIBERATELY NOT `requestedExecutionLevel: requireAdministrator` back in
+// the exe manifest -- the manifest stays `asInvoker` (see package.json /
+// scripts/apply-exe-resources.js). Baking elevation into the manifest would
+// ALSO force a UAC prompt on every MANUAL double-click launch, which is
+// exactly the regression this app already shipped once and reverted (see
+// "Install on another PC" in README). The scheduled task supplies elevation
+// ONLY for the specific at-logon launch path; a manual launch stays a plain,
+// promptless asInvoker start, same as today.
+// ---------------------------------------------------------------------------
+
+function psSingleQuote(str) {
+  return "'" + String(str).replace(/'/g, "''") + "'";
+}
+
+// Runs `schtasks.exe <schtasksArgs>` ELEVATED via PowerShell's
+// Start-Process -Verb RunAs (the ShellExecute "runas" verb -- THIS is what
+// actually raises the UAC consent prompt; spawning schtasks.exe directly
+// from this asInvoker process would just fail silently with "ERROR: Access
+// is denied." for an /RL HIGHEST task, no prompt at all, no chance for the
+// user to approve it).
+//
+// Routed through a temporary .ps1 FILE rather than an inline `-Command`
+// string: three layers of argument passing (this function's JS array ->
+// PowerShell's own command-line parsing -> Start-Process's -ArgumentList ->
+// schtasks.exe's argv) make inline quoting extremely fragile, especially
+// with an exe path that itself contains spaces ("CoachBuild Overlay.exe"
+// installs under a path with spaces by default). A real script file using a
+// native PowerShell array literal sidesteps all of that -- one clean
+// boundary instead of three fragile ones.
+//
+// `-Wait -PassThru` + `exit $p.ExitCode` propagate schtasks' REAL exit code
+// out to this function's return value, not just "Start-Process managed to
+// launch something." A UAC prompt the user dismisses/denies surfaces here as
+// a real, non-zero, reported failure -- never silently treated as success.
+function runElevatedSchtasks(schtasksArgs) {
+  const scriptPath = path.join(userDataDir, 'coachbuild-schtasks-elevate.ps1');
+  const argsLiteral = schtasksArgs.map(psSingleQuote).join(', ');
+  const script = [
+    `$taskArgs = @(${argsLiteral})`,
+    'try {',
+    "  $p = Start-Process -FilePath 'schtasks.exe' -ArgumentList $taskArgs -Verb RunAs -Wait -PassThru",
+    '  exit $p.ExitCode',
+    '} catch {',
+    '  Write-Error $_.Exception.Message',
+    '  exit 1223', // ERROR_CANCELLED -- the same code Windows uses when a UAC prompt is denied; a thrown Start-Process exception (e.g. the user clicked "No") lands here distinctly from a genuine schtasks failure.
+    '}',
+  ].join('\r\n');
+
+  try {
+    fs.writeFileSync(scriptPath, script, 'utf8');
+  } catch (err) {
+    warn('elevated autostart: failed to write temp elevation script:', err.message);
+    return { success: false, exitCode: null, error: err.message };
+  }
+
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
+    windowsHide: true,
+    encoding: 'utf8',
+  });
+
+  try {
+    fs.unlinkSync(scriptPath);
+  } catch {
+    // Best-effort cleanup only -- a leftover temp script is harmless (plain
+    // argv text, no credentials in it), never worth failing the whole
+    // operation over.
+  }
+
+  if (result.error) {
+    return { success: false, exitCode: null, error: result.error.message };
+  }
+  return { success: result.status === 0, exitCode: result.status, stderr: (result.stderr || '').trim() };
+}
+
+// Read-only query -- does NOT require elevation (only /Create and /Delete of
+// an /RL HIGHEST task do), so this can run unconditionally at every startup
+// to detect real on-disk state rather than trusting a remembered flag.
+function isElevatedTaskRegistered() {
+  const result = spawnSync('schtasks', ['/Query', '/TN', ELEVATED_TASK_NAME], { windowsHide: true, encoding: 'utf8' });
+  return result.status === 0;
+}
+
+function enableElevatedAutostart() {
+  if (!app.isPackaged) {
+    warn('elevated autostart: not meaningful in dev (unpackaged) -- process.execPath points at electron.exe, not this app -- skipping');
+    return { success: false, error: 'unavailable in a dev build' };
+  }
+  const exePath = process.execPath;
+  log(
+    `elevated autostart: creating scheduled task "${ELEVATED_TASK_NAME}" -> "${exePath}" (ONE UAC prompt expected right now, to create the task -- it then launches silently, elevated, at every future login)`
+  );
+  const outcome = runElevatedSchtasks(['/Create', '/TN', ELEVATED_TASK_NAME, '/TR', `"${exePath}"`, '/SC', 'ONLOGON', '/RL', 'HIGHEST', '/F']);
+  if (!outcome.success) {
+    warn(
+      `elevated autostart: task creation failed (exit ${outcome.exitCode}${outcome.error ? ', ' + outcome.error : ''}${
+        outcome.stderr ? ', ' + outcome.stderr : ''
+      }) -- likely the UAC prompt was dismissed or denied`
+    );
+    return outcome;
+  }
+  log('elevated autostart: scheduled task created successfully');
+  // The two autostart mechanisms MUST NOT both fire at login -- a double
+  // launch would hit the single-instance lock and one copy would silently
+  // die, the exact class of bug already hit once with the old companion .vbs
+  // racing this app's own setLoginItemSettings (see "Companion supervision"
+  // in README). The elevated task now owns autostart; turn the plain one off.
+  try {
+    app.setLoginItemSettings({ openAtLogin: false });
+    log('elevated autostart: disabled the plain (non-elevated) setLoginItemSettings autostart -- the scheduled task now owns login launch');
+  } catch (err) {
+    warn('elevated autostart: failed to disable the plain autostart after enabling the elevated task:', err.message);
+  }
+  return outcome;
+}
+
+function disableElevatedAutostart() {
+  log(`elevated autostart: deleting scheduled task "${ELEVATED_TASK_NAME}"`);
+  const outcome = runElevatedSchtasks(['/Delete', '/TN', ELEVATED_TASK_NAME, '/F']);
+  if (!outcome.success) {
+    warn(`elevated autostart: task deletion reported exit ${outcome.exitCode}${outcome.error ? ', ' + outcome.error : ''} (harmless if the task was already gone)`);
+  } else {
+    log('elevated autostart: scheduled task removed');
+  }
+  // Never leave the user with NEITHER autostart mechanism active after
+  // turning this off -- restore the normal fallback.
+  configureAutostart();
+  return outcome;
+}
+
+function toggleElevatedAutostart() {
+  if (elevatedAutostartEnabled) {
+    disableElevatedAutostart();
+  } else {
+    enableElevatedAutostart();
+  }
+  // Re-derive from real on-disk state rather than assuming the operation
+  // above succeeded -- same "measure, don't guess" bar as the hotkey
+  // bind-status rows.
+  elevatedAutostartEnabled = isElevatedTaskRegistered();
+  rebuildTrayMenu();
+}
+
+// ---------------------------------------------------------------------------
 // Hotkeys — global, so they work while League has focus.
 // ---------------------------------------------------------------------------
 
@@ -1311,6 +1501,22 @@ function toggleInteractive() {
 // on-screen legend to the renderer -- see the IPC+DOM contract in
 // HANDOFF-engy.md for exactly what engo's ingame.js needs to implement; I do
 // not own or edit that file.
+// Fix 3 (2026-07-27 round 10) companion helper -- called on every adjust-mode
+// EXIT that does NOT go through the save path (toggled-off via hotkey/tray,
+// or Esc-cancel). See the display-metrics-changed guard below: WHILE
+// adjusting, a mid-session display/resolution change is deliberately NOT
+// reconciled against `calibrationGeometry` (to avoid reloading over the
+// renderer's live unsaved working copy out from under the user). This is
+// where that deferred reconciliation catches up, exactly once, at the moment
+// the session actually ends -- so a cancel/toggle-off can never re-push a
+// geometry that's stale for whatever the CURRENT display now is. (The save
+// path doesn't need this: it always recomputes fresh from
+// getPrimaryDisplayBounds() read at the moment of save, independent of
+// `calibrationGeometry`'s prior value.)
+function resyncCalibrationOnAdjustExit() {
+  applyCalibrationForCurrentDisplay();
+}
+
 function toggleAdjustOverlay() {
   if (isCalibrating) {
     warn('cannot enter adjust-in-place mode while the separate calibration window is open -- close it first');
@@ -1318,7 +1524,22 @@ function toggleAdjustOverlay() {
   }
 
   isAdjustingOverlay = !isAdjustingOverlay;
-  log('adjust overlay position ->', isAdjustingOverlay ? 'ON (main window now captures keyboard input)' : 'off');
+  // REASON-TAGGED (2026-07-27 round 10, Fix 2): this line used to just say
+  // "-> off" regardless of WHY -- a re-toggle (hotkey/tray), a save (Enter),
+  // and a cancel (Esc) all read identically in the log, which cost real
+  // diagnostic time on a real bug report where the actual save/cancel
+  // handlers below never ran at all. THIS call site is specifically the
+  // TOGGLE path (hotkey re-press or tray click) -- the IPC handlers for
+  // save/cancel below log their own 'saved'/'cancelled' reason instead, so
+  // grepping the log for "adjust overlay position ->" now gives an
+  // unambiguous per-transition trace no matter which of the three exit paths
+  // actually fired.
+  log(
+    'adjust overlay position ->',
+    isAdjustingOverlay
+      ? 'ON (main window now captures keyboard input)'
+      : 'off (reason: toggled-off -- the hotkey/tray item was used again, NOT Enter/Esc reaching the renderer)'
+  );
 
   if (isAdjustingOverlay && !overlayVisibleWanted) {
     // The user can't align boxes they can't see -- force the overlay visible
@@ -1328,6 +1549,39 @@ function toggleAdjustOverlay() {
   }
 
   applyMainWindowInteractivity();
+
+  if (isAdjustingOverlay) {
+    // FOCUS CHECK (2026-07-27 round 10, Fix 2): applyMainWindowInteractivity()
+    // just called mainWindow.focus() above, but focus() is a REQUEST, not a
+    // guarantee -- Windows can refuse to actually activate a window, which is
+    // exactly what UIPI does when a higher-integrity process (League, under
+    // Vanguard) owns the foreground. A failed focus grab is INDISTINGUISHABLE
+    // from the user's seat from "adjust mode does nothing": the renderer's
+    // keydown listeners for arrows/+/-/[/]/Enter/Esc simply never fire
+    // because the window never became the OS-focused window, and (as this
+    // round's real log confirms) that is exactly what was happening -- the
+    // save handler below never once logged. This was previously invisible.
+    // Logged once per adjust session, after a short delay to give Windows a
+    // beat to complete (or refuse) the activation before checking.
+    setTimeout(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      const focused = mainWindow.isFocused();
+      log(
+        `adjust-in-place focus check: window ${focused ? 'DID gain' : 'did NOT gain'} OS focus after focus() -- ` +
+          (focused
+            ? 'keyboard input should reach the renderer'
+            : "this is precisely the failure mode where arrows/Enter/Esc never arrive at the renderer (UIPI blocking a lower-integrity window from taking focus over a higher-integrity foreground app -- see README's \"Hotkeys and bind status\" section and the tray's \"Run elevated at login\" item)")
+      );
+    }, 150);
+  } else {
+    // Exiting via re-toggle (not save/cancel, which handle their own
+    // resync -- see resyncCalibrationOnAdjustExit()'s header): catch up on
+    // any display change that happened mid-session and was deliberately
+    // deferred by the display-metrics-changed guard below (Fix 3), so the
+    // re-push a few lines down never sends a geometry that's stale for the
+    // CURRENT display.
+    resyncCalibrationOnAdjustExit();
+  }
   // Pushed on BOTH directions, not just entry:
   //  - Entering: seeds the renderer's local working copy from the current
   //    authoritative value, in case something changed (e.g. a
@@ -1356,6 +1610,11 @@ ipcMain.on('coachbuild-adjust-save', (_event, geometry) => {
   const bounds = getPrimaryDisplayBounds();
   calibrationGeometry = saveCalibration(userDataDir, geometry, bounds.width, bounds.height);
   log(`adjust-in-place geometry saved for ${bounds.width}x${bounds.height}:`, JSON.stringify(calibrationGeometry));
+  // Reason-tagged (Fix 2, see toggleAdjustOverlay()'s matching comment) --
+  // this is the line that was MISSING from the real bug log: every "-> off"
+  // observed there was the toggled-off variant, never this one, which is
+  // exactly the evidence that Enter never reached the renderer.
+  log('adjust overlay position -> off (reason: saved)');
   gameState = mergeState(gameState, { calibration: buildCalibrationPayload() });
   pushState();
   // CRITICAL (matches exitCalibration()'s own fix, same day): the renderer's
@@ -1381,6 +1640,13 @@ ipcMain.on('coachbuild-adjust-save', (_event, geometry) => {
 // position.
 ipcMain.on('coachbuild-adjust-cancel', () => {
   log('adjust-in-place cancelled -- keeping the previous geometry');
+  // Reason-tagged (Fix 2) + resync (Fix 3) -- see resyncCalibrationOnAdjustExit()'s
+  // header for why this call is here: it catches up on any display change
+  // that happened mid-session and was deliberately deferred, so the
+  // pushCalibration() below sends geometry that's correct for the CURRENT
+  // display, not stale for whatever it was when adjusting started.
+  log('adjust overlay position -> off (reason: cancelled)');
+  resyncCalibrationOnAdjustExit();
   pushCalibration();
   if (isAdjustingOverlay) {
     isAdjustingOverlay = false;
@@ -1441,7 +1707,7 @@ function logElevationGuidance() {
   // diagnosis. Always check "Open log file" / the tray's hotkey rows first:
   // those report the ACTUAL bind status, which is a fact, not a guess.
   log(
-    'if Ctrl+F10/Ctrl+F11/Ctrl+Shift+A do not respond while League has focus: check the tray menu or "Open log file" first for the actual per-hotkey bind status (a hotkey that failed to register will never respond regardless of elevation). If it DID bind but still does not respond in-game, elevation/UIPI is one possible remaining factor -- try "npm run start:admin" / right-click -> Run as administrator. The SYSTEM TRAY ICON works regardless of any of this and is the reliable fallback either way.'
+    'if Ctrl+F10/Ctrl+F11/Ctrl+Shift+A do not respond while League has focus (or "Adjust overlay position" never saves): check the tray menu or "Open log file" first for the actual per-hotkey bind status (a hotkey that failed to register will never respond regardless of elevation) and the "adjust-in-place focus check" line if you were testing adjust mode. If hotkeys DID bind, or the focus check reports the window did NOT gain focus, that is UIPI: League runs elevated under Vanguard and Windows will not deliver keyboard input to a lower-integrity window while a higher-integrity one is foreground -- confirmed as the real cause this round, not just a guess. Fix: tray -> "Run elevated at login (fixes in-game hotkeys)" -- creates a Scheduled Task that launches this app elevated at every login with only ONE UAC prompt, ever (to create the task). The SYSTEM TRAY ICON works regardless of any of this and is the reliable fallback either way.'
   );
 }
 
@@ -1560,6 +1826,22 @@ function buildTrayMenuTemplate() {
       enabled: false,
     },
     {
+      // Fix 1 (2026-07-27 round 10) -- the actual answer to "hotkeys/adjust-
+      // mode work outside the game but not in it": League runs elevated
+      // under Vanguard, this app runs asInvoker, Windows UIPI blocks input
+      // delivery across that gap. This task, not requireAdministrator in the
+      // manifest, is how elevation is obtained WITHOUT a UAC prompt on every
+      // manual launch. See enableElevatedAutostart()'s header for the full
+      // reasoning.
+      label: elevatedAutostartEnabled
+        ? 'Run elevated at login (fixes in-game hotkeys) — ENABLED'
+        : 'Run elevated at login (fixes in-game hotkeys)…',
+      type: 'checkbox',
+      checked: elevatedAutostartEnabled,
+      enabled: app.isPackaged,
+      click: () => toggleElevatedAutostart(),
+    },
+    {
       // Same "surfaced, not silent" bar as the hotkey rows above -- see
       // lib/autoUpdater.js's getStatusLabel(). Non-clickable status row,
       // live-updated via onStatusChange -> rebuildTrayMenu() wired in
@@ -1668,7 +1950,17 @@ if (!gotSingleInstanceLock) {
     // THIS app's own, so a machine that hasn't rebooted yet never has both
     // racing for the mutex at the next sign-in.
     removeLegacyVbsAutostartOnce();
-    configureAutostart();
+    // Detect real on-disk state, not an assumed one -- and never register
+    // BOTH autostart mechanisms: if the elevated scheduled task is already
+    // in place (enabled in a previous session), configureAutostart()'s plain
+    // setLoginItemSettings must stay OFF, or the app would double-launch at
+    // the next login and lose the single-instance-lock race with itself.
+    elevatedAutostartEnabled = isElevatedTaskRegistered();
+    if (elevatedAutostartEnabled) {
+      log('elevated autostart: scheduled task already registered -- using it, skipping the plain setLoginItemSettings autostart to avoid a double-launch at login');
+    } else {
+      configureAutostart();
+    }
     spawnCompanion();
 
     // Seamless auto-update (2026-07-27) -- see lib/autoUpdater.js's header
@@ -1700,6 +1992,35 @@ if (!gotSingleInstanceLock) {
     // and re-validate calibration against the new resolution (never keep
     // using coordinates calibrated for a different screen size silently).
     screen.on('display-metrics-changed', () => {
+      // GUARD (2026-07-27 round 10, Fix 3): a game entering/leaving
+      // borderless fullscreen fires this repeatedly -- a real user log this
+      // round showed it firing 4 times in one session. Repositioning the
+      // window to the new display bounds is ALWAYS safe/necessary (a
+      // stale-sized fullscreen window could stop covering the game). But
+      // applyCalibrationForCurrentDisplay() RELOADS `calibrationGeometry`
+      // from disk (or the scaled default, if the resolution doesn't match a
+      // saved one) -- doing that WHILE `isAdjustingOverlay` is true would
+      // silently overwrite the authoritative in-memory geometry mid-edit: if
+      // a transient/spurious resolution report came through during exactly
+      // this kind of fullscreen flicker, the user's unsaved working session
+      // would be resting on top of geometry that just got swapped out from
+      // under it, and a subsequent Cancel would then re-push THAT
+      // possibly-wrong value instead of what was on screen before the user
+      // started adjusting -- the box visibly snapping to an unexpected spot
+      // for no reason the user did.
+      //
+      // Deferred, not dropped: whichever way the adjust session actually
+      // ends, the reconciliation still happens exactly once, correctly --
+      // Save always recomputes fresh from bounds read at the moment of save
+      // (independent of `calibrationGeometry`'s prior value); toggle-off and
+      // Cancel both call resyncCalibrationOnAdjustExit() (the same
+      // applyCalibrationForCurrentDisplay() call, just run once at the
+      // moment the session ends instead of possibly mid-nudge).
+      if (isAdjustingOverlay) {
+        log('display metrics changed while adjust-in-place is active -- repositioning window only, calibration re-check deferred until the adjust session ends');
+        repositionMainWindowToDisplay();
+        return;
+      }
       log('display metrics changed -- repositioning overlay window and re-checking calibration');
       repositionMainWindowToDisplay();
       applyCalibrationForCurrentDisplay();

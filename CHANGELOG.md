@@ -2,6 +2,43 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.67.0] — 2026-07-27 — Seven champions stop being refused, for the right reason
+
+### Fixed
+- **Jayce, Karma, Elise, Nidalee, Udyr, Aphelios and Yuumi now get skill recommendations.** A user
+  played Jayce, saw a permanently blank overlay, and said refusing was not good enough. They were
+  right: the engine hardcoded `MAX_RANKS = {Q:5,W:5,E:5,R:3}`, and Data Dragon publishes the real
+  per-champion caps. A full 173-champion sweep found exactly seven that differ.
+
+  **The obvious fix would not have worked**, which is the part worth recording. Replaying the old
+  resolver against each champion's real published order showed Jayce at **0/15** recommendations and
+  Karma/Elise/Nidalee at **0/15 at every single level** — dominated by `no-unspent`, not by the
+  kit refusal. Raising the rank caps alone would have left all four still blank.
+
+  The actual mechanism is **free ranks**: these champions are granted their R at level 1 *without
+  spending a point*. Since `unspent = level − Σranks` counts a granted rank as spent, exactly one
+  point was hidden at every level, forever. `lib/championKit.ts` models that as `freeRanks`, and it
+  is the load-bearing half — the caps alone are not.
+
+  **The evidence for it is an identity rather than an assumption.** A champion has 18 points, so
+  purchasable ranks must total 18. Read naively, only 166 of 173 do, and Jayce is a reductio (his
+  basics alone are 6+6+6=18). With the free-rank rule, **170 of 173 total exactly 18** — and the
+  three that don't (Yuumi 19, Aphelios 21, Udyr 24) are precisely the champions who genuinely cannot
+  max everything. CommunityDragon's `cost: "No Cost"` field looks like a ready-made signal for this
+  and was rejected: it is the *mana* cost, and reads "No Cost" for abilities that do consume points.
+
+  Ultimate legality is derived from the data too (`maxrank` 3 → 6/11/16; 4 → 1/6/11/16; 1 → level 1;
+  6 → ungated), so no champion is named anywhere and a future rework is picked up automatically
+  instead of silently drifting.
+
+  Result, verified live against Data Dragon and the real upstream: **Jayce 18/18, Karma 18/18**,
+  both from 0/15. Every one of the seven has a published order upstream — none of this was an honest
+  "no data" case; the data was there and being discarded. 53 new tests (1806 → 1859).
+
+- **A refusal is no longer indistinguishable from a broken app.** Every refusal now logs its reason,
+  and the ones that persist for a whole game say so on screen in one quiet line. Descriptive, never
+  imperative — it explains an absence, it does not advise a key.
+
 ## [0.66.1] — 2026-07-27 — The download button downloads
 
 ### Fixed

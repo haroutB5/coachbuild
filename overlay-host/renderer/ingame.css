@@ -422,6 +422,25 @@ body {
    row's horizontal midpoint and the top edge of the boxes -- so it always
    sits just above wherever the row actually is, regardless of calibration,
    without ingame.js needing to know the legend's own rendered size. */
+/* The one line a user MUST read. See ingame.html's comment: buried at the
+   bottom, it was misread mid-match and the save key was never pressed. Brighter
+   than the surrounding rows and given breathing room, because this legend is
+   read in about a second while a game is running. */
+.cb-adjust-legend-primary {
+  /* --cb-gold, not --cb-txt: the legend container already sets --cb-txt, so
+     reusing it would produce no contrast at all against the lines it needs to
+     stand out from. (The first draft of this rule said `--cb-text`, which does
+     not exist in this stylesheet — it would have silently inherited and looked
+     like nothing had changed.) Gold cannot be confused with the skill grid's
+     gold here: the grid is not rendered in adjust mode, only the four pink
+     outline boxes are. */
+  color: var(--cb-gold);
+  font-weight: 700;
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+}
+
 .cb-adjust-legend {
   position: fixed;
   z-index: 30;
@@ -508,4 +527,31 @@ body {
     opacity: 1;
     transform: none;
   }
+}
+
+/* One quiet line explaining a PERSISTENT refusal (Jayce's non-standard kit, no
+   published path, path ends at 15). Sits just above the ability-box row, where
+   the user is already looking. Deliberately muted and small: it explains an
+   absence, it is not a recommendation, and it must never compete for attention
+   with the highlight box itself. */
+.cb-refusal-note {
+  position: fixed;
+  z-index: 25;
+  transform: translate(-50%, -100%);
+  margin-top: -14px;
+  max-width: 420px;
+  padding: 5px 10px;
+  border: 1px solid var(--cb-line);
+  border-radius: 6px;
+  background: var(--cb-panel);
+  color: var(--cb-mut);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+  white-space: normal;
+  pointer-events: none;
+}
+
+.cb-refusal-note[hidden] {
+  display: none;
 }

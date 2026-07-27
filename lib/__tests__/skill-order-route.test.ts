@@ -13,14 +13,22 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("@/lib/staticData", () => ({ getChampionById: vi.fn() }));
+// NOTE: this factory replaces the WHOLE module, so every staticData export the
+// route calls must be listed here or it arrives as `undefined` and the route's
+// catch-all turns a TypeError into a silent `null` body. `resolveChampionKit`
+// was added when per-champion rank caps landed (see lib/championKit.ts).
+vi.mock("@/lib/staticData", () => ({
+  getChampionById: vi.fn(),
+  resolveChampionKit: vi.fn(),
+}));
 vi.mock("@/lib/opgg", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/opgg")>();
   return { ...actual, fetchSkillOrder: vi.fn() };
 });
 
 import { GET } from "@/app/api/skill-order/route";
-import { getChampionById } from "@/lib/staticData";
+import { getChampionById, resolveChampionKit } from "@/lib/staticData";
+import { STANDARD_KIT } from "@/lib/championKit";
 import { fetchSkillOrder, CACHE_TTL_SECONDS } from "@/lib/opgg";
 import { buildSkillOrderModel } from "@/lib/skillOrderModel";
 import type { Ability, SkillOrderModel } from "@/lib/types";
@@ -43,6 +51,8 @@ const AHRI_MODEL = buildSkillOrderModel({
 beforeEach(() => {
   vi.mocked(getChampionById).mockReset();
   vi.mocked(fetchSkillOrder).mockReset();
+  vi.mocked(resolveChampionKit).mockReset();
+  vi.mocked(resolveChampionKit).mockResolvedValue(STANDARD_KIT);
   vi.mocked(getChampionById).mockResolvedValue({
     id: 103,
     key: "Ahri",
@@ -91,7 +101,25 @@ describe("GET /api/skill-order — payload + cache policy", () => {
 
   it("passes the champion's Riot KEY (not its id) and the role through", async () => {
     await GET(req("?champ=103&role=2"));
-    expect(vi.mocked(fetchSkillOrder)).toHaveBeenCalledWith("Ahri", 2);
+    // The 3rd arg is the injectable transport (left default); the 4th is the
+    // champion's resolved rank rules. Asserting all four keeps this test's
+    // original point (key-not-id, plus the role) while also pinning that the
+    // kit is actually forwarded rather than resolved and dropped.
+    expect(vi.mocked(fetchSkillOrder)).toHaveBeenCalledWith("Ahri", 2, undefined, STANDARD_KIT);
+  });
+
+  it("resolves the kit for the requested champion, by id AND key", async () => {
+    await GET(req("?champ=103&role=2"));
+    expect(vi.mocked(resolveChampionKit)).toHaveBeenCalledWith(103, "Ahri");
+  });
+
+  it("forwards a null kit (known non-standard, unresolved) instead of substituting a standard one", async () => {
+    // The whole point of the null: the route must not paper over it, because
+    // downstream `unknown-kit` is what stops a Jayce player getting 5/5/5/3
+    // advice. See lib/staticData.ts's resolveChampionKit.
+    vi.mocked(resolveChampionKit).mockResolvedValue(null);
+    await GET(req("?champ=126&role=0"));
+    expect(vi.mocked(fetchSkillOrder)).toHaveBeenCalledWith("Ahri", 0, undefined, null);
   });
 
   it("a real payload earns a long s-maxage", async () => {

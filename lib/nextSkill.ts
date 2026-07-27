@@ -26,14 +26,47 @@
 // contract boundary against a wire format nobody here has run.
 //
 // The one thing that is NOT assumed is the arithmetic:
-//   unspent = level - (Q + W + E + R)
+//   unspent = level - (points actually SPENT)
 // That is just League's one-point-per-level rule, and it is tested exhaustively
 // below. The passive is excluded structurally — it has no `abilityLevel` and is
 // never nameable as an `Ability` — so it cannot leak into the sum.
+//
+// ── The caps are the CHAMPION'S now, not a constant ─────────────────────────
+// This module used to hardcode 5/5/5/3 and 6/11/16. Both are simply false for
+// seven champions, and the consequences were live bugs, not theoretical ones:
+//
+//   * JAYCE (6/6/6/1) was refused outright as `non-standard-kit`. A real user
+//     played him and got a permanently blank overlay. That is the report this
+//     change answers.
+//   * KARMA / ELISE / NIDALEE (5/5/5/4) were WORSE than refused — they were
+//     silently mishandled. Their R is available from level 1, so a player
+//     following the published order held R:1 while the guard demanded level 6
+//     for a first ultimate rank, and every early-game recommendation was
+//     refused as `ultimate-illegal`. Then, because their R legitimately
+//     reaches rank 4, `non-standard-kit` fired around level 16 — so the panel
+//     worked for the mid-game and went dark at both ends, which reads as
+//     broken rather than as declining.
+//   * UDYR's R is a fourth BASIC, legally ranked at level 2; the old guard
+//     refused it for not being level 6.
+//
+// The rules now arrive as a ChampionKit sourced from Data Dragon (see
+// lib/championKit.ts for the derivation and the evidence behind it). Two
+// pieces of it are load-bearing here and neither is optional:
+//
+//   maxRanks       — what counts as capped, and what counts as incoherent.
+//   freeRanks      — ranks the game GRANTS rather than sells. Jayce's
+//                    Transform and Karma/Elise/Nidalee's first R rank cost no
+//                    skill point, so counting them as spent makes `unspent`
+//                    off by one FOR THE WHOLE GAME. This is the subtle half:
+//                    fixing only the caps would have moved Jayce from a
+//                    `non-standard-kit` blank to a `no-unspent` blank, and the
+//                    user's overlay would still have been empty.
+//   ultimateLevels — per-champion legality, replacing the 6/11/16 constant.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { MAX_RANKS, SOURCE_LEVELS, TOTAL_LEVELS, ULTIMATE_LEVELS, isAbility } from "./skillOrderModel";
-import type { Ability, SkillOrderModel } from "./types";
+import { SOURCE_LEVELS, TOTAL_LEVELS, isAbility } from "./skillOrderModel";
+import { STANDARD_KIT, isUltimateRankLegal, purchasedRanks } from "./championKit";
+import type { Ability, ChampionKit, SkillOrderModel } from "./types";
 
 /** Per-ability rank as reported live. The passive is deliberately absent from
  *  this type — it has no rank and must never enter the point arithmetic. */
@@ -60,12 +93,20 @@ export type NextSkillRefusal =
   | "bad-level"
   /** A rank isn't a non-negative integer, or the four don't fit in 18 points. */
   | "bad-ranks"
-  /** The live ranks exceed League's standard 5/5/5/3 model, so this champion
-   *  is not on the model the recommended order was derived under. Udyr (six
-   *  ranks per basic, no true ultimate), Aphelios, Jayce, Yuumi. See
-   *  skillOrderModel.ts's NON-STANDARD CHAMPIONS block — same population,
-   *  caught the same way: by arithmetic, never by a champion blocklist. */
+  /** The live ranks exceed THIS CHAMPION'S OWN published caps, so the reading
+   *  is genuinely incoherent — a rank the game could not have granted.
+   *
+   *  NARROWED. This used to fire for any champion that merely differed from
+   *  5/5/5/3, which is what blanked Jayce. A Jayce with Q at 6 or a Karma with
+   *  R at 4 is now perfectly ordinary and gets a real recommendation; only a
+   *  Jayce with Q at *7* lands here. Still caught by arithmetic against the
+   *  champion's own ddragon-published data, never by a champion blocklist. */
   | "non-standard-kit"
+  /** The champion's rank rules could not be resolved AND this champion is
+   *  known to be off the standard model, so assuming 5/5/5/3 would produce
+   *  confidently wrong advice. Distinct from `no-model`: we HAVE a recommended
+   *  order, we just cannot safely interpret it. See SkillOrderModel.kit. */
+  | "unknown-kit"
   /** ranks sum to MORE than the level. Impossible in a real game (you cannot
    *  spend a point you were never given), so the reading is incoherent —
    *  most plausibly a level and a rank set captured either side of a level-up.
@@ -90,13 +131,17 @@ export type NextSkillRefusal =
    *  never published. */
   | "capped-ability"
   /** The order names the ultimate at a level the game will not allow it to be
-   *  ranked (R2 before 11, R3 before 16). This is REAL, not theoretical: seven
-   *  popular champions (JINX, ZED, KASSADIN, SIVIR, CORKI, ZERI, QIYANA)
-   *  publish R at level *12*, because the published order is a per-level MODAL
-   *  AGGREGATE across many games rather than one legal path — see
-   *  skillOrderModel.ts's "Why there is NO ultimate-level legality check".
-   *  That aggregate is fine for the rank COUNTS the completion derives from;
-   *  it is NOT fine as a live instruction, so it is refused here instead. */
+   *  ranked. This is REAL, not theoretical: seven popular champions (JINX,
+   *  ZED, KASSADIN, SIVIR, CORKI, ZERI, QIYANA) publish R at level *12*,
+   *  because the published order is a per-level MODAL AGGREGATE across many
+   *  games rather than one legal path — see skillOrderModel.ts's "Why there is
+   *  NO ultimate-level legality check". That aggregate is fine for the rank
+   *  COUNTS the completion derives from; it is NOT fine as a live instruction,
+   *  so it is refused here instead.
+   *
+   *  Legality is now read off the champion's OWN schedule rather than a
+   *  6/11/16 constant, so Karma's level-1 R and Udyr's level-2 R are allowed
+   *  while a genuinely illegal rank is still refused. */
   | "ultimate-illegal"
   /** The order contains something that isn't Q/W/E/R. Guards against a
    *  reshaped upstream reaching this far. */
@@ -142,11 +187,23 @@ function isNonNegativeInt(n: unknown): n is number {
   return typeof n === "number" && Number.isInteger(n) && n >= 0;
 }
 
-/** Total ability points spent. The passive cannot appear here — RANKABLE is
- *  the closed set of the four rankable slots, so there is no path by which a
- *  passive's (non-existent) level could be added in. */
-export function pointsSpent(ranks: AbilityRanks): number {
-  return RANKABLE.reduce((sum, a) => sum + ranks[a], 0);
+/**
+ * Total ability points SPENT. The passive cannot appear here — RANKABLE is the
+ * closed set of the four rankable slots, so there is no path by which a
+ * passive's (non-existent) level could be added in.
+ *
+ * Ranks the game GRANTS are excluded, because they were never bought. Only
+ * form-swap kits have any: Jayce's Transform, and the first Mantra/Spider
+ * Form/Cougar Form rank of Karma/Elise/Nidalee. Getting this wrong is not a
+ * rounding error — `unspent = level − spent`, so counting a granted rank as
+ * spent hides exactly one point at every level of the game, and the panel
+ * shows nothing from level 1 to level 18.
+ *
+ * Defaults to STANDARD_KIT (no free ranks), which is identical to this
+ * function's previous unconditional behaviour.
+ */
+export function pointsSpent(ranks: AbilityRanks, kit: ChampionKit = STANDARD_KIT): number {
+  return RANKABLE.reduce((sum, a) => sum + purchasedRanks(ranks[a], a, kit), 0);
 }
 
 /**
@@ -174,6 +231,16 @@ export function resolveNextSkill(input: NextSkillInput): NextSkillResult {
 
   if (!model) return none("no-model");
 
+  // ── Whose rules are we applying? ─────────────────────────────────────────
+  // `undefined` means no kit travelled with this model (a response cached
+  // before the field existed, or a hand-built fixture) — assume the standard
+  // model, which is exactly what this function did unconditionally before.
+  // `null` means resolution FAILED for a champion known to be non-standard;
+  // assuming 5/5/5/3 there is precisely the wrong answer that blanked Jayce,
+  // so refuse instead. See SkillOrderModel.kit.
+  if (model.kit === null) return none("unknown-kit");
+  const kit = model.kit ?? STANDARD_KIT;
+
   // ── Input validation. The wire format has never been observed here; treat
   // every field as untrusted (see this file's header). ──────────────────────
   if (!Number.isInteger(level) || level < 1 || level > TOTAL_LEVELS) return none("bad-level");
@@ -183,14 +250,15 @@ export function resolveNextSkill(input: NextSkillInput): NextSkillResult {
     if (!isNonNegativeInt(ranks[a])) return none("bad-ranks");
   }
 
-  const spent = pointsSpent(ranks);
+  const spent = pointsSpent(ranks, kit);
   if (spent > TOTAL_LEVELS) return none("bad-ranks");
 
-  // Non-standard kit detection, by arithmetic on the champion's own live data
-  // rather than a name list that would rot on the next rework. Udyr's sixth Q
-  // rank lands here; so does anything else off the 5/5/5/3 model.
+  // Incoherent-reading detection, by arithmetic on the champion's OWN
+  // published caps rather than a name list that would rot on the next rework.
+  // A Jayce Q at 6 and a Karma R at 4 are ordinary and pass; a rank the game
+  // could never have granted lands here.
   for (const a of RANKABLE) {
-    if (ranks[a] > MAX_RANKS[a]) return none("non-standard-kit");
+    if (ranks[a] > kit.maxRanks[a]) return none("non-standard-kit");
   }
 
   // ── The derivation ───────────────────────────────────────────────────────
@@ -222,17 +290,24 @@ export function resolveNextSkill(input: NextSkillInput): NextSkillResult {
   // The player deviated from the recommendation and has already maxed this
   // ability. There is no honest recommendation to give: the published order
   // has no branch for "you did something else."
-  if (fromRank >= MAX_RANKS[ability]) return none("capped-ability");
+  if (fromRank >= kit.maxRanks[ability]) return none("capped-ability");
 
   // Ultimate legality — the modal-aggregate check. See the doc comment above
   // and NextSkillRefusal's "ultimate-illegal" note.
-  // (`toRank > ULTIMATE_LEVELS.length` is unreachable — fromRank >= 3 was
-  // already sent to `capped-ability` above — but an out-of-range index here
-  // would silently read `undefined` and compare false, i.e. approve. Bounds
-  // first, then compare.)
-  if (ability === "R") {
-    if (toRank > ULTIMATE_LEVELS.length) return none("ultimate-illegal");
-    if (level < ULTIMATE_LEVELS[toRank - 1]) return none("ultimate-illegal");
+  //
+  // THE RULE, stated explicitly rather than buried (it is derived from
+  // ddragon's `maxrank`, so nothing here names a champion — see
+  // lib/championKit.ts's ULTIMATE_SEMANTICS table):
+  //   R maxrank 3  → a true ultimate; ranks legal at levels 6 / 11 / 16.
+  //   R maxrank 4  → a level-1 form-swap ultimate; legal at 1 / 6 / 11 / 16.
+  //   R maxrank 1  → a single-rank transform; legal at level 1.
+  //   R maxrank 6  → not an ultimate at all, a fourth basic; NEVER gated.
+  //
+  // `isUltimateRankLegal` also bounds the index before comparing: an
+  // out-of-range rank would otherwise read `undefined` and compare false, i.e.
+  // silently APPROVE. Bounds first, then compare.
+  if (ability === "R" && !isUltimateRankLegal(toRank, level, kit)) {
+    return none("ultimate-illegal");
   }
 
   return { kind: "recommend", ability, fromRank, toRank, atLevel: idx + 1, unspent };

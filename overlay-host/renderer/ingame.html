@@ -45,11 +45,18 @@
       <div class="cb-adjust-box" id="cb-adjust-box-W"><span class="cb-adjust-box-label">W</span></div>
       <div class="cb-adjust-box" id="cb-adjust-box-E"><span class="cb-adjust-box-label">E</span></div>
       <div class="cb-adjust-box" id="cb-adjust-box-R"><span class="cb-adjust-box-label">R</span></div>
+      <!-- Save/cancel goes FIRST and is emphasised. It used to sit last, under
+           a line ending in the word "spacing" — a real user read that mid-game
+           and pressed SPACE, which does nothing, and concluded their changes
+           would not save. Nothing was wrong with the key handling; the line
+           that mattered most was the least prominent one on a legend being
+           read in a fraction of a second during a match. The adjust keys are
+           discoverable by trying them; the SAVE key is not. -->
       <div id="cb-adjust-legend" class="cb-adjust-legend">
         <strong>Adjusting overlay position</strong>
+        <div class="cb-adjust-legend-primary"><kbd>Enter</kbd> to SAVE &middot; <kbd>Esc</kbd> to cancel</div>
         <div><kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> move &middot; +<kbd>Shift</kbd> = &times;10</div>
-        <div><kbd>+</kbd>/<kbd>-</kbd> box size &middot; <kbd>[</kbd>/<kbd>]</kbd> spacing</div>
-        <div><kbd>Enter</kbd> save &middot; <kbd>Esc</kbd> cancel</div>
+        <div><kbd>+</kbd>/<kbd>-</kbd> box size &middot; <kbd>[</kbd>/<kbd>]</kbd> gap between boxes</div>
       </div>
     </div>
 

@@ -59,7 +59,16 @@ Check League's video settings before testing: **Settings → Video → Display M
   contract if that's still in progress. **Was Ctrl+F12 until 2026-07-27 round 9** —
   changed because F12 is permanently reserved by Windows for the debugger and can
   never be registered as a global hotkey on any Windows machine; see "Hotkeys and
-  bind status" below for the full story.
+  bind status" below for the full story. **Round 10 diagnostics:** the log line for
+  exiting adjust mode now names WHY (`reason: saved` / `reason: cancelled` /
+  `reason: toggled-off`), and a one-time-per-session `adjust-in-place focus check`
+  line reports whether the window actually gained OS focus after entering — see
+  "Hotkeys and bind status" below for what a failed focus check means. A
+  display-metrics change (e.g. the game flickering in/out of borderless fullscreen)
+  that fires WHILE a user is mid-adjustment no longer re-pushes calibration geometry
+  over the user's unsaved edit — the window still repositions to match, but the
+  geometry re-check is deferred until the adjust session actually ends (save/cancel/
+  toggle-off all reconcile it correctly at that point).
 - **Calibrate ability bar (separate window, fallback)** — the original approach,
   kept for a second monitor or a dry run without a game running. Four draggable
   Q/W/E/R boxes, modelled as one rigid group (`{firstBoxCenterX, centerY, boxSize,
@@ -223,14 +232,38 @@ startup, not silently dead for an hour like this one was.
   tray equivalent (show/hide, "Adjust overlay position", interactive mode), and the
   tray does not depend on hotkey registration or elevation at all.
 
-**Still open, not yet retested since elevating:** whether Ctrl+F10/Ctrl+F11
-specifically respond while League (which runs elevated under Vanguard) has focus.
-Those two are NOT reserved keys, so Windows' UIPI (User Interface Privilege
-Isolation) not delivering global-hotkey input from a lower-integrity process to a
-higher-integrity foreground window remains a live, untested hypothesis for THEM
-specifically — just no longer assumed to be the explanation for every hotkey
-problem. The tray's per-hotkey rows plus the log file are exactly what will settle
-this on the next real test.
+**Root cause CONFIRMED 2026-07-27 round 10, from a real gaming-PC log.** All three
+hotkeys bound successfully (`register()` and `isRegistered()` both `true`) —
+so this is not the F12 problem above. But the user reported Ctrl+Shift+A working
+OUTSIDE the game and not in it, AND adjust-mode saves never happening (the log
+showed `adjust overlay position -> off` four times in a row, never once followed by
+`adjust-in-place geometry saved for ...`). Both symptoms share ONE cause: League
+runs **elevated** under Vanguard while this app runs **asInvoker**, and Windows UIPI
+(User Interface Privilege Isolation) blocks a lower-integrity process from
+receiving input while a higher-integrity window is foreground. In-game, that means
+global hotkeys never fire AND the adjust-mode window never actually gains OS focus —
+so the renderer's Enter/arrow-key listeners never receive anything, which is exactly
+why the save handler's log line never appeared. The user's edits were never
+received; they were never silently discarded either — they never arrived.
+
+- **Diagnosing it yourself:** "Open log file" → look for
+  `adjust-in-place focus check: window did NOT gain OS focus after focus()`
+  (added round 10, logged once per adjust-mode session) — that line, or hotkeys that
+  `register()`ed fine but still don't respond only while League has focus, is UIPI.
+- **The fix — tray → "Run elevated at login (fixes in-game hotkeys)"** (added round
+  10): creates a Windows Scheduled Task with "Run with highest privileges" and an
+  at-logon trigger, which launches the app **elevated with NO UAC prompt at sign-in**
+  — the standard mechanism for getting both silent autostart AND elevation, instead
+  of choosing one (which is what this app did twice before — see "Install on another
+  PC" below). **Creating the task itself needs admin, so turning this ON raises ONE
+  real UAC prompt, once** — expected, not a bug. Turning it off deletes the task and
+  falls back to the normal silent (non-elevated) autostart; the two mechanisms are
+  never both active at once (enabling one always disables the other, both at toggle
+  time and at every startup). The exe's manifest itself is deliberately left
+  `asInvoker` — see `enableElevatedAutostart()`'s header comment in `main.js` for why
+  baking elevation into the manifest instead would be the wrong fix (it would force a
+  UAC prompt on every *manual* launch too, the exact regression already shipped and
+  reverted once).
 
 - To run elevated: `npm run start:admin`, or double-click `start-admin.cmd`, or
   right-click `node_modules/electron/dist/electron.exe` in a shortcut and choose

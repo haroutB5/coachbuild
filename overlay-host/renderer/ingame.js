@@ -85,7 +85,7 @@
 // honest postures, in the same file, on purpose.
 //
 // The refusal discipline is what makes this safe rather than reckless:
-// `resolveNextSkill` returns `{kind:"none", because:<one of 11 refusals>}`
+// `resolveNextSkill` returns `{kind:"none", because:<one of 13 refusals>}`
 // far more often than a live game "should" produce ambiguity -- non-standard
 // kits, a deviated-from ability already capped, an incomplete order past
 // level 15, a level/ranks reading that doesn't add up, etc (see
@@ -419,7 +419,7 @@ function buildGrid(model, championLevel) {
 
 /**
  * @returns {object|null} a `{kind:"recommend", ability, ...}` result, or null
- *   for EVERY refusal (all 11 -- see lib/nextSkill.ts's NextSkillRefusal) and
+ *   for EVERY refusal (all 13 -- see lib/nextSkill.ts's NextSkillRefusal) and
  *   for every phase that isn't a resolved "ok" skill order. Never guesses.
  */
 function computeNextSkillRecommendation(data) {
@@ -437,7 +437,80 @@ function computeNextSkillRecommendation(data) {
     ranks: data.abilityRanks,
   });
 
-  return result.kind === "recommend" ? result : null;
+  if (result.kind === "recommend") return result;
+
+  // ── Make a refusal EXPLICABLE, not just invisible ──────────────────────────
+  // Every one of resolveNextSkill's eleven refusals renders nothing, which is
+  // right — we do not guess about a key the player is about to press. But
+  // "nothing" is indistinguishable from "this app is broken", and a real user
+  // hit exactly that: they played JAYCE, correctly got `non-standard-kit`
+  // (his two-stance kit does not fit League's 5/5/5/3 rank model, so the
+  // arithmetic this engine relies on does not apply), saw an empty screen, and
+  // reasonably reported it as a failure.
+  //
+  // So: log every refusal with its reason, ALWAYS. That alone makes the next
+  // report diagnosable from the log file instead of guesswork.
+  //
+  // Only the reasons that persist FOR THE WHOLE GAME are surfaced on screen
+  // (see PERSISTENT_REFUSALS). `no-unspent` is deliberately excluded — it is
+  // the overwhelmingly common case, true most of every match, and captioning it
+  // would put permanent chrome on the screen to announce that nothing is
+  // happening.
+  if (result.because !== lastLoggedRefusal) {
+    lastLoggedRefusal = result.because;
+    console.log(`[CoachBuild overlay] no recommendation — resolveNextSkill refused: ${result.because}`);
+  }
+  return null;
+}
+
+/** Refusals that will NOT resolve themselves by playing on, and are therefore
+ *  worth one quiet line on screen. Everything else stays silent. */
+const PERSISTENT_REFUSALS = {
+  "non-standard-kit": "This champion's ability ranks don't match its published kit — nothing shown.",
+  "no-model": "No recommended skill path published for this champion and lane.",
+  "model-incomplete": "Skill path only published to level 15 — nothing shown beyond it.",
+  // Added when lib/championKit.ts landed: the champion's per-champion rank caps
+  // could not be resolved (Data Dragon unavailable or a kit shape we refuse to
+  // guess at). Without them the point arithmetic is unsafe — several champions
+  // are granted their R at level 1 WITHOUT spending a point, so assuming the
+  // standard 5/5/5/3 kit silently miscounts unspent points at every level.
+  // Distinct copy from `non-standard-kit`: that means "the reading contradicts
+  // a kit we DO know", this means "we don't know the kit at all".
+  "unknown-kit": "Couldn't load this champion's ability data — nothing shown.",
+};
+
+/** Remembers the last refusal so the log records each TRANSITION once rather
+ *  than once per poll (this runs on every state push, several times a minute). */
+let lastLoggedRefusal = null;
+
+/**
+ * Renders (or clears) the one-line explanation for a persistent refusal.
+ * Positioned just above the ability-box row, using the calibrated geometry, so
+ * it sits where the user is already looking rather than somewhere they must go
+ * and find. Created lazily: an element that never appears costs nothing.
+ */
+function renderRefusalNote(reason) {
+  const text = reason ? PERSISTENT_REFUSALS[reason] : null;
+  if (!els.refusalNote) {
+    if (!text) return; // nothing to show and nothing built yet
+    const node = document.createElement("div");
+    node.className = "cb-refusal-note";
+    node.id = "cb-refusal-note";
+    document.body.appendChild(node);
+    els.refusalNote = node;
+  }
+  if (!text) {
+    els.refusalNote.hidden = true;
+    return;
+  }
+  els.refusalNote.textContent = text;
+  const cal = calibration; // module-scope, set by applyCalibration()
+  if (cal) {
+    const rowCenterX = cal.firstBoxCenterX + 1.5 * cal.spacing;
+    els.refusalNote.style.left = `${rowCenterX}px`;
+    els.refusalNote.style.top = `${cal.centerY - cal.boxSize / 2}px`;
+  }
+  els.refusalNote.hidden = false;
 }
 
 /** Validates engy's calibration payload defensively -- crosses a process
@@ -498,8 +571,15 @@ function renderHighlight(data) {
 
   if (!rec) {
     els.highlight.hidden = true;
+    // Say WHY, but only for refusals that will not resolve by playing on.
+    // A Jayce player seeing a permanently blank overlay has no way to tell a
+    // deliberate refusal from a broken app; a Jayce player seeing one quiet
+    // line knows the app looked and declined. Note this is descriptive, never
+    // imperative -- it explains an absence, it does not advise a key.
+    renderRefusalNote(lastLoggedRefusal);
     return;
   }
+  renderRefusalNote(null);
 
   const slot = ABILITY_SLOT_INDEX[rec.ability];
   const centerX = calibration.firstBoxCenterX + slot * calibration.spacing;

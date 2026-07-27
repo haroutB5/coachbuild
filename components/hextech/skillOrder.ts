@@ -30,6 +30,8 @@
 // so it stays importable from a plain .ts test file.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import type { ChampionKit } from "@/lib/types";
+
 export type Ability = "Q" | "W" | "E" | "R";
 
 export interface SkillOrderModel {
@@ -48,6 +50,16 @@ export interface SkillOrderModel {
   winRate: number | null;
   /** Share of games using this order, 0..1, or null. */
   share: number | null;
+  /** This champion's real per-ability rank rules, as resolved server-side from
+   *  Data Dragon. Carried verbatim from the API payload (this module never
+   *  reconstructs the model, so it arrives intact) and consumed by
+   *  lib/nextSkill.ts's resolveNextSkill — see the `kit` field on lib/types.ts's
+   *  SkillOrderModel for what each of its three states means. Typed as the
+   *  shared ChampionKit rather than re-declared, because unlike the rest of
+   *  this file's deliberate frontend/backend split it is passed STRAIGHT into
+   *  a lib/ function, so drift here would be a real type hole rather than a
+   *  cosmetic duplication. */
+  kit?: ChampionKit | null;
 }
 
 /** Row order for the skill-path display — Q/W/E/R, R last and marked

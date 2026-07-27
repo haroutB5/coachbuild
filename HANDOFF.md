@@ -3970,3 +3970,551 @@ Added a "CoachBuild Overlay" download section to the Companion page, clearly sep
 **Not verified:** did not test actual click-through to GitHub (repo/release may not be published yet per the task brief — "first release is being published shortly") and did not test with a screen reader / keyboard-only nav beyond confirming it's a real `<a>` (not a div) with visible focus-ring classes matching every other interactive control on this page.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-27 20:04
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-27 17:50:16Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-27 round — "one app": Electron overlay supervises companion.ps1 as a hidden child
+
+Model: Sonnet 5 (per CLAUDE.md routing, engy implementation tier).
+
+### Scope (matches the brief, nothing extra)
+
+Did NOT touch `Invoke-ApplyRunes`, `Invoke-ApplyItemSets`, `Merge-ItemSets`,
+`Test-RunePayload`, `Test-ItemSetsPayload`, or anything they call. Did NOT
+bump the main app version, edit `CHANGELOG.md`, deploy the website, touch
+`overlay-host/renderer/**`/`js/skillOrderData.js`/`vendor/**`, or publish a
+GitHub release.
+
+**1. `public/companion.ps1` — minimal, ~12 lines.** Added `[switch]$NoTray`
+to the param block and one dispatch arm: `} elseif ($NoTray) { Start-Companion
+-SuppressTray:$NoTray }`. Mirrors how `-DebugRunSeconds` already reaches
+`Start-Companion -SuppressTray`, minus the auto-exit (`RunSeconds` stays its
+default `0` = run until Quit). Bumped `$script:Config.Version` to `1.9.0` and
+regenerated `public/companion.version` via the existing
+`node scripts/sync-companion-version.mjs` (never hand-edited the version
+file — that's exactly the drift bug that script exists to prevent).
+
+**2. `overlay-host/main.js` — new "Companion supervision" section** (search
+that heading). `spawnCompanion()` spawns `powershell.exe -NoProfile
+-ExecutionPolicy Bypass -File <resolved path> -NoTray` with `stdio: 'ignore'`
+(chosen over tee-ing stdout into `log()`/`warn()` — companion.ps1 already has
+its own independent file logger at `%LOCALAPPDATA%\CoachBuild\companion.log`
+that survives `-NoTray`, so piping stdout here would be redundant diagnostics
+carrying a real pipe-fill-blocks-the-child risk for no new signal). Killed on
+`will-quit` via `taskkill /pid <pid> /T /F` (belt-and-braces against orphans,
+even though this child spawns no children of its own). Restarts on
+unexpected exit with backoff (`[2s,5s,15s,30s,60s]`), gated on `!inGame` --
+if a restart comes due mid-game it sets phase `restart-deferred` and
+`notifyGameEndedForCompanion()` (wired into `pollActivePlayer`'s
+game-ended branch, alongside the existing `autoUpdaterModule.notifyGameEnded()`)
+fires it the instant the game ends, not on the next backoff tick.
+**Mutex-race is a distinct state, not a crash-loop**: an exit within 5s of
+spawn is treated as "another copy already running" (`phase: 'already-running'`)
+and does NOT auto-retry -- confirmed live, see below. Status polling
+(`pollCompanionStatusOnce`, every 3s) hits the child's own `GET /status` on
+loopback with the session token read from
+`%LOCALAPPDATA%\CoachBuild\companion-session.txt` (never invents a second
+token) and **the exact-Origin header this bridge requires**
+(`Origin: https://coachbuild.vercel.app` -- Node's `http` module sends no
+Origin by default, and companion.ps1's bridge 403s any request whose Origin
+doesn't match `Sync.AppOrigin` exactly; this cost a few minutes to find via
+manual `Invoke-WebRequest` testing before it was obvious). Tray gets two new
+non-clickable rows: a summary line (`buildCompanionStatusLabel()`) and a
+second, separate, more alarming row that appears ONLY when
+`lastPollAtAdvancing === false` (`buildCompanionPollHealthLabel()`) -- kept
+split out per the brief's "single most useful thing to show," so it isn't
+lost among routine phase text.
+
+**3. Bundling — `extraResources`, not `files`+`asarUnpack`.** Added to
+`overlay-host/package.json`:
+```json
+"extraResources": [{ "from": "../public/companion.ps1", "to": "companion.ps1" }]
+```
+Chose this over the asarUnpack route the brief flagged as likely-needed:
+`extraResources` never enters `app.asar` in the first place, so there's no
+"can a .ps1 execute from inside an asar" question to answer at all, rather
+than working around it after packing. `getCompanionScriptPath()` in
+`main.js` resolves `process.resourcesPath + '/companion.ps1'` when
+`app.isPackaged`, else the sibling `public/companion.ps1` in a dev checkout.
+
+**4. Autostart.** Removed `requestedExecutionLevel: requireAdministrator`
+from `package.json`'s `build.win` per the brief's product decision. **Found
+a real second place it was set that the brief didn't mention**:
+`scripts/apply-exe-resources.js` hardcodes its own
+`--set-requested-execution-level requireAdministrator` rcedit flag,
+independent of `package.json` -- because `signAndEditExecutable: false`
+means electron-builder's own manifest step never runs at all, so THIS script
+is the only thing that actually stamps the built exe's manifest.
+**Building and checking the real exe (as instructed) caught this**: the
+first build still showed `requireAdministrator` in the manifest despite the
+package.json edit, because package.json's value was never being read for
+this purpose. Fixed both. Verified the SECOND build shows
+`level="asInvoker"` via `Select-String` against the real
+`dist\win-unpacked\CoachBuild Overlay.exe`. `main.js` now calls
+`app.setLoginItemSettings({ openAtLogin: true, path: process.execPath })`
+(packaged builds only) and, once (settings-file-flag-gated, packaged builds
+only), shells out to companion.ps1's own `-Uninstall` to remove the old
+`%APPDATA%\...\Startup\CoachBuildCompanion.vbs` -- never deletes files by
+hand.
+
+**Real bug caught and fixed mid-round**: `removeLegacyVbsAutostartOnce()`
+originally had NO `app.isPackaged` gate, unlike `configureAutostart()`
+right next to it. During dev testing (`npm start`, unpackaged) it actually
+ran and deleted this DEV MACHINE's real
+`CoachBuildCompanion.vbs` Startup entry -- a real side effect on a real
+machine that also runs a real companion for real matches (62 item sets, see
+CLAUDE.md), not a sandboxed test artifact. Caught immediately from the log
+line's presence for an unpackaged run, reconstructed the exact `.vbs`
+content by reading `New-CompanionAutostartVbs`'s literal template and
+rewriting it byte-for-byte by hand (verified `Get-Content` after), then
+added the missing `if (!app.isPackaged) return;` gate so this can't happen
+again. Confirmed the fix compiles and, on the next dev-mode run, does not
+touch the Startup folder.
+
+### Verification actually run, with real output
+
+All manual testing happened on THIS dev machine, which -- unlike the target
+gaming PC -- already runs a REAL companion.ps1 (`irm | iex`, v1.8.0 live) for
+real matches. Every test that needed the mutex free stopped that real
+process first (always checked `/liveclientdata/activeplayer` first to
+confirm no live game), and it was relaunched via the exact same `irm | iex`
+command afterward every time -- confirmed running again after each test.
+
+1. **`-SelfTest` (adversarial suite).** First run FAILED 3x on
+   "Double-launch guard" -- root-caused to the real companion already holding
+   `Local\CoachBuildCompanion` (confirmed identical failure on the
+   pre-my-changes file via `git stash`, so this was a pre-existing
+   environment condition, not something I introduced). No live game running
+   (verified), so stopped it, re-ran: **`SELFTEST PASSED`**. Re-ran again
+   after ALL edits settled (the isPackaged-gate fix, the apply-exe-resources
+   fix) on the exact shipping file: **`SELFTEST PASSED`** again.
+2. **`-Mock -Once`**: `MOCK RUN PASSED` (both runs).
+3. **`-HarnessTest`**: `HARNESSTEST PASSED` (both runs) -- this is the one
+   that spawns a real `-DebugRunSeconds` child and asserts `lastPollAt`
+   advances across two reads; unaffected by the `-NoTray` addition since
+   `-DebugRunSeconds` is a separate dispatch arm.
+4. **Mutex-race path, live, twice** (once unpackaged, once packaged): with
+   the real companion running, launched the Electron app both via `npm
+   start` and via the built `dist\win-unpacked\CoachBuild Overlay.exe`. Both
+   times, log showed:
+   ```
+   companion: spawning powershell.exe ... -NoTray
+   companion: child exited (code=0, signal=null) after 341-347ms
+   companion: exited within 5000ms of spawn -- likely another copy is
+   already running (mutex race), not auto-retrying
+   ```
+   No retry loop observed in either case (watched for several seconds past
+   the exit, no further "spawning" line).
+5. **Happy path, live** (real companion stopped, no game running): launched
+   `npm start`. Log showed the child spawn with no immediate exit. Verified
+   the poll loop independently (same technique `-HarnessTest` uses) by
+   `Invoke-WebRequest`-ing `http://127.0.0.1:48291/status?session=<token>`
+   with the `Origin` header twice, 4s apart:
+   `lastPollAt` moved from `...18:36:48.58Z` to `...18:36:59.35Z` --
+   **confirmed advancing**, `clientConnected: true` (League client was open
+   on this machine), `version: "1.9.0"`. This is exactly the signal
+   `pollCompanionStatusOnce()`/the tray row is built on.
+6. **Graceful quit, orphan check, mutex release.** Quit via
+   `taskkill /pid <main pid>` (no `/F` -- lets `will-quit` fire rather than
+   hard-killing the whole tree, which would prove nothing about the app's
+   own cleanup code) both for the dev run and the packaged run. Both times:
+   process exited cleanly (background task reported exit code 0), log showed
+   `companion: killing child process (pid <n>) on quit`,
+   `Get-CimInstance Win32_Process` confirmed **zero** matching
+   `*companion.ps1*`/`*NoTray*` powershell processes survived, and (dev-run
+   case) re-launching `companion.ps1 -DebugRunSeconds 5` immediately
+   afterward ran silently to completion with no "already running" message --
+   confirming the mutex was genuinely released, not just the process gone.
+7. **Packaged build, full chain.** `npm run dist` (clean `dist/`) succeeded.
+   `npx asar list resources/app.asar` confirmed `companion.ps1` is **NOT**
+   inside the asar (as designed -- `extraResources`); it exists as a real
+   file at `dist\win-unpacked\resources\companion.ps1`, and its SHA-256
+   matches `public/companion.ps1` byte-for-byte
+   (`DEF4EDF7...E416EEE6` both sides). Ran the real unpacked exe directly
+   (`.\CoachBuild Overlay.exe`, no `npm`/`electron .` wrapper) -- launched
+   with **no UAC prompt** (log shows `packaged: true`, hotkeys registered,
+   `autostart: openAtLogin=true`, and the companion spawn line pointing at
+   the packaged `resources\companion.ps1` path), hit the mutex-race path
+   correctly (real companion was running), quit cleanly, no orphan. Did NOT
+   get to observe the FULL happy path (child spawns AND stays alive AND
+   polls) from the packaged exe specifically end-to-end, because re-running
+   that scenario would have meant stopping the user's real companion a third
+   time on this machine for marginal additional evidence -- the packaged
+   companion.ps1 is byte-identical to the one already proven to run the
+   happy path correctly under the exact same `-NoTray` invocation (item 5
+   above), and the packaged exe already proved it can spawn+resolve the file
+   correctly and clean up correctly. Judged this combination sufficient
+   rather than repeating the full cycle; flagging the gap rather than
+   claiming it as directly observed.
+
+### What was NOT verified (be skeptical of this section, not just the rest)
+
+- **In-game restart-deferred behavior** (`attemptCompanionRestart()` seeing
+  `inGame === true` and setting `restart-deferred`, then
+  `notifyGameEndedForCompanion()` firing on game-end) was reasoned through
+  and code-reviewed but never triggered live -- doing so needs a real
+  unexpected companion crash WHILE a real League game is running, which
+  isn't something to manufacture against a real account.
+- **Tray row text was never visually confirmed on screen.** Same
+  documented limitation as the rest of this project on this machine (no
+  visible taskbar/notification area in this desktop session, per this
+  README's existing "NOT verified -- the tray icon's on-screen appearance"
+  note). `tray.setContextMenu(Menu.buildFromTemplate(...))` ran with no
+  exception on every rebuild, and the label-building functions were read
+  and reasoned through directly, but nobody has looked at the actual tray
+  menu pixels.
+- **`app.setLoginItemSettings` was exercised exactly once** (the packaged
+  test run) and the registry key it wrote
+  (`HKCU:\...\Run\electron.app.CoachBuild Overlay`) was inspected directly
+  and confirmed present, then manually removed afterward (see cleanup
+  below) -- but a real reboot/sign-in cycle actually launching the app
+  silently was not observed.
+- **NSIS installer flow itself** (`CoachBuild Overlay-Setup-0.2.0.exe`) was
+  built but not run/clicked-through -- only the pre-packaged
+  `dist\win-unpacked` exe was launched directly, per the same "avoid
+  installing test builds over a real setup" caution as everything else this
+  round.
+
+### Side effects on THIS dev machine from testing, and how they were undone
+
+This machine is not the target gaming PC, but it does run a real companion
+for real matches, so testing here had real-world consequences that needed
+explicit cleanup (all confirmed reverted, not just attempted):
+
+- Stopped and relaunched the real live companion process **three times**
+  (each time preceded by an `/liveclientdata/activeplayer` check confirming
+  no live game). Confirmed running again after every restore (`irm | iex`,
+  same command line as before, matches this project's documented normal
+  startup).
+- `removeLegacyVbsAutostartOnce()` (before its `isPackaged` gate was added)
+  deleted the real `CoachBuildCompanion.vbs` Startup entry once during dev
+  testing. Restored it by hand, byte-for-byte, from
+  `New-CompanionAutostartVbs`'s literal template -- confirmed via
+  `Get-Content` the restored file reads
+  `CreateObject("WScript.Shell").Run "powershell.exe -NoProfile
+  -ExecutionPolicy Bypass -Command ""irm
+  https://coachbuild.vercel.app/companion.ps1 | iex""", 0, False`, matching
+  what `Install-Companion` would have written.
+- The packaged-exe test run's `app.setLoginItemSettings({ openAtLogin: true
+  })` added `HKCU:\Software\Microsoft\Windows\CurrentVersion\Run\electron.app.CoachBuild Overlay`
+  pointing at the disposable `dist\win-unpacked` test build. Removed via
+  `Remove-ItemProperty` -- confirmed gone (`Get-Item ...Run | Property`
+  after showed only the pre-existing RiotClient/Overwolf/Edge entries).
+- Final process sweep confirmed only the real companion (v1.8.0, still
+  live-site-served, unaffected by any local change since nothing was
+  deployed) and pre-existing unrelated scheduled-task processes remain --
+  no leftover Electron/test-exe processes.
+
+### Files touched
+
+`public/companion.ps1`, `public/companion.version` (regenerated, not
+hand-edited), `overlay-host/main.js`, `overlay-host/package.json`,
+`overlay-host/scripts/apply-exe-resources.js`, `overlay-host/README.md`
+(new "Companion supervision" section + corrected two stale claims: the
+elevation requirement, and a wrong claim about `userData` dir isolation
+between dev/packaged runs -- see inline diff, both were checked live rather
+than assumed).
+
+### One thing worth flagging to the user, not just recording
+
+While correcting the README's userData-dir claim I found `app.getName()`
+never gets set explicitly anywhere in `overlay-host/`, so Electron falls
+back to `package.json`'s `name` field (`coachbuild-overlay-host`) for
+`app.getPath('userData')` -- identical between an unpackaged `npm start` and
+the real packaged exe on the same machine (measured: both logged the exact
+same `...\Roaming\coachbuild-overlay-host\...` path this round). This means
+lane override / calibration / the new
+`legacyVbsAutostartRemoved`/autostart-related settings are NOT actually
+isolated between a dev checkout and an installed copy on any machine that's
+run both. Not a regression from this round's work, not fixed (out of scope
+of the brief and not obviously safe to change without checking whether any
+current user relies on this), but worth knowing before it causes confusion
+someday.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-27 20:41
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-27 19:04:30Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-27 round 10 — elevated-autostart Scheduled Task (v0.3.1 → v0.4.0)
+
+**Brief:** real gaming-PC log showed all 3 hotkeys binding fine, Ctrl+Shift+A
+working outside the game but not in it, and adjust-mode saves never firing
+(`adjust overlay position -> off` x4, never `adjust-in-place geometry saved
+for ...`). Root cause, agreed with in the brief: League runs elevated under
+Vanguard, this app runs asInvoker, Windows UIPI blocks input delivery from a
+lower-integrity process to a higher-integrity foreground window — explains
+both symptoms with one mechanism. Three fixes requested.
+
+**Fix 1 — silent elevated autostart via a Scheduled Task.** New
+`ELEVATED_TASK_NAME` constant + `enableElevatedAutostart()` /
+`disableElevatedAutostart()` / `isElevatedTaskRegistered()` /
+`toggleElevatedAutostart()` in `main.js`. Creating the task shells out to
+`schtasks /Create ... /RL HIGHEST /F` via PowerShell's `Start-Process -Verb
+RunAs` (routed through a temp `.ps1` file at `userDataDir` rather than an
+inline `-Command` string — three layers of arg-passing quoting is fragile,
+especially given the install path has spaces; a real script + a native
+PowerShell array literal sidesteps that). New tray checkbox: "Run elevated at
+login (fixes in-game hotkeys)". Enabling it turns OFF the plain
+`setLoginItemSettings` autostart (and vice versa on disable) — both at toggle
+time AND at every startup (`isElevatedTaskRegistered()` is queried fresh on
+every launch, never assumed from a remembered flag), so the two mechanisms
+can never race and double-launch into the single-instance lock. Manifest
+stays `asInvoker` deliberately — did NOT restore
+`requestedExecutionLevel: requireAdministrator`; that would force a UAC
+prompt on every *manual* launch too, the exact regression this app already
+shipped once and reverted. Reasoning is in `enableElevatedAutostart()`'s
+header comment in `main.js`, not just here.
+
+**Fix 2 — save/cancel/toggle-off are now distinguishable in the log.** Every
+exit from adjust mode now logs `adjust overlay position -> off (reason:
+saved|cancelled|toggled-off)` from its own call site (`toggleAdjustOverlay()`,
+the `coachbuild-adjust-save` handler, the `coachbuild-adjust-cancel` handler)
+instead of one ambiguous phrase from three different paths. Also added a
+one-time-per-adjust-session `adjust-in-place focus check` line
+(`mainWindow.isFocused()`, checked ~150ms after `focus()` to give Windows a
+beat to complete/refuse activation) — this is the line that would have
+directly shown UIPI blocking focus, instead of leaving it to be inferred from
+the absence of a save log line.
+
+**Fix 3 — display-metrics-changed no longer clobbers an in-progress adjust.**
+Traced the actual wire path before touching anything (per the "your own
+can't-happen is a test target" rule): confirmed via `preload.js` +
+`renderer/ingame.js` that the renderer's box-drawing code reads geometry
+*only* off the dedicated `coachbuild-calibration` channel, never
+`state.calibration` — so the pre-existing `display-metrics-changed` handler's
+`pushState()` call was never actually re-pushing geometry to the screen mid-edit.
+The REAL risk was narrower but still genuine: `applyCalibrationForCurrentDisplay()`
+reloads the main process's own authoritative `calibrationGeometry` from disk
+(or a resolution-scaled default) — doing that while `isAdjustingOverlay` is
+true, during exactly the kind of repeated fullscreen-flicker firing seen in
+the real log (4x in one session), could silently swap the AUTHORITATIVE value
+out from under an in-progress session; a subsequent Cancel would then
+re-push *that* (possibly wrong-for-the-old-display) value instead of what was
+actually on screen when adjusting started. Fix: guarded so
+`display-metrics-changed` still repositions the window while adjusting
+(needed regardless — a stale-sized fullscreen window could stop covering the
+game) but skips the calibration reload/push, deferring it to
+`resyncCalibrationOnAdjustExit()` — a new helper called once, at the moment
+the session actually ends, from the toggled-off path and the cancel IPC
+handler (the save path doesn't need it: it always recomputes fresh from
+`getPrimaryDisplayBounds()` read at the moment of save).
+
+**Verified this round:**
+- `node --check` on every `.js` file in the app (main.js, preload.js, and
+  all of `lib/*.js`) — all pass.
+- `npm run dist` (the full unpacked → resources → package chain) completed
+  clean from `package.json`'s bumped `0.4.0`. Confirmed
+  `dist/win-unpacked/resources/app-update.yml` is still generated (provider/
+  owner/repo/updaterCacheDirName all correct). Confirmed via `findstr` against
+  the REAL built exe that it still declares `asInvoker` (not
+  `requireAdministrator`) — `<requestedExecutionLevel level="asInvoker"
+  uiAccess="false"/>` present verbatim.
+- `npm start` (dev, unpackaged) ran cleanly for the full window before being
+  torn down — startup log shows `isElevatedTaskRegistered()`'s query running
+  with no error, correctly taking the "no task, fall back to
+  setLoginItemSettings" branch (logged: `autostart: skipping
+  app.setLoginItemSettings in dev`), tray/window/hotkeys/IPC handshake all
+  unaffected by the new code paths.
+- **The core elevation mechanism was directly tested on this machine**, not
+  just reasoned about: wrote the exact script `runElevatedSchtasks()`
+  generates (creating a task named `...TEST`, not the real name) and ran it.
+  Confirmed independently via `Get-Process consent` that a REAL, persistent
+  UAC `consent.exe` prompt appeared (same verification pattern this project
+  already established for genuine UAC — see README's "Install on another PC"
+  section). No human was available to click "Yes," so the prompt was
+  dismissed by killing `consent.exe`; the script's own `catch` block then
+  correctly reported the denial as `exit 1223` (`ERROR_CANCELLED`) rather
+  than silently treating it as success — confirmed end-to-end via the actual
+  process exit code. Confirmed afterward via `schtasks /Query` (with
+  `MSYS_NO_PATHCONV=1`, Git Bash otherwise mangles `/TN` as a path) that
+  **neither the TEST task nor the real `ELEVATED_TASK_NAME` task exists on
+  this machine** — nothing was left behind, nothing to clean up.
+
+**NOT verified — anything requiring an actual "Yes" click on the UAC prompt,
+or a real in-game test.** Could not confirm the task, once actually created,
+launches the app elevated at a real login, nor whether the elevated app then
+fixes Ctrl+F10/F11/Shift+A and adjust-mode saves while League has focus —
+both require a human at the keyboard (same class of limitation as every
+other UAC verification already in this project) and a real League session on
+Vanguard, neither available here. What IS verified: the mechanism raises a
+genuine UAC prompt (not a fake/scripted one), the app's own logic around it
+(mutual-exclusion with the plain autostart, state detection, failure
+reporting) runs without error, and the packaged build is otherwise unaffected.
+
+Bumped `overlay-host/package.json` to **0.4.0**. Did not touch
+`renderer/ingame.{html,css,js}`, did not bump the main CoachBuild app
+version, did not touch `CHANGELOG.md`, did not deploy the website, no new
+npm dependencies, did not publish (per the brief — publishing stays yours).
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-27 20:44
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-27 19:41:14Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-27 — Per-champion ability rank caps (ddragon-sourced). Jayce et al. fixed.
+
+**New file `lib/championKit.ts`.** `MAX_RANKS`/`ULTIMATE_LEVELS` are no longer hardcoded constants; a
+`ChampionKit` (real caps + free ranks + per-champion ultimate legality) is resolved from ddragon and threaded
+through `skillOrderModel.ts` and `nextSkill.ts`. Gates: `tsc` clean, `npm run lint` clean (only pre-existing
+`<img>` warnings), **1859 vitest passing (baseline 1806, +53)**, overlay `_selfTest-highlight.mjs` 53/53.
+
+### The briefed root cause was incomplete — measured, not assumed
+
+The brief attributed the blank Jayce overlay to `MAX_RANKS` → `non-standard-kit`. I replayed the **old**
+resolver against a player following each champion's real published order (levels 1-15):
+
+| champion | old recommendations | dominant refusal |
+|---|---|---|
+| Ahri | 15/15 | — |
+| **Jayce** | **0/15** | `no-unspent` (L1-11), then `non-standard-kit` |
+| **Karma** | **0/15** | `no-unspent`, all 15 levels |
+| **Elise** | **0/15** | `no-unspent`, all 15 levels |
+| **Nidalee** | **0/15** | `no-unspent`, all 15 levels |
+| Udyr | 9/15 | `ultimate-illegal` L2, `non-standard-kit` L12+ |
+| Yuumi | 11/15 | `non-standard-kit` L13+ |
+
+**Fixing only the caps would have left all four still blank.** The dominant mechanism is not the caps — it is
+that these champions' R rank is **granted at level 1 without a skill point** (Jayce's Transform,
+Karma/Elise/Nidalee's Mantra/Spider Form/Cougar Form). `unspent = level − Σranks` counts a granted rank as
+spent, hiding exactly one point at *every* level. Hence `ChampionKit.freeRanks`, and hence `pointsSpent` now
+subtracts them. This is the load-bearing half of the change.
+
+The coordinator's mid-task correction proposed the mechanism was `ultimate-illegal` firing on a level-1 R.
+**Not reproducible against the real feed:** op.gg never publishes R at level 1 for Karma/Elise/Nidalee (probed
+live — their orders rank R at 6 and 11 only), precisely because it costs no point. The guard was real but
+downstream of a refusal that already fired.
+
+### What ddragon actually shows (verified live, 16.14.1, full 173-champion sweep)
+
+`data.<Key>.spells[i].maxrank`, i = 0..3 = Q,W,E,R. Confirmed identical in both `championFull.json` and the
+per-champion files. **Every champion has exactly 4 spells — no ragged-array case exists** (the length guard in
+`parseChampionKit` is a CDN-reshape boundary, not a known case). Seven are off 5/5/5/3:
+
+```
+Aphelios 6/6/6/3   Elise 5/5/5/4   Jayce 6/6/6/1   Karma 5/5/5/4
+Nidalee  5/5/5/4   Udyr  6/6/6/6   Yuumi 6/5/5/3
+```
+
+The brief listed four; **Elise, Karma and Nidalee were missing** and were the ones being silently mishandled
+rather than refused.
+
+### The derived rule (stated in code, not buried)
+
+Everything keys off R's `maxrank` — nothing names a champion, so a rework is picked up automatically:
+
+| R maxrank | meaning | legal levels | first rank free? |
+|---|---|---|---|
+| 3 | true ultimate | 6 / 11 / 16 | no |
+| 4 | level-1 form-swap ultimate | 1 / 6 / 11 / 16 | **yes** |
+| 1 | single-rank transform | 1 | **yes** |
+| 6 | not an ultimate — a 4th basic | never gated | no |
+| anything else | unknown | — | refuse (`kitFromMaxRanks` → null) |
+
+**Evidence for the free-rank half** (it is an inference; this is its basis): a champion has exactly 18 points,
+so Σ(purchasable ranks) should be 18 for anyone who wastes nothing. Reading every rank as purchasable → only
+166 champions total 18, and Jayce is a reductio (basics alone are 6+6+6=18, leaving no point for R). Treating
+R's first rank as free when maxrank ∈ {1,4} → **170 of 173 total exactly 18**, and the only three that don't
+(Yuumi 19, Aphelios 21, Udyr 24) are exactly the champions who genuinely must skip points. Corroborated by
+op.gg: Jayce's published 15 contains no R at all, and Karma/Elise/Nidalee's remainders then complete to
+exactly 3 by the same arithmetic that already works for all 160 standard champions. Test
+`championKit.test.ts › the 18-point identity` executes this rather than asserting it in prose.
+
+**A trap I checked and rejected:** CommunityDragon's per-spell `cost` field reads `"No Cost"` for exactly those
+four R abilities and looks like a ready-made signal. It is the **mana** cost — it also reads `"No Cost"` for
+Yuumi's W and Aphelios's W, both of which do consume a skill point. Not used as a source.
+
+### Behaviour now
+
+* **Jayce** — completes to 18 (`QWEQQWQWQWQWWEE` + `EEE`, no R in the tail), **18/18 recommendations** across a
+  full live game, final ranks Q6 W6 E6 R1. Verified end-to-end against live ddragon + live op.gg (19,825-game
+  sample), not just against fixtures.
+* **Karma / Elise / Nidalee** — complete cleanly, **18/18**, final Q5 W5 E5 R4. Karma verified live end-to-end.
+* **Udyr** — R now correctly ranked at level 2 (was `ultimate-illegal`); advises through all 15 published
+  levels; tail still honestly not derivable.
+* **Yuumi / Aphelios** — advise through the published 15; no longer go dark mid-game.
+* **`non-standard-kit` narrowed** to *this champion's own* caps — a Jayce Q6 or Karma R4 is ordinary; a Jayce
+  Q7 still refuses.
+* New refusal **`unknown-kit`**; new completion refusal **`kit-not-derivable`** (Yuumi/Aphelios/Udyr, the
+  honest reason: more purchasable ranks than points, so the skipped point is a player choice).
+
+### Does upstream publish orders for these champions? YES — all seven
+
+Probed op.gg live. Jayce (top **and** mid), Udyr, Aphelios, Yuumi, Karma, Elise, Nidalee all return a normal
+15-level order. **Kha'Zix is the only champion refused at the feed** (`R-Q`/`R-W` evolution tokens → `bad-token`,
+unchanged and deliberate). So no champion here is a "no model, and that's fine" case — they all have data, and
+all of it was being thrown away.
+
+### Design notes / tradeoffs
+
+* **The kit rides ON `SkillOrderModel`** (`kit?: ChampionKit | null`) rather than as a new `resolveNextSkill`
+  parameter. Deliberate: both consumers — `SkillOrderNextPanel.tsx` and the overlay's `renderer/ingame.js` —
+  already pass the API payload through verbatim, so they became champion-correct with **zero call-site
+  changes**. `renderer/ingame.js` is checked out by another engineer right now; a signature change would have
+  forced a conflict there.
+* **Three-state `kit`, and the states matter.** Object = resolved. `null` = unresolved **and** the champion is
+  on the measured non-standard list → consumers refuse (`unknown-kit`), because handing a Jayce 5/5/5/3 is the
+  exact wrong answer. Absent = no kit travelled (old cached response / test fixture) → `STANDARD_KIT`, byte-
+  identical to pre-change behaviour.
+* **`KNOWN_NON_STANDARD_CHAMPION_IDS` carries identity, never cap VALUES** — consulted only on the
+  ddragon-unreachable path. A values table would rot into confidently-wrong advice (repo gotcha (y)); an
+  identity list that rots degrades to today's exposure. Failed resolutions are deliberately **not** cached, so
+  a blip doesn't pin a serverless instance to the fallback.
+* **Kit fetch uses ddragon's own latest version, not the coachless-resolved patch** — the caller is in a live
+  game, so caps must match the client being played. Same reasoning as the existing champion gap-fill.
+  Memoized per champion key alongside the existing `runeMap`/`champsMap` caches; no second cache layer, no
+  per-render network call.
+
+### Tests I changed, and why (not quiet edits)
+
+1. **`nextSkill.test.ts` — two Udyr cases re-titled and re-scoped.** They asserted Udyr is refused
+   (`non-standard-kit` at L14, `ultimate-illegal` at L2). With his real kit both readings are now legal and
+   *do* get recommendations — asserted in the new per-champion block. The old cases still prove something real
+   (the **standard-kit fallback** for a model carrying no kit), so they are kept with that framing and the
+   fixture renamed `noKit`. No assertion was weakened.
+2. **`skill-order-route.test.ts` — mock factory gained `resolveChampionKit`.** `vi.mock` with a factory
+   replaces the whole module, so the new export arrived `undefined`, threw, and the route's catch-all turned it
+   into a silent `null` body. Harness gap, not a behaviour assertion.
+3. **`skill-order-route.test.ts` — `toHaveBeenCalledWith("Ahri", 2)` → `("Ahri", 2, undefined, STANDARD_KIT)`.**
+   Argument list grew; the test's original point (Riot key not id, plus role) is preserved and it now also pins
+   that the kit is forwarded rather than resolved-and-dropped. Two new cases added alongside it.
+4. **`skillOrderModel.test.ts` — the `OVER_CAP` block re-titled** to say it exercises the standard-kit
+   fallback. Assertions unchanged.
+
+### Not verified / open
+
+* **The Live Client Data wire format is still ASSUMED, not observed** — unchanged by this work, and no test
+  here pretends otherwise. `ranks` inputs remain hand-built from Riot's published schema. The free-rank
+  arithmetic assumes the live API reports Jayce's Transform as `R.abilityLevel = 1` from level 1. That is the
+  natural reading and every other interpretation makes his ranks unrepresentable, **but it has not been seen on
+  a real payload.** If it instead reports 0, Jayce would read as off-by-one the other way. This is the single
+  highest-value thing to check against a real game.
+* **`overlay-host/renderer/ingame.js` was not touched** (owned by another engineer this session). It needs no
+  change to work — the kit flows through its existing verbatim payload pass-through — but its
+  `PERSISTENT_REFUSALS` map has no copy for the new `unknown-kit` refusal, so that one currently renders
+  silently rather than with an on-screen caption. Its comments also still say "all 11 refusals"; there are now
+  13. Cosmetic, worth a follow-up by that file's owner.
+* **Elise/Karma/Nidalee were checked against op.gg and ddragon but not against a live game.**
+* The `maxrank 4 → [1,6,11,16]` legality schedule is corroborated by the 18-point identity and by op.gg's
+  orders, but I could find no source that publishes unlock levels directly; ddragon does not carry them.
+
+

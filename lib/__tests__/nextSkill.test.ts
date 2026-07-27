@@ -36,7 +36,8 @@ import {
   type NextSkillResult,
 } from "@/lib/nextSkill";
 import { buildSkillOrderModel, countRanks, MAX_RANKS } from "@/lib/skillOrderModel";
-import type { Ability, SkillOrderModel } from "@/lib/types";
+import { kitFromMaxRanks } from "@/lib/championKit";
+import type { Ability, ChampionKit, SkillOrderModel } from "@/lib/types";
 
 const A = (s: string): Ability[] => s.split("") as Ability[];
 
@@ -222,24 +223,34 @@ describe("resolveNextSkill — refuses rather than guessing", () => {
   });
 });
 
-describe("resolveNextSkill — non-standard champions degrade, never mislead", () => {
-  it("Udyr: six ranks on a basic -> non-standard-kit", () => {
-    const udyr = model(UDYR_15);
-    expect(udyr.completed).toBe(false);
-    expect(udyr.order).toHaveLength(15);
-    // Mid-game, once Q passes the standard cap.
-    expectNone(resolveNextSkill({ model: udyr, level: 14, ranks: ranks(6, 1, 4, 1) }), "non-standard-kit");
+describe("resolveNextSkill — the STANDARD-kit fallback still refuses off-model ranks", () => {
+  // ── WHY THESE TWO TESTS CHANGED ─────────────────────────────────────────
+  // They used to be titled as Udyr's production behaviour and asserted that
+  // he is refused. That is no longer true of Udyr: with his real ddragon kit
+  // (6/6/6/6, R ungated) both readings below are perfectly legal and now get
+  // a recommendation — see the per-champion block at the end of this file,
+  // which asserts exactly that.
+  //
+  // What these cases still legitimately prove is the FALLBACK: a model that
+  // carries NO kit is interpreted under the standard 5/5/5/3 model, which is
+  // what every consumer did before per-champion caps existed and what still
+  // happens when ddragon cannot be reached for an unremarkable champion. So
+  // they are kept, re-titled, and their fixture is now named for what it is.
+  const noKit = model(UDYR_15);
+
+  it("a sixth rank on a basic -> non-standard-kit when no kit is supplied", () => {
+    expect(noKit.kit).toBeUndefined();
+    expect(noKit.completed).toBe(false);
+    expect(noKit.order).toHaveLength(15);
+    expectNone(resolveNextSkill({ model: noKit, level: 14, ranks: ranks(6, 1, 4, 1) }), "non-standard-kit");
   });
 
-  it("Udyr: EARLY game, before any cap is exceeded, is caught by ultimate legality", () => {
-    // Udyr's published order puts "R" at level 2. His R is really a fourth
-    // basic and CAN be ranked there — but we have no way to know that from the
-    // data, and League's rule for a real ultimate says level 6. Refusing a
-    // correct-for-Udyr recommendation is the right trade: the alternative is a
-    // rule that would approve an illegal ultimate rank for every other
-    // champion in the game.
-    const udyr = model(UDYR_15);
-    expectNone(resolveNextSkill({ model: udyr, level: 2, ranks: ranks(1, 0, 0, 0) }), "ultimate-illegal");
+  it("an R ranked at level 2 -> ultimate-illegal when no kit is supplied", () => {
+    // Under the standard model an ultimate's first rank needs level 6. Without
+    // a kit telling us this champion's R is really a fourth basic, refusing is
+    // still the right trade: the alternative is a rule that would approve an
+    // illegal ultimate rank for every other champion in the game.
+    expectNone(resolveNextSkill({ model: noKit, level: 2, ranks: ranks(1, 0, 0, 0) }), "ultimate-illegal");
   });
 
   it("every rank over the standard cap is caught, on every slot", () => {
@@ -375,6 +386,272 @@ describe("resolveNextSkill — the player deviated from the recommendation", () 
     }
     // Guards against the sweep silently asserting nothing.
     expect(recommended).toBeGreaterThan(100);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PER-CHAMPION KITS — the seven champions the hardcoded 5/5/5/3 model got
+// wrong, four of them catastrophically.
+//
+// Every `order` below is the REAL op.gg published 15, probed live 2026-07-27.
+// Every kit is ddragon 16.14.1's real `spells[i].maxrank`. The `ranks` inputs
+// are still hand-built from Riot's published Live Client Data schema — that
+// half remains unobserved (see this file's header) and these tests claim
+// nothing about it.
+//
+// MEASURED BASELINE, so these tests are anchored to a real defect rather than
+// a hypothesis. Replaying the OLD engine against a player who follows each
+// published order exactly, across levels 1-15:
+//
+//     Ahri     15/15 recommendations   (unaffected)
+//     Jayce     0/15                   permanently blank  ← the user's report
+//     Karma     0/15                   permanently blank
+//     Elise     0/15                   permanently blank
+//     Nidalee   0/15                   permanently blank
+//     Udyr      9/15                   blank at both ends
+//     Yuumi    11/15                   goes dark from level 12
+//
+// The dominant cause for the four zeroes was NOT `non-standard-kit` — it was
+// `no-unspent`, every single level. Their R rank is GRANTED at level 1, and
+// counting a granted rank as spent hides exactly one point forever. Fixing
+// only the caps would have left all four still blank, which is why
+// `freeRanks` exists and why these walks assert a recommendation at EVERY
+// level rather than merely "no refusal".
+// ─────────────────────────────────────────────────────────────────────────────
+describe("resolveNextSkill — per-champion kits", () => {
+  const KIT = {
+    ahri: kitFromMaxRanks([5, 5, 5, 3])!,
+    jayce: kitFromMaxRanks([6, 6, 6, 1])!,
+    karma: kitFromMaxRanks([5, 5, 5, 4])!,
+    elise: kitFromMaxRanks([5, 5, 5, 4])!,
+    nidalee: kitFromMaxRanks([5, 5, 5, 4])!,
+    udyr: kitFromMaxRanks([6, 6, 6, 6])!,
+    yuumi: kitFromMaxRanks([6, 5, 5, 3])!,
+    aphelios: kitFromMaxRanks([6, 6, 6, 3])!,
+  };
+
+  /** A model carrying a specific champion's kit. */
+  const kitModel = (order: Ability[], kit: ChampionKit): SkillOrderModel => {
+    const m = buildSkillOrderModel({ order, play: 1000, win: 550, pickRate: 0.4 }, kit);
+    if (!m) throw new Error("fixture produced no model");
+    return m;
+  };
+
+  /**
+   * Walk a full game for a player who follows the published order exactly,
+   * starting from whatever ranks the game GRANTS at level 1. Asserts a real
+   * recommendation at every level and returns the abilities recommended.
+   */
+  const walk = (m: SkillOrderModel, kit: ChampionKit, upTo: number): string[] => {
+    const live: AbilityRanks = { Q: 0, W: 0, E: 0, R: kit.freeRanks.R };
+    const out: string[] = [];
+    for (let level = 1; level <= upTo; level += 1) {
+      const res = resolveNextSkill({ model: m, level, ranks: { ...live } });
+      expect(res.kind, `level ${level} → ${res.kind === "none" ? res.because : ""}`).toBe("recommend");
+      if (res.kind !== "recommend") break;
+      expect(res.atLevel).toBe(level);
+      expect(res.unspent).toBe(1);
+      expect(res.toRank).toBeLessThanOrEqual(kit.maxRanks[res.ability]);
+      live[res.ability] += 1;
+      out.push(res.ability);
+    }
+    return out;
+  };
+
+  // ── JAYCE — the champion in the bug report ────────────────────────────────
+  const JAYCE_15 = A("QWEQQWQWQWQWWEE");
+
+  it("JAYCE: level 1 with his granted Transform gets a real recommendation", () => {
+    // THE REGRESSION, in one assertion. Ranks are Q0 W0 E0 R1 because the game
+    // grants Transform at level 1. The old engine computed spent=1, unspent=0
+    // and said `no-unspent` — for all 18 levels of every Jayce game.
+    const jayce = kitModel(JAYCE_15, KIT.jayce);
+    expect(resolveNextSkill({ model: jayce, level: 1, ranks: ranks(0, 0, 0, 1) })).toEqual({
+      kind: "recommend",
+      ability: "Q",
+      fromRank: 0,
+      toRank: 1,
+      atLevel: 1,
+      unspent: 1,
+    });
+  });
+
+  it("JAYCE: all 18 levels advise, and Q/W/E each reach SIX ranks", () => {
+    const jayce = kitModel(JAYCE_15, KIT.jayce);
+    expect(jayce.completed).toBe(true);
+    const walked = walk(jayce, KIT.jayce, 18);
+    expect(walked.join("")).toBe(jayce.order.join(""));
+    expect(countRanks(walked as Ability[])).toEqual({ Q: 6, W: 6, E: 6, R: 0 });
+  });
+
+  it("JAYCE: ranking Q to 6 is ordinary, not non-standard-kit", () => {
+    const jayce = kitModel(JAYCE_15, KIT.jayce);
+    // order[10] is 'Q'; the player is on Q5 and the sixth rank is legal.
+    expect(jayce.order[10]).toBe("Q");
+    expect(resolveNextSkill({ model: jayce, level: 12, ranks: ranks(5, 4, 1, 1) })).toMatchObject({
+      ability: "Q",
+      fromRank: 5,
+      toRank: 6,
+    });
+  });
+
+  it("JAYCE: R is legal at level 1, and a second R rank is refused", () => {
+    // His published order never names R (it costs no point), so an order that
+    // DOES is synthetic — labelled as such. It tests the legality rule
+    // directly: maxrank 1 means the schedule is [1].
+    const synthetic: SkillOrderModel = { ...kitModel(JAYCE_15, KIT.jayce), order: A("RQWE"), completed: true };
+    expect(resolveNextSkill({ model: synthetic, level: 1, ranks: ranks(0, 0, 0, 0) })).toMatchObject({
+      kind: "recommend",
+      ability: "R",
+      toRank: 1,
+    });
+    // Already at his only rank -> capped, never a fabricated rank 2.
+    expectNone(resolveNextSkill({ model: synthetic, level: 18, ranks: ranks(0, 0, 0, 1) }), "capped-ability");
+  });
+
+  it("JAYCE: a genuinely incoherent reading is still refused", () => {
+    const jayce = kitModel(JAYCE_15, KIT.jayce);
+    // Seven Q on a six-Q champion — a rank the game could not have granted.
+    expectNone(resolveNextSkill({ model: jayce, level: 18, ranks: ranks(7, 1, 1, 1) }), "non-standard-kit");
+    // R at 2 when his maxrank is 1.
+    expectNone(resolveNextSkill({ model: jayce, level: 18, ranks: ranks(5, 5, 5, 2) }), "non-standard-kit");
+  });
+
+  // ── KARMA / ELISE / NIDALEE — the level-1 ultimate, 5/5/5/4 ──────────────
+  const LEVEL1_ULT: Array<[string, string, keyof typeof KIT]> = [
+    ["KARMA", "QEWQQRQEQEREEWW", "karma"],
+    ["NIDALEE", "QEWQQRQEQEREEWW", "nidalee"],
+    ["ELISE", "WQEQQRQWQWRWWEE", "elise"],
+  ];
+
+  it.each(LEVEL1_ULT)("%s: advises at EVERY level 1-18 despite the granted R rank", (name, path, key) => {
+    const kit = KIT[key];
+    const m = kitModel(A(path), kit);
+    expect(m.completed, name).toBe(true);
+    const walked = walk(m, kit, 18);
+    expect(walked, name).toHaveLength(18);
+    // Three PURCHASED R ranks; the fourth was granted at level 1.
+    expect(countRanks(walked as Ability[]).R, name).toBe(3);
+  });
+
+  it.each(LEVEL1_ULT)("%s: R is legal at level 1 and reaches rank 4; rank 5 refuses", (name, path, key) => {
+    const kit = KIT[key];
+    // Synthetic R-first order — their published aggregate never spends a point
+    // on R at level 1 (it is free), so this exercises the legality rule.
+    const rFirst: SkillOrderModel = { ...kitModel(A(path), kit), order: A("RRRR"), completed: true };
+
+    // Rank 1 at level 1 — the schedule is [1,6,11,16].
+    expect(resolveNextSkill({ model: rFirst, level: 1, ranks: ranks(0, 0, 0, 0) }), name).toMatchObject({
+      ability: "R",
+      toRank: 1,
+    });
+    // Rank 4 at level 16 is legal for them (a standard champion caps at 3).
+    expect(resolveNextSkill({ model: rFirst, level: 16, ranks: ranks(0, 0, 0, 3) }), name).toMatchObject({
+      ability: "R",
+      fromRank: 3,
+      toRank: 4,
+    });
+    // ...but not before 16.
+    expectNone(resolveNextSkill({ model: rFirst, level: 15, ranks: ranks(0, 0, 0, 3) }), "ultimate-illegal");
+    // A fifth rank does not exist. Capped, never fabricated.
+    expectNone(resolveNextSkill({ model: rFirst, level: 18, ranks: ranks(0, 0, 0, 4) }), "capped-ability");
+    // And a live reading claiming rank 5 is incoherent.
+    expectNone(resolveNextSkill({ model: rFirst, level: 18, ranks: ranks(0, 0, 0, 5) }), "non-standard-kit");
+  });
+
+  // ── UDYR — no true ultimate at all ───────────────────────────────────────
+  it("UDYR: his R is a fourth basic — legal at level 1 and at level 2", () => {
+    const udyr = kitModel(UDYR_15, KIT.udyr);
+    // His published order ranks R at level 2. Previously `ultimate-illegal`.
+    expect(udyr.order[1]).toBe("R");
+    expect(resolveNextSkill({ model: udyr, level: 2, ranks: ranks(1, 0, 0, 0) })).toMatchObject({
+      kind: "recommend",
+      ability: "R",
+      toRank: 1,
+      atLevel: 2,
+    });
+    // Ungated means ungated: rank 1 at level 1 too.
+    const rFirst: SkillOrderModel = { ...udyr, order: A("RQWE"), completed: true };
+    expect(resolveNextSkill({ model: rFirst, level: 1, ranks: ranks(0, 0, 0, 0) })).toMatchObject({
+      ability: "R",
+      toRank: 1,
+    });
+  });
+
+  it("UDYR: advises through all 15 published levels, six ranks on a basic included", () => {
+    const udyr = kitModel(UDYR_15, KIT.udyr);
+    // He cannot max everything (24 purchasable ranks, 18 points), so the tail
+    // is honestly not derivable — but the published 15 are all advisable.
+    expect(udyr.completed).toBe(false);
+    const walked = walk(udyr, KIT.udyr, 15);
+    expect(walked.join("")).toBe(UDYR_15.join(""));
+    expect(countRanks(walked as Ability[])).toEqual({ Q: 6, W: 2, E: 6, R: 1 });
+    // Past the published 15 we still say nothing.
+    expectNone(resolveNextSkill({ model: udyr, level: 16, ranks: ranks(6, 2, 6, 1) }), "model-incomplete");
+  });
+
+  it("UDYR: a seventh rank is still incoherent", () => {
+    const udyr = kitModel(UDYR_15, KIT.udyr);
+    expectNone(resolveNextSkill({ model: udyr, level: 18, ranks: ranks(7, 0, 0, 0) }), "non-standard-kit");
+  });
+
+  // ── YUUMI / APHELIOS — real ultimate, six-rank basics ────────────────────
+  it("YUUMI: Q reaches six ranks while W/E cap at five, and R stays gated at 6/11/16", () => {
+    const yuumi = kitModel(A("QEQEQRQEQERQEWW"), KIT.yuumi);
+    const walked = walk(yuumi, KIT.yuumi, 15);
+    expect(countRanks(walked as Ability[])).toEqual({ Q: 6, W: 2, E: 5, R: 2 });
+    // Her ultimate is a true ultimate — no level-1 exception.
+    const rFirst: SkillOrderModel = { ...yuumi, order: A("RRR"), completed: true };
+    expectNone(resolveNextSkill({ model: rFirst, level: 5, ranks: ranks(0, 0, 0, 0) }), "ultimate-illegal");
+    // A sixth W is incoherent for her even though her Q allows six.
+    expectNone(resolveNextSkill({ model: yuumi, level: 18, ranks: ranks(0, 6, 0, 0) }), "non-standard-kit");
+  });
+
+  it("APHELIOS: Q and E reach six, W caps at six too, R gated normally", () => {
+    const aphelios = kitModel(A("QQQEQREQEQEEREW"), KIT.aphelios);
+    const walked = walk(aphelios, KIT.aphelios, 15);
+    expect(countRanks(walked as Ability[])).toEqual({ Q: 6, W: 1, E: 6, R: 2 });
+    expectNone(resolveNextSkill({ model: aphelios, level: 18, ranks: ranks(0, 0, 0, 4) }), "non-standard-kit");
+  });
+
+  // ── The unresolved-kit path ──────────────────────────────────────────────
+  it("a NULL kit refuses outright rather than assuming 5/5/5/3", () => {
+    // "Known non-standard champion, ddragon unreachable." Assuming the
+    // standard model here is exactly the wrong answer — it is what produced
+    // the blank Jayce — so the refusal is explicit and named.
+    const unresolved: SkillOrderModel = { ...model(JAYCE_15), kit: null };
+    expectNone(resolveNextSkill({ model: unresolved, level: 1, ranks: ranks(0, 0, 0, 1) }), "unknown-kit");
+    // It wins over every other refusal, including ones that would otherwise
+    // fire on the same input — we cannot classify a reading we cannot model.
+    expectNone(resolveNextSkill({ model: unresolved, level: 99, ranks: ranks(0, 0, 0, 1) }), "unknown-kit");
+  });
+
+  it("an ABSENT kit behaves exactly as this function did before kits existed", () => {
+    const ahri = model(AHRI_15);
+    expect(ahri.kit).toBeUndefined();
+    expect(resolveNextSkill({ model: ahri, level: 6, ranks: ranks(3, 1, 1, 0) })).toEqual({
+      kind: "recommend",
+      ability: "R",
+      fromRank: 0,
+      toRank: 1,
+      atLevel: 6,
+      unspent: 1,
+    });
+    // ...and an explicit standard kit is indistinguishable from its absence.
+    const withKit = kitModel(AHRI_15, KIT.ahri);
+    expect(resolveNextSkill({ model: withKit, level: 6, ranks: ranks(3, 1, 1, 0) })).toEqual(
+      resolveNextSkill({ model: ahri, level: 6, ranks: ranks(3, 1, 1, 0) })
+    );
+  });
+
+  it("pointsSpent excludes granted ranks — the arithmetic the walks depend on", () => {
+    expect(pointsSpent(ranks(0, 0, 0, 1), KIT.jayce)).toBe(0);
+    expect(pointsSpent(ranks(6, 6, 6, 1), KIT.jayce)).toBe(18);
+    expect(pointsSpent(ranks(0, 0, 0, 1), KIT.karma)).toBe(0);
+    expect(pointsSpent(ranks(5, 5, 5, 4), KIT.karma)).toBe(18);
+    // No free ranks anywhere else — identical to the pre-kit behaviour.
+    expect(pointsSpent(ranks(0, 0, 0, 1), KIT.udyr)).toBe(1);
+    expect(pointsSpent(ranks(5, 5, 5, 3))).toBe(18);
   });
 });
 
