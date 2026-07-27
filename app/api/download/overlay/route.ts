@@ -30,7 +30,24 @@ export const dynamic = "force-dynamic";
 const OWNER = "haroutB5";
 const REPO = "coachbuild-overlay-releases";
 const RELEASES_PAGE = `https://github.com/${OWNER}/${REPO}/releases/latest`;
-const API_LATEST = `https://api.github.com/repos/${OWNER}/${REPO}/releases/latest`;
+
+/**
+ * The LIST endpoint, not `/releases/latest`. This is a correctness fix, not a
+ * preference — see the tag-tie note below.
+ *
+ * GitHub defines "latest" as the most recent non-draft, non-prerelease release
+ * "sorted by the `created_at` attribute of the underlying git tag". Our releases
+ * repo holds BINARIES ONLY: it has effectively one commit, and every tag points
+ * at it, so all five tags carry the IDENTICAL `created_at` (2026-07-27T17:43:01Z
+ * for v0.2.0 through v0.4.1). A five-way tie leaves the winner arbitrary.
+ *
+ * That is not theoretical. On 2026-07-27, minutes after v0.4.1 was published,
+ * `/releases/latest` answered **v0.4.1** to a direct call and this route served
+ * **v0.2.0** — a three-versions-stale installer to anyone clicking Download.
+ * Sorting ourselves by SEMVER removes the dependency on GitHub's tie-breaking
+ * entirely, and keeps working however the tags are created.
+ */
+const API_LIST = `https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=30`;
 
 /** GitHub's unauthenticated API allows 60 requests/hour PER IP. A Vercel
  *  function's IP is shared across every visitor, so an uncached call here would
@@ -48,6 +65,24 @@ function isInstallerAsset(name: unknown): name is string {
   return typeof name === "string" && /setup.*\.exe$/i.test(name);
 }
 
+/**
+ * Parse a `vX.Y.Z` tag into comparable numbers. Returns null for anything that
+ * is not exactly three numeric parts — an unparseable tag is SKIPPED rather
+ * than sorted to the bottom, because a release we cannot rank is one we cannot
+ * honestly call newest.
+ */
+function parseSemver(tag: unknown): [number, number, number] | null {
+  if (typeof tag !== "string") return null;
+  const m = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(tag.trim());
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+/** Highest semver wins; ties (impossible for distinct tags) keep the first. */
+function compareSemver(a: [number, number, number], b: [number, number, number]): number {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
+
 function toReleasesPage() {
   // 302, not 308: which asset is "latest" changes, so this must never be
   // cached permanently by a browser as a permanent redirect.
@@ -56,7 +91,7 @@ function toReleasesPage() {
 
 export async function GET() {
   try {
-    const res = await fetch(API_LATEST, {
+    const res = await fetch(API_LIST, {
       headers: {
         Accept: "application/vnd.github+json",
         // GitHub asks every client to identify itself; unidentified callers are
@@ -68,10 +103,31 @@ export async function GET() {
 
     if (!res.ok) return toReleasesPage();
 
-    const release = (await res.json()) as { assets?: unknown };
-    if (!Array.isArray(release.assets)) return toReleasesPage();
+    const releases = (await res.json()) as unknown;
+    if (!Array.isArray(releases)) return toReleasesPage();
 
-    const installer = (release.assets as Array<{ name?: unknown; browser_download_url?: unknown }>).find(
+    // Pick the highest SEMVER among real, published releases. Drafts are
+    // invisible to users and prereleases are opt-in, so neither may ever win
+    // the download button — the same rule electron-builder's updater applies.
+    let best: { version: [number, number, number]; assets: unknown } | null = null;
+    for (const r of releases as Array<{
+      tag_name?: unknown;
+      draft?: unknown;
+      prerelease?: unknown;
+      assets?: unknown;
+    }>) {
+      if (r?.draft === true || r?.prerelease === true) continue;
+      const version = parseSemver(r?.tag_name);
+      if (!version) continue;
+      if (!Array.isArray(r?.assets)) continue;
+      if (!best || compareSemver(version, best.version) > 0) {
+        best = { version, assets: r.assets };
+      }
+    }
+
+    if (!best || !Array.isArray(best.assets)) return toReleasesPage();
+
+    const installer = (best.assets as Array<{ name?: unknown; browser_download_url?: unknown }>).find(
       (a) => isInstallerAsset(a?.name)
     );
 
