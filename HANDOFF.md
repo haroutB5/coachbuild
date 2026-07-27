@@ -2459,3 +2459,178 @@ live game (Practice Tool is fastest) → confirm the overlay appears upper-left,
 on level-up, and both hotkeys behave as described.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-27 14:50
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-27 13:24:07Z; previous content preserved there. Append new rounds below. -->
+
+# HANDOFF — engo, audit fix round, 2026-07-27
+
+Model: Sonnet 5 (claude-sonnet-5).
+
+Fable 5's adversarial cold-start audit reviewed the overlay and cleared the compliance shape, the champion-level highlight decision, and confirmed `resolveNextSkill`/`pointsSpent` are imported by nothing under `overwolf/`. It found 8 real defects. All 8 fixed, in my files only (`ingame/**`, `js/skillOrderData.js`, `vendor/**`), plus the two API routes the coordinator explicitly lifted the no-edit restriction on for this round. `background/**`, `desktop/**`, `js/gameState.js`, `js/owWindows.js`, `js/liveClientHttp.js`, `manifest.json` untouched.
+
+**1. (P1) Network failure reported as "champion not recognized."** `getChampionList()` now returns `{status:"ok", list} | {status:"unavailable"}` instead of collapsing every failure to `null`. `resolveChampionId` threads it through as its own `{status:"unavailable"}` result, distinct from `{status:"not-found"}`. `resolveOverlayData` surfaces a new `"unavailable"` phase. `ingame.js` routes it to the exact same `"Skill order unavailable."` string `fetchSkillOrder`'s `error` status already used — pulled both into a shared `MSG_UNAVAILABLE` constant so they can't drift apart.
+
+**2. (P1) Retry cooldowns never triggered.** Added `retryDelayMs(data)` + `scheduleRetry(data)` in `ingame.js`: after every render, if the phase is `"unavailable"` or `"resolved"` with `skillOrder.status` `"error"`/`"no-data"`, arms a single `setTimeout(() => handleState(lastState), cooldown + 1000)`. Always clears the existing timer first (no stacking), and any phase that isn't one of those three falls through to `null` delay, which — combined with the always-clear — satisfies "clear on game exit and on successful resolve" without a separate code path. The three cooldown constants (`CHAMPION_LIST_RETRY_COOLDOWN_MS`, `ERROR_RETRY_COOLDOWN_MS`, `NO_DATA_RETRY_COOLDOWN_MS`) are now `export`ed from `skillOrderData.js` so `ingame.js` uses the SAME numbers the cache enforces, not a duplicated guess. `selfTest.mjs` pins their exact values — a renamed/missing export is a silent `undefined` on an ES import, not a thrown error, so this is the only thing that would have caught that regression class.
+
+**3. (P2) Lane buttons destroyed on every GEP push.** `renderLaneBar()` now computes `signature = `${isInteractive}:${lane}`` and short-circuits (`return`) when unchanged since the last build, before touching `innerHTML`. Only rebuilds when interactive mode or the stored lane actually changed. Left the main grid's full-rebuild-every-render approach untouched, per the audit's explicit instruction — that one has no click-loss consequence and incrementalizing it would reintroduce the first-render/steady-state divergence I deliberately removed.
+
+**4. (P2) Header showed Riot's internal name.** `resolveChampionId` now returns `{status:"ok", id, name}` — `name` is the matched `ChampionRef`'s own display name, not the raw/matching identifier used for lookup. `resolveOverlayData` carries it as `championDisplayName`. `renderResolved` renders `data.championDisplayName || data.championName`, so a genuine no-match fallback still shows SOMETHING rather than going blank. Verified end-to-end in `selfTest.mjs` with the Wukong/MonkeyKing case specifically (key and display name deliberately diverge).
+
+**5. (P2) `!completed` was the wrong proxy for "16-18 unknown."** Footer now checks `order.length < TOTAL_LEVELS` directly instead of `!model.completed` — `completed:false` also covers `refusedBecause:"already-complete"` (source published all 18 itself), where the old code printed "Levels 16-18 not published" under a fully-marked 18-column grid. `buildGrid` was already correct (it always used `order.length`, never `completed`) — only the footer needed the fix.
+
+**6. (P2) No in-flight dedup on `fetchSkillOrder`.** Added `skillOrderLoading` Map mirroring `championListLoading`'s existing pattern — a concurrent second call for the same `(championId, roleId)` while a fetch is outstanding gets the SAME in-flight promise instead of issuing a duplicate request. `doFetchSkillOrder` extracted as the actual network+cache-write logic so `fetchSkillOrder` itself is just cache-check → dedup-check → dispatch.
+
+**7. (P2) Dropped the vendored bundle.** Deleted `overwolf/vendor/` entirely (`skillEngine.js` + my own `_engineEntry.ts` barrel from the first round) and removed the `overwolf:bundle` script from `package.json`. `ingame.js` now has `const TOTAL_LEVELS = 18;` inlined with a comment naming `lib/skillOrderModel.ts` as the source of truth. Confirmed nothing else under `overwolf/` imported from `vendor/` (grepped after deleting — only remaining hit is the explanatory comment in `ingame.js` itself, not a live import).
+
+**8. (CORS) Added `Access-Control-Allow-Origin: *`** to `app/api/champions/route.ts` (success + 500 paths) and `app/api/skill-order/route.ts` (payload, empty, and all three 400 paths — every response this route can produce). Did not touch either route's existing `Cache-Control` logic (gotcha (b) preserved exactly). Not deployed, so not live-verifiable yet — `curl -I` against prod confirms no CORS header present today, as expected pre-deploy.
+
+**Wording nit (not mine to fix):** `desktop.html`'s "…to pick the right skill order" is the closest thing to advisory language in the tree. `desktop.html` is engy's file — flagging here per the coordinator's note rather than editing it. Suggested replacement if he wants it: "the matching skill order."
+
+## Verification (all re-run after all 8 fixes)
+
+```
+node --check overwolf/js/skillOrderData.js   -> OK
+node --check overwolf/ingame/ingame.js       -> OK
+node --check overwolf/js/selfTest.mjs        -> OK
+
+node overwolf/js/selfTest.mjs
+  [CoachBuild overlay] champion list fetch failed: Error: GET /api/champions -> HTTP 500   (expected -- the "unavailable" test's own mocked failure)
+  --- LIVE smoke test against https://coachbuild.vercel.app (real network) ---
+  GET /api/champions -> resolved "Ahri" to id 103
+  GET /api/skill-order?champ=103&role=2 -> status=ok
+  48 passed, 0 failed        (was 38 before this round; 10 new assertions cover fixes #1, #2, #4, #6)
+
+npm run typecheck   -> clean
+npm run lint         -> clean (same 5 pre-existing <img> warnings, unrelated files)
+npx vitest run       -> 1806 tests passed (unchanged)
+```
+
+No version bump, no CHANGELOG edit, no deploy, per the coordinator's instruction.
+
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-27 13:24:07Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-27 (round 2) — fixes from the Fable 5 adversarial audit
+
+Model: Sonnet 5 (claude-sonnet-5). All six confirmed defects fixed, in `background.js`,
+`js/gameState.js`, `js/owWindows.js`, `manifest.json`, `manifest.README.md`, and
+`README.md` only — did not touch `ingame/**`, `js/skillOrderData.js`, `vendor/**`
+(engo's files, being fixed in parallel per the coordinator's note).
+
+**Cleared by the audit, unchanged:** the `sendMessage` transport deviation, the
+message ids, the READY-handshake ordering proof, and every point in `gameState.js`
+(Passive exclusion, riotId matching, rawChampionName preference, non-English survival
+via ddragon's ASCII `key` + the normalized-fallback rescuing `FiddleSticks`/
+`Fiddlesticks` casing). No changes made to anything already cleared.
+
+### 1. (P1) `livePort` coercion + default — `background.js`, exports from `js/gameState.js`
+`toFiniteInt` is now exported from `gameState.js` (previously module-private) so
+`background.js` can reuse the same coercion `gameState.js`'s own header mandates,
+rather than a second hand-rolled check. New `resolvePort()` in `background.js`
+coerces `live_client_data.port` through it, falls back to `DEFAULT_LIVE_CLIENT_PORT
+= 2999` (matching `companion.ps1`'s four hardcoded call sites) when the coerced
+value is absent or `<= 0`, and logs the resolved port once per change — not every
+tick, so it's visible without flooding the console. Fixed the exact silent-failure
+chain flagged: `fetchPlayerList` was never even attempted when `port` came in as a
+string or was missing, and the README's old troubleshooting entry pointed at a
+catch-block log that could never fire because the call never happened.
+`README.md`'s troubleshooting section rewritten to check the new port-resolution
+log FIRST, before the (still-relevant, but now second-in-line) playerlist-fetch log.
+
+**Verified:** new 8-assertion suite against `toFiniteInt` directly (bare number,
+stringified number, absent, null, empty string, garbage string, zero, non-integer)
+— all pass. It also surfaced a real JS quirk worth flagging for whoever touches this
+next: `Number('') === 0`, so `toFiniteInt('')` is `0`, not `null` — harmless here
+only because `resolvePort()` already checks `coerced > 0`, not just `!== null`; a
+future caller that checks `!== null` alone would treat an empty-string port as
+"valid: 0" instead of falling back.
+
+### 2. (P1) `getInfo()` envelope — `seedInitialState()` in `background.js`
+Now reads `res.res?.live_client_data ?? res.live_client_data` and treats success as
+`res.success === true || res.status === 'success'`, exactly as directed, and logs
+which shape (`NESTED under res.res.live_client_data` vs `FLAT under
+res.live_client_data`) was actually observed. **Still unverified against a real
+call** — this fix makes the first live run self-diagnosing rather than resolving
+the ambiguity in advance, which is the most honest thing achievable without a
+running League client.
+
+### 3. (P2) Desktop window auto-open on `GameLaunch` — `background.js`
+Replaced the unconditional `restoreWindow(desktop)` in `init()` with
+`declareDesktopWindow()` (obtains the window without showing it) plus
+`decideDesktopAutoOpen(origin)`, driven by `overwolf.extensions.onAppLaunchTriggered`
+when available. Default on any ambiguity (event unavailable, never fires within a
+2s fallback timeout, or reports an unrecognized origin) is **NOT** to auto-open —
+matching what `manifest.README.md` already promised. **Honesty note:**
+`onAppLaunchTriggered` and its `origin` field (specifically the string
+`"gamelaunchevent"`) are asserted from general knowledge of the Overwolf API
+surface, not observed against a live launch on this machine — flagged inline in
+`background.js`'s comment and in `manifest.README.md`. Updated `README.md`'s load
+checklist (steps 5 and 7) to stop promising the desktop window "should open
+automatically" — it now correctly says it may or may not, and how to tell which
+happened from the background console log.
+
+### 4. (S) READY handshake delivery — `background.js`, `js/owWindows.js`
+`pushState()` and `pushInteractiveChange()` now target `ingameWindowId` (the real
+windowId, captured in `openIngameWindow()`) instead of the declared window NAME,
+via a new `ingameSendTarget()` helper that falls back to the name only when the id
+isn't known yet — and warns loudly when it has to. Both functions now also
+explicitly check `result.success === true` on a resolved send (belt-and-braces on
+top of `owWindows.js`'s promise already rejecting on `!success`) and log every
+failure via `warn(...)`, not the quieter `log(...)` the P1 version used — a dropped
+delivery is no longer indistinguishable from routine chatter in the console.
+`owWindows.js`'s `sendMessageToWindow` doc comment updated to say the parameter
+should be a windowId when the caller has one, name as a fallback only.
+
+### 5. (S) `minimum-overwolf-version` — `manifest.json`
+Raised `0.120.0` → `1.0.0`. Not pinned to a specific Overwolf changelog entry
+(would need cross-referencing Overwolf's own release notes, not done), but
+deliberately conservative: sits inside "definitely has the modern `result.success`
+boolean convention every `owWindows.js` wrapper depends on" territory, well below
+this machine's installed 1.131.304.3, and well above the pre-1.0 releases the old
+floor would have permitted. `manifest.README.md` updated with the full reasoning
+and an explicit note that this isn't an exact pin.
+
+### 6. (S) `passthrough` documentation — `manifest.README.md`
+Corrected: `passthrough: true` means the keystroke is delivered to the game IN
+ADDITION to firing Overwolf's `onPressed` callback — not "consumed and never
+forwarded," which is what the doc said before. The part of the original reasoning
+that was actually correct (hotkeys fire regardless of game focus either way) is
+kept; only the wrong "consumed" claim was replaced. Added an explicit warning for
+whoever picks the next hotkey: get this right before choosing a combo that might
+collide with a real in-game bind.
+
+### Re-verification run
+- `node -e "JSON.parse(...)"` on `manifest.json` — still valid JSON after the
+  version-floor edit.
+- `node --check` on every touched `.js` file (`gameState.js`, `owWindows.js`,
+  `background.js`) — all pass.
+- `gameState.js`'s original 17-assertion suite — re-run in full, all still pass
+  (no export was removed or changed shape, only one new export added).
+- New 8-assertion suite targeting `toFiniteInt` specifically (see fix 1) — all pass.
+
+### Still not verified — unchanged from round 1, restated for this round
+Nothing in this round was tested against a real Overwolf process or a real League
+client — I have no way to launch either from this environment. Every fix above is a
+best-effort correction against documented/reasoned Overwolf behavior, not something
+I watched work. The three highest-risk unverified assumptions specific to this
+round's fixes: (a) `getInfo()`'s actual envelope shape — the code now tolerates
+both, but which one Overwolf actually sends is still unknown until the first live
+run's log line reports it; (b) `overwolf.extensions.onAppLaunchTriggered` existing
+at all and using `"gamelaunchevent"` as its origin string for a `launch_events`-triggered
+start — if this API doesn't exist or the field is named/shaped differently, the 2s
+fallback timeout silently takes over and the desktop window simply never
+auto-opens on any launch path, which is a safe failure mode (matches the documented
+promise) but not necessarily the intended one; (c) whether `overwolf.windows.sendMessage`
+genuinely behaves better/more reliably when given a windowId vs. a declared name —
+asserted per the audit's finding, not independently re-derived.
+
+

@@ -1,0 +1,280 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   ingame.css — the transparent in-game overlay's content styling.
+   Plain CSS, hand-written (this app is not part of the Next/Tailwind build).
+   Tokens below are copied by hand from app/globals.css / tailwind.config.ts
+   ("hextech" gold/navy palette) so the overlay reads as the same product as
+   the web app, at the moment those source values were read (2026-07-27).
+
+   Design constraints (task brief + single-monitor revision, 2026-07-27):
+     - This window is the ONLY surface, looked at for well under a second at
+       a time mid-fight -- bias hard toward compact + instantly-legible.
+       Solid-enough backing behind every glyph, high contrast text.
+     - The current-level column must be findable at a glance: a filled
+       background band across the whole column, not just an outline.
+     - Clickthrough (default) vs interactive (hotkey-toggled) must look
+       obviously different: interactive gets a visible border glow + an
+       "editable" badge + the lane control turns into real buttons; nothing
+       ever looks pressable in clickthrough, because pressing it does nothing.
+     - Near-zero motion; prefers-reduced-motion is honored below regardless.
+     - All 18 levels visible without scrolling -- a 4-row (Q/W/E/R) x
+       18-column grid (levels as columns) is the compact shape chosen; see
+       ingame.js's header for why over an 18-row list.
+   ───────────────────────────────────────────────────────────────────────── */
+
+:root {
+  --cb-bg: #0a0d0b;
+  --cb-panel: rgba(8, 10, 9, 0.92); /* more opaque than the web app's glass card --
+                                        this sits over gameplay, not a page bg */
+  --cb-line: rgba(255, 255, 255, 0.1);
+  --cb-line-gold: rgba(200, 170, 110, 0.4);
+  --cb-gold: #c8aa6e;
+  --cb-gold-hover: #ddc48f;
+  --cb-gold-dim: #8a7440;
+  --cb-txt: #ece7de;
+  --cb-mut: #9aa39b;
+  --cb-cell: rgba(255, 255, 255, 0.07);
+  --cb-cell-unknown: rgba(255, 255, 255, 0.03);
+  --cb-current-band: rgba(200, 170, 110, 0.22);
+  --cb-interactive: #4fb0e0; /* deliberately a DIFFERENT hue from the gold accent --
+                                 "editable" must never be mistaken for "recommended" */
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent; /* the Overwolf window itself supplies the transparent
+                               chrome; this page must never paint an opaque body */
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+  color: var(--cb-txt);
+  -webkit-font-smoothing: antialiased;
+  user-select: none; /* an overlay isn't a page you select text from mid-game */
+}
+
+.cb-overlay {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--cb-panel);
+  border: 1.5px solid var(--cb-line-gold);
+  border-radius: 8px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
+  min-width: 320px;
+  max-width: 440px;
+}
+
+/* Interactive mode: the ONE unmistakable at-a-glance signal that input is
+   being captured instead of reaching the game. Border hue swap (not just a
+   subtler shadow) so it reads correctly even glanced at for a fraction of a
+   second mid-fight. */
+.cb-overlay--interactive {
+  border-color: var(--cb-interactive);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(79, 176, 224, 0.35);
+}
+
+.cb-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--cb-line);
+  padding-bottom: 6px;
+}
+
+.cb-champion {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--cb-gold);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cb-interactive-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--cb-interactive);
+  border: 1px solid var(--cb-interactive);
+  border-radius: 3px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+
+.cb-interactive-badge[hidden] {
+  display: none;
+}
+
+/* ── Lane control ──────────────────────────────────────────────────────────
+   Clickthrough: a single plain-text label -- deliberately NOT styled like a
+   button (no border, no hover, no cursor change) because pressing it would
+   do nothing; looking pressable when it isn't is the one thing to avoid.
+   Interactive: five real buttons with visible affordance. */
+.cb-lanebar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 20px;
+}
+
+.cb-lane-static {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--cb-mut);
+}
+
+.cb-lane-btn {
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--cb-txt);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--cb-interactive);
+  border-radius: 4px;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+
+.cb-lane-btn:hover {
+  background: rgba(79, 176, 224, 0.18);
+}
+
+.cb-lane-btn--active {
+  background: var(--cb-interactive);
+  color: #0a1620;
+  border-color: var(--cb-interactive);
+}
+
+.cb-body {
+  min-height: 20px;
+}
+
+.cb-message {
+  margin: 4px 0;
+  font-size: 11px;
+  color: var(--cb-mut);
+  line-height: 1.4;
+}
+
+.cb-message:empty {
+  display: none;
+}
+
+/* ── The skill grid: 4 ability rows x 18 level columns, plus a header row
+      of level numbers and a label column of ability letters. Built entirely
+      by ingame.js -- this file only styles the resulting <table>/<tr>/<td>. */
+.cb-grid {
+  border-collapse: separate;
+  border-spacing: 2px;
+  width: 100%;
+}
+
+.cb-grid th,
+.cb-grid td {
+  padding: 0;
+  text-align: center;
+}
+
+/* Level-number header row */
+.cb-grid tr:first-child th {
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--cb-mut);
+  height: 13px;
+  line-height: 13px;
+  border-radius: 2px;
+}
+
+/* Ability-letter row label */
+.cb-grid th[scope="row"] {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--cb-gold);
+  width: 18px;
+  padding-right: 4px;
+  text-align: left;
+}
+
+.cb-grid td {
+  width: 17px;
+  height: 17px;
+  border-radius: 3px;
+  background: var(--cb-cell);
+}
+
+/* A level at which this ability is ranked, per the recommended order. Pure
+   description of aggregate data -- not an instruction, never animated into
+   attention. */
+.cb-grid td.cb-marked {
+  background: var(--cb-gold-dim);
+}
+
+/* Levels 16-18 on a `completed:false` order: honestly unknown, never blank
+   (blank would silently read the same as "not this ability"). A faint
+   diagonal hatch, no glyph -- legible at this size without adding noise. */
+.cb-grid td.cb-unknown {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--cb-cell-unknown),
+    var(--cb-cell-unknown) 2px,
+    transparent 2px,
+    transparent 4px
+  );
+}
+
+/* The player's OWN current champion level -- descriptive, not instructive.
+   A filled background BAND across the whole column (header + all 4 ability
+   cells), not just an outline, so it is findable in well under a second --
+   the single most important glance-legibility requirement on this screen. */
+.cb-grid th.cb-current {
+  color: var(--cb-gold-hover);
+  font-weight: 800;
+  background: var(--cb-current-band);
+}
+
+.cb-grid td.cb-current {
+  background: var(--cb-current-band);
+  outline: 1.5px solid var(--cb-gold);
+  outline-offset: -1.5px;
+}
+
+.cb-grid td.cb-marked.cb-current {
+  background: var(--cb-gold);
+}
+
+.cb-footer {
+  font-size: 9.5px;
+  color: var(--cb-mut);
+  min-height: 11px;
+}
+
+.cb-footer:empty {
+  display: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Deliberately near-zero motion everywhere regardless of the media query --
+     this sits over a game, not a marketing page. The one transition kept is
+     a fast opacity/border settle, which the reduced-motion block below
+     still overrides to instant. */
+  .cb-overlay {
+    transition: opacity 120ms ease-out, border-color 120ms ease-out, box-shadow 120ms ease-out;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cb-overlay {
+    transition: none !important;
+  }
+}
