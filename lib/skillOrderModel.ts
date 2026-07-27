@@ -19,13 +19,30 @@
 // 1-15. Levels 16-18 are therefore NOT measured — they are DERIVED, or they
 // are absent. There is no third option and there is no padding:
 //   * `completed: true`  — 16-18 were derived by completeSkillOrder's
-//                          arithmetic below, from a champion that provably
-//                          fits League's standard 5/5/5/3 rank model.
+//                          arithmetic below, from this champion's own
+//                          published rank caps plus a max-priority order.
 //   * `completed: false` — the derivation refused. `order` then carries ONLY
 //                          the 15 levels the source actually reported, and
 //                          the UI must render nothing beyond level 15.
 // A caller MUST NOT treat a 15-long order as "18 with three unknowns to fill
 // in" — the whole point is that we do not know them.
+//
+// ── DERIVED IS NOT MEASURED, AND THE MODEL NOW SAYS WHICH IS WHICH ──────────
+// `completed: true` used to be the only signal that a tail existed, which left
+// every consumer free to render all 18 levels as if the source had published
+// them. It had not. Two fields close that:
+//   * `observedLevels`  — how many LEADING entries of `order` came verbatim
+//                         from the source. Everything at a higher index is
+//                         OURS. Read it through `observedLevelCount()` /
+//                         `isDerivedLevel()`, never raw (see those helpers for
+//                         the back-compat case).
+//   * `completionBasis` — WHICH priority resolved the tail: op.gg's own
+//                         published max order (`"published"`, measured over a
+//                         far larger sample than the order itself) or one
+//                         inferred from the observed path (`"derived"`).
+// The Builds card and the desktop overlay both render the derived tail
+// differently from the source levels. That is a requirement, not a nicety: a
+// tail presented as measured is exactly the fabrication hard rule #4 forbids.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { Ability, ChampionKit, SkillOrderModel } from "./types";
@@ -33,6 +50,7 @@ import {
   STANDARD_KIT,
   TOTAL_LEVELS,
   ULTIMATE_LEVELS,
+  isUltimateRankLegal,
   purchasableUltimateRanks,
   tailUltimateRanks,
 } from "./championKit";
@@ -135,34 +153,91 @@ export type CompletionRefusal =
   | "rank-over-cap"
   | "ultimate-remainder"
   | "tail-mismatch"
-  /** The champion has MORE purchasable ranks than the 18 points a game
-   *  grants, so they must skip something — and which point they skip is a
-   *  player choice the source's aggregate cannot tell us. Yuumi (19),
-   *  Aphelios (21), Udyr (24). Distinct from `rank-over-cap`, which means the
-   *  observed path broke this champion's OWN caps; this one means the caps
-   *  themselves leave the tail genuinely undetermined. */
-  | "kit-not-derivable";
+  /** The champion's purchasable ranks total FEWER than the 18 points a game
+   *  grants, so no complete 18-level path exists for them at all — there is
+   *  nothing left to spend the last points on.
+   *
+   *  NARROWED 2026-07-27. This used to fire for `purchasableTotal !== 18`,
+   *  i.e. for the SURPLUS champions too (Yuumi 19, Aphelios 21, Udyr 24), on
+   *  the reasoning that a champion who must skip a point makes the tail
+   *  undecidable. That reasoning was one step short: the source publishes a
+   *  max-priority order (`skill_masteries.ids`) over a LARGER sample than the
+   *  order itself, and walking it under the champion's own caps decides which
+   *  point is skipped without inventing anything. Surplus kits now complete
+   *  when that walk lands exactly 18 legal points, and refuse as
+   *  `priority-exhausted` when it does not. No champion on the current roster
+   *  reaches this refusal; it is the honest answer for a kit shape that
+   *  cannot fill 18, and it is asserted in tests rather than assumed absent. */
+  | "kit-not-derivable"
+  /** Walking the max-priority order ran out of abilities still under their
+   *  cap before all 18 points were placed. The tail is then genuinely
+   *  unresolved — the priority we hold does not name anything left to spend
+   *  on — so the observed 15 are returned untouched. */
+  | "priority-exhausted"
+  /** A derived tail entry would rank the ultimate at a level this champion's
+   *  own schedule does not allow. Distinct from lib/nextSkill.ts's
+   *  `ultimate-illegal`, which judges a LIVE instruction; this one judges a
+   *  level we ourselves chose, so it firing would mean the allocator, not the
+   *  source, produced an illegal path. See the check for why it is currently
+   *  unreachable by arithmetic and tested anyway. */
+  | "ultimate-illegal-tail";
+
+/** Which priority resolved a derived tail. `"published"` is op.gg's own
+ *  `skill_masteries.ids`; `"derived"` is `derivePriority`'s reading of the
+ *  observed path. Published is preferred wherever it is well-formed — it is
+ *  measured over a far larger sample (Udyr: 17,186 games vs the order's
+ *  9,670) and it is the only source that ranks the R slot at all. */
+export type PriorityBasis = "published" | "derived";
 
 export interface CompletionResult {
   order: Ability[];
   completed: boolean;
   /** Present only when `completed` is false. */
   refusedBecause?: CompletionRefusal;
+  /** How many LEADING entries of `order` came verbatim from the source.
+   *  Equals `order.length` on every refusal (nothing was derived) and
+   *  `SOURCE_LEVELS` on every successful completion. */
+  observedLevels: number;
+  /** Which priority resolved the tail. Present only when `completed`. */
+  basis?: PriorityBasis;
 }
 
 /**
  * Complete a 15-level observed path to the full 18 levels — BY DERIVATION,
  * NEVER BY GUESSING.
  *
- * ── The derivation ─────────────────────────────────────────────────────────
+ * ── The derivation, case 1: the caps DETERMINE the tail (170 champions) ─────
  * A champion has exactly 18 ability points. So given a first 15 levels that
- * provably fit THIS CHAMPION'S OWN caps, the remaining 3 points are fully
- * DETERMINED by subtraction — there is nothing to guess. Ahri mid, for
- * example, has Q:5 W:5 E:3 R:2 across levels 1-15, leaving exactly R×1 and
- * E×2. The ultimate takes level 16 (6/11/16 are the only ultimate levels),
- * and the two E points fall at 17 and 18. That is arithmetic, not opinion,
- * and it reproduces U.GG's published Ahri path exactly (cross-checked
- * 2026-07-27).
+ * provably fit THIS CHAMPION'S OWN caps, and a champion whose purchasable
+ * ranks total exactly 18, the remaining 3 points are fully DETERMINED by
+ * subtraction — there is nothing to guess. Ahri mid, for example, has Q:5 W:5
+ * E:3 R:2 across levels 1-15, leaving exactly R×1 and E×2. The ultimate takes
+ * level 16 (6/11/16 are the only ultimate levels), and the two E points fall
+ * at 17 and 18. That is arithmetic, not opinion, and it reproduces U.GG's
+ * published Ahri path exactly (cross-checked 2026-07-27).
+ *
+ * ── The derivation, case 2: the PRIORITY resolves it (Udyr/Yuumi/Aphelios) ──
+ * Three champions have MORE purchasable ranks than the 18 points a game grants
+ * — Yuumi 19, Aphelios 21, Udyr 24 — so subtraction alone leaves the tail
+ * ambiguous and this function used to refuse them outright. It no longer has
+ * to, because the source publishes the missing fact IN THE SAME RESPONSE:
+ * `skill_masteries.ids` is op.gg's max-priority order, the sequence in which
+ * players actually max abilities, measured over a LARGER sample than the
+ * levelling order itself. lib/opgg.ts parses it into `priorityIds`.
+ *
+ * Udyr jungle is the worked example, and it is the report this change answers.
+ * His published 15 is Q6 W2 E6 R1 against caps of 6/6/6/6, so Q and E are
+ * already maxed at level 15 and the last 3 points could legally go to W or to
+ * R in several distributions. His published priority is ["Q","E","W","R"]
+ * (17,186 games): Q maxed, E maxed, W next and 4 ranks under its cap, so the
+ * three points are W's. Final: Q6 W5 E6 R1 = 18. Derived, not invented — and
+ * `completionBasis: "published"` says exactly which datum decided it.
+ *
+ * The allocator is deliberately the same one in both cases: walk the priority,
+ * give each ability as many of the remaining points as its own cap allows,
+ * stop at 18. For a case-1 champion the caps leave exactly 3 points and the
+ * walk therefore places precisely what subtraction already determined — which
+ * is why this generalisation changed no standard champion's output.
  *
  * ── The caps are now the CHAMPION'S, not a constant ────────────────────────
  * This used to hardcode 5/5/5/3 and therefore refused four popular champions

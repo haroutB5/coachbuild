@@ -423,7 +423,16 @@ function buildGrid(model, championLevel) {
  *   for every phase that isn't a resolved "ok" skill order. Never guesses.
  */
 function computeNextSkillRecommendation(data) {
-  if (data.phase !== "resolved" || !data.skillOrder || data.skillOrder.status !== "ok") return null;
+  if (data.phase !== "resolved" || !data.skillOrder || data.skillOrder.status !== "ok") {
+    // Clear the remembered refusal on the way out. Without this the note stuck
+    // on screen after the game ended: `lastLoggedRefusal` kept its old value,
+    // and the caller renders the note from that value, so a refusal from a
+    // finished match kept being re-rendered against a `not-in-game` state
+    // forever. A note explaining why THIS game has no recommendation must not
+    // outlive the game it was about.
+    lastLoggedRefusal = null;
+    return null;
+  }
 
   // Deliberately no pre-filtering of `championLevel`/`abilityRanks` here --
   // resolveNextSkill's OWN validation (bad-level / bad-ranks / non-standard-
@@ -489,8 +498,25 @@ let lastLoggedRefusal = null;
  * it sits where the user is already looking rather than somewhere they must go
  * and find. Created lazily: an element that never appears costs nothing.
  */
+/** Auto-dismiss timer. The note is a one-time explanation, not a status line:
+ *  once read, it is just something sitting on top of the game. Cleared and
+ *  re-armed on every change so a NEW reason gets its own full window. */
+let refusalNoteTimer = null;
+const REFUSAL_NOTE_VISIBLE_MS = 12000;
+
 function renderRefusalNote(reason) {
   const text = reason ? PERSISTENT_REFUSALS[reason] : null;
+
+  if (refusalNoteTimer !== null) {
+    clearTimeout(refusalNoteTimer);
+    refusalNoteTimer = null;
+  }
+  if (text) {
+    refusalNoteTimer = setTimeout(() => {
+      refusalNoteTimer = null;
+      if (els.refusalNote) els.refusalNote.hidden = true;
+    }, REFUSAL_NOTE_VISIBLE_MS);
+  }
   if (!els.refusalNote) {
     if (!text) return; // nothing to show and nothing built yet
     const node = document.createElement("div");

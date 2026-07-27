@@ -1,6 +1,26 @@
 # CoachBuild — handoff
 
-**Current state: 2026-07-26, v0.58.0.** Prod: `coachbuild.vercel.app`. Companion: 1.6.4. All gates green, prod-smoked.
+**Current state: 2026-07-27 evening — web `v0.67.0`, overlay-host `v0.4.0`, companion `1.9.0`.**
+Prod: `coachbuild.vercel.app` (verified live). All gates green (tsc, lint, **1859** tests, build).
+
+> **NEW SECOND COMPONENT: `overlay-host/`** — an Electron in-game overlay, published as installers to
+> the PUBLIC repo `haroutB5/coachbuild-overlay-releases` (source repo stays private). It draws a pink
+> box on the player's real Q/W/E/R icons marking the next point, reads `127.0.0.1:2999` directly,
+> auto-updates itself, and supervises `companion.ps1` as a hidden child so there is ONE desktop app.
+> `overwolf/` was DELETED (Overwolf refuses private apps — see `overlay-host/README.md`'s PIVOT).
+>
+> **Full session detail, in-flight work, next steps and newly-earned gotchas live in
+> `C:/Claude/AI/urgot/data/SESSION-HANDOFF.md`.** Read that first — it is current; much of the file
+> below is older.
+>
+> Headlines: the League client now exists on this machine, so `scripts/capture-live-client.ps1` and
+> `scripts/capture-lcu.ps1` (both new, both read-only) turned long-standing assumptions into
+> observations — v0.65.0's wire format is confirmed, the loopback TLS scoping (I-16) is verified both
+> directions for the first time, and CLAUDE.md's "4KB item-set budget" was disproved (the real
+> document is 61,060 bytes / 62 sets). `lib/championKit.ts` (new) fixed seven champions that were
+> silently refused, via per-champion rank caps AND free ranks — Jayce and Karma went 0/15 → 18/18.
+
+**Prior state header (superseded): 2026-07-26, v0.58.0, companion 1.6.4.**
 
 > ⚠️ **This file is at ~880 lines, well past its own 150-200 rollup threshold** (the merged per-agent rounds are most of it). A rollup into `CHANGELOG.md`-referenced footnotes is DUE — do it deliberately, keeping the open-items list intact, rather than trimming ad hoc.
 
