@@ -285,6 +285,59 @@ export function buildMyStatsRows(records: MyStatsRecord[], iconOf: IconLookup): 
   });
 }
 
+/**
+ * The account's main CHAMPION, summed across every role they played it in.
+ *
+ * `records` are per (champion, ROLE) pairs, so `rows[0]` — which the /mystats
+ * MAIN tile used to read — is the biggest single (champion, role) record, NOT
+ * the champion's total. On a real account that understated the headline: Viktor
+ * showed as 15 games when the true total across mid/top was 19 (15 + 3 + 1).
+ * A user reads "MAIN: Viktor, 15g" as "I have played 15 games of Viktor", and
+ * that reading was simply wrong.
+ *
+ * The win rate is recomputed from the summed wins and games rather than
+ * averaged across the per-role rates — averaging rates weights a 1-game role
+ * equally with a 15-game one.
+ *
+ * Returns null when there are no records at all.
+ */
+export function computeMainChampion(
+  records: MyStatsRecord[],
+  iconOf: IconLookup
+): { championId: number; name: string; games: number; wins: number; winrate: number } | null {
+  if (records.length === 0) return null;
+
+  const totals = new Map<number, { games: number; wins: number }>();
+  for (const r of records) {
+    const acc = totals.get(r.championId) ?? { games: 0, wins: 0 };
+    acc.games += r.games;
+    acc.wins += r.wins;
+    totals.set(r.championId, acc);
+  }
+
+  let bestId: number | null = null;
+  let best = { games: 0, wins: 0 };
+  // `.forEach` rather than `for…of` over the Map: this project's tsconfig target
+  // predates downlevelIteration, so iterating a Map directly does not compile.
+  totals.forEach((acc, championId) => {
+    // Strictly greater, so ties keep the first-seen champion — `records` arrive
+    // sorted by games desc, making that the more-played-recently one.
+    if (acc.games > best.games) {
+      bestId = championId;
+      best = acc;
+    }
+  });
+  if (bestId === null) return null;
+
+  return {
+    championId: bestId,
+    name: iconOf(bestId)?.name ?? `Champion #${bestId}`,
+    games: best.games,
+    wins: best.wins,
+    winrate: best.games > 0 ? best.wins / best.games : 0,
+  };
+}
+
 export interface MyStatsOverall {
   games: number;
   wins: number;

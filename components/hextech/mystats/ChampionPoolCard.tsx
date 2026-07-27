@@ -57,9 +57,15 @@ export default function ChampionPoolCard({ rows, winrateOnBuild, winrateOffBuild
         // Your own most-played champions are the shortest possible route into a
         // build — leaving them inert made this the third dead-end list in the app.
         <Link
-          key={row.championId}
-          href={`/?championId=${row.championId}`}
-          aria-label={`See the build for ${row.name}`}
+          // Rows are per (champion, ROLE), not per champion — `buildMyStatsRows`
+          // maps one record per pair. Keying on championId alone gave DUPLICATE
+          // React keys the moment a champion was played in two roles, which is
+          // common: this account had Viktor x3, Swain x3, Galio/Karma/Mel x2.
+          // Duplicate keys make reconciliation undefined, so a re-render could
+          // reuse the wrong row's DOM node.
+          key={`${row.championId}-${row.role}`}
+          href={`/?championId=${row.championId}&role=${row.role}`}
+          aria-label={`See the build for ${row.name} ${row.roleLabel}`}
           className="flex items-center gap-3 py-2.5 border-b border-line last:border-b-0 rounded-md transition-colors hover:bg-white/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal"
         >
           <span className="w-8 h-8 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
@@ -68,7 +74,14 @@ export default function ChampionPoolCard({ rows, winrateOnBuild, winrateOffBuild
 
           <div className="min-w-0 flex-1">
             <p className="text-[12.5px] text-txt font-semibold truncate">{row.name}</p>
-            <p className="text-[10px] text-mut tabular-nums">{row.games}g</p>
+            {/* The ROLE is what distinguishes two rows for the same champion.
+                Without it this card rendered visually IDENTICAL lines — this
+                account had two "Mel 1g 0.0%" rows with nothing to tell them
+                apart, which reads as a duplication bug rather than as two
+                different lanes. `roleLabel` was already on the row, unused. */}
+            <p className="text-[10px] text-mut tabular-nums">
+              {row.roleLabel} · {row.games}g
+            </p>
           </div>
 
           <div className="w-16 h-1.5 rounded-full bg-panel2 overflow-hidden flex-shrink-0 hidden sm:block">

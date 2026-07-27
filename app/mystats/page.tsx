@@ -36,6 +36,7 @@ import {
   buildMyStatsRows,
   buildMyStatsMatchupRows,
   computeMyStatsOverall,
+  computeMainChampion,
   type MyStatsSummary,
   type MyStatsChampionRow,
   type MyStatsMatchupRow,
@@ -138,7 +139,12 @@ export default function MyStatsPage() {
   const rows: MyStatsChampionRow[] =
     state.status === "ok" ? buildMyStatsRows(state.summary.records, (id) => champIcons.get(id)) : [];
   const overall = state.status === "ok" ? computeMyStatsOverall(state.summary.records) : null;
-  const mainRow = rows.length > 0 ? rows[0] : null;
+  // Summed across roles — NOT rows[0], which is one (champion, role) record and
+  // understated the headline whenever a champion was played in two lanes.
+  const mainRow =
+    state.status === "ok"
+      ? computeMainChampion(state.summary.records, (id) => champIcons.get(id))
+      : null;
   const recentGames = state.status === "ok" ? state.summary.recentGames ?? [] : [];
 
   return (
