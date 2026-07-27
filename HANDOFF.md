@@ -1536,3 +1536,71 @@ it restored. Full suite 1632 passed / 113 files.
 Version NOT bumped, CHANGELOG untouched, nothing committed — per brief.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-27 01:08
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-26 18:30:19Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-27 — Mobile TopBar cleanup (v0.63.3 → unversioned, not bumped per brief)
+
+**Fixed:** global `TopBar` (`components/hextech/GlobalNav/TopBar.tsx`) showed a
+duplicate champion/player search AND a permanently-dead "Apply runes" button
+on mobile, on every route including `/history` and `/draft` which already own
+their own search inputs — user photographed this from `/history`.
+
+**Root cause confirmed:** `ApplyRunesButton` → `companionClient.ts` talks to
+`http://127.0.0.1:<port>` — a same-machine League-client bridge. On a phone,
+`127.0.0.1` is the phone; the button can never succeed there.
+
+**Changes:**
+- `components/hextech/GlobalNav/ApplyRunesButton.tsx` — className now
+  `hidden lg:flex` (was unconditional `flex`). Desktop-only on every route.
+- `components/hextech/GlobalNav/topBarChrome.ts` (new) — pure
+  `topBarChromeConfig(pathname)` returning `{ hideSearchOnMobile }`. True only
+  for `/history` and `/draft` (exact match, not prefix — confirmed via
+  `app/history` and `app/draft` having no nested dynamic routes today). Single
+  source of truth, unit-tested.
+- `components/hextech/GlobalNav/TopBar.tsx` — search wrapper div now
+  `hidden lg:block …` on those two routes (mobile-only hide; `lg`+ unaffected
+  on any route). Root bar div: added `emptyOnMobile` (`hideSearchOnMobile &&
+  !chipVisible`) — collapses the ENTIRE bar (`hidden lg:flex` on the root,
+  vs. plain `flex`) below `lg` when both the search AND Apply Runes are
+  hidden and the champ-select chip isn't rendering either, so /history and
+  /draft never show a bordered strip with nothing in it on mobile. Chose a
+  pure-CSS/route-driven collapse over a JS `matchMedia`-based `return null`
+  specifically to avoid an SSR/hydration mismatch (viewport width isn't known
+  during the server render pass).
+- `components/hextech/GlobalNav/ChampSelectChip.tsx` — added optional
+  `onVisibleChange?: (visible: boolean) => void` prop, fired from a
+  `useEffect` on `model.show`. Left the self-hiding `if (!model.show) return
+  null` behavior untouched; this is purely additive so TopBar can know
+  whether the chip is the one thing keeping the bar non-empty. Default
+  `chipVisible` state in TopBar is `false`, matching
+  `CompanionProvider`'s default (`clientConnected: false`) — no hydration
+  mismatch on first paint.
+- New test: `components/__tests__/topBarChrome.test.ts` (5 cases: /history,
+  /draft, all other routes, null pathname, nested-path non-match).
+
+**Left alone (per brief):** `/compact` (chromeless, confirmed byte-identical
+via screenshot); Builds empty-state (`ChampionPickPrompt.tsx`, no champion
+suggestions added); `/history` empty search landing.
+
+**Verified:** `verify-fix.sh` all green (tsc/lint/1646 tests/build/sw/
+manifest). Puppeteer (puppeteer-core + system Chrome, isolated userDataDir —
+chrome-devtools MCP still down) across all 7 routes × 390×844 and 1440×900:
+Apply Runes hidden on every mobile route, present on every desktop route;
+search hidden on mobile only for /history and /draft, present everywhere
+else on mobile and everywhere on desktop; bar itself collapses (zero height,
+no border) on /history and /draft mobile when no live companion session;
+`/compact` unchanged; no horizontal overflow on any combination.
+
+No version bump / CHANGELOG edit / commit / deploy done — left for the user
+per the brief.
+
+
+

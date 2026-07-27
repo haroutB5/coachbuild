@@ -5,6 +5,15 @@
 // content). Three zones: champion search (left), champ-select status chip
 // (center-right), gold "Apply runes" action (right).
 //
+// Mobile parity (v0.63.4): Apply Runes is desktop-only on every route
+// (ApplyRunesButton.tsx — it drives a same-machine League-client bridge that
+// has no meaning on a phone). The champion search is ALSO hidden below `lg`
+// on routes whose page already owns a champion/player search (/history,
+// /draft — see topBarChrome.ts), so mobile never stacks two-to-three search
+// boxes on one screen. Desktop keeps the search everywhere. See TopBar()'s
+// own `emptyOnMobile` for how the bar avoids rendering as an empty bordered
+// strip when both zones are hidden on those two routes.
+//
 // Search wiring: this bar owns its OWN champion combobox (same fetch-
 // /api/champions + arrow-key-nav contract as SidebarChampionSearch.tsx's
 // ChampionSearchField / ChampionPicker.tsx — those aren't exported as a
@@ -20,6 +29,7 @@ import type { ChampionRef } from "@/lib/types";
 import { emitChampionSearch } from "../championSearchBus";
 import ChampSelectChip from "./ChampSelectChip";
 import ApplyRunesButton from "./ApplyRunesButton";
+import { topBarChromeConfig } from "./topBarChrome";
 
 const FALLBACK_CHAMPIONS: ChampionRef[] = [
   { id: 112, key: "Viktor", name: "Viktor", icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/Viktor.webp" },
@@ -192,12 +202,28 @@ function TopBarChampionSearch() {
 }
 
 export default function TopBar() {
+  const pathname = usePathname();
+  const { hideSearchOnMobile } = topBarChromeConfig(pathname);
+
+  // On /history and /draft (hideSearchOnMobile), below `lg` the search box is
+  // hidden (the page already owns its own) and Apply Runes is ALWAYS hidden
+  // below `lg` (ApplyRunesButton.tsx, every route) — so the chip is the ONLY
+  // thing that can still be showing there. Track whether it actually is, so
+  // the bar's own chrome (border/padding/background) can collapse below `lg`
+  // when it would otherwise be a bordered strip with nothing in it. Default
+  // false matches ChampSelectChip's own default-hidden state (no companion
+  // session on first paint), so this never causes a hydration mismatch.
+  const [chipVisible, setChipVisible] = useState(false);
+  const emptyOnMobile = hideSearchOnMobile && !chipVisible;
+
   return (
-    <div className="sticky top-0 z-30 bg-sidebar/95 backdrop-blur border-b border-line px-3 sm:px-4 lg:px-6 py-2.5 flex items-center gap-2.5 sm:gap-3 overflow-x-clip">
-      <div className="flex-1 min-w-0 max-w-[420px]">
+    <div
+      className={`${emptyOnMobile ? "hidden lg:flex" : "flex"} sticky top-0 z-30 bg-sidebar/95 backdrop-blur border-b border-line px-3 sm:px-4 lg:px-6 py-2.5 items-center gap-2.5 sm:gap-3 overflow-x-clip`}
+    >
+      <div className={hideSearchOnMobile ? "hidden lg:block flex-1 min-w-0 max-w-[420px]" : "flex-1 min-w-0 max-w-[420px]"}>
         <TopBarChampionSearch />
       </div>
-      <ChampSelectChip />
+      <ChampSelectChip onVisibleChange={setChipVisible} />
       <ApplyRunesButton />
     </div>
   );

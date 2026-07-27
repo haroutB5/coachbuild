@@ -18,7 +18,16 @@ import { roleIdToLane } from "@/components/live/deepLink";
 import { LANE_LABEL } from "@/components/hextech/heroContracts";
 import { champSelectChipModel } from "./champSelectChipModel";
 
-export default function ChampSelectChip() {
+interface ChampSelectChipProps {
+  /** Notifies the caller (TopBar.tsx) whether this chip actually rendered
+   *  content this tick, so TopBar can collapse its own chrome (border/
+   *  padding/background) when nothing else in the bar is visible either —
+   *  see topBarChrome.ts. Optional: this component still self-hides via its
+   *  own `if (!model.show) return null` with no caller wired up. */
+  onVisibleChange?: (visible: boolean) => void;
+}
+
+export default function ChampSelectChip({ onVisibleChange }: ChampSelectChipProps = {}) {
   const companion = useCompanion();
   const [champions, setChampions] = useState<ChampionRef[]>([]);
 
@@ -49,6 +58,10 @@ export default function ChampSelectChip() {
     champSelect: companion.champSelect ? { championName, role } : null,
     clientConnected: companion.clientConnected,
   });
+
+  useEffect(() => {
+    onVisibleChange?.(model.show);
+  }, [model.show, onVisibleChange]);
 
   if (!model.show) return null;
 

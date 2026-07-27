@@ -2,6 +2,42 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.63.4] — 2026-07-27 — The top bar stops showing phone users things a phone cannot do
+
+### Fixed
+- **"Apply Runes" is desktop-only now.** It writes to the League client through the companion at
+  `http://127.0.0.1:<port>` — a **localhost** bridge to the client on the same machine. On a phone
+  `127.0.0.1` is the phone, where no League client exists, so the button was permanently dead UI on
+  every mobile route while occupying the most valuable strip on the screen. It is unchanged on
+  desktop, where the companion can genuinely run.
+
+- **The global champion search no longer stacks on top of a page's own search.** On `/history` it sat
+  directly above "Search a pro player…", and `/draft` was worse — the top bar's box plus "Add an
+  enemy champion…" plus "Set your champion…", three champion inputs on one phone screen. It is hidden
+  at mobile width on those two routes only. It stays on `/`, `/movers`, `/mystats` and `/live-setup`,
+  where nothing else offers a champion jump and on Builds it *is* the champion switcher — and it
+  stays on **every** route at desktop width, where there is room and it is a real nav affordance.
+
+- **The bar itself collapses rather than leaving an empty strip.** With both children hidden on
+  `/history` and `/draft` mobile, `TopBar` would otherwise have rendered as padding plus a bottom
+  border — a stray line under the status bar, trading one visual defect for another. It now
+  disappears entirely on those routes at that width, and those pages start directly at their heading.
+
+### Notes
+- The route→chrome decision is a pure, tested `topBarChromeConfig(pathname)` rather than conditionals
+  sprinkled through the component, and it extends `AppShell`'s existing `CHROMELESS_ROUTES` idea
+  instead of inventing a parallel mechanism.
+- The breakpoint is Tailwind `lg`, matched to the existing `DesktopRail` / `MobileTabBar` split rather
+  than a new one.
+- Collapsing is done with responsive classes, not a `matchMedia` check, so there is no SSR/CSR
+  hydration mismatch.
+- `ChampSelectChip` already self-hides without a companion session; its logic is untouched. It only
+  gained an optional visibility callback so the bar can tell whether the chip is the one thing
+  keeping it non-empty.
+- Audited all seven routes at 390x844 and 1440x900 before and after. No route had horizontal overflow
+  either way, and `/compact` was already correctly chrome-free — the problem was concentrated
+  entirely in the global top bar.
+
 ## [0.63.3] — 2026-07-26 — A test that loads the page twice
 
 ### Added

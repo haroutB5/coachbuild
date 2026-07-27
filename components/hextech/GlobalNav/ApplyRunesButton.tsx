@@ -92,6 +92,13 @@ export default function ApplyRunesButton() {
 
   const label = state === "applying" ? "Applying…" : state === "success" ? "Applied" : state === "error" ? "Failed" : "Apply runes";
 
+  // Desktop-only (`hidden lg:flex`, the same `lg` breakpoint DesktopRail/
+  // MobileTabBar already split on) on every route — not a route-based rule.
+  // companionClient.ts's applyRunes() PUTs to http://127.0.0.1:<port>, a
+  // same-machine bridge to the League client. On a phone 127.0.0.1 is the
+  // phone itself, where no League client will ever be running, so this
+  // button can never succeed there — it would just be permanently-dead UI
+  // occupying prime top-bar space on every mobile route.
   return (
     <button
       type="button"
@@ -99,7 +106,7 @@ export default function ApplyRunesButton() {
       disabled={disabled}
       title={message ?? (liveReady ? "Apply this champion's recommended runes" : "Waiting for champ select…")}
       aria-label="Apply runes for the current champ-select champion"
-      className={`flex-shrink-0 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.05em] rounded-lg px-3 py-[11px] min-h-[44px] transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar ${
+      className={`hidden lg:flex flex-shrink-0 items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.05em] rounded-lg px-3 py-[11px] min-h-[44px] transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar ${
         disabled ? "bg-panel2 text-mut cursor-not-allowed" : "bg-teal text-bg hover:bg-teal-hover"
       }`}
     >
