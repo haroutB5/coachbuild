@@ -35,3 +35,6 @@ artifacts/
 scripts/.backfill-team-comps-reorder-cursor.json
 
 .vercel
+
+# live-client capture evidence (scripts/capture-live-client.ps1)
+_capture/

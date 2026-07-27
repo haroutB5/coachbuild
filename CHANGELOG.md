@@ -2,6 +2,52 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.65.1] — 2026-07-27 — The wire format stops being an assumption; overlay groundwork
+
+### Verified — v0.65.0's contract, confirmed against a real game for the first time
+`lib/nextSkill.ts` shipped with an unusually blunt header: *"NO LIVE RESPONSE HAS EVER BEEN
+OBSERVED by the author."* The field names came from Riot's published schema, not a captured
+payload, because the authoring machine had no League client. It does now.
+
+`scripts/capture-live-client.ps1` (new, read-only — GETs to `127.0.0.1:2999`, nothing else)
+captured a real Practice Tool game. **Every assumption held.** `level`, and
+`abilities.{Q,W,E,R}.abilityLevel`, exactly as guessed.
+
+Two things the capture proved that careful reading could not:
+
+- **`abilities` carries a `Passive` key, and it has no `abilityLevel`.** `nextSkill.ts` argued the
+  passive was "excluded structurally"; that argument is now an observation. Code that iterated the
+  ability object generically would have summed a phantom rank and inverted `unspent`.
+- **A level-cheat jump (2 → 7 in one tick) exercised the banked-points path hard** — `unspent=6`,
+  then 7, then two ranks in one tick. That is the exact divergence between indexing by points-spent
+  and by level, and it behaved correctly.
+
+One real gap found: **`/activeplayer` carries no champion name at all.** It is in `/playerlist`,
+matched on `riotId`, and `rawChampionName` is the locale-safe field — `championName` is localised
+and would break champion-id lookup on a non-English client.
+
+### Added
+- **Permissive CORS (`Access-Control-Allow-Origin: *`) on `/api/champions` and `/api/skill-order`**,
+  on every response shape including the 400s — so a CORS rejection can never masquerade as a data
+  failure. Both routes are public, read-only and unauthenticated. `Cache-Control` logic is untouched:
+  an empty answer still earns `no-store` and only a real payload earns a long `s-maxage` (gotcha (b)).
+
+### Groundwork — Overwolf in-game overlay (`overwolf/`, NOT yet verified)
+A passive levels 1–18 skill-path table drawn over the running game, with the current level's column
+highlighted. Shell + GEP controller, transparent clickthrough overlay, two hotkeys, desktop window.
+
+**Deliberately a passive table rather than the imperative prompt `/compact` renders.** Riot's policy
+approves *"Game overlays that provide static data that is available prior to the game"* and bans
+*"Apps that dictate player decisions"*. A path table with your position marked is the former; "level
+Q next" is closer to the latter. The overlay never calls `resolveNextSkill` — which, as a side
+effect, makes the whole non-standard-kit problem (Udyr/Aphelios/Jayce) evaporate rather than needing
+a refusal branch.
+
+**Unverified against a real Overwolf runtime.** Nothing here has been loaded into an Overwolf
+process; every `overwolf.*` call site is written against documentation, not exercised. This is
+recorded as groundwork for the same reason v0.60.1 pulled the Electron shell — an unverified process
+is not a shipped feature. The difference is that this time the machine can verify it.
+
 ## [0.65.0] — 2026-07-27 — Which ability to level next, live, on `/compact`
 
 > **Companion update required.** This ships companion **1.8.0**; re-run the install one-liner

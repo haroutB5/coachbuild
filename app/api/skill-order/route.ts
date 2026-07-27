@@ -28,11 +28,23 @@ import { fetchSkillOrder, CACHE_TTL_SECONDS } from "@/lib/opgg";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// Public, read-only, unauthenticated data — safe to expose to any origin.
+// Added 2026-07-27 (audit fix #8) for the Overwolf overlay's
+// `overwolf-extension://<id>` origin: the manifest's `externally_connectable`
+// field does NOT grant this — that field controls which origins may
+// postMessage INTO the app, it grants no outbound-fetch CORS relief. Applied
+// to EVERY response this route returns (payload, empty, AND the 400s below)
+// so a CORS rejection can never masquerade as a data/validation failure to
+// the client. Does not touch the Cache-Control logic below (repo gotcha (b)
+// stays exactly as it was).
+const CORS_HEADERS = { "Access-Control-Allow-Origin": "*" };
+
 /** Repo gotcha (b): never let the CDN cache an empty/degraded response —
  *  only a real payload earns a long s-maxage. */
-const EMPTY_HEADERS = { "Cache-Control": "no-store" };
+const EMPTY_HEADERS = { "Cache-Control": "no-store", ...CORS_HEADERS };
 const PAYLOAD_HEADERS = {
   "Cache-Control": `s-maxage=${CACHE_TTL_SECONDS}, stale-while-revalidate=86400`,
+  ...CORS_HEADERS,
 };
 
 function empty() {
@@ -47,13 +59,13 @@ export async function GET(req: NextRequest) {
 
   if (!champParam || !roleParam) {
     const body: ApiError = { error: "Missing required query params: champ, role" };
-    return NextResponse.json(body, { status: 400 });
+    return NextResponse.json(body, { status: 400, headers: CORS_HEADERS });
   }
 
   // Strict integer params (reject "2x", "86.5", etc.) — same guard as /api/build.
   if (!/^\d+$/.test(champParam) || !/^\d+$/.test(roleParam)) {
     const body: ApiError = { error: "Invalid champ or role param" };
-    return NextResponse.json(body, { status: 400 });
+    return NextResponse.json(body, { status: 400, headers: CORS_HEADERS });
   }
 
   const championId = parseInt(champParam, 10);
@@ -61,7 +73,7 @@ export async function GET(req: NextRequest) {
 
   if (roleId < 0 || roleId > 5) {
     const body: ApiError = { error: "Invalid role (must be 0-5)" };
-    return NextResponse.json(body, { status: 400 });
+    return NextResponse.json(body, { status: 400, headers: CORS_HEADERS });
   }
 
   try {

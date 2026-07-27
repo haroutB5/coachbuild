@@ -2117,3 +2117,345 @@ Did NOT bump version, touch CHANGELOG.md, commit, or deploy — per brief,
 Urgot ships.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-27 14:24
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-26 11:44:39Z; previous content preserved there. Append new rounds below. -->
+
+# HANDOFF — engo (Overwolf overlay: UI + data layer), 2026-07-27
+
+Model: Sonnet 5 (claude-sonnet-5).
+
+## What I built
+
+All under `C:/Claude/AI/coachbuild/overwolf/`, plus one line in `package.json`:
+
+- `overwolf/ingame/ingame.html`, `ingame.css`, `ingame.js` — the transparent overlay window. A 4-row (Q/W/E/R) × 18-column grid, one filled cell per level marking which ability the aggregate recommends there (the classic op.gg/u.gg skill-order visual), current-champion-level column highlighted with a full background band (not just an outline, for at-a-glance legibility). Champion name header, a lane control, quiet loading/empty/no-data/error states, `prefers-reduced-motion` honored.
+- `overwolf/js/skillOrderData.js` — the data layer: lane→roleId mapping, champion-name→id resolution against `/api/champions` (with defensive `rawChampionName` prefix-stripping and normalized fuzzy matching), `/api/skill-order` fetch with honest 200-null handling, per-(championId,roleId) caching cleared on every new-game transition, plus an orchestration entry point `resolveOverlayData(state)`.
+- `overwolf/vendor/skillEngine.js` — generated esbuild bundle (6.4kb), **not hand-written, regenerate via `npm run overwolf:bundle`.**
+- `overwolf/vendor/_engineEntry.ts` — see "Deviation from the literal brief" below; this is the actual esbuild entry point now.
+- `overwolf/js/selfTest.mjs` — standalone Node verification script (see "Testing" below; NOT wired into `npm test`, see the vitest gap noted below).
+- `package.json` — added `"overwolf:bundle"` script only. No other line touched.
+
+## Deviation from the literal brief: the bundle entry point
+
+The brief said to bundle `lib/nextSkill.ts` directly and consume `SOURCE_LEVELS`, `MAX_RANKS`, `TOTAL_LEVELS`, `isAbility` from the result. I ran that exact command first and checked the output's `export {}` block before writing anything against it — **it does not export those four.** `nextSkill.ts` only *imports* them from `skillOrderModel.ts`; it never re-exports them, so esbuild's ESM output only advertises `RANKABLE, isLiveSkillError, parseLiveSkillState, pointsSpent, resolveNextSkill`. The brief's own verification ("produces a working 2.6kb module") checked that the bundle ran, not that every constant it asked for was reachable on the output — that assumption was wrong.
+
+Fix: added `overwolf/vendor/_engineEntry.ts` (a file I own, inside `overwolf/`) that does `export * from "../../lib/skillOrderModel"; export * from "../../lib/nextSkill";`, and pointed `overwolf:bundle` at that instead. Verified: the new bundle (6.4kb) now exports `BASIC_ABILITIES, MAX_RANKS, RANKABLE, SOURCE_LEVELS, TOTAL_LEVELS, ULTIMATE_LEVELS, buildSkillOrderModel, completeSkillOrder, countRanks, derivePriority, isAbility, isLiveSkillError, levelsByAbility, parseLiveSkillState, pointsSpent, resolveNextSkill, resolvePriority`. **Neither `lib/nextSkill.ts` nor `lib/skillOrderModel.ts` was modified** — the barrel only imports from them. `npm run typecheck` and `npm run lint` both pass clean with the new `.ts` file in the tree (tsc's `include: ["**/*.ts"]` picks it up automatically; no tsconfig change needed or made).
+
+## The highlight-index judgement call
+
+Highlight column = **champion level** (`order[championLevel - 1]`), **not points spent**. Full reasoning is in `ingame.js`'s header comment; summary:
+- `resolveNextSkill`'s points-spent indexing exists specifically to answer "which ability next" — an instruction. This overlay must never approach that shape at all.
+- Champion level is a fact the player can already read off their own HUD, unconditionally correct regardless of banked points or deviation from the recommendation. Points-spent would not have that property, and using it here would start to look like "you should be at this column" — closer to advice than description.
+- Tradeoff, stated plainly: a player who banked a point sees the level-N column highlighted while their own live ability ranks (not rendered here at all) may be behind where "spent every point" would put them. That's fine — the table never claims to describe the player's own ranks, only "this is level N's column in the static reference order."
+
+## Manifest entry needed (CORS) — for you to merge into `overwolf/manifest.json`
+
+Under the `data` key:
+```json
+"externally_connectable": {
+  "matches": ["https://coachbuild.vercel.app/*"]
+}
+```
+Not tested against a real cross-origin `overwolf-extension://` fetch (no way to without engy's manifest/window wired up). If it proves insufficient, next step is CORS headers on the API route — flagged as a risk, not pre-emptively built.
+
+## Mid-task scope changes I incorporated
+
+Two messages arrived while I was working; both are fully reflected in the code above, not just noted:
+
+**1. Real captured Live Client Data payload.** `championName` is NOT on `/liveclientdata/activeplayer` — it comes from `/liveclientdata/playerlist`, matched by `riotId`, and can legitimately arrive later than `championLevel`. `resolveOverlayData` already treats "level known, champion not yet" as the ordinary `waiting-for-champion` phase, not an error — verified this was already correct by construction (championName is checked independently of championLevel). Also: `rawChampionName` ("game_character_displayname_Corki") is the locale-safe field to prefer over the localized `championName` for id resolution. **Since engy owns the state-object contract, I could not change what he puts in the `championName` field** — I made `resolveChampionId` defensively strip the `game_character_displayname_` prefix if it ever arrives unstripped, but the actual locale-safety depends on **engy pushing the raw/unlocalized identifier, not the localized display name, into `championName`.** Please confirm this with him / merge as a note into his README.
+
+**2. Single-monitor revision (lane control + interactive/clickthrough).** Implemented:
+- `window.CoachBuildOverlay.onInteractiveChange(isInteractive)` alongside `onState` — toggles a `cb-overlay--interactive` class (border/glow, different hue from the gold accent so "editable" is never confused with "recommended"), shows/hides an "editable" badge, and re-renders the lane control between a plain static label (clickthrough) and 5 real buttons (interactive).
+- The lane control now **writes** `localStorage["coachbuild.overwolf.lane"]` itself when a button is clicked, then immediately re-resolves (cache-friendly re-fetch — same champion+lane combo visited earlier this game resolves from cache).
+- **Coordination risk, real:** this key is now written from BOTH my overlay and (per the original brief) engy's desktop window. I don't know if his window still has its own lane picker post single-monitor-revision, or whether anything polls/re-writes this key on an interval. If his side ever re-asserts a lane on a timer, it will fight my selection. Please check with him before merging.
+- Hide/show robustness: every render is a full rebuild from module-level `lastState`/`isInteractive`, never an incremental DOM patch — there is no "first render only" code path to go stale. If engy's hide/show hotkey ever *reloads* the window (destroys the JS context) rather than just toggling OS-level visibility, he needs to re-call `onState()` with a fresh snapshot right after showing it — I have no way to pull state on my own initiative, only receive pushes.
+
+## What I could NOT verify without a running game
+
+- **The exact string engy's controller puts in `state.championName`** — end-to-end, this is unverified. What I *did* verify live (see Testing) is that `/api/champions` and `/api/skill-order` behave exactly as documented against the real prod API, and that my resolver correctly handles a Riot-key match, a display-name-only match, a raw-prefixed string, and an unknown string (all against a mocked champion list, deterministically).
+- **The `externally_connectable` CORS fix** — not tested against a real `overwolf-extension://` origin fetch; only asserted from Overwolf's documented manifest schema.
+- **Visual legibility over an actual live game** — built the CSS against static color-contrast/size reasoning (solid backing, high-contrast gold-on-near-black, 17px cells), not screenshotted over a running match. Worth a look once engy's window/positioning lands.
+- **`onInteractiveChange`'s actual hotkey wiring** — I only implemented the method engy said he'd call; I have no hotkey code of my own to test it against, so the toggle has only been exercised by hand-calling it (see Testing).
+
+## Testing
+
+**The vitest gap (verified, not assumed):** `vitest.config.ts`'s include glob is exactly `["lib/**/__tests__/**/*.test.ts", "components/**/__tests__/**/*.test.ts"]` — it does not cover `overwolf/**`. Proved this empirically before deciding how to test: ran `npx vitest run` (1806 tests), added a throwaway `overwolf/js/__tests__/_probe.test.ts`, ran again — still 1806 tests, the file was never collected — then deleted the probe. This is exactly the "test count must go up" check the brief demanded, and it failed, confirming tests placed under `overwolf/` would be silently dead exactly like the GlobalNav gap CLAUDE.md already documents. I could not fix `vitest.config.ts` myself (outside my allowed edit scope — only `package.json`'s scripts block). **Someone with access should widen the include glob to `overwolf/**` (or a scoped equivalent) if real vitest coverage of this data layer is wanted going forward.**
+
+Instead, wrote `overwolf/js/selfTest.mjs` — a standalone Node script (not part of any npm script, run manually) covering: pure lane mapping, localStorage lane read/validation, champion-id resolution (exact key, raw-prefix-stripped, fuzzy display-name, unknown-name, null/empty-safety, single-fetch caching), the 200-null/ok/error three-way `fetchSkillOrder` contract plus its cache/retry-cooldown behavior, and the full `resolveOverlayData` orchestration including the new-game cache-clear transition — all against a mocked `fetch`, deterministic. **Then, separately, ONE real live round-trip against production** (not mocked): `GET /api/champions` and `GET /api/skill-order` for Ahri/Mid.
+
+Actual output, run twice:
+```
+$ node overwolf/js/selfTest.mjs
+GET /api/champions -> resolved "Ahri" to id 103
+GET /api/skill-order?champ=103&role=2 -> status=no-data
+38 passed, 0 failed
+
+$ node overwolf/js/selfTest.mjs   (immediately after, again)
+GET /api/champions -> resolved "Ahri" to id 103
+GET /api/skill-order?champ=103&role=2 -> status=ok
+38 passed, 0 failed
+```
+That `no-data` → `ok` flip between two runs seconds apart is real, observed upstream flakiness in the coachless/op.gg skill-order source (confirmed by curling the endpoint directly, which also alternated) — not a bug in my code. It's actually a good live confirmation that the "200 + null is a normal, honest answer, not an error" posture is the right one: this happened for real, in production, during testing.
+
+Also ran (all clean, no regressions from anything I added):
+```
+npm run typecheck   -> clean
+npm run lint        -> clean (only pre-existing <img> warnings, unrelated files)
+npx vitest run      -> 1806 tests passed (unchanged before/after)
+npm run overwolf:bundle -> regenerates overwolf/vendor/skillEngine.js, 6.4kb
+```
+
+**To manually test `onInteractiveChange` / the lane buttons without Overwolf running:** open `overwolf/ingame/ingame.html` directly in a browser (file:// is fine, no server needed — it's plain ES modules + relative paths), then in devtools console:
+```js
+window.CoachBuildOverlay.onInteractiveChange(true);   // see the lane buttons + border glow + badge appear
+window.CoachBuildOverlay.onState({ inGame: true, championName: "Ahri", championLevel: 9,
+  abilityRanks: { Q: 3, W: 2, E: 1, R: 1 } });
+```
+(Real network calls will fire against prod from a plain browser tab — that's fine, it's the same public API the web app uses.)
+
+## Not done (explicitly out of scope, not an oversight)
+
+- No `manifest.json`/`background/`/`desktop/`/`owWindows.js`/`gameState.js`/`README.md` edits — all engy's files, untouched.
+- No version bump, no CHANGELOG entry, no deploy.
+- No new npm dependency added (esbuild resolved from the existing node_modules tree — transitive, likely via vitest — not added to `package.json` explicitly; flagging as a minor fragility: if that transitive dependency ever drops, `overwolf:bundle` breaks silently until someone runs it).
+
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-27 01:38:45Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-27 — Overwolf overlay SHELL (manifest, background controller, plumbing, desktop window)
+
+Model: Sonnet 5 (claude-sonnet-5). Session had one transient stream-stall mid-task —
+resumed, re-verified everything already on disk (`find C:/Claude/AI/coachbuild/overwolf`
+before continuing), nothing was lost or redone. Both mid-task follow-ups (live-payload
+champion-name findings; the single-monitor two-hotkey refinement) were incorporated
+before the stall, not bolted on after — verified again on resume.
+
+### What I built (all under `C:/Claude/AI/coachbuild/overwolf/`)
+
+```
+manifest.json              full app manifest — background/ingame/desktop windows,
+                            game_targeting/game_events for 5426+10902, permissions,
+                            two hotkeys, GameLaunch auto-start
+manifest.README.md         field-by-field annotation (JSON can't hold comments)
+background/background.html
+background/background.js   the controller — the ONLY file touching overwolf.games.events
+js/owWindows.js            promise wrappers over overwolf.windows/.games callbacks
+js/gameState.js            PURE normaliser — level/ability-rank parsing, champion-name
+                            resolution, all unit-tested without Overwolf running
+js/liveClientHttp.js       overwolf.web.sendHttpRequest wrapper for the playerlist call
+desktop/desktop.html       status + Riot disclaimer + lane selector
+desktop/desktop.js
+desktop/desktop.css
+icons/icon.png, icon_gray.png, launcher_icon.ico   PLACEHOLDER 1×1 assets (see below)
+README.md                  numbered load/test checklist
+```
+
+I did not touch `ingame/**`, `js/skillOrderData.js`, `js/selfTest.mjs`, or `vendor/**` —
+those are engo's, and are present on disk (checked via `find`, not assumed).
+
+### Overwolf APIs used, and why
+
+- `overwolf.games.onGameInfoUpdated` + `overwolf.games.getRunningGameInfo` — detect
+  League launching/running/exiting. Only place `isLeagueId()` lives (checks 5426/10902
+  directly; also defensively checks `Math.floor(id/10)` in case Overwolf reports a
+  class-id-with-suffix — **that fallback is precautionary, NOT confirmed against a
+  real running game on this machine**).
+- `overwolf.games.events.setRequiredFeatures(['live_client_data'], cb)` — registered
+  ONLY from `background.js`, with a retry loop (3s interval, gives up after 10
+  attempts ≈30s) because this call races on game launch. Success test is exactly
+  `result.success && result.supportedFeatures.length > 0`, per the brief.
+- `overwolf.games.events.getInfo(cb)` — seeds state on registration success, because
+  `onInfoUpdates2` only fires on change and a game already in progress when the app
+  launches would otherwise render nothing until the next level-up.
+- `overwolf.games.events.onInfoUpdates2` — the live tick. Registered once at module
+  load (not gated on feature registration succeeding first — it's a no-op until
+  `live_client_data` events actually start arriving, so this ordering is harmless).
+- `overwolf.web.sendHttpRequest` — the ONLY path to
+  `https://127.0.0.1:<port>/liveclientdata/playerlist` (self-signed loopback cert).
+  Used exclusively to resolve the local player's champion name — see next section.
+- `overwolf.windows.{obtainDeclaredWindow,restore,hide,sendMessage}` — window lifecycle
+  and state delivery, wrapped in `js/owWindows.js`.
+- `overwolf.windows.setWindowStyle` / `removeWindowStyle` with
+  `WindowStyle.InputPassThrough` — runtime clickthrough toggle. Confirmed via the
+  brief that `overwolf.windows.changeWindowProperty` does **not** exist; this is the
+  real mechanism, and the manifest's `clickthrough: true` is only the window's
+  *initial* style.
+- `overwolf.settings.hotkeys.onPressed` — both hotkeys, registered in `background.js`
+  only (a listener in a hidden in-game window never fires — this is the thing most
+  worth not regressing, since with one monitor `toggle_overlay` is the only way the
+  overlay comes back once hidden).
+
+### The live-payload findings (incorporated, not just noted)
+
+Real captured Practice Tool `/activeplayer` key set: `abilities, championStats,
+currentGold, fullRunes, level, riotId, riotIdGameName, riotIdTagLine, summonerName,
+teamRelativeColors`. Consequences baked into `js/gameState.js`:
+
+1. **No champion identity on `active_player` at all.** Champion name only exists on
+   `/liveclientdata/playerlist`, matched to the local player by `riotId` (identical
+   string, tagline included, on both endpoints). `resolveChampionName()` prefers
+   `rawChampionName` (strip the `game_character_displayname_` prefix) over the
+   localised `championName`, falling back to the latter if the former is absent.
+2. **`abilities.Passive` exists and has no `abilityLevel`.** `parseLevelAndAbilities()`
+   iterates a hardcoded `['Q','W','E','R']` list, never `Object.keys(abilities)` — a
+   generic iteration would either crash on `Passive` or (worse) silently treat its
+   `undefined` rank as a valid zero.
+3. **`championName` may resolve later than `championLevel`/`abilityRanks`, and must
+   never gate them.** These are two independent update streams in `background.js`:
+   the GEP tick (`applyLiveClientData`) publishes level/abilities immediately via
+   `mergeState()`, and a separate playerlist poll (every 4s, plus a fast-path
+   fired the instant a `riotId` is first seen) publishes `championName` whenever it
+   resolves. Neither blocks the other — `pushState()` is called from both paths.
+4. **All-or-nothing stays scoped to the level+abilities group only**, not the whole
+   state object. A reading missing even one of level/Q/W/E/R still yields `null` for
+   both (a defaulted-zero rank is indistinguishable from "not yet ranked" — same
+   reasoning `lib/nextSkill.ts` already documents on the web side). `championName`
+   living outside that gate was the actual design change this finding required.
+
+Verified by execution (see "What I actually ran" below): 17 assertions covering all
+four points above, including the Passive-key exclusion and the all-or-nothing gate,
+against a hand-built object shaped exactly like the real captured payload.
+
+### The single-monitor refinement (two hotkeys) — also incorporated
+
+- `manifest.json` now declares **two** hotkeys, both `"action-type": "custom"`,
+  both `"passthrough": true`: `toggle_overlay` (`Ctrl+F10`, show/hide) and
+  `toggle_interactive` (`Ctrl+F11`, clickthrough toggle).
+- `background.js`'s `onPressed` listener branches on `event.name`. `toggle_overlay`
+  flips `overlayVisibleWanted` and calls `restoreWindow`/`hideWindow` on the in-game
+  window (a no-op outside a match — the window is `in_game_only`); reappearing
+  **resends the last known state** rather than coming back blank.
+  `toggle_interactive` flips `isInteractive`, calls `setClickThrough(windowId,
+  !isInteractive)`, and pushes the new mode to the overlay.
+- `window.CoachBuildOverlay.onInteractiveChange(isInteractive)` — see the transport
+  note directly below for exactly how this gets called.
+
+### One deliberate deviation from the literal contract wording — read this before wiring `ingame/`
+
+The brief says: *"You publish game state by calling `window.CoachBuildOverlay.onState(state)`
+on the in-game window... Guard for the window not being open yet."* I could not verify
+that Overwolf exposes any API for a background page to obtain a live, callable JS
+reference into a **different** window's global scope. I know of and could confirm:
+`overwolf.windows.obtainDeclaredWindow` (returns metadata — id/name/visibility, not a
+JS handle) and `overwolf.windows.sendMessage` / `overwolf.windows.onMessageReceived`
+(real, documented, long-standing cross-window transport). Rather than ship a call I
+could not verify exists and risk it silently no-op'ing in a live test, **I implemented
+the transport via `sendMessage`/`onMessageReceived`, with the actual
+`window.CoachBuildOverlay.onState(...)` / `.onInteractiveChange(...)` call happening
+INSIDE the in-game window**, triggered by the received message. The contract's outward
+behavior is unchanged — state still ends up delivered to exactly those two functions,
+on the in-game window, with the same shapes — only the wire mechanism differs from the
+literal sentence.
+
+**What `ingame/ingame.js` needs to add** (message ids are exact, defined in
+`background.js`'s `MESSAGES` constant):
+
+```js
+overwolf.windows.onMessageReceived.addListener((message) => {
+  if (!window.CoachBuildOverlay) return; // guard: not initialized yet
+  if (message.id === 'coachbuild-state') {
+    window.CoachBuildOverlay.onState(message.content);
+  } else if (message.id === 'coachbuild-interactive') {
+    window.CoachBuildOverlay.onInteractiveChange(message.content);
+  }
+});
+```
+
+`message.content` for `'coachbuild-state'` is exactly the `gameState.js` shape
+(`{inGame, championLevel, championName, abilityRanks}`); for `'coachbuild-interactive'`
+it's a plain boolean. If `ingame/ingame.js` already has this listener (engo may have
+written it independently against the same brief), please reconcile the message ids
+against `background.js`'s `MESSAGES` constant rather than assuming — I have not seen
+`ingame/ingame.js`'s contents.
+
+### Overlay window position
+
+340×520, `start_position: {top:110, left:24}` (upper-left, one-monitor assumption).
+Reasoning: League's minimap + shop panel sit bottom-right, the ability/item bar sits
+bottom-center, the scoreboard/kill-feed/objective banners sit top-center/top-right,
+and the chat log sits bottom-left. Upper-left, well clear of the very top edge, is the
+one region no standard HUD element occupies. **Not verified against an actual
+rendered game window on this machine** — this is general LoL HUD-layout knowledge,
+not something I captured a screenshot of. First thing worth checking in a live test.
+
+### Placeholder icons
+
+`icons/icon.png`, `icon_gray.png` are 1×1 transparent PNGs; `launcher_icon.ico` wraps
+the same pixel in a minimal valid ICO container (built with a small inline Node script,
+not a real image tool — no image-generation capability available). They exist purely
+so the manifest is well-formed and the app loads without an asset error. **Real
+artwork still needs to be dropped in before this goes anywhere near distribution** —
+a 1×1 icon will render as a blank/invisible tray icon, which is fine for this dev/test
+shell and wrong for anything else.
+
+### Compliance posture (re-stated, since it's load-bearing)
+
+The overlay only ever displays the full static 1–18 skill path with the current-level
+row highlighted — never imperative copy. The Riot disclaimer text is in
+`desktop/desktop.html`'s footer verbatim as specified. No ad code exists yet; the
+`desktop` window is architected as the only place one could ever go (a normal,
+resizable, taskbar window, separate from the transparent/clickthrough in-game
+surface) — I did not add any ad/subscription scaffolding beyond that structural
+separation, per "do not paint us into a corner," not "build the corner now."
+
+### What I actually ran (smoke-test contract)
+
+- `node -e "JSON.parse(...)"` on `manifest.json` — valid JSON.
+- `node --check` on every `.js` file (`gameState.js`, `owWindows.js`,
+  `liveClientHttp.js`, `background.js`, `desktop.js`) — Node 24's `--check` correctly
+  detects ESM via `import`/`export` and syntax-validates it (confirmed this actually
+  catches errors, not just silently passing, by deliberately breaking a throwaway
+  file first and seeing it fail).
+- A 17-assertion script exercising `js/gameState.js` end-to-end against a hand-built
+  object shaped exactly like the real captured Practice Tool payload: object-form and
+  string-form `active_player`, nested-stringified `abilities`, the `Passive`-key
+  exclusion, the all-or-nothing gate on a missing ability rank, acceptance of a large
+  single-tick level jump (not treated as corruption), `riotId` extraction,
+  `rawChampionName`-prefix-preferred champion resolution with fallback, an unmatched
+  riotId, a null riotId, and `mergeState`/`emptyStateFor`. **All 17 passed.**
+
+**What I could NOT verify — be honest about this before trusting it live:**
+
+- `background.js`, `owWindows.js`, `liveClientHttp.js`, `desktop.js`, and the entire
+  manifest have **never been loaded into a real Overwolf process**. I have no way to
+  launch Overwolf or drive its UI from this environment. Every Overwolf-API call site
+  is written against documented/researched behavior, not exercised.
+- The `sendMessage`/`onMessageReceived` cross-window transport (see the deviation
+  note above) is the single highest-risk unverified piece — if it turns out Overwolf
+  DOES support a direct window-reference call and `sendMessage` behaves differently
+  than I expect (e.g. requires the target window to already be fully loaded before a
+  message queues, or drops messages sent before the first listener attaches), the
+  overlay could receive zero updates despite `background.js` logging successful
+  sends. **This is the first thing to check in a live test** — watch both the
+  background console (does `sendMessage` resolve success?) and the in-game window's
+  own console (does the listener actually fire?).
+- The GEP `live_client_data` payload shape for `onInfoUpdates2`'s envelope
+  (`event.info.live_client_data`) vs. `getInfo`'s envelope (`res.live_client_data`)
+  is taken as given from the brief, not independently re-derived or observed by me.
+- `overlayVisibleWanted`'s interaction with `in_game_only: true` — I assumed toggling
+  visibility only matters while `inGame` is true and is a safe no-op otherwise;
+  never confirmed what `restoreWindow`/`hideWindow` actually do when called on an
+  `in_game_only` window while no game is running.
+- Hotkey conflicts: `Ctrl+F10`/`Ctrl+F11` were chosen to avoid League's own default
+  binds and Steam's F12 screenshot key, by reasoning, not by testing an actual bind
+  conflict live.
+
+### Load & test steps
+
+Full numbered checklist is in `overwolf/README.md`. Summary: Overwolf tray → Settings
+→ About → Development options → **Load unpacked extension** → select
+`C:\Claude\AI\coachbuild\overwolf` → watch the **background** window's devtools
+console (`[CoachBuild:bg]`-prefixed logs) while launching League and getting into a
+live game (Practice Tool is fastest) → confirm the overlay appears upper-left, updates
+on level-up, and both hotkeys behave as described.
+
+
