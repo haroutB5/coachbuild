@@ -169,17 +169,25 @@ describe("normalizeMyStatsMatchups", () => {
     expect(normalizeMyStatsMatchups(undefined)).toBeNull();
   });
 
-  it("parses a full envelope and drops a malformed matchup entry", () => {
+  it("parses a full envelope (incl. role) and drops a malformed matchup entry", () => {
     const result = normalizeMyStatsMatchups({
       accountUnresolved: false,
       season: "Season 2026",
       championId: 112,
+      role: 2,
       matchups: [
         { oppChampionId: 99, games: 8, wins: 3, winrate: 0.375 },
         { games: 2 }, // missing oppChampionId
       ],
     });
+    expect(result?.role).toBe(2);
     expect(result?.matchups).toEqual([{ oppChampionId: 99, games: 8, wins: 3, winrate: 0.375 }]);
+  });
+
+  it("role degrades to null when absent or non-numeric -- champion-wide is a real, distinct scope from role -1", () => {
+    expect(normalizeMyStatsMatchups({ championId: 1, matchups: [] })?.role).toBeNull();
+    expect(normalizeMyStatsMatchups({ championId: 1, role: "abc", matchups: [] })?.role).toBeNull();
+    expect(normalizeMyStatsMatchups({ championId: 1, role: -1, matchups: [] })?.role).toBe(-1);
   });
 });
 
@@ -205,14 +213,28 @@ describe("fetchMyStatsSummary / fetchMyStatsMatchups", () => {
     expect(await fetchMyStatsSummary({ fetchImpl })).toBeNull();
   });
 
-  it("fetchMyStatsMatchups hits the URL with championId encoded", async () => {
+  it("fetchMyStatsMatchups hits the URL with championId encoded, no role param when role is omitted (champion-wide)", async () => {
     let calledUrl = "";
     const fetchImpl = vi.fn(async (url: string) => {
       calledUrl = url;
       return { ok: true, json: async () => ({}) } as Response;
     }) as unknown as typeof fetch;
-    await fetchMyStatsMatchups(112, { fetchImpl });
+    await fetchMyStatsMatchups(112, undefined, { fetchImpl });
     expect(calledUrl).toBe("/api/mystats/matchups?championId=112");
+  });
+
+  it("fetchMyStatsMatchups includes role in the URL when given -- role=-1 (unresolved lane) included too, not treated as absent", async () => {
+    let calledUrl = "";
+    const fetchImpl = vi.fn(async (url: string) => {
+      calledUrl = url;
+      return { ok: true, json: async () => ({}) } as Response;
+    }) as unknown as typeof fetch;
+
+    await fetchMyStatsMatchups(112, 2, { fetchImpl });
+    expect(calledUrl).toBe("/api/mystats/matchups?championId=112&role=2");
+
+    await fetchMyStatsMatchups(112, -1, { fetchImpl });
+    expect(calledUrl).toBe("/api/mystats/matchups?championId=112&role=-1");
   });
 });
 

@@ -90,7 +90,11 @@ function TilesSkeleton() {
 export default function MyStatsPage() {
   const [champIcons, setChampIcons] = useState<Map<number, ChampionIconEntry>>(new Map());
   const [state, setState] = useState<SummaryState>({ status: "loading" });
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  // Keyed on (championId, role), not championId alone -- a champion played in
+  // multiple lanes (e.g. Viktor Mid AND Top) previously shared one bare-id
+  // key, so clicking one row expanded every row for that champion at once and
+  // their `detailId`s collided. See toggleRow/isRowExpanded below.
+  const [expanded, setExpanded] = useState<{ championId: number; role: number } | null>(null);
   const [detail, setDetail] = useState<DetailState>({ status: "idle" });
   // v0.50.0: bumped by MyStatsRefresher's onRefreshed when the on-demand
   // incremental ingest actually found new games.
@@ -112,13 +116,16 @@ export default function MyStatsPage() {
   }, [refetchKey]);
 
   useEffect(() => {
-    if (expandedId === null) {
+    if (expanded === null) {
       setDetail({ status: "idle" });
       return;
     }
     let cancelled = false;
     setDetail({ status: "loading" });
-    fetchMyStatsMatchups(expandedId).then((data) => {
+    // Pass the row's own role -- scopes the fetched matchups to exactly the
+    // (championId, role) the header summed, instead of every role that
+    // champion was ever played in.
+    fetchMyStatsMatchups(expanded.championId, expanded.role).then((data) => {
       if (cancelled) return;
       if (!data) {
         setDetail({ status: "error" });
@@ -130,10 +137,10 @@ export default function MyStatsPage() {
     return () => {
       cancelled = true;
     };
-  }, [expandedId, champIcons]);
+  }, [expanded, champIcons]);
 
-  function toggleRow(championId: number) {
-    setExpandedId((prev) => (prev === championId ? null : championId));
+  function toggleRow(championId: number, role: number) {
+    setExpanded((prev) => (prev && prev.championId === championId && prev.role === role ? null : { championId, role }));
   }
 
   const rows: MyStatsChampionRow[] =
@@ -217,14 +224,16 @@ export default function MyStatsPage() {
                 {rows.length} champions with recorded games this season, sorted by games played.
               </p>
               {rows.map((row) => {
-                const expanded = expandedId === row.championId;
-                const detailId = `mystats-detail-${row.championId}`;
+                // (championId, role), not championId alone -- see the
+                // `expanded` state comment above.
+                const isRowExpanded = expanded !== null && expanded.championId === row.championId && expanded.role === row.role;
+                const detailId = `mystats-detail-${row.championId}-${row.role}`;
                 return (
-                  <div key={row.championId} className="border-b border-line last:border-b-0">
+                  <div key={`${row.championId}-${row.role}`} className="border-b border-line last:border-b-0">
                     <button
                       type="button"
-                      onClick={() => toggleRow(row.championId)}
-                      aria-expanded={expanded}
+                      onClick={() => toggleRow(row.championId, row.role)}
+                      aria-expanded={isRowExpanded}
                       aria-controls={detailId}
                       className="w-full flex items-center gap-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg rounded-lg"
                     >
@@ -260,22 +269,22 @@ export default function MyStatsPage() {
                       </div>
 
                       <span
-                        className={`text-mut text-[11px] transition-transform duration-150 flex-shrink-0 ${expanded ? "rotate-180" : ""}`}
+                        className={`text-mut text-[11px] transition-transform duration-150 flex-shrink-0 ${isRowExpanded ? "rotate-180" : ""}`}
                         aria-hidden="true"
                       >
                         &#9662;
                       </span>
                     </button>
 
-                    <div id={detailId} hidden={!expanded} className="pb-3 pl-12 pr-1">
-                      {expanded && detail.status === "loading" && <p className="text-[11px] text-mut py-2">Loading matchups…</p>}
-                      {expanded && detail.status === "error" && (
+                    <div id={detailId} hidden={!isRowExpanded} className="pb-3 pl-12 pr-1">
+                      {isRowExpanded && detail.status === "loading" && <p className="text-[11px] text-mut py-2">Loading matchups…</p>}
+                      {isRowExpanded && detail.status === "error" && (
                         <p className="text-[11px] text-bad py-2">Couldn&apos;t load matchups — try again.</p>
                       )}
-                      {expanded && detail.status === "empty" && (
+                      {isRowExpanded && detail.status === "empty" && (
                         <p className="text-[11px] text-mut py-2">No lane-opponent data recorded for this champion.</p>
                       )}
-                      {expanded && detail.status === "ok" && (
+                      {isRowExpanded && detail.status === "ok" && (
                         <div className="space-y-1.5 py-1">
                           {detail.matchups.map((m) => (
                             <div key={m.oppChampionId} className="flex items-center gap-2.5">

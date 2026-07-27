@@ -90,6 +90,11 @@ export interface MyStatsMatchups {
   accountUnresolved: boolean;
   season: string;
   championId: number;
+  /** null = champion-wide (no role filter was requested/echoed), else the
+   *  (championId, role) scope the server applied — see
+   *  app/api/mystats/matchups/route.ts's doc comment. -1 is a real,
+   *  distinct-from-null value (unresolved lane, e.g. ARAM). */
+  role: number | null;
   matchups: MyStatsMatchupRecord[];
 }
 
@@ -192,6 +197,7 @@ export function normalizeMyStatsMatchups(raw: unknown): MyStatsMatchups | null {
     accountUnresolved: r.accountUnresolved === true,
     season: typeof r.season === "string" ? r.season : "",
     championId: typeof r.championId === "number" ? r.championId : 0,
+    role: typeof r.role === "number" ? r.role : null,
     matchups: Array.isArray(r.matchups)
       ? r.matchups.map(normalizeMatchupRecord).filter((x): x is MyStatsMatchupRecord => x !== null)
       : [],
@@ -217,10 +223,21 @@ export async function fetchMyStatsSummary(deps: MyStatsDeps = {}): Promise<MySta
   }
 }
 
-export async function fetchMyStatsMatchups(championId: number, deps: MyStatsDeps = {}): Promise<MyStatsMatchups | null> {
+/** `role`, when given, scopes the request to one (championId, role) pair —
+ *  this is what the /mystats "Matchup History" row expansion must pass, so
+ *  the expanded detail matches the row's own header instead of the whole
+ *  champion. `undefined` (the default) requests the champion-wide matchups
+ *  instead — a different, still-legitimate question. `role=-1` (unresolved
+ *  lane, e.g. ARAM) is a real value, distinct from omitting the param. */
+export async function fetchMyStatsMatchups(
+  championId: number,
+  role?: number,
+  deps: MyStatsDeps = {}
+): Promise<MyStatsMatchups | null> {
   const f = deps.fetchImpl ?? fetch;
   try {
-    const res = await f(`/api/mystats/matchups?championId=${championId}`);
+    const qs = role !== undefined ? `?championId=${championId}&role=${role}` : `?championId=${championId}`;
+    const res = await f(`/api/mystats/matchups${qs}`);
     if (!res.ok) return null;
     return normalizeMyStatsMatchups(await res.json());
   } catch {

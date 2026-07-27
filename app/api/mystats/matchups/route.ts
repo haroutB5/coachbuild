@@ -15,9 +15,28 @@ interface Row {
   game_creation: string;
 }
 
+/** Same convention as app/api/mystats/summary/route.ts's parseIntParam:
+ *  absent -> undefined (no filter), present-but-invalid -> null (caller
+ *  400s), present-and-valid -> the parsed integer. Signed, because role -1
+ *  (unresolved lane, e.g. ARAM) is a real, filterable value — "no role
+ *  param" (undefined) and "role=-1" (the number -1) are deliberately
+ *  different requests; see this route's doc comment. */
+function parseIntParam(raw: string | null): number | null | undefined {
+  if (raw === null) return undefined; // absent
+  if (!/^-?\d+$/.test(raw)) return null; // present but invalid
+  return parseInt(raw, 10);
+}
+
 /**
- * GET /api/mystats/matchups?championId=<n> (required)
+ * GET /api/mystats/matchups?championId=<n> (required)&role=<n> (optional)
  * All of my recorded matchups on one champion, grouped by lane opponent.
+ * `role` scopes the result to one (championId, role) pair — the same
+ * grouping the /mystats "Matchup History" row headers use (see
+ * lib/mystats/aggregate.ts's summarizeByChampion). Without it, matchups are
+ * champion-wide across every role ever played — a legitimate, different
+ * question, kept as the default for backward compatibility. `role=-1`
+ * (unresolved lane) is filterable like any other role; omitting the param
+ * entirely is NOT the same request as `role=-1`.
  * Per-user private data -> always `no-store` (see summary route's doc
  * comment — same posture). DISPLAY DATA ONLY, same no-blending posture as
  * /api/mystats/summary — see lib/draft/recommend.ts's PersonalPlayResult.
@@ -35,20 +54,33 @@ export async function GET(req: NextRequest) {
   }
   const championId = parseInt(championIdParam, 10);
 
+  const role = parseIntParam(searchParams.get("role"));
+  if (role === null) {
+    return NextResponse.json({ error: "Invalid role param" }, { status: 400, headers: { "Cache-Control": "no-store" } });
+  }
+
   try {
     const account = await getMyAccount(sql);
     if (!account) {
       return NextResponse.json(
-        { accountUnresolved: true, season: SEASON_LABEL, championId, matchups: [] },
+        { accountUnresolved: true, season: SEASON_LABEL, championId, role: role ?? null, matchups: [] },
         { status: 200, headers: { "Cache-Control": "no-store" } }
       );
     }
 
-    const rows = (await sql`
-      SELECT role, opp_champion_id, win, game_creation
-      FROM coachbuild.my_matches
-      WHERE champion_id = ${championId}
-    `) as unknown as Row[];
+    const rows = (
+      role !== undefined
+        ? await sql`
+            SELECT role, opp_champion_id, win, game_creation
+            FROM coachbuild.my_matches
+            WHERE champion_id = ${championId} AND role = ${role}
+          `
+        : await sql`
+            SELECT role, opp_champion_id, win, game_creation
+            FROM coachbuild.my_matches
+            WHERE champion_id = ${championId}
+          `
+    ) as unknown as Row[];
 
     const records: MyMatchRecord[] = rows.map((r) => ({
       championId,
@@ -59,7 +91,13 @@ export async function GET(req: NextRequest) {
     }));
 
     return NextResponse.json(
-      { accountUnresolved: false, season: SEASON_LABEL, championId, matchups: summarizeMatchupsByOpponent(records) },
+      {
+        accountUnresolved: false,
+        season: SEASON_LABEL,
+        championId,
+        role: role ?? null,
+        matchups: summarizeMatchupsByOpponent(records),
+      },
       { status: 200, headers: { "Cache-Control": "no-store" } }
     );
   } catch (err) {

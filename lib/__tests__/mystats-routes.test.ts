@@ -148,6 +148,74 @@ describe("GET /api/mystats/matchups", () => {
     const body = await res.json();
     expect(body.matchups).toEqual([{ oppChampionId: 99, games: 1, wins: 1, winrate: 1 }]);
     expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(body.role).toBeNull(); // no role param -> champion-wide, echoed as null
+  });
+
+  it("400 on a non-numeric role", async () => {
+    const res = await matchupsGET(req("http://localhost/api/mystats/matchups?championId=1&role=abc"));
+    expect(res.status).toBe(400);
+  });
+
+  // ── Reported bug repro: /mystats "Matchup History" row header (per
+  // champion+ROLE) vs its own expanded matchups (champion-wide, no role)
+  // contradicted each other -- a Galio MID row read "3g" while its expanded
+  // list summed to 5 games because the fetch didn't scope by role. This test
+  // pins the fix's actual acceptance criterion: sum(expanded matchup games)
+  // === the header's (champion, role) game count. A single-role fixture
+  // would pass even with the old bug, so this uses a champion played in TWO
+  // roles with DIFFERENT opponents per role -- the exact shape that broke. ──
+  it("scoping invariant: role-scoped matchups sum to exactly that role's games, never leaking a champion's other-role games (Galio Mid vs Top repro)", async () => {
+    // mockResolvedValue (not -Once): this test drives the route 3 times
+    // (Mid-scoped, Top-scoped, champion-wide) and needs the account resolved
+    // on every call, not just the first.
+    mockGetMyAccount.mockResolvedValue({ puuid: "p", riotId: "X#EUW", region: "EUW", routing: {} });
+    const GALIO = 3;
+    const MID = 2;
+    const TOP = 0;
+    const allRows = [
+      // Galio MID: 3 games, 3W-0L against 3 distinct opponents (matches the report's header: "3g · 3W-0L · 100.0%")
+      { champion_id: GALIO, role: MID, opp_champion_id: 9, win: true, game_creation: "2026-01-01T00:00:00.000Z" }, // vs Fiddlesticks
+      { champion_id: GALIO, role: MID, opp_champion_id: 35, win: true, game_creation: "2026-01-02T00:00:00.000Z" }, // vs Shaco
+      { champion_id: GALIO, role: MID, opp_champion_id: 84, win: true, game_creation: "2026-01-03T00:00:00.000Z" }, // vs Akali
+      // Same champion, played TOP too -- different opponents, must never bleed into the Mid-scoped result
+      { champion_id: GALIO, role: TOP, opp_champion_id: 24, win: false, game_creation: "2026-01-04T00:00:00.000Z" },
+      { champion_id: GALIO, role: TOP, opp_champion_id: 82, win: true, game_creation: "2026-01-05T00:00:00.000Z" },
+    ];
+    // Emulates the real WHERE clause: filters by champion_id, and by role only
+    // when the route actually passed one (mirroring Postgres's real behavior
+    // for the two SQL branches in app/api/mystats/matchups/route.ts).
+    mockSql.mockImplementation((_strings: TemplateStringsArray, ...values: unknown[]) => {
+      const [championId, role] = values as [number, number | undefined];
+      const filtered = allRows.filter((r) => r.champion_id === championId && (role === undefined || r.role === role));
+      return Promise.resolve(filtered);
+    });
+
+    const midRes = await matchupsGET(req(`http://localhost/api/mystats/matchups?championId=${GALIO}&role=${MID}`));
+    const midBody = await midRes.json();
+    const midTotalGames = midBody.matchups.reduce((sum: number, m: { games: number }) => sum + m.games, 0);
+    expect(midTotalGames).toBe(3); // NOT 5 -- the pre-fix bug summed all 5 champion-wide games under the Mid header
+    expect(midBody.matchups.map((m: { oppChampionId: number }) => m.oppChampionId).sort((a: number, b: number) => a - b)).toEqual([
+      9, 35, 84,
+    ]);
+    expect(midBody.role).toBe(MID);
+
+    // The Top-scoped request for the SAME champion is disjoint from Mid's --
+    // proves role, not something else, is what separates the two headers.
+    const topRes = await matchupsGET(req(`http://localhost/api/mystats/matchups?championId=${GALIO}&role=${TOP}`));
+    const topBody = await topRes.json();
+    const topTotalGames = topBody.matchups.reduce((sum: number, m: { games: number }) => sum + m.games, 0);
+    expect(topTotalGames).toBe(2);
+    expect(topBody.matchups.map((m: { oppChampionId: number }) => m.oppChampionId).sort((a: number, b: number) => a - b)).toEqual([
+      24, 82,
+    ]);
+
+    // Backward compatibility: omitting role still returns the champion-wide
+    // total (5) -- a legitimate, different question from either role scope.
+    const wideRes = await matchupsGET(req(`http://localhost/api/mystats/matchups?championId=${GALIO}`));
+    const wideBody = await wideRes.json();
+    const wideTotalGames = wideBody.matchups.reduce((sum: number, m: { games: number }) => sum + m.games, 0);
+    expect(wideTotalGames).toBe(5);
+    expect(wideBody.role).toBeNull();
   });
 });
 
