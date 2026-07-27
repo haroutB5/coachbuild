@@ -2,6 +2,56 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.64.0] — 2026-07-27 — Recommended skill order on the Builds page
+
+### Added
+- **A SKILL ORDER card on the Builds page** — the compact priority string (`Q › W › E`, the thing
+  players actually memorise) followed by one row per ability listing the levels it is ranked at.
+  Deliberately NOT the 18-column grid: that needs ~18 touch-target columns, and this is a phone-first
+  app. The per-game 18-column grid in `GameDetailSheet` is untouched — it answers a different
+  question ("what happened in *this* pro game") and stays as it is.
+
+  Sourced from OP.GG behind a single choke point (`lib/opgg.ts`, mirroring how `lib/coachless.ts`
+  isolates that provider), cached 6h, deliberately matching `coachless.ts` so both halves of the page
+  age together. A source failure returns null and the card simply does not render — "absent, not
+  empty", the same convention `boots`/`starters` already use.
+
+### The part that required care: levels 16–18 are not published
+The feed supplies only levels 1–15. Under the standard 5/5/5/3 rank model the last three points are
+**determined by subtraction**, not guessed: Ahri's observed 15 leave exactly R×1 and E×2, giving
+R@16, E@17, E@18 — which reproduces U.GG's published path exactly. The derivation is tested
+exhaustively over every (Q,W,E,R) distribution summing to 15, and its "cannot happen" branch is
+asserted unreachable rather than trusted.
+
+When the arithmetic does not resolve, the model **refuses to complete** — `completed: false`, the card
+shows only the 15 levels that are actually known, and a visible caption says so. Rows are never
+padded to look tidy. Udyr renders exactly this way.
+
+### Three things a 172-champion sweep found that reasoning alone would have got wrong
+- **An ultimate-legality check (R only at 6/11/16) was designed, then deleted.** Seven popular
+  champions — Jinx, Zed, Kassadin, Sivir, Corki, Zeri, Qiyana — publish R at level **12**, because the
+  feed is a per-level *modal aggregate*, not a legal levelling path. That check would have broken
+  seven champions to buy nothing.
+- **Kha'Zix encodes ultimates as `R-Q` / `R-W`** (evolution suffixes), 1 champion in 172. The parser
+  refuses rather than mapping them to `R` — collapsing them would have produced a clean, plausible
+  5/5/5/3 path while silently discarding *which ability he evolves*. He renders no card.
+- **Kayn**, predicted up front as certain to break, is perfectly standard. Arithmetic decides which
+  champions degrade, not a hand-maintained blocklist.
+
+### Notes
+- `win` in the feed is a **win count, not a rate**, and `pick_rate` is the **share of games, not the
+  win rate**. Win rate is derived as `win/play`; share is passed through verbatim, because its
+  denominator is not published and inventing one to "verify" it would be fabrication.
+- **Requesting specific output fields silently REORDERS the feed's declared fields** — the same
+  champion in the same minute returns `order,play,win,pick_rate` or `order,pick_rate,play,win`
+  depending on the request. Positional parsing would have read a 0.57 pick-rate as a 0.57 game count.
+  The parser maps by name off the response's own class header and returns null on any unfamiliar
+  field set.
+- `winRate`/`share` serialise as explicit `null` rather than `undefined`, which would vanish through
+  `JSON.stringify` and render as "undefined%".
+- Rank brackets are not wired into this card yet: OP.GG's `tier` values *look* like they map to
+  `lib/rankBrackets.ts`, but that is unverified and was not assumed.
+
 ## [0.63.4] — 2026-07-27 — The top bar stops showing phone users things a phone cannot do
 
 ### Fixed

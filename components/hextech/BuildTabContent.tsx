@@ -7,6 +7,7 @@ import { LANE_TO_ROLE_ID, LANE_LABEL } from "./heroContracts";
 import RunesSummonersCard from "./RunesSummonersCard";
 import ItemBuildCard from "./ItemBuildCard";
 import ProConsensusCard from "./ProConsensusCard";
+import SkillOrderCard from "./SkillOrderCard";
 import HextechTabs from "./HextechTabs";
 import { versionFromPatch } from "@/components/proAssets";
 import ItemDetailPopover from "@/components/ItemDetailPopover";
@@ -100,8 +101,17 @@ function CardSkeleton({ className = "" }: { className?: string }) {
 // item rows), dropping row-1 height 804px -> 674px. Not a tradeoff: the
 // narrower column was never earning its width, and the wider one badly
 // needed it.
+// 2026-07-27 (recommended skill order feature) — new "skillorder" area added
+// as its OWN full-width row between ITEM BUILD and PRO CONSENSUS, both in the
+// mobile stack and at `lg`+. Deliberately NOT folded into the runes column:
+// v0.63.2 just finished balancing RUNES' column height against ITEM BUILD's
+// (see that changelog entry above) by matching RunesSummonersCard's fixed
+// ~315px content against ItemBuildCard's ~650px+ — adding a second card to
+// that column would reopen the exact height-matching problem that fix closed.
+// A dedicated full-width row is simpler and keeps both existing columns
+// untouched.
 const BUILD_GRID_CLASS =
-  "grid grid-cols-1 gap-5 [grid-template-areas:'runes'_'itembuild'_'pro'] lg:grid-cols-[5fr_7fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_itembuild'_'pro_pro']";
+  "grid grid-cols-1 gap-5 [grid-template-areas:'runes'_'itembuild'_'skillorder'_'pro'] lg:grid-cols-[5fr_7fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_itembuild'_'skillorder_skillorder'_'pro_pro']";
 
 // Mobile-only BUILD|PRO segmented control (peak usage is a 30s champ select —
 // the pre-existing shape here was one ~3,000px scroll: Runes -> Starting ->
@@ -121,6 +131,7 @@ function BuildLoadingSkeleton() {
     <div className={BUILD_GRID_CLASS}>
       <CardSkeleton className="[grid-area:runes]" />
       <CardSkeleton className="[grid-area:itembuild] min-h-[280px]" />
+      <CardSkeleton className="[grid-area:skillorder]" />
       <CardSkeleton className="[grid-area:pro]" />
     </div>
   );
@@ -372,6 +383,22 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
           aria-labelledby="hextech-tab-build"
         >
           <ItemBuildCard champ={champ} lane={lane} build={build} ver={ver} onItemClick={openItemPopover} />
+        </div>
+        {/* 2026-07-27 (recommended skill order feature) — a RECOMMENDATION
+            card (max-priority string + per-ability path), grouped with
+            RunesSummonersCard/ItemBuildCard under the "Build" mobile tab
+            rather than "Pro" — like ItemBuildCard, it's a build recommendation
+            this tab surfaces directly, not a community/pro-play data view the
+            way ProConsensusCard is. Own fetch/loading/hidden states
+            (components/hextech/SkillOrderCard.tsx) — a null API payload
+            renders no card, collapsing this grid cell to zero height exactly
+            like ProConsensusCard's own N=0 state already does. */}
+        <div
+          className={`[grid-area:skillorder] ${mobileTab === "pro" ? "hidden lg:block" : ""}`}
+          role="tabpanel"
+          aria-labelledby="hextech-tab-build"
+        >
+          <SkillOrderCard champ={champ} lane={lane} />
         </div>
         <div
           className={`[grid-area:pro] ${mobileTab === "build" ? "hidden lg:block" : ""}`}

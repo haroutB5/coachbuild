@@ -151,6 +151,33 @@ export interface BuildResponse {
 /** Top-3 recommended setups for a champion + role. */
 export type BuildsResponse = BuildResponse[];
 
+// ── Recommended skill order (GET /api/skill-order) ───────────────────────────
+// The aggregate "Skill Priority" / "Skill Path" recommendation for a
+// champion + role, sourced from op.gg. Distinct from the PER-GAME skillOrder
+// on a ProGame (Riot-timeline-extracted, rendered by
+// components/skillOrderGrid.ts) — that is one game's measured path, this is a
+// recommendation aggregated over many. See lib/skillOrderModel.ts.
+
+export type Ability = "Q" | "W" | "E" | "R";
+
+export interface SkillOrderModel {
+  /** Max-priority order of the basic abilities, e.g. ["Q","W","E"]. */
+  priority: Ability[];
+  /** Level numbers (1-18) at which each ability is ranked up. */
+  levels: Record<Ability, number[]>;
+  /** Sequence by level; index 0 = level 1. Length 15 or 18. */
+  order: Ability[];
+  /** True only when levels 16-18 were derived by the completion rule.
+   *  False means the source's 15 are all we honestly know. */
+  completed: boolean;
+  /** Games behind this order. */
+  sampleSize: number;
+  /** 0..1, or null when not supplied. */
+  winRate: number | null;
+  /** Share of games using this order, 0..1, or null. */
+  share: number | null;
+}
+
 export interface ApiError {
   error: string;
   detail?: string;
