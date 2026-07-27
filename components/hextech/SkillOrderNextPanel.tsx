@@ -45,7 +45,7 @@ import { useEffect, useRef, useState } from "react";
 import { useCompanion } from "@/components/live/CompanionProvider";
 import { getSkills, getStoredPort, SKILL_POLL_MS } from "@/components/live/companionClient";
 import { resolveNextSkill, type LiveSkillState } from "@/lib/nextSkill";
-import { fetchSkillOrder, type SkillOrderModel } from "./skillOrder";
+import { fetchSkillOrder, fetchSkillOrderBestLane, type SkillOrderModel } from "./skillOrder";
 import { LANE_TO_ROLE_ID, type LaneId } from "./heroContracts";
 
 interface SkillOrderNextPanelProps {
@@ -76,8 +76,16 @@ export default function SkillOrderNextPanel({ championId, lane }: SkillOrderNext
     let cancelled = false;
     setModel(null);
     if (!championId || championId <= 0) return;
-    const roleId = lane ? LANE_TO_ROLE_ID[lane] : 5; // 5 = let the API pick
-    void fetchSkillOrder(championId, roleId).then((res) => {
+    // When the lane IS known, ask for it directly. When it is not, probe every
+    // lane and keep the largest sample — this used to send `role=5` with the
+    // comment "let the API pick", but the API never picked: `opggPosition(5)`
+    // returns null, so role=5 answers `null` for every champion and this panel
+    // rendered silently empty for the entire unknown-lane case. Verified against
+    // production before the fix.
+    const request = lane
+      ? fetchSkillOrder(championId, LANE_TO_ROLE_ID[lane])
+      : fetchSkillOrderBestLane(championId);
+    void request.then((res) => {
       if (cancelled) return;
       setModel(res.status === "ok" ? res.model : null);
     });

@@ -161,6 +161,59 @@ function isSkillOrderModel(data: unknown): data is SkillOrderModel {
   );
 }
 
+/**
+ * The five concrete lane role ids, in the order they are probed. Role 5 is NOT
+ * in this list on purpose — see `fetchSkillOrderBestLane`.
+ */
+const CONCRETE_ROLE_IDS = [0, 1, 2, 3, 4] as const;
+
+/**
+ * Fetch a skill order when the lane is UNKNOWN.
+ *
+ * `/compact` used to send `role=5` with the comment "let the API pick". The API
+ * never picked. `opggPosition(5)` returns null (op.gg rejects `all`/`none`), so
+ * role=5 returns `null` for EVERY champion and the panel silently rendered
+ * nothing — verified against production 2026-07-27 for both Udyr and Ahri. The
+ * comment described an intention nobody implemented, which is why this survived:
+ * the code looked deliberate.
+ *
+ * The overlay already solved the same problem (see `overlay-host/js/
+ * skillOrderData.js`): probe every concrete lane and keep whichever resolves
+ * with the LARGEST `sampleSize`. That beats a fixed lane priority — a champion
+ * played mostly bot but occasionally mid should return the bot order, and only
+ * the sample size knows which is which.
+ *
+ * `hidden` (a legitimate "no data for this lane") is not an error, so a champion
+ * with no data in ANY lane still degrades to `hidden` rather than to a spurious
+ * failure. A real transport error is only surfaced when NOTHING resolved.
+ */
+export async function fetchSkillOrderBestLane(championId: number): Promise<SkillOrderFetchResult> {
+  const settled = await Promise.all(
+    CONCRETE_ROLE_IDS.map((role) => fetchSkillOrder(championId, role))
+  );
+
+  let best: { model: SkillOrderModel; sampleSize: number } | null = null;
+  let sawHidden = false;
+  let firstError: SkillOrderFetchResult | null = null;
+
+  for (const res of settled) {
+    if (res.status === "ok") {
+      const sampleSize = typeof res.model.sampleSize === "number" ? res.model.sampleSize : 0;
+      // Strictly greater, so the earlier lane wins a tie and the result is
+      // stable across calls rather than depending on network ordering.
+      if (!best || sampleSize > best.sampleSize) best = { model: res.model, sampleSize };
+    } else if (res.status === "hidden") {
+      sawHidden = true;
+    } else if (!firstError) {
+      firstError = res;
+    }
+  }
+
+  if (best) return { status: "ok", model: best.model };
+  if (sawHidden) return { status: "hidden" };
+  return firstError ?? { status: "hidden" };
+}
+
 export async function fetchSkillOrder(championId: number, role: number): Promise<SkillOrderFetchResult> {
   try {
     const res = await fetch(`/api/skill-order?champ=${championId}&role=${role}`);
