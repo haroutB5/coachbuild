@@ -25,6 +25,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import CoreBuildOrderCard from "@/components/hextech/CoreBuildOrderCard";
 import RunesSummonersCard from "@/components/hextech/RunesSummonersCard";
+import SkillOrderNextPanel from "@/components/hextech/SkillOrderNextPanel";
 import { useCompanion } from "@/components/live/CompanionProvider";
 import { resolveChampSelectRoleId, resolveCurrentChampSelectChampionId } from "@/components/live/champSelectFollow";
 import { roleIdToLane } from "@/components/live/deepLink";
@@ -133,6 +134,17 @@ export default function CompactPage() {
 
   return (
     <main className="min-h-screen bg-bg text-txt px-3 py-3">
+      {/* Deliberately OUTSIDE the build-fetch state branch, and deliberately
+          first. It depends on /api/skill-order and the companion, not on
+          /api/build, so a failed build fetch must not take the in-game skill
+          prompt down with it — and during a game this is the single most
+          time-critical thing on the surface, so it goes where the eye lands.
+          Renders null in every state except "there is a live reading and a
+          recommendation we stand behind", including the whole time no game is
+          running, so it costs nothing when it has nothing to say. */}
+      <div className="empty:hidden mb-3">
+        <SkillOrderNextPanel championId={championId} lane={lane} />
+      </div>
       {state.kind === "ready" ? (
         <>
           <header className="flex items-baseline justify-between gap-2 mb-3 px-0.5">

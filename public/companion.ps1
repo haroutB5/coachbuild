@@ -82,6 +82,23 @@ WIRE CONTRACT (must match components/live/companionClient.ts exactly):
                                   ~1 per 60s per distinct failure -- never
                                   contains the session token or a name)}
   - GET  /live         -> 200 <raw allgamedata JSON> | 200 {error:"no-live"}
+  - GET  /skills       -> 200 {level:1..18,
+                                abilities:{Q:int,W:int,E:int,R:int}}
+                          | 200 {error:"no-live"}
+                          -- v1.8.0. The ACTIVE PLAYER's OWN champion level
+                          and OWN ability ranks, read off the in-game Live
+                          Client Data API (/liveclientdata/activeplayer).
+                          Read-only, no derived values; the "which ability
+                          next" judgement is made web-side in
+                          lib/nextSkill.ts, never here. ALL OR NOTHING: a
+                          reading missing any one of level/Q/W/E/R answers
+                          no-live rather than a partial object (see
+                          ConvertTo-LiveSkillState for why a defaulted zero
+                          would invert the answer, not merely weaken it).
+                          NOTE the response shape is derived from Riot's
+                          PUBLISHED schema, not from an observed payload --
+                          it had not been exercised against a live game as
+                          of the commit that added it.
   - POST /apply-runes  body {name, primaryStyleId, subStyleId,
                               selectedPerkIds:number[9], current:true,
                               mode:'auto'|'manual' (optional, validated,
@@ -287,7 +304,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.7.0'
+    Version     = '1.8.0'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -571,6 +588,128 @@ function Get-LiveClientData {
         Write-ThrottledErrorLog -Key 'live-client-data' -Message "Get-LiveClientData failed: $($_.Exception.GetType().Name): $($_.Exception.Message)"
         return $null
     }
+}
+
+# --- Skill state (v1.8.0) -----------------------------------------------------
+# Feeds the /compact page's "level this next" panel. STRICTLY READ-ONLY: it
+# reads the ACTIVE PLAYER's OWN champion level and OWN per-ability ranks and
+# returns them. It computes nothing, decides nothing, and touches nothing about
+# any other player -- every judgement lives in lib/nextSkill.ts on the web side.
+# This stays inside CLAUDE.md hard rule 5 ("never expand the companion's
+# endpoint surface into anything that acts on the game itself"): no timers, no
+# cooldowns, no enemy data, no input.
+#
+# HONESTY NOTE, do not delete: as written, NOBODY HAS EVER SEEN A RESPONSE FROM
+# THIS ENDPOINT. There is no League client on the machine this was authored on.
+# The field names below (`level`, `abilities.Q.abilityLevel`) come from Riot's
+# PUBLISHED Live Client Data schema, not from a captured payload. That is
+# precisely why ConvertTo-LiveSkillState is split out as a PURE function and
+# validates every field: it is the contract boundary against a wire format that
+# has not been exercised. If the real shape differs, this returns $null, the
+# route answers no-live, and the panel renders nothing -- the intended failure.
+
+function ConvertTo-LiveSkillRank {
+    # One ability rank, or $null if it is not a plain non-negative integer.
+    # $null is meaningful here and must never be coerced to 0: a missing rank
+    # means we do not know the rank, and 0 would silently manufacture an
+    # unspent point that does not exist.
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [bool]) { return $null }
+    $n = 0
+    if (-not [int]::TryParse([string]$Value, [ref]$n)) { return $null }
+    if ($n -lt 0 -or $n -gt 18) { return $null }
+    return $n
+}
+
+function ConvertTo-LiveSkillState {
+    # PURE. Given whatever /liveclientdata/activeplayer returned (and, only if
+    # that response carried no abilities block, whatever
+    # /liveclientdata/activeplayerabilities returned), produce
+    #   @{ level = <int>; abilities = @{ Q=..; W=..; E=..; R=.. } }
+    # or $null.
+    #
+    # ALL OR NOTHING, deliberately. A reading missing any one of level/Q/W/E/R
+    # returns $null rather than a partial object. The web-side arithmetic is
+    # `unspent = level - (Q+W+E+R)`; a single defaulted-to-zero field does not
+    # degrade that answer, it INVERTS it -- a missing W of 3 reads as three
+    # unspent points and would tell the player to level something three times.
+    # A half-known state is not a weaker version of a known state, it is a
+    # different and wrong one.
+    #
+    # The PASSIVE is excluded structurally: only the four named keys are ever
+    # read, so a passive (which has no abilityLevel and can never be ranked)
+    # cannot enter the sum no matter what the payload contains.
+    param($ActivePlayer, $Abilities)
+
+    if ($null -eq $ActivePlayer) { return $null }
+
+    $level = ConvertTo-LiveSkillRank -Value $ActivePlayer.level
+    if ($null -eq $level -or $level -lt 1 -or $level -gt 18) { return $null }
+
+    $src = $Abilities
+    if ($null -eq $src) { $src = $ActivePlayer.abilities }
+    if ($null -eq $src) { return $null }
+
+    $out = [ordered]@{}
+    foreach ($key in @('Q', 'W', 'E', 'R')) {
+        $slot = $src.$key
+        if ($null -eq $slot) { return $null }
+        # Riot publishes each slot as an object carrying abilityLevel. A bare
+        # number is accepted too, purely so a future/alternate shape degrades
+        # to a correct reading rather than to a wrong one -- it is NOT evidence
+        # that any such shape exists.
+        $rank = $null
+        if ($slot -is [string] -or $slot -is [int] -or $slot -is [long] -or $slot -is [double]) {
+            $rank = ConvertTo-LiveSkillRank -Value $slot
+        } else {
+            $rank = ConvertTo-LiveSkillRank -Value $slot.abilityLevel
+        }
+        if ($null -eq $rank) { return $null }
+        $out[$key] = $rank
+    }
+
+    return [ordered]@{ level = $level; abilities = $out }
+}
+
+function Get-LiveSkillState {
+    # /liveclientdata/activeplayer carries BOTH the level and the abilities
+    # block, so it is read FIRST and on its own. That is not a micro-
+    # optimisation, it is the correctness argument: level and ranks taken from
+    # two separate HTTP calls can straddle a level-up, and the pair
+    # (level = N+1, ranks summing to N+1) reads as zero unspent points at the
+    # exact instant the player has one to spend -- the one moment this panel
+    # exists for. One request is one atomic snapshot.
+    #
+    # /activeplayerabilities is consulted ONLY as a fallback, when the first
+    # response arrives without an abilities block at all. That is a shape
+    # nobody here has observed either way; if it happens, a split read beats no
+    # read, and lib/nextSkill.ts's `over-spent` refusal catches the straddle
+    # case on the web side.
+    #
+    # No game running is the NORMAL state, not an error: 2999 simply refuses
+    # the connection, Invoke-RestMethod throws, and this returns $null quietly.
+    # Deliberately NOT routed through Write-ThrottledErrorLog -- unlike the LCU
+    # calls, a failure here carries no diagnostic value (it is true for most of
+    # the day) and would only bury real errors in the log.
+    $active = $null
+    try {
+        $active = Invoke-RestMethod -Uri 'https://127.0.0.1:2999/liveclientdata/activeplayer' -UseBasicParsing -TimeoutSec 2
+    } catch {
+        return $null
+    }
+    if ($null -eq $active) { return $null }
+
+    $abilities = $null
+    if ($null -eq $active.abilities) {
+        try {
+            $abilities = Invoke-RestMethod -Uri 'https://127.0.0.1:2999/liveclientdata/activeplayerabilities' -UseBasicParsing -TimeoutSec 2
+        } catch {
+            return $null
+        }
+    }
+
+    return ConvertTo-LiveSkillState -ActivePlayer $active -Abilities $abilities
 }
 
 function Set-CorsHeaders {
@@ -1716,6 +1855,22 @@ while ($Sync.Running) {
             } else {
                 Write-JsonResponse -Response $res -StatusCode 200 -Obj $live
             }
+        } elseif ($path -eq '/skills' -and $req.HttpMethod -eq 'GET') {
+            # v1.8.0 -- the ACTIVE PLAYER's own champion level + own ability
+            # ranks, read straight off the in-game Live Client Data API and
+            # passed through untouched. Deliberately separate from /live rather
+            # than derived from it: /live is the whole allgamedata blob (every
+            # player, every score, every item) and this is polled once a second
+            # by an always-open panel. Same reason it answers `no-live` instead
+            # of a status code -- a closed game is the normal state of the
+            # world, not a failed request, and the page must never have to
+            # branch on an error to decide whether to render an optional panel.
+            $skills = Get-LiveSkillState
+            if ($null -eq $skills) {
+                Write-JsonResponse -Response $res -StatusCode 200 -Obj @{ error = 'no-live' }
+            } else {
+                Write-JsonResponse -Response $res -StatusCode 200 -Obj $skills
+            }
         } elseif ($path -eq '/apply-runes' -and $req.HttpMethod -eq 'POST') {
             $reader = New-Object IO.StreamReader($req.InputStream, [Text.Encoding]::UTF8)
             $bodyRaw = $reader.ReadToEnd()
@@ -2460,6 +2615,51 @@ function Invoke-SelfTest {
     $bridge.Sync.LastBuildsDetachAt = $null
     $bridge.Sync.LastDraftDetachAt = $null
 
+    # 4f. v1.8.0 GET /skills, NO GAME RUNNING -- and this one is genuinely
+    # executed, not simulated. There is no League client here and nothing is
+    # listening on 127.0.0.1:2999, which is exactly the state this asserts: the
+    # connection is refused, Get-LiveSkillState swallows it, and the route must
+    # answer 200 {error:'no-live'} rather than a 500, a hang, or a stack trace.
+    # A closed game is the normal state of the world for most of the day, so
+    # "fails silently and cheaply when there is no game" is the single most
+    # load-bearing behaviour of this endpoint -- and, unlike the live path, it
+    # is fully verifiable on a machine with no League installed.
+    #
+    # NOTE what this does NOT prove: that a REAL live game produces a usable
+    # reading. Nothing in this suite can prove that. See 8e's header.
+    try {
+        $skillsStart = Get-Date
+        $r = Invoke-WebRequest -Uri "$base/skills?session=$session" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing
+        $skillsElapsed = ((Get-Date) - $skillsStart).TotalSeconds
+        if ($r.StatusCode -ne 200) { $failures.Add("/skills with no game expected 200, got $($r.StatusCode)") }
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.error -ne 'no-live') { $failures.Add("/skills with no game expected {error:'no-live'}, got $($r.Content)") }
+        if ($null -ne $obj.level) { $failures.Add("/skills with no game must not emit a level, got $($r.Content)") }
+        # A connection-refused on loopback returns immediately; anything near
+        # the 2s TimeoutSec would mean the panel's 1Hz poll is stacking waits.
+        if ($skillsElapsed -gt 5) { $failures.Add("/skills with no game took $([Math]::Round($skillsElapsed,1))s -- must fail fast, not block the poll") }
+    } catch { $failures.Add("/skills no-game request threw: $($_.Exception.Message)") }
+
+    # /skills is behind the SAME origin+session gate as every other route --
+    # asserted rather than assumed, because it is a new entry in the dispatch
+    # chain and the gate lives above it.
+    try {
+        $r = Invoke-WebRequest -Uri "$base/skills?session=$session" -Method GET -Headers @{ Origin = 'https://evil.example' } -UseBasicParsing
+        $failures.Add("/skills wrong-origin expected 403, got $($r.StatusCode)")
+    } catch {
+        $code = $null
+        if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+        if ($code -ne 403) { $failures.Add("/skills wrong-origin expected 403, got $code") }
+    }
+    try {
+        $r = Invoke-WebRequest -Uri "$base/skills?session=wrong-token" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing
+        $failures.Add("/skills bad-session expected 403, got $($r.StatusCode)")
+    } catch {
+        $code = $null
+        if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+        if ($code -ne 403) { $failures.Add("/skills bad-session expected 403, got $code") }
+    }
+
     $applyBody = @{ name = 'CoachBuild Test Mid'; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = @(8005, 9111, 9104, 8014, 8017, 8009, 8017, 5008, 5008); current = $true }
 
     # 5. apply-runes: free-slot path (no existing pages) -- direct POST, NO
@@ -3111,6 +3311,101 @@ function Invoke-SelfTest {
             }
         } catch {
             $failures.Add("Whole-file ASCII guard threw: $($_.Exception.Message)")
+        }
+    }
+
+    # 8e. v1.8.0 ConvertTo-LiveSkillState -- the PURE half of GET /skills.
+    #
+    # READ THIS BEFORE ADDING A CASE HERE. These fixtures are hand-written from
+    # Riot's PUBLISHED Live Client Data schema. No response from
+    # 127.0.0.1:2999 has ever been observed by this file's author, so these
+    # cases prove exactly one thing: given an object of THIS shape, the shaping
+    # is correct and every incomplete variant is rejected. They prove NOTHING
+    # about whether the real endpoint emits this shape.
+    #
+    # In particular, do NOT stand up a mock HttpListener on 2999 and call that
+    # a live-path test. It would assert that a fixture matches a fixture while
+    # reading, in a handoff six months from now, as proof the wire format was
+    # verified. The wire format is verified by a human running the curl
+    # commands in HANDOFF-engy.md against a real game, and by nothing else.
+    $skillActive = @{
+        level     = 9
+        abilities = @{
+            Passive = @{ displayName = 'Essence Theft' }
+            Q       = @{ abilityLevel = 5; displayName = 'Orb of Deception' }
+            W       = @{ abilityLevel = 2; displayName = 'Fox-Fire' }
+            E       = @{ abilityLevel = 1; displayName = 'Charm' }
+            R       = @{ abilityLevel = 1; displayName = 'Spirit Rush' }
+        }
+    }
+    $shaped = ConvertTo-LiveSkillState -ActivePlayer $skillActive -Abilities $null
+    if ($null -eq $shaped) {
+        $failures.Add('ConvertTo-LiveSkillState returned null on a well-formed activeplayer fixture')
+    } else {
+        if ($shaped.level -ne 9) { $failures.Add("ConvertTo-LiveSkillState level: expected 9, got $($shaped.level)") }
+        if ($shaped.abilities.Q -ne 5 -or $shaped.abilities.W -ne 2 -or $shaped.abilities.E -ne 1 -or $shaped.abilities.R -ne 1) {
+            $failures.Add("ConvertTo-LiveSkillState ranks wrong: Q=$($shaped.abilities.Q) W=$($shaped.abilities.W) E=$($shaped.abilities.E) R=$($shaped.abilities.R)")
+        }
+        # The passive has no rank and must never reach the web side, where it
+        # would be summed into spent-points and eat a real unspent point.
+        if ($shaped.abilities.Keys -contains 'Passive') {
+            $failures.Add('ConvertTo-LiveSkillState leaked the Passive into the abilities map')
+        }
+        if (@($shaped.abilities.Keys).Count -ne 4) {
+            $failures.Add("ConvertTo-LiveSkillState emitted $(@($shaped.abilities.Keys).Count) ability keys, expected exactly 4")
+        }
+    }
+
+    # ALL-OR-NOTHING. Each of these is a reading we cannot complete, and each
+    # must answer $null rather than a partial object -- a rank defaulted to 0
+    # does not weaken the web-side `unspent = level - sum(ranks)` arithmetic,
+    # it inverts it.
+    $skillPartials = @(
+        @{ Name = 'missing W'; Obj = @{ level = 9; abilities = @{ Q = @{ abilityLevel = 5 }; E = @{ abilityLevel = 1 }; R = @{ abilityLevel = 1 } } } },
+        @{ Name = 'W present but rankless'; Obj = @{ level = 9; abilities = @{ Q = @{ abilityLevel = 5 }; W = @{ displayName = 'Fox-Fire' }; E = @{ abilityLevel = 1 }; R = @{ abilityLevel = 1 } } } },
+        @{ Name = 'no abilities block at all'; Obj = @{ level = 9 } },
+        @{ Name = 'no level'; Obj = @{ abilities = @{ Q = @{ abilityLevel = 0 }; W = @{ abilityLevel = 0 }; E = @{ abilityLevel = 0 }; R = @{ abilityLevel = 0 } } } },
+        @{ Name = 'level 0 (out of range)'; Obj = @{ level = 0; abilities = @{ Q = @{ abilityLevel = 0 }; W = @{ abilityLevel = 0 }; E = @{ abilityLevel = 0 }; R = @{ abilityLevel = 0 } } } },
+        @{ Name = 'level 19 (out of range)'; Obj = @{ level = 19; abilities = @{ Q = @{ abilityLevel = 5 }; W = @{ abilityLevel = 5 }; E = @{ abilityLevel = 5 }; R = @{ abilityLevel = 3 } } } },
+        @{ Name = 'negative rank'; Obj = @{ level = 9; abilities = @{ Q = @{ abilityLevel = -1 }; W = @{ abilityLevel = 2 }; E = @{ abilityLevel = 1 }; R = @{ abilityLevel = 1 } } } },
+        @{ Name = 'non-numeric rank'; Obj = @{ level = 9; abilities = @{ Q = @{ abilityLevel = 'five' }; W = @{ abilityLevel = 2 }; E = @{ abilityLevel = 1 }; R = @{ abilityLevel = 1 } } } }
+    )
+    foreach ($case in $skillPartials) {
+        if ($null -ne (ConvertTo-LiveSkillState -ActivePlayer $case.Obj -Abilities $null)) {
+            $failures.Add("ConvertTo-LiveSkillState accepted a partial/invalid reading ($($case.Name)) -- must be all-or-nothing")
+        }
+    }
+    if ($null -ne (ConvertTo-LiveSkillState -ActivePlayer $null -Abilities $null)) {
+        $failures.Add('ConvertTo-LiveSkillState accepted a null activeplayer')
+    }
+
+    # The SPLIT-READ fallback: activeplayer with no abilities block, plus a
+    # separate activeplayerabilities response. Shape-only -- whether the real
+    # API ever produces this pairing is unknown.
+    $splitShaped = ConvertTo-LiveSkillState -ActivePlayer @{ level = 4 } -Abilities @{
+        Q = @{ abilityLevel = 2 }; W = @{ abilityLevel = 1 }; E = @{ abilityLevel = 1 }; R = @{ abilityLevel = 0 }
+    }
+    if ($null -eq $splitShaped -or $splitShaped.level -ne 4 -or $splitShaped.abilities.Q -ne 2 -or $splitShaped.abilities.R -ne 0) {
+        $failures.Add('ConvertTo-LiveSkillState did not shape the split activeplayer+activeplayerabilities fallback')
+    }
+
+    # An explicit abilities argument WINS over an abilities block on the
+    # activeplayer response, so the fallback can never be silently ignored.
+    $splitWins = ConvertTo-LiveSkillState -ActivePlayer @{ level = 4; abilities = @{ Q = @{ abilityLevel = 9 }; W = @{ abilityLevel = 9 }; E = @{ abilityLevel = 9 }; R = @{ abilityLevel = 9 } } } -Abilities @{
+        Q = @{ abilityLevel = 2 }; W = @{ abilityLevel = 1 }; E = @{ abilityLevel = 1 }; R = @{ abilityLevel = 0 }
+    }
+    if ($null -eq $splitWins -or $splitWins.abilities.Q -ne 2) {
+        $failures.Add('ConvertTo-LiveSkillState ignored the explicitly-supplied abilities argument')
+    }
+
+    # It must serialize to the exact JSON the web side narrows
+    # (parseLiveSkillState in lib/nextSkill.ts): flat integer ranks, not the
+    # nested {abilityLevel:n} objects Riot sends. This is the one assertion
+    # that actually pins the wire contract BETWEEN the two halves of this repo.
+    if ($null -ne $shaped) {
+        $skillJson = ConvertTo-Json -InputObject $shaped -Depth 10 -Compress
+        if ($skillJson -ne '{"level":9,"abilities":{"Q":5,"W":2,"E":1,"R":1}}') {
+            $failures.Add("GET /skills JSON shape drifted from what lib/nextSkill.ts parses: $skillJson")
         }
     }
 

@@ -2,6 +2,70 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.65.0] — 2026-07-27 — Which ability to level next, live, on `/compact`
+
+> **Companion update required.** This ships companion **1.8.0**; re-run the install one-liner
+> (`irm …/companion.ps1 | iex`). A pre-1.8.0 companion 404s the new endpoint and the panel simply
+> stays hidden — an un-updated user sees nothing rather than an error.
+
+### Added
+- **`/compact` shows the next ability to level while a game is running.** Put it on a second monitor
+  during a game; at each level-up it names the ability and the rank transition (e.g. `W 2 → 3`).
+
+  **What this is NOT:** nothing is drawn inside the game. That is impossible — the LCU has no
+  ability/skill endpoint (970 checked) and structurally cannot, since it drives the *client*, not the
+  game; the in-game API is read-only. Every app that appears to highlight abilities in the HUD is
+  drawing an Overwolf-style overlay *over* the game, which stays out of scope here.
+
+- **Companion 1.8.0 gains `GET /skills`**, reading the in-game Live Client Data API on
+  `127.0.0.1:2999`. Riot's policy explicitly permits this: tools may "highlight decisions that are
+  important", and your own champion level and ability ranks are already on your own screen. Nothing
+  about enemies is read.
+
+### The care that went into refusing to guess
+`lib/nextSkill.ts` is a pure resolver with **eleven named refusals**, every one of which renders
+nothing rather than a recommendation. Two matter most:
+
+- **`model-incomplete`** — when the recommended order stops at level 15 (v0.64.0: the source doesn't
+  publish 16–18 and we refuse to invent them), the panel goes silent from the 16th point rather than
+  guessing the endgame.
+- **`ultimate-illegal`** — this was probed rather than assumed, and it is real. The seven champions
+  whose aggregate publishes R at level 12 mean a player who took R at 6 and 11 arrives at level 12
+  with the order saying "R" while R3 actually needs level 16. Without the guard the panel would tell
+  you to press a key the game ignores.
+
+The order is indexed by **points spent, not by level.** Those coincide in ordinary play and diverge
+exactly when a player banks a point — which is the case this panel exists for. Indexing by level
+would silently skip a rank.
+
+Reading is done from **one** `/activeplayer` call rather than two endpoints, because level and ranks
+fetched separately can straddle a level-up and read as "zero unspent points" at the precise instant
+you have one. Rank parsing is all-or-nothing: a missing rank yields no state at all, since a
+defaulted zero doesn't weaken the unspent-point arithmetic, it inverts it.
+
+### Verified by execution
+The resolver has 34 tests including a full 18-level walk and an exhaustive 15,552-input sweep
+(no rank ever exceeds its cap, every transition is +1, every ultimate lands on a legal level). The
+no-game path is genuinely exercised — nothing listens on 2999 in CI, so the connection-refused branch
+is real, not simulated. The panel renders nothing with no live game, and **`/skills` is never polled
+at all** in that state.
+
+### Assumed and NOT verified — please read
+- **No real `/activeplayer` response has ever been observed.** Field names come from Riot's published
+  schema. The live path is unexercised end to end; there is no League client in the build
+  environment. Tests deliberately do **not** mock the wire format and call it verified.
+- **Form-swap champions are genuinely unknown** — Jayce, Elise, Nidalee, Gnar, Kayn. Whether
+  `activeplayerabilities` reports the active form or a canonical set is untested. This is the single
+  most valuable thing to check first.
+- **The champion is assumed from the page, not read back from the game** — `/activeplayer` carries no
+  champion name, so a stale deep link would produce a confident but wrong recommendation. Pre-existing
+  for the whole page; now worth fixing.
+- A level-up shifts the layout by ~74px. Reserving the space would contradict "absent, not empty", so
+  it was left rather than silently traded off.
+
+The manual validation checklist — exact curls, what a good response looks like, and the form-swap
+probe — is in `HANDOFF-engy.md` §5.
+
 ## [0.64.0] — 2026-07-27 — Recommended skill order on the Builds page
 
 ### Added

@@ -18,6 +18,7 @@ import {
   probeCompanion,
   refreshStatus,
   getLive,
+  getSkills,
   isLiveError,
   applyRunes,
   applyItemSets,
@@ -437,6 +438,67 @@ describe("companionClient — getLive / isLiveError", () => {
       throw new TypeError("Failed to fetch");
     });
     expect(await getLive(48291, "sess", { fetchImpl })).toBeNull();
+  });
+});
+
+describe("companionClient — getSkills (companion 1.8.0 /skills)", () => {
+  // These test THIS CLIENT'S degradation behaviour against an injected fetch.
+  // They do not — and cannot — test that the real companion emits this shape;
+  // there is no League client in CI or on the authoring machine, so no real
+  // /skills response has ever been observed. See lib/__tests__/nextSkill.test.ts's
+  // header for why that distinction is kept explicit rather than blurred.
+  const okWith = (body: unknown) =>
+    vi.fn(async () => ({ ok: true, json: async () => body })) as unknown as typeof fetch;
+
+  it("narrows a well-formed reading", async () => {
+    const fetchImpl = okWith({ level: 9, abilities: { Q: 5, W: 2, E: 1, R: 1 } });
+    expect(await getSkills(48291, "sess", { fetchImpl })).toEqual({
+      level: 9,
+      abilities: { Q: 5, W: 2, E: 1, R: 1 },
+    });
+  });
+
+  it("requests /skills on the given port with the session", async () => {
+    const fetchImpl = okWith({ level: 1, abilities: { Q: 0, W: 0, E: 0, R: 0 } });
+    await getSkills(48292, "tok en", { fetchImpl });
+    expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe(
+      "http://127.0.0.1:48292/skills?session=tok%20en"
+    );
+  });
+
+  it("collapses {error:'no-live'} to null — no game is not an error", async () => {
+    expect(await getSkills(48291, "sess", { fetchImpl: okWith({ error: "no-live" }) })).toBeNull();
+  });
+
+  it("collapses a 404 from a pre-1.8.0 companion to null, exactly like no game", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: "not-found" }),
+    })) as unknown as typeof fetch;
+    expect(await getSkills(48291, "sess", { fetchImpl })).toBeNull();
+  });
+
+  it("rejects a PARTIAL reading rather than passing half a snapshot to the resolver", async () => {
+    expect(await getSkills(48291, "sess", { fetchImpl: okWith({ level: 9, abilities: { Q: 5, W: 2 } }) })).toBeNull();
+    expect(await getSkills(48291, "sess", { fetchImpl: okWith({ abilities: { Q: 5, W: 2, E: 1, R: 1 } }) })).toBeNull();
+  });
+
+  it("returns null (not a throw) on a network error", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    expect(await getSkills(48291, "sess", { fetchImpl })).toBeNull();
+  });
+
+  it("returns null when the body is not JSON at all", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => {
+        throw new SyntaxError("Unexpected token");
+      },
+    })) as unknown as typeof fetch;
+    expect(await getSkills(48291, "sess", { fetchImpl })).toBeNull();
   });
 });
 

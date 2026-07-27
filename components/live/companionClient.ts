@@ -80,6 +80,8 @@
 // history on a return visit, even without PowerShell/log access.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { parseLiveSkillState, type LiveSkillState } from "@/lib/nextSkill";
+
 export const COMPANION_PORTS = [48291, 48292, 48293] as const;
 export type CompanionPort = (typeof COMPANION_PORTS)[number];
 
@@ -98,6 +100,15 @@ export const COMPANION_STATUS_POLL_MS = 3000;
  *  are no cooldowns/timers derived from this data by design, so neither fix
  *  trades away anything time-sensitive). */
 export const LIVE_POLL_MS = 3000;
+/** GET /skills poll cadence for the /compact next-ability panel. 1000ms is the
+ *  brief's stated ceiling and the community-established Live Client Data norm.
+ *  Unlike LIVE_POLL_MS's enemy roster (fixed for the whole game, hence slowed
+ *  to 3s), this data changes at every level-up and the panel's entire value is
+ *  being right the moment the point lands — 3s would mean a third of the
+ *  glances land on stale state. The poll only runs while the companion reports
+ *  phase InProgress (see SkillOrderNextPanel), so a closed game costs zero
+ *  requests rather than one per second all day. */
+export const SKILL_POLL_MS = 1000;
 
 const SESSION_STORAGE_KEY = "coachbuild:companion:session";
 const PORT_STORAGE_KEY = "coachbuild:companion:port";
@@ -639,6 +650,41 @@ export async function getLive(
     const res = await f(bridgeUrl(port, "/live", session), { method: "GET" });
     if (!res.ok) return null;
     return (await res.json()) as LiveResult;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * GET /skills — the ACTIVE PLAYER's own champion level + own ability ranks,
+ * read by the companion off the in-game Live Client Data API (companion
+ * 1.8.0+). Feeds the /compact "level this next" panel via
+ * lib/nextSkill.ts's resolveNextSkill.
+ *
+ * Returns null for EVERY failure that is not a well-formed reading — transport
+ * error, 404 from a pre-1.8.0 companion, `{error:'no-live'}`, or a body that
+ * doesn't narrow. Callers treat null as "render nothing", which is the same
+ * thing they do when there is no game. That collapse is intentional: from the
+ * panel's point of view "the companion is too old to answer" and "no game is
+ * running" are the same state (nothing to show), and giving them separate
+ * handling would only produce a placeholder where the design calls for
+ * absence.
+ *
+ * Narrowing happens HERE (parseLiveSkillState), not at the call site, because
+ * the companion updates on its own schedule over `irm | iex` — a browser can
+ * be talking to an older or newer companion than the page was built against,
+ * so the wire shape is never assumed.
+ */
+export async function getSkills(
+  port: CompanionPort,
+  session: string,
+  deps: CompanionClientDeps = {}
+): Promise<LiveSkillState | null> {
+  const f = deps.fetchImpl ?? fetch;
+  try {
+    const res = await f(bridgeUrl(port, "/skills", session), { method: "GET" });
+    if (!res.ok) return null;
+    return parseLiveSkillState(await res.json());
   } catch {
     return null;
   }
