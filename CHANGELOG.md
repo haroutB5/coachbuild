@@ -2,6 +2,26 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.66.1] — 2026-07-27 — The download button downloads
+
+### Fixed
+- **The overlay download button opened a GitHub page instead of downloading.** New
+  `GET /api/download/overlay` asks GitHub which installer is current and 302s straight to it, so
+  the click starts a download.
+
+  A direct link was not an option: GitHub's `releases/latest/download/<asset>` form still needs the
+  exact filename, and ours carries the version (`CoachBuild-Overlay-Setup-0.2.0.exe`). Hardcoding
+  that would 404 on the very next release — a dead button nobody notices until someone reports it.
+
+  Two details worth keeping: the asset match is anchored (`/setup.*\.exe$/i`) so it cannot pick
+  `…Setup-0.2.0.exe.blockmap`, which contains both "Setup" and ".exe" and would download as what
+  looks like a corrupt installer. And every failure path — API down, rate limited, reshaped payload,
+  no matching asset — falls back to the releases PAGE rather than erroring, so a user still finishes
+  in one click. Same posture as `/api/skill-order`'s "200 + null is a normal answer".
+
+  Cached 10 minutes at the CDN: GitHub's unauthenticated API allows 60 requests/hour per IP, and a
+  serverless function's IP is shared across every visitor.
+
 ## [0.66.0] — 2026-07-27 — The in-game overlay ships, and updates itself
 
 ### Added

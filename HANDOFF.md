@@ -3873,3 +3873,100 @@ Files touched: `overlay-host/main.js`, `overlay-host/package.json`,
 or `overlay-host/vendor/skillEngine.js`.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-27 18:50
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-27 17:18:40Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-27 round — seamless auto-update (overlay-host)
+
+**Task:** make the packaged overlay app update itself without the user quitting
+and manually reinstalling on their separate gaming PC — full brief context and
+reasoning now lives in `overlay-host/README.md`'s new "Auto-update" section
+(elevation reasoning, portable-target caveat, publish command, exactly what
+was/wasn't verified — not duplicated here to avoid drift between two copies).
+
+**What changed:**
+- `overlay-host/package.json`: added `electron-updater` (^6.8.9, real
+  `dependencies`, not dev) — the one new runtime dep approved. Bumped
+  `0.1.0` → `0.2.0` (a real delta to test an update against, once published).
+  Added `build.publish` (github provider, `haroutB5/coachbuild-overlay-releases`,
+  the public binaries-only repo you'd already created empty). Added
+  `dist:publish` npm script (three-step build chain + `--publish always`,
+  reads `GH_TOKEN` from env — nothing hardcoded).
+- `overlay-host/lib/autoUpdater.js` (NEW): owns all `electron-updater` wiring
+  — background auto-download, the `inGame`-gated deferred install
+  (`quitAndInstall(true, true)` only fires when not in a game), a status
+  state machine for the tray, and a periodic 4h check + one 10s-after-launch
+  check. Every event logs through the callback passed from `main.js` (so it
+  lands in the existing file logger). Guards `!app.isPackaged` (dev `npm
+  start` runs) by disabling cleanly rather than failing checks with no feed.
+- `overlay-host/main.js`: requires the new module, calls
+  `autoUpdaterModule.init(...)` in `app.whenReady()` (after tray/window/
+  hotkeys/poll are up), calls `notifyGameEnded()` from the EXISTING
+  `inGame = false` transition inside `pollActivePlayer()`'s catch block (the
+  same place that already logs "game no longer detected"), calls
+  `shutdown()` in `will-quit`, and adds two tray rows: a live, non-clickable
+  status row (`Update: checking…` / `downloading 42%` / `ready — installs
+  when you finish your game` / `Up to date (vX.Y.Z)` / an error message) and
+  a `Check for updates now` manual-trigger row (disabled unpackaged).
+
+**Verified by actually building** (not just written): `npm start` (unpackaged)
+confirms the module initializes and logs its dev-disabled state with zero
+crash/side-effect on the rest of startup. Full three-step packaging chain
+(`dist:unpacked` → `dist:resources` → `dist:package`) ran clean from an empty
+`dist/`; confirmed via `npx asar list` that `electron-updater` + deps are
+bundled into `app.asar` automatically (production `dependencies` get pulled
+in by electron-builder regardless of the explicit `files` allowlist — no
+`node_modules/**/*` entry needed); confirmed `dist/latest.yml` is generated
+correctly by the `--prepackaged` step (version `0.2.0`, real `sha512`, real
+size) — this was the specific risk flagged in the brief and it does NOT
+silently fail; re-confirmed the built exe still carries
+`requestedExecutionLevel: requireAdministrator`.
+
+**Did NOT publish** — that's explicitly yours to run:
+`GH_TOKEN=<token> npm run dist:publish` from `overlay-host/`.
+
+**Not verified, stated plainly:** any real end-to-end update cycle (there is
+only one version, unpublished, in existence). Whether a UAC prompt appears
+when the already-elevated running app spawns the silent NSIS installer —
+reasoned through in the README (child processes inherit an elevated parent's
+token, so it should be silent) but not observed. Whether `quitAndInstall`'s
+auto-relaunch comes back up cleanly on a real machine. Portable-target
+auto-update behavior (untested; NSIS-installed is the verified/intended path).
+
+Files: `overlay-host/package.json`, `overlay-host/lib/autoUpdater.js` (new),
+`overlay-host/main.js`, `overlay-host/README.md`.
+
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-27 01:38:45Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-27 — CoachBuild Overlay download section on /live-setup
+
+Added a "CoachBuild Overlay" download section to the Companion page, clearly separated from the existing PowerShell companion install UI.
+
+**New file:** `components/hextech/companion/OverlayDownload.tsx` — static (no `"use client"`) section: eyebrow label, one paragraph distinguishing it from the companion, a gold CTA link (`Download for Windows`, external-link glyph) to `https://github.com/haroutB5/coachbuild-overlay-releases/releases/latest` (intentionally the releases "latest" page, not a hardcoded `.exe` filename — that rots every release), and a 4-item fact list (SmartScreen/unsigned-installer warning, same-PC-as-League requirement, auto-update, Borderless/Windowed display-mode requirement). No version number shown anywhere (none was given, and CLAUDE.md's "no fabricated data" rule applies here same as everywhere else in this repo).
+
+**Wired into:** `app/live-setup/page.tsx` — imported and rendered as `<OverlayDownload />` right after `<AutomationToggles />` and before the collapsible Diagnostics `<details>`. Kept it above the fold, its own bordered `bg-panel`/`border-line` card matching `InstallCommands`/`AutomationToggles` exactly (same eyebrow typography, same button treatment as the existing Copy buttons, same bullet-with-teal-dot pattern used elsewhere on the page).
+
+**Did not touch:** `overlay-host/` (per instruction — that's a different engineer's active area), `CHANGELOG.md`, `package.json` version, any deploy.
+
+**Verification run:**
+- `npx tsc --noEmit` — clean, zero errors.
+- `npx vitest run` — 120 files / 1806 tests passing (matches the pre-existing baseline exactly, no regressions, no new tests added since this is a static presentational addition with no pure-function logic to unit test).
+- `npm run lint` — clean; the only warnings shown are pre-existing `@next/next/no-img-element` warnings in unrelated files (ChampionPicker, ChampionHero, IconWithFallback, ItemPath, SpellRow) — not touched by this change.
+- Ran `npx next dev -p 4571` and drove `/live-setup` via chrome-devtools MCP puppeteer:
+  - Full-page screenshot at 1280×1000 (desktop) — new section renders correctly between Automation and Diagnostics, matches hextech gold/navy language pixel-for-pixel with the surrounding cards.
+  - Full-page screenshot at 390×844 (mobile floor) — copy wraps cleanly, button doesn't overflow, no horizontal scroll. (The fixed `MobileTabBar` visually overlapping mid-page content in the full-page screenshot is a pre-existing artifact of capturing a `position:fixed` element in a stitched full-page capture — not something this change introduced or touched; Companion isn't a mobile-nav destination by design per CLAUDE.md.)
+  - `evaluate_script` confirmed the download link's resolved attributes: `href` = the exact releases/latest URL, `target="_blank"`, `rel="noopener noreferrer"`.
+
+**Not verified:** did not test actual click-through to GitHub (repo/release may not be published yet per the task brief — "first release is being published shortly") and did not test with a screen reader / keyboard-only nav beyond confirming it's a real `<a>` (not a div) with visible focus-ring classes matching every other interactive control on this page.
+
+

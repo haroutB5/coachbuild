@@ -22,7 +22,11 @@
 
 import type { ReactNode } from "react";
 
-const OVERLAY_RELEASES_URL = "https://github.com/haroutB5/coachbuild-overlay-releases/releases/latest";
+/** Starts the download immediately rather than opening GitHub's releases page.
+ *  The route resolves whichever installer is current and 302s to it — a direct
+ *  link cannot be used because the asset filename carries the version and would
+ *  404 on the next release. See app/api/download/overlay/route.ts. */
+const OVERLAY_DOWNLOAD_URL = "/api/download/overlay";
 
 const FACTS: { key: string; body: ReactNode }[] = [
   {
@@ -76,14 +80,15 @@ export default function OverlayDownload() {
         </p>
       </div>
 
+      {/* No `target="_blank"`: this navigates to a redirect that returns a
+          file, so a new tab would open, download, and sit there empty. Same
+          reason there is no "opens in new tab" arrow glyph any more — it would
+          now be describing behaviour that does not happen. */}
       <a
-        href={OVERLAY_RELEASES_URL}
-        target="_blank"
-        rel="noopener noreferrer"
+        href={OVERLAY_DOWNLOAD_URL}
         className="inline-flex items-center gap-2 text-[12px] font-bold uppercase tracking-[0.06em] text-bg bg-teal hover:bg-teal-hover rounded-lg px-4 py-2.5 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
       >
         Download for Windows
-        <span aria-hidden="true">&#8599;</span>
       </a>
 
       <ul className="space-y-2 text-[11px] text-mut leading-relaxed">
