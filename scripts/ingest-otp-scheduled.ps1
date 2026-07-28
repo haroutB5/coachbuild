@@ -10,10 +10,21 @@
 # Vercel (Riot match-v5) stays on /api/ingest/otp, and discovery runs from this
 # box, where op.gg is confirmed reachable.
 #
-# Scheduled cadence: every 6 hours, 6 champions per run (~170 champions, so a
-# full sweep takes ~1 week and then rolls continuously). Deliberately unhurried
-# — the pass is bound by lib/pro/pacer.ts's 1.3s Riot floor, which is SHARED
-# with the pro-account sweep and My Stats.
+# Scheduled cadence: every 6 hours, 30 champions per run.
+#
+# MEASURED, not guessed (2026-07-28): a 6-champion run took 22m42s wall clock,
+# i.e. ~3.8 min/champion, bound by lib/pro/pacer.ts's 1.3s Riot floor. So:
+#   6/run  = 24 champions/day  -> ~7 days for the ~170-champion roster
+#   30/run = 120 champions/day -> full coverage in ~1.5 days, then a rolling
+#            re-freshness cycle of ~1.5 days (the walk is stalest-first, so once
+#            every champion has a cursor row it naturally re-walks oldest-first)
+#
+# 30 is the ceiling the CONTENTION WINDOW allows, and that is what caps it, not
+# ambition: 30 x 3.8 min = ~114 min, against a 3h gap to the neighbouring
+# CoachBuildMatchIngest slot. Do not raise this past ~40 (152 min) without
+# re-checking that gap — two concurrent Riot-calling jobs double the request
+# rate against one key budget, and exceeding the cap SUSPENDS the key for every
+# surface in the app (CLAUDE.md gotcha (d)).
 #
 # DO NOT schedule this to overlap CoachBuildMatchIngest. The pacer only
 # serialises calls WITHIN one process, so two concurrent Riot-calling jobs
@@ -55,7 +66,7 @@ Set-Location $repo
 $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 Add-Content $log "[$stamp] otp ingest starting" -Encoding utf8
 
-& npx tsx scripts/ingest-otp.mjs --champions 6 2>&1 | Out-File -FilePath $log -Append -Encoding utf8
+& npx tsx scripts/ingest-otp.mjs --champions 30 2>&1 | Out-File -FilePath $log -Append -Encoding utf8
 $code = $LASTEXITCODE
 
 $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')

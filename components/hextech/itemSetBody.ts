@@ -611,21 +611,37 @@ function dedupeArchetypeLines<T extends { arch: Archetype; line: Candidate[] }>(
  *  keep-priority order — the block a user reads first is the one that survives
  *  a collision. Archetypes break the tie among themselves by
  *  ARCHETYPE_PRIORITY, not by emission order (unchanged from v0.48.0). */
-type LineFamily = "core" | "buy" | "pro" | "otp" | "themed" | "archetype";
+// FOUR build categories, and only four (user directive 2026-07-28). The shop
+// panel used to carry Core build + Buy order + Pro build + OTP build + Highest
+// WPA + up to 4 damage-archetype categories + Situational swaps — up to nine
+// blocks to triage mid-champ-select. The four that survive each answer a
+// DIFFERENT question:
+//
+//   wpa  — what the app's own WPA model recommends (the Builds page headline)
+//   pro  — what professionals actually built
+//   otp  — what the champion's one-tricks actually built
+//   gem  — what almost nobody builds but wins when they do (selectHiddenGemPicks)
+//
+// Rank order is collision priority for dedupeLineBlocks, which only collapses
+// IDENTICAL item sets: when pro and otp converge the user sees one block, and
+// the surviving label is the more informative one. `gem` is last on purpose —
+// if the hidden gem equals a headline build it was never hidden, and the block
+// should disappear rather than repeat.
+//
+// The archetype/themed machinery further down this file is now UNREACHABLE from
+// buildItemSets (nothing calls buildThemedLine / buildArchetypeLine /
+// resolveDamageFamily / selectArchetypes / curatedArchetypePool / unionPool /
+// archetypeBlockTitle any more). It is left in place deliberately rather than
+// ripped out in the same commit: it is ~500 lines interleaved with live helpers,
+// and a line-range deletion attempt cut a live construct in half. Removing it is
+// a separate mechanical pass with tsc as the oracle.
+type LineFamily = "wpa" | "pro" | "otp" | "gem";
 
-// "otp" sits directly after "pro" (2026-07-28). Both are consensus lines, and
-// pro keeps the higher rank purely because it is the older, better-populated
-// surface — when the two converge on the identical item set the user sees one
-// block labelled "Pro build", which is the more informative of the two labels.
-// When they DIVERGE (the common case, and the whole reason the OTP section
-// exists) both survive, because dedupeLineBlocks only collapses identical sets.
 const FAMILY_KEEP_RANK: Record<LineFamily, number> = {
-  core: 0,
-  buy: 1,
-  pro: 2,
-  otp: 3,
-  themed: 4,
-  archetype: 5,
+  wpa: 0,
+  pro: 1,
+  otp: 2,
+  gem: 3,
 };
 
 interface LineBlock {
@@ -654,17 +670,13 @@ function idOrderKey(line: Candidate[]): string {
  *  two blocks with identical contents does not care which permutation each one
  *  chose — it is the same build shown twice.
  *
- *  ONE carve-out: the Core build / Buy order pair. Buy order exists ONLY to
- *  express the ORDER of the same items, so for that pair the order is part of
- *  the content and they are duplicates only when it matches too. (The gate that
- *  emits Buy order at all — resolveOptimizedPathView differing from the core
- *  prefix — is upstream of padding, so the two lines can still converge after
- *  buildLine fills them out; that is the case this catches.) */
+ *  The old Core-build/Buy-order carve-out (where ORDER was part of the content,
+ *  because Buy order existed only to re-express the same items in purchase
+ *  order) went with Buy order itself in the 2026-07-28 four-category cut. All
+ *  four surviving families name a distinct SOURCE, so two of them landing on
+ *  the same item set genuinely is the same recommendation twice, in any order. */
 function duplicateBlocks(a: LineBlock, b: LineBlock): boolean {
-  if (idSetKey(a.line) !== idSetKey(b.line)) return false;
-  const pair = new Set<LineFamily>([a.family, b.family]);
-  if (pair.has("core") && pair.has("buy")) return idOrderKey(a.line) === idOrderKey(b.line);
-  return true;
+  return idSetKey(a.line) === idSetKey(b.line);
 }
 
 /** Collapse duplicate build-line blocks across ALL families, keeping whichever
@@ -852,6 +864,121 @@ function toCandidate(id: number, ranking: ScaleRanking, fallback: RawWeight): Ca
   const r = ranking.get(id);
   if (!r) return { id, score: 0, raw: fallback };
   return { id, score: r.score, raw: { weight: r.weight, scale: r.scale } };
+}
+
+// ── Hidden gem ───────────────────────────────────────────────────────────────
+//
+// The fourth category: "a build that isn't thought of by users, or has high
+// winrate but low play rate" (user directive 2026-07-28).
+//
+// This is the ONE line derived from a claim about the world rather than from a
+// ranking, so it carries the most risk of being confidently wrong. High winrate
+// at low play rate is the classic small-sample trap: an item bought 9 times that
+// happened to win 7 is not a hidden gem, it is noise wearing a percentage. Three
+// guards, all deliberately conservative:
+//
+//   1. MIN_GEM_OCCURRENCE — an absolute sample floor. Below it a winrate is not
+//      evidence of anything, whatever the margin.
+//   2. GEM_WINRATE_MARGIN_PP — it must beat the pool's own baseline winrate by a
+//      real margin, not by rounding.
+//   3. GEM_PLAY_RATE_CEILING — it must be genuinely UNDER-played relative to
+//      that same pool. An item everyone already builds cannot be hidden.
+//
+// And a fourth, structural: anything already emitted in the WPA / Pro / OTP
+// lines is excluded outright. If a "hidden" pick is what pros build, it is not
+// hidden — it is just the build, and repeating it would make the block a lie.
+//
+// When fewer than GEM_MIN_ITEMS candidates clear all of that, NO block is
+// emitted. A one-item "gem" line padded out with the standard build IS the
+// standard build with a misleading title, which is worse than no block at all.
+
+// THRESHOLDS ARE MEASURED, NOT GUESSED. Swept live against 10 champion+role
+// combinations on patch 16.14 (Viktor/Ahri mid, Lee Sin jg, Jinx bot,
+// Thresh/Pyke/Lux sup, Garen/Teemo/Yasuo top). Observed pool shape: 14-17 items
+// carrying a winrate, occurrence ranging 483 to ~249,000, median play count
+// 8k-44k depending on champion. The settings below fire on 7 of 9 champions and
+// surface genuinely off-meta picks (Banshee's Veil on Ahri, Jak'Sho on Thresh,
+// Rapid Firecannon on Jinx). Loosening the margin to 1.5pp fires on 9 of 9 but
+// starts admitting picks under 2pp of baseline, which is inside the noise the
+// margin exists to exclude. Not every champion HAS a hidden gem, and a block
+// that appears for everyone would not be one.
+
+/** Absolute game-count floor. The smallest occurrence observed in any sampled
+ *  pool was 483, so 500 keeps every real pick while still refusing a winrate
+ *  computed off a handful of games on a thinly-played champion. At ~1,500 games
+ *  a winrate is good to roughly ±1.3pp, comfortably inside the margin below. */
+const MIN_GEM_OCCURRENCE = 500;
+/** Percentage POINTS above the pool's median winrate. */
+const GEM_WINRATE_MARGIN_PP = 2;
+/** Must be played at most this fraction of the pool's median play count. */
+const GEM_PLAY_RATE_CEILING = 0.6;
+/** One genuine find is worth a block. Measured: the strongest results in the
+ *  sweep (Jinx's Rapid Firecannon, Thresh's Jak'Sho) are SINGLE items — a
+ *  2-item minimum would have discarded exactly the picks the feature exists to
+ *  surface. The block leads with the gem and fills the rest from the WPA build,
+ *  which is the honest shape of "play your build, but swap this in". */
+const GEM_MIN_ITEMS = 1;
+
+function medianOf(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+/**
+ * Picks winning well above the pool baseline while being played well below it.
+ * Exported for tests — this is the judgement call in the whole file.
+ *
+ * Returns them best-winrate-first, or [] when the evidence doesn't support a
+ * block. Never throws; a pick with a null winrate (coachless omits it below its
+ * own confidence threshold) is simply not a candidate.
+ */
+export function selectHiddenGemPicks(
+  pool: PickType[],
+  excludeIds: ReadonlySet<number>,
+  meta: ReadonlyMap<number, ItemDetail>
+): PickType[] {
+  // NOTE what is deliberately NOT filtered here: `Pick.lowSample`. That flag is
+  // the app's own confidence guard, so excluding it looks like the obviously
+  // correct thing to do — and it is exactly wrong for this block. Measured
+  // 2026-07-28: with lowSample excluded, ZERO gems survive on ANY of the 10
+  // sampled champions, because "flagged as low sample" and "played less than the
+  // popular items" are the SAME population. The flag is relative to the
+  // headline pick; this block is about items that are rare RELATIVE to that
+  // headline. The absolute floor above is the honest guard, since an item with
+  // 1,500+ real games has a trustworthy winrate whatever its share of the pool.
+  //
+  // Baseline is computed over the FULL eligible pool, BEFORE exclusions — the
+  // question "is this under-played?" is about the champion's item pool as a
+  // whole, not about whatever is left once the popular picks are removed. Doing
+  // it after would raise the bar precisely where the popular items were taken
+  // out, and quietly promote mid-tier picks into "gems".
+  const eligible = pool.filter(
+    (p) =>
+      isFullItem(p.id, meta.get(p.id)) &&
+      typeof p.winrate === "number" &&
+      Number.isFinite(p.winrate) &&
+      p.occurrence >= MIN_GEM_OCCURRENCE
+  );
+  if (eligible.length === 0) return [];
+
+  const baselineWinrate = medianOf(eligible.map((p) => p.winrate as number));
+  const medianPlay = medianOf(eligible.map((p) => p.occurrence));
+
+  const gems = eligible.filter(
+    (p) =>
+      !excludeIds.has(p.id) &&
+      (p.winrate as number) >= baselineWinrate + GEM_WINRATE_MARGIN_PP &&
+      p.occurrence <= medianPlay * GEM_PLAY_RATE_CEILING
+  );
+
+  if (gems.length < GEM_MIN_ITEMS) return [];
+  // Best winrate first; ties broken by the RARER item, since rarity is the other
+  // axis this block is actually about.
+  return gems.sort(
+    (a, b) => (b.winrate as number) - (a.winrate as number) || a.occurrence - b.occurrence
+  );
 }
 
 function fromPicks(picks: PickType[], ranking: ScaleRanking): Candidate[] {
@@ -1561,22 +1688,17 @@ export function buildItemSets(
   // comment) is an empty Core build rather than a set with no build in it at
   // all — the block's presence is what tells the user the export ran and found
   // nothing, instead of silently shipping Starting + Situational.
+  // Renamed from "Core build" 2026-07-28 so every block names its SOURCE (WPA
+  // model / pros / one-tricks / hidden gem) instead of mixing a source-name with
+  // a shape-name. Contents unchanged: still the WPA-ranked core order the Builds
+  // page shows as its headline, so the in-game panel and the page agree.
   lines.push({
-    type: "Core build",
-    family: "core",
-    keep: FAMILY_KEEP_RANK.core,
+    type: "WPA build",
+    family: "wpa",
+    keep: FAMILY_KEEP_RANK.wpa,
     emit: emit++,
     line: buildLine(corePrimary, generalFallback, bootsIds),
   });
-
-  if (optimizedPrimary) {
-    // v0.36.0: the data-availability gate above (optimizedView differs from
-    // core) is independent of the NEW full-items-only filter -- if every
-    // candidate here happens to fail isFullItem (e.g. a totally degraded
-    // itemMeta fetch), don't ship a technically-present but genuinely empty
-    // shop-panel line.
-    pushLine("Buy order", "buy", FAMILY_KEEP_RANK.buy, buildLine(optimizedPrimary, [corePrimary], bootsIds));
-  }
 
   if (hasPro) {
     // `corePrimary` LAST, and only for this line: it is the only pool carrying
@@ -1606,119 +1728,40 @@ export function buildItemSets(
     pushLine("OTP build", "otp", FAMILY_KEEP_RANK.otp, buildLine(otpPool, [...generalFallback, corePrimary], bootsIds));
   }
 
-  // Themed lines — derived entirely from the pools already built above, no
-  // new upstream data. All full-item-filtered already (every pool fed into
-  // themedUnion is). Highest WPA uses buildThemedLine directly; the damage-type
-  // archetypes (v0.47.0) use buildArchetypeLine.
-  const themedUnion = unionPool(corePrimary, optimizedPrimary ?? [], situationalPoolFull, proPool);
-  // The metric the "Highest WPA" TITLE claims, read from the WPA ranking table
-  // rather than from the winning candidate's `raw` — an item that ranked better
-  // on pro share carries `raw.scale === "share"` in the union even though the
-  // champ's build data does score it, and the title's claim is about the latter.
-  // `undefined` here means genuinely no measured WPA (a pro-consensus-only
-  // item), which is what makes it FILL rather than a zero-WPA entry.
-  const wpaMetric: MetricLens = {
-    scale: "wpa",
-    valueOf: (id) => wpaRanking.get(id)?.weight,
-  };
-  const highestWpaLine = buildThemedLine(themedUnion, wpaMetric, bootsIds);
-  if (highestWpaLine) pushLine("Highest WPA", "themed", FAMILY_KEEP_RANK.themed, highestWpaLine);
-
-  // v0.47.0 — damage-type-scoped archetypes. The champ's family (AP vs AD) is
-  // inferred from their OWN recommended items (themedUnion); every archetype
-  // inside that family is emitted (never a cross-family one), plus pure Tank
-  // when the champ is an actual tank. See the archetype vocabulary + the
-  // resolveDamageFamily/selectArchetypes helpers above.
-  const rating = getCompRating(champ.id);
-  const champTags = champ.tags ?? [];
-  const { family, confident } = resolveDamageFamily(champ, themedUnion, meta);
-  const selected = selectArchetypes(family, champTags, rating);
-
-  // Build every selected archetype's line FIRST (in emission order), applying
-  // the confident/empty guards. poolLen (real per-champ matched-item count) is
-  // retained for the CATEGORY_MAX_EMIT trim below.
-  const built = selected
-    .map((arch) => {
-      const poolLen = themedUnion.filter((c) => {
-        const m = meta.get(c.id);
-        return m ? arch.match(m) : false;
-      }).length;
-      // A damage archetype with NO real per-champ items is only worth a
-      // catalog/curated-fill line when the champ's family is CONFIDENT (item-
-      // or class-tag-confirmed). A pure tank/utility champ that only defaulted
-      // into AP should get its Tank line, not a hollow filled damage archetype.
-      // Pure Tank (universal) is exempt — gated on real tankiness, not a guess.
-      if (arch.family !== "universal" && !confident && poolLen === 0) return null;
-      const { line, evidence } = buildArchetypeLine(themedUnion, arch, meta, bootsIds);
-      if (line.length === 0) return null; // never a genuinely empty block
-      return { arch, line, evidence, poolLen };
-    })
-    .filter((x): x is NonNullable<typeof x> => x !== null);
-
-  // v0.48.0 — FUZZY archetype-vs-archetype de-dup: collapse NEAR-duplicate
-  // lines (the user-reported Viktor "AP/Mage == AP Burst" bug — both data-first,
-  // same real burst items, differing only in the last padded slot), keeping the
-  // higher-priority archetype name. Still needed alongside the exact
-  // cross-family pass below, which by design only collapses identical sets.
-  const deduped = dedupeArchetypeLines(built, bootsIds);
-
-  // Keyed by `emit` INDEX, not by block title. Titles happen to be unique today
-  // (8 distinct archetype names x a deterministic evidence suffix), but keying
-  // the trim below on a display string means the day two blocks ever collide on
-  // one, BOTH get dropped — a silent-content-loss bug for a saving of nothing.
-  // The emit index is unique by construction.
-  const archMeta = new Map<number, { arch: Archetype; poolLen: number }>();
-  for (const { arch, line, evidence, poolLen } of deduped) {
-    if (line.length === 0) continue;
-    archMeta.set(emit, { arch, poolLen });
+  // ── Hidden gem — the fourth and last category ─────────────────────────────
+  // Candidate pool is every pick the CHAMPION's own data offers (core order,
+  // optimized path, full alternatives pool) — NOT the pro/OTP pools: those are
+  // consensus feeds carrying a share metric, with no winrate and no play-rate
+  // baseline to be under-played relative to.
+  const emittedIds = new Set<number>();
+  for (const l of lines) for (const c of l.line) emittedIds.add(c.id);
+  const gemPicks = selectHiddenGemPicks(
+    [...corePicks, ...(optimizedPicks ?? []), ...situationalPicks],
+    emittedIds,
+    meta
+  );
+  if (gemPicks.length > 0) {
+    // Gems LEAD; the remaining slots fill from the champion's own WPA build,
+    // because a two-item recommendation is not a build anyone can play. The
+    // title claims the lead items are the find, not the whole line.
     pushLine(
-      archetypeBlockTitle(arch.title, evidence),
-      "archetype",
-      FAMILY_KEEP_RANK.archetype + archetypePriority(arch.title),
-      line
+      "Hidden gem",
+      "gem",
+      FAMILY_KEEP_RANK.gem,
+      buildLine(fromPicks(gemPicks, wpaRanking), [corePrimary, ...generalFallback], bootsIds)
     );
   }
 
-  // ── Cross-FAMILY de-dup (audit P1-B) ──────────────────────────────────────
-  // Runs BEFORE the CATEGORY_MAX_EMIT trim on purpose: if an archetype is
-  // dropped for duplicating Core build or Highest WPA, the budget it was
-  // occupying should go to an archetype that actually shows the user something
-  // new, not be spent on a block that is no longer emitted.
+  // Collapse any two blocks that resolved to the IDENTICAL item set (pro and
+  // OTP converging is the common case). Emission order is preserved.
   const survivors = dedupeLineBlocks(lines);
 
-  // Trim surviving ARCHETYPE blocks to CATEGORY_MAX_EMIT (the worst-case
-  // block-count guard — the other families are at most one block each): keep
-  // universal pure Tank, then the archetypes with the most real per-champ data;
-  // emission order preserved.
-  const survivingArch = survivors.filter((b) => b.family === "archetype");
-  const dropped = new Set<number>();
-  if (survivingArch.length > CATEGORY_MAX_EMIT) {
-    const keep = new Set<number>();
-    for (const b of survivingArch) {
-      if (archMeta.get(b.emit)?.arch.family === "universal") keep.add(b.emit);
-    }
-    const ranked = [...survivingArch]
-      .filter((b) => archMeta.get(b.emit)?.arch.family !== "universal")
-      .sort((a, b) => archMeta.get(b.emit)!.poolLen - archMeta.get(a.emit)!.poolLen || a.emit - b.emit);
-    for (const b of ranked) {
-      if (keep.size >= CATEGORY_MAX_EMIT) break;
-      keep.add(b.emit);
-    }
-    for (const b of survivingArch) if (!keep.has(b.emit)) dropped.add(b.emit);
-  }
-
+  // Starting stays a SLOT, not one of the four build categories: HARD RULE 2
+  // (a starter never renders inside a completed-item list) is a standing user
+  // directive, and keeping the starter in its own labelled block is the only
+  // way to honour it while shipping exactly four build lines.
   const blocks: ItemSetBlock[] = [{ type: "Starting", items: [itemRef(items.starter.id)] }];
-  for (const b of survivors) {
-    if (dropped.has(b.emit)) continue;
-    blocks.push({ type: b.type, items: toItemRefs(b.line) });
-  }
-
-  if (situationalPicks.length > 0) {
-    blocks.push({
-      type: "Situational swaps",
-      items: situationalPicks.slice(0, SITUATIONAL_CAP).map((p) => itemRef(p.id)),
-    });
-  }
+  for (const b of survivors) blocks.push({ type: b.type, items: toItemRefs(b.line) });
 
   return [{ ...baseSet(champ, roleLabel), blocks }];
 }

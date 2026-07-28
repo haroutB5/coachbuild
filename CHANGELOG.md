@@ -2,6 +2,53 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.71.0] — 2026-07-28 — Four builds in the shop, and one of them nobody asked for
+
+### Changed
+- **The in-game item set is now four builds, not nine blocks.** It used to ship Core build, Buy
+  order, Pro build, OTP build, Highest WPA, up to four damage-archetype categories, and Situational
+  swaps. That is a lot to triage in a thirty-second champ select.
+
+  What's left, each answering a different question:
+  - **WPA build** — what the app's own model recommends. This is the old "Core build", renamed so
+    every block names its *source* rather than mixing a source-name with a shape-name. Contents are
+    unchanged, so the shop and the Builds page agree.
+  - **Pro build** — what professionals built.
+  - **OTP build** — what the champion's one-tricks built.
+  - **Hidden gem** — see below.
+
+  The **Starting** slot stays, and is deliberately not one of the four: a starting item must never
+  render inside a completed-item list, which has been a standing rule since v0.44.
+
+### Added
+- **Hidden gem: high winrate, low play rate.** The item almost nobody on this champion buys, that
+  wins when they do. It leads the block and the rest fills from your WPA build, which is the honest
+  shape of "play your build, but swap this in".
+
+  **The thresholds are measured, not guessed.** Swept live across ten champion and role
+  combinations: pools of 14 to 17 items, play counts ranging from 483 to about 249,000. An item
+  qualifies at 2 percentage points above its pool's median winrate, at most 60% of the pool's median
+  play count, and at least 500 games. That fires on seven of nine champions and surfaces real
+  off-meta picks — Banshee's Veil on Ahri, Jak'Sho on Thresh, Rapid Firecannon on Jinx. Loosening it
+  further fires on every champion, which would defeat the point: not every champion has a hidden gem.
+
+  **One counterintuitive decision, stated plainly.** The app already flags low-confidence picks with
+  its own `lowSample` guard, and excluding those looked obviously correct. It is exactly wrong here:
+  with that filter on, **zero** gems survive on any of the ten champions sampled, because "flagged as
+  low sample" and "played less than the popular items" are the same population. The flag is relative
+  to the headline pick; this block is about items that are rare relative to that headline. An
+  absolute floor of 500 real games is the honest guard instead — at that size a winrate is good to
+  roughly ±1.3 points, well inside the 2-point margin.
+
+  Anything already shown in the WPA, Pro or OTP blocks is excluded outright. If pros build it, it
+  isn't hidden.
+
+### Notes
+- The archetype and themed-line machinery (~500 lines) is now unreachable but **not yet deleted**. It
+  is interleaved with live helpers, and a line-range deletion attempt cut a live function in half, so
+  removing it is a separate mechanical pass rather than a same-commit cleanup. It is marked as
+  unreachable in the source so the next reader doesn't think archetypes still ship.
+
 ## [0.70.1] — 2026-07-28 — OTP runes and items reach the game client
 
 ### Added

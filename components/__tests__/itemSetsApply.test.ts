@@ -225,7 +225,7 @@ describe("applyItemSetsForBuild", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("builds ONE set (Core build + Highest WPA, pro fetch empty) and POSTs to the bridge", async () => {
+  it("builds ONE set (WPA build, pro fetch empty) and POSTs to the bridge", async () => {
     let capturedBridgeBody: string | undefined;
     vi.stubGlobal(
       "fetch",
@@ -273,14 +273,13 @@ describe("applyItemSetsForBuild", () => {
     // (cross-family exclusion). Confirms real ItemDetail tags threaded through
     // applyItemSetsForBuild drive family-scoped archetype emission + de-dup
     // end to end.
-    // AUDIT P1-B: "Highest WPA" is gone from this list. It carried the exact
-    // same ids as Core build (this fixture's whole pool IS the core build), and
-    // the cross-family de-dup now collapses identical builds regardless of which
-    // block family they came from.
+    // 2026-07-28 four-category cut: the shop now carries the Starting slot plus
+    // at most four SOURCE-named build blocks (WPA / Pro / OTP / Hidden gem).
+    // "Highest WPA" and the damage-archetype categories are gone entirely; with
+    // no pro data, no OTP data and no qualifying gem, only the WPA build remains.
     expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).toEqual([
       "Starting",
-      "Core build",
-      "Crit/Marksman (low data)",
+      "WPA build",
     ]);
     // v0.35.0: champ-scoped (not role-scoped) stale-removal prefix, so a
     // later lane flip's export cleans up THIS lane's set too.
@@ -367,9 +366,9 @@ describe("applyItemSetsForBuild", () => {
       session: "sess-1",
     });
     const parsed = JSON.parse(capturedBridgeBody!);
-    const core = parsed.sets[0].blocks.find((b: { type: string }) => b.type === "Core build");
+    const core = parsed.sets[0].blocks.find((b: { type: string }) => b.type === "WPA build");
     expect(core.items).toEqual([]); // every id unknown -- excluded, never an unfiltered/invented item
-    expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).not.toContain("Highest WPA"); // pool size 0
+    expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).not.toContain("Hidden gem"); // nothing qualifies
   });
 });
 
