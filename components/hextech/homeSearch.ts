@@ -32,11 +32,14 @@ import type { ProGameSource } from "@/components/proGames.types";
 import type { LaneId } from "./heroContracts";
 import type { HextechTab } from "./HextechTabs";
 
-/** The home page's main content area is champion-only now (see this file's
- *  header) — kept as a named type (rather than inlining into WireMainView)
- *  since it's the natural extension point if a second view kind ever comes
- *  back. */
-export type MainView = { kind: "champion"; champ: ChampionRef; lane: LaneId };
+/** The home page's main content area — a real champion selection, or the
+ *  "prompt" hub (Your Lanes / Recently Viewed / Trending This Patch) shown
+ *  before one exists. `kind: "prompt"` added in v0.69.1 to fix a back-nav
+ *  bug: the base history entry for "/" must always represent the hub (see
+ *  wireViewForPrompt) so back navigation from a champion has somewhere real
+ *  to land, instead of walking through champion entries and bottoming out on
+ *  whatever the mount-time seed happened to be. */
+export type MainView = { kind: "champion"; champ: ChampionRef; lane: LaneId } | { kind: "prompt" };
 
 /** Tapping a lane row in the sidebar always lands on that lane's champion —
  *  laneChampions/activeLane are separate page-level state, untouched by this
@@ -91,23 +94,26 @@ export interface WireMainView {
 }
 
 /** Fields app/page.tsx's restore needs to setState from a landed-on history
- *  entry. */
+ *  entry. `kind` (v0.69.1) is what lets restoreMainView tell a real champion
+ *  selection apart from the hub — see champChosenAfterRestore below. */
 export interface HomeRestoreState {
   searchMode: "champions";
   tab: HextechTab;
   gamesSource: ProGameSource;
+  kind: MainView["kind"];
   activeLane?: LaneId;
   champ?: ChampionRef;
 }
 
 export function applyWireMainView(wire: WireMainView): HomeRestoreState {
-  return {
-    searchMode: "champions",
+  const base = {
+    searchMode: "champions" as const,
     tab: wire.tab,
     gamesSource: wire.source,
-    activeLane: wire.view.lane,
-    champ: wire.view.champ,
+    kind: wire.view.kind,
   };
+  if (wire.view.kind === "prompt") return base;
+  return { ...base, activeLane: wire.view.lane, champ: wire.view.champ };
 }
 
 /** Builds the wire shape to push/replace for a champion-view change (lane
@@ -119,4 +125,28 @@ export function wireViewForChampion(
   source: ProGameSource
 ): WireMainView {
   return { view: { kind: "champion", champ, lane }, tab, source };
+}
+
+/** Builds the wire shape for the hub / pick-prompt view (v0.69.1). This is
+ *  what app/page.tsx's useSheetBackNav now seeds unconditionally on mount —
+ *  the base "/" history entry must always be the hub, never a champion
+ *  (previously seedInitialSelection always claimed a champion selection —
+ *  the mount-time `champ` state, which is Viktor before hydration resolves —
+ *  so there was never a history entry representing the hub, and back always
+ *  bottomed out on Viktor instead of exiting through it). A restored last
+ *  champion is pushed ON TOP of this seed, not seeded in its place, so the
+ *  stack is [hub, champion] rather than [champion]. */
+export function wireViewForPrompt(tab: HextechTab, source: ProGameSource): WireMainView {
+  return { view: { kind: "prompt" }, tab, source };
+}
+
+/** Whether landing on a restored entry (mount-resume or popstate) should show
+ *  a real champion build or send the page back to the pick prompt. Extracted
+ *  as its own pure function (v0.69.1) specifically so the "back from a
+ *  champion lands on the prompt view" regression is pinned by a real test —
+ *  app/page.tsx has no JSX rendering harness (see CLAUDE.md's Test
+ *  conventions), so this is the testable seam for that decision; app/page.tsx
+ *  itself only does the imperative setChampChosen(champChosenAfterRestore(...)). */
+export function champChosenAfterRestore(kind: MainView["kind"]): boolean {
+  return kind === "champion";
 }

@@ -5,6 +5,8 @@ import {
   defaultSourceForKind,
   applyWireMainView,
   wireViewForChampion,
+  wireViewForPrompt,
+  champChosenAfterRestore,
 } from "../hextech/homeSearch";
 import type { ChampionRef } from "@/lib/types";
 
@@ -85,12 +87,13 @@ describe("wireViewForChampion", () => {
 });
 
 describe("applyWireMainView", () => {
-  it("maps a champion-kind wire to activeLane/champ/gamesSource", () => {
+  it("maps a champion-kind wire to activeLane/champ/gamesSource, tagged kind: champion", () => {
     const applied = applyWireMainView(wireViewForChampion(DARIUS, "top", "proBuilds", "soloq"));
     expect(applied).toEqual({
       searchMode: "champions",
       tab: "proBuilds",
       gamesSource: "soloq",
+      kind: "champion",
       activeLane: "top",
       champ: DARIUS,
     });
@@ -103,6 +106,7 @@ describe("applyWireMainView", () => {
       searchMode: "champions",
       tab: "proBuilds",
       gamesSource: "prostage",
+      kind: "champion",
       activeLane: "mid",
       champ: VIKTOR,
     });
@@ -110,8 +114,53 @@ describe("applyWireMainView", () => {
       searchMode: "champions",
       tab: "proBuilds",
       gamesSource: "soloq",
+      kind: "champion",
       activeLane: "mid",
       champ: VIKTOR,
     });
+  });
+
+  // v0.69.1 regression: the hub / pick-prompt is now a real MainView kind, and
+  // the base "/" history entry always seeds as one (wireViewForPrompt) so
+  // there is somewhere real for back() to land instead of bottoming out on
+  // whatever champion happened to be in state at mount (the reported bug —
+  // "Build page goes back to viktor instead of what you built").
+  it("maps a prompt-kind wire with no activeLane/champ keys at all", () => {
+    const applied = applyWireMainView(wireViewForPrompt("build", "all"));
+    expect(applied).toEqual({
+      searchMode: "champions",
+      tab: "build",
+      gamesSource: "all",
+      kind: "prompt",
+    });
+    expect(applied).not.toHaveProperty("activeLane");
+    expect(applied).not.toHaveProperty("champ");
+  });
+});
+
+describe("wireViewForPrompt", () => {
+  it("wraps the hub view with the given tab and source", () => {
+    expect(wireViewForPrompt("build", "prostage")).toEqual({
+      view: { kind: "prompt" },
+      tab: "build",
+      source: "prostage",
+    });
+  });
+});
+
+// v0.69.1 regression pin: "back from a champion lands on the prompt view."
+// app/page.tsx's restoreMainView has no JSX rendering harness to exercise
+// directly (see CLAUDE.md's Test conventions), so champChosenAfterRestore is
+// the extracted pure decision it delegates to — this test pins the exact
+// contract restoreMainView relies on: landing on a champion entry means a
+// real selection (show the build), landing on the seeded hub entry means no
+// selection (show the pick prompt).
+describe("champChosenAfterRestore", () => {
+  it("is true for a champion-kind entry", () => {
+    expect(champChosenAfterRestore("champion")).toBe(true);
+  });
+
+  it("is false for the prompt/hub entry — this is what makes back() from a champion land on the hub, not a champion", () => {
+    expect(champChosenAfterRestore("prompt")).toBe(false);
   });
 });

@@ -4749,3 +4749,224 @@ including a case where they **disagree**; malformed-priority fallback; by-name p
   changing it would move the card's headline string for one champion. Worth a decision, not a bug.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-27 23:55
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-27 16:25:59Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-27 -- /mystats "games played vs games shown" bug -- FIXED (engo)
+
+User report: Matchup History row header and its own expanded detail
+disagreed (Galio MID header "3g · 3W-0L · 100.0%" vs expanded list summing to
+5g/3W-2L/60%). Root cause (pre-diagnosed, confirmed while implementing):
+`/api/mystats/matchups` only ever filtered by `championId`, never by `role`,
+even though the row list groups by (championId, role). Plus a second,
+same-root-cause bug: `expandedId` in `app/mystats/page.tsx` was a bare
+championId, so a champion played in 2+ lanes (e.g. Viktor Mid/Top/Bot in the
+report's own account) shared one React key and one `aria-controls`/`id`
+pair -- clicking one row expanded every row for that champion.
+
+**Files changed:**
+- `app/api/mystats/matchups/route.ts` -- added optional `role` param, same
+  `parseIntParam` convention as the sibling summary route (absent ->
+  undefined/no filter, invalid -> 400, valid incl. `-1` -> filtered). Two SQL
+  branches (`WHERE champion_id = X AND role = Y` vs `WHERE champion_id = X`)
+  rather than summary route's COALESCE trick -- more directly testable
+  against a mocked `sql` tag, still validates identically. Response now
+  echoes `role: number | null` (null = champion-wide, matching "no role
+  param" vs "role=-1" being genuinely different requests per the brief).
+  Backward compatible: omitting `role` still returns champion-wide matchups.
+- `components/hextech/myStats.ts` -- `MyStatsMatchups.role: number | null`
+  added to the wire contract; `normalizeMyStatsMatchups` parses it (defaults
+  to `null` on absent/non-numeric, never coerced). `fetchMyStatsMatchups`
+  signature changed: `(championId, role?, deps?)` -- role omitted still hits
+  the old URL shape exactly, role given (incl. `-1`) appends `&role=<n>`.
+- `app/mystats/page.tsx` -- `expandedId: number | null` replaced with
+  `expanded: {championId, role} | null`; `toggleRow` now takes both; the
+  detail fetch effect passes `expanded.role` into `fetchMyStatsMatchups`;
+  React `key`/`detailId`/`aria-controls` all keyed on
+  `${championId}-${role}`, and the per-row expanded boolean was renamed to
+  `isRowExpanded` to avoid shadowing the (now-object) `expanded` state var
+  (every reference to the old bare-boolean `expanded` inside the row JSX --
+  chevron rotate, `hidden`, the 4 status branches -- updated to
+  `isRowExpanded`).
+- `lib/__tests__/mystats-routes.test.ts` -- added a 400-on-invalid-role test
+  and the acceptance-criterion invariant test: a Galio-Mid-vs-Top fixture (3
+  Mid games w/ 3 distinct opponents, 2 Top games w/ 2 different opponents)
+  asserts the Mid-scoped response sums to exactly 3 games (not 5), the
+  Top-scoped response is disjoint (sums to 2, different opponent ids), and
+  the no-role request still returns the champion-wide total (5) for backward
+  compat. Mock `sql` reimplements the route's WHERE-clause semantics by
+  reading the tagged-template's interpolated values -- necessary because the
+  DB layer is mocked, so "does SQL actually filter by role" can only be
+  proven by making the mock enforce the same contract the real query text
+  encodes; kept intentionally simple (2 positional values) so it stays
+  coupled to the route's actual param order, not a guess.
+- `components/__tests__/myStats.test.ts` -- updated
+  `fetchMyStatsMatchups`/`normalizeMyStatsMatchups` tests for the new
+  signature/field (role omitted, role given incl. `-1`, role
+  absent/invalid-in-payload -> null).
+
+**Gates (from repo root):** `npx tsc --noEmit` clean. `npx vitest run` --
+124 files, **1919 passed, 0 failed** (was 1915+ required; added 5 net new
+tests: 1 route-level 400, 1 invariant test, 1 normalizer role test, 1
+fetchMyStatsMatchups role-URL test -- one earlier assertion inside the
+invariant test needed a fix, see below). `npm run lint` clean (only
+pre-existing `<img>` warnings in files I didn't touch: ChampionPicker,
+ChampionHero, IconWithFallback, ItemPath, SpellRow).
+
+**One thing worth flagging, not a bug in the shipped code:** while writing
+the invariant test I initially used `mockGetMyAccount.mockResolvedValueOnce`
+for a test that drives the route 3 times (Mid/Top/wide) -- the 2nd and 3rd
+calls silently got `accountUnresolved: true` (empty matchups) because
+`-Once` only queues one resolution. Caught by the test itself failing
+(`expected 2, got 0`), fixed with `mockResolvedValue`. Flagging in case this
+pattern recurs elsewhere in the suite -- a test that calls a route handler
+more than once needs to check whether its account-resolution mock is
+`-Once` or persistent.
+
+**Not verified (no browser/puppeteer run this round):** did not visually
+confirm on `/mystats` in a live browser -- backend contract + component unit
+tests are green and cover the exact reported discrepancy numerically, but
+I did not drive the actual page. If a screenshot/puppeteer pass is wanted,
+that's outstanding.
+
+**Did NOT touch:** `app/page.tsx`, `app/history/page.tsx`, Builds/ProPlayers
+empty-state components, `overlay-host/`, `components/hextech/skillOrder*.ts*`,
+`components/hextech/mystats/ChampionPoolCard.tsx`, or
+`app/api/mystats/summary/route.ts` (read it for the `parseIntParam`
+convention, but the file itself is unchanged). No version bump, no commit,
+no deploy, dev server not run -- per the brief.
+
+-- engo
+
+
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-27 20:22:26Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-27 round — overlay-host tray redesign + 8 audited lifecycle fixes
+
+Scope: `overlay-host/` only (per brief). Did NOT touch `app/`, `components/`, `lib/`, or `public/companion.ps1`. Did NOT bump version, commit, publish, or deploy — overlay stays at v0.4.1 in package.json.
+
+### Gates run (from repo root, this round)
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — **1919 passed, 0 failed** (up from the 1908+ floor; no test files changed, this is just current head).
+- `npm run lint` — clean (only pre-existing `<img>`/next-image warnings, unrelated to this round).
+- `node --check` on every JS file touched: `main.js`, `lib/autoUpdater.js`, `scripts/generate-tray-icon.js` (CommonJS) + `node --input-type=module --check` on `renderer/ingame.js` (ESM, loaded via `<script type="module">`) — all clean.
+- Every new CSS class (`.cb-highlight--derived`) exists in `renderer/ingame.css`; no new element ids were queried (B7 reuses the existing `#cb-highlight` element already in `els`).
+
+### Two diagnosis corrections (stated per the brief's instruction to flag disagreements)
+1. **Icon path.** The brief said `build/icon.ico`. There is no `build/` directory in `overlay-host/`. The real app icon is `assets/icon.ico` — confirmed against `package.json`'s `build.win.icon` and `scripts/apply-exe-resources.js`'s `ICON_PATH`, both of which point there. Backed up and regenerated `assets/icon.ico`, not a nonexistent `build/icon.ico`.
+2. **Accent color.** The brief said "the app's accent colour is teal (see `renderer/ingame.css`)." Checked directly: `ingame.css` has no teal token at all — it's a gold/navy "hextech" palette (`--cb-gold: #c8aa6e`, `--cb-bg: #0a0d0b`). The main Next app's `tailwind.config.ts` keeps a color **key** literally named `teal` only so old `bg-teal`/`text-teal` call sites keep resolving; its own comment says the value is "League Hextech gold (was cyan, then lavender-era teal)" — i.e. there is no live teal hue anywhere in this codebase anymore, just a stale class name. The new icon uses the two real current tokens (gold + navy) instead.
+
+### A1 — tray menu redesign
+`main.js`'s `buildTrayMenuTemplate()` rewritten. New top-level shape (8 entries + 4 separators):
+```
+CoachBuild Overlay v0.4.1        (disabled)
+Companion: <status>              (disabled, ONE line — was two)
+─────────
+Hide overlay / Show overlay
+Adjust overlay position          (transient "Adjusting… (Enter to save, Esc to cancel)" label unchanged)
+─────────
+Settings        ▸  Interactive mode · Show skill table · Lane override ▸ (unchanged: Auto + 5 lanes) ·
+                    Calibrate ability bar (fallback)… · Start with Windows (elevated, fixes in-game hotkeys)
+Updates         ▸  <status line> · Check for updates now
+Troubleshooting ▸  Open log file · [poll-stall row, only while stalled] · per-hotkey bind-status rows · elevation guess row
+─────────
+Quit CoachBuild Overlay
+```
+Every capability from the old 23-item flat list is preserved — nothing became unreachable, this is a regroup not a cull. "Run elevated at login" was relabeled "Start with Windows (elevated, fixes in-game hotkeys)" per the brief's suggested shape, keeping the original parenthetical so the "why" isn't lost. The two companion rows (`buildCompanionStatusLabel` + `buildCompanionPollHealthLabel`) collapsed to one at top level exactly as instructed; the stall-detail row moved into Troubleshooting.
+
+### A2 — tray icon + app icon
+New generator: `overlay-host/scripts/generate-tray-icon.js` (CommonJS, run via `node scripts/generate-tray-icon.js`). Reuses `sharp` + `png-to-ico` from `C:/Claude/AI/urgot/.smoke-tools/node_modules` rather than installing new deps into overlay-host (png-to-ico v3 is pure ESM and its default export only takes file paths + a fixed size set, so the script reaches its named `imagesToIco` export via dynamic `import()` and feeds it raw RGBA frames from sharp instead).
+
+Design: a navy disc (own contrast on a light taskbar) + a slim gold ring (own contrast on a dark taskbar, since a plain navy disc nearly disappears on Windows' near-black dark taskbar) + a bold navy upward chevron cut across the gold field (evokes "next/level up" — literally what the ability-highlight-box feature does). No text, no fine detail.
+
+Backed up before overwriting: `assets/tray-icon.png.bak`, `assets/icon.ico.bak` (both untracked, not committed — delete them once you're happy with the new icon, or restore from them to revert). Wrote:
+- `assets/tray-icon.png` — 16x16 (primary tray size).
+- `assets/tray-icon@2x.png` — 32x32 (Electron's nativeImage auto-picks this up next to the base path for HiDPI; no main.js change needed).
+- `assets/icon.ico` — verified by parsing the ICO header directly (not assumed): 5 entries, exactly 16/24/32/48/256, all 32bpp, byte offsets/sizes internally consistent with the 287,934-byte file.
+
+Visually verified at 16px (nearest-neighbor-magnified renders, not smoothed, so the actual pixel grid was inspected): legible as a bold gold coin with a dark ring and chevron. Composited onto simulated light (`#f3f3f3`) and dark (`#202020`) taskbar strips at true 16px scale (then magnified for viewing) — reads clearly on both; images were generated into the scratch temp dir for inspection, not committed anywhere.
+
+Added `"!assets/*.bak"` to `package.json`'s `build.files` so the backup files don't get bundled into a packaged build (the existing `assets/**/*` glob would otherwise have shipped them).
+
+### B1 (P1) — companion supervisor blind in already-running state — FIXED
+`main.js`, the child `exit` handler: the mutex-race branch (`ranMs < COMPANION_MUTEX_RACE_EXIT_MS`) used to inherit an unconditional `stopCompanionStatusPolling()` that ran before the branch was even checked, then returned without ever restarting it. Now calls `startCompanionStatusPolling()` in that branch instead (idempotent — clears any existing timer first) so `/status` polling of the real already-running companion continues. Did NOT change the "never auto-retry the spawn in this case" behavior — that part of the original diagnosis was correct.
+
+### B2 (P1) — champ-select guard — FIXED
+Added `isCompanionBusy()` (`inGame || companionStatus.phase === 'ChampSelect'`) as the one shared source of truth, plus `companionBusyReason()` for logging. `attemptCompanionRestart()` now checks `isCompanionBusy()` instead of bare `inGame`. `lib/autoUpdater.js`'s callback renamed `getInGame` → `getIsBusy` throughout (definition, `init()` destructure, `maybeInstallIfIdle()`); `main.js`'s `autoUpdaterModule.init()` call now passes `getIsBusy: () => isCompanionBusy()`. Confirmed `companionStatus.phase` still carries the RAW gameflow value everywhere (B6 below only adds a presentation-layer label map, never touches the stored field) — this check depends on that staying true.
+
+### B3 (P1) — display-metrics-changed desync — FIXED
+Added the missing `pushCalibration()` call after `applyCalibrationForCurrentDisplay()` + `pushState()` in the `screen.on('display-metrics-changed', ...)` handler's non-adjusting branch — this was the third of three documented breaks of "the renderer reads calibration geometry only off the dedicated IPC channel, never off `state.calibration`."
+
+### B4 (P2) — restart backoff never escalates — FIXED
+Removed the `companionRestartAttempts = 0` line at the end of `spawnCompanion()` (it ran on every spawn, including the spawn that was itself a backed-off restart attempt, undoing the increment every time). The reset already present in `pollCompanionStatusOnce()` on a real successful status poll is the correct signal and was left as-is.
+
+### B5 (P2) — second launch wipes the running instance's log — FIXED
+Moved `initLogFile()` from before the `app.requestSingleInstanceLock()` check to inside the `else` branch (only runs once the lock is actually held). The losing branch now logs to console only, not the file, so it can never truncate the real running instance's log out from under its open write stream.
+
+### B6 (P2) — raw LCU phase read as companion health — FIXED
+Added `GAMEFLOW_PHASE_LABELS` (presentation-only map: `None` → "idle (client open, no lobby)", `ChampSelect` → "champ select", `InProgress` → "in game", etc.) consulted only inside `buildCompanionStatusLabel()`'s `default` branch. `companionStatus.phase` itself is never rewritten — confirmed this doesn't collide with B2's `isCompanionBusy()` check, which reads the same field and needs the raw value.
+
+### B7 (P2) — highlight box has no derived-level provenance — FIXED
+`renderer/ingame.js`'s `renderHighlight()`: added `rec.atLevel - 1 >= observedLevelCount(model)` (reusing the exact index `buildGrid` already compares, so the box and the table can never disagree about which levels are derived) and toggles a new `cb-highlight--derived` class. `renderer/ingame.css`: added `.cb-highlight--derived { border-style: dashed; }` — same pink hue/glow as a published recommendation, dashed instead of solid border for "less certain," consistent in spirit with the grid's own derived-column treatment (which trades a solid fill for an outline, not literally a dashed border — the brief described `.cb-grid td.cb-derived` as "dashed," but it's actually a `box-shadow` outline treatment; there is no dashed border anywhere in the existing CSS to literally match, so I used dashed as the clearest available "provenance differs" convention rather than inventing a new color).
+
+### B8 (P2) — full state push + DOM rebuild every 1.5s — FIXED
+Added `computeGameStateSignature(state)` in `main.js`, covering every field `js/skillOrderData.js`'s `resolveOverlayData` actually reads off pushed state (confirmed by reading that function directly): `inGame`, `championName`, `championLevel`, `abilityRanks.{Q,W,E,R}`, `lane`, `detectedPosition`. Deliberately excludes `calibration` — that field rides on `gameState` too but the renderer is contractually forbidden from reading it off the state channel (own dedicated `coachbuild-calibration` push instead), so including it would report changes the renderer never sees. `pollActivePlayer()` now builds a candidate merged state and only commits + `pushState()`s when the signature actually changed, instead of on every successful poll tick unconditionally.
+
+### Unverifiable without a live game
+Everything above was verified by reading the code paths and (for B1/B2/B3/B4/B5/B6/B8) tracing the exact call sites named in the brief, plus the gates above. None of it was exercised against a real League client or a real companion process — same caveat this file already carries for `lib/nextSkill.ts`'s live wire shape. In particular: B1's actual tray behavior when a standalone companion is already running, B2's actual timing window during a live champ select, and B8's actual IPC-traffic reduction over a real 40-minute game are all reasoned from the code, not measured live.
+
+
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-27 17:50:16Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-27 — Empty-state redesign: Builds (`/`) and Pro Players (`/history`)
+
+Solo fronty round (no parallel engo — task was pure FE, ≤4 files/2 surfaces). User request: the two empty states wasted a full mobile screen with a big heading + prose + nothing. Redesigned both to surface real, already-available data instead. Consulted reactbits.dev's showcase first per standing directive — nothing fit (it's hero/background decorative material; this is a dense functional data surface), skipped per the "if nothing fits, move on" guardrail.
+
+### Builds (`/`) — `components/hextech/ChampionPickPrompt.tsx` (rewritten in place, same export/import site so `app/page.tsx`'s diff stays small)
+
+Cut the two explanatory paragraphs to a one-line heading (prose only reappears if literally nothing else loaded). Below it, three real sections, each independently hidden when its source is empty/unavailable — never a fake placeholder:
+
+- **Your Lanes** — `GET /api/mystats/summary` (no role/championId filter), decorated via `buildMyStatsRows`/`myStatsRoleLabel` imported straight from engo's `components/hextech/myStats.ts` (read-only reuse, did not touch that file). One pill per lane showing the account's top champion + win rate in that lane; lanes with no data render muted/non-interactive rather than disappearing (keeps the 5-lane grid visually stable). Verified live against this user's real 82-game account: TOP 67%, JG 0%, MID 60%, BOT 100%, SUP 43%.
+- **Recently Viewed** — new `lib/recentChampions.ts` (small localStorage list, deduped by champion, cap 6, newest-first). Separate key/shape from `lib/lastChampion.ts` on purpose — that one remembers exactly one champion for mount-restore; this keeps a short list for the empty state. Written from `app/page.tsx`'s existing persist effect (same `shouldPersistLastChampion` guard, one extra call). **Verified at the data layer** (clicking a quick-pick correctly wrote `[{championId:50,lane:"top"}]` to `coachbuild:recentChampions:v1`) but I could not get a clean screenshot of the populated chip row — every attempt to force a genuinely-empty-but-has-recents state ran into `useSheetBackNav`'s `window.history.state` correctly resuming a real prior pick in the same tab (that's pre-existing, correct behavior I didn't touch, not a bug — see the trace in this round's transcript if it matters later). The rendering itself is the identical `IconWithFallback` + button chip pattern already screenshot-verified working in the other two sections, so I'm confident in it without forcing that exact screenshot.
+- **Trending This Patch** — `GET /api/patch-movers` (already computed for `/movers`, not recomputed), top 4, colored delta consistent with `MoverRow.tsx`'s own good/bad convention. Links to `/movers` for the rest.
+
+All three tap targets call one new handler, `handleQuickPick(championId, lane)` in `app/page.tsx` — resolves the id against `/api/champions` (same fetch the existing deep-link effect already uses) and lands directly on the known lane, skipping the async most-played-lane lookup `handleChampionSelect` needs for a blind search pick (not needed here — every section already knows the lane).
+
+### Pro Players (`/history`) — new `components/ProPlayersSpotlight.tsx`, replaces the inline `PromptState()` in `app/history/page.tsx`
+
+Player mode: spotlights the most-recently-starred favorite (`lib/favorites.ts`, unchanged) with `ProHistoryResults` embedded directly (`limit=4`, no `historySheet` props so each card manages its own open state locally — confirmed that's a supported standalone mode by reading `ProGameCard.tsx`). Zero favorites falls back to resolving one well-known pro (`Faker` → `Chovy` → `Caps` → `Ruler`, in order) via the real typeahead (`GET /api/players?q=`), labeled "Popular" instead of "Favorite" so it's honest about why it's showing. All real numbers — the fallback only picks WHO to show, never fabricates what's shown. Champion mode does the same off `getFavoriteChampions()`; with no favorite champions it falls straight to the honest short prompt (no synthetic "notable champion" list — no real signal for that, so it doesn't guess).
+
+**Bug caught and fixed before shipping:** the notable-pro fallback effect originally gated re-entry on `fallback.status !== "idle"`, with `fallback.status` also in its own dependency array — so the moment it called `setFallback({status:"loading"})`, the resulting re-render fired the effect's cleanup, which flipped the in-flight fetch's `cancelled` flag to `true` before the (already-resolved, ~1ms) response could report back. Result: the UI sat in the loading skeleton forever even though the request had already succeeded — confirmed via `performance.getEntriesByType('resource')` showing the request completed while the component stayed stuck. Fixed by moving the "already started" guard to a `useRef` instead of state, and dropping `fallback.status` from the effect's deps. Both modes screenshot-verified working after the fix (real Faker games in the fallback case, real Viktor games in the favorite case).
+
+**Unrelated finding, not fixed (out of scope, not touched by this round):** the local dev environment had a stale `.next/cache` build cache serving `NEXT_PUBLIC_APP_VERSION="0.65.2"` in some client chunks against a `0.68.4` SSR render, throwing a real React hydration-mismatch toast (`DesktopRail`'s version footer). This reproduced even after clearing the service worker, all caches, and localStorage, and only went away after `rm -rf .next` + a full dev-server restart — confirming it was disk-cache staleness from a prior local session, unrelated to any file this round touched (`AppShell`/`DesktopRail`/`next.config.mjs` are untouched). Flagging in case a future dev-server session on this machine shows the same version-mismatch toast — the fix is `rm -rf .next` + restart, not a code change.
+
+### Gates (from `C:/Claude/AI/coachbuild`, all green)
+- `npx tsc --noEmit` — clean
+- `npx vitest run` — **1919 passed, 0 failing** (baseline 1915+)
+- `npm run lint` — clean (only pre-existing `<img>`/`next/image` warnings, none in new files)
+- Live-verified via `npx next dev` + puppeteer at 390×844/950/1000: both empty states render real data, no horizontal scroll at any width (`scrollWidth === clientWidth` confirmed), tap targets confirmed via `elementFromPoint` hit-testing AND a real click-through (Builds → Swain/Top landed correctly on the real build page with runes/items).
+- Did NOT bump version, commit, or deploy, per the brief.
+
+### Files touched
+- `components/hextech/ChampionPickPrompt.tsx` — rewritten (Builds empty state)
+- `components/ProPlayersSpotlight.tsx` — new (Pro Players empty state)
+- `app/page.tsx` — added `handleQuickPick`, recent-champion persist call, prop wiring
+- `app/history/page.tsx` — swapped inline `PromptState` for `ProPlayersSpotlight`
+- `lib/recentChampions.ts` — new, small localStorage helper
+
+Read-only reuse (not edited): `components/hextech/myStats.ts` (`fetchMyStatsSummary`, `buildMyStatsRows`, `myStatsRoleLabel`), `components/hextech/MoverRow.tsx` (`Mover` type import), `lib/favorites.ts`, `components/ProHistoryResults.tsx`, `components/ProGamesSkeleton.tsx`.
+
+

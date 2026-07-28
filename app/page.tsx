@@ -26,13 +26,20 @@ import {
   markFollowedChampSelectChampion,
 } from "@/components/live/champSelectFollowState";
 import { useCompanion } from "@/components/live/CompanionProvider";
-import { useSheetBackNav } from "@/components/useSheetBackNav";
+import { useSheetBackNav, isNavSheetState } from "@/components/useSheetBackNav";
 import {
   STATIC_FALLBACK_LANE_CHAMPIONS,
   getMostPlayedLane,
   type LaneId,
 } from "@/components/hextech/heroContracts";
-import { applyWireMainView, wireViewForChampion, defaultSourceForKind, type WireMainView } from "@/components/hextech/homeSearch";
+import {
+  applyWireMainView,
+  wireViewForChampion,
+  wireViewForPrompt,
+  champChosenAfterRestore,
+  defaultSourceForKind,
+  type WireMainView,
+} from "@/components/hextech/homeSearch";
 import { subscribeChampionSearch } from "@/components/hextech/championSearchBus";
 import { DEFAULT_RANK_BRACKET } from "@/lib/rankBrackets";
 import { readStoredRankBracketId, writeStoredRankBracketId } from "@/components/hextech/rankBracketStorage";
@@ -73,12 +80,19 @@ export default function HomePage() {
   // prompt instead of the Viktor seed. `champ` stays non-null throughout so no
   // downstream component has to learn a nullable contract.
   const [champChosen, setChampChosen] = useState(false);
+  // Mirrors `resolveVisitSession(...).chosen` for the restored-champion push
+  // effect below (declared after `sheetNav`, see its own comment for why).
+  // A plain ref, not state: it's set synchronously in the same effect flush
+  // as this one, so the push effect can read it on the SAME pass its own
+  // dependency fires, without waiting on a state update to propagate.
+  const sessionChosenRef = useRef(false);
   useEffect(() => {
     const session = resolveVisitSession(
       STATIC_FALLBACK_LANE_CHAMPIONS[INITIAL_LANE],
       INITIAL_LANE,
       readLastChampion()
     );
+    sessionChosenRef.current = session.chosen;
     if (session.chosen) {
       setChamp(session.champ);
       setActiveLane(session.lane);
@@ -156,14 +170,64 @@ export default function HomePage() {
   // WireMainView shape — kept unchanged, just fed fixed values here rather
   // than reshaping its contract mid-wave).
   const source = defaultSourceForKind("champion");
+  // v0.69.1 P0 fix: the base "/" history entry must always be the hub, never
+  // a champion — see wireViewForPrompt's doc comment for the bug this closes
+  // (the old seed unconditionally claimed a champion selection using
+  // mount-time `champ`, which is still the Viktor seed at this point since
+  // the session-resolve effect above hasn't committed its setState yet when
+  // this hook's own mount effect runs in the same flush — so there was never
+  // a real hub entry and back() always bottomed out on Viktor).
   const sheetNav = useSheetBackNav<WireMainView>({
     onApplySelection: restoreMainView,
-    seedInitialSelection: () => ({
-      view: { kind: "champion", champ, lane: activeLane },
-      tab: FIXED_TAB,
-      source,
-    }),
+    seedInitialSelection: () => wireViewForPrompt(FIXED_TAB, source),
   });
+
+  // Captured once, synchronously, at the FIRST client render — before any
+  // effect (including the hook's own mount effect above) has run — whether
+  // this mount is RESUMING an existing history entry (a same-tab refresh, or
+  // any landing where `window.history.state` is already a NavSheetState) as
+  // opposed to a genuinely fresh navigation with no entry yet. This is the
+  // guard that keeps the push below from double-pushing: on a resume, the
+  // hook's own mount effect takes the early-return branch (restores from
+  // `existing.selection` via onApplySelection, never calls
+  // seedInitialSelection), and that resumed entry — whether it happens to be
+  // a champion or the hub itself — must be left exactly as-is. Without this
+  // check, refreshing while already on a champion would push a SECOND,
+  // duplicate champion entry (back would need two taps to reach the hub
+  // instead of one), and refreshing while already on the hub — despite having
+  // a stored last champion from an earlier visit — would get bounced onto
+  // that champion instead of staying on the hub. Sanctioned "compute once
+  // during render" ref idiom (React docs), not a side effect.
+  const hadExistingHistoryStateRef = useRef<boolean | null>(null);
+  if (hadExistingHistoryStateRef.current === null) {
+    hadExistingHistoryStateRef.current =
+      typeof window !== "undefined" && isNavSheetState<WireMainView>(window.history.state);
+  }
+
+  // Push the restored last champion ON TOP of the just-seeded hub entry, so
+  // the stack is [hub, champion] and back from the champion reaches the hub
+  // instead of the seed swallowing the hub entirely (see wireViewForPrompt).
+  //
+  // Ordering is the trap: this effect MUST be declared AFTER `sheetNav` so it
+  // registers as a LATER effect than the hook's own seeding effect above —
+  // pushing from inside the session-resolve effect (declared earlier, before
+  // `sheetNav` exists) would race the seed's replaceState and either lose to
+  // it or run before `sheetNav` is even defined. `restoredChampionPushedRef`
+  // gates this to fire exactly once: on the mount pass `lastChampHydrated` is
+  // still false so this no-ops without marking itself pushed; once the
+  // session-resolve effect's setState commits and this component re-renders,
+  // the dependency flips true and this runs for real, reading the (by then
+  // updated) `champ`/`activeLane` state and `sessionChosenRef` set
+  // synchronously by that same effect.
+  const restoredChampionPushedRef = useRef(false);
+  useEffect(() => {
+    if (!lastChampHydrated || restoredChampionPushedRef.current) return;
+    restoredChampionPushedRef.current = true;
+    if (hadExistingHistoryStateRef.current) return; // resume, not a fresh mount — leave it exactly as restored
+    if (!sessionChosenRef.current) return; // fresh user, nothing stored — hub stands
+    sheetNav.pushSelection(wireViewForChampion(champ, activeLane, FIXED_TAB, source));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastChampHydrated]);
 
   // ── Live mode (v0.32.0; provider-lifted v0.37.0) ────────────────────────
   //
@@ -320,19 +384,18 @@ export default function HomePage() {
     if (!wire) return;
     mostPlayedLaneRequestRef.current++;
     const applied = applyWireMainView(wire);
+    // v0.69.1: the seed is now always a "prompt" entry (see wireViewForPrompt),
+    // so landing back on it — mount-resume on a same-tab refresh, or a real
+    // back() from a champion — must send the page back to the pick prompt.
+    // champChosenAfterRestore is the single source of truth for this decision
+    // (kept in homeSearch.ts so it's covered by a real test — no JSX harness
+    // exists here, see CLAUDE.md). The old Viktor-id special case is gone: it
+    // existed only because the seed used to masquerade as a champion
+    // selection, which can no longer happen.
+    setChampChosen(champChosenAfterRestore(applied.kind));
     if (applied.activeLane !== undefined && applied.champ !== undefined) {
       setActiveLane(applied.activeLane);
       setChamp(applied.champ);
-      // NOT an unconditional "the user chose something". useSheetBackNav seeds
-      // its initial selection from current state on mount and applies it right
-      // back through here — with the Viktor seed still in `champ`. Marking
-      // chosen there defeated the pick prompt entirely (caught in the browser:
-      // fresh install still rendered VIKTOR). A genuine back-navigation TO a
-      // Viktor view can only happen after a real pick, which has already set
-      // this flag, so the id check costs nothing in that case.
-      if (applied.champ.id !== STATIC_FALLBACK_LANE_CHAMPIONS[INITIAL_LANE].id) {
-        setChampChosen(true);
-      }
     }
   }
 

@@ -36,6 +36,11 @@ export function isNavSheetState<S>(v: unknown): v is NavSheetState<S> {
   return typeof v === "object" && v !== null && (v as { v?: unknown }).v === 1;
 }
 
+// Sentinel for "not captured yet" in the mount-time snapshot below — `unknown`
+// (not `null`) because `window.history.state` legitimately IS `null` for a
+// genuinely fresh entry, so `null` can't double as the sentinel.
+const UNCAPTURED: unique symbol = Symbol("useSheetBackNav.uncaptured");
+
 interface UseSheetBackNavOptions<S> {
   /** Repaint page state from a landed-on entry's selection — fired on
    *  mount-resume (a same-tab refresh retains history.state for the CURRENT
@@ -89,6 +94,28 @@ export function useSheetBackNav<S>({
   // True while a popstate-driven restore is applying — see isRestoring's doc.
   const restoringRef = useRef(false);
 
+  // Snapshot `window.history.state` ONCE, synchronously, at the very first
+  // render — before the mount effect below (or any effect) has run. Reading
+  // it fresh INSIDE that effect is what used to happen, and it is not safe:
+  // under React 18 StrictMode (dev only), React double-invokes mount effects
+  // against the SAME render (no re-render in between) to catch exactly this
+  // class of non-idempotent effect. The mount effect's own FIRST invoke calls
+  // `window.history.replaceState` for a fresh seed — a REAL browser mutation
+  // that StrictMode's replay does NOT roll back (only React state/refs are
+  // reset via cleanup; raw Web APIs are not). So the SECOND invoke, reading
+  // `window.history.state` live, would see its own just-written seed and
+  // wrongly conclude "this is a resume of an existing entry," replaying
+  // `onApplySelection` with that seed's value — clobbering whatever a
+  // sibling effect (e.g. a page's own session-restore effect) set in the
+  // interim. Capturing once at render makes both StrictMode invokes agree:
+  // either both take the resume branch or both take the fresh-seed branch,
+  // never a mismatch. (Sanctioned "compute once during render" ref idiom —
+  // see the React docs on refs written during render.)
+  const existingHistoryStateRef = useRef<unknown>(UNCAPTURED);
+  if (existingHistoryStateRef.current === UNCAPTURED) {
+    existingHistoryStateRef.current = typeof window !== "undefined" ? window.history.state : null;
+  }
+
   function pushSelection(selection: S | null) {
     setOpenGameId(null);
     if (restoringRef.current) return;
@@ -121,7 +148,7 @@ export function useSheetBackNav<S>({
   // a "change," so back from here correctly exits to wherever the user came
   // from (no extra entry).
   useEffect(() => {
-    const existing = window.history.state;
+    const existing = existingHistoryStateRef.current;
     if (isNavSheetState<S>(existing)) {
       setOpenGameId(existing.openGameId);
       onApplySelection?.(existing.selection);
