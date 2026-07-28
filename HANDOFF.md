@@ -5009,3 +5009,162 @@ Files touched: `components/hextech/homeSearch.ts`, `app/page.tsx`, `components/u
 
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-28 16:47
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-27 22:55:07Z; previous content preserved there. Append new rounds below. -->
+
+# archetype/themed item-set machinery deletion (2026-07-28)
+
+Model: Claude Sonnet 5 (claude-sonnet-5).
+
+## What was deleted
+
+File: `components/hextech/itemSetBody.ts`. 1801 → 987 lines (814 lines removed:
+dead functions/types/constants plus the comment blocks that documented them).
+
+Confirmed via `grep` across the whole repo before starting that these symbols
+have zero references outside this one file — the deletion is entirely
+self-contained.
+
+Deleted symbols (all were unreachable from `buildItemSets`, orphaned by the
+v0.71.0 four-block cut):
+
+- Functions: `buildThemedLine`, `buildArchetypeLine`, `dedupeArchetypeLines`,
+  `nearDuplicateLines`, `archetypePriority`, `resolveDamageFamily`,
+  `selectArchetypes`, `curatedArchetypePool`, `categoryDefaultPool`,
+  `unionPool`, `orderByMetric`, `evidenceFor`, `archetypeBlockTitle`,
+  `metaHasTag`, `hasAnyTag`, `scoreByPosition`
+- Types/interfaces: `Archetype`, `ArchetypeEvidence`, `MetricLens`,
+  `DamageFamily`
+- Constants: the eight curated archetype objects (`AP_MAGE`, `AP_BURST`,
+  `TANK_MAGE`, `BRUISER_AD`, `LETHALITY`, `CRIT_MARKSMAN`, `ON_HIT`,
+  `TANK_PURE`), `AP_ARCHETYPES`, `AD_ARCHETYPES`, `ARCHETYPE_PRIORITY`,
+  `AP_DAMAGE_TAGS`, `AD_DAMAGE_TAGS`, `DURABILITY_TAGS`, `MIN_THEMED_POOL`,
+  `CATEGORY_LINE_LEN`, `MIN_CATEGORY_MEASURED`, `CATEGORY_MAX_EMIT`,
+  `warnedDeadCuratedIds`
+- Dead import: `getCompRating`/`RatedComp` from `@/lib/draft/compRatings`
+  (consumed only by the now-deleted `Archetype.fits` signature and
+  `selectArchetypes`; `getCompRating(` had zero call sites even before this
+  pass)
+
+Everything deleted by SYMBOL, verified with `tsc --noEmit` after each chunk
+(3 checkpoints — after the header-comment trims, after the first half of
+function bodies, after the second half), never by line range.
+
+## Comments
+
+Kept: the v0.34.1 restructure rationale, the v0.36.0 full-items-only/rename
+notes, the item-set schema note, the boots-identification note, and the audit
+P1-A/P1-B rationale (trimmed — see below) — all explain decisions still in
+force in the live code (buildLine's one-boots invariant, isFullItem,
+Candidate.score-is-the-only-ranking-axis, dedupeLineBlocks).
+
+Deleted/rewrote:
+- v0.43.0, v0.47.0, v0.48.0 header blocks (entirely about the archetype
+  vocabulary/category system) — replaced with one paragraph summarizing that
+  v0.43.0-v0.48.0 built the archetype system and it was removed 2026-07-28.
+- v0.36.0's point 3 (buildThemedLine origin) — trimmed, "three more" -> "two
+  more" changes.
+- Audit P1-A's item 2 (the "Highest WPA ordered by orderByMetric" fix) —
+  reduced to a one-line historical note; item 1 (the Candidate.score
+  invariant) kept in full since `buildScaleRanking`/`Candidate.raw` are live.
+- Audit P1-C (buildArchetypeLine's evidence-labelling bug) — collapsed to a
+  two-line pointer since `ArchetypeEvidence` no longer exists.
+- The `buildItemSets` doc comment's block-order description — this was
+  ALREADY stale before I touched it (it documented "Buy order" and
+  "Situational swaps" as emitted blocks; neither is pushed in the live
+  function body — that removal predates this pass). Since fixing the
+  archetype-specific parts of this same paragraph required touching it
+  anyway, I rewrote the whole block-order description to match what
+  `buildItemSets` actually emits today: Starting -> WPA build -> Pro build
+  (conditional) -> OTP build (conditional) -> Hidden gem (conditional).
+- The Candidate interface's "exactly one function compares raw weights
+  (orderByMetric)" claim — updated since orderByMetric is gone and grep
+  confirms nothing else compares `.raw.weight` across candidates now.
+- `dedupeLineBlocks`'s doc comment ("keep is a total order: family rank, then
+  ARCHETYPE_PRIORITY...") — dropped the ARCHETYPE_PRIORITY clause since
+  dedupeLineBlocks never used it (that was dedupeArchetypeLines' concern, a
+  different, now-deleted function).
+- "themed-line tag classification (hasAnyTag)" mention in the boots-ID note
+  and the buildItemSets itemMeta doc — removed (hasAnyTag deleted).
+
+No behavior changed by any of this — comment-only edits, verified by the
+byte-identical check below running on the SAME code these comments describe.
+
+## Byte-identical verification (the real oracle)
+
+Wrote a throwaway script (`scripts/_baseline-itemsets.mts`, now deleted) that:
+1. Wrapped `global.fetch` to redirect the app's own relative
+   `fetch("/api/...")` calls to `https://coachbuild.vercel.app` (prod).
+2. Called the REAL functions the app uses — `resolveProConsensusForSets`,
+   `resolveOtpConsensusForSets`, `resolveItemMetaForSets` from
+   `itemSetsApply.ts`, and `buildItemSets` from `itemSetBody.ts` — not a
+   reimplementation.
+3. Ran it for 8 champion/role combos: Ahri Mid, Jinx Bot, Leona Support,
+   Darius Top, Lee Sin Jungle, Viktor Mid, Thresh Support, Garen Top.
+4. Captured the full JSON output (all `ItemSet[]` for each combo, plus
+   `hasPro`/`hasOtp` flags) to the scratchpad, before deleting anything.
+5. Deleted the dead machinery.
+6. Re-ran the identical script against the edited code, diffed.
+
+Result: **`diff` reported zero differences; MD5 of both output files is
+identical (`8df03ddac163d2a1507b309c322efbb2`)**. Real coverage — the run
+against live prod data exercised all four block types across the sample
+(6 of 8 combos got a `Pro build` block, 2 got `OTP build`, 6 got
+`Hidden gem`), not just the always-present `WPA build`/`Starting`.
+
+Script deleted per instructions and confirmed via `git status --porcelain`
+showing only `itemSetBody.ts` modified.
+
+## verify-fix gate
+
+`bash C:/Claude/AI/urgot/scripts/verify-fix.sh C:/Claude/AI/coachbuild`:
+
+```
+[PASS] tsc -b clean
+[PASS] lint clean (warnings: 0)
+[PASS] tests 1925 passed
+[PASS] build clean
+[PASS] sw (public/sw.js) versioned via ?v= registration param
+[PASS] manifest present (public/manifest.webmanifest)
+verify-fix: ALL CHECKS PASSED
+```
+
+## Kept, not touched (deliberately, out of stated scope)
+
+Two other genuinely-dead-looking symbols in the same file, found while
+tracing reachability, but NOT part of the archetype/themed machinery named
+in the brief — left alone rather than expanding scope mid-task:
+
+- `idOrderKey` — a small helper right next to the live `idSetKey`. Appears
+  to be a leftover from the pre-four-category "Core build/Buy order pair is
+  order-sensitive" comparison (the comment above `duplicateBlocks` says that
+  carve-out "went with Buy order itself in the 2026-07-28 four-category
+  cut"). Genuinely unreferenced now, but it's a Buy-order-era leftover, not
+  archetype/themed machinery.
+- `SITUATIONAL_CAP = 6` — defined, never used anywhere in the file. Same
+  story: "Situational swaps" is documented in several places as a block that
+  used to be emitted but isn't pushed anywhere in the current `buildItemSets`
+  body. Looks like a second leftover from the same prior (not-this-task)
+  removal that dropped the Buy order and Situational swaps blocks.
+
+Both are small (a few lines each) and unrelated to archetypes — recommend a
+follow-up pass specifically for "Buy order / Situational swaps leftovers" if
+you want those gone too, separate from this one.
+
+No behavior was changed anywhere in this pass — pure deletion, confirmed
+byte-identical.
+
+

@@ -24,7 +24,7 @@
 // exempt — it's a swap-suggestion row, not a worn loadout, so several boots
 // alternatives sitting side by side is normal, not a bug.
 //
-// v0.36.0 — three more user-driven changes:
+// v0.36.0 — two more user-driven changes:
 //   1. FULL-ITEMS-ONLY build lines (live bug: Dark Seal — a stackable
 //      component that upgrades into Mejai's Soulstealer — reached a Pro
 //      build line via pro-consensus data). Root cause: proConsensus.ts's
@@ -45,85 +45,21 @@
 //      alternative build. Purely a block-`type` string change; the
 //      underlying optimizedPath.ts data/logic is untouched (out of scope —
 //      that module backs CoreBuildOrderCard's own UI too).
-//   3. Three THEMED lines (Highest WPA / Tanky / Burst) derived from
-//      EXISTING data only (no new upstream fetch) — see buildThemedLine's
-//      doc comment for the tag vocabulary (confirmed against a live
-//      item.json pull, not invented) and the ≥4-qualifying-items omission
-//      rule.
 //
-// v0.43.0 — user feedback ("add the item categories even if not with big
-// sample size... create builds for each champ and item category you think
-// is best"): the old binary Tanky/Burst pair is REPLACED by a fuller
-// archetype vocabulary — Tank / AP/Mage / AD/Lethality / Attack Speed
-// (On-hit) / Support-Utility — see CATEGORY_DEFS below. Two things changed
-// from the old themed-line model:
-//   1. Emission is now archetype-GATED, not just pool-size-gated — a
-//      category only appears when it's SENSIBLE for the champion (a
-//      lib/draft/compRatings.ts curated rating signal, e.g. tankiness>=1
-//      for Tank, OR the champ's own ddragon tags from ChampionRef.tags) OR
-//      the champ's real item data already shows usage of that tag (the
-//      live-data escape hatch — see buildCategoryLine's doc comment). This
-//      is what keeps a Yuumi from getting an AD/Lethality line just because
-//      the whole roster is being swept for a build.
-//   2. Thin data (fewer than MIN_THEMED_POOL real qualifying items) is no
-//      longer an omission reason for a category that IS sensible — it's a
-//      FILL trigger instead (buildCategoryLine's low-data path), titled
-//      "<Category> (low data)" so the UI never presents a judgment fill as
-//      measured. Highest WPA is UNCHANGED — still built by buildThemedLine
-//      below exactly as before (byte-identical regression pin), still
-//      omitted below MIN_THEMED_POOL like every pre-v0.43.0 themed line.
-//
-// v0.47.0 — user feedback (screenshot of a durable-AP "tank mage" Viktor:
-// Rylai's/Blackfire + Sorc + Riftmaker + Abyssal + Rabadon's; "even if it
-// categorically doesn't work for Viktor, still I want to see potential builds
-// for 'tank mage' Viktor"): the v0.43.0 "sensible-for-champ" gate that HID
-// Tank from mages was too conservative — it suppressed off-meta-but-coherent
-// archetypes the user explicitly wants shown. REPLACED by a DAMAGE-FAMILY-
-// scoped model (see "Damage-type-scoped archetype vocabulary" below):
-//   1. A champion's damage family (AP vs AD) is inferred from their OWN
-//      recommended items' damage tags (resolveDamageFamily) — the strongest
-//      client-available signal (ChampionRef carries no ddragon info block;
-//      real itemization beats the coarse info.attack/magic scale anyway and
-//      classifies AP assassins/fighters like Fizz/Mordekaiser correctly).
-//   2. EVERY archetype inside the champ's family is emitted regardless of
-//      meta popularity; a cross-family one is NEVER emitted (no AD/Lethality
-//      or On-hit line for an AP mage — those items don't scale with AP). The
-//      correct exclusion the old gate had (no AD line for Viktor) is kept;
-//      the over-conservative one (no durable-AP line for Viktor) is not.
-//   3. Archetypes: AP family = AP/Mage (balanced default) / AP Burst (glass
-//      cannon) / Tank Mage (durable AP — the user's screenshot). AD family =
-//      Bruiser (AD) / Lethality-Assassin / Crit-Marksman / On-hit, emitted in
-//      the champ's AD sub-lean. Tank (pure) = universal, actual tanks only.
-//      Support/Utility is dropped (enchanters resolve to the AP family).
-//      Highest WPA is UNCHANGED (buildThemedLine, byte-identical pin).
-//
-// v0.48.0 — user feedback (screenshot of Viktor's in-client sets): (1) "AP/Mage"
-// and "AP Burst" showed the IDENTICAL 4 items — "don't duplicate, show one and
-// name it appropriately, and make sure it doesn't happen for other champs"; and
-// (2) the Tank Mage build "isn't a good build and it's not 6 items". Three
-// changes (all in this module, no companion change → web-only ship):
-//   1. Category lines are FULL 6-item builds now (CATEGORY_LINE_LEN 4 → 6) —
-//      the v0.46.0 4-item cap was a payload measure the 413 stale-set prune
-//      made unnecessary; item count is no longer what bounds the byte size
-//      (CATEGORY_MAX_EMIT caps the NUMBER of category blocks — verified a
-//      maximal 6×4 set stays well under 4096 B). buildArchetypeLine now pads
-//      every data-first line to a full build.
-//   2. A GENERAL de-dup (dedupeArchetypeLines) runs for EVERY champ: after all
-//      archetype lines are built, near-duplicate lines collapse to one, keeping
-//      the higher-priority name (ARCHETYPE_PRIORITY). Viktor's AP/Mage ==
-//      AP Burst collapses to just "AP/Mage"; a champ whose builds genuinely
-//      differ keeps both. Pure + unit-tested (nearDuplicateLines).
-//   3. The "variant" archetypes (Tank Mage, Bruiser (AD)) are now
-//      CURATED-POOL-DRIVEN, not data-first (Archetype.curated) — they exist to
-//      show an off-meta durable build the champ's data does NOT reflect, so
-//      they're built from a hand-ranked durable pool (Rylai's/Riftmaker/Cosmic
-//      Drive/Abyssal/Zhonya's/Rod of Ages for Tank Mage), NOT the champ's
-//      burst-leaning real items. That makes them coherent AND distinct from the
-//      standard build so they survive de-dup. The STANDARD builds (AP/Mage,
-//      Crit/Marksman, Lethality, On-hit) stay data-first. VERIFIED root cause:
-//      the pre-v0.48.0 Tank Mage did NOT pull burst items (match already
-//      excluded them) — it was starved (only the champ's 1-2 real durable
-//      items) and capped at 4; the fix is the curated pool + 6 items.
+// v0.43.0 through v0.48.0 built out a damage-type ARCHETYPE line system
+// (Tank / AP-Mage / AP-Burst / Tank-Mage / Bruiser / Lethality / Crit /
+// On-hit — up to CATEGORY_MAX_EMIT curated+data-first "themed" build blocks
+// per champion, plus their own de-dup and "(low data)"/"(suggested)" honesty
+// labels) on top of a "Highest WPA" themed line introduced in v0.36.0. User
+// directive 2026-07-28 (see the FOUR-build-category note below) cut the
+// shop panel down to exactly four blocks named for their SOURCE, and none
+// of them is a themed/archetype line — so that entire system (buildThemedLine,
+// buildArchetypeLine, resolveDamageFamily, selectArchetypes,
+// curatedArchetypePool, categoryDefaultPool, dedupeArchetypeLines, the
+// Archetype interface + curated pools, ArchetypeEvidence) went orphaned and
+// was deleted in a follow-up pass (2026-07-28) once a byte-identical output
+// diff across 8 live champion/role combos confirmed nothing reachable
+// depended on it. See CHANGELOG / HANDOFF-engy.md for that pass's detail.
 //
 // AUDIT 2026-07-25 follow-up — P1-A / P1-B / P1-C. All three were found by
 // driving THIS module against live prod data + the real 16.13.1 catalog; the
@@ -150,15 +86,16 @@
 //          raw number survives only as `Candidate.raw = {weight, scale}` —
 //          PROVENANCE, never an ordering key. Comparing `raw.weight` across
 //          two candidates is legal ONLY when both carry the same `raw.scale`,
-//          and exactly one place in this file does it (orderByMetric, which
-//          takes the scale as an explicit parameter). The nesting is
+//          and no other code in this file does it. The nesting is
 //          deliberate: `c.raw.weight` is loud enough to catch in review, where
 //          the old bare `c.weight` read like a neutral ranking number.
-//       2. A block whose TITLE claims a metric is now ORDERED BY THAT METRIC
-//          (orderByMetric): items carrying the metric rank first, sorted by
-//          it; items that do not carry it are appended as FILL and can never
-//          interleave above a metric-bearing item. "Highest WPA" keeps its
-//          name because it can now honestly claim it.
+//       2. (Historical) a block whose TITLE claimed a metric was ordered by
+//          that metric via a helper called `orderByMetric` (items carrying
+//          the metric ranked first; items lacking it were appended as FILL).
+//          That helper only ever served the "Highest WPA" themed line, which
+//          was deleted along with the rest of the archetype/themed machinery
+//          (see above) — item 1's invariant (`score` is the one ranking axis)
+//          is what survives and still matters for every live block.
 //
 //   P1-B — DE-DUP ONLY COVERED ARCHETYPE-vs-ARCHETYPE. dedupeArchetypeLines
 //     (v0.48.0) runs over the archetype lines only, and it runs AFTER Core
@@ -174,23 +111,10 @@
 //     duplicate only when the order matches too, because expressing the order
 //     is Buy order's entire reason to exist.
 //
-//   P1-C — A CURATED VARIANT COULD NEVER BE LABELLED, AT ANY FILL LEVEL.
-//     `buildArchetypeLine` had `const lowData = arch.curated ? false : ...`.
-//     Live: Ornn Top's `Bruiser (AD)` was the BRUISER_AD.pool array verbatim
-//     in declaration order — zero measured items — sitting directly above
-//     `On-hit (low data)`, which is equally fabricated and IS labelled. A bare
-//     title next to a "(low data)" one reads as measured by implication, which
-//     is HARD RULE 4 ("a curated/estimated value is always labeled as such")
-//     violated in the user's client. The old code's REASONING was sound
-//     though — a curated variant is a judgment build, not a thin measurement —
-//     so flipping the boolean would just lie in the other direction. The fix
-//     is a THIRD state driven by the real reason (see ArchetypeEvidence):
-//     zero measured non-boots items -> "(suggested)"; some but below
-//     MIN_CATEGORY_MEASURED -> "(low data)"; a line the champ's own data fills
-//     -> plain title. It applies to CURATED and DATA-FIRST archetypes alike —
-//     the label follows the evidence, not the flag. "Suggested" is not new
-//     vocabulary: components/hextech/SupportItemCard.tsx already renders
-//     "Suggested — <archetype> build, not measured" for exactly this case.
+// (P1-C, the third fix in that same audit pass, was a mislabelling bug in
+// `buildArchetypeLine`'s "(low data)"/"(suggested)" honesty suffix — deleted
+// along with the rest of the archetype machinery above; ArchetypeEvidence no
+// longer exists.)
 //
 // Item-set schema per set (LCU /lol-item-sets/v1/item-sets/{id}/sets
 // contract, community-standard importer shape — see companion.ps1's own
@@ -211,8 +135,7 @@
 // module against `Pick` (lib/types.ts) alone, which carries no `tags` field,
 // so boots detection there had to be structural (items.boots / alts.boots /
 // pro.boots). v0.36.0 now ALSO threads real ItemDetail metadata in (for the
-// full-item rule and themed-line tag classification — see below), so boots
-// detection stays exactly as it was (structural — those three sources are
+// full-item rule — see below), so boots detection stays exactly as it was (structural — those three sources are
 // still the authoritative "this id is boots" signal; ItemDetail's own
 // "Boots" tag is used only inside isFullItem's tier-2-boots special case,
 // not to re-derive the boots-id set itself).
@@ -220,7 +143,6 @@
 
 import type { ChampionRef, BuildResponse, ItemsBlock, Pick as PickType } from "@/lib/types";
 import type { ItemDetail } from "@/components/itemDetail";
-import { getCompRating, type RatedComp } from "@/lib/draft/compRatings";
 import { flattenSituational } from "./situational";
 import { resolveOptimizedPathView } from "./optimizedPath";
 
@@ -284,338 +206,24 @@ export interface ProConsensusItemsInput {
 }
 
 const LINE_LEN = 6;
-/** v0.48.0 — archetype CATEGORY lines are now FULL 6-item builds (5 items +
- *  1 boots), same as Core/Buy order/Pro/Highest WPA. They were capped at 4 in
- *  v0.46.0 as a payload measure; the v0.46.0 413 fix's stale-set prune (the PUT
- *  now carries only the CURRENT champ+role set, not an accumulation) freed the
- *  byte budget, and a category line truncated to 4 read as an incomplete/"bad"
- *  build (user report: the Viktor Tank Mage showed only 4 items and looked
- *  wrong). A build must be a full build — so the item count is NOT what we cap;
- *  CATEGORY_MAX_EMIT caps the NUMBER of category blocks instead, which is what
- *  actually bounds the set's byte size (verified: a maximal 6-item × 4-category
- *  set stays well under the 4096 B LCU per-object ceiling — see the byte-budget
- *  tests). The 1-boots rule is preserved. */
-const CATEGORY_LINE_LEN = 6;
 const SITUATIONAL_CAP = 6;
-/** A themed line (Highest WPA / Tanky / Burst) is omitted entirely rather
- *  than padded with off-theme junk when fewer than this many qualifying
- *  (tag-matched, full-item) candidates exist. */
-const MIN_THEMED_POOL = 4;
 
-// ── Damage-type-scoped archetype vocabulary (v0.47.0) ───────────────────────
-// Tags below are the real ddragon vocabulary, confirmed against a live
-// item.json pull (coachless CDN mirror, 16.13.1) — NOT invented. There is NO
-// "Lethality" tag (it's a stat); real Lethality-class items (Duskblade/
-// Youmuu's/Serylda's) are tagged ArmorPenetration. "SpellBlock" (not the
-// rarer "MagicResist") is the MR durability tag.
-
-/** Damage-identifying tags — used ONLY to infer a champion's family from
- *  their own recommended items (resolveDamageFamily). AttackSpeed/OnHit count
- *  as AD (physical carries). */
-const AP_DAMAGE_TAGS = new Set(["SpellDamage", "MagicPenetration"]);
-const AD_DAMAGE_TAGS = new Set([
-  "Damage",
-  "CriticalStrike",
-  "ArmorPenetration",
-  "AttackSpeed",
-  "OnHit",
-]);
-/** Durability tags — the "tank" half of a durable build (tank mage / bruiser
- *  / pure tank). */
-const DURABILITY_TAGS = new Set(["Health", "Armor", "SpellBlock"]);
-
-type DamageFamily = "AP" | "AD";
-
-/** True iff `meta` carries the given tag. */
-function metaHasTag(meta: ItemDetail | undefined, tag: string): boolean {
-  return !!meta && Array.isArray(meta.tags) && meta.tags.includes(tag);
-}
-
-/** One damage-type archetype. `family` scopes it (AP/AD, or "universal" for
- *  pure Tank). `match(meta)` recognises a champ's OWN real items that embody
- *  the archetype (the MEASURED signal). `pool` is a curated list of real LoL
- *  item ids that DEFINE the archetype — the FILL source when a champ's real
- *  matched items are thin; every id is re-validated against itemMeta
- *  (isFullItem), so a wrong/legacy id degrades to the catalog-wide `match`
- *  fallback rather than surfacing garbage, and the curated list is trusted
- *  verbatim (NOT re-filtered through `match`) so a genuinely-on-archetype
- *  item whose tags don't literally satisfy the predicate — e.g. Abyssal Mask
- *  in Tank Mage, a pure-MR item with no SpellDamage tag — is still included.
- *  `fits(champTags, rating)` is the WITHIN-FAMILY sub-lean gate (AD only; AP
- *  archetypes always emit their full set; pure Tank gates on real tankiness). */
-interface Archetype {
-  title: string;
-  family: DamageFamily | "universal";
-  match: (meta: ItemDetail) => boolean;
-  pool: number[];
-  fits: (champTags: string[], rating: RatedComp) => boolean;
-  /** v0.48.0 — CURATED-DRIVEN vs DATA-FIRST.
-   *  A "variant" archetype (Tank Mage, Bruiser (AD)) exists precisely to show
-   *  a coherent build the champ's META DATA does NOT reflect — the user's
-   *  standing directive to surface off-meta potential builds by judgment. Its
-   *  line is therefore driven by the curated `pool` (real itemization
-   *  knowledge, hand-ranked), NOT by the champ's own (burst-leaning) real
-   *  data — which is exactly what makes it (a) a genuinely durable/coherent
-   *  build and (b) distinct from the standard build so it survives de-dup. The
-   *  champ's OWN items that genuinely satisfy `match` (durable-AP items a mage
-   *  actually builds) still rank first — they're both on-archetype AND
-   *  measured — but the champ's off-archetype items are never pulled in
-   *  (they fail `match`). A curated variant is labelled honestly as the plain
-   *  archetype title (never "(low data)"): it's a deliberate judgment build,
-   *  not a thin measurement.
-   *  A DATA-FIRST archetype (AP/Mage, AP Burst, Crit/Marksman, Lethality,
-   *  On-hit, pure Tank) reflects the champ's real meta itemization: real
-   *  matched items rank first, padded to a full build from the curated pool,
-   *  and it carries the measured/"(low data)" distinction. */
-  curated: boolean;
-}
-
-// Curated item pools — hand-ranked best-first from real LoL itemization
-// knowledge (patch ~16.13). These are FILL sources for thin-data champs; the
-// primary content of every line is always the champ's own measured items, so
-// a wrong/legacy id degrades gracefully (see Archetype.pool doc) — it never
-// surfaces garbage, just falls through to the catalog-wide `match` fallback.
-const AP_MAGE: Archetype = {
-  title: "AP/Mage",
-  family: "AP",
-  match: (m) => hasAnyTag(m, AP_DAMAGE_TAGS),
-  // Standard/balanced mage core, hand-ranked best-first: Luden's, Liandry's,
-  // Shadowflame, Rabadon's, Void Staff, Zhonya's (one defensive cap). Kept
-  // deliberately BURST/standard-leaning (not stacked with durable-AP items)
-  // so it stays visibly distinct from the curated Tank Mage build.
-  pool: [6655, 6653, 4645, 3089, 3135, 3157],
-  fits: () => true,
-  curated: false,
-};
-const AP_BURST: Archetype = {
-  title: "AP Burst",
-  family: "AP",
-  // Glass cannon: AP damage with NO durability tag.
-  match: (m) => hasAnyTag(m, AP_DAMAGE_TAGS) && !hasAnyTag(m, DURABILITY_TAGS),
-  // Luden's, Shadowflame, Stormsurge, Rabadon's, Void Staff, Horizon Focus,
-  // Lich Bane — pure penetration/amp burst.
-  pool: [6655, 4645, 4646, 3089, 3135, 4628, 3100],
-  fits: () => true,
-  curated: false,
-};
-const TANK_MAGE: Archetype = {
-  title: "Tank Mage",
-  family: "AP",
-  // Durable AP: an AP item that ALSO builds durability (the user's exact
-  // screenshot archetype — Rylai's/Riftmaker/Abyssal + Zhonya's Viktor).
-  match: (m) => metaHasTag(m, "SpellDamage") && hasAnyTag(m, DURABILITY_TAGS),
-  // CURATED durable-AP build, hand-ordered durable-core -> defense -> damage
-  // cap: Rod of Ages, Riftmaker, Rylai's (durable AP core) / Cosmic Drive,
-  // Liandry's (durable damage) / Zhonya's, Abyssal Mask (defense) / Rabadon's
-  // (damage cap). Abyssal is a pure-MR item with NO SpellDamage tag — trusted
-  // verbatim (curatedArchetypePool does NOT re-filter through `match`).
-  // AUDIT 2026-07-26: id was 3001, which the comment always meant as "Abyssal
-  // Mask" but is really Evenshroud (purchasable:false in 16.13.1 regardless —
-  // confirmed live against the real ddragon catalog). Abyssal Mask's real id
-  // is 8020. isFullItem's purchasable check already kept the wrong/dead id
-  // from ever surfacing in a build — it just silently shrank the pool to 7/8 —
-  // see curatedArchetypePool's dead-id warn for the structural guard.
-  pool: [6657, 4633, 3116, 4629, 6653, 3157, 8020, 3089],
-  fits: () => true,
-  curated: true,
-};
-const BRUISER_AD: Archetype = {
-  title: "Bruiser (AD)",
-  family: "AD",
-  // Health + AD.
-  match: (m) =>
-    hasAnyTag(m, new Set(["Damage", "ArmorPenetration"])) && hasAnyTag(m, DURABILITY_TAGS),
-  // CURATED durable-AD build, hand-ordered: Stridebreaker, Black Cleaver,
-  // Sundered Sky (bruiser core) / Death's Dance, Sterak's Gage (defense) /
-  // Titanic Hydra, Trinity Force, Hullbreaker (damage/utility). Distinct from
-  // the crit/lethality data builds by construction.
-  pool: [6631, 3071, 6610, 6333, 3053, 3748, 3078, 3181],
-  fits: (tags) => tags.includes("Fighter"),
-  curated: true,
-};
-const LETHALITY: Archetype = {
-  title: "Lethality/Assassin",
-  family: "AD",
-  // Squishy burst AD: armor-pen (lethality-class) OR pure Damage with no
-  // durability / attack-speed / crit (a caster-AD item, not a marksman or
-  // bruiser one).
-  match: (m) =>
-    metaHasTag(m, "ArmorPenetration") ||
-    (metaHasTag(m, "Damage") &&
-      !hasAnyTag(m, DURABILITY_TAGS) &&
-      !metaHasTag(m, "AttackSpeed") &&
-      !metaHasTag(m, "CriticalStrike")),
-  // The Collector, Eclipse, Serylda's, Youmuu's, Profane Hydra, Hubris, Edge
-  // of Night, Serpent's Fang.
-  // AUDIT 2026-07-26: id was 6691 (Duskblade of Draktharr) — confirmed dead,
-  // purchasable:false in 16.13.1 against the real ddragon catalog (its
-  // reworked successor, Opportunity/6701, is ALSO dead this patch). Swapped
-  // for The Collector (6676) — same execute/burst-AD niche, purchasable,
-  // already trusted verbatim elsewhere in this module (Crit/Marksman's own
-  // curated pool) so sharing it across two adjacent archetypes is not new.
-  pool: [6676, 6692, 6694, 3142, 6698, 6697, 3814, 6695],
-  fits: (tags) => tags.includes("Assassin"),
-  curated: false,
-};
-const CRIT_MARKSMAN: Archetype = {
-  title: "Crit/Marksman",
-  family: "AD",
-  match: (m) => metaHasTag(m, "CriticalStrike"),
-  // Infinity Edge, Rapid Firecannon, Statikk Shiv, Lord Dominik's,
-  // Bloodthirster, Shieldbow, Phantom Dancer, The Collector, Mortal Reminder.
-  pool: [3031, 3094, 3087, 3036, 3072, 6673, 3046, 6676, 3033],
-  fits: (tags) => tags.includes("Marksman"),
-  curated: false,
-};
-const ON_HIT: Archetype = {
-  title: "On-hit",
-  family: "AD",
-  match: (m) => hasAnyTag(m, new Set(["AttackSpeed", "OnHit"])),
-  // Blade of the Ruined King, Wit's End, Guinsoo's, Kraken Slayer, Runaan's,
-  // Trinity Force.
-  pool: [3153, 3091, 3124, 6672, 3085, 3078],
-  fits: (tags) => tags.includes("Marksman") || tags.includes("Fighter"),
-  curated: false,
-};
-const TANK_PURE: Archetype = {
-  title: "Tank",
-  family: "universal",
-  // Pure durability, not primarily a damage item.
-  match: (m) =>
-    hasAnyTag(m, DURABILITY_TAGS) &&
-    !metaHasTag(m, "SpellDamage") &&
-    !hasAnyTag(m, new Set(["Damage", "CriticalStrike", "ArmorPenetration"])),
-  // Sunfire, Thornmail, Randuin's, Spirit Visage, Heartsteel, Frozen Heart,
-  // Warmog's Armor, Abyssal Mask.
-  // AUDIT 2026-07-26: TWO ids were wrong here, both confirmed live against
-  // the real 16.13.1 catalog. (1) 3193 (Gargoyle Stoneplate) is dead
-  // (purchasable:false) — swapped for Warmog's Armor (3083), a live pure-HP
-  // tank staple, same "not primarily a damage item" theme. (2) 3001 — same
-  // Evenshroud-vs-Abyssal-Mask id mix-up as TANK_MAGE above; fixed to 8020.
-  pool: [3068, 3075, 3143, 3065, 3084, 3110, 3083, 8020],
-  // Actual tanks only (the v0.47.0 brief: "high tankiness rating").
-  fits: (tags, rating) => tags.includes("Tank") || rating.tankiness >= 3,
-  curated: false,
-};
-
-const AP_ARCHETYPES: Archetype[] = [AP_MAGE, AP_BURST, TANK_MAGE];
-const AD_ARCHETYPES: Archetype[] = [BRUISER_AD, LETHALITY, CRIT_MARKSMAN, ON_HIT];
-
-/** v0.48.0 — de-dup keep-priority (lower index = higher priority = the name
- *  KEPT when two archetype lines collapse into one). The user-reported bug:
- *  Viktor's "AP/Mage" and "AP Burst" showed the IDENTICAL item list — because
- *  both are data-first and his real items are pure burst, so both resolve to
- *  the same picks. The de-dup below detects that and emits ONE block, keeping
- *  the higher-priority name. Standard builds outrank the off-meta variants
- *  (Tank Mage, Bruiser) so that when a variant DOES accidentally overlap a
- *  standard build, the standard name survives — but a properly curated variant
- *  is distinct by construction and is never the one dropped. AP/Mage outranks
- *  AP Burst, so Viktor's collapse keeps "AP/Mage". */
-const ARCHETYPE_PRIORITY: readonly string[] = [
-  "Tank",
-  "AP/Mage",
-  "Crit/Marksman",
-  "Lethality/Assassin",
-  "AP Burst",
-  "On-hit",
-  "Tank Mage",
-  "Bruiser (AD)",
-];
-function archetypePriority(title: string): number {
-  const i = ARCHETYPE_PRIORITY.indexOf(title);
-  return i < 0 ? ARCHETYPE_PRIORITY.length : i;
-}
-
-/** v0.48.0 — true when two built lines are near-duplicate BUILDS. Boots are
- *  excluded from the comparison — two genuinely different builds routinely
- *  share the champ's one boots pick, and a build is defined by its ~5 non-boots
- *  items, not its boots. Three conditions, ALL required:
- *    1. similar length (|A| - |B| <= 1) — a 3-item line and a 1-item line are
- *       different builds, not duplicates, even if one contains the other;
- *    2. they differ by at most one item within the smaller set
- *       (inter >= min-1) — catches the real bug's near-misses (AP/Mage vs
- *       AP Burst differing only in the last, differently-padded slot), not
- *       just byte-identical lines;
- *    3. they actually share something (inter >= 1) — without this a size-1
- *       set trivially satisfies `inter >= min-1 == 0` and every thin line
- *       would falsely collapse into every other (the Jinx Lethality-vs-Crit
- *       false positive).
- *  A curated variant (Tank Mage: durable AP; Bruiser: durable AD) shares at
- *  most 1-2 items with the standard build of its family, so it is never a
- *  near-duplicate; and dedupeArchetypeLines additionally never compares across
- *  curated-ness, so a variant is doubly protected from being dropped. */
-function nearDuplicateLines(
-  a: Candidate[],
-  b: Candidate[],
-  bootsIds: ReadonlySet<number>
-): boolean {
-  const sa = new Set(a.filter((c) => !bootsIds.has(c.id)).map((c) => c.id));
-  const sb = new Set(b.filter((c) => !bootsIds.has(c.id)).map((c) => c.id));
-  if (sa.size === 0 || sb.size === 0) return false;
-  if (Math.abs(sa.size - sb.size) > 1) return false;
-  const [small, large] = sa.size <= sb.size ? [sa, sb] : [sb, sa];
-  let inter = 0;
-  small.forEach((id) => {
-    if (large.has(id)) inter++;
-  });
-  return inter >= 1 && inter >= small.size - 1;
-}
-
-/** v0.48.0 — collapse near-duplicate archetype lines to one each, keeping the
- *  higher-priority name (ARCHETYPE_PRIORITY). Greedy over priority: the
- *  highest-priority survivor of any near-dup cluster is kept; lower-priority
- *  near-dups are dropped. The kept archetypes are returned in the caller's
- *  ORIGINAL emission order (block order preserved for the UI). Pure — no I/O,
- *  deterministic (priority is a total order, emission order is stable). */
-function dedupeArchetypeLines<T extends { arch: Archetype; line: Candidate[] }>(
-  entries: T[],
-  bootsIds: ReadonlySet<number>
-): T[] {
-  const byPriority = [...entries].sort(
-    (x, y) => archetypePriority(x.arch.title) - archetypePriority(y.arch.title)
-  );
-  const kept: T[] = [];
-  for (const cand of byPriority) {
-    // Only collapse lines of the SAME curated-ness. A curated VARIANT (Tank
-    // Mage, Bruiser) is a deliberate off-meta build meant to sit ALONGSIDE the
-    // standard build of its family — it must never be deduped away by a
-    // standard line just because they happen to share items (e.g. a mage whose
-    // AP/Mage fill reached for a durable item that also lives in Tank Mage).
-    // The user-reported dup was two DATA-FIRST siblings (AP/Mage == AP Burst);
-    // that's what this collapses. Variant-vs-variant can still collapse (rare).
-    if (
-      kept.some(
-        (k) => k.arch.curated === cand.arch.curated && nearDuplicateLines(cand.line, k.line, bootsIds)
-      )
-    )
-      continue;
-    kept.push(cand);
-  }
-  const keptArch = new Set(kept.map((k) => k.arch));
-  return entries.filter((e) => keptArch.has(e.arch));
-}
-
-// ── Cross-FAMILY de-dup (audit P1-B) ────────────────────────────────────────
-// dedupeArchetypeLines above only ever compared archetype lines to each other,
-// and only after Core build / Buy order / Pro build / Highest WPA had already
-// been pushed — so the v0.48.0 user complaint ("don't duplicate, show one and
-// name it appropriately, and make sure it doesn't happen for other champs")
-// kept firing BETWEEN families, 11 times across 23 live champions. The two
-// dedups are complementary and both stay: the archetype one is FUZZY (collapses
-// near-misses that differ by a single padded slot, boots ignored — that is the
-// Viktor AP/Mage-vs-AP-Burst case it was built for), this one is EXACT and
-// spans every family.
+// ── Cross-family de-dup (audit P1-B) ────────────────────────────────────────
+// The shop panel used to carry Core build + Buy order + Pro build + OTP build
+// + Highest WPA + up to 4 damage-archetype categories + Situational swaps —
+// up to nine blocks to triage mid-champ-select, and an earlier archetype-only
+// de-dup (superseded, since removed along with the rest of that machinery —
+// see the module header) missed duplicates that crossed BLOCK FAMILIES: 11
+// live instances across 23 champions, e.g. Ornn Top's `Highest WPA` and
+// `Tank` byte-identical, Garen's `Pro build` == `Highest WPA` (same 5 items,
+// merely REORDERED). dedupeLineBlocks below runs over EVERY build-line block,
+// EXACT match, item SET, ORDER-INSENSITIVE.
 
 /** Which build-line family a block belongs to. Order of declaration is the
- *  canonical EMISSION order and, for everything but the archetypes, also the
- *  keep-priority order — the block a user reads first is the one that survives
- *  a collision. Archetypes break the tie among themselves by
- *  ARCHETYPE_PRIORITY, not by emission order (unchanged from v0.48.0). */
-// FOUR build categories, and only four (user directive 2026-07-28). The shop
-// panel used to carry Core build + Buy order + Pro build + OTP build + Highest
-// WPA + up to 4 damage-archetype categories + Situational swaps — up to nine
-// blocks to triage mid-champ-select. The four that survive each answer a
-// DIFFERENT question:
+ *  canonical EMISSION order and also the keep-priority order — the block a
+ *  user reads first is the one that survives a collision. */
+// FOUR build categories, and only four (user directive 2026-07-28). Each
+// answers a DIFFERENT question:
 //
 //   wpa  — what the app's own WPA model recommends (the Builds page headline)
 //   pro  — what professionals actually built
@@ -627,14 +235,6 @@ function dedupeArchetypeLines<T extends { arch: Archetype; line: Candidate[] }>(
 // the surviving label is the more informative one. `gem` is last on purpose —
 // if the hidden gem equals a headline build it was never hidden, and the block
 // should disappear rather than repeat.
-//
-// The archetype/themed machinery further down this file is now UNREACHABLE from
-// buildItemSets (nothing calls buildThemedLine / buildArchetypeLine /
-// resolveDamageFamily / selectArchetypes / curatedArchetypePool / unionPool /
-// archetypeBlockTitle any more). It is left in place deliberately rather than
-// ripped out in the same commit: it is ~500 lines interleaved with live helpers,
-// and a line-range deletion attempt cut a live construct in half. Removing it is
-// a separate mechanical pass with tsc as the oracle.
 type LineFamily = "wpa" | "pro" | "otp" | "gem";
 
 const FAMILY_KEEP_RANK: Record<LineFamily, number> = {
@@ -681,10 +281,9 @@ function duplicateBlocks(a: LineBlock, b: LineBlock): boolean {
 
 /** Collapse duplicate build-line blocks across ALL families, keeping whichever
  *  comes first in canonical emission order. Deterministic: `keep` is a total
- *  order (family rank, then ARCHETYPE_PRIORITY within archetypes, then the
- *  emission index as a final tiebreak), and the survivors are returned in
- *  emission order so the block layout the user sees never depends on the
- *  dedup's internal traversal. */
+ *  order (family rank, then the emission index as a final tiebreak), and the
+ *  survivors are returned in emission order so the block layout the user sees
+ *  never depends on the dedup's internal traversal. */
 function dedupeLineBlocks(blocks: LineBlock[]): LineBlock[] {
   const byKeep = [...blocks].sort((x, y) => x.keep - y.keep || x.emit - y.emit);
   const kept: LineBlock[] = [];
@@ -695,71 +294,6 @@ function dedupeLineBlocks(blocks: LineBlock[]): LineBlock[] {
   return kept.sort((x, y) => x.emit - y.emit);
 }
 
-/** A real per-champ matched-item count at/above which an archetype line is
- *  presented as MEASURED (no "(low data)" suffix): enough of the champ's OWN
- *  data to fill every non-boots slot, so nothing is padded in from judgment.
- *
- *  Derived from CATEGORY_LINE_LEN rather than hardcoded, because hardcoding it
- *  is what broke it. It was a literal 3, justified by a comment reading
- *  "CATEGORY_LINE_LEN is 4 (3 non-boots + 1 boots)" — true when written, but
- *  the line length was raised 4 -> 6 in v0.48.0 and this constant was not.
- *  A line then needed 5 real non-boots items, so 3 measured + 2 curated-fill
- *  cleared the bar and shipped WITHOUT the "(low data)" suffix: Yuumi Support's
- *  "AP Burst" presented Luden's Echo and Shadowflame — pure fill on an
- *  enchanter — as measured. Judgment-filled entries must be labelled; tying the
- *  threshold to the length means the next length change can't silently unlabel
- *  them again. */
-const MIN_CATEGORY_MEASURED = CATEGORY_LINE_LEN - 1;
-
-/** How much of an archetype line the CHAMPION'S OWN DATA actually paid for
- *  (audit P1-C). Three states, because two could not tell the truth:
- *
- *  - `measured`  — the champ's own matched items fill every non-boots slot.
- *                  Plain title.
- *  - `low-data`  — some measured items, but below MIN_CATEGORY_MEASURED, so
- *                  curated/catalog judgment filled the rest. "(low data)".
- *  - `suggested` — ZERO measured non-boots items. The line is the curated pool
- *                  verbatim: a build we think is coherent, not one this champ's
- *                  data shows anyone playing. "(suggested)".
- *
- *  WHY A THIRD STATE. The old rule was `arch.curated ? false : ...` — a
- *  curated variant could never be labelled at ANY fill level, so Ornn Top's
- *  100%-fabricated `Bruiser (AD)` sat bare directly above the equally
- *  fabricated `On-hit (low data)`, inviting the user to read Bruiser as the
- *  better-evidenced of the two. The signal was inverted. But flipping the flag
- *  would have been just as wrong in the other direction: the old code's
- *  reasoning ("a judgment build is not a thin measurement") is correct, it was
- *  only attached to the wrong variable. `curated` describes where the ITEMS
- *  came from; the label has to describe what the EVIDENCE is — so the label
- *  now follows the evidence for curated and data-first archetypes alike.
- *
- *  "Suggested" is the house word for exactly this, not new vocabulary:
- *  components/hextech/SupportItemCard.tsx already renders
- *  "Suggested — <archetype> build, not measured". */
-type ArchetypeEvidence = "measured" | "low-data" | "suggested";
-
-function evidenceFor(realNonBootsCount: number): ArchetypeEvidence {
-  if (realNonBootsCount === 0) return "suggested";
-  if (realNonBootsCount < MIN_CATEGORY_MEASURED) return "low-data";
-  return "measured";
-}
-
-function archetypeBlockTitle(title: string, evidence: ArchetypeEvidence): string {
-  if (evidence === "suggested") return `${title} (suggested)`;
-  if (evidence === "low-data") return `${title} (low data)`;
-  return title;
-}
-
-/** Worst-case block-count guard (companion side wants ~10 blocks max):
- *  Starting/Core/Buy order/Pro build/Highest WPA/Situational already account
- *  for up to 6 blocks; capping archetypes at 4 keeps the theoretical worst
- *  case at 10. AP always selects <= 4 (pure Tank + 3 AP archetypes); only an
- *  AD champ with no sub-lean tags (full AD spread) plus a pure-Tank gate can
- *  reach 5. When more than 4 are selected, keep pure Tank plus the family
- *  archetypes with the MOST real per-champ data; declaration order preserved
- *  for the survivors. */
-const CATEGORY_MAX_EMIT = 4;
-
 function slugPart(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-+|-+$)/g, "") || "x";
 }
@@ -768,23 +302,20 @@ function itemRef(id: number, count = 1): ItemSetItem {
   return { id: String(id), count };
 }
 
-// ── Candidate: the one shape `buildLine`/themed-line construction operate
-// on ───────────────────────────────────────────────────────────────────────
-// Unifies Pick (wpa-ranked — Core/Optimized/Situational's native shape),
-// pro-consensus entries (share-ranked) and the curated/catalog fill pools
-// (gold-ranked) behind one type, so the dedup/boots-fix/padding/ranking logic
-// below is written ONCE, not once per pool type.
+// ── Candidate: the one shape `buildLine` construction operates on ─────────
+// Unifies Pick (wpa-ranked — Core/Optimized/Situational's native shape) and
+// pro/OTP-consensus entries (share-ranked) behind one type, so the
+// dedup/boots-fix/padding/ranking logic below is written ONCE, not once per
+// pool type.
 //
 // THE INVARIANT THIS TYPE EXISTS TO ENFORCE (audit P1-A, see header):
 //   `score` is the ONLY ranking axis. `raw.weight` is PROVENANCE and must
 //   never be compared against another candidate's unless `raw.scale` is
 //   identical — because -3.94 (a real live WPA) and 0.67 (a real live pro
 //   share) are not two points on one number line, and the module spent three
-//   releases pretending they were.
-//   Exactly ONE function in this file compares raw weights (orderByMetric),
-//   and it takes the scale as an explicit parameter so the comparison is
-//   provably within-scale. Everything else — unionPool, buildLine,
-//   findBestBoots, buildThemedLine, buildArchetypeLine — sorts on `score`.
+//   releases pretending they were. No code in this file compares raw weights
+//   across candidates any more — buildLine, findBestBoots and everything else
+//   sorts on `score`.
 
 /** Which number line a raw weight lives on. `wpa` can be negative and is
  *  unbounded; `share` is a proportion in 0..1; `gold` is an item's total cost.
@@ -1017,19 +548,6 @@ function fromShares(
   return entries.map((e) => toCandidate(e.itemId, ranking, { weight: e.share, scale: "share" }));
 }
 
-/** Score an ALREADY-ORDERED gold-scale fill pool by its position. The curated
- *  archetype pools are hand-ranked best-first (the declaration order IS the
- *  ranking, not the gold cost), and categoryDefaultPool sorts by gold before
- *  calling this — either way the array order is the intended ranking, so the
- *  score is derived from it directly. */
-function scoreByPosition(entries: { id: number; goldTotal: number }[]): Candidate[] {
-  return entries.map((e, i) => ({
-    id: e.id,
-    score: 1 / (1 + i),
-    raw: { weight: e.goldTotal, scale: "gold" as const },
-  }));
-}
-
 /** Sort a candidate list best-first on the ONE legal axis. The original array
  *  index is the tiebreak, so equal scores keep the caller's order (which is
  *  itself deterministic: pool priority, then within-pool rank) instead of
@@ -1121,12 +639,6 @@ function fullItemsOnly(cands: Candidate[], itemMeta: ReadonlyMap<number, ItemDet
   return cands.filter((c) => isFullItem(c.id, itemMeta.get(c.id)));
 }
 
-function hasAnyTag(meta: ItemDetail | undefined, tagSet: ReadonlySet<string>): boolean {
-  if (!meta) return false;
-  const tags = Array.isArray(meta.tags) ? meta.tags : [];
-  return tags.some((t) => tagSet.has(t));
-}
-
 /** Best (highest-weight) boots candidate across the fallback pools, in
  *  priority order, excluding anything already used in the line — the
  *  "insert the top boots from situational/consensus" step of the spec. */
@@ -1202,319 +714,6 @@ function buildLine(
   return [...others.slice(0, insertAt), boots, ...others.slice(insertAt)];
 }
 
-/** Best-RANK-wins union of several already full-item-filtered pools, deduped
- *  by id — the shared candidate pool every themed/archetype line ranks within.
- *  Keeping the best evidence an id has across sources is the original,
- *  correct intent; what was wrong (audit P1-A) is that it used to compare RAW
- *  weights, so a 0.67 pro share lost to a 2.11 WPA and a 0.9 pro share beat a
- *  0.4 WPA — comparisons with no meaning. It now compares `score`, the
- *  reciprocal rank WITHIN each id's own scale, which is commensurable.
- *
- *  Ties keep the EARLIER pool's candidate (strict `>`), and callers pass pools
- *  in a fixed priority order, so the union is deterministic. Note that an id
- *  present in two scales keeps whichever scale ranked it better — which is why
- *  a metric-claiming block must resolve its metric from the scale's own
- *  ranking table (orderByMetric) and not from the winning candidate's `raw`. */
-function unionPool(...pools: Candidate[][]): Candidate[] {
-  const best = new Map<number, Candidate>();
-  for (const pool of pools) {
-    for (const c of pool) {
-      const existing = best.get(c.id);
-      if (!existing || c.score > existing.score) best.set(c.id, c);
-    }
-  }
-  return Array.from(best.values());
-}
-
-/** A metric a block's TITLE claims. `valueOf` returns the metric's raw value
- *  for an id, or undefined when the item simply does not carry that metric
- *  (e.g. a pro-consensus-only item has no WPA — the champ's own build data
- *  never scored it). `scale` is what makes the raw comparison below legal:
- *  every value `valueOf` returns lives on that one number line. */
-interface MetricLens {
-  scale: WeightScale;
-  valueOf: (id: number) => number | undefined;
-}
-
-/** Order a pool for a block whose title CLAIMS a metric (audit P1-A).
- *
- *  Rule: items carrying the metric come FIRST, ordered by it; items lacking it
- *  are appended as FILL and may NEVER interleave above a metric-bearing item.
- *  Before this existed, "Highest WPA" ranked on the mixed weight axis, so a
- *  pro-consensus item with no measured WPA at all could sit 3rd in a block
- *  whose name is a claim about WPA ordering. A block that silently means
- *  something other than its own title is a lie the user has no way to detect,
- *  which is the class this closes.
- *
- *  The `b.v - a.v` comparison is the ONE raw-weight comparison in this file,
- *  and it is safe because every value came from the same `metric.scale`. */
-function orderByMetric(pool: Candidate[], metric: MetricLens): Candidate[] {
-  const bearing: { c: Candidate; v: number; i: number }[] = [];
-  const fill: { c: Candidate; i: number }[] = [];
-  pool.forEach((c, i) => {
-    const v = metric.valueOf(c.id);
-    if (v === undefined) fill.push({ c, i });
-    else bearing.push({ c, v, i });
-  });
-  bearing.sort((a, b) => b.v - a.v || a.i - b.i);
-  fill.sort((a, b) => b.c.score - a.c.score || a.i - b.i);
-  return [...bearing.map((x) => x.c), ...fill.map((x) => x.c)];
-}
-
-/** v0.36.0 — the "Highest WPA" line. `pool` is already full-item-filtered
- *  (buildItemSets's themedUnion). Omitted entirely (returns null) below
- *  MIN_THEMED_POOL candidates rather than padded with judgment fill.
- *
- *  Audit P1-A: the ordering now goes through `orderByMetric`, so the block
- *  genuinely IS ordered by the metric its title names — measured WPA first in
- *  descending order, then any pro-consensus-only item as trailing FILL. The
- *  boots pick is likewise the highest-WPA boots rather than the highest raw
- *  mixed weight.
- *
- *  The one thing the title does NOT claim is the boots SLOT position: boots is
- *  reinserted after the first 3 items by the same layout convention every
- *  other line in this module uses (see buildLine step 5) — that is a shop-panel
- *  reading order, not a ranking statement, and the boots chosen is still the
- *  metric's own best. */
-function buildThemedLine(
-  pool: Candidate[],
-  metric: MetricLens,
-  bootsIds: ReadonlySet<number>
-): Candidate[] | null {
-  if (pool.length < MIN_THEMED_POOL) return null;
-
-  const ordered = orderByMetric(pool, metric);
-  const nonBoots = ordered.filter((c) => !bootsIds.has(c.id));
-  const boots = ordered.find((c) => bootsIds.has(c.id)) ?? null;
-
-  const target = LINE_LEN - (boots ? 1 : 0);
-  const top = nonBoots.slice(0, target);
-  if (!boots) return top;
-
-  const insertAt = Math.min(3, top.length);
-  return [...top.slice(0, insertAt), boots, ...top.slice(insertAt)];
-}
-
-/** v0.47.0 — catalog-wide (NOT champ-scoped) full-item pool matching an
- *  archetype's own `match` predicate, ranked by total gold cost: a cheap,
- *  honest "this is a real, substantial item" proxy, deliberately NOT a claim
- *  of measured performance (the "(low data)" title suffix is what keeps this
- *  honest — see buildArchetypeLine). Last-resort fill when a champ has thin
- *  real data AND the curated pool didn't resolve. */
-function categoryDefaultPool(
-  itemMeta: ReadonlyMap<number, ItemDetail>,
-  match: (meta: ItemDetail) => boolean
-): Candidate[] {
-  const out: { id: number; goldTotal: number }[] = [];
-  itemMeta.forEach((m, id) => {
-    if (!isFullItem(id, m)) return;
-    // A fill pool only ever supplies NON-BOOTS padding slots (the one-boots
-    // machinery resolves the boots slot separately, from the champ's own
-    // pool). A boots-tagged item must never leak in here — e.g. Mercury's
-    // Treads / Plated Steelcaps carry a durability tag and would otherwise
-    // match the pure-Tank archetype and pad in as a SECOND pair of boots
-    // (the champ's recommended boots isn't the catalog's boots), reopening
-    // the "2 boots in one line" bug on a line whose bootsIds set (the
-    // recommended boots only) doesn't know this catalog boot is boots.
-    if (metaHasTag(m, "Boots")) return;
-    if (!match(m)) return;
-    out.push({ id, goldTotal: m.goldTotal });
-  });
-  // Gold desc IS this pool's ranking (see doc above); the id tiebreak keeps a
-  // catalog sweep deterministic across Map-iteration orders.
-  out.sort((a, b) => b.goldTotal - a.goldTotal || a.id - b.id);
-  return scoreByPosition(out);
-}
-
-/** AUDIT 2026-07-26 — a curated pool id going dead (purchasable:false in a
- *  later patch) used to fail completely silently: isFullItem already
- *  excludes it (see its own `meta.purchasable === false` check), so the pool
- *  just quietly shrank by one — exactly how ids 3001/6691/3193 rotted in
- *  16.13.1 without anyone noticing until a live audit compared them by hand
- *  against the real ddragon catalog. A hardcoded id LIST is what rotted here
- *  (the lesson recorded 2026-07-25 for isFullItem's starter partition); the
- *  structural fix is to check the catalog's own `purchasable` field and warn
- *  on the class, not just patch the three known instances. Dedupes per
- *  process (a warm lambda serving many requests only warns once per id) —
- *  this is a loud dev/ops signal, not a per-request budget concern. Absence
- *  from the map entirely is NOT warned here — that's the ordinary
- *  not-yet-loaded/version-mismatch case every other lookup in this module
- *  already tolerates silently, not evidence of a dead id. */
-const warnedDeadCuratedIds = new Set<number>();
-
-/** v0.47.0 — the curated archetype pool resolved against real item metadata:
- *  full items only, hand-ranked order preserved (best-first by construction,
- *  which IS "ranked by quality + tag fit"). Trusted verbatim: NOT re-filtered
- *  through the archetype's `match` predicate, so an on-archetype item whose
- *  tags don't literally satisfy the predicate (Abyssal Mask in Tank Mage) is
- *  kept. A wrong/legacy id absent from itemMeta simply drops out. */
-function curatedArchetypePool(
-  arch: Archetype,
-  itemMeta: ReadonlyMap<number, ItemDetail>
-): Candidate[] {
-  const out: { id: number; goldTotal: number }[] = [];
-  for (const id of arch.pool) {
-    const m = itemMeta.get(id);
-    if (m && m.purchasable === false && !warnedDeadCuratedIds.has(id)) {
-      warnedDeadCuratedIds.add(id);
-      console.warn(
-        `[itemSetBody] curated pool id ${id} ("${m.name}") in archetype "${arch.title}" is purchasable:false in the current catalog — the pool has silently shrunk by one. Replace it.`
-      );
-    }
-    if (!m || !isFullItem(id, m)) continue;
-    if (metaHasTag(m, "Boots")) continue; // fill pools never supply boots (see categoryDefaultPool)
-    out.push({ id, goldTotal: m.goldTotal });
-  }
-  // Hand-ranked declaration order IS the ranking here — scored by POSITION, not
-  // by gold, so a cheap-but-core item (Black Cleaver) is never demoted beneath
-  // an expensive late one just because it costs less.
-  return scoreByPosition(out);
-}
-
-/** v0.47.0 — infer a champion's damage FAMILY. Primary signal: the champ's
- *  OWN recommended full items' damage tags (the strongest client-available
- *  signal — it reflects real itemization, so it classifies AP assassins/
- *  fighters like Fizz/Mordekaiser correctly where their ddragon class tag
- *  would not). Tie / no damage-tagged items -> ddragon class tags (Mage/
- *  Support -> AP; Marksman/Assassin/Fighter -> AD). Last resort -> AP (a
- *  tag-less, damage-item-less champ is almost always a utility/enchanter or
- *  tank, AP-family).
- *
- *  NOTE (the v0.47.0 brief asked to "prefer info.magic>info.attack"): ddragon's
- *  info block is SERVER-ONLY (lib/staticData.ts getChampionMeta) and NOT on
- *  ChampionRef's wire contract, so it isn't available in this pure client
- *  module without new API plumbing. The real-item signal used here is strictly
- *  BETTER for this purpose than the coarse 1-10 info scale (info misclassifies
- *  hybrid champs; actual recommended items do not), so no info plumbing was
- *  added — see HANDOFF-engy for the tradeoff.
- *
- *  `confident` is true when the family came from real damage items OR a
- *  damage class tag (Mage/Support/Marksman/Assassin/Fighter) — a genuine
- *  signal that the champ deals that damage type. It's false ONLY for the
- *  last-resort default (a champ with no damage items AND no damage class tag —
- *  a pure tank/utility champ), which lets buildItemSets suppress catalog-fill
- *  damage archetypes it can't stand behind (a pure tank should get its Tank
- *  line, not a nonsensical "AP/Mage (low data)"). */
-function resolveDamageFamily(
-  champ: ChampionRef,
-  realFullItems: Candidate[],
-  itemMeta: ReadonlyMap<number, ItemDetail>
-): { family: DamageFamily; confident: boolean } {
-  let ap = 0;
-  let ad = 0;
-  for (const c of realFullItems) {
-    const m = itemMeta.get(c.id);
-    if (!m) continue;
-    if (hasAnyTag(m, AP_DAMAGE_TAGS)) ap++;
-    if (hasAnyTag(m, AD_DAMAGE_TAGS)) ad++;
-  }
-  // Audit follow-up (2026-07-26) — a bare ap!==ad tie-break let a SINGLE
-  // incidentally-tagged item decide the whole family. Live repro: Leona/Braum/
-  // Nautilus/Rell (real ddragon tags ["Tank","Support"]) all landed at
-  // ap=0/ad=1 or ap=1/ad=0 -- one item each, e.g. the support Artifact item
-  // Bandlepipes (id 2524), which is a generic durability item every support
-  // can pick regardless of the champion's own damage type, but carries an
-  // incidental "AttackSpeed" stat tag -- enough to satisfy AD_DAMAGE_TAGS and
-  // (because ap!==ad was the ONLY gate) claim `confident: true`, skipping the
-  // tag-based fallback that would have correctly read "Support" -> AP.
-  // FAMILY_TALLY_MARGIN requires the item signal to be a real majority (>=2
-  // more matched items on one side) before it overrides the champion's own
-  // ddragon class tags. Verified live across 27 champions (8 supports named
-  // in the brief + Rell/Rakan/Thresh/Pyke/Senna/Karma/Sona + AD/AP controls +
-  // 5 non-support tanks): every genuine AD/AP carry (Draven ad=15, Ahri
-  // ap=14, Pyke ad=10, Senna ad=10 vs ap=2) clears this margin by a wide
-  // margin untouched; every single-item false positive (Leona, Braum,
-  // Nautilus, Rell, all margin=1) now falls through to the tag branch below
-  // and resolves correctly. A margin of exactly 2 (Shen: ad=3/ap=1) is left
-  // item-driven, unchanged from today -- outside the briefed scope and not
-  // demonstrated wrong.
-  const FAMILY_TALLY_MARGIN = 2;
-  if (Math.abs(ap - ad) >= FAMILY_TALLY_MARGIN) {
-    return { family: ap > ad ? "AP" : "AD", confident: true };
-  }
-  const tags = champ.tags ?? [];
-  if (tags.includes("Mage") || tags.includes("Support")) return { family: "AP", confident: true };
-  if (tags.includes("Marksman") || tags.includes("Assassin") || tags.includes("Fighter")) {
-    return { family: "AD", confident: true };
-  }
-  return { family: "AP", confident: false };
-}
-
-/** v0.47.0 — the ordered archetypes to emit for a champion: pure Tank (if an
- *  ACTUAL tank) + the champ's damage family. AP always emits its full
- *  3-archetype set (AP/Mage, AP Burst, Tank Mage); AD emits the sub-lean
- *  archetypes its class tags fit, falling back to the full AD spread when a
- *  champ has no AD sub-lean tag (e.g. resolved to AD purely via its items).
- *  A cross-family archetype is NEVER included — the core of the redesign. */
-function selectArchetypes(
-  family: DamageFamily,
-  champTags: string[],
-  rating: RatedComp
-): Archetype[] {
-  const out: Archetype[] = [];
-  if (TANK_PURE.fits(champTags, rating)) out.push(TANK_PURE);
-  if (family === "AP") {
-    out.push(...AP_ARCHETYPES);
-  } else {
-    const subs = AD_ARCHETYPES.filter((a) => a.fits(champTags, rating));
-    out.push(...(subs.length > 0 ? subs : AD_ARCHETYPES));
-  }
-  return out;
-}
-
-/** v0.48.0 — build one archetype line as a FULL 6-item build (5 items + 1
- *  boots), through the same one-boots / isFullItem machinery every other line
- *  uses. Two modes (see Archetype.curated):
- *
- *  DATA-FIRST (AP/Mage, AP Burst, Crit/Marksman, Lethality, On-hit, pure Tank):
- *  the champ's OWN matched items rank first, then the line is PADDED to a full
- *  build from the curated pool, then catalog `match` defaults.
- *
- *  CURATED-DRIVEN (Tank Mage, Bruiser (AD)): the build is defined by the
- *  curated pool, NOT the champ's (off-archetype) real data. The champ's own
- *  items that genuinely satisfy `match` (durable-AP items a mage actually
- *  builds) still rank first — on-archetype AND measured — but his
- *  off-archetype burst items are never pulled in (they fail `match`), and the
- *  curated pool defines the rest of a coherent, ordered durable build.
- *
- *  Either way the champ's own real boots are folded in so a line never strands
- *  itself boots-less, and a line that resolves to boots-only (no archetype
- *  content anywhere in reach) returns empty so buildItemSets omits the block.
- *
- *  Audit P1-C: the honesty label is now THREE-state and is computed the SAME
- *  WAY for curated and data-first archetypes — see ArchetypeEvidence. */
-function buildArchetypeLine(
-  pool: Candidate[],
-  arch: Archetype,
-  itemMeta: ReadonlyMap<number, ItemDetail>,
-  bootsIds: ReadonlySet<number>
-): { line: Candidate[]; evidence: ArchetypeEvidence } {
-  const realMatched = byScoreDesc(
-    pool.filter((c) => {
-      const m = itemMeta.get(c.id);
-      return m ? arch.match(m) : false;
-    })
-  );
-  const realNonBoots = realMatched.filter((c) => !bootsIds.has(c.id));
-  const hasRealBoots = realMatched.some((c) => bootsIds.has(c.id));
-  const overallBoots = byScoreDesc(pool.filter((c) => bootsIds.has(c.id)))[0] ?? null;
-
-  const curatedFill = curatedArchetypePool(arch, itemMeta);
-  const catalogFill = categoryDefaultPool(itemMeta, arch.match);
-
-  // Primary = the champ's real matched (on-archetype) items, weight-ranked,
-  // plus his own boots when the matched set had none — identical for both
-  // modes (a curated variant still leads with the champ's genuine durable
-  // items). The curated pool then completes the build for a variant, or pads a
-  // short standard line to a full 6.
-  const primary = overallBoots && !hasRealBoots ? [...realMatched, overallBoots] : realMatched;
-  const line = buildLine(primary, [curatedFill, catalogFill], bootsIds, CATEGORY_LINE_LEN);
-  if (line.filter((c) => !bootsIds.has(c.id)).length === 0)
-    return { line: [], evidence: "measured" };
-
-  return { line, evidence: evidenceFor(realNonBoots.length) };
-}
-
 function toItemRefs(cands: Candidate[]): ItemSetItem[] {
   return cands.map((c) => itemRef(c.id));
 }
@@ -1573,46 +772,33 @@ function baseSet(champ: ChampionRef, roleLabel: string): Omit<ItemSet, "blocks">
   };
 }
 
-/** ONE item set per champion+role — Core/Buy order/Pro/themed/Situational
- *  are all BLOCKS (in-game shop-panel lines) inside it, not separate sets.
- *  See module header for the "3 sets → 1 set" restructure and the v0.36.0
- *  full-item / rename / themed-lines follow-up.
+/** ONE item set per champion+role — Starting plus the four build-line
+ *  BLOCKS (in-game shop-panel lines) below are all inside it, not separate
+ *  sets. See module header for the "3 sets → 1 set" restructure and the
+ *  2026-07-28 four-build-category cut (see the FOUR build categories note
+ *  above LineFamily) that replaced the old up-to-nine-block model.
  *
  *  `itemMeta` (v0.36.0, optional — defaults to empty) is the SAME
  *  ItemDetail map components/itemDetail.ts's getItemDetailMap already
- *  resolves (itemSetsApply.ts fetches it; see that module). Powers TWO
- *  things: (1) the full-items-only filter on every 6-item build line
- *  (isFullItem), (2) themed-line tag classification (hasAnyTag). Starting
- *  and Situational swaps never consult it — unaffected either way.
+ *  resolves (itemSetsApply.ts fetches it; see that module). Powers the
+ *  full-items-only filter on every 6-item build line (isFullItem). Starting
+ *  never consults it — unaffected either way.
  *
  *  EVERY build-line block below is additionally subject to the cross-family
  *  de-dup (audit P1-B, dedupeLineBlocks): a block whose ITEM SET already
  *  appeared in a higher-priority block is dropped, so "the gate says emit it"
- *  is necessary but not sufficient. Keep-priority is the emission order below;
- *  the Core build / Buy order pair is the one order-SENSITIVE comparison.
+ *  is necessary but not sufficient. Keep-priority is the emission order below.
  *
- *  Block order: Starting (exempt from the 6-rule — 1-3 items) → Core build
- *  (always — the ONE block emitted even when empty, see its push site) → Buy
- *  order (only when
- *  resolveOptimizedPathView says it genuinely differs from Core — same rule
- *  the old buildOptimizedSet used — padded to 6 with the CORE remainder
- *  specifically, so it reads as "same build, refined order" rather than
- *  pulling in situational/pro noise) → Pro build (only when pro-consensus
- *  data resolves, boots-deduped to the single highest-share pick, padded
- *  via the general optimized→situational→consensus cascade) → Highest WPA
- *  (only when the whole pool has ≥4 qualifying full items — see
- *  buildThemedLine; ORDERED BY WPA since the audit, so the title is a
- *  checkable claim) → up to CATEGORY_MAX_EMIT damage-type archetypes
- *  (v0.47.0 — family-scoped: pure Tank if an actual tank, then the champ's AP
- *  set [AP/Mage, AP Burst, Tank Mage] or AD set [Bruiser (AD),
- *  Lethality/Assassin, Crit/Marksman, On-hit]; never a cross-family line; thin
- *  data fills via buildArchetypeLine and gets a "(low data)" or "(suggested)"
- *  title suffix instead of being dropped — see ArchetypeEvidence)
- *  → Situational swaps
- *  (the alternates pool, cap 6, exempt
- *  from BOTH the one-boots rule AND the full-items rule — these are swap
- *  SUGGESTIONS, not a worn loadout, so a stacking item or several boots
- *  options side by side is the intended shape, not a bug). */
+ *  Block order: Starting (exempt from the 6-rule — 1-3 items) → WPA build
+ *  (always — the ONE block emitted even when empty, see its push site; the
+ *  optimized/situational/pro pools feed it only as PADDING, they are not
+ *  their own blocks) → Pro build (only when pro-consensus data resolves,
+ *  boots-deduped to the single highest-share pick) → OTP build (same shape,
+ *  one-trick consensus) → Hidden gem (only when selectHiddenGemPicks finds a
+ *  genuine under-played/over-performing pick). Pro build and OTP build each
+ *  pad via optimized→situational→(the other consensus)→corePrimary, same
+ *  cascade shape, so a champ with no `pro.boots`/`otp.boots` still gets a
+ *  boots slot via the champ's own core boots. */
 export function buildItemSets(
   champ: ChampionRef,
   roleLabel: string,

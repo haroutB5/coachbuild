@@ -2,6 +2,20 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.71.2] — 2026-07-28 — Deleting the machinery the four-block shop stopped calling
+
+### Removed
+- **814 dead lines out of `components/hextech/itemSetBody.ts`** (1801 → 987). The
+  damage-archetype/themed-line system — `buildArchetypeLine`, `buildThemedLine`,
+  `dedupeArchetypeLines`, the eight curated archetype pools (AP Mage, Tank, Bruiser,
+  Lethality, Crit Marksman, On-hit, etc.) and their scoring/tagging helpers — was
+  orphaned when v0.71.0 moved the shop to four fixed blocks (WPA / Pro / OTP / Hidden
+  gem). Nothing in the app called any of it anymore. Zero behaviour change: the
+  generated item-set output was captured for 8 live champion/role combos (Ahri Mid,
+  Jinx Bot, Leona Support, Darius Top, Lee Sin Jungle, Viktor Mid, Thresh Support,
+  Garen Top) before and after the deletion and diffed byte-identical (same MD5).
+  Internal cleanup only — nothing user-visible changes.
+
 ## [0.71.1] — 2026-07-28 — The page and the shop finally speak the same language
 
 ### Fixed
