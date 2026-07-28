@@ -312,16 +312,40 @@ describe("selectHiddenGemPicks", () => {
 
 describe("buildItemSets — Hidden gem block", () => {
   it("emits the block with the gem LEADING, padded to a real build", () => {
+    // TWO gems, deliberately. A single gem padded from the WPA build differs
+    // from it by exactly one item, which the near-duplicate rule now drops —
+    // see MAX_UNIQUE_ITEMS_FOR_NEAR_DUPLICATE and the test below. This case is
+    // about the block's SHAPE (gem first, padded to a playable line), so it
+    // needs a gem block that survives on its own merits.
     const items = baseItems({
-      alts: { first: [pick(3200, 0.01, { winrate: 59, occurrence: 1500 })] },
+      alts: {
+        first: [
+          pick(3200, 0.01, { winrate: 59, occurrence: 1500 }),
+          pick(3201, 0.01, { winrate: 58, occurrence: 1500 }),
+        ],
+      },
     });
-    const m = metaMap(...Array.from(baseItemMetaMap().values()));
+    const m = metaMap(...Array.from(baseItemMetaMap().values()), meta(3201));
     const sets = buildItemSets(CHAMP, "Bot", baseBuild(items), null, m);
     const gem = findBlock(sets, "Hidden gem");
     expect(gem).toBeDefined();
     expect(Number(gem!.items[0].id)).toBe(3200);
     // A two-item recommendation is not a build anyone can play.
     expect(gem!.items.length).toBeGreaterThan(1);
+  });
+
+  it("drops a gem block that differs from the WPA build by a single item", () => {
+    // The Viktor Mid report, 2026-07-28: "OTP and hidden gem look too much like
+    // the first two". With GEM_MIN_ITEMS = 1 the gem block is one distinctive
+    // item plus five copied from the WPA build, which is a swap rather than a
+    // second opinion. A labelled block in a shop panel is a claim about where
+    // its contents came from, so a one-item delta is not worth one.
+    const items = baseItems({
+      alts: { first: [pick(3200, 0.01, { winrate: 59, occurrence: 1500 })] },
+    });
+    const m = metaMap(...Array.from(baseItemMetaMap().values()));
+    const sets = buildItemSets(CHAMP, "Bot", baseBuild(items), null, m);
+    expect(blockTypes(sets)).not.toContain("Hidden gem");
   });
 
   it("emits no block when nothing qualifies", () => {

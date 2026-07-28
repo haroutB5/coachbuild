@@ -2,6 +2,52 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.72.0] — 2026-07-28 — Blocks that only differ by one item stop pretending to be a second opinion
+
+### Changed
+- **A build block that differs from a higher one by a single item is now dropped.** Reported on
+  Viktor Mid: "OTP and hidden gem look too much like the first two". They did, and the cause is
+  arithmetic, not a bug in any one block. Every line is built to SIX slots, but no source supports
+  six. Measured on Viktor the same day: the one-trick feed had **65 games from 8 players with only
+  five items above 20% agreement**; the pro feed had **300 games and also only five**. Both lines
+  run out of their own evidence and pad the rest from the shared fallback cascade
+  (optimized → situational → the other consensus → the champion's core), so their tails converge by
+  construction. Hidden gem was the extreme case: `GEM_MIN_ITEMS` is 1 and the remaining slots fill
+  from the WPA build, so a gem block was typically **one distinctive item and five copied ones**.
+
+  The de-dup used to require an *identical* item set, which almost never happened. It now drops a
+  block that adds at most one item the kept block does not have. Asymmetric on purpose: the question
+  is whether the candidate still tells you something, so a short block wholly contained in a longer
+  one also goes — set equality missed that entirely.
+
+  **The underlying data was never degenerate.** Viktor's one-tricks put Lich Bane at 40% where pros
+  have it at 21%, and build Void Staff where pros build Rabadon's. That signal was real; it was
+  being diluted to one or two slots out of six and shown at the same weight as the filler.
+
+  Measured across six champions after the change — no panel is gutted, and every surviving block now
+  differs by at least two items:
+
+  | Champion | Blocks | Note |
+  |---|---|---|
+  | Viktor Mid | 4 | OTP dropped as a near-copy of Pro; gem now leads Void Staff + Stormsurge |
+  | Ahri Mid | 5 | all four families survive, all genuinely distinct |
+  | Jinx Bot | 4 | OTP survives with Yun Tal + Mortal Reminder; gem dropped |
+  | Lee Sin Jungle | 3 | pros and one-tricks both agree with the WPA build |
+  | Garen Top | 3 | no OTP data ingested yet |
+  | Thresh Support | 3 | no OTP data ingested yet |
+
+  Fewer blocks now means **the sources agree**, not that data is missing.
+
+### Known limits, stated rather than papered over
+- **OTP coverage is 58 of ~170 champions**, and 24 of those have under 80 games. Garen and Thresh
+  above have none. The ingest is still working through the roster.
+- **Boots count as ordinary items in the similarity test**, so two lines differing only in their boot
+  collapse. That is a real build difference being discarded; it is kept this way because a
+  boots-only difference is exactly what was being called a duplicate.
+- A block is dropped against **any** higher-priority block, and priority is WPA → Pro → OTP → gem. So
+  a one-trick build that happens to match the pro build loses to it, as on Viktor.
+
+
 ## [0.71.2] — 2026-07-28 — Deleting the machinery the four-block shop stopped calling
 
 ### Removed

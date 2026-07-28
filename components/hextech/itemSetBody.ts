@@ -262,8 +262,40 @@ function idOrderKey(line: Candidate[]): string {
   return line.map((c) => c.id).join(",");
 }
 
-/** Two blocks are duplicates when they carry the IDENTICAL ITEM SET,
- *  ORDER-INSENSITIVE.
+/** How many items a block may carry that a higher-priority block does not,
+ *  before it counts as a near-duplicate and is dropped.
+ *
+ *  1 means "shares all but one item". User directive 2026-07-28, from a live
+ *  report on Viktor Mid that the OTP and Hidden gem blocks "look too much like
+ *  the first two".
+ *
+ *  They did, and the cause is arithmetic rather than a bug in any one block.
+ *  Every line is built to SIX slots, but no source supports six. Measured on
+ *  Viktor Mid the same day: the one-trick feed had 65 games from 8 players with
+ *  only FIVE items above 20% agreement; the pro feed had 300 games and also only
+ *  five. Both lines therefore run out of their own evidence and pad the rest from
+ *  the shared fallback cascade (optimized → situational → the other consensus →
+ *  the champion's core), so the tails converge by construction. Hidden gem is the
+ *  extreme case: GEM_MIN_ITEMS is 1 and the remaining slots fill from the WPA
+ *  build, so a gem block is typically one distinctive item and five copied ones.
+ *
+ *  The underlying data is NOT degenerate — Viktor's one-tricks put Lich Bane at
+ *  40% where pros have it at 21%, and build Void Staff where pros build
+ *  Rabadon's. That signal is real; it was just being diluted to one or two slots
+ *  out of six and shown at the same visual weight as the filler.
+ *
+ *  So: a block that differs by a single item is the same recommendation with a
+ *  swap, not a second opinion worth a labelled block in a shop panel you read
+ *  mid-game. Dropping it is better than showing it, because a block's TITLE is a
+ *  claim about where its contents came from. */
+const MAX_UNIQUE_ITEMS_FOR_NEAR_DUPLICATE = 1;
+
+/** Two blocks collide when the later one adds at most
+ *  MAX_UNIQUE_ITEMS_FOR_NEAR_DUPLICATE items the earlier one does not have —
+ *  ORDER-INSENSITIVE, and asymmetric on purpose: what matters is whether the
+ *  CANDIDATE still tells the reader something, not whether the two are alike in
+ *  the abstract. A 3-item block wholly contained in a kept 6-item block adds
+ *  nothing and goes, which set equality would have missed entirely.
  *
  *  Order-insensitive is load-bearing: Garen Top shipped `Pro build` and
  *  `Highest WPA` with the same five items merely REORDERED, and a user reading
@@ -274,9 +306,28 @@ function idOrderKey(line: Candidate[]): string {
  *  because Buy order existed only to re-express the same items in purchase
  *  order) went with Buy order itself in the 2026-07-28 four-category cut. All
  *  four surviving families name a distinct SOURCE, so two of them landing on
- *  the same item set genuinely is the same recommendation twice, in any order. */
-function duplicateBlocks(a: LineBlock, b: LineBlock): boolean {
-  return idSetKey(a.line) === idSetKey(b.line);
+ *  the same item set genuinely is the same recommendation twice, in any order.
+ *
+ *  KNOWN AND ACCEPTED: boots count as ordinary items here, so two lines that
+ *  differ ONLY in their boot collapse. That is a real build difference being
+ *  discarded. It is kept this way because the directive was explicitly "shares
+ *  5 or 6 of 6 → drop", and because a boots-only difference is exactly what the
+ *  reader was calling a duplicate. Revisit by excluding boots from `uniqueTo`
+ *  if a boots-only split ever turns out to be worth its own block. */
+function duplicateBlocks(kept: LineBlock, cand: LineBlock): boolean {
+  return uniqueTo(cand.line, kept.line) <= MAX_UNIQUE_ITEMS_FOR_NEAR_DUPLICATE;
+}
+
+/** Count of distinct item ids in `line` that do not appear in `other`.
+ *
+ *  Array.from around the Set rather than iterating it directly: this file is
+ *  compiled by the Next build with a target that does not downlevel Set
+ *  iteration, so `for (const x of someSet)` type-checks under tsc and then
+ *  fails the build. */
+function uniqueTo(line: Candidate[], other: Candidate[]): number {
+  const seen = new Set(other.map((c) => c.id));
+  const distinct = Array.from(new Set(line.map((c) => c.id)));
+  return distinct.filter((id) => !seen.has(id)).length;
 }
 
 /** Collapse duplicate build-line blocks across ALL families, keeping whichever

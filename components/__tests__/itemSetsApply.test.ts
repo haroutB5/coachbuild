@@ -306,7 +306,20 @@ describe("applyItemSetsForBuild", () => {
         // absence of a block for a reason that had nothing to do with wiring.
         // 3094 is pro-only; the 5th core item (3046, added below) is what stops
         // Core build reaching into the pro pool to fill its last slot.
-        if (url.startsWith("/api/pros")) return jsonResponse({ games: [PRO_GAME(3094), PRO_GAME(3094)] });
+        // 2026-07-28: TWO pro-only items, not one. The near-duplicate rule
+        // (MAX_UNIQUE_ITEMS_FOR_NEAR_DUPLICATE in itemSetBody.ts) now drops a
+        // block that adds only a single item the kept block does not have, so a
+        // one-item pro fixture would collapse and leave this WIRING test failing
+        // for a reason that has nothing to do with wiring — the same trap the
+        // note above describes, one notch further along. 6672 is pro-only and
+        // absent from baseBuild's core (3006/3031/3036/3095/3072 + 3046).
+        if (url.startsWith("/api/pros"))
+          return jsonResponse({
+            games: [
+              { ...PRO_GAME(3094), finalItems: [3094, 6672, 1054] },
+              { ...PRO_GAME(3094), finalItems: [3094, 6672, 1054] },
+            ],
+          });
         if (url.startsWith("https://cdn.coachless.gg"))
           return jsonResponse({
             ...ITEM_JSON_FIXTURE,
@@ -314,6 +327,7 @@ describe("applyItemSetsForBuild", () => {
               ...ITEM_JSON_FIXTURE.data,
               "3046": { name: "Phantom Dancer", tags: ["AttackSpeed"], into: [], from: ["1018"] },
               "3094": { name: "Rapid Firecannon", tags: ["CriticalStrike"], into: [], from: ["1038"] },
+              "6672": { name: "Kraken Slayer", tags: ["AttackSpeed"], into: [], from: ["1038"] },
             },
           });
         if (url.includes("/apply-itemsets")) {
