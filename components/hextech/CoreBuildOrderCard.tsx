@@ -53,18 +53,39 @@ export default function CoreBuildOrderCard({ items, onItemClick }: CoreBuildOrde
           moment a late slot's best available option is negative, which is a
           real state and one users have seen (Jinx's 6th item at -0.02). Say
           what it means instead of letting the number look like a bug. */}
+      {/* Renamed from "Core Order — buy order" 2026-07-28. The in-game shop
+          block carrying these exact items is titled "WPA build", and the page
+          calling the same thing something else is a vocabulary split the user
+          has to reconcile themselves. One name, both surfaces. "buy order" is
+          kept as the qualifier because the arrows genuinely are a sequence. */}
       <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold mb-1">
-        Core Order <span className="text-mut/60 normal-case tracking-normal font-normal">— buy order</span>
+        WPA Build <span className="text-mut/60 normal-case tracking-normal font-normal">— buy order</span>
       </p>
       {/* WPA is the app's central number and appeared NOWHERE in prose before
           v0.60.1 — every green/red figure on this page is one, on a scale
           nothing explained. Defined once, here, where the first labelled WPA
-          lives; /compact renders this same card and inherits it. */}
-      <p className="text-[10.5px] text-mut/70 normal-case mb-4 leading-relaxed">
-        <span className="text-txt/80">WPA is Win Probability Added</span> — how much a pick shifts your chance of
-        winning, measured by coachless.gg. Each slot shows the highest-WPA option for that point in the build; a
-        negative value means even the best option there trends slightly below average.
-      </p>
+          lives; /compact renders this same card and inherits it.
+          v0.71.1: the DEFINITION stays inline (a returning user still needs the
+          scale named), but the two sentences of mechanics moved behind a tap.
+          It was ~4 lines of prose on every mobile visit, above the build the
+          user actually opened the page for. Native <details> so it needs no
+          state, no JS, and stays keyboard- and screen-reader-operable. */}
+      <details className="group mb-4">
+        <summary className="text-[10.5px] text-mut/70 normal-case leading-relaxed cursor-pointer list-none marker:content-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-teal rounded-sm">
+          <span className="text-txt/80">WPA is Win Probability Added</span>
+          <span className="text-mut/50"> — how much a pick shifts your chance of winning. </span>
+          <span className="text-teal-dim underline decoration-dotted underline-offset-2 group-open:hidden">
+            More
+          </span>
+          <span className="text-teal-dim underline decoration-dotted underline-offset-2 hidden group-open:inline">
+            Less
+          </span>
+        </summary>
+        <p className="text-[10.5px] text-mut/70 normal-case mt-2 leading-relaxed">
+          Measured by coachless.gg. Each slot shows the highest-WPA option for that point in the
+          build; a negative value means even the best option there trends slightly below average.
+        </p>
+      </details>
       <div className="flex items-start flex-wrap gap-x-1 gap-y-4">
         {order.map((pick, i) => (
           <div key={`${pick.id}-${i}`} className="flex items-start">

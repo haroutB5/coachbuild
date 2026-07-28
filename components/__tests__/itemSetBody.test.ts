@@ -243,6 +243,20 @@ describe("selectHiddenGemPicks", () => {
     expect(out.map((p) => p.id)).toEqual([103]);
   });
 
+  it("refuses a SNOWBALL item however large its sample", () => {
+    // The defect the first version shipped with, caught by looking at the
+    // rendered card and not by any threshold test: Ahri's top "gem" came back
+    // as Mejai's Soulstealer, 78.5% across 8,149 games. Huge sample, real
+    // winrate, every other guard passed — and a terrible recommendation,
+    // because Mejai's is bought BECAUSE you are already winning. A winrate that
+    // far above the pool measures won games, not the item.
+    const pool = [...gemPool(), pick(105, 0.01, { winrate: 78.5, occurrence: 8149 })];
+    const out = selectHiddenGemPicks(pool, new Set(), metaMap(...Array.from(M.values()), meta(105)));
+    expect(out.map((p) => p.id)).not.toContain(105);
+    // ...and the legitimate gem still survives alongside it.
+    expect(out.map((p) => p.id)).toEqual([103]);
+  });
+
   it("refuses a winrate computed off too few games", () => {
     // The whole trap this block exists to avoid: 9 games, 78% winrate, noise.
     const pool = [...gemPool(), pick(105, 0.01, { winrate: 78, occurrence: 9 })];

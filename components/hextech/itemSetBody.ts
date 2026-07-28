@@ -884,8 +884,8 @@ function toCandidate(id: number, ranking: ScaleRanking, fallback: RawWeight): Ca
 //   3. GEM_PLAY_RATE_CEILING — it must be genuinely UNDER-played relative to
 //      that same pool. An item everyone already builds cannot be hidden.
 //
-// And a fourth, structural: anything already emitted in the WPA / Pro / OTP
-// lines is excluded outright. If a "hidden" pick is what pros build, it is not
+// And a fourth, structural: anything already in the WPA build is excluded
+// outright. A "hidden" pick that is already your top recommendation is not
 // hidden — it is just the build, and repeating it would make the block a lie.
 //
 // When fewer than GEM_MIN_ITEMS candidates clear all of that, NO block is
@@ -910,6 +910,28 @@ function toCandidate(id: number, ranking: ScaleRanking, fallback: RawWeight): Ca
 const MIN_GEM_OCCURRENCE = 500;
 /** Percentage POINTS above the pool's median winrate. */
 const GEM_WINRATE_MARGIN_PP = 2;
+/**
+ * UPPER bound, in percentage points above the median — a SELECTION-BIAS guard,
+ * and the one the first version of this feature was missing.
+ *
+ * Caught by looking at the rendered card rather than by any unit test: Ahri's
+ * top "gem" came back as **Mejai's Soulstealer at 78.5% across 8,149 games**.
+ * The sample is enormous and the winrate is real, so every guard above passed.
+ * It is still a terrible recommendation: Mejai's is a snowball stack you buy
+ * BECAUSE you are already far ahead. Its winrate measures the games it gets
+ * bought in, not the effect of buying it. Telling a user to build it is telling
+ * them to buy a trophy for a game they have not won yet.
+ *
+ * A genuine item edge in this data sits around 2-8pp over the pool median.
+ * Anything past +10pp is not an under-rated item, it is an item that only
+ * appears in won games — the same reason Dark Seal and every other snowball
+ * stack would rank absurdly here. Excluding the top end costs nothing real and
+ * removes the whole class.
+ *
+ * Live on Ahri: drops Mejai's (+~26pp), keeps Banshee's Veil (+5.7),
+ * Shadowflame (+4.4) and Gluttonous Greaves (+3.9).
+ */
+const GEM_WINRATE_CEILING_PP = 10;
 /** Must be played at most this fraction of the pool's median play count. */
 const GEM_PLAY_RATE_CEILING = 0.6;
 /** One genuine find is worth a block. Measured: the strongest results in the
@@ -970,6 +992,9 @@ export function selectHiddenGemPicks(
     (p) =>
       !excludeIds.has(p.id) &&
       (p.winrate as number) >= baselineWinrate + GEM_WINRATE_MARGIN_PP &&
+      // Upper bound too — see GEM_WINRATE_CEILING_PP. A winrate this far above
+      // the pool is a snowball item measuring won games, not a hidden edge.
+      (p.winrate as number) <= baselineWinrate + GEM_WINRATE_CEILING_PP &&
       p.occurrence <= medianPlay * GEM_PLAY_RATE_CEILING
   );
 
@@ -1733,11 +1758,20 @@ export function buildItemSets(
   // optimized path, full alternatives pool) — NOT the pro/OTP pools: those are
   // consensus feeds carrying a share metric, with no winrate and no play-rate
   // baseline to be under-played relative to.
-  const emittedIds = new Set<number>();
-  for (const l of lines) for (const c of l.line) emittedIds.add(c.id);
+  // Excludes the WPA BUILD's ids and nothing else — deliberately narrower than
+  // "everything already emitted" (2026-07-28). Two reasons, and the second is
+  // the load-bearing one:
+  //   1. "Not thought of by users" is about YOUR recommended build. A pro
+  //      picking it up does not make it a mainstream pick for the ladder.
+  //   2. The Builds PAGE renders this same block (HiddenGemCard) and has no
+  //      pro/OTP data in scope at that point. Excluding pro/OTP ids here would
+  //      make the shop and the page disagree about what the gem is — the exact
+  //      class of inconsistency this pass exists to remove. One definition,
+  //      computed from data both surfaces hold.
+  const wpaBuildIds = new Set<number>(lines[0]?.line.map((c) => c.id) ?? []);
   const gemPicks = selectHiddenGemPicks(
     [...corePicks, ...(optimizedPicks ?? []), ...situationalPicks],
-    emittedIds,
+    wpaBuildIds,
     meta
   );
   if (gemPicks.length > 0) {

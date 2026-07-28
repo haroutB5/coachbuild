@@ -14,6 +14,7 @@ import type { LaneId } from "./heroContracts";
 import StartingCard from "./StartingCard";
 import CoreBuildOrderCard from "./CoreBuildOrderCard";
 import SituationalCard from "./SituationalCard";
+import HiddenGemCard from "./HiddenGemCard";
 import SupportItemCard from "./SupportItemCard";
 import { applyItemSetsForBuild } from "./itemSetsApply";
 import { hasSession, getStoredSession, getStoredPort } from "@/components/live/companionClient";
@@ -106,6 +107,10 @@ export default function ItemBuildCard({ champ, lane, build, ver, onItemClick }: 
         {lane === "support" && <SupportItemCard champ={champ} build={build} ver={ver} onItemClick={onItemClick} />}
         <CoreBuildOrderCard items={build.items} onItemClick={onItemClick} />
         <SituationalCard items={build.items} onItemClick={onItemClick} />
+        {/* 2026-07-28 — the fourth build category, shown on the page as well as
+            in the shop. Renders null when nothing qualifies (common by design),
+            so the card list simply ends at Situational for those champions. */}
+        <HiddenGemCard items={build.items} ver={ver} onItemClick={onItemClick} />
       </div>
     </div>
   );

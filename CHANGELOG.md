@@ -2,6 +2,42 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.71.1] — 2026-07-28 — The page and the shop finally speak the same language
+
+### Fixed
+- **A snowball item was being recommended as a hidden gem.** Found by looking at the rendered card,
+  not by any test: Ahri's top gem came back as **Mejai's Soulstealer, 78.5% win rate across 8,149
+  games**. Enormous sample, real number, every guard passed — and a genuinely bad recommendation.
+  Mejai's is a stacking item you buy *because* you are already far ahead. Its win rate measures the
+  games it gets bought in, not the effect of buying it.
+
+  There is now an upper bound as well as a lower one. A real item edge in this data sits around 2 to
+  8 points above the pool median; anything past 10 is an item that only shows up in won games. That
+  removes the whole class (Mejai's, Dark Seal, every snowball stack) without touching a curated list
+  that would rot. On Ahri it drops Mejai's and keeps Banshee's Veil, Shadowflame and Gluttonous
+  Greaves.
+
+- **The page and the in-game shop used different names for the same thing.** The shop said "WPA
+  build" while the page said "Core Order". Introduced in 0.71.0 by renaming one side and not the
+  other. The page now says **WPA Build** too.
+
+### Added
+- **Hidden gem is on the Builds page**, not just in the shop. Previously the only way to find out
+  what your hidden gem was, was to load a game — backwards for a build page. The card calls the
+  *same* function the shop export uses, over the same candidate pool and the same exclusion set, so
+  the two cannot drift apart. It shows the win rate and the games behind it, because either number
+  alone is misleading. It renders nothing when nothing qualifies.
+
+  The exclusion basis narrowed to match: a gem is now anything that isn't already in **your WPA
+  build**, rather than anything not in the WPA, Pro or OTP blocks. A pro picking something up doesn't
+  make it a mainstream pick — and more importantly, the page has no pro/OTP data in scope, so the
+  wider rule would have made the two surfaces disagree again.
+
+### Changed
+- **The WPA explainer no longer costs four lines on every visit.** The definition stays visible; the
+  two sentences of mechanics moved behind a "More" tap. Native disclosure element, so it needs no
+  JavaScript and stays keyboard and screen-reader operable.
+
 ## [0.71.0] — 2026-07-28 — Four builds in the shop, and one of them nobody asked for
 
 ### Changed
