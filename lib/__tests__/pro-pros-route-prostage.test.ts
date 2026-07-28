@@ -137,6 +137,58 @@ describe("GET /api/pros source param", () => {
     expect(body.games[1].source).toBe("soloq");
   });
 
+  it("400s on a non-numeric proMin", async () => {
+    const res = await GET(req("?championId=103&role=2&proMin=lots"));
+    expect(res.status).toBe(400);
+  });
+
+  it("proMin reserves result slots for pro play instead of letting soloq recency win", async () => {
+    // The starvation shape from the 2026-07-28 report, miniaturised: every
+    // soloq row is newer than every prostage row, so a plain recency merge
+    // with limit=3 returns 3 soloq rows and zero pro play. proMin=2 must land
+    // both prostage rows and only the single newest soloq row.
+    const soloq = [0, 1, 2, 3].map((i) => ({
+      ...SOLOQ_ROW,
+      match_id: `EUW1_${i}`,
+      game_creation: `2026-07-2${5 - i}T00:00:00.000Z`,
+    }));
+    const prostage = [0, 1].map((i) => ({
+      ...PROSTAGE_ROW,
+      game_id: `LEC_2026_Summer_1_${i}`,
+      game_datetime: `2026-07-1${5 - i}T00:00:00.000Z`,
+    }));
+    mockSql
+      .mockResolvedValueOnce(soloq)
+      .mockResolvedValueOnce(prostage)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    const res = await GET(req("?championId=103&role=2&limit=3&proMin=2"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.games).toHaveLength(3);
+    expect(body.games.filter((g: { source: string }) => g.source === "prostage")).toHaveLength(2);
+    expect(body.games.filter((g: { source: string }) => g.source === "soloq")).toHaveLength(1);
+    // Still recency-ordered overall.
+    expect(body.games[0].source).toBe("soloq");
+  });
+
+  it("omitting proMin leaves the plain recency merge untouched", async () => {
+    const soloq = [0, 1, 2].map((i) => ({
+      ...SOLOQ_ROW,
+      match_id: `EUW1_${i}`,
+      game_creation: `2026-07-2${5 - i}T00:00:00.000Z`,
+    }));
+    mockSql
+      .mockResolvedValueOnce(soloq)
+      .mockResolvedValueOnce([{ ...PROSTAGE_ROW, game_datetime: "2026-07-10T00:00:00.000Z" }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    const res = await GET(req("?championId=103&role=2&limit=3"));
+    const body = await res.json();
+    expect(body.games).toHaveLength(3);
+    expect(body.games.every((g: { source: string }) => g.source === "soloq")).toBe(true);
+  });
+
   it("source=all is equivalent to the default (explicit form)", async () => {
     mockSql
       .mockResolvedValueOnce([SOLOQ_ROW])

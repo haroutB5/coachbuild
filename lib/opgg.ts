@@ -60,7 +60,7 @@ import {
   type SkillOrderSource,
 } from "./skillOrderModel";
 
-const OPGG_MCP_URL = "https://mcp-api.op.gg/mcp";
+export const OPGG_MCP_URL = "https://mcp-api.op.gg/mcp";
 
 /**
  * How long a skill-order response stays cached.
@@ -186,7 +186,11 @@ const MASTERIES_FIELD_SETS: readonly (readonly string[])[] = [
   ["ids", "play", "win", "pick_rate", "builds"],
 ] as const;
 
-function parseClassHeader(text: string): Map<string, string[]> {
+/** Exported for lib/otp/leaderboard.ts, which parses a DIFFERENT op.gg tool's
+ *  payload but the SAME pseudo-class text framing — one parser for the
+ *  framing, so a provider reshape is caught in one place rather than two
+ *  drifting copies. */
+export function parseClassHeader(text: string): Map<string, string[]> {
   const classes = new Map<string, string[]>();
   for (const line of text.split("\n")) {
     const m = /^class (\w+):\s*(.*)$/.exec(line.trim());
@@ -202,7 +206,8 @@ function parseClassHeader(text: string): Map<string, string[]> {
   return classes;
 }
 
-function sameFieldSet(actual: readonly string[], expected: readonly string[]): boolean {
+/** Exported alongside parseClassHeader — see its comment. */
+export function sameFieldSet(actual: readonly string[], expected: readonly string[]): boolean {
   if (actual.length !== expected.length) return false;
   const a = new Set(actual);
   return expected.every((f) => a.has(f));
@@ -401,8 +406,9 @@ const defaultTransport: OpggTransport = async (body) => {
 };
 
 /** Accept either a plain JSON body or an SSE frame, since the endpoint may
- *  serve either depending on how it reads our Accept header. */
-function parseEnvelope(raw: string): unknown {
+ *  serve either depending on how it reads our Accept header. Exported for
+ *  lib/otp/leaderboard.ts — same endpoint, same framing ambiguity. */
+export function parseEnvelope(raw: string): unknown {
   const trimmed = raw.trim();
   if (trimmed.startsWith("{")) return JSON.parse(trimmed);
   const dataLines = trimmed

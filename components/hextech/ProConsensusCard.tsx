@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { ChampionRef, BuildResponse, ShardSet } from "@/lib/types";
 import type { ProGame, ProGamesApiResponse } from "@/components/proGames.types";
+import type { OtpPlayerSummary, OtpResponse } from "@/lib/otp/types";
 import type { EntityKind } from "@/components/EntityDetailPopover";
 import { itemIconUrl, spellIconUrl, spellName, treeIconUrl, treeName, resolveRuneDisplay, shardIconUrl, shardName } from "@/components/proAssets";
 import { getItemDetailMap, type ItemDetail } from "@/components/itemDetail";
@@ -27,17 +28,54 @@ import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/compo
 const LOW_SAMPLE_THRESHOLD = 3;
 // Fetched sample size for the aggregation — deliberately larger than PRO
 // BUILDS' own list limit (20): this card never renders individual rows, only
-// counts, so a bigger sample (route caps `limit` at 150 — see
+// counts, so a bigger sample (route caps `limit` at 300 — see
 // app/api/pros/route.ts) sharpens the fractions without any extra per-row
-// render cost. 100 here, not 150, is this card's own deliberate choice
+// render cost. 200 here, not 300, is this card's own deliberate choice
 // within that ceiling, not a claim about the backend's own cap (comment
 // fixed 2026-07-17 — previously said "backend caps at 100", which was wrong;
-// the route's cap was raised 100 -> 150 on 2026-07-13 for this same request).
-const AGGREGATION_LIMIT = 100;
+// the route's cap was raised 100 -> 150 on 2026-07-13, then -> 300 on
+// 2026-07-28, both times for this same "bigger pro sample" request).
+const AGGREGATION_LIMIT = 200;
+
+// Floor of result slots reserved for PRO-PLAY (on-stage) games — see
+// lib/pro/mergeGames.ts for the measurement this comes from. Solo queue is
+// played daily and official matches weekly, so a plain recency merge gave
+// this card ~4 pro-play games out of 100 even for a champion with 94 fresh
+// pro-play games in the DB (user report, Viktor mid, 2026-07-28). Half the
+// sample is a floor, not a cap: when fewer pro-play games exist the rest of
+// the page fills with solo queue, and when solo queue is the thin side
+// pro play backfills past this number. The footer's "(N pro play, M solo
+// queue)" line reports the REAL resulting split either way, so the card can
+// never overstate what it sampled.
+const PRO_PLAY_FLOOR = 100;
+
+/** OTP sample size. Smaller than the pro card's 200 because the OTP pool is
+ *  8 tracked accounts at 20 recent games each — the ceiling the DATA has, not
+ *  a display choice — and asking for more would just be a wider LIMIT over the
+ *  same rows. */
+const OTP_AGGREGATION_LIMIT = 200;
+
+/**
+ * Which feed this card renders.
+ *
+ * "pro" — GET /api/pros: professional players, solo queue + on-stage.
+ * "otp" — GET /api/otp: ladder ONE-TRICKS (op.gg's top Master+ players for
+ *         this champion, 100+ games on it), their recent ranked games.
+ *
+ * One component, two feeds, deliberately: the user asked for the OTP section
+ * to be "same as we have for pro," and a second component would drift from
+ * this one's layout, its starter/boots partition (HARD RULE 2) and its
+ * per-slot honest denominators within a couple of changes. The variant only
+ * ever changes WHERE the games come from and WHAT the card says about them —
+ * never how a frequency is computed.
+ */
+export type ConsensusVariant = "pro" | "otp";
 
 interface ProConsensusCardProps {
   champ: ChampionRef;
   lane: LaneId;
+  /** Defaults to "pro" so every existing call site is unchanged. */
+  variant?: ConsensusVariant;
   /** Same icon/data version BuildTabContent already resolved from the BUILD
    *  response's own patch (`versionFromPatch(build.patch)`) — reused here so
    *  this card's icons come from the SAME CDN version as the rest of the tab
@@ -61,7 +99,19 @@ interface ProConsensusCardProps {
 
 type FetchState =
   | { status: "loading" }
-  | { status: "ok"; model: ProConsensusModel; itemMeta: Map<number, ItemDetail> }
+  | {
+      status: "ok";
+      model: ProConsensusModel;
+      itemMeta: Map<number, ItemDetail>;
+      /** OTP variant only — who the sample came from, for the footer. */
+      otpPlayers: OtpPlayerSummary[];
+    }
+  // OTP variant only: one-tricks ARE tracked for this champion but none of
+  // their games have been ingested yet. Deliberately NOT folded into
+  // "hidden": "we're still fetching this champion's one-tricks" and "nobody
+  // one-tricks this champion" are different facts and the card must not
+  // present the second when the first is true.
+  | { status: "pending" }
   | { status: "hidden" } // N=0 by design (e.g. Viktor Support) — genuinely nothing to show
   | { status: "error"; reason: string }; // fetch failed — distinct from N=0 (v0.27.2); reason
 // surfaces IN the line (v0.27.4) because a live iOS-only persistent failure
@@ -597,7 +647,7 @@ function slotSampleNote(breakdown: RuneSlotBreakdown): string {
   return `from ${sampleSize} games (${soloqCount} solo queue, ${prostageCount} pro play)`;
 }
 
-export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build }: ProConsensusCardProps) {
+export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build, variant = "pro" }: ProConsensusCardProps) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
   // v0.27.3 (live user report: the v0.27.2 error line showed up on-device and
   // then STUCK — the fetch only ever re-fired on champion/lane change, so one
@@ -636,23 +686,55 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
       // clean URL so normal loads keep any legitimate intermediary caching) —
       // defeats a poisoned SW/edge cache entry along a specific device's path.
       const bust = attemptsLeft < 2 ? `&r=${Date.now()}` : "";
+      const url =
+        variant === "otp"
+          ? `/api/otp?championId=${champ.id}&role=${role}&limit=${OTP_AGGREGATION_LIMIT}${bust}`
+          : `/api/pros?championId=${champ.id}&role=${role}&limit=${AGGREGATION_LIMIT}&proMin=${PRO_PLAY_FLOOR}&source=all${bust}`;
       Promise.all([
-        fetch(`/api/pros?championId=${champ.id}&role=${role}&limit=${AGGREGATION_LIMIT}&source=all${bust}`).then(async (res) => {
+        fetch(url).then(async (res) => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data: ProGamesApiResponse = await res.json();
-          return Array.isArray(data?.games) ? data.games : [];
+          const data: ProGamesApiResponse & Partial<OtpResponse> = await res.json();
+          return {
+            games: Array.isArray(data?.games) ? data.games : [],
+            players: Array.isArray(data?.players) ? data.players : [],
+            pending: data?.pending === true,
+          };
         }),
         // Belt-and-braces despite getItemDetailMap's own internal catch: the
         // item map must NEVER be able to sink the whole card.
         getItemDetailMap(ver).catch(() => new Map<number, ItemDetail>()),
       ])
-        .then(([games, itemMeta]: [ProGame[], Map<number, ItemDetail>]) => {
+        .then(([payload, itemMeta]) => {
           if (cancelled) return;
+          const { games, players, pending } = payload;
           if (games.length === 0) {
-            setState({ status: "hidden" });
+            // OTP only: nothing stored for this champion yet, so ask the
+            // server to go get it. Same pull-freshness-to-the-moment-of-
+            // interest design as POST /api/pros/refresh — a background sweep
+            // cannot keep ~170 champions current, but the champion someone is
+            // actually looking at is worth one budgeted pass.
+            //
+            // Fire-and-forget on PURPOSE: it takes tens of seconds (every
+            // Riot call is paced at 1.3s) so there is nothing to await into
+            // this render, the route is cooldown-gated server-side against
+            // re-renders and multiple devices, and a failure must never turn
+            // an empty card into an error card. The data appears on a later
+            // visit, which is what the "pending" copy tells the user.
+            if (variant === "otp") {
+              void fetch(
+                `/api/otp/refresh?championId=${champ.id}&championKey=${encodeURIComponent(champ.key)}`,
+                { method: "POST" }
+              ).catch(() => {});
+            }
+            setState({ status: pending ? "pending" : "hidden" });
             return;
           }
-          setState({ status: "ok", model: aggregateProConsensus(games, itemMeta), itemMeta });
+          setState({
+            status: "ok",
+            model: aggregateProConsensus(games, itemMeta),
+            itemMeta,
+            otpPlayers: players,
+          });
         })
         .catch((err: unknown) => {
           if (cancelled) return;
@@ -681,7 +763,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
     return () => {
       cancelled = true;
     };
-  }, [champ.id, lane, ver, retryToken]);
+  }, [champ.id, champ.key, lane, ver, retryToken, variant]);
 
   useEffect(() => {
     if (state.status !== "ok") return;
@@ -723,12 +805,29 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `state` narrowed above; model identity changes every fetch resolution, which is exactly when a re-resolve is wanted
   }, [state, ver]);
 
+  const isOtp = variant === "otp";
+  const cardTitle = isOtp ? "OTP Consensus" : "Pro Consensus";
+
   if (state.status === "loading") return <ConsensusSkeleton />;
   if (state.status === "hidden") return null;
+  // OTP only. Says exactly what is true — we know who the one-tricks are, we
+  // don't have their games yet — instead of the "hidden" render, which would
+  // silently imply this champion has no one-tricks.
+  if (state.status === "pending") {
+    return (
+      <div className="bg-panel border border-line rounded-xl p-5">
+        <CardHeader>{cardTitle}</CardHeader>
+        <p className="text-[10.5px] text-mut/60 mt-3" role="status">
+          One-tricks found for {champ.name}, but their games haven&apos;t been pulled in yet. Check
+          back shortly.
+        </p>
+      </div>
+    );
+  }
   if (state.status === "error") {
     return (
       <p className="text-[10.5px] text-mut/50 px-0.5" role="status">
-        Pro consensus data couldn&apos;t load ({state.reason}).{" "}
+        {cardTitle} data couldn&apos;t load ({state.reason}).{" "}
         <button
           type="button"
           onClick={() => {
@@ -773,9 +872,25 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
       : model.itemsSampleSize > 0
         ? ` · items/boots/starting from ${model.itemsSampleSize} game${model.itemsSampleSize === 1 ? "" : "s"} with item data`
         : " · no item data in this sample yet";
-  const sampleLine = `From ${model.gamesTotal} pro game${model.gamesTotal === 1 ? "" : "s"} (${sourceNote}) · fresh window${
-    tournamentNote ? ` · ${tournamentNote}` : ""
-  }${itemsCoverageNote}`;
+  // The OTP footer names the actual roster instead of a source split: every
+  // OTP row is ranked solo queue, so "(N pro play, M solo queue)" would be
+  // noise, and "one-tricks" is a claim the user should be able to CHECK.
+  // Player count and per-player minimum both come from the returned rows, so
+  // the line can never describe a roster the sample didn't come from.
+  const otpContributors = state.otpPlayers.filter((p) => p.gamesInSample > 0);
+  const otpMinPlays = otpContributors.length
+    ? Math.min(...otpContributors.map((p) => p.championPlays))
+    : 0;
+  const otpNote = otpContributors.length
+    ? ` · ${otpContributors.length} one-trick${otpContributors.length === 1 ? "" : "s"}${
+        otpMinPlays > 0 ? `, each ${otpMinPlays}+ games on ${champ.name}` : ""
+      }`
+    : "";
+  const sampleLine = isOtp
+    ? `From ${model.gamesTotal} ranked game${model.gamesTotal === 1 ? "" : "s"}${otpNote} · fresh window${itemsCoverageNote}`
+    : `From ${model.gamesTotal} pro game${model.gamesTotal === 1 ? "" : "s"} (${sourceNote}) · fresh window${
+        tournamentNote ? ` · ${tournamentNote}` : ""
+      }${itemsCoverageNote}`;
 
   // v0.28.0 — one consolidated caption for the additional-runes sample sizes
   // (minors/picks/shards each carry their OWN denominator, see proConsensus.ts
@@ -794,14 +909,25 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
   return (
     <div className="bg-panel border border-line rounded-xl p-5">
       <div className="flex items-start justify-between gap-3 mb-3.5">
-        <CardHeader>Pro Consensus</CardHeader>
+        <CardHeader>{cardTitle}</CardHeader>
         {/* 2026-07-22 (manual pro push) — visually parallel to
             RunesSummonersCard's Apply-runes/Add-item-builds pair, same
             visibility gate (hasSession(), checked inside each button so a
             build without a live session renders neither). `build` is
             optional (same degrade-quietly convention as the rest of this
-            tab) — omitting it just hides both buttons. */}
-        {build && (
+            tab) — omitting it just hides both buttons.
+
+            NOT rendered on the OTP variant (2026-07-28, deliberate). Both
+            buttons write to LCU objects whose titles are a pinned contract —
+            the rune page "CoachBuild <champ> <role> Pro" and one item set per
+            champion+role — and HARD RULE 5 plus the companion's SelfTest
+            guard that naming. Adding a third rune-page title is a companion-
+            side change (companion.ps1 is versioned separately and installed
+            by the user re-running the install one-liner), so shipping the
+            button here would either collide with the Pro page or silently do
+            nothing on every already-installed companion. The OTP card is
+            read-only until that's done properly. */}
+        {build && !isOtp && (
           <div className="flex items-start gap-2.5">
             <ApplyProRunesButton
               champ={champ}

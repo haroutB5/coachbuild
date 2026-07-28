@@ -117,8 +117,13 @@ function CardSkeleton({ className = "" }: { className?: string }) {
 // that column would reopen the exact height-matching problem that fix closed.
 // A dedicated full-width row is simpler and keeps both existing columns
 // untouched.
+// `otp` (2026-07-28) is a second full-width row directly under `pro`, same
+// shape for the same reason: the OTP card renders the identical wide
+// grid internally (see ProConsensusCard's lg:grid-cols-[5fr_7fr] body), so
+// giving it its own full-width area keeps both consensus cards visually
+// identical instead of squeezing one into a column.
 const BUILD_GRID_CLASS =
-  "grid grid-cols-1 gap-5 [grid-template-areas:'runes'_'itembuild'_'skillorder'_'pro'] lg:grid-cols-[5fr_7fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_itembuild'_'skillorder_skillorder'_'pro_pro']";
+  "grid grid-cols-1 gap-5 [grid-template-areas:'runes'_'itembuild'_'skillorder'_'pro'_'otp'] lg:grid-cols-[5fr_7fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_itembuild'_'skillorder_skillorder'_'pro_pro'_'otp_otp']";
 
 // Mobile-only BUILD|PRO segmented control (peak usage is a 30s champ select —
 // the pre-existing shape here was one ~3,000px scroll: Runes -> Starting ->
@@ -127,10 +132,16 @@ const BUILD_GRID_CLASS =
 // tab renders one column at a time; at `lg`+ the grid already reflows into
 // the existing 2-column desktop composition and the control disappears
 // entirely, per spec ("desktop keeps the current single-scroll layout").
-type MobileBuildTab = "build" | "pro";
+// "otp" added 2026-07-28. It gets its OWN tab rather than sharing "pro":
+// pros and one-tricks answer different questions ("what does the meta's best
+// execution look like" vs "what does the person who has played this 700 times
+// build"), and stacking both consensus cards under one tab would rebuild the
+// exact ~3,000px champ-select scroll this control exists to kill.
+type MobileBuildTab = "build" | "pro" | "otp";
 const MOBILE_TAB_OPTIONS: { value: MobileBuildTab; label: string }[] = [
   { value: "build", label: "Build" },
   { value: "pro", label: "Pro" },
+  { value: "otp", label: "OTP" },
 ];
 
 function BuildLoadingSkeleton() {
@@ -140,6 +151,7 @@ function BuildLoadingSkeleton() {
       <CardSkeleton className="[grid-area:itembuild] min-h-[280px]" />
       <CardSkeleton className="[grid-area:skillorder]" />
       <CardSkeleton className="[grid-area:pro]" />
+      <CardSkeleton className="[grid-area:otp]" />
     </div>
   );
 }
@@ -384,7 +396,7 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
             trade-off for a mobile-only control that stays mounted at every
             breakpoint (see HANDOFF-fronty.md for the full reasoning). */}
         <div
-          className={`[grid-area:runes] ${mobileTab === "pro" ? "hidden lg:block" : ""}`}
+          className={`[grid-area:runes] ${mobileTab !== "build" ? "hidden lg:block" : ""}`}
           role="tabpanel"
           id="hextech-tabpanel-build"
           aria-labelledby="hextech-tab-build"
@@ -400,7 +412,7 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
           />
         </div>
         <div
-          className={`[grid-area:itembuild] ${mobileTab === "pro" ? "hidden lg:block" : ""}`}
+          className={`[grid-area:itembuild] ${mobileTab !== "build" ? "hidden lg:block" : ""}`}
           role="tabpanel"
           aria-labelledby="hextech-tab-build"
         >
@@ -416,14 +428,14 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
             renders no card, collapsing this grid cell to zero height exactly
             like ProConsensusCard's own N=0 state already does. */}
         <div
-          className={`[grid-area:skillorder] ${mobileTab === "pro" ? "hidden lg:block" : ""}`}
+          className={`[grid-area:skillorder] ${mobileTab !== "build" ? "hidden lg:block" : ""}`}
           role="tabpanel"
           aria-labelledby="hextech-tab-build"
         >
           <SkillOrderCard champ={champ} lane={lane} />
         </div>
         <div
-          className={`[grid-area:pro] ${mobileTab === "build" ? "hidden lg:block" : ""}`}
+          className={`[grid-area:pro] ${mobileTab !== "pro" ? "hidden lg:block" : ""}`}
           role="tabpanel"
           id="hextech-tabpanel-pro"
           aria-labelledby="hextech-tab-pro"
@@ -441,6 +453,33 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
               to zero height cleanly — grid-template-areas doesn't reserve
               empty space for a null child. */}
           <ProConsensusCard champ={champ} lane={lane} ver={ver} onOpenDetail={openDetail} build={build} />
+        </div>
+        <div
+          className={`[grid-area:otp] ${mobileTab !== "otp" ? "hidden lg:block" : ""}`}
+          role="tabpanel"
+          id="hextech-tabpanel-otp"
+          aria-labelledby="hextech-tab-otp"
+        >
+          {/* 2026-07-28 (user request: "add a OTP section in builds for champs
+              as well, same as we have for pro"). Same component, `variant="otp"`
+              — it swaps the feed to /api/otp (op.gg's top Master+ one-tricks for
+              this champion, 100+ games each, their recent ranked games) and the
+              wording that describes it, and nothing else. Sharing the component
+              is the point: the starter/boots partition (HARD RULE 2) and the
+              per-slot honest denominators are enforced in ONE place.
+
+              `build` is deliberately NOT passed: it exists only to render the
+              two companion apply buttons, which the OTP variant suppresses (see
+              ProConsensusCard's header comment — a third LCU rune-page title is
+              a companion-side change). Passing it would be dead weight that
+              reads like the buttons are meant to be there. */}
+          <ProConsensusCard
+            champ={champ}
+            lane={lane}
+            variant="otp"
+            ver={ver}
+            onOpenDetail={openDetail}
+          />
         </div>
       </div>
 

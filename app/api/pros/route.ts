@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
 import { FRESH_WINDOW_DAYS } from "@/lib/pro/fresh";
+import { mergeProGames } from "@/lib/pro/mergeGames";
 import { cleanLeaguepediaName } from "@/lib/prostage/displayName";
 import {
   buildProstageCompsMap,
@@ -287,6 +288,7 @@ export async function GET(req: NextRequest) {
   const playerParam = searchParams.get("player");
   const roleParam = searchParams.get("role");
   const limitParam = searchParams.get("limit");
+  const proMinParam = searchParams.get("proMin");
 
   // Exactly one of championId / proId / player — never zero, never two+.
   const providedCount = [champParam, proIdParam, playerParam].filter((v) => v !== null).length;
@@ -349,13 +351,31 @@ export async function GET(req: NextRequest) {
     if (!/^\d+$/.test(limitParam) || parseInt(limitParam, 10) <= 0) {
       return NextResponse.json({ error: "Invalid limit param" }, { status: 400 });
     }
-    // Cap raised 100 -> 150 (2026-07-13, pro-consensus sample-size request):
+    // Cap raised 100 -> 150 (2026-07-13, pro-consensus sample-size request),
+    // then 150 -> 300 (2026-07-28, "get more pro games data for builds"):
     // each side (soloq/prostage) is still fetched at exactly `limit` rows and
     // merge-sorted (see the Promise.all block below), so this only changes
     // the ceiling a caller can ask for — never fetches more than requested.
-    // 150 is a sane ceiling for a single page load, not a claim that every
+    // 300 is a sane ceiling for a single page load, not a claim that every
     // champion+role has that much fresh data (most don't).
-    limit = Math.min(parseInt(limitParam, 10), 150);
+    limit = Math.min(parseInt(limitParam, 10), 300);
+  }
+
+  // proMin — reserve a FLOOR of result slots for pro-play (prostage) rows.
+  // See lib/pro/mergeGames.ts for the full rationale; short version: pro play
+  // happens on match days and solo queue happens every day, so a plain
+  // recency merge hands ~96 of any 100 slots to solo queue no matter how much
+  // pro-play data exists. Opt-in and defaults to 0, so the /history list (a
+  // genuine "most recent games" feed) is bit-for-bit unchanged.
+  let proMin = 0;
+  if (proMinParam !== null) {
+    if (!/^\d+$/.test(proMinParam)) {
+      return NextResponse.json({ error: "Invalid proMin param" }, { status: 400 });
+    }
+    // Clamped rather than rejected above `limit`: mergeProGames already caps
+    // the floor at min(proFloor, available, limit), so a caller asking for
+    // more than the page holds gets "as much pro play as fits," not a 400.
+    proMin = Math.min(parseInt(proMinParam, 10), limit);
   }
 
   const sourceParam = searchParams.get("source");
@@ -576,9 +596,7 @@ export async function GET(req: NextRequest) {
       )
       .filter((g): g is ProGame => g !== null);
 
-    const games = [...soloqGames, ...prostageGames]
-      .sort((a, b) => new Date(b.gameCreation).getTime() - new Date(a.gameCreation).getTime())
-      .slice(0, limit);
+    const games = mergeProGames(soloqGames, prostageGames, limit, proMin);
 
     const body: ProsResponse = { games };
     // Empty results are never CDN-cached: an empty set is either genuinely

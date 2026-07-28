@@ -12,6 +12,7 @@ vi.mock("../prostage/cargo", async (importOriginal) => {
 
 import { cargoQueryWithRetry } from "../prostage/cargo";
 import {
+  MAX_TOURNAMENTS,
   orderByStaleness,
   resolveActiveTournaments,
   __resetTournamentCacheForTests,
@@ -79,12 +80,12 @@ describe("resolveActiveTournaments", () => {
     expect(cargoQueryWithRetry).toHaveBeenCalledTimes(1);
   });
 
-  it("caps at 7 tournaments", async () => {
+  it("caps at MAX_TOURNAMENTS", async () => {
     vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce(
-      Array.from({ length: 10 }, (_, i) => ({ OverviewPage: `League ${i}` })) as never
+      Array.from({ length: MAX_TOURNAMENTS + 5 }, (_, i) => ({ OverviewPage: `League ${i}` })) as never
     );
     const pages = await resolveActiveTournaments();
-    expect(pages).toHaveLength(7);
+    expect(pages).toHaveLength(MAX_TOURNAMENTS);
   });
 
   it("falls back to [] (not a throw) when the Tournaments lookup errors", async () => {
@@ -138,6 +139,28 @@ describe("resolveActiveTournaments", () => {
     const [queryArgs] = vi.mocked(cargoQueryWithRetry).mock.calls[0];
     const where = (queryArgs as { where: string }).where;
     expect(where).toContain('OverviewPage NOT LIKE "%Academy%"');
+  });
+
+  it("excludes Classic Showmatch pages from the Cargo query's WHERE clause", async () => {
+    // Regression for the 2026-07-28 live probe: "LEC/2026 Season/Summer
+    // Season/Classic Showmatch" and its LCS/MSI twins matched the real
+    // league prefixes and sorted by DateStart right beside the actual splits,
+    // burning MAX_TOURNAMENTS slots on exhibition games played by retired
+    // players on legacy patches.
+    vi.mocked(cargoQueryWithRetry).mockResolvedValueOnce([{ OverviewPage: "MSI 2026" }] as never);
+    await resolveActiveTournaments();
+    const [queryArgs] = vi.mocked(cargoQueryWithRetry).mock.calls[0];
+    const where = (queryArgs as { where: string }).where;
+    expect(where).toContain('OverviewPage NOT LIKE "%Showmatch%"');
+  });
+
+  it("keeps MAX_TOURNAMENTS wide enough to reach every league in the live window", async () => {
+    // The cap is a hard VISIBILITY ceiling, not just a rate budget — pages
+    // past it are never ingested at all (resolveActiveTournaments slices
+    // before orderByStaleness reorders). At the old value of 7, the live
+    // 2026-07-28 list cut off right after "Esports World Cup 2026", leaving
+    // LCK's only in-window tournament permanently unreachable.
+    expect(MAX_TOURNAMENTS).toBeGreaterThanOrEqual(10);
   });
 
   it("anchors league codes as a PREFIX match, not a bare substring (excludes false positives)", async () => {

@@ -2,6 +2,65 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.70.0] — 2026-07-28 — Far more pro-play games, and a new OTP section
+
+### Fixed
+- **Pro Consensus was ~96% solo queue while calling itself a pro sample.** Reported from mobile:
+  Viktor mid read *"From 100 pro games (4 pro play, 96 solo queue)"*. The data was never missing —
+  the DB held **94** fresh pro-play Viktor-mid games at that moment. The merge was throwing them away.
+
+  `GET /api/pros` fetched `limit` rows from each source, concatenated them, sorted by recency and
+  sliced. Solo queue and pro play do not differ in volume so much as in **cadence**: a tracked pro
+  queues most days, official matches happen on match days. So the newest 96 rows were always solo
+  queue, and pro play was squeezed into whatever was left. Measured live: the 96th-newest solo-queue
+  game was about one day older than the newest pro-play game.
+
+  The merge now reserves a **floor** of slots for the scarcer source (`proMin`, opt-in — the
+  `/history` recency feed is unchanged). It invents nothing: every row is real, the result is still
+  recency-ordered, the floor is capped by what actually exists, and a short side backfills from the
+  other so the sample can never shrink. Same champion, after the fix:
+  **"From 200 pro games (88 pro play, 112 solo queue)"** — 4 → 88.
+
+- **Two of the seven pro-play ingest slots were being spent on exhibition games.** A live probe of
+  Leaguepedia's tournament list found three "Classic Showmatch" pages sorting by start date right
+  beside the real splits. They are now excluded — retired players on legacy patches are actively
+  misleading as build inspiration, which is the same reasoning the 90-day freshness window already
+  encodes.
+
+- **The tournament cap was a hard visibility ceiling, not just a rate budget.** Pages outside the
+  top-N by start date are never ingested at all, however stale they get. At 7 the live list cut off
+  immediately after Esports World Cup 2026, leaving LCK's only in-window tournament permanently
+  unreachable. Raised to 10.
+
+### Added
+- **OTP Consensus — what actual one-tricks build.** A new section on Builds, beside Pro Consensus,
+  with its own mobile tab (BUILD | PRO | OTP).
+
+  Sourced from op.gg's champion leaderboard (top Master+ players per champion, KR + EUW), filtered to
+  players with **100+ games on that champion**, whose recent ranked games are then read through Riot's
+  match API. Live on Viktor mid at ship time: 65 games from 8 one-tricks, the smallest of whom has 487
+  Viktor games and the largest 1,873. They also disagree with the pros in a way worth seeing — Flash +
+  **Ghost** at 54%, where the pro sample runs Flash + Teleport.
+
+  The footer states exactly what it aggregated ("From 65 ranked games · 8 one-tricks, each 487+ games
+  on Viktor") rather than asking you to trust the word "one-trick". A champion whose one-tricks are
+  known but whose games have not been pulled in yet says so, instead of rendering as though nobody
+  one-tricks it.
+
+  Champions fill in two ways: a background sweep (`CoachBuildOtpIngest`, every 6h, offset from the
+  pro-account sweep so the two never contend for the shared Riot key), and on demand — opening a
+  champion with no OTP data asks the server to go and get it, budgeted to one account per call and
+  guarded by an atomic claim so two devices cannot both spend the key.
+
+### Notes
+- The OTP card is **read-only** — no "Apply runes" / "Add item builds" buttons. Both write to LCU
+  objects whose titles are a pinned contract, so a third rune page is a companion-side change and is
+  deliberately not smuggled in here.
+- op.gg's leaderboard `puuid` is **not** a Riot puuid (`400 Exception decrypting`, verified against
+  both account-v1 and match-v5); players are re-resolved by riot-id instead.
+- Pro-play ingest is unchanged in *where* it runs — Leaguepedia is still unreachable from Vercel, so
+  it still comes from the local scheduled task.
+
 ## [0.69.2] — 2026-07-28 — Back from a champion reaches the Builds hub
 
 ### Fixed

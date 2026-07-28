@@ -59,8 +59,30 @@ const EVENT_CONTAINS_PATTERNS = [
 // Academy pages (e.g. "LCK Academy Series") LIKE-match the LCK/ prefix but
 // resolve to tournaments with no ScoreboardPlayers data — live-verified
 // 2026-07-10 (see DATA-QUALITY PROBE in HANDOFF-engy.md).
-const EXCLUDE_PATTERNS = ["Academy"];
-export const MAX_TOURNAMENTS = 7; // caps Cargo calls per ScoreboardPlayers ingest pass; exported for scripts/ingest-prostage.mjs's --via-export path
+//
+// "Showmatch" added 2026-07-28. Live probe that day returned 19 tournaments
+// in the 90-day window, and THREE of them were exhibition pages —
+// "LEC/2026 Season/Summer Season/Classic Showmatch",
+// "LCS/2026 Season/Summer Season/Classic Showmatch",
+// "2026 Mid-Season Invitational/Classic Showmatch". They sort by DateStart
+// alongside the real splits, so two of them were sitting at #3 and #4 in the
+// DateStart-DESC order and burning 2 of the MAX_TOURNAMENTS slots. They are
+// also the wrong DATA even when they do ingest: retired players on legacy
+// patches are actively misleading as build inspiration, the same reasoning
+// FRESH_WINDOW_DAYS already encodes.
+const EXCLUDE_PATTERNS = ["Academy", "Showmatch"];
+// Caps Cargo calls per ScoreboardPlayers ingest pass; exported for
+// scripts/ingest-prostage.mjs's --via-export path.
+// Raised 7 -> 10 (2026-07-28). resolveActiveTournaments slices to this cap
+// BEFORE orderByStaleness reorders, so the cap is a hard visibility ceiling,
+// not just a rate budget: a tournament outside the top-N by DateStart is
+// never ingested at all, no matter how stale it gets. At 7 the live list cut
+// off right after "Esports World Cup 2026", leaving LCK's only in-window
+// tournament ("LCK/2026 Season/Road to MSI", #8 that day) permanently
+// unreachable. Cost is bounded — the local scheduled task runs --via-export
+// on a 5s pacing floor, and the serverless route still does ONE tournament
+// per invocation regardless of list length.
+export const MAX_TOURNAMENTS = 10;
 
 // A cron-drained serverless route calls resolveActiveTournaments() fresh on
 // EVERY invocation (one tournament per invocation, cursor-paginated — see
