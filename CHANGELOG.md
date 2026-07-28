@@ -2,6 +2,84 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.69.2] — 2026-07-28 — Back from a champion reaches the Builds hub
+
+### Fixed
+- **Going back after opening a champion landed on Viktor instead of the Builds page.** Reported from
+  mobile. The new hub (Your Lanes / Recently Viewed / Trending) was unreachable once you had viewed
+  any champion.
+
+  The page seeded its first history entry as a *champion* selection on mount, and at that moment the
+  champion is still the hardcoded initial fallback: Viktor. So the base entry for `/` claimed a Viktor
+  selection while the screen was actually showing the hub, and no entry ever represented the hub. Back
+  walked down the champion entries and bottomed out on Viktor, which is why it was always Viktor
+  rather than the champion you came from.
+
+  The hub is now the base view and a champion is a layer on top of it, so the stack is
+  `[hub, champion]`. Your last champion still greets you on arrival — that is a standing directive —
+  it just no longer swallows the hub's history entry.
+
+- **A React StrictMode double-invoke defect in the shared back-navigation hook** (also used by
+  `/history`). Its mount effect read `history.state` live, and its own first pass writes a
+  `replaceState` that StrictMode does not roll back, so the second pass saw its own leftover and
+  replayed the restore. Dev-only, but real. Found by observing that `history.state` was correct while
+  the DOM disagreed.
+
+## [0.69.1] — 2026-07-28 — Tap target on the patch-movers link
+
+### Fixed
+- The new "See all patch movers" link measured 17px tall on a 390px viewport, under the 44px touch
+  guideline. It was the only tap target on the redesigned Builds surface below it.
+
+## [0.69.0] — 2026-07-28 — The empty states earn their screen
+
+### Added
+- **Builds and Pro Players no longer waste a full phone screen.** Reported from a real iPhone: the
+  Builds landing was a search bar, a large heading, two paragraphs, and roughly 400px of nothing.
+- **Your Lanes** — your own top champion per lane, from your existing match history. Display only,
+  never feeding any score or ranking.
+- **Recently Viewed** — a small deduped list of champions you actually opened.
+- **Trending This Patch** — reuses the patch-movers data already computed for `/movers`.
+- **Pro Players spotlight** — surfaces a starred favourite's real recent games. With no favourites it
+  resolves a well-known pro and labels it "Popular", not "Favorite", so the reason is honest.
+- Every section hides when its source is empty. No placeholder cards, no invented numbers.
+
+## [0.68.4] — 2026-07-27 — My Stats matchups contradicted their own header
+
+### Fixed
+- **A champion row showed one game count while its expanded detail showed another.** Reported from
+  mobile: Galio Mid read `3g · 3W-0L · 100%` while its own matchup list summed to 5 games, 3W-2L.
+
+  Rows are grouped by champion *and lane*, but expanding one fetched matchups for the champion across
+  every lane. The endpoint had no lane parameter at all.
+- **Expanding one row expanded every row for that champion.** Expansion was keyed on champion alone,
+  so an account playing Viktor in three lanes opened all three at once, with colliding element ids.
+
+## [0.68.3] — 2026-07-27 — The compact panel was blank without a lane
+
+### Fixed
+- **The in-game skill panel showed nothing whenever the lane was unknown**, which is most of champ
+  select. It asked for lane `5` with a comment saying "let the API pick". The API never picked, so it
+  answered null for every champion. It now checks all five lanes and keeps the largest sample, the
+  same way the overlay already did.
+
+## [0.68.2] — 2026-07-27 — My Stats listed the same champion three times
+
+### Fixed
+- **The champion pool showed duplicate-looking rows** (Viktor three times, Swain three times, two
+  identical "Mel 1g 0.0%" lines). Rows are per champion *and lane*, but the lane was never displayed,
+  and React keys collided across them.
+- **The MAIN tile understated your most-played champion** — it read a single lane's record, showing
+  Viktor at 15 games when his real total across lanes was 19.
+
+## [0.68.1] — 2026-07-27 — The download button served a stale installer
+
+### Fixed
+- **Downloading the overlay gave you a three-versions-old installer.** Not a hardcoded version:
+  GitHub sorts "latest release" by the tag's creation time, and this binaries-only repo has every tag
+  on one commit with an identical timestamp, so the winner was arbitrary. It now picks the highest
+  version number itself, skipping drafts and pre-releases.
+
 ## [0.68.0] — 2026-07-27 — Skill orders reach level 18 (overlay 0.4.1)
 
 ### Added
