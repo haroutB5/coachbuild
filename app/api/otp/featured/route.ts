@@ -1,0 +1,126 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/otp/featured?championId=<n>
+//
+// The ONE one-trick we feature for a champion, and what they actually build.
+//
+// Deliberately a NEW route rather than a change to /api/otp: that one serves the
+// eight-account consensus the OTP card was built on, and this replaces the card
+// rather than the data behind it. Two routes, two shapes, no shared failure.
+//
+// Read-only. Every Riot call for this data happens in
+// scripts/ingest-otp-featured.mjs on a machine that can drive a browser — see
+// that script's header for why discovery cannot run here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { NextRequest, NextResponse } from "next/server";
+import { getSql } from "@/lib/pro/db";
+import { buildFeaturedModel, type FeaturedMatchRow } from "@/lib/otp/featured";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+export interface FeaturedOtpResponse {
+  /** Null when this champion has no eligible one-trick yet. */
+  player: {
+    gameName: string;
+    tagLine: string;
+    server: string | null;
+    tier: string | null;
+    lp: number | null;
+    /** Share of THEIR games that are this champion, 0-100. */
+    championSharePct: number | null;
+    /** Games on the champion per the source — bigger than what we store. */
+    sourceGames: number | null;
+    winratePct: number | null;
+    kda: number | null;
+    refreshedAt: string | null;
+  } | null;
+  /** Build rates over the games WE hold, which is the honest denominator for
+   *  every percentage below. Never the source's larger game count. */
+  sample: { games: number; wins: number } | null;
+  items: { itemId: number; games: number; pct: number }[];
+  runes: { page: unknown; games: number; pct: number } | null;
+  spells: { spells: number[]; games: number; pct: number } | null;
+}
+
+const EMPTY: FeaturedOtpResponse = {
+  player: null,
+  sample: null,
+  items: [],
+  runes: null,
+  spells: null,
+};
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const champParam = searchParams.get("championId");
+  if (!champParam || !/^\d+$/.test(champParam)) {
+    return NextResponse.json({ error: "Invalid or missing championId" }, { status: 400 });
+  }
+  const championId = parseInt(champParam, 10);
+
+  const sql = getSql();
+  if (!sql) return NextResponse.json(EMPTY);
+
+  try {
+    const featured = (await sql`
+      SELECT game_name, tag_line, server, tier, lp, champion_share_pct,
+             source_games, winrate_pct, kda, puuid, refreshed_at
+      FROM coachbuild.otp_featured
+      WHERE champion_id = ${championId}
+      LIMIT 1
+    `) as unknown as {
+      game_name: string;
+      tag_line: string;
+      server: string | null;
+      tier: string | null;
+      lp: number | null;
+      champion_share_pct: number | null;
+      source_games: number | null;
+      winrate_pct: number | null;
+      kda: string | number | null;
+      puuid: string;
+      refreshed_at: string;
+    }[];
+
+    if (featured.length === 0) return NextResponse.json(EMPTY);
+    const f = featured[0];
+
+    const rows = (await sql`
+      SELECT win, final_items, runes, spells
+      FROM coachbuild.otp_matches
+      WHERE puuid = ${f.puuid} AND champion_id = ${championId}
+      ORDER BY game_creation DESC
+    `) as unknown as FeaturedMatchRow[];
+
+    // No item filter here: the client already holds the item metadata map and
+    // knows which ids are completed items. Filtering by a guess on the server
+    // is how components end up presented as builds.
+    const model = buildFeaturedModel(rows);
+
+    const body: FeaturedOtpResponse = {
+      player: {
+        gameName: f.game_name,
+        tagLine: f.tag_line,
+        server: f.server,
+        tier: f.tier,
+        lp: f.lp,
+        championSharePct: f.champion_share_pct,
+        sourceGames: f.source_games,
+        winratePct: f.winrate_pct,
+        kda: f.kda == null ? null : Number(f.kda),
+        refreshedAt: f.refreshed_at,
+      },
+      sample: { games: model.games, wins: model.wins },
+      items: model.items,
+      runes: model.runes ? { page: model.runes.page, games: model.runes.games, pct: model.runes.pct } : null,
+      spells: model.spells
+        ? { spells: model.spells.spells, games: model.spells.games, pct: model.spells.pct }
+        : null,
+    };
+    return NextResponse.json(body);
+  } catch (err) {
+    console.error("[/api/otp/featured] Unexpected error:", err);
+    return NextResponse.json(EMPTY);
+  }
+}

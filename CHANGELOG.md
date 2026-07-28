@@ -2,6 +2,53 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.73.0] — 2026-07-29 — The OTP block becomes one named player instead of eight averaged ones
+
+### Changed
+- **The one-trick section now features a single named account and shows what THEY build**, with the
+  percentage of their games each item appears in. Requested after the old block "looked too much
+  like the first two": averaging eight one-tricks together removes exactly the disagreement that
+  made them worth reading, and what survives the averaging is the same core the WPA and Pro cards
+  already show. One player's spread is copyable — Dun builds Blackfire Torch in 24 of his last 30
+  Viktor games and Lich Bane in 9, and both of those numbers tell you something.
+
+  Live on production data at the time of writing:
+
+  | | Viktor | Akshan |
+  |---|---|---|
+  | Featured | **Dun#NA1** | **Phanta#107** |
+  | Rank | Challenger, 2316 LP | Challenger, 4088 LP |
+  | Games on champ | 627 (67% of his games) | 504 (68% of theirs) |
+  | Top build | Blackfire Torch 80% | Hexoptics C44 71% |
+
+### Added
+- **onetricks.gg as the selection source** (`lib/otp/onetricks.ts`). It publishes the list sorted by
+  LP and — the part that matters — marks which accounts are genuinely one-tricks. That flag is why
+  it disagrees with op.gg: for Viktor, op.gg's "rank 1" was a Diamond player with the most games,
+  and pure LP order gives Splash at 2486 LP who plays Viktor only **33%** of the time and is not
+  flagged. Ranking by LP *among flagged one-tricks* gives Dun, which is both the expected answer and
+  the more useful one.
+- **A 150-game floor**, per user directive. It is load-bearing rather than decorative: the same
+  capture has Phantasm #TWTV0 at 2982 LP with a **77% winrate on 117 games** of Akshan, which reads
+  as the best player on the page until you notice the sample.
+- `GET /api/otp/featured?championId=<n>` — the featured account plus item build rates, modal rune
+  page and modal summoner pair. Deliberately a new route: `/api/otp` still serves the consensus.
+- `scripts/ingest-otp-featured.mjs`, and migration `0018_otp_featured.sql`.
+
+### Notes, stated rather than papered over
+- **Percentages are over the games WE HOLD**, not the account's career total, and the card says so in
+  words. Dun's card reads 30 games; his career is 627.
+- **Skill order is the champion's common order, not the featured player's**, and is labelled that way
+  on the card. Riot's match data does not carry skill order without a second timeline call per game.
+- **The starter is shown on its own line**, never inside the completed-item list (HARD RULE from
+  2026-07-22). Doran's Ring passes an `into.length === 0` test on its own and would otherwise sit
+  between Rabadon's and Zhonya's as though it were a build slot.
+- **Discovery is local-only.** onetricks.gg answers a browser but returns HTTP 429 to plain fetches,
+  reproduced repeatedly, so the scrape drives Chrome through a `puppeteer-core` devDependency that
+  the Next app never imports. Same split, same reason, as the existing op.gg discovery path.
+- **dpm.lol was evaluated and rejected as a source**: it returns 403 from Cloudflare bot protection
+  on every data route, to headless and to a real browser window alike. Not worked around.
+
 ## [0.72.0] — 2026-07-28 — Blocks that only differ by one item stop pretending to be a second opinion
 
 ### Changed

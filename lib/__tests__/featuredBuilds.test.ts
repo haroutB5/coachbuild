@@ -1,0 +1,93 @@
+import { describe, it, expect } from "vitest";
+import { buildFeaturedModel, type FeaturedMatchRow } from "../otp/featured";
+
+const page = (keystone: number, primaryTree = 8200) => ({
+  primaryTree,
+  keystone,
+  primary: [8226, 8234],
+  secondaryTree: 8000,
+  secondary: [8017, 9105],
+  shards: [5005, 5008, 5011],
+});
+
+const game = (over: Partial<FeaturedMatchRow> = {}): FeaturedMatchRow => ({
+  win: true,
+  final_items: [3100, 6653],
+  runes: page(8992),
+  spells: [4, 6],
+  ...over,
+});
+
+describe("buildFeaturedModel", () => {
+  it("reports build rate as a share of the player's own games", () => {
+    const m = buildFeaturedModel([
+      game({ final_items: [3100, 6653] }),
+      game({ final_items: [3100, 3157] }),
+      game({ final_items: [3100, 6653] }),
+      game({ final_items: [4645] }),
+    ]);
+    expect(m.games).toBe(4);
+    expect(m.items[0]).toEqual({ itemId: 3100, games: 3, pct: 75 });
+    expect(m.items.find((i) => i.itemId === 6653)).toEqual({ itemId: 6653, games: 2, pct: 50 });
+    expect(m.items.find((i) => i.itemId === 4645)).toEqual({ itemId: 4645, games: 1, pct: 25 });
+  });
+
+  it("counts a duplicated item once per game", () => {
+    // One inventory listing the same id twice is one game that built it.
+    const m = buildFeaturedModel([game({ final_items: [3100, 3100, 3100] })]);
+    expect(m.items[0]).toEqual({ itemId: 3100, games: 1, pct: 100 });
+  });
+
+  it("applies the caller's item filter rather than guessing at metadata", () => {
+    const m = buildFeaturedModel([game({ final_items: [3100, 1058, 2003] })], (id) => id !== 2003);
+    expect(m.items.map((i) => i.itemId).sort()).toEqual([1058, 3100]);
+  });
+
+  it("picks the modal rune page, not the first seen", () => {
+    const m = buildFeaturedModel([
+      game({ runes: page(8112) }),
+      game({ runes: page(8992) }),
+      game({ runes: page(8992) }),
+    ]);
+    expect(m.runes?.page.keystone).toBe(8992);
+    expect(m.runes?.games).toBe(2);
+    expect(m.runes?.pct).toBe(67);
+  });
+
+  it("treats pages with neither keystone nor tree as absent", () => {
+    // Otherwise empty pages win the modal count by sheer volume and the card
+    // claims a rune setup the player never ran.
+    const m = buildFeaturedModel([
+      game({ runes: { primary: [], secondary: [], shards: [] } }),
+      game({ runes: { primary: [], secondary: [], shards: [] } }),
+      game({ runes: page(8992) }),
+    ]);
+    expect(m.runes?.page.keystone).toBe(8992);
+    expect(m.runes?.games).toBe(1);
+  });
+
+  it("normalises spell pair order so 4,6 and 6,4 are the same choice", () => {
+    const m = buildFeaturedModel([
+      game({ spells: [4, 6] }),
+      game({ spells: [6, 4] }),
+      game({ spells: [4, 12] }),
+    ]);
+    expect(m.spells?.spells).toEqual([4, 6]);
+    expect(m.spells?.games).toBe(2);
+  });
+
+  it("survives malformed rows without throwing", () => {
+    const m = buildFeaturedModel([
+      game({ final_items: null, runes: null, spells: null }),
+      game({ final_items: "nope" as unknown as number[], runes: 7 as unknown as object }),
+      game({ final_items: [0, -1, 3100] }),
+    ]);
+    expect(m.games).toBe(3);
+    expect(m.items).toEqual([{ itemId: 3100, games: 1, pct: 33 }]);
+  });
+
+  it("reports zero games without dividing by zero", () => {
+    const m = buildFeaturedModel([]);
+    expect(m).toEqual({ games: 0, wins: 0, items: [], runes: null, spells: null });
+  });
+});

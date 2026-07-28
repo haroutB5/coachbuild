@@ -7,6 +7,7 @@ import { LANE_TO_ROLE_ID, LANE_LABEL } from "./heroContracts";
 import RunesSummonersCard from "./RunesSummonersCard";
 import ItemBuildCard from "./ItemBuildCard";
 import ProConsensusCard from "./ProConsensusCard";
+import FeaturedOtpCard from "./FeaturedOtpCard";
 import SkillOrderCard from "./SkillOrderCard";
 import HextechTabs from "./HextechTabs";
 import { versionFromPatch } from "@/components/proAssets";
@@ -472,14 +473,7 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
               apply buttons, which the OTP variant renders too. v0.70.0 held them
               back believing a third LCU rune page needed a companion-side
               change; it does not. See ApplyProRunesButton's `variant` doc. */}
-          <ProConsensusCard
-            champ={champ}
-            lane={lane}
-            variant="otp"
-            ver={ver}
-            onOpenDetail={openDetail}
-            build={build}
-          />
+          <FeaturedOtpCard champ={champ} ver={ver} />
         </div>
       </div>
 
