@@ -893,7 +893,7 @@ function toCandidate(id: number, ranking: ScaleRanking, fallback: RawWeight): Ca
 // standard build with a misleading title, which is worse than no block at all.
 
 // THRESHOLDS ARE MEASURED, NOT GUESSED. Swept live against 10 champion+role
-// combinations on patch 16.14 (Viktor/Ahri mid, Lee Sin jg, Jinx bot,
+// combinations on patch 16.13 (Viktor/Ahri mid, Lee Sin jg, Jinx bot,
 // Thresh/Pyke/Lux sup, Garen/Teemo/Yasuo top). Observed pool shape: 14-17 items
 // carrying a winrate, occurrence ranging 483 to ~249,000, median play count
 // 8k-44k depending on champion. The settings below fire on 7 of 9 champions and
