@@ -472,3 +472,61 @@ describe("autoApplyItemSetsIfEligible — probe + apply orchestration", () => {
     expect(applyFn).toHaveBeenCalledWith({ ...params, port: 48291, session: "s" });
   });
 });
+
+// ── OTP resolution + the query-drift guard (2026-07-28) ─────────────────────
+describe("OTP consensus for item sets", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("resolveOtpConsensusForSets reads /api/otp and returns item frequencies", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch([
+        ["/api/otp", { games: [PRO_GAME(3031), PRO_GAME(3031)], players: [], pending: false }],
+        ["https://cdn.coachless.gg", ITEM_JSON_FIXTURE],
+      ])
+    );
+    const { resolveOtpConsensusForSets } = await import("../hextech/itemSetsApply");
+    const result = await resolveOtpConsensusForSets(CHAMP, "bot", "16.13");
+    expect(result).not.toBeNull();
+    expect(result!.items.some((i) => i.itemId === 3031)).toBe(true);
+  });
+
+  it("returns null — never throws — for a champion with no ingested one-tricks", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch([
+        ["/api/otp", { games: [], players: [], pending: true }],
+        ["https://cdn.coachless.gg", ITEM_JSON_FIXTURE],
+      ])
+    );
+    const { resolveOtpConsensusForSets } = await import("../hextech/itemSetsApply");
+    expect(await resolveOtpConsensusForSets(CHAMP, "bot", "16.13")).toBeNull();
+  });
+
+  it("QUERY-DRIFT GUARD: the item-set export's /api/pros call carries the pro-play floor", async () => {
+    // This module performs a SECOND, independent /api/pros aggregation for the
+    // LCU export. In v0.70.0 the card was fixed to limit=200&proMin=100 and
+    // this path was not, so the "Pro build" line users got IN THEIR SHOP stayed
+    // ~96% solo queue while the card beside it read 88 pro-play games. Pin the
+    // parameters here so the two copies cannot silently diverge again.
+    const seen: string[] = [];
+    vi.stubGlobal("fetch", (url: string, ...rest: unknown[]) => {
+      seen.push(String(url));
+      return routedFetch([
+        ["/api/pros", { games: [PRO_GAME(3031)] }],
+        ["/api/otp", { games: [], players: [], pending: false }],
+        ["https://cdn.coachless.gg", ITEM_JSON_FIXTURE],
+      ])(url, ...(rest as []));
+    });
+    const { resolveProConsensusForSets } = await import("../hextech/itemSetsApply");
+    await resolveProConsensusForSets(CHAMP, "bot", "16.13");
+    const prosCall = seen.find((u) => u.includes("/api/pros"));
+    expect(prosCall).toBeDefined();
+    expect(prosCall).toContain("proMin=100");
+    expect(prosCall).toContain("limit=200");
+  });
+});

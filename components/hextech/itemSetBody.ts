@@ -611,14 +611,21 @@ function dedupeArchetypeLines<T extends { arch: Archetype; line: Candidate[] }>(
  *  keep-priority order — the block a user reads first is the one that survives
  *  a collision. Archetypes break the tie among themselves by
  *  ARCHETYPE_PRIORITY, not by emission order (unchanged from v0.48.0). */
-type LineFamily = "core" | "buy" | "pro" | "themed" | "archetype";
+type LineFamily = "core" | "buy" | "pro" | "otp" | "themed" | "archetype";
 
+// "otp" sits directly after "pro" (2026-07-28). Both are consensus lines, and
+// pro keeps the higher rank purely because it is the older, better-populated
+// surface — when the two converge on the identical item set the user sees one
+// block labelled "Pro build", which is the more informative of the two labels.
+// When they DIVERGE (the common case, and the whole reason the OTP section
+// exists) both survive, because dedupeLineBlocks only collapses identical sets.
 const FAMILY_KEEP_RANK: Record<LineFamily, number> = {
   core: 0,
   buy: 1,
   pro: 2,
-  themed: 3,
-  archetype: 4,
+  otp: 3,
+  themed: 4,
+  archetype: 5,
 };
 
 interface LineBlock {
@@ -1362,10 +1369,19 @@ function toItemRefs(cands: Candidate[]): ItemSetItem[] {
 
 /** One id set covering every position the contract already knows is
  *  "boots" — see module header for why this is structural, not tag-based. */
-function collectBootsIds(items: ItemsBlock, pro?: ProConsensusItemsInput | null): Set<number> {
+function collectBootsIds(
+  items: ItemsBlock,
+  pro?: ProConsensusItemsInput | null,
+  otp?: ProConsensusItemsInput | null
+): Set<number> {
   const ids = new Set<number>([items.boots.id]);
   for (const alt of items.alts?.boots ?? []) ids.add(alt.id);
   if (pro) for (const b of pro.boots) ids.add(b.itemId);
+  // OTP boots must be in this set too, or buildLine cannot RECOGNISE an
+  // OTP-favoured boot as boots and the one-boots rule silently mis-classifies
+  // it as a full item — the same class of defect the Yuumi missing-boots bug
+  // came from on the Pro line.
+  if (otp) for (const b of otp.boots) ids.add(b.itemId);
   return ids;
 }
 
@@ -1450,12 +1466,20 @@ export function buildItemSets(
   roleLabel: string,
   build: BuildResponse,
   pro?: ProConsensusItemsInput | null,
-  itemMeta?: ReadonlyMap<number, ItemDetail>
+  itemMeta?: ReadonlyMap<number, ItemDetail>,
+  /** OTP (one-trick) consensus, 2026-07-28. Same shape as `pro` and equally
+   *  optional — omitted/null simply means no "OTP build" block this export,
+   *  never a failure. Deliberately a SEPARATE parameter rather than merged
+   *  into `pro` upstream: the two are different populations with different
+   *  denominators, and averaging them would produce a build nobody actually
+   *  plays. */
+  otp?: ProConsensusItemsInput | null
 ): ItemSet[] {
   const items = build.items;
   const meta = itemMeta ?? new Map<number, ItemDetail>();
   const hasPro = !!pro && (pro.items.length > 0 || pro.boots.length > 0);
-  const bootsIds = collectBootsIds(items, hasPro ? pro : null);
+  const hasOtp = !!otp && (otp.items.length > 0 || otp.boots.length > 0);
+  const bootsIds = collectBootsIds(items, hasPro ? pro : null, hasOtp ? otp : null);
 
   const corePicks = [items.first, items.second, items.third, items.boots, ...items.fourthPlus];
   const optimizedView = resolveOptimizedPathView(items);
@@ -1484,6 +1508,18 @@ export function buildItemSets(
     "share",
     proEntries.map((e) => ({ id: e.itemId, weight: e.share }))
   );
+  // A SECOND, independent share ranking for OTP — not an exception to the
+  // "one ranking per scale" rule above, an application of it. That rule exists
+  // so a rank means the same thing everywhere it is used; pro shares and OTP
+  // shares are computed over different game populations, so a single merged
+  // ranking would silently compare "63% of 200 pro games" against "71% of 65
+  // one-trick games" as if they were the same measurement. Each line reads
+  // only its own ranking.
+  const otpEntries = hasOtp ? [...otp!.boots, ...otp!.items] : [];
+  const otpShareRanking = buildScaleRanking(
+    "share",
+    otpEntries.map((e) => ({ id: e.itemId, weight: e.share }))
+  );
 
   const corePrimary = fullItemsOnly(fromPicks(corePicks, wpaRanking), meta);
   const optimizedPrimary = optimizedPicks
@@ -1494,6 +1530,10 @@ export function buildItemSets(
   const situationalPoolFull = fullItemsOnly(fromPicks(situationalPicks, wpaRanking), meta);
   const proPool = fullItemsOnly(
     fromShares([...proEntries].sort((a, b) => b.share - a.share), shareRanking),
+    meta
+  );
+  const otpPool = fullItemsOnly(
+    fromShares([...otpEntries].sort((a, b) => b.share - a.share), otpShareRanking),
     meta
   );
 
@@ -1553,6 +1593,17 @@ export function buildItemSets(
     // `hasPro` only means the SOURCE pro-consensus data was non-empty, not
     // that anything survived the full-items-only filter.
     pushLine("Pro build", "pro", FAMILY_KEEP_RANK.pro, buildLine(proPool, [...generalFallback, corePrimary], bootsIds));
+  }
+
+  if (hasOtp) {
+    // Same cascade shape as the Pro line above, and `corePrimary` last for the
+    // same load-bearing reason: it is the only pool guaranteed to carry
+    // `items.boots`, so without it a champ whose one-tricks never bought a
+    // tracked boot would ship a six-full-item line with no boots at all (the
+    // Yuumi Support defect). `proPool` is NOT in this cascade — padding an OTP
+    // line with pro items would produce a build neither group actually plays,
+    // and the block's label would then be a false claim about its own contents.
+    pushLine("OTP build", "otp", FAMILY_KEEP_RANK.otp, buildLine(otpPool, [...generalFallback, corePrimary], bootsIds));
   }
 
   // Themed lines — derived entirely from the pools already built above, no

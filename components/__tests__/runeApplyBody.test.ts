@@ -109,6 +109,27 @@ describe("buildRuneApplyBody", () => {
     expect(pro.replacePrefix).toBe("CoachBuild Viktor ");
   });
 
+  it("2026-07-28: all THREE pages coexist and share one champ-scoped replacePrefix", () => {
+    // WPA (auto-export), Pro, and now OTP. Three distinct exact titles means
+    // the companion's STEP 2 exact-title match writes each to its own page and
+    // no apply can revert a sibling; one shared prefix means a champ change
+    // still cleans up all three together, and STEP 1's "never delete a page
+    // starting with replacePrefix" protects each from the other two.
+    const wpa = buildRuneApplyBody("Viktor", "Mid", baseRunes());
+    const pro = buildRuneApplyBody("Viktor", "Mid", baseRunes(), { pageSuffix: "Pro" });
+    const otp = buildRuneApplyBody("Viktor", "Mid", baseRunes(), { pageSuffix: "OTP" });
+    expect(otp.name).toBe("CoachBuild Viktor Mid OTP");
+    expect(new Set([wpa.name, pro.name, otp.name]).size).toBe(3);
+    expect(otp.replacePrefix).toBe("CoachBuild Viktor ");
+    // Every title must pass the companion's Test-RunePayload gate.
+    for (const b of [wpa, pro, otp]) expect(b.name.startsWith("CoachBuild")).toBe(true);
+    // No title may be a PREFIX of another under exact-title matching... but it
+    // is worth stating the real invariant: matching is EQUALITY, not
+    // StartsWith, which is exactly why "CoachBuild Viktor Mid" cannot target
+    // "CoachBuild Viktor Mid OTP".
+    expect(otp.name.startsWith(wpa.name)).toBe(true);
+  });
+
   it("ignores a blank/whitespace pageSuffix (falls back to the plain WPA title)", () => {
     expect(buildRuneApplyBody("Viktor", "Mid", baseRunes(), { pageSuffix: "   " }).name).toBe("CoachBuild Viktor Mid");
     expect(buildRuneApplyBody("Viktor", "Mid", baseRunes(), { pageSuffix: "" }).name).toBe("CoachBuild Viktor Mid");

@@ -1896,3 +1896,110 @@ describe("buildItemSets — v0.47.0 maximally-full set byte budget", () => {
     expect(bytes).toBeLessThan(4096);
   });
 });
+
+// ── OTP build block (2026-07-28) ────────────────────────────────────────────
+// The one-trick consensus line, added alongside "Pro build". These assertions
+// exist mostly to pin the ways it could be WRONG rather than absent: padding
+// an OTP line with PRO items, mis-classifying an OTP-only boot as a full item,
+// or letting the two consensus lines collapse into one when they genuinely
+// disagree.
+describe("buildItemSets — OTP build block", () => {
+  const otpMeta = () =>
+    metaMap(
+      ...Array.from(baseItemMetaMap().values()),
+      meta(7001),
+      meta(7002),
+      meta(7003),
+      meta(7004),
+      meta(7005),
+      bootsMeta(7100)
+    );
+
+  const otpInput = {
+    items: [
+      { itemId: 7001, share: 0.9 },
+      { itemId: 7002, share: 0.8 },
+      { itemId: 7003, share: 0.7 },
+      { itemId: 7004, share: 0.6 },
+      { itemId: 7005, share: 0.5 },
+    ],
+    boots: [{ itemId: 7100, share: 0.75 }],
+  };
+
+  it("emits no OTP block when no OTP data is supplied", () => {
+    const sets = buildItemSets(CHAMP, "Bot", baseBuild(baseItems()), null, baseItemMetaMap());
+    expect(blockTypes(sets)).not.toContain("OTP build");
+  });
+
+  it("emits no OTP block for an empty OTP sample", () => {
+    const sets = buildItemSets(
+      CHAMP,
+      "Bot",
+      baseBuild(baseItems()),
+      null,
+      baseItemMetaMap(),
+      { items: [], boots: [] }
+    );
+    expect(blockTypes(sets)).not.toContain("OTP build");
+  });
+
+  it("emits an OTP block built from the OTP items", () => {
+    const sets = buildItemSets(CHAMP, "Bot", baseBuild(baseItems()), null, otpMeta(), otpInput);
+    const block = findBlock(sets, "OTP build");
+    expect(block).toBeDefined();
+    const ids = block!.items.map((i) => Number(i.id));
+    expect(ids).toContain(7001);
+    expect(ids).toContain(7002);
+  });
+
+  it("recognises an OTP-only boot AS boots, not as a sixth full item", () => {
+    // collectBootsIds must see otp.boots, or the one-boots rule silently
+    // mis-classifies 7100 and the line ships two boots or none.
+    const sets = buildItemSets(CHAMP, "Bot", baseBuild(baseItems()), null, otpMeta(), otpInput);
+    const ids = findBlock(sets, "OTP build")!.items.map((i) => Number(i.id));
+    const bootsCount = ids.filter((id) => id === 7100 || id === 3006).length;
+    expect(bootsCount).toBe(1);
+  });
+
+  it("never pads an OTP line with PRO items", () => {
+    // A block labelled "OTP build" that contains items only pros bought is a
+    // false claim about its own contents.
+    const proOnly = { items: [{ itemId: 8888, share: 0.99 }], boots: [] };
+    const sets = buildItemSets(
+      CHAMP,
+      "Bot",
+      baseBuild(baseItems()),
+      proOnly,
+      otpMeta(),
+      otpInput
+    );
+    const otpIds = findBlock(sets, "OTP build")!.items.map((i) => Number(i.id));
+    expect(otpIds).not.toContain(8888);
+    // ...and the Pro line is still built from the pro pool, unaffected.
+    expect(findBlock(sets, "Pro build")!.items.map((i) => Number(i.id))).toContain(8888);
+  });
+
+  it("keeps BOTH consensus blocks when pro and OTP disagree", () => {
+    const proInput = { items: [{ itemId: 8888, share: 0.95 }], boots: [] };
+    const sets = buildItemSets(CHAMP, "Bot", baseBuild(baseItems()), proInput, otpMeta(), otpInput);
+    expect(blockTypes(sets)).toContain("Pro build");
+    expect(blockTypes(sets)).toContain("OTP build");
+  });
+
+  it("collapses to the Pro block when the two lines are the identical set", () => {
+    // Same items => one build shown twice. dedupeLineBlocks keeps the
+    // higher-ranked family, and "Pro build" is the more informative label.
+    const same = { items: otpInput.items, boots: otpInput.boots };
+    const sets = buildItemSets(CHAMP, "Bot", baseBuild(baseItems()), same, otpMeta(), otpInput);
+    expect(blockTypes(sets)).toContain("Pro build");
+    expect(blockTypes(sets)).not.toContain("OTP build");
+  });
+
+  it("caps the OTP line at 6 slots with at most one boots, like every build line", () => {
+    const sets = buildItemSets(CHAMP, "Bot", baseBuild(baseItems()), null, otpMeta(), otpInput);
+    const items = findBlock(sets, "OTP build")!.items;
+    expect(items.length).toBeLessThanOrEqual(6);
+    const bootIds = new Set([3006, 3111, 3157, 3158, 7100]);
+    expect(items.filter((i) => bootIds.has(Number(i.id))).length).toBeLessThanOrEqual(1);
+  });
+});

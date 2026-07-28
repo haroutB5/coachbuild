@@ -846,11 +846,27 @@ function Invoke-ApplyRunes {
 
     # -- STEP 1: champ-scoped stale cleanup (v1.6.3) ----------------------------
     # Delete OUR OWN pages ("CoachBuild*") for OTHER champions so we stay
-    # bounded at the current champ's <=2 pages (WPA + Pro). Gated on a valid
+    # bounded at the current champ's own pages. Gated on a valid
     # replacePrefix ("CoachBuild <champ> ", trailing space load-bearing).
-    #   - A page starting with replacePrefix is NEVER deleted -> protects BOTH
-    #     the current champ's WPA and Pro pages from cross-deletion (applying
-    #     WPA must not wipe the Pro page, and vice-versa).
+    #   - A page starting with replacePrefix is NEVER deleted -> protects ALL
+    #     of the current champ's pages from cross-deletion (applying one must
+    #     not wipe a sibling).
+    #
+    # v0.70.1 (web-side change only, no behaviour change here): that bound is
+    # now <=3 pages, not <=2 -- "CoachBuild <champ> <role>" (WPA auto-export),
+    # "... Pro" (pro consensus) and "... OTP" (one-trick consensus). This
+    # handler needed NO modification to support the third: it is title-agnostic
+    # beyond Test-RunePayload's starts-with-"CoachBuild" gate, matches its
+    # target by EXACT title in STEP 2, and protects every prefix-sharing page
+    # here. The comment is updated because a stale "<=2" would send the next
+    # reader looking for a bug that is not there.
+    #
+    # SLOT PRESSURE IS THE REAL CONSEQUENCE, and it degrades correctly rather
+    # than silently: an account with 2 rune slots cannot hold all three, so
+    # STEP 3 finds no free slot and falls through to the manual branch, which
+    # replaces the CURRENTLY SELECTED page -- a real click, real consent, HARD
+    # RULE 5's documented carve-out. AUTO mode still only ever writes the
+    # unsuffixed WPA page and still touches nothing when full.
     #   - A non-"CoachBuild" page is NEVER touched (hard invariant, shared with
     #     the auto-mode zero-foreign-mutation guarantee).
     #   - Fail-soft: a delete the LCU refuses (e.g. a stale page that's still

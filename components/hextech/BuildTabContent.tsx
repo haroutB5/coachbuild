@@ -468,17 +468,17 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
               is the point: the starter/boots partition (HARD RULE 2) and the
               per-slot honest denominators are enforced in ONE place.
 
-              `build` is deliberately NOT passed: it exists only to render the
-              two companion apply buttons, which the OTP variant suppresses (see
-              ProConsensusCard's header comment — a third LCU rune-page title is
-              a companion-side change). Passing it would be dead weight that
-              reads like the buttons are meant to be there. */}
+              `build` IS passed now (2026-07-28) — it powers the two companion
+              apply buttons, which the OTP variant renders too. v0.70.0 held them
+              back believing a third LCU rune page needed a companion-side
+              change; it does not. See ApplyProRunesButton's `variant` doc. */}
           <ProConsensusCard
             champ={champ}
             lane={lane}
             variant="otp"
             ver={ver}
             onOpenDetail={openDetail}
+            build={build}
           />
         </div>
       </div>

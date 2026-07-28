@@ -2,6 +2,37 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.70.1] — 2026-07-28 — OTP runes and items reach the game client
+
+### Added
+- **"Apply OTP runes" and "Add OTP item build".** The OTP section now pushes to the League client
+  exactly like the Pro section does.
+  - Runes go to their own page, `CoachBuild <champ> <role> OTP`, kept alongside the recommended page
+    and the Pro page. Applying one never reverts another.
+  - The item set gains an **OTP build** block next to **Pro build**. Verified on Viktor mid at ship
+    time, the two lines genuinely differ: Pro runs Rocketbelt into Rabadon's, the one-tricks run Lich
+    Bane into Void Staff.
+
+  **No companion re-install is needed.** v0.70.0 said this feature required a companion-side change.
+  That was wrong, and the correction is the interesting part: `Invoke-ApplyRunes` never cared about
+  the specific title. It gates on the name starting with `CoachBuild`, protects every page sharing
+  the current champion's prefix, and matches its target by exact title — so a third suffix already
+  worked. The item side needed nothing either, because the OTP line is a block inside the existing
+  one-set-per-champion set, not a new set.
+
+  The one real consequence is rune-page slots: three pages per champion against two slots on a free
+  account. That degrades correctly rather than silently. A real click replaces the currently selected
+  page, which is the consent carve-out the companion already documents, and the automatic export
+  still only ever writes the unsuffixed recommended page.
+
+### Fixed
+- **The item build sent to your shop was still ~96% solo queue.** v0.70.0 fixed the pro-play
+  starvation on the Pro Consensus *card*, but the item-set export runs its own separate query for the
+  same data, and that copy was missed — it kept asking for 100 games with no pro-play floor. So the
+  card beside it read "88 pro play" while the **Pro build** line actually landing in the client was
+  built from the old, starved sample. Both now use the same parameters, and a test pins them so the
+  two copies cannot drift apart again.
+
 ## [0.70.0] — 2026-07-28 — Far more pro-play games, and a new OTP section
 
 ### Fixed

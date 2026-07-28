@@ -30,7 +30,17 @@ import { shouldAutoExport, type AutoApplyGateInput } from "./autoExportShared";
 
 export { type AutoApplyGateInput };
 
-const PRO_CONSENSUS_LIMIT = 100;
+// MUST stay in step with ProConsensusCard's own AGGREGATION_LIMIT/
+// PRO_PLAY_FLOOR. This module performs an INDEPENDENT second aggregation for
+// the LCU export (see the header), and that independence is exactly how it
+// missed the v0.70.0 pro-play starvation fix: the card was corrected to
+// limit=200&proMin=100 while this path silently kept limit=100 with no floor,
+// so the "Pro build" line the user got IN THEIR SHOP was still ~96% solo
+// queue after the card beside it had been fixed. Two copies of one query is
+// the defect; until they share a helper, changing one means changing both.
+const PRO_CONSENSUS_LIMIT = 200;
+const PRO_PLAY_FLOOR = 100;
+const OTP_CONSENSUS_LIMIT = 200;
 
 /** Same aggregation ProConsensusCard.tsx performs (GET /api/pros + item
  *  metadata -> aggregateProConsensus), reduced to just the `items`/`boots`
@@ -61,7 +71,9 @@ export async function resolveProConsensusForSets(
     const role = LANE_TO_ROLE_ID[lane];
     const ver = versionFromPatch(patch);
     const [games, itemMeta] = await Promise.all([
-      fetch(`/api/pros?championId=${champ.id}&role=${role}&limit=${PRO_CONSENSUS_LIMIT}&source=all`).then(async (res) => {
+      fetch(
+        `/api/pros?championId=${champ.id}&role=${role}&limit=${PRO_CONSENSUS_LIMIT}&proMin=${PRO_PLAY_FLOOR}&source=all`
+      ).then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: ProGamesApiResponse = await res.json();
         return Array.isArray(data?.games) ? data.games : [];
@@ -72,6 +84,56 @@ export async function resolveProConsensusForSets(
     if (games2.length === 0) return null;
     const model = aggregateProConsensus(games2, itemMeta);
     if (model.items.length === 0 && model.boots.length === 0 && model.supportFinals === null) return null;
+    const items = [...model.items, ...(model.supportFinals ? [model.supportFinals.top] : [])].sort((a, b) =>
+      b.share !== a.share ? b.share - a.share : a.itemId - b.itemId
+    );
+    return {
+      items: items.map((e) => ({ itemId: e.itemId, share: e.share })),
+      boots: model.boots.map((e) => ({ itemId: e.itemId, share: e.share })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** The OTP twin of resolveProConsensusForSets (2026-07-28) — GET /api/otp +
+ *  item metadata -> aggregateProConsensus -> the items/boots frequency arrays
+ *  buildItemSets' OTP variant needs.
+ *
+ *  Reuses `aggregateProConsensus` verbatim because the OTP feed returns the
+ *  identical ProGame shape (real Riot solo-queue matches), so the frequency
+ *  maths, the starter/boots partition and the support-final carve-out are all
+ *  the SAME code — not a parallel implementation that could drift into
+ *  disagreeing with the OTP card the user just read.
+ *
+ *  Returns null on ANY failure (fetch error, empty sample, a champion whose
+ *  one-tricks haven't been ingested yet). buildItemSets treats `otp: null` as
+ *  "no OTP block this export", so the worst case is one missing block in the
+ *  shop panel, never a failed apply. */
+export async function resolveOtpConsensusForSets(
+  champ: ChampionRef,
+  lane: LaneId,
+  patch: string
+): Promise<ProConsensusItemsInput | null> {
+  try {
+    const role = LANE_TO_ROLE_ID[lane];
+    const ver = versionFromPatch(patch);
+    const [games, itemMeta] = await Promise.all([
+      fetch(`/api/otp?championId=${champ.id}&role=${role}&limit=${OTP_CONSENSUS_LIMIT}`).then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data: ProGamesApiResponse = await res.json();
+        return Array.isArray(data?.games) ? data.games : [];
+      }),
+      getItemDetailMap(ver).catch(() => new Map<number, ItemDetail>()),
+    ]);
+    const games2 = games as ProGame[];
+    if (games2.length === 0) return null;
+    const model = aggregateProConsensus(games2, itemMeta);
+    if (model.items.length === 0 && model.boots.length === 0 && model.supportFinals === null) return null;
+    // Same support-final fold-in as the pro path, for the same reason: only
+    // `top` is added back, because the alternatives are by definition items
+    // the player cannot also own, and a 6-item shop line carrying two of them
+    // is the exact duplication bug that partition exists to prevent.
     const items = [...model.items, ...(model.supportFinals ? [model.supportFinals.top] : [])].sort((a, b) =>
       b.share !== a.share ? b.share - a.share : a.itemId - b.itemId
     );
@@ -121,11 +183,16 @@ export async function applyItemSetsForBuild(params: {
   port: CompanionPort;
   session: string;
 }): Promise<ApplyItemSetsResult> {
-  const [pro, itemMeta] = await Promise.all([
+  const [pro, itemMeta, otp] = await Promise.all([
     resolveProConsensusForSets(params.champ, params.lane, params.build.patch),
     resolveItemMetaForSets(params.build.patch),
+    // In the SAME Promise.all, not sequentially after it: this runs on a
+    // user click and on the champ-select auto-export, where champ select is
+    // a 30-second window. Both consensus fetches are independent and both
+    // fail soft, so serialising them would only add latency.
+    resolveOtpConsensusForSets(params.champ, params.lane, params.build.patch),
   ]);
-  const sets = buildItemSets(params.champ, params.roleLabel, params.build, pro, itemMeta);
+  const sets = buildItemSets(params.champ, params.roleLabel, params.build, pro, itemMeta, otp);
   return applyItemSets(params.port, params.session, {
     championId: params.champ.id,
     sets,

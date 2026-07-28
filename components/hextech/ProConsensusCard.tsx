@@ -162,12 +162,32 @@ type ApplyUiState =
  *  can't fill a complete page — see proConsensus.ts's missingRunePageReason,
  *  the single source of truth this button and proConsensusRuneApplyInput both
  *  read. */
-function ApplyProRunesButton({ champ, roleLabel, model, fallbackShards }: {
+function ApplyProRunesButton({ champ, roleLabel, model, fallbackShards, variant = "pro" }: {
   champ: ChampionRef;
   roleLabel: string;
   model: ProConsensusModel;
   fallbackShards: ShardSet;
+  /** 2026-07-28. "otp" writes a THIRD page, `"CoachBuild <champ> <role> OTP"`.
+   *
+   *  No companion change was needed for this, which is worth stating because
+   *  the v0.70.0 card shipped without these buttons on the assumption that one
+   *  was. It is not: `Invoke-ApplyRunes` is title-agnostic beyond a
+   *  starts-with-"CoachBuild" gate (`Test-RunePayload`), matches its target by
+   *  EXACT title, and its champ-scoped stale cleanup protects every page
+   *  sharing the `"CoachBuild <champ> "` prefix — so a third suffix slots in
+   *  under the existing contract rather than extending it.
+   *
+   *  Slot pressure is the one real consequence: three pages per champion on an
+   *  account with two rune slots. That degrades correctly rather than silently
+   *  — a real click takes `Invoke-ApplyRunes`'s manual branch, which replaces
+   *  the CURRENTLY SELECTED page (real consent, HARD RULE 5's documented
+   *  carve-out). The AUTO export still only ever writes the unsuffixed WPA
+   *  page, so nothing about this can fire without a click. */
+  variant?: ConsensusVariant;
 }) {
+  const isOtp = variant === "otp";
+  const label = isOtp ? "OTP" : "pro";
+  const pageSuffix = isOtp ? "OTP" : "Pro";
   const [ready, setReady] = useState(false);
   const [state, setState] = useState<ApplyUiState>({ status: "idle" });
 
@@ -178,11 +198,12 @@ function ApplyProRunesButton({ champ, roleLabel, model, fallbackShards }: {
   const reason = missingRunePageReason(model);
   const input = reason === null ? proConsensusRuneApplyInput(model, fallbackShards) : null;
   const disabled = state.status === "applying" || input === null;
+  const base = `Saves the ${isOtp ? "one-trick" : "pro"}-consensus runes as a separate "${pageSuffix}" rune page (kept alongside the recommended page).`;
   const tooltip =
     reason ??
     (input?.shardsFromFallback
-      ? "Saves the pro-consensus runes as a separate \"Pro\" rune page (kept alongside the recommended page). Shards from CoachBuild's recommendation — pro shard data unavailable."
-      : "Saves the pro-consensus runes as a separate \"Pro\" rune page (kept alongside the recommended page).");
+      ? `${base} Shards from CoachBuild's recommendation — ${isOtp ? "one-trick" : "pro"} shard data unavailable.`
+      : base);
 
   async function handleClick() {
     if (!input) return;
@@ -198,9 +219,9 @@ function ApplyProRunesButton({ champ, roleLabel, model, fallbackShards }: {
       // pageSuffix:"Pro" -> "CoachBuild <champ> <role> Pro", a SEPARATE page
       // from the WPA auto-export's "CoachBuild <champ> <role>" so the two
       // coexist and neither reverts the other (companion 1.6.3).
-      body = buildRuneApplyBody(champ.name, roleLabel, input.runes, { pageSuffix: "Pro" });
+      body = buildRuneApplyBody(champ.name, roleLabel, input.runes, { pageSuffix });
     } catch {
-      setState({ status: "error", message: "Couldn't build a pro rune page — try refreshing." });
+      setState({ status: "error", message: `Couldn't build a ${label} rune page — try refreshing.` });
       return;
     }
 
@@ -230,10 +251,10 @@ function ApplyProRunesButton({ champ, roleLabel, model, fallbackShards }: {
         onClick={handleClick}
         disabled={disabled}
         title={tooltip}
-        aria-label={`Apply pro runes — ${tooltip}`}
+        aria-label={`Apply ${label} runes — ${tooltip}`}
         className="flex-shrink-0 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-bg bg-teal hover:bg-teal-hover disabled:opacity-60 disabled:cursor-not-allowed rounded-md px-2.5 py-1.5 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
       >
-        {state.status === "applying" ? "Applying…" : "Apply pro runes"}
+        {state.status === "applying" ? "Applying…" : `Apply ${label} runes`}
       </button>
       {state.status === "success" && (
         <p role="status" className="text-[10.5px] text-teal">
@@ -270,12 +291,14 @@ type ItemSetsUiState =
  *  section for a user who's looking at this card specifically. No new
  *  plumbing: same gating (session-ready only), same result shape as
  *  RunesSummonersCard's ItemSetsButton. */
-function AddProItemBuildButton({ champ, lane, roleLabel, build }: {
+function AddProItemBuildButton({ champ, lane, roleLabel, build, variant = "pro" }: {
   champ: ChampionRef;
   lane: LaneId;
   roleLabel: string;
   build: BuildResponse;
+  variant?: ConsensusVariant;
 }) {
+  const isOtp = variant === "otp";
   const [ready, setReady] = useState(false);
   const [state, setState] = useState<ItemSetsUiState>({ status: "idle" });
 
@@ -309,7 +332,11 @@ function AddProItemBuildButton({ champ, lane, roleLabel, build }: {
 
   if (!ready) return null;
 
-  const tooltip = "Adds the full CoachBuild item set (including the Pro consensus line) — check your shop in game.";
+  // Honest on BOTH variants: this pushes the ONE champ+role set, which now
+  // carries BOTH consensus lines as blocks. Neither button exports a
+  // variant-only set, and the copy must not imply otherwise — it names the
+  // line the user is looking at while saying the set is the full one.
+  const tooltip = `Adds the full CoachBuild item set (including the ${isOtp ? "OTP" : "Pro"} consensus line) — check your shop in game.`;
 
   return (
     <div className="flex flex-col items-end gap-1.5">
@@ -318,10 +345,10 @@ function AddProItemBuildButton({ champ, lane, roleLabel, build }: {
         onClick={handleClick}
         disabled={state.status === "applying"}
         title={tooltip}
-        aria-label={`Add pro item build — ${tooltip}`}
+        aria-label={`Add ${isOtp ? "OTP" : "pro"} item build — ${tooltip}`}
         className="flex-shrink-0 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-txt bg-panel2 border border-line hover:border-line-gold disabled:opacity-60 disabled:cursor-not-allowed rounded-md px-2.5 py-1.5 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
       >
-        {state.status === "applying" ? "Adding…" : "Add pro item build"}
+        {state.status === "applying" ? "Adding…" : `Add ${isOtp ? "OTP" : "pro"} item build`}
       </button>
       {state.status === "success" && (
         <p role="status" className="text-[10.5px] text-teal max-w-[220px] text-right">
@@ -917,25 +944,33 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
             optional (same degrade-quietly convention as the rest of this
             tab) — omitting it just hides both buttons.
 
-            NOT rendered on the OTP variant (2026-07-28, deliberate). Both
-            buttons write to LCU objects whose titles are a pinned contract —
-            the rune page "CoachBuild <champ> <role> Pro" and one item set per
-            champion+role — and HARD RULE 5 plus the companion's SelfTest
-            guard that naming. Adding a third rune-page title is a companion-
-            side change (companion.ps1 is versioned separately and installed
-            by the user re-running the install one-liner), so shipping the
-            button here would either collide with the Pro page or silently do
-            nothing on every already-installed companion. The OTP card is
-            read-only until that's done properly. */}
-        {build && !isOtp && (
+            Rendered on BOTH variants since 2026-07-28. v0.70.0 shipped the OTP
+            card read-only on the belief that a third rune page needed a
+            companion-side change; re-reading `Invoke-ApplyRunes` showed that
+            was wrong. The companion is title-agnostic beyond a
+            starts-with-"CoachBuild" gate, targets its page by EXACT title, and
+            protects every page sharing the champ prefix — so `pageSuffix:"OTP"`
+            works against the ALREADY-INSTALLED companion with no re-install.
+            The item side needed no companion change either: the OTP line is a
+            BLOCK inside the existing one-set-per-champion+role document, not a
+            new set. See ApplyProRunesButton's `variant` doc for the slot-
+            pressure consequence, which is real but degrades correctly. */}
+        {build && (
           <div className="flex items-start gap-2.5">
             <ApplyProRunesButton
               champ={champ}
               roleLabel={build.roleLabel}
               model={model}
               fallbackShards={build.runes.shards}
+              variant={variant}
             />
-            <AddProItemBuildButton champ={champ} lane={lane} roleLabel={build.roleLabel} build={build} />
+            <AddProItemBuildButton
+              champ={champ}
+              lane={lane}
+              roleLabel={build.roleLabel}
+              build={build}
+              variant={variant}
+            />
           </div>
         )}
       </div>
