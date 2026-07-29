@@ -63,10 +63,6 @@ export interface StatTilesProps {
 
 type NotComparable = Extract<MyStatsBuildWinrateDelta, { comparable: false }>["reason"];
 
-function pct1(fraction: number): string {
-  return `${(fraction * 100).toFixed(1)}%`;
-}
-
 /** One chip per non-comparable reason. Text is short and visibly NON-numeric;
  *  the title carries the specific why for hover + assistive tech. */
 function unknownChip(reason: NotComparable): KpiDelta {
@@ -100,33 +96,31 @@ function unknownChip(reason: NotComparable): KpiDelta {
 }
 
 /**
- * The adherence half of the caption.
+ * The few words that sit UNDER the adherence chip.
  *
- * This caption stays a caption rather than moving into the chips (2026-07-29
- * review). On the featured card the equivalent grey paragraph WAS removable,
- * because what it said could be carried by labels on the things it described.
- * Here it cannot: a KPI cell is ~101px wide at 390px, and the two sample sizes
- * behind the comparison have to be legible on screen — a percentage never
- * appears without its n. The chip's `title` alone is not "legible", it is
- * hover-only. So the caption is written as ONE compact clause per chip instead,
- * which reads as a caption rather than as a block of prose.
+ * 2026-07-29 review: this used to be a shared grey paragraph beneath the whole
+ * strip — the same shape the user disliked on the featured card, and shortening
+ * the wording did not help (measured: 121 chars -> 94 chars, still two lines at
+ * 390px). So the explanation moved onto the chip it explains, one short note per
+ * cell, and the paragraph is gone.
+ *
+ * The hard constraint from the previous round survives the move: when the
+ * comparison IS made, both sample sizes stay LEGIBLE on screen — "22g on · 14g
+ * off" — never hover-only in a `title`. A percentage never appears without its
+ * n. Keep every branch under ~18 characters; the cell is ~101px wide at 390px.
  */
-function buildCaption(d: MyStatsBuildWinrateDelta): string {
-  if (d.comparable) {
-    return `adherence = ${pct1(d.onBuild.winrate)} on-build (${d.onBuild.n} games) vs ${pct1(
-      d.offBuild.winrate
-    )} off (${d.offBuild.n} games)`;
-  }
+function buildNote(d: MyStatsBuildWinrateDelta): string {
+  if (d.comparable) return `${d.onBuild.n}g on · ${d.offBuild.n}g off`;
   switch (d.reason) {
     case "no-on-build-data":
-      return "adherence needs games played on the WPA build to compare";
+      return "no on-build games";
     case "no-off-build-data":
-      return "adherence needs games played off the WPA build to compare";
+      return "no off-build games";
     case "low-sample":
-      return `adherence needs ${MYSTATS_LOW_SAMPLE_THRESHOLD}+ games both on and off the WPA build to compare`;
+      return `needs ${MYSTATS_LOW_SAMPLE_THRESHOLD}g of each`;
     case "sample-unknown":
     default:
-      return "adherence can't compare — the sample sizes behind those win rates weren't reported";
+      return "samples not sent";
   }
 }
 
@@ -163,6 +157,7 @@ export default function StatTiles({
         priorSplitWinrate !== null
           ? { kind: "delta", pp: (winrate - priorSplitWinrate) * 100, title: "vs your last split" }
           : null,
+      note: priorSplitWinrate !== null ? "vs last split" : undefined,
     },
     {
       key: "adherence",
@@ -178,20 +173,10 @@ export default function StatTiles({
             title: `win rate on the WPA build (${buildDelta.onBuild.n} games) vs off it (${buildDelta.offBuild.n} games)`,
           }
         : unknownChip(buildDelta.reason),
+      note: buildNote(buildDelta),
     },
   ];
 
-  return (
-    <div>
-      <KpiStrip items={items} columns={3} />
-      {/* Every chip above is a bare signed number or a bare phrase; this is
-          where each says what it compared, and over how many games. One clause
-          per chip, dot-separated — see buildCaption's doc comment for why this
-          stays a caption instead of collapsing into the chips. */}
-      <p className="mt-2 text-[10px] text-mut/70 leading-[1.5]">
-        Chips: {priorSplitWinrate !== null && <>win rate vs last split · </>}
-        {buildCaption(buildDelta)}.
-      </p>
-    </div>
-  );
+  // No caption paragraph: each chip now carries its own note (see buildNote).
+  return <KpiStrip items={items} columns={3} />;
 }

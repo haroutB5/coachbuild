@@ -2,6 +2,21 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.75.1] — 2026-07-29 — The last grey paragraph goes too
+
+### Changed
+- **My Stats' explanatory paragraph is gone.** v0.75.0 removed the grey paragraph from the featured
+  one-trick card but left the equivalent one under the KPI strip — the same shape the original
+  report objected to. Shortening it did not help (measured: 121 → 94 characters, still two lines at
+  390px), so it moved onto the chips it explains: one short note per cell, directly beneath the chip,
+  e.g. `needs 10g of each` under the adherence chip and `vs last split` under the win rate.
+
+  The note row is reserved in every cell whenever any cell uses one, so the strip's height never
+  depends on how much data an account happens to have.
+
+- This is the same rule as the featured card's fix, now applied consistently: **what explains a
+  number belongs next to that number, not in a block of prose above or below it.**
+
 ## [0.75.0] — 2026-07-29 — Redesigned the one-trick card header and My Stats
 
 Two surfaces, one visual language: a hero band, a KPI strip of large numbers with their labels

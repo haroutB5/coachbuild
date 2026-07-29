@@ -5853,3 +5853,175 @@ second 0-death game, and a 1/11/2 game:
   hydration mismatch all still stand as written in `HANDOFF.md`.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-29 11:56
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-29 10:33:32Z; previous content preserved there. Append new rounds below. -->
+
+# Round 3 — mobile tab void + KPI caption (2026-07-29)
+
+Rounds 1 and 2 are in `HANDOFF.md`. `bash scripts/verify-fix.sh
+C:/Claude/AI/coachbuild` — **ALL CHECKS PASSED** (tsc, lint 0 warnings, 1971
+tests, build, sw, manifest).
+
+---
+
+## 1. The mobile tab void — your diagnosis was right, and it was worse than the OTP tab
+
+Measured on the production build at 390px BEFORE the fix, with
+`grid-template-rows` naming the mechanism outright:
+
+| tab | `grid-template-rows` | void ABOVE | dead space BELOW |
+|---|---|---|---|
+| BUILD | `370.75 1233.38 307.25 0 0` | 0px | **40px** (2 trailing gaps) |
+| PRO | `0 0 0 1407.25 0` | **60px** | 20px |
+| OTP | `0 0 0 0 977.14` | **80px** | 0px |
+
+**PRO was 60px, exactly as you predicted.** The part not in the brief: every tab
+wasted the *same* 80px total, just split above and below according to where its
+area sat in the template. BUILD's share was 40px of dead space at the bottom,
+which is why nobody had noticed it.
+
+### The fix
+
+`components/hextech/BuildTabContent.tsx`, `BUILD_GRID_CLASS`:
+
+```
+- grid grid-cols-1 gap-5 [grid-template-areas:'runes'_'itembuild'_'skillorder'_'pro'_'otp'] lg:grid-cols-[5fr_7fr] …
++ flex flex-col gap-5 lg:grid lg:grid-cols-[5fr_7fr] …
+```
+
+Below `lg` this is now a **flex column**; the named-area template is scoped to
+`lg:` only. Not a negative margin — a different formatting context, so the row
+model describes what is actually rendered at that breakpoint, which is what you
+asked for. A `display:none` child is not a flex item at all, so it contributes
+neither a line nor a gap.
+
+I did **not** take the "only render the active tab's area" option: those four
+wrappers are deliberately kept MOUNTED behind `hidden lg:block` so
+`ProConsensusCard` and friends hold their fetched state across tab switches.
+Unmounting would refetch on every tap.
+
+The five children keep their unprefixed `[grid-area:*]` classes — those are
+grid-item properties and are inert on a flex item — and mobile DOM order
+(runes, itembuild, skillorder, pro, otp) already matched the old mobile template
+exactly, so nothing moves.
+
+I also corrected a comment in that file that had asserted `grid-template-areas`
+"doesn't reserve empty space" for a null child. Zero *height*, yes — but an
+explicitly declared row still takes its row-gap from its neighbours. That belief
+is what hid this for two releases.
+
+### How it was verified — and the constraint that forced the method
+
+`verify-fix.sh` runs `next build`, which wipes `.next`. **That broke your server
+on 4599**: immediately after the build its CSS chunk answered `400` while it kept
+serving a stale HTML shell. That is the rebuild you asked for, not a second
+server — I never started one. It answers 200 at the root again now, but it is
+serving a build that no longer exists on disk; **restart it before you smoke
+anything.**
+
+So rather than start a server, I verified the CSS in isolation: a static fixture
+whose container class string is **extracted from `BuildTabContent.tsx` at
+generation time** (not retyped), with the real child classes, compiled through
+the project's own `tailwind.config.ts` + `globals.css`, rendered OLD vs NEW side
+by side.
+
+**The harness reproduces the live numbers exactly** — old-variant voids of
+0/20/40/60/80 and dead-space of 80/60/40/20/0 across the five areas, matching the
+60px and 80px measured on the real server. That is what makes it trustworthy.
+
+| 390px | display | void above | dead below | container height for a 200px panel |
+|---|---|---|---|---|
+| OLD (otp active) | grid | 80px | 0px | 280px |
+| OLD (pro active) | grid | 60px | 20px | 280px |
+| **NEW (any tab)** | **flex** | **0px** | **0px** | **200px** |
+
+**Desktop is provably untouched:** at 1280px, old and new are byte-identical —
+same `display: grid`, same `grid-template-rows: 400px 200px 200px 200px`, same
+per-area offsets. The two-column composition is unchanged.
+
+---
+
+## 2. The /mystats caption — you were right, and shortening it was not enough
+
+I first tried tightening the wording. Measured at 390px: **121 chars → 94 chars,
+and still two lines.** A marginal win, not a fix. So I did what you actually
+suggested and attached each explanation to the chip it explains.
+
+`KpiItem` gained an optional `note?: string`, rendered on its own reserved row
+directly under the chip. The shared paragraph is **deleted**; `StatTiles` now
+returns the strip alone.
+
+| state | chip | note under it |
+|---|---|---|
+| comparable | `▲ +23.0pp` | `22g on · 14g off` |
+| low-sample | `Too few games` | `needs 10g of each` |
+| sample-unknown | `Sample unknown` | `samples not sent` |
+| no-on-build-data | `No comparison` | `no on-build games` |
+| no-off-build-data | `No comparison` | `no off-build games` |
+
+The win-rate chip gets `vs last split`.
+
+**Round 2's hard requirement survives the move:** when the comparison is made,
+both sample sizes are still LEGIBLE on screen — `22g on · 14g off` — not
+hover-only in a `title`. That is why the note exists rather than just deleting
+the paragraph.
+
+Verified in a second static fixture whose classes are likewise **extracted from
+`KpiStrip.tsx`**, at 390px, across all five states:
+
+- strip height **117px in every state** — the no-reflow guarantee still holds.
+- all three cells equal height in every state.
+- every note renders on **one 13px line**; zero horizontal overflow anywhere.
+
+Net vertical change: the old strip was 100px plus a two-line 30px paragraph
+(~130px+); the new one is 117px with nothing under it.
+
+---
+
+## What I could NOT verify this round
+
+Stated plainly, because both gaps are real:
+
+- **Neither fix has been seen on the real running page.** Both are static-fixture
+  measurements of the real compiled CSS. I was asked not to start a server and
+  the existing one is serving a deleted build. The grid fix is pure CSS geometry
+  and the harness reproduces the live before-numbers exactly, so my confidence is
+  high — but "high confidence" is not "I looked at it".
+- **Chip colour in the new fixture is hardcoded**, so the negative delta renders
+  green there. The red/green split was verified live in round 2 (`▼ -1.9pp` red);
+  I did not re-verify it this round.
+- **Font face.** The harness falls back to a system serif rather than the app's
+  `var(--font-sans)`. Geometry is what I measured; the real face is narrower, so
+  the one-line note fit should only improve.
+
+**What I need from you:** restart the 4599 server on the current build and I will
+do a five-minute visual pass over both fixes — or tell me to start one myself and
+I will.
+
+---
+
+## Also found
+
+- The two round-1 items are unchanged: `ChampionPoolCard` still renders all 44
+  champions uncapped, and the dev-only stale-`.next` `NEXT_PUBLIC_APP_VERSION`
+  hydration mismatch still stands (production is clean).
+- **`next build` and a live `next start` cannot share this checkout**, which is
+  now a second instance of the same class of trap as the two-`next dev` problem
+  already in `HANDOFF.md`. Worth a gotcha: any round where verify-fix runs will
+  invalidate a running production server on the same directory.
+
+

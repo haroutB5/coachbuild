@@ -65,6 +65,13 @@ export interface KpiItem {
   text?: string | null;
   valueClassName?: string;
   delta?: KpiDelta | null;
+  /** A few words under the chip saying what it compared — "vs last split",
+   *  "22g on · 14g off". Lives HERE, per cell, rather than in a shared
+   *  paragraph under the strip: a chip is a bare number and the thing that
+   *  explains it should sit with it. Keep it under ~18 characters; a KPI cell
+   *  is ~101px wide at 390px. Its row is reserved in every cell when any cell
+   *  uses it, so an absent note never changes the strip's height. */
+  note?: string;
   /** Roll the number up on mount. Off by default — a count-up on a value the
    *  user is comparing against another cell is noise. */
   countUp?: boolean;
@@ -115,9 +122,11 @@ const COLUMNS: Record<2 | 3 | 4, string> = {
 };
 
 export default function KpiStrip({ items, columns = 3, flush = false, className }: KpiStripProps) {
-  // One cell carrying a delta reserves the delta row in EVERY cell, so the
-  // labels stay on one baseline across the strip instead of stair-stepping.
+  // One cell carrying a delta (or a note) reserves that row in EVERY cell, so
+  // the labels stay on one baseline across the strip instead of stair-stepping,
+  // and the strip's height never depends on how much data an account has.
   const anyDelta = items.some((i) => i.delta);
+  const anyNote = items.some((i) => i.note);
 
   return (
     <dl
@@ -150,6 +159,11 @@ export default function KpiStrip({ items, columns = 3, flush = false, className 
             {anyDelta && (
               <dd className="order-3 mt-1.5 h-[17px] flex items-center">
                 {it.delta ? <DeltaChip delta={it.delta} /> : null}
+              </dd>
+            )}
+            {anyNote && (
+              <dd className="order-4 mt-1 min-h-[13px] text-[9px] leading-[1.25] text-mut/75 tabular-nums">
+                {it.note ?? ""}
               </dd>
             )}
           </div>
