@@ -8017,3 +8017,588 @@ response and honouring `Retry-After` on a 429; a Riot 429 now ABORTS the
 solo-queue sweep rather than being skipped per-account."*
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-29 23:02
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-29 17:53:33Z; previous content preserved there. Append new rounds below. -->
+
+# engy — alternative keystone surfaced on the Runes card (2026-07-29)
+
+No version bump, no deploy, no commit — as instructed.
+
+## What shipped
+
+The Builds page rendered `data[0]` and discarded the rest of `/api/build`'s array.
+`lib/recommend.ts`'s header states the contract — *"Returns the TOP 3 viable setups…
+Variants prefer different primary trees"* — so the engine's entire design for "a genuinely
+different keystone exists" is *put it in a later variant*. v0.51.0 deleted the consumer while
+the engine kept relying on it.
+
+Now, when it qualifies, the Runes & Summoners card carries a **NOT PICKED — SCORED HIGHER**
+block: the withheld keystone's icon, name, tree, sample and WPA, plus a footnote. Tapping it
+opens the same rune-detail popover every other rune on the card uses — the user asked for
+enough to "decide to pick it or not", and that needs the rune's text, not just its score.
+
+**Nothing about the ranking changed.** `builds[0]` is still the recommendation on every card,
+unconditionally. No engine file was touched.
+
+Files:
+
+- `components/hextech/altKeystone.ts` — NEW. Pure `resolveAltKeystone(builds)`. All the
+  reasoning and measurements live in its header.
+- `components/hextech/__tests__/altKeystone.test.ts` — NEW, 29 tests. (Confirmed the new
+  nested `__tests__` dir is actually collected by `vitest.config.ts`'s glob — `npx vitest list`
+  reports the file and its 29 cases. CLAUDE.md flags this as a past silent-miss.)
+- `components/hextech/BuildTabContent.tsx` — resolves the alternative ONCE at fetch time into
+  `FetchState`. The full `BuildResponse[]` is deliberately NOT held in state (see "coupled
+  defect" below).
+- `components/hextech/RunesSummonersCard.tsx` — `AltKeystoneNote`, plus an optional
+  `altKeystone` prop.
+
+`/compact` renders this same card off `variants[0]` and passes nothing, so that surface is
+byte-identical. Same for the `null` case on the Builds page: no empty slot, no reserved height.
+
+## The predicate, and why it is not the one the brief suggested
+
+Fires iff **(1)** shown keystone WPA `< 0`, **(2)** alternative WPA `> 0`, **(3)** gap `> 0.04`,
+**(4)** the alternative cleared the engine's adoption bar (`!lowSample`).
+
+**(1)+(2) make it a sign flip, and that is the load-bearing choice.** Per the investigation's
+own caveat, coachless's per-rune WPA figures are marginal contributions measured inside their
+own rune pages, not terms on a shared scale — so "+2.50 is 2.77 better than −0.27" is not a
+statement the data supports, and any predicate keyed on gap SIZE quietly asserts it. Which side
+of zero a reading falls on is a property of the one number, so the card can say "this one is
+above zero, the pick is below" and stop. This is also why nothing in the UI sums, diffs or bars
+the two numbers, and why the footnote says so explicitly.
+
+Measured over the 500 champion/role pairs with ≥2,000 games (patch 16.13, tiers [5,6,7], the
+app's own default request), by re-running the investigation's sweep:
+
+| predicate | fires | of all cards |
+|---|---|---|
+| `alt.wpa > shown.wpa` (bare) | 146 | 29.2% |
+| `alt.wpa > 0 AND gap > 0.04` | 144 | 28.8% |
+| shown renders red AND alt renders green | 78 | 15.6% |
+| **sign flip + gap > 0.04 (chosen)** | **83** | **16.6%** |
+
+The 29% predicates fire on cases like Amumu SUP (+0.376 shown, +0.416 alternative on 1,022
+games) — the pick is already good and the difference is not decision-relevant. That is a
+permanent second block on a third of all cards during a 30-second champ select, which is how
+this stops reading as an exception. The "renders red" variant (`wpa < -0.02`, wpaClass's red
+cutoff) is a strict SUBSET of the chosen one — **measured: zero cases fire it that the sign flip
+does not** — and it drops **Caitlyn BOT**, whose −0.011 sits in wpaClass's neutral-grey dead
+zone while a +0.807 First Strike on 65,776 games goes unrendered. Hence: trigger on the SIGN of
+the number, not the colour it prints.
+
+83/500 is exactly the class the investigation identified, arrived at independently.
+
+**(3) is a display-integrity guard, not a filter.** `wpaText` rounds to 2dp, so two readings
+within 0.01 print identically; a card claiming one is higher while showing the same string twice
+is a visible lie. Measured: the guard excludes **zero** of today's 83 cases. It exists for the
+day the data produces a hairline flip.
+
+**(4) is defensive and currently always-true.** `pickRecommended` only selects a keystone out of
+`adopted` (`occurrence >= bar`), so every variant keystone clears the bar by construction.
+Verified rather than assumed — swept all 319 pairs that have a distinct alternative keystone,
+**zero below the bar**. Kept because the card makes an adoption claim and a claim should rest on
+a check.
+
+### The brief's suggested predicate is wrong, and it fails on the brief's own headline case
+
+The brief proposed `builds[1].keystone.wpa > builds[0].keystone.wpa`. `primaryConfigs` is ordered
+by raw tree adoption, so `builds[1]` is the **second-most-played tree** — which has no
+relationship to which withheld keystone is best. Real `buildRecommendations`, run live:
+
+```
+JHIN BOT
+  [0] Fleet Footwork   (Precision)   wpa -0.272   387,410 games
+  [1] Dark Harvest     (Domination)  wpa -0.725   131,012 games   <-- WORSE than shown
+  [2] Deathfire Touch  (Sorcery)     wpa +2.500    81,053 games   <-- the +2.500 the brief cites
+```
+
+A `builds[1]`-only read shows nothing on the app's most extreme case and hides +2.500 exactly as
+before the fix. Across the 83 firing pairs, **the best alternative is not in `builds[1]` in 11 of
+them**, and in 5 `builds[1]` is worse than what is already shown (Jhin BOT, Malphite SUP, Rumble
+JG, Teemo MID, Ambessa TOP). So `resolveAltKeystone` scans every later variant and takes the best
+qualifying WPA.
+
+It also **dedupes on keystone id**: when fewer than 3 primary trees are viable,
+`buildRecommendations` fills its remaining pages with secondary-tree variations of the top
+config, and those pages carry variant #1's own keystone. Observed on Ziggs BOT [2], Caitlyn BOT
+[2], Sylas MID [2], Ahri MID [2], Garen TOP [2], Lux SUP [2] — six of nine champions probed.
+Without the id check the card would offer the user the rune it is already showing them.
+
+## Selectable? NO — and explicitly so
+
+**I did not make it selectable.** The brief's condition was "either wire it through consistently
+or do not make it selectable", and consistent wiring is not reachable from this component:
+
+- `GlobalNav/ApplyRunesButton.tsx` lives in `AppShell`, outside the Builds page tree, and
+  deliberately resolves the **live champ-select** champion from `useCompanion()` rather than
+  page state ("never from whatever champion happens to be showing on the current page" — its own
+  header). It does its own `/api/build` fetch and takes `data[0]`.
+- `components/live/AutoExporter.tsx` likewise writes `data[0]` to the LCU on champ-select
+  resolution, app-wide, with no page in the loop at all.
+
+So a selectable card creates two silent divergences, not one, and the auto-exporter's cannot be
+fixed by wiring at all — it fires when no card is being looked at. A user who switched the card
+and then hit the top-bar APPLY RUNES (or simply let auto-export run) would get the original page
+while the screen showed the alternative. That is the worse defect the brief names.
+
+The user's ask — *"just highlight it i guess and put its stats with it so i can decide to pick it
+or not"* — is satisfied without it: they decide in champ select and set it in the client. If
+selection is wanted later it needs a shared apply-target store that `ApplyRunesButton` and
+`AutoExporter` both read, which is a real design change, not a prop.
+
+## The coupled `bestAboveFloor` defect — decided BEFORE, and the investigation's framing corrected
+
+**It does not bite in this design, and I did not change it.** The surface exposes only the
+keystone, its WPA, its sample and its tree. All of that comes from `pickRecommended` over
+`keystoneData`; the path never calls `bestAboveFloor`. `resolveAltKeystone` returns exactly
+`{keystone, tree, variantRank}` and two tests pin that — one asserting the key set, one asserting
+the sub-floor secondary runes present in the fixture never appear in the output. `BuildTabContent`
+also does not retain the `BuildResponse[]`, so nothing downstream can reach for a second variant's
+rows later.
+
+**But the investigation's claim that the defect is "invisible today" is wrong, and that is worth
+more than a rushed fix.** It said the fallback is confined to unrendered variants. I probed 109
+champion/role pairs by running the real `buildRecommendations` and comparing every variant's
+secondary occurrences against that champion's own `noiseFloor`:
+
+```
+variant-1 (RENDERED)      secondaries below the noise floor:  13 / 109   (~12%)
+variant-2/3 (unrendered)  secondaries below the noise floor:  50
+```
+
+It reaches variant 1 through `displayReliable(winner)`: when the winning secondary tree has fewer
+than 2 positive runes above the floor, it fills from `byWpa`, whose per-row `bestAboveFloor` has
+already fallen back to most-played. Live examples on the card **today**, before my change:
+
+```
+Lissandra SUP  total   9,457  floor 400  ::  Magical Footwear 105, Cosmic Insight 186
+Caitlyn TOP    total   3,785  floor 400  ::  Bone Plating 161, Overgrowth 105
+Syndra TOP     total   4,615  floor 400  ::  Gathering Storm 187
+Galio TOP      total  10,520  floor 400  ::  Scorch 355
+```
+
+Magical Footwear on 105 of 9,457 games is 1.1% adoption, rendered as a recommendation with no
+caution beyond the existing `lowSample` glyph.
+
+**I did not fix it, deliberately.** It is a pre-existing, live, user-visible defect that is
+independent of this change; fixing it alters what variant 1's secondary row shows on ~12% of
+champion/role pairs — a behaviour change to the currently-shipped recommendation, in a task
+scoped to "do not change which setup is the default pick", with no user directive behind it. It
+wants its own decision about what the honest fallback is (refuse the row? show it with an
+explicit "below sample floor" marker? widen the search to the next tree?), because "most-played
+regardless of floor" and "nothing" are both defensible and the choice is the user's. **Open P2,
+now measured.**
+
+## Verified, and how
+
+- `verify-fix.sh` — **ALL CHECKS PASSED** (tsc clean, lint 0 warnings, 2357 tests, build clean,
+  sw, manifest).
+- **29 new unit tests.** Live-captured fixtures for Ziggs BOT / Jhin BOT / Caitlyn BOT / Lux SUP,
+  every conjunct of the predicate at its boundary (including strict `>` at exactly
+  `ALT_KEYSTONE_MIN_GAP`, shown WPA exactly 0, alt WPA exactly 0), the id-dedupe, best-of-variants
+  selection, both tie-breaks, the no-secondary-rows guard, and degenerate input (empty, single,
+  non-array, missing `runes`, malformed keystone).
+- **Live API cross-check.** `curl`'d `/api/build` for all three browser champions and confirmed
+  the served payloads match the test fixtures field-for-field.
+- **Browser, real dev server, fresh `userDataDir` per run** (the PWA service-worker false-negative
+  trap): Ziggs BOT, Jhin BOT and Lux SUP at **390px and 1920px** — 6/6 combos pass. Each asserts
+  fires/doesn't-fire, the rune name, WPA string, tree, sample string, the "still the
+  recommendation" disclaimer, the tile's disclaiming `aria-label`, that tapping it opens the
+  detail popover, zero console/page errors, and no horizontal document scroll.
+- **v0.81.0 tab semantics regression-guarded** in the same run: exactly 3 tabs, exactly one
+  `aria-selected="true"`, exactly one `tabindex="0"` (roving), exactly 3 tabpanels, exactly 1
+  visible. Unchanged.
+- **Mobile occlusion hit-test:** the fixed `MobileTabBar` covers none of the block at 390px
+  (0 of 5 hit-test points on the tile occluded).
+- **Reduced motion:** no motion was added. The only transforms are the hover/active ones the
+  card's existing `RuneTile` already uses, so there is no entrance transition to gate.
+
+## Not verified / open
+
+- **Only three champions were driven in a browser.** The predicate's population behaviour
+  (83/500) is from the API sweep, not from 500 rendered pages.
+- **`prefers-reduced-motion` was not toggled in the browser.** The claim rests on reading the
+  markup — there is no transition, keyframe or scroll behaviour in the new block. It is an
+  argument, not an observation.
+- **No screen-reader run.** The `aria-label` is written and asserted as a string; how VoiceOver
+  or NVDA actually announces it is untested.
+- **Not tested against a rank bracket other than the default** ([5,6,7]). The predicate reads
+  whatever the engine returns for the requested bracket, so it should hold, but no probe ran.
+- **`/compact` is unchanged and still shows only `variants[0]`.** It is an in-game surface, not a
+  champ-select one, so it was out of scope — but the same withheld keystone is invisible there.
+- The **~10 upstream coachless calls per request** for variants 2/3 are unchanged. One of them now
+  has a consumer; the call count did not move in either direction.
+- Trees ranked **4th or lower never reach a variant at all** (`pages` caps at 3), so a withheld
+  keystone in a 4th tree stays withheld. Not addressed — it would mean changing what the engine
+  returns.
+
+## Environment note (not a defect in this work)
+
+**Another agent was editing this same checkout throughout the session.** Between two consecutive
+`verify-fix` runs, `components/skillOrderGrid.ts`, `lib/skillOrderModel.ts`,
+`components/hextech/skillOrder.ts`, `components/hextech/SkillOrderCard.tsx`, `lib/types.ts` and a
+new `components/SkillGrid.tsx` changed under me, transiently breaking `tsc` (a
+`buildSkillOrderGrid` → `buildSkillGrid` rename that had not yet reached `GameDetailSheet.tsx`)
+and 404-ing the dev server's static chunks mid-screenshot. Their refactor has since converged and
+the final gate is green with both sets of changes in the tree. The working tree was **not** clean
+at the start of this task, contrary to the brief. Nothing in `skillOrder*`/`SkillGrid` is mine —
+my diff is `altKeystone.ts`, its test, `BuildTabContent.tsx` and `RunesSummonersCard.tsx`.
+
+Probe scripts were kept out of the repo (scratchpad, not repo root) — a throwaway `.ts` at the
+root breaks `tsc -b` and the build, unlike the existing `_*.mjs` ones.
+
+## Wiki
+
+`wiki/` does not exist in this project. If one is generated later, the entries worth carrying:
+
+- The `builds[1]` trap (tree order is adoption, not quality) — the Jhin case above.
+- Filler variants repeat variant #1's keystone; anything reading the array must dedupe on rune id.
+- `bestAboveFloor` reaches the RENDERED card on ~12% of pairs, not just the unrendered variants.
+
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- Previous round was merged into HANDOFF.md 2026-07-29 13:55:29Z and is preserved there. -->
+
+# Skill order as a grid, always 18
+
+2026-07-29. Against v0.81.0. No version bump, no commit, no deploy — as briefed.
+
+Two user directives, both reversing earlier deliberate decisions:
+
+1. Render the skill order as the classic 18-column grid, everywhere.
+2. Always complete it to level 18 — "all websites I see do that."
+
+Plus a mid-task clarification: the reference screenshot's empty 17/18 columns were an accident
+of a game that ended at level 16. Take the visual language, not the fill rule.
+
+---
+
+## 1. The shared grid primitive
+
+`components/skillOrderGrid.ts` — extended in place (it was already the per-game transform).
+`components/SkillGrid.tsx` — NEW, the renderer.
+
+The old `buildSkillOrderGrid` was replaced by `buildSkillGrid`, which returns cells carrying
+PROVENANCE rather than bare level numbers:
+
+* `measured` — the source published this level. Solid colour chip.
+* `derived`  — `completeSkillOrder`'s arithmetic, which has exactly one answer. Tinted chip,
+  solid hairline.
+* `inferred` — the arithmetic refused and the level was filled from the max-priority order.
+  Dashed outline, no fill.
+
+`SkillGrid` renders 4 rows × N columns and **takes no view on completeness**. Column count and
+cell provenance are both the caller's decision. That is the line the clarification drew, and it
+is enforced by shape: there is no "always 18" default anywhere inside the primitive.
+
+Colours are Q blue `#4c8ff0` / W orange `#e2903f` / E purple `#a878e4` / R red `#e8595c`, the
+reference convention. **Colour is never the only signal** — the row label carries the literal
+Q/W/E/R and every chip carries its level number, so the grid is fully readable with no colour
+perception. Tailwind arbitrary values, deliberately NOT added to `tailwind.config.ts`, so four
+decorative hues cannot leak into surfaces where the single-gold-accent rule should hold.
+
+Accessibility: the visual grid is `aria-hidden` and the same information is served as a
+`sr-only` list, one line per ability, naming which levels are derived and which are inferred.
+Labelling cells individually was not an option — a per-row wrapper element would become a single
+CSS-grid item and collapse the layout.
+
+### Mobile — the reason a grid was rejected once before
+
+Solved, and it was never a column-WIDTH problem: the cells are not touch targets. Tracks are
+`minmax(0, 1fr)`, so they shrink to fit. Measured at 390px: **14.5px cells, grid 316px wide,
+its `overflow-x` container does not scroll, and the page does not scroll.** The
+`overflow-x-auto` wrapper is a second line of defence, not the mechanism. On desktop a
+`max-w-[560px]` on the card side caps cells at 27.1px so the grid reads as a compact chart
+rather than 18 giant squares.
+
+### No ability icons
+
+The reference shows an icon per row; this ships letters. There is no ability-icon resolver in
+the app today (`lib/staticData.ts` fetches ddragon champion detail only for `maxrank`), so icons
+would mean a new asset path, a new per-champion field on the wire, and 4 more images per card on
+a 30-second champ-select surface. The letter is required anyway by the colour-blindness rule.
+Say the word if you want icons and it becomes a small, separate change.
+
+---
+
+## 2. Which surfaces got the grid
+
+| Surface | Result |
+|---|---|
+| `components/hextech/SkillOrderCard.tsx` (Builds) | **Grid.** Replaced the per-ability level lists. Priority string (`Q › W › E`) kept above it — it is the thing players memorise, and it is a different fact from the path. |
+| `components/GameDetailSheet.tsx` | **Grid, now the shared one.** Its inline `SkillGridRow` was deleted and it calls `SkillGrid`. Same look, different fill rule. |
+| `components/hextech/SkillOrderNextPanel.tsx` (`/compact`) | **No grid, deliberately.** It answers "which key do I press right now" — one ability, during a live game. A whole-path grid is a different question and would bury the one-ability answer on a chrome-free glance surface. |
+| `app/compact/page.tsx` | **Nothing to change.** It renders only the next-skill panel; it presents no skill order today. |
+| `components/hextech/FeaturedOtpCard.tsx` | **No grid, deliberately.** Its skill line is already a priority string, not "simple numbering", and it sits in a narrow right rail at `lg`. An 18-column grid there would be unreadable, and the line is explicitly the CHAMPION's common order rather than that player's own — a full path would over-promise it. |
+| `overlay-host/renderer/ingame.js` (Electron overlay) | **Untouched — flagged for you.** It ALREADY renders the classic 18-column grid, so "everywhere" is visually satisfied. But it is a separate vanilla-JS app with hand-synced copies of `TOTAL_LEVELS`/`SOURCE_LEVELS` and its own `observedLevelCount`, and it does NOT know about `inferredTail`, so it will keep stopping at 15 on a refusal. Out of a web-frontend task's blast radius, and it speaks during live games. **Your call whether it follows.** |
+
+---
+
+## 3. Always 18 — how the tail is filled
+
+`lib/skillOrderModel.ts` gained `inferSkillOrderTail(observed, priority, kit)`.
+
+**The guess is quarantined.** `order`, `levels`, `completed`, `observedLevels` and
+`completionBasis` are exactly what they were. The inference lives in two NEW optional fields,
+`inferredTail: Ability[]` and `inferredBasis: "published" | "derived"`. Consumers must opt in.
+That is what makes section 4 true by construction rather than by care.
+
+Mechanism: the same allocator `completeSkillOrder` uses, minus the structural guards that
+refuse. Walk the max-priority order, give each ability as many remaining points as its own cap
+allows, take any ultimate rank the schedule opens up first.
+
+Two refusals survive, because both would make the guess actively wrong:
+
+* **`kit === null`** — the champion is known non-standard and ddragon did not resolve, so the
+  caps the walk needs are exactly what is missing. Inferring under `STANDARD_KIT` there is the
+  blank-Jayce bug's wrong arithmetic in a new hat. Tested.
+* **bad token** — Kha'Zix's `R-Q`/`R-W`. `lib/opgg.ts` already rejects that payload upstream, so
+  this is belt-and-braces.
+
+A **short** tail is returned rather than one that breaks a cap. Those levels stay blank in the
+grid and get their own caption.
+
+### How inferred is marked
+
+Three things, not one:
+
+1. **Dashed chip** — the only treatment in the palette using a dashed border, pinned by a test
+   so it can never collide with `derived`.
+2. **A plain caption**, naming the exact levels and the basis:
+   *"The source publishes levels 1–15 only, and this champion's last points can't be worked out
+   from them. Levels 16–18 are inferred from the champion's published max order (dashed) — a
+   best guess, not recorded data."*
+3. **Screen-reader text**: *"Levels 16, 17, 18 inferred from the max-priority order, not
+   recorded."* Distinct wording from the derived case, so the two are not conflated for a
+   non-sighted user.
+
+A partial tail adds a second caption: *"Levels 17–18 are unknown for this champion and left
+blank."*
+
+---
+
+## 4. `lib/nextSkill.ts` — NOT changed, as instructed
+
+Its `model-incomplete` refusal past level 15 is untouched. It reads `model.completed` and
+`order.length`, neither of which this work modifies, so the live in-game panel still goes silent
+rather than guessing. Pinned by tests asserting `order`/`levels`/`observedLevels` are unchanged
+on a model carrying an inferred tail.
+
+**I do not think it should change, and I am not asking you to decide now.** The asymmetry is
+real: a reference grid is read at the player's own pace with a visible "best guess" caption
+attached; the live panel is a single imperative with no room for a caption, delivered mid-fight.
+If you ever do want it, the honest shape would be a visually distinct "probably W" state, not a
+silent promotion of `inferredTail` into `order`.
+
+---
+
+## 5. What I verified, and how
+
+`bash C:/Claude/AI/urgot/scripts/verify-fix.sh C:/Claude/AI/coachbuild` — **ALL CHECKS PASSED**
+(tsc, lint 0 warnings, **2357 tests**, build, sw, manifest).
+
+Tests added: `lib/__tests__/skillOrderTail.test.ts` (inference + wiring, including the
+partial-tail boundary and the `kit === null` refusal) and
+`components/__tests__/skillOrderRecommendedGrid.test.ts` (model → grid, provenance
+disjointness). `components/__tests__/skillOrderGrid.test.ts` was rewritten for the shared
+transform.
+
+Browser-verified against a real dev server (`next dev -p 3113`), headless Chrome, **fresh
+`userDataDir` every run** so no service worker could serve a pre-change shell. Both 390×900 and
+1920×1200 unless noted.
+
+| Case | Result |
+|---|---|
+| Ahri mid (103/2) | 18 columns, measured 1–15, **derived 16–18**, none inferred. |
+| **Udyr** jungle (77/1) | 18 columns, derived 16–18. **The brief's "known unresolvable" Udyr now COMPLETES** — see section 6. |
+| **Kha'Zix** (121/1 and 121/2) | `/api/skill-order` returns `null`; **no card renders at all.** Unchanged by this work. |
+| Inferred tail, forced payload | Dashed 16/17/18, correct caption, correct sr-only text. |
+| Inferred tail PARTIAL, forced | Dashed 16 only; 17/18 blank; both captions present. |
+| `GameDetailSheet`, 38-minute game | 18 columns, 18 chips, **zero derived or inferred treatment**. |
+| `GameDetailSheet`, **16-minute game** | 18 columns, **11 chips, 17/18 blank — not padded.** The clarification's requirement, verified on a real game. |
+| Builds tabs (v0.81.0 tabpanels) | 3 tabs, 3 tabpanels, `aria-selected` correct, roving tabindex `0/-1/-1` → ArrowRight moves focus to Pro and the tabindex rotates. **Not regressed.** |
+| OTP tab | Featured OTP card renders; **zero grids in that panel** (correct — it keeps its priority string). |
+
+**Page horizontal scroll: confirmed `documentElement.scrollWidth === clientWidth` AND
+`body.scrollWidth === clientWidth` on EVERY case above, at 390px and 1920px.** Measured off the
+live DOM, not reasoned about.
+
+Screenshots read at both viewports: the Builds card (Ahri, Udyr, inferred, partial) and the
+sheet grid (full-length game and 16-minute game).
+
+## 6. What I did NOT verify — read this part
+
+* **The inferred tail has NO live champion today.** I probed Udyr, Yuumi, Aphelios, Jayce,
+  Karma, Elise and Nidalee against the live feed: **every one completes via op.gg's published
+  `skill_masteries.ids`.** The brief's premise that Udyr is the known unresolvable case is
+  **outdated** — `skillOrderModel.ts`'s own header already recorded that the surplus path landed
+  2026-07-27. So the inferred marking was verified by **serving a synthetic payload through a
+  `window.fetch` shim into the real component**, not by finding a champion that hits it live.
+  The component path is genuinely exercised; the model path is exercised only by unit tests.
+  The inference is therefore a **safety net for when op.gg's publication goes absent or
+  malformed**, not something users will see today. Finding a live case would need a full-roster
+  sweep (~173 champions × ~3.5s, op.gg rate-limit exposure) — I did not run it.
+* **`/compact`'s next-skill panel was not render-verified.** It renders `null` without a live
+  companion and there is no League client here. I did not change it; the build and its existing
+  tests cover it.
+* **No production check.** Nothing was deployed.
+* **The overlay app was not run.** Its grid is unchanged code, but I did not launch Electron.
+
+## 7. Also worth knowing
+
+* **`.next` got corrupted mid-session** (`Cannot find module './7787.js'`, then blanket 404s from
+  a route that had just worked) after `next build` and `next dev` ran against the same checkout —
+  repo gotcha (i), which is worth widening to cover this failure shape. Starting a dev server on
+  a fresh port cleared it. `rm -rf .next` was blocked by the safety gate; I did not route around
+  it, and it turned out not to be needed.
+* Puppeteer **CDP request interception broke Next's dev asset requests outright** (the page
+  rendered nothing at all). A `page.evaluateOnNewDocument` fetch shim is the reliable way to
+  force an API payload on this app, and it is service-worker-proof by construction. Worth adding
+  to the fleet's smoke-tools habits.
+* Two exports in `components/hextech/skillOrder.ts` are now unused by the card: `ABILITY_ROWS`
+  and `sortedLevels`. Left in place because `components/__tests__/skillOrder.test.ts` covers
+  them and deleting exports was not in scope.
+* `components/hextech/BuildTabContent.tsx` and `lib/recommend.ts` were NOT touched — another
+  agent was live in both. `BuildTabContent` needed no change: the card swap was entirely
+  internal to `SkillOrderCard`.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-29 23:08
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- Previous rounds merged into HANDOFF.md 2026-07-29 22:02:57Z and preserved there. -->
+
+# OTP tab body: back to the house runes-first composition
+
+2026-07-29, after v0.82.0. No version bump, no commit, no deploy.
+
+User directive: the OTP tab should match the other tabs' template — runes/summoners
+first, then the build. It had shipped `7fr_5fr` with the build on the left.
+
+## What changed
+
+`components/hextech/FeaturedOtpCard.tsx`
+
+* `OTP_BODY_GRID_CLASS`: `lg:grid-cols-[7fr_5fr]` → `lg:grid-cols-[5fr_7fr]`. Now identical in
+  shape to the BUILD tab's `'runes_itembuild'` 5fr/7fr and to `ProConsensusCard`'s internal
+  5fr/7fr.
+* **The two body columns were swapped IN SOURCE ORDER.** The runes/summoners/skill-order column
+  now leads; the build column follows.
+* Comments rewritten. The old header argued for build-left and is preserved as the trade it was,
+  not deleted — future-me needs to know this was a considered position that the user overruled,
+  not an oversight.
+
+`components/hextech/buildTabLayout.ts` — its composition map now records the reversal.
+
+**Note on the brief's wording:** there is no `BUILD_TAB_LAYOUT` export any more. That constant
+was removed earlier the same day (it had gone stale describing a v0.44.0 five-card layout that
+no longer existed). The house pattern now lives in the tabs' actual grids, and that is what this
+change matched.
+
+## Why a DOM reorder and not a grid-area shuffle
+
+The cheap option was to leave DOM order alone and place the columns with `grid-template-areas`.
+**Rejected, and it should stay rejected.** That would put visual order (runes, then build) at
+odds with reading and focus order (build, then runes), so a keyboard user tabbing through the
+card would jump from the right column back to the left. Consistency between tabs is not worth an
+inverted tab order.
+
+So the columns moved in source. DOM order, visual order and focus order still agree.
+
+## What it costs, stated plainly
+
+The mobile stack is now `hero → KPIs → runes → summoners → skill order → their build`. The
+build — which is the headline of a profile of a named person — is no longer the first thing
+under the KPI strip. That is a real trade and the user chose it; a reader flicking between three
+tabs during a 30-second champ select should not get a different thing under the cursor on each.
+The previous comment in this file claimed mobile was "byte-identical"; that is now false and the
+comment says so.
+
+## Verified
+
+`verify-fix.sh` — **ALL CHECKS PASSED** (tsc, lint 0 warnings, 2357 tests, build, sw, manifest).
+
+Browser, fresh `userDataDir`, real dev server, Ahri mid OTP tab:
+
+| Check | 390×950 | 1920×1200 |
+|---|---|---|
+| Section order in DOM | Runes → Summoners → Their build → Boots → Item slots | same |
+| Computed `grid-template-columns` | (block, stacked — correct below `lg`) | **569.2px / 796.8px** = 5fr/7fr |
+| Column lead + x | single stack | Runes at **x=377**, Their build at **x=978** — runes is the LEFT track |
+| Page horizontal scroll | **none** (`scrollWidth === clientWidth`, doc and body) | **none** |
+| OP.GG link on the one-trick's name | **present** | **present** |
+| Skill-order priority string | present | present |
+| Grids leaked into the OTP panel | 0 (correct — it keeps its priority string) | 0 |
+
+Screenshots read at both widths. At 1920 the left column ends higher than the right, leaving
+dead space under Skill order — inherent to `items-start` and the same shape the BUILD tab has,
+so not treated as a defect.
+
+## One thing you need to fix at commit time
+
+**Two of my test files from the grid round were never committed.** `git status` shows them
+untracked and `git ls-tree HEAD` confirms they are absent from v0.82.0:
+
+* `lib/__tests__/skillOrderTail.test.ts` — the inference path, the partial-tail boundary, and
+  the `kit === null` refusal.
+* `components/__tests__/skillOrderRecommendedGrid.test.ts` — model → grid provenance.
+
+The rewritten `components/__tests__/skillOrderGrid.test.ts` **did** land. So v0.82.0 shipped the
+`inferredTail` code with no committed test coverage of it, and the local 2357 count includes
+files the repo does not have. Please stage both with this round. I did not commit them myself
+per the brief.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-29 23:08
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-29 22:09:00Z; previous content preserved there. Append new rounds below. -->
+
+

@@ -35,7 +35,12 @@
 //           change ('pro pro') and carries its own measured 5fr/7fr split
 //           internally (runes | starting+items), so it needs no outer grid.
 //   otp   — FeaturedOtpCard alone, same story: it was already a full-width row.
-//           Its BODY is what got the desktop composition — see that file.
+//           Its BODY is what got the desktop composition — see that file. It
+//           shipped 7fr/5fr build-left for a few hours and was reversed to the
+//           house runes-left 5fr/7fr the same day, so all three tabs now put the
+//           same thing under the reader's cursor. That reversal was a real DOM
+//           reorder, not a grid-area shuffle — see OTP_BODY_GRID_CLASS for why
+//           the cheaper option was refused.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** The three views of a champion's build. `"build"` is the WPA recommendation

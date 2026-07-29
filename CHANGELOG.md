@@ -2,6 +2,33 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.82.1] — 2026-07-29 — OTP matches the other tabs, and two tests that missed the boat
+
+### Changed
+- **The OTP tab uses the house runes-first composition.** v0.82.0 gave it `7fr_5fr` with the build
+  leading, on the argument that a named player's profile should headline the build they played. The
+  user overruled it for consistency with the BUILD and PRO tabs. Now `5fr_7fr` with
+  runes/summoners/skill-order first.
+
+  **The columns were swapped in DOM order, not placed with `grid-template-areas`.** The latter was
+  the smaller diff but would have left visual order disagreeing with focus order, so a keyboard user
+  would tab from the right column back to the left. DOM, visual and focus order all still agree.
+  Verified at 1920: computed tracks `569.2px / 796.8px`, runes at x=377, build at x=978.
+
+  The old build-left rationale is kept in the comment as a position that was overruled rather than
+  deleted, and the comment's previously false claim that mobile was byte-identical is replaced with
+  the real cost: the mobile stack is now hero, KPIs, runes, then build, so on a named person's
+  profile the build no longer leads.
+
+### Fixed
+- **Two test files missed the v0.82.0 commit.** `lib/__tests__/skillOrderTail.test.ts` and
+  `components/__tests__/skillOrderRecommendedGrid.test.ts` were written but left untracked, so
+  v0.82.0 shipped the `inferredTail` code with no committed tests behind it and its reported 2,357
+  count included files the repo did not have. Both are committed here. The count is now honest.
+- `BUILD_TAB_LAYOUT` was referenced in planning for this change and **no longer exists** — it was
+  removed earlier the same day for describing a stale v0.44.0 layout. The tabs' actual grids are the
+  reference now.
+
 ## [0.82.0] — 2026-07-29 — The rune we were hiding, and skill order as a real grid
 
 ### Added

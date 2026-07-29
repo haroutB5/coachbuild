@@ -154,31 +154,37 @@ interface FeaturedResponse {
 // to twice the width their content needs, with the name at one end and the
 // percentage at the other.
 //
-// The split is 7fr/5fr with the BUILD on the left, and that is deliberately NOT
-// the BUILD and PRO tabs' runes-left 5fr/7fr. The reason is what this card is:
-// the other two are recommendations, where runes and items are two halves of
-// one answer and either can lead. This one is a PROFILE of a named person, and
-// its headline is the build they actually played — it is the thing the hero band
-// and the KPI strip above it are introducing. Putting runes first here would
-// mean one of two things, both worse:
+// ── AND THE COMPOSITION IT SETTLED ON, AFTER ONE REVERSAL ───────────────────
 //
-//   * reordering the DOM, which buries the lede on mobile (hero -> KPIs ->
-//     runes -> ... -> their build), or
-//   * keeping DOM order and placing with grid-template-areas, which puts the
-//     visual order (runes, then build) at odds with the reading and FOCUS order
-//     (build, then runes). A keyboard user would tab from the right column back
-//     to the left. That is the trade the BUILD tab's own grid never had to make,
-//     because its DOM order and its visual order agree.
+// It is 5fr/7fr with RUNES on the left — the same shape the BUILD tab
+// (`'runes_itembuild'`, 5fr/7fr) and the PRO tab (ProConsensusCard's internal
+// 5fr/7fr) already use. Every tab on this page now reads runes first, then the
+// build, at every width.
 //
-// So the primary column keeps the primary content, in source order, at every
-// width, and the setup detail (runes, summoners, skill order) becomes a
-// narrower supporting rail. Nothing moves on mobile: below `lg` this is a plain
-// block and every section stacks in DOM order exactly as it shipped.
+// This file previously argued the opposite and shipped 7fr/5fr build-left. That
+// argument is preserved here because it was not wrong about the trade-offs, only
+// about which one the user wanted: this card is a PROFILE of a named person, its
+// headline is the build they actually played, and putting runes first costs
+// something real —
+//
+//   * on mobile the stack becomes hero -> KPIs -> runes -> ... -> their build,
+//     so the lede is no longer the first thing under the KPI strip;
+//   * it is a genuine DOM reorder, not a grid-area shuffle. That was the OTHER
+//     option and it is still rejected: placing with grid-template-areas would
+//     put visual order (runes, build) at odds with reading and FOCUS order
+//     (build, runes), so a keyboard user would tab from the right column back to
+//     the left. Consistency is not worth an inverted tab order.
+//
+// User directive 2026-07-29 chose consistency: three tabs the reader flicks
+// between during a 30-second champ select should not each put a different thing
+// under the cursor. So the columns were swapped IN SOURCE ORDER — DOM order,
+// visual order and focus order all still agree, which is the property the
+// rejected option would have broken.
 //
 // `items-start` matters — without it the two columns stretch to equal height and
 // the shorter one's sections space out to fill, which is the sprawl this split
 // exists to remove, reintroduced one level down.
-const OTP_BODY_GRID_CLASS = "lg:grid lg:grid-cols-[7fr_5fr] lg:gap-x-8 lg:items-start";
+const OTP_BODY_GRID_CLASS = "lg:grid lg:grid-cols-[5fr_7fr] lg:gap-x-8 lg:items-start";
 
 /** Items below this build rate are noise on a 30-60 game sample: one or two
  *  games, usually a situational pickup or a game that ended early. Showing them
@@ -697,7 +703,171 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
           </p>
         ) : (
           <div className={OTP_BODY_GRID_CLASS}>
-            {/* ── PRIMARY COLUMN: what they build ─────────────────────────── */}
+            {/* ── HOW THEY SET UP — runes, summoners, skill order ─────────────
+                LEADS in source order as of 2026-07-29, matching the BUILD and
+                PRO tabs (see OTP_BODY_GRID_CLASS for the reversal and what it
+                costs). Below `lg` this wrapper is a plain block and its sections
+                open the single stack; at `lg`+ it is the narrower LEFT track.
+
+                NOT byte-identical on mobile any more — this comment used to say
+                it was, and the swap is exactly what made that false. The mobile
+                stack is now hero -> KPIs -> runes -> summoners -> skill order ->
+                their build. Nothing inside these sections changed; their
+                POSITION did.
+
+                `lg:[&>*:first-child]:mt-0` cancels the top margin of whichever
+                section happens to lead. Written as a first-child rule rather
+                than put on the Runes section directly because ALL THREE are
+                conditional — a champion whose featured player has no stored
+                rune page leads with Summoners, and hardcoding the reset onto
+                Runes would leave this column starting 20px lower than the
+                build column beside it. */}
+            <div className="min-w-0 lg:[&>*:first-child]:mt-0">
+            {/* The FULL rune page, not a keystone and three shard icons (user
+                report 2026-07-29). Every part of it is already stored per game
+                and already modelled — `runes.page` carries primaryTree,
+                keystone, the three primary minors, secondaryTree, the two
+                secondary picks and the three positional shards. The layout is
+                RunesSummonersCard's: primary column, secondary column,
+                shards under the secondary tree they sit beside in client. */}
+            {runePage && (
+              <section className="mt-5">
+                <PanelHeading meta={`${runes!.pct}% of ${sample.games} games`}>Runes</PanelHeading>
+                {/* `grid-cols-2` at mobile packs the two trees side by side,
+                    the same thing RunesSummonersCard does at 390px. At `sm`+
+                    the tracks become CONTENT-SIZED and left-packed: two equal
+                    `fr` tracks in a wide card pushed the secondary tree's 2
+                    tiles out to x=840 with ~450px of dead space in between
+                    (measured at 1440x900), which `auto` + justify-start fixes
+                    by letting the row end where the content ends.
+
+                    `lg:grid-cols-1 xl:grid-cols-[auto_auto]` is new with the
+                    desktop tabs (2026-07-29) and is about the RAIL this section
+                    now lives in, not about the viewport. Measured on Ahri at
+                    1024x900: the rail is 273px there, which leaves the secondary
+                    tree a 102px track — narrow enough that the three stat shards
+                    wrapped to one per row, a 3-high vertical column where every
+                    other surface in the app draws them as a row. Stacking the
+                    two trees instead gives each the rail's full 273px: the
+                    primary row fits its keystone + 3 minors, and the shards fit
+                    on one line. From `xl` the rail is ~493px and the side-by-side
+                    pair fits again, so it comes back. */}
+                <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-[auto_auto] sm:justify-start sm:gap-x-12 lg:grid-cols-1 lg:gap-x-0 xl:grid-cols-[auto_auto] xl:gap-x-10">
+                  <div>
+                    {runePage.primaryTree != null ? (
+                      <TreeLabel treeId={runePage.primaryTree} />
+                    ) : (
+                      <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">
+                        Primary
+                      </p>
+                    )}
+                    <div className="flex flex-wrap items-start gap-1.5">
+                      {runePage.keystone != null && runePage.keystone > 0 && (
+                        <RuneTile keystone {...runeOf(runePage.keystone)} />
+                      )}
+                      {sortPerkIdsByRow(runePage.primaryTree, runePage.primary ?? []).map((id) => (
+                        <RuneTile key={id} {...runeOf(id)} />
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    {runePage.secondaryTree != null ? (
+                      <TreeLabel treeId={runePage.secondaryTree} />
+                    ) : (
+                      <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">
+                        Secondary
+                      </p>
+                    )}
+                    <div className="flex flex-wrap items-start gap-1.5">
+                      {sortPerkIdsByRow(runePage.secondaryTree, runePage.secondary ?? []).map((id) => (
+                        <RuneTile key={id} {...runeOf(id)} />
+                      ))}
+                    </div>
+
+                    {runePage.shards.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-line/60">
+                        <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">
+                          Shards
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {runePage.shards.map((s, i) => (
+                            <span key={`${s}-${i}`} className="flex flex-col items-center text-center w-[52px] gap-1">
+                              <span className="w-7 h-7 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
+                                <IconWithFallback
+                                  src={shardIconUrl(s)}
+                                  alt={shardName(s)}
+                                  fallbackGlyph={shardName(s)}
+                                  className="w-full h-full object-contain p-0.5"
+                                  size={28}
+                                />
+                              </span>
+                              <span className="text-[9px] text-mut leading-tight">
+                                {SHARD_ROW_LABELS[i] ?? shardName(s)}
+                              </span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {data!.spells && (
+              <section className="mt-5">
+                <PanelHeading rule={false} meta={`${data!.spells.pct}% of ${sample.games} games`}>
+                  Summoners
+                </PanelHeading>
+                <div className="mt-2 flex items-center gap-2">
+                  {data!.spells.spells.map((s) => (
+                    <span
+                      key={s}
+                      title={spellName(s)}
+                      className="w-[26px] h-[26px] rounded-md border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
+                    >
+                      <IconWithFallback
+                        src={spellIconUrl(s, ver)}
+                        alt={spellName(s)}
+                        fallbackGlyph={spellName(s)}
+                        className="w-full h-full object-contain"
+                        size={26}
+                      />
+                    </span>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {skillPriority && (
+              <div className="mt-5">
+                <PanelHeading rule={false}>Skill order</PanelHeading>
+                <div className="mt-2 flex items-center gap-1.5">
+                  {skillPriority.map((s, i) => (
+                    <span key={s} className="flex items-center gap-1.5">
+                      <span className="w-6 h-6 rounded-md bg-panel2 border border-line grid place-items-center text-[11px] font-semibold text-txt">
+                        {s}
+                      </span>
+                      {i < skillPriority.length - 1 && <span className="text-mut text-[11px]">›</span>}
+                    </span>
+                  ))}
+                </div>
+                {/* Said out loud rather than implied. Every other number on this
+                    card is this player's own; this one is not, because match-v5
+                    does not carry skill order without a timeline call per game. */}
+                <p className="mt-1.5 text-[10.5px] text-mut/70 leading-relaxed">
+                  The champion&apos;s common order, not {player.gameName}&apos;s own — skill order is
+                  not in the match data we store.
+                </p>
+              </div>
+            )}
+            </div>
+
+            {/* ── WHAT THEY BUILD ─────────────────────────────────────────────
+                The wider (7fr) RIGHT track at `lg`+, and the tail of the stack
+                on mobile. Still the headline content of this card — it just no
+                longer leads, by user directive; see OTP_BODY_GRID_CLASS. */}
             <div className="min-w-0">
             {/* Gated on EITHER, not on `fullBuild` alone. The opener is a fact
                 about how they play the lane and does not depend on any game
@@ -924,161 +1094,6 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
               <p className="text-[12px] text-mut">
                 No item reaches {MIN_DISPLAY_PCT}% across the games we hold yet.
               </p>
-            )}
-            </div>
-
-            {/* ── SECONDARY COLUMN: how they set up ───────────────────────────
-                Runes, summoners and skill order. Below `lg` this wrapper is a
-                plain block and its sections continue the single stack in DOM
-                order, exactly as they did before — mobile is byte-identical.
-                At `lg`+ it becomes the narrower right track.
-
-                `lg:[&>*:first-child]:mt-0` cancels the top margin of whichever
-                section happens to lead. Written as a first-child rule rather
-                than put on the Runes section directly because ALL THREE are
-                conditional — a champion whose featured player has no stored
-                rune page leads with Summoners, and hardcoding the reset onto
-                Runes would leave that card's right column starting 20px lower
-                than its left one. */}
-            <div className="min-w-0 lg:[&>*:first-child]:mt-0">
-            {/* The FULL rune page, not a keystone and three shard icons (user
-                report 2026-07-29). Every part of it is already stored per game
-                and already modelled — `runes.page` carries primaryTree,
-                keystone, the three primary minors, secondaryTree, the two
-                secondary picks and the three positional shards. The layout is
-                RunesSummonersCard's: primary column, secondary column,
-                shards under the secondary tree they sit beside in client. */}
-            {runePage && (
-              <section className="mt-5">
-                <PanelHeading meta={`${runes!.pct}% of ${sample.games} games`}>Runes</PanelHeading>
-                {/* `grid-cols-2` at mobile packs the two trees side by side,
-                    the same thing RunesSummonersCard does at 390px. At `sm`+
-                    the tracks become CONTENT-SIZED and left-packed: two equal
-                    `fr` tracks in a wide card pushed the secondary tree's 2
-                    tiles out to x=840 with ~450px of dead space in between
-                    (measured at 1440x900), which `auto` + justify-start fixes
-                    by letting the row end where the content ends.
-
-                    `lg:grid-cols-1 xl:grid-cols-[auto_auto]` is new with the
-                    desktop tabs (2026-07-29) and is about the RAIL this section
-                    now lives in, not about the viewport. Measured on Ahri at
-                    1024x900: the rail is 273px there, which leaves the secondary
-                    tree a 102px track — narrow enough that the three stat shards
-                    wrapped to one per row, a 3-high vertical column where every
-                    other surface in the app draws them as a row. Stacking the
-                    two trees instead gives each the rail's full 273px: the
-                    primary row fits its keystone + 3 minors, and the shards fit
-                    on one line. From `xl` the rail is ~493px and the side-by-side
-                    pair fits again, so it comes back. */}
-                <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-[auto_auto] sm:justify-start sm:gap-x-12 lg:grid-cols-1 lg:gap-x-0 xl:grid-cols-[auto_auto] xl:gap-x-10">
-                  <div>
-                    {runePage.primaryTree != null ? (
-                      <TreeLabel treeId={runePage.primaryTree} />
-                    ) : (
-                      <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">
-                        Primary
-                      </p>
-                    )}
-                    <div className="flex flex-wrap items-start gap-1.5">
-                      {runePage.keystone != null && runePage.keystone > 0 && (
-                        <RuneTile keystone {...runeOf(runePage.keystone)} />
-                      )}
-                      {sortPerkIdsByRow(runePage.primaryTree, runePage.primary ?? []).map((id) => (
-                        <RuneTile key={id} {...runeOf(id)} />
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    {runePage.secondaryTree != null ? (
-                      <TreeLabel treeId={runePage.secondaryTree} />
-                    ) : (
-                      <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">
-                        Secondary
-                      </p>
-                    )}
-                    <div className="flex flex-wrap items-start gap-1.5">
-                      {sortPerkIdsByRow(runePage.secondaryTree, runePage.secondary ?? []).map((id) => (
-                        <RuneTile key={id} {...runeOf(id)} />
-                      ))}
-                    </div>
-
-                    {runePage.shards.length > 0 && (
-                      <div className="mt-3 pt-3 border-t border-line/60">
-                        <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">
-                          Shards
-                        </p>
-                        <div className="flex flex-wrap gap-1.5">
-                          {runePage.shards.map((s, i) => (
-                            <span key={`${s}-${i}`} className="flex flex-col items-center text-center w-[52px] gap-1">
-                              <span className="w-7 h-7 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
-                                <IconWithFallback
-                                  src={shardIconUrl(s)}
-                                  alt={shardName(s)}
-                                  fallbackGlyph={shardName(s)}
-                                  className="w-full h-full object-contain p-0.5"
-                                  size={28}
-                                />
-                              </span>
-                              <span className="text-[9px] text-mut leading-tight">
-                                {SHARD_ROW_LABELS[i] ?? shardName(s)}
-                              </span>
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </section>
-            )}
-
-            {data!.spells && (
-              <section className="mt-5">
-                <PanelHeading rule={false} meta={`${data!.spells.pct}% of ${sample.games} games`}>
-                  Summoners
-                </PanelHeading>
-                <div className="mt-2 flex items-center gap-2">
-                  {data!.spells.spells.map((s) => (
-                    <span
-                      key={s}
-                      title={spellName(s)}
-                      className="w-[26px] h-[26px] rounded-md border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
-                    >
-                      <IconWithFallback
-                        src={spellIconUrl(s, ver)}
-                        alt={spellName(s)}
-                        fallbackGlyph={spellName(s)}
-                        className="w-full h-full object-contain"
-                        size={26}
-                      />
-                    </span>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {skillPriority && (
-              <div className="mt-5">
-                <PanelHeading rule={false}>Skill order</PanelHeading>
-                <div className="mt-2 flex items-center gap-1.5">
-                  {skillPriority.map((s, i) => (
-                    <span key={s} className="flex items-center gap-1.5">
-                      <span className="w-6 h-6 rounded-md bg-panel2 border border-line grid place-items-center text-[11px] font-semibold text-txt">
-                        {s}
-                      </span>
-                      {i < skillPriority.length - 1 && <span className="text-mut text-[11px]">›</span>}
-                    </span>
-                  ))}
-                </div>
-                {/* Said out loud rather than implied. Every other number on this
-                    card is this player's own; this one is not, because match-v5
-                    does not carry skill order without a timeline call per game. */}
-                <p className="mt-1.5 text-[10.5px] text-mut/70 leading-relaxed">
-                  The champion&apos;s common order, not {player.gameName}&apos;s own — skill order is
-                  not in the match data we store.
-                </p>
-              </div>
             )}
             </div>
           </div>
