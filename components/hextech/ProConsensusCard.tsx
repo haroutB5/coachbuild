@@ -18,6 +18,8 @@ import {
   type RuneSlotBreakdown,
 } from "./proConsensus";
 import { sortPerksByRow } from "./perkSlots";
+import BuildSlotList from "./BuildSlotList";
+import { isContested, slotFromFrequencies, type SlotView } from "./buildSlotView";
 import { buildRuneApplyBody } from "./runeApplyBody";
 import { applyItemSetsForBuild } from "./itemSetsApply";
 import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/components/live/companionClient";
@@ -392,229 +394,25 @@ function FractionPct({ count, denom, className = "" }: { count: number; denom: n
   );
 }
 
-function ItemTile({
-  itemId,
-  count,
-  denom,
-  name,
-  icon,
-  onClick,
-}: {
-  itemId: number;
-  count: number;
-  denom: number;
-  name: string;
-  icon: string;
-  onClick: () => void;
-}) {
-  const pct = formatSharePct(denom > 0 ? count / denom : 0);
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={`View details for ${name} — built in ${count} of ${denom} pro games (${pct})`}
-      className="flex flex-col items-center text-center w-[72px] flex-shrink-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
-    >
-      <span className="w-11 h-11 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center">
-        <IconWithFallback src={icon} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={44} />
-      </span>
-      <span className="text-[10px] text-txt mt-1.5 leading-tight line-clamp-2 min-h-[24px]">{name}</span>
-      <span className="text-[10.5px] font-bold tabular-nums text-teal">{pct}</span>
-      <span className="text-[9.5px] text-mut/70 tabular-nums">{count}/{denom}</span>
-    </button>
-  );
-}
-
-/** v0.28.0 — one grid slot holding BOTH boots choices stacked vertically
- *  (user report: Crimson Lucidity 35% and Spellslinger's Shoes 27% each ate a
- *  full item slot on the same champion — "count them under the same item,
- *  just put the two choices on top of each other"). Same overall footprint
- *  as one ItemTile so it reflows in the same flex-wrap row; each row is its
- *  own tap target with its own icon/name/pct/count — the two counts are
- *  never merged into a fake combined stat (they're independent per-boot
- *  fractions against the same `denom`).
+/* FOUR ITEM TILE COMPONENTS USED TO LIVE HERE (deleted 2026-07-29).
  *
- *  v0.51.1 (user-reported: boots/starter icons render visibly smaller than
- *  the main ITEMS grid icons): each entry now uses the EXACT SAME icon
- *  size/box as ItemTile (w-11 h-11, size=44), stacked in a column instead of
- *  the old horizontal icon-left/text-right row that only had room for a
- *  20px icon. Still one flex-wrap slot overall (a `flex-col` wrapper), so
- *  the "group boots under one slot" partition semantics are unchanged —
- *  only the per-entry icon size and layout direction changed. */
-function BootsStackTile({
-  boots,
-  denom,
-  names,
-  icon,
-  onClick,
-}: {
-  boots: { itemId: number; count: number }[];
-  denom: number;
-  names: Map<number, string>;
-  icon: (itemId: number) => string;
-  onClick: (itemId: number) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-2.5 w-[72px] flex-shrink-0">
-      {boots.map((b) => {
-        const name = names.get(b.itemId) ?? `Item #${b.itemId}`;
-        const pct = formatSharePct(denom > 0 ? b.count / denom : 0);
-        return (
-          <button
-            key={b.itemId}
-            type="button"
-            onClick={() => onClick(b.itemId)}
-            aria-label={`View details for ${name} — built in ${b.count} of ${denom} pro games (${pct})`}
-            className="flex flex-col items-center text-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
-          >
-            <span className="w-11 h-11 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center">
-              <IconWithFallback src={icon(b.itemId)} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={44} />
-            </span>
-            <span className="text-[10px] text-txt mt-1.5 leading-tight line-clamp-2 min-h-[24px]">{name}</span>
-            <span className="text-[10.5px] font-bold tabular-nums text-teal">{pct}</span>
-            <span className="text-[9.5px] text-mut/70 tabular-nums">{b.count}/{denom}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-/** 2026-07-22 — one grid slot holding the top starter-class item choice(s)
- *  (Dark Seal, Tear of the Goddess, etc. — STARTING_ITEM_ALLOWLIST), stacked
- *  the exact same way BootsStackTile stacks boots choices (v0.28.0) — same
- *  component, different label vocabulary, since a starter and a boots pick
- *  are structurally the same "small labeled slot beside the main items
- *  grid" shape. Hard user directive (screenshot-verified, 2026-07-22): a
- *  starter must NEVER render inside the main ITEMS grid — this is its
- *  dedicated home instead. Absent (not rendered) when `starters` is empty —
- *  see the render call site below.
+ * `ItemTile`, `BootsStackTile`, `StartersStackTile`, `SupportFinalStackTile`.
+ * The last three were the SAME component discovered three separate times —
+ * v0.28.0 for a split boots preference ("count them under the same item, just
+ * put the two choices on top of each other"), 2026-07-22 for starters,
+ * 2026-07-26 for the mutually-exclusive support-quest finals, which had even
+ * grown an "or" rule between the top pick and the runners-up. Each was a go-to
+ * with its alternatives attached: a build SLOT.
  *
- *  v0.51.1: mirrors BootsStackTile's same-day icon-size fix — each entry now
- *  renders at ItemTile's exact icon size (w-11 h-11, size=44) in a vertical
- *  icon-above-text layout instead of the old smaller (20px) horizontal row,
- *  so Starting/boots tiles no longer look visibly smaller than the main
- *  ITEMS grid. The starter-slot partition itself (never merging into the
- *  completed-items row) is unchanged — only the tile's internal size/layout. */
-function StartersStackTile({
-  starters,
-  denom,
-  names,
-  icon,
-  onClick,
-}: {
-  starters: { itemId: number; count: number }[];
-  denom: number;
-  names: Map<number, string>;
-  icon: (itemId: number) => string;
-  onClick: (itemId: number) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-2.5 w-[72px] flex-shrink-0">
-      {starters.map((s) => {
-        const name = names.get(s.itemId) ?? `Item #${s.itemId}`;
-        const pct = formatSharePct(denom > 0 ? s.count / denom : 0);
-        return (
-          <button
-            key={s.itemId}
-            type="button"
-            onClick={() => onClick(s.itemId)}
-            aria-label={`View details for ${name} — a starting item choice in ${s.count} of ${denom} pro games (${pct})`}
-            className="flex flex-col items-center text-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
-          >
-            <span className="w-11 h-11 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center">
-              <IconWithFallback src={icon(s.itemId)} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={44} />
-            </span>
-            <span className="text-[10px] text-txt mt-1.5 leading-tight line-clamp-2 min-h-[24px]">{name}</span>
-            <span className="text-[10.5px] font-bold tabular-nums text-teal">{pct}</span>
-            <span className="text-[9.5px] text-mut/70 tabular-nums">{s.count}/{denom}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-/** 2026-07-26 — ONE grid slot for the support-quest FINAL family (user bug,
- *  screenshot-confirmed: the ITEMS grid showed Zaz'Zak's Realmspike 80% AND
- *  Solstice Sleigh 20% at once, two of six slots spent on a single choice).
- *  Only ONE of the five finals can ever be owned — Bounty of Worlds upgrades
- *  into exactly one — so this renders the modal pick as the primary tile with
- *  the runners-up stacked beneath it, labelled as the alternatives they are.
+ * The completed-items grid was the one place that still lacked it, and that was
+ * the reported bug — six equal tiles claim six items you build together, while
+ * whole pairs of them are measured never to co-occur once. All of it now renders
+ * through BuildSlotList, which says that relationship in one vocabulary.
  *
- *  Visually a BootsStackTile (same w-[72px] column, same w-11 h-11 / size=44
- *  tiles, so it reflows in the same flex-wrap Items row and matches the boots
- *  and starter stacks beside it). Two deliberate differences:
- *   - an "or" rule between the top pick and the alternatives, because these
- *     entries are MUTUALLY EXCLUSIVE, where stacked boots/starters are merely
- *     a split preference among things a build could in principle contain;
- *   - alternatives render dimmed (opacity-70) and say so in their aria-label,
- *     so the primary reads as the pick rather than as first-of-a-list.
- *  Each entry keeps its OWN honest percentage against the same `denom` — the
- *  fractions are never summed into a combined family stat (see
- *  proConsensus.ts's `supportFinals` doc comment). */
-function SupportFinalStackTile({
-  top,
-  alternatives,
-  denom,
-  names,
-  icon,
-  onClick,
-}: {
-  top: { itemId: number; count: number };
-  alternatives: { itemId: number; count: number }[];
-  denom: number;
-  names: Map<number, string>;
-  icon: (itemId: number) => string;
-  onClick: (itemId: number) => void;
-}) {
-  const tile = (entry: { itemId: number; count: number }, isAlternative: boolean) => {
-    const name = names.get(entry.itemId) ?? `Item #${entry.itemId}`;
-    const pct = formatSharePct(denom > 0 ? entry.count / denom : 0);
-    return (
-      <button
-        key={entry.itemId}
-        type="button"
-        onClick={() => onClick(entry.itemId)}
-        aria-label={
-          isAlternative
-            ? `View details for ${name} — an alternative support-quest upgrade, built in ${entry.count} of ${denom} pro games (${pct})`
-            : `View details for ${name} — the most-built support-quest upgrade, in ${entry.count} of ${denom} pro games (${pct})`
-        }
-        className={`flex flex-col items-center text-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform ${
-          isAlternative ? "opacity-70" : ""
-        }`}
-      >
-        <span className="w-11 h-11 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center">
-          <IconWithFallback src={icon(entry.itemId)} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={44} />
-        </span>
-        <span className="text-[10px] text-txt mt-1.5 leading-tight line-clamp-2 min-h-[24px]">{name}</span>
-        <span className="text-[10.5px] font-bold tabular-nums text-teal">{pct}</span>
-        <span className="text-[9.5px] text-mut/70 tabular-nums">{entry.count}/{denom}</span>
-      </button>
-    );
-  };
-
-  return (
-    <div className="flex flex-col gap-2.5 w-[72px] flex-shrink-0">
-      {tile(top, false)}
-      {alternatives.length > 0 && (
-        <>
-          {/* "or", not a bare gap — these are mutually exclusive, and the
-              card should say so rather than leave the reader to infer it
-              from two stacked icons. aria-hidden: the exclusivity is already
-              carried explicitly in each alternative's aria-label above. */}
-          <span aria-hidden="true" className="flex items-center gap-1.5 text-[9px] uppercase tracking-[0.1em] text-mut/50">
-            <span className="h-px flex-1 bg-line" />
-            or
-            <span className="h-px flex-1 bg-line" />
-          </span>
-          {alternatives.map((a) => tile(a, true))}
-        </>
-      )}
-    </div>
-  );
-}
+ * The model-side PARTITIONS (HARD RULE 2's starter carve-out, the boots
+ * carve-out, the support-final carve-out) are untouched in proConsensus.ts and
+ * are what still decide which group an item belongs to. Only the paint changed.
+ * Do not reintroduce a per-item tile for a grouped choice. */
 
 /** In-game-page rune tile — icon above name above percentage, the same
  *  vocabulary RunesSummonersCard's RuneTile uses on the BUILD tab, just
@@ -893,6 +691,37 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
 
   const { model } = state;
   const lowSample = model.gamesTotal < LOW_SAMPLE_THRESHOLD;
+
+  // ── Everything in the items column, as SLOTS ───────────────────────────────
+  // Three of these were ALREADY slots in the model and were only ever painted
+  // as separate stacked tiles: `starters` (top opener + runners-up), `boots`
+  // (v0.28.0, "count them under the same item, just put the two choices on top
+  // of each other") and `supportFinals` (2026-07-26, five mutually-exclusive
+  // quest upgrades). `slotFromFrequencies` is arithmetic only — it re-ranks
+  // nothing and merges no fractions, so each option keeps the same honest
+  // percentage against `itemsSampleSize` it showed before.
+  //
+  // `model.itemSlots` is the genuinely new one: the completed-item ranking
+  // regrouped by co-occurrence, so an item that is never built alongside the
+  // go-to attaches to it instead of taking a slot of its own.
+  const itemNameOf = (id: number) => names.items.get(id) ?? `Item #${id}`;
+  const starterSlot = slotFromFrequencies(model.starters, model.itemsSampleSize);
+  const bootsSlot = slotFromFrequencies(model.boots, model.itemsSampleSize);
+  const supportFinalSlot = model.supportFinals
+    ? slotFromFrequencies(
+        [model.supportFinals.top, ...model.supportFinals.alternatives],
+        model.itemsSampleSize
+      )
+    : null;
+  const buildSlots: SlotView[] = [
+    ...(bootsSlot ? [bootsSlot] : []),
+    ...(supportFinalSlot ? [supportFinalSlot] : []),
+    ...model.itemSlots,
+  ];
+  // The explanation renders only where there is something to explain. A settled
+  // build produces no contested slot at all (Heimerdinger, measured), and a line
+  // about competing items on a card showing none would be a claim about nothing.
+  const hasContestedSlot = buildSlots.some(isContested) || (starterSlot ? isContested(starterSlot) : false);
 
   const sourceNote =
     model.tournaments.soloqCount > 0 && model.tournaments.prostageCount > 0
@@ -1253,79 +1082,74 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
               starting item in a separate slot"). "Starting" matches the card's
               existing label vocabulary (itemSetBody.ts's "Starting" block type /
               StartingCard.tsx on the BUILD tab above this card use the same
-              word for the same concept). Visually parallel to the boots stack
-              below — same StartersStackTile/BootsStackTile shape — just in its
-              own section instead of sharing the Items header. Absent entirely
-              when there are zero starters in the sample (no empty block). */}
-          {model.starters.length > 0 && (
+              word for the same concept). Absent entirely when there are zero
+              starters in the sample (no empty block).
+
+              2026-07-29: the three stacked TILES that used to live here and
+              below (StartersStackTile / BootsStackTile / SupportFinalStackTile)
+              are gone. All three were the same thing invented three times — a
+              top pick with its runners-up stacked under it — and the
+              support-final one had even grown an "or" rule between them,
+              because those five finals are mutually exclusive. That is a build
+              SLOT, which the item list beside them has now become as well. One
+              vocabulary for one relationship; see BuildSlotList.tsx.
+
+              The PARTITIONS are untouched: starters still occupy their own
+              labelled section here, boots and the support-quest family still
+              come out of `items` in the model exactly as before. Only the shape
+              they are painted in changed. */}
+          {/* The explainer sits ABOVE the first section that can show an
+              indentation, not inside the Items block where it was first put.
+              Screenshot-caught at 390px: Starting renders "Dark Seal 52% / or
+              Doran's Ring 32%" and sits above Items, so a reader met an
+              indented alternative and then, several rows later, the sentence
+              explaining what indentation means. One line, once, before anything
+              it governs. */}
+          {hasContestedSlot && (
+            <p className="text-[10.5px] text-mut/80 leading-relaxed mb-3">
+              Indented items are built <span className="text-txt">instead of</span> the one above
+              them, not alongside it — they compete for the same slot.
+            </p>
+          )}
+
+          {starterSlot && (
             <div className="mb-4">
               <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">Starting</p>
-              <div className="flex flex-wrap gap-2.5">
-                {/* denom is itemsSampleSize, NOT gamesTotal (2026-07-25 P1-2 fix)
-                    — see proConsensus.ts's ProConsensusModel.itemsSampleSize doc
-                    comment. Live-ingested prostage rows write finalItems=[], so
-                    dividing by every game in the sample understated every
-                    item/boots/starter percentage by the itemless-row share. */}
-                <StartersStackTile
-                  starters={model.starters}
-                  denom={model.itemsSampleSize}
-                  names={names.items}
-                  icon={(id) => itemIconUrl(id, ver)}
-                  onClick={(id) => onOpenDetail("item", id)}
-                />
-              </div>
+              {/* denom is itemsSampleSize, NOT gamesTotal (2026-07-25 P1-2 fix)
+                  — see proConsensus.ts's ProConsensusModel.itemsSampleSize doc
+                  comment. Live-ingested prostage rows write finalItems=[], so
+                  dividing by every game in the sample understated every
+                  item/boots/starter percentage by the itemless-row share. It is
+                  carried on the slot itself (`sampleGames`) so a percentage
+                  cannot travel without it. */}
+              <BuildSlotList
+                slots={[starterSlot]}
+                ver={ver}
+                nameOf={itemNameOf}
+                onOpenItem={(id) => onOpenDetail("item", id)}
+              />
             </div>
           )}
 
-          {(model.items.length > 0 || model.boots.length > 0 || model.supportFinals !== null) && (
+          {buildSlots.length > 0 && (
             <div className="mb-4 lg:mb-0">
               <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">Items</p>
-              {/* flex-wrap, not overflow-x-auto — matches CoreBuildOrderCard/
-                  SituationalCard's own item-row convention on this tab (no
-                  horizontal scroll strips anywhere on BUILD), so tiles reflow
-                  to a second row instead of hiding behind a scrollbar at 390px.
-                  v0.28.0: boots render as ONE stacked slot (see BootsStackTile)
-                  instead of eating two separate item slots. Now that this
-                  block is its OWN column (v0.63.2, ~40% of the row instead of
-                  the full width), wrapping to a second row here is expected
-                  and reads as an honest icon grid, not sprawl. */}
-              <div className="flex flex-wrap gap-2.5">
-                {model.boots.length > 0 && (
-                  <BootsStackTile
-                    boots={model.boots}
-                    denom={model.itemsSampleSize}
-                    names={names.items}
-                    icon={(id) => itemIconUrl(id, ver)}
-                    onClick={(id) => onOpenDetail("item", id)}
-                  />
-                )}
-                {/* 2026-07-26 — the support-quest final family as ONE slot,
-                    beside the boots stack and ahead of the main items (it is a
-                    single core build decision for the role, not a filler slot).
-                    Absent entirely — no empty block — when the sample never
-                    built one, same convention as boots/starters. */}
-                {model.supportFinals && (
-                  <SupportFinalStackTile
-                    top={model.supportFinals.top}
-                    alternatives={model.supportFinals.alternatives}
-                    denom={model.itemsSampleSize}
-                    names={names.items}
-                    icon={(id) => itemIconUrl(id, ver)}
-                    onClick={(id) => onOpenDetail("item", id)}
-                  />
-                )}
-                {model.items.map((entry) => (
-                  <ItemTile
-                    key={entry.itemId}
-                    itemId={entry.itemId}
-                    count={entry.count}
-                    denom={model.itemsSampleSize}
-                    name={names.items.get(entry.itemId) ?? `Item #${entry.itemId}`}
-                    icon={itemIconUrl(entry.itemId, ver)}
-                    onClick={() => onOpenDetail("item", entry.itemId)}
-                  />
-                ))}
-              </div>
+              {/* Rows, not a wrapping tile grid. A grid of six equal tiles says
+                  "these six go together", and measured on stored games whole
+                  pairs of them never co-occur once — they are one decision shown
+                  twice. A row can carry its own alternatives underneath it; a
+                  tile in a wrap grid cannot without becoming a column, which is
+                  what the three deleted stack tiles each were.
+
+                  Order is boots slot, support-quest slot, then the item slots —
+                  the same DOM order the tiles had, so nothing about which
+                  decisions come first has changed. */}
+              <BuildSlotList
+                slots={buildSlots}
+                ver={ver}
+                nameOf={itemNameOf}
+                onOpenItem={(id) => onOpenDetail("item", id)}
+              />
             </div>
           )}
         </div>

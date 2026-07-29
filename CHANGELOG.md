@@ -2,6 +2,55 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.77.0] — 2026-07-29 — Items that compete for a slot now share one
+
+### Changed
+- **Mutually exclusive items share a single slot instead of taking one row each.** Listing Malignance
+  and Blackfire Torch as two rows with two percentages read as "buy both". Nobody does. A slot now
+  shows the go-to plus what gets built **instead** of it:
+
+  ```
+  BOOTS        Crimson Lucidity 84% (31/37)  OR  Chainlaced Crushers 14% (5/37)
+  ITEM SLOTS   Blackfire Torch  70% (26/37)  OR  Malignance          27%
+  ```
+
+  Measured, not assumed. Across 12,910 stored one-trick games: on Ahri, Malignance (71% of games)
+  and Blackfire Torch (23%) appear together in **zero**. Same for Annie. Items that genuinely pair
+  up sit at 25-52% joint rate, so the two populations separate cleanly.
+
+  Grouping uses **lift** with a floor on expected co-occurrence, not a raw joint rate — a raw rate
+  calls two rare items "exclusive" purely because they seldom overlap. It is computed per champion
+  **and role** from real games, never a hardcoded list that would go stale each patch. Live: 87 of
+  413 slots contested (21%), so most slots still render as ordinary rows.
+
+### Fixed
+- **The OTP build line padded itself with pro items.** A one-trick pool that could not fill six slots
+  borrowed from the pro build, and the block titled "OTP build" then contained items one-tricks do
+  not build. Measured across all 218 champion+role combos: 17 of 1,307 slots (1.3%) on 11 lines — 
+  rarer than assumed, but concentrated entirely on thin-sample champions, worst 3 of 6 slots on a
+  single stored game. Short honest lines now, no borrowing. The Pro line never had the mirror
+  problem; that is now pinned by a test rather than assumed.
+- **Mejai's Soulstealer reached the WPA Build tab.** v0.76.0 cleared the Pro and OTP tabs only. It
+  arrived by a different path — as a per-slot situational **swap**, invisible to anyone reading the
+  main build order. Filtered at the pool boundary before the slice, so the freed slot backfills.
+- **Gunmetal Greaves was not recognised as boots.** Item 3172 is a tier-3 boot whose live catalog
+  record carries no `Boots` tag — the only such gap in the entire boots family. Three separate
+  classifiers each decided "is this boots" independently and all three got it wrong, so it ate a
+  completed-item slot and could produce two pairs of boots in one build. Live exposure was wide:
+  **Yone mid carried it in 178 of 200 games**. Now one shared predicate (`lib/bootsItems.ts`), rule
+  is tag OR built-from-boots by recipe ancestry, all private copies deleted.
+- **Tap targets on the new grouped rows.** Alternative rows rendered 32px tall, well under the ~44px
+  a finger reliably hits on a phone. Now 44px, with the height bought back from the gap between
+  alternatives. 77 of 77 edge probes land.
+- The `OPENS` row printed a percentage with its sample size three lines away in the heading. It now
+  carries its own denominator inline.
+
+### Notes
+- The assembled build says so plainly on the card: "put together from those rates, not taken from one
+  game, so they may never have finished a game holding exactly this set."
+- Contested slots are explained where they appear: "Indented items are built instead of the one above
+  them, not alongside it."
+
 ## [0.76.0] — 2026-07-29 — Real builds on the Pro and OTP tabs
 
 ### Pro tab

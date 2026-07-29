@@ -38,6 +38,7 @@ import {
 import { DEFAULT_RANK_BRACKET, type RankBracket } from "./rankBrackets";
 import { capExtraFullItems } from "./buildSlotCap";
 import { collapseSupportFinalPools } from "./supportFinalGroup";
+import { isSnowballStackItem } from "./snowballStacks";
 import {
   getLatestPatch,
   getChampionById,
@@ -339,7 +340,7 @@ export async function buildRecommendations(
   // freshly-fetched pool with an already-committed pick from these pools, so
   // making them correct needs cross-source family state rather than a pool
   // filter, and the matchup path is verified-403 dead code today.
-  const [starterData, bootsData, leg1Data, leg2Data, leg3Data, leg456Data] =
+  const [starterData, collapsedBoots, collapsedLeg1, collapsedLeg2, collapsedLeg3, collapsedLeg456] =
     collapseSupportFinalPools([
       rawStarterData,
       rawBootsData,
@@ -348,6 +349,44 @@ export async function buildRecommendations(
       rawLeg3Data,
       rawLeg456Data,
     ]);
+
+  // ── Snowball stacks never occupy a COMPLETED build slot ────────────────────
+  // User directive, 2026-07-29, restated "in general for all builds": Mejai's
+  // Soulstealer is not a build item. v0.76.0 applied `lib/snowballStacks.ts` on
+  // the Pro and OTP consensus surfaces, both of which aggregate stored games
+  // client-side. The WPA build does not route through either — it is assembled
+  // HERE from coachless's own WPA-ranked pools — so Mejai's was still live on
+  // the Build tab after that ship. Confirmed against prod 2026-07-29 before this
+  // fix: Ahri Mid carried it in `alts.second` (wpa 1.39, 8,149 games, 78.5% wr)
+  // AND `alts.third`; Annie Mid in `alts.second` (wpa 3.54); Veigar Mid at the
+  // TOP of `alts.third` (wpa 2.91). It reached the build as a per-slot
+  // situational SWAP, not as a core pick — which is why it was invisible to
+  // anyone reading only the first/second/third slots.
+  //
+  // The filter sits HERE, at the pool boundary, for two reasons:
+  //   1. ONE place. `bestItem`, `topItems` and `itemAlts` all draw from these
+  //      same pools, so a single filter covers the core order, `fourthPlus` AND
+  //      every situational-swap list. Filtering at each consumer would be three
+  //      copies of one rule and the next consumer would forget.
+  //   2. BEFORE every truncation. `itemAlts` slices to 3 and `capExtraFullItems`
+  //      caps the tail; dropping an id after either would leave a list one entry
+  //      short with a hole in it instead of promoting the next real item. That
+  //      ordering was the subtle half of the v0.76.0 fix and it is the same trap
+  //      here — see lib/snowballStacks.ts's header.
+  //
+  // `starterData` is deliberately NOT filtered. Dark Seal (1082) is in the
+  // snowball family and is a genuine OPENING purchase; the directive is about
+  // build slots, not openers, and `lib/snowballStacks.ts` says so explicitly.
+  // Filtering the starter pool here would silently delete Dark Seal from the
+  // Build tab's Starting slot — the exact regression already caught once on
+  // review this round.
+  const dropSnowballStacks = (pool: ItemEntry[]): ItemEntry[] =>
+    pool.filter((e) => !isSnowballStackItem(e.itemId));
+  const bootsData = dropSnowballStacks(collapsedBoots);
+  const leg1Data = dropSnowballStacks(collapsedLeg1);
+  const leg2Data = dropSnowballStacks(collapsedLeg2);
+  const leg3Data = dropSnowballStacks(collapsedLeg3);
+  const leg456Data = dropSnowballStacks(collapsedLeg456);
 
   const totalGames = keystoneData.reduce((s, e) => s + e.occurrence, 0);
   const bar = adoptionBar(totalGames);
@@ -520,7 +559,12 @@ export async function buildRecommendations(
       if (slot > 3) return [];
       const extras: Record<string, unknown> = { firstLegendaryId: prefix[0] };
       if (prefix.length >= 2) extras.secondLegendaryId = prefix[1];
-      return getGlobalItemStatistics(champId, role, patch, [slot], 1, extras, filterOpts);
+      // Its own fetch, so its own snowball filter — this pool never passes
+      // through the boundary above. Filtered before buildOptimizedPath ranks or
+      // truncates anything, same ordering rule as everywhere else.
+      return dropSnowballStacks(
+        await getGlobalItemStatistics(champId, role, patch, [slot], 1, extras, filterOpts)
+      );
     },
     2,
     OPTIMIZER_MIN_SAMPLE,
@@ -566,12 +610,17 @@ export async function buildRecommendations(
 
     if (matchupInfo.supported) {
       // Condition the shared core items + spells on the matchup, per-slot fallback.
-      const [m1, m2, m3, mSpells] = await Promise.all([
+      // Same snowball filter as the unconditioned pools — these are three more
+      // independent fetches (dormant today: the matchup path is verified-403,
+      // see the block comment above), and leaving them unfiltered would make the
+      // rule true only while the feature stays dead.
+      const [m1raw, m2raw, m3raw, mSpells] = await Promise.all([
         getGlobalItemStatistics(champId, role, patch, [1], 1, {}, mcf()),
         getGlobalItemStatistics(champId, role, patch, [2], 1, {}, mcf()),
         getGlobalItemStatistics(champId, role, patch, [3], 1, {}, mcf()),
         getGlobalSummonerSpellStatistics(champId, role, patch, mcf()),
       ]);
+      const [m1, m2, m3] = [m1raw, m2raw, m3raw].map(dropSnowballStacks);
       const usedM = new Set<number>();
       const condSlots: [ItemEntry, ItemEntry[]][] = [
         [leg1Best, m1],

@@ -21,6 +21,14 @@
 // mattered. This module owns the featured card's classification outright so the
 // four slots below cannot disagree with each other about what an item IS.
 //
+// That fixed the disagreement WITHIN this card and left the one BETWEEN cards.
+// All three modules still asked "is this boots?" separately, all three answered
+// `tags.includes("Boots")`, and on 2026-07-29 all three were wrong together
+// about 3172 Gunmetal Greaves — a tier-3 boot enchant the live catalog does not
+// tag as a boot — so a one-trick line shipped two pairs of boots. The boots
+// question now lives in lib/bootsItems.ts and all three call it. Same lesson one
+// level up: a rule copied is a rule that will diverge exactly when it matters.
+//
 // ═══════════════════════════════════════════════════════════════════════════
 // THE FULL BUILD, AND WHY IT CARRIES ITS OWN METHOD LABEL
 // ═══════════════════════════════════════════════════════════════════════════
@@ -79,6 +87,8 @@
 import type { ItemDetail } from "@/components/itemDetail";
 import { isSnowballStackItem } from "@/lib/snowballStacks";
 import { STARTING_ITEM_ALLOWLIST } from "@/lib/startingItems";
+import { resolveBuildSlots, type BuildSlot } from "@/lib/buildSlots";
+import { isFinalBootsItem, type ItemCatalog } from "@/lib/bootsItems";
 
 /** One item and how often this player finishes a game holding it — the shape
  *  `/api/otp/featured` already returns (`ItemBuildRate`), restated here so this
@@ -125,23 +135,38 @@ export type FeaturedItemClass = "completed" | "boots" | "starter" | "snowball" |
  * `excluded`, never a guess — the same posture proConsensus.ts's `isBuildItem`
  * and itemSetBody.ts's `isFullItem` both take.
  *
- * The completed/boots rules mirror proConsensus.ts's `isBuildItem` +
- * `isBootsFinal` exactly, INCLUDING the `from.length > 0` clause on the boots
- * branch, which is not decoration: raw tier-1 Boots (1001) is Boots-tagged and
- * built from nothing, and without that clause it would classify as a real boots
- * pick and could take a slot in the boots list AND in a "full build". It is a
- * mid-build component. With the clause it falls through to the `into` rule,
- * which excludes it (1001 upgrades into every tier-2 boot).
+ * The boots branch is lib/bootsItems.ts's `isFinalBootsItem` — THE boots rule
+ * for the whole app, shared with proConsensus.ts and itemSetBody.ts since
+ * 2026-07-29. This file used to carry its own `tags.includes("Boots")` copy,
+ * and so did the other two, and all three were wrong about 3172 Gunmetal
+ * Greaves together (a tier-3 boot the live catalog does not tag as one). Read
+ * that module's header before changing anything here.
+ *
+ * `isFinalBootsItem` keeps the `from.length > 0` clause, which is not
+ * decoration: raw tier-1 Boots (1001) is Boots-tagged and built from nothing,
+ * and without that clause it would classify as a real boots pick and could take
+ * a slot in the boots list AND in a "full build". It is a mid-build component.
+ * With the clause it falls through to the `into` rule, which excludes it (1001
+ * upgrades into every tier-2 boot).
+ *
+ * `catalog` is OPTIONAL and additive — supplying it lets the boots rule walk an
+ * item's recipe and catch a boot the catalog forgot to tag. A caller that omits
+ * it (FeaturedOtpCard.tsx's `include` predicate) still classifies every KNOWN
+ * catalog gap correctly, via `BOOTS_ID_EXCEPTIONS`. Pass it where a map is in
+ * scope.
  */
-export function classifyFeaturedItem(itemId: number, meta: ItemDetail | undefined): FeaturedItemClass {
+export function classifyFeaturedItem(
+  itemId: number,
+  meta: ItemDetail | undefined,
+  catalog?: ItemCatalog
+): FeaturedItemClass {
   if (STARTING_ITEM_ALLOWLIST.has(itemId)) return "starter";
   if (isSnowballStackItem(itemId)) return "snowball";
   if (!meta) return "excluded";
   if (meta.purchasable === false) return "excluded";
   const tags = Array.isArray(meta.tags) ? meta.tags : [];
   if (tags.includes("Consumable") || tags.includes("Trinket")) return "excluded";
-  const from = Array.isArray(meta.from) ? meta.from : [];
-  if (tags.includes("Boots") && from.length > 0) return "boots";
+  if (isFinalBootsItem(itemId, meta, catalog)) return "boots";
   return Array.isArray(meta.into) && meta.into.length === 0 ? "completed" : "excluded";
 }
 
@@ -203,6 +228,19 @@ export interface FeaturedBuildView {
    *  reached, e.g. a brand-new account) — absent, not empty, the same
    *  convention proConsensus.ts's `boots`/`starters` use. */
   fullBuild: FeaturedFullBuild | null;
+  /** 2026-07-29 — the same completed items as `items`, regrouped into SLOTS:
+   *  one build decision per entry, with the items that get built INSTEAD of the
+   *  go-to attached to it (lib/buildSlots.ts).
+   *
+   *  ADDITIVE. `items` is unchanged and still the flat ranking, because the two
+   *  answer different questions and a card may legitimately want either — and
+   *  because changing `items`' type would have broken a wired card for a
+   *  presentational choice. Slots are derived from the SAME per-item counts, so
+   *  a percentage cannot differ between the two views.
+   *
+   *  Empty when the sample cannot support the claim — a small sample, or a
+   *  genuinely settled build. Both are honest; see `resolveBuildSlots`. */
+  slots: BuildSlot[];
 }
 
 /** Slots in a League inventory, and therefore the hard cap on a full build.
@@ -303,7 +341,9 @@ export function buildFeaturedView(
   const minPct = opts.minDisplayPct ?? 0;
   const bootsMinPct = opts.bootsMinDisplayPct ?? 0;
 
-  const classOf = (id: number): FeaturedItemClass => classifyFeaturedItem(id, meta.get(id));
+  // `meta` doubles as the catalog so the shared boots rule can walk recipes —
+  // see lib/bootsItems.ts. Classify ONCE per id, here, and never re-derive.
+  const classOf = (id: number): FeaturedItemClass => classifyFeaturedItem(id, meta.get(id), meta);
 
   // Classify ONCE, partition, THEN truncate. The order is the fix the user
   // asked for: a snowball stack is gone before anything is sliced, so the
@@ -325,6 +365,14 @@ export function buildFeaturedView(
     boots,
     starters,
     fullBuild: resolveFullBuild(sorted, gameItems, sampleGames, classOf),
+    // Non-boots completed items only. Boots already have a dedicated slot on
+    // this card, and they are the single most reliably "competing" family there
+    // is (every boots pair in the live probe measured lift 0.00) — slotting them
+    // here as well would say the same thing twice on one card.
+    slots: resolveBuildSlots(gameItems, sampleGames, {
+      include: (id) => classOf(id) === "completed",
+      minPct: minPct > 0 ? minPct : undefined,
+    }),
   };
 }
 

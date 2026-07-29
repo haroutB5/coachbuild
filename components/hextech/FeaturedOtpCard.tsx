@@ -68,7 +68,10 @@ import {
 } from "@/components/proAssets";
 import { getItemDetailMap, type ItemDetail } from "@/components/itemDetail";
 import { IconWithFallback } from "@/components/IconWithFallback";
-import { buildFeaturedView } from "@/lib/otp/featuredBuild";
+import { buildFeaturedView, classifyFeaturedItem } from "@/lib/otp/featuredBuild";
+import { resolveBuildSlots, type BuildSlot } from "@/lib/buildSlots";
+import BuildSlotList from "./BuildSlotList";
+import { isContested } from "./buildSlotView";
 import HeroBand, { Pill } from "./HeroBand";
 import KpiStrip, { type KpiItem } from "./KpiStrip";
 import PanelHeading from "./PanelHeading";
@@ -143,16 +146,12 @@ const MIN_SAMPLE_GAMES = 12;
  * boots split all live there. Do not reintroduce a local item rule here.
  */
 
-function Bar({ pct }: { pct: number }) {
-  return (
-    <div className="h-1 w-full rounded-full bg-white/[0.06] overflow-hidden" aria-hidden="true">
-      <div
-        className="h-full rounded-full bg-teal/75"
-        style={{ width: `${Math.max(2, Math.min(100, pct))}%` }}
-      />
-    </div>
-  );
-}
+/* The local `Bar` lived here until the rates list became a slot list. It drew
+ * ONE item's build rate on its own full track, which is the visual that made two
+ * competing items read as two independent things each mostly-full. Its
+ * replacement (BuildSlotList's `SlotBar`) draws one track per SLOT and divides
+ * it between the options, so the picture says "one decision, split". Do not
+ * reintroduce a per-item bar into a slot row. */
 
 /** Tag for the starter row. HARD RULE 2's partition made visible: a starting
  *  item sits in a labelled slot, never inside the completed-item list. */
@@ -365,6 +364,63 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
   // lane — but it is not a build slot and must not look like one.
   const starter = view.starters[0];
 
+  // ── The item spread, as SLOTS rather than as a list ────────────────────────
+  // A flat rates list showed Malignance 71% and Blackfire Torch 23% as two rows,
+  // which reads as "build both". Measured on this very card's data (Ahri, 111
+  // stored games) those two co-occur in ZERO games — they compete for one slot.
+  // `resolveBuildSlots` decides that from the per-game inventories by LIFT, not
+  // by a raw co-occurrence count; see lib/buildSlots.ts's header for the
+  // measurement and the threshold it fixes.
+  //
+  // The include predicate is `classifyFeaturedItem`, the SAME classifier
+  // `buildFeaturedView` uses above — deliberately not a second rule. Three rules
+  // for one question is how Doran's Bow shipped inside completed build lines
+  // (featuredBuild.ts's header), and a slot list disagreeing with the build
+  // strip directly above it about what an item IS would be that bug again.
+  //
+  // DEGRADED INPUT, ONE RENDER PATH: `gameItems` is optional on the response, so
+  // an older cached/SW body predating the field has no co-occurrence evidence at
+  // all. That case falls back to one settled slot per item — which is not a
+  // placeholder but the honest reading: with no evidence of competition, no
+  // competition is claimed, and a settled slot claims exactly nothing. The
+  // alternative (keeping the old flat list as a second branch) would be two
+  // renderings of one section, free to drift apart.
+  const gameItems = data!.gameItems ?? [];
+  const itemSlots: BuildSlot[] =
+    gameItems.length > 0
+      ? resolveBuildSlots(gameItems, sample.games, {
+          // `meta` passed as the THIRD arg, not just the per-item lookup: with a
+          // catalog `classifyFeaturedItem` resolves boots by recipe ancestry, and
+          // without one it falls back to the tag plus a pinned exception list.
+          // Item 3172 Gunmetal Greaves is a tier-3 boot whose live catalog record
+          // carries no `Boots` tag, so on the weaker rule it reads as a completed
+          // item and lands in a build slot — measured live on Yone mid at 178 of
+          // 200 games. This was the one call site still on that weaker path.
+          include: (id) => classifyFeaturedItem(id, meta.get(id), meta) === "completed",
+          minPct: MIN_DISPLAY_PCT,
+        })
+      : view.items.map((it) => ({
+          primary: { itemId: it.itemId, games: it.games, pct: it.pct },
+          alternatives: [],
+          sampleGames: sample.games,
+        }));
+  // Boots are ONE slot by the rules of the game — a player wears one pair — so
+  // this needs no co-occurrence evidence and does not go through
+  // `resolveBuildSlots`. `view.boots` is already ranked most-built first over
+  // the same stored-game denominator, which is exactly a go-to plus its
+  // alternatives.
+  const bootsSlot: BuildSlot | null =
+    view.boots.length > 0
+      ? {
+          primary: { itemId: view.boots[0].itemId, games: view.boots[0].games, pct: view.boots[0].pct },
+          alternatives: view.boots.slice(1).map((b) => ({ itemId: b.itemId, games: b.games, pct: b.pct })),
+          sampleGames: sample.games,
+        }
+      : null;
+  // Every slot the card can render, not just the item ones — the boots slot can
+  // be the only contested thing on a settled build (Heimerdinger, measured).
+  const hasContestedSlot = itemSlots.some(isContested) || (bootsSlot ? isContested(bootsSlot) : false);
+
   const winPct = Math.round((sample.wins / sample.games) * 100);
   // Below the floor we show WHO, never percentages — see MIN_SAMPLE_GAMES.
   const thinSample = sample.games < MIN_SAMPLE_GAMES;
@@ -465,8 +521,24 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
                       />
                     </span>
                     <span className="text-[12px] text-txt truncate">{itemName(starter.itemId)}</span>
-                    <span className="text-[12px] font-semibold text-txt tabular-nums ml-auto flex-shrink-0">
-                      {starter.pct}%
+                    {/* The fraction, not just the percentage. `sampleMeta` on
+                        the heading three lines up already states the sample, and
+                        that satisfied the section-level convention — but this
+                        was the ONE percentage on the card still travelling
+                        without its own denominator beside it, while every slot
+                        row below it prints "26/37". Same rule, same row, no
+                        exception to notice. The slash is aria-hidden and the
+                        words supplied, exactly as BuildSlotList's `Fraction`
+                        does, so a screen reader hears a sentence and not a
+                        division. */}
+                    <span className="ml-auto flex items-baseline gap-1.5 flex-shrink-0">
+                      <span className="text-[12px] font-semibold text-txt tabular-nums">
+                        {starter.pct}%
+                      </span>
+                      <span aria-hidden="true" className="text-[9.5px] text-mut tabular-nums">
+                        {starter.games}/{sample.games}
+                      </span>
+                      <span className="sr-only">{` in ${starter.games} of ${sample.games} games`}</span>
                     </span>
                   </div>
                 )}
@@ -521,84 +593,57 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
               </section>
             )}
 
-            {view.boots.length > 0 && (
-              <section className="mt-5">
+            {/* Above the FIRST section that can indent, not inside the item
+                section where it started. Screenshot-caught at 390px on
+                Heimerdinger: his item slots are all settled but his BOOTS slot
+                is not, so the card showed an indented "or Sorcerer's Shoes"
+                with the explanation suppressed — `hasContestedSlot` was reading
+                the item slots alone. One line, once, before anything it
+                governs, and gated on ALL the slots on the card. */}
+            {hasContestedSlot && (
+              <p className="mt-5 text-[10.5px] text-mut/80 leading-relaxed">
+                Indented items are built <span className="text-txt">instead of</span> the one above
+                them, not alongside it — they compete for the same slot.
+              </p>
+            )}
+
+            {bootsSlot && (
+              <section className="mt-4">
                 <PanelHeading meta={sampleMeta}>Boots</PanelHeading>
-                <ul className="mt-3 space-y-2">
-                  {view.boots.map((b) => (
-                    <li key={b.itemId} className="flex items-center gap-2.5">
-                      <span className="w-7 h-7 rounded-md border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
-                        <IconWithFallback
-                          src={itemIconUrl(b.itemId, ver)}
-                          alt=""
-                          fallbackGlyph={itemName(b.itemId)}
-                          className="w-full h-full object-contain"
-                          size={28}
-                        />
-                      </span>
-                      <span className="text-[12px] text-txt truncate">{itemName(b.itemId)}</span>
-                      <span className="ml-auto flex items-baseline gap-2 flex-shrink-0">
-                        <span className="text-[9.5px] text-mut tabular-nums">
-                          {b.games}/{sample.games}
-                        </span>
-                        <span className="text-[12px] font-semibold text-txt tabular-nums">{b.pct}%</span>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+                {/* ONE slot, not a list — screenshot-caught at 390px. This
+                    rendered "Crimson Lucidity 84%" and "Chainlaced Crushers
+                    14%" as two equal rows, which is the same claim the item
+                    list was making and is even less defensible here: a player
+                    wears exactly one pair of boots, so these two ALWAYS compete,
+                    by the rules of the game rather than by a measurement.
+                    Rendering it as anything other than one slot would leave the
+                    card contradicting itself two sections apart.
+                    The user's "show the top three boots with percentages"
+                    directive is intact — three options still render, with their
+                    own percentages, and `bootsMinDisplayPct: 0` still keeps a
+                    third boot at 8% from being filtered out. They are now shown
+                    as what they are: one choice, three ways. */}
+                <BuildSlotList slots={[bootsSlot]} ver={ver} nameOf={itemName} />
               </section>
             )}
 
-            {view.items.length > 0 && (
+            {itemSlots.length > 0 && (
               <section className="mt-5">
-                {/* Renamed from "Builds most often" now that a real build sits
-                    above it: this section's job is the SPREAD — how often each
-                    item shows up — which is what makes the build above readable
-                    as a preference rather than a rule. Boots are absent by
-                    design; they have their own slot. */}
-                {/* Short heading on purpose: measured at 390px, "How often they
-                    build each item" pushed the denominator meta onto its own
-                    line, breaking the shared baseline every other PanelHeading
-                    on this card keeps. */}
-                <PanelHeading meta={sampleMeta}>Build rates</PanelHeading>
-                <ul className="mt-3 space-y-2.5">
-                  {view.items.map((it) => (
-                    <li key={it.itemId} className="flex items-center gap-3">
-                      <span className="w-[30px] h-[30px] rounded-md border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
-                        <IconWithFallback
-                          src={itemIconUrl(it.itemId, ver)}
-                          alt=""
-                          fallbackGlyph={itemName(it.itemId)}
-                          className="w-full h-full object-contain"
-                          size={30}
-                        />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-baseline justify-between gap-2">
-                          <span className="text-[12.5px] text-txt truncate">{itemName(it.itemId)}</span>
-                          <span className="text-[12px] font-semibold text-txt tabular-nums flex-shrink-0">
-                            {it.pct}%
-                          </span>
-                        </div>
-                        {/* Bar capped rather than full-bleed: on a wide card
-                            a 900px rail for "79%" is a lot of ink for one
-                            number, and the eye stops tracking it. The bar is
-                            aria-hidden and never the only carrier — the
-                            percentage and the raw fraction are both text. */}
-                        <div className="mt-1 flex items-center gap-2 max-w-[420px]">
-                          <Bar pct={it.pct} />
-                          <span className="text-[9.5px] text-mut tabular-nums flex-shrink-0 w-[52px] text-right">
-                            {it.games}/{sample.games}
-                          </span>
-                        </div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                {/* "Build rates" was the old name, when this was a flat list of
+                    items with a percentage each. It is now a list of DECISIONS,
+                    and the heading has to say so — a reader who still reads it
+                    as a rates list will read two options in one row as two
+                    items to buy, which is the exact bug this section exists to
+                    end. Short on purpose: measured at 390px, a longer heading
+                    pushes the denominator meta onto its own line and breaks the
+                    shared baseline every other PanelHeading on this card keeps.
+                    Boots are absent by design; they have their own slot. */}
+                <PanelHeading meta={sampleMeta}>Item slots</PanelHeading>
+                <BuildSlotList slots={itemSlots} ver={ver} nameOf={itemName} />
               </section>
             )}
 
-            {view.items.length === 0 && !fullBuild && (
+            {itemSlots.length === 0 && !fullBuild && (
               <p className="text-[12px] text-mut">
                 No item reaches {MIN_DISPLAY_PCT}% across the games we hold yet.
               </p>

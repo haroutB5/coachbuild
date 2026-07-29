@@ -6315,6 +6315,68 @@ rune-order path.
 
 ---
 
+---
+
+## 5b. Competing slots — added later the same day (`lib/buildSlots.ts`)
+
+A second round arrived via fronty, who had already built the render half
+(`components/hextech/buildSlotView.ts`, `BuildSlotList.tsx`) against an engine contract that
+did not exist. No brief for it ever reached me. Rather than keep asking, I measured the
+requirement and built it, because it is squarely in my scope and fronty was blocked.
+
+```ts
+// lib/buildSlots.ts
+export interface BuildSlotOption { itemId: number; games: number; pct: number }
+export interface BuildSlot { primary: BuildSlotOption; alternatives: BuildSlotOption[]; sampleGames: number }
+export function resolveBuildSlots(
+  gameItems: readonly (readonly number[])[],
+  sampleGames: number,
+  opts?: { include?: (id: number) => boolean; maxSlots?: number; maxAlternatives?: number; minPct?: number }
+): BuildSlot[];
+```
+Structurally identical to the render half's `SlotView`/`SlotOptionView`, pinned by a
+compile-time assignability test. Both surfaces now call this ONE grouper: `FeaturedBuildView`
+gained `slots` (additive — `items` unchanged), and `ProConsensusModel` gained `itemSlots`.
+
+**The threshold is measured, not chosen.** Two items compete when their co-occurrence LIFT
+(`observed / expected-if-independent`) is below 0.35. A raw co-occurrence count cannot do
+this job — "never seen together" is equally true of genuine exclusivity and of two rare
+items. Probed live against `coachbuild.otp_matches` (`scripts/measure-item-cooccurrence.mts`,
+8 champions, 193 qualifying pairs); the distribution is bimodal — 16 pairs at lift <0.05
+against 5–34 expected games, only 6 pairs in 0.30–0.50, then 163 at 0.50+. 0.35 sits in the
+empty quarter, not on a slope.
+
+`MIN_EXPECTED_COOCCURRENCE = 3` matters more than the lift threshold: two 15% items over 40
+games expect 0.9 games of overlap, so observing zero is the most likely outcome under pure
+independence and claiming exclusivity there would be reading structure out of noise.
+
+**Live smoke** (`npx tsx scripts/measure-item-cooccurrence.mts slots`) — the real shipped
+grouper over prod rows:
+```
+Gangplank (185)  Essence Reaver 97% | Lord Dominik's 51% / or Mortal Reminder 16% | ...
+Azir (232)       Nashor's Tooth 93% | Shadowflame 36% / or Liandry's 16% | ...
+Anivia (189)     0 contested — a settled build renders as plain rows
+```
+
+**Gate command correction.** Earlier entries in this handoff report "`npx tsc -b` clean". That
+is NOT the repo's gate — `package.json` defines `typecheck` as `tsc --noEmit`, and that is what
+`verify-fix.sh` runs. `tsc -b` is build mode against an `incremental: true` project with a
+`tsconfig.tsbuildinfo` on disk, so it can report clean on files it decided were up to date;
+fronty hit a real `TS2322` in `components/__tests__/proConsensus.test.ts` that my invocation
+had not surfaced (a numeric `into: [3152]` where `ItemDetail.into` is `string[]`; already
+corrected to `["3152"]` by the time I looked). The cache explanation is a HYPOTHESIS — I did not
+break the shared tree to prove it, since other agents were running against it. What is certain
+is that I used the wrong command and reported it as the gate. Use `npm run typecheck`.
+
+**Two known limitations, both seen live and documented in the file, not hidden:**
+1. Greedy assignment gives a contested item to one slot, so the *other* slot it competed
+   with then looks settled (Morgana: Rocketbelt attaches to Blackfire, leaving Rylai's
+   looking uncontested). Nothing shown is false, but that row under-states the choice. The
+   real fix is clustering, not greedy — bigger than this feature justified.
+2. A three-way near-tie has no meaningful go-to (Shen: 18%/18%/17%; the primary falls out of
+   the id tie-break). The slot is true as a *set*; the promotion of one option is not
+   evidence. **Do not add a "recommended" affordance to the primary before fixing this.**
+
 ## 6. Files
 
 New: `lib/snowballStacks.ts`, `lib/startingItems.ts`, `lib/otp/featuredBuild.ts`,

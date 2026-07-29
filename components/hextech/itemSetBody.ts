@@ -126,25 +126,32 @@
 // which stay numeric — see runeApplyBody.ts's own header note on that
 // separate id space).
 //
-// ── Boots identification (why this is structural, not tag-based) ──────────
-// The brief for this restructure pointed at proConsensus.ts's
-// `isBootsTag`/`isBootsFinal` (tags-based, via ItemDetail metadata fetched
-// through getItemDetailMap) as "the boots detection the codebase already
-// has." That fetch is real but lives one layer up (itemSetsApply.ts /
-// proConsensus.ts) and operates on ItemDetail objects — v0.34.1 shipped this
-// module against `Pick` (lib/types.ts) alone, which carries no `tags` field,
-// so boots detection there had to be structural (items.boots / alts.boots /
-// pro.boots). v0.36.0 now ALSO threads real ItemDetail metadata in (for the
-// full-item rule — see below), so boots detection stays exactly as it was (structural — those three sources are
-// still the authoritative "this id is boots" signal; ItemDetail's own
-// "Boots" tag is used only inside isFullItem's tier-2-boots special case,
-// not to re-derive the boots-id set itself).
+// ── Boots identification (structural AND classified — both, on purpose) ───
+// v0.34.1 shipped this module against `Pick` (lib/types.ts) alone, which
+// carries no `tags` field, so boots detection had to be STRUCTURAL: an id is
+// boots because it arrived in a slot the contract calls boots (items.boots /
+// alts.boots / pro.boots / otp.boots). v0.36.0 threaded real ItemDetail
+// metadata in for the full-item rule but left boots detection structural only.
+//
+// 2026-07-29: structural-only was not enough, and the gap shipped. A boot the
+// live catalog forgets to TAG as one (3172 Gunmetal Greaves) gets partitioned
+// upstream into `pro.items`/`otp.items` instead of `.boots`, so it reached
+// `collectBootsIds` through no boots slot at all, `buildLine` counted it as a
+// full item, and a line went out holding Swiftmarch AND Gunmetal Greaves.
+// `collectBootsIds` now unions the structural sources with a CLASSIFIED pass
+// over every candidate id, using lib/bootsItems.ts — THE boots predicate,
+// shared with proConsensus.ts and lib/otp/featuredBuild.ts, which were both
+// carrying their own `tags.includes("Boots")` copy of the same wrong rule.
+// Read that module's header before touching any of this. The two sources are
+// kept because they fail in opposite directions: structural survives a total
+// metadata-fetch failure, classified survives a wrong upstream partition.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { ChampionRef, BuildResponse, ItemsBlock, Pick as PickType } from "@/lib/types";
 import type { ItemDetail } from "@/components/itemDetail";
 import { flattenSituational } from "./situational";
 import { resolveOptimizedPathView } from "./optimizedPath";
+import { isBootsItem, isFinalBootsItem, type ItemCatalog } from "@/lib/bootsItems";
 
 export interface ItemSetItem {
   id: string;
@@ -697,10 +704,13 @@ function dedupeById(cands: Candidate[]): Candidate[] {
  *    documented tradeoff: correctness over completeness for a line users
  *    will actually click "buy" against in the shop panel).
  *  - `purchasable === false` -> EXCLUDE.
- *  - Boots special case (mirrors proConsensus.ts's isBootsFinal exactly):
- *    a Boots-tagged item with a non-empty `from` (built from something) is
- *    a legitimate final choice even though the 2026 boots rework gives
- *    every tier-2 boot an optional tier-3 enchant `into` — "stopped at
+ *  - Boots special case — lib/bootsItems.ts's `isFinalBootsItem`, THE boots
+ *    rule for the whole app (2026-07-29; this file used to carry its own
+ *    `tags.includes("Boots")` copy, as did proConsensus.ts and
+ *    lib/otp/featuredBuild.ts, and all three were wrong about 3172 Gunmetal
+ *    Greaves together). A boots item with a non-empty `from` (built from
+ *    something) is a legitimate final choice even though the 2026 boots rework
+ *    gives every tier-2 boot an optional tier-3 enchant `into` — "stopped at
  *    tier 2" is a normal final build state, not an unfinished component.
  *  - LANE STARTERS -> EXCLUDE, structurally (see below).
  *  - Everything else: a genuine recipe-tree leaf (`into` empty) is full.
@@ -728,20 +738,24 @@ function dedupeById(cands: Candidate[]): Candidate[] {
  *  does not depend on anyone maintaining a list. */
 const LANE_STARTER_MAX_GOLD = 500;
 
-function isFullItem(itemId: number, meta: ItemDetail | undefined): boolean {
+function isFullItem(
+  itemId: number,
+  meta: ItemDetail | undefined,
+  catalog?: ItemCatalog
+): boolean {
   if (!meta) return false;
   if (meta.purchasable === false) return false;
   const tags = Array.isArray(meta.tags) ? meta.tags : [];
   const from = Array.isArray(meta.from) ? meta.from : [];
   const into = Array.isArray(meta.into) ? meta.into : [];
-  if (tags.includes("Boots") && from.length > 0) return true;
+  if (isFinalBootsItem(itemId, meta, catalog)) return true;
   const goldTotal = typeof meta.goldTotal === "number" ? meta.goldTotal : Number.POSITIVE_INFINITY;
   if (from.length === 0 && goldTotal <= LANE_STARTER_MAX_GOLD && tags.includes("Lane")) return false;
   return into.length === 0;
 }
 
 function fullItemsOnly(cands: Candidate[], itemMeta: ReadonlyMap<number, ItemDetail>): Candidate[] {
-  return cands.filter((c) => isFullItem(c.id, itemMeta.get(c.id)));
+  return cands.filter((c) => isFullItem(c.id, itemMeta.get(c.id), itemMeta));
 }
 
 /** Best (highest-weight) boots candidate across the fallback pools, in
@@ -823,21 +837,59 @@ function toItemRefs(cands: Candidate[]): ItemSetItem[] {
   return cands.map((c) => itemRef(c.id));
 }
 
-/** One id set covering every position the contract already knows is
- *  "boots" — see module header for why this is structural, not tag-based. */
+/** One id set covering every id `buildLine` must treat as boots.
+ *
+ *  TWO independent sources, deliberately, because each covers the other's blind
+ *  spot and the one-boots-per-line invariant must not rest on either alone:
+ *
+ *  1. POSITIONAL — ids that arrive in a slot the contract already CALLS boots
+ *     (`items.boots`, its alts, `pro.boots`, `otp.boots`). This needs no item
+ *     metadata, so it still works when the ddragon fetch failed entirely, and it
+ *     is what makes an upstream-declared boot recognisable even if the catalog
+ *     has never heard of the id. OTP boots must be in here or buildLine cannot
+ *     RECOGNISE an OTP-favoured boot and the one-boots rule silently
+ *     mis-classifies it as a full item — the same class of defect the Yuumi
+ *     missing-boots bug came from on the Pro line.
+ *
+ *  2. CLASSIFIED — every candidate id from every pool, run through
+ *     lib/bootsItems.ts's `isBootsItem` (2026-07-29). Source 1 alone was NOT
+ *     enough and shipped a real defect: a boot the catalog forgets to tag (3172
+ *     Gunmetal Greaves) is partitioned upstream into `pro.items`/`otp.items`
+ *     rather than `.boots`, so it reached this set through no positional slot at
+ *     all, buildLine counted it as a full item, and a line went out holding
+ *     Swiftmarch AND Gunmetal Greaves — two pairs of boots in one worn loadout.
+ *
+ *     Fixing the upstream partition (proConsensus.ts now shares the same rule)
+ *     removes today's instance. This clause is what removes the CLASS: the
+ *     invariant is now enforced here from the item data itself, so it holds even
+ *     when an upstream partition is wrong, which is exactly the condition under
+ *     which it shipped. Do not delete it as redundant with the upstream fix —
+ *     redundancy IS the point, and "an independent second aggregation will miss
+ *     the next fix" (CLAUDE.md gotcha (dd)) cuts both ways: a lone consumer
+ *     trusting its producer's classification will miss the next catalog gap.
+ *
+ *  @param candidateIds every id that can reach a build line — pass ALL of them.
+ *                      A missed id is a boot buildLine cannot see. A plain
+ *                      readonly array rather than an Iterable: this file's
+ *                      tsconfig target predates downlevel iteration, and the
+ *                      callers all build an array anyway.
+ *  @param meta         the item catalog; an empty map degrades this to source 1
+ *                      plus `BOOTS_ID_EXCEPTIONS`, never to a throw. */
 function collectBootsIds(
   items: ItemsBlock,
-  pro?: ProConsensusItemsInput | null,
-  otp?: ProConsensusItemsInput | null
+  pro: ProConsensusItemsInput | null | undefined,
+  otp: ProConsensusItemsInput | null | undefined,
+  candidateIds: readonly number[],
+  meta: ReadonlyMap<number, ItemDetail>
 ): Set<number> {
   const ids = new Set<number>([items.boots.id]);
   for (const alt of items.alts?.boots ?? []) ids.add(alt.id);
   if (pro) for (const b of pro.boots) ids.add(b.itemId);
-  // OTP boots must be in this set too, or buildLine cannot RECOGNISE an
-  // OTP-favoured boot as boots and the one-boots rule silently mis-classifies
-  // it as a full item — the same class of defect the Yuumi missing-boots bug
-  // came from on the Pro line.
   if (otp) for (const b of otp.boots) ids.add(b.itemId);
+  for (const id of candidateIds) {
+    if (ids.has(id)) continue;
+    if (isBootsItem(id, meta.get(id), meta)) ids.add(id);
+  }
   return ids;
 }
 
@@ -900,10 +952,22 @@ function baseSet(champ: ChampionRef, roleLabel: string): Omit<ItemSet, "blocks">
  *  their own blocks) → Pro build (only when pro-consensus data resolves,
  *  boots-deduped to the single highest-share pick) → OTP build (same shape,
  *  one-trick consensus) → Hidden gem (only when selectHiddenGemPicks finds a
- *  genuine under-played/over-performing pick). Pro build and OTP build each
- *  pad via optimized→situational→(the other consensus)→corePrimary, same
- *  cascade shape, so a champ with no `pro.boots`/`otp.boots` still gets a
- *  boots slot via the champ's own core boots. */
+ *  genuine under-played/over-performing pick).
+ *
+ *  PADDING CASCADES, stated exactly (this doc claimed a symmetry that never
+ *  existed — that both consensus lines padded from "the other consensus" —
+ *  which was wrong in both directions and is the kind of drift that hid the
+ *  2026-07-29 OTP defect for a release):
+ *    - WPA build → optimized, situational, proPool  (`generalFallback`)
+ *    - Pro build → optimized, situational, proPool, corePrimary
+ *      (proPool is its own primary, so its presence in the cascade is a no-op
+ *      after dedupe; otpPool has NEVER been in it)
+ *    - OTP build → optimized, situational, corePrimary  (`otpFallback` —
+ *      proPool deliberately absent, see that constant)
+ *    - Hidden gem → corePrimary, then `generalFallback`
+ *  corePrimary is last on both consensus lines because it is the only pool
+ *  guaranteed to carry `items.boots`, so a champ with no `pro.boots`/`otp.boots`
+ *  still gets a boots slot from the champ's own core boots. */
 export function buildItemSets(
   champ: ChampionRef,
   roleLabel: string,
@@ -922,7 +986,6 @@ export function buildItemSets(
   const meta = itemMeta ?? new Map<number, ItemDetail>();
   const hasPro = !!pro && (pro.items.length > 0 || pro.boots.length > 0);
   const hasOtp = !!otp && (otp.items.length > 0 || otp.boots.length > 0);
-  const bootsIds = collectBootsIds(items, hasPro ? pro : null, hasOtp ? otp : null);
 
   const corePicks = [items.first, items.second, items.third, items.boots, ...items.fourthPlus];
   const optimizedView = resolveOptimizedPathView(items);
@@ -959,6 +1022,27 @@ export function buildItemSets(
   // one-trick games" as if they were the same measurement. Each line reads
   // only its own ranking.
   const otpEntries = hasOtp ? [...otp!.boots, ...otp!.items] : [];
+
+  // Computed HERE, not at the top of the function, because it now classifies
+  // every candidate id and so must run after every candidate pool exists. The
+  // union below has to be exhaustive: an id `buildLine` can reach but this set
+  // never saw is a boot the one-boots invariant cannot enforce against (see
+  // `collectBootsIds`). `bootsIds` is not read until the buildLine calls far
+  // below, so the move is order-safe.
+  const bootsIds = collectBootsIds(
+    items,
+    hasPro ? pro : null,
+    hasOtp ? otp : null,
+    [
+      ...corePicks.map((p) => p.id),
+      ...(optimizedPicks ?? []).map((p) => p.id),
+      ...situationalPicks.map((p) => p.id),
+      ...proEntries.map((e) => e.itemId),
+      ...otpEntries.map((e) => e.itemId),
+    ],
+    meta
+  );
+
   const otpShareRanking = buildScaleRanking(
     "share",
     otpEntries.map((e) => ({ id: e.itemId, weight: e.share }))
@@ -985,6 +1069,47 @@ export function buildItemSets(
   // with just the core remainder (see below) — it's the one line that should
   // stay "this build, reordered/filled out," not reach into situational/pro.
   const generalFallback = [optimizedPrimary ?? [], situationalPoolFull, proPool];
+
+  // The OTP line's OWN cascade — `generalFallback` MINUS `proPool`.
+  //
+  // This array exists because the two are genuinely different rules and sharing
+  // one array is what let them drift: the comment above the OTP push site
+  // asserted for a release that `proPool` was not in that line's cascade while
+  // the code passed `generalFallback`, which contains it. The claim was the
+  // right rule and the code was the wrong implementation of it.
+  //
+  // WHAT THE RULE IS. A block's title is a claim about where its contents came
+  // from — the standing rule in this file. "OTP build" claims the champion's
+  // one-tricks built these items. Padding it from the PRO consensus produces a
+  // line neither population plays: the one-tricks' own picks up front, pro picks
+  // behind them, under a label that names only the first group. The champion's
+  // own WPA pools (optimized / situational / core) are a different case and stay
+  // in: they are not a rival population's build, they are the same champion's
+  // own model-ranked data, which is what every other line in this set is already
+  // built from.
+  //
+  // MEASURED DAMAGE, 2026-07-29, live prod across all 218 champion+role combos
+  // holding OTP games (harness drove this exact function against /api/build +
+  // /api/pros + /api/otp + the live 16.13.1 catalog):
+  //   - 1,307 OTP slots emitted; 17 of them (1.3%) came from `proPool`, on 11 of
+  //     218 lines (5.0%).
+  //   - It is entirely a THIN-SAMPLE defect. At >=50 stored one-trick games: ZERO
+  //     pro-sourced slots on 81 lines. At >=20: one line, 2 slots. Below 20
+  //     stored games: 10.3% of lines affected, worst case 3 of 6 slots
+  //     (Draven Mid, 1 stored game — Bloodthirster / Gunmetal Greaves / Infinity
+  //     Edge all arrived from the pro feed).
+  //   - The reason it is small is the cascade ORDER, not any guard: `optimized`
+  //     and `situational` sit ahead of `proPool` and the situational pool carries
+  //     a median of 7 full items, so it absorbs almost every shortfall first.
+  //     That is luck, not design — it makes the failure rare and invisible
+  //     rather than absent, and it concentrates it exactly where the OTP sample
+  //     is thinnest and a false label costs the most.
+  //
+  // buildLine already SHIPS SHORT rather than inventing when the remaining pools
+  // cannot reach six (its step 4), so removing a pool can only ever shorten a
+  // line, never leave a hole — verified live: Camille Mid already emits a 5-item
+  // OTP line today.
+  const otpFallback = [optimizedPrimary ?? [], situationalPoolFull];
 
   // Every build-line block is COLLECTED first and emitted last, so the
   // cross-family de-dup (audit P1-B) can see all of them at once. Emitting
@@ -1034,14 +1159,17 @@ export function buildItemSets(
   }
 
   if (hasOtp) {
-    // Same cascade shape as the Pro line above, and `corePrimary` last for the
-    // same load-bearing reason: it is the only pool guaranteed to carry
-    // `items.boots`, so without it a champ whose one-tricks never bought a
-    // tracked boot would ship a six-full-item line with no boots at all (the
-    // Yuumi Support defect). `proPool` is NOT in this cascade — padding an OTP
-    // line with pro items would produce a build neither group actually plays,
-    // and the block's label would then be a false claim about its own contents.
-    pushLine("OTP build", "otp", FAMILY_KEEP_RANK.otp, buildLine(otpPool, [...generalFallback, corePrimary], bootsIds));
+    // `otpFallback`, NOT `generalFallback` — see that constant for why `proPool`
+    // is excluded from this one line and what it measured before it was.
+    //
+    // `corePrimary` stays LAST for the load-bearing reason the Pro line above
+    // documents: it is the only pool guaranteed to carry `items.boots`, so
+    // without it a champ whose one-tricks never bought a TRACKED boot would ship
+    // a six-full-item line with no boots at all (the Yuumi Support defect). That
+    // is not hypothetical on this line — measured live, the boots slot is where
+    // most OTP padding actually lands: every Bot-lane one-trick line with a full
+    // six-item OTP pool still reaches outside it for footwear.
+    pushLine("OTP build", "otp", FAMILY_KEEP_RANK.otp, buildLine(otpPool, [...otpFallback, corePrimary], bootsIds));
   }
 
   // ── Hidden gem — the fourth and last category ─────────────────────────────

@@ -1508,3 +1508,87 @@ describe("snowball stacks are dropped from the items grid, and backfilled", () =
     expect(model.items.map((i) => i.itemId)).toEqual([ROCKETBELT]);
   });
 });
+
+// ── itemSlots: the same items, grouped by what they are built INSTEAD of ─────
+// The flat `items` list claims six things you build together. Measured on stored
+// games, whole pairs of them never co-occur once. These pin the two halves that
+// matter: that a genuinely-exclusive pair collapses into ONE slot, and that the
+// slot pool obeys the exact same partition chain `items` does — a starter, a
+// boot, a snowball stack or a component reaching a build slot would be HARD
+// RULE 2 (and the Mejai's directive) broken by a new code path.
+describe("aggregateProConsensus — itemSlots", () => {
+  const ALT_ITEM = 3157; // a second completed item, real id (Zhonya's)
+  const MEJAIS = 3041;
+
+  /** N games; `a` in the first `aCount`, `b` in the last `bCount`, so they never
+   *  share a game unless the counts overlap. */
+  function splitGames(n: number, a: number, aCount: number, b: number, bCount: number): ProGame[] {
+    return Array.from({ length: n }, (_, i) => {
+      const items: number[] = [];
+      if (i < aCount) items.push(a);
+      if (i >= n - bCount) items.push(b);
+      return game({ finalItems: items });
+    });
+  }
+
+  const completedMeta = itemMeta(item(ROCKETBELT), item(ALT_ITEM));
+
+  it("collapses a never-together pair into ONE slot, most-built as the go-to", () => {
+    // 20 games: Rocketbelt in 14 (70%), Zhonya's in 6 (30%), zero overlap.
+    // Expected overlap under independence is 4.2 games, so zero is a real
+    // signal rather than the noise MIN_EXPECTED_COOCCURRENCE guards against.
+    const model = aggregateProConsensus(splitGames(20, ROCKETBELT, 14, ALT_ITEM, 6), completedMeta);
+    expect(model.itemSlots).toHaveLength(1);
+    expect(model.itemSlots[0].primary).toEqual({ itemId: ROCKETBELT, games: 14, pct: 70 });
+    expect(model.itemSlots[0].alternatives).toEqual([{ itemId: ALT_ITEM, games: 6, pct: 30 }]);
+    // The flat ranking is unchanged and still lists both — the card renders
+    // slots, but nothing about `items` moved.
+    expect(model.items.map((i) => i.itemId)).toEqual([ROCKETBELT, ALT_ITEM]);
+  });
+
+  it("leaves two items that are always built together as two settled slots", () => {
+    const games = Array.from({ length: 20 }, () => game({ finalItems: [ROCKETBELT, ALT_ITEM] }));
+    const model = aggregateProConsensus(games, completedMeta);
+    expect(model.itemSlots).toHaveLength(2);
+    expect(model.itemSlots.every((s) => s.alternatives.length === 0)).toBe(true);
+  });
+
+  it("never lets a starter, a boot, a snowball stack or a component take a slot", () => {
+    const meta = itemMeta(
+      item(ROCKETBELT),
+      item(DARK_SEAL, { into: ["3041"] }),
+      item(MEJAIS),
+      item(SORCERERS_SHOES, { tags: ["Boots"], from: ["1001"], into: ["3175"] }),
+      item(NEEDLESSLY_LARGE_ROD, { into: ["3152"] })
+    );
+    const games = Array.from({ length: 20 }, () =>
+      game({ finalItems: [ROCKETBELT, DARK_SEAL, MEJAIS, SORCERERS_SHOES, NEEDLESSLY_LARGE_ROD] })
+    );
+    const model = aggregateProConsensus(games, meta);
+    const inSlots = model.itemSlots.flatMap((s) => [s.primary, ...s.alternatives].map((o) => o.itemId));
+    expect(inSlots).toEqual([ROCKETBELT]);
+    // And the carve-outs they belong to still hold, from the same one pass.
+    expect(model.starters.map((i) => i.itemId)).toEqual([DARK_SEAL]);
+    expect(model.boots.map((i) => i.itemId)).toEqual([SORCERERS_SHOES]);
+  });
+
+  it("quotes slots against itemsSampleSize, never gamesTotal", () => {
+    // 5 itemless rows (real: live-ingested prostage games write finalItems=[]).
+    // Dividing by all 25 would understate every percentage by the itemless
+    // share — the 2026-07-25 P1-2 bug, which a new code path must not reopen.
+    const games = [
+      ...Array.from({ length: 20 }, () => game({ finalItems: [ROCKETBELT] })),
+      ...Array.from({ length: 5 }, () => game({ source: "prostage" as const, finalItems: [] })),
+    ];
+    const model = aggregateProConsensus(games, completedMeta);
+    expect(model.gamesTotal).toBe(25);
+    expect(model.itemsSampleSize).toBe(20);
+    expect(model.itemSlots[0].sampleGames).toBe(20);
+    expect(model.itemSlots[0].primary.pct).toBe(100);
+  });
+
+  it("is empty when the sample carried no item data at all", () => {
+    const games = Array.from({ length: 5 }, () => game({ finalItems: [] }));
+    expect(aggregateProConsensus(games, completedMeta).itemSlots).toEqual([]);
+  });
+});

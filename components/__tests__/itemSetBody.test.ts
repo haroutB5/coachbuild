@@ -276,6 +276,100 @@ describe("buildItemSets — block set", () => {
   });
 });
 
+// ── The OTP line's cascade excludes the pro pool (2026-07-29) ───────────────
+//
+// The push site's comment claimed for a release that `proPool` was not in this
+// line's cascade while the code passed `generalFallback`, which contains it. The
+// claim was the right rule; the code was the wrong implementation of it, and no
+// test covered the difference — which is why the fixtures below are built so the
+// OTP pool is SHORT and the champion's own optimized/situational pools are
+// EMPTY. That is the only shape where the two behaviours differ at all, and it
+// is why a naive fixture would pass either way.
+//
+// Measured live before the fix (218 champion+role combos with OTP games): 17 of
+// 1,307 emitted slots came from the pro pool, on 11 lines. Entirely a
+// thin-sample defect — zero at >=50 stored games, worst case 3 of 6 slots on
+// Draven Mid at 1 stored game.
+
+describe("buildItemSets — the OTP line never borrows from the pro build", () => {
+  /** No `alts` and no `optimizedPath`, so `situationalPoolFull` and
+   *  `optimizedPrimary` are both empty and the cascade is forced past them —
+   *  straight into whatever comes next. Before the fix that was `proPool`. */
+  const bareItems = () => baseItems();
+
+  const shortOtp = { items: [{ itemId: 9001, share: 0.8 }], boots: [] as { itemId: number; share: number }[] };
+  const fatPro = {
+    items: [3200, 3153, 3020, 42, 100].map((itemId, i) => ({ itemId, share: 0.9 - i * 0.1 })),
+    boots: [{ itemId: 3111, share: 0.7 }],
+  };
+  const PRO_ONLY_IDS = [3200, 3153, 3020, 42, 100, 3111];
+
+  it("pads a short OTP line from the champion's own pools, never from pro items", () => {
+    const sets = buildItemSets(CHAMP, "Mid", baseBuild(bareItems()), fatPro, baseItemMetaMap(), shortOtp);
+    const otp = findBlock(sets, "OTP build")!;
+    const ids = otp.items.map((i) => Number(i.id));
+
+    // The one-trick's own pick leads.
+    expect(ids[0]).toBe(9001);
+    // Nothing that could ONLY have come from the pro feed is in the line.
+    for (const proOnly of PRO_ONLY_IDS) expect(ids).not.toContain(proOnly);
+    // ...and the Pro block beside it genuinely does carry those ids, so the
+    // assertion above is about the cascade and not about an empty pro fixture.
+    const pro = findBlock(sets, "Pro build")!;
+    expect(pro.items.map((i) => Number(i.id))).toEqual(expect.arrayContaining([3200, 3153]));
+  });
+
+  it("still gets boots when the one-tricks never bought a TRACKED boot (the Yuumi defect)", () => {
+    // `corePrimary` stays LAST in the cascade for exactly this: it is the only
+    // pool guaranteed to carry `items.boots`. Live, this is where most real OTP
+    // padding lands — every Bot-lane one-trick line with a full six-item OTP
+    // pool still reaches outside it for footwear.
+    const sixOtpItemsNoBoots = {
+      items: [9001, 9999, 8888, 42, 100, 101].map((itemId, i) => ({ itemId, share: 0.9 - i * 0.1 })),
+      boots: [] as { itemId: number; share: number }[],
+    };
+    const sets = buildItemSets(CHAMP, "Mid", baseBuild(bareItems()), fatPro, baseItemMetaMap(), sixOtpItemsNoBoots);
+    const ids = findBlock(sets, "OTP build")!.items.map((i) => Number(i.id));
+
+    expect(ids.filter((id) => BOOTS_IDS.has(id))).toEqual([3006]); // the champ's own core boots
+    expect(ids).not.toContain(3111); // NOT the pro feed's boot
+    expect(ids).toHaveLength(6);
+  });
+
+  it("emits a SHORT line rather than borrowing to reach six", () => {
+    // The whole point of the change: a short honest line beats a padded
+    // dishonest one. Metadata is withheld for 3036/3095/3072/3046 so isFullItem
+    // excludes them, leaving corePrimary as just {3031, boots 3006} — the
+    // champion's own pools genuinely cannot fill six slots.
+    const thinMeta = metaMap(meta(9001), meta(3031), bootsMeta(3006), meta(3200), meta(3153), meta(3020), meta(42), meta(100), bootsMeta(3111));
+    const sets = buildItemSets(CHAMP, "Mid", baseBuild(bareItems()), fatPro, thinMeta, shortOtp);
+    const ids = findBlock(sets, "OTP build")!.items.map((i) => Number(i.id));
+
+    // Boots go after the first 3 non-boots items, or after all of them when
+    // there are fewer than 3 (buildLine's `Math.min(3, others.length)`).
+    expect(ids).toEqual([9001, 3031, 3006]);
+    expect(ids.length).toBeLessThan(6);
+    for (const proOnly of PRO_ONLY_IDS) expect(ids).not.toContain(proOnly);
+  });
+
+  it("does not have the mirror problem: the Pro line never draws on the OTP pool", () => {
+    // Checked rather than assumed. `otpPool` has never been in `generalFallback`,
+    // so the Pro line cannot reach it — but the doc comment claimed a symmetry
+    // ("each pads via ... the other consensus") that was false in both
+    // directions, and a claim like that is exactly what stopped anyone noticing
+    // the OTP bug.
+    const shortPro = { items: [{ itemId: 3200, share: 0.8 }], boots: [] as { itemId: number; share: number }[] };
+    const fatOtp = {
+      items: [9001, 9999, 8888, 42, 100].map((itemId, i) => ({ itemId, share: 0.9 - i * 0.1 })),
+      boots: [{ itemId: 3111, share: 0.7 }],
+    };
+    const sets = buildItemSets(CHAMP, "Mid", baseBuild(bareItems()), shortPro, baseItemMetaMap(), fatOtp);
+    const ids = findBlock(sets, "Pro build")!.items.map((i) => Number(i.id));
+
+    for (const otpOnly of [9001, 9999, 8888, 3111]) expect(ids).not.toContain(otpOnly);
+  });
+});
+
 // ── Hidden gem ───────────────────────────────────────────────────────────────
 //
 // Occurrence values here mirror the REAL scale measured on patch 16.14 across

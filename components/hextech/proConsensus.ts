@@ -262,6 +262,8 @@ import type { ItemDetail } from "@/components/itemDetail";
 import { primaryMinorRow } from "./perkSlots";
 import { isSupportFinalItem, rankSupportFinals, type SupportFinalRanking } from "@/lib/supportFinalGroup";
 import { isSnowballStackItem } from "@/lib/snowballStacks";
+import { isBootsItem, isFinalBootsItem, type ItemCatalog } from "@/lib/bootsItems";
+import { resolveBuildSlots, type BuildSlot } from "@/lib/buildSlots";
 import { STARTING_ITEM_ALLOWLIST } from "@/lib/startingItems";
 
 export { STARTING_ITEM_ALLOWLIST };
@@ -395,15 +397,32 @@ export interface ProConsensusModel {
    *  BEFORE the top-6 slice, so the next-most-built item takes the slot and
    *  this list is still six long. */
   items: ItemFrequency[];
+  /** 2026-07-29 — the SAME population as `items`, grouped into build SLOTS: a
+   *  go-to plus the items that get built INSTEAD of it. Competition is decided
+   *  by LIFT over the raw per-game inventories, not by a raw co-occurrence count
+   *  (a "never seen together" is equally true of two mutually-exclusive items
+   *  and of two merely-rare ones) — see lib/buildSlots.ts for the measurement
+   *  and the threshold.
+   *
+   *  This is what the card renders. `items` is kept because it is still the
+   *  honest flat ranking and because itemSetsApply/itemSetBody read this model
+   *  for a real LCU loadout, where a "slot" is not a thing — a shop set holds
+   *  one concrete list. Both derive from ONE classification chain (see
+   *  `includeInSlot`), so they cannot disagree about what an item is.
+   *
+   *  Empty when the sample carried no item data at all — never a padded list. */
+  itemSlots: BuildSlot[];
   /** v0.28.0 — top 2 boots choices by pick rate, carved out of `items` so a
    *  champion with a split boots preference (e.g. Crimson Lucidity 35% vs.
    *  Spellslinger's Shoes 27%) occupies ONE grid slot instead of two,
    *  freeing a slot for an actual non-boots item. Partitioned from the SAME
-   *  completed-item counts `items` draws from (via `itemMeta`'s `tags`,
-   *  `Array.isArray(meta.tags) && meta.tags.includes("Boots")` — the same
-   *  defensive guard `isBootsFinal` uses) — an item with no metadata at all
-   *  is never classified as boots (stays out of this list, same "never
-   *  assume" posture as the rest of this module). share is against
+   *  completed-item counts `items` draws from, via lib/bootsItems.ts's
+   *  `isBootsItem` — THE boots rule for the whole app, tag OR recipe-ancestry
+   *  OR a pinned catalog gap, so a boot the live catalog forgot to tag (3172
+   *  Gunmetal Greaves) lands here rather than eating a completed-item slot. An
+   *  item with no metadata at all is never classified as boots (stays out of
+   *  this list, same "never assume" posture as the rest of this module). share
+   *  is against
    *  `itemsSampleSize`, same denominator as `items` — these are still two
    *  independent per-boot fractions, not a merged combined stat. */
   boots: ItemFrequency[];
@@ -578,44 +597,35 @@ const TOP_SHARDS_LIMIT = 3;
  * header carries the full note on the list's contents and its two rots
  * (Doran's Bow / Doran's Helm shipping inside completed build lines). */
 
-/** Boots special case — see module header (b). A tier-2 boot (e.g.
- *  Sorcerer's Shoes) still has an `into` pointing at its optional tier-3
- *  enchant, so it fails the plain empty-into check even though "stopped at
- *  tier 2" is a completely normal final build state.
- *
- *  Defensive against a malformed `meta`: this ultimately reads from
- *  JSON.parse'd localStorage (components/itemDetail.ts), and a real prod
- *  incident (v0.27.2 hotfix) showed a stale pre-v0.27.1 cache entry can
- *  arrive here with `tags`/`from` undefined even though ItemDetail's TYPE
- *  says they're always arrays — itemDetail.ts now normalizes on read/write,
- *  but this guards independently so a future shape change degrades instead
- *  of throwing (`Cannot read properties of undefined (reading 'includes')`). */
-function isBootsFinal(meta: ItemDetail): boolean {
-  return Array.isArray(meta.tags) && meta.tags.includes("Boots") && Array.isArray(meta.from) && meta.from.length > 0;
-}
-
-/** v0.28.0 — is this a boots item at all, for the items/boots grid partition
- *  (a lighter check than `isBootsFinal`, which additionally requires a
- *  non-empty `from` to exclude the raw tier-1 Boots). Reused here because a
- *  tier-1 raw Boots never reaches this function in the first place — it's
- *  already excluded by `isBuildItem` upstream — so `tags.includes("Boots")`
- *  alone is sufficient once an id has passed that filter. No metadata at all
- *  -> never classified as boots (same "never assume" default as the rest of
- *  this module). */
-function isBootsTag(meta: ItemDetail | undefined): boolean {
-  return !!meta && Array.isArray(meta.tags) && meta.tags.includes("Boots");
-}
-
 /** True when `itemId` belongs in the aggregated items list — a real build
  *  choice, not a mid-build component. Exported for direct unit testing.
  *
- *  Guards `meta.into` the same defensive way isBootsFinal guards
- *  `tags`/`from` — see that function's comment for why. */
-export function isBuildItem(itemId: number, meta: ItemDetail | undefined): boolean {
+ *  The boots special case (see module header (b)) is now `isFinalBootsItem`
+ *  from lib/bootsItems.ts — a tier-2 boot still has an `into` pointing at its
+ *  optional tier-3 enchant, so it fails the plain empty-into check even though
+ *  "stopped at tier 2" is a completely normal final build state. That module is
+ *  THE boots rule for the whole app; this file no longer carries its own copy
+ *  (2026-07-29 — see that header for the 3172 Gunmetal Greaves catalog gap the
+ *  three private copies all missed together).
+ *
+ *  `catalog` is optional and additive: with it, the boots rule can walk an
+ *  item's recipe and catch a boot the catalog forgot to tag. Existing callers
+ *  that pass only two arguments still compile and still classify every KNOWN
+ *  catalog gap correctly via `BOOTS_ID_EXCEPTIONS`.
+ *
+ *  Guards `meta.into` the same defensive way lib/bootsItems.ts guards
+ *  `tags`/`from` — a stale pre-v0.27.1 localStorage entry can arrive with those
+ *  fields undefined even though ItemDetail's TYPE says they are always arrays
+ *  (real prod incident, v0.27.2 hotfix). */
+export function isBuildItem(
+  itemId: number,
+  meta: ItemDetail | undefined,
+  catalog?: ItemCatalog
+): boolean {
   if (STARTING_ITEM_ALLOWLIST.has(itemId)) return true;
   if (!meta) return false; // unknown item data — exclude rather than assume
   if (meta.purchasable === false) return false;
-  if (isBootsFinal(meta)) return true;
+  if (isFinalBootsItem(itemId, meta, catalog)) return true;
   // Array.isArray guard (not just `meta.into.length === 0`): a malformed/
   // legacy meta with `into` missing entirely is unknown, not "finished" —
   // same "never assume, never invent" posture as the `!meta` branch above,
@@ -869,6 +879,15 @@ export function aggregateProConsensus(
 ): ProConsensusModel {
   const gamesTotal = games.length;
 
+  // THE boots question, asked once per id against lib/bootsItems.ts and never
+  // re-derived below. `itemMeta` is passed as the catalog so the recipe-ancestry
+  // clause can run — that is what catches a boot the live catalog forgot to tag
+  // (3172 Gunmetal Greaves; see lib/bootsItems.ts). This partition decides which
+  // GRID SLOT an item lands in, so it asks `isBootsItem`, not
+  // `isFinalBootsItem`: an id that reached here has already passed
+  // `isBuildItem`, which excludes raw tier-1 Boots on its own.
+  const isBoots = (itemId: number): boolean => isBootsItem(itemId, itemMeta.get(itemId), itemMeta);
+
   const itemCounts = new Map<number, number>();
   const keystoneCounts = new Map<number, number>();
   const spellPairCounts = new Map<string, number>();
@@ -905,7 +924,7 @@ export function aggregateProConsensus(
     const seenItems = new Set<number>();
     for (const itemId of rawFinalItems) {
       if (!itemId || CONSUMABLE_ITEM_IDS.has(itemId)) continue;
-      if (!isBuildItem(itemId, itemMeta.get(itemId))) continue;
+      if (!isBuildItem(itemId, itemMeta.get(itemId), itemMeta)) continue;
       seenItems.add(itemId);
     }
     seenItems.forEach((itemId) => bump(itemCounts, itemId));
@@ -974,7 +993,7 @@ export function aggregateProConsensus(
   const items: ItemFrequency[] = sortedItemEntries
     .filter(
       ([itemId]) =>
-        !isBootsTag(itemMeta.get(itemId)) &&
+        !isBoots(itemId) &&
         !STARTING_ITEM_ALLOWLIST.has(itemId) &&
         !isSupportFinalItem(itemId) &&
         !isSnowballStackItem(itemId)
@@ -982,11 +1001,11 @@ export function aggregateProConsensus(
     .slice(0, TOP_ITEMS_LIMIT)
     .map(toFrequency);
   const boots: ItemFrequency[] = sortedItemEntries
-    .filter(([itemId]) => isBootsTag(itemMeta.get(itemId)))
+    .filter(([itemId]) => isBoots(itemId))
     .slice(0, TOP_BOOTS_LIMIT)
     .map(toFrequency);
   const starters: ItemFrequency[] = sortedItemEntries
-    .filter(([itemId]) => !isBootsTag(itemMeta.get(itemId)) && STARTING_ITEM_ALLOWLIST.has(itemId))
+    .filter(([itemId]) => !isBoots(itemId) && STARTING_ITEM_ALLOWLIST.has(itemId))
     .slice(0, TOP_STARTERS_LIMIT)
     .map(toFrequency);
   // The boots/starter exclusions are repeated here rather than assumed away:
@@ -997,10 +1016,45 @@ export function aggregateProConsensus(
   // held); TOP_SUPPORT_FINALS_LIMIT is applied here, to the flattened
   // top-then-alternatives order, so the cap trims the weakest runners-up and
   // can never drop the top pick.
+  // ── The SAME six items, grouped into slots (2026-07-29) ───────────────────
+  // `items` above is a flat top-6 ranking, and a flat ranking makes a claim it
+  // cannot support: that the six are things you build TOGETHER. Measured on
+  // stored one-trick games, whole pairs of them never co-occur once (Ahri:
+  // Malignance 71%, Blackfire Torch 23%, 0 games together out of 111). Those are
+  // one decision shown as two rows.
+  //
+  // `resolveBuildSlots` re-derives the same pool from the RAW per-game
+  // inventories — it needs the co-occurrence evidence, which a frequency map has
+  // already thrown away — and attaches competing items to the go-to they lose
+  // to. The `include` predicate is this file's own partition chain, repeated
+  // exactly, so a slot can never contain an item the `items` list would have
+  // excluded (boots, starter, support final, snowball stack, consumable,
+  // component). Same denominator as every other item fraction on this card
+  // (`itemsSampleSize`, NOT gamesTotal), passed in explicitly for that reason.
+  //
+  // `items` stays on the model and is still the honest flat ranking; the card
+  // renders `itemSlots`. Both are computed from one classification chain, so
+  // they cannot disagree about what an item is.
+  const includeInSlot = (itemId: number): boolean => {
+    if (CONSUMABLE_ITEM_IDS.has(itemId)) return false;
+    const meta = itemMeta.get(itemId);
+    if (!isBuildItem(itemId, meta, itemMeta)) return false;
+    if (isBoots(itemId)) return false;
+    if (STARTING_ITEM_ALLOWLIST.has(itemId)) return false;
+    if (isSupportFinalItem(itemId)) return false;
+    if (isSnowballStackItem(itemId)) return false;
+    return true;
+  };
+  const itemSlots = resolveBuildSlots(
+    games.map((g) => g.finalItems ?? []),
+    itemsSampleSize,
+    { include: includeInSlot, maxSlots: TOP_ITEMS_LIMIT }
+  );
+
   const supportFinalEntries: ItemFrequency[] = sortedItemEntries
     .filter(
       ([itemId]) =>
-        !isBootsTag(itemMeta.get(itemId)) &&
+        !isBoots(itemId) &&
         !STARTING_ITEM_ALLOWLIST.has(itemId) &&
         isSupportFinalItem(itemId)
     )
@@ -1134,6 +1188,7 @@ export function aggregateProConsensus(
   return {
     gamesTotal,
     items,
+    itemSlots,
     boots,
     starters,
     supportFinals,
