@@ -1,7 +1,46 @@
 # CoachBuild — handoff
 
-**Current state: 2026-07-27 evening — web `v0.67.0`, overlay-host `v0.4.0`, companion `1.9.0`.**
-Prod: `coachbuild.vercel.app` (verified live). All gates green (tsc, lint, **1859** tests, build).
+**Current state: 2026-07-29 — web `v0.73.1`.** Prod: `coachbuild.vercel.app` (verified live).
+All gates green (tsc, lint, **1945** tests, build).
+
+## Latest: the OTP section is one named one-trick, not eight averaged (v0.72.0 → v0.73.1)
+
+The old block averaged eight one-tricks. Averaging removes exactly the disagreement that made them
+worth reading, and what survives is the same core the WPA and Pro cards already show. It now
+features ONE account and shows what THEY build, with the percentage of their games each item appears
+in. **Viktor → Dun#NA1**, **Akshan → Phanta#107** — both reproduce the user's own picks.
+
+- **Selection: `lib/otp/onetricks.ts`** parses onetricks.gg's ranking and takes the highest-LP row
+  the site flags as a one-trick with **150+ games**. That flag is load-bearing: Viktor's LP leader is
+  Splash at 2486 LP who plays Viktor only **33%** of the time and is NOT flagged. op.gg cannot
+  replace this — it ranks by games played and exposes only ten players per region, which is why
+  Phanta#107 was absent from all nine regions.
+- **`lib/otp/featured.ts`** resolves the Riot ID to a puuid (the id in onetricks URLs is
+  site-scoped and Riot rejects it) and PROBES the routings, because a leaderboard's server label is
+  not where the account plays — Phanta#107 resolves on `americas` and plays on `europe`.
+- **`GET /api/otp/featured`**, **`components/hextech/FeaturedOtpCard.tsx`**, migration **0018**.
+- **Ingest is LOCAL-ONLY**: `scripts/ingest-otp-featured.mjs` drives Chrome via a
+  `puppeteer-core` devDependency, because onetricks.gg returns HTTP 429 to plain fetches and 200 to
+  a browser. The Next app never imports it. ~70s per champion at `--matches 40`.
+
+### Two "minimum games" numbers, and both are needed
+The 150 floor is the account's CAREER on the champion. How many of their games we have STORED is a
+different number and they come apart: Lee Sin's featured Grandmaster had 7 stored, and the card
+quoted 71% off five games. Below **12 stored games** the card now shows who the player is and says it
+is still collecting.
+
+### Coverage and the scheduled job
+102 champions featured at handoff, all with stored games, median 32 each. A backfill may still be
+running — check before starting another Riot-calling job.
+`scripts/ingest-otp-featured-scheduled.ps1` exists but is **deliberately NOT registered**; its
+header explains the two safe ways to slot it against the existing 6h jobs.
+
+### Also in this window
+**v0.72.0** drops a build block that adds at most one item a higher-priority block already has. The
+old de-dup required an identical set, which almost never happened, so near-copies survived. Measured
+across six champions afterwards: 3-5 blocks each, none gutted.
+
+---
 
 > **NEW SECOND COMPONENT: `overlay-host/`** — an Electron in-game overlay, published as installers to
 > the PUBLIC repo `haroutB5/coachbuild-overlay-releases` (source repo stays private). It draws a pink
