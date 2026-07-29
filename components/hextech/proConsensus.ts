@@ -261,6 +261,10 @@ import { CONSUMABLE_ITEM_IDS, treeIconUrl, treeName, shardIconUrl, shardName } f
 import type { ItemDetail } from "@/components/itemDetail";
 import { primaryMinorRow } from "./perkSlots";
 import { isSupportFinalItem, rankSupportFinals, type SupportFinalRanking } from "@/lib/supportFinalGroup";
+import { isSnowballStackItem } from "@/lib/snowballStacks";
+import { STARTING_ITEM_ALLOWLIST } from "@/lib/startingItems";
+
+export { STARTING_ITEM_ALLOWLIST };
 import { TREE_NAME } from "@/lib/types";
 import type { Pick as PickType, RunesBlock, ShardSet, TreeId } from "@/lib/types";
 
@@ -383,7 +387,13 @@ export interface ProConsensusModel {
    *  Blackfire Torch/Rabadon's/etc.) so this list is never diluted by either.
    *  2026-07-26: the five support-quest FINALS are likewise carved out into
    *  `supportFinals` below — they are mutually exclusive, so listing more
-   *  than one of them here spent multiple slots on a single choice. */
+   *  than one of them here spent multiple slots on a single choice.
+   *  2026-07-29: SNOWBALL STACKS (Mejai's Soulstealer, `lib/snowballStacks.ts`)
+   *  are DROPPED rather than carved out — unlike boots/starters/support finals
+   *  they get no slot of their own, because a snowball stack is not a build
+   *  choice this card should present at all (hard user directive). Dropped
+   *  BEFORE the top-6 slice, so the next-most-built item takes the slot and
+   *  this list is still six long. */
   items: ItemFrequency[];
   /** v0.28.0 — top 2 boots choices by pick rate, carved out of `items` so a
    *  champion with a split boots preference (e.g. Crimson Lucidity 35% vs.
@@ -559,40 +569,14 @@ const TOP_PRIMARY_MINORS_LIMIT = 3;
 const TOP_SECONDARY_PICKS_LIMIT = 2;
 const TOP_SHARDS_LIMIT = 3;
 
-/** Explicit starting-item allowlist (requirement #3) — see the module header
- *  comment for which entries are load-bearing today (Dark Seal, Tear of the
- *  Goddess — both have a real `into` upgrade path) vs. pinned defensively
- *  (everything else here is already empty-into and would pass the general
- *  completed-item rule on its own). */
-export const STARTING_ITEM_ALLOWLIST = new Set<number>([
-  1054, // Doran's Shield
-  1055, // Doran's Blade
-  1056, // Doran's Ring
-  1082, // Dark Seal — upgrades into Mejai's Soulstealer; still a real build choice
-  1083, // Cull
-  1086, // Doran's Bow — MISSING until 2026-07-25; see the note below
-  1120, // Doran's Helm — MISSING until 2026-07-25; see the note below
-  3070, // Tear of the Goddess — upgrades into Manamune/Archangel's/Winter's Approach/Whispering Circlet
-  3865, // World Atlas (support starter)
-  2049, // Guardian's Amulet (support starter)
-  2050, // Guardian's Shroud (support starter)
-]);
-
-/* WHY 1086/1120 WERE MISSING FOR SO LONG, AND WHY THIS LIST IS NO LONGER THE
- * ONLY GUARD. Both are `into: []`, so `isFullItem` in itemSetBody.ts passed
- * them as genuine recipe-tree leaves, and this list was the only thing that
- * would have held them out — except neither was on it. They shipped inside
- * completed 6-item build lines in production: Doran's Bow in Ashe/Jinx/
- * Caitlyn/Lucian/Ezreal "Pro build", Doran's Helm in Ornn/Darius/Malphite,
- * and ProConsensusCard rendered "Doran's Bow 43%" in its completed-items grid
- * — exactly the display the 2026-07-22 Dark Seal directive banned.
- *
- * An enumeration that must be updated by hand every time Riot ships an item is
- * a guard that will rot again, and this one now has twice. `isFullItem` grew a
- * STRUCTURAL lane-starter rule (from-nothing + cheap + "Lane"-tagged) so the
- * class is caught without anyone maintaining a list; this stays as
- * belt-and-braces and as the partition key for the `starters` field. Add new
- * ids here when you notice them, but do not rely on that being sufficient. */
+/* STARTING_ITEM_ALLOWLIST moved to lib/startingItems.ts on 2026-07-29 and is
+ * re-exported (above) so every existing import site is unchanged. It moved for
+ * the same reason SUPPORT_FINAL_ITEMS did on 2026-07-26: lib/otp/featuredBuild.ts
+ * needs the same starter partition, and lib/ importing a value out of
+ * components/ would have dragged this module's whole graph — proAssets and its
+ * CDN fetches included — into it for the sake of eleven integers. That file's
+ * header carries the full note on the list's contents and its two rots
+ * (Doran's Bow / Doran's Helm shipping inside completed build lines). */
 
 /** Boots special case — see module header (b). A tier-2 boot (e.g.
  *  Sorcerer's Shoes) still has an `into` pointing at its optional tier-3
@@ -976,12 +960,24 @@ export function aggregateProConsensus(
   // live 16.13.1 item.json), and World Atlas (3865, the chain's STARTER) is
   // allowlisted and so still lands in `starters`, where it belongs. See the
   // module header's "Support-quest finals get ONE slot" section.
+  // 2026-07-29: snowball stacks (Mejai's Soulstealer) excluded here, and the
+  // POSITION of that check is the fix, not the check itself. It sits inside the
+  // `.filter` that runs BEFORE `.slice(0, TOP_ITEMS_LIMIT)`, so dropping
+  // Mejai's promotes the seventh-most-built item into the freed slot and the
+  // grid still shows six. Excluding after the slice would have left a five-item
+  // grid with a hole in it — the user's directive was "put another full item in
+  // its place", and this ordering is what delivers the second half.
+  // Dark Seal (also a snowball stack) is already held out by the
+  // STARTING_ITEM_ALLOWLIST clause on the line above and keeps its own
+  // `starters` slot untouched — see lib/snowballStacks.ts on why that is
+  // deliberate and not an oversight.
   const items: ItemFrequency[] = sortedItemEntries
     .filter(
       ([itemId]) =>
         !isBootsTag(itemMeta.get(itemId)) &&
         !STARTING_ITEM_ALLOWLIST.has(itemId) &&
-        !isSupportFinalItem(itemId)
+        !isSupportFinalItem(itemId) &&
+        !isSnowballStackItem(itemId)
     )
     .slice(0, TOP_ITEMS_LIMIT)
     .map(toFrequency);

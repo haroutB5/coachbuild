@@ -88,6 +88,26 @@ describe("buildFeaturedModel", () => {
 
   it("reports zero games without dividing by zero", () => {
     const m = buildFeaturedModel([]);
-    expect(m).toEqual({ games: 0, wins: 0, items: [], runes: null, spells: null });
+    expect(m).toEqual({ games: 0, wins: 0, items: [], gameItems: [], runes: null, spells: null });
+  });
+
+  it("returns the per-game inventories the full-build slot needs", () => {
+    // `items` above is a per-item aggregate and cannot answer "which items did
+    // they finish holding TOGETHER" — see lib/otp/featuredBuild.ts on why an
+    // assembled build and an observed one must not be confusable.
+    const m = buildFeaturedModel([
+      game({ final_items: [3100, 6653, 3100] }),
+      game({ final_items: [4645] }),
+      game({ final_items: null }),
+    ]);
+    // Deduped within a game, one entry per row, and a malformed row keeps its
+    // slot as [] so the array stays index-aligned with the games it describes.
+    expect(m.gameItems).toEqual([[3100, 6653], [4645], []]);
+    expect(m.gameItems).toHaveLength(m.games);
+  });
+
+  it("applies the caller's item filter to the per-game inventories too", () => {
+    const m = buildFeaturedModel([game({ final_items: [3100, 2003] })], (id) => id !== 2003);
+    expect(m.gameItems).toEqual([[3100]]);
   });
 });

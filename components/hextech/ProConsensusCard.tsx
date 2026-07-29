@@ -17,6 +17,7 @@ import {
   type ProConsensusModel,
   type RuneSlotBreakdown,
 } from "./proConsensus";
+import { sortPerksByRow } from "./perkSlots";
 import { buildRuneApplyBody } from "./runeApplyBody";
 import { applyItemSetsForBuild } from "./itemSetsApply";
 import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/components/live/companionClient";
@@ -661,6 +662,27 @@ function ConsensusRuneTile({
   );
 }
 
+/* RUNE DISPLAY ORDER IS THE TREE ROW, NEVER THE PICK RATE (2026-07-29).
+ *
+ * USER BUG (screenshot, a Domination page): the card rendered Electrocute ->
+ * Ultimate Hunter -> Taste of Blood -> Grisly Mementos. Nothing was wrong with
+ * the data — `primaryMinors.entries` arrives sorted by COUNT (proConsensus.ts's
+ * `sortEntries`) and Ultimate Hunter was simply the most-picked minor. But it
+ * sits in Domination's LAST minor row, so a frequency sort printed the bottom
+ * of the tree in second position. This card's whole claim (v0.28.0: "runes are
+ * set as in game") is that it reads like the in-game page, and an in-game page
+ * is read top to bottom. The percentage stays on every tile, so sorting by row
+ * instead of by rate loses nothing.
+ *
+ * `sortPerksByRow` (perkSlots.ts) is the shared resolver — a pure lookup over
+ * the static PERK_TREES snapshot, NO fetch anywhere in the path, so this order
+ * cannot be broken by a failed request. It is the same map the rune-APPLY path
+ * has used for slot coherence since 2026-07-22, so display order and applied
+ * order cannot disagree. Unknown ids sort to the end deterministically.
+ *
+ * Display-only: it returns a new array, so the model the apply path reads is
+ * untouched. */
+
 /** Honest sub-sample caption for a rune-slot breakdown — "from N games", or
  *  "from N solo-queue games" when the sample is entirely soloq-sourced
  *  (structurally true for shards today, see proConsensus.ts's header), or a
@@ -998,8 +1020,233 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
           IIFE below). This wrapper carries NO un-prefixed grid/flex classes
           — below `lg` it is a plain block and both children stack exactly
           as before (byte-identical to pre-v0.63.2). */}
+      {/* 2026-07-29 — RUNES NOW COME FIRST, matching the WPA build page.
+          The BUILD tab's own order is Runes & Summoners -> Item Build -> Skill
+          Order (BuildTabContent.tsx: DOM order below `lg`, and the
+          `'runes_itembuild'` template at `lg`+). This card had the opposite
+          order, so a user moving between the BUILD and PRO tabs met the same
+          two sections in reverse. User directive: "just like the template for
+          the regular build WPA page."
+
+          The split is `5fr_7fr` — the BUILD tab's own proportions, arrived at
+          by MEASURING rather than by copying. v0.63.2 gave the rune group the
+          wider track on the reasoning that it "needs the other ~60%". That was
+          true when it sat on the RIGHT of a taller item column; with the order
+          flipped it stops being true, because the tall column is now the one
+          that has to be fed. Measured live on Viktor mid @1440x900, all three
+          splits, computed heights:
+
+            7fr_5fr  runes 272px / items 615px -> card 747px (343px dead)
+            6fr_6fr  runes 503px / items 614px -> card 746px (111px dead)
+            5fr_7fr  runes 503px / items 500px -> card 635px (~3px dead)
+
+          No horizontal overflow in ANY of the three (the inner rune grid's
+          scrollWidth equalled its clientWidth every time) — the rune group
+          simply wraps to a second row at 440px, which costs 231px of height
+          and buys 176px for the item grid, which saves more than that. So the
+          card is 112px shorter AND better balanced, and it now matches the
+          BUILD tab's column proportions as well as its section order. Below
+          `lg` this wrapper is a plain block and the children stack in DOM
+          order. */}
       <div className="lg:grid lg:grid-cols-[5fr_7fr] lg:gap-x-10 lg:items-start">
         <div>
+        {(() => {
+        // Local consts (not `model.keystone` inline) so TS's null-narrowing
+        // survives into the nested onClick closures below — narrowing a
+        // property access does NOT persist across a function boundary, only
+        // a local const does.
+        const keystone = model.keystone;
+        const secondaryTree = model.secondaryTree;
+        const spellPair = model.spellPair;
+        const hasPrimaryCol = Boolean(keystone) || model.primaryMinors.entries.length > 0;
+        const hasSecondaryCol = Boolean(secondaryTree) || model.secondaryPicks.entries.length > 0 || model.shards.entries.length > 0;
+        if (!hasPrimaryCol && !hasSecondaryCol && !spellPair) return null;
+        // v0.28.0 (user request: "put the additional runes as the layout...
+        // runes are set as in game. Don't put them like that separately") —
+        // composed as ONE in-game-style rune page (primary column: keystone
+        // + its minors below; secondary column: tree label + 2 picks + stat
+        // shards; summoners column), the same layout vocabulary
+        // RunesSummonersCard already uses on the BUILD tab for the WPA
+        // recommendation, adapted here to a pick-rate fraction per tile
+        // instead of a WPA score. No "Additional Runes" sub-section anymore —
+        // minors/picks/shards render directly under their owning tree.
+        return (
+        // v0.63.2: `lg:grid-cols-[auto_auto_auto] lg:justify-start` overrides
+        // the md:1.5fr/1.1fr/auto fr-stretch ONLY at `lg`+ (this card's own
+        // column is now narrower than the full row there — see the split
+        // above). Verified via computed style (Chrome): with three `auto`
+        // tracks and no `fr` track present, the grid sizing algorithm still
+        // distributes the container's free space across all three columns
+        // in the Maximize Tracks step, but PROPORTIONAL TO EACH COLUMN'S OWN
+        // max-content contribution — a heavier column (e.g. a 4-tile Primary
+        // rune row) claims more of the extra space than a 2-tile Summoners
+        // column, unlike the old fixed 1.5fr/1.1fr/auto ratio which had NO
+        // relationship to actual content and produced arbitrary, unrelated
+        // gaps. Screenshot-verified across three champion shapes (Brand
+        // support, Viktor mid, Ornn top) — the proportional growth reads as
+        // evenly distributed, not stretched-then-abandoned. Below `lg`
+        // (including the existing md/tablet range) this is untouched — same
+        // 1.5fr/1.1fr/auto stretch as before.
+        <div className="grid grid-cols-1 md:grid-cols-[1.5fr_1.1fr_auto] lg:grid-cols-[auto_auto_auto] lg:justify-start gap-x-8 gap-y-5 mb-1">
+          {hasPrimaryCol && (
+            <div>
+              {/* v0.29.0: the page is now conditioned on the modal keystone's
+                  TREE, so show that tree as the PRIMARY header (icon + name),
+                  mirroring the secondary tree header — the data is already at
+                  hand (model.primaryTree). Falls back to the plain "Primary"
+                  label when the tree couldn't be resolved from the sample. */}
+              {model.primaryTree ? (
+                <div className="flex items-center gap-2 mb-2.5">
+                  <span className="w-5 h-5 rounded-full bg-black/20 overflow-hidden flex items-center justify-center flex-shrink-0">
+                    <IconWithFallback
+                      src={treeIconUrl(model.primaryTree)}
+                      alt={treeName(model.primaryTree)}
+                      fallbackGlyph={treeName(model.primaryTree)}
+                      className="w-full h-full object-contain"
+                      size={20}
+                    />
+                  </span>
+                  <span className="text-[11.5px] text-txt font-semibold">{treeName(model.primaryTree)}</span>
+                </div>
+              ) : (
+                <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2.5">Primary</p>
+              )}
+              <div className="flex flex-wrap items-end gap-2.5">
+                {keystone && (
+                  <ConsensusRuneTile
+                    size="lg"
+                    count={keystone.count}
+                    denom={model.runesSampleSize}
+                    name={names.keystone?.name ?? `Rune #${keystone.keystoneId}`}
+                    icon={names.keystone?.icon ?? ""}
+                    onClick={() => onOpenDetail("rune", keystone.keystoneId)}
+                  />
+                )}
+                {/* Tree-row order, not pick-rate order — see the note above. */}
+                {sortPerksByRow(model.primaryTree, model.primaryMinors.entries, (e) => e.runeId).map((e) => (
+                  <ConsensusRuneTile
+                    key={e.runeId}
+                    count={e.count}
+                    denom={model.primaryMinors.sampleSize}
+                    name={names.primaryMinors.get(e.runeId)?.name ?? `Rune #${e.runeId}`}
+                    icon={names.primaryMinors.get(e.runeId)?.icon ?? ""}
+                    onClick={() => onOpenDetail("rune", e.runeId)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {hasSecondaryCol && (
+            <div>
+              {secondaryTree ? (
+                <div className="flex items-center gap-2 mb-2.5">
+                  <span className="w-5 h-5 rounded-full bg-black/20 overflow-hidden flex items-center justify-center flex-shrink-0">
+                    <IconWithFallback
+                      src={treeIconUrl(secondaryTree.treeId)}
+                      alt={treeName(secondaryTree.treeId)}
+                      fallbackGlyph={treeName(secondaryTree.treeId)}
+                      className="w-full h-full object-contain"
+                      size={20}
+                    />
+                  </span>
+                  <span className="text-[11.5px] text-txt font-semibold">{treeName(secondaryTree.treeId)}</span>
+                  <span className="text-[9.5px] leading-tight">
+                    <FractionPct count={secondaryTree.count} denom={model.secondaryTreeSampleSize} />
+                  </span>
+                </div>
+              ) : (
+                <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2.5">Secondary</p>
+              )}
+
+              {model.secondaryPicks.entries.length > 0 && (
+                <div className="flex flex-wrap gap-2.5 mb-3.5">
+                  {/* Same rule as the primary minors: a secondary pick's row is
+                      where it sits in ITS tree, and the two picks a page runs
+                      come from two different rows, so the row index orders them
+                      exactly as the client draws them. `secondaryTree` is
+                      guaranteed non-null inside this branch. */}
+                  {sortPerksByRow(secondaryTree?.treeId ?? null, model.secondaryPicks.entries, (e) => e.runeId).map((e) => (
+                    <ConsensusRuneTile
+                      key={e.runeId}
+                      count={e.count}
+                      denom={model.secondaryPicks.sampleSize}
+                      name={names.secondaryPicks.get(e.runeId)?.name ?? `Rune #${e.runeId}`}
+                      icon={names.secondaryPicks.get(e.runeId)?.icon ?? ""}
+                      onClick={() => onOpenDetail("rune", e.runeId)}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {model.shards.entries.length > 0 && (
+                <div className="flex flex-wrap gap-2.5">
+                  {model.shards.entries.map((e) => (
+                    <ConsensusRuneTile
+                      key={e.runeId}
+                      size="xs"
+                      count={e.count}
+                      denom={model.shards.sampleSize}
+                      name={shardName(e.runeId)}
+                      icon={shardIconUrl(e.runeId)}
+                      onClick={() => onOpenDetail("shard", e.runeId)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {spellPair && (
+            <div className="flex md:flex-col md:justify-center gap-2">
+              <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-0 md:mb-1.5 hidden md:block">
+                Summoners
+              </p>
+              <div className="flex items-center gap-2">
+                <div className="flex -space-x-1">
+                  {spellPair.spells.map((id) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => onOpenDetail("spell", id)}
+                      aria-label={`View details for summoner spell ${spellName(id)}`}
+                      className="w-8 h-8 rounded-[8px] bg-black/30 border border-line ring-2 ring-panel overflow-hidden flex items-center justify-center flex-shrink-0 focus-visible:outline-none focus-visible:ring-teal active:scale-95 transition-transform"
+                    >
+                      <IconWithFallback
+                        src={spellIconUrl(id, ver)}
+                        alt={spellName(id)}
+                        fallbackGlyph={spellName(id)}
+                        className="w-full h-full object-contain"
+                        size={32}
+                      />
+                    </button>
+                  ))}
+                </div>
+                <span>
+                  <span className="block text-[11.5px] text-txt font-medium leading-tight">
+                    {spellPair.spells.map((id) => spellName(id)).join(" + ")}
+                  </span>
+                  <span className="block text-[10px] leading-tight mt-0.5">
+                    <FractionPct count={spellPair.count} denom={model.spellSampleSize} />
+                  </span>
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+        );
+      })()}
+        </div>
+
+        {/* Starting + Items — SECOND now (see the wrapper's own comment).
+            `mt-5 lg:mt-0`: below `lg` this used to be the first child and
+            needed no top margin. Stacked under the rune grid it does — the
+            rune grid ends on `mb-1` (4px), which was fine as a gap before the
+            card's footer rule but reads as collision against a new section
+            heading. 20px matches the rune grid's own `gap-y-5` row rhythm, so
+            the mobile stack keeps one spacing scale throughout. At `lg`+ these
+            are side-by-side grid columns and the margin is removed. */}
+        <div className="mt-5 lg:mt-0">
           {/* 2026-07-22 — starters render in their OWN labeled slot, entirely
               separate from the Items block below (hard user directive: a
               starter must never render as a completed item, "keep it as a
@@ -1081,189 +1328,6 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
               </div>
             </div>
           )}
-        </div>
-
-        <div>
-        {(() => {
-        // Local consts (not `model.keystone` inline) so TS's null-narrowing
-        // survives into the nested onClick closures below — narrowing a
-        // property access does NOT persist across a function boundary, only
-        // a local const does.
-        const keystone = model.keystone;
-        const secondaryTree = model.secondaryTree;
-        const spellPair = model.spellPair;
-        const hasPrimaryCol = Boolean(keystone) || model.primaryMinors.entries.length > 0;
-        const hasSecondaryCol = Boolean(secondaryTree) || model.secondaryPicks.entries.length > 0 || model.shards.entries.length > 0;
-        if (!hasPrimaryCol && !hasSecondaryCol && !spellPair) return null;
-        // v0.28.0 (user request: "put the additional runes as the layout...
-        // runes are set as in game. Don't put them like that separately") —
-        // composed as ONE in-game-style rune page (primary column: keystone
-        // + its minors below; secondary column: tree label + 2 picks + stat
-        // shards; summoners column), the same layout vocabulary
-        // RunesSummonersCard already uses on the BUILD tab for the WPA
-        // recommendation, adapted here to a pick-rate fraction per tile
-        // instead of a WPA score. No "Additional Runes" sub-section anymore —
-        // minors/picks/shards render directly under their owning tree.
-        return (
-        // v0.63.2: `lg:grid-cols-[auto_auto_auto] lg:justify-start` overrides
-        // the md:1.5fr/1.1fr/auto fr-stretch ONLY at `lg`+ (this card's own
-        // column is now narrower than the full row there — see the split
-        // above). Verified via computed style (Chrome): with three `auto`
-        // tracks and no `fr` track present, the grid sizing algorithm still
-        // distributes the container's free space across all three columns
-        // in the Maximize Tracks step, but PROPORTIONAL TO EACH COLUMN'S OWN
-        // max-content contribution — a heavier column (e.g. a 4-tile Primary
-        // rune row) claims more of the extra space than a 2-tile Summoners
-        // column, unlike the old fixed 1.5fr/1.1fr/auto ratio which had NO
-        // relationship to actual content and produced arbitrary, unrelated
-        // gaps. Screenshot-verified across three champion shapes (Brand
-        // support, Viktor mid, Ornn top) — the proportional growth reads as
-        // evenly distributed, not stretched-then-abandoned. Below `lg`
-        // (including the existing md/tablet range) this is untouched — same
-        // 1.5fr/1.1fr/auto stretch as before.
-        <div className="grid grid-cols-1 md:grid-cols-[1.5fr_1.1fr_auto] lg:grid-cols-[auto_auto_auto] lg:justify-start gap-x-8 gap-y-5 mb-1">
-          {hasPrimaryCol && (
-            <div>
-              {/* v0.29.0: the page is now conditioned on the modal keystone's
-                  TREE, so show that tree as the PRIMARY header (icon + name),
-                  mirroring the secondary tree header — the data is already at
-                  hand (model.primaryTree). Falls back to the plain "Primary"
-                  label when the tree couldn't be resolved from the sample. */}
-              {model.primaryTree ? (
-                <div className="flex items-center gap-2 mb-2.5">
-                  <span className="w-5 h-5 rounded-full bg-black/20 overflow-hidden flex items-center justify-center flex-shrink-0">
-                    <IconWithFallback
-                      src={treeIconUrl(model.primaryTree)}
-                      alt={treeName(model.primaryTree)}
-                      fallbackGlyph={treeName(model.primaryTree)}
-                      className="w-full h-full object-contain"
-                      size={20}
-                    />
-                  </span>
-                  <span className="text-[11.5px] text-txt font-semibold">{treeName(model.primaryTree)}</span>
-                </div>
-              ) : (
-                <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2.5">Primary</p>
-              )}
-              <div className="flex flex-wrap items-end gap-2.5">
-                {keystone && (
-                  <ConsensusRuneTile
-                    size="lg"
-                    count={keystone.count}
-                    denom={model.runesSampleSize}
-                    name={names.keystone?.name ?? `Rune #${keystone.keystoneId}`}
-                    icon={names.keystone?.icon ?? ""}
-                    onClick={() => onOpenDetail("rune", keystone.keystoneId)}
-                  />
-                )}
-                {model.primaryMinors.entries.map((e) => (
-                  <ConsensusRuneTile
-                    key={e.runeId}
-                    count={e.count}
-                    denom={model.primaryMinors.sampleSize}
-                    name={names.primaryMinors.get(e.runeId)?.name ?? `Rune #${e.runeId}`}
-                    icon={names.primaryMinors.get(e.runeId)?.icon ?? ""}
-                    onClick={() => onOpenDetail("rune", e.runeId)}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {hasSecondaryCol && (
-            <div>
-              {secondaryTree ? (
-                <div className="flex items-center gap-2 mb-2.5">
-                  <span className="w-5 h-5 rounded-full bg-black/20 overflow-hidden flex items-center justify-center flex-shrink-0">
-                    <IconWithFallback
-                      src={treeIconUrl(secondaryTree.treeId)}
-                      alt={treeName(secondaryTree.treeId)}
-                      fallbackGlyph={treeName(secondaryTree.treeId)}
-                      className="w-full h-full object-contain"
-                      size={20}
-                    />
-                  </span>
-                  <span className="text-[11.5px] text-txt font-semibold">{treeName(secondaryTree.treeId)}</span>
-                  <span className="text-[9.5px] leading-tight">
-                    <FractionPct count={secondaryTree.count} denom={model.secondaryTreeSampleSize} />
-                  </span>
-                </div>
-              ) : (
-                <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2.5">Secondary</p>
-              )}
-
-              {model.secondaryPicks.entries.length > 0 && (
-                <div className="flex flex-wrap gap-2.5 mb-3.5">
-                  {model.secondaryPicks.entries.map((e) => (
-                    <ConsensusRuneTile
-                      key={e.runeId}
-                      count={e.count}
-                      denom={model.secondaryPicks.sampleSize}
-                      name={names.secondaryPicks.get(e.runeId)?.name ?? `Rune #${e.runeId}`}
-                      icon={names.secondaryPicks.get(e.runeId)?.icon ?? ""}
-                      onClick={() => onOpenDetail("rune", e.runeId)}
-                    />
-                  ))}
-                </div>
-              )}
-
-              {model.shards.entries.length > 0 && (
-                <div className="flex flex-wrap gap-2.5">
-                  {model.shards.entries.map((e) => (
-                    <ConsensusRuneTile
-                      key={e.runeId}
-                      size="xs"
-                      count={e.count}
-                      denom={model.shards.sampleSize}
-                      name={shardName(e.runeId)}
-                      icon={shardIconUrl(e.runeId)}
-                      onClick={() => onOpenDetail("shard", e.runeId)}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {spellPair && (
-            <div className="flex md:flex-col md:justify-center gap-2">
-              <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-0 md:mb-1.5 hidden md:block">
-                Summoners
-              </p>
-              <div className="flex items-center gap-2">
-                <div className="flex -space-x-1">
-                  {spellPair.spells.map((id) => (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => onOpenDetail("spell", id)}
-                      aria-label={`View details for summoner spell ${spellName(id)}`}
-                      className="w-8 h-8 rounded-[8px] bg-black/30 border border-line ring-2 ring-panel overflow-hidden flex items-center justify-center flex-shrink-0 focus-visible:outline-none focus-visible:ring-teal active:scale-95 transition-transform"
-                    >
-                      <IconWithFallback
-                        src={spellIconUrl(id, ver)}
-                        alt={spellName(id)}
-                        fallbackGlyph={spellName(id)}
-                        className="w-full h-full object-contain"
-                        size={32}
-                      />
-                    </button>
-                  ))}
-                </div>
-                <span>
-                  <span className="block text-[11.5px] text-txt font-medium leading-tight">
-                    {spellPair.spells.map((id) => spellName(id)).join(" + ")}
-                  </span>
-                  <span className="block text-[10px] leading-tight mt-0.5">
-                    <FractionPct count={spellPair.count} denom={model.spellSampleSize} />
-                  </span>
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
-        );
-      })()}
         </div>
       </div>
 

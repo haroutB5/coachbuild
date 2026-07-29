@@ -39,6 +39,12 @@ export interface FeaturedOtpResponse {
    *  every percentage below. Never the source's larger game count. */
   sample: { games: number; wins: number } | null;
   items: { itemId: number; games: number; pct: number }[];
+  /** One entry per stored game: the deduplicated final inventory, raw ids, no
+   *  classification (same posture as `items` — see the note below the query).
+   *  The card needs the GAMES, not just the per-item rates, to answer "which
+   *  six did they finish holding TOGETHER" honestly — `lib/otp/featuredBuild.ts`
+   *  explains why an assembled build and an observed one must not look alike. */
+  gameItems: number[][];
   runes: { page: unknown; games: number; pct: number } | null;
   spells: { spells: number[]; games: number; pct: number } | null;
 }
@@ -47,6 +53,7 @@ const EMPTY: FeaturedOtpResponse = {
   player: null,
   sample: null,
   items: [],
+  gameItems: [],
   runes: null,
   spells: null,
 };
@@ -113,6 +120,7 @@ export async function GET(req: NextRequest) {
       },
       sample: { games: model.games, wins: model.wins },
       items: model.items,
+      gameItems: model.gameItems,
       runes: model.runes ? { page: model.runes.page, games: model.runes.games, pct: model.runes.pct } : null,
       spells: model.spells
         ? { spells: model.spells.spells, games: model.spells.games, pct: model.spells.pct }

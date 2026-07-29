@@ -6025,3 +6025,589 @@ I will.
   invalidate a running production server on the same directory.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-29 12:36
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-28 15:47:30Z; previous content preserved there. Append new rounds below. -->
+
+# HANDOFF — engy — signal layer for the Pro and OTP build cards (2026-07-29)
+
+Scope owned: `lib/**`, non-JSX `.ts` under `components/`, `app/api/otp/featured/route.ts`, tests.
+No `.tsx` touched. Gate: `npx tsc -b` clean, `npx vitest run` **2019 passed / 133 files**,
+`next lint` clean on every file below.
+
+Smoke run over a realistic 37-game sample (all four pieces, actual output):
+
+```
+ITEMS : Rocketbelt 89% | Rabadon's 81% | Shadowflame 70% | Zhonya's 57% | Void Staff 49% | Cryptbloom 32%
+BOOTS : Sorcerer's Shoes 59% (22/37) | Swiftmarch 30% (11/37) | Ionian Boots 8% (3/37)
+OPENS : Dark Seal 57% | Doran's Ring 54%
+BUILD : most-played-exact games = 3 of 37
+        Rocketbelt 89% | Rabadon's 81% | Shadowflame 70% | Sorcerer's Shoes [boots] 59% | Zhonya's 57% | Void Staff 49%
+BUILD2: assembled-from-rates games = null      <- same rates, exact set repeated only twice
+RUNES : in   8139, 8106, 8140, 8112, 9999
+        out  8112, 8139, 8140, 8106, 9999      <- keystone, row1, row2, Ultimate Hunter LAST, unknown after
+```
+
+Mejai's (15/37) is absent from ITEMS and Cryptbloom (12/37) holds the sixth slot — the
+backfill, not a shortened list.
+
+---
+
+## 1. Exact signatures fronty calls
+
+### Snowball-stack exclusion — `lib/snowballStacks.ts` (new)
+
+```ts
+export const SNOWBALL_STACK_ITEM_IDS: ReadonlySet<number>;   // {3041 Mejai's, 1082 Dark Seal}
+export function isSnowballStackItem(itemId: number): boolean;
+```
+
+**ProConsensusCard needs no change.** The exclusion is applied inside
+`aggregateProConsensus`, so `model.items` already arrives with Mejai's gone and the
+list backfilled to six. Both independent consumers of that aggregate
+(`ProConsensusCard.tsx` and `itemSetsApply.ts` — gotcha (dd)'s second copy) go through
+the same function, verified by grep, so the LCU "Pro build" and "OTP build" export lines
+are fixed by the same edit.
+
+For FeaturedOtpCard, do not call this beside a local `isCompleted`. Use the classifier.
+
+### Item classification — `lib/otp/featuredBuild.ts` (new)
+
+```ts
+export type FeaturedItemClass = "completed" | "boots" | "starter" | "snowball" | "excluded";
+export function classifyFeaturedItem(itemId: number, meta: ItemDetail | undefined): FeaturedItemClass;
+```
+
+Total function, one class per id, never throws. Precedence top to bottom:
+**starter > snowball** > (no meta → excluded) > `purchasable === false` → excluded >
+Consumable/Trinket → excluded > Boots-tagged **with non-empty `from`** → boots >
+`into` empty → completed > excluded.
+
+**Starter beats snowball, and that order is load-bearing.** Dark Seal is in both families
+and classifies `starter`, so it keeps the "Opens" row. The snowball rule governs BUILD
+SLOTS — which is what the user's directive says — and an opener is not a build slot.
+Mejai's is not allowlisted, so it still classifies `snowball` and is still excluded from
+every build slot. This shipped the other way round at first; see §4.5.
+
+### The featured card's whole item model — `lib/otp/featuredBuild.ts`
+
+```ts
+export interface FeaturedItemRate { itemId: number; games: number; pct: number }
+export interface FullBuildItem { itemId: number; games: number; pct: number; isBoots: boolean }
+
+export type FeaturedFullBuild =
+  | { method: "most-played-exact";    games: number; sampleGames: number; items: FullBuildItem[] }
+  | { method: "assembled-from-rates"; games: null;   sampleGames: number; items: FullBuildItem[] };
+
+export interface FeaturedBuildView {
+  items: FeaturedItemRate[];
+  boots: FeaturedItemRate[];
+  starters: FeaturedItemRate[];
+  fullBuild: FeaturedFullBuild | null;
+}
+
+export interface FeaturedViewOptions {
+  itemLimit?: number;           // default 6
+  bootsLimit?: number;          // default 3
+  starterLimit?: number;        // default 2
+  minDisplayPct?: number;       // default 0; applies to `items` ONLY
+  bootsMinDisplayPct?: number;  // default 0 — see the note below
+}
+
+export function buildFeaturedView(
+  rates: readonly FeaturedItemRate[],          // = response.items
+  gameItems: readonly (readonly number[])[],   // = response.gameItems  (new field)
+  sampleGames: number,                         // = response.sample.games
+  meta: ReadonlyMap<number, ItemDetail>,       // = getItemDetailMap(ver)
+  opts?: FeaturedViewOptions
+): FeaturedBuildView;
+
+export function resolveFullBuild(
+  rates: readonly FeaturedItemRate[],
+  gameItems: readonly (readonly number[])[],
+  sampleGames: number,
+  classOf: (itemId: number) => FeaturedItemClass
+): FeaturedFullBuild | null;
+```
+
+### Rune row order — `components/hextech/perkSlots.ts` (additions)
+
+```ts
+export function perkSlotPosition(treeId: number | null | undefined, runeId: number): { row: number; col: number } | null;
+export function perkSortRank(treeId: number | null | undefined, runeId: number): number;
+export function comparePerksByRow(treeId: number | null | undefined): (a: number, b: number) => number;
+export function sortPerkIdsByRow(treeId: number | null | undefined, runeIds: readonly number[]): number[];
+export function sortPerksByRow<T>(treeId: number | null | undefined, items: readonly T[], getRuneId: (item: T) => number): T[];
+```
+
+Drop-in for the Pro card's flat aggregate:
+`sortPerksByRow(model.primaryTree, model.primaryMinors.entries, (e) => e.runeId)`.
+
+**Indexing differs from the existing `primaryMinorRow` — do not mix them.**
+`perkSlotPosition` uses row 0 = keystone row, rows 1/2/3 = the three minor rows;
+`primaryMinorRow` is minors-only, 0/1/2. Same slot, different origin. Using the sort
+helpers means never touching the numbers.
+
+### Response change — `app/api/otp/featured/route.ts`
+
+```ts
+gameItems: number[][];   // one entry per stored game, deduped final inventory, RAW ids, unclassified
+```
+`FeaturedOtpResponse.gameItems` is `[]` in every empty/error path.
+
+**Pass `{ minDisplayPct: 15 }` to keep the card's existing item floor.** It applies to
+`items` only, on purpose. A single shared floor silently defeated the directive: measured
+on a realistic 37-game sample, a 15% floor cut the third boot (3/37 = 8%) and the card
+showed two boots, not "the top three boots" the user asked for. `bootsMinDisplayPct`
+exists if a boots floor is ever actually wanted; it defaults to 0. The floor is never
+applied to `fullBuild` — a display cutoff must not produce a five-item "full build".
+
+---
+
+## 2. Method choice for the full build, and the threshold
+
+**Both methods are implemented; (a) wins when it can, (b) is the labelled fallback.**
+
+- **(a) `"most-played-exact"`** — the most frequent COMPLETE final item set across their
+  games. `games` = the count of games that ended holding **exactly** that set, after
+  components/consumables/starters/snowball stacks are stripped from each game.
+  A build they demonstrably played.
+- **(b) `"assembled-from-rates"`** — top boot + the most-built completed items to six
+  slots. Every item's own `games`/`pct` is real; **the combination is not evidenced.**
+
+Thresholds, both in `lib/otp/featuredBuild.ts` with their reasoning in the constant docs:
+
+| Constant | Value | What it gates |
+|---|---|---|
+| `EXACT_SET_MIN_GAMES` | **3** | Times the modal exact set must repeat before (a) is allowed. n=1 is one game; n=2 out of ~37 is roughly accidental; n=3 (~8% of their games landing on one exact inventory) is a deliberate repeat. |
+| `EXACT_SET_MIN_ITEMS` | **5** | Fewest items a game needs to vote. Surrenders leave two items and are numerous and identical, so unfiltered they win the modal vote outright and hand the card a two-item "full build". Tested. |
+| `FULL_BUILD_SLOTS` | **6** | Inventory cap. A game finishing with more than six kept items is malformed and is excluded from the vote rather than trimmed into a set nobody played. |
+
+**The honesty guarantee is structural, not editorial.** `FeaturedFullBuild` is a
+discriminated union and the synthesised branch types `games` as **`null`** — not 0, not
+optional. TypeScript forces the caller to handle it and there is no number there for a
+caption to print, so a UI cannot describe a synthesis as a real game. Do not `?? 0` it.
+This is the v0.73.1 class of mistake (a number quoted against a denominator it did not
+come from) closed at the type level.
+
+### Ordering: build rate, NOT purchase order
+
+`items[]` is ordered by that player's own build rate across their whole stored sample,
+most-built first, ties by item id. **Neither method carries any purchase-order evidence
+and the card must not imply one.** `coachbuild.otp_matches` is written from Riot match-v5
+detail with no timeline call (`lib/otp/ingest.ts`, and CLAUDE.md's OTP pipeline note says
+so) — purchase order was never fetched, not merely unavailable. Riot's `item0..item5` are
+inventory slots. The card already says exactly this about skill order; the same line holds
+here.
+
+The sense the build does make: six real slots, exactly one pair of boots, no starters, no
+snowball stacks, no components — a legal inventory, which the raw frequency list was not.
+
+---
+
+## 3. What each function returns for "unknown"
+
+| Input | Result |
+|---|---|
+| Item id with no `ItemDetail` | `classifyFeaturedItem` → `"excluded"`. Never assumed finished. |
+| Snowball/starter id with no `ItemDetail` | still `"snowball"` / `"starter"` — those are id-based, so the exclusion does not depend on a CDN fetch having succeeded. |
+| Empty metadata map (fetch failed) | `buildFeaturedView` → empty `items`/`boots`, `fullBuild: null`, starters still resolve. An empty card, never a card full of components. Tested. |
+| No eligible build item anywhere | `fullBuild: null` — absent, not empty, the `boots`/`starters` convention. |
+| Fewer than 3 boots built | `boots` is shorter, or `[]`. Never padded. |
+| Unknown perk id | sorts to the END, ordered by id ascending. |
+| Unknown / `null` / `undefined` `treeId` | every id is unknown → stable **id-ascending** order, not an arbitrary one. |
+| Junk perk input (`0`, `-1`, `NaN`, `[]`) | no throw. |
+
+`comparePerksByRow` is **total** (never 0 for two different ids), so results do not depend
+on caller input order or on `Array.prototype.sort` stability. No fetch anywhere in the
+rune-order path.
+
+---
+
+## 4. Deliberate deviations from the brief
+
+1. **Rune rows come from `perkSlots.ts`, not `runesReforged.json`/`lib/prostage/ddragon.ts`.**
+   The brief pointed at ddragon. Overridden: it is server-side and network-bound, and this
+   fix is needed in a client card whose rune display is explicitly decorative and must
+   never block a render on a fetch. `buildDdragonMaps` also keys runes by NAME and keeps
+   only `{id, parentStyleId}` — it discards the slot index, so it would have needed
+   extending anyway. `perkSlots.ts` already holds the row structure as pure static
+   CDragon-sourced data and is what the rune-APPLY path has trusted for slot coherence
+   since 2026-07-22, so display order and apply order now cannot disagree. Reasoning is in
+   the file, not only here.
+
+2. **`STARTING_ITEM_ALLOWLIST` moved** from `components/hextech/proConsensus.ts` to
+   `lib/startingItems.ts`, re-exported from its old home so **every existing import site is
+   unchanged** (`FeaturedOtpCard.tsx`, `components/__tests__/proConsensus.test.ts`). Forced
+   by `lib/otp/featuredBuild.ts` needing the same partition: lib/ importing a value out of
+   components/ would have dragged proAssets and its CDN fetches into it. Identical to the
+   `supportFinalGroup` move of 2026-07-26.
+
+3. **The full build is computed client-side, not returned by the API.** The decision needs
+   the ddragon metadata only the client holds, and the route deliberately does not classify
+   items. So the route ships `gameItems` (raw per-game inventories) and
+   `buildFeaturedView` decides. Payload cost is ~37 games × ≤6 ids.
+
+4. **`wins` is not returned for the exact-set build.** A win rate over an n=3 set is a
+   number with a denominator nobody should read — the v0.73.1 class again. Adding per-game
+   win flags alongside `gameItems` is a two-line change if the caption genuinely needs it.
+
+5. **Dark Seal is in `SNOWBALL_STACK_ITEM_IDS` but the exclusion is applied to
+   completed-item lists ONLY.** It keeps its Starting/Opens slot on BOTH cards, pinned by
+   a regression test on each, because a future "simplification" applying the rule to
+   `starters` would silently delete a real build choice with no error anywhere.
+
+   **This was wrong when first written, and was caught on review by fronty, not by me.**
+   `classifyFeaturedItem` checked snowball before starter, so Dark Seal classified
+   `snowball` and vanished from the featured card's opener row — while the Pro card kept
+   showing it in Starting. Two answers for one item on two surfaces of the same kind, and
+   it directly contradicted `lib/snowballStacks.ts`'s own header, which says in those
+   words that applying the rule to the starter partition "would be a regression, not extra
+   safety". I then wrote a doc comment on `FeaturedBuildView.starters` presenting the
+   contradiction as a considered trade, which is the worse half of the mistake: it made a
+   bug read as a decision. Fixed by swapping the two precedence lines; Mejai's is
+   unaffected because it is not allowlisted. The lesson worth keeping is that a
+   contract written in one file does not enforce itself in another — the classifier
+   needed the test, and now has one.
+
+---
+
+## 5. NOT verified / NOT done — read before shipping
+
+- **The WPA build path can still surface Mejai's. Confirmed, not suspected.**
+  `lib/recommend.ts` ranks coachless picks by occurrence/WPA and contains no snowball
+  filter (grepped for `3041`/`snowball`: no hits). `itemSetBody.ts`'s `isFullItem` passes
+  Mejai's — `from: ["1082"]`, `into: []`, goldTotal ~1600, so the from-nothing/cheap/Lane
+  starter rule does not catch it. So the Builds page's own WPA recommendation and the LCU
+  item set's **"WPA build"** line remain able to show it. Deliberately left alone: the
+  user's directive named the Pro and OTP surfaces, and touching `isFullItem` changes
+  `buildLine`'s exactly-6 invariant and the Builds-page core order — a much wider blast
+  radius, mid-parallel-run. **Recommend a follow-up** applying `isSnowballStackItem` inside
+  `isFullItem`, with its own tests against the 6-item line invariant.
+  The "Hidden gem" line is already safe via `GEM_WINRATE_CEILING_PP`.
+- **Not verified against live data.** Every number here is from fixtures. No live
+  `/api/otp/featured` call was made and no browser smoke was run — the featured account and
+  its stored games live in Neon and I did not query it. The exact-set-vs-synthesis outcome
+  on a real 37-game sample is therefore **unknown**: I cannot tell you whether a real
+  one-trick clears `EXACT_SET_MIN_GAMES` or falls back to the labelled synthesis. Worth one
+  probe before shipping, because if every real account falls back, the threshold is doing
+  nothing and should be revisited rather than left as decoration.
+- **`perkSlots.ts` is a 2026-07-22 CDragon snapshot.** Correct today (Ultimate Hunter 8106
+  is `minorRows[2][2]`, asserted against the map itself so a refresh that moves it fails
+  loudly). A rune-tree rework rots it; the degradation is a rune at the back of the list,
+  never a wrong slot.
+- **Boots detection is tag-based** (`tags.includes("Boots") && from.length > 0`), so it
+  depends on the ddragon metadata fetch. With no metadata the boots list is empty rather
+  than wrong. `itemSetBody.ts`'s structural boots detection is a different mechanism for a
+  different input shape and is untouched.
+
+---
+
+## 6. Files
+
+New: `lib/snowballStacks.ts`, `lib/startingItems.ts`, `lib/otp/featuredBuild.ts`,
+`lib/__tests__/featuredBuildView.test.ts`, `components/__tests__/perkSlotOrder.test.ts`.
+
+Changed: `components/hextech/perkSlots.ts` (sort helpers), `components/hextech/proConsensus.ts`
+(snowball filter placed before the top-6 slice; allowlist re-export), `lib/otp/featured.ts`
+(`gameItems`), `app/api/otp/featured/route.ts` (`gameItems` passthrough),
+`lib/__tests__/featuredBuilds.test.ts` + `components/__tests__/proConsensus.test.ts` (extended).
+
+## 7. Proposed wiki / CLAUDE.md updates (not applied — urgot merges)
+
+- **HARD RULE candidate:** snowball stacks join the starter partition as a standing item
+  rule. Suggested wording: *"A snowball stack (Mejai's/Dark Seal, `lib/snowballStacks.ts`)
+  never renders as a completed build item on any aggregate surface. Unlike starters and
+  boots it gets no slot of its own — it is dropped, and dropped BEFORE any top-N slice so
+  the freed slot is backfilled."*
+- **New gotcha:** *"An exclusion applied after a top-N slice leaves a hole, not a shorter
+  list. Every item-family filter in `aggregateProConsensus` and `buildFeaturedView` runs
+  before `.slice()` for this reason."*
+- **Gotcha (s) extension:** it currently covers flat top-N aggregates being wrongly treated
+  as positional for APPLY. The same aggregate was being rendered as if it were a rune page
+  — same root cause, display side. `perkSlots.ts`'s sort helpers are the display-side fix.
+- **Data pipeline map:** add `lib/snowballStacks.ts`, `lib/startingItems.ts`,
+  `lib/otp/featuredBuild.ts`; note `STARTING_ITEM_ALLOWLIST` now declares in `lib/`.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-29 12:42
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-29 10:56:11Z; previous content preserved there. Append new rounds below. -->
+
+# HANDOFF-fronty — Pro + OTP card layout round (2026-07-29)
+
+`bash scripts/verify-fix.sh C:/Claude/AI/coachbuild` — **ALL CHECKS PASSED** (tsc, lint 0 warnings,
+2019 tests, build, SW, manifest). Verified in a browser at 390x844 and 1440x900 against a
+production `next start` on port 4714 with the real Neon data (Viktor mid, one-trick `Dun#NA1`,
+33 stored games).
+
+I own the `.tsx`. engy owns `lib/**` and the non-JSX `.ts`. I edited no file of his.
+
+---
+
+## What changed, per file
+
+### `components/hextech/ProConsensusCard.tsx`
+
+**1. Runes now render FIRST, above Starting and Items.**
+The two children of the card's two-column wrapper were swapped in the DOM — so mobile (a plain
+block stack below `lg`) reads Runes -> Starting -> Items, and desktop reads Runes on the left.
+The item column picked up `mt-5 lg:mt-0`: it was previously the first child and needed no top
+margin; stacked under the rune grid (which ends on `mb-1`) it collided with the Starting heading.
+20px matches the rune grid's own `gap-y-5`.
+
+**2. Column split changed `5fr_7fr` -> `7fr_5fr` -> back to `5fr_7fr`, by measurement.**
+I first kept the wider track on the runes, on the strength of v0.63.2's comment that the rune group
+"needs the other ~60%". That comment was true when runes sat to the RIGHT of a taller item column
+and stopped being true once the order flipped. Measured all three splits live on Viktor mid at
+1440x900, reading computed heights off the real DOM:
+
+| split | runes col | items col | card height | dead space |
+|---|---|---|---|---|
+| `7fr_5fr` | 272px | 615px | 747px | 343px under runes |
+| `6fr_6fr` | 503px | 614px | 746px | 111px |
+| **`5fr_7fr`** | **503px** | **500px** | **635px** | **~3px** |
+
+No horizontal overflow in any of the three — the inner rune grid's `scrollWidth` equalled its
+`clientWidth` every time. The rune group simply wraps to a second row at 440px, costing 231px of
+height and buying 176px for the item grid, which saves more than it costs. Net: the card is
+**112px shorter** and it now matches the BUILD tab's column proportions as well as its section
+order.
+
+**3. Rune order is now the TREE ROW, not the pick rate.**
+Both `primaryMinors` and `secondaryPicks` render through engy's `sortPerksByRow` (perkSlots.ts).
+I first wrote a local `byTreeRow` off the existing `primaryMinorRow`; engy's landed mid-task with a
+strictly better contract (handles the keystone row and left-to-right `col` within a row, total
+comparator), so my shim is deleted. One resolver, shared with the rune-APPLY path, so display order
+and applied order cannot disagree.
+
+### `components/hextech/FeaturedOtpCard.tsx`
+
+**All local item classification deleted.** The file's own `isCompleted` was the third copy of one
+question. `buildFeaturedView` (engy's `lib/otp/featuredBuild.ts`) now returns all four slots
+already partitioned: `items`, `boots`, `starters`, `fullBuild`. Mejai's exclusion, the starter
+partition and the boots split all live in his one classifier. I pass `minDisplayPct: 15` and take
+his defaults for the item/boots/starter limits (6/3/2).
+
+New sections, in render order: **Their build** (opener row + 6-slot strip + method caption) ->
+**Boots** -> **Build rates** -> **Runes** (full page) -> **Summoners** -> **Skill order**.
+
+- **Full build** renders as a 6-tile strip: 6 x 44px + 5 x 8px gaps = 304px inside a 390px
+  viewport's 358px content box, so one row, no wrap, no scroll strip.
+- **No per-slot percentage on that strip, deliberately.** Every `FullBuildItem` carries its own
+  overall build rate, and printing six of those beside a set quoted against a different count
+  ("3 of 37 games ended with exactly these") puts two denominators on one row — the exact shape of
+  the v0.73.1 bug. The rates get their own section below under one stated denominator.
+- **Full rune page**: primary tree + keystone + minors, secondary tree + picks, and the three
+  positional shards labelled Offense/Flex/Defense (the label comes from the ARRAY INDEX, which is a
+  fact about `perks.statPerks`, not a guess about the id). Rune art resolves in one `Promise.all`
+  and is decorative — a failure costs icons and names, never the page STRUCTURE, which comes from
+  perkSlots.ts and the stored page with no fetch in the path.
+- **Rune grid width**: `grid-cols-2` at mobile (matching RunesSummonersCard's own 390px treatment),
+  `sm:grid-cols-[auto_auto] sm:justify-start`. Two equal `fr` tracks pushed the secondary tree's
+  tiles out to x=840 with ~450px of dead space at 1440 — measured, then fixed.
+- **"Build rates"** is a deliberately short heading: measured at 390px, "How often they build each
+  item" pushed the denominator meta onto its own line and broke the shared baseline every other
+  PanelHeading on this card keeps.
+
+### `components/hextech/BuildTabContent.tsx`
+
+**No change.** Read it, found nothing this round required. The `otp_otp` full-width row and the
+mobile flex-column both already do the right thing for both cards.
+
+---
+
+## The WPA page's section order I matched, and where I found it
+
+`components/hextech/BuildTabContent.tsx`. Two places state the same order and agree:
+
+1. DOM order of the grid children (which IS the mobile order — below `lg` `BUILD_GRID_CLASS` is a
+   flex column, not a grid): `runes` -> `itembuild` -> `skillorder` -> `pro` -> `otp`.
+2. The `lg:` named-area template on `BUILD_GRID_CLASS`:
+   `'runes_itembuild'_'skillorder_skillorder'_'pro_pro'_'otp_otp'` — runes in the left column of
+   row 1, item build in the right.
+
+The components those areas hold are `RunesSummonersCard` (Runes & Summoners), then `ItemBuildCard`
+(Starting/Support/Core/Situational), then `SkillOrderCard`. So the template is **runes before
+items**, and the Pro card was the only surface on the tab that read the other way round.
+
+The BUILD tab's own column split is `lg:grid-cols-[5fr_7fr]` (same line), which is where the
+Pro card's final proportions came from — arrived at independently by measurement, then found to
+agree, which is the outcome worth having.
+
+---
+
+## How the full build is captioned, per method
+
+engy's `FeaturedFullBuild` is a discriminated union and the assembled branch types `games` as
+`null`, so there is no number available to caption a synthesis as a real game even by mistake.
+
+**`most-played-exact`** — an item set they demonstrably finished N separate games holding:
+
+> A build Dun actually played — **N** of the **33** games we hold ended with exactly these items.
+
+**`assembled-from-rates`** — top boot plus top legendaries by build rate:
+
+> Their most-built boots and items across the **33** games we hold — put together from those rates,
+> not taken from one game, so they may never have finished a game holding exactly this set.
+
+**Both** then get, in the same paragraph:
+
+> Not a purchase order: the match data stores a final inventory, never what was bought first.
+
+The sample size appears twice on every path — in the section heading's meta ("33 stored games · 64%
+won") and inside the caption itself.
+
+Live on Viktor, Dun resolves to **`assembled-from-rates`**, and the card says so. I have therefore
+**seen the synthesis caption rendered and NOT the played one** — see the gaps below.
+
+The thin-sample floor is intact: `MIN_SAMPLE_GAMES = 12` still gates the entire non-thin branch, so
+under 12 stored games the card shows WHO the player is and no build percentages at all.
+
+---
+
+## VERIFIED, with what evidence
+
+- **Runes render before Starting/Items on mobile.** Measured `getBoundingClientRect` at 390px:
+  rune column top 459px h 472px, item column top 951px — a 20px gap, exactly the `mt-5`.
+- **Rune order is row order.** Rendered at 390px: Sorcery reads Deathfire Touch (keystone) ->
+  Manaflow Band (row 0) -> Celerity (row 1) -> Scorch (row 2). Secondary Resolve reads Shield Bash
+  (row 0) -> Bone Plating (row 1). Both are the in-game top-to-bottom order, not the pick-rate order
+  (Manaflow 100%, Scorch 97%, Celerity 73% — a rate sort would put Celerity last).
+- **Desktop balance.** 1440x900: runes 440px wide / 503px tall, items 616px / 500px, card 635px.
+- **No horizontal overflow anywhere.** `document.documentElement.scrollWidth === 390` on both tabs
+  at 390px, and 1434 (viewport minus scrollbar) at 1440.
+- **Clicks land, not just geometry.** 5-point `elementFromPoint` edge scan over all **21**
+  interactive elements in the Pro card at 390px: 21/21 pass at all five points. Then a real click on
+  the Manaflow Band tile opened the detail popover with the correct content, confirming the reorder
+  did not break the popover plumbing.
+- **OTP full build is a legal inventory.** Read the rendered tile titles: Blackfire Torch,
+  Spellslinger's Shoes, Zhonya's Hourglass, Liandry's Torment, Lich Bane, Cryptbloom — six slots,
+  exactly one pair of boots, no starter, no Mejai's.
+- **OTP rune page is complete.** Rendered alts: Sorcery / Deathfire Touch, Manaflow Band, Celerity,
+  Scorch + Precision / Legend: Haste, Cut Down + Attack Speed, Move Speed, Health shards.
+- **Accessibility.** Build-strip and rune tiles carry a REAL `alt` (the icon is the only carrier of
+  identity there, and they are non-interactive `<span>`s, not fake buttons). The boots and rates
+  lists keep `alt=""` because the name is written out beside the icon and a duplicate alt would make
+  a screen reader say it twice. The `Bar` is `aria-hidden` and never the sole carrier — the
+  percentage and the raw `n/33` fraction are both text beside it.
+
+## NOT VERIFIED — say so out loud
+
+- **The `most-played-exact` caption has never been seen rendered.** Dun's sample resolves to
+  `assembled-from-rates`, so the branch that claims a played game is code-reviewed and type-checked
+  only. Its numbers come straight off `fullBuild.games`/`fullBuild.sampleGames` with no arithmetic,
+  and engy has unit tests on the threshold, but I did not see those words on a screen. Worth pointing
+  a reviewer at a champion whose one-trick has a repeating exact set.
+- **The Mejai's backfill on the PRO card is not visually confirmed.** Viktor's 200-game pro sample
+  contains no Mejai's, so the ITEMS grid rendered 6 non-boots items with nothing to backfill. The
+  exclusion-before-truncation logic is engy's, in `lib/snowballStacks.ts`, and he has a test for it
+  ("drops Mejai's AND backfills the freed slot"). I confirmed the OTP side has no Mejai's; I did not
+  see a pro card where removing it changed the grid.
+- **Only ONE champion was driven in the browser** (Viktor mid). Support-quest finals, the boots
+  stack with two entries, the low-sample warning, the thin-sample floor and the pending/error states
+  were not exercised this round.
+- **No physical device.** Chrome DevTools mobile emulation at 390x844x3 with touch, not an iPhone.
+  Note `resize_page` cannot reach 390px on Windows (Chrome's minimum window width is ~500px) — the
+  measurements above all come from CDP device-metrics emulation, which does reach it.
+- **Boots slot shows ONE boot for Dun, not three.** That is honest, not a bug: his second boot is
+  under the 15% display floor and engy's helper never pads. But it means the three-boot layout is
+  unproven on a real player.
+
+---
+
+## RESOLVED mid-round — the Dark Seal opener regression
+
+**Raised, fixed by engy, re-verified rendered. Nothing outstanding.**
+
+I found the OTP card's "Opens" row showing Doran's Ring (45%) when Dun's actual most-common opener
+is Dark Seal (19 of 33 games, 58%) — it was showing his SECOND opener as if it were his opener.
+Cause was in engy's `classifyFeaturedItem`, which checked `isSnowballStackItem` before
+`STARTING_ITEM_ALLOWLIST`, so Dark Seal (1082) classified `"snowball"` and never reached `starters`.
+His own two files documented opposite contracts on whether that was intended.
+
+engy swapped the two checks. Verified in the tree (`lib/otp/featuredBuild.ts` now reads
+`STARTING_ITEM_ALLOWLIST` first, `isSnowballStackItem` second) and verified RENDERED at 390px on a
+fresh production build: **OPENS now reads Dark Seal 58%.** Mejai's (3041) is not allowlisted, so it
+still classifies `"snowball"` and is still absent from every build slot — the directive is intact.
+engy also corrected the contradicting doc comment and added a test asserting no starter can reach
+`items`/`boots`/`fullBuild`, which is what makes the precedence order provably safe rather than
+merely intended.
+
+## ALSO CHANGED mid-round — the boots floor split in two
+
+engy split `FeaturedViewOptions.minDisplayPct` into `minDisplayPct` (items only) and
+`bootsMinDisplayPct` (default 0). My card passes only `{ minDisplayPct: 15 }`, so it picked up three
+boots with no code change on my side. Verified rendered at 390px:
+
+> Spellslinger's Shoes 20/33 61% · Swiftmarch 4/33 12% · Plated Steelcaps 1/33 3%
+
+Before the split it showed ONE boot — the shared 15% floor was quietly defeating the "top three
+boots" directive. **Worth a second opinion:** the third entry here is a single game (1/33). The raw
+fraction sits beside the percentage so nothing is hidden, and three boots is what the user asked
+for explicitly, so I left it. But a 1-game third boot is thin, and if it reads badly across more
+champions the honest lever is `bootsMinDisplayPct`, not a UI change.
+
+## Open, and NOT mine — Mejai's can still reach the WPA build line
+
+engy flagged that `lib/recommend.ts` / `itemSetBody.ts`'s `isFullItem` is a separate code path from
+`snowballStacks.ts`, so the BUILD tab's own item card can still surface Mejai's. He confirmed it by
+grep and deliberately left it for a follow-up.
+
+I checked what that means ON SCREEN rather than leaving it abstract: **Viktor mid's WPA build does
+not currently show Mejai's** (ITEM BUILD reads Blackfire Torch, Lich Bane, Shadowflame, Mercury's
+Treads, Zhonya's, Rabadon's; Situational has no Mejai's either). So this is a latent inconsistency,
+not a live one on the champion I drove. It would become visible as soon as a champion's WPA line
+picks Mejai's up, and then the same screen would exclude it on two tabs and show it on a third.
+
+---
+
+## Notes for the next person
+
+- **Do not reintroduce a local item rule in FeaturedOtpCard.tsx.** The four slots come from one
+  classifier now. That is the whole point of `lib/otp/featuredBuild.ts`.
+- **The caption must match the method.** If you add a third derivation, it needs its own branch in
+  the union AND its own sentence. A caption that outlives its method is the v0.73.1 bug wearing a
+  new hat.
+- **`next start` locks `.next`.** Killing the server and immediately running `next build` produced a
+  `PageNotFoundError: ENOENT` once (gotcha (i)); a plain re-run of `next build` cleared it. I did
+  NOT delete `.next` — the safety gate blocks recursive deletion and the retry made it unnecessary.
+- Servers were run on ports 4711-4714 per the brief, never a second `next dev` on this checkout.
+  All are terminated.
+
+### Wiki updates proposed (not applied — parallel run, urgot merges)
+
+`wiki/` does not exist under `C:/Claude/AI/coachbuild`, so there is nothing to update. If one is
+generated later, two facts from this round are worth carrying into `gotchas.md`:
+
+1. A flat top-N frequency aggregate rendered as a "page" must be sorted by SLOT, not by count —
+   the display-side twin of gotcha (s). `perkSlots.ts` is the shared resolver.
+2. Chrome's ~500px minimum window width means `resize_page` cannot verify a 390px layout on
+   Windows; CDP device-metrics emulation is required.
+
+

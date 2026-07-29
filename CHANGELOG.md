@@ -2,6 +2,40 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.76.0] — 2026-07-29 — Real builds on the Pro and OTP tabs
+
+### Pro tab
+- **Runes lead the card**, matching the section order the WPA build page already uses.
+- **Runes render in TREE ORDER, not by pick rate.** Ultimate Hunter sits in the third minor row of
+  Domination, so it now renders last — even though it is the most-picked rune on the page at 99%.
+  Previously the card sorted by popularity and showed it second. Domination now reads
+  Electrocute → Taste of Blood → Grisly Mementos → Ultimate Hunter.
+- **Mejai's Soulstealer no longer occupies a build slot**, and the freed slot is filled by the next
+  most-built full item rather than left short.
+
+### OTP tab
+- **A real build, not a frequency list.** The card now shows one full build under `THEIR BUILD`
+  instead of seven independent percentages you had to assemble yourself.
+- **Boots are their own slot**, with the player's top three boots and how often they bought each.
+- **The full rune page** — both trees with their rows, and the shards — replaces the lone keystone.
+- Same Mejai's rule as the Pro tab.
+
+### How the full build is derived, and why the card says so
+Two methods, and they are not equally strong. If the player finished several games holding the
+*exact* same item set, that set is shown — a build they genuinely played. If no set repeats often
+enough, the build is **assembled** from their per-item build rates, which may be a combination they
+never actually played in one game. The card states which one you are looking at.
+
+This is enforced by the type rather than by discipline: the assembled branch of `FeaturedFullBuild`
+carries `games: null`, so no caller can print a game count beside a build nobody played.
+
+### Notes
+- **Dark Seal is excluded from build slots but kept as an opener.** It is the same snowball mechanic
+  as Mejai's and does not belong in a completed-build slot, but it is a genuine opening purchase and
+  the `OPENS` row still shows it. Excluding it from both would have removed correct information.
+- Snowball stacks are an explicit, documented id set (`lib/snowballStacks.ts`), not a statistical
+  guess — the user named the item, and a heuristic that *usually* catches it is worse than a list.
+
 ## [0.75.1] — 2026-07-29 — The last grey paragraph goes too
 
 ### Changed

@@ -1422,3 +1422,89 @@ describe("proConsensus.ts — pro-consensus rune-apply input (2026-07-22)", () =
     });
   });
 });
+
+// ── Snowball stacks (2026-07-29 user directive) ─────────────────────────────
+// "Mejai's must not count as one of the build items — put another full item in
+// its place." The second clause is what these tests are really about: the
+// exclusion has to happen while the seventh-most-built item is still a
+// candidate, so it takes the freed slot. A test that only asserts Mejai's is
+// absent would pass against a five-item grid with a hole in it, which is the
+// bug being avoided.
+describe("snowball stacks are dropped from the items grid, and backfilled", () => {
+  const MEJAIS = 3041;
+  const RABADONS = 3089;
+  const ZHONYAS = 3157;
+  const SHADOWFLAME = 4645;
+  const VOID_STAFF = 3135;
+  const BANSHEES = 3102;
+  const CRYPTBLOOM = 3011; // ranks SEVENTH — the item that must move up
+
+  /** Build rate per item, chosen so Mejai's genuinely out-ranks Cryptbloom:
+   *  without the exclusion Mejai's holds the sixth slot and Cryptbloom is off
+   *  the grid entirely. */
+  const COUNTS: [number, number][] = [
+    [ROCKETBELT, 10],
+    [RABADONS, 9],
+    [ZHONYAS, 8],
+    [SHADOWFLAME, 7],
+    [VOID_STAFF, 6],
+    [MEJAIS, 5],
+    [CRYPTBLOOM, 4],
+    [BANSHEES, 3],
+  ];
+
+  const completedMeta = (id: number) => item(id, { from: ["1058"], into: [], tags: ["SpellDamage"] });
+  const META = itemMeta(...COUNTS.map(([id]) => completedMeta(id)));
+  const GAMES = Array.from({ length: 10 }, (_, i) =>
+    game({ finalItems: COUNTS.filter(([, n]) => n > i).map(([id]) => id) })
+  );
+
+  it("drops Mejai's and promotes the seventh item into the freed slot", () => {
+    const model = aggregateProConsensus(GAMES, META);
+    expect(model.items.map((i) => i.itemId)).toEqual([
+      ROCKETBELT,
+      RABADONS,
+      ZHONYAS,
+      SHADOWFLAME,
+      VOID_STAFF,
+      CRYPTBLOOM,
+    ]);
+    expect(model.items).toHaveLength(6);
+  });
+
+  it("would have shown Mejai's in that slot — the premise, pinned", () => {
+    // Without this the test above could pass on a sample where Mejai's never
+    // ranked top-6 anyway, proving nothing about the backfill. Asserted on the
+    // fixture's own build rates rather than by re-running the aggregate with
+    // the filter disabled — there is no way to disable it, which is the point.
+    const rate = (id: number) => COUNTS.find(([i]) => i === id)![1];
+    expect(rate(MEJAIS)).toBeGreaterThan(rate(CRYPTBLOOM));
+    // Six items out-build Cryptbloom, so it only reaches the grid because
+    // Mejai's left it.
+    const aboveCryptbloom = COUNTS.filter(([, n]) => n > rate(CRYPTBLOOM)).length;
+    expect(aboveCryptbloom).toBe(6);
+  });
+
+  it("gives a snowball stack no slot of its own, unlike boots/starters/support finals", () => {
+    const model = aggregateProConsensus(GAMES, META);
+    expect(model.boots.map((i) => i.itemId)).not.toContain(MEJAIS);
+    expect(model.starters.map((i) => i.itemId)).not.toContain(MEJAIS);
+    expect(model.supportFinals).toBeNull();
+  });
+
+  it("leaves Dark Seal's starter slot alone — the double-handling guard", () => {
+    // Dark Seal is a snowball stack too, and is already held out of `items` by
+    // the STARTING_ITEM_ALLOWLIST partition. It must keep its own Starting
+    // slot: that partition is a 2026-07-22 hard directive and the snowball
+    // rule governs COMPLETED-item lists only. A "simplification" that applies
+    // the exclusion to `starters` would silently delete a real build choice.
+    const meta = itemMeta(
+      completedMeta(ROCKETBELT),
+      item(DARK_SEAL, { into: ["3041"], from: [], tags: ["Health", "SpellDamage", "Lane"] })
+    );
+    const games = [game({ finalItems: [ROCKETBELT, DARK_SEAL] }), game({ finalItems: [ROCKETBELT, DARK_SEAL] })];
+    const model = aggregateProConsensus(games, meta);
+    expect(model.starters.map((i) => i.itemId)).toEqual([DARK_SEAL]);
+    expect(model.items.map((i) => i.itemId)).toEqual([ROCKETBELT]);
+  });
+});

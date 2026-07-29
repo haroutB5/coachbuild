@@ -116,3 +116,104 @@ export function isKeystoneOf(treeId: number, runeId: number): boolean {
   const tree = PERK_TREES[treeId];
   return !!tree && tree.keystones.includes(runeId);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DISPLAY ORDER (2026-07-29 user report, Pro page)
+//
+// THE BUG: "rune order is wrong — Ultimate Hunter shows 2nd but it is the LAST
+// row of Domination." Confirmed against the data path rather than assumed.
+// `ProConsensusModel.primaryMinors` is a FLAT frequency aggregate
+// (`RuneSlotAccumulator.finalize`, sorted count desc / id asc), so the card was
+// rendering minors in PICK-RATE order and calling it a rune page. Ultimate
+// Hunter (8106) is `PERK_TREES[8100].minorRows[2][2]` — the third rune of the
+// THIRD minor row — and simply happens to be the second-most-picked Domination
+// minor on the reported champion. Nothing was mis-parsed; the display never had
+// row information to sort by. This is CLAUDE.md gotcha (s) in its display form:
+// a flat top-N aggregate must never be assumed positional.
+//
+// THE SOURCE, and why NOT runesReforged.json. The dispatch brief pointed at
+// `lib/prostage/ddragon.ts`, which does iterate `style.slots` and therefore does
+// carry row structure. Overridden deliberately, for three reasons: (1) it is
+// server-side and fetches ddragon over the network, and the fix is needed in a
+// client card whose rune display is explicitly decorative and must never block
+// a render on a fetch; (2) `buildDdragonMaps` keys runes by NAME and keeps only
+// `{id, parentStyleId}` — it discards the slot index, so it would have to be
+// extended anyway; (3) the row structure is ALREADY in this repo, right here, as
+// pure static data pulled from CommunityDragon's perkstyles.json — the same map
+// the rune-APPLY path has trusted for slot coherence since 2026-07-22. Reusing
+// it means display order and apply order can never disagree, which is a
+// stronger guarantee than a second source would have given.
+//
+// DEGRADATION (matches proAssets.ts's posture for rune data): never throws,
+// never fetches, never randomises. An id this snapshot doesn't know — a new
+// rune, a shard passed in by mistake, a rune of a different tree — sorts to the
+// END, deterministically, by id ascending. An unknown/absent `treeId` makes
+// EVERY id unknown, so the input falls back to a stable id-ascending order
+// rather than an arbitrary one. A wrong ORDER is the failure mode being fixed;
+// these helpers can only ever fail by leaving an unrecognised rune at the back.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Sort position of a perk within its tree: `row` 0 is the keystone row and
+ *  1/2/3 are the three minor rows; `col` is the rune's left-to-right index
+ *  inside that row, exactly as the in-game page lays it out (PERK_TREES stores
+ *  each row in that order). `null` when `treeId` or `runeId` is unknown to this
+ *  snapshot — callers sort those to the end rather than guessing a slot. */
+export function perkSlotPosition(
+  treeId: number | null | undefined,
+  runeId: number
+): { row: number; col: number } | null {
+  if (treeId == null) return null;
+  const tree = PERK_TREES[treeId];
+  if (!tree) return null;
+  const k = tree.keystones.indexOf(runeId);
+  if (k >= 0) return { row: 0, col: k };
+  for (let r = 0; r < 3; r++) {
+    const c = tree.minorRows[r].indexOf(runeId);
+    if (c >= 0) return { row: r + 1, col: c };
+  }
+  return null;
+}
+
+/** Sort rank for `runeId` within `treeId` — lower renders first. Known runes
+ *  rank by (row, col); unknown ones share a rank past every known slot, and the
+ *  comparators below break that tie by id so the result is still deterministic.
+ *  Exported for tests and for a caller that wants to bucket rather than sort. */
+export function perkSortRank(treeId: number | null | undefined, runeId: number): number {
+  const pos = perkSlotPosition(treeId, runeId);
+  return pos === null ? Number.MAX_SAFE_INTEGER : pos.row * 10 + pos.col;
+}
+
+/**
+ * Comparator putting a tree's perks in real page order: keystone row, then
+ * minor row 1, row 2, row 3, and left-to-right within each row. Unknown ids
+ * land at the end, ordered by id.
+ *
+ * Total (never returns 0 for two different ids), so the result does not depend
+ * on the caller's sort stability or on input order.
+ */
+export function comparePerksByRow(treeId: number | null | undefined): (a: number, b: number) => number {
+  return (a, b) => {
+    const ra = perkSortRank(treeId, a);
+    const rb = perkSortRank(treeId, b);
+    return ra !== rb ? ra - rb : a - b;
+  };
+}
+
+/** `comparePerksByRow` applied to a plain id list. Returns a NEW array — never
+ *  sorts the caller's array in place, since these usually come straight off a
+ *  memoised API response. */
+export function sortPerkIdsByRow(treeId: number | null | undefined, runeIds: readonly number[]): number[] {
+  return [...runeIds].sort(comparePerksByRow(treeId));
+}
+
+/** `sortPerkIdsByRow` for a list of objects that each carry a perk id — e.g.
+ *  `ProConsensusModel.primaryMinors.entries` (`{ runeId, count, share }`) or the
+ *  featured card's own rune page arrays. Keeps every field, only reorders. */
+export function sortPerksByRow<T>(
+  treeId: number | null | undefined,
+  items: readonly T[],
+  getRuneId: (item: T) => number
+): T[] {
+  const cmp = comparePerksByRow(treeId);
+  return [...items].sort((a, b) => cmp(getRuneId(a), getRuneId(b)));
+}
