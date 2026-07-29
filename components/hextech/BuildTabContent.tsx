@@ -123,8 +123,35 @@ function CardSkeleton({ className = "" }: { className?: string }) {
 // grid internally (see ProConsensusCard's lg:grid-cols-[5fr_7fr] body), so
 // giving it its own full-width area keeps both consensus cards visually
 // identical instead of squeezing one into a column.
+// 2026-07-29 (mobile tab void fix): below `lg` this is a FLEX COLUMN, not a
+// grid, and the named-area template is scoped to `lg:` only.
+//
+// The bug it fixes: a `grid-template-areas` with five named rows declares five
+// EXPLICIT rows, and `row-gap` applies between every adjacent pair of them
+// whether or not anything occupies them. Below `lg` only one tab's area is
+// visible (the other four wrappers are `hidden`, i.e. `display:none`, so they
+// measure 0), but the four 20px gaps survived — so each tab opened with a void
+// proportional to how far down the template its area sat. Measured on the
+// production build at 390px, with `grid-template-rows` naming the culprit:
+//
+//   BUILD  rows 370.75 1233.38 307.25 0 0   ->  0px above, 40px dead BELOW
+//   PRO    rows 0 0 0 1407.25 0             -> 60px above (3 gaps)
+//   OTP    rows 0 0 0 0 977.14              -> 80px above (4 gaps)
+//
+// A flex column has no explicit tracks: a `display:none` child is not a flex
+// item at all, so it contributes neither a line nor a gap, and the one visible
+// panel sits flush. This is why the fix is a different FORMATTING CONTEXT
+// rather than a negative margin — the row template now describes what is
+// actually rendered at that breakpoint instead of being corrected after the
+// fact.
+//
+// The children keep their unprefixed `[grid-area:*]` classes: those are
+// grid-item properties and are inert on a flex item, and mobile DOM order
+// (runes, itembuild, skillorder, pro, otp) already matches the old mobile
+// template exactly, so nothing moves. At `lg`+ `lg:grid` restores the grid and
+// the areas apply as before — the desktop composition is untouched.
 const BUILD_GRID_CLASS =
-  "grid grid-cols-1 gap-5 [grid-template-areas:'runes'_'itembuild'_'skillorder'_'pro'_'otp'] lg:grid-cols-[5fr_7fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_itembuild'_'skillorder_skillorder'_'pro_pro'_'otp_otp']";
+  "flex flex-col gap-5 lg:grid lg:grid-cols-[5fr_7fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_itembuild'_'skillorder_skillorder'_'pro_pro'_'otp_otp']";
 
 // Mobile-only BUILD|PRO segmented control (peak usage is a 30s champ select —
 // the pre-existing shape here was one ~3,000px scroll: Runes -> Starting ->
@@ -450,9 +477,13 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
               champ/lane change same as everything else on this tab. Reuses
               this tab's own popover plumbing (openDetail) rather than
               standing up a second popover/scroll-lock instance. A hidden
-              (N=0) ProConsensusCard renders null, collapsing this grid cell
-              to zero height cleanly — grid-template-areas doesn't reserve
-              empty space for a null child. */}
+              (N=0) ProConsensusCard renders null, collapsing this cell to zero
+              HEIGHT cleanly.
+              Corrected 2026-07-29: this used to say grid-template-areas
+              "doesn't reserve empty space" for such a cell. Zero height, yes —
+              but an explicitly-declared row still takes its ROW-GAP from the
+              neighbours, which is exactly how the 60/80px mobile tab void went
+              unnoticed. See BUILD_GRID_CLASS's header. */}
           <ProConsensusCard champ={champ} lane={lane} ver={ver} onOpenDetail={openDetail} build={build} />
         </div>
         <div

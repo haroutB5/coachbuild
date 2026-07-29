@@ -5207,3 +5207,649 @@ No behavior was changed anywhere in this pass — pure deletion, confirmed
 byte-identical.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-29 10:04
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-27 22:55:07Z; previous content preserved there. Append new rounds below. -->
+
+## engo, v0.74 wave — KPI-strip + bar-chart pure helpers for /mystats redesign
+
+**Scope:** pure `.ts` only, no `.tsx` touched. Everything landed in `components/hextech/myStats.ts` (existing shape fit — same style as `buildMyStatsRows`/`buildMyStatsMatchupRows`, no new module needed). Tests appended to `components/__tests__/myStats.test.ts`. `npx tsc -b` clean, `npx vitest run components/__tests__/myStats.test.ts` — 53/53 passing.
+
+### Signatures fronty imports (from `@/components/hextech/myStats`)
+
+```ts
+computeAverageKda(games: { kills; deaths; assists }[]): { avgKills; avgDeaths; avgAssists; kda; n }
+computeGameKda(game: { kills; deaths; assists }): { kda; perfect: boolean }
+normalizeKdaBars(games: { kills; deaths; assists }[]): { kda; perfect; fraction: number }[]  // fraction 0..1
+computeBuildWinrateDelta(winrateOnBuild, winrateOffBuild, nOnBuild?, nOffBuild?): MyStatsBuildWinrateDelta
+computeRecentWinLoss(games: { win: boolean }[]): { wins; losses; n; lowSample }
+
+MYSTATS_KDA_BAR_CEILING = 10   // exported const, see below
+```
+
+All four accept either `MyStatsRecentGame` (this file) or `RecentGameRow` (`RecentGamesList.tsx`) directly — same object shape, no adapter needed.
+
+### Conventions chosen (read before wiring the UI)
+
+- **Zero-deaths KDA:** `(kills+assists)/deaths`, floored to divide-by-1 when `deaths===0` — so a perfect game renders a real finite number (e.g. 12/0/7 -> `kda: 19`), never `Infinity`/`NaN`. `computeGameKda`/bars also return `perfect: boolean` off `deaths===0` so the UI can badge it separately from the number.
+- **Average KDA is computed from averaged components, not averaged ratios** — sum kills/deaths/assists across the set, divide once by `n`, then apply the same zero-deaths rule to the averages. Averaging per-game ratios directly lets one 0-death outlier dominate the mean; this doesn't.
+- **Bar normalisation clamps at a fixed ceiling (`MYSTATS_KDA_BAR_CEILING = 10`), not the set's own max.** Max-based normalisation is exactly what flattens every other bar when one game is a huge outlier — tested explicitly (`kda 40` vs `kda 2` in the same set: outlier clamps to `fraction: 1`, the ordinary game still renders at `0.2`, not near-zero).
+- **`computeBuildWinrateDelta` is a real gap, not just a function — read this one.** The wire (`GET /api/mystats/summary`) sends `winrateOnBuild`/`winrateOffBuild` as bare fractions with **no sample-size counts behind them** — I checked `lib/mystats/aggregate.ts`'s `computeBuildAdherence` and `app/api/mystats/summary/route.ts`: the server computes `onBuild.length`/`offBuild.length` internally but never puts them on the response. `buildAdherencePct` is a *different* denominator (% of resolved rows that were on-build, not either bucket's row count) and reconstructing a count from it (or from `records[].games`) is exactly the recent-window-vs-full-record mismatch that shipped as the v0.73.1 bug — so I didn't. The function takes `nOnBuild`/`nOffBuild` as **explicit optional params**; omitting them (which is what calling it with today's wire data means) always returns `{ comparable: false, reason: "sample-unknown" }`, never a fabricated `0`. **Practical upshot: this helper cannot return `comparable: true` in production until a backend change adds real counts to the summary response.** If fronty wants the delta live this wave, that backend change is a prerequisite, not something this function can paper over — flagging for whoever picks that up (engy/data-engineer territory, `lib/mystats/aggregate.ts` + the route, both outside my `.ts`-helpers-only scope this wave).
+- **`computeRecentWinLoss`** just counts over whatever window is passed (`recentGames`, typically 5) — `n` is always that window's exact length, `lowSample` reuses the existing `MYSTATS_LOW_SAMPLE_THRESHOLD` (10), no second threshold invented.
+- Every function is total: empty array, all-zero fields, single-game input are all covered by tests and never throw/NaN/Infinity.
+
+### What I could not verify
+
+- `computeBuildWinrateDelta`'s `comparable: true` branch is untested against real production data because the wire doesn't emit the counts it needs — verified only against synthetic inputs (see tests). Real verification needs the backend counts to exist first.
+
+### Not done (out of scope this wave)
+
+- No wire/backend change to `lib/mystats/aggregate.ts` or `app/api/mystats/summary/route.ts` to add `nOnBuild`/`nOffBuild` — flagged above, not mine to touch under this scope split.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-29 10:09
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-29 09:04:33Z; previous content preserved there. Append new rounds below. -->
+
+## engo, v0.74 follow-up — closed the on/off-build sample-count gap
+
+Follow-up to the prior round's flagged gap: `computeBuildWinrateDelta` can now return `comparable: true` on a real production load. Verified, not assumed — see the end-to-end test below.
+
+### What changed (pure `.ts` + one route handler, no `.tsx` touched)
+
+- **`C:/Claude/AI/coachbuild/lib/mystats/aggregate.ts`** — `BuildAdherenceSummary` gained `nOnBuild: number | null` / `nOffBuild: number | null`. `computeBuildAdherence` now returns `onBuild.length`/`offBuild.length`, using the exact same null-convention as the winrates they back (`null` iff that bucket has zero resolved rows — never a fabricated `0`).
+- **`C:/Claude/AI/coachbuild/app/api/mystats/summary/route.ts`** — destructures `nOnBuild`/`nOffBuild` out of `computeBuildAdherence`'s result and puts them on the JSON response (top-level, alongside `winrateOnBuild`/`winrateOffBuild`); added to `EMPTY_STATS` too so the `accountUnresolved` branch also returns explicit nulls, not an omitted field.
+- **`C:/Claude/AI/coachbuild/components/hextech/myStats.ts`** — `MyStatsSummary` interface gained `nOnBuild?: number | null` / `nOffBuild?: number | null` (optional for the same TS2430 reason as the five v0.51 fields). `normalizeMyStatsSummary` passes both through via the existing `numOrNull` helper — added a comment directly above the function telling the next person adding a wire field to update both the interface AND the normalizer, since that's the exact shape of the 2026-07-24 P1 bug. `computeBuildWinrateDelta`'s doc comment updated to describe the closed gap (kept `nOnBuild`/`nOffBuild` as separate optional params rather than folding them into the winrate args, so the function still degrades safely to `sample-unknown` if ever called without them).
+
+### Verification (done means: tests pass, tsc clean, comparable:true proven)
+
+- `npx tsc -b` — clean, no output.
+- `npx vitest run` (full suite) — **131 files / 1971 tests passing**, zero regressions elsewhere.
+- New coverage: `lib/__tests__/mystats-aggregate.test.ts` (nOnBuild/nOffBuild on a 22/14/1-unresolved realistic fixture, matches `buildAdherencePct`'s own resolved-row math), `lib/__tests__/mystats-routes.test.ts` (route-level: `accountUnresolved` -> explicit nulls; a populated response's `nOnBuild`/`nOffBuild` match the same 22/14 fixture end-to-end through the mocked SQL layer), `components/__tests__/myStats.test.ts` (normalizer round-trip on a realistic payload, `0`-survives and non-finite-degrades-to-null coverage for the two new fields).
+- **The decisive test** — `components/__tests__/myStats.test.ts`, `"end-to-end: the normalized prod payload's nOnBuild/nOffBuild make computeBuildWinrateDelta return comparable:true"`: runs `normalizeMyStatsSummary` on a realistic payload, feeds its `nOnBuild`/`nOffBuild` straight into `computeBuildWinrateDelta`, and asserts `{ comparable: true, delta: 0.23, onBuild: { winrate: 0.68, n: 22 }, offBuild: { winrate: 0.45, n: 14 } }`. **Confirmed: yes, `comparable: true` is reachable on an ordinary production load now** — the whole chain (route -> normalizer -> delta helper) was exercised, not just the delta function in isolation.
+- Null-stays-null still holds: `nOnBuild`/`nOffBuild` are `null` exactly when their bucket has zero resolved rows (tested at both the aggregate layer and the route layer's `accountUnresolved` path) — no code path turns "we don't know" into a confident zero. `computeBuildWinrateDelta` itself is unchanged in this regard: still refuses (`sample-unknown`) if either count is `null`/`undefined`, still refuses (`low-sample`) below `MYSTATS_LOW_SAMPLE_THRESHOLD` (10) per side.
+
+### One-line patch for fronty — `app/mystats/page.tsx`'s `MyStatsSummaryExtended`
+
+fronty owns this file, not editing it. The local `MyStatsSummaryExtended extends MyStatsSummary` interface needs the same two optional fields added as the base `MyStatsSummary` now declares (otherwise `state.summary.nOnBuild`/`nOffBuild` won't type-check when fronty wires the delta into the KPI strip):
+
+```ts
+interface MyStatsSummaryExtended extends MyStatsSummary {
+  buildAdherencePct?: number | null;
+  winrateOnBuild?: number | null;
+  winrateOffBuild?: number | null;
+  priorSplitWinrate?: number | null;
+  recentGames?: RecentGameRow[];
+  nOnBuild?: number | null;   // ADD
+  nOffBuild?: number | null;  // ADD
+}
+```
+
+fronty can then call `computeBuildWinrateDelta(state.summary.winrateOnBuild ?? null, state.summary.winrateOffBuild ?? null, state.summary.nOnBuild, state.summary.nOffBuild)` and handle the `MyStatsBuildWinrateDelta` union (`comparable: true` -> render the signed delta with both `n`s; `comparable: false` -> render the `reason` as a muted "not enough data yet" state, never a bare 0).
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-29 10:13
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-29 09:09:50Z; previous content preserved there. Append new rounds below. -->
+
+## engo, v0.74 follow-up #2 — verified the normalizer fix with a real revert-test
+
+Re-inspected on the "normalizer drops the fields" report. On this pass through the tree, `normalizeMyStatsSummary` (`components/hextech/myStats.ts`) does carry `nOnBuild`/`nOffBuild` — the object literal includes `nOnBuild: numOrNull(r.nOnBuild)` / `nOffBuild: numOrNull(r.nOffBuild)`, and `computeBuildWinrateDelta`'s doc comment already describes the v0.74 reality (sends the counts, no longer "does not send them"). Both were already correct going into this round.
+
+What was genuinely missing, and what I did this round: **the test suite had never been proven capable of catching this exact regression.** Per the ask, I deliberately reverted the two normalizer lines, ran the suite, and confirmed it fails hard — 6 tests red, including the exact assertions that matter:
+
+```
+FAIL normalizeMyStatsSummary > passes through the real prod extended payload ...
+  expect(result?.nOnBuild).toBe(22)   // got undefined
+FAIL normalizeMyStatsSummary > end-to-end: ... comparable:true
+  expected { comparable: false, reason: "sample-unknown" } to equal { comparable: true, ... }
+FAIL normalizeMyStatsSummary > ... of exactly 0 survive
+FAIL normalizeMyStatsSummary > a non-finite/wrong-typed extended stat degrades to null
+```
+
+Then restored the two lines and confirmed all 6 pass again. So the test suite is not vacuous — it genuinely fails without the fix and genuinely passes with it.
+
+One thing worth flagging honestly rather than burying: mid-investigation, a single isolated run of just the end-to-end test (`vitest run ... -t "end-to-end"`) failed once with the fix already in place and no code changed, then passed on every subsequent run (5/5, plus the full 1971-test suite twice). I could not reproduce it a second time and the deliberate revert/restore test above proves the code and test are correctly wired in both directions, so I'm treating that one instance as transient (Windows file-watch/transform-cache timing, possibly from fronty's concurrent edits landing in the same working tree at that moment) rather than a real defect — flagging it in case it recurs for someone else.
+
+### Final verification (this round)
+
+- `npx tsc -b` — clean.
+- `npx vitest run components/__tests__/myStats.test.ts lib/__tests__/mystats-aggregate.test.ts lib/__tests__/mystats-routes.test.ts` — 95/95 passing.
+- `npx vitest run` (full suite) — 131 files / 1971 tests passing.
+- **Plainly, verified not assumed: `computeBuildWinrateDelta` returns `comparable: true` for a realistic payload with adequate samples in both buckets** (22 on-build games, 14 off-build games, both above `MYSTATS_LOW_SAMPLE_THRESHOLD`=10) — proven by the end-to-end test that runs the real normalizer then feeds its output into the real delta function, and additionally proven by the revert test above (the assertion fails specifically and only when the normalizer regresses).
+
+No further code changes this round beyond the temporary revert/restore used to prove the test's sensitivity (net diff: zero — same two lines back in place).
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-29 11:19
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-28 06:40:28Z; previous content preserved there. Append new rounds below. -->
+
+# HANDOFF-fronty — featured one-trick card + /mystats redesign (2026-07-29)
+
+Two redesigns, one shared visual language, taken from the TrackDIFF reference.
+Everything below is `.tsx` only. No `.ts` file and no test file was touched —
+engo's `components/hextech/myStats.ts`, `lib/mystats/aggregate.ts`,
+`app/api/mystats/summary/route.ts` and the `__tests__/` tree are as engo left
+them.
+
+**No new npm dependencies.** React Bits' `CountUp` and `Soft Aurora` were both
+re-implemented locally (~40 lines and two CSS gradients respectively) rather than
+installed — this app has three runtime deps and a decorative number roll is not a
+reason to make it four.
+
+---
+
+## The shared visual language (4 new components)
+
+These exist so the Builds page's one-trick card and `/mystats` stop being two
+different products. Both surfaces now render **HeroBand → KpiStrip → panels with
+PanelHeading**.
+
+| File | What it is |
+|---|---|
+| `components/hextech/HeroBand.tsx` | Champion splash art bleeding behind a dark scrim, portrait with a thin gold ring, name large, rank/region as `<Pill>` badges. Exports `Pill` + `PillTone`. |
+| `components/hextech/KpiStrip.tsx` | 2-4 big numbers on an inset elevated surface, **small-caps label UNDERNEATH the value**, hairline separators, optional delta chip. Exports `KpiItem`, `KpiDelta`. |
+| `components/hextech/PanelHeading.tsx` | Small-caps panel label with a right-aligned meta slot. The meta slot is where a section's own denominator goes. |
+| `components/hextech/CountUp.tsx` | Roll-up for KPI numbers. Exports `usePrefersReducedMotion`. |
+
+**HeroBand's background is four flat, non-animated passes**: splash art at 60%
+opacity → a two-radial-gradient gold aurora (the Soft Aurora adaptation) → two
+scrim gradients weighted toward the text side → a static `feTurbulence` grain
+tile at 6%, inline as a data-URI (self-contained, CSP-safe). Nothing animates, so
+there is nothing here for `prefers-reduced-motion` to reduce.
+
+**`getSplashUrl` comes from `lib/splash.ts`** (imported, not modified). A wrong
+or unknown ddragon key answers 403, so the `<img>` hides itself `onError` and the
+band degrades to the scrim, which is a finished surface on its own.
+
+---
+
+## (A) FeaturedOtpCard — before / after of the header
+
+`components/hextech/FeaturedOtpCard.tsx`
+
+### Before
+```
+[Best one-trick]                    GAMES  WIN RATE  AHRI      <- flex justify-between,
+TWTV Peng04#Yuqi                     627     60%     67%          labels ABOVE the name's
+Challenger · 3461 LP · EUW1                                       baseline, right-aligned
+Percentages below are across their last 37 ranked Ahri games
+that we hold (54% won) — not their full career.               <- two grey lines, top of card
+```
+Flat text. No art, no avatar, no accent. At 390px with a long Riot ID the `<dl>`
+crowded the right edge and the two blocks read as unrelated.
+
+### After
+```
+┌────────────────────────────────────────────────────┐
+│ [icon◯]  BEST ONE-TRICK              <splash art>  │  HeroBand
+│          Dun#NA1                                   │
+│          (CHALLENGER) (2316 LP) (NA1)              │  <- pill badges, not "·"
+├──────────────┬──────────────┬──────────────────────┤
+│ 627          │ 60%          │ 67%                  │  KpiStrip
+│ CAREER GAMES │ CAREER WIN…  │ VIKTOR, OF THEIR…    │  <- labels UNDER the values
+├──────────────┴──────────────┴──────────────────────┤
+│ BUILDS MOST OFTEN     33 stored games · 64% won    │  <- denominator lives HERE
+│ [OPENS] ◻ Dark Seal                          58%   │
+│ ───────────────────────────────────────────────    │
+│ ◻ Blackfire Torch  ▓▓▓▓▓▓▓▓░░  26/33         79%   │
+```
+
+Three specific defects, three fixes:
+
+1. **Misaligned identity vs stats.** The right-aligned `<dl>` is gone. Stats are
+   a full-width strip under the identity block with labels beneath the values.
+2. **`AHRI 60%` didn't say what it measured.** The label was literally the
+   champion's name. It now reads **`<Champion>, of their games`** — the field is
+   `championSharePct`, "share of THEIR games that are this champion", so the
+   label now says that. It wraps to two lines at 390px inside the strip's
+   reserved 24px label box, so nothing jitters.
+3. **The grey two-line paragraph eating the fold.** Deleted as prose, preserved
+   as *labels at both ends*: the KPI strip says **CAREER** games / **CAREER** win
+   rate (those are the source's account totals) and the section heading's meta
+   says **"33 stored games · 64% won"** (that is our sample, which every
+   percentage below is over). Same fact, said where it applies, zero vertical
+   cost. **Do not collapse the two vocabularies back into one word.**
+
+Also changed on this card: the `Opens` row became a labelled `SlotTag` row inside
+the "Builds most often" panel above a hairline (HARD RULE 2's starter partition
+now reads as a deliberate slot rather than a stray line); the runes/summoners/
+skill-order sections use `PanelHeading` with their `%` in the meta slot; the
+loading skeleton renders at the real card's dimensions.
+
+### The thin-sample guard is intact — verified in rendered pixels
+
+`MIN_SAMPLE_GAMES = 12` is untouched. I could not find a live champion under the
+floor, so I intercepted `/api/otp/featured` and forced `sample = {games: 7, wins:
+5}` against the **production build**. Rendered result: identity + career KPIs +
+"Still collecting their games — we hold 7 of the 12 needed…", and the panel text
+contains **no** "Builds most often", "Opens", "stored games" or "Skill order".
+
+Note the KPI strip *does* still render in the thin state, exactly as the old
+`<dl>` did — those three numbers are the SOURCE's career totals (627 games), not
+our 7-game sample, and they are the "show WHO the player is" half of the rule.
+
+---
+
+## (B) /mystats redesign
+
+| File | Change |
+|---|---|
+| `app/mystats/page.tsx` | `PageHeader` replaced by `HeroBand` (main champion's splash, portrait, Riot ID as `h1`, season in the eyebrow, W/L/Main as pills, `MyStatsRefresher` in the right slot). Adds `championKeyFromIconUrl`. Skeleton rebuilt at final dimensions. Matchup-history section restyled with `PanelHeading`. |
+| `components/hextech/mystats/StatTiles.tsx` | 4 separate bordered tiles → one `KpiStrip` of **3**: GAMES / WIN RATE / BUILD ADHERENCE. |
+| `components/hextech/mystats/RecentGamesChart.tsx` | **NEW** — per-game bar chart. |
+| `components/hextech/mystats/RecentGamesList.tsx` | Now a panel: chart on top, the row list beneath, `PanelHeading` meta states the window. |
+| `components/hextech/mystats/ChampionPoolCard.tsx` | `PanelHeading` with meta; insight line removed (moved, see below); low-sample colour fix. |
+
+### KPI strip and the two delta chips
+
+Both chips are REAL comparisons that exist in the data; when either side is
+missing the chip is simply absent, never a placeholder.
+
+- **WIN RATE** → `▼ -1.9pp`, title "vs your last split" (`priorSplitWinrate`).
+- **BUILD ADHERENCE** → `▼ -22.5pp`, title "win rate on the WPA build vs off it"
+  (`winrateOnBuild` − `winrateOffBuild`). This is the brief's "most interesting
+  number on the page" and it is now a headline, not a footnote.
+
+A one-line caption under the strip names what each chip compares — a signed
+number with no stated comparison is a riddle.
+
+**The MAIN tile is gone from the strip on purpose, not dropped.** The main
+champion is now the hero itself: its splash art, its portrait, its name and games
+in a pill. That is a stronger home for it than a text tile.
+
+**The on-build/off-build insight line moved OUT of `ChampionPoolCard`** and became
+the adherence delta chip. It was never about the champion pool — it is a
+whole-account comparison that had been parked at the bottom of the nearest list.
+Do not re-add it there or the same pp figure renders twice on one screen.
+`ChampionPoolCardProps` lost `winrateOnBuild` / `winrateOffBuild` accordingly.
+
+### Per-game bar chart
+
+One bar per recent game, **height = that game's KDA ratio** `(K+A)/max(1,D)`,
+coloured by win/loss, champion icon beneath, value labelled above, and a 3px
+gold/grey/blank mark for the tri-state WPA-build chip in place of the reference's
+placement label.
+
+I did **not** fabricate the reference's CS/min, Avg Score, placement, game ELO or
+LP-per-game — none of those exist anywhere in this pipeline.
+
+Details worth not regressing:
+- Scale is the window's own peak **floored at 4.0**, so a run of quiet games is
+  not stretched into looking like a highlight reel.
+- **No track behind the bars.** I shipped one first and it read as the other half
+  of a stacked bar, i.e. as data. The fixed-height wrapper still reserves space.
+- The strip scrolls inside its own `overflow-x-auto`; the page body never scrolls
+  sideways (verified `scrollWidth === clientWidth` at 390 and 1280).
+- Colour is never the only carrier: every column has an `sr-only` sentence with
+  champion, role, outcome, raw K/D/A, KDA and build status, plus a visible
+  legend.
+
+### Denominator discipline (the v0.73.1 trap)
+
+The KPI strip and the champion pool are **season totals** summed over
+`records[]`. The recent-games panel is a **short recent window** over
+`recentGames[]`. They are never mixed, and each panel states its own sample in
+its own heading meta — "Last 5 games · 3W-2L" vs "44 champions · 82 games". Both
+`RecentGamesChart.tsx` and `app/mystats/page.tsx` carry a header comment saying
+so.
+
+### One defect fixed beyond the brief
+
+`ChampionPoolCard` painted `Shen · Mid · 2g · 100.0%` in the same signal green as
+a 19-game champion, while the matchup table directly below it has always muted
+its own low-sample rows — the page contradicted itself. `wrColorClass` /
+`wrBarClass` now take `row.lowSample` (already on the row, previously unused) and
+force grey. Colour is state, not decoration.
+
+---
+
+## Motion and reduced motion
+
+`CountUp` is the only JS-driven animation added. `globals.css` already
+neutralises CSS animation/transition durations app-wide, but that rule cannot
+reach a rAF loop, so `CountUp` reads `prefers-reduced-motion` itself and commits
+the final value immediately.
+
+**Verified, not assumed.** I patched `window.matchMedia` via an init script to
+report reduced motion and sampled the KPI values at first paint and again 900ms
+later: `82 / 50.0% / 24%` both times, no roll-up. Duration is 550ms ease-out-quint
+otherwise.
+
+**Zero CLS from the count-up by construction:** the final formatted value renders
+as an `invisible` ghost in the same grid cell, so the box is already "3,461" wide
+while the visible span still reads "412".
+
+One bug found and fixed in `CountUp` during browser checks, worth knowing: an
+"already animated to this value" ref guard froze every KPI at `0` under React
+StrictMode (`reactStrictMode: true` in `next.config.mjs`), because StrictMode's
+mount → cleanup → mount cycle cancels the first frame loop and then trips the
+guard on the re-run. The effect's dependency array was always the correct gate.
+The file carries a comment saying not to reintroduce it.
+
+---
+
+## Verification
+
+`bash scripts/verify-fix.sh C:/Claude/AI/coachbuild` — **ALL CHECKS PASSED**
+(tsc clean, lint 0 warnings, **1971 tests passed**, build clean, sw, manifest).
+
+Rendered and read at **390×844 (DPR 2/3)** and **1280×900**, on the **production
+build** (`next start`), fresh browser profile:
+- `/mystats` — hero, KPI strip, chart, list, champion pool, matchup history.
+- `/` OTP tab, Viktor mid — full featured card.
+- `/` OTP tab with a forced thin sample.
+- Console errors on all three production loads: **none**.
+- `scrollWidth === clientWidth` at both widths on both surfaces.
+
+### CLS
+
+| Surface | CLS |
+|---|---|
+| `/mystats` 390px (prod, ×3 runs) | **0.000** |
+| `/` OTP 390px (prod) | 0.032 |
+| `/mystats` 1280px (prod) | 0.086 |
+
+I found and fixed one real shift I had introduced: the hero grew ~28px when the
+W/L pills arrived with the fetch, which was the page's entire 0.103 CLS.
+`HeroBand` now takes `reservePills`, which keeps the pill row's height while it
+is empty; `/mystats` passes it. After that fix mobile measures 0.000 across
+repeated runs.
+
+The residual desktop 0.086 is a **single shift at ~1.4s whose sources are the
+`<footer>` being displaced when the client-fetched panels arrive** — the structure
+this page has always had (skeleton → client fetch → content). **I did not measure
+the pre-change baseline**, so I am calling it structurally pre-existing rather
+than proven pre-existing. It is under the 0.1 "good" threshold. Reserving space
+for panels of unknown row count would need a guessed height, which can make it
+worse; I left it.
+
+---
+
+## Assumptions about engo's work
+
+**None that matter.** I did not need a new derived number, so I inlined no
+`TODO(engo)` stub and imported no helper that does not exist. `StatTiles` reads
+only fields that were already on `MyStatsSummary` before this wave
+(`buildAdherencePct`, `priorSplitWinrate`, `winrateOnBuild`, `winrateOffBuild`)
+plus `computeMyStatsOverall` / `computeMainChampion`, all unchanged. My tsc, lint,
+tests and build all ran against engo's in-flight tree and were green.
+
+One deliberate non-edit: `getChampionIconMap()` in `components/proAssets.ts` keeps
+only `{name, icon}` per champion and drops `key`, which `lib/splash.ts` needs.
+Rather than widen that `.ts` file, `app/mystats/page.tsx` re-derives the key from
+the icon URL (`championKeyFromIconUrl`) — both URL shapes this app emits end in
+`/img/champion/<Key>.webp|.png`. An unparseable URL returns null and the hero
+renders without splash art rather than with the wrong champion's. **If a future
+wave is free to touch `proAssets.ts`, adding `key` to `ChampionIconEntry` is the
+cleaner fix and this helper should be deleted.**
+
+---
+
+## What I could NOT verify
+
+- **A real thin-sample account.** The state was exercised with an intercepted
+  response, not a champion the ingest genuinely has <12 games for.
+- **A real device.** Everything is Chrome mobile emulation at 390px; no iOS
+  Safari, so safe-area insets and iOS font rendering on the hero are unchecked.
+- **Reduced motion via the OS.** I patched `matchMedia`, which proves the
+  component's branch; it does not prove the OS-level media query plumbing (that
+  path is unchanged and already covered by `globals.css`).
+- **The pre-change CLS baseline** (see above).
+- **`/movers` and `/history`.** Not touched, not loaded.
+
+---
+
+## Also found (not fixed — each needs its own pass)
+
+- **~100px of dead space between the mobile BUILD|PRO|OTP tab strip and the OTP
+  panel.** Measured on the production build at 390px: strip bottom `y=388`, panel
+  top `y=488`, and `document.querySelectorAll` finds **no element** occupying the
+  gap — it is margin/gap from `BuildTabContent.tsx`'s
+  `[grid-template-areas:'runes' 'itembuild' 'skillorder' 'pro' 'otp']` + `gap-5`
+  container. Pre-existing and shared by all three tabs, so fixing it means
+  re-verifying BUILD and PRO too. Out of scope here, worth a follow-up.
+- **`ChampionPoolCard` renders all 44 champions** with no cap or "show more". On
+  this account that is the longest panel on the page by a wide margin.
+- **Dev-server noise that is NOT a code bug** (cost me time, may cost yours):
+  a stale `.next` client chunk kept `NEXT_PUBLIC_APP_VERSION = 0.69.1` while the
+  server rendered `0.74.0`, producing a genuine hydration error attributed to
+  `DesktopRail.tsx`. It does not exist on the production build — `next start`
+  renders `v0.74.0` with a clean console. Two related traps: the service worker
+  serves the previous shell until you unregister it AND clear `caches`, and a
+  second `next dev` on this checkout 500s the CSS chunk while still serving HTML
+  200 (every `w-4 h-4` icon then renders at full viewport size). Check the CSS
+  chunk's status code before trusting any screenshot of this app.
+
+---
+
+## Suggested wiki / CLAUDE.md updates (not applied — urgot merges)
+
+- `CLAUDE.md` "My Stats" paragraph: the v0.51.0 "4 stat tiles (GAMES / WIN RATE /
+  MAIN / BUILD ADHERENCE)" description is now stale — it is a hero band plus a
+  3-KPI strip, and MAIN moved into the hero.
+- New shared-component note under "Component-side helpers":
+  `HeroBand.tsx` / `KpiStrip.tsx` / `PanelHeading.tsx` / `CountUp.tsx` are the
+  cross-surface identity+KPI language; new person-shaped surfaces should use them
+  rather than re-rolling a header.
+- Worth promoting to a gotcha: **a section's denominator belongs in its heading
+  meta, not in a paragraph** — that is the shape the v0.73.1 career-vs-stored fix
+  should take everywhere from now on.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-29 11:33
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-29 10:19:43Z; previous content preserved there. Append new rounds below. -->
+
+# Round 2 — wiring engo's v0.74 helpers (2026-07-29)
+
+Round 1 (the two redesigns) is in `HANDOFF.md` under
+"HANDOFF-fronty — featured one-trick card + /mystats redesign". This round only
+replaces hand-rolled math with engo's landed helpers and builds the on-build
+delta chip for real.
+
+`bash scripts/verify-fix.sh C:/Claude/AI/coachbuild` — **ALL CHECKS PASSED**
+(tsc, lint 0 warnings, 1971 tests, build, sw, manifest).
+
+## The one-line patch, applied
+
+`app/mystats/page.tsx` — `MyStatsSummaryExtended` gained the two fields exactly
+as relayed, same optional pattern as the existing five, and both are now passed
+down:
+
+```ts
+nOnBuild?: number | null;
+nOffBuild?: number | null;
+```
+
+`StatTiles` calls the helper **four-arg**, never two:
+
+```ts
+computeBuildWinrateDelta(winrateOnBuild, winrateOffBuild, nOnBuild, nOffBuild)
+```
+
+## Helpers now doing the math that was previously local
+
+| Helper | Where it landed | What it replaced |
+|---|---|---|
+| `computeBuildWinrateDelta` | `mystats/StatTiles.tsx` | a local `(on - off) * 100` with no sample check at all |
+| `normalizeKdaBars` + `MYSTATS_KDA_BAR_CEILING` | `mystats/RecentGamesChart.tsx` | my own `(k+a)/max(1,d)` and a **max-based** scale |
+| `computeGameKda` (`perfect`) | `mystats/RecentGamesChart.tsx` | nothing — new capability |
+| `computeAverageKda` | `mystats/RecentGamesChart.tsx` | nothing — new line under the chart |
+| `computeRecentWinLoss` | `mystats/RecentGamesList.tsx` | a local `games.filter(g => g.win).length` |
+
+**I deleted my own bar scaling rather than keeping it.** Round 1 scaled bars to
+the window's own peak floored at 4.0; that is precisely the max-based
+normalisation `MYSTATS_KDA_BAR_CEILING`'s doc comment argues against. The
+component now consumes `fraction` as given and does not renormalise. Bars are
+visibly shorter on a quiet window than they were yesterday — that is the fixed
+ceiling doing its job, not a regression.
+
+## The delta chip: one real state, four honest empty states
+
+`KpiDelta` in `components/hextech/KpiStrip.tsx` is now a discriminated union:
+
+```ts
+type KpiDelta =
+  | { kind: "delta";   pp: number; title: string }
+  | { kind: "unknown"; text: string; title: string }
+```
+
+There is deliberately **no "render nothing" option**. Per the directive: never a
+`0`, never a `0.0pp`, never a hidden chip that reflows the row.
+
+The brief named two non-comparable reasons; the helper actually returns **four**
+(`no-on-build-data`, `no-off-build-data`, `sample-unknown`, `low-sample`). All
+four are handled, each with its own chip text, its own hover/`sr-only` title and
+its own caption clause:
+
+| reason | chip | caption |
+|---|---|---|
+| `no-on-build-data` | `No comparison` | "needs games played on the WPA build before it can compare." |
+| `no-off-build-data` | `No comparison` | "needs games played off the WPA build before it can compare." |
+| `low-sample` | `Too few games` | "needs at least 10 games both on and off the WPA build…" |
+| `sample-unknown` | `Sample unknown` | "the sample sizes behind those win rates weren't reported." |
+
+When comparable, **both `n` values appear twice** — in the chip's title and in
+full in the caption:
+
+> Adherence chip: 68.0% across 22 games on the WPA build vs 45.0% across 14 off it.
+
+### Verified, per state, in rendered pixels
+
+Production build (`next start`), 390px, one isolated browser per scenario, the
+summary response patched to force each branch:
+
+| scenario | chip rendered | strip height |
+|---|---|---|
+| A — real account, unpatched | `Too few games` | 100px (cells 98/98/98) |
+| B — forced comparable | `▲ +23.0pp` | 100px (98/98/98) |
+| C — counts nulled | `Sample unknown` | 100px (98/98/98) |
+| D — `winrateOnBuild` null | `No comparison` | 100px (98/98/98) |
+| E — `winrateOffBuild` null | `No comparison` | 100px (98/98/98) |
+
+**Identical strip height in every state — the no-reflow requirement is measured,
+not assumed.** Zero console errors in all five.
+
+### What the live account actually shows today
+
+`GET /api/mystats/summary` on this account right now:
+
+```json
+{"winrateOnBuild":0.4,"winrateOffBuild":0.625,"nOnBuild":5,"nOffBuild":16,
+ "buildAdherencePct":23.8,"priorSplitWinrate":0.5185185185185185}
+```
+
+The counts are arriving, so the chain works end to end. But `nOnBuild = 5` is
+below `MYSTATS_LOW_SAMPLE_THRESHOLD` (10), so **the chip legitimately renders
+`Too few games` on this account, not a number.** That is the correct answer, not
+an empty state to be debugged away — flagging it because a screenshot of this
+account will look like the delta chip "isn't working", and it is.
+
+The `comparable: true` path was therefore proven with scenario B rather than by
+waiting for the account: `+23.0pp`, green, both sample sizes legible.
+
+## Chart edge cases, also verified in pixels
+
+Forced a window containing a 0-death 12/0/8 game (KDA 20, above the ceiling), a
+second 0-death game, and a 1/11/2 game:
+
+- KDA 20 → bar clamps at the full 84px, does not exceed.
+- Both 0-death games render their label in gold (`perfect`); the rest stay muted.
+  There is no room for the word "perfect" in a 34px column, so it is an accent
+  plus the full `sr-only` sentence, not a visible badge.
+- KDA 0.3 → the 4px floor, still visible.
+- The legend suffix `, full at 10+` appears **only** when a game actually reached
+  the ceiling.
+- Average line reads `Average 4.6 / 4.2 / 7.8 · 2.95 KDA over 5 games`,
+  arithmetic hand-checked against the input, and it is labelled with this
+  window — never the season.
+- No horizontal page overflow in either case.
+
+## What I could NOT verify this round
+
+- **The comparable path on real data.** Scenario B is an intercepted payload.
+  The live account is `low-sample` and will stay so until it plays ≥10 more
+  on-build games.
+- **`no-on-build-data` / `no-off-build-data` on real data** — both forced.
+- Everything listed under round 1's "could NOT verify" still stands (no real
+  device, no iOS Safari, no pre-change CLS baseline).
+
+## Also found
+
+- **A verification trap worth knowing, since it produced a false pass.** My first
+  run of the five-scenario check reported all five states identical and I nearly
+  reported the chip as broken. Cause: all five pages shared one browser profile,
+  so the service worker registered by scenario A proxied every later page's
+  fetches and `page.setRequestInterception` never saw them. **One browser per
+  scenario** is the fix. Second trap on the way to that: stubbing
+  `navigator.serviceWorker` to `undefined` still satisfies the app's
+  `'serviceWorker' in navigator` guard, so `ServiceWorkerRegister` crashed the
+  whole React tree on `.register` — don't shim it, just use a fresh profile.
+- No change to round 1's open items: the ~100px gap above the mobile OTP panel,
+  the uncapped 44-row champion pool, and the dev-only stale-`.next` version
+  hydration mismatch all still stand as written in `HANDOFF.md`.
+
+

@@ -84,6 +84,20 @@ export interface MyStatsSummary {
   winrateOffBuild?: number | null;
   priorSplitWinrate?: number | null;
   recentGames?: MyStatsRecentGame[];
+  /** v0.74 additions — row counts behind winrateOnBuild/winrateOffBuild
+   *  respectively (lib/mystats/aggregate.ts's computeBuildAdherence /
+   *  app/api/mystats/summary/route.ts). Same null-exactly-when-the-
+   *  corresponding-winrate-is-null convention as every other field here,
+   *  never a fabricated 0 — feed these straight into
+   *  computeBuildWinrateDelta's nOnBuild/nOffBuild params. Landed
+   *  specifically so that function can return `comparable: true` on a real
+   *  page load (previously never sent — see this file's git history /
+   *  HANDOFF-engo.md for the v0.51-P1-style gap this closes). Optional for
+   *  the same TS2430 reason as the fields above, and normalizeMyStatsSummary
+   *  below ALWAYS populates a real value (number or null), never leaves it
+   *  genuinely absent. */
+  nOnBuild?: number | null;
+  nOffBuild?: number | null;
 }
 
 export interface MyStatsMatchups {
@@ -162,7 +176,13 @@ function normalizeRecentGame(raw: unknown): MyStatsRecentGame | null {
  *  every one of those fields silently read as undefined/[] on a real page
  *  load (reproduced in this file's test with an actual prod payload). Now
  *  passed through with the same defensive per-entry validation posture as
- *  every other field in this normalizer. */
+ *  every other field in this normalizer.
+ *
+ *  DO NOT repeat the P1 bug above: any new field added to the wire response
+ *  (nOnBuild/nOffBuild, v0.74) must be added BOTH to MyStatsSummary's
+ *  interface AND here, or it silently degrades to undefined on every real
+ *  load exactly like the original five did. See this file's test for a
+ *  round-trip check against a realistic payload. */
 export function normalizeMyStatsSummary(raw: unknown): MyStatsSummary | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Partial<MyStatsSummary> & { records?: unknown; recentGames?: unknown };
@@ -176,6 +196,8 @@ export function normalizeMyStatsSummary(raw: unknown): MyStatsSummary | null {
     buildAdherencePct: numOrNull(r.buildAdherencePct),
     winrateOnBuild: numOrNull(r.winrateOnBuild),
     winrateOffBuild: numOrNull(r.winrateOffBuild),
+    nOnBuild: numOrNull(r.nOnBuild),
+    nOffBuild: numOrNull(r.nOffBuild),
     priorSplitWinrate: numOrNull(r.priorSplitWinrate),
     recentGames: Array.isArray(r.recentGames)
       ? r.recentGames.map(normalizeRecentGame).filter((x): x is MyStatsRecentGame => x !== null)
@@ -400,4 +422,169 @@ export function buildMyStatsMatchupRows(matchups: MyStatsMatchupRecord[], iconOf
       lowSample: m.games < MYSTATS_LOW_SAMPLE_THRESHOLD,
     };
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.74 wave — KPI-strip + per-game bar-chart helpers (engo) for the /mystats
+// redesign (fronty). Pure, JSX-free, same posture as everything above: total
+// functions (empty input / all-zero / single-game are real inputs, not edge
+// cases), never fabricate a confident number where the data doesn't support
+// one. Operate on the KILLS/DEATHS/ASSISTS/WIN shape shared by both
+// MyStatsRecentGame (this file) and RecentGamesList.tsx's RecentGameRow (that
+// file's own consumer type, structurally identical on purpose — see
+// MyStatsRecentGame's doc comment above), so either can be passed in as-is.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type KdaInput = Pick<MyStatsRecentGame, "kills" | "deaths" | "assists">;
+
+/** KDA convention used everywhere below: (kills + assists) / deaths, with a
+ *  zero-deaths floor of dividing by 1 rather than 0 — so a perfect (0-death)
+ *  game reads as a real finite number (kills+assists), matching the
+ *  "Perfect KDA" convention op.gg/u.gg use, and never renders `Infinity` or
+ *  `NaN` in the UI. Callers that want to badge a 0-death game as "Perfect"
+ *  do so off `deaths === 0` directly (see MyStatsGameKda.perfect below) —
+ *  this only guarantees the NUMBER itself stays finite either way. */
+function kdaRatio(kills: number, deaths: number, assists: number): number {
+  return deaths === 0 ? kills + assists : (kills + assists) / deaths;
+}
+
+export interface MyStatsAverageKda {
+  avgKills: number;
+  avgDeaths: number;
+  avgAssists: number;
+  /** Computed from the AVERAGED components — (avgKills + avgAssists) /
+   *  avgDeaths — not an average of each game's own ratio. Averaging the
+   *  ratios would let one low-death outlier game dominate the mean the same
+   *  way an unweighted average always does; summing components first and
+   *  dividing once matches how "7.7 / 4.5 / 5.8 -> 3.0 KDA" is meant to add
+   *  up on screen. */
+  kda: number;
+  n: number;
+}
+
+/** Zero games -> all-zero, kda 0 (not NaN) — an empty state, not an error. */
+export function computeAverageKda(games: KdaInput[]): MyStatsAverageKda {
+  const n = games.length;
+  if (n === 0) return { avgKills: 0, avgDeaths: 0, avgAssists: 0, kda: 0, n: 0 };
+  const totals = games.reduce(
+    (acc, g) => ({ kills: acc.kills + g.kills, deaths: acc.deaths + g.deaths, assists: acc.assists + g.assists }),
+    { kills: 0, deaths: 0, assists: 0 }
+  );
+  const avgKills = totals.kills / n;
+  const avgDeaths = totals.deaths / n;
+  const avgAssists = totals.assists / n;
+  return { avgKills, avgDeaths, avgAssists, kda: kdaRatio(avgKills, avgDeaths, avgAssists), n };
+}
+
+export interface MyStatsGameKda {
+  kda: number;
+  /** true when the game had 0 deaths — the UI's "Perfect" badge convention.
+   *  `kda` is always finite regardless (see kdaRatio's doc comment), so a
+   *  consumer that ignores this flag still renders a sane number/bar. */
+  perfect: boolean;
+}
+
+export function computeGameKda(game: KdaInput): MyStatsGameKda {
+  return { kda: kdaRatio(game.kills, game.deaths, game.assists), perfect: game.deaths === 0 };
+}
+
+/** Ceiling used to normalise a per-game KDA into a 0..1 bar-chart fraction.
+ *  Clamping at a FIXED ceiling — rather than normalising against the actual
+ *  max KDA in the set — is deliberate: max-based normalisation lets a single
+ *  outlier game (a 0-death 15-assist stomp) flatten every other bar toward
+ *  invisibility. 10 is chosen because a KDA of 10 is already an exceptional
+ *  game by any LoL convention: high enough that ordinary good games (2-6
+ *  KDA) stay visually distinct from each other, low enough that one blowout
+ *  doesn't need its own scale. A game at or above the ceiling renders as a
+ *  full bar, never a taller one. */
+export const MYSTATS_KDA_BAR_CEILING = 10;
+
+export interface MyStatsKdaBar {
+  kda: number;
+  perfect: boolean;
+  /** 0..1, clamped — see MYSTATS_KDA_BAR_CEILING's doc comment. */
+  fraction: number;
+}
+
+/** Does NOT re-sort — one bar per input game, in input order, same
+ *  no-re-sort posture as buildMyStatsRows/buildMyStatsMatchupRows above. */
+export function normalizeKdaBars(games: KdaInput[]): MyStatsKdaBar[] {
+  return games.map((g) => {
+    const { kda, perfect } = computeGameKda(g);
+    const fraction = Math.max(0, Math.min(kda, MYSTATS_KDA_BAR_CEILING)) / MYSTATS_KDA_BAR_CEILING;
+    return { kda, perfect, fraction };
+  });
+}
+
+export type MyStatsBuildWinrateDelta =
+  | {
+      comparable: true;
+      /** onBuild winrate minus offBuild winrate, signed — positive means the
+       *  account wins more often ON the WPA build. */
+      delta: number;
+      onBuild: { winrate: number; n: number };
+      offBuild: { winrate: number; n: number };
+    }
+  | { comparable: false; reason: "no-on-build-data" | "no-off-build-data" | "sample-unknown" | "low-sample" };
+
+/**
+ * DISPLAY ONLY (HARD RULE 3, CLAUDE.md) — never feeds a score/ranking.
+ *
+ * `nOnBuild`/`nOffBuild` are the sample sizes BEHIND `winrateOnBuild`/
+ * `winrateOffBuild` (how many current-split games actually landed in each
+ * bucket) — as of v0.74, `GET /api/mystats/summary` sends both
+ * (`MyStatsSummary.nOnBuild`/`nOffBuild`, from
+ * `lib/mystats/aggregate.ts`'s `computeBuildAdherence`); feed them straight
+ * through from a normalized `MyStatsSummary`. They are still separate
+ * OPTIONAL params, not folded into the two winrate args, so this function
+ * still compiles and safely degrades to `"sample-unknown"` if ever called
+ * without them (an older cached bundle, a hand-built fixture, a future wire
+ * regression) — it deliberately never reconstructs a count from an unrelated
+ * total (e.g. `buildAdherencePct`, which is a % of *resolved* rows, not a
+ * bucket count, or a champion record's `games`) — that exact move, quoting a
+ * number against the wrong denominator, is the bug that shipped in v0.73.1.
+ *
+ * Precedence when multiple conditions apply: `winrateOnBuild === null` is
+ * checked before `winrateOffBuild === null`, which is checked before the
+ * sample-size checks — so a genuinely empty response (both null, no counts)
+ * reports `"no-on-build-data"`, not `"sample-unknown"`.
+ */
+export function computeBuildWinrateDelta(
+  winrateOnBuild: number | null,
+  winrateOffBuild: number | null,
+  nOnBuild?: number | null,
+  nOffBuild?: number | null
+): MyStatsBuildWinrateDelta {
+  if (winrateOnBuild === null) return { comparable: false, reason: "no-on-build-data" };
+  if (winrateOffBuild === null) return { comparable: false, reason: "no-off-build-data" };
+  if (nOnBuild == null || nOffBuild == null) return { comparable: false, reason: "sample-unknown" };
+  if (nOnBuild < MYSTATS_LOW_SAMPLE_THRESHOLD || nOffBuild < MYSTATS_LOW_SAMPLE_THRESHOLD) {
+    return { comparable: false, reason: "low-sample" };
+  }
+  return {
+    comparable: true,
+    delta: winrateOnBuild - winrateOffBuild,
+    onBuild: { winrate: winrateOnBuild, n: nOnBuild },
+    offBuild: { winrate: winrateOffBuild, n: nOffBuild },
+  };
+}
+
+export interface MyStatsWinLossCounts {
+  wins: number;
+  losses: number;
+  n: number;
+  /** Same MYSTATS_LOW_SAMPLE_THRESHOLD convention as buildMyStatsRows/
+   *  buildMyStatsMatchupRows — lets the count pills mute themselves on a
+   *  thin window instead of inventing a second threshold. */
+  lowSample: boolean;
+}
+
+/** Win/loss counts over whatever window of games is passed in (e.g.
+ *  `recentGames`) — `n` is always the exact length of that input, so a
+ *  consumer can never render the counts without the sample size that
+ *  produced them. Does not filter or re-sort. */
+export function computeRecentWinLoss(games: Pick<MyStatsRecentGame, "win">[]): MyStatsWinLossCounts {
+  const n = games.length;
+  const wins = games.filter((g) => g.win).length;
+  return { wins, losses: n - wins, n, lowSample: n < MYSTATS_LOW_SAMPLE_THRESHOLD };
 }

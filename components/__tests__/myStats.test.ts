@@ -8,7 +8,13 @@ import {
   buildMyStatsRows,
   computeMyStatsOverall,
   buildMyStatsMatchupRows,
+  computeAverageKda,
+  computeGameKda,
+  normalizeKdaBars,
+  computeBuildWinrateDelta,
+  computeRecentWinLoss,
   MYSTATS_LOW_SAMPLE_THRESHOLD,
+  MYSTATS_KDA_BAR_CEILING,
   type MyStatsRecord,
   type MyStatsMatchupRecord,
   type IconEntry,
@@ -18,6 +24,8 @@ const EXTENDED_DEFAULTS = {
   buildAdherencePct: null,
   winrateOnBuild: null,
   winrateOffBuild: null,
+  nOnBuild: null,
+  nOffBuild: null,
   priorSplitWinrate: null,
   recentGames: [],
 };
@@ -87,6 +95,8 @@ describe("normalizeMyStatsSummary", () => {
     buildAdherencePct: 62.5,
     winrateOnBuild: 0.68,
     winrateOffBuild: 0.45,
+    nOnBuild: 22,
+    nOffBuild: 14,
     priorSplitWinrate: 0.5185,
     recentGames: [
       { championId: 112, role: 2, win: true, kills: 8, deaths: 2, assists: 11, onWpaBuild: true },
@@ -102,6 +112,8 @@ describe("normalizeMyStatsSummary", () => {
     expect(result?.buildAdherencePct).toBe(62.5);
     expect(result?.winrateOnBuild).toBe(0.68);
     expect(result?.winrateOffBuild).toBe(0.45);
+    expect(result?.nOnBuild).toBe(22);
+    expect(result?.nOffBuild).toBe(14);
     expect(result?.priorSplitWinrate).toBe(0.5185);
     expect(result?.recentGames).toHaveLength(5);
     expect(result?.recentGames).toEqual([
@@ -113,19 +125,62 @@ describe("normalizeMyStatsSummary", () => {
     ]);
   });
 
-  it("buildAdherencePct/winrateOnBuild/winrateOffBuild/priorSplitWinrate of exactly 0 survive (never coerced to null)", () => {
-    const result = normalizeMyStatsSummary({ buildAdherencePct: 0, winrateOnBuild: 0, winrateOffBuild: 0, priorSplitWinrate: 0 });
+  // ── v0.74 closes the gap flagged in HANDOFF-engo.md: feeding a REAL
+  // (normalized) server payload's nOnBuild/nOffBuild into
+  // computeBuildWinrateDelta must now actually reach `comparable: true` on
+  // an ordinary production load -- this is the end-to-end proof, not a
+  // synthetic-only unit test of the delta function in isolation. ──────────
+  it("end-to-end: the normalized prod payload's nOnBuild/nOffBuild make computeBuildWinrateDelta return comparable:true", () => {
+    const result = normalizeMyStatsSummary(PROD_PAYLOAD);
+    expect(result).not.toBeNull();
+    const delta = computeBuildWinrateDelta(
+      result!.winrateOnBuild ?? null,
+      result!.winrateOffBuild ?? null,
+      result!.nOnBuild,
+      result!.nOffBuild
+    );
+    expect(delta).toEqual({
+      comparable: true,
+      delta: 0.68 - 0.45,
+      onBuild: { winrate: 0.68, n: 22 },
+      offBuild: { winrate: 0.45, n: 14 },
+    });
+  });
+
+  it("buildAdherencePct/winrateOnBuild/winrateOffBuild/priorSplitWinrate/nOnBuild/nOffBuild of exactly 0 survive (never coerced to null)", () => {
+    const result = normalizeMyStatsSummary({
+      buildAdherencePct: 0,
+      winrateOnBuild: 0,
+      winrateOffBuild: 0,
+      priorSplitWinrate: 0,
+      // nOnBuild/nOffBuild are never actually 0 in practice (the aggregate
+      // layer returns null instead, see mystats-aggregate.test.ts) -- this
+      // exercises the NORMALIZER's own numOrNull passthrough in isolation,
+      // same "0 is a real value" discipline as every other field here.
+      nOnBuild: 0,
+      nOffBuild: 0,
+    });
     expect(result?.buildAdherencePct).toBe(0);
     expect(result?.winrateOnBuild).toBe(0);
     expect(result?.winrateOffBuild).toBe(0);
     expect(result?.priorSplitWinrate).toBe(0);
+    expect(result?.nOnBuild).toBe(0);
+    expect(result?.nOffBuild).toBe(0);
   });
 
   it("a non-finite/wrong-typed extended stat degrades to null, never NaN or a string", () => {
-    const result = normalizeMyStatsSummary({ buildAdherencePct: NaN, winrateOnBuild: "0.5", priorSplitWinrate: undefined });
+    const result = normalizeMyStatsSummary({
+      buildAdherencePct: NaN,
+      winrateOnBuild: "0.5",
+      priorSplitWinrate: undefined,
+      nOnBuild: "22",
+      nOffBuild: NaN,
+    });
     expect(result?.buildAdherencePct).toBeNull();
     expect(result?.winrateOnBuild).toBeNull();
     expect(result?.priorSplitWinrate).toBeNull();
+    expect(result?.nOnBuild).toBeNull();
+    expect(result?.nOffBuild).toBeNull();
   });
 
   it("drops a malformed recentGames entry without dropping the rest of the list", () => {
@@ -332,5 +387,151 @@ describe("buildMyStatsMatchupRows", () => {
       { oppChampionId: 2, games: 20, wins: 15, winrate: 0.75 },
     ];
     expect(buildMyStatsMatchupRows(matchups, () => undefined).map((r) => r.oppChampionId)).toEqual([1, 2]);
+  });
+});
+
+// ── v0.74 wave -- KPI-strip + bar-chart helpers (engo) ──────────────────────
+
+describe("computeAverageKda", () => {
+  it("computes KDA from the AVERAGED components, not the average of per-game ratios (realistic 2-game sample)", () => {
+    // avgKills=8, avgDeaths=3, avgAssists=7 -> kda = (8+7)/3 = 5
+    const games = [
+      { kills: 10, deaths: 4, assists: 6 },
+      { kills: 6, deaths: 2, assists: 8 },
+    ];
+    const result = computeAverageKda(games);
+    expect(result).toEqual({ avgKills: 8, avgDeaths: 3, avgAssists: 7, kda: 5, n: 2 });
+  });
+
+  it("zero deaths across every game -> finite kda (kills+assists), never Infinity or NaN", () => {
+    const games = [
+      { kills: 10, deaths: 0, assists: 5 },
+      { kills: 6, deaths: 0, assists: 9 },
+    ];
+    const result = computeAverageKda(games);
+    expect(result.avgDeaths).toBe(0);
+    expect(result.kda).toBe(15); // avgKills(8) + avgAssists(7)
+    expect(Number.isFinite(result.kda)).toBe(true);
+  });
+
+  it("zero games -> all-zero totals, kda 0 (not NaN) -- an empty state, not an error", () => {
+    expect(computeAverageKda([])).toEqual({ avgKills: 0, avgDeaths: 0, avgAssists: 0, kda: 0, n: 0 });
+  });
+
+  it("a single game is a real input -- averages equal that game's own numbers", () => {
+    const result = computeAverageKda([{ kills: 4, deaths: 2, assists: 6 }]);
+    expect(result).toEqual({ avgKills: 4, avgDeaths: 2, avgAssists: 6, kda: 5, n: 1 });
+  });
+});
+
+describe("computeGameKda", () => {
+  it("computes (kills+assists)/deaths for a normal game", () => {
+    expect(computeGameKda({ kills: 6, deaths: 3, assists: 3 })).toEqual({ kda: 3, perfect: false });
+  });
+
+  it("zero deaths -> finite kda (kills+assists) and perfect: true, never Infinity", () => {
+    const result = computeGameKda({ kills: 12, deaths: 0, assists: 7 });
+    expect(result).toEqual({ kda: 19, perfect: true });
+    expect(Number.isFinite(result.kda)).toBe(true);
+  });
+
+  it("a scoreless game (0/0/0) is a real input -- 0 kda, perfect: true (0 deaths), not NaN", () => {
+    expect(computeGameKda({ kills: 0, deaths: 0, assists: 0 })).toEqual({ kda: 0, perfect: true });
+  });
+});
+
+describe("normalizeKdaBars", () => {
+  it("maps kda to a 0..1 fraction of MYSTATS_KDA_BAR_CEILING for ordinary games", () => {
+    const bars = normalizeKdaBars([{ kills: 3, deaths: 3, assists: 3 }]); // kda 2
+    expect(bars[0].kda).toBe(2);
+    expect(bars[0].fraction).toBeCloseTo(2 / MYSTATS_KDA_BAR_CEILING, 5);
+  });
+
+  it("an outlier game clamps at the ceiling (fraction 1) instead of stretching the scale for every other bar", () => {
+    const bars = normalizeKdaBars([
+      { kills: 20, deaths: 0, assists: 20 }, // kda 40 -- the outlier
+      { kills: 3, deaths: 3, assists: 3 }, // kda 2 -- an ordinary game
+    ]);
+    expect(bars[0].kda).toBe(40);
+    expect(bars[0].fraction).toBe(1); // clamped, not 40/40
+    expect(bars[1].fraction).toBeCloseTo(2 / MYSTATS_KDA_BAR_CEILING, 5); // still a visible, undistorted bar
+  });
+
+  it("does NOT re-sort -- one bar per input game, in input order", () => {
+    const bars = normalizeKdaBars([
+      { kills: 1, deaths: 1, assists: 1 },
+      { kills: 9, deaths: 1, assists: 9 },
+    ]);
+    expect(bars.map((b) => b.kda)).toEqual([2, 18]);
+  });
+
+  it("empty input -> empty output", () => {
+    expect(normalizeKdaBars([])).toEqual([]);
+  });
+});
+
+describe("computeBuildWinrateDelta", () => {
+  it("returns comparable:true with a signed delta when both sides have adequate samples", () => {
+    // realistic figures matching the module's own prod-payload fixture style
+    const result = computeBuildWinrateDelta(0.68, 0.45, 22, 14);
+    expect(result).toEqual({
+      comparable: true,
+      delta: 0.68 - 0.45,
+      onBuild: { winrate: 0.68, n: 22 },
+      offBuild: { winrate: 0.45, n: 14 },
+    });
+  });
+
+  it("winrateOnBuild null -> not comparable, reason no-on-build-data (checked before offBuild)", () => {
+    expect(computeBuildWinrateDelta(null, 0.45, 22, 14)).toEqual({ comparable: false, reason: "no-on-build-data" });
+    expect(computeBuildWinrateDelta(null, null, 22, 14)).toEqual({ comparable: false, reason: "no-on-build-data" });
+  });
+
+  it("winrateOffBuild null (onBuild present) -> not comparable, reason no-off-build-data", () => {
+    expect(computeBuildWinrateDelta(0.68, null, 22, 14)).toEqual({ comparable: false, reason: "no-off-build-data" });
+  });
+
+  it("both winrates present but sample sizes unknown -- degrades to sample-unknown, never guesses a count", () => {
+    expect(computeBuildWinrateDelta(0.68, 0.45)).toEqual({ comparable: false, reason: "sample-unknown" });
+    expect(computeBuildWinrateDelta(0.68, 0.45, null, null)).toEqual({ comparable: false, reason: "sample-unknown" });
+    expect(computeBuildWinrateDelta(0.68, 0.45, 22, undefined)).toEqual({ comparable: false, reason: "sample-unknown" });
+  });
+
+  it(`either side below MYSTATS_LOW_SAMPLE_THRESHOLD (${MYSTATS_LOW_SAMPLE_THRESHOLD}) -- not comparable, reason low-sample`, () => {
+    expect(computeBuildWinrateDelta(0.68, 0.45, 5, 14)).toEqual({ comparable: false, reason: "low-sample" });
+    expect(computeBuildWinrateDelta(0.68, 0.45, 22, 3)).toEqual({ comparable: false, reason: "low-sample" });
+  });
+
+  it("never returns a delta of 0 for an unknown comparison -- 0 only appears inside a comparable:true result", () => {
+    const result = computeBuildWinrateDelta(0.5, 0.5, 22, 14);
+    expect(result).toEqual({
+      comparable: true,
+      delta: 0,
+      onBuild: { winrate: 0.5, n: 22 },
+      offBuild: { winrate: 0.5, n: 14 },
+    });
+    // contrast: the "unknown" cases never carry a numeric delta field at all
+    const unknown = computeBuildWinrateDelta(0.5, 0.5);
+    expect((unknown as { delta?: number }).delta).toBeUndefined();
+  });
+});
+
+describe("computeRecentWinLoss", () => {
+  it("counts wins/losses over the given window, n is the exact input length", () => {
+    const games = [{ win: true }, { win: false }, { win: true }, { win: true }];
+    expect(computeRecentWinLoss(games)).toEqual({ wins: 3, losses: 1, n: 4, lowSample: true });
+  });
+
+  it(`at/above MYSTATS_LOW_SAMPLE_THRESHOLD (${MYSTATS_LOW_SAMPLE_THRESHOLD}) is not lowSample`, () => {
+    const games = Array.from({ length: MYSTATS_LOW_SAMPLE_THRESHOLD }, (_, i) => ({ win: i % 2 === 0 }));
+    expect(computeRecentWinLoss(games).lowSample).toBe(false);
+  });
+
+  it("zero games -> all-zero counts, lowSample true, never a crash", () => {
+    expect(computeRecentWinLoss([])).toEqual({ wins: 0, losses: 0, n: 0, lowSample: true });
+  });
+
+  it("a single game is a real input", () => {
+    expect(computeRecentWinLoss([{ win: false }])).toEqual({ wins: 0, losses: 1, n: 1, lowSample: true });
   });
 });

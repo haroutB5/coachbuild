@@ -47,6 +47,8 @@ const EMPTY_STATS = {
   buildAdherencePct: null as number | null,
   winrateOnBuild: null as number | null,
   winrateOffBuild: null as number | null,
+  nOnBuild: null as number | null,
+  nOffBuild: null as number | null,
   priorSplitWinrate: null as number | null,
   recentGames: [] as ReturnType<typeof buildRecentGames>,
 };
@@ -98,6 +100,12 @@ function parseIntParam(raw: string | null): number | null | undefined {
  *    build-adherence stats (lib/mystats/aggregate.ts's computeBuildAdherence)
  *    — null when no row in the current split has a resolved recommendation
  *    yet (see lib/mystats/adherence.ts's null/false distinction).
+ *  - `nOnBuild`/`nOffBuild` (v0.74, additive): the row counts BEHIND
+ *    `winrateOnBuild`/`winrateOffBuild` respectively — same null-exactly-
+ *    when-the-corresponding-winrate-is-null convention, never a fabricated
+ *    0. Lets a consumer refuse to render a winrate delta computed over a
+ *    handful of games as if it meant the same thing as one over hundreds —
+ *    see components/hextech/myStats.ts's computeBuildWinrateDelta.
  *  - `priorSplitWinrate`: overall win rate for the PRIOR split (not
  *    role/championId-scoped — the whole-account delta comparison point), or
  *    null when there is no prior split yet (still in split 1).
@@ -163,7 +171,7 @@ export async function GET(req: NextRequest) {
     const adherenceRows = (await sql`
       SELECT on_wpa_build, win FROM coachbuild.my_matches WHERE split = ${split}
     `) as unknown as AdherenceRow[];
-    const { buildAdherencePct, winrateOnBuild, winrateOffBuild } = computeBuildAdherence(
+    const { buildAdherencePct, winrateOnBuild, winrateOffBuild, nOnBuild, nOffBuild } = computeBuildAdherence(
       adherenceRows.map((r) => ({ win: r.win, onWpaBuild: r.on_wpa_build ?? null }))
     );
 
@@ -207,6 +215,8 @@ export async function GET(req: NextRequest) {
         buildAdherencePct,
         winrateOnBuild,
         winrateOffBuild,
+        nOnBuild,
+        nOffBuild,
         priorSplitWinrate,
         recentGames,
       },

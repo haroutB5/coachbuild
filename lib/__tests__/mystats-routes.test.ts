@@ -112,6 +112,39 @@ describe("GET /api/mystats/summary", () => {
     const res1 = await summaryGET(req("http://localhost/api/mystats/summary?oppChampionId=99")); // no championId
     expect((await res1.json()).matchup).toBeNull();
   });
+
+  it("accountUnresolved response includes nOnBuild/nOffBuild as null (v0.74), not omitted", async () => {
+    mockGetMyAccount.mockResolvedValueOnce(null);
+    const res = await summaryGET(req("http://localhost/api/mystats/summary"));
+    const body = await res.json();
+    expect(body.nOnBuild).toBeNull();
+    expect(body.nOffBuild).toBeNull();
+  });
+
+  it("v0.74: nOnBuild/nOffBuild are the real row counts behind winrateOnBuild/winrateOffBuild, distinct from buildAdherencePct's resolved-row-% denominator", async () => {
+    mockGetMyAccount.mockResolvedValueOnce({ puuid: "p", riotId: "X#EUW", region: "EUW", routing: {} });
+    // The route issues three separate SQL calls (records, adherence rows, prior-split/recent) --
+    // key the mock off the query text so each returns its own fixture.
+    mockSql.mockImplementation((strings: TemplateStringsArray) => {
+      const sqlText = strings.join("");
+      if (sqlText.includes("on_wpa_build, win FROM")) {
+        // 22 on-build rows, 14 off-build rows, 1 unresolved -- mirrors the
+        // aggregate-layer fixture in mystats-aggregate.test.ts.
+        const rows = [
+          ...Array.from({ length: 22 }, (_, i) => ({ on_wpa_build: true, win: i % 3 !== 0 })),
+          ...Array.from({ length: 14 }, (_, i) => ({ on_wpa_build: false, win: i % 2 === 0 })),
+          { on_wpa_build: null, win: true },
+        ];
+        return Promise.resolve(rows);
+      }
+      return Promise.resolve([]);
+    });
+    const res = await summaryGET(req("http://localhost/api/mystats/summary"));
+    const body = await res.json();
+    expect(body.nOnBuild).toBe(22);
+    expect(body.nOffBuild).toBe(14);
+    expect(body.buildAdherencePct).toBeCloseTo((22 / 36) * 100, 1);
+  });
 });
 
 describe("GET /api/mystats/matchups", () => {

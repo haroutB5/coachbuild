@@ -20,12 +20,26 @@
 // Both /api/mystats/* routes are `no-store` unconditionally (private
 // per-user data) — fetched client-side only, no server-side caching
 // surprises possible even by accident.
+//
+// 2026-07-29 REDESIGN. The page now opens with a HeroBand (main champion's
+// splash art behind a scrim, portrait with an accent ring, Riot ID large,
+// season/W-L as pill badges) followed by a hairline-separated KpiStrip — the
+// SAME two components the Builds page's FeaturedOtpCard uses, which is what
+// makes the two surfaces read as one product rather than two apps.
+//
+// The one rule this layout must never break: the KPI strip and the champion
+// pool are SEASON totals (summed over `records[]`), while the recent-games
+// panel is a short recent window (`recentGames[]`). CoachBuild has already
+// shipped a production bug from those two denominators drifting (v0.73.1), so
+// each panel states its own sample in its own heading and no number crosses
+// between them.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState } from "react";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import MyStatsRefresher from "@/components/hextech/MyStatsRefresher";
-import PageHeader from "@/components/hextech/PageHeader";
+import HeroBand, { Pill } from "@/components/hextech/HeroBand";
+import PanelHeading from "@/components/hextech/PanelHeading";
 import StatTiles from "@/components/hextech/mystats/StatTiles";
 import RecentGamesList, { type RecentGameRow } from "@/components/hextech/mystats/RecentGamesList";
 import ChampionPoolCard from "@/components/hextech/mystats/ChampionPoolCard";
@@ -50,6 +64,14 @@ interface MyStatsSummaryExtended extends MyStatsSummary {
   winrateOffBuild?: number | null;
   priorSplitWinrate?: number | null;
   recentGames?: RecentGameRow[];
+  /** v0.74 — the row counts BEHIND winrateOnBuild/winrateOffBuild
+   *  (lib/mystats/aggregate.ts -> the summary route -> normalizeMyStatsSummary).
+   *  Same optional pattern as the five above, for the same TS2430 reason.
+   *  These are what let `computeBuildWinrateDelta` return `comparable: true` on
+   *  a real load — without them it answers "sample-unknown" forever, which is
+   *  the state this field pair was added to end. Pass BOTH to StatTiles. */
+  nOnBuild?: number | null;
+  nOffBuild?: number | null;
 }
 
 function pct(fraction: number): string {
@@ -74,17 +96,41 @@ function EmptyPanel({ title, body }: { title: string; body: string }) {
   );
 }
 
+/** Renders at the FINAL dimensions of the real KPI strip (3 cells, value +
+ *  2-line label + delta row) so swapping in real numbers costs no layout
+ *  shift. */
 function TilesSkeleton() {
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-pulse">
-      {Array.from({ length: 4 }).map((_, i) => (
-        <div key={i} className="bg-panel border border-line rounded-xl p-4 space-y-2">
-          <div className="h-2 w-14 bg-panel2 rounded" />
-          <div className="h-5 w-16 bg-panel2 rounded" />
+    <div className="grid grid-cols-3 gap-px bg-line rounded-xl overflow-hidden border border-line animate-pulse">
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="bg-panel2/70 px-2.5 sm:px-4 py-3 sm:py-3.5">
+          <div className="h-[21px] sm:h-[26px] w-14 bg-panel2 rounded" />
+          <div className="mt-1.5 h-2 w-16 max-w-full bg-panel2 rounded" />
+          <div className="mt-1.5 h-[17px] w-12 bg-panel2 rounded-full" />
         </div>
       ))}
     </div>
   );
+}
+
+/**
+ * The ddragon champion KEY ("Ahri", "MonkeyKing") pulled back out of the icon
+ * URL /api/champions already returned.
+ *
+ * `getChampionIconMap()` (components/proAssets.ts) keeps only {name, icon} per
+ * champion, and `key` is what lib/splash.ts needs. Both icon URL shapes this
+ * app produces end in the key: the coachless CDN's
+ * ".../img/champion/Ahri.webp" and the ddragon gap-fill's
+ * ".../img/champion/Ahri.png" (lib/staticData.ts's ICON_BASES.champ /
+ * DDRAGON_CHAMPION_ICON). Widening ChampionIconEntry itself would mean editing
+ * proAssets.ts, which is outside this wave's file split — and an unparseable
+ * URL simply returns null here, which renders the hero without splash art
+ * rather than with the wrong champion's.
+ */
+function championKeyFromIconUrl(url: string | undefined): string | null {
+  if (!url) return null;
+  const m = url.match(/\/champion\/([^/?#]+)\.(?:webp|png|jpg)(?:[?#]|$)/);
+  return m ? m[1] : null;
 }
 
 export default function MyStatsPage() {
@@ -153,16 +199,42 @@ export default function MyStatsPage() {
       ? computeMainChampion(state.summary.records, (id) => champIcons.get(id))
       : null;
   const recentGames = state.status === "ok" ? state.summary.recentGames ?? [] : [];
+  const seasonLabel = state.status === "ok" ? state.summary.season || "" : "";
+  const riotId = state.status === "ok" ? state.summary.riotId : null;
+  // Splash art = the account's main champion. Falls back to no art (scrim
+  // only, still a finished surface) when there are no records yet or the
+  // champion map hasn't resolved.
+  const heroSplashKey = mainRow ? championKeyFromIconUrl(champIcons.get(mainRow.championId)?.icon) : null;
+  const heroAvatar = mainRow ? champIcons.get(mainRow.championId)?.icon ?? "" : "";
 
   return (
     <div className="min-h-screen pb-16">
-      <div className="max-w-[1100px] mx-auto px-4 sm:px-6">
-        <PageHeader
-          title="My Stats"
-          subtitle={
-            state.status === "ok" && !state.summary.accountUnresolved
-              ? `${state.summary.season || "Season"} · ${state.summary.riotId ?? "Account"} · from your local match history`
-              : "Your own personal match history — for context, never for ranking."
+      <div className="max-w-[1100px] mx-auto px-4 sm:px-6 pt-6 space-y-5">
+        <HeroBand
+          headingLevel={1}
+          splashKey={heroSplashKey}
+          avatarSrc={mainRow ? heroAvatar : null}
+          avatarAlt={mainRow?.name ?? ""}
+          avatarGlyph={mainRow?.name}
+          eyebrow={seasonLabel ? `My Stats · ${seasonLabel}` : "My Stats"}
+          title={riotId ?? "My Stats"}
+          reservePills
+          pills={
+            overall && overall.games > 0 ? (
+              <>
+                <Pill tone="good" title="Wins this season">
+                  {overall.wins}W
+                </Pill>
+                <Pill tone="bad" title="Losses this season">
+                  {overall.losses}L
+                </Pill>
+                {mainRow && (
+                  <Pill tone="accent" title="Most-played champion this season">
+                    Main · {mainRow.name} {mainRow.games}g
+                  </Pill>
+                )}
+              </>
+            ) : undefined
           }
           right={<MyStatsRefresher onRefreshed={() => setRefetchKey((k) => k + 1)} />}
         />
@@ -197,29 +269,27 @@ export default function MyStatsPage() {
               seasonLabel={state.summary.season || ""}
               winrate={overall.winrate}
               priorSplitWinrate={state.summary.priorSplitWinrate ?? null}
-              mainChampionName={mainRow?.name ?? null}
-              mainChampionGames={mainRow?.games ?? null}
-              mainChampionWinrate={mainRow?.winrate ?? null}
               buildAdherencePct={state.summary.buildAdherencePct ?? null}
+              winrateOnBuild={state.summary.winrateOnBuild ?? null}
+              winrateOffBuild={state.summary.winrateOffBuild ?? null}
+              nOnBuild={state.summary.nOnBuild ?? null}
+              nOffBuild={state.summary.nOffBuild ?? null}
             />
 
-            <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-5">
+            {/* `items-start`: without it the two panels are forced to equal
+                height, and the champion pool (44 rows on this account) stretched
+                the 5-row recent-games card into ~600px of empty panel. */}
+            <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-5 items-start">
               <RecentGamesList games={recentGames} iconOf={(id) => champIcons.get(id)} />
-              <ChampionPoolCard
-                rows={rows}
-                winrateOnBuild={state.summary.winrateOnBuild ?? null}
-                winrateOffBuild={state.summary.winrateOffBuild ?? null}
-              />
+              <ChampionPoolCard rows={rows} />
             </div>
 
             {/* Secondary section — the pre-wave-B per-champion expandable
                 matchup table, lightly restyled. Capability preserved
                 verbatim (same fetch/toggle logic), just demoted below the
                 new tiles/lists as a secondary drill-down. */}
-            <div className="bg-panel border border-line rounded-xl px-5">
-              <p className="pt-4 pb-2 text-[11px] tracking-[0.12em] uppercase text-mut font-semibold">
-                Matchup history
-              </p>
+            <div className="bg-panel border border-line rounded-xl px-4 sm:px-5 pt-4 pb-1">
+              <PanelHeading meta={`${rows.length} champions, this season`}>Matchup history</PanelHeading>
               <p className="sr-only" role="status">
                 {rows.length} champions with recorded games this season, sorted by games played.
               </p>

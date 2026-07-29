@@ -12,14 +12,25 @@
 // that is the useful part.
 //
 // Every percentage on this card is over the games WE HOLD for that account,
-// which is smaller than the source's career total. The card says so in words
-// rather than quietly implying the bigger number.
+// which is smaller than the source's career total.
+//
+// HOW THE TWO DENOMINATORS ARE KEPT APART (redesign, 2026-07-29). This used to
+// be one grey two-line paragraph at the top of the card, which ate the fold and
+// read as boilerplate. It is now carried by the LABELS at both ends instead:
+// the KPI strip says CAREER GAMES / CAREER WIN RATE (the source's totals, which
+// is what those fields are), and every section whose numbers come from OUR
+// stored sample states that sample in its own heading meta ("37 stored games ·
+// 54% won"). Same fact, said where it applies, costing no vertical space.
+// Do not collapse the two vocabularies back into one word.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState } from "react";
 import type { ChampionRef } from "@/lib/types";
 import { itemIconUrl, spellIconUrl, spellName, treeIconUrl, resolveRuneDisplay, shardIconUrl, shardName } from "@/components/proAssets";
 import { getItemDetailMap, type ItemDetail } from "@/components/itemDetail";
+import HeroBand, { Pill } from "./HeroBand";
+import KpiStrip, { type KpiItem } from "./KpiStrip";
+import PanelHeading from "./PanelHeading";
 import { STARTING_ITEM_ALLOWLIST } from "./proConsensus";
 
 interface FeaturedPlayer {
@@ -73,10 +84,6 @@ const MIN_DISPLAY_PCT = 15;
  */
 const MIN_SAMPLE_GAMES = 12;
 
-function Label({ children }: { children: React.ReactNode }) {
-  return <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">{children}</p>;
-}
-
 /** A completed item, not a component or consumable. Same rule the build lines
  *  use: something with nothing to build INTO is finished.
  *
@@ -97,12 +104,22 @@ function isCompleted(id: number, meta: ItemDetail | undefined): boolean {
 
 function Bar({ pct }: { pct: number }) {
   return (
-    <div className="h-1 w-full rounded-full bg-panel2 overflow-hidden" aria-hidden="true">
+    <div className="h-1 w-full rounded-full bg-white/[0.06] overflow-hidden" aria-hidden="true">
       <div
-        className="h-full rounded-full bg-teal/70"
+        className="h-full rounded-full bg-teal/75"
         style={{ width: `${Math.max(2, Math.min(100, pct))}%` }}
       />
     </div>
+  );
+}
+
+/** Tag for the starter row. HARD RULE 2's partition made visible: a starting
+ *  item sits in a labelled slot, never inside the completed-item list. */
+function SlotTag({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center h-[18px] px-1.5 rounded-md border border-line bg-white/[0.04] text-[9px] font-bold uppercase tracking-[0.07em] text-mut flex-shrink-0">
+      {children}
+    </span>
   );
 }
 
@@ -158,11 +175,33 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
   }, [champ.id, ver]);
 
   if (loading) {
+    // Rendered at the FINAL dimensions of the real card's first two bands
+    // (hero min-h-[92px]/sm:104, strip ~86px) so the swap to real content
+    // costs no layout shift.
     return (
-      <div className="bg-panel border border-line rounded-xl p-5 animate-pulse">
-        <div className="h-2.5 w-32 bg-panel2 rounded mb-4" />
-        <div className="h-10 w-full bg-panel2 rounded mb-3" />
-        <div className="h-24 w-full bg-panel2 rounded" />
+      <div className="bg-panel border border-line rounded-xl overflow-hidden animate-pulse">
+        <div className="min-h-[92px] sm:min-h-[104px] flex items-center gap-3.5 sm:gap-4 px-4 sm:px-5 py-4 sm:py-5">
+          <div className="w-[52px] h-[52px] sm:w-[62px] sm:h-[62px] rounded-xl bg-panel2 flex-shrink-0" />
+          <div className="flex-1 space-y-2">
+            <div className="h-2 w-20 bg-panel2 rounded" />
+            <div className="h-4 w-40 max-w-full bg-panel2 rounded" />
+            <div className="h-[20px] w-28 bg-panel2 rounded-full" />
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-px bg-line border-y border-line">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="bg-panel2/70 px-2.5 sm:px-4 py-3 sm:py-3.5">
+              <div className="h-[21px] sm:h-[26px] w-12 bg-panel2 rounded" />
+              <div className="mt-1.5 h-2 w-16 max-w-full bg-panel2 rounded" />
+              <div className="mt-1 h-2 w-10 bg-panel2 rounded" />
+            </div>
+          ))}
+        </div>
+        <div className="p-4 sm:p-5 space-y-3">
+          <div className="h-2.5 w-32 bg-panel2 rounded" />
+          <div className="h-10 w-full bg-panel2 rounded" />
+          <div className="h-10 w-full bg-panel2 rounded" />
+        </div>
       </div>
     );
   }
@@ -173,7 +212,7 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
   if (!player || !sample || sample.games === 0) {
     return (
       <div className="bg-panel border border-line rounded-xl p-5">
-        <Label>One-trick</Label>
+        <PanelHeading rule={false}>One-trick</PanelHeading>
         <p className="mt-3 text-[13px] text-mut leading-relaxed">
           No one-trick tracked for {champ.name} yet. We only feature an account with{" "}
           <span className="text-txt">150+ games</span> on the champion, so this fills in as the
@@ -201,210 +240,251 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
   const runes = data!.runes;
   const runeDisplay = keystone;
 
+  // CAREER numbers, from the source's own account totals — a different, LARGER
+  // denominator than `sample.games` below. The labels say "career" for exactly
+  // that reason; see this file's header. A cell is omitted, never zeroed, when
+  // the source didn't give us the field.
+  const kpis: KpiItem[] = [];
+  if (player.sourceGames != null) {
+    kpis.push({
+      key: "career-games",
+      label: "Career games",
+      value: player.sourceGames,
+      format: (n) => Math.round(n).toLocaleString("en-US"),
+      countUp: true,
+    });
+  }
+  if (player.winratePct != null) {
+    kpis.push({
+      key: "career-wr",
+      label: "Career win rate",
+      value: player.winratePct,
+      format: (n) => `${Math.round(n)}%`,
+      valueClassName: player.winratePct >= 50 ? "text-good" : "text-bad",
+      countUp: true,
+    });
+  }
+  if (player.championSharePct != null) {
+    kpis.push({
+      // The old label was the champion's own NAME ("AHRI 60%"), which never
+      // said what the number measured. It is the share of this account's games
+      // played on this champion, so the label now says that outright.
+      key: "champ-share",
+      label: `${champ.name}, of their games`,
+      value: player.championSharePct,
+      format: (n) => `${Math.round(n)}%`,
+      countUp: true,
+    });
+  }
+
+  const sampleMeta = `${sample.games} stored games · ${winPct}% won`;
+
   return (
-    <div className="bg-panel border border-line rounded-xl p-5">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <Label>Best one-trick</Label>
-          <h3 className="mt-1.5 text-[19px] font-semibold text-txt leading-tight">
+    <div className="bg-panel border border-line rounded-xl overflow-hidden">
+      <HeroBand
+        flush
+        headingLevel={3}
+        splashKey={champ.key}
+        avatarSrc={champ.icon}
+        avatarAlt={champ.name}
+        eyebrow="Best one-trick"
+        title={
+          <>
             {player.gameName}
             <span className="text-mut font-normal">#{player.tagLine}</span>
-          </h3>
-          <p className="mt-1 text-[11.5px] text-mut">
-            {[player.tier, player.lp != null ? `${player.lp} LP` : null, player.server]
-              .filter(Boolean)
-              .join(" · ")}
+          </>
+        }
+        pills={
+          <>
+            {player.tier && <Pill tone="accent">{player.tier}</Pill>}
+            {player.lp != null && <Pill>{player.lp} LP</Pill>}
+            {player.server && <Pill>{player.server}</Pill>}
+          </>
+        }
+      />
+
+      {kpis.length > 0 && <KpiStrip flush columns={3} items={kpis} />}
+
+      <div className="p-4 sm:p-5">
+        {thinSample ? (
+          <p className="text-[12px] text-mut leading-relaxed">
+            Still collecting their games — we hold{" "}
+            <span className="text-txt tabular-nums">{sample.games}</span> of the{" "}
+            <span className="text-txt tabular-nums">{MIN_SAMPLE_GAMES}</span> needed before build
+            percentages mean anything. Their card fills in as the ingest catches up.
           </p>
-        </div>
-        <dl className="flex gap-4 text-right">
-          {player.sourceGames != null && (
-            <div>
-              <dt className="text-[9.5px] uppercase tracking-[0.12em] text-mut">Games</dt>
-              <dd className="text-[15px] font-semibold text-txt tabular-nums">{player.sourceGames}</dd>
-            </div>
-          )}
-          {player.winratePct != null && (
-            <div>
-              <dt className="text-[9.5px] uppercase tracking-[0.12em] text-mut">Win rate</dt>
-              <dd className="text-[15px] font-semibold text-txt tabular-nums">{player.winratePct}%</dd>
-            </div>
-          )}
-          {player.championSharePct != null && (
-            <div>
-              <dt className="text-[9.5px] uppercase tracking-[0.12em] text-mut">{champ.name}</dt>
-              <dd className="text-[15px] font-semibold text-txt tabular-nums">{player.championSharePct}%</dd>
-            </div>
-          )}
-        </dl>
-      </div>
+        ) : (
+          <>
+            {(starter || items.length > 0) && (
+              <section>
+                <PanelHeading meta={sampleMeta}>Builds most often</PanelHeading>
 
-      {thinSample ? (
-        <p className="mt-3 text-[11.5px] text-mut leading-relaxed">
-          Still collecting their games — we hold{" "}
-          <span className="text-txt tabular-nums">{sample.games}</span> of the{" "}
-          <span className="text-txt tabular-nums">{MIN_SAMPLE_GAMES}</span> needed before build
-          percentages mean anything. Their card fills in as the ingest catches up.
-        </p>
-      ) : (
-        <p className="mt-3 text-[11px] text-mut/80 leading-relaxed">
-          Percentages below are across their last{" "}
-          <span className="text-txt tabular-nums">{sample.games}</span> ranked {champ.name} games that
-          we hold ({winPct}% won) — not their full career.
-        </p>
-      )}
-
-      {!thinSample && starter && (
-        <div className="mt-4 flex items-center gap-2.5">
-          <Label>Opens</Label>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={itemIconUrl(starter.itemId, ver)}
-            alt=""
-            width={22}
-            height={22}
-            className="rounded border border-line flex-shrink-0"
-            loading="lazy"
-          />
-          <span className="text-[12px] text-txt truncate">{meta.get(starter.itemId)?.name}</span>
-          <span className="text-[12px] font-semibold text-txt tabular-nums ml-auto">{starter.pct}%</span>
-        </div>
-      )}
-
-      {!thinSample && items.length > 0 && (
-        <div className="mt-4">
-          <Label>Builds most often</Label>
-          <ul className="mt-2.5 space-y-2">
-            {items.map((it) => (
-              <li key={it.itemId} className="flex items-center gap-3">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={itemIconUrl(it.itemId, ver)}
-                  alt=""
-                  width={30}
-                  height={30}
-                  className="rounded-md border border-line flex-shrink-0"
-                  loading="lazy"
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className="text-[12.5px] text-txt truncate">
-                      {meta.get(it.itemId)?.name ?? `Item ${it.itemId}`}
-                    </span>
-                    <span className="text-[12px] font-semibold text-txt tabular-nums flex-shrink-0">
-                      {it.pct}%
-                    </span>
-                  </div>
-                  <div className="mt-1 flex items-center gap-2">
-                    <Bar pct={it.pct} />
-                    <span className="text-[9.5px] text-mut tabular-nums flex-shrink-0 w-[52px] text-right">
-                      {it.games}/{sample.games}
-                    </span>
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {!thinSample && (runes || data!.spells) && (
-        <div className="mt-5 grid gap-4 sm:grid-cols-2">
-          {runes && (
-            <div>
-              <Label>Most-run runes</Label>
-              <div className="mt-2 flex items-center gap-2">
-                {runeDisplay?.icon && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={runeDisplay.icon} alt="" width={30} height={30} className="flex-shrink-0" loading="lazy" />
-                )}
-                {runes.page.secondaryTree != null && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={treeIconUrl(runes.page.secondaryTree)}
-                    alt=""
-                    width={18}
-                    height={18}
-                    className="flex-shrink-0 opacity-80"
-                    loading="lazy"
-                  />
-                )}
-                <span className="text-[12px] text-txt truncate">{runeDisplay?.name ?? "Rune page"}</span>
-                <span className="ml-auto text-[12px] font-semibold text-txt tabular-nums">{runes.pct}%</span>
-              </div>
-              {runes.page.shards.length > 0 && (
-                <div className="mt-2 flex items-center gap-1.5">
-                  {runes.page.shards.map((s, i) => (
-                    // eslint-disable-next-line @next/next/no-img-element
+                {starter && (
+                  <div className="flex items-center gap-2.5 pt-3 pb-3 border-b border-line/60">
+                    <SlotTag>Opens</SlotTag>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      key={`${s}-${i}`}
-                      src={shardIconUrl(s)}
-                      alt={shardName(s)}
-                      title={shardName(s)}
-                      width={16}
-                      height={16}
-                      className="rounded-sm"
+                      src={itemIconUrl(starter.itemId, ver)}
+                      alt=""
+                      width={24}
+                      height={24}
+                      className="rounded border border-line flex-shrink-0"
                       loading="lazy"
                     />
+                    <span className="text-[12px] text-txt truncate">{meta.get(starter.itemId)?.name}</span>
+                    <span className="text-[12px] font-semibold text-txt tabular-nums ml-auto flex-shrink-0">
+                      {starter.pct}%
+                    </span>
+                  </div>
+                )}
+
+                {items.length > 0 && (
+                  <ul className="mt-3 space-y-2.5">
+                    {items.map((it) => (
+                      <li key={it.itemId} className="flex items-center gap-3">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={itemIconUrl(it.itemId, ver)}
+                          alt=""
+                          width={30}
+                          height={30}
+                          className="rounded-md border border-line flex-shrink-0"
+                          loading="lazy"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-baseline justify-between gap-2">
+                            <span className="text-[12.5px] text-txt truncate">
+                              {meta.get(it.itemId)?.name ?? `Item ${it.itemId}`}
+                            </span>
+                            <span className="text-[12px] font-semibold text-txt tabular-nums flex-shrink-0">
+                              {it.pct}%
+                            </span>
+                          </div>
+                          {/* Bar capped rather than full-bleed: on a wide card
+                              a 900px rail for "79%" is a lot of ink for one
+                              number, and the eye stops tracking it. */}
+                          <div className="mt-1 flex items-center gap-2 max-w-[420px]">
+                            <Bar pct={it.pct} />
+                            <span className="text-[9.5px] text-mut tabular-nums flex-shrink-0 w-[52px] text-right">
+                              {it.games}/{sample.games}
+                            </span>
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {items.length === 0 && (
+                  <p className="pt-3 text-[12px] text-mut">
+                    No item reaches {MIN_DISPLAY_PCT}% across the games we hold yet.
+                  </p>
+                )}
+              </section>
+            )}
+
+            {(runes || data!.spells) && (
+              <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                {runes && (
+                  <div>
+                    <PanelHeading rule={false} meta={`${runes.pct}%`}>
+                      Most-run runes
+                    </PanelHeading>
+                    <div className="mt-2 flex items-center gap-2">
+                      {runeDisplay?.icon && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={runeDisplay.icon}
+                          alt=""
+                          width={30}
+                          height={30}
+                          className="flex-shrink-0"
+                          loading="lazy"
+                        />
+                      )}
+                      {runes.page.secondaryTree != null && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={treeIconUrl(runes.page.secondaryTree)}
+                          alt=""
+                          width={18}
+                          height={18}
+                          className="flex-shrink-0 opacity-80"
+                          loading="lazy"
+                        />
+                      )}
+                      <span className="text-[12px] text-txt truncate">{runeDisplay?.name ?? "Rune page"}</span>
+                    </div>
+                    {runes.page.shards.length > 0 && (
+                      <div className="mt-2 flex items-center gap-1.5">
+                        {runes.page.shards.map((s, i) => (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            key={`${s}-${i}`}
+                            src={shardIconUrl(s)}
+                            alt={shardName(s)}
+                            title={shardName(s)}
+                            width={16}
+                            height={16}
+                            className="rounded-sm"
+                            loading="lazy"
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {data!.spells && (
+                  <div>
+                    <PanelHeading rule={false} meta={`${data!.spells.pct}%`}>
+                      Summoners
+                    </PanelHeading>
+                    <div className="mt-2 flex items-center gap-2">
+                      {data!.spells.spells.map((s) => (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          key={s}
+                          src={spellIconUrl(s, ver)}
+                          alt={spellName(s)}
+                          title={spellName(s)}
+                          width={26}
+                          height={26}
+                          className="rounded-md border border-line"
+                          loading="lazy"
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {skillPriority && (
+              <div className="mt-5">
+                <PanelHeading rule={false}>Skill order</PanelHeading>
+                <div className="mt-2 flex items-center gap-1.5">
+                  {skillPriority.map((s, i) => (
+                    <span key={s} className="flex items-center gap-1.5">
+                      <span className="w-6 h-6 rounded-md bg-panel2 border border-line grid place-items-center text-[11px] font-semibold text-txt">
+                        {s}
+                      </span>
+                      {i < skillPriority.length - 1 && <span className="text-mut text-[11px]">›</span>}
+                    </span>
                   ))}
                 </div>
-              )}
-            </div>
-          )}
-
-          {data!.spells && (
-            <div>
-              <Label>Summoners</Label>
-              <div className="mt-2 flex items-center gap-2">
-                {data!.spells.spells.map((s) => (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    key={s}
-                    src={spellIconUrl(s, ver)}
-                    alt={spellName(s)}
-                    title={spellName(s)}
-                    width={26}
-                    height={26}
-                    className="rounded-md border border-line"
-                    loading="lazy"
-                  />
-                ))}
-                <span className="ml-auto text-[12px] font-semibold text-txt tabular-nums">
-                  {data!.spells.pct}%
-                </span>
+                {/* Said out loud rather than implied. Every other number on this
+                    card is this player's own; this one is not, because match-v5
+                    does not carry skill order without a timeline call per game. */}
+                <p className="mt-1.5 text-[10.5px] text-mut/70 leading-relaxed">
+                  The champion&apos;s common order, not {player.gameName}&apos;s own — skill order is
+                  not in the match data we store.
+                </p>
               </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {!thinSample && skillPriority && (
-        <div className="mt-5">
-          <Label>Skill order</Label>
-          <div className="mt-2 flex items-center gap-1.5">
-            {skillPriority.map((s, i) => (
-              <span key={s} className="flex items-center gap-1.5">
-                <span className="w-6 h-6 rounded-md bg-panel2 border border-line grid place-items-center text-[11px] font-semibold text-txt">
-                  {s}
-                </span>
-                {i < skillPriority.length - 1 && <span className="text-mut text-[11px]">›</span>}
-              </span>
-            ))}
-          </div>
-          {/* Said out loud rather than implied. Every other number on this card
-              is this player's own; this one is not, because match-v5 does not
-              carry skill order without a second timeline call per game. */}
-          <p className="mt-1.5 text-[10.5px] text-mut/70 leading-relaxed">
-            The champion&apos;s common order, not {player.gameName}&apos;s own — skill order is not in
-            the match data we store.
-          </p>
-        </div>
-      )}
-
-      {!thinSample && items.length === 0 && (
-        <p className="mt-4 text-[12px] text-mut">
-          No item reaches {MIN_DISPLAY_PCT}% across the games we hold yet.
-        </p>
-      )}
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

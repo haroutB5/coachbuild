@@ -117,6 +117,17 @@ export interface BuildAdherenceSummary {
   winrateOnBuild: number | null;
   /** Win rate (0-1) restricted to off-build rows; null when there are none. */
   winrateOffBuild: number | null;
+  /** Row count BEHIND winrateOnBuild -- null exactly when winrateOnBuild is
+   *  null (same "no such rows" condition, never a fabricated 0). Added
+   *  v0.74 so a consumer can tell a real 55% from 2 games apart from a real
+   *  55% from 200 -- deliberately a DIFFERENT denominator than
+   *  buildAdherencePct (which is a % of resolved rows, not a bucket count)
+   *  and than any per-champion `games` total -- do not conflate them, see
+   *  computeBuildWinrateDelta's doc comment in components/hextech/myStats.ts
+   *  for the exact bug (v0.73.1) that conflating denominators caused here. */
+  nOnBuild: number | null;
+  /** Row count BEHIND winrateOffBuild -- same null convention as nOnBuild. */
+  nOffBuild: number | null;
 }
 
 function round1(n: number): number {
@@ -128,7 +139,7 @@ function round1(n: number): number {
 export function computeBuildAdherence(rows: AdherenceRecord[]): BuildAdherenceSummary {
   const resolved = rows.filter((r) => r.onWpaBuild !== null);
   if (resolved.length === 0) {
-    return { buildAdherencePct: null, winrateOnBuild: null, winrateOffBuild: null };
+    return { buildAdherencePct: null, winrateOnBuild: null, winrateOffBuild: null, nOnBuild: null, nOffBuild: null };
   }
   const onBuild = resolved.filter((r) => r.onWpaBuild === true);
   const offBuild = resolved.filter((r) => r.onWpaBuild === false);
@@ -136,6 +147,8 @@ export function computeBuildAdherence(rows: AdherenceRecord[]): BuildAdherenceSu
     buildAdherencePct: round1((onBuild.length / resolved.length) * 100),
     winrateOnBuild: onBuild.length > 0 ? onBuild.filter((r) => r.win).length / onBuild.length : null,
     winrateOffBuild: offBuild.length > 0 ? offBuild.filter((r) => r.win).length / offBuild.length : null,
+    nOnBuild: onBuild.length > 0 ? onBuild.length : null,
+    nOffBuild: offBuild.length > 0 ? offBuild.length : null,
   };
 }
 

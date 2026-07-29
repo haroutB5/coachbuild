@@ -99,7 +99,13 @@ function adh(over: Partial<AdherenceRecord>): AdherenceRecord {
 describe("computeBuildAdherence", () => {
   it("all null when there are zero rows with a resolved recommendation", () => {
     const out = computeBuildAdherence([adh({ onWpaBuild: null }), adh({ onWpaBuild: null })]);
-    expect(out).toEqual({ buildAdherencePct: null, winrateOnBuild: null, winrateOffBuild: null });
+    expect(out).toEqual({
+      buildAdherencePct: null,
+      winrateOnBuild: null,
+      winrateOffBuild: null,
+      nOnBuild: null,
+      nOffBuild: null,
+    });
   });
 
   it("excludes unresolved (null) rows from the denominator", () => {
@@ -111,7 +117,7 @@ describe("computeBuildAdherence", () => {
     expect(out.buildAdherencePct).toBe(50); // 1 of 2 RESOLVED rows on-build
   });
 
-  it("computes buildAdherencePct + separate on/off win rates", () => {
+  it("computes buildAdherencePct + separate on/off win rates + the row count behind each", () => {
     const out = computeBuildAdherence([
       adh({ onWpaBuild: true, win: true }),
       adh({ onWpaBuild: true, win: true }),
@@ -121,12 +127,28 @@ describe("computeBuildAdherence", () => {
     expect(out.buildAdherencePct).toBe(75); // 3 of 4
     expect(out.winrateOnBuild).toBeCloseTo(2 / 3, 5);
     expect(out.winrateOffBuild).toBe(0);
+    expect(out.nOnBuild).toBe(3);
+    expect(out.nOffBuild).toBe(1);
   });
 
-  it("winrateOffBuild is null when every resolved row was on-build (no off-build rows to average)", () => {
+  it("winrateOffBuild/nOffBuild are null when every resolved row was on-build (no off-build rows to average)", () => {
     const out = computeBuildAdherence([adh({ onWpaBuild: true, win: true })]);
     expect(out.winrateOffBuild).toBeNull();
+    expect(out.nOffBuild).toBeNull();
     expect(out.winrateOnBuild).toBe(1);
+    expect(out.nOnBuild).toBe(1);
+  });
+
+  it("nOnBuild/nOffBuild are real counts on a larger realistic sample, not percentages", () => {
+    const rows = [
+      ...Array.from({ length: 22 }, (_, i) => adh({ onWpaBuild: true, win: i % 3 !== 0 })), // 22 on-build
+      ...Array.from({ length: 14 }, (_, i) => adh({ onWpaBuild: false, win: i % 2 === 0 })), // 14 off-build
+      adh({ onWpaBuild: null, win: true }), // unresolved, excluded from every figure
+    ];
+    const out = computeBuildAdherence(rows);
+    expect(out.nOnBuild).toBe(22);
+    expect(out.nOffBuild).toBe(14);
+    expect(out.buildAdherencePct).toBeCloseTo((22 / 36) * 100, 1);
   });
 
   it("empty input -> all null", () => {
@@ -134,6 +156,8 @@ describe("computeBuildAdherence", () => {
       buildAdherencePct: null,
       winrateOnBuild: null,
       winrateOffBuild: null,
+      nOnBuild: null,
+      nOffBuild: null,
     });
   });
 });

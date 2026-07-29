@@ -2,6 +2,50 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.75.0] — 2026-07-29 — Redesigned the one-trick card header and My Stats
+
+Two surfaces, one visual language: a hero band, a KPI strip of large numbers with their labels
+beneath, and denominators that live in section headings instead of in grey paragraphs.
+
+### Fixed — the reported defect
+- **The top of the featured one-trick card.** The identity block and the stat row shared one flex
+  row, so a long Riot ID crowded the numbers against the right edge with their labels sitting above
+  the name's baseline — two blocks that read as unrelated. They are now separate: a hero band with
+  the champion's art behind the player's name, with tier, LP and server as pills rather than one
+  `·`-joined line, and a three-cell KPI strip beneath it.
+- **A stat that did not say what it measured.** The third cell rendered as a bare `AHRI 60%`. It now
+  reads **`AHRI, OF THEIR GAMES`**, and its neighbours read **`CAREER GAMES`** and **`CAREER WIN
+  RATE`** — so each number names the population it was computed over.
+- **The grey paragraph above the content.** The two-line disclaimer is gone; the sample size moved
+  into the `BUILDS MOST OFTEN` heading as **`37 stored games · 54% won`**, next to the percentages it
+  qualifies rather than above everything.
+- **An ~80px empty void between the tab row and the tab's content, on mobile.** The tab panel
+  declared five named grid rows while four of its children are `hidden lg:block`, so at phone width
+  four 20px row gaps survived with nothing in them. Mobile is now a flex column and the named-area
+  grid applies only from `lg`. Measured on the production build at 390px: 80px → 21px, on both the
+  Pro and OTP tabs.
+
+### Added — My Stats
+- A hero band carrying the Riot ID, win/loss pills and the main champion.
+- A KPI strip: games, win rate with a chip against your previous split, and build adherence.
+- A recent-games chart — one bar per game, height by KDA, coloured by result, champion icons beneath.
+  Bars clamp at a fixed ceiling rather than scaling to the set's own maximum, so one outlier game
+  cannot flatten every other bar to nothing.
+- `HeroBand`, `KpiStrip`, `PanelHeading` and `CountUp` are the shared cross-surface pieces.
+  `CountUp` renders its final value immediately under `prefers-reduced-motion`.
+
+### Fixed — a number that could never appear
+- `winrateOnBuild` / `winrateOffBuild` were sent without the sample counts behind them, so the
+  on-build vs off-build comparison could never resolve and would have shipped as a permanently blank
+  chip. `computeBuildAdherence` now returns `nOnBuild` / `nOffBuild`, the summary route sends them,
+  and the client normalizer carries them through. Where the comparison genuinely is not possible it
+  says so — never a `0`, which would read as "no difference".
+
+### Notes
+- Career figures and stored-sample figures stay separated throughout, and the thin-sample floor
+  (12 stored games) still hides build percentages rather than quoting them. Both are the v0.73.1 rule
+  applied to a new layout.
+
 ## [0.74.0] — 2026-07-29 — Show the Pro and OTP builds even when they agree
 
 ### Changed
