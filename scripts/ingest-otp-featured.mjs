@@ -177,7 +177,12 @@ async function main() {
   const howMany = Number(argValue("--champions", "6")) || 6;
   const matchCount = Number(argValue("--matches", String(DEFAULT_MATCHES))) || DEFAULT_MATCHES;
 
-  const all = await getAllChampions();
+  // `getAllChampions` carries non-Summoner's-Rift variants ("Jade_Ahri",
+  // "Jade_Alistar", …). onetricks.gg has no page for them, so each one costs a
+  // page load and an entry in the rate limiter to learn nothing. Real Riot
+  // champion keys are single tokens — Kai'Sa is "Kaisa", Nunu & Willump is
+  // "Nunu" — so an underscore is a reliable marker for a variant.
+  const all = (await getAllChampions()).filter((c) => !c.key.includes("_"));
   let targets;
   if (only) {
     targets = all.filter((c) => c.key.toLowerCase() === only.toLowerCase() || String(c.id) === only);

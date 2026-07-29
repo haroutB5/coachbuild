@@ -69,17 +69,36 @@ export async function resolveFeaturedAccount(
     return null;
   }
 
+  // An ERROR and an EMPTY LIST are not the same answer, and conflating them is
+  // how a third of a backfill vanished on 2026-07-29: under rate limiting every
+  // probe threw, the catch moved on, and the account was written off as having
+  // no games. Both accounts checked afterwards had plenty — aa5a#aaa on asia,
+  // Barsas#BRAND on europe, which is the FIRST routing tried.
+  //
+  // So: only conclude "no matches anywhere" when every routing answered
+  // CLEANLY with an empty list. If any probe errored, say so and return null
+  // with a different message, so the champion is retried on the next pass
+  // instead of being silently skipped forever.
+  let cleanEmpty = 0;
+  let lastError: unknown = null;
   for (const routing of ROUTINGS) {
     try {
       const ids = await getMatchIdsByPuuid(routing, puuid, { queue: 420, start: 0, count: 1 });
-      if (ids.length > 0) {
-        return { puuid, gameName, tagLine, matchRouting: routing };
-      }
-    } catch {
-      // A routing that errors is not the one; keep probing.
+      if (ids.length > 0) return { puuid, gameName, tagLine, matchRouting: routing };
+      cleanEmpty += 1;
+    } catch (err) {
+      lastError = err;
     }
   }
-  log(`${gameName}#${tagLine}: resolved, but no ranked-solo matches on any routing`);
+
+  if (cleanEmpty === ROUTINGS.length) {
+    log(`${gameName}#${tagLine}: resolved, but no ranked-solo matches on any routing`);
+  } else {
+    log(
+      `${gameName}#${tagLine}: routing probe INCONCLUSIVE — ${cleanEmpty}/${ROUTINGS.length} answered, ` +
+        `last error: ${lastError instanceof Error ? lastError.message : String(lastError)}. Will retry.`
+    );
+  }
   return null;
 }
 
