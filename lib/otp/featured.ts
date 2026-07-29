@@ -113,6 +113,21 @@ export interface ItemBuildRate {
   pct: number;
 }
 
+/** One stored game, reduced to what a build view needs: what they finished it
+ *  holding, and whether they won it.
+ *
+ *  `win` is `boolean | null` and the null is meaningful — it is what a response
+ *  body predating this field degrades to, and it must never be defaulted to
+ *  `false`. A defaulted `false` would caption a real build "a game they lost",
+ *  which is a fabricated fact rather than a missing one (HARD RULE 4). */
+export interface FeaturedGame {
+  /** Deduplicated final inventory (item0..item5, zeros already stripped at
+   *  ingest), in stored inventory-slot order. NOT purchase order — the OTP
+   *  pipeline makes no timeline call, so purchase order was never fetched. */
+  items: number[];
+  win: boolean | null;
+}
+
 export interface FeaturedBuildModel {
   /** Games the rates are computed over. The honest denominator. */
   games: number;
@@ -120,25 +135,33 @@ export interface FeaturedBuildModel {
   /** Every completed item they build, most-built first. Boots included —
    *  which boot a one-trick picks is a real decision, not chrome. */
   items: ItemBuildRate[];
-  /** PER-GAME final inventories, one entry per row, deduplicated within a game
-   *  and in stored (inventory-slot) order.
+  /** PER-GAME record, one entry per row, NEWEST FIRST (the caller's query
+   *  orders by `game_creation DESC`, and the featured card's single-game
+   *  tiebreak relies on that order — see lib/otp/featuredBuild.ts).
    *
-   *  `items` above is a per-item aggregate and cannot answer "which SIX did
+   *  `items` above is a per-item aggregate and cannot answer "which items did
    *  they finish a game holding TOGETHER" — that question needs the games
-   *  themselves, and it is what the featured card's full-build slot rests on
+   *  themselves, and it is what the featured card's build strip rests on
    *  (2026-07-29 user directive: "show at least one FULL build... make the
-   *  build make sense"). Assembling a build from per-item rates instead would
-   *  be a synthesis, possibly a combination nobody ever played, which is a
-   *  claim this data does not support without saying so. So the raw sets
-   *  travel, and `lib/otp/featuredBuild.ts` decides — with the item metadata
-   *  the client holds and the server does not — whether an exact repeated set
-   *  exists or a labelled synthesis is the honest answer.
+   *  build make sense"; extended the same day to "show one real complete
+   *  build" once the data proved no complete set repeats). Assembling a build
+   *  from per-item rates instead would be a synthesis, possibly a combination
+   *  nobody ever played, which is a claim this data does not support. So the
+   *  raw games travel, and `lib/otp/featuredBuild.ts` decides — with the item
+   *  metadata the client holds and the server does not — whether an exact set
+   *  repeats or one real game is the honest answer.
+   *
+   *  ONE ARRAY OF RECORDS, not two parallel arrays. The inventory and the
+   *  outcome are facts about the SAME game, and the card labels a build "a
+   *  game they won" off the pair; two arrays would let an ingest change or a
+   *  filter desynchronise them silently, and the label would then be a lie
+   *  with nothing to catch it. Structural alignment beats a documented one.
    *
    *  UNFILTERED beyond `keepItem`, same contract as `items`: this function
    *  counts, it does not classify. Rows whose payload was malformed contribute
-   *  an empty array rather than vanishing, so index alignment with the row
-   *  list is preserved and `games` stays the denominator for everything. */
-  gameItems: number[][];
+   *  an empty `items` array rather than vanishing, so the entry count still
+   *  equals `games` and that stays the denominator for everything. */
+  gameLog: FeaturedGame[];
   /** The rune page they run most often, with how often. Null when their pages
    *  are too scattered to have a modal one. */
   runes: { page: RunePage; games: number; pct: number } | null;
@@ -210,7 +233,7 @@ export function buildFeaturedModel(
 ): FeaturedBuildModel {
   const games = rows.length;
   const itemGames = new Map<number, number>();
-  const gameItems: number[][] = [];
+  const gameLog: FeaturedGame[] = [];
   const runeGroups = new Map<string, { page: RunePage; n: number }>();
   const spellGroups = new Map<string, { spells: [number, number]; n: number }>();
   let wins = 0;
@@ -223,8 +246,11 @@ export function buildFeaturedModel(
     const seen = new Set(asNumberArray(row.final_items).filter(keepItem));
     seen.forEach((id) => itemGames.set(id, (itemGames.get(id) ?? 0) + 1));
     // Same Set, so the per-game inventory and the per-item counts can never
-    // disagree about what this game built — one dedup, two consumers.
-    gameItems.push(Array.from(seen));
+    // disagree about what this game built — one dedup, two consumers. The
+    // outcome is pushed in the SAME statement as the inventory, which is what
+    // makes their pairing structural rather than a convention two loops could
+    // drift out of.
+    gameLog.push({ items: Array.from(seen), win: row.win });
 
     const page = toRunePage(row.runes);
     if (page) {
@@ -257,7 +283,7 @@ export function buildFeaturedModel(
     games,
     wins,
     items,
-    gameItems,
+    gameLog,
     runes: topRunes ? { page: topRunes.page, games: topRunes.n, pct: pct(topRunes.n) } : null,
     spells: topSpells ? { spells: topSpells.spells, games: topSpells.n, pct: pct(topSpells.n) } : null,
   };

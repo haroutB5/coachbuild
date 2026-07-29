@@ -6673,3 +6673,985 @@ generated later, two facts from this round are worth carrying into `gotchas.md`:
    Windows; CDP device-metrics emulation is required.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-29 14:55
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-29 11:36:47Z; previous content preserved there. Append new rounds below. -->
+
+# HANDOFF — engy, 2026-07-29 (signal layer: OTP cascade, competing slots, snowball stacks)
+
+Scope owned: `lib/**` and non-JSX `.ts` under `components/`, plus tests. No `.tsx` touched.
+
+**Gate:** `npx tsc -b` clean. `npx vitest run` → **136 files, 2068 tests, all green**
+(2067 before this pass). `npx next lint` → pre-existing `<img>` warnings only, no errors.
+
+---
+
+## 1. The OTP line padded itself with pro items
+
+`components/hextech/itemSetBody.ts`. The comment above the OTP push site claimed
+`proPool` was not in that line's cascade; the code passed `generalFallback`, which
+contains it. The claim was the right rule and the code was the wrong implementation.
+
+### Measured damage — the numbers, not an estimate
+
+Harness drove the **real `buildItemSets`** against live prod (`/api/build` + `/api/pros`
++ `/api/otp`) plus the live 16.13.1 catalog, over **every champion+role in
+`coachbuild.otp_matches` that holds any OTP games — 218 combos.** Slot attribution is
+the cascade order itself (otp → optimized → situational → pro → core), so a slot counts
+as pro-sourced only when nothing earlier in the cascade could have supplied it.
+
+| | value |
+|---|---|
+| OTP slots emitted | 1,307 |
+| slots sourced from `proPool` | **17 (1.3%)** |
+| lines with >=1 pro-sourced slot | **11 of 218 (5.0%)** |
+| lines that pad at all (any source) | 66 of 218 (30.3%) |
+| avg pro-sourced slots per line | 0.078 |
+| worst line | **3 of 6 slots** — Draven Mid, 1 stored game |
+
+Broken out by how much one-trick data the champion actually has:
+
+| stored OTP games | lines | pro-padded lines | pro-sourced slots |
+|---|---|---|---|
+| >=50 | 81 | **0** | **0 of 486** |
+| >=20 | 121 | 1 | 2 of 726 |
+| <20 | 97 | 10 (10.3%) | 15 of 581 |
+
+**The brief's framing was too strong and this is the honest correction.** It is not
+"routine" padding and the OTP block was not drifting toward the Pro block by
+construction. Every one of the 11 affected lines is a thin-sample champion. The reason
+is cascade ORDER, not any guard: `optimized` and `situational` sit ahead of `proPool`
+and the situational pool carries a median of 7 full items, so it absorbs nearly every
+shortfall first. That is luck rather than design — it made the failure rare and
+invisible, and concentrated it exactly where the OTP sample is thinnest and a false
+"OTP build" label costs the most.
+
+Every affected line, before the fix:
+
+```
+Fiora Bot        (28 games)  2/6 slots  Stormrazor, Endless Hunger
+Mordekaiser Jgl  (13 games)  1/6        Dusk and Dawn
+Fizz Bot          (7 games)  1/6        Void Staff
+Akshan Sup        (6 games)  1/6        Boots of Swiftness
+Zyra Mid          (4 games)  2/6        Rylai's, Void Staff
+Ivern Sup         (4 games)  1/6        Knight's Vow
+Aphelios Top      (2 games)  1/6        Phantom Dancer
+MasterYi Mid      (2 games)  1/6        Wit's End
+Brand Jgl         (2 games)  2/6        Liandry's, Zhonya's
+Zed Bot           (1 game)   2/6        Serpent's Fang, Lord Dominik's
+Draven Mid        (1 game)   3/6        Bloodthirster, Gunmetal Greaves, Infinity Edge
+```
+
+Most real OTP padding is **the boots slot**, not items: every Bot-lane one-trick line
+with a full six-item OTP pool still reaches outside it for footwear, because
+`aggregateProConsensus` returns up to 6 items + 2 boots and the boots half is often empty.
+
+### The change
+
+New `otpFallback = [optimizedPrimary, situationalPoolFull]` — `generalFallback` minus
+`proPool`. `corePrimary` still appended LAST (the Yuumi Support defect: it is the only
+pool guaranteed to carry `items.boots`). The champion's own WPA pools stay in: they are
+not a rival population's build, they are the same champion's model-ranked data.
+
+`buildLine` already ships short rather than inventing when the pools cannot reach six
+(its step 4) — verified live, not assumed: Camille Mid already emitted a 5-item OTP line
+before this change.
+
+### Re-measured after the fix
+
+The 11 affected combos, re-run through the same harness: **0 pro-sourced slots on all
+11.** Aphelios Top now honestly emits **5 items instead of a padded 6** — the intended
+behaviour change. The others refill from the champion's own core/situational pools.
+
+### Mirror problem on the Pro line — checked, does not exist
+
+`otpPool` has never been in `generalFallback`, so the Pro line cannot reach it. Pinned by
+a test rather than left as an assertion. **No change made.** The `buildItemSets` doc
+comment did claim a symmetry ("each pads via … the other consensus") that was false in
+BOTH directions; that doc now writes out all four cascades exactly.
+
+---
+
+## 2. Mutually exclusive items now share ONE slot
+
+**The contract was already in the tree**, uncommitted, from the round that was stopped:
+`lib/buildSlots.ts` + `lib/__tests__/buildSlots.test.ts` +
+`components/hextech/buildSlotView.ts` + `BuildSlotList.tsx`, with three live callers
+(`proConsensus.ts`, `lib/otp/featuredBuild.ts`, `FeaturedOtpCard.tsx`). It implements
+`BuildSlot`/`BuildSlotOption` with exactly the field names and semantics the brief
+specifies. I kept it and hardened it rather than rewriting — replacing a measured, tested
+module the frontend already codes against would have been churn, not correctness.
+
+### Exported signatures (unchanged, as briefed)
+
+```ts
+export interface BuildSlotOption { itemId: number; games: number; pct: number; }
+export interface BuildSlot { primary: BuildSlotOption; alternatives: BuildSlotOption[]; sampleGames: number; }
+
+export function resolveBuildSlots(
+  gameItems: readonly (readonly number[])[],
+  sampleGames: number,
+  opts?: { include?: (itemId: number) => boolean; maxSlots?: number; maxAlternatives?: number; minPct?: number }
+): BuildSlot[];
+```
+
+`sampleGames` is a REQUIRED parameter, not derived from `gameItems.length`: it must be
+the same denominator the rest of the card quotes, or a slot's "46%" and the item list's
+"46%" describe different populations. That divergence is the v0.73.1 class of bug.
+
+### Thresholds, and one deviation from the brief
+
+| constant | value | why |
+|---|---|---|
+| `COMPETES_MAX_LIFT` | 0.35 | measured; sits in an empty quarter of a bimodal distribution over 193 pairs |
+| `MIN_EXPECTED_COOCCURRENCE` | 3 games | the honesty guard — "never together" means nothing when chance expects 0.9 |
+| `MIN_SAMPLE_GAMES` | 20 item-bearing games | **added this pass** — see below |
+| `DEFAULT_MIN_PCT` | 15% | equal to the band the threshold was measured over; lower extrapolates past the evidence |
+
+**DEVIATION, stated plainly: the module uses LIFT, not the joint rate the brief named.**
+Lift = observed_together / expected_together_if_independent. The brief's joint rate
+(Jaccard) separates the same two populations on this corpus, and every pair it found (all
+at exactly 0 co-occurrence) has lift 0 and is caught here too — nothing is lost. Where
+they disagree, lift is the STRICTER of the two:
+
+```
+A in 50% of games, B in 50%, together in 10%   joint 0.11 "competing"   lift 0.40 not competing
+A in 20%,          B in 20%, together in  2%   joint 0.05 "competing"   lift 0.50 not competing
+```
+
+In both, the items co-occur about as often as chance predicts, and the joint rate calls
+them exclusive only because they are not built that often in absolute terms. Grouping two
+items that genuinely stack is a fabrication — the build then shows five items where the
+player buys six — so the measure that refuses those cases is the right one. Both
+statistics and the reasoning are written into the module header.
+
+**`MIN_SAMPLE_GAMES = 20`, added this pass, is the floor the brief asked to be stated.**
+Be clear about what it is: the statistical work is done by `MIN_EXPECTED_COOCCURRENCE`,
+which is per-pair and strictly better than any blanket sample size. This floor earns its
+place on one case the pair guard lets through — 10 games with A in 6 and B in 5 expects
+exactly 3 shared games (clears the guard) while pigeonhole FORCES them to share at least
+one, at which point lift is 0.33 and a contested slot appears out of arithmetic rather
+than behaviour. That pigeonhole floor is scale-invariant, so no larger number fixes it;
+20 is a product judgement ("not enough games to have an opinion"), not a significance
+test, and it is documented as such.
+
+### Tie-break, documented as asked
+
+An item mutually exclusive with two primaries attaches to the **more-built** one. Greedy,
+highest build rate first, so the assignment is deterministic and the stronger claim wins.
+Pinned by a test. Two known limitations are written into the module header rather than
+hidden: the loser of a greedy claim can render as "settled" when it does have a
+competitor, and a three-way tie has no meaningful go-to (Shen live: 18/18/17%).
+
+### Verified against live data, per champion AND role
+
+Ran the real `resolveBuildSlots` over every champion+role in `otp_matches` with >=40
+stored games (**97 combos**): **87 of 413 slots contested (21.1%), on 63 of 97 combos
+(64.9%).** The user's own example resolves exactly as he described it:
+
+```
+Ahri Mid (n=102)
+  [Malignance 70% | Blackfire Torch 25%]   <- the either/or he named
+  Zhonya's Hourglass 34%                   <- companion of Malignance, kept apart
+  [Lich Bane 29% | Cosmic Drive 26%]       <- a second either/or
+  Shadowflame 26%                          <- companion of Blackfire, kept apart
+```
+
+It also generalises two fixes this repo previously made by ENUMERATION, without being
+told about either: support-quest finals (Maokai Support returns
+`[Solstice Sleigh 67% | Celestial Opposition 29%]`) and split boot preferences.
+
+The brief's methodology warning is now in the module header as a rule on callers: mutual
+exclusivity is per champion **and role**. Note `scripts/measure-item-cooccurrence.mts`
+(the threshold probe, already in the tree) groups by CHAMPION only — fine for a
+distribution-shape question, but its per-champion slot output must not be read as what a
+surface would render.
+
+---
+
+## 3. Mejai's on the WPA (Build) tab
+
+### Which code path it was
+
+`lib/recommend.ts`, and it is **not** the path v0.76.0 touched. The Pro and OTP tabs
+aggregate stored games client-side through `proConsensus.ts`; the WPA build is assembled
+server-side from coachless's own WPA-ranked pools. Mejai's reached it as a **per-slot
+situational SWAP** (`items.alts.*`), which is why reading first/second/third could not see
+it. Measured on prod before the fix:
+
+```
+Ahri Mid    alts.second  Mejai's  wpa 1.393   8,149 games  78.5% wr
+            alts.third   Mejai's  wpa 0.827  13,948 games  78.4% wr
+Annie Mid   alts.second  Mejai's  wpa 3.543     915 games  82.0% wr
+Veigar Mid  alts.third   Mejai's  wpa 2.910     715 games  81.5% wr   (TOP of the row)
+```
+
+### The fix
+
+One filter, at the pool boundary right after `collapseSupportFinalPools`, reusing
+`isSnowballStackItem` from `lib/snowballStacks.ts`. No second list, no second mechanism.
+
+- **One place:** `bestItem`, `topItems` and `itemAlts` all draw from these same pools, so
+  it covers the core order, `fourthPlus` and every situational-swap list at once.
+- **Before every truncation:** `itemAlts` slices to 3 and `capExtraFullItems` caps the
+  tail. Filtering after either would leave a short list with a hole instead of promoting
+  the next real item. Pinned by its own test.
+- The sequential optimizer and the (dormant, 403) matchup path perform their **own**
+  `getGlobalItemStatistics` fetches and never pass through that boundary, so both are
+  filtered at their own call sites. Also pinned by a test.
+- **`starterData` is deliberately NOT filtered.** Dark Seal (1082) is in the snowball
+  family and is a genuine opening purchase; the directive is about build slots, not
+  openers. Two tests pin that it still wins the Starting slot when the sample says so AND
+  is still excluded from every completed slot.
+
+New file `lib/__tests__/snowballStackBuild.test.ts` (7 tests). **Verified they fail
+without the fix**: temporarily neutering `dropSnowballStacks` fails 5 of 7, and the 2 that
+still pass are exactly the Dark Seal opener tests — they pin unchanged behaviour, which is
+the point.
+
+### Grep audit: no other surface surfaces a snowball stack in a completed slot
+
+Three production call sites, one list, no hardcoded ids anywhere else:
+
+```
+lib/snowballStacks.ts:75                      isSnowballStackItem       <- the only rule
+lib/recommend.ts:384                          WPA build pools           <- new this pass
+components/hextech/proConsensus.ts:996,1042   Pro + OTP consensus       <- v0.76.0
+lib/otp/featuredBuild.ts:139                  featured one-trick card   <- v0.76.0
+```
+
+`grep -n '\b(3041|1082)\b'` across `lib/` + `components/` + `app/` finds the ids only in
+`snowballStacks.ts` (the list), `startingItems.ts` (Dark Seal's pre-existing starter
+allowlist entry, correct), doc comments, and tests. Nothing else.
+
+Remaining producers of completed-item lists, and why each is covered:
+
+- `components/hextech/itemSetBody.ts` — no snowball guard of its own and does not need
+  one: every pool it reads is now clean at source (BuildResponse from `recommend.ts`,
+  pro/OTP inputs from `proConsensus.ts`). Confirmed empirically as well as structurally —
+  **0 of 218 live OTP blocks contained Mejai's even BEFORE this pass**, because
+  `proConsensus` already dropped it.
+- `lib/buildSlots.ts` — its `include` default was `() => true`, so a caller passing raw
+  `final_items` with no predicate would have surfaced Mejai's. All three live callers do
+  pass a correct classifier, but I made the exclusion **unconditional** inside the
+  function (ANDed with the caller's predicate) so the default is safe rather than merely
+  unused. Same import, same list. It cannot regress Dark Seal's opener row: this module
+  has no opener concept and never produces one.
+- `lib/heroStats.ts`, `lib/patchMovers.ts` — fetch `itemType 6` (starters) only, for
+  win-rate maths. No build slots.
+
+---
+
+## OPEN — a real live defect found while measuring, NOT fixed (out of brief)
+
+**`3172` Gunmetal Greaves is a tier-3 boot enchant that ddragon does not tag as boots.**
+Live 16.13.1 catalog:
+
+```
+3168 Immortal Path           tags ["LifeSteal","SpellVamp","Boots"]              from ["3008"]
+3170 Swiftmarch              tags ["Boots"]                                       from ["3009"]
+3171 Crimson Lucidity        tags ["CooldownReduction","Boots"]                   from ["3158"]
+3175 Spellslinger's Shoes    tags ["Boots","MagicPenetration"]                    from ["3020"]
+3172 Gunmetal Greaves        tags ["AttackSpeed","LifeSteal","NonbootsMovement"]  from ["3006"]   <- no "Boots"
+```
+
+Every tags-based boots check in the app therefore misclassifies it as an ordinary full
+item: `proConsensus.ts`'s `isBootsTag`/`isBootsFinal` file it into `items` instead of
+`boots`; `itemSetBody.ts`'s `collectBootsIds` never learns the id, so `buildLine`'s
+one-boots rule cannot see it; `featuredBuild.ts`'s `classifyFeaturedItem` returns
+`completed`.
+
+Observed live, not theorised: the Draven Mid OTP line shipped **Swiftmarch AND Gunmetal
+Greaves in one six-slot loadout** — two pairs of boots, the exact bug the v0.34.1
+restructure exists to prevent. (That specific instance disappeared with the Task 1 fix
+because Gunmetal Greaves arrived via `proPool`; the underlying misclassification is
+untouched and will resurface anywhere else the id appears.)
+
+Not fixed here because there is no single choke point — three independent classifiers own
+"is this boots" (`proConsensus.isBootsTag`/`isBootsFinal`, `itemSetBody.collectBootsIds`,
+`featuredBuild.classifyFeaturedItem`) and a correct fix is a shared rule across files
+another agent is editing in parallel. Minimal fix: an id override beside the boots check,
+in the shape of gotcha (e)'s rune-icon exceptions, plus a catalog probe on every patch
+bump. Same class as gotcha (y): curated/tag-derived item facts rot silently.
+
+## Cleanup owed
+
+The safety gate blocked file deletion (it points at a dead `S:/AI/urgot` path), so seven
+untracked scratch harnesses are still in `scripts/`, all prefixed `_tmp-`:
+`_tmp-probe.mjs`, `_tmp-probe-mejais.mjs`, `_tmp-probe-boots.mjs`, `_tmp-summarize.mjs`,
+`_tmp-summarize2.mjs`, `_tmp-measure-otp.mts`, `_tmp-validate-slots.mts`. None is imported
+by anything. Delete before commit. (`scripts/measure-item-cooccurrence.mts` is NOT one of
+mine — it is the threshold probe the module header cites and should stay.)
+
+## Wiki
+
+No `wiki/` directory in this project. Proposed CLAUDE.md updates:
+
+- Data pipeline map: add `lib/buildSlots.ts` — measured mutual-exclusivity grouping
+  (lift-based), consumed by Pro Consensus, the featured one-trick card, and the OTP card.
+- New gotcha: ddragon's `tags` are not a reliable boots signal — `3172` Gunmetal Greaves
+  is a tier-3 boot with no `Boots` tag (see OPEN above).
+- Near gotcha (dd): the OTP item-set line pads from `otpFallback`, NOT `generalFallback`;
+  all four cascades are written out in `buildItemSets`'s doc comment.
+
+---
+
+# Boots classification fix — 3172 Gunmetal Greaves (engy, 2026-07-29, second pass)
+
+Closes the OPEN item above ("ddragon `tags` are not a reliable boots signal"). Scope was
+`lib/**` and non-JSX `.ts` under `components/`; no `.tsx` touched.
+
+## What the live catalog actually says
+
+Probed ddragon **16.15.1** directly (2026-07-29) by walking the full transitive `into`
+closure from `1001` Boots — 20 items — plus a global scan for `Boots`- and
+`NonbootsMovement`-tagged ids outside it.
+
+| tier | ids | `Boots` tag? |
+|---|---|---|
+| 1 | 1001 | yes |
+| 2 | 3005, 3006, 3008, 3009, 3010, 3020, 3047, 3111, 3117, 3158 | yes, all |
+| 3 | 3168, 3170, 3171, 3173, 3174, 3175, 3176 | yes, all |
+| 3 | **3172 Gunmetal Greaves** | **NO** |
+
+`3172` is `{ tags: ["AttackSpeed","LifeSteal","NonbootsMovement"], from: ["3006"], into: [],
+purchasable: true }`. The catalog contradicts itself — a `NonbootsMovement` tag on a boot.
+**It is the only gap in the family**; the previous agent's report was correct and complete
+on that point. `3010/3013/3117/3176` are `purchasable: false` and are excluded upstream
+anyway.
+
+Outside the tree, `Boots`-tagged ids exist but are not Summoner's Rift build items:
+`1111` Jarvan I's, `2422` Slightly Magical Footwear, the `223xxx`/`771xxx`/`773xxx` mode
+variants, and the `550xxx` debug items (which carry *every* tag, `Boots` and `Consumable`
+both). All have `from: []`, so they fail the final-boots rule exactly as they did before —
+behaviour unchanged, deliberately.
+
+## Live exposure — this was never a Draven-only edge case
+
+Swept prod `/api/pros` and `/api/otp` over 23 champions x 6 roles. **18 feed/role combos
+carried 3172.** Worst:
+
+| champ/role | 3172 build rate | other boots in sample |
+|---|---|---|
+| **Yone mid** | **178 / 200 (89%)** | 3173 x8, 3174 x7, 3168 x1, 3006 x1 |
+| Yasuo mid | 132 / 200 (66%) | 3170 x24, 3174 x18, 3173 x15 |
+| Yone bot | 112 / 200 | 3006 x59, 3173 x4, 3174 x4 |
+| Vayne mid | 20 / 31 | 3168 x4, 3170 x4 |
+| Tryndamere mid | 11 / 13 | 3168 x1 |
+
+So on Yone mid the champion's *actual* boot was absent from the boots slot, was eating a
+completed-item slot, and was invisible to the one-boots invariant simultaneously.
+
+**Draven mid did NOT reproduce** on the current feed: `/api/otp?championId=119&role=2`
+returns one game with items, holding 3170 and no 3172. The reported symptom is real as a
+mechanism and the feed has simply moved since it was measured. Reported as a data point,
+not a contradiction.
+
+**The WPA line is unaffected.** coachless never surfaces 3172 in any `ItemsBlock` — checked
+26 champion/role combos via prod `/api/build`, zero hits, so `items.boots` and the legendary
+slots were never involved. The exposure was entirely Pro/OTP consensus and the featured card.
+
+## The shared predicate
+
+**`lib/bootsItems.ts`** — `isBootsItem(itemId, meta, catalog?)` and
+`isFinalBootsItem(itemId, meta, catalog?)`. Two functions, not one, because the codebase
+genuinely asks two questions: partition ("which grid slot", includes tier-1 1001) vs
+completed-item ("is this a finished pick", excludes 1001 via `from.length > 0`). That split
+pre-dates this change — it is why proConsensus needed both `isBootsTag` and `isBootsFinal`.
+
+Rule: **Boots-tagged, OR anything it is built FROM is boots** (recursive over `from`, depth
+cap 6, cycle-guarded). Every boot descends from 1001, which is tagged, so the recipe chain
+is the anchor and a missing tag above tier 1 is self-healing. Measured over the entire live
+catalog, the ancestry clause reclassifies **exactly one** item — 3172 — and zero others.
+
+`BOOTS_ID_EXCEPTIONS = {3172}` is kept as the **degradation path, not decoration**: the
+ancestry clause needs the PARENT in a catalog map, and two call sites cannot always supply
+one (`FeaturedOtpCard.tsx`'s include predicate passes no map; a stale localStorage entry
+normalizes to `from: []`). Without the pin the bug would silently return on those paths only
+— the worst kind, since the others would still be right. Documented per-entry with what the
+catalog says vs what is true, in the style of `lib/snowballStacks.ts`.
+
+## Call sites now routed through it
+
+| file | was | now |
+|---|---|---|
+| `components/hextech/proConsensus.ts` | private `isBootsTag` (5 sites) + `isBootsFinal` | both **deleted**; `isBoots(itemId)` closure -> `isBootsItem`, `isBuildItem` -> `isFinalBootsItem`. `isBuildItem` takes an optional 3rd `catalog` arg (back-compatible). |
+| `lib/otp/featuredBuild.ts` | `tags.includes("Boots") && from.length > 0` | `isFinalBootsItem`; `classifyFeaturedItem` takes an optional 3rd `catalog` arg, and `buildFeaturedView` passes its `meta` map. |
+| `components/hextech/itemSetBody.ts` | `isFullItem`'s inline tag check | `isFinalBootsItem`, with `itemMeta` threaded through `fullItemsOnly`. |
+| `components/hextech/itemSetBody.ts` | `collectBootsIds` — **positional only** | positional sources **plus** a classified pass over every candidate id. See below. |
+
+### `collectBootsIds` is the fix that closes the class, not just the instance
+
+`collectBootsIds` was never a tag classifier — it collected ids from slots the contract
+already *calls* boots (`items.boots`, `alts.boots`, `pro.boots`, `otp.boots`). That is
+exactly why the two-boots line shipped: 3172 was partitioned upstream into `pro.items`/
+`otp.items`, so it reached the set through no boots slot at all and `buildLine` counted it
+as a full item.
+
+Fixing the upstream partition removes today's instance. It does not remove the class — the
+invariant would still be resting on a producer being right. So `collectBootsIds` now unions
+the positional sources with `isBootsItem` run over **every candidate id from every pool**
+(core picks, optimized path, situational, pro entries, OTP entries). The two sources fail in
+opposite directions and both are kept on purpose: positional survives a total metadata-fetch
+failure, classified survives a wrong upstream partition. `bootsIds` moved down in
+`buildItemSets` so it runs after every pool exists; it is not read until the `buildLine`
+calls far below, so the move is order-safe.
+
+## Tests — `lib/__tests__/bootsItems.test.ts`, 28 tests
+
+Fixtures are the **verbatim live 16.15.1 catalog records** for 31 ids (real recipes, tags,
+gold). Load-bearing twice: 3172's exact tag list *is* the bug, and the negative controls
+(3046 Phantom Dancer, 3086 Zeal, 3041 Mejai's) only prove anything because they carry the
+real `NonbootsMovement` tag that must never be read as a boots signal.
+
+Covers: every tier-2 and tier-3 boot classified both ways; 3172 by ancestry AND by pin with
+no catalog; tier-1 1001 boots-but-not-final; no over-reach onto `NonbootsMovement` items or
+boot components; a wrecked localStorage-shaped `ItemDetail`; all three call sites agreeing;
+the top-three-boots slot seeing 3172; the two-boots line reduced to one; the invariant on
+*every* emitted block; the Yuumi no-tracked-boot defect still fixed; never-invent-boots.
+
+**Mutation-verified, not assumed** (each mutation applied, suite run, then reverted):
+- tag-only rule + no exceptions + no ancestry -> **7 tests fail**
+- `collectBootsIds` classified pass removed -> **2 tests fail** (both two-boots tests)
+- plain-literal second predicate re-added to `featuredBuild.ts` -> **guard test fails**
+
+The first version of the two-boots assertions was **circular** — it filtered the emitted ids
+with `isBootsItem`, the very predicate under test, so mutating the predicate moved code and
+assertion together and the test stayed green while the app shipped two boots. Caught by the
+mutation run and rewritten against a hardcoded `REAL_BOOTS_IDS` list. Worth remembering: an
+invariant test must not use the classifier it is guarding.
+
+The no-second-predicate guard is a source-text regex over 10 consumer files (comments
+stripped). **What it cannot see, stated plainly:** it catches the form a developer would
+actually write (`tags.includes("Boots")`) and not a deliberately obfuscated one — both were
+mutation-tested; the plain literal fails, a `String.fromCharCode`-built one does not. The
+defended failure mode is honest copy-paste, not sabotage.
+
+## Verification
+
+`npx tsc -b` clean. `npx vitest run` — **137 files, 2096 tests, all passing**, including the
+pre-existing "a line with 2 boots" regression in `components/__tests__/itemSetBody.test.ts`
+and all of `proConsensus.test.ts`.
+
+## Not done / for someone else
+
+- **`components/hextech/FeaturedOtpCard.tsx:392`** calls
+  `classifyFeaturedItem(id, meta.get(id))` with no catalog. **Correct today** — the pinned
+  exception covers 3172 on that path — but it is the one call site running the weaker rule,
+  so a *future* untagged boot would slip through there and nowhere else. One-line fix
+  (pass `meta` as the 3rd arg). `.tsx`, so out of my scope; flagged for fronty.
+- Not verified in a browser. The change is pure-function and covered by unit tests over real
+  catalog data; no puppeteer/prod smoke was run.
+- `3010` Symbiotic Soles / `3013` / `3176` Forever Forward are `purchasable: false` in
+  16.15.1 and so are excluded from every completed-item list. If that line is meant to be
+  buyable, this is a separate (pre-existing) defect — noticed while sweeping, not
+  investigated.
+
+### Wiki / CLAUDE.md proposals
+- Add a gotcha: **"ddragon's `Boots` tag is not complete — 3172 Gunmetal Greaves lacks it.
+  Never write a boots check; call `lib/bootsItems.ts`."** Pairs with existing gotcha (y)
+  (curated item ids rot every patch) and (dd) (a second copy of a rule misses the next fix).
+
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-29 11:42:21Z; previous content preserved there. Append new rounds below. -->
+
+## Round: build-slot tap targets + the three unverified requirements (fronty, 2026-07-29)
+
+Scope taken: `.tsx` only. `lib/**` and `components/hextech/itemSetBody.ts` / `proConsensus.ts`
+(non-JSX `.ts`) were another engineer's, and were left alone.
+
+Files changed:
+- `components/hextech/BuildSlotList.tsx`
+- `components/hextech/FeaturedOtpCard.tsx` (one row, see requirement 3)
+
+### The stalled note was STALE — read this before re-doing the work
+
+The previous agent's last note said the tap target was 17px and that it was "making the whole row
+the target". It had ALREADY made that change before it stopped. `Row` was already the `<button>`,
+already `w-full`. Measured on the tree as I received it, at 390x844x3 mobile emulation, Ahri mid:
+
+| | before this round | after |
+|---|---|---|
+| go-to row (Pro card, interactive) | 316 x **46** | 316 x **46** |
+| alternative row (Pro card, interactive) | 259 x **32** | 259 x **44** |
+| go-to row (OTP card, non-interactive) | 324 x **46** | 324 x **46** |
+| alternative row (OTP card, non-interactive) | 267 x **32** | 267 x **44** |
+
+So the real remaining defect was not 17px, it was the ALTERNATIVE row at 32px — 12px under the
+44px guideline — plus the fact that both heights were content-derived accidents rather than floors.
+
+### What changed
+
+1. `min-h-[46px]` on the go-to row, `min-h-[44px]` on the alternative row. The go-to already
+   measured 46px, but only because its content happens to be two lines (name+pct, then bar+
+   fraction). A shorter name, a dropped fraction or a font swap could have shrunk it back under
+   the line silently. It is a floor now, not a by-product.
+2. Alternative spacing `space-y-1.5` -> `space-y-0.5`. The height the 44px floor cost is bought
+   back from the gap BETWEEN alternatives, which is the right place to take it from: two adjacent
+   44px targets with a 2px seam miss less than two 32px targets with a 6px gap. Net cost is +8px
+   per alternative row, not +12px.
+3. `FeaturedOtpCard.tsx`'s "Opens" starter row now prints its fraction (`26/37`) beside the
+   percentage, with the slash `aria-hidden` and the words supplied — the same `Fraction` shape
+   BuildSlotList uses. See requirement 3 below for why.
+
+The `Row` doc comment carried the old "these heights are a deliberate trade under 44px" paragraph.
+That is now replaced with the second measurement and what it produced, so the next reader is not
+told a stale rationale for a number that no longer holds.
+
+### Evidence
+
+**Tap target, measured not reasoned.** Chrome, `390x844x3,mobile,touch`, `npx next start -p 4733`
+off a clean `next build`. Note: `resize_page` alone did NOT take (innerWidth stayed 500) — device
+emulation via `emulate` is what actually produced a 390px layout viewport. Anything measured with
+`resize_page` alone on this app should be re-measured.
+
+**Clicks land, not just geometry.** 7-point `elementFromPoint` edge scan (4 corners, centre, both
+mid-edges) over all 11 visible interactive rows on the Pro card: **77/77 probes landed inside their
+own button, 0 misses.** Then a real `click` dispatched at the bottom-LEFT corner of the "or
+Blackfire Torch" alternative row — deliberately away from the item name, on the part of the row
+that used to be dead — opened the correct item popover (`role="dialog"`, text "Blackfire Torch
+2,800 gold ...").
+
+**No horizontal overflow.** `document.documentElement.scrollWidth === 390 === innerWidth`.
+
+### Requirement 1 — the go-to IS visually dominant. Confirmed.
+
+Computed styles pulled off the live DOM, one contested slot (Crimson Lucidity / Spellslinger's
+Shoes, Pro card, 390px):
+
+| axis | go-to | alternative |
+|---|---|---|
+| icon | 34px | 20px (2.9x the area) |
+| name | 13px / weight 500 / `rgb(236,231,222)` | 11.5px / weight 400 / `rgb(131,141,132)` |
+| percentage | 12.5px / weight 600 / bright | 11.5px / weight 600 / muted |
+| left edge | x=33 | x=90 (57px indent) |
+| binding rail | none | 1px left border, present only when contested |
+| words | — | literal visible "or" prefix |
+
+Six independent axes, none of them colour, none of them load-bearing alone. Screenshot at 390px
+read directly: the go-to reads as the row and the alternative reads as a footnote to it, not as a
+second item to buy.
+
+### Requirement 2 — a settled slot renders plainly. Confirmed.
+
+Live DOM, Rabadon's Deathcap (Pro card, `alternatives: []`):
+`hasAltUl: false`, no `ul[aria-label]`, no left rail, no "or", `li` height **46px** — i.e. exactly
+the go-to row and nothing else. Full text content is `Rabadon's Deathcap 29% 58/200`. No empty
+tail, no reserved space. Verified again visually on the OTP card (Zhonya's Hourglass 38% 14/37,
+screenshot) — it is an ordinary item row.
+
+### Requirement 3 — sampleGames beside every percentage. Confirmed, after ONE fix.
+
+Swept every leaf element containing `%` across both cards at 390px.
+
+Already correct: every BuildSlotList row (`84% 31/37` + `sr-only " in 31 of 37 games"`, on go-to
+AND alternative), runes (`49% of 37 games`), summoners (`57% of 37 games`), Pro-card runes
+(`93% 186/199`, `58% · 109/187`), hero band (`50.9% WIN · 352,948 GAMES`), KPI strip (career win
+rate 62% sits beside CAREER GAMES 409, and the labels say "career" so the two denominators cannot
+be confused — this file's own header rule).
+
+**The one exception, now fixed:** FeaturedOtpCard's "Opens" starter row printed `70%` alone. Its
+denominator existed only in the section heading meta three lines up ("37 stored games · 54% won").
+That satisfies the section-level convention, but it was the single percentage on the card
+travelling without its own fraction while every slot row below it printed one. It now reads
+`Opens · Dark Seal · 70% · 26/37`. Measured after: row height unchanged at 49px, no wrap, no
+overflow.
+
+### Accessibility — unchanged and still intact
+
+The "these compete for one slot" relationship survives without colour or size: alternatives sit in
+a nested `<ul aria-label="Built instead of <go-to> in this slot">`, every entry carries the literal
+visible word "or" (real text, not an aria-label — survives CSS failing to load), and each
+interactive row's `aria-label` restates "built instead of <go-to> in this slot" because a button's
+label replaces its inner text. Verified on the live DOM: 7 labelled sub-lists present on Ahri mid.
+
+### Thin-sample floor — not regressed. Verified live.
+
+Found a real thin-sample case rather than reasoning about it: Lee Sin (championId 64) has **7**
+stored games for its featured one-trick. At `/?championId=64&role=1`, OTP tab: 0 slot lists
+rendered, no Opens row, no build percentages anywhere. Only the hero win rate (with its GAMES
+count) and the labelled CAREER KPIs. The card shows WHO the player is (apex predator#of jg,
+Grandmaster, 2097 LP, EUW1) plus "Still collecting their games — we hold 7 of the 12 needed".
+My Opens-row edit sits inside the `!thinSample` branch, so it cannot leak into this state.
+
+### Gate
+
+`bash scripts/verify-fix.sh C:/Claude/AI/coachbuild` -> **ALL CHECKS PASSED** (tsc clean, lint 0
+warnings, 2068 tests passed, build clean, sw versioned, manifest present).
+
+Worth knowing for the merge: the gate FAILED twice on the way here, both times on
+`components/hextech/itemSetBody.ts` mid-edit by the other engineer (first a missing
+`@/lib/bootsItems` import, then a `downlevelIteration` error), never on my files. It passed on the
+third run once that file settled. If it fails again on that file, it is not this round.
+
+### Not verified / left open
+
+- **No `prefers-reduced-motion` check.** Nothing I touched animates; the rows' only motion is the
+  pre-existing `active:scale-[0.99]` and a colour transition. Not measured either way.
+- **No Lighthouse / CLS number.** The skeleton in FeaturedOtpCard renders `h-10` placeholder rows
+  against real rows at 46px — a pre-existing ~6px-per-row difference that my change does not touch
+  (it affects go-to rows, which did not change height). I did not measure the resulting CLS.
+- **Desktop (lg) not re-measured.** All numbers above are 390px. The Pro card is full width at lg
+  and the rows will be much wider there; height should be unaffected but I did not confirm it.
+- **Only Ahri mid and Lee Sin jungle were rendered.** A slot with 3+ alternatives (the deepest
+  measured here was 1 alternative per slot on Ahri, and Zhonya's on the Pro card had 2) would push
+  a single slot to 46 + 8 + 3*46 = ~192px. Not seen live; worth a look if a champion produces one.
+- **`scripts/_tmp-fronty-thin.mjs` is still on disk.** I wrote it to find a thin-sample champion
+  and could not delete it — the orchestrator's safety gate blocks `rm` and its approval file path
+  (`S:/AI/urgot/data/approved.txt`) does not exist on this machine. It is untracked, harmless, and
+  sits beside the previous agent's other `_tmp-*` leftovers. Please remove it, along with those.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-29 16:30
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-29 13:55:29Z; previous content preserved there. Append new rounds below. -->
+
+## v0.79.0 — a full build is five items plus boots; snowball stacks stay in the record (engy, 2026-07-29)
+
+`verify-fix.sh` all green (tsc, lint, **2115** tests, build, SW, manifest) — run twice, once before and
+once after the browser pass, so the number below reflects the tree as it stands. Verified in a real
+browser at 390px against live prod data on four champions covering all four branches.
+
+### TASK 1 — the bar is now five finished non-boots items PLUS boots
+
+`lib/otp/featuredBuild.ts`. `EXACT_SET_MIN_ITEMS = 4` is gone, replaced by two constants because the
+two branches now have two different bars:
+
+- `FULL_BUILD_MIN_NON_BOOTS = 5` — a game is a COMPLETE build when it ends with five finished
+  non-boots items and at least one pair of boots, total ≤ 6. Only complete builds vote in branch (a).
+- `SHOWABLE_MIN_ITEMS = 4` — the old floor, kept, as the pool branch (b) draws its one real game
+  from. This is what keeps the single-game fallback alive for players whose history cannot reach a
+  full build; one shared bar would have turned every shallow sample into `null`, which is not "no
+  full build found", it is "we show you nothing".
+
+`FeaturedOtpCard`'s `MIN_SAMPLE_GAMES = 12` thin-sample floor is untouched and still enforced in
+both the model and the JSX.
+
+**Stated as "5 + boots", not "≥ 6 finished items", and the difference is real.** Six legendaries and
+no boots also totals six and is not the build the directive describes. Two of Ahri's 232 stored games
+end that way; they do not qualify. That case has its own test.
+
+#### Fleet-wide cost, measured
+
+`scripts/measure-featured-branches.mts` (new). It **imports `resolveFullBuild` and
+`classifyFeaturedItem` themselves** rather than restating the rules — the throwaway probe used for
+the brief re-implemented them inline with a tag-only boots rule, which is exactly the divergence
+`lib/bootsItems.ts` exists to prevent. Both columns below were produced by running the shipping code
+over all 172 featured accounts:
+
+```
+                     OLD: 4 finished items    NEW: 5 non-boots + boots
+                          snowball excluded        snowball included
+  most-played-exact           139 (81%)                  18 (10%)
+  single-game                  23 (13%)                 144 (84%)
+  thin-sample                   9 ( 5%)                   9 ( 5%)
+  null                          1 ( 1%)                   1 ( 1%)
+```
+
+Two notes on those numbers, because the second one changes what they mean:
+
+1. **The OLD column is 139/23/9/1, not the 142/21/9/0 in the brief.** Same date, same DB — the
+   difference is methodology. The brief's figure came from the ad-hoc `_probe-branches.mjs`, whose
+   boots rule was `tags.includes("Boots")` and which had no snowball handling. Running the real
+   classifier moves it by three champions. The 142 was never wrong about the direction, only about
+   the digits.
+2. **18 champions still render the played build, not the ~1 the brief expected — but read it
+   carefully. FOURTEEN of the 18 repeat a full build exactly TWICE**, the bare
+   `EXACT_SET_MIN_GAMES` minimum, on samples of 25-44 games. The other four repeat 3, 4, 5 and 9
+   times. So branch (a) mostly survives by a single game, and one more ingest pass could move any of
+   those 14 in either direction. Treat 10% as "hanging on", not as "healthy".
+
+Ahri's own numbers came out slightly different from the brief for the same reason: **17** games at
+5+boots (brief: 16), non-boots histogram `0:2 1:15 2:54 3:77 4:64 5:18 6:2` (brief: `3:78 4:63`).
+One game moves between the 3 and 4 buckets under the ancestry-based boots rule. The repeating build
+is identical to the brief's, four times.
+
+**`null` is now confirmed live and this repo's docs previously said it was not.** Champion 78
+(Poppy, 그렇더라고요, 29 stored games) has no stored game that ever ended with four finished items.
+`featuredBuild.ts`'s header claimed "null 0, unobserved live" — that was already stale before this
+change, and it is corrected. Verified in the browser: the build strip is absent, the opener, boots,
+slots and runes all still render.
+
+### TASK 2 — snowball stacks: IN the played build, OUT of the slot list
+
+Implemented as briefed, not re-litigated. `resolveFullBuild`'s held-item predicate is
+`completed | boots | snowball`; `buildFeaturedView`'s `items`/`slots` still filter on `completed`
+alone. Mejai's counts toward the five non-boots items, which is load-bearing rather than incidental —
+without it Ahri's only repeating build is four non-boots plus boots and falls short of the bar, which
+is the measured 17 → 3 collapse.
+
+Dark Seal is unaffected: `classifyFeaturedItem` puts `starter` ahead of `snowball`, so it stays an
+opener and never reaches a build slot. Pinned by its own test.
+
+**Documented in three places a future reader will actually hit**, per the brief:
+`lib/snowballStacks.ts` gets a "TWO SURFACES, TWO JOBS" section beside the exclusion itself (with the
+17 → 3 measurement and an explicit "if you came here to make these consistent, read this first"),
+`featuredBuild.ts`'s header gets the matching argument, and `FeaturedOtpCard.tsx`'s header names the
+three carriers.
+
+#### How it is marked so it does not read as advice
+
+Three carriers, each independently sufficient to notice and none of them a paragraph:
+
+1. **Ordered LAST**, whatever its build rate — `resolveFullBuild`'s `order` comparator has a
+   snowball key ahead of the build-rate key. Mejai's is Ahri's 43% item and would otherwise sit
+   fourth of six. This costs nothing, because the strip is explicitly not purchase order, so its
+   position carries no claim that moving it could break.
+2. **A dashed, muted tile** (`border-dashed border-mut/50 opacity-70`) whose `title` AND `alt` read
+   "Mejai's Soulstealer — a snowball stack they held, not a recommendation". The alt matters: a
+   plain item-name alt would make a screen reader read it exactly like the five real items beside it,
+   which is the one thing the marker exists to prevent.
+3. **A conditional caption clause** naming the item: "Mejai's Soulstealer is shown because they held
+   it — a snowball stack, not something we recommend building. It is left out of the slots below."
+   It names the item rather than saying "a snowball stack" because a reader looking at six icons
+   needs to know which one.
+
+`FullBuildItem` carries a new `isSnowball: boolean` so the card never re-derives the classification.
+
+### TASK 3 — denominator
+
+Unchanged and re-verified in the browser: every number is quoted against `sample.games`. Ahri reads
+"4 of the 232 games we hold". The 17 qualifying games appear nowhere on screen, in any branch.
+
+### FIXED ALONG THE WAY — the fallback caption would have become a lie
+
+Branch (b) said "**No set repeats** across the N games we hold". That was a fact while both branches
+shared one bar. It stops being one the moment the vote runs over full builds only: a four-item set
+can repeat happily in a sample that still falls back to a single game. It now reads "**No full build
+repeats**". `EXACT_SET_MIN_GAMES`'s doc comment already tied the threshold and the wording together
+as one decision; that note is extended to say the word "full" is now part of it.
+
+### Tests
+
+`lib/__tests__/featuredBuildView.test.ts`, +7 net (2108 → 2115). New/changed:
+
+- `qualifies at EXACTLY five non-boots plus boots` — the boundary.
+- `does NOT qualify at four non-boots plus boots, however often it repeats` — five identical
+  four-item games must fall through to single-game, and must still show that real game.
+- `does NOT qualify at six non-boots and no boots` — the case that separates "5 + boots" from
+  "≥ 6 finished".
+- `drops a malformed seven-finished-item row rather than trimming it`.
+- A `snowball stacks in the played build` block: Mejai's counts toward the five; `isSnowball` is set
+  on it and on nothing else; it is ordered last while the remaining five stay most-built-first; and
+  — asserted on ONE `buildFeaturedView` call so the two surfaces cannot be compared against
+  different inputs — it is in `fullBuild.items` and absent from both `items` and `slots`. Plus the
+  Dark Seal guard.
+- REMOVED `counts FOUR finished items as a build` and `strips Mejai's out of a game before that game
+  votes`. Both encoded rules this change reverses; the second's fixture (`EXACT` + Mejai's = seven
+  items) is also no longer a legal inventory now that Mejai's occupies a slot.
+
+### Browser verification, 390px, live prod data
+
+| champion | branch | what rendered |
+|---|---|---|
+| 103 Ahri | `most-played-exact` | Six tiles in one row, no wrap, no overflow. Order: Crimson Lucidity (87%), Blackfire Torch, Cosmic Drive, Zhonya's, Rabadon's, **Mejai's last and dashed**. Caption: "4 of the 232 games we hold". |
+| 1 Annie | `single-game` | "One game they won… **No full build repeats** across the 43 games we hold". Snowball clause also fires here. |
+| 78 Poppy | `null` | No build strip. Opener, boots, item slots and runes all still render. |
+| 89 Leona | `thin-sample` | "we hold 9 of the 12 needed" — floor intact. |
+
+Zero console errors, zero horizontal overflow on all four.
+
+### Could not verify / left undone
+
+- **THE THREE STRAY FILES ARE STILL THERE.** `_probe-branches.mjs`, `_smoke-otp.mjs` and
+  `scripts/_tmp-probe-depth.mts` could not be deleted: the safety gate blocks every `rm`, with and
+  without `-f`. I did not route around it. **Two more of my own are stuck with them** —
+  `_smoke-branch.mjs` (repo root, the puppeteer harness; it has to live in the repo for
+  `puppeteer-core` to resolve) and `scripts/_tmp-thin.mts`. All five are untracked and none of them
+  affects `verify-fix.sh`, which passed with all five present. They still need removing before any
+  `git add -A`.
+  The gate is also **broken on this machine independently of the block**: it tries to write its
+  approval file to `S:/AI/urgot/data/approved.txt`, a dead path, so `mkdir`/`touch` fail and there is
+  no working approval route even with permission. Worth fixing in urgot's hooks.
+- **The 18 played-build champions are not individually eyeballed.** I verified one of them (Ahri) in
+  a browser and the other 17 only through `measure-featured-branches.mts`, which runs the same
+  function the card calls. A rendering bug specific to, say, a five-item strip with no snowball would
+  not have been caught.
+- **Nothing is deployed.** Version bumped to 0.79.0 in `package.json`, CHANGELOG written, no
+  `vercel --prod` run.
+- **The ingest pagination itself is not mine and I did not re-verify it.** I took the 232-game figure
+  from the DB as it stands; whether `ingest-otp-featured.mjs` paginates correctly on the next
+  scheduled run for the other 171 accounts is untested here. If it does not, the 10% played-build
+  figure will not recover on its own.
+- **Wiki:** coachbuild has no `wiki/` directory, so nothing to update there. `CLAUDE.md` is at
+  v0.71.0 and now four versions behind; it does not mention the featured card's build strip at all,
+  so nothing in it is contradicted by this change — but it is drifting.
+
+## v0.78.0 — featured one-trick card: real-game build strip, two paragraphs removed (engy, 2026-07-29)
+
+`verify-fix.sh` all green (tsc, lint, 2108 tests, build, SW, manifest). Both branches verified in a
+real browser at 390px against live prod data.
+
+### What shipped
+
+**TASK 1 — the two paragraphs are gone.**
+
+1. The assembled-build disclaimer ("Their most-built boots and items across the N games we hold —
+   put together from those rates... Not a purchase order: the match data stores a final inventory,
+   never what was bought first"). Removed by removing the thing it apologised for: the
+   `assembled-from-rates` branch no longer exists. Both surviving branches are games the player
+   actually played, so there is nothing left to disclaim.
+
+   The purchase-order half went with it, per the same user directive. The constraint it protected is
+   **unchanged and now enforced structurally**, documented in both files: the tiles are unnumbered,
+   `resolveFullBuild` sorts them by BUILD RATE (never by inventory slot), and the JSX carries an
+   explicit "do not add a step number, an arrow, or a first/then affordance" note. `otp_matches` is
+   written with no timeline call, so purchase order was never fetched.
+
+2. The "Indented items are built instead of the one above them" paragraph → a four-word inline key:
+
+   ```
+   or = instead of, not as well
+   ```
+
+   Same placement (above the first section that can indent, gated on `hasContestedSlot`, which still
+   covers the boots slot — the Heimerdinger case). The relationship keeps four carriers: this key,
+   the literal word "or" on every alternative row, the nested list's accessible name ("Built instead
+   of X in this slot"), and the single divided bar. ~30 characters instead of ~110.
+
+**TASK 2 — the build strip is a build they played.**
+
+`FeaturedFullBuild` is now `most-played-exact | single-game`, never null-on-a-branch:
+
+| branch | when | caption |
+|---|---|---|
+| `most-played-exact` | the modal finished-item set repeats ≥2 times | *"A build TWTV Peng04 actually played — **4** of the **60** games we hold ended with exactly these finished items."* |
+| `single-game` | nothing repeats | *"One game they won — the finished items CapsIsMyFather ended it holding. No set repeats across the **26** games we hold, so this is one game, not a rate."* |
+| `null` | no game ever finished a legal build | renders nothing (the Opens row still renders) |
+
+Verified live: Ahri (103) renders `most-played-exact`; Orianna (61) renders `single-game`. Both
+screenshots at 390px, no horizontal overflow, no console errors.
+
+### The three judgement calls, and the evidence behind each
+
+**1. Compare on FINISHED items, and the bar is FOUR, not six.** The brief's original measurement
+("all 25 full builds are distinct, nothing repeats") was an artefact of comparing raw inventories —
+a game that ended with a Needlessly Large Rod in the bag looks different from the identical game
+that sold it. `scripts/measure-featured-fullbuild.mjs` (new, kept, reproducible) on the live
+`otp_matches`, Peng04's Ahri, 60 stored games:
+
+```
+inventory slots filled  : 42 have six, 16 have five, 2 have four
+FINISHED items per game : 3 -> 22 games, 4 -> 24, 5 -> 8, 6 -> ZERO
+six-slot inventories    : 42 games, 41 DISTINCT (modal 2x)
+finished-set grouping   : >=3  54 eligible, modal 13x — but a boot and two items, not a build
+                          >=4  32 eligible, 22 distinct, 7 repeating, modal 4x  <- shipped
+                          >=5   8 eligible, modal 2x   <- the old floor, why the branch rarely fired
+```
+
+The modal set at ≥4 is `[Lich Bane, Malignance, Zhonya's Hourglass, Crimson Lucidity]`, 4 games,
+3 of them wins — the same set the coordinator's independent measurement named, which is the part
+that makes it robust. Our eligible counts differ (32 vs their 24/19) because this repo excludes
+Mejai's from every build slot by hard directive and they counted it as finished; the winning set is
+identical either way.
+
+**Fleet-wide, same date, same rules — this is the answer to "which branch renders":**
+
+```
+most-played-exact  142 of 172 featured champions (83%)
+single-game         21 (12%)
+thin-sample          9 (5%)
+null                 0
+```
+
+**2. `EXACT_SET_MIN_GAMES` moved 3 → 2, and it is coupled to the fallback caption.** The old
+threshold erred high because the fallback was a whole-sample synthesis, genuinely stronger data at
+n=2. The fallback is now a single game, so "2 of 60 ended with exactly this" beats it outright.
+More importantly the threshold **makes the fallback's wording true**: branch (b) can only be reached
+when the biggest group is smaller than 2, i.e. exactly 1, so *"no set repeats across the N games we
+hold"* is a fact whenever it prints. At 3 it would have been a lie in the n=2 case. Moving either
+the threshold or that sentence alone reintroduces the lie — the code comment says so.
+
+**3. Single-game selection: won → most finished items → most recent.** Three keys, and the last one
+is the game's index in a newest-first log, which is unique, so the comparator is **total** — it can
+never fall through to an unspecified order. The pick changes only when the data changes. An unknown
+outcome (`win: null`) ranks *with* the losses, never above them. The win preference is a real
+selection bias, so it is **disclosed in the caption** rather than hidden: the label says "they won"
+/ "they lost" / (on a null) "of theirs", always true of the game shown.
+
+**Components: not shown, and the label says so.** The strip is the game's FINISHED items —
+completed + boots — never the raw six slots. Showing the raw inventory would have meant putting
+Needlessly Large Rod and Dark Seal in a "build" strip (Dark Seal is in 26 of Peng04's 37 games), and
+Dark Seal in a completed-item strip is a HARD RULE 2 violation. So the strip is often **four or five
+tiles, not six, and that is correct** — the word "finished" in both captions is doing that work.
+
+### Structural changes worth knowing about
+
+- **`FeaturedBuildModel.gameItems: number[][]` → `gameLog: FeaturedGame[]`** (`{ items, win }`),
+  same rename on the `/api/otp/featured` response. One array of records, not two parallel arrays:
+  the card captions a build "a game they won" off the pairing, and two arrays could desynchronise
+  silently and turn that caption into a lie. Pinned by a test.
+- **`win: boolean | null`, and `null` is load-bearing.** A legacy cached body has inventories but no
+  outcomes; it maps to `null`, and the caption drops the outcome clause. Defaulting to `false` would
+  caption a real build "a game they lost" — a fabricated fact, HARD RULE 4.
+- **`minSampleGames` is now a model option**, passed by the card alongside its existing JSX branch.
+  The thin-sample floor lived only in a render branch, where it was untestable (no JSX harness) and
+  one refactor from being routed around. Belt and braces, tested at the boundary (11 vs 12).
+- **The "Their build" section now renders on `fullBuild || starter`.** Previously the Opens row was
+  collateral damage when no game reached a finished build.
+
+### Not verified / open
+
+- **The `null` branch has never been seen on screen** — 0 of 172 featured champions produce it
+  today. Unit-tested only. It is the correct answer for a sample of games that all ended early, not
+  dead code, but treat "renders nothing" as untested-in-production.
+- **The legacy `gameItems` degradation path is untested end-to-end.** `public/sw.js` is network-first
+  for `/api/` and its cache name is version-tied, so a pre-rename body can only surface OFFLINE and
+  only until the v0.78.0 bump evicts it. The mapping is one line and typechecked; I did not simulate
+  an offline hit against a stale cache.
+- **Sample sizes move under you.** Peng04's stored games went 37 → 60 *during this task* (an ingest
+  is running). Every number in the code comments carries its date. The modal set held across that
+  growth, which is itself evidence.
+- **`scripts/measure-featured-fullbuild.mjs` mirrors `classifyFeaturedItem` rather than importing
+  it** (the app's copy takes a ddragon `ItemDetail`, the script takes a raw catalog entry). If the
+  classifier's precedence changes, change both or the measurements stop describing what ships. Said
+  in the script's header.
+- **Two stray files in the repo root need deleting and I could not remove them**: `_smoke-otp.mjs`
+  and `_probe-branches.mjs`, both mine, both untracked, both would be caught by `git add -A`. The
+  safety gate blocks `rm` (and its own approval path points at the dead `S:/AI` root), so I left
+  them rather than route around the block.
+- **`CLAUDE.md` was not updated.** It still documents v0.71.0 and describes the OTP surface as the
+  eight-account consensus card, which v0.73+ already replaced — that staleness predates this work
+  and fixing it properly is a doc pass, not a line edit.
+
+### Proposed wiki/CLAUDE.md note (for urgot to merge)
+
+> The featured one-trick card's build strip is always a build the player PLAYED — either an exact
+> finished-item set that repeated (`most-played-exact`, 83% of champions) or one real game
+> (`single-game`, 12%). There is no synthesised/assembled branch and one must not be reintroduced;
+> the on-screen disclaimer that used to accompany it was removed by removing the synthesis. Builds
+> are compared on FINISHED items (completed + boots) at a floor of FOUR — comparing raw inventories
+> makes every game look unique, and six finished items is not a bar any stored game reaches.
+
+

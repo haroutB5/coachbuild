@@ -116,12 +116,32 @@ async function ingestChampion(sql, page, champ, matchCount) {
       kda = EXCLUDED.kda, source_rank = EXCLUDED.source_rank, refreshed_at = now()
   `;
 
-  const ids = await getMatchIdsByPuuid(resolved.matchRouting, resolved.puuid, {
-    queue: 420,
-    start: 0,
-    count: matchCount,
-    startTime: freshStartTimeEpochSec(),
-  });
+  // PAGINATED since 2026-07-29. Riot caps `count` at 100 PER REQUEST, and this
+  // asked for one page from start=0, so a prolific account's history was
+  // silently truncated at 100 ranked games however large `--matches` was.
+  //
+  // Measured on the featured Ahri one-trick: 348 ranked games sit inside the
+  // 90-day freshness window, of which we held 60 on this champion. The cap was
+  // not the window and not the account — it was this single request. A build
+  // that repeats needs depth: at ~3% of games reaching five finished items plus
+  // boots, one page yields two such games and no repeat at all.
+  //
+  // The 90-day window still bounds this — see lib/pro/fresh.ts. Older games
+  // predate item overhauls and are actively misleading, so paging deeper must
+  // never mean paging PAST the window; `startTime` is passed on every page.
+  const ids = [];
+  for (let start = 0; start < matchCount; start += 100) {
+    const page = await getMatchIdsByPuuid(resolved.matchRouting, resolved.puuid, {
+      queue: 420,
+      start,
+      count: Math.min(100, matchCount - start),
+      startTime: freshStartTimeEpochSec(),
+    });
+    ids.push(...page);
+    // A short page means the window is exhausted; asking again returns nothing
+    // and just spends a Riot call against a shared key budget.
+    if (page.length < 100) break;
+  }
   const known = ids.length
     ? new Set(
         (

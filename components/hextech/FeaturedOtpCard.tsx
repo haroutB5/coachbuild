@@ -29,29 +29,55 @@
 // actual FULL BUILD, gives boots their own slot, and renders the complete rune
 // page instead of a keystone and three shard icons.
 //
-// The full build can be produced two ways, and THE CAPTION MUST MATCH THE
+// The build strip can be produced two ways, and THE CAPTION MUST MATCH THE
 // METHOD — this is the single most load-bearing rule in this file. The method
 // is decided in lib/otp/featuredBuild.ts and arrives as a discriminated union:
 //
-//   "most-played-exact"    — an item set this player DEMONSTRABLY finished
-//                            `games` separate games holding. The caption may
-//                            say they played it, and states that count against
-//                            `sampleGames`.
-//   "assembled-from-rates" — their top boot plus their top legendaries by build
-//                            rate. Possibly a combination they have NEVER
-//                            played in one game, and the caption says exactly
-//                            that. `games` is typed `null` on this branch, so
-//                            there is no number available to caption it as a
-//                            real game even by mistake.
+//   "most-played-exact" — a FULL BUILD (five finished non-boots items plus
+//                         boots) this player DEMONSTRABLY ended `games`
+//                         separate games holding. The caption says they played
+//                         it, and states that count against `sampleGames`.
+//   "single-game"       — ONE stored game's finished items, shown because no
+//                         FULL BUILD repeated. `games` is the literal 1 and
+//                         `won` carries that game's real outcome, so the
+//                         caption can name it as one game and say how it went,
+//                         and cannot imply a frequency. It is NOT necessarily a
+//                         complete build and the caption must not call it one —
+//                         branch (b) draws from a lower floor on purpose, so a
+//                         shallow sample still gets a real game.
 //
-// Neither caption may imply a PURCHASE ORDER. Riot's match payload stores a
-// final inventory in slots item0..item5; the slot index is where the item sat
-// in the inventory, not when it was bought. There is no purchase-order evidence
-// anywhere in what we store, so the card says so on screen rather than letting
-// a left-to-right strip of icons imply it.
+// A SNOWBALL STACK (Mejai's) STAYS IN THE STRIP, and is excluded from the slot
+// list two sections below. The strip reports one game; the slot list
+// recommends. See lib/snowballStacks.ts's "Two surfaces, two jobs". It is
+// marked three ways so the report cannot read as advice: ordered last, dashed
+// tile with a marked alt/title, and named in the caption. Removing one carrier
+// and trusting the other two is how it quietly becomes advice again.
 //
-// This repo shipped v0.73.1 over exactly this class of error (two denominators
-// drifting apart). Do not let a caption drift off its method.
+// BOTH ARE GAMES THIS PLAYER PLAYED. That is new, and it is what let two grey
+// paragraphs come off the card on 2026-07-29 ("remove the text description
+// there. Not needed"):
+//
+//   1. The assembled-build disclaimer ("...put together from those rates, not
+//      taken from one game, so they may never have finished a game holding
+//      exactly this set. Not a purchase order: the match data stores a final
+//      inventory, never what was bought first."). The assembled branch is GONE,
+//      so the apology has nothing left to apologise for. The purchase-order
+//      half of it went with it by the same user directive — the constraint it
+//      protected is still absolute and is enforced structurally instead: the
+//      tiles are unnumbered, unordered-looking, and `resolveFullBuild` sorts
+//      them by BUILD RATE, never by inventory slot. `otp_matches` is written
+//      with no timeline call, so purchase order was never fetched and no
+//      surface here may imply one. Do not number these tiles.
+//   2. The "indented items are built instead of the one above them" paragraph.
+//      Replaced by a four-word inline key, and the relationship itself is
+//      unchanged and still carried three ways by BuildSlotList: the literal
+//      word "or" on every alternative row, the labelled nested list
+//      ("Built instead of X in this slot"), and the single divided bar.
+//
+// This repo shipped v0.73.1 over two denominators drifting apart. Every number
+// on this card is quoted against `sample.games` — the games WE hold — including
+// the exact-set count, which is "3 of 37", never "3 of the 20 that qualified".
+// A second denominator is the bug, not a clarification.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState } from "react";
@@ -69,6 +95,7 @@ import {
 import { getItemDetailMap, type ItemDetail } from "@/components/itemDetail";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import { buildFeaturedView, classifyFeaturedItem } from "@/lib/otp/featuredBuild";
+import type { FeaturedGame } from "@/lib/otp/featured";
 import { resolveBuildSlots, type BuildSlot } from "@/lib/buildSlots";
 import BuildSlotList from "./BuildSlotList";
 import { isContested } from "./buildSlotView";
@@ -102,10 +129,14 @@ interface FeaturedResponse {
   player: FeaturedPlayer | null;
   sample: { games: number; wins: number } | null;
   items: { itemId: number; games: number; pct: number }[];
-  /** Per-game final inventories — what `buildFeaturedView` needs to tell an
-   *  OBSERVED build from an assembled one. Optional here on purpose: an older
-   *  cached/SW response predating the field must degrade to the assembled
-   *  branch, not throw. */
+  /** Per-game records, newest first — what `buildFeaturedView` needs to show a
+   *  build somebody actually played rather than a synthesis. Optional on
+   *  purpose: an older cached/SW body predating the field must degrade, not
+   *  throw. See `gameLog` below the fetch for exactly how it degrades. */
+  gameLog?: FeaturedGame[];
+  /** PRE-2026-07-29 shape, kept readable so an offline SW hit from before the
+   *  rename still renders its item slots. Inventories only, no outcomes, so a
+   *  build derived from it can never claim a win — see the mapping below. */
   gameItems?: number[][];
   runes: { page: RunePage; games: number; pct: number } | null;
   spells: { spells: number[]; games: number; pct: number } | null;
@@ -169,14 +200,25 @@ function SlotTag({ children }: { children: React.ReactNode }) {
  *  tile that doesn't. The icon is therefore the only carrier of the item's
  *  identity, so it gets a REAL alt — not `alt=""` — unlike the rates list
  *  below, where the name is written out beside the icon and a duplicate alt
- *  would just make a screen reader say it twice. */
-function BuildSlot({ name, icon }: { name: string; icon: string }) {
+ *  would just make a screen reader say it twice.
+ *
+ *  `snowball` marks a stack item (Mejai's) that is in the strip because the
+ *  player HELD it, not because this app suggests it. The tile goes dashed and
+ *  muted, and both the tooltip and the alt say so — an alt of just "Mejai's
+ *  Soulstealer" would read to a screen reader exactly like the five real build
+ *  items beside it, which is the one thing this marker exists to prevent. It is
+ *  one of three carriers; the other two (ordered last, named in the caption)
+ *  live in lib/otp/featuredBuild.ts's `order` and in the caption below. */
+function BuildSlot({ name, icon, snowball = false }: { name: string; icon: string; snowball?: boolean }) {
+  const label = snowball ? `${name} — a snowball stack they held, not a recommendation` : name;
   return (
     <span
-      title={name}
-      className="w-11 h-11 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0"
+      title={label}
+      className={`w-11 h-11 rounded-lg bg-black/30 overflow-hidden flex items-center justify-center flex-shrink-0 ${
+        snowball ? "border border-dashed border-mut/50 opacity-70" : "border border-line"
+      }`}
     >
-      <IconWithFallback src={icon} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={44} />
+      <IconWithFallback src={icon} alt={label} fallbackGlyph={name} className="w-full h-full object-contain" size={44} />
     </span>
   );
 }
@@ -347,17 +389,39 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
     );
   }
 
+  // ONE reading of the per-game data, used by everything below it.
+  //
+  // The legacy branch maps the old inventories-only field to `win: null`, NOT
+  // to `win: false`. That distinction is the whole reason `win` is nullable: a
+  // defaulted `false` would let the caption say "a game they lost" about a game
+  // we simply have no outcome for, which is an invented fact rather than a
+  // missing one. With `null` the caption drops the outcome clause instead.
+  const gameLog: FeaturedGame[] =
+    data!.gameLog ?? (data!.gameItems ?? []).map((items) => ({ items, win: null }));
+
   // ONE call, four slots, one classifier — see lib/otp/featuredBuild.ts. The
   // item metadata map lives on the client (the route deliberately ships raw
   // ids), so this is where the two halves meet.
   //
-  // `gameItems` is what lets the helper tell an OBSERVED build from an
-  // assembled one; an older cached response without it degrades to the
-  // assembled branch, correctly labelled, rather than throwing.
-  const view = buildFeaturedView(data!.items, data!.gameItems ?? [], sample.games, meta, {
+  // `minSampleGames` is passed as well as branched on below: the thin-sample
+  // rule is a property of the MODEL now, so a future edit that reshuffles the
+  // JSX cannot leak a percentage over five games.
+  const view = buildFeaturedView(data!.items, gameLog, sample.games, meta, {
     minDisplayPct: MIN_DISPLAY_PCT,
+    minSampleGames: MIN_SAMPLE_GAMES,
   });
   const fullBuild = view.fullBuild;
+  // The played build is a RECORD of one game, so a snowball stack they really
+  // held stays in it — while `view.items`/`view.slots` below still exclude it,
+  // because those are a recommendation. Two surfaces, two jobs; the split is
+  // argued in lib/snowballStacks.ts and lib/otp/featuredBuild.ts, and the user
+  // decided it on 2026-07-29 after the alternative was measured: excluding it
+  // costs the featured Ahri one-trick its only repeating full build.
+  //
+  // At most one can be present — Mejai's is the only snowball stack that
+  // reaches a build slot (Dark Seal classifies `starter` first) — so a single
+  // slot is the right shape here, not a list.
+  const snowballSlot = fullBuild?.items.find((s) => s.isSnowball) ?? null;
   // Their most-common opener, on its own line rather than mixed into the build.
   // Genuinely useful on a one-trick card — Dun opens Doran's Ring in 4 games out
   // of 10 and Dark Seal in nearly 6, which is a real read on how he plays the
@@ -378,27 +442,31 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
   // (featuredBuild.ts's header), and a slot list disagreeing with the build
   // strip directly above it about what an item IS would be that bug again.
   //
-  // DEGRADED INPUT, ONE RENDER PATH: `gameItems` is optional on the response, so
-  // an older cached/SW body predating the field has no co-occurrence evidence at
-  // all. That case falls back to one settled slot per item — which is not a
-  // placeholder but the honest reading: with no evidence of competition, no
-  // competition is claimed, and a settled slot claims exactly nothing. The
-  // alternative (keeping the old flat list as a second branch) would be two
-  // renderings of one section, free to drift apart.
-  const gameItems = data!.gameItems ?? [];
+  // DEGRADED INPUT, ONE RENDER PATH: the per-game data is optional on the
+  // response, so an empty body has no co-occurrence evidence at all. That case
+  // falls back to one settled slot per item — which is not a placeholder but
+  // the honest reading: with no evidence of competition, no competition is
+  // claimed, and a settled slot claims exactly nothing. The alternative
+  // (keeping the old flat list as a second branch) would be two renderings of
+  // one section, free to drift apart.
   const itemSlots: BuildSlot[] =
-    gameItems.length > 0
-      ? resolveBuildSlots(gameItems, sample.games, {
-          // `meta` passed as the THIRD arg, not just the per-item lookup: with a
-          // catalog `classifyFeaturedItem` resolves boots by recipe ancestry, and
-          // without one it falls back to the tag plus a pinned exception list.
-          // Item 3172 Gunmetal Greaves is a tier-3 boot whose live catalog record
-          // carries no `Boots` tag, so on the weaker rule it reads as a completed
-          // item and lands in a build slot — measured live on Yone mid at 178 of
-          // 200 games. This was the one call site still on that weaker path.
-          include: (id) => classifyFeaturedItem(id, meta.get(id), meta) === "completed",
-          minPct: MIN_DISPLAY_PCT,
-        })
+    gameLog.length > 0
+      ? resolveBuildSlots(
+          gameLog.map((g) => g.items),
+          sample.games,
+          {
+            // `meta` passed as the THIRD arg, not just the per-item lookup: with
+            // a catalog `classifyFeaturedItem` resolves boots by recipe
+            // ancestry, and without one it falls back to the tag plus a pinned
+            // exception list. Item 3172 Gunmetal Greaves is a tier-3 boot whose
+            // live catalog record carries no `Boots` tag, so on the weaker rule
+            // it reads as a completed item and lands in a build slot — measured
+            // live on Yone mid at 178 of 200 games. This was the one call site
+            // still on that weaker path.
+            include: (id) => classifyFeaturedItem(id, meta.get(id), meta) === "completed",
+            minPct: MIN_DISPLAY_PCT,
+          }
+        )
       : view.items.map((it) => ({
           primary: { itemId: it.itemId, games: it.games, pct: it.pct },
           alternatives: [],
@@ -504,7 +572,12 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
           </p>
         ) : (
           <>
-            {fullBuild && (
+            {/* Gated on EITHER, not on `fullBuild` alone. The opener is a fact
+                about how they play the lane and does not depend on any game
+                having reached a finished build — before this, a player whose
+                games all ended early lost their "Opens Dark Seal 70%" row as
+                collateral. */}
+            {(fullBuild || starter) && (
               <section>
                 <PanelHeading meta={sampleMeta}>Their build</PanelHeading>
 
@@ -543,67 +616,144 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
                   </div>
                 )}
 
-                {/* Six 44px tiles + five 8px gaps = 304px, inside a 390px
-                    viewport's 358px content box — one row, no wrap, no
-                    horizontal scroll strip (this tab has none anywhere).
-                    `flex-wrap` is still on so a future seventh slot degrades to
-                    a second row instead of overflowing. */}
-                {/* No per-slot percentage here, deliberately. Every slot in
-                    `fullBuild.items` carries its OWN overall build rate, and
-                    printing six of those beside a set that is itself quoted
-                    against a different count ("3 of 37 games ended with exactly
-                    these") puts two denominators on one row — the precise shape
-                    of the v0.73.1 bug. The rates get their own section below,
-                    under one stated denominator. */}
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  {fullBuild.items.map((slot) => (
-                    <BuildSlot
-                      key={slot.itemId}
-                      name={itemName(slot.itemId)}
-                      icon={itemIconUrl(slot.itemId, ver)}
-                    />
-                  ))}
-                </div>
+                {fullBuild && (
+                  <>
+                    {/* Up to six 44px tiles + five 8px gaps = 304px, inside a
+                        390px viewport's 358px content box — one row, no wrap,
+                        no horizontal scroll strip (this tab has none anywhere).
+                        FEWER than six is the normal case and is correct, not a
+                        gap to pad: the measured maximum this player ever
+                        FINISHES is four legendaries plus boots, and a strip of
+                        five real items beats six with a component in it.
+                        `flex-wrap` stays on so a longer set degrades to a
+                        second row instead of overflowing.
 
-                {/* THE CAPTION MUST MATCH THE METHOD — see this file's header
-                    and featuredBuild.ts's. `method` is a discriminated union and
-                    the assembled branch types `games` as null, so there is no
-                    number available to caption a synthesis as a played game
-                    even by mistake. Neither branch implies a purchase order,
-                    and both state the sample they rest on. */}
-                <p className="mt-2.5 text-[10.5px] text-mut/80 leading-relaxed">
-                  {fullBuild.method === "most-played-exact" ? (
-                    <>
-                      A build {player.gameName} actually played —{" "}
-                      <span className="text-txt tabular-nums">{fullBuild.games}</span> of the{" "}
-                      <span className="text-txt tabular-nums">{fullBuild.sampleGames}</span> games we
-                      hold ended with exactly these items.
-                    </>
-                  ) : (
-                    <>
-                      Their most-built boots and items across the{" "}
-                      <span className="text-txt tabular-nums">{fullBuild.sampleGames}</span> games we
-                      hold — put together from those rates, not taken from one game, so they may
-                      never have finished a game holding exactly this set.
-                    </>
-                  )}{" "}
-                  Not a purchase order: the match data stores a final inventory, never what was
-                  bought first.
-                </p>
+                        No per-slot percentage, deliberately. Every entry in
+                        `fullBuild.items` carries its OWN overall build rate,
+                        and printing those beside a set quoted against a
+                        different count ("3 of 37 games ended with exactly
+                        these") puts two denominators on one row — the precise
+                        shape of the v0.73.1 bug. The rates get their own
+                        section below, under one stated denominator.
+
+                        UNNUMBERED, and that is a constraint rather than a
+                        style: `otp_matches` is written with no timeline call,
+                        so purchase order was never fetched. Left-to-right here
+                        is build rate. Do not add a step number, an arrow, or a
+                        "first/then" affordance. */}
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      {fullBuild.items.map((slot) => (
+                        <BuildSlot
+                          key={slot.itemId}
+                          name={itemName(slot.itemId)}
+                          icon={itemIconUrl(slot.itemId, ver)}
+                          snowball={slot.isSnowball}
+                        />
+                      ))}
+                    </div>
+
+                    {/* THE CAPTION MUST MATCH THE METHOD — see this file's
+                        header and featuredBuild.ts's. Both branches describe
+                        games this player really played, both quote the same
+                        denominator (`sampleGames`, the games we hold), and the
+                        word "finished" is doing real work in both: the strip is
+                        their FINISHED items, and other slots in those games
+                        held components or a Dark Seal.
+
+                        The single-game branch may only claim an outcome when
+                        `won` is a boolean. On `null` — a legacy body with no
+                        outcome field — the clause is dropped rather than
+                        guessed.
+
+                        THREE tiers now, and each caption states the size of the
+                        thing it is describing (2026-07-29). The middle tier is
+                        a build that REPEATED but is a slot short, and its whole
+                        risk is being read as a full one — so it prints its item
+                        count and says plainly that no full build repeats yet.
+                        `nonBootsItems` is on the union branch for exactly this;
+                        do not drop it from the sentence.
+
+                        The single-game caption now says "nothing repeats",
+                        because reaching it means BOTH repeating tiers failed.
+                        Its two earlier wordings were each true only until the
+                        next bar was added: "no set repeats" died when the full
+                        and showable bars diverged, and "no full build repeats"
+                        died when the middle tier landed. Pin this sentence to
+                        the condition in featuredBuild.ts's branch (b), not to
+                        whatever the previous version said.
+
+                        The snowball clause is CONDITIONAL and is the third of
+                        three carriers (the tile is dashed, and it is ordered
+                        last). It names the item rather than saying "a snowball
+                        stack", because a reader looking at six icons needs to
+                        know WHICH one is the record-only slot. */}
+                    <p className="mt-2.5 text-[10.5px] text-mut/80 leading-relaxed">
+                      {fullBuild.method === "most-played-exact" ? (
+                        <>
+                          A full build {player.gameName} actually played —{" "}
+                          <span className="text-txt tabular-nums">{fullBuild.games}</span> of the{" "}
+                          <span className="text-txt tabular-nums">{fullBuild.sampleGames}</span>{" "}
+                          games we hold ended with exactly these finished items.
+                        </>
+                      ) : fullBuild.method === "most-played-partial" ? (
+                        <>
+                          A build {player.gameName} repeated —{" "}
+                          <span className="text-txt tabular-nums">{fullBuild.games}</span> of the{" "}
+                          <span className="text-txt tabular-nums">{fullBuild.sampleGames}</span>{" "}
+                          games we hold ended with exactly these finished items. It is{" "}
+                          <span className="text-txt tabular-nums">{fullBuild.nonBootsItems}</span>{" "}
+                          items plus boots, not a full six — no full build repeats in what we hold
+                          yet.
+                        </>
+                      ) : (
+                        <>
+                          One game{" "}
+                          {fullBuild.won === true
+                            ? "they won"
+                            : fullBuild.won === false
+                              ? "they lost"
+                              : "of theirs"}{" "}
+                          — the finished items {player.gameName} ended it holding. Nothing repeats
+                          across the{" "}
+                          <span className="text-txt tabular-nums">{fullBuild.sampleGames}</span>{" "}
+                          games we hold, so this is one game, not a rate.
+                        </>
+                      )}
+                      {snowballSlot && (
+                        <>
+                          {" "}
+                          <span className="text-txt">{itemName(snowballSlot.itemId)}</span> is shown
+                          because they held it — a snowball stack, not something we recommend
+                          building. It is left out of the slots below.
+                        </>
+                      )}
+                    </p>
+                  </>
+                )}
               </section>
             )}
 
-            {/* Above the FIRST section that can indent, not inside the item
-                section where it started. Screenshot-caught at 390px on
+            {/* WAS a two-line paragraph ("Indented items are built instead of
+                the one above them, not alongside it — they compete for the same
+                slot"), removed 2026-07-29 on the user's "remove the text
+                description there. Not needed."
+
+                What it protected is NOT removed. Losing the sighted reader's
+                cue entirely would re-create the "looks like you buy both" bug
+                the slot grouping exists to fix, so the relationship still has
+                four carriers: this key, the literal word "or" on every
+                alternative row, the nested list's accessible name ("Built
+                instead of X in this slot"), and the single divided bar. A key
+                is what a paragraph turns into when the paragraph is the problem.
+
+                Placement is unchanged and was screenshot-caught at 390px on
                 Heimerdinger: his item slots are all settled but his BOOTS slot
-                is not, so the card showed an indented "or Sorcerer's Shoes"
-                with the explanation suppressed — `hasContestedSlot` was reading
-                the item slots alone. One line, once, before anything it
-                governs, and gated on ALL the slots on the card. */}
+                is not, so gating on the item slots alone showed an indented
+                "or Sorcerer's Shoes" with no explanation. Above the first
+                section that can indent, gated on ALL the slots on the card. */}
             {hasContestedSlot && (
-              <p className="mt-5 text-[10.5px] text-mut/80 leading-relaxed">
-                Indented items are built <span className="text-txt">instead of</span> the one above
-                them, not alongside it — they compete for the same slot.
+              <p className="mt-5 text-[10.5px] text-mut/80">
+                <span className="text-txt font-semibold">or</span> = instead of, not as well
               </p>
             )}
 

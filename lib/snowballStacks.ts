@@ -50,6 +50,41 @@
 // user's directive was about BUILD ITEMS, not openers. Every call site below
 // therefore applies this to completed-item lists only. Applying it to
 // `starters` would be a regression, not extra safety.
+//
+// ═══════════════════════════════════════════════════════════════════════════
+// TWO SURFACES, TWO JOBS — the ONE place this exclusion deliberately does not
+// apply, and why making them agree would be the bug
+// ═══════════════════════════════════════════════════════════════════════════
+// User decision, 2026-07-29. `lib/otp/featuredBuild.ts`'s `resolveFullBuild`
+// — the featured one-trick card's PLAYED-BUILD strip — counts a snowball stack
+// as a build slot. Every other consumer of this module excludes it. That is not
+// an oversight and it is not drift; it is the difference between two claims:
+//
+//   A RECOMMENDATION — "this is what they build", ranked by build rate. Here
+//     the exclusion stands, because a build rate cannot tell a core item apart
+//     from an item bought because the game was already won. That is this whole
+//     module's argument, above.
+//   A RECORD — "these are the items they ended THIS GAME holding." Here the
+//     exclusion is a false statement about a specific game. They had it. A
+//     strip that quietly drops it is not being cautious, it is being wrong
+//     about a fact it is presenting as observed.
+//
+// The cost is measured, not hypothetical. The featured Ahri one-trick's ONLY
+// repeating full build (232 stored games, 2026-07-29) contains Mejai's:
+//
+//   Blackfire Torch, Mejai's Soulstealer, Rabadon's Deathcap,
+//   Zhonya's Hourglass, Cosmic Drive  + Crimson Lucidity (boots)   x4
+//
+// Excluding it drops the qualifying games from 16 to 3, with ZERO repeats — so
+// no featured champion in the fleet would render a played build at all.
+//
+// IF YOU CAME HERE TO MAKE THE TWO SURFACES CONSISTENT: they are consistent,
+// on the rule that matters — a snowball stack is never RECOMMENDED anywhere in
+// this app. What differs is whether a surface is recommending or reporting.
+// `featuredBuild.ts` marks its snowball slot three ways (ordered last, dashed
+// tile, named in the caption) precisely so a reader cannot mistake the report
+// for advice. Read that file's "SNOWBALL STACKS ARE IN THE PLAYED BUILD"
+// section before changing either side.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -70,7 +105,8 @@ export const SNOWBALL_STACK_ITEM_IDS: ReadonlySet<number> = new Set<number>([304
  *
  * Apply this to COMPLETED-ITEM lists only, and apply it BEFORE the list is
  * truncated to N so the next-most-built item backfills the freed slot. Never
- * apply it to a starter/opener slot — see the module header.
+ * apply it to a starter/opener slot, and never to a strip that REPORTS one
+ * game's real inventory — see the module header's two sections on each.
  */
 export function isSnowballStackItem(itemId: number): boolean {
   return SNOWBALL_STACK_ITEM_IDS.has(itemId);

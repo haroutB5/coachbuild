@@ -88,26 +88,46 @@ describe("buildFeaturedModel", () => {
 
   it("reports zero games without dividing by zero", () => {
     const m = buildFeaturedModel([]);
-    expect(m).toEqual({ games: 0, wins: 0, items: [], gameItems: [], runes: null, spells: null });
+    expect(m).toEqual({ games: 0, wins: 0, items: [], gameLog: [], runes: null, spells: null });
   });
 
-  it("returns the per-game inventories the full-build slot needs", () => {
+  it("returns the per-game records the build strip needs", () => {
     // `items` above is a per-item aggregate and cannot answer "which items did
-    // they finish holding TOGETHER" — see lib/otp/featuredBuild.ts on why an
-    // assembled build and an observed one must not be confusable.
+    // they finish holding TOGETHER" — see lib/otp/featuredBuild.ts on why a
+    // build assembled from rates and one somebody played must not be
+    // confusable.
     const m = buildFeaturedModel([
       game({ final_items: [3100, 6653, 3100] }),
       game({ final_items: [4645] }),
       game({ final_items: null }),
     ]);
     // Deduped within a game, one entry per row, and a malformed row keeps its
-    // slot as [] so the array stays index-aligned with the games it describes.
-    expect(m.gameItems).toEqual([[3100, 6653], [4645], []]);
-    expect(m.gameItems).toHaveLength(m.games);
+    // slot with an empty `items` so the log stays index-aligned with the games
+    // it describes and `games` stays the denominator.
+    expect(m.gameLog.map((g) => g.items)).toEqual([[3100, 6653], [4645], []]);
+    expect(m.gameLog).toHaveLength(m.games);
+  });
+
+  it("pairs each inventory with the outcome of the SAME game", () => {
+    // The card captions a build "a game they won" off this pairing. Two
+    // parallel arrays could desynchronise silently and turn that caption into a
+    // lie; one array of records cannot. This pins the pairing, including for a
+    // malformed row, whose outcome is still a known fact about a real game.
+    const m = buildFeaturedModel([
+      game({ final_items: [3100, 6653], win: true }),
+      game({ final_items: [4645], win: false }),
+      game({ final_items: null, win: true }),
+    ]);
+    expect(m.gameLog).toEqual([
+      { items: [3100, 6653], win: true },
+      { items: [4645], win: false },
+      { items: [], win: true },
+    ]);
+    expect(m.wins).toBe(2);
   });
 
   it("applies the caller's item filter to the per-game inventories too", () => {
     const m = buildFeaturedModel([game({ final_items: [3100, 2003] })], (id) => id !== 2003);
-    expect(m.gameItems).toEqual([[3100]]);
+    expect(m.gameLog.map((g) => g.items)).toEqual([[3100]]);
   });
 });

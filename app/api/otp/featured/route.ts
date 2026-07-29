@@ -14,7 +14,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
-import { buildFeaturedModel, type FeaturedMatchRow } from "@/lib/otp/featured";
+import { buildFeaturedModel, type FeaturedGame, type FeaturedMatchRow } from "@/lib/otp/featured";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,12 +39,17 @@ export interface FeaturedOtpResponse {
    *  every percentage below. Never the source's larger game count. */
   sample: { games: number; wins: number } | null;
   items: { itemId: number; games: number; pct: number }[];
-  /** One entry per stored game: the deduplicated final inventory, raw ids, no
-   *  classification (same posture as `items` — see the note below the query).
+  /** One entry per stored game, NEWEST FIRST: the deduplicated final inventory
+   *  (raw ids, no classification — same posture as `items`, see the note below
+   *  the query) plus whether they won it.
+   *
    *  The card needs the GAMES, not just the per-item rates, to answer "which
-   *  six did they finish holding TOGETHER" honestly — `lib/otp/featuredBuild.ts`
-   *  explains why an assembled build and an observed one must not look alike. */
-  gameItems: number[][];
+   *  items did they finish holding TOGETHER" honestly — `lib/otp/featuredBuild.ts`
+   *  explains why a build assembled from rates and one somebody actually played
+   *  must not look alike. The `win` flag is what lets the card prefer, and then
+   *  truthfully label, a game they WON when it has to fall back to a single
+   *  game; the ORDER is what makes its recency tiebreak deterministic. */
+  gameLog: FeaturedGame[];
   runes: { page: unknown; games: number; pct: number } | null;
   spells: { spells: number[]; games: number; pct: number } | null;
 }
@@ -53,7 +58,7 @@ const EMPTY: FeaturedOtpResponse = {
   player: null,
   sample: null,
   items: [],
-  gameItems: [],
+  gameLog: [],
   runes: null,
   spells: null,
 };
@@ -120,7 +125,7 @@ export async function GET(req: NextRequest) {
       },
       sample: { games: model.games, wins: model.wins },
       items: model.items,
-      gameItems: model.gameItems,
+      gameLog: model.gameLog,
       runes: model.runes ? { page: model.runes.page, games: model.runes.games, pct: model.runes.pct } : null,
       spells: model.spells
         ? { spells: model.spells.spells, games: model.spells.games, pct: model.spells.pct }

@@ -193,7 +193,12 @@ describe("all three call sites agree that 3172 is boots", () => {
       [3173, 3072, 3031, 3036, 6676, 1055],
     ];
     const rates = ratesFrom(gameItems);
-    const view = buildFeaturedView(rates, gameItems, gameItems.length, CATALOG);
+    const view = buildFeaturedView(
+      rates,
+      gameItems.map((items) => ({ items, win: true })),
+      gameItems.length,
+      CATALOG
+    );
     expect(view.boots.map((b) => b.itemId)).toEqual([GUNMETAL_GREAVES, 3170, 3173]);
     expect(view.items.map((i) => i.itemId)).not.toContain(GUNMETAL_GREAVES);
     const bootsInBuild = view.fullBuild!.items.filter((i) => i.isBoots);

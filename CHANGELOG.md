@@ -2,6 +2,125 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.80.0] — 2026-07-29 — A middle tier, and a fetcher that can actually reach the bar
+
+### Added
+- **A middle tier between "a full build they repeated" and "one game of theirs".** Raising the bar to
+  five items plus boots cost 121 champions their repeated build (139 → 18) — the cause is sample
+  DEPTH, not the rule. A build the player repeated four times is more informative than one arbitrary
+  game even a slot short, so the ladder now degrades through it:
+
+  ```
+                        5 + boots only        with the middle tier
+    full build repeats       18 (10%)                18 (10%)
+    shorter build repeats         —                  47 (27%)
+    one real game            144 (84%)                97 (56%)
+    still collecting           9 ( 5%)                 9 ( 5%)
+    no build to show           1 ( 1%)                 1 ( 1%)
+  ```
+
+  **47 champions recovered.** Each tier states its own item count — the middle one reads "It is 4
+  items plus boots, not a full six" — so it cannot be mistaken for a complete build. It stops at
+  four: at three the modal set is a boot and two items, which is a game that ended early.
+
+- **A continuous, priority-driven deep walk** (`scripts/ingest-otp-priority.mjs`) that deepens the
+  featured one-tricks for the champions **the user actually plays** — 42 of them, all already
+  featured, against 172 in the full fleet. It runs in the ~10 hours a day the Riot key is otherwise
+  idle and is safe by PREDICATE rather than by schedule: before every unit of work it asks whether a
+  scheduled Riot job is running (process command lines AND Task Scheduler state, either signal
+  meaning busy), parks at 30s polling when one is, and **aborts if it cannot enumerate processes at
+  all** — a walk that cannot see the other jobs must not keep running.
+
+  Riot's ceiling is `100:120,20:1` read from live headers, and the pacer's 1.3s floor already sits at
+  ~92% of it, so there is no speed to be had — only unused hours. The user's 42 champions are 3,682
+  stored games short of a useful sample.
+
+### Fixed
+- **The featured ingest only ever fetched Riot's first page of 100 match ids.** `--matches` above 100
+  was silently truncated, so a prolific account's history stopped dead at 100 ranked games. It
+  paginates now, inside the same 90-day window — never past it, since older games predate item
+  overhauls. The featured Ahri one-trick went 37 → 232 stored games.
+- **The walk's scheduler wrapper launched an interactive Node REPL instead of the job.** It splatted
+  `$args`, a PowerShell automatic variable, which passes nothing when reassigned — so `npx tsx` ran
+  with no script. Task Scheduler reported the task as "Running" with no error and no exit code while
+  it did nothing at all. Caught on the first live registration by reading the host log rather than
+  the task state.
+
+## [0.79.0] — 2026-07-29 — A full build is five items plus boots
+
+### Changed
+- **A complete build now means five finished non-boots items PLUS boots.** It was four finished
+  items in total, a bar chosen when the deepest sample we held was 60 games. The featured Ahri
+  one-trick now holds **232** — the ingest was only ever asking Riot for the first page of 100 match
+  ids and silently truncating a prolific account — so the stricter bar is reachable.
+
+  Stated as "5 plus boots", not "6 finished items", because six legendaries and no boots is also six
+  finished items and is not the same build. Two of Ahri's 232 games end that way; they do not
+  qualify.
+
+- **The played-build branch is now rare, and that is the accepted cost.** Measured across all 172
+  featured accounts, both bars run through the shipping code
+  (`scripts/measure-featured-branches.mts`):
+
+  ```
+                       4 finished items      5 non-boots + boots
+    most-played-exact       139 (81%)               18 (10%)
+    single-game              23 (13%)              144 (84%)
+    still collecting          9 ( 5%)                9 ( 5%)
+    no build to show          1 ( 1%)                1 ( 1%)
+  ```
+
+  Fourteen of those 18 clear the bar by a single repeated game. Only Ahri has had the deep ingest
+  run for it; the other 171 accounts hold a median of 32 games and the scheduled job fills them in
+  from here. The single-game fallback keeps its lower floor on purpose, so a shallow sample still
+  shows a real game rather than an empty strip.
+
+- **A snowball stack stays IN the played build and stays OUT of the slot list.** The strip reports
+  what the player ended one game holding, so removing Mejai's Soulstealer from it would be a false
+  claim about that game; the slot list recommends, so the exclusion stands there. Not a hypothetical
+  split — the only repeating full build Ahri's one-trick has contains Mejai's, and excluding it drops
+  the qualifying games from 17 to 3 with no repeats at all. It is marked three ways so it cannot read
+  as advice: ordered last whatever its build rate, drawn with a dashed muted tile whose tooltip and
+  alt text say "a snowball stack they held, not a recommendation", and named in the caption.
+
+### Fixed
+- **The fallback caption said "no set repeats" and would have been false.** The vote now runs over
+  full builds only, so a four-item set can repeat in a sample that still falls back to one game. It
+  reads "no full build repeats" — the same fact the branch is actually entitled to state.
+
+## [0.78.0] — 2026-07-29 — The one-trick's build strip is a build they played
+
+### Changed
+- **The featured one-trick's build strip is now a real game, not a composite.** It used to be their
+  top boot plus their top five items by build rate — a combination the player may never have
+  finished a single game holding — carried by a paragraph of disclaimer saying exactly that. Two
+  branches replace it, and both are games this player played:
+
+  ```
+  most-played-exact   4 of the 60 games we hold ended with exactly these finished items
+  single-game         one game they won, shown because no set repeats across the sample
+  ```
+
+  Live on Ahri (TWTV Peng04#Yuqi) the first branch renders: Lich Bane, Malignance, Zhonya's
+  Hourglass and Crimson Lucidity, played four times, won three of them. Across all 172 featured
+  accounts the split is 142 played-build / 21 single-game / 9 still collecting.
+
+- **Builds are compared on FINISHED items.** Comparing raw inventories makes every game look
+  unique — a game that ended with a half-built Needlessly Large Rod in the bag differs from the
+  identical game that sold it. Measured on those same 60 games: 42 full inventories, 41 distinct;
+  drop the components and 32 games qualify as builds, 22 distinct, seven sets repeating.
+
+- **Four finished items is a build.** Three legendaries plus boots. The old floor of five is why the
+  played-build branch fired so rarely: this player finishes a fifth item in 8 games out of 60, and a
+  sixth in none. Six was never a reachable bar.
+
+### Removed
+- **Two blocks of explanatory text on the one-trick card.** The assembled-build disclaimer went with
+  the assembled build itself — a real game needs no apology. The "indented items are built instead
+  of the one above them" paragraph is now a four-word key (`or = instead of, not as well`); the
+  relationship is still carried by the word "or" on every alternative row, the nested list's
+  accessible name, and the single divided bar.
+
 ## [0.77.0] — 2026-07-29 — Items that compete for a slot now share one
 
 ### Changed
