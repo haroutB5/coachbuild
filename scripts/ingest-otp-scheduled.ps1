@@ -12,6 +12,15 @@
 #
 # Scheduled cadence: every 6 hours, 30 champions per run.
 #
+# THIS SLOT NOW RUNS TWO JOBS, SEQUENTIALLY: the consensus walk below, then
+# ingest-otp-featured-scheduled.ps1 (the onetricks.gg featured one-trick
+# refresh, 20 champions, ~24 min). They are chained rather than given separate
+# triggers so that total Riot concurrency stays at one BY CONSTRUCTION — see
+# that script's header for the measured numbers behind the decision. A
+# wall-clock budget below skips the featured half if the consensus walk
+# overruns, so a slow run degrades coverage instead of colliding with
+# CoachBuildMatchIngest.
+#
 # MEASURED, not guessed (2026-07-28): a 6-champion run took 22m42s wall clock,
 # i.e. ~3.8 min/champion, bound by lib/pro/pacer.ts's 1.3s Riot floor. So:
 #   6/run  = 24 champions/day  -> ~7 days for the ~170-champion roster
@@ -63,7 +72,8 @@ Set-Location $repo
 # -Encoding utf8 on BOTH writers: PS 5.1's bare *>> redirect writes UTF-16LE
 # while Add-Content writes ANSI -- a mixed-encoding log that byte-oriented
 # tools (tail, grep) render as garbage. One encoding, one log.
-$stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+$slotStart = Get-Date
+$stamp = $slotStart.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 Add-Content $log "[$stamp] otp ingest starting" -Encoding utf8
 
 & npx tsx scripts/ingest-otp.mjs --champions 30 2>&1 | Out-File -FilePath $log -Append -Encoding utf8
@@ -71,4 +81,45 @@ $code = $LASTEXITCODE
 
 $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 Add-Content $log "[$stamp] otp ingest finished, exit $code" -Encoding utf8
+
+# ── Chained featured one-trick refresh ──────────────────────────────────────
+# Guard, not decoration. TWO ceilings bound this slot, and the tighter one is
+# NOT the obvious one:
+#   1. CoachBuildMatchIngest opens its slot 180 min after this one.
+#   2. This task's own "Stop Task If Runs" limit, which Task Scheduler enforces
+#      by KILLING the job. It was 02:00:00 while this slot ran only the
+#      consensus walk; raised to 02:45:00 (PT2H45M) on 2026-07-29 when the
+#      featured half was chained on, still stopping well before ceiling 1.
+# Ceiling 2 binds. At the old 2h limit, a worst-case consensus walk (111 min
+# measured) plus the featured half (~24 min) would have been cut off mid-run.
+#
+# The featured half needs ~24 min at 20 champions, so starting it past the 120
+# min mark leaves under ~20 min before the kill. Past that, skipping a refresh
+# cycle is strictly cheaper than a half-written run or two concurrent Riot
+# processes, which SUSPENDS the key for every surface in the app (CLAUDE.md
+# gotcha (d)). Coverage is recoverable; a suspended key is not.
+#
+# If you change either ceiling, change the other deliberately: this budget, the
+# task's ExecutionTimeLimit, and the 3h trigger offset are one interlocking set.
+#
+# Run as a CHILD PROCESS, not dot-sourced or called with &: that script ends in
+# `exit`, which in the same scope would terminate this one too and lose the
+# logging below.
+$budgetMinutes = 120
+$elapsed = [int]((Get-Date) - $slotStart).TotalMinutes
+$stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+
+if ($elapsed -ge $budgetMinutes) {
+    Add-Content $log "[$stamp] featured half SKIPPED: consensus walk took $elapsed min, budget is $budgetMinutes" -Encoding utf8
+} else {
+    Add-Content $log "[$stamp] featured half starting ($elapsed min elapsed, budget $budgetMinutes)" -Encoding utf8
+    $featured = Join-Path $PSScriptRoot 'ingest-otp-featured-scheduled.ps1'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $featured -Champions 20
+    $featuredCode = $LASTEXITCODE
+    $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    Add-Content $log "[$stamp] featured half finished, exit $featuredCode (own log: otp-featured-ingest.log)" -Encoding utf8
+}
+
+# Exit with the CONSENSUS code: that is what this task's health has always
+# meant, and the featured half logs its own outcome separately.
 exit $code
