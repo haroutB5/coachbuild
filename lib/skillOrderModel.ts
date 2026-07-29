@@ -547,6 +547,98 @@ export function completeSkillOrder(
 }
 
 /**
+ * Fill the levels `completeSkillOrder` REFUSED to derive, from the champion's
+ * max-priority order — a GUESS, named as one, and never mixed into `order`.
+ *
+ * ── Why this exists, and why it is not a softening of the refusals ──────────
+ * User directive 2026-07-29: the recommended skill order must always read as a
+ * full 18 levels, "as all websites I see do that." That is a real ask — a grid
+ * that stops at 15 looks broken next to every reference site — and it is
+ * COMPATIBLE with this module's honesty rule, but only if the two are kept
+ * structurally apart. So:
+ *
+ *   * `order`, `levels`, `completed`, `observedLevels` and `completionBasis`
+ *     are UNTOUCHED by this function. Every existing consumer — most
+ *     importantly lib/nextSkill.ts, which drives a LIVE in-game instruction and
+ *     deliberately goes silent past level 15 on an incomplete order — sees
+ *     exactly what it saw before. Inferred data is fine on a reference grid the
+ *     player reads at their own pace; it is not obviously fine as live
+ *     instruction, and that call is not this function's to make.
+ *   * the guess is carried in its OWN field (`inferredTail`) so a consumer has
+ *     to opt into it, and any consumer that renders it must render it as
+ *     visibly inferred (SkillOrderCard: dashed chips + a plain caption).
+ *
+ * ── What it does ────────────────────────────────────────────────────────────
+ * The same allocator `completeSkillOrder` uses, minus every structural guard
+ * that would refuse: walk the max-priority order, give each ability as many of
+ * the remaining points as ITS OWN cap allows, stopping when the 18 levels are
+ * filled. Any ultimate rank the champion's schedule opens up in the tail is
+ * taken first, exactly as in the derivation.
+ *
+ * Two refusals SURVIVE, because both would make the guess actively wrong
+ * rather than merely unproven:
+ *
+ *   1. `kit === null` at the call site (see `buildSkillOrderModel`) — the
+ *      champion is known non-standard and ddragon did not resolve, so the caps
+ *      this walk needs are precisely what is missing. Guessing under
+ *      STANDARD_KIT there reintroduces the blank-Jayce bug's wrong arithmetic.
+ *   2. a bad token (Kha'Zix's `R-Q`/`R-W`) — lib/opgg.ts already rejects that
+ *      payload upstream, so this is a belt-and-braces guard rather than a live
+ *      path.
+ *
+ * A SHORT tail is returned rather than padded: if the priority names nothing
+ * left under a cap, those levels stay empty in the grid. Filling them by
+ * ignoring the champion's own rank caps would emit a path the game does not
+ * allow, which is worse than a gap.
+ *
+ * Returns `null` when there is nothing to infer (already 18 levels, no valid
+ * order, or the walk placed nothing) — never an empty-array "success".
+ */
+export function inferSkillOrderTail(
+  observed: readonly Ability[],
+  priority?: readonly Ability[],
+  kit: ChampionKit = STANDARD_KIT
+): { tail: Ability[]; basis: PriorityBasis } | null {
+  if (!Array.isArray(observed) || !observed.length) return null;
+  if (!observed.every(isAbility)) return null;
+  const slots = TOTAL_LEVELS - observed.length;
+  if (slots <= 0) return null;
+
+  const counts = countRanks(observed);
+  const caps: Record<Ability, number> = {
+    Q: kit.maxRanks.Q,
+    W: kit.maxRanks.W,
+    E: kit.maxRanks.E,
+    R: purchasableUltimateRanks(kit),
+  };
+  // `Math.max(0, …)` rather than a refusal: an observed path that already
+  // breaks a cap (the `rank-over-cap` case) is exactly one of the situations
+  // this function exists to still answer for. That ability simply has nothing
+  // left to give.
+  const spare: Record<Ability, number> = {
+    Q: Math.max(0, caps.Q - counts.Q),
+    W: Math.max(0, caps.W - counts.W),
+    E: Math.max(0, caps.E - counts.E),
+    R: Math.max(0, caps.R - counts.R),
+  };
+
+  const forcedUlts = Math.min(tailUltimateRanks(kit, observed.length), spare.R, slots);
+  const tail: Ability[] = Array<Ability>(forcedUlts).fill("R");
+  spare.R -= forcedUlts;
+
+  const { priority: allocationPriority, basis } = resolveAllocationPriority(priority, observed, kit);
+  for (const ability of allocationPriority) {
+    while (spare[ability] > 0 && tail.length < slots) {
+      tail.push(ability);
+      spare[ability] -= 1;
+    }
+    if (tail.length >= slots) break;
+  }
+
+  return tail.length ? { tail, basis } : null;
+}
+
+/**
  * Is a supplied priority list well-formed enough to be preferred over a
  * derived one?
  *
@@ -714,6 +806,22 @@ export function buildSkillOrderModel(
       : completeSkillOrder(src.order, src.priorityIds, effectiveKit);
   const { order, completed, observedLevels, basis } = completion;
 
+  // The INFERRED tail — levels the derivation refused, filled from the
+  // max-priority order so the recommendation grid can read as a full 18 (user
+  // directive 2026-07-29). Deliberately a SEPARATE field, never merged into
+  // `order`: see `inferSkillOrderTail`'s header for why, and note the two
+  // conditions below.
+  //
+  //   * only when the derivation actually refused — a completed order has no
+  //     tail to infer and attaching an empty/duplicate one would invite a
+  //     consumer to render three chips twice.
+  //   * NEVER when `kit === null`. That state means "known non-standard
+  //     champion, ddragon unresolved", and the caps the walk needs are the very
+  //     thing missing. Guessing under STANDARD_KIT is the one degrade this
+  //     module has already measured to be worse than silence.
+  const inference =
+    !completed && kit !== null ? inferSkillOrderTail(order, src.priorityIds, effectiveKit) : null;
+
   // Win rate is DERIVED, and only when the counts can actually support it.
   const winRate =
     Number.isFinite(src.win) && src.win >= 0 && src.play > 0
@@ -733,6 +841,9 @@ export function buildSkillOrderModel(
     // decided nothing would imply a derivation that did not happen.
     observedLevels,
     ...(basis ? { completionBasis: basis } : {}),
+    // Provenance for the guess, same discipline as `completionBasis` for the
+    // derivation: attached only when something was actually inferred.
+    ...(inference ? { inferredTail: inference.tail, inferredBasis: inference.basis } : {}),
     sampleSize: src.play,
     winRate,
     share,

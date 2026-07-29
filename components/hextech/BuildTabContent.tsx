@@ -17,6 +17,7 @@ import {
   buildTabPanelId,
   type BuildTab,
 } from "./buildTabLayout";
+import { resolveAltKeystone, type AltKeystone } from "./altKeystone";
 import { versionFromPatch } from "@/components/proAssets";
 import ItemDetailPopover from "@/components/ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "@/components/EntityDetailPopover";
@@ -51,7 +52,17 @@ interface BuildTabContentProps {
 
 type FetchState =
   | { status: "loading" }
-  | { status: "ok"; build: BuildResponse }
+  /** `build` is still `data[0]` and still the ONLY thing rendered as the
+   *  recommendation — this feature did not change which setup is picked.
+   *  `altKeystone` is the one fact salvaged from the rest of the array: the
+   *  best withheld keystone worth telling the user about, or null (the common
+   *  case). Resolved HERE, once per response, rather than in the card's render
+   *  — the full BuildResponse[] is deliberately not held in state, so nothing
+   *  downstream can start rendering a second variant's items/shards/secondary
+   *  rows by reaching for it (see altKeystone.ts on why exposing a whole
+   *  alternative page would surface lib/recommend.ts's `bestAboveFloor`
+   *  fallback). */
+  | { status: "ok"; build: BuildResponse; altKeystone: AltKeystone | null }
   | { status: "empty" }
   /** `network` = the request never completed (fetch threw) — the user's
    *  connection genuinely might be the problem. `upstream` = the request
@@ -320,7 +331,18 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
         }
         // Spec shows a single primary build, not the top-3 variant switcher
         // the legacy Builds page rendered — the #1 ranked setup only.
-        setState({ status: "ok", build: data[0] });
+        //
+        // 2026-07-29: variants 2 and 3 are no longer discarded WHOLESALE. The
+        // engine's header states its contract — "Variants prefer different
+        // primary trees" — and its entire design for "a genuinely different
+        // keystone exists" is to put that keystone in a later variant. Dropping
+        // the array here deleted that escape hatch while the engine kept
+        // relying on it, which is why 16.6% of populated champion/role pairs
+        // displayed a negative-WPA keystone with a positive, adoption-cleared
+        // one unrendered. One fact is now salvaged from the tail — the
+        // keystone, its WPA, its sample and its tree — and nothing else: the
+        // pick, the ranking and every other slot on the card are untouched.
+        setState({ status: "ok", build: data[0], altKeystone: resolveAltKeystone(data) });
         onPatchResolved?.(data[0].patch);
       } catch {
         // fetch() itself threw, so the request never completed — this is the
@@ -423,7 +445,7 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
     );
   }
 
-  const { build } = state;
+  const { build, altKeystone } = state;
   const ver = versionFromPatch(build.patch);
 
   return (
@@ -484,6 +506,7 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
               roleLabel={build.roleLabel}
               build={build}
               lane={lane}
+              altKeystone={altKeystone}
             />
           </div>
           <div className="[grid-area:itembuild]">

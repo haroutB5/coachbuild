@@ -2,18 +2,26 @@
 // skillOrder.ts — pure model + display helpers for the "recommended skill
 // order" card on the Builds page (new feature, 2026-07-27).
 //
-// IMPORTANT — this is a DIFFERENT thing from skillOrderGrid.ts. That file (and
-// GameDetailSheet's own "Skill Order" section) renders the 18-column TIMELINE
-// of what happened in ONE pro game — untouched by this feature, do not conflate
-// the two. This module backs a RECOMMENDATION card instead: research on how
-// U.GG/similar sites present a leveling recommendation converges on two parts,
-// in this order —
+// This module backs a RECOMMENDATION card, presented in two parts:
 //   1. a compact max-priority string ("Q › W › E") — the thing players actually
 //      memorise, so it goes first;
-//   2. a per-ability PATH — one row per ability listing the levels it's ranked
-//      at (e.g. "Q  2  4  5  7  9"), NOT an 18-column grid. An 18-column grid
-//      needs ~18 touch-target-width columns; four short rows fit a 390px phone
-//      screen, which is this app's primary target.
+//   2. the classic 18-column SKILL GRID — one row per ability, one column per
+//      champion level, a coloured chip where that ability takes a point.
+//
+// ── The grid replaced per-ability level lists on 2026-07-29 ────────────────
+// This header used to argue the opposite: that four short "Q 2 4 5 7 9" rows
+// beat a grid because an 18-column grid needs ~18 touch-target-width columns
+// and this is a phone-first app. That decision was REVERSED by the user, who
+// asked for the grid every reference site uses, everywhere. The mobile
+// objection was real but was never a column-WIDTH problem: the cells are not
+// touch targets, so `minmax(0, 1fr)` tracks simply shrink to fit a 390px
+// screen. See components/SkillGrid.tsx's header for the mechanism.
+//
+// The grid is the SAME primitive GameDetailSheet's per-game timeline renders
+// (components/SkillGrid.tsx + skillOrderGrid.ts) — one implementation, because
+// two lookalike grids will drift. What differs is the FILL RULE, and it differs
+// on purpose: a per-game grid is a factual record and shows exactly the levels
+// that game reached, while this recommendation always answers all 18.
 //
 // `SkillOrderModel` mirrors the contract engy's data layer builds against
 // (GET /api/skill-order?champ=&role=, app's standard envelope: 200 + JSON body
@@ -32,6 +40,11 @@
 
 import type { ChampionKit } from "@/lib/types";
 import { isDerivedLevel, observedLevelCount } from "@/lib/skillOrderModel";
+import {
+  buildSkillGrid,
+  SKILL_GRID_COLUMNS,
+  type SkillGridCell,
+} from "@/components/skillOrderGrid";
 
 // Provenance is NOT duplicated the way the model shape above is. The rule for
 // "which levels did we derive" has exactly one correct implementation
@@ -65,6 +78,14 @@ export interface SkillOrderModel {
    *  order, or one inferred from the observed path. Absent when nothing was
    *  derived. Provenance, never a score. */
   completionBasis?: "published" | "derived";
+  /** Levels the derivation refused, filled from the max-priority order so the
+   *  grid reads as a complete 18. A GUESS — read it through
+   *  `buildRecommendedSkillGrid`, which tags those cells `inferred` so they
+   *  render visibly differently. Never part of `order`. See the same field on
+   *  lib/types.ts's SkillOrderModel. */
+  inferredTail?: Ability[];
+  /** Which priority produced `inferredTail`. Provenance, never a score. */
+  inferredBasis?: "published" | "derived";
   /** Games behind this order. */
   sampleSize: number;
   /** 0..1, or null when not supplied. */
@@ -103,6 +124,74 @@ export function formatPriorityString(priority: Ability[]): string {
  *  low-to-high. Never mutates the input. */
 export function sortedLevels(levels: number[]): number[] {
   return [...levels].sort((a, b) => a - b);
+}
+
+/**
+ * The full 18-level recommendation: the model's own `order` (measured levels,
+ * plus any the arithmetic DERIVED) followed by the INFERRED tail.
+ *
+ * Concatenating here rather than in the model is the whole design: `order`
+ * keeps its exact prior meaning for every other consumer — above all
+ * lib/nextSkill.ts, whose live in-game refusal past level 15 depends on it —
+ * and only this display path opts into the guess.
+ *
+ * May still be SHORTER than 18 when the inference itself came up short (the
+ * priority named nothing left under a cap). Those levels are genuinely unknown
+ * and the grid leaves them empty rather than inventing a chip.
+ */
+export function recommendedSkillOrder(
+  model: Pick<SkillOrderModel, "order" | "inferredTail">
+): Ability[] {
+  const order = Array.isArray(model.order) ? model.order : [];
+  const tail = Array.isArray(model.inferredTail) ? model.inferredTail : [];
+  return [...order, ...tail];
+}
+
+/**
+ * The 4×18 grid for the recommendation card, with every cell tagged by
+ * provenance so SkillGrid can render measured / derived / inferred levels
+ * distinguishably.
+ *
+ * Always 18 columns wide — a recommendation answers the whole game (user
+ * directive 2026-07-29). That is this CALLER's rule, not the grid's: the same
+ * primitive backs GameDetailSheet, where a game that ended at level 16 must
+ * keep showing 16 and must never be padded.
+ */
+export function buildRecommendedSkillGrid(
+  model: Pick<SkillOrderModel, "order" | "completed" | "observedLevels" | "inferredTail">
+): (SkillGridCell | null)[][] {
+  return buildSkillGrid(recommendedSkillOrder(model), {
+    columns: SKILL_GRID_COLUMNS,
+    measuredThrough: observedLevelCount(model),
+    derivedThrough: Array.isArray(model.order) ? model.order.length : 0,
+  });
+}
+
+/** Does this model carry levels the app DERIVED by arithmetic? */
+export function hasDerivedTail(
+  model: Pick<SkillOrderModel, "order" | "completed" | "observedLevels">
+): boolean {
+  const len = Array.isArray(model.order) ? model.order.length : 0;
+  return len > observedLevelCount(model);
+}
+
+/** Does this model carry levels the app GUESSED from the priority order? */
+export function hasInferredTail(model: Pick<SkillOrderModel, "inferredTail">): boolean {
+  return Array.isArray(model.inferredTail) && model.inferredTail.length > 0;
+}
+
+/**
+ * The level at which the inferred tail STARTS (1-based), or null when there
+ * isn't one. Named in the caption so the disclosure is specific — "levels 16-18
+ * are inferred" is a disclosure, "some levels are inferred" is a shrug.
+ */
+export function inferredTailRange(
+  model: Pick<SkillOrderModel, "order" | "inferredTail">
+): { from: number; to: number } | null {
+  if (!hasInferredTail(model)) return null;
+  const from = (Array.isArray(model.order) ? model.order.length : 0) + 1;
+  const to = from + (model.inferredTail as Ability[]).length - 1;
+  return { from, to };
 }
 
 /** Honest sample-size caption for the card footer — "N games", plus win rate

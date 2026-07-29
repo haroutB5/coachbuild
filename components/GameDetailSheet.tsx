@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import type { ProGame, ProGamePurchase } from "./proGames.types";
@@ -33,7 +33,8 @@ import { SheetTeamsSection } from "./TeamComp";
 import ItemDetailPopover from "./ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "./EntityDetailPopover";
 import { getItemNameMap } from "./itemDetail";
-import { buildSkillOrderGrid, SKILL_ROWS, SKILL_GRID_COLUMNS, type SkillLetter } from "./skillOrderGrid";
+import SkillGrid from "./SkillGrid";
+import { buildSkillGrid } from "./skillOrderGrid";
 import { useProstageTimeline } from "./prostageTimeline";
 import { useTeamPlayers } from "./teamPlayers";
 import { trapTabKey } from "./focusTrap";
@@ -152,49 +153,6 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
  *  id-only accessible name in the sheet). */
 function itemLabelFrom(names: Map<number, string> | null, id: number): string {
   return names?.get(id) ?? `Item #${id}`;
-}
-
-/** One Q/W/E/R row of the skill-order grid: a label cell + SKILL_GRID_COLUMNS
- *  level cells, emitted as a `Fragment` (no wrapper element) so they land as
- *  direct children of the parent `grid` and CSS Grid's row-major auto-flow
- *  places them correctly — a wrapper div here would break into its own grid
- *  item instead of 19 individual cells. */
-function SkillGridRow({ letter, levels }: { letter: SkillLetter; levels: (number | null)[] }) {
-  const isUlt = letter === "R";
-  return (
-    <Fragment>
-      <div
-        className={`flex items-center justify-center text-[10px] font-bold ${isUlt ? "text-teal" : "text-mut"}`}
-      >
-        {letter}
-      </div>
-      {levels.map((level, ci) => (
-        <div
-          key={ci}
-          className={`aspect-square min-w-0 rounded-[3px] flex items-center justify-center text-[8px] font-bold tabular-nums leading-none ${
-            level
-              ? isUlt
-                ? // Ult (R) row — the vivid, solid-fill treatment. Deliberately
-                  // the brightest cell on the grid; Q/W/E below stay one step
-                  // down so R still reads as "the hero ability."
-                  "bg-teal text-bg"
-                : // Q/W/E filled cells — bg-panel2 (#202329) here was only
-                  // ~1.07:1 against the sheet's own bg-panel (#1a1d21), i.e.
-                  // functionally invisible as a "filled" indicator even
-                  // though the number text inside it was legible. Swapped to
-                  // a translucent teal-dim tint + solid teal-dim border: a
-                  // real hue shift (not just a lightness bump) reads as
-                  // clearly "filled" against the neutral sheet bg, while
-                  // staying visually one step down from R's solid fill.
-                  "bg-teal-dim/25 border border-teal-dim text-teal-hover"
-              : "bg-black/10 border border-line/30"
-          }`}
-        >
-          {level ?? ""}
-        </div>
-      ))}
-    </Fragment>
-  );
 }
 
 /** Purchases bucketed by in-game minute — consecutive buys in the same
@@ -467,7 +425,12 @@ export default function GameDetailSheet({
   const hasFullRunes = runes.primary.length > 0 || runes.secondary.length > 0;
   const hasAnyRunes = runes.keystone > 0 || hasFullRunes || runes.shards.length > 0;
 
-  const skillGrid = buildSkillOrderGrid(game.skillOrder);
+  // Every cell here is MEASURED — this is what one game's Riot timeline
+  // actually recorded. No `measuredThrough`/`derivedThrough` overrides, and
+  // deliberately NO padding: a game that ended at level 16 shows 16 points and
+  // leaves 17-18 empty. Padding a factual record to look like the
+  // recommendation card would invent levels a player never took.
+  const skillGrid = buildSkillGrid(game.skillOrder);
 
   // Per-player Teams-box roster — fetched separately from GET
   // /api/pros/team-players once the sheet opens (engy's concurrent contract
@@ -892,21 +855,15 @@ export default function GameDetailSheet({
                 onItemClick={openItemPopover}
               />
 
-              {/* Skill order — classic per-ability Q/W/E/R rows × 18 level
-                  columns. Fixed to a CSS grid with `fr` cell columns (not
-                  fixed pixel widths) so all 18 columns always fit the
-                  sheet's width with zero horizontal scroll, down to 390px. */}
+              {/* Skill order — the shared grid primitive (components/
+                  SkillGrid.tsx), the same one the Builds page's recommendation
+                  card renders since 2026-07-29. What this game recorded, and
+                  ONLY that: an early surrender shows fewer chips, never a
+                  padded 18. */}
               {game.skillOrder.length > 0 && (
                 <section>
                   <SectionLabel>Skill Order</SectionLabel>
-                  <div
-                    className="grid gap-[3px]"
-                    style={{ gridTemplateColumns: `18px repeat(${SKILL_GRID_COLUMNS}, minmax(0, 1fr))` }}
-                  >
-                    {SKILL_ROWS.map((letter, ri) => (
-                      <SkillGridRow key={letter} letter={letter} levels={skillGrid[ri]} />
-                    ))}
-                  </div>
+                  <SkillGrid grid={skillGrid} />
                 </section>
               )}
             </>

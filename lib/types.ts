@@ -220,6 +220,27 @@ export interface SkillOrderModel {
    * Absent when nothing was derived. Diagnostic/provenance, not a score.
    */
   completionBasis?: "published" | "derived";
+  /**
+   * The levels the derivation REFUSED, filled from the max-priority order so a
+   * recommendation surface can render a complete 18 (user directive
+   * 2026-07-29). Present only when `completed` is false and something could be
+   * inferred; absent whenever the champion's kit could not be resolved.
+   *
+   * A GUESS, and the field name is the contract. Three rules for consumers:
+   *   * It is NOT part of `order`/`levels`/`observedLevels` — those keep their
+   *     exact prior meaning, which is why lib/nextSkill.ts's live in-game
+   *     refusal past level 15 is untouched by this field's existence.
+   *   * Appending it to `order` yields the full 18 levels, in order, starting
+   *     at level `order.length + 1`.
+   *   * Anything rendering it MUST mark it visibly as inferred (hard rule #4).
+   *     It may be SHORTER than the gap it fills, when the priority named
+   *     nothing left under a cap; the remaining levels are then genuinely
+   *     unknown and must stay empty.
+   */
+  inferredTail?: Ability[];
+  /** Which priority produced `inferredTail` — the source's own published max
+   *  order, or one read off the observed path. Provenance, never a score. */
+  inferredBasis?: "published" | "derived";
   /** Games behind this order. */
   sampleSize: number;
   /** 0..1, or null when not supplied. */

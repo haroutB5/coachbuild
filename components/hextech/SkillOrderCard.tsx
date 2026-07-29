@@ -4,17 +4,16 @@ import { useEffect, useState } from "react";
 import type { ChampionRef } from "@/lib/types";
 import type { LaneId } from "./heroContracts";
 import { LANE_TO_ROLE_ID } from "./heroContracts";
+import SkillGrid from "@/components/SkillGrid";
 import { formatSharePct } from "./proConsensus";
 import {
-  ABILITY_ROWS,
   LOW_SAMPLE_THRESHOLD,
+  buildRecommendedSkillGrid,
   fetchSkillOrder,
   formatPriorityString,
   formatSkillOrderSampleLine,
-  isDerivedLevel,
-  observedLevelCount,
-  sortedLevels,
-  type Ability,
+  hasDerivedTail,
+  inferredTailRange,
   type SkillOrderModel,
 } from "./skillOrder";
 
@@ -49,77 +48,25 @@ function SkillOrderSkeleton() {
   );
 }
 
-/** One Q/W/E/R row of the skill PATH (not the 18-column timeline grid — see
- *  skillOrder.ts's module header for why these are different features). R is
- *  marked distinctly (solid teal fill) since 6/11/16 are the power-spike
- *  levels — same "R reads as the hero ability" treatment GameDetailSheet's
- *  own SkillGridRow already uses for its filled cells, reused here rather
- *  than invented fresh so the two skill-order surfaces read consistently. */
-function AbilityRow({
-  ability,
-  levels,
-  isDerived,
-}: {
-  ability: Ability;
-  levels: number[];
-  /** True for a level this app DERIVED rather than the source publishing it.
-   *  Rendered as an outline instead of a fill — see the card's footnote. */
-  isDerived: (level: number) => boolean;
-}) {
-  const isUlt = ability === "R";
-  const sorted = sortedLevels(levels);
-  const derived = sorted.filter(isDerived);
-  return (
-    <div className="flex items-center gap-2.5 py-1">
-      <span
-        className={`w-5 flex-shrink-0 text-center text-[11px] font-bold ${isUlt ? "text-teal" : "text-mut"}`}
-        aria-hidden="true"
-      >
-        {ability}
-      </span>
-      {sorted.length > 0 ? (
-        <div
-          className="flex flex-wrap gap-1"
-          aria-label={
-            // The screen-reader label carries the provenance too. A visual-only
-            // distinction would tell sighted users the tail is derived and tell
-            // everyone else it was measured — which is the fabrication hard
-            // rule #4 forbids, just aimed at a subset of the audience.
-            `${ability} ranked at level${sorted.length === 1 ? "" : "s"} ${sorted.join(", ")}` +
-            (derived.length
-              ? `. Level${derived.length === 1 ? "" : "s"} ${derived.join(", ")} derived, not recorded`
-              : "")
-          }
-        >
-          {sorted.map((lvl) => (
-            <span
-              key={lvl}
-              className={`inline-flex items-center justify-center min-w-[22px] px-1 py-0.5 rounded-[4px] text-[10.5px] font-semibold tabular-nums leading-none ${
-                isDerived(lvl)
-                  ? "bg-transparent border border-dashed border-mut/50 text-mut"
-                  : isUlt
-                    ? "bg-teal text-bg"
-                    : "bg-teal-dim/20 border border-teal-dim/60 text-teal-hover"
-              }`}
-            >
-              {lvl}
-            </span>
-          ))}
-        </div>
-      ) : (
-        <span className="text-[10.5px] text-mut/50" aria-label={`${ability} — no leveling data`}>
-          —
-        </span>
-      )}
-    </div>
-  );
-}
-
 /** "Recommended skill order" card for the Builds page — a RECOMMENDATION
- *  (max-priority string + per-ability path), distinct from GameDetailSheet's
- *  18-column timeline of what happened in one pro game (skillOrderGrid.ts,
- *  untouched by this feature). See skillOrder.ts's module header for the full
- *  rationale (U.GG-derived two-part convention, mobile-first column budget).
+ *  (max-priority string + the classic 18-column skill grid).
+ *
+ *  ── Two things changed here on 2026-07-29, both by user directive ─────────
+ *  1. The per-ability level lists ("Q  2 4 5 7 9") became THE GRID, the same
+ *     primitive GameDetailSheet renders (components/SkillGrid.tsx). This file
+ *     used to carry a rationale for why a grid was wrong on a phone-first app;
+ *     that rationale is gone because the decision is reversed, and the mobile
+ *     concern is answered by `minmax(0, 1fr)` tracks rather than by avoiding
+ *     the grid.
+ *  2. The grid always renders all 18 levels. Where lib/skillOrderModel.ts's
+ *     arithmetic resolves 16-18 it always did; where it REFUSES, the tail is
+ *     now inferred from the champion's published max-priority order and marked
+ *     as inferred — dashed chips plus a plain caption below. It is still not
+ *     presented as measured, which is the line hard rule #4 draws.
+ *
+ *  Same primitive as the per-game grid, different FILL RULE: a game that ended
+ *  at level 16 shows 16 there, because that is a record of something that
+ *  happened. A recommendation answers the whole game.
  *
  *  `null` payload (API's "no data for this champ+role" — a normal 200) renders
  *  NO card at all, same convention ProConsensusCard's N=0 "hidden" state
@@ -166,12 +113,17 @@ export default function SkillOrderCard({ champ, lane }: SkillOrderCardProps) {
 
   const { model } = state;
   const lowSample = model.sampleSize < LOW_SAMPLE_THRESHOLD;
-  // Levels this app derived rather than the source publishing them. One
-  // implementation, imported from lib/skillOrderModel.ts (see skillOrder.ts's
-  // re-export note) so the card and the desktop overlay cannot disagree about
-  // which levels are ours.
-  const derivedAt = (level: number) => isDerivedLevel(model, level);
-  const hasDerivedTail = model.order.length > observedLevelCount(model);
+  // One implementation of "which levels are ours", imported rather than
+  // reimplemented (see skillOrder.ts's re-export note) so the card, the grid
+  // and the desktop overlay cannot disagree about it.
+  const grid = buildRecommendedSkillGrid(model);
+  const derivedTail = hasDerivedTail(model);
+  const inferred = inferredTailRange(model);
+  // The genuinely-unknown case: the derivation refused AND the inference could
+  // not fill the gap either (the priority named nothing left under a cap), so
+  // the tail columns are empty. Rare, and it must still be said out loud.
+  const knownLevels = model.order.length + (model.inferredTail?.length ?? 0);
+  const incompleteGrid = knownLevels < 18;
 
   return (
     <div className="bg-panel border border-line rounded-xl p-5">
@@ -186,50 +138,74 @@ export default function SkillOrderCard({ champ, lane }: SkillOrderCardProps) {
         {formatPriorityString(model.priority)}
       </p>
 
-      {/* Part 2 — skill PATH, one row per ability with the levels it's
-          ranked at (NOT an 18-column grid — see module header). */}
-      <div className="space-y-0.5">
-        {ABILITY_ROWS.map((ability) => (
-          <AbilityRow
-            key={ability}
-            ability={ability}
-            levels={model.levels[ability] ?? []}
-            isDerived={derivedAt}
-          />
-        ))}
-      </div>
+      {/* Part 2 — THE GRID. 18 columns always: a recommendation answers the
+          whole game. `max-w` caps how big the cells get on a wide desktop so
+          it reads as a compact chart rather than 18 giant squares; on a 390px
+          phone the 1fr tracks shrink to fit and the page gains no horizontal
+          scroll (see SkillGrid.tsx's header). */}
+      <SkillGrid grid={grid} className="max-w-[560px]" />
 
-      {/* Honesty requirement — `completed: false` must be VISIBLE, not
-          silently hidden: it means levels 16-18 are genuinely unknown rather
-          than derived, so the short rows above are the truth, not a data gap
-          to apologize for. Never padded to 18 to look tidy (see AbilityRow /
-          skillOrder.ts — the levels arrays are rendered exactly as supplied). */}
-      {!model.completed && (
+      {/* Honesty requirements below. All three are about the same thing —
+          saying which levels are ours — and they are deliberately separate
+          sentences rather than one merged line, because a reader who sees only
+          solid chips should see NO caption at all. */}
+
+      {/* The tail was INFERRED: the derivation refused for this champion and
+          the levels were filled from the published max-priority order so the
+          grid reads complete. That is a good guess and it is still a guess.
+          Dashed chips say so visually; this says it in words, because a visual
+          convention nobody explained is not a disclosure. */}
+      {inferred && (
+        <p className="text-[10.5px] text-gold/70 mt-3 flex items-start gap-1">
+          <span aria-hidden="true">⚠</span>
+          <span>
+            The source publishes levels 1–{model.order.length} only, and this champion&apos;s last
+            points can&apos;t be worked out from them. Level{inferred.from === inferred.to ? " " : "s "}
+            <span className="tabular-nums">
+              {inferred.from === inferred.to ? inferred.from : `${inferred.from}–${inferred.to}`}
+            </span>{" "}
+            {inferred.from === inferred.to ? "is" : "are"} inferred from{" "}
+            {model.inferredBasis === "published"
+              ? "the champion's published max order"
+              : "the levelling path above"}{" "}
+            (dashed) — a best guess, not recorded data.
+          </span>
+        </p>
+      )}
+
+      {/* Neither derived nor inferable. Rare, and the one case where the grid
+          genuinely has holes — never padded to look tidy. */}
+      {incompleteGrid && (
         <p className="text-[10.5px] text-gold/70 mt-3 flex items-center gap-1">
           <span aria-hidden="true">⚠</span>
-          Only levels 1–15 are confirmed for this sample — 16–18 aren&apos;t recorded.
+          <span className="tabular-nums">
+            Levels {knownLevels + 1}–18 are unknown for this champion and left blank.
+          </span>
         </p>
       )}
 
       {/* The other half of the same honesty requirement, and the one that is
           easy to forget: a COMPLETED order shows all 18 levels, and three of
-          them are ours. The dashed chips above already say so visually; this
-          says it in words, because a visual convention nobody explained is
-          not a disclosure. Deliberately not styled as a warning — a derived
-          tail is a legitimate, useful answer, just not a measured one. */}
-      {hasDerivedTail && (
+          them are ours. The outlined chips already say so visually; this says
+          it in words, because a visual convention nobody explained is not a
+          disclosure. Deliberately not styled as a warning — a DERIVED tail is
+          arithmetic with exactly one answer, a legitimate and useful result,
+          just not a measured one. That is why it reads differently from the
+          INFERRED caption above, which is a genuine guess. */}
+      {derivedTail && (
         <p className="text-[10.5px] text-mut/70 mt-3">
           {/* Three states, not two. A payload cached before `completionBasis`
               existed carries no basis at all, and the old two-way ternary
               silently called those "levelling path" — naming a provenance we
-              do not actually hold, which is the same fabrication the dashed
-              chips exist to prevent, just in prose. When we don't know, we say
-              only what we do know: these levels are ours, not the source's. */}
+              do not actually hold, which is the same fabrication the chip
+              treatments exist to prevent, just in prose. When we don't know, we
+              say only what we do know: these levels are ours, not the
+              source's. */}
           {model.completionBasis === "published"
-            ? "Dashed levels are derived from this champion's published max order, not recorded"
+            ? "Outlined levels are derived from this champion's published max order, not recorded"
             : model.completionBasis === "derived"
-              ? "Dashed levels are derived from this champion's levelling path, not recorded"
-              : "Dashed levels are derived, not recorded"}
+              ? "Outlined levels are derived from this champion's levelling path, not recorded"
+              : "Outlined levels are derived, not recorded"}
           {" — the source publishes levels 1–15 only."}
         </p>
       )}

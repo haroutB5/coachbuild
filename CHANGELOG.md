@@ -2,6 +2,72 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.82.0] — 2026-07-29 — The rune we were hiding, and skill order as a real grid
+
+### Added
+- **The higher-WPA keystone we were withholding is now on the card.** `buildRecommendations`
+  returns three viable setups and the client rendered only `data[0]`, so on **83 of 500**
+  champion/role pairs (16.6%, measured) the card showed a NEGATIVE-WPA keystone while a positive,
+  adoption-clearing alternative sat unrendered. Jhin BOT displayed −0.272 while hiding **+2.500**.
+
+  **The obvious implementation is wrong and was caught by building it.** `primaryConfigs` sorts by
+  tree adoption, so `builds[1]` is the second-most-*played* tree, which has nothing to do with which
+  withheld keystone is best. On Jhin, `builds[1]` is Dark Harvest at **−0.725 — worse than what was
+  already shown** — and the +2.500 lives in `builds[2]`. A `builds[1]`-only read would have hidden
+  the headline case exactly as before. It scans every later variant and dedupes on rune id, because
+  filler variants repeat variant #1's keystone (6 of 9 champions probed).
+
+  **Predicate: a sign flip plus a gap guard** — shown `< 0`, alternative `> 0`, gap `> 0.04`,
+  alternative clears the adoption bar. Reached independently at exactly the 83 pairs the
+  investigation found. `alt.wpa > shown.wpa` was rejected (146 pairs, 29.2% — fires on Amumu SUP
+  +0.376→+0.416, furniture during a 30-second champ select), and so was "whatever renders red" (78 —
+  a strict subset that drops **Caitlyn BOT**, whose −0.011 sits in the neutral-grey dead zone while
+  hiding +0.807). The sign flip is load-bearing: WPA figures are marginal contributions measured in
+  their own rune pages, so any gap-size predicate quietly asserts a shared scale, while which side of
+  zero a reading falls on survives that caveat. The gap guard is display integrity only — it excludes
+  none of today's 83, it stops two identically-rounded strings appearing under a "scored higher"
+  heading.
+
+  **It is deliberately NOT selectable.** `ApplyRunesButton` writes `data[0]` to the League client,
+  and `AutoExporter` also writes `data[0]` on champ-select resolution **with no page in the loop** —
+  so that second divergence cannot be fixed by wiring the UI at all. Seeing one rune page and
+  receiving another is a worse defect than the one being fixed. The shown setup remains the
+  recommendation; this is "here is the one we did not pick, and the numbers".
+- **Skill order is the classic 18-column grid, and the recommendation always fills all 18.**
+  `SkillOrderCard`'s level lists are replaced by the grid; the priority string stays above it. The
+  earlier rationale ("a grid needs ~18 touch columns, this is a phone-first app") is rewritten
+  rather than left asserting a spec the file no longer follows.
+
+  **One primitive, two fill rules.** `GameDetailSheet`'s inline `SkillGridRow` is deleted and both
+  surfaces call the new `SkillGrid`, which **takes no view on completeness** — the caller decides how
+  full the grid is. A recommendation fills to 18; a per-game record shows what actually happened. A
+  real 16-minute game renders 11 chips with 17 and 18 blank, and is never padded, because inventing
+  levels a player did not take is fabrication.
+
+  Cells carry provenance — `measured` / `derived` / `inferred` — and the new `inferSkillOrderTail`
+  keeps its guess in new fields (`inferredTail` / `inferredBasis`). `order`, `levels`, `completed`
+  and `observedLevels` are untouched, so **`lib/nextSkill.ts`'s live in-game refusal is unaffected by
+  construction rather than by care.** That panel tells someone which key to press mid-fight and still
+  goes silent past level 15 rather than guess.
+
+  **The premise for the inference turned out to be outdated, and that is good news.** Udyr completes
+  cleanly today via op.gg's published priority, as do Yuumi, Aphelios, Jayce, Karma, Elise and
+  Nidalee. **No live champion reaches the inferred path.** It was verified by serving a synthetic
+  payload through the real component, not by finding a live case — it is a safety net for if op.gg's
+  publication goes missing, not something on screen today.
+
+### Known
+- **13% of champion/role pairs already display a sub-noise-floor rune on the shipped card** —
+  Lissandra SUP shows Magical Footwear off 105 of 9,457 games. `bestAboveFloor` falls back to the
+  most-played entry when nothing clears its floor, silently defeating the floor. Measured across 109
+  pairs while verifying the keystone work; **pre-existing and independent of it**. Not fixed here:
+  the fix changes the shipped recommendation on ~12% of pairs and there is no directive behind it.
+- `overlay-host/renderer/ingame.js` renders its own 18-column grid with hand-synced constants and
+  does not know about `inferredTail`. Out of a web change's blast radius, and it speaks during live
+  games.
+- The alternative-keystone card is unverified under a screen reader, at non-default rank brackets,
+  and with the reduced-motion toggle (argued from markup — no motion was added).
+
 ## [0.81.0] — 2026-07-29 — Tabs at every width, and three ingests that stop lying about failing
 
 ### Added

@@ -98,8 +98,13 @@ lib/buildSlotCap.ts            — 6-slot game-reality cap (see Hard rules below
 lib/patchMovers.ts             — Feature 4 win-rate-shift model (see Patch Movers above)
 lib/rankBrackets.ts            — RANK_BRACKETS (tier labels UNCONFIRMED against coachless's own UI — see Open items)
 lib/opgg.ts / skillOrderModel.ts — recommended skill order (network half / pure model half). The model REFUSES to
-                                  derive levels 16-18 rather than guess; `completed:false` means the source's 15
-                                  are all we know. Read skillOrderModel.ts's header before touching either.
+                                  DERIVE levels 16-18 rather than guess; `completed:false` means the arithmetic
+                                  did not resolve. Since 2026-07-29 a refusal ALSO carries `inferredTail` — the
+                                  same levels filled from the published max-priority order so the grid can read
+                                  as a complete 18 (user directive). It is a GUESS, kept in its own field and
+                                  never merged into `order`/`levels`/`completed`, so lib/nextSkill.ts's live
+                                  in-game refusal is untouched by it. Any UI rendering it must mark it visibly
+                                  inferred. Read skillOrderModel.ts's header before touching either.
 lib/nextSkill.ts               — PURE "which ability to level next" resolver for /compact's in-game panel. Takes a
                                   SkillOrderModel + live level + live ranks; every ambiguity returns an explicit
                                   refusal instead of a recommendation (see NextSkillRefusal). The live inputs come
@@ -116,6 +121,8 @@ migrations/                    — run via `node scripts/db-migrate.mjs`, coachb
   0014_mystats_build_adherence.sql    my_matches.{kills,deaths,assists,item_ids,primary_keystone,on_wpa_build,split}
   0017_otp.sql                    otp_accounts / otp_matches / otp_champion_cursor (one-trick pipeline)
 ```
+
+**Skill grid (one primitive, two fill rules — 2026-07-29).** `components/skillOrderGrid.ts` (pure transform + per-ability colour tokens) + `components/SkillGrid.tsx` (renderer) back BOTH skill-order surfaces: the Builds page's recommendation card (`components/hextech/SkillOrderCard.tsx`, via `buildRecommendedSkillGrid`) and `GameDetailSheet`'s per-game timeline. The component takes no view on completeness — the CALLER decides. A recommendation always fills 18; a per-game record shows exactly the levels that game reached and is NEVER padded (a 16-minute game shows 11 chips). Every cell carries provenance — `measured` (solid) / `derived` (tinted + solid hairline) / `inferred` (dashed) — and the three treatments must stay visually distinct. Q blue / W orange / E purple / R red, with the row's letter label always present so colour is never the only signal.
 
 Component-side helpers: `components/proAssets.ts`, `components/itemDetail.ts`/`runeDetail.ts`/`shardDetail.ts`/`summonerDetail.ts` (tap-to-detail, CDragon-sourced for runes — Gotcha f), `components/favoritesSync.ts`, `components/focusTrap.ts`, `components/useBodyScrollLock.ts`, `components/hextech/runesPage.ts`, `components/hextech/proConsensus.ts` (Pro Consensus card model — see below), `components/hextech/itemSetBody.ts` (LCU item-set export builder), `lib/favorites.ts`.
 

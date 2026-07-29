@@ -4,9 +4,10 @@ import { useEffect, useState } from "react";
 import type { RunesBlock, Pick as PickType, BuildResponse } from "@/lib/types";
 import type { LaneId } from "./heroContracts";
 import type { EntityKind } from "@/components/EntityDetailPopover";
-import { wpaClass, wpaText } from "@/components/StatBadge";
+import { wpaClass, wpaText, fmtSample } from "@/components/StatBadge";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import { buildRunesPageModel } from "./runesPage";
+import type { AltKeystone } from "./altKeystone";
 import { buildRuneApplyBody } from "./runeApplyBody";
 import { applyItemSetsForBuild } from "./itemSetsApply";
 import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/components/live/companionClient";
@@ -339,6 +340,87 @@ function SummonerTile({ spell, onOpenDetail }: SummonerTileProps) {
   );
 }
 
+/** "NOT PICKED — SCORED HIGHER": the keystone the engine built and the client
+ *  used to throw away (see altKeystone.ts for the trigger predicate and the
+ *  measurements behind it). Rendered ONLY when resolveAltKeystone returns
+ *  non-null; on the ~83% of champion/role pairs where it returns null this
+ *  component is never mounted and the card is byte-identical to before the
+ *  feature — no empty slot, no placeholder, no reserved height.
+ *
+ *  IT MUST NOT READ AS A RECOMMENDATION. Three things carry that, and none of
+ *  them is decorative:
+ *
+ *   1. The heading leads with NOT PICKED, not with the rune.
+ *   2. The frame is DASHED where the recommended keystone's ring is SOLID
+ *      teal — the only dashed border on the card, so it is visibly the odd one
+ *      out rather than a second equally-blessed option. Deliberately NOT
+ *      coloured with `good`/`bad`: those tokens are reserved for WPA/winrate
+ *      signal (tailwind.config.ts says so), and the WPA number inside already
+ *      spends `good` correctly via wpaClass.
+ *   3. The footnote states plainly that the build above is still the
+ *      recommendation, AND that the two WPA figures are separate readings —
+ *      coachless's per-rune WPA is a marginal contribution measured inside its
+ *      own rune page, so this surface must never invite the user to subtract
+ *      one from the other. Nothing here sums, diffs or bars the two numbers.
+ *
+ *  The tile is a button routing into the SAME rune-detail popover every other
+ *  rune on this card uses — "so i can decide to pick it or not" (user, 2026-07-29)
+ *  needs the rune's actual text, not just its score.
+ *
+ *  No motion is introduced: the only transforms are the hover/active ones the
+ *  card's existing RuneTile already uses. There is no entrance transition to
+ *  gate on `prefers-reduced-motion`, which is also why a tab switch to this
+ *  card stays a repaint (see BuildTabContent's panel note). */
+function AltKeystoneNote({
+  alt,
+  onOpenDetail,
+}: {
+  alt: AltKeystone;
+  onOpenDetail: (kind: EntityKind, id: number) => void;
+}) {
+  const { keystone, tree } = alt;
+  return (
+    <div className="mt-4 pt-4 border-t border-line/60">
+      <div className="mb-2">
+        <CardHeader>Not picked — scored higher</CardHeader>
+      </div>
+      <button
+        type="button"
+        onClick={() => onOpenDetail("rune", keystone.id)}
+        aria-label={`View details for ${keystone.name}, an alternative keystone in the ${tree.name} tree with WPA ${wpaText(
+          keystone.wpa
+        )} over ${keystone.occurrence.toLocaleString("en-US")} games. Not the recommended pick.`}
+        className={`group w-full flex items-center gap-3 text-left rounded-lg border border-dashed border-line-gold bg-panel2/60 px-3 py-2.5 hover:border-teal ${TAP_RING}`}
+      >
+        <span className="w-11 h-11 rounded-full bg-black/30 border border-line-gold overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform group-hover:scale-105">
+          <IconWithFallback
+            src={keystone.icon}
+            alt={keystone.name}
+            fallbackGlyph={keystone.name}
+            className="w-full h-full object-contain"
+            size={44}
+          />
+        </span>
+        <span className="flex-1 min-w-0">
+          <span className="block text-[11.5px] text-txt font-semibold leading-tight break-words">
+            {keystone.name}
+          </span>
+          <span className="block text-[10px] text-mut leading-tight mt-0.5">
+            {tree.name} · {fmtSample(keystone.occurrence)} games
+          </span>
+        </span>
+        <span className={`text-[13px] font-bold tabular-nums flex-shrink-0 ${wpaClass(keystone.wpa)}`}>
+          {wpaText(keystone.wpa)}
+        </span>
+      </button>
+      <p className="text-[10px] text-mut leading-snug mt-2">
+        Ranked below because its tree is played less. The build above is still the recommendation — each
+        WPA is measured inside its own rune page, so read these as two separate numbers, not a difference.
+      </p>
+    </div>
+  );
+}
+
 interface RunesSummonersCardProps {
   runes: RunesBlock;
   spells: PickType[];
@@ -359,6 +441,13 @@ interface RunesSummonersCardProps {
    *  either hides just this button, Apply runes is unaffected. */
   build?: BuildResponse;
   lane?: LaneId;
+  /** 2026-07-29: the keystone the engine ranked into a later variant and this
+   *  page discarded, when one qualifies — resolved ONCE at fetch time by
+   *  BuildTabContent (altKeystone.ts's resolveAltKeystone over the whole
+   *  /api/build array), never recomputed during render. Optional and
+   *  null-by-default on purpose: /compact renders this same card off
+   *  `variants[0]` alone and passes nothing, so that surface is unchanged. */
+  altKeystone?: AltKeystone | null;
 }
 
 export default function RunesSummonersCard({
@@ -369,6 +458,7 @@ export default function RunesSummonersCard({
   roleLabel,
   build,
   lane,
+  altKeystone,
 }: RunesSummonersCardProps) {
   const model = buildRunesPageModel(runes);
 
@@ -468,6 +558,15 @@ export default function RunesSummonersCard({
           </div>
         </div>
       </div>
+
+      {/* Full-width, BELOW the three rune columns rather than inside the
+          primary-tree cell. Two reasons, both measured rather than assumed:
+          the primary column is a ~180px half at 390px and cannot hold a rune
+          name + tree + WPA + sample on one line; and v0.63.2 measured ~155px
+          of dead space under this card's content at the `5fr_7fr` desktop
+          split, which this block occupies instead of adding to the card's
+          height. Nothing renders here when `altKeystone` is null. */}
+      {altKeystone && <AltKeystoneNote alt={altKeystone} onOpenDetail={onOpenDetail} />}
     </div>
   );
 }
