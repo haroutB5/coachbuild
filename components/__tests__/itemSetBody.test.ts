@@ -205,15 +205,70 @@ describe("buildItemSets — block set", () => {
     }
   });
 
-  it("collapses two blocks that resolve to the identical item set", () => {
-    const same = {
+  // ── Pro/OTP agreement is shown, not collapsed ────────────────────────────
+  //
+  // These use "Mid" rather than the file's usual "Bot" on purpose: Bot carries
+  // the ADC 6-full-item exception (buildSlotCap), so a 5-item consensus line
+  // pads from the shared cascade and two lines can converge through PADDING
+  // rather than through their own data. Mid's 5-full-items-plus-boots budget is
+  // filled exactly by these fixtures, so what the assertions see is the
+  // sources' own agreement or disagreement.
+
+  it("shows BOTH Pro and OTP blocks when they resolve to the same items, and says whose build it matches", () => {
+    // User directive 2026-07-29: "just put both item sets so i can see its the
+    // same for pro and otps". The old behaviour collapsed them to one block,
+    // which hid the agreement and was indistinguishable from having no
+    // one-trick data at all — the reader saw a missing block, not a consensus.
+    const consensus = {
       items: [3031, 3036, 3095, 3072, 3046].map((itemId, i) => ({ itemId, share: 0.9 - i * 0.1 })),
       boots: [{ itemId: 3006, share: 0.8 }],
     };
-    const sets = buildItemSets(CHAMP, "Bot", baseBuild(baseItems()), same, baseItemMetaMap(), same);
-    const lineBlocks = sets[0].blocks.filter((b) => b.type !== "Starting");
-    const keys = lineBlocks.map((b) => b.items.map((i) => i.id).sort().join(","));
-    expect(new Set(keys).size).toBe(keys.length);
+    // A WPA build made of entirely different items, so the OTP block collides
+    // with Pro rather than with WPA and the label names the interesting one.
+    const wpaItems = baseItems({
+      boots: pick(3157),
+      first: pick(3020),
+      second: pick(3153),
+      third: pick(3200),
+      fourthPlus: [pick(9001), pick(9999)],
+    });
+    const sets = buildItemSets(CHAMP, "Mid", baseBuild(wpaItems), consensus, baseItemMetaMap(), consensus);
+
+    const types = blockTypes(sets);
+    expect(types).toContain("Pro build");
+    expect(types).toContain("OTP build (same as Pro build)");
+
+    // The claim in that label has to be true.
+    const pro = findBlock(sets, "Pro build")!;
+    const otp = findBlock(sets, "OTP build (same as Pro build)")!;
+    expect(otp.items.map((i) => i.id).sort()).toEqual(pro.items.map((i) => i.id).sort());
+  });
+
+  it("does NOT claim sameness when the two lines differ by one item", () => {
+    // Near-duplicates are still both shown — that is the point of the change —
+    // but "(same as Pro build)" would be a false claim about the contents, and
+    // a block's label is a claim. The reader compares the two themselves.
+    const pro = {
+      items: [3031, 3036, 3095, 3072, 3046].map((itemId, i) => ({ itemId, share: 0.9 - i * 0.1 })),
+      boots: [{ itemId: 3006, share: 0.8 }],
+    };
+    const otp = {
+      items: [3031, 3036, 3095, 3072, 3153].map((itemId, i) => ({ itemId, share: 0.9 - i * 0.1 })),
+      boots: [{ itemId: 3006, share: 0.8 }],
+    };
+    const wpaItems = baseItems({
+      boots: pick(3157),
+      first: pick(3020),
+      second: pick(9001),
+      third: pick(3200),
+      fourthPlus: [pick(9999), pick(8888)],
+    });
+    const sets = buildItemSets(CHAMP, "Mid", baseBuild(wpaItems), pro, baseItemMetaMap(), otp);
+
+    const types = blockTypes(sets);
+    expect(types).toContain("Pro build");
+    expect(types).toContain("OTP build");
+    expect(types.some((t) => t.startsWith("OTP build (same as"))).toBe(false);
   });
 
   it("keeps the champ-scoped replace prefix", () => {

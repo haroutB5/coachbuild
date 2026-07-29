@@ -230,12 +230,27 @@ const SITUATIONAL_CAP = 6;
 //   otp  — what the champion's one-tricks actually built
 //   gem  — what almost nobody builds but wins when they do (selectHiddenGemPicks)
 //
-// Rank order is collision priority for dedupeLineBlocks, which only collapses
-// IDENTICAL item sets: when pro and otp converge the user sees one block, and
-// the surviving label is the more informative one. `gem` is last on purpose —
-// if the hidden gem equals a headline build it was never hidden, and the block
-// should disappear rather than repeat.
+// Rank order is collision priority for dedupeLineBlocks. `gem` is last on
+// purpose — if the hidden gem equals a headline build it was never hidden, and
+// the block should disappear rather than repeat.
+//
+// wpa/pro/otp are NEVER dropped for duplicating each other (user directive
+// 2026-07-29: "just put both item sets so i can see its the same for pro and
+// otps"). Each names a SEPARATELY SOURCED answer to the same question, so two
+// of them landing on the same items is itself the finding — the pros and the
+// one-tricks agree with the model — and collapsing them hides it. Worse, the
+// collapse is indistinguishable from having no data for that source: the reader
+// sees a missing block, not a consensus. So both are shown, and the later one
+// says whose build it matches (see `sameAs`), which is what makes the agreement
+// legible rather than merely repeated.
 type LineFamily = "wpa" | "pro" | "otp" | "gem";
+
+/** Families whose label is a claim about a SOURCE rather than about a shape,
+ *  and which therefore still earn a block when their items duplicate an earlier
+ *  one. `gem` is the only family outside this set, and has to be: it is defined
+ *  as what almost nobody builds, so a gem equal to a headline build is
+ *  self-contradictory and the honest move is to not show it at all. */
+const SOURCE_CLAIM_FAMILIES: ReadonlySet<LineFamily> = new Set<LineFamily>(["wpa", "pro", "otp"]);
 
 const FAMILY_KEEP_RANK: Record<LineFamily, number> = {
   wpa: 0,
@@ -252,18 +267,26 @@ interface LineBlock {
   /** Position in canonical emission order — preserved for the surviving set. */
   emit: number;
   line: Candidate[];
+  /** Set when this block's item set is EXACTLY an earlier block's, naming that
+   *  block. Rendered into the title so the panel states the agreement instead
+   *  of leaving two identical-looking blocks unexplained. Never set on a
+   *  near-duplicate: see dedupeLineBlocks. */
+  sameAs?: string;
 }
 
 function idSetKey(line: Candidate[]): string {
   return Array.from(new Set(line.map((c) => c.id))).sort((a, b) => a - b).join(",");
 }
 
-function idOrderKey(line: Candidate[]): string {
-  return line.map((c) => c.id).join(",");
-}
-
 /** How many items a block may carry that a higher-priority block does not,
- *  before it counts as a near-duplicate and is dropped.
+ *  before it counts as a near-duplicate.
+ *
+ *  SCOPE, since 2026-07-29: being a near-duplicate now only removes a `gem`
+ *  block. For wpa/pro/otp it decides nothing about visibility — they are always
+ *  shown — and only the stricter EXACT-set test drives the "(same as X)" label.
+ *  The reasoning below is why the threshold is 1 and is unchanged; what changed
+ *  is that "these two are alike" stopped meaning "hide one of them" for the
+ *  three source-claim families.
  *
  *  1 means "shares all but one item". User directive 2026-07-28, from a live
  *  report on Viktor Mid that the OTP and Hidden gem blocks "look too much like
@@ -308,12 +331,14 @@ const MAX_UNIQUE_ITEMS_FOR_NEAR_DUPLICATE = 1;
  *  four surviving families name a distinct SOURCE, so two of them landing on
  *  the same item set genuinely is the same recommendation twice, in any order.
  *
- *  KNOWN AND ACCEPTED: boots count as ordinary items here, so two lines that
- *  differ ONLY in their boot collapse. That is a real build difference being
- *  discarded. It is kept this way because the directive was explicitly "shares
- *  5 or 6 of 6 → drop", and because a boots-only difference is exactly what the
- *  reader was calling a duplicate. Revisit by excluding boots from `uniqueTo`
- *  if a boots-only split ever turns out to be worth its own block. */
+ *  BOOTS: they count as ordinary items here, so two lines differing ONLY in
+ *  their boot register as near-duplicates. This used to discard a real build
+ *  difference. Since pro/otp are no longer dropped it no longer can, except on
+ *  a `gem` block — and a gem whose only distinction from the WPA build is its
+ *  boot is not a hidden gem in any useful sense, so collapsing it there is the
+ *  wanted behaviour rather than a tolerated loss. A boots-only pro/OTP split now
+ *  renders as two blocks with no "(same as)" label, because the sets are not
+ *  identical, which is exactly how the reader spots the difference. */
 function duplicateBlocks(kept: LineBlock, cand: LineBlock): boolean {
   return uniqueTo(cand.line, kept.line) <= MAX_UNIQUE_ITEMS_FOR_NEAR_DUPLICATE;
 }
@@ -330,19 +355,48 @@ function uniqueTo(line: Candidate[], other: Candidate[]): number {
   return distinct.filter((id) => !seen.has(id)).length;
 }
 
-/** Collapse duplicate build-line blocks across ALL families, keeping whichever
- *  comes first in canonical emission order. Deterministic: `keep` is a total
- *  order (family rank, then the emission index as a final tiebreak), and the
- *  survivors are returned in emission order so the block layout the user sees
- *  never depends on the dedup's internal traversal. */
+/** Resolve duplicate build-line blocks across ALL families against whichever
+ *  comes first in canonical emission order.
+ *
+ *  Only `gem` is ever REMOVED (see SOURCE_CLAIM_FAMILIES). A wpa/pro/otp block
+ *  that duplicates an earlier one is KEPT and tagged with `sameAs`, so the
+ *  panel shows the agreement between two independent sources instead of
+ *  swallowing one of them.
+ *
+ *  `sameAs` is set only on an EXACT item-set match, never on a near-duplicate.
+ *  A line that differs by one item is not the same build, and this module's
+ *  standing rule is that a block's label is a claim about its contents — so
+ *  "same as Pro build" has to actually be true. Near-duplicates simply render
+ *  side by side and let the reader see the one-item difference for themselves,
+ *  which is the whole point of showing both.
+ *
+ *  Deterministic: `keep` is a total order (family rank, then the emission index
+ *  as a final tiebreak), and the survivors are returned in emission order so
+ *  the block layout the user sees never depends on the dedup's internal
+ *  traversal. `type` is never mutated, so a `sameAs` label always names a
+ *  block's ORIGINAL title and can never nest into
+ *  "OTP build (same as Pro build (same as WPA build))". */
 function dedupeLineBlocks(blocks: LineBlock[]): LineBlock[] {
   const byKeep = [...blocks].sort((x, y) => x.keep - y.keep || x.emit - y.emit);
   const kept: LineBlock[] = [];
   for (const cand of byKeep) {
-    if (kept.some((k) => duplicateBlocks(k, cand))) continue;
-    kept.push(cand);
+    const clash = kept.find((k) => duplicateBlocks(k, cand));
+    if (!clash) {
+      kept.push(cand);
+      continue;
+    }
+    if (!SOURCE_CLAIM_FAMILIES.has(cand.family)) continue;
+    const identical = idSetKey(clash.line) === idSetKey(cand.line);
+    kept.push(identical ? { ...cand, sameAs: clash.type } : cand);
   }
   return kept.sort((x, y) => x.emit - y.emit);
+}
+
+/** The title the shop panel actually shows. Parentheses rather than a dash
+ *  because the client renders these titles in a narrow column and a bracketed
+ *  suffix stays readable when it wraps. */
+function blockTitle(b: LineBlock): string {
+  return b.sameAs ? `${b.type} (same as ${b.sameAs})` : b.type;
 }
 
 function slugPart(s: string): string {
@@ -1023,8 +1077,10 @@ export function buildItemSets(
     );
   }
 
-  // Collapse any two blocks that resolved to the IDENTICAL item set (pro and
-  // OTP converging is the common case). Emission order is preserved.
+  // Resolve blocks that resolved to the same item set (pro and OTP converging
+  // is the common case). Since 2026-07-29 that no longer removes a pro or OTP
+  // block — both are shown, and the later one is labelled with whose build it
+  // matches. Only Hidden gem is still dropped. Emission order is preserved.
   const survivors = dedupeLineBlocks(lines);
 
   // Starting stays a SLOT, not one of the four build categories: HARD RULE 2
@@ -1032,7 +1088,7 @@ export function buildItemSets(
   // directive, and keeping the starter in its own labelled block is the only
   // way to honour it while shipping exactly four build lines.
   const blocks: ItemSetBlock[] = [{ type: "Starting", items: [itemRef(items.starter.id)] }];
-  for (const b of survivors) blocks.push({ type: b.type, items: toItemRefs(b.line) });
+  for (const b of survivors) blocks.push({ type: blockTitle(b), items: toItemRefs(b.line) });
 
   return [{ ...baseSet(champ, roleLabel), blocks }];
 }

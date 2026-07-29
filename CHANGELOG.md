@@ -2,6 +2,29 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.74.0] — 2026-07-29 — Show the Pro and OTP builds even when they agree
+
+### Changed
+- **When the pros and the one-tricks land on the same items, you now see both blocks instead of
+  one.** Previously the shop panel collapsed near-identical build lines and kept only the
+  higher-priority label. That was the right call for Hidden gem and the wrong call here: two blocks
+  that name a SOURCE are answering the same question from independent evidence, so them agreeing is
+  the finding, not redundancy. Collapsing also made agreement look identical to missing data — the
+  reader saw an absent OTP block and could not tell whether the one-tricks agreed or whether we
+  simply had nothing on them.
+
+  The later block now says whose build it matches, e.g. **`OTP build (same as Pro build)`**. That
+  label appears only on an EXACT item-set match. Two lines differing by even one item render as two
+  plain blocks with no claim of sameness, because a block's label is a claim about its contents and
+  "same as" has to be true.
+
+- **Hidden gem is unchanged and still collapses.** It has to: it is defined as what almost nobody
+  builds, so a gem equal to a headline build is self-contradictory and is better not shown at all.
+
+### Notes
+- A boots-only difference between the Pro and OTP lines now survives as two blocks rather than being
+  discarded, since near-duplicates are no longer dropped for those families.
+
 ## [0.73.1] — 2026-07-29 — Don't quote build percentages off seven games
 
 ### Fixed
