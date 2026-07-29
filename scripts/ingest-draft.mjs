@@ -16,6 +16,20 @@
 // dominance probes (top/jungle/mid/adc/support) check out. See
 // lib/draft/ugg.ts's header comment and HANDOFF-engy.md for the full log.
 //
+// TIMEOUT RETRY (2026-07-29): the 2026-07-27 run errored on exactly 12
+// champions, all "curl transport failed (exit 28)" — a curl timeout, not a
+// rejection. MEASURED live before assuming a cause: 5 of the 12 (142, 147,
+// 164, 233, 234) fetched cleanly in 0.6-1.3s each (2.5-3.2MB payloads)
+// against curl's own 60s ceiling — i.e. NOT unusually large or slow blobs,
+// so the "big matchup file, needs a longer timeout" theory doesn't hold.
+// This is a transient blip (one dropped connection/hung DNS lookup out of
+// ~340 sequential curl calls over a long walk), which a bounded retry
+// fixes and a longer timeout would not (a longer ceiling doesn't help a
+// genuinely hung connection, it just makes a truly-stuck one block
+// longer before failing). uggCurlTransport below is wrapped with
+// lib/retryTransport.ts's retryWithBackoff (2 retries, 5s/15s) — see
+// HANDOFF-engo.md for the measurement log.
+//
 // Run: npm run ingest:draft
 import { loadEnvLocal } from "./_env.mjs";
 import { curlTransportWithHeaders } from "./_curl-transport.mjs";
@@ -25,11 +39,20 @@ loadEnvLocal();
 const { runDraftIngest } = await import("../lib/draft/ingest.ts");
 const { getAllChampions } = await import("../lib/staticData.ts");
 const { UGG_REFERER } = await import("../lib/draft/ugg.ts");
+const { withRetryTransport } = await import("../lib/retryTransport.ts");
 
-/** curlTransportWithHeaders, pre-bound with u.gg's required Referer. */
-function uggCurlTransport(url) {
-  return curlTransportWithHeaders(url, { Referer: UGG_REFERER });
-}
+/** curlTransportWithHeaders, pre-bound with u.gg's required Referer, and
+ *  wrapped with a bounded retry-with-backoff for the transient curl-level
+ *  failures (exit 28 timeouts, DNS blips) seen in production — see the
+ *  TIMEOUT RETRY note above for the live measurement backing 5s/15s. */
+const uggCurlTransport = withRetryTransport(
+  (url) => curlTransportWithHeaders(url, { Referer: UGG_REFERER }),
+  {
+    delaysMs: [5_000, 15_000],
+    onRetry: (attempt, err, delayMs) =>
+      console.log(`  [u.gg] transient failure (${err.message}); retry ${attempt} in ${delayMs / 1000}s`),
+  }
+);
 
 // Known-lane-dominant champions for the "role indices via known-champ-max-
 // sample" empirical assertion (plan §9): a champion played overwhelmingly in

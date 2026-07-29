@@ -877,7 +877,38 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
           BUILD tab's column proportions as well as its section order. Below
           `lg` this wrapper is a plain block and the children stack in DOM
           order. */}
-      <div className="lg:grid lg:grid-cols-[5fr_7fr] lg:gap-x-10 lg:items-start">
+      {/* 2026-07-29 — THE SPLIT MOVED FROM `lg` TO `xl`. It was OVERFLOWING at
+          the `lg` boundary, and had been since v0.63.2 shipped it; the page
+          wrapper's `overflow-x-clip` (app/page.tsx) is why nobody saw it, and
+          why the document-level scrollWidth check that usually catches this
+          reported zero. It surfaced now because PRO became a tab of its own and
+          got looked at directly at 1024px.
+
+          MEASURED on Ahri mid at 1024x900. The card is 728px there, so the
+          content box is 688px, but the two tracks resolved to 385.0px + 307.5px
+          + 40px gap = 732.5px — 44px wider than the box. The 5fr track is the
+          cause: an `fr` track's automatic minimum is its MIN-CONTENT, and the
+          rune group's min-content is 385px (three `auto` tile columns plus two
+          32px gaps), well above the 287px its 5/12 share would give. So the
+          left track refuses to shrink, the right track is squeezed to 307px,
+          and the Starting/Items rows spill out of the card — the percentages
+          and fractions on the right were literally cut off mid-glyph.
+
+          `min-w-0` on the children is the usual answer and is the WRONG one
+          here: it would let the track drop under min-content, which moves the
+          clipping inside the rune group instead of removing it. The honest fix
+          is to not attempt two columns at a width that cannot hold them. This
+          split was designed and measured against a ~1138px card; at `xl` the
+          card is 986px (tracks 401/561 at the gap below), which clears the
+          385px floor, and at 1440px+ it is back to the width it was tuned on.
+          Below `xl` the children stack, which is exactly what this card did at
+          every width before v0.63.2 and is known-good.
+
+          The gap is 24px rather than 40px from `xl` for the same reason: at the
+          1280 boundary the extra 16px is the difference between comfortable and
+          9px from overflowing again. Above ~1440px neither number is load-
+          bearing. */}
+      <div className="xl:grid xl:grid-cols-[5fr_7fr] xl:gap-x-6 xl:items-start">
         <div>
         {(() => {
         // Local consts (not `model.keystone` inline) so TS's null-narrowing
@@ -916,7 +947,13 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
         // evenly distributed, not stretched-then-abandoned. Below `lg`
         // (including the existing md/tablet range) this is untouched — same
         // 1.5fr/1.1fr/auto stretch as before.
-        <div className="grid grid-cols-1 md:grid-cols-[1.5fr_1.1fr_auto] lg:grid-cols-[auto_auto_auto] lg:justify-start gap-x-8 gap-y-5 mb-1">
+        // 2026-07-29: the `auto_auto_auto` override moved `lg` -> `xl` with the
+        // outer split, and must stay pinned to it. It exists because this group
+        // sits in a NARROWER COLUMN than the full card row, which is only true
+        // where that split is actually applied. Between `lg` and `xl` the card
+        // is full-width again, so the md fr-stretch is right there — the same
+        // behaviour this card had at every width before v0.63.2.
+        <div className="grid grid-cols-1 md:grid-cols-[1.5fr_1.1fr_auto] xl:grid-cols-[auto_auto_auto] xl:justify-start gap-x-8 gap-y-5 mb-1">
           {hasPrimaryCol && (
             <div>
               {/* v0.29.0: the page is now conditioned on the modal keystone's
@@ -1075,7 +1112,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
             heading. 20px matches the rune grid's own `gap-y-5` row rhythm, so
             the mobile stack keeps one spacing scale throughout. At `lg`+ these
             are side-by-side grid columns and the margin is removed. */}
-        <div className="mt-5 lg:mt-0">
+        <div className="mt-5 xl:mt-0">
           {/* 2026-07-22 — starters render in their OWN labeled slot, entirely
               separate from the Items block below (hard user directive: a
               starter must never render as a completed item, "keep it as a
@@ -1132,7 +1169,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
           )}
 
           {buildSlots.length > 0 && (
-            <div className="mb-4 lg:mb-0">
+            <div className="mb-4 xl:mb-0">
               <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">Items</p>
               {/* Rows, not a wrapping tile grid. A grid of six equal tiles says
                   "these six go together", and measured on stored games whole

@@ -2,12 +2,45 @@
 // lib/pro/riot.ts — typed Riot API client. Every call is paced through
 // pacer.ts (shared process-wide queue) and requires RIOT_API_KEY — throws
 // RiotUnavailableError up front (before consuming a pacer slot) when absent.
+//
+// ── 429 HANDLING (2026-07-29) ───────────────────────────────────────────────
+// This module used to discard the response headers entirely, which meant Riot
+// was telling us how full the bucket was and when to come back and we were
+// answering by firing again 1.3s later. See lib/pro/pacer.ts's header for the
+// measured failure. Two things happen here now, and the order matters:
+//
+//   * 429  -> `Retry-After` is AUTHORITATIVE. It becomes a pacer hold, so every
+//             call in this process (not just the retry) waits it out, and the
+//             call is retried up to MAX_RATE_LIMIT_RETRIES times AFTER the
+//             stated delay. When the header is absent we fall back to a full
+//             2-minute window rather than to a guess: `x-app-rate-limit` is
+//             `100:120`, so one whole window is the shortest delay we can prove
+//             clears the bucket.
+//   * else -> the live `x-app-rate-limit-count` / `x-method-rate-limit-count`
+//             are fed back to the pacer, which holds BEFORE the cap is reached
+//             rather than after. This is the part that catches a second
+//             spender (a Vercel route on the same key) while there is still
+//             headroom left to give up.
+//
+// A retry costs a request, so it is bounded and reserved for 429 alone. Every
+// other status still fails the call on the first attempt exactly as before.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { pacedCall } from "./pacer";
+import { holdPacer, observeRateLimitBuckets, pacedCall } from "./pacer";
+import { parseRateBuckets, parseRetryAfterSec, type RateBucket } from "./rateLimits";
 import { RiotUnavailableError } from "./errors";
 import { fetchWithTimeout } from "../fetchTimeout";
 import type { RiotAccountDto, RiotMatch, RiotTimeline } from "./types";
+
+/** Attempts AFTER the first for a 429 specifically. Each one waits out the
+ *  server-stated delay first, so 2 is "give Riot two chances to mean it"
+ *  without turning a sustained rate limit into an unbounded hammer. */
+export const MAX_RATE_LIMIT_RETRIES = 2;
+
+/** Hold applied to a 429 that arrives with NO Retry-After. One full
+ *  `x-app-rate-limit` window (100:120) — the shortest delay that provably
+ *  clears the bucket when the server declines to state one. */
+export const DEFAULT_429_HOLD_SEC = 120;
 
 function requireKey(): string {
   const key = process.env.RIOT_API_KEY;
@@ -20,20 +53,88 @@ function requireKey(): string {
  *  loops) should catch this specifically rather than treating it as fatal. */
 export class RiotRequestError extends Error {
   status: number;
-  constructor(url: string, status: number, statusText: string) {
+  /** Seconds Riot asked us to wait, or null when it did not say. Null is NOT
+   *  "zero" — a caller must supply its own conservative default. */
+  retryAfterSec: number | null;
+  /** `x-rate-limit-type`: "application" | "method" | "service", or null. */
+  limitType: string | null;
+  constructor(
+    url: string,
+    status: number,
+    statusText: string,
+    meta: { retryAfterSec?: number | null; limitType?: string | null } = {}
+  ) {
     super(`riot ${url} -> ${status} ${statusText}`);
     this.name = "RiotRequestError";
     this.status = status;
+    this.retryAfterSec = meta.retryAfterSec ?? null;
+    this.limitType = meta.limitType ?? null;
   }
+}
+
+/** True for the one status this module retries. Exported so ingest loops can
+ *  classify a caught error the same way rather than re-deriving `=== 429`. */
+export function isRateLimited(err: unknown): err is RiotRequestError {
+  return err instanceof RiotRequestError && err.status === 429;
+}
+
+/** Both bucket families Riot reports, joined on window length. The method
+ *  buckets are included because a per-endpoint limit can be exhausted while the
+ *  app-wide one still looks healthy. */
+export function readRateBuckets(headers: Headers): RateBucket[] {
+  return [
+    ...parseRateBuckets(headers.get("x-app-rate-limit"), headers.get("x-app-rate-limit-count")),
+    ...parseRateBuckets(
+      headers.get("x-method-rate-limit"),
+      headers.get("x-method-rate-limit-count")
+    ),
+  ];
+}
+
+async function riotAttempt<T>(url: string, key: string): Promise<T> {
+  const res = await fetchWithTimeout(url, { headers: { "X-Riot-Token": key } });
+
+  if (!res.ok) {
+    const err = new RiotRequestError(url, res.status, res.statusText, {
+      retryAfterSec: parseRetryAfterSec(res.headers.get("retry-after")),
+      limitType: res.headers.get("x-rate-limit-type"),
+    });
+    if (res.status === 429) {
+      // Retry-After wins outright. Deriving a hold from the count headers here
+      // too would silently override the server's own statement with our
+      // arithmetic, and holding for a full window on every 429 would make the
+      // Retry-After path dead code that nothing exercises.
+      holdPacer(1000 * (err.retryAfterSec ?? DEFAULT_429_HOLD_SEC));
+    } else {
+      // A 404/5xx still carries the live bucket counts, and it still SPENT a
+      // request. Dropping the reading here would blind the closed loop for
+      // exactly as long as a run of failures lasts — which is when the budget
+      // is most likely to be under pressure.
+      observeRateLimitBuckets(readRateBuckets(res.headers));
+    }
+    throw err;
+  }
+
+  observeRateLimitBuckets(readRateBuckets(res.headers));
+  return res.json() as Promise<T>;
 }
 
 async function riotFetch<T>(url: string): Promise<T> {
   const key = requireKey();
-  return pacedCall(async () => {
-    const res = await fetchWithTimeout(url, { headers: { "X-Riot-Token": key } });
-    if (!res.ok) throw new RiotRequestError(url, res.status, res.statusText);
-    return res.json() as Promise<T>;
-  });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await pacedCall(() => riotAttempt<T>(url, key));
+    } catch (err) {
+      if (isRateLimited(err) && attempt < MAX_RATE_LIMIT_RETRIES) {
+        // The hold was applied inside the attempt, so the next pacedCall cannot
+        // start until the server-stated delay has elapsed — there is
+        // deliberately no sleep here, because the wait belongs to the whole
+        // process's queue, not to this one call.
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 /** Fallback PUUID resolution when the lolpros-supplied PUUID doesn't work

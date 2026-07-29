@@ -2,6 +2,84 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.81.0] — 2026-07-29 — Tabs at every width, and three ingests that stop lying about failing
+
+### Added
+- **Build / Pro / OTP are tabs on desktop too.** They already existed below `lg` and were switched
+  off above it — the tab strip was `lg:hidden` and every section escaped its own gate through
+  `hidden lg:block`, so a wide screen rendered all five sections as one scroll. That was a
+  deliberate earlier spec ("desktop keeps the current single-scroll layout"); the user reversed it.
+  The state is renamed off `mobile*`, which had become a lie, and the comment asserting the old spec
+  is replaced rather than left standing.
+
+  The accessibility premise died with the change and was rebuilt, not patched: five gated cards
+  became **three real tabpanels**, one per tab. The previous markup had three panels claiming a
+  single tab and two `aria-controls` pointing at nothing — invisible while the tablist was removed
+  from the a11y tree at `lg`, load-bearing the moment it is not. `HextechTabs` gained roving
+  tabindex and Left/Right/Home/End, so the tablist is one tab stop instead of three.
+
+  **PRO needed no reflow and that is measured, not assumed** — it already spanned full width with
+  its own tuned split, screenshot-confirmed at 1920. **OTP got a `7fr_5fr` composition**, build left
+  and runes/summoners/skill as a right rail. Deliberately not the runes-left house style: this card
+  is a profile whose headline is the build the player actually played, and runes-left would either
+  bury that on mobile or put visual order at odds with focus order. The BUILD tab's desktop layout
+  is untouched.
+- **The featured one-trick's name links to their OP.GG profile.** Canonical
+  `https://op.gg/lol/summoners/{region}/{name}-{tag}` (verified 200; the two obvious alternatives
+  308 to it, so the redirect is not relied on). The region is the trap and is handled as one: the
+  API returns a Riot PLATFORM id (`EUW1`, `NA1`) and OP.GG wants a slug that is **not** its
+  lowercase — `EUN1`→`eune`, `LA1`→`lan`, `OC1`→`oce`. All 17 mappings live in a pure module with
+  tests. An unknown or null platform renders the name as plain text with **no link at all**; a dead
+  link to a stranger's profile is worse than none.
+
+### Fixed
+- **The solo-queue sweep's 429s were structured, and the pacer was running blind.** Three bursts of
+  exactly five, 1–2s apart inside a burst and exactly 60s between bursts — not the shape a steady
+  process makes alone. Measured over the failing 12:20 run: ~91 calls per 120s against a `100:120`
+  cap, so the 1.3s floor was working. The defect was that `riotFetch` **discarded every response
+  header** — `Retry-After`, `X-App-Rate-Limit-Count` — so the pacer ran open-loop at 92% of a ceiling
+  it never measured, and a 429 changed nothing: it threw, the caller moved on, and the same fixed
+  clock fired again 1.3s later into a bucket Riot had just said was empty. That is how one overshoot
+  became five, which is the path to a suspended key.
+
+  `Retry-After` is now honoured and authoritative (absent → a full 120s window, never a guess). The
+  pacer reads `x-app-rate-limit-count` off every response and holds *before* the cap. Every
+  misread-header path degrades to slower, never faster, and that is tested in both directions.
+  `ingestMatches` no longer stamps `last_fetched_at` on an account it never examined.
+
+  **The second spender was not identified and was not guessed at.** Not the priority walk, not the
+  scheduled OTP job — both ruled out on timestamps. Leading suspicion is the Vercel routes on the
+  same key, which `riotYield.ts` structurally cannot see. Confirming needs Vercel logs; probing
+  spends the key.
+- **Draft ingest's 12 missing champions were a network blip, not slow downloads.** All five flagged
+  ids were live-curled against the exact failing URL and returned 2.5–3.2MB in 0.6–1.3s against a
+  60s ceiling — so raising the timeout would have fixed nothing. A bounded retry (2 attempts, 5s and
+  15s) now wraps the transport at every call site. Proved end to end through the real pipeline:
+  champion 142 fetched in 234ms and decoded to 592 rows across all five roles, 0 skipped.
+- **Pro-stage's single 10s Cloudflare retry was not enough** — 2 of 4 scheduled runs still failed
+  today. Now 2 retries at 15s and 45s, still filtered to `CargoRequestError` only so raw network
+  failures propagate immediately, and still obeying the mandated api.php cooldown contract. The two
+  comments claiming "failures are rare enough to propagate immediately" are marked false with the
+  evidence rather than left asserting it.
+- **All three sweeps stop reporting failure for runs that recovered.** A graded outcome replaces
+  "any error means exit 1", which made a healthy run indistinguishable from a broken one in Task
+  Scheduler. The real 12:20 match run (1445 ok / 200 skipped / 15 errors) is now exit 0 with a
+  printed reason; a rate-limit abort or >5% errors still exits 1.
+- **`ProConsensusCard` has been overflowing its own card by 44px at `lg` since v0.63.2.**
+  `overflow-x-clip` on the page wrapper hid it from every `scrollWidth` check, so the only symptom
+  was percentages cut off mid-glyph at 1024px. Its two-column split moves `lg` → `xl`. Found while
+  screenshotting the tab work, not reported.
+
+### Known
+- **The Riot rate-limit fix has never seen a live 429.** The priority walk held the key throughout,
+  so zero live Riot calls were made and the count-header loop has never read a real
+  `x-app-rate-limit-count`. Unit-tested in both directions; unproven against the wire.
+- **The Cloudflare retry has never seen a live challenge** — every CargoExport probe succeeded on
+  the day it was written.
+- `INVESTIGATION-ziggs-wpa.md` documents a separate open finding: the engine builds three rune
+  setups and the client renders only the first, hiding a higher-WPA adopted keystone on **83 of 500**
+  champion/role pairs. No behaviour changed here; the fix is a product decision.
+
 ## [0.80.0] — 2026-07-29 — A middle tier, and a fetcher that can actually reach the bar
 
 ### Added

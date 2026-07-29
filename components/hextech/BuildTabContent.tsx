@@ -10,6 +10,13 @@ import ProConsensusCard from "./ProConsensusCard";
 import FeaturedOtpCard from "./FeaturedOtpCard";
 import SkillOrderCard from "./SkillOrderCard";
 import HextechTabs from "./HextechTabs";
+import {
+  BUILD_TAB_OPTIONS,
+  DEFAULT_BUILD_TAB,
+  buildTabId,
+  buildTabPanelId,
+  type BuildTab,
+} from "./buildTabLayout";
 import { versionFromPatch } from "@/components/proAssets";
 import ItemDetailPopover from "@/components/ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "@/components/EntityDetailPopover";
@@ -118,11 +125,14 @@ function CardSkeleton({ className = "" }: { className?: string }) {
 // that column would reopen the exact height-matching problem that fix closed.
 // A dedicated full-width row is simpler and keeps both existing columns
 // untouched.
-// `otp` (2026-07-28) is a second full-width row directly under `pro`, same
-// shape for the same reason: the OTP card renders the identical wide
-// grid internally (see ProConsensusCard's lg:grid-cols-[5fr_7fr] body), so
-// giving it its own full-width area keeps both consensus cards visually
-// identical instead of squeezing one into a column.
+// 2026-07-29 (DESKTOP TABS) — `pro` and `otp` ARE NO LONGER IN THIS TEMPLATE.
+// They used to be two more full-width rows below the two-column area, because
+// desktop rendered all five sections as one page. Build/Pro/OTP are now the
+// navigation at every width (user directive: "I dont want them all in a single
+// long page"), so each tab owns its own panel and this grid describes the BUILD
+// tab alone: RUNES beside ITEM BUILD, SKILL ORDER full-width beneath. That is
+// byte-for-byte the composition desktop already showed for those three cards —
+// the change is what no longer FOLLOWS them, not how they sit.
 // 2026-07-29 (mobile tab void fix): below `lg` this is a FLEX COLUMN, not a
 // grid, and the named-area template is scoped to `lg:` only.
 //
@@ -147,39 +157,59 @@ function CardSkeleton({ className = "" }: { className?: string }) {
 //
 // The children keep their unprefixed `[grid-area:*]` classes: those are
 // grid-item properties and are inert on a flex item, and mobile DOM order
-// (runes, itembuild, skillorder, pro, otp) already matches the old mobile
-// template exactly, so nothing moves. At `lg`+ `lg:grid` restores the grid and
-// the areas apply as before — the desktop composition is untouched.
+// (runes, itembuild, skillorder) already matches the old mobile template
+// exactly, so nothing moves. At `lg`+ `lg:grid` restores the grid and the areas
+// apply as before — the desktop composition is untouched.
+//
+// The void this comment describes cannot recur in the shape it took, because
+// the three panels are SIBLINGS of this grid now rather than cells inside it:
+// each tab's panel is its own element, and a hidden one is `display:none` on a
+// `space-y` parent, which contributes no line and no gap. The row-template
+// reasoning is kept anyway — it is still what governs THIS grid's own three
+// cards, all of which are visible together on the BUILD tab at every width.
 const BUILD_GRID_CLASS =
-  "flex flex-col gap-5 lg:grid lg:grid-cols-[5fr_7fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_itembuild'_'skillorder_skillorder'_'pro_pro'_'otp_otp']";
+  "flex flex-col gap-5 lg:grid lg:grid-cols-[5fr_7fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_itembuild'_'skillorder_skillorder']";
 
-// Mobile-only BUILD|PRO segmented control (peak usage is a 30s champ select —
-// the pre-existing shape here was one ~3,000px scroll: Runes -> Starting ->
-// Support -> Core -> Optimized -> Situational -> Pro Consensus). `lg:hidden`
-// below matches BUILD_GRID_CLASS's own breakpoint exactly: below `lg` this
-// tab renders one column at a time; at `lg`+ the grid already reflows into
-// the existing 2-column desktop composition and the control disappears
-// entirely, per spec ("desktop keeps the current single-scroll layout").
-// "otp" added 2026-07-28. It gets its OWN tab rather than sharing "pro":
-// pros and one-tricks answer different questions ("what does the meta's best
-// execution look like" vs "what does the person who has played this 700 times
-// build"), and stacking both consensus cards under one tab would rebuild the
-// exact ~3,000px champ-select scroll this control exists to kill.
-type MobileBuildTab = "build" | "pro" | "otp";
-const MOBILE_TAB_OPTIONS: { value: MobileBuildTab; label: string }[] = [
-  { value: "build", label: "Build" },
-  { value: "pro", label: "Pro" },
-  { value: "otp", label: "OTP" },
-];
+// THE BUILD|PRO|OTP TAB SET NOW LIVES IN buildTabLayout.ts.
+//
+// It used to be declared here as `MobileBuildTab` / `MOBILE_TAB_OPTIONS`, and
+// that name is a lie as of 2026-07-29: these are the Builds page's tabs at
+// EVERY width, not a mobile-only control. The spec this file used to state —
+// "desktop keeps the current single-scroll layout", with the strip `lg:hidden`
+// and every panel escaping its gate through `lg:block` — was reversed by user
+// directive: "redesign and add the tabs for WPA, Pro, OTP build pages on
+// Desktop version just like in mobile. I dont want them all in a single long
+// page."
+//
+// What has NOT changed is why the tabs exist at all: peak usage is a 30-second
+// champ select, and the shape before them was one ~3,000px scroll (Runes ->
+// Starting -> Support -> Core -> Optimized -> Situational -> Pro Consensus).
+// A 1920px screen does not fix that; it just turns a long scroll into a long
+// scroll with wider cards. Nor has the reason OTP is its own tab rather than
+// sharing "pro" (see buildTabLayout.ts's own note).
+//
+// Switching tabs must stay INSTANT — see the panel wrappers below for how that
+// is guaranteed (all three panels stay mounted; only `display` toggles, and no
+// transition is attached to the swap).
 
-function BuildLoadingSkeleton() {
+/** Skeleton for ONE tab. Before this it drew all five cards at once regardless
+ *  of which tab was showing — correct when desktop rendered all five, a
+ *  guaranteed layout jump now that it renders one.
+ *
+ *  The grid-area classes are written out LITERALLY rather than interpolated
+ *  from a card list. Tailwind's JIT scanner reads source text, so a
+ *  `[grid-area:${id}]` template would only ever work by accident — via the same
+ *  literal appearing somewhere else in the file — and would silently produce an
+ *  unstyled skeleton the day that other call site moved. See buildTabLayout.ts
+ *  for why no card-membership constant exists to map over. */
+function BuildLoadingSkeleton({ tab }: { tab: BuildTab }) {
+  // Pro and OTP are a single full-width card each — no grid to mirror.
+  if (tab !== "build") return <CardSkeleton className="min-h-[280px]" />;
   return (
     <div className={BUILD_GRID_CLASS}>
       <CardSkeleton className="[grid-area:runes]" />
       <CardSkeleton className="[grid-area:itembuild] min-h-[280px]" />
       <CardSkeleton className="[grid-area:skillorder]" />
-      <CardSkeleton className="[grid-area:pro]" />
-      <CardSkeleton className="[grid-area:otp]" />
     </div>
   );
 }
@@ -188,13 +218,13 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
   const [state, setState] = useState<FetchState>({ status: "loading" });
   const [activeDetail, setActiveDetail] = useState<DetailRef | null>(null);
   const [lastDetail, setLastDetail] = useState<DetailRef | null>(null);
-  // Mobile BUILD|PRO split (defaults to BUILD on load, per spec). Below `lg`
-  // only one of the two card groups is VISIBLE at a time — both stay
-  // mounted (see the [grid-area:*] wrappers in the render below), so
-  // switching tabs never re-triggers ProConsensusCard's /api/pros fetch or
-  // loses RunesSummonersCard/ItemBuildCard state. Desktop (`lg`+) ignores
-  // this entirely — both groups always render there, same as before.
-  const [mobileTab, setMobileTab] = useState<MobileBuildTab>("build");
+  // The BUILD|PRO|OTP split, at EVERY width as of 2026-07-29 (this was
+  // `mobileTab` and was ignored at `lg`+). Exactly one panel is VISIBLE at a
+  // time; all three stay MOUNTED (see the panel wrappers in the render below),
+  // so switching tabs never re-triggers ProConsensusCard's /api/pros fetch or
+  // FeaturedOtpCard's /api/otp/featured fetch, and never loses
+  // RunesSummonersCard/ItemBuildCard/SkillOrderCard state.
+  const [buildTab, setBuildTab] = useState<BuildTab>(DEFAULT_BUILD_TAB);
 
   function openDetail(kind: "item" | EntityKind, id: number) {
     setLastDetail({ kind, id });
@@ -325,9 +355,21 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
   // (RunesSummonersCard's own click handlers) are untouched and still live.
 
   if (state.status === "loading") {
+    // The tab strip renders DURING loading now. It used to appear only once the
+    // build resolved, so the whole page below it jumped down by the strip's
+    // height (44px + border) on every champion change — a self-inflicted layout
+    // shift on the app's hottest path. It also means a user who lands mid-fetch
+    // can already choose the tab they want.
     return (
       <div className="mt-5 space-y-5">
-        <BuildLoadingSkeleton />
+        <HextechTabs
+          options={BUILD_TAB_OPTIONS}
+          value={buildTab}
+          onChange={setBuildTab}
+          ariaLabel="Build view"
+          className="mb-1"
+        />
+        <BuildLoadingSkeleton tab={buildTab} />
       </div>
     );
   }
@@ -386,126 +428,119 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
 
   return (
     <div className="mt-5 space-y-5">
-      {/* v0.51.0 (Builds redesign, mockup 4/5): below `lg` a plain
-          single-column stack (Runes, Item Build, Pro Consensus). At `lg`+ the
-          SAME three cards reflow into a 2-column composition — RUNES spans
-          both rows on the left, ITEM BUILD (top) + PRO CONSENSUS (bottom) on
-          the right — via grid-template-areas (BUILD_GRID_CLASS above). */}
-      {/* Mobile-only (lg:hidden matches BUILD_GRID_CLASS's own breakpoint) —
-          real tab semantics (role=tablist/tab/aria-selected via HextechTabs,
-          generalized for this reuse — see that file's own comment), not a
-          decorative toggle. Absent entirely at `lg`+, where both groups
-          below always render regardless of `mobileTab`. */}
-      <div className="lg:hidden mb-1">
-        <HextechTabs
-          options={MOBILE_TAB_OPTIONS}
-          value={mobileTab}
-          onChange={setMobileTab}
-          ariaLabel="Build view"
-        />
+      {/* THE NAVIGATION, AT EVERY WIDTH (2026-07-29). This wrapper used to be
+          `lg:hidden`; the panels below used to escape their own gate through
+          `lg:block`, so at `lg`+ everything rendered at once. Both are gone.
+          Real tab semantics (role=tablist/tab/aria-selected, roving tabindex,
+          Left/Right/Home/End) come from HextechTabs — see that file's header
+          for the keyboard contract this change made load-bearing. */}
+      <HextechTabs
+        options={BUILD_TAB_OPTIONS}
+        value={buildTab}
+        onChange={setBuildTab}
+        ariaLabel="Build view"
+        className="mb-1"
+      />
+
+      {/* ── ONE PANEL PER TAB ────────────────────────────────────────────────
+          Previously each of the FIVE cards carried its own `role="tabpanel"`,
+          three of them pointing at the same `hextech-tab-build` with only one
+          of the three owning the `hextech-tabpanel-build` id the tab's
+          `aria-controls` names. That was three panels for one tab and two
+          unreachable ids, and it survived review because at `lg` the tablist
+          was removed from the a11y tree, so the whole relationship was inert
+          exactly where it was wrong. Making the tablist live at every width
+          killed that premise, so the structure is now what it always claimed
+          to be: exactly one tabpanel per tab, each with the id its own tab
+          points at, each labelled by that tab.
+
+          `tabIndex={0}` on every panel is the ARIA Tabs pattern's own
+          recommendation — it gives the keyboard user a stop on the panel
+          itself, which is where Tab lands after the roving tablist.
+
+          VISIBILITY IS `hidden` (display:none) AND NOTHING ELSE. No opacity
+          transition, no height animation, no unmount. Peak usage is a
+          30-second champ select: a tab switch has to be a repaint, not an
+          animation, and a transition here would delay content on the app's
+          hottest path. It also means the inactive panels' cards stay MOUNTED —
+          switching Build -> Pro -> Build re-fires nothing and loses no state —
+          while being correctly removed from the tab order and the a11y tree.
+          `prefers-reduced-motion` needs no handling here because there is no
+          motion to reduce. */}
+      <div
+        role="tabpanel"
+        id={buildTabPanelId("build")}
+        aria-labelledby={buildTabId("build")}
+        tabIndex={0}
+        className={buildTab === "build" ? "" : "hidden"}
+      >
+        <div className={BUILD_GRID_CLASS}>
+          <div className="[grid-area:runes]">
+            <RunesSummonersCard
+              runes={build.runes}
+              spells={build.spells}
+              onOpenDetail={openDetail}
+              championName={build.champion.name}
+              roleLabel={build.roleLabel}
+              build={build}
+              lane={lane}
+            />
+          </div>
+          <div className="[grid-area:itembuild]">
+            <ItemBuildCard champ={champ} lane={lane} build={build} ver={ver} onItemClick={openItemPopover} />
+          </div>
+          {/* 2026-07-27 (recommended skill order feature) — a RECOMMENDATION
+              card (max-priority string + per-ability path), grouped with
+              RunesSummonersCard/ItemBuildCard under the "Build" tab rather than
+              "Pro": like ItemBuildCard, it's a build recommendation this page
+              produces, not a community/pro-play data view the way
+              ProConsensusCard is. Own fetch/loading/hidden states
+              (components/hextech/SkillOrderCard.tsx) — a null API payload
+              renders no card, collapsing this grid cell to zero height. */}
+          <div className="[grid-area:skillorder]">
+            <SkillOrderCard champ={champ} lane={lane} />
+          </div>
+        </div>
       </div>
 
-      <div className={BUILD_GRID_CLASS}>
-        {/* v0.62.x: `hidden lg:block` mirrors the codebase's standard
-            responsive-visibility idiom (same mechanism as e.g. `hidden
-            sm:block`) — below `lg` this collapses the group to zero layout
-            footprint via display:none (also correctly pulling it out of the
-            tab order/a11y tree) whenever the OTHER mobile tab is active; at
-            `lg`+ the override always wins, so desktop is unaffected by
-            `mobileTab`. RunesSummonersCard/ItemBuildCard/ProConsensusCard
-            stay mounted the whole time — only visibility toggles, so
-            switching BUILD -> PRO -> BUILD never re-fires ProConsensusCard's
-            /api/pros fetch or drops any of the three cards' own state.
-            role=tabpanel/aria-labelledby wire these to HextechTabs' own
-            auto-generated tab ids (hextech-tab-build/hextech-tab-pro) —
-            correct below `lg` where the tablist is live; at `lg`+ the
-            tablist itself is `lg:hidden` (removed from the a11y tree), so
-            the reference is inert rather than wrong — an accepted, common
-            trade-off for a mobile-only control that stays mounted at every
-            breakpoint (see HANDOFF-fronty.md for the full reasoning). */}
-        <div
-          className={`[grid-area:runes] ${mobileTab !== "build" ? "hidden lg:block" : ""}`}
-          role="tabpanel"
-          id="hextech-tabpanel-build"
-          aria-labelledby="hextech-tab-build"
-        >
-          <RunesSummonersCard
-            runes={build.runes}
-            spells={build.spells}
-            onOpenDetail={openDetail}
-            championName={build.champion.name}
-            roleLabel={build.roleLabel}
-            build={build}
-            lane={lane}
-          />
-        </div>
-        <div
-          className={`[grid-area:itembuild] ${mobileTab !== "build" ? "hidden lg:block" : ""}`}
-          role="tabpanel"
-          aria-labelledby="hextech-tab-build"
-        >
-          <ItemBuildCard champ={champ} lane={lane} build={build} ver={ver} onItemClick={openItemPopover} />
-        </div>
-        {/* 2026-07-27 (recommended skill order feature) — a RECOMMENDATION
-            card (max-priority string + per-ability path), grouped with
-            RunesSummonersCard/ItemBuildCard under the "Build" mobile tab
-            rather than "Pro" — like ItemBuildCard, it's a build recommendation
-            this tab surfaces directly, not a community/pro-play data view the
-            way ProConsensusCard is. Own fetch/loading/hidden states
-            (components/hextech/SkillOrderCard.tsx) — a null API payload
-            renders no card, collapsing this grid cell to zero height exactly
-            like ProConsensusCard's own N=0 state already does. */}
-        <div
-          className={`[grid-area:skillorder] ${mobileTab !== "build" ? "hidden lg:block" : ""}`}
-          role="tabpanel"
-          aria-labelledby="hextech-tab-build"
-        >
-          <SkillOrderCard champ={champ} lane={lane} />
-        </div>
-        <div
-          className={`[grid-area:pro] ${mobileTab !== "pro" ? "hidden lg:block" : ""}`}
-          role="tabpanel"
-          id="hextech-tabpanel-pro"
-          aria-labelledby="hextech-tab-pro"
-        >
-          {/* v0.27.0 (user request: "pro players seem to build Rocketbelt on
-              Viktor — create another builds and runes space based on what pro
-              players are often building"). Complements the WPA recommendation
-              above with a plain pick-rate count over the same champion-scoped
-              pro-games feed PRO BUILDS lists — own fetch, own loading/hidden
-              states (components/hextech/ProConsensusCard.tsx), refetches on
-              champ/lane change same as everything else on this tab. Reuses
-              this tab's own popover plumbing (openDetail) rather than
-              standing up a second popover/scroll-lock instance. A hidden
-              (N=0) ProConsensusCard renders null, collapsing this cell to zero
-              HEIGHT cleanly.
-              Corrected 2026-07-29: this used to say grid-template-areas
-              "doesn't reserve empty space" for such a cell. Zero height, yes —
-              but an explicitly-declared row still takes its ROW-GAP from the
-              neighbours, which is exactly how the 60/80px mobile tab void went
-              unnoticed. See BUILD_GRID_CLASS's header. */}
-          <ProConsensusCard champ={champ} lane={lane} ver={ver} onOpenDetail={openDetail} build={build} />
-        </div>
-        <div
-          className={`[grid-area:otp] ${mobileTab !== "otp" ? "hidden lg:block" : ""}`}
-          role="tabpanel"
-          id="hextech-tabpanel-otp"
-          aria-labelledby="hextech-tab-otp"
-        >
-          {/* 2026-07-28 (user request: "add a OTP section in builds for champs
-              as well, same as we have for pro"). Same component, `variant="otp"`
-              — it swaps the feed to /api/otp (op.gg's top Master+ one-tricks for
-              this champion, 100+ games each, their recent ranked games) and the
-              wording that describes it, and nothing else. Sharing the component
-              is the point: the starter/boots partition (HARD RULE 2) and the
-              per-slot honest denominators are enforced in ONE place.
+      {/* PRO — ProConsensusCard alone, no outer grid, deliberately.
+          This card already spanned the full content width before the tabs
+          change (it was the `'pro pro'` row) and already carries its own
+          measured desktop composition: `lg:grid-cols-[5fr_7fr]` splitting its
+          rune page from its Starting+Items column, with the proportions
+          arrived at by measuring three splits live on Viktor mid at 1440x900
+          (see that file). Owning the tab does not make it wider than it
+          already was, so wrapping it in a second grid would add a container
+          that changes nothing. The composition work for this change went into
+          FeaturedOtpCard instead, which genuinely had none. */}
+      <div
+        role="tabpanel"
+        id={buildTabPanelId("pro")}
+        aria-labelledby={buildTabId("pro")}
+        tabIndex={0}
+        className={buildTab === "pro" ? "" : "hidden"}
+      >
+        {/* v0.27.0 (user request: "pro players seem to build Rocketbelt on
+            Viktor — create another builds and runes space based on what pro
+            players are often building"). A plain pick-rate count over the
+            champion-scoped pro-games feed — own fetch, own loading/hidden
+            states, refetches on champ/lane change. Reuses this tab's popover
+            plumbing (openDetail) rather than standing up a second instance. */}
+        <ProConsensusCard champ={champ} lane={lane} ver={ver} onOpenDetail={openDetail} build={build} />
+      </div>
 
-              `build` IS passed now (2026-07-28) — it powers the two companion
-              apply buttons, which the OTP variant renders too. v0.70.0 held them
-              back believing a third LCU rune page needed a companion-side
-              change; it does not. See ApplyProRunesButton's `variant` doc. */}
-          <FeaturedOtpCard champ={champ} ver={ver} />
-        </div>
+      {/* OTP — FeaturedOtpCard alone, same reasoning as PRO above: it was
+          already the full-width `'otp otp'` row. Its BODY is where this
+          change's desktop composition work landed — see that file's
+          "DESKTOP COMPOSITION" note. */}
+      <div
+        role="tabpanel"
+        id={buildTabPanelId("otp")}
+        aria-labelledby={buildTabId("otp")}
+        tabIndex={0}
+        className={buildTab === "otp" ? "" : "hidden"}
+      >
+        <FeaturedOtpCard champ={champ} ver={ver} />
       </div>
 
       {/* Always mounted (once any item/rune/shard/spell has ever been

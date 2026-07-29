@@ -29,7 +29,7 @@ import { DbUnavailableError, RiotUnavailableError } from "./errors";
 import { extractMatch } from "./extract";
 import { freshStartTimeEpochSec } from "./fresh";
 import { routingForServer } from "./regionMap";
-import { getMatch, getMatchIdsByPuuid, getMatchTimeline, RiotRequestError } from "./riot";
+import { getMatch, getMatchIdsByPuuid, getMatchTimeline, isRateLimited, RiotRequestError } from "./riot";
 
 export interface MatchIngestOptions {
   batch?: number;
@@ -49,6 +49,12 @@ export interface MatchIngestResult {
    *  that qualified under it — see this file's header CURSOR CONTRACT. */
   nextCursor: string | null;
   errors: string[];
+  /** The walk STOPPED because Riot rate-limited us even after lib/pro/riot.ts
+   *  honoured the server's own Retry-After and retried. Distinct from an entry
+   *  in `errors`: this is systemic (something else is spending the key), it is
+   *  never a property of one account, and continuing to walk would spend the
+   *  rest of the budget discovering the same thing 1,400 more times. */
+  rateLimited: boolean;
 }
 
 interface AccountRow {
@@ -80,6 +86,7 @@ export async function runMatchIngest(opts: MatchIngestOptions = {}): Promise<Mat
     matchesUpserted: 0,
     nextCursor: null,
     errors: [],
+    rateLimited: false,
   };
 
   // Tiebreaker is load-bearing: `last_fetched_at ASC NULLS FIRST` alone leaves
@@ -113,6 +120,30 @@ export async function runMatchIngest(opts: MatchIngestOptions = {}): Promise<Mat
       result.matchesUpserted += upserted;
     } catch (err) {
       result.errors.push(`account ${account.riot_id}: ${(err as Error).message}`);
+
+      // RATE LIMIT: stop the walk, and deliberately do NOT bump the stamp.
+      //
+      // The bump below is a termination guard, and it is the right answer for
+      // an account-specific error — but a 429 says nothing about this account.
+      // Stamping it would mark an account we never examined as freshly fetched
+      // and hide it from the walk for a whole cycle, which on a 1,445-account
+      // sweep is hours of staleness bought to paper over a transient. Skipping
+      // the bump is only safe BECAUSE we abort right here: an un-bumped account
+      // still satisfies the walk predicate and still sorts to the front, so
+      // continuing would re-select it forever (the exact loop the guard exists
+      // to prevent). The two decisions are one decision — do not separate them.
+      //
+      // Aborting is also the safety behaviour that matters most. lib/pro/riot.ts
+      // has already honoured Riot's Retry-After and retried; still being limited
+      // means a second process is spending this key right now, and grinding
+      // through the remaining accounts is how a transient 429 becomes a
+      // suspended key that blanks every surface in the app (gotcha (d)).
+      if (isRateLimited(err)) {
+        result.rateLimited = true;
+        result.nextCursor = null;
+        return result;
+      }
+
       // Termination guard: an account that errors without a last_fetched_at
       // bump still satisfies the walk predicate and still sorts at the front,
       // so a page of all-erroring accounts (suspended key -> every call 403s)
@@ -212,7 +243,14 @@ export async function ingestOneAccount(
       const ts = new Date(row.gameCreation).getTime();
       if (maxGameCreation === null || ts > maxGameCreation) maxGameCreation = ts;
     } catch (err) {
-      if (err instanceof RiotRequestError) {
+      // A 429 is NOT a property of this match — the match is fine, the key is
+      // saturated — so skipping it silently drops a real game and, worse, moves
+      // straight on to the next Riot call. lib/pro/riot.ts has already waited
+      // out the server's Retry-After and retried by the time we see one here,
+      // so let it propagate: runMatchIngest's catch turns it into a walk abort.
+      // Every OTHER Riot status (404 on a match Riot has purged, a 5xx blip)
+      // genuinely is per-match and keeps the original skip-and-continue.
+      if (err instanceof RiotRequestError && err.status !== 429) {
         log(`match ${matchId}: riot ${err.status}, skipping`);
         continue;
       }

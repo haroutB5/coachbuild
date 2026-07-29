@@ -7655,3 +7655,365 @@ tiles, not six, and that is correct** — the word "finished" in both captions i
 > makes every game look unique, and six finished items is not a bar any stored game reaches.
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-29 18:44
+
+> ⚠️ DELIVERABLE WARNINGS for engo
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engo
+
+<!-- merged into HANDOFF.md 2026-07-29 09:13:50Z; previous content preserved there. Append new rounds below. -->
+
+## 2026-07-29 — engo: fixed the two scheduled-ingest failures (draft/u.gg timeouts + prostage/Leaguepedia Cloudflare blips)
+
+Scope: `scripts/ingest-draft.mjs`, `scripts/ingest-prostage.mjs`, `lib/prostage/cargo.ts` and what they call. Did not touch `scripts/ingest-matches.mjs` or `lib/pro/pacer.ts` (engy's files).
+
+### Root causes (measured, not assumed)
+
+**Failure 1 (draft/u.gg, 12 champions, curl exit 28).** Hypothesis in the brief was "the larger matchup blobs are plausibly just slow." Measured directly before building anything: live-curled 5 of the 12 flagged champion ids (142, 147, 164, 233, 234) against the exact URL shape from the failing log line. All 5 fetched in **0.6–1.3s**, payloads 2.5–3.2MB, against curl's own 60s ceiling — i.e. **not** unusually large or slow. So the "needs a longer timeout" theory is wrong; this is a transient blip (one dropped connection / hung DNS lookup somewhere across ~340 sequential curl calls over a long walk — 170 champs × 2 endpoints), which retry fixes and a longer timeout would not (a longer ceiling doesn't help a genuinely hung connection, it just makes a truly-stuck one block longer before failing).
+
+**Failure 2 (prostage/Leaguepedia CargoExport, intermittent).** The script already had a retry (one attempt, 10s delay) added 2026-07-10, but it wasn't consistently enough — 2 of the 4 scheduled runs on 2026-07-29 still failed after it. I could not reproduce a live Cloudflare challenge myself (every CargoExport probe I ran today, including 3 requests 6s apart, came back HTTP 200 JSON in <0.55s) — this is inherently intermittent and I'm not claiming to have caught it in the act. The fix is a stronger, still-bounded retry policy, not a reproduction.
+
+### What changed
+
+- **New: `lib/retryTransport.ts`** — a generic, tested `retryWithBackoff(fn, opts)` (bounded, finite `delaysMs`, optional `shouldRetry` filter, optional `onRetry` logging hook) plus a `withRetryTransport` convenience wrapper for `(url) => Promise<string>` transports. Both scripts now share this one utility instead of growing divergent bespoke retry loops. It does **not** touch or resemble `lib/prostage/cargo.ts`'s separate, mandated api.php ratelimit-cooldown-retry-once contract (`cargoQueryWithRetry`) — different failure class, different function, untouched.
+- **`scripts/ingest-draft.mjs`** — `uggCurlTransport` (used by the schema probe, role probes, the main batch loop, and the spot-checks — every call site, verified by grep) is now wrapped with `withRetryTransport(..., { delaysMs: [5_000, 15_000] })`: up to 2 retries, 3 total attempts. Header comment documents the measurement above.
+- **`scripts/ingest-prostage.mjs`** — `cargoExportViaCurl` (used by both `resolveTournamentsViaExport` and, when `--via-export` is set, as the `queryFn` inside `runProstageIngest`'s paginated ScoreboardPlayers walk) now goes through `retryWithBackoff` with `delaysMs: [15_000, 45_000]` (up to 2 retries, 3 total attempts) instead of the old single 10s retry. `shouldRetry` is still restricted to `CargoRequestError` only, preserving the original design intent — a raw curl-transport-level failure (network/DNS) still propagates immediately rather than being retried, since that's not the failure shape observed against this endpoint (see `cargo.ts`'s header: curl succeeds against CargoExport reliably; it's the *response* that's occasionally a Cloudflare challenge, not the request).
+- **`lib/prostage/cargo.ts`** — updated the two comments (file header + `cargoExportQuery`'s doc comment) that asserted "CargoExport failures are rare enough that propagating immediately is the right default." That reasoning is now stated as false as of 2026-07-29, with the evidence, while keeping the structurally-true part (the function itself still has zero built-in retry — policy stays caller-side).
+
+### Exit code
+
+No dedicated exit-code logic change was needed. `scripts/ingest-draft.mjs`'s `process.exitCode = 1` was already gated purely on `allErrors.length > 0 || roleProbeFailures.length > 0 || guardOk === false || lolalyticsVerdict === "fail"`. Champion-level errors are only pushed to `result.errors` in `lib/draft/ingest.ts`'s outer catch, which now only fires after retries are exhausted — so a run where every timeout is recovered by retry naturally exits 0. A run where a champion genuinely can't be fetched after 3 attempts still pushes an error and still exits 1 — that's correct, not a regression (real missing data should still be visible).
+
+### Verified, and how
+
+- `npx vitest run` — **2183 passed** (140 files; up from the 1524 documented in the stale `CLAUDE.md`, expected drift, not a regression). New file `lib/__tests__/retryTransport.test.ts` (9 tests) covers: first-try success, retry-then-succeed, exact delay timing (fake timers), exhausting all retries throws the LAST error, boundedness (never retries past `delaysMs.length`), `shouldRetry` filtering both ways, `onRetry` callback args, and `withRetryTransport`'s URL passthrough across retries.
+- `bash C:/Claude/AI/urgot/scripts/verify-fix.sh C:/Claude/AI/coachbuild` — **ALL CHECKS PASSED** (tsc, lint 0 warnings, tests, build, SW cache versioning, manifest).
+- **Failure 1 proven end-to-end**, not just unit-tested: ran a throwaway script (`scripts/_verify-142.mjs`, NOT committed to the ingest — deleted after use... except the delete itself got blocked, see below) that drives the *exact same* production pipeline (`curlTransportWithHeaders` + Referer + `withRetryTransport` + `fetchMatchups` + the real `decodeMatchupsJson`) against champion 142 (Zoe — one of the 27/07 failures), with no DB writes. Result: `patch=16.13`, fetched in **234ms**, decoded to **592 total matchup rows across all 5 roles, 0 skipped**. That's the real network call, the real decoder, the real retry-wrapped transport — landing cleanly.
+- **Failure 2 is NOT independently reproduced or end-to-end proven** — I could not trigger a live Cloudflare challenge against CargoExport today (every probe succeeded, see Root Causes above). This fix is verified by unit test (the retry mechanics) plus a code-path grep confirming `cargoExportViaCurl` is the one function both call sites route through, but the actual "does the strengthened backoff clear a real Cloudflare challenge" claim is **unverified against a live challenge** — the next real occurrence (check `%LOCALAPPDATA%\CoachBuild\prostage-ingest.log`) is the real test. If it still fails after 3 attempts (60s of backoff), that's the signal the window needs to widen further or a different mitigation (e.g. an alternate transport/IP) is needed.
+
+### Unverified / left as-is
+
+- The exact cause of curl exit 28 on the 27/07 run (DNS hiccup vs. dropped TCP connection vs. something CDN-edge-side) is not identifiable after the fact — I measured that it ISN'T a size/slowness problem, but I can't say precisely what it WAS. Retry is the right mitigation regardless of which of those it was.
+- `scripts/_verify-142.mjs` — a throwaway, no-DB-writes verification script I created to prove Failure 1 end-to-end. I tried to delete it after use; the sandbox's safety-gate hook blocked the `rm` (references a dead `S:/AI/urgot` path per existing memory, unrelated to this project). It is harmless (not imported anywhere, not part of `npm run ingest:draft`) but should be deleted — either approve the `rm C:/Claude/AI/coachbuild/scripts/_verify-142.mjs` or delete it manually.
+- Did not change `MIN_INTERVAL_MS`/`EXPORT_MIN_INTERVAL_MS` pacing floors or the api.php ratelimit-cooldown-retry-once contract in `cargo.ts` — out of scope and explicitly not to be touched per the brief.
+- Did not bump version, deploy, or commit, per instructions.
+
+
+
+
+---
+
+## Latest dispatch -- 2026-07-29 18:53
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-29 15:30:43Z; previous content preserved there. Append new rounds below. -->
+
+# HANDOFF — engy — Riot 429s in the solo-queue match sweep (2026-07-29)
+
+Scope: `scripts/ingest-matches.mjs`, `lib/pro/pacer.ts`, `lib/pro/riot.ts`,
+`lib/pro/ingestMatches.ts` + two new pure modules. **Zero live Riot calls were
+made** — `scripts/ingest-otp-priority.mjs` (pid 27024) was confirmed still
+walking the key throughout.
+
+---
+
+## What was actually causing the 429s
+
+The briefed candidates were worth checking and **most of them were wrong**. What
+the evidence says:
+
+**The pacer IS applied to the id-list calls.** `riotFetch` in `lib/pro/riot.ts`
+wraps every call — `getMatchIdsByPuuid` included — in `pacedCall`. Not the bug.
+
+**The interval was working.** The 12:20 run ran 12:20:02Z → 13:00:34Z (2,432s)
+and made at least 1,845 Riot calls (1,445 id-list + 200×2 match/timeline).
+That is 0.759 calls/s = **~91 calls per 120s**, sitting right on the 1.3s floor
+and just under `x-app-rate-limit: 100:120`. The clock was not slipping.
+
+**The 429s were not random.** The failing URLs carry
+`startTime=<epoch seconds>`, and `freshStartTimeEpochSec` computes that at call
+time — so each URL is a timestamp. The 15 errors are **three bursts of exactly
+five**, in-burst spacing 1–2s (the 1.3s floor), and the bursts start at
+1777552984, 1777553044, 1777553104: **exactly 60 seconds apart**. A steady
+91/120s process cannot produce that alone. Something else spent the key in
+those windows.
+
+### The actual defect: the pacer was open-loop, and a 429 changed nothing
+
+Two things, and the second is the dangerous one.
+
+1. **Nothing read the response.** `riotFetch` threw `RiotRequestError` on any
+   non-ok status and discarded the headers — `Retry-After`,
+   `X-Rate-Limit-Type`, `X-App-Rate-Limit-Count`, all of it. So the pacer ran at
+   ~92% of a cap it never measured, with no way to notice a second spender.
+2. **After a 429, the next call went out 1.3s later.** The 429 propagated as an
+   exception, the caller moved to the next account, and the same fixed clock
+   fired straight back into a bucket Riot had just said was empty. That is what
+   turned one overshoot into five consecutive failures — three times. Rejected
+   requests still count as requests; hammering an exhausted bucket is the
+   documented route from a transient 429 to a suspended key.
+
+`lib/pro/ingestMatches.ts` made both worse in its own way: the per-match catch
+logged `riot 429, skipping` and moved straight on to the next match id (a 429 is
+never a property of one match), and the per-account catch **stamped
+`last_fetched_at = now()` on a 429**, marking an account it never examined as
+freshly fetched and hiding it from the walk for a full cycle.
+
+### Which second spender — NOT determined
+
+I could not identify it, and I would rather say so than name one.
+
+- **Not `ingest-otp-priority.mjs`.** Its log's first line today is 16:04Z; it did
+  not exist at 12:20Z.
+- **Not `CoachBuildOtpIngest`.** It fires at 09:20/15:20 UTC — deliberately
+  offset (gotcha (cc)) and not in the window.
+- **Structural hole, and my leading suspicion:** `lib/otp/riotYield.ts` stops a
+  second *local* script by enumerating processes. It cannot see Vercel.
+  `/api/pros/refresh`, `/api/mystats/refresh`, `/api/otp/refresh` and the
+  `/api/ingest/*` crons all spend the same `RIOT_API_KEY`, each serverless
+  invocation in its own process with its own fresh copy of the pacer.
+  `/api/pros/refresh` alone can issue up to 4 accounts × (1 + 10×2) = 84 calls
+  in one request. Confirming this needs Vercel function logs for 12:20–13:00Z;
+  I did not probe, because probing spends the key.
+
+That uncertainty is *why* the fix reads Riot's headers instead of modelling the
+buckets. I cannot enumerate every spender; Riot can tell us the running total.
+
+---
+
+## What I changed
+
+### New — `lib/pro/rateLimits.ts` (pure)
+
+Parsers for the headers that were being thrown away. Two things worth knowing:
+
+- `parseRateBuckets` joins the limit header against the count header **on window
+  length, never on position**. Riot has shipped these pairs in different orders;
+  a positional zip would compare a 1s count against a 120s limit and read
+  "99 spare" at the moment there are 7. A bucket missing either half is dropped
+  rather than half-invented.
+- `parseRetryAfterSec` returns **null for absent**, never 0 — "the server did
+  not say" is a different fact from "retry now", and conflating them is how this
+  bug behaves. Clamped to [1s, 600s], handles both the integer and HTTP-date
+  forms, and always rounds a delay **up**.
+
+### `lib/pro/pacer.ts` — a second gate
+
+`MIN_INTERVAL_MS` is **unchanged at 1300**. I deliberately did not lower it; see
+"What remains unverified".
+
+Added a **hold**: `pacedCall` now waits for `max(interval, holdUntil)`, and the
+wait is re-evaluated in a loop rather than handed to one `setTimeout`, so a hold
+*extended* while a call is already waiting is respected. A hold is **monotonic**
+— it can only ever be extended, never shortened, so two callers racing to back
+off cannot talk each other out of it. Clamped at `MAX_HOLD_MS` (10 min).
+
+Two things set it: `holdPacer(ms)` (an explicit backoff, used for `Retry-After`)
+and `observeRateLimitBuckets` (the closed loop — Riot's live counts fed back
+in). Crossing the reserve holds for the **full window length**, which is blunt
+on purpose: the headers say how much of a window is spent but never when it
+started, so one whole window is the only delay that is *provably* sufficient. A
+shorter guess would be plausible and wrong, and on this key that is the worse
+error.
+
+**`RATE_LIMIT_RESERVE = 5` is the number that decides whether this is a safety
+mechanism or a self-inflicted outage,** so it is derived and tested, not
+asserted. This process's own worst case is 93 calls per 120s, so a reserve of 5
+trips at 95 — unreachable unaided, meaning any trip is real evidence of a second
+spender. A reserve of 8 would trip at 92 and the pacer would throttle itself to
+a crawl every window with nothing wrong.
+
+`effectiveReserve` closes the "can't happen" version of that: a hypothetical
+small method bucket (say `10:10`, where our own peak in the window is 8) would
+be permanently over a flat reserve, holding forever on our own traffic. Each
+bucket now gets the largest reserve that still clears our own worst case, and a
+bucket we could saturate unaided falls back to reserve 0 — hold when genuinely
+*at* the cap, never when merely near it. Tested both ways.
+
+### `lib/pro/riot.ts` — honour `Retry-After`
+
+- `RiotRequestError` now carries `retryAfterSec` and `limitType`.
+- On a 429: `Retry-After` becomes a pacer hold (so the *whole process* waits it
+  out, not just the retry) and the call is retried up to
+  `MAX_RATE_LIMIT_RETRIES = 2` times **after** the stated delay. No
+  `Retry-After` → a full 120s `x-app-rate-limit` window, not a guess.
+- **`Retry-After` is authoritative and wins outright.** The 429 response reports
+  the bucket at its cap, so also deriving a hold from the count headers would
+  apply 120s over the server's own 3s statement and make the `Retry-After` path
+  dead code nothing exercises. Pinned by a test.
+- Every non-429 response (2xx *and* 4xx/5xx) feeds its counts to the closed
+  loop. A 404 spent a request too; dropping its reading would blind the loop for
+  exactly as long as a run of failures lasts.
+- Retry is bounded and 429-only. Everything else fails on the first attempt,
+  exactly as before.
+
+### `lib/pro/ingestMatches.ts` — a 429 aborts the walk
+
+New `rateLimited` field on `MatchIngestResult`. On a 429 the walk **stops** and
+**does not stamp `last_fetched_at`**. Those are one decision in two halves and
+the comment in the file says so: skipping the stamp is only safe *because* we
+abort, since an un-bumped account still satisfies the walk predicate and sorts
+to the front, so continuing would re-select it forever — the exact loop the
+termination guard exists to prevent.
+
+Aborting is the point. By the time a 429 reaches this layer, `riot.ts` has
+already honoured Riot's own delay and retried; still being limited means
+something is spending the key *now*, and grinding through 1,400 more accounts to
+rediscover that is how a transient becomes a suspension.
+
+The per-match catch now re-throws a 429 and keeps skip-and-continue for every
+other status.
+
+### New — `lib/pro/sweepOutcome.ts` + `scripts/ingest-matches.mjs`
+
+`if (allErrors.length > 0) process.exitCode = 1` is gone. `classifySweep` is
+pure, tested, and grades the run:
+
+- rate-limit abort → **exit 1** (checked first — it usually carries one error
+  but the walk did not finish and the cause is the one that can kill the key);
+- errors above `max(25, 5% of accounts)` → **exit 1**;
+- zero accounts *with* errors → **exit 1**;
+- otherwise **exit 0**, including a drained walk that visited nothing.
+
+Matches upserted deliberately never enter the verdict — a sweep that finds no
+new games is the normal steady state. The one-line reason is printed, so the
+exit code is never the only evidence.
+
+### `app/api/ingest/matches/route.ts` — comment only
+
+A 120s hold outlives that route's 60s `maxDuration`. That is the intended
+outcome (no Riot call happens during a hold, and a mid-batch timeout already
+costs nothing there), but it will look like a regression to whoever next debugs
+a truncated cron invocation, so it is written down where they will trip on it.
+
+---
+
+## What I verified, and how
+
+`bash C:/Claude/AI/urgot/scripts/verify-fix.sh C:/Claude/AI/coachbuild` — **all
+checks passed, 2255 tests** (tsc, lint, tests, build, SW, manifest).
+
+**80 new tests** across five files, all against mocked transports:
+
+- `lib/__tests__/pro-rateLimits.test.ts` — header parsing, including the
+  reordered-count-header case a positional zip gets wrong, and that a missing
+  `Retry-After` yields null rather than 0.
+- `lib/__tests__/pro-pacer.test.ts` — hold monotonicity, the clamp, the
+  re-evaluation loop (a hold extended mid-wait is respected), one call's hold
+  delaying every other, the reserve invariant asserted arithmetically, and
+  `effectiveReserve`'s small-bucket guard.
+- `lib/__tests__/pro-riot-429.test.ts` — **the `Retry-After` path**: a stated 5s
+  delay holds exactly 5s, the retry does *not* fire at 1.3s (the exact moment
+  the old code would have), then succeeds. Plus: the no-header fallback, the
+  clamp on `Retry-After: 0`, the bounded retry count, no retry on non-429,
+  `Retry-After` beating the count headers, and a 404 still feeding the loop.
+- `lib/__tests__/pro-ingestMatches-ratelimit.test.ts` — the walk aborts, the
+  stamp is *not* written, a non-429 keeps the old behaviour exactly, and a 429
+  inside the match loop propagates instead of being skipped.
+- `lib/__tests__/pro-sweepOutcome.test.ts` — the real 12:20 numbers
+  (1445/200/15) now classify **exit 0**, with boundary cases either side.
+
+**Runtime smoke, no Riot calls:**
+
+- `npx tsx scripts/ingest-matches.mjs` with `DATABASE_URL` pointed at an invalid
+  string: the script boots, both new `.ts` imports resolve under tsx, and it
+  dies at `getSql()` — the first statement in `runMatchIngest`, before the Riot
+  key is even checked. Confirms the runner is wired and that no Riot call is
+  reachable on that path.
+- A scratchpad harness importing the real `classifySweep` under tsx and setting
+  `process.exitCode` from it. Output for the five scenarios, verbatim:
+
+```
+exit 0  12:20 run as measured (was exit 1)
+        OK: 1445 accounts, 200 matches, 15 transient error(s) tolerated (budget 73).
+exit 0  clean run
+        OK: 1445 accounts, 200 matches, no errors.
+exit 1  rate-limit abort
+        FAILED: Riot kept rate-limiting after its own Retry-After was honoured — walk aborted after 900 accounts. Something else is spending RIOT_API_KEY.
+exit 1  broken run
+        FAILED: 400 error(s) across 1445 accounts exceeds the tolerance of 73.
+exit 0  drained walk, nothing to do
+        OK: nothing to do — every account already fetched this cycle.
+process exit code: 0
+```
+
+---
+
+## What remains UNVERIFIED — be explicit about this
+
+1. **No live 429 was ever seen by this code.** Every `Retry-After` assertion is
+   against a mocked `fetchWithTimeout`, so the parsing is verified against
+   Riot's *documented and previously observed* header shapes, not a live
+   response. The failure modes are deliberately one-directional: an unparseable
+   or absent `Retry-After` falls through to a 120s hold (tested), never to an
+   immediate retry. A misread header makes the sweep slower, never faster.
+2. **The closed loop has never seen a real `x-app-rate-limit-count`.** The
+   header *name and shape* come from the observation already recorded in
+   `lib/otp/riotYield.ts` (`x-app-rate-limit: 100:120,20:1`); I have no recorded
+   *count* header from this key. If it turns out to be absent in practice,
+   `parseRateBuckets` returns `[]`, `observeRateLimitBuckets` does nothing, and
+   the behaviour degrades exactly to today's (tested) — the 429/`Retry-After`
+   path still carries the fix on its own. **First live run: capture one
+   response's headers and confirm the count header exists before trusting the
+   loop.**
+3. **The second spender is unidentified** (see above). If it is a Vercel route,
+   nothing here stops it spending the key — this change only stops *the sweep*
+   making things worse when it happens. A real fix for that is a shared
+   cross-process budget, which is out of this scope.
+4. **The abort's blast radius in production is untested.** A contended key now
+   ends a sweep early instead of finishing with 15 skips, so per-run account
+   coverage drops when the key is busy. I think that is the right trade against
+   a key suspension, but it is a judgement, not a measurement.
+5. **~15 lines in `scripts/ingest-matches.mjs` are verified by reading only** —
+   accumulating `rateLimited`, breaking the loop, calling `classifySweep`,
+   setting `exitCode`. A unit test cannot reach them because the script runs
+   `main()` on import. The classifier either side of those lines is tested, and
+   both ends were smoke-run under tsx, but the join was not executed as a whole.
+6. **`MIN_INTERVAL_MS` was NOT changed.** 1.3s is ~92% of a demonstrably shared
+   cap and is arguably the root cause. I left it because lowering it slows every
+   Riot script in the repo, and the closed loop should now yield *before* the
+   cap rather than needing a permanent margin. If 429s persist after a few runs,
+   this is the next lever — and it is a cheap one-line change.
+
+---
+
+## Also found (not acted on)
+
+- The 07:10 run failed identically. The wrapper truncates the log at 1MB, so
+  only the last run's error block survives; the graded exit code plus its
+  printed reason is what makes the next one legible without reading the log.
+- I suspected two concurrent `ingest-otp-priority` walks from interleaved
+  Viktor/Malzahar lines in `otp-priority.log`. **Checked — it is clean.** One
+  `walk starting` line, one pid (27024) in the lock file, and no overlapping
+  timestamps; the walk re-picks the highest-priority champion per unit, which
+  reads as interleaving in the log. Not a concurrency bug.
+- `CLAUDE.md` gotcha (d) says the pacer is per-process and warns against
+  parallelising local scripts. It does not mention that the Vercel routes are
+  also uncontrolled spenders of the same key. Worth adding.
+
+### Proposed wiki/CLAUDE.md update
+
+Gotcha (d) should gain: *"The pacer is per-PROCESS, and 'process' includes every
+Vercel serverless invocation — `/api/pros/refresh`, `/api/mystats/refresh`,
+`/api/otp/refresh` and the `/api/ingest/*` crons each get a fresh pacer that
+`lib/otp/riotYield.ts`'s local process scan cannot see. Since 2026-07-29
+`lib/pro/pacer.ts` closes the loop by reading `x-app-rate-limit-count` off every
+response and honouring `Retry-After` on a 429; a Riot 429 now ABORTS the
+solo-queue sweep rather than being skipped per-account."*
+
+

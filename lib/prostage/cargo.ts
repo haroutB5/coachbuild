@@ -28,10 +28,14 @@
 //     no change was needed there.
 //   - `order by` (URLSearchParams key with a literal space, which serializes
 //     to `order+by=...`) works identically to api.php's `order_by`.
-//   - Much lighter rate limit — paced separately, 5s floor vs api.php's 30s,
-//     with NO retry-on-failure logic (a real failure here is unusual enough
-//     to just propagate; there's no known ratelimit-then-cooldown contract
-//     the way there is for api.php).
+//   - Much lighter rate limit — paced separately, 5s floor vs api.php's 30s.
+//     This function itself has NO retry-on-failure logic (there's no known
+//     ratelimit-then-cooldown contract here the way there is for api.php) —
+//     but a real failure (a Cloudflare challenge response) is NOT rare
+//     enough to skip retrying entirely at the caller. See
+//     cargoExportQuery()'s own doc comment below (updated 2026-07-29) and
+//     scripts/ingest-prostage.mjs's cargoExportViaCurl for the caller-side
+//     retry-with-backoff this endpoint actually needs in production.
 //
 // P0 FOLLOW-UP (2026-07-10, decided): live-probing cargoExportQuery's actual
 // HTTP path showed curl succeeds against Special:CargoExport reliably, but
@@ -223,10 +227,22 @@ async function fetchExportTransport(url: string): Promise<string> {
  *  or whatever a custom transport throws), if the body doesn't parse as JSON
  *  (a Cloudflare challenge page is HTML), or if the parsed JSON isn't an
  *  array — NEVER returns [] to mask any of those, same contract as
- *  cargoQuery(). No retry logic: CargoExport failures are rare enough (and
- *  this isn't api.php's well-understood ratelimit-then-cooldown shape) that
- *  propagating immediately is the right default; callers that want a retry
- *  can wrap this themselves. Pacing and response validation apply
+ *  cargoQuery(). No retry logic IN THIS FUNCTION: it stays transport/policy
+ *  agnostic on purpose, so retry behavior is entirely the caller's call —
+ *  see lib/retryTransport.ts's retryWithBackoff and
+ *  scripts/ingest-prostage.mjs's cargoExportViaCurl for the concrete policy
+ *  the production ingest path actually uses.
+ *
+ *  UPDATED 2026-07-29: this comment used to also claim "CargoExport failures
+ *  are rare enough that propagating immediately is the right default" — that
+ *  turned out to be false in practice (2 of 4 scheduled runs on 2026-07-29
+ *  failed on a non-JSON/Cloudflare-challenge response even with the caller's
+ *  original single 10s-delayed retry), and cargoExportViaCurl now retries up
+ *  to twice with backoff (15s, 45s). The STRUCTURAL point still holds and is
+ *  unchanged: this function itself never retries or hammers on its own —
+ *  that policy belongs one layer up, where a caller can choose fastFail vs a
+ *  real wait, same as cargoQueryWithRetry already does for api.php's
+ *  ratelimit-cooldown contract below. Pacing and response validation apply
  *  regardless of which transport is plugged in — only "make the HTTP
  *  request" is pluggable. */
 export async function cargoExportQuery<T = Record<string, string | undefined>>(

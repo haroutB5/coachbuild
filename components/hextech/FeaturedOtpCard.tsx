@@ -103,6 +103,7 @@ import HeroBand, { Pill } from "./HeroBand";
 import KpiStrip, { type KpiItem } from "./KpiStrip";
 import PanelHeading from "./PanelHeading";
 import { sortPerkIdsByRow } from "./perkSlots";
+import { opggProfileUrl } from "./opggProfile";
 
 interface FeaturedPlayer {
   gameName: string;
@@ -141,6 +142,43 @@ interface FeaturedResponse {
   runes: { page: RunePage; games: number; pct: number } | null;
   spells: { spells: number[]; games: number; pct: number } | null;
 }
+
+// ── DESKTOP COMPOSITION (2026-07-29) ─────────────────────────────────────────
+//
+// Until now this card was the full-width `'otp otp'` row at the BOTTOM of a
+// page that showed everything at once, so its body never had to fill a wide
+// viewport on its own — a reader arrived here having already scrolled past the
+// WPA build and the pro consensus. Build/Pro/OTP are tabs at every width now,
+// so this card IS the whole screen when its tab is open, and a single 1340px
+// column of stacked sections is what that would have been: slot rows stretched
+// to twice the width their content needs, with the name at one end and the
+// percentage at the other.
+//
+// The split is 7fr/5fr with the BUILD on the left, and that is deliberately NOT
+// the BUILD and PRO tabs' runes-left 5fr/7fr. The reason is what this card is:
+// the other two are recommendations, where runes and items are two halves of
+// one answer and either can lead. This one is a PROFILE of a named person, and
+// its headline is the build they actually played — it is the thing the hero band
+// and the KPI strip above it are introducing. Putting runes first here would
+// mean one of two things, both worse:
+//
+//   * reordering the DOM, which buries the lede on mobile (hero -> KPIs ->
+//     runes -> ... -> their build), or
+//   * keeping DOM order and placing with grid-template-areas, which puts the
+//     visual order (runes, then build) at odds with the reading and FOCUS order
+//     (build, then runes). A keyboard user would tab from the right column back
+//     to the left. That is the trade the BUILD tab's own grid never had to make,
+//     because its DOM order and its visual order agree.
+//
+// So the primary column keeps the primary content, in source order, at every
+// width, and the setup detail (runes, summoners, skill order) becomes a
+// narrower supporting rail. Nothing moves on mobile: below `lg` this is a plain
+// block and every section stacks in DOM order exactly as it shipped.
+//
+// `items-start` matters — without it the two columns stretch to equal height and
+// the shorter one's sections space out to fill, which is the sprawl this split
+// exists to remove, reintroduced one level down.
+const OTP_BODY_GRID_CLASS = "lg:grid lg:grid-cols-[7fr_5fr] lg:gap-x-8 lg:items-start";
 
 /** Items below this build rate are noise on a 30-60 game sample: one or two
  *  games, usually a situational pickup or a game that ended early. Showing them
@@ -183,6 +221,92 @@ const MIN_SAMPLE_GAMES = 12;
  * replacement (BuildSlotList's `SlotBar`) draws one track per SLOT and divides
  * it between the options, so the picture says "one decision, split". Do not
  * reintroduce a per-item bar into a slot row. */
+
+/** The "leaves this app" mark on the profile link. Aria-hidden — the anchor's
+ *  own accessible name already says it opens a new tab, and a second
+ *  announcement of the same fact is noise. */
+function ExternalMark() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="13"
+      height="13"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+      className="inline-block align-[0.06em] ml-1 flex-shrink-0 opacity-70 transition-opacity motion-reduce:transition-none group-hover:opacity-100"
+    >
+      <path d="M14 4h6v6" />
+      <path d="M20 4 11 13" />
+      <path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" />
+    </svg>
+  );
+}
+
+/**
+ * The featured player's Riot ID, linked out to their OP.GG match history when
+ * — and only when — we can build that URL honestly.
+ *
+ * `href === null` renders the exact plain-text markup this card shipped before
+ * the link existed. That branch is not a fallback to be tidied away later: the
+ * region slug comes from a scraped platform id (see opggProfile.ts), and a
+ * guessed slug is a live link to a STRANGER'S profile page. No link beats a
+ * wrong one about a named person.
+ *
+ * TOUCH TARGET. The anchor is a pure INLINE element, so its vertical padding
+ * extends the hit area without changing the h3's line box — the hero band's
+ * measured height is identical with and without the link. `py-2.5` puts the hit
+ * box at ~46px against the 23px heading, clearing the card's own 44px
+ * convention (HextechTabs, ApplyRunesButton) without an inline-block box that
+ * would have needed a negative margin to undo.
+ *
+ * `relative z-10` is load-bearing, not decoration. MEASURED at 390px: the
+ * padded hit box is 44px tall, but its bottom ~10px sits under the hero's pill
+ * row, which is a LATER sibling and therefore won hit-testing —
+ * `elementFromPoint` at the anchor's own bottom edge returned the pill
+ * container, so the bottom quarter of a 44px target was dead. Raising the
+ * anchor gives the whole box back. Safe because it overlays only
+ * non-interactive pills and paints no background: nothing changes visually and
+ * no click is taken from anything clickable.
+ */
+function PlayerIdentity({
+  gameName,
+  tagLine,
+  href,
+}: {
+  gameName: string;
+  tagLine: string;
+  href: string | null;
+}) {
+  const id = (
+    <>
+      {gameName}
+      <span className="text-mut font-normal">#{tagLine}</span>
+    </>
+  );
+
+  if (href === null) return id;
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      // Says whose profile, where it goes, and that it leaves the app — the
+      // three things the icon alone cannot say to a screen reader.
+      aria-label={`${gameName} #${tagLine} — open their match history on OP.GG (opens in a new tab)`}
+      title={`${gameName}#${tagLine} on OP.GG`}
+      className="group relative z-10 py-2.5 -mx-1 px-1 rounded-md decoration-teal/50 decoration-1 underline-offset-[6px] hover:underline hover:text-teal-hover transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
+    >
+      {id}
+      <ExternalMark />
+    </a>
+  );
+}
 
 /** Tag for the starter row. HARD RULE 2's partition made visible: a starting
  *  item sits in a labelled slot, never inside the completed-item list. */
@@ -546,10 +670,11 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
         avatarAlt={champ.name}
         eyebrow="Best one-trick"
         title={
-          <>
-            {player.gameName}
-            <span className="text-mut font-normal">#{player.tagLine}</span>
-          </>
+          <PlayerIdentity
+            gameName={player.gameName}
+            tagLine={player.tagLine}
+            href={opggProfileUrl(player.server, player.gameName, player.tagLine)}
+          />
         }
         pills={
           <>
@@ -571,7 +696,9 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
             percentages mean anything. Their card fills in as the ingest catches up.
           </p>
         ) : (
-          <>
+          <div className={OTP_BODY_GRID_CLASS}>
+            {/* ── PRIMARY COLUMN: what they build ─────────────────────────── */}
+            <div className="min-w-0">
             {/* Gated on EITHER, not on `fullBuild` alone. The opener is a fact
                 about how they play the lane and does not depend on any game
                 having reached a finished build — before this, a player whose
@@ -798,7 +925,22 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
                 No item reaches {MIN_DISPLAY_PCT}% across the games we hold yet.
               </p>
             )}
+            </div>
 
+            {/* ── SECONDARY COLUMN: how they set up ───────────────────────────
+                Runes, summoners and skill order. Below `lg` this wrapper is a
+                plain block and its sections continue the single stack in DOM
+                order, exactly as they did before — mobile is byte-identical.
+                At `lg`+ it becomes the narrower right track.
+
+                `lg:[&>*:first-child]:mt-0` cancels the top margin of whichever
+                section happens to lead. Written as a first-child rule rather
+                than put on the Runes section directly because ALL THREE are
+                conditional — a champion whose featured player has no stored
+                rune page leads with Summoners, and hardcoding the reset onto
+                Runes would leave that card's right column starting 20px lower
+                than its left one. */}
+            <div className="min-w-0 lg:[&>*:first-child]:mt-0">
             {/* The FULL rune page, not a keystone and three shard icons (user
                 report 2026-07-29). Every part of it is already stored per game
                 and already modelled — `runes.page` carries primaryTree,
@@ -811,14 +953,24 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
                 <PanelHeading meta={`${runes!.pct}% of ${sample.games} games`}>Runes</PanelHeading>
                 {/* `grid-cols-2` at mobile packs the two trees side by side,
                     the same thing RunesSummonersCard does at 390px. At `sm`+
-                    the tracks become CONTENT-SIZED and left-packed: this card
-                    is full-width at `lg` (BuildTabContent's `otp_otp` row,
-                    ~1100px), and two equal fr tracks there pushed the secondary
-                    tree's 2 tiles out to x=840 with ~450px of dead space in
-                    between — measured at 1440x900. `auto` tracks + justify-start
-                    keep the two trees beside each other and let the row end
-                    where the content ends. */}
-                <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-[auto_auto] sm:justify-start sm:gap-x-12">
+                    the tracks become CONTENT-SIZED and left-packed: two equal
+                    `fr` tracks in a wide card pushed the secondary tree's 2
+                    tiles out to x=840 with ~450px of dead space in between
+                    (measured at 1440x900), which `auto` + justify-start fixes
+                    by letting the row end where the content ends.
+
+                    `lg:grid-cols-1 xl:grid-cols-[auto_auto]` is new with the
+                    desktop tabs (2026-07-29) and is about the RAIL this section
+                    now lives in, not about the viewport. Measured on Ahri at
+                    1024x900: the rail is 273px there, which leaves the secondary
+                    tree a 102px track — narrow enough that the three stat shards
+                    wrapped to one per row, a 3-high vertical column where every
+                    other surface in the app draws them as a row. Stacking the
+                    two trees instead gives each the rail's full 273px: the
+                    primary row fits its keystone + 3 minors, and the shards fit
+                    on one line. From `xl` the rail is ~493px and the side-by-side
+                    pair fits again, so it comes back. */}
+                <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-[auto_auto] sm:justify-start sm:gap-x-12 lg:grid-cols-1 lg:gap-x-0 xl:grid-cols-[auto_auto] xl:gap-x-10">
                   <div>
                     {runePage.primaryTree != null ? (
                       <TreeLabel treeId={runePage.primaryTree} />
@@ -928,7 +1080,8 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
                 </p>
               </div>
             )}
-          </>
+            </div>
+          </div>
         )}
       </div>
     </div>

@@ -24,15 +24,30 @@
 // can shell out; app/route code can't, so it stays on cargoExportQuery's
 // default fetch transport (unaffected either way — the route never calls
 // cargoExportQuery at all).
-// --via-export ALSO retries ONCE, after a ~10s pause, on a CargoRequestError
-// (the transient Cloudflare-challenge case) — live evidence from a real
-// backfill run (2026-07-10): 2 of 7 cursors got "CargoExport returned a
-// non-JSON response" on the first attempt, and an immediate manual retry
-// succeeded both times. cargoExportQuery itself deliberately has NO retry
-// (see cargo.ts's doc comment — that contract is unchanged); this retry
-// lives here, script-side only, same pattern as api.php's cooldown-retry-
-// once but much shorter (CargoExport's failures are a brief challenge blip,
-// not a sustained rate-limit).
+// --via-export ALSO retries on a CargoRequestError (the transient
+// Cloudflare-challenge case) — live evidence from a real backfill run
+// (2026-07-10): 2 of 7 cursors got "CargoExport returned a non-JSON
+// response" on the first attempt, and an immediate manual retry succeeded
+// both times. cargoExportQuery itself deliberately has NO retry (see
+// cargo.ts's doc comment — that contract is unchanged, retry policy stays
+// caller-side); this retry lives here, script-side only, same pattern as
+// api.php's cooldown-retry-once but much shorter (CargoExport's failures
+// are a brief challenge blip, not a sustained rate-limit).
+//
+// STRENGTHENED (2026-07-29): the original single 10s-delayed retry above
+// was NOT always enough — the scheduled task's own log showed 2 of 4 runs
+// today still failing on "non-JSON response (Cloudflare challenge?)" after
+// that one retry. Bumped to 2 retries with backoff (15s, then 45s) via the
+// shared lib/retryTransport.ts helper — still bounded (never a tight loop,
+// never anywhere close to api.php's own separate ~4.5min ratelimit-retry-
+// once contract in lib/prostage/cargo.ts's cargoQueryWithRetry, which this
+// does not touch), just more tolerant of a challenge that takes longer than
+// 10s to clear. Only CargoRequestError retries — a raw curl transport-level
+// failure (network/DNS) still propagates immediately, unchanged from the
+// original design; CargoExport-via-curl has no observed history of THAT
+// failure shape here (see lib/prostage/cargo.ts's header — curl succeeds
+// against this endpoint reliably; it's the RESPONSE that's occasionally a
+// Cloudflare challenge, not the request itself failing).
 import { loadEnvLocal } from "./_env.mjs";
 import { curlTransport } from "./_curl-transport.mjs";
 
@@ -43,30 +58,25 @@ const { resolveActiveTournaments, buildTournamentsQuerySpec, MAX_TOURNAMENTS } =
   "../lib/prostage/tournaments.ts"
 );
 const { cargoExportQuery, cargoField, CargoRequestError } = await import("../lib/prostage/cargo.ts");
+const { retryWithBackoff } = await import("../lib/retryTransport.ts");
 
 const viaExport = process.argv.includes("--via-export");
-const EXPORT_RETRY_DELAY_MS = 10_000;
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** cargoExportQuery, but always through the curl transport, with a single
- *  ~10s-delayed retry on CargoRequestError (a transient Cloudflare
- *  challenge — live-verified 2026-07-10 to usually clear on one retry). A
- *  SECOND CargoRequestError propagates to the caller same as before — this
- *  is a retry-once, not a loop. A single place both the Tournaments
- *  resolution and the ScoreboardPlayers queryFn route through, so a future
- *  transport/retry-policy change only touches this one function. */
-async function cargoExportViaCurl(opts) {
-  try {
-    return await cargoExportQuery(opts, curlTransport);
-  } catch (err) {
-    if (!(err instanceof CargoRequestError)) throw err;
-    console.log(`  [cargo-export] transient failure (${err.message}); retrying once in 10s`);
-    await sleep(EXPORT_RETRY_DELAY_MS);
-    return cargoExportQuery(opts, curlTransport);
-  }
+/** cargoExportQuery, but always through the curl transport, with up to 2
+ *  backoff retries (15s, then 45s) on CargoRequestError (a transient
+ *  Cloudflare challenge) — see the STRENGTHENED note above for why this
+ *  grew from a single 10s retry. A THIRD CargoRequestError (or any other
+ *  error) propagates to the caller — bounded, not a loop. A single place
+ *  both the Tournaments resolution and the ScoreboardPlayers queryFn route
+ *  through, so a future transport/retry-policy change only touches this
+ *  one function. */
+function cargoExportViaCurl(opts) {
+  return retryWithBackoff(() => cargoExportQuery(opts, curlTransport), {
+    delaysMs: [15_000, 45_000],
+    shouldRetry: (err) => err instanceof CargoRequestError,
+    onRetry: (attempt, err, delayMs) =>
+      console.log(`  [cargo-export] transient failure (${err.message}); retry ${attempt} in ${delayMs / 1000}s`),
+  });
 }
 
 /** Same WHERE semantics as resolveActiveTournaments (buildTournamentsQuerySpec

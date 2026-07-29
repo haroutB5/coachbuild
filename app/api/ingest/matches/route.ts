@@ -46,6 +46,16 @@ export const maxDuration = 60;
 // maximizes accounts/day for the common case (incremental re-fetch, few new
 // matches) while degrading gracefully — never losing data — on the
 // never-fetched worst case.
+// RATE-LIMIT HOLDS vs THIS 60s BUDGET (2026-07-29). lib/pro/pacer.ts can now
+// hold every Riot call for up to a full `x-app-rate-limit` window (120s) after
+// a 429 or a near-cap count header. That is LONGER than this route's
+// maxDuration, so a saturated key will simply kill the invocation mid-batch.
+// That is the intended outcome, not a regression: no Riot call is made during a
+// hold, and a mid-batch timeout already costs nothing here (see the batch=20
+// reasoning above — inserts are idempotent and the account stays at the front
+// of the queue). Do NOT "fix" it by shortening the hold; the hold length is the
+// only delay that provably clears the bucket, and this key is shared with the
+// local scheduled sweeps.
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
