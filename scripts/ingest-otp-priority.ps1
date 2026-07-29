@@ -88,9 +88,39 @@
 #   Stop:    schtasks /end    /tn CoachBuildOtpPriority
 #   Remove:  schtasks /delete /tn CoachBuildOtpPriority /f
 #
-#   Then confirm the two settings schtasks cannot express on the command line:
+#   Then confirm the settings schtasks cannot express on the command line:
 #     - Settings > "If the task is already running: Do not start a new instance"
 #     - Settings > "Stop the task if it runs longer than" > above -MaxHours
+#     - Conditions > UNTICK "Start the task only if the computer is on AC power"
+#       and UNTICK "Stop if the computer switches to battery power"
+#
+# ── THE BATTERY DEFAULT, WHICH COSTS A WHOLE SLOT AND LEAVES NO TRACE ───────
+# `schtasks /create` sets DisallowStartIfOnBatteries=True and
+# StopIfGoingOnBatteries=True. This is a LAPTOP. The consequences:
+#
+#   * an unplugged machine SKIPS the trigger outright. LastRunTime does not
+#     move, NextRunTime jumps to the following hour, NumberOfMissedRuns goes up
+#     by one, and Status still reads "Ready". Nothing is written to either log,
+#     because no process ever started. It is indistinguishable from a task that
+#     simply has not been triggered yet;
+#   * unplugging mid-walk KILLS it, and LastTaskResult becomes 267014
+#     (0x41306, SCHED_S_TASK_TERMINATED) — byte-identical to a `schtasks /end`,
+#     so the log looks like somebody stopped it on purpose.
+#
+# Observed 2026-07-29: the 18:10 slot was lost this way at 66% battery. Fix it
+# from PowerShell — Set-ScheduledTask REPLACES the whole settings object, so
+# every setting you want to keep must be restated in the same call:
+#
+#   $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+#          -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
+#          -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 13)
+#   Set-ScheduledTask -TaskName CoachBuildOtpPriority -Settings $s
+#
+# Whenever this job "did not run" and left nothing behind, check
+# (Get-CimInstance -Namespace root\wmi BatteryStatus).PowerOnline BEFORE
+# reading any application log. The sibling CoachBuildMatchIngest,
+# CoachBuildDraftIngest and CoachBuildProstageIngest tasks still carry the
+# default and will skip the same way; CoachBuildOtpIngest was already corrected.
 #
 # NOTE: CoachBuildOtpPriority is deliberately NOT added to
 # riotYield.ts's RIOT_SCHEDULED_TASKS. That list is what this walk yields TO;

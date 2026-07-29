@@ -45,6 +45,18 @@ All notable changes to CoachBuild are documented here.
   with no script. Task Scheduler reported the task as "Running" with no error and no exit code while
   it did nothing at all. Caught on the first live registration by reading the host log rather than
   the task state.
+- **The walk then lost its next slot to a power setting, not a bug.** `schtasks /create` defaults to
+  "start only on AC power", and this is a laptop. The 18:10 trigger was skipped outright at 66%
+  battery: `LastRunTime` never moved, `NextRunTime` jumped an hour, `NumberOfMissedRuns` went to 1,
+  `Status` still read "Ready", and neither log was written because no process ever started. The
+  companion default kills a running walk on unplug with result 267014, which is byte-identical to a
+  manual `schtasks /end`. Both are now off for `CoachBuildOtpPriority`, and the wrapper's header
+  documents the trap and the `Set-ScheduledTask` recipe. **The three sibling tasks still carry the
+  default.**
+
+  Deployed to production and verified live afterwards: Ahri renders the full-build tier over 232
+  stored games, Viktor the new middle tier ("4 items plus boots, not a full six", 2 of 78), Orianna
+  the one-real-game fallback (26 games). No console errors on any of the three at 390px.
 
 ## [0.79.0] — 2026-07-29 — A full build is five items plus boots
 
