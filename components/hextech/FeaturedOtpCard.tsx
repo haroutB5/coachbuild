@@ -57,6 +57,22 @@ interface FeaturedResponse {
  *  padded. */
 const MIN_DISPLAY_PCT = 15;
 
+/**
+ * Games we must hold before quoting build PERCENTAGES for a player.
+ *
+ * The 150-game floor in lib/otp/onetricks.ts is about the account's CAREER on
+ * the champion — it is what makes them a one-trick worth featuring. This is a
+ * different guard: how many of their games we have actually stored. The two
+ * come apart, and did on Lee Sin (2026-07-29) — a Grandmaster with a long
+ * career whose last 40 ranked games were mostly other champions, leaving us
+ * SEVEN. "71%" over seven games is five of them, and printing it next to a
+ * progress bar invites reading it as a settled preference.
+ *
+ * So below this we still show WHO the player is — that part is solid — and say
+ * plainly that we are still collecting their games. The ingest fills it in.
+ */
+const MIN_SAMPLE_GAMES = 12;
+
 function Label({ children }: { children: React.ReactNode }) {
   return <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">{children}</p>;
 }
@@ -180,6 +196,8 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
     .sort((a, b) => b.games - a.games)[0];
 
   const winPct = Math.round((sample.wins / sample.games) * 100);
+  // Below the floor we show WHO, never percentages — see MIN_SAMPLE_GAMES.
+  const thinSample = sample.games < MIN_SAMPLE_GAMES;
   const runes = data!.runes;
   const runeDisplay = keystone;
 
@@ -220,13 +238,22 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
         </dl>
       </div>
 
-      <p className="mt-3 text-[11px] text-mut/80 leading-relaxed">
-        Percentages below are across their last{" "}
-        <span className="text-txt tabular-nums">{sample.games}</span> ranked {champ.name} games that
-        we hold ({winPct}% won) — not their full career.
-      </p>
+      {thinSample ? (
+        <p className="mt-3 text-[11.5px] text-mut leading-relaxed">
+          Still collecting their games — we hold{" "}
+          <span className="text-txt tabular-nums">{sample.games}</span> of the{" "}
+          <span className="text-txt tabular-nums">{MIN_SAMPLE_GAMES}</span> needed before build
+          percentages mean anything. Their card fills in as the ingest catches up.
+        </p>
+      ) : (
+        <p className="mt-3 text-[11px] text-mut/80 leading-relaxed">
+          Percentages below are across their last{" "}
+          <span className="text-txt tabular-nums">{sample.games}</span> ranked {champ.name} games that
+          we hold ({winPct}% won) — not their full career.
+        </p>
+      )}
 
-      {starter && (
+      {!thinSample && starter && (
         <div className="mt-4 flex items-center gap-2.5">
           <Label>Opens</Label>
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -243,7 +270,7 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
         </div>
       )}
 
-      {items.length > 0 && (
+      {!thinSample && items.length > 0 && (
         <div className="mt-4">
           <Label>Builds most often</Label>
           <ul className="mt-2.5 space-y-2">
@@ -280,7 +307,7 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
         </div>
       )}
 
-      {(runes || data!.spells) && (
+      {!thinSample && (runes || data!.spells) && (
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
           {runes && (
             <div>
@@ -350,7 +377,7 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
         </div>
       )}
 
-      {skillPriority && (
+      {!thinSample && skillPriority && (
         <div className="mt-5">
           <Label>Skill order</Label>
           <div className="mt-2 flex items-center gap-1.5">
@@ -373,7 +400,7 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
         </div>
       )}
 
-      {items.length === 0 && (
+      {!thinSample && items.length === 0 && (
         <p className="mt-4 text-[12px] text-mut">
           No item reaches {MIN_DISPLAY_PCT}% across the games we hold yet.
         </p>

@@ -2,6 +2,23 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.73.1] — 2026-07-29 — Don't quote build percentages off seven games
+
+### Fixed
+- **A thin stored sample could print confident-looking percentages.** The 150-game floor is about the
+  account's CAREER on the champion, which is what makes them worth featuring. How many of their games
+  we have STORED is a different number, and the two come apart: Lee Sin's featured Grandmaster has a
+  long career but their last 40 ranked games were mostly other champions, leaving us **seven**. "71%"
+  over seven games is five of them, and printing it beside a progress bar invites reading it as a
+  settled preference.
+
+  Below **12 stored games** the card now shows who the player is — that part is solid — and says
+  plainly that it is still collecting their games, rather than showing build rates, runes, summoners
+  or the opener. It fills itself in as the ingest catches up.
+
+### Coverage at time of writing
+95 champions featured, every one with stored games, median 32 games each.
+
 ## [0.73.0] — 2026-07-29 — The OTP block becomes one named player instead of eight averaged ones
 
 ### Changed
