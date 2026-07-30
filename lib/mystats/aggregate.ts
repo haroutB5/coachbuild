@@ -13,12 +13,19 @@
 // difference between the two approaches immaterial.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { aggregateCs, csPerMinForGame, type CsInput } from "./cs";
+
 export interface MyMatchRecord {
   championId: number;
   role: number;
   oppChampionId: number | null;
   win: boolean;
   gameCreation: string; // ISO
+  /** Migration 0021. OPTIONAL on this input shape so every existing caller
+   *  (and every existing fixture) compiles unchanged; absent is treated
+   *  identically to null, i.e. NOT MEASURED — see lib/mystats/cs.ts. */
+  cs?: number | null;
+  gameDurationSec?: number | null;
 }
 
 export interface ChampionSummary {
@@ -28,6 +35,16 @@ export interface ChampionSummary {
   wins: number;
   winrate: number;
   lastPlayed: string; // ISO
+  /** TIME-WEIGHTED CS/min for this champion+role — sum(cs)/(sum(sec)/60), NOT
+   *  the mean of per-game rates (lib/mystats/cs.ts's header has the worked
+   *  example of how far apart those two answers land). null when csGames is 0. */
+  csPerMin: number | null;
+  /** How many of `games` are actually behind csPerMin. ALWAYS <= games and
+   *  routinely smaller — unbackfilled pre-0021 rows and sub-CS_MIN_GAME_SEC
+   *  games are excluded. Shipped BESIDE csPerMin for the same reason
+   *  nOnBuild/nOffBuild were added to BuildAdherenceSummary in v0.74: a rate
+   *  over 3 games and a rate over 300 must not be renderable identically. */
+  csGames: number;
 }
 
 export interface OpponentMatchup {
@@ -43,7 +60,18 @@ export interface OpponentMatchup {
 export function summarizeByChampion(rows: MyMatchRecord[]): ChampionSummary[] {
   const map = new Map<
     string,
-    { championId: number; role: number; games: number; wins: number; lastPlayed: string }
+    {
+      championId: number;
+      role: number;
+      games: number;
+      wins: number;
+      lastPlayed: string;
+      /** Raw CS rows for this group, aggregated ONLY at the end via
+       *  lib/mystats/cs.ts. Accumulating a running rate here instead would
+       *  reintroduce exactly the mean-of-rates error that module exists to
+       *  prevent. */
+      csRows: CsInput[];
+    }
   >();
   for (const r of rows) {
     const key = `${r.championId}:${r.role}`;
@@ -53,14 +81,22 @@ export function summarizeByChampion(rows: MyMatchRecord[]): ChampionSummary[] {
       games: 0,
       wins: 0,
       lastPlayed: r.gameCreation,
+      csRows: [] as CsInput[],
     };
     entry.games += 1;
     if (r.win) entry.wins += 1;
     if (r.gameCreation > entry.lastPlayed) entry.lastPlayed = r.gameCreation;
+    // Pushed unconditionally, including rows whose cs is absent/null or whose
+    // game was too short -- aggregateCs owns that filtering, so there is one
+    // place to change it and `csGames` always reports what actually counted.
+    entry.csRows.push({ cs: r.cs ?? null, gameDurationSec: r.gameDurationSec ?? null });
     map.set(key, entry);
   }
   return Array.from(map.values())
-    .map((e) => ({ ...e, winrate: e.wins / e.games }))
+    .map(({ csRows, ...e }) => {
+      const cs = aggregateCs(csRows);
+      return { ...e, winrate: e.wins / e.games, csPerMin: cs.csPerMin, csGames: cs.games };
+    })
     .sort((a, b) => b.games - a.games || b.winrate - a.winrate || a.championId - b.championId);
 }
 
@@ -172,6 +208,10 @@ export interface RecentGameInput {
   assists: number;
   onWpaBuild: boolean | null;
   gameCreation: string; // ISO
+  /** Migration 0021 — optional for the same back-compat reason as
+   *  MyMatchRecord's; absent === null === NOT MEASURED. */
+  cs?: number | null;
+  gameDurationSec?: number | null;
 }
 
 export interface RecentGame {
@@ -182,6 +222,16 @@ export interface RecentGame {
   deaths: number;
   assists: number;
   onWpaBuild: boolean | null;
+  /** RAW creep score for this one game. null = not stored for this row. */
+  cs: number | null;
+  /** Game length in SECONDS. null = not stored for this row. */
+  gameDurationSec: number | null;
+  /** This game's own rate, 1 decimal. null when either raw field is null OR
+   *  the game is under CS_MIN_GAME_SEC — a 4-minute remake's "rate" measures
+   *  the game ending, not farming, so it is WITHHELD rather than shown. `cs`
+   *  and `gameDurationSec` survive on such a row regardless, so a caller can
+   *  still render "12 CS in 3:41" if it wants to. */
+  csPerMin: number | null;
 }
 
 /** Latest `limit` games, newest first — sorts here (rather than trusting the
@@ -192,5 +242,23 @@ export function buildRecentGames(rows: RecentGameInput[], limit = 5): RecentGame
     .slice()
     .sort((a, b) => (a.gameCreation < b.gameCreation ? 1 : a.gameCreation > b.gameCreation ? -1 : 0))
     .slice(0, limit)
-    .map(({ gameCreation: _gameCreation, ...rest }) => rest);
+    .map(({ gameCreation: _gameCreation, cs = null, gameDurationSec = null, ...rest }) => ({
+      ...rest,
+      cs,
+      gameDurationSec,
+      csPerMin: csPerMinForGame({ cs, gameDurationSec }),
+    }));
+}
+
+/** Account-wide CS/min headline — the KPI tile. Same TIME-WEIGHTED arithmetic
+ *  as every other figure here, over whatever scope the caller's rows represent
+ *  (the summary route passes the CURRENT SPLIT, matching buildAdherencePct).
+ *
+ *  Deliberately NOT derived by averaging summarizeByChampion's per-champion
+ *  csPerMin values: that would be a mean of rates one level up, weighting a
+ *  3-game champion equally with a 90-game one. It re-aggregates from the raw
+ *  rows instead, which is the whole reason migration 0021 stores raw columns. */
+export function computeCsSummary(rows: MyMatchRecord[]): { csPerMin: number | null; csGames: number } {
+  const cs = aggregateCs(rows.map((r) => ({ cs: r.cs ?? null, gameDurationSec: r.gameDurationSec ?? null })));
+  return { csPerMin: cs.csPerMin, csGames: cs.games };
 }

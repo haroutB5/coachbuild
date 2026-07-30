@@ -21,7 +21,7 @@
 // decision here" posture as the rest of this file.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { patchFromGameVersion } from "@/lib/pro/extract";
+import { creepScore, patchFromGameVersion } from "@/lib/pro/extract";
 import { roleFromTeamPosition } from "@/lib/pro/roleMap";
 import { splitForGameCreation } from "./season";
 import type { ExtractedMyMatch, MyRiotMatch, MyRiotParticipant } from "./types";
@@ -98,5 +98,15 @@ export function extractMyMatch(match: MyRiotMatch, puuid: string): ExtractedMyMa
     itemIds: itemIdsFrom(participant),
     primaryKeystone: primaryKeystoneFrom(participant),
     split: splitForGameCreation(match.info.gameCreation),
+    // Migration 0021. RAW numerator + RAW denominator, never a rate -- the
+    // formula is lib/pro/extract.ts's creepScore(), shared with the pro/OTP
+    // pipelines rather than re-written here, so "CS" cannot come to mean two
+    // different things in one codebase. No short-game filtering happens at
+    // extraction time: a 3-minute remake is extracted and stored exactly like
+    // any other game and is dropped only at aggregation (lib/mystats/cs.ts),
+    // the same "extraction must never make a filtering decision" posture this
+    // file's header sets out for role and queue.
+    cs: creepScore(participant),
+    gameDurationSec: match.info.gameDuration,
   };
 }

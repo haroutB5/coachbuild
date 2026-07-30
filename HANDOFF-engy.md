@@ -1,386 +1,310 @@
-<!-- merged into HANDOFF.md 2026-07-29 23:32:12Z; previous content preserved there. Append new rounds below. -->
+<!-- merged into HANDOFF.md 2026-07-30 02:27:49Z; previous content preserved there. Append new rounds below. -->
 
-## 2026-07-30 — three audit defects on the multi-account ship (engy)
+# engy — My Stats data layer for the TrackDIFF-style /mystats rebuild
 
-Scope was the three defects a Fable cold-start audit found against the uncommitted
-multi-account tree, plus one cheap atomicity fix. Nothing else touched. Not
-committed, not version-bumped, not deployed.
+## §1 — THE CONTRACT fronty builds against (WRITTEN FIRST, 2026-07-30)
 
-`bash C:/Claude/AI/urgot/scripts/verify-fix.sh C:/Claude/AI/coachbuild` — ALL
-CHECKS PASSED (tsc, lint 0 warnings, **2479 tests**, build, SW, manifest). Was
-2464 before; +15 are the new ones below.
+`GET /api/mystats/summary` is extended **additively**. Every field that existed before
+keeps its exact name, type and meaning. Three groups are new.
 
----
+### 1a. Per-account rank (on every entry of the existing `accounts[]` array)
 
-### FIX 1 (P1) — the OTP walk's 6h self-refresh of `my_matches` was permanently dead
+```ts
+interface MyAccountSummary {
+  // -- unchanged, already shipped ------------------------------------------
+  id: number;
+  riotId: string;          // "MunsterHunter#EUW"
+  gameName: string;
+  tagLine: string;
+  region: string;          // "EUW"
+  active: boolean;
+  lastSeenAt: string | null;
+  games: number;
 
-`maybeRefreshMine` in `scripts/ingest-otp-priority.mjs` read the cursor by
-`WHERE id = 1`. Migration 0020 dropped that column, so it threw on every pass and
-the catch returned false. Now scoped by the active puuid, the same way
-`activePuuid`/`loadStates` in that file and `getPersistedCursor` in
-`lib/mystats/ingest.ts` already do.
-
-**Proved against the live DB, both directions** (read-only, zero Riot calls — the
-probe is still in the tree at `C:/Claude/AI/coachbuild/_engy-fix1-probe.mjs`, see
-"left behind" below):
-
-```
---- A) the query maybeRefreshMine ran until today (WHERE id = 1) ---
-FAILED as predicted: column "id" does not exist
-
---- B) the replacement (WHERE puuid = <active puuid>) ---
-SUCCEEDED: [{"last_incremental_at":"2026-07-29T23:19:50.121Z","next_start":0,"backfill_done":true}]
-
---- C) cursor table shape ---
-columns: next_start, backfill_done, updated_at, last_incremental_at, puuid   (no `id`)
-```
-
-**Independent confirmation it was live, not theoretical.** The running walk's own
-log (`%LOCALAPPDATA%\CoachBuild\otp-priority.log`) carries the failure once per
-unit, ~every 8 seconds, for the whole tail of the file:
-
-```
-[2026-07-29T23:44:26.979Z] my_matches freshness check failed — column "id" does not exist
-```
-
-**The log line is now honest about which failure it is**, per the brief. Three
-distinguishable outcomes instead of one:
-
-- no cursor row → `my_matches: no ingest cursor row for the active account yet —
-  treating as never refreshed`, and it proceeds to refresh (right answer for a new
-  account).
-- query/schema error → `MY_MATCHES SELF-REFRESH IS BROKEN — ... QUERY/SCHEMA
-  ERROR: <msg>`, naming the consequence, with a consecutive-failure count.
-- no active account → its own line.
-
-Also **throttled to one line per state per 30 min** (`noteMineCheckState`), reset
-on a healthy read so a recurrence announces itself immediately. The volume was
-part of the camouflage: 2,000+ identical lines is indistinguishable from routine
-noise, which is how a hard schema error survived.
-
-One structural change at the call site: `activePuuid(sql)` is now resolved *once*
-per pass and passed into `maybeRefreshMine`, instead of the refresh doing its own
-lookup after. Same answer, one query, one copy of the fact.
-
-**Not yet in effect on the live walk.** pid 27024 has the old code loaded and has
-been running since 2026-07-29T17:15Z. The fix takes effect when
-`CoachBuildOtpIngest` next restarts it. Re-run the probe afterwards to confirm.
-
----
-
-### FIX 2 (P1) — incremental ingest now pages until overlap
-
-`runMyStatsIngest` in incremental mode fetched one page of the newest 30 and
-stopped, and nothing anywhere schedules backfill mode. Fixed as briefed: page
-forward from `start=0` until a page contains a match id already stored **for that
-account**.
-
-Everything below lives in `lib/mystats/ingest.ts`, whose header now carries the
-full argument. Read that before touching the loop.
-
-**The part that is easy to get wrong, and the reason there is a flag at all.**
-Overlap alone is *not* a completeness proof — "I have seen this game before" only
-means "fully synced" if everything *behind* that point was walked too. So the walk
-reads the persisted flag and only stops on overlap when the history is already
-known complete (`stopOnOverlap`); otherwise it walks to exhaustion to *earn* it.
-Without that, a run stopped part-way would store a fresh block at the front and
-the next run would find overlap on page 0 and declare itself synced over the hole
-it just made — the same defect one level up, exactly as the brief warned.
-
-#### The `backfill_done` decision: REUSED, not retired, with one sharpened meaning
-
-```
-backfill_done = true  <=>  every match in this account's season window, down to
-                           the depth this app walks (INCREMENTAL_DEPTH_CAP ==
-                           BACKFILL_CAP), has been EXAMINED at least once.
+  // -- NEW (2026-07-30) ----------------------------------------------------
+  /** "IRON".."CHALLENGER", uppercase, exactly as Riot spells it.
+   *  null = we DID look and this account has no ranked solo/duo standing
+   *  (genuinely unranked, or placements not finished). */
+  tier: string | null;
+  /** "I" | "II" | "III" | "IV". null whenever tier is null. Riot always sends
+   *  "I" for MASTER/GRANDMASTER/CHALLENGER -- do not render a division for
+   *  those three tiers. */
+  division: string | null;
+  /** League points, 0-100 in normal tiers, unbounded in apex. null whenever
+   *  tier is null. */
+  lp: number | null;
+  /** Ranked solo/duo wins/losses for the CURRENT split, straight from Riot.
+   *  null whenever tier is null. Display-only, like everything else here. */
+  rankWins: number | null;
+  rankLosses: number | null;
+  /** TRUE = we do not know, as opposed to "unranked".
+   *  Exactly one of these two readings is right at any time:
+   *    rankUnknown === false  ->  tier/division/lp are the truth. tier === null
+   *                               here means GENUINELY UNRANKED -- render the
+   *                               "Unranked" state, not a blank.
+   *    rankUnknown === true   ->  tier/division/lp are ALWAYS null and mean
+   *                               NOTHING. Render a placeholder / "--", never an
+   *                               unranked badge. Happens when: the account has
+   *                               never been the active one (we only ever spend
+   *                               a Riot call on the active account), or the
+   *                               last fetch failed.
+   *  A tier badge that renders blank on rankUnknown is the confidently-wrong-
+   *  blank this field exists to prevent. */
+  rankUnknown: boolean;
+  /** ISO of when the stored rank was last read from Riot, or null when never.
+   *  Lets the UI say "as of 14:05" instead of implying it is live. */
+  rankCheckedAt: string | null;
+}
 ```
 
-**Why reuse rather than retire.** That is already what backfill mode meant by it,
-*including* its cap-reached case ("as deep as this feature goes"). So no migration,
-no column rename, and no second flag that could disagree with the first. What
-changed is that incremental mode now both **reads** it (as its licence to stop on
-overlap) and **writes** it — setting it true when it proves the window exhausted,
-and **clearing** it when a per-run limit cut a walk short.
+Top-level convenience mirror of the ACTIVE account's rank, so the hero does not have to
+hunt through `accounts[]`: `tier`, `division`, `lp`, `rankWins`, `rankLosses`,
+`rankUnknown`, `rankCheckedAt` -- identical semantics, same values as
+`accounts.find(a => a.active)`. On the `accountUnresolved:true` response they are
+`null` / `rankUnknown:true`.
 
-Deliberate consequences worth knowing:
+**Solo queue only.** `RANKED_SOLO_5x5`. Flex is not fetched, not stored and not surfaced --
+if it ever is, it arrives under separate `flex*` names, never silently inside these.
 
-- **`next_start` stays backfill-mode-only.** Incremental never reads or writes it
-  and always re-walks from 0. That costs one cheap id page per 100 already-stored
-  ids and means it can never trust a stale offset. One column, one meaning, two
-  writers who agree — not two mechanisms.
-- **A fresh account no longer needs a manual backfill at all.** "Until overlap"
-  with nothing stored *is* the backfill. `scripts/ingest-mystats.mjs` still works
-  and is now the *fast* path rather than the only one (see the convergence note).
-- **`"examined"` is not `"stored"`.** A match Riot refuses to serve, or a
-  pre-season row dropped by the season guard, is examined. Otherwise one
-  permanently-404ing match would hold the flag hostage forever. Residual cost: one
-  wasted Riot call per run for such a match, visible in `result.errors`. Same cost
-  as before this change.
-- Backfill mode's own result reports `truncatedBy: null` always: both its stop
-  conditions mean "as deep as this feature walks", which is completeness under
-  this definition, not truncation.
+### 1b. CS on the champion pool
 
-#### The cap, and why it is 30
+The champion-pool array is the **existing `records[]`**. `championPool` is emitted as an
+**alias of the same array** (identical object references, asserted by a test) so either
+name works -- `records` is what already-shipped consumers read, `championPool` is the name
+the redesign brief used. They can never disagree; do not compute one from the other.
 
-**This is the constraint the brief did not have, and it drove the design.** Both
-callers of incremental mode declare `maxDuration = 60`
-(`app/api/mystats/refresh/route.ts`, `app/api/ingest/mystats/route.ts`). At
-`lib/pro/pacer.ts`'s 1.3s floor that is ~45 Riot calls of wall clock, so a walk
-sized to fetch a whole season in one invocation would simply be **killed** — and a
-killed run records nothing. Constants:
+```ts
+interface ChampionSummary {
+  // -- unchanged -----------------------------------------------------------
+  championId: number;
+  role: number;            // 0..4, -1 unresolved
+  games: number;
+  wins: number;
+  winrate: number;         // 0..1
+  lastPlayed: string;      // ISO
 
-| constant | value | why |
-|---|---|---|
-| `INCREMENTAL_CALL_BUDGET` | 30 | id pages + match fetches together. ~39s paced, inside 60s *with the cursor write done*. |
-| `INCREMENTAL_DEADLINE_MS` | 45 000 | `resolveRecommendedBuild`'s coachless lookups are unpaced and unbounded; only a clock maps to `maxDuration`. |
-| `INCREMENTAL_MAX_PAGES` | 20 | belt-and-braces; never the binding limit. |
-| `INCREMENTAL_DEPTH_CAP` | `BACKFILL_CAP` (400) | policy depth. Same number by construction so the two paths cannot disagree about where "as deep as we go" is. |
-| `INCREMENTAL_CATCHUP_PAGE_SIZE` | `PAGE_SIZE` (100) | a catch-up re-scans stored territory to reach the frontier; Riot charges per *page*, not per id, so 100/page crosses the depth cap in 4 calls instead of 14. Steady state keeps 30. |
+  // -- NEW -----------------------------------------------------------------
+  /** TRUE average CS per minute across this champion+role, time-weighted:
+   *  sum(cs) / (sum(gameDurationSec) / 60). NOT the mean of per-game rates --
+   *  a 40-minute game and a 20-minute game do not average their rates.
+   *  null when csGames === 0. Rounded to 1 decimal. */
+  csPerMin: number | null;
+  /** How many of `games` are actually behind csPerMin. ALWAYS <= games, and
+   *  frequently smaller: rows ingested before this ship have no CS yet, and
+   *  games under 300s are excluded (see 2). Render the denominator, or at
+   *  least refuse to show csPerMin when csGames is tiny. */
+  csGames: number;
+}
+```
 
-`callBudget` / `deadlineMs` / `now` are overridable via `MyStatsIngestOptions` —
-`deadlineMs: null` disables the clock for long-running script callers. Nothing in
-the app overrides them.
+### 1c. CS on recent games
 
-**The rate limit is untouched.** No change to `lib/pro/pacer.ts`, no parallel
-fan-out, no new concurrent caller. The walk spends *fewer or equal* calls per
-invocation than the ceiling those two routes already implied.
+```ts
+interface RecentGame {
+  // -- unchanged -----------------------------------------------------------
+  championId: number;
+  role: number;
+  win: boolean;
+  kills: number;
+  deaths: number;
+  assists: number;
+  onWpaBuild: boolean | null;
 
-#### A truncation is never silent — three places, not one
+  // -- NEW -----------------------------------------------------------------
+  /** Raw creep score for this one game (minions + neutral monsters).
+   *  null = not stored for this row (pre-ship row, not yet backfilled). */
+  cs: number | null;
+  /** Game length in seconds. null on pre-ship rows. */
+  gameDurationSec: number | null;
+  /** cs / (gameDurationSec / 60), 1 decimal. null when either input is null
+   *  OR the game is under 300s (see 2) -- a 4-minute remake's "rate" is
+   *  noise, so it is withheld rather than shown. `cs` and `gameDurationSec`
+   *  are still populated for such a row, so the UI can still show "12 CS in
+   *  3:41" if it wants to. */
+  csPerMin: number | null;
+}
+```
 
-1. **Log**, loud: `INCOMPLETE SYNC for <riotId>: stopped after N page(s) / M ids
-   examined WITHOUT reaching already-synced games — <reason>. ...this account's
-   stats are over a PARTIAL history until it does.`
-2. **Persisted**: `backfill_done` cleared, so the next run resumes the catch-up
-   instead of stopping at the false overlap. This is the load-bearing half.
-3. **On the wire**: `MyStatsIngestResult.truncatedBy` (the reason, verbatim) and
-   `historyComplete`, passed through `lib/mystats/refresh.ts`'s
-   `{refreshed:true,...}` variant and returned by both ingest routes.
+### 1d. Headline KPI
 
-Additionally `GET /api/mystats/summary` now carries **`historyComplete`**, read
-through the one function that owns the flag (`readHistoryComplete`, exported from
-`ingest.ts` rather than re-querying at the call site — gotcha (dd)). That is the
-surface computing the `season: "Season 2026"` label, so the fact that the
-denominator may be partial travels with the numbers. **The UI does not render it
-yet** — that is a fronty change and I did not make it. The honest treatment is to
-qualify the season label / stat tiles when `historyComplete === false`.
+Top-level, account-wide, current split (same scope as `buildAdherencePct`):
 
-#### Idempotency and kill-safety
+```ts
+csPerMin: number | null;   // time-weighted across the whole current split
+csGames: number;           // games behind it; 0 => csPerMin is null
+```
 
-Unchanged dedupe: the per-page `SELECT match_id ... WHERE puuid = ... AND match_id
-= ANY(...)` prefilter plus `ON CONFLICT (puuid, match_id) DO NOTHING`. Matches are
-inserted one at a time and the flag is only written at the *end* of a proven walk,
-so a kill mid-walk loses nothing, duplicates nothing, and leaves `backfill_done`
-at its old value — false if mid-catch-up; and if it was true, the next run's
-front-fill re-checks the front anyway.
+### Not built, deliberately -- see 4
 
-#### The window: it is the SEASON boundary, not 90 days
+`avgScore`, `mvp`/`ace`, `placement`, `avgGameElo` are **absent from the response** and
+will stay absent. Do not leave a slot expecting them.
 
-Correcting the brief's premise. `my_matches`' ingest boundary is
-`seasonStartEpochSec()` — 2026-01-08, about seven months — passed as `startTime` on
-**every** id page in both modes, so the walk structurally cannot reach behind it no
-matter how many pages it takes. The 90-day figure is `lib/pro/fresh.ts`'s
-`FRESH_WINDOW_DAYS`, which governs the pro/OTP pipelines
-(`scripts/ingest-otp-priority.mjs`), not this one. The *intent* of the
-non-negotiable is honoured exactly: the window is never widened, depth comes from
-paginating inside it. Noted in the file header so the next reader does not carry
-the 90-day number across.
+## §2 -- Short games and remakes
 
-#### Convergence cost, stated plainly
+Stored always, excluded from every RATE. Threshold `CS_MIN_GAME_SEC = 300` (5 minutes),
+one exported constant in `lib/mystats/cs.ts`.
 
-A fresh account with a full season converges over **multiple runs**, not one:
-~29 matches per run, so ~400 games is ~14 runs. With the page-view refresh's 3-min
-cooldown that is ~45 minutes of having My Stats open; on the daily cron alone it is
-~2 weeks. `npx tsx scripts/ingest-mystats.mjs` (long-running, no serverless wall,
-no budget) still does it in one pass and is the fast path for a newly linked
-account. This is a real limitation of a 60s function plus a shared Riot key, not a
-bug — but it is the reason `historyComplete` is on the wire, and it is why I did
-**not** shorten `REFRESH_COOLDOWN_MS` to speed convergence: that is a key-budget
-decision, the OTP walk is currently spending the same key, and it was not mine to
-make while the user is asleep.
+Why 300 and not Riot's 3:00 remake vote: a remake ends at ~3:20 with the duration Riot
+reports, but early FF/disconnect games in the 3-5 minute band are equally rate-noise (a
+jungler with 8 CS at 4:10 reads as 1.9 CS/min and drags a real 7.0 average down hard).
+Below 5 minutes there is no laning phase to measure, so the number would not be a
+measurement of anything. Above it, everything counts -- no upper bound, no other filter.
 
-#### Tests (14 new, `lib/__tests__/mystats-ingest.test.ts`)
+The row is never dropped: `cs` and `game_duration_sec` are stored for a 3-minute remake
+exactly like any other game. The exclusion happens at aggregation time only, so changing
+the threshold later is a one-constant change with no re-ingest.
 
-Grouped by the three properties the brief named. The one that matters most is
-**CONVERGES ACROSS RUNS**: the harness's fake cursor row is *mutated* by a flag
-write, so run 1 truncating and run 2 finishing over the block run 1 created is
-actually exercised end to end — that is the false-overlap trap, and it is the
-failure mode that would silently lose games.
+## §3 -- What landed
 
-- termination: steady state stops on page 0 (and writes no cursor row at all);
-  caught-up-from-behind pages 0/30/60 and stops on the overlapping page; **an
-  incomplete history does NOT stop at the first overlap**; a fresh account's walk
-  becomes the backfill with no separate trigger.
-- window: every page carries the season `startTime`; a short page ends the walk;
-  it never requests a page past the window's end; the depth cap is **clamped**, not
-  overshot, even with an awkward caller `pageSize`.
-- cap recorded: call budget → `truncatedBy` set, `historyComplete` false, flag
-  written `false`, `INCOMPLETE SYNC` logged; **a truncated front-fill clears a
-  previously-true flag**; the wall-clock deadline is recorded identically;
-  `deadlineMs: null` opts out cleanly.
-- idempotency: re-running a complete walk makes zero `getMatch` calls.
+### Files
 
-Plus one in `lib/__tests__/mystats-refresh.test.ts` pinning that
-`runMyStatsRefresh` passes `historyComplete`/`truncatedBy` through to the client.
-That plumbing was a genuine silent gap: `toEqual` treats a missing key and an
-`undefined` one as equal, so the two pre-existing pass-through tests would have
-kept passing with the fields dropped. Both now assert them explicitly.
-
-Two of my first-draft tests failed on the real default budget rather than on the
-loop — the 30-call budget truncates a 70-new-game catch-up. The premise was mine,
-not the code's; those two now pass an explicit budget to isolate the loop, and the
-default-budget behaviour got its own convergence test instead of being papered
-over.
-
----
-
-### FIX 3 (P2) — real puuid in a publicly served file
-
-`public/companion.ps1` is served from `https://coachbuild.vercel.app/companion.ps1`.
-Its SelfTest `$realShape` fixture carried the user's real 78-character puuid, in
-**two** places (the fixture and the `$expectedMeJson` string). Both replaced with
-`SYNTHETIC-PUUID-NOT-A-REAL-ACCOUNT-0000000000000000000000000000000000000000000`
-— same 78-char length, and nothing anywhere asserts a puuid's length or charset
-(`ConvertTo-MeIdentity` checks present/string/non-blank), so the shape assertion
-loses nothing. The comment above it now says the values are synthetic **and why
-they must stay that way**, instead of implying the capture was the source.
-
-**What the sweep of that file and `_capture/` found:**
-
-- **`_capture/` is clean.** Every raw body has `"puuid":"[REDACTED]"`,
-  `"gameName":"[REDACTED]"` etc., `scripts/capture-lcu.ps1` does the redaction, and
-  the directory is gitignored and untracked. The capture's own redaction claim is
-  **true**. The leak was authored directly into the fixture from the live client
-  while the comment pointed at the (clean) capture as its provenance — the file
-  claiming redaction and the file that broke it were not the same file.
-- **No other long identifier-shaped string in `companion.ps1`.** A scan for
-  `[A-Za-z0-9_-]{40,}` returns only those two lines (plus two ASCII rules).
-  `summonerId = 1000000` is already synthetic; every other mock puuid in the file
-  is already obviously fake (`mock-puuid-...`, `d0123456789abcdef0123`).
-- **Also fixed, same class, lower exposure:**
-  `components/__tests__/companionMe.test.ts` held a **44-character prefix** of the
-  same real puuid. Not served publicly, but 44 characters is plenty to identify the
-  account, and scrubbing one file while leaving the secret in a sibling is fixing
-  the instance rather than the invariant. Replaced with a synthetic of the same
-  length.
-- **Reported, deliberately NOT changed — Riot IDs.** `MunsterHunter#EUW` and
-  `K1ayer#swift` appear as plain names in `companion.ps1` (and in
-  `lib/mystats/account.ts`'s `MY_RIOT_ID` default, `CLAUDE.md`, and elsewhere). A
-  Riot ID is a public in-game display name, a different exposure class from an
-  API-addressable puuid; `K1ayer#swift` specifically is load-bearing test data (a
-  real custom tagLine is what proves `routingForServer("swift")` is null, which is
-  why region resolution is server-side); and changing it in one file while it is
-  public in ten others is theatre. **Flagging it for the user rather than deciding
-  it.** If they want the names out too, it is a global rename, not a one-line fix.
-- `HANDOFF.md` contains `WBGC6KIe…` — an 8-character elision. That is real
-  redaction and not usable. Left as is.
-
-**No companion version bump.** The change is a SelfTest fixture value; no
-behaviour changed, so no re-install is required. (Also per the brief: no bumps.)
-
----
-
-### Also fixed — `setActiveAccount` is now one transaction
-
-`lib/mystats/account.ts`. The two UPDATEs run in a single Neon HTTP transaction
-(`sql.transaction([...])`). Migration 0020's partial unique index already makes
-*two* active rows unrepresentable; what it cannot prevent is a crash between the
-statements leaving **zero** active, which renders the `accountUnresolved` empty
-state for an account the user definitely linked. Safe direction, so never a P0, but
-two statements that must both land are a transaction.
-
-Order still matters *inside* the transaction (deactivate first) — statements
-execute sequentially and the partial index is checked per statement.
-
-**Deliberately NOT collapsed into `SET active = (id = $1)`**, which looks simpler
-and is a trap: one UPDATE touching both rows may be executed in either row order,
-and the index rejects the ordering that activates the new row while the old one is
-still active — a duplicate-key error that depends on the plan rather than on the
-data. That reasoning is in the code comment, not only here.
-
-Test-side consequence: the Neon `sql` is a function *with a `.transaction`
-property*, and a bare `vi.fn()` is not. Every sql mock in
-`lib/__tests__/mystats-account.test.ts` now goes through a local `sqlMock()` helper
-that supplies it. Two new assertions pin that exactly one transaction of exactly
-two statements is issued, and that an unknown id issues none.
-
----
-
-### Verified, and HOW
-
-| claim | how |
+| File | Change |
 |---|---|
-| Fix 1's old query is dead / new one works | Ran both against the live Neon DB. Output pasted above. Plus the running walk's own log showing the failure once per unit. |
-| Fix 1's script still loads and runs | `node --check` clean; `npx tsx scripts/ingest-otp-priority.mjs --dry-run --verbose` produced a real plan (22 champions with work, 12235 stored across 172 featured). Dry-run takes no lock and makes zero Riot calls. |
-| No sibling dead reads | Swept every `my_ingest_cursor` query in the repo: all puuid-scoped except `purge.ts`'s deliberately account-wide UPDATE. Swept `id = 1` across all `.ts`/`.mjs`/`.tsx`: only comments remain. |
-| Fix 2's loop | 14 new unit tests (above) with a fake Riot history + a *mutable* fake cursor, so cross-run convergence is exercised, not assumed. |
-| Fix 2 spends no more key than before | No change to `lib/pro/pacer.ts`; per-run budget derived from the callers' existing `maxDuration = 60`. |
-| Fix 3 | `grep -c` for the full puuid across the tree = 0 outside the 8-char elision in `HANDOFF.md`. `companion.ps1 -SelfTest` emits **no** `ConvertTo-MeIdentity` or `GET /me JSON shape drifted` failure, so the shape assertions pass against the synthetic value (SelfTest prints only failures). |
-| whole tree | `verify-fix.sh` all green, 2478 tests. |
-| no live Riot calls made | The walk **is** running (pid 27024, lock file present, log active). Every check I ran was read-only SQL, `--dry-run`, or a mocked unit test. |
+| `migrations/0021_mystats_cs.sql` | `my_matches.cs`, `my_matches.game_duration_sec`. APPLIED. |
+| `migrations/0022_mystats_rank.sql` | `my_account.rank_{tier,division,lp,wins,losses,checked_at,attempted_at}`. APPLIED. |
+| `lib/pro/extract.ts` | NEW `creepScore()` -- the one CS formula, now shared. `extractGameStats` calls it. |
+| `lib/pro/types.ts` | NEW `RiotLeagueEntryDto` (shape OBSERVED live, not from docs). |
+| `lib/pro/riot.ts` | NEW `getLeagueEntriesByPuuid(platform, puuid)`. |
+| `lib/mystats/cs.ts` | NEW. `CS_MIN_GAME_SEC`, `countsTowardCsRate`, `csPerMinForGame`, `aggregateCs`. |
+| `lib/mystats/rank.ts` | NEW. Fetch/persist/TTL/selection, all pure parts separately testable. |
+| `lib/mystats/extract.ts` | Pulls `cs` (via `creepScore`) + `gameDurationSec`. |
+| `lib/mystats/types.ts` | CS on `ExtractedMyMatch`/`MyMatchRow`, rank on `MyAccountRow`, `gameDuration` + the two minion fields on the Riot shapes. |
+| `lib/mystats/aggregate.ts` | CS threaded into `summarizeByChampion` + `buildRecentGames`; NEW `computeCsSummary`. |
+| `lib/mystats/account.ts` | `listAccounts` returns rank via `rankFromRow`. |
+| `lib/mystats/ingest.ts` | INSERT carries `cs`, `game_duration_sec` -- new matches self-populate. |
+| `app/api/mystats/summary/route.ts` | All new fields, additively. |
+| `scripts/backfill-mystats-cs.mjs` | NEW. Walks EVERY linked account (the KDA script is active-only -- see below). |
+| `lib/__tests__/mystats-cs.test.ts` | NEW, 24 tests. |
+| `lib/__tests__/mystats-rank.test.ts` | NEW, 25 tests. |
 
-### NOT verified — be explicit
+### Proof on real rows
 
-- **The fixed `maybeRefreshMine` has not executed.** The live walk still runs the
-  old code; I proved the replacement *query* against the real DB but not the
-  function end to end, because doing so spends Riot calls through
-  `runMyStatsRefresh` while the walk holds the key. Confirm after the next
-  `CoachBuildOtpIngest` restart: `otp-priority.log` should show
-  `refreshing my_matches (last incremental ...)` and no `MY_MATCHES SELF-REFRESH IS
-  BROKEN`.
-- **Fix 2 has never run against real Riot data.** Every test is mocked. The
-  multi-page walk, the overlap detection against a real `my_matches`, and the
-  convergence arithmetic are all unexercised in production. Same reason.
-- **The multi-account case is still hypothetical in the data.** `my_account` holds
-  exactly ONE row (MunsterHunter#EUW, 138 games, 2026-01-12 → 2026-07-29,
-  `backfill_done = true`). Both of Fix 2's scenarios need a second linked account to
-  actually occur. So Fix 2 is a fix for a defect that has not yet had the chance to
-  produce wrong numbers — which is the right time to fix it, but it does mean
-  nothing in the live DB confirms the *symptom* existed.
-- **`companion.ps1 -SelfTest` reports 3 failures**, all in the double-launch guard:
-  a real companion is running (PID 16500, since 2026-07-28) and holds the mutex.
-  **Pre-existing and environmental, proved** — I extracted `git show
-  HEAD:public/companion.ps1` to a temp file and ran its SelfTest: byte-identical
-  three failures. Not from my change.
-- **No browser smoke test.** Nothing rendered changed; `historyComplete` is
-  additive and unconsumed by the UI.
-- The `sqlMock` transaction stand-in *executes* the queries it is handed (a real
-  Neon tagged template is lazy and only runs inside the transaction). Statement
-  order and count are faithful; the actual BEGIN/COMMIT is the driver's, and is not
-  covered by a unit test.
+`gameDuration` IS seconds, verified rather than assumed -- measured min 73s / max 3045s
+across the backfilled rows, i.e. the normal 1-51 minute band. The millisecond form (Riot
+pre-11.20) is unreachable here because the table is season-scoped to 2026, so no
+magnitude guard was added; a guard keyed on magnitude would be untestable against real
+data and would silently rescale a legitimately long game.
 
-### Out of scope, left alone as instructed
+Newest real rows after backfill:
 
-`/api/mystats/matchups` applies no split filter while summary's `records` are
-split-scoped, so a row's expansion can show more games than its header.
-Pre-existing, not from this ship. Untouched — the user is being told separately.
+```
+riot_id              match_id           champ role  cs  dur_sec  cs/min
+K1ayer#swift         EUW1_7934363887     38    -1    39   1372    1.7
+K1ayer#swift         EUW1_7933884838    112     2   222   2093    6.4
+MunsterHunter#EUW    EUW1_7933781384     54     0   241   2230    6.5
+MunsterHunter#EUW    EUW1_7933656564     50     0   262   2329    6.7
+MunsterHunter#EUW    EUW1_7930659630    112     0   311   3045    6.1
+MunsterHunter#EUW    EUW1_7930183601    904     0   231   1933    7.2
+```
 
-### Left behind on purpose / for urgot
+**The aggregation choice is measurable on live data, not just in a fixture** -- this is
+why the raw columns are stored instead of a rate:
 
-- **`C:/Claude/AI/coachbuild/_engy-fix1-probe.mjs`** — untracked read-only
-  diagnostic (zero Riot calls) that reproduces Fix 1 in both directions. Re-run it
-  after the walk restarts. **I could not delete it: the repo's safety-gate hook
-  blocks every `rm`,** and the hook itself is broken — it fails with
-  `mkdir: cannot create directory 'S:/AI'` and
-  `touch: cannot touch 'S:/AI/urgot/data/approved.txt'` before blocking, i.e. it
-  points at the dead `S:/AI/urgot` root and cannot write its own approval file or
-  log. Per the "never route around a block" rule I stopped rather than working
-  around it. **That broken hook is worth fixing independently** — right now it
-  cannot be approved out of, so no destructive command can ever be authorised.
-- Two dead leftovers noted by a previous round are still unreferenced in
-  `components/hextech/itemSetBody.ts` (`idOrderKey`, `SITUATIONAL_CAP`). Still out
-  of scope, still noted.
-- `scripts/ingest-mystats.mjs` (backfill runner) is now arguably redundant with
-  incremental subsuming it, but it is the only path that walks a whole history in
-  one pass, so it should stay until someone deliberately retires it.
+```
+riot_id              split  cs_games  TIME-WEIGHTED  naive mean-of-rates
+K1ayer#swift           2        2         4.5              4.0
+MunsterHunter#EUW      1       22         5.4              5.5
+MunsterHunter#EUW      2       80         5.1              5.1
+```
 
-### Proposed wiki/CLAUDE.md updates (not applied — urgot merges)
+6 real games in the table are under 300s and are excluded from every rate.
 
-- `CLAUDE.md`'s My Stats section still describes "ONE fixed linked Riot account"
-  and lists migrations only to 0017. Both are stale as of the multi-account ship.
-- New gotcha worth adding: **an incremental sync's stop-on-overlap needs a
-  persisted completeness flag, or a truncated run manufactures its own false
-  overlap.** That is the generalisable lesson here and it will apply to the next
-  paginated catch-up anyone writes in this repo.
-- New gotcha: **a per-run budget on a serverless ingest must be derived from
-  `maxDuration`, not chosen.** A budget bigger than the wall does not fetch more —
-  it gets the function killed before it can record what it did.
+Rank, live end-to-end through `refreshStaleRanks` (the actual route path):
+
+```
+PASS 1 (cold):  riot calls spent: 2
+  MunsterHunter#EUW  active=true   PLATINUM IV  89 LP  65W/66L  rankUnknown=false
+  K1ayer#swift       active=false  EMERALD  IV  57 LP  80W/56L  rankUnknown=false
+PASS 2 (immediately after):  riot calls spent: 0   <- TTL gating, proven live
+```
+
+K1ayer's real league-v4 response carries BOTH a solo entry and a `RANKED_FLEX_SR`
+GOLD III entry. The stored value is the EMERALD IV solo one, so the queueType filter is
+verified against the exact data that would have broken an index-based pick. The active
+account was not changed by any of this (`MunsterHunter#EUW` is still active).
+
+### Decisions worth knowing
+
+- **`records` and `championPool` are the SAME array by reference**, built once and
+  emitted twice. Not two calls to `summarizeByChampion` -- two independent computations
+  of one fact is gotcha (dd). Pinned by a reference-identity test.
+- **Rank TTL is 30 minutes, not coachless.ts's 6 hours.** Deliberate deviation from the
+  brief's suggestion, one exported constant (`RANK_TTL_MS`) to change back. LP moves
+  every ranked game, so a 6-hour-old LP is routinely a wrong number shown as current,
+  whereas coachless's build aggregates barely move within a patch. The cost is bounded
+  because the TTL is enforced against a DB column rather than per-process memory: ~48
+  calls/day/account against a budget of 100 per 2 MINUTES. The hard constraint the brief
+  set -- not a call per page view -- holds with large margin, and `rankCheckedAt` ships
+  so the UI never has to imply the number is live.
+- **The rank cache is in Postgres, not in module state.** An in-process TTL on Vercel is
+  per-lambda-instance, so N cold instances make N calls for the same fact.
+- **At most 2 accounts refresh per request** (`RANK_REFRESH_MAX_PER_REQUEST`): the active
+  one, then the stalest other. That is what lets a non-active account's card fill in at
+  all without the fan-out the brief forbids. Steady state is zero calls.
+- **A failed refresh keeps the last good reading.** `rank_checked_at` (last success) and
+  `rank_attempted_at` (last attempt) are separate columns precisely so a transient Riot
+  failure backs the call off WITHOUT blanking a badge that was correct a minute ago. The
+  staleness is disclosed via `rankCheckedAt` rather than hidden.
+- **`scripts/backfill-mystats-cs.mjs` walks every linked account**, unlike
+  `backfill-mystats-kda.mjs`, which is active-account-only because it predates
+  multi-account. That older script will therefore never fill a non-active account's
+  KDA -- pre-existing, out of scope for this pass, flagged as a follow-up.
+
+### Two environment notes for whoever runs the gate next
+
+- **`verify-fix.sh`'s BUILD step is unreliable while a `next dev` is up on this
+  checkout** -- CLAUDE.md gotcha (i), hit live here. fronty's dev server (`next dev -p
+  3007`, PID confirmed) was running in parallel, and `next build` failed twice on
+  DIFFERENT, untouched routes each time (`/mystats` + `/` on one run, `/api/ingest/otp` +
+  `/api/pros` on the next) before passing clean on a third with no code change between.
+  Non-deterministic failures on routes the diff never touches is the signature; do not
+  debug it as a code defect. Final state: **verify-fix ALL CHECKS PASSED, 2622 tests**
+  (up from 2501).
+- **The CS backfill ran concurrently with the `ingest-mystats` process that was still
+  walking K1ayer** (started 07:10, still alive). `lib/pro/pacer.ts` only serialises Riot
+  calls WITHIN a process, so the two together spent against one key at roughly double the
+  intended rate. It completed 162/162 with zero failures and zero 429s, so nothing was
+  harmed -- but that was margin, not design. Worth knowing before someone runs two
+  Riot-spending scripts side by side on a busier day.
+
+### Not done / verified-absent
+
+- **`components/hextech/myStats.ts` is untouched** -- it is fronty's surface. It
+  normalizes `records` and will pass the new fields through only once fronty widens
+  `normalizeRecord`. The API side is complete and correct independently.
+- **The CS backfill covers pre-0021 rows only.** New matches self-populate through
+  `lib/mystats/ingest.ts`. Rows that fail their Riot re-fetch stay NULL and are excluded
+  from every figure rather than counted as zero.
+- **No `next: { revalidate }` was added to the Riot fetch path.** `riotFetch` is shared
+  with every other pipeline and adding Next fetch-caching there would change caching
+  behaviour for match ingest too -- out of scope and risky.
+
+## §4 -- Avg Score / MVP / ACE / placement / Avg Game ELO -- NOT BUILT
+
+None of these were built, no formula was invented, and no field for any of them exists on
+the response. Assessed individually rather than dismissed as a group:
+
+- **Avg Score** -- a proprietary composite. There is no published definition, so any
+  version I wrote would be a formula of my own invention rendered in the same typeface as
+  the measured numbers beside it. Not derivable. Not built.
+- **MVP / ACE** -- these are *rendered* by other sites from a composite score, so they
+  inherit Avg Score's problem exactly: computing them means first inventing the score.
+  Not built.
+- **Placement within the match ("10th", "4th")** -- same. A placement is a RANKING over a
+  per-player score, so it cannot exist before the score does. Worth stating plainly
+  because it looks more objective than it is: a rank over an invented number is still an
+  invented number, just harder to argue with.
+- **Avg Game ELO** -- this is the one with a real, honest partial path, so it gets a
+  derivation rather than a flat refusal. We could call league-v4 for the nine other
+  participants of a match and average their tiers. It is still NOT built, for three
+  reasons, and I recommend against it: (1) cost -- 9 extra Riot calls PER MATCH against a
+  shared key that suspends the whole app when it trips, which is 1,494 calls to backfill
+  the 166 rows currently stored; (2) it would be measured at *fetch* time, not at *game*
+  time, so a game from March would be labelled with the players' ranks TODAY -- a number
+  that silently changes meaning the longer ago the game was; (3) match-v5 does not carry
+  participant ranks, so there is no cheap path. **If you want it, the honest version is a
+  forward-only field populated at ingest for NEW matches only, labelled "avg rank at time
+  of ingest", never backfilled.** Your call -- I have left it unbuilt.
+
+The `records`/`championPool` entries and `recentGames` entries carry exactly the fields in
+§1 and nothing speculative alongside them.

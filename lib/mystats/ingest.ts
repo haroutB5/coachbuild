@@ -510,12 +510,14 @@ async function ingestOnePage(
       await sql`
         INSERT INTO coachbuild.my_matches (
           puuid, match_id, queue_id, game_creation, patch, champion_id, role, opp_champion_id, win,
-          kills, deaths, assists, item_ids, primary_keystone, on_wpa_build, split
+          kills, deaths, assists, item_ids, primary_keystone, on_wpa_build, split,
+          cs, game_duration_sec
         ) VALUES (
           ${account.puuid}, ${row.matchId}, ${row.queueId}, ${row.gameCreation}, ${row.patch},
           ${row.championId}, ${row.role}, ${row.oppChampionId}, ${row.win},
           ${row.kills}, ${row.deaths}, ${row.assists}, ${row.itemIds}::integer[], ${row.primaryKeystone},
-          ${onWpaBuild}, ${row.split}
+          ${onWpaBuild}, ${row.split},
+          ${row.cs}, ${row.gameDurationSec}
         )
         ON CONFLICT (puuid, match_id) DO NOTHING
       `;

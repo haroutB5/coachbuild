@@ -254,6 +254,31 @@ export interface RiotRegionDto {
   region: string;
 }
 
+/** league-v4 `entries/by-puuid` element (lib/pro/riot.ts's
+ *  getLeagueEntriesByPuuid). Shape OBSERVED LIVE 2026-07-30 against both linked
+ *  My Stats accounts, not assumed from docs — the full observed payload was
+ *  `{queueType, tier, rank, puuid, leaguePoints, wins, losses, veteran,
+ *  inactive, freshBlood, hotStreak}`. Only the six fields below are consumed;
+ *  the four booleans are deliberately not carried, because nothing renders them
+ *  and an unused stored field is a field nobody validates.
+ *
+ *  `tier`/`rank` are typed `string`, NOT unions, on purpose: a tier Riot adds
+ *  later must degrade to "a tier we display verbatim", never to a type error or
+ *  a silently dropped entry. */
+export interface RiotLeagueEntryDto {
+  /** "RANKED_SOLO_5x5" | "RANKED_FLEX_SR" | ... — the discriminator. */
+  queueType: string;
+  /** "IRON".."CHALLENGER", uppercase. */
+  tier: string;
+  /** "I".."IV" — always "I" in MASTER/GRANDMASTER/CHALLENGER, where it carries
+   *  no information. Stored/forwarded verbatim; the decision not to RENDER it
+   *  for those tiers belongs to the UI, not to this shape. */
+  rank: string;
+  leaguePoints: number;
+  wins: number;
+  losses: number;
+}
+
 export interface RiotPerkSelection {
   perk: number;
   var1?: number;

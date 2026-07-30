@@ -2,6 +2,88 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.84.0] — 2026-07-30 — My Stats as a profile page, and the numbers behind it
+
+Rebuilt `/mystats` in the shape of a TrackDIFF profile: hero band, account card grid,
+most-played-champions panel and a Match Performance panel with a per-game bar chart.
+
+### Added
+- **CS per minute** (migration 0021). Stores **raw counts and raw duration**, never a pre-divided
+  rate — a stored rate cannot be re-aggregated, because a 40-minute game and a 20-minute game do not
+  average their rates. Measured on real rows: K1ayer's time-weighted figure is **4.5** where the
+  naive mean-of-rates says **4.0**. Backfill ran across **166/166** rows, both accounts, zero
+  failures.
+
+  **Short games are stored but excluded from rates** (`CS_MIN_GAME_SEC = 300`, 7 real games affected).
+  A remake keeps its raw `cs`/`gameDurationSec` so a surface can say "12 CS in 3:41", but its
+  `csPerMin` is withheld. 5 minutes rather than Riot's 3:00 remake vote because the 3–5 minute band
+  has no laning phase either — the rate would measure the game ending, not farming.
+- **Ranked solo/duo tier, division and LP** (migration 0022). Live end-to-end on first run:
+  `MunsterHunter#EUW` Platinum IV 89 LP (65W/66L), `K1ayer#swift` Emerald IV 57 LP (80W/56L). The
+  second pass immediately after spent **zero** Riot calls — TTL gating proven live, not asserted.
+
+  **`rankUnknown` is the discriminator and it is load-bearing.** A null tier means genuinely
+  *unranked* only when `rankUnknown` is false; when it is true every rank field is null and means
+  nothing, and the UI must render a placeholder rather than an unranked badge. A blank badge that
+  actually means a failed fetch is a confidently-wrong-blank. Three further calls worth knowing:
+  the TTL is **30 minutes, not coachless's 6 hours** (LP moves every game, so a 6-hour-old LP is a
+  wrong number shown as current — cost is ~48 calls/day/account against a 100-per-2-*minutes* cap,
+  because the TTL lives in Postgres, not per-lambda memory); at most **two accounts** refresh per
+  request, active first then stalest, so a non-active card fills in without fan-out; and a failed
+  refresh **keeps the last good reading**, with `rank_checked_at` (success) and `rank_attempted_at`
+  (any attempt) as separate columns so a transient failure backs off without blanking a correct badge.
+
+  K1ayer's real league-v4 response carries both a solo entry *and* a `RANKED_FLEX_SR` Gold III entry,
+  so the queueType filter was verified against the exact data an index-based pick would have got wrong.
+
+### Changed
+- **The Match Performance panel now reads 20 games, not 5.** The heading says "(Last 20 Games)" and
+  the chart is sized for it; at `LIMIT 5` the heading was a claim the data did not back — the same
+  defect class as an unlabelled partial history, just smaller. The panel renders however many rows
+  come back, so a newly-linked account with 3 games still reads correctly.
+
+### Fixed
+- **`normalizeMyStatsSummary` was silently dropping the entire new data contract** — CS/min, tier,
+  division and LP were all on the wire and none of them reached the page. This is the **fourth** time
+  that exact bug has hit `components/hextech/myStats.ts`; the new fields are now in the shared test
+  fixture so the fifth fails a test instead of shipping.
+- **The bar chart rendered twice** (10 bars where there should be 5) because both tab panels stay
+  mounted. Caught by looking at pixels, not by a test.
+- **A card click with no stored secret failed completely silently.**
+- **CLS at 1920px went from 0.07372 to 0.00665**, an order of magnitude better, measured on a
+  production build. 390px is at parity (0.1335 vs a 0.13057 baseline). An intermediate version of the
+  skeleton measured 0.736 at 390px before being fixed.
+
+### Not built, deliberately
+- **`Avg Score`, `MVP`/`ACE`, per-match placement and `Avg Game ELO` are absent, and a test asserts
+  they never appear in the response.** Avg Score is TrackDIFF's proprietary composite; MVP/ACE and
+  placement all reduce to it, and a placement is a *ranking over* an invented number, which is still
+  invented. Avg Game ELO is the one with a real derivation (league-v4 for the other nine
+  participants, averaged) and is left unbuilt on cost and honesty: 9 calls per match, 1,494 to
+  backfill 166 rows, on a key whose suspension blanks the whole app — and it would measure rank at
+  *fetch* time, labelling a March game with today's ranks.
+- **`Decay` and `VODs` tabs** — nothing behind them. **`Live Game` tab** — checked first rather than
+  assumed: `CompanionProvider` exposes only phase/champSelect/clientConnected and never polls
+  `/live`, so the tab could only restate a chip the global nav already shows. The live state that *is*
+  real ships as the red `LIVE` ring on the hero portrait.
+- **`PRO` chip, country flag, social buttons** — no truthful source. **`#1 EUW`** became a
+  region-only chip: the region is real, the ladder position is not.
+- **Per-champion KDA does not exist** — `summarizeByChampion` returns games and wins only. Building it
+  from `recentGames[]` would have been the v0.73.1 two-denominators bug again, so that column shows
+  the account's record instead and every column in the panel is headed so the swap reads as a
+  decision rather than a slip.
+- **Bars carry KDA, chosen on coverage not taste** — `csPerMin` is null on pre-ship rows and withheld
+  under 5 minutes, so a CS/min chart would have holes today. The axis says `Bar height = KDA`.
+
+### Known
+- No real account switch was exercised (no secret stored on the build machine, so only the failure
+  path ran). The `unranked` and `rankUnknown` states are unit-tested but have never rendered, because
+  both accounts came back ranked.
+- At exactly 1024px the active account card's name truncates. Clears at other widths.
+- `verify-fix.sh`'s build step is unreliable while a `next dev` server is up — it failed twice on
+  *untouched* routes, then passed clean with no code change. Kill the dev server before gating; do not
+  debug it as a code defect.
+
 ## [0.83.1] — 2026-07-30 — The League client's puuid is not Riot's puuid
 
 ### Fixed

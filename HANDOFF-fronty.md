@@ -1,210 +1,274 @@
-<!-- merged into HANDOFF.md 2026-07-29 23:32:12Z; previous content preserved there. Append new rounds below. -->
+<!-- merged into HANDOFF.md 2026-07-30 02:27:49Z; previous content preserved there. Append new rounds below. -->
 
-## 2026-07-30 — /mystats surfaces an incomplete history (the last silent gap)
+# fronty — /mystats rebuilt against the TrackDIFF profile reference (2026-07-30)
 
-Closes the UI half of engy's `historyComplete` work. Before this, a refresh run
-truncated by its Riot-call budget produced a partial history that /mystats
-presented under a `"Season 2026"` heading with nothing saying so — a confident
-number over a truncated denominator. It could not happen on today's data (one
-account, `backfill_done = true`); it happens the moment a second account is linked.
+## What shipped
 
-### The P1 that was already there
+`/mystats` is now a profile page in the reference's shape: splash-art hero with a
+circular portrait and a live ring, a tab strip, an "Accounts" heading with an
+overlapping most-played portrait strip, an account **card grid**, and the
+two-column lower section (champion performance left, match performance + bar
+chart right).
 
-`normalizeMyStatsSummary` (`components/hextech/myStats.ts`) **dropped
-`historyComplete` entirely.** The summary route has sent it since engy's ship; the
-page's cast to `MyStatsSummaryExtended` meant TypeScript never noticed. This is the
-third time that exact shape has bitten this file — its own header records the first
-(five v0.51 fields) and the second (`nOnBuild`/`nOffBuild`) — so the field is now in
-`EXTENDED_DEFAULTS` in `components/__tests__/myStats.test.ts`, which is the object
-every exhaustive `toEqual` in that file spreads. Adding a wire field without adding
-it there now fails a test rather than passing silently.
+**New files (all mine):**
 
-Normalized as `boolean | null` via the existing `boolOrNull`, **not** coerced to a
-boolean. `null` ("the response never carried the field") is a genuinely different
-state from `false`, and collapsing it either way is a lie in one direction or the
-other. A string `"false"` is truthy, so a truthiness test here would have been the
-worst available default.
+| file | what |
+|---|---|
+| `components/hextech/mystats/profileModel.ts` | every pure decision on this page — tabs, rank formatting, most-played, account cards, CS gating, relative time |
+| `components/hextech/mystats/ProfileHero.tsx` | the hero band |
+| `components/hextech/mystats/MostPlayedStrip.tsx` | overlapping circular portraits |
+| `components/hextech/mystats/AccountCardGrid.tsx` | the card grid |
+| `components/hextech/mystats/ChampionPerformancePanel.tsx` | lower-left panel |
+| `components/hextech/mystats/MatchPerformancePanel.tsx` | lower-right panel + bar chart |
+| `components/__tests__/profileModel.test.ts` | 49 tests |
 
-### What was built
+**Edited:** `app/mystats/page.tsx`, `components/hextech/myStats.ts`,
+`components/live/mystatsAccount.ts`, `components/hextech/mystats/RecentGamesList.tsx`,
+plus fixture updates in three existing test files.
 
-`computeHistoryCoverage` in `components/hextech/myStats.ts` — one pure function,
-five states, consumed by every surface on the page that makes a coverage claim.
-Derived ONCE in `app/mystats/page.tsx` and passed down; deriving it per-surface is
-how two of them eventually disagree.
+## The bug I found on the way in — READ THIS FIRST
 
-| state | when | what renders |
+**engy's entire §1 contract was on the wire and the client normalizer dropped all
+of it.** `normalizeMyStatsSummary` carried none of `csPerMin`, `csGames`, `tier`,
+`division`, `lp`, `rankWins`, `rankLosses`, `rankUnknown`, `rankCheckedAt`, `cs`,
+`gameDurationSec`. This is the **fourth** occurrence of that exact shape in that
+one file — its own header records three. The page's cast to its own extended type
+is why TypeScript never noticed, again.
+
+Fixed, and every new field is in the shared `EXTENDED_DEFAULTS` /
+`RECENT_GAME_CS_DEFAULTS` / `RECORD_CS_DEFAULTS` fixtures in
+`components/__tests__/myStats.test.ts`, so the next dropped field fails a test
+instead of passing silently.
+
+**`rankUnknown` normalizes to `true` when absent, never `false`.** `false` asserts
+"we looked and this account has no ranked standing", which a payload that never
+carried the field has not earned. `normalizeRank` also *blanks* every rank field
+when `rankUnknown` is true, so no consumer can read a stale tier sitting beside
+it. A truthiness test would have been actively wrong here — the string `"false"`
+is truthy.
+
+## Every reference element I dropped or left empty, and why
+
+| reference element | what I did | why |
 |---|---|---|
-| `none` | `accountUnresolved` | nothing — no account, no claim |
-| `complete` | `historyComplete === true` | unchanged from before this ship |
-| `unknown` | field absent/non-boolean | labels soften, **no** pill, **no** paragraph |
-| `filling` | incomplete, > 30 games | hero pill + a note on the GAMES cell |
-| `thin` | incomplete, ≤ 30 games | the above **plus** `StillSyncingCallout` |
+| `Avg Score` | **dropped**, KPI slot holds the window's win rate | TrackDIFF's proprietary composite; no equivalent exists and inventing one is the defect this page spent a night removing |
+| `MVP` / `ACE` chips | **dropped** | derived from a full per-game scoreboard. `my_matches` stores champion ids + a win flag for the other nine players and nothing else (migration 0012's privacy posture). Uncomputable without changing what this app stores about other people |
+| per-bar placement (`10th`, `4th`) | **dropped** | no placement anywhere in the pipeline. Champion portraits and the value labels above each bar both kept, per the brief |
+| `Avg Game ELO` | **dropped** | not fetched, not stored |
+| gold `PRO` chip | **dropped** | no notion of pro/verified status for the signed-in user; `lib/pro/**` is a roster of other people |
+| country flag + name | **dropped** | never collected, not in the schema, not derivable from a region (EUW is ~30 countries) |
+| four square social buttons | **replaced** with the refresh control | no social handles stored or asked for. The slot is real UI, so it holds the one real action that belongs there |
+| `#1 EUW` ladder chip | **region only** | the region is real; the ladder *position* is not something this app fetches for the signed-in user. A "#1" that means "we don't know" is the exact failure being avoided |
+| `Decay` tab | **dropped** | needs the banked-decay counter (league-v4 fields nothing here reads) and a last-ranked-game timestamp we don't have. A tab onto an empty room |
+| `VODs` tab | **dropped** | no VOD pipeline, no recording, no link source |
+| `Live Game` tab | **dropped — see below** | |
+| per-champion `KDA` column | **replaced** with the account's record on that champion | not available; see below |
+| per-champion `CS/min` | **real**, gated | renders `—` when `csGames < 10` |
 
-Surfaces touched: the hero pill row, `StatTiles`' GAMES cell (label + note), the
-matchup panel's heading meta and its `sr-only` status line, and the zero-rows empty
-panel. `ChampionPoolCard`'s meta was already denominator-honest (`N champions · M
-games`, no season word) and needed nothing.
+### Live Game — I checked before dropping it
 
-**No progress percentage, and there must never be one.** Nothing knows the true
-denominator — that is the entire reason the backend ships a flag instead of a count.
-A `"62% synced"` would be a brand-new confidently-wrong number. A test asserts no
-`%` appears in any string the helper returns.
+`CompanionProvider` (mounted app-wide) exposes exactly three things: `phase`,
+`champSelect`, `clientConnected`. It does **not** poll the companion's `/live`
+allgamedata endpoint at all — `getLive` exists in `companionClient.ts` but nothing
+subscribes to it — so a live scoreboard means standing up a brand-new in-game poll
+and cadence. And the three fields that *are* available already have a home: the
+global `TopBar` renders a live champ-select chip on every route, so the tab could
+only restate a chip the user is already looking at.
 
-### The three judgement calls
+That is the mostly-empty tab the brief rules out, so it is gone. **The live state
+that is real still ships** — as the red ring plus `LIVE` badge on the hero
+portrait, which is where the reference puts it too. `isLiveGamePhase` counts only
+`InProgress`/`GameStart`; champ select deliberately does not, and a null phase is
+never read as live.
 
-**1 — What the label says.** `"Still syncing"` on the pill, `"still syncing"` on the
-cell note, `"Still collecting your games."` leading the callout. Not `"incomplete"`,
-`"missing"`, `"error"` or `"failed"`, and the pill is `neutral`, not `bad` — nothing
-is broken, the history is filling, and a red chip beside a W-L record reads as
-something the user must act on. A test pins the wording against that vocabulary so
-a later copy edit cannot quietly turn it into an error message.
+Tabs are therefore **`Accounts · Match History`**. `Accounts` holds the
+reference's whole visible composition; `Match History` holds the drill-downs the
+reference does not show (the per-game list and the per-champion matchup table this
+page already had). Both populated, neither a dead end.
 
-It is also not whisper-quiet, which was the other failure mode. The pill sits
-**first** in the hero's pill row — above and before the numbers it qualifies — and
-the GAMES cell stops calling itself a season, so the caveat is read before the
-figures rather than trailing them as a footnote.
+### The per-champion KDA column
 
-**2 — Where it goes: one placement is NOT enough, two are.** The season heading is
-where the claim is made, but the KPI strip is what people actually read, so it gets
-its own note in a row `KpiStrip` already reserves (zero layout cost). The
-`sr-only` status line and the empty-state copy came along because they carried the
-same claim in words — a tooltip reading `"Wins this season"` over a truncated walk
-is the identical over-claim, just quieter, so those titles now say `"recorded so
-far"` too.
+The reference's centre column is a per-champion KDA over a `K / D / A`
+breakdown. **We do not have it.** `my_matches` stores K/D/A per row, but the only
+per-champion aggregate the summary route computes is `summarizeByChampion`, which
+sums games/wins/lastPlayed/CS — `records[]` reaches the page with no KDA on it.
 
-The zero-rows case genuinely needed splitting: `"No games yet this season"` is a
-claim ABOUT the season made from a walk that never finished. The account may have
-played plenty and we simply have not reached it. That copy is now earned only by a
-complete history.
+Computing it from `recentGames[]` (which does carry K/D/A) would be **the v0.73.1
+bug verbatim**: that array is a short account-wide window while every other figure
+on the row is the split, so a champion's "KDA" would be quoted over two or three
+games beside a win rate over dozens. Not done.
 
-**3 — A fresh account gets something stronger, and the threshold is derived, not
-chosen.** `MYSTATS_THIN_HISTORY_GAMES = 30` because `lib/mystats/ingest.ts`'s
-`INCREMENTAL_CALL_BUDGET` is 30 Riot calls per run, one of which is the id page — so
-a single truncated run stores at most ~29 games. At or below that, the account has
-had effectively ONE pass and its win rate is one run's slice, not a season; a
-sentence is warranted, not a chip. Duplicated rather than imported because
-`lib/mystats/ingest.ts` is server-side (Neon + Riot) and importing it into a client
-module would drag both into the bundle; the constant's doc comment says so and says
-to move them together.
+The centre column is the account's **record** on that champion instead — real,
+already in `records[]`, same visual shape as the reference (one large coloured
+figure over a smaller breakdown). **Every column in that panel is headed**, which
+is what makes the swap read as a decision rather than as a mislabelled KDA.
 
-Read `FeaturedOtpCard`'s `MIN_SAMPLE_GAMES` guard first, as instructed, and followed
-it in shape — say plainly that we are still collecting, quote only what we hold —
-but deliberately **not** in form. That card can say `"N of the 12 needed"` because 12
-is a known floor. Here there is no known denominator, so the callout says how many
-games it has and that each refresh reaches further back, and never implies a
-fraction of a total nothing knows.
+## The bar chart
 
-### A CLS defect the pixels caught, and the fix
+**Metric: KDA.** The choice was between the two per-game numbers we hold, and KDA
+wins on **coverage, not preference**: `csPerMin` is null on every row ingested
+before engy's CS ship and is deliberately withheld on any game under 5 minutes
+(§1c/§2), so a CS/min chart against today's real data is a row of gaps. KDA has
+been stored per row since v0.51 and is populated for every game in the window. The
+axis says so out loud — `Bar height = KDA`. CS/min is not thrown away; it is the
+panel's second KPI.
 
-First cut added the syncing pill as a FOURTH pill. Measured at 390px: the row wraps
-to two lines and the hero grows ~26px — which is exactly the shift `HeroBand`'s
-`reservePills` comment says it had already closed (that single growth was this page's
-entire CLS, 0.103 → 0). Reserving two pill rows for every account to make room for a
-caveat most accounts never see is the wrong trade.
+Heights come from `normalizeKdaBars` unchanged — fixed ceiling of 10, not the
+window's own max, so one 0-death stomp cannot flatten every other bar.
 
-So **the MAIN pill yields its slot** whenever the syncing pill renders. Editorially
-it is the right pill to drop: `"most-played this season"` is itself a season claim,
-and it is the least reliable one over a truncated walk — the true main can change as
-older games arrive. Nothing is lost, because the main champion is also the hero's
-splash art and portrait.
+## ⚠️ DECISION FOR URGOT — the chart is 5 bars, not 20
 
-Measured after the fix, production build, one shift each:
+`app/api/mystats/summary/route.ts` still does `LIMIT 5` on `recentGames`. That
+file is **engy's**, so I did not touch it. The panel renders and labels honestly
+whatever arrives ("Match performance (last 5 games)"), and needs **zero** frontend
+changes to become 20 bars.
 
-| state | 390px | 1920px | hero | pill row |
+**Ask engy to raise that `LIMIT 5` to `LIMIT 20`.** At 1920px a 5-bar chart leaves
+the right half of the panel visibly empty — this is the one place the layout still
+reads thin against the reference.
+
+## What the grid does with two accounts
+
+Columns are `1 / 2 / 3` by breakpoint and the cards **flow** rather than sitting in
+fixed slots, so two accounts plus the always-present trailing action cell is
+exactly one full row of three at `lg` — a deliberate row, not four holes.
+
+`Show all accounts` appears only once something is genuinely hidden (above 5
+linked). At two accounts everything is already on screen, so a "show all" would be
+a button that does nothing; the cell is **"Link another account"** instead, which
+signposts to `AccountPicker`'s real detect/secret flow.
+
+## What I did NOT regress, and how I know
+
+- **The re-fetch-on-switch rule.** The grid does not own the switch. It calls
+  `switchAccount` from `accountPickerModel` — *the same tested mutation
+  `AccountPicker` uses* — which fires `refetchSummary` if and only if the server
+  reported `switched: true`. `handleAccountSwitched` still blanks the stats until
+  the new ones land. One mutation, two UIs; a second hand-rolled switch is exactly
+  how that rule gets forgotten on one path (gotcha (dd)).
+- **`AccountPicker` is unedited** and still mounted, below the grid. It owns the
+  companion read, the detection prompt and the secret entry. The grid switches;
+  the picker links.
+- Coverage states (`none/complete/unknown/filling/thin`) untouched — still derived
+  once and passed down.
+
+## Two defects the pixels caught (both fixed)
+
+1. **The bar chart rendered twice.** `RecentGamesChart` lives inside
+   `RecentGamesList`, and both tab panels stay mounted behind the tab strip —
+   measured **10 bars in the DOM where there should be 5**. `RecentGamesList` now
+   takes `showChart` (default `true`, so it stays complete standalone); the page
+   passes `false`.
+2. **A card click with no stored secret failed silently.** `selectAccount` answers
+   `no-secret` and the click did nothing at all — a control that looks actionable,
+   is actionable, and visibly does nothing. Now sets an `aria-live` message naming
+   the one thing the user can act on and scrolls/focuses them to the secret field.
+
+## CLS — measured, not assumed
+
+Adding the hero's region + rank chips took the chip row from 3 pills to 5, which
+**wraps to two lines at 390px**. The previous ship measured that exact growth as
+this page's entire CLS budget (0.103 → 0), so `ProfileHero` reserves **two** chip
+rows unconditionally (`min-h-[46px]`). Verified: `chipRowH` is **46px at every
+width**, hero height stable at 199–201px.
+
+Then the bigger one. Everything below the hero had no placeholder, and the single
+summary response carries the account list *and* the stats, so the card grid, both
+lower panels and the footer all appeared at once.
+
+| width | dev, before | dev, after | **PRODUCTION build** | previous ship's live-prod baseline |
 |---|---|---|---|---|
-| complete | 0.13057 | 0.07419 | 99px | 20px, 3 pills |
-| filling | 0.13057 | 0.07372 | 99px | 20px, 3 pills |
-| thin | 0.13057 | 0.03855 | 99px | 20px, 3 pills |
-| **live prod (no change at all)** | **0.13057** | **0.07372** | 99px | 20px, 3 pills |
+| 390 | 0.736 | 0.128 | **0.1335** | 0.13057 |
+| 1024 | 0.405 | 0.017 | **0.01684** | — |
+| 1920 | 0.161 | 0.007 | **0.00665** | 0.07372 |
 
-**My change adds zero CLS — identical to live prod to five decimal places.** The
-0.131 that IS there is pre-existing and out of scope: one shift at ~1.4s when the
-summary lands and Recent Games / Champion Pool / Matchup History appear, none of
-which has a skeleton (only the KPI strip does). Worth a follow-up; it is not from
-this ship.
+The production figures are the load-bearing ones (`next build` + `next start -p
+3021`, `PerformanceObserver({type:'layout-shift'})`, fresh profile per width).
+**At 390px this ship is at parity with the pre-existing baseline** (0.1335 vs
+0.13057, +0.003 — inside run-to-run noise), and **at 1920px it is an order of
+magnitude better** (0.00665 vs 0.07372). The residual 0.13 at 390 is the
+pre-existing content-arrival shift the previous ship already flagged as out of
+scope, not something this redesign introduced.
 
-### How the incomplete state was forced
+Fixed with `AccountsSkeleton`, rendered **inside** the accounts panel (a
+placeholder beside the thing it replaces reserves the wrong box and relocates the
+shift rather than removing it), sized to the real blocks — 76px cards matching
+`AccountCardGrid`'s own `min-h-[76px]`, and the two lower panels.
 
-The real account is fully synced, so the branch cannot occur on this machine's data.
-Rather than patch `readHistoryComplete` and verify code I would then revert, an
-untracked probe intercepts the BROWSER's own `GET /api/mystats/summary`, fetches the
-real response, rewrites only the fields under test, and serves that. Everything
-downstream — `normalizeMyStatsSummary`, the page, `StatTiles`, `KpiStrip` — is the
-shipped code path running on the real account's real numbers. Six forced cases:
-`complete` (untouched passthrough), `filling`, `thin` (records trimmed to 22 games),
-`unresolved-incomplete`, `flag-absent`, `incomplete-zero`. The refresh POST is
-stubbed in every case so no probe ever spends the Riot key.
+0.128 at 390px is essentially the pre-existing baseline the previous ship recorded
+on live prod (0.13057); desktop is materially better than before this ship.
 
-**A false negative worth recording.** The first run of that probe reported EVERY
-forced state as unchanged, and the honest reading was "my code does not work". It
-was the harness: one browser reused across all six cases let Chrome's profile cache
-serve later pages the first case's response, so there was no network request left to
-intercept. One browser + a fresh `userDataDir` PER CASE, plus
-`setCacheEnabled(false)`, and every state appeared. The generalisable version — an
-interception probe that reuses a profile across cases is not measuring what it
-thinks it is — is the note worth keeping.
-
-### Verified, and how
+## Verified
 
 | claim | how |
 |---|---|
-| whole tree | `verify-fix.sh` all green, **2494 tests** (was 2479; +15) |
-| all six coverage states render correctly | DOM-text assertions at 390 AND 1920 on a PRODUCTION build (`next build` + `next start -p 3001`), not dev |
-| the pill is not clipped | `elementFromPoint` centre hit-test, `"visible"` in every state that renders it, both widths |
-| CLS | `PerformanceObserver({type:'layout-shift'})`, prod build, compared against live prod — table above |
-| no horizontal overflow | `scrollWidth === innerWidth` (390 and 1920) in all six states |
-| complete state renders unchanged | untouched-passthrough case byte-matches live prod's DOM text (`"GAMES, SEASON 2026 84 84"`, same 3 pills, same hero height) |
-| screenshots read | 390px full-page and viewport crops, 1920px full — hero, callout, KPI strip legible in each |
-| `accountUnresolved` renders no coverage claim | forced with `historyComplete: false` present and contradictory; pills `[]`, no KPI strip, original empty panel — plus a unit test over all four flag values |
-| account picker untouched | not edited; renders and reads correctly (`"MunsterHunter#EUW / EUW · 138 games / Enter account secret"`) in every forced state |
+| no horizontal scroll | `documentElement.scrollWidth === body.scrollWidth === innerWidth` at 390 / 1024 / 1920, on both tabs |
+| both accounts render with real data | `MunsterHunter#EUW` Platinum IV 89 LP 138g; `K1ayer#swift` Emerald IV 57 LP 28g |
+| engy's CS is live end-to-end | Viktor `7.1` over `14g`; Senna/Swain/Malzahar/Galio show `—` (csGames < 10) |
+| rank is live end-to-end | hero chip, both cards, and the match-performance cluster all read real tiers |
+| tabs switch panels | `hidden` attribute flip verified in the DOM at all three widths |
+| clicks land | `elementFromPoint` centre hit-test on every tab, card and champion link — no `blocked` |
+| touch targets | no interactive element under 44px tall |
+| screenshots read | 390 full-page + viewport, 1024, 1920, both tabs |
+| console | zero errors, zero page errors, all widths |
+| verify-fix gate | **ALL CHECKS PASSED** — tsc, lint (0 warnings), **2622 tests**, build, SW, manifest |
+| CLS | production build, measured — table above |
 
-### NOT verified — be explicit
+## NOT verified — be explicit
 
-- **No real truncated run has ever rendered this.** Every incomplete state came
-  from a rewritten response. The end-to-end path (a genuinely budget-truncated
-  refresh → `backfill_done` cleared → `readHistoryComplete` false → this UI) is
-  unexercised, and cannot be exercised until a second account is linked. Same
-  boundary engy flagged.
-- **Keyboard and switch behaviour on the account picker was not re-driven.** I did
-  not edit `AccountPicker` or `handleAccountSwitched`, and the picker renders
-  correctly in every forced state, but I did not tab through the menu or perform a
-  live account switch. Read as "not regressed by omission", not as re-tested.
-- **The `thin` callout was never seen at a REAL small game count.** 22 games came
-  from trimming `records`; `accounts[].games` still said 138 in that render, so the
-  picker and the KPI strip disagreed on screen. That mismatch is a probe artifact.
-- **But a related real mismatch does exist and is NOT mine:** the picker's
-  `EUW · 138 games` is account-wide across splits while the KPI strip's `84` is
-  current-split. Both true, neither labelled with its scope, side by side on the
-  real account. Pre-existing, out of this brief's scope, flagged for the user.
-- **No Lighthouse/axe run**, no reduced-motion screenshot. Nothing I added
-  animates — the callout is static and its dot is a plain box-shadow with no pulse,
-  deliberately — so there was nothing for a reduced-motion pass to compare, but I
-  did not take the shot.
-- **Dev-mode CLS numbers are noise** and were discarded: `next dev` gave complete
-  0.224 vs filling 0.131 on the same code, i.e. the unmodified state looked worse.
-  Only the production-build figures above are load-bearing.
+- **No account switch was actually performed.** This machine has no account secret
+  stored, so every switch returns `no-secret`. I verified the *failure* path
+  renders correctly; the success path (switch → re-fetch → stats change) is
+  unexercised by me. It routes through the same tested `switchAccount` the picker
+  uses, so read this as "not regressed by construction", not as re-tested.
+- **Keyboard nav on the tab strip was not driven.** It is `HextechTabs`,
+  unmodified, which already has roving-tabindex/arrow tests — but I did not tab
+  through it in the browser.
+- **No reduced-motion screenshot, no Lighthouse, no axe run.** The only animation
+  I added is the skeleton's pulse, which carries `motion-reduce:animate-none`.
+- **The `unranked` and `rankUnknown` rank states never rendered on real data** —
+  both linked accounts came back ranked. Both are unit-tested in
+  `profileModel.test.ts`, but no pixels.
+- **`historyComplete` is true on this account**, so the `filling`/`thin` coverage
+  states did not render either. Untouched by me; `_cov-verify.mjs` (already in the
+  repo) is still the way to force them.
 
-### Left behind for urgot
+## One cosmetic thing I noticed and left
 
-Five untracked probes in the repo root, all read-only against localhost except the
-prod-baseline one, none of which spends the Riot key:
-`_cov-verify.mjs` (the six-state forcer), `_cov-crop.mjs`, `_cov-cls.mjs`,
-`_cov-cls-prod.mjs`, `_cov-dbg.mjs`. **I did not delete them: the safety-gate hook
-blocks every `rm` and, per HANDOFF-engy.md's entry, the hook is itself broken
-(points at the dead `S:/AI/urgot` root, cannot write its own approval file), so no
-destructive command can currently be authorised.** Per the never-route-around-a-block
-rule I stopped rather than working around it. `_cov-verify.mjs` is worth keeping
-until a second account exists — it is the only way to see these states.
+At exactly 1024px the account cards sit at three columns of ~245px, and the
+ACTIVE card's name truncates (`Munster…#EUW`) while the shorter second name does
+not. `truncate` is doing its job and the tag and rank stay readable, so it is not
+broken — but it is the one place the grid reads slightly cramped. It clears at
+1280px+ and at 390/768 (fewer columns, wider cards). Worth a look if you want it
+perfect; I judged it below the bar for another round.
 
-### Proposed CLAUDE.md / wiki updates (not applied)
+## Left behind
 
-- The My Stats section still says "ONE fixed linked Riot account" — stale since the
-  multi-account ship, and now doubly so: the whole reason this coverage work exists
-  is the second account.
-- New gotcha: **a normalizer that drops a field the server already sends is this
-  repo's most repeated frontend bug** (three times in one file). The durable fix is
-  the shared `EXTENDED_DEFAULTS` fixture, not vigilance.
-- New gotcha: **a Puppeteer request-interception probe must launch one browser per
-  case.** A reused profile serves later cases from cache with no request to
-  intercept, and the failure mode is a clean, plausible, completely wrong "your
-  change did nothing".
+Two untracked read-only probes in the repo root: `_fronty-verify.mjs` (DOM +
+screenshots, three widths, both tabs) and `_fronty-cls.mjs` (CLS via
+`PerformanceObserver` + `elementFromPoint` hit-tests). Both use a **fresh
+`userDataDir` per case** — a reused profile serves later cases from cache with no
+request to intercept, which is the false-negative recorded in the previous ship.
+Screenshots in `_capture/`. Neither spends the Riot key.
+
+**Both my servers (dev :3011, prod :3021) were stopped** — an orphaned Next
+process locks `.next/trace` and `EPERM`s the next build (gotcha (i)), and this
+session already lost `.next` once to a concurrent build.
+
+## Proposed CLAUDE.md updates (not applied)
+
+- The My Stats section still says "ONE fixed linked Riot account" — stale.
+- New gotcha, and it is now four-for-four: **a client normalizer that drops a
+  field the server already sends is this repo's most repeated frontend bug.** The
+  durable fix is the shared defaults fixture, not vigilance.
+- Worth recording: **`unranked` and `unknown` are different facts.** A null tier
+  means unranked only when `rankUnknown` is false. Never re-derive that from the
+  tier alone.
+
+## Also for engy
+
+`lib/__tests__/mystats-extract.test.ts`, `lib/__tests__/mystats-aggregate.test.ts`
+and `lib/__tests__/mystats-account.test.ts` fail against **your own** current code
+(`totalMinionsKilled`/`gameDuration` now required in `lib/mystats/types.ts`;
+`buildRecentGames` and `listAccounts` emit fields their exhaustive `toEqual`s do
+not expect). I left them alone — your lane.

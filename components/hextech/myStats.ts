@@ -34,6 +34,18 @@ export interface MyStatsRecord {
   wins: number;
   winrate: number; // 0-1
   lastPlayed: string; // ISO
+  /** TIME-WEIGHTED CS per minute across this (champion, role) — engy,
+   *  HANDOFF-engy.md §1b, computed by lib/mystats/cs.ts's aggregateCs as
+   *  sum(cs) / (sum(duration) / 60), NOT the mean of per-game rates. null when
+   *  `csGames` is 0. Never coerced to 0: a support who genuinely farmed nothing
+   *  is a real 0.0, so the absence has to be a different value. */
+  csPerMin: number | null;
+  /** How many of `games` are actually behind `csPerMin` — ALWAYS <= games and
+   *  frequently much smaller (rows ingested before that ship carry no CS, and
+   *  games under CS_MIN_GAME_SEC are excluded from every rate). This is the
+   *  DENOMINATOR: a rate over 3 games must not render like one over 300, which
+   *  is the v0.73.1 defect class. Render it, or withhold the rate. */
+  csGames: number;
 }
 
 export interface MyStatsMatchupRecord {
@@ -60,6 +72,16 @@ export interface MyStatsRecentGame {
   deaths: number;
   assists: number;
   onWpaBuild: boolean | null | undefined;
+  /** Raw creep score for this ONE game (minions + neutral monsters). null =
+   *  not stored for this row (pre-ship, not yet backfilled). engy §1c. */
+  cs: number | null;
+  /** Game length in seconds. null on pre-ship rows. */
+  gameDurationSec: number | null;
+  /** This game's own CS/min, 1 decimal. null when either input above is null OR
+   *  the game ran under CS_MIN_GAME_SEC (300s) — a 4-minute remake's "rate" is
+   *  noise, so the RATE is withheld while `cs`/`gameDurationSec` stay populated
+   *  and a surface may still say "12 CS in 3:41". */
+  csPerMin: number | null;
 }
 
 export interface MyStatsSummary {
@@ -126,6 +148,25 @@ export interface MyStatsSummary {
    *  see its doc comment. Never coerced to `true`, which would be a coverage
    *  claim made from an absent field. */
   historyComplete?: boolean | null;
+
+  // ── 2026-07-30, engy §1d + §1a top-level mirror ───────────────────────────
+  /** Account-wide, CURRENT-SPLIT time-weighted CS/min — same scope as
+   *  `buildAdherencePct`. null when `csGames` is 0. */
+  csPerMin?: number | null;
+  /** Games behind `csPerMin`. 0 => csPerMin is null. Always rendered with it. */
+  csGames?: number;
+  /** The ACTIVE account's ranked solo/duo standing, mirrored top-level so the
+   *  hero does not have to hunt through `accounts[]`. Identical semantics and
+   *  identical values to `accounts.find(a => a.active)` — see AccountSummary's
+   *  comment for the rankUnknown discriminator, which is the load-bearing part.
+   *  On the accountUnresolved response these are null / rankUnknown:true. */
+  tier?: string | null;
+  division?: string | null;
+  lp?: number | null;
+  rankWins?: number | null;
+  rankLosses?: number | null;
+  rankUnknown?: boolean;
+  rankCheckedAt?: string | null;
 }
 
 export interface MyStatsMatchups {
@@ -157,6 +198,14 @@ function normalizeRecord(raw: unknown): MyStatsRecord | null {
     wins: num(r.wins),
     winrate: num(r.winrate),
     lastPlayed: typeof r.lastPlayed === "string" ? r.lastPlayed : "",
+    // `numOrNull`, NOT `num`: a missing rate must stay null so the UI renders an
+    // em dash. `num(...)` would default it to 0, which is a real CS/min value and
+    // would read as "this champion farms nothing" on every pre-backfill row.
+    csPerMin: numOrNull(r.csPerMin),
+    // csGames IS safe to default to 0 — zero games behind the rate is exactly
+    // what an absent field means, and it is the value that makes the UI withhold
+    // the rate rather than show it.
+    csGames: num(r.csGames),
   };
 }
 
@@ -187,6 +236,13 @@ function normalizeRecentGame(raw: unknown): MyStatsRecentGame | null {
     deaths: num(r.deaths),
     assists: num(r.assists),
     onWpaBuild: boolOrNull(r.onWpaBuild),
+    // All three stay null on absence. `cs: 0` is a real reading (a 3-minute
+    // remake where nobody farmed) and must not be manufactured from a missing
+    // field — see engy §1c for why the raw pair survives even when the RATE is
+    // deliberately withheld on a sub-300s game.
+    cs: numOrNull(r.cs),
+    gameDurationSec: numOrNull(r.gameDurationSec),
+    csPerMin: numOrNull(r.csPerMin),
   };
 }
 
@@ -229,6 +285,58 @@ function normalizeAccountSummary(raw: unknown): AccountSummary | null {
     active: a.active === true,
     lastSeenAt: typeof a.lastSeenAt === "string" ? a.lastSeenAt : null,
     games: num(a.games),
+    ...normalizeRank(a),
+  };
+}
+
+/**
+ * The seven ranked-standing fields, shared by `normalizeAccountSummary` and the
+ * top-level mirror in `normalizeMyStatsSummary` — one implementation so the two
+ * can never disagree about the same account's rank.
+ *
+ * THE DEFAULT IS THE WHOLE POINT: an absent/malformed `rankUnknown` normalizes
+ * to **true**, not false. `false` asserts "we looked and this account has no
+ * ranked standing", which a payload that never carried the field has not earned.
+ * A response predating engy's rank ship therefore renders as "not synced yet"
+ * rather than parading every account as Unranked — and the same defence covers a
+ * future wire regression.
+ *
+ * A stray non-boolean (`"false"`, 0, null) is likewise unknown. Note that a
+ * truthiness test would be actively wrong here: the string "false" is truthy.
+ */
+function normalizeRank(raw: unknown): {
+  tier: string | null;
+  division: string | null;
+  lp: number | null;
+  rankWins: number | null;
+  rankLosses: number | null;
+  rankUnknown: boolean;
+  rankCheckedAt: string | null;
+} {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const known = r.rankUnknown === false;
+  if (!known) {
+    // Unknown means every field means NOTHING — they are blanked here rather
+    // than passed through, so no consumer can accidentally read a stale tier
+    // sitting beside `rankUnknown: true`.
+    return {
+      tier: null,
+      division: null,
+      lp: null,
+      rankWins: null,
+      rankLosses: null,
+      rankUnknown: true,
+      rankCheckedAt: typeof r.rankCheckedAt === "string" ? r.rankCheckedAt : null,
+    };
+  }
+  return {
+    tier: typeof r.tier === "string" && r.tier.length > 0 ? r.tier.toUpperCase() : null,
+    division: typeof r.division === "string" && r.division.length > 0 ? r.division.toUpperCase() : null,
+    lp: numOrNull(r.lp),
+    rankWins: numOrNull(r.rankWins),
+    rankLosses: numOrNull(r.rankLosses),
+    rankUnknown: false,
+    rankCheckedAt: typeof r.rankCheckedAt === "string" ? r.rankCheckedAt : null,
   };
 }
 
@@ -261,6 +369,12 @@ export function normalizeMyStatsSummary(raw: unknown): MyStatsSummary | null {
     // through as boolean|null — see the field's doc comment for why the null case
     // is not collapsed into either boolean.
     historyComplete: boolOrNull(r.historyComplete),
+    // 2026-07-30 (engy §1d + §1a). Added to the interface AND here in the same
+    // edit, per this normalizer's own standing warning — three separate P1s in
+    // this file came from doing only the former.
+    csPerMin: numOrNull(r.csPerMin),
+    csGames: num(r.csGames),
+    ...normalizeRank(r),
   };
 }
 
@@ -358,6 +472,11 @@ export interface MyStatsChampionRow {
    *  new champion with 2 games is still real data, just not yet a stable
    *  trend. */
   lowSample: boolean;
+  /** Time-weighted CS/min for this (champion, role), straight from the record —
+   *  null when `csGames` is 0. See MyStatsRecord for why this is not `games`. */
+  csPerMin: number | null;
+  /** The denominator behind `csPerMin`. Rendered with it, always. */
+  csGames: number;
 }
 
 /** Records already arrive games-DESC / winrate-DESC / championId-ASC sorted
@@ -379,6 +498,8 @@ export function buildMyStatsRows(records: MyStatsRecord[], iconOf: IconLookup): 
       losses: r.games - r.wins,
       winrate: r.winrate,
       lowSample: r.games < MYSTATS_LOW_SAMPLE_THRESHOLD,
+      csPerMin: r.csPerMin,
+      csGames: r.csGames,
     };
   });
 }

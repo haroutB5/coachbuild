@@ -42,7 +42,29 @@ const EXTENDED_DEFAULTS = {
   // that it never arrives). null = the payload did not carry it, which is
   // deliberately NOT the same as `false` — see computeHistoryCoverage.
   historyComplete: null,
+  // 2026-07-30, engy §1d + §1a (CS/min + ranked standing). Same reason as every
+  // block above. Note `rankUnknown: true` is the DEFAULT for an absent field on
+  // purpose — "we do not know" — never `false`, which would assert we looked and
+  // found this account unranked. See normalizeRank's doc comment.
+  csPerMin: null,
+  csGames: 0,
+  tier: null,
+  division: null,
+  lp: null,
+  rankWins: null,
+  rankLosses: null,
+  rankUnknown: true,
+  rankCheckedAt: null,
 };
+
+/** The per-game CS trio as it normalizes from a payload that predates engy's CS
+ *  ship — all null, never a fabricated 0. Spread into every exhaustive
+ *  `recentGames` assertion for the same reason EXTENDED_DEFAULTS exists. */
+const RECENT_GAME_CS_DEFAULTS = { cs: null, gameDurationSec: null, csPerMin: null };
+
+/** Same idea for a champion-pool record: no rate, and a ZERO denominator, which
+ *  is what makes the UI withhold the figure instead of printing "0.0". */
+const RECORD_CS_DEFAULTS = { csPerMin: null, csGames: 0 };
 
 describe("normalizeMyStatsSummary", () => {
   it("returns null for a non-object payload", () => {
@@ -61,7 +83,9 @@ describe("normalizeMyStatsSummary", () => {
       accountUnresolved: false,
       season: "Season 2026",
       riotId: "MunsterHunter#EUW",
-      records: [{ championId: 112, role: 2, games: 39, wins: 25, winrate: 0.641, lastPlayed: "2026-07-20T00:00:00.000Z" }],
+      records: [
+        { championId: 112, role: 2, games: 39, wins: 25, winrate: 0.641, lastPlayed: "2026-07-20T00:00:00.000Z", ...RECORD_CS_DEFAULTS },
+      ],
       ...EXTENDED_DEFAULTS,
     });
   });
@@ -75,7 +99,7 @@ describe("normalizeMyStatsSummary", () => {
   it("drops a malformed individual record without dropping the rest of the list", () => {
     const result = normalizeMyStatsSummary({
       records: [
-        { championId: 112, role: 2, games: 5, wins: 3, winrate: 0.6, lastPlayed: "x" },
+        { championId: 112, role: 2, games: 5, wins: 3, winrate: 0.6, lastPlayed: "x", csPerMin: null, csGames: 0 },
         { role: 2, games: 5 }, // missing championId
       ],
     });
@@ -130,13 +154,81 @@ describe("normalizeMyStatsSummary", () => {
     expect(result?.nOffBuild).toBe(14);
     expect(result?.priorSplitWinrate).toBe(0.5185);
     expect(result?.recentGames).toHaveLength(5);
+    // This fixture predates engy's CS ship, so every row normalizes with the CS
+    // trio ABSENT -> null. That is the assertion worth having: an old payload
+    // must not manufacture `cs: 0`, which is a real reading (a remake nobody
+    // farmed) and would render as a genuine measurement.
     expect(result?.recentGames).toEqual([
-      { championId: 112, role: 2, win: true, kills: 8, deaths: 2, assists: 11, onWpaBuild: true },
-      { championId: 122, role: 0, win: false, kills: 3, deaths: 6, assists: 2, onWpaBuild: false },
-      { championId: 64, role: 1, win: true, kills: 12, deaths: 4, assists: 7, onWpaBuild: null },
-      { championId: 51, role: 3, win: true, kills: 6, deaths: 1, assists: 9, onWpaBuild: true },
-      { championId: 412, role: 4, win: false, kills: 0, deaths: 3, assists: 14, onWpaBuild: null },
+      { championId: 112, role: 2, win: true, kills: 8, deaths: 2, assists: 11, onWpaBuild: true, ...RECENT_GAME_CS_DEFAULTS },
+      { championId: 122, role: 0, win: false, kills: 3, deaths: 6, assists: 2, onWpaBuild: false, ...RECENT_GAME_CS_DEFAULTS },
+      { championId: 64, role: 1, win: true, kills: 12, deaths: 4, assists: 7, onWpaBuild: null, ...RECENT_GAME_CS_DEFAULTS },
+      { championId: 51, role: 3, win: true, kills: 6, deaths: 1, assists: 9, onWpaBuild: true, ...RECENT_GAME_CS_DEFAULTS },
+      { championId: 412, role: 4, win: false, kills: 0, deaths: 3, assists: 14, onWpaBuild: null, ...RECENT_GAME_CS_DEFAULTS },
     ]);
+  });
+
+  it("carries engy's per-game CS trio through when the payload does have it", () => {
+    const result = normalizeMyStatsSummary({
+      recentGames: [
+        { championId: 112, role: 2, win: true, kills: 8, deaths: 2, assists: 11, onWpaBuild: true, cs: 241, gameDurationSec: 1980, csPerMin: 7.3 },
+        // Sub-300s remake: engy withholds the RATE but still sends the raw pair.
+        { championId: 64, role: 1, win: false, kills: 0, deaths: 0, assists: 0, onWpaBuild: null, cs: 12, gameDurationSec: 221, csPerMin: null },
+      ],
+    });
+    expect(result?.recentGames?.[0]).toMatchObject({ cs: 241, gameDurationSec: 1980, csPerMin: 7.3 });
+    expect(result?.recentGames?.[1]).toMatchObject({ cs: 12, gameDurationSec: 221, csPerMin: null });
+  });
+
+  it("carries engy's per-champion CS pair on records, and never invents a 0 rate", () => {
+    const result = normalizeMyStatsSummary({
+      records: [
+        { championId: 112, role: 2, games: 19, wins: 10, winrate: 0.526, lastPlayed: "x", csPerMin: 7.4, csGames: 17 },
+        { championId: 64, role: 1, games: 4, wins: 2, winrate: 0.5, lastPlayed: "x", csPerMin: null, csGames: 0 },
+      ],
+    });
+    expect(result?.records[0]).toMatchObject({ csPerMin: 7.4, csGames: 17 });
+    // Absent -> null rate, 0 denominator. NOT `csPerMin: 0`.
+    expect(result?.records[1]).toMatchObject({ csPerMin: null, csGames: 0 });
+  });
+
+  describe("ranked standing (engy §1a) — unranked and unknown are different facts", () => {
+    it("defaults an absent rankUnknown to TRUE, never parading accounts as Unranked", () => {
+      const result = normalizeMyStatsSummary({ accounts: [{ id: 1, riotId: "A#EUW" }] });
+      expect(result?.rankUnknown).toBe(true);
+      expect(result?.accounts?.[0].rankUnknown).toBe(true);
+      expect(result?.accounts?.[0].tier).toBeNull();
+    });
+
+    it("reads a genuine unranked account (rankUnknown false, tier null)", () => {
+      const result = normalizeMyStatsSummary({ rankUnknown: false, tier: null, rankCheckedAt: "2026-07-30T14:05:00.000Z" });
+      expect(result?.rankUnknown).toBe(false);
+      expect(result?.tier).toBeNull();
+      expect(result?.rankCheckedAt).toBe("2026-07-30T14:05:00.000Z");
+    });
+
+    it("passes a real standing through, upper-casing tier and division", () => {
+      const result = normalizeMyStatsSummary({
+        rankUnknown: false, tier: "emerald", division: "ii", lp: 47, rankWins: 61, rankLosses: 54,
+      });
+      expect(result).toMatchObject({ tier: "EMERALD", division: "II", lp: 47, rankWins: 61, rankLosses: 54 });
+    });
+
+    it("blanks every rank field when rankUnknown is true, even if the payload contradicts itself", () => {
+      // A stale tier sitting beside rankUnknown:true must not be readable at all.
+      const result = normalizeMyStatsSummary({ rankUnknown: true, tier: "DIAMOND", division: "I", lp: 12 });
+      expect(result).toMatchObject({ tier: null, division: null, lp: null, rankUnknown: true });
+    });
+
+    it("treats the truthy string \"false\" as unknown rather than as a known standing", () => {
+      const result = normalizeMyStatsSummary({ rankUnknown: "false", tier: "GOLD" });
+      expect(result?.rankUnknown).toBe(true);
+      expect(result?.tier).toBeNull();
+    });
+
+    it("carries the account-wide CS KPI, with 0 games meaning the rate is withheld", () => {
+      expect(normalizeMyStatsSummary({ csPerMin: 6.8, csGames: 84 })).toMatchObject({ csPerMin: 6.8, csGames: 84 });
+      expect(normalizeMyStatsSummary({})).toMatchObject({ csPerMin: null, csGames: 0 });
+    });
   });
 
   // ── v0.74 closes the gap flagged in HANDOFF-engo.md: feeding a REAL
@@ -412,7 +504,7 @@ describe("buildMyStatsRows", () => {
   const iconOf = (id: number): IconEntry | undefined => (id === 112 ? { name: "Viktor", icon: "viktor.webp" } : undefined);
 
   it("decorates a record with icon/name/role label and losses", () => {
-    const records: MyStatsRecord[] = [{ championId: 112, role: 2, games: 39, wins: 25, winrate: 0.641, lastPlayed: "x" }];
+    const records: MyStatsRecord[] = [{ championId: 112, role: 2, games: 39, wins: 25, winrate: 0.641, lastPlayed: "x", csPerMin: null, csGames: 0 }];
     const rows = buildMyStatsRows(records, iconOf);
     expect(rows).toEqual([
       {
@@ -426,22 +518,26 @@ describe("buildMyStatsRows", () => {
         losses: 14,
         winrate: 0.641,
         lowSample: false,
+        // Carried straight off the record — this decorator adds display fields
+        // and must not invent a rate the record did not have.
+        csPerMin: null,
+        csGames: 0,
       },
     ]);
   });
 
   it(`marks games below ${MYSTATS_LOW_SAMPLE_THRESHOLD} as lowSample`, () => {
-    const records: MyStatsRecord[] = [{ championId: 1, role: 0, games: 9, wins: 5, winrate: 0.556, lastPlayed: "x" }];
+    const records: MyStatsRecord[] = [{ championId: 1, role: 0, games: 9, wins: 5, winrate: 0.556, lastPlayed: "x", csPerMin: null, csGames: 0 }];
     expect(buildMyStatsRows(records, () => undefined)[0].lowSample).toBe(true);
   });
 
   it(`exactly ${MYSTATS_LOW_SAMPLE_THRESHOLD} games is NOT lowSample (threshold is exclusive on the low side)`, () => {
-    const records: MyStatsRecord[] = [{ championId: 1, role: 0, games: 10, wins: 5, winrate: 0.5, lastPlayed: "x" }];
+    const records: MyStatsRecord[] = [{ championId: 1, role: 0, games: 10, wins: 5, winrate: 0.5, lastPlayed: "x", csPerMin: null, csGames: 0 }];
     expect(buildMyStatsRows(records, () => undefined)[0].lowSample).toBe(false);
   });
 
   it("unresolved icon falls back to a placeholder name, never an empty label", () => {
-    const records: MyStatsRecord[] = [{ championId: 999, role: -1, games: 3, wins: 1, winrate: 0.333, lastPlayed: "x" }];
+    const records: MyStatsRecord[] = [{ championId: 999, role: -1, games: 3, wins: 1, winrate: 0.333, lastPlayed: "x", csPerMin: null, csGames: 0 }];
     const row = buildMyStatsRows(records, () => undefined)[0];
     expect(row.name).toBe("Champion #999");
     expect(row.roleLabel).toBe("Other");
@@ -449,8 +545,8 @@ describe("buildMyStatsRows", () => {
 
   it("does NOT re-sort -- preserves whatever order the records arrived in", () => {
     const records: MyStatsRecord[] = [
-      { championId: 1, role: 0, games: 5, wins: 1, winrate: 0.2, lastPlayed: "x" },
-      { championId: 2, role: 0, games: 50, wins: 40, winrate: 0.8, lastPlayed: "x" },
+      { championId: 1, role: 0, games: 5, wins: 1, winrate: 0.2, lastPlayed: "x", csPerMin: null, csGames: 0 },
+      { championId: 2, role: 0, games: 50, wins: 40, winrate: 0.8, lastPlayed: "x", csPerMin: null, csGames: 0 },
     ];
     const rows = buildMyStatsRows(records, () => undefined);
     expect(rows.map((r) => r.championId)).toEqual([1, 2]); // input order kept even though champ 2 has more games
@@ -460,8 +556,8 @@ describe("buildMyStatsRows", () => {
 describe("computeMyStatsOverall", () => {
   it("sums games/wins across every record", () => {
     const records: MyStatsRecord[] = [
-      { championId: 1, role: 0, games: 39, wins: 25, winrate: 0.641, lastPlayed: "x" },
-      { championId: 2, role: 1, games: 11, wins: 4, winrate: 0.364, lastPlayed: "x" },
+      { championId: 1, role: 0, games: 39, wins: 25, winrate: 0.641, lastPlayed: "x", csPerMin: null, csGames: 0 },
+      { championId: 2, role: 1, games: 11, wins: 4, winrate: 0.364, lastPlayed: "x", csPerMin: null, csGames: 0 },
     ];
     expect(computeMyStatsOverall(records)).toEqual({ games: 50, wins: 29, losses: 21, winrate: 0.58 });
   });

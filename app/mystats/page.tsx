@@ -35,17 +35,39 @@
 // between them.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import MyStatsRefresher from "@/components/hextech/MyStatsRefresher";
-import HeroBand, { Pill } from "@/components/hextech/HeroBand";
+import { Pill } from "@/components/hextech/HeroBand";
+import HextechTabs from "@/components/hextech/HextechTabs";
 import PanelHeading from "@/components/hextech/PanelHeading";
 import StatTiles from "@/components/hextech/mystats/StatTiles";
 import AccountPicker from "@/components/hextech/mystats/AccountPicker";
 import RecentGamesList, { type RecentGameRow } from "@/components/hextech/mystats/RecentGamesList";
 import ChampionPoolCard from "@/components/hextech/mystats/ChampionPoolCard";
+import ProfileHero from "@/components/hextech/mystats/ProfileHero";
+import MostPlayedStrip from "@/components/hextech/mystats/MostPlayedStrip";
+import AccountCardGrid from "@/components/hextech/mystats/AccountCardGrid";
+import ChampionPerformancePanel from "@/components/hextech/mystats/ChampionPerformancePanel";
+import MatchPerformancePanel from "@/components/hextech/mystats/MatchPerformancePanel";
+import { switchAccount } from "@/components/hextech/mystats/accountPickerModel";
+import {
+  buildProfileTabs,
+  buildMostPlayedStrip,
+  buildChampionPerformanceRows,
+  buildAccountCards,
+  buildMatchPerformanceChips,
+  computeLastActiveMs,
+  formatRelativeTime,
+  formatRank,
+  formatRegionChip,
+  isLiveGamePhase,
+  type ProfileTabId,
+  type RankInput,
+} from "@/components/hextech/mystats/profileModel";
 import { getChampionIconMap, type ChampionIconEntry } from "@/components/proAssets";
-import type { AccountSummary } from "@/components/live/mystatsAccount";
+import { useCompanion } from "@/components/live/CompanionProvider";
+import { selectAccount, type AccountSummary } from "@/components/live/mystatsAccount";
 import {
   fetchMyStatsSummary,
   fetchMyStatsMatchups,
@@ -143,6 +165,39 @@ function StillSyncingCallout({ games }: { games: number }) {
   );
 }
 
+/**
+ * The Accounts tab's loading state, at the FINAL dimensions of what replaces it.
+ *
+ * This exists because the pixels said so. Before it, everything below the hero
+ * was simply absent until the single summary fetch landed — and since that ONE
+ * response carries the account list AND the stats, "absent" meant the card grid,
+ * both lower panels and the footer all appeared at once. Measured at 390px on a
+ * dev build: CLS 0.736. The KPI strip was the only thing reserving any space.
+ *
+ * Each block below is sized to the real thing it stands in for:
+ *   · cards      76px min-height, the exact `min-h-[76px]` AccountCardGrid uses
+ *   · panels     the two lower panels, side by side at `lg` exactly as they land
+ * A skeleton that is not the final size does not reduce shift, it relocates it,
+ * so these track their real counterparts — if a panel's height changes, change
+ * these with it.
+ */
+function AccountsSkeleton({ cards }: { cards: number }) {
+  return (
+    <div className="space-y-5 animate-pulse motion-reduce:animate-none" aria-hidden="true">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+        {Array.from({ length: Math.max(3, cards + 1) }).map((_, i) => (
+          <div key={i} className="min-h-[76px] rounded-xl border border-line bg-panel" />
+        ))}
+      </div>
+      <TilesSkeleton />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+        <div className="h-[420px] rounded-xl border border-line bg-panel" />
+        <div className="h-[420px] rounded-xl border border-line bg-panel" />
+      </div>
+    </div>
+  );
+}
+
 /** Renders at the FINAL dimensions of the real KPI strip (3 cells, value +
  *  2-line label + delta row) so swapping in real numbers costs no layout
  *  shift. */
@@ -206,6 +261,22 @@ export default function MyStatsPage() {
   // Non-null only while a just-switched account's stats are in flight — lets the
   // loading state name the account it is loading instead of going silently blank.
   const [pendingRiotId, setPendingRiotId] = useState<string | null>(null);
+  // 2026-07-30 profile redesign. Which section the tab strip is showing, whether
+  // the account grid is expanded past its cap, and which card has a switch in
+  // flight. All three are pure view state — none of them can change what a
+  // number MEANS, which is why they live here rather than in `state`.
+  const [tab, setTab] = useState<ProfileTabId>("accounts");
+  const [accountsExpanded, setAccountsExpanded] = useState(false);
+  const [switchingId, setSwitchingId] = useState<number | null>(null);
+  // Non-null only after a failed card switch — see switchFromGrid.
+  const [gridError, setGridError] = useState<string | null>(null);
+  // "Link another account" scrolls to (and focuses) the real linking surface,
+  // which is AccountPicker — that flow owns the companion read, the secret entry
+  // and the detection prompt, and is the tested path. The grid's trailing cell
+  // is a signpost to it, never a second implementation of it.
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+  const { phase } = useCompanion();
+  const liveNow = isLiveGamePhase(phase);
 
   useEffect(() => {
     getChampionIconMap().then(setChampIcons);
@@ -273,6 +344,53 @@ export default function MyStatsPage() {
     };
   }, [expanded, champIcons]);
 
+  /**
+   * The card grid's switch. Routed through `switchAccount` — the same pure
+   * mutation AccountPicker uses — so the re-fetch-on-switch rule lives in ONE
+   * place. `refetchSummary` fires if and only if the server reported
+   * `switched: true`, and `handleAccountSwitched` blanks the stats until the new
+   * ones land. A second hand-rolled switch here is exactly how that rule would
+   * eventually be forgotten on one of the two paths.
+   */
+  const switchFromGrid = useCallback(
+    async (id: number) => {
+      const target = accountScope?.accounts.find((a) => a.id === id) ?? null;
+      setSwitchingId(id);
+      const result = await switchAccount(id, {
+        select: (accountId) => selectAccount(accountId),
+        refetchSummary: () => handleAccountSwitched(target?.riotId ?? null),
+      });
+      setSwitchingId(null);
+      if (result.status === "ok") {
+        // Re-seed the LIST immediately (which account is active) — a different
+        // question from what the NUMBERS mean, which only the re-fetch answers.
+        setAccountScope({ accounts: result.accounts, activeId: result.activeId, riotId: result.riotId });
+        setGridError(null);
+        return;
+      }
+      // A FAILED switch must not be silent. Measured in the browser: with no
+      // stored account secret, `selectAccount` answers `no-secret` and the card
+      // click did nothing at all — a control that looks actionable, is
+      // actionable, and visibly does nothing. AccountPicker still owns the full
+      // error vocabulary and the secret FIELD (duplicating either here would give
+      // the page two disagreeing error surfaces), so this says the one thing the
+      // user can act on and sends them to the control that unblocks them.
+      setGridError(
+        result.reason === "no-secret" || result.reason === "unauthorized"
+          ? "Switching accounts needs your account secret — enter it below."
+          : "Couldn't switch accounts. See the panel below."
+      );
+      focusPicker();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [accountScope]
+  );
+
+  function focusPicker(): void {
+    pickerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    pickerRef.current?.querySelector("button")?.focus();
+  }
+
   function toggleRow(championId: number, role: number) {
     setExpanded((prev) => (prev && prev.championId === championId && prev.role === role ? null : { championId, role }));
   }
@@ -309,22 +427,99 @@ export default function MyStatsPage() {
   const heroSplashKey = mainRow ? championKeyFromIconUrl(champIcons.get(mainRow.championId)?.icon) : null;
   const heroAvatar = mainRow ? champIcons.get(mainRow.championId)?.icon ?? "" : "";
 
+  // ── 2026-07-30 profile-redesign derivations ────────────────────────────────
+  // Every one of these is derived ONCE here and passed down, for the same reason
+  // `coverage` is: a value re-derived per component is a value two components
+  // eventually disagree about.
+  const summary = state.status === "ok" ? state.summary : null;
+  // The ACTIVE account's ranked standing. Read from the top-level mirror engy
+  // ships (§1a) rather than hunting through `accounts[]` — same values, and one
+  // less place to pick the wrong row. `rankUnknown` defaults to TRUE through the
+  // normalizer, so a response that predates the rank ship reads as "not synced",
+  // never as "Unranked".
+  const activeRank: RankInput = {
+    tier: summary?.tier ?? null,
+    division: summary?.division ?? null,
+    lp: summary?.lp ?? null,
+    rankWins: summary?.rankWins ?? null,
+    rankLosses: summary?.rankLosses ?? null,
+    rankUnknown: summary?.rankUnknown ?? true,
+    rankCheckedAt: summary?.rankCheckedAt ?? null,
+  };
+  const heroRank = formatRank(activeRank);
+  const regionChip = formatRegionChip(
+    accountScope?.accounts.find((a) => a.id === accountScope.activeId)?.region ?? ""
+  );
+  const mostPlayed = buildMostPlayedStrip(rows);
+  const championPerformance = buildChampionPerformanceRows(rows);
+  const accountGrid = buildAccountCards(accountScope?.accounts ?? [], { expanded: accountsExpanded });
+  const matchChips = buildMatchPerformanceChips(recentGames, activeRank);
+  // "Last active" is the newest game we have STORED, not the companion's
+  // last-seen — see computeLastActiveMs. Computed against a render-time clock;
+  // it is a coarse freshness cue (minutes/hours/days), so it does not need to
+  // tick and deliberately does not run a timer.
+  const lastActive = formatRelativeTime(
+    computeLastActiveMs(summary?.records ?? []),
+    Date.now()
+  );
+  const scopeLabel = coverage.seasonClaimSafe ? "this split" : "recorded so far";
+  const TABS = buildProfileTabs();
+
   return (
     <div className="min-h-screen pb-16">
       <div className="max-w-[1100px] mx-auto px-4 sm:px-6 pt-6 space-y-5">
-        <HeroBand
+        <ProfileHero
           headingLevel={1}
           splashKey={heroSplashKey}
           avatarSrc={mainRow ? heroAvatar : null}
           avatarAlt={mainRow?.name ?? ""}
           avatarGlyph={mainRow?.name}
+          live={liveNow}
           eyebrow={seasonLabel ? `My Stats · ${seasonLabel}` : "My Stats"}
           title={riotId ?? "My Stats"}
-          reservePills
-          pills={
-            coverage.pill || (overall && overall.games > 0) ? (
-              <>
-                {/* FIRST in the row on purpose: the caveat is read before the
+          lines={
+            <>
+              {/* Real copy in the reference's CTA slot, not marketing. Line one
+                  is the ranked standing in words (which also says plainly when
+                  it has not been read); line two is freshness. */}
+              <p title={heroRank.title}>
+                {heroRank.state === "ranked" ? (
+                  <>
+                    Ranked solo/duo: {heroRank.label}
+                    {heroRank.lp ? ` · ${heroRank.lp}` : ""}
+                    {/* nowrap on the record: at 390px "65W 66L" was breaking
+                        mid-pair onto the next line, which reads as two unrelated
+                        numbers rather than one W-L record. */}
+                    {heroRank.record ? <span className="whitespace-nowrap"> · {heroRank.record}</span> : ""}
+                  </>
+                ) : heroRank.state === "unranked" ? (
+                  "No ranked solo/duo standing this split."
+                ) : (
+                  "Ranked standing not read yet for this account."
+                )}
+              </p>
+              <p>
+                {lastActive ? `Last recorded game ${lastActive}.` : "No games recorded yet."}
+                {liveNow && <span className="text-bad font-semibold"> In a game now.</span>}
+              </p>
+            </>
+          }
+          actions={<MyStatsRefresher onRefreshed={() => setRefetchKey((k) => k + 1)} />}
+          chips={
+            <>
+              {/* The reference's `#1 EUW` slot. The REGION is real; the ladder
+                  POSITION is not something this app fetches for the signed-in
+                  user, so the chip carries region only — never a "#1" that
+                  actually means "we don't know". */}
+              {regionChip && <Pill tone="neutral" title="Riot server region for the active account">{regionChip}</Pill>}
+              {/* Rank chip. `heroRank.state` is read, NOT `tier === null` — an
+                  account whose rank has never been read says "Rank not synced"
+                  and must never wear an Unranked badge (engy §1a). */}
+              <Pill tone={heroRank.state === "ranked" ? "accent" : "neutral"} title={heroRank.title}>
+                {heroRank.label}
+                {heroRank.lp ? ` · ${heroRank.lp}` : ""}
+              </Pill>
+              {/* FIRST in the row on purpose: the caveat is read before the
                     counts it qualifies, rather than trailing them as a footnote.
                     `neutral` rather than `bad` — nothing is broken, the history is
                     filling, and a red pill beside a W-L record would read as an
@@ -375,20 +570,21 @@ export default function MyStatsPage() {
                     )}
                   </>
                 )}
-              </>
-            ) : undefined
+            </>
           }
-          right={<MyStatsRefresher onRefreshed={() => setRefetchKey((k) => k + 1)} />}
         />
 
-        {accountScope && (
-          <AccountPicker
-            accounts={accountScope.accounts}
-            activeRiotId={accountScope.riotId}
-            activeId={accountScope.activeId}
-            onSwitched={handleAccountSwitched}
-          />
-        )}
+        {/* The reference's tab strip, minus the three tabs that lead nowhere —
+            see buildProfileTabs. HextechTabs brings the ARIA Tabs keyboard
+            contract (roving tabindex, arrows, Home/End) and the gold underline
+            with it, so this strip does not re-implement either. */}
+        <HextechTabs
+          options={TABS}
+          value={tab}
+          onChange={setTab}
+          ariaLabel="My Stats sections"
+          className="-mt-1"
+        />
 
         {state.status === "loading" && (
           <>
@@ -397,7 +593,6 @@ export default function MyStatsPage() {
                 Loading stats for <span className="text-txt font-semibold">{pendingRiotId}</span>…
               </p>
             )}
-            <TilesSkeleton />
           </>
         )}
 
@@ -431,28 +626,122 @@ export default function MyStatsPage() {
           />
         )}
 
+        {/* ── ACCOUNTS TAB ──────────────────────────────────────────────────
+            The reference's visible state, in its order: the "Accounts" heading
+            with the most-played portrait strip on its baseline, the account card
+            grid, then the two-column lower section. The account PICKER stays
+            mounted underneath the grid because it owns the linking flow — the
+            companion read, the detection prompt and the secret entry — and is
+            the tested surface for all three. The grid switches; the picker
+            links. Neither duplicates the other's job. */}
+        <div
+          id="hextech-tabpanel-accounts"
+          role="tabpanel"
+          aria-labelledby="hextech-tab-accounts"
+          hidden={tab !== "accounts"}
+          className="space-y-5"
+        >
+          <div className="flex items-end justify-between gap-3 flex-wrap min-h-[32px]">
+            <h2 className="text-[15px] font-semibold text-txt tracking-[-0.015em]">Accounts</h2>
+            <MostPlayedStrip champions={mostPlayed} />
+          </div>
+
+          {/* The skeleton lives INSIDE this panel, standing in for exactly the
+              blocks below it, rather than beside them — a placeholder rendered
+              next to the thing it replaces reserves the wrong box and relocates
+              the shift instead of removing it. */}
+          {state.status === "loading" && (
+            <AccountsSkeleton cards={accountScope?.accounts.length ?? 2} />
+          )}
+
+          {state.status !== "loading" && accountScope && (
+            <AccountCardGrid
+              model={accountGrid}
+              avatarOf={() => (mainRow ? champIcons.get(mainRow.championId)?.icon : undefined)}
+              onSelect={switchFromGrid}
+              pendingId={switchingId}
+              onShowAll={() => setAccountsExpanded(true)}
+              onLinkAnother={focusPicker}
+              // The grid only renders once loading has finished (the skeleton
+              // covers that window), so a switch in flight is the only thing
+              // left that should lock the cards.
+              disabled={switchingId !== null}
+            />
+          )}
+
+          {gridError && (
+            <p role="status" aria-live="polite" className="text-[11.5px] text-bad">
+              {gridError}
+            </p>
+          )}
+
+          {state.status !== "loading" && accountScope && (
+            <div ref={pickerRef}>
+              <AccountPicker
+                accounts={accountScope.accounts}
+                activeRiotId={accountScope.riotId}
+                activeId={accountScope.activeId}
+                onSwitched={handleAccountSwitched}
+              />
+            </div>
+          )}
+
+          {state.status === "ok" && !state.summary.accountUnresolved && rows.length > 0 && overall && (
+            <div className="space-y-5">
+              {coverage.state === "thin" && <StillSyncingCallout games={coverage.games} />}
+
+              <StatTiles
+                games={overall.games}
+                seasonLabel={state.summary.season || ""}
+                winrate={overall.winrate}
+                priorSplitWinrate={state.summary.priorSplitWinrate ?? null}
+                buildAdherencePct={state.summary.buildAdherencePct ?? null}
+                winrateOnBuild={state.summary.winrateOnBuild ?? null}
+                winrateOffBuild={state.summary.winrateOffBuild ?? null}
+                nOnBuild={state.summary.nOnBuild ?? null}
+                nOffBuild={state.summary.nOffBuild ?? null}
+                coverage={coverage}
+              />
+
+              {/* The reference's two-column lower section. `items-start` so the
+                  taller panel never stretches the shorter one into empty space.
+                  One column under `lg` — a 3-column card grid and a 20-bar chart
+                  both need a real mobile answer, and stacking is it. */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+                <ChampionPerformancePanel rows={championPerformance} scopeLabel={scopeLabel} />
+                <MatchPerformancePanel
+                  games={recentGames}
+                  iconOf={(id) => champIcons.get(id)}
+                  chips={matchChips}
+                  splitCsPerMin={state.summary.csPerMin ?? null}
+                  splitCsGames={state.summary.csGames ?? 0}
+                  lastActive={lastActive}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── MATCH HISTORY TAB ─────────────────────────────────────────────
+            The drill-downs the reference does not show: the per-game list and
+            the per-champion matchup table this page already had. */}
+        <div
+          id="hextech-tabpanel-history"
+          role="tabpanel"
+          aria-labelledby="hextech-tab-history"
+          hidden={tab !== "history"}
+          className="space-y-5"
+        >
         {state.status === "ok" && !state.summary.accountUnresolved && rows.length > 0 && overall && (
           <div className="space-y-5">
-            {coverage.state === "thin" && <StillSyncingCallout games={coverage.games} />}
-
-            <StatTiles
-              games={overall.games}
-              seasonLabel={state.summary.season || ""}
-              winrate={overall.winrate}
-              priorSplitWinrate={state.summary.priorSplitWinrate ?? null}
-              buildAdherencePct={state.summary.buildAdherencePct ?? null}
-              winrateOnBuild={state.summary.winrateOnBuild ?? null}
-              winrateOffBuild={state.summary.winrateOffBuild ?? null}
-              nOnBuild={state.summary.nOnBuild ?? null}
-              nOffBuild={state.summary.nOffBuild ?? null}
-              coverage={coverage}
-            />
-
             {/* `items-start`: without it the two panels are forced to equal
                 height, and the champion pool (44 rows on this account) stretched
                 the 5-row recent-games card into ~600px of empty panel. */}
             <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-5 items-start">
-              <RecentGamesList games={recentGames} iconOf={(id) => champIcons.get(id)} />
+              {/* showChart=false: MatchPerformancePanel on the Accounts tab owns
+                  the bar chart now, and both panels stay mounted behind the tab
+                  strip, so leaving it on rendered the same five bars twice. */}
+              <RecentGamesList games={recentGames} iconOf={(id) => champIcons.get(id)} showChart={false} />
               <ChampionPoolCard rows={rows} />
             </div>
 
@@ -563,6 +852,7 @@ export default function MyStatsPage() {
             </div>
           </div>
         )}
+        </div>
 
         <footer className="mt-10 pt-4 border-t border-line text-center text-[11px] text-mut space-y-1">
           <p>Your own match history — shown for context only, never blended into any recommendation or ranking.</p>

@@ -21,6 +21,9 @@ function participant(overrides: Partial<MyRiotParticipant>): MyRiotParticipant {
     item4: 3025,
     item5: 0,
     perks: { styles: [{ description: "primaryStyle", selections: [{ perk: 8005 }] }, { description: "subStyle", selections: [{ perk: 8226 }] }] },
+    // Migration 0021 — the two halves of creep score. 180 + 20 = 200 CS.
+    totalMinionsKilled: 180,
+    neutralMinionsKilled: 20,
     ...overrides,
   };
 }
@@ -32,6 +35,7 @@ function match(participants: MyRiotParticipant[], overrides: Partial<MyRiotMatch
       gameCreation: 1_700_000_000_000,
       gameVersion: "16.13.567.1234",
       queueId: 420,
+      gameDuration: 1800, // SECONDS (30 min) — see MyRiotMatch's doc comment
       participants,
       ...overrides,
     },
@@ -143,5 +147,48 @@ describe("extractMyMatch", () => {
     const row = extractMyMatch(m, SELF_PUUID);
     expect(row!.role).toBe(-1);
     expect(row!.oppChampionId).toBeNull();
+  });
+
+  // ── Migration 0021: CS + duration ─────────────────────────────────────────
+  it("extracts CS as lane minions PLUS neutral monsters, and duration in seconds", () => {
+    const m = match([
+      participant({ puuid: SELF_PUUID, totalMinionsKilled: 210, neutralMinionsKilled: 34 }),
+    ]);
+    const row = extractMyMatch(m, SELF_PUUID)!;
+    expect(row.cs).toBe(244); // NOT 210 — jungle monsters count
+    expect(row.gameDurationSec).toBe(1800);
+  });
+
+  it("uses the SAME formula as the pro pipeline", async () => {
+    // Guards the shared-helper decision: if someone re-writes an inline
+    // `a + b` in lib/mystats/extract.ts, this still passes — but if the two
+    // pipelines ever disagree on what CS means, creepScore is the one place
+    // that has to change, and this asserts My Stats actually routes through it.
+    const { creepScore } = await import("@/lib/pro/extract");
+    const p = { totalMinionsKilled: 210, neutralMinionsKilled: 34 };
+    const row = extractMyMatch(match([participant({ puuid: SELF_PUUID, ...p })]), SELF_PUUID)!;
+    expect(row.cs).toBe(creepScore(p));
+  });
+
+  it("STORES a 3-minute remake rather than dropping it — filtering is the aggregator's job", () => {
+    // Same posture this file's header sets out for role/queue: extraction never
+    // makes a filtering decision. lib/mystats/cs.ts excludes it from RATES.
+    const m = match(
+      [participant({ puuid: SELF_PUUID, totalMinionsKilled: 12, neutralMinionsKilled: 0 })],
+      { gameDuration: 221 }
+    );
+    const row = extractMyMatch(m, SELF_PUUID)!;
+    expect(row).not.toBeNull();
+    expect(row.cs).toBe(12);
+    expect(row.gameDurationSec).toBe(221);
+  });
+
+  it("extracts a genuine 0-CS game as 0, never as null", () => {
+    // 0 is a measurement; null means NOT measured. Conflating them is what
+    // would let a real zero be dropped from a denominator it belongs in.
+    const m = match([
+      participant({ puuid: SELF_PUUID, totalMinionsKilled: 0, neutralMinionsKilled: 0 }),
+    ]);
+    expect(extractMyMatch(m, SELF_PUUID)!.cs).toBe(0);
   });
 });

@@ -22,6 +22,20 @@ export interface MyAccountRow {
    *  logged into the League client. Null = never detected (env-seeded, or
    *  linked before this column existed). */
   last_seen_at: string | null;
+  /** Migration 0022 (ranked tier/LP). All six value columns move together —
+   *  see the migration's header. Read them through lib/mystats/rank.ts's
+   *  `rankFromRow`, which is the one place that turns them into the
+   *  unranked-vs-unknown distinction the API contract promises. */
+  rank_tier: string | null;
+  rank_division: string | null;
+  rank_lp: number | null;
+  rank_wins: number | null;
+  rank_losses: number | null;
+  /** Last SUCCESSFUL read. NULL here is the ONLY thing that means "we have
+   *  never known this account's rank" — do not infer it from rank_tier. */
+  rank_checked_at: string | null;
+  /** Last attempt, success or failure. TTL gate only; never displayed. */
+  rank_attempted_at: string | null;
 }
 
 /** DisplayRoleId-shaped (lib/pro/types.ts): 0-4 concrete, -1 unresolved. Kept
@@ -50,6 +64,13 @@ export interface ExtractedMyMatch {
    *  SPLIT_BOUNDARIES) — a pure function of gameCreation, computed here so
    *  ingest.ts doesn't need to re-derive it. */
   split: number;
+  /** Migration 0021 — creep score (lane minions + neutral monsters) and the
+   *  game length in SECONDS that divides it. RAW, never a pre-divided rate:
+   *  see the migration's header for why a stored rate cannot be re-aggregated.
+   *  Both are always present on a freshly extracted row (match-v5 always
+   *  carries them); NULL only ever appears on rows stored before 0021. */
+  cs: number;
+  gameDurationSec: number;
 }
 
 export interface MyMatchRow {
@@ -77,6 +98,12 @@ export interface MyMatchRow {
    *  computeAdherence doc comment for the null/false distinction. */
   on_wpa_build: boolean | null;
   split: number | null;
+  /** Migration 0021. NULL on any row stored before that migration and not yet
+   *  run through scripts/backfill-mystats-cs.mjs. NULL means NOT MEASURED and
+   *  must never be read as 0 — lib/mystats/cs.ts drops such a row from every
+   *  figure rather than counting it as a zero-CS game. */
+  cs: number | null;
+  game_duration_sec: number | null;
 }
 
 // ── Local Riot match-v5 shapes (only the fields this feature reads) ────────
@@ -114,6 +141,11 @@ export interface MyRiotParticipant {
   /** Optional/absent on a malformed fixture or a genuinely perk-less remake
    *  -- extract.ts degrades to a null primaryKeystone rather than crashing. */
   perks?: { styles: MyRiotPerkStyle[] };
+  /** Migration 0021 (CS/min). The two halves of creep score -- summed by
+   *  lib/pro/extract.ts's creepScore(), which is shared with the pro/OTP
+   *  pipelines so both cannot drift on what "CS" means. */
+  totalMinionsKilled: number;
+  neutralMinionsKilled: number;
 }
 
 export interface MyRiotMatch {
@@ -122,6 +154,16 @@ export interface MyRiotMatch {
     gameCreation: number; // epoch ms
     gameVersion: string; // "14.13.567.1234"
     queueId: number;
+    /** SECONDS. Riot's own unit for gameDuration has been seconds since patch
+     *  11.20 (before that it was milliseconds on games with no
+     *  gameEndTimestamp). Every row this table can ever hold is season-scoped
+     *  to 2026 (lib/mystats/season.ts's SEASON_START_MS), so the millisecond
+     *  form is unreachable here and is deliberately NOT branched on — a guard
+     *  keyed on magnitude would be untestable against real data and would
+     *  silently rescale a legitimately long game. Verified against the live
+     *  table instead: measured min/max durations sit in the normal
+     *  15-45-minute band, see HANDOFF-engy.md. */
+    gameDuration: number;
     participants: MyRiotParticipant[];
   };
 }

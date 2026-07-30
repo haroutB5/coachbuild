@@ -26,6 +26,18 @@ function account(over: Partial<AccountSummary> = {}): AccountSummary {
     active: true,
     lastSeenAt: null,
     games: 138,
+    // engy §1a rank fields (2026-07-30). Defaulted to the UNKNOWN state — "we
+    // have never read this account's rank" — because that is what the picker
+    // sees for any account that has not been active, and because the alternative
+    // default (rankUnknown:false) would assert an unranked standing this fixture
+    // has not earned.
+    tier: null,
+    division: null,
+    lp: null,
+    rankWins: null,
+    rankLosses: null,
+    rankUnknown: true,
+    rankCheckedAt: null,
     ...over,
   };
 }

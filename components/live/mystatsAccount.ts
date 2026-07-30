@@ -84,6 +84,31 @@ export interface AccountSummary {
   active: boolean;
   lastSeenAt: string | null;
   games: number;
+
+  // ── Ranked solo/duo standing (2026-07-30, engy — HANDOFF-engy.md §1a) ─────
+  // Mirrors lib/mystats/rank.ts's AccountRank exactly. Solo queue only; flex is
+  // not fetched, not stored, and would arrive under separate `flex*` names.
+  //
+  // READ `rankUnknown` FIRST — it is the discriminator, and the whole reason
+  // these are seven fields rather than three:
+  //   rankUnknown === false -> tier/division/lp are the truth, and a NULL tier
+  //                            means GENUINELY UNRANKED. Render "Unranked".
+  //   rankUnknown === true  -> every field below is null and means NOTHING.
+  //                            Render a placeholder, never an unranked badge.
+  // Rendering a blank tier badge on rankUnknown is the confidently-wrong-blank
+  // this pair exists to prevent.
+  /** "IRON".."CHALLENGER", uppercase, as Riot spells it. */
+  tier: string | null;
+  /** "I".."IV". Riot sends "I" for MASTER/GRANDMASTER/CHALLENGER where it means
+   *  nothing — forwarded verbatim, and the UI declines to render it there. */
+  division: string | null;
+  lp: number | null;
+  rankWins: number | null;
+  rankLosses: number | null;
+  rankUnknown: boolean;
+  /** ISO of the last SUCCESSFUL read from Riot, null when there has never been
+   *  one. Lets a surface say "as of 14:05" instead of implying it is live. */
+  rankCheckedAt: string | null;
 }
 
 export interface AccountsMutationResult {

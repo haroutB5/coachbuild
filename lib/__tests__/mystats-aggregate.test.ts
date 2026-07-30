@@ -206,6 +206,10 @@ describe("buildRecentGames", () => {
 
   it("strips gameCreation from the output shape (display doesn't need it)", () => {
     const [g] = buildRecentGames([recentRow({})]);
+    // Deliberately an EXACT-shape assertion, not toMatchObject: this is the
+    // wire contract, so a field appearing here unannounced should fail loudly.
+    // The three cs fields were added by migration 0021 -- a caller that omits
+    // them gets nulls, never a fabricated 0 (see lib/mystats/cs.ts).
     expect(g).toEqual({
       championId: 1,
       role: 2,
@@ -214,6 +218,9 @@ describe("buildRecentGames", () => {
       deaths: 2,
       assists: 7,
       onWpaBuild: null,
+      cs: null,
+      gameDurationSec: null,
+      csPerMin: null,
     });
   });
 

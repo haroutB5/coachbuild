@@ -42,6 +42,7 @@ import {
 } from "@/lib/pro/riot";
 import { RiotUnavailableError } from "@/lib/pro/errors";
 import { routingForServer, routingForPlatform, type RiotRouting } from "@/lib/pro/regionMap";
+import { rankFromRow, type RankRow } from "./rank";
 import type { getSql } from "@/lib/pro/db";
 import type { MyAccountRow } from "./types";
 
@@ -87,6 +88,21 @@ export interface MyAccountSummary {
   /** How many stored matches this account has. Lets the picker show "138
    *  games" beside a name instead of an unlabelled tag. */
   games: number;
+  /** Migration 0022 — ranked solo/duo standing, spread onto this shape rather
+   *  than nested, so a card can read `account.tier` directly.
+   *
+   *  READ `rankUnknown` BEFORE `tier`. A null tier means genuinely UNRANKED
+   *  only when rankUnknown is false; when rankUnknown is true every one of
+   *  these fields is null and means nothing at all. lib/mystats/rank.ts's
+   *  rankFromRow is the ONE place that decides which of the two it is — never
+   *  re-derive it from the tier being null. */
+  tier: string | null;
+  division: string | null;
+  lp: number | null;
+  rankWins: number | null;
+  rankLosses: number | null;
+  rankUnknown: boolean;
+  rankCheckedAt: string | null;
 }
 
 export function splitRiotId(riotId: string): { gameName: string; tagLine: string } | null {
@@ -150,22 +166,28 @@ export const getMyAccount = getActiveAccount;
 export async function listAccounts(sql: Sql): Promise<MyAccountSummary[]> {
   const rows = (await sql`
     SELECT a.id, a.riot_id, a.region, a.active, a.last_seen_at,
+           a.rank_tier, a.rank_division, a.rank_lp, a.rank_wins, a.rank_losses,
+           a.rank_checked_at, a.rank_attempted_at,
            COALESCE(m.games, 0)::int AS games
     FROM coachbuild.my_account a
     LEFT JOIN (
       SELECT puuid, count(*)::int AS games FROM coachbuild.my_matches GROUP BY puuid
     ) m ON m.puuid = a.puuid
     ORDER BY a.active DESC, a.last_seen_at DESC NULLS LAST, a.id
-  `) as unknown as {
+  `) as unknown as ({
     id: number;
     riot_id: string;
     region: string;
     active: boolean;
     last_seen_at: string | null;
     games: number;
-  }[];
+  } & RankRow)[];
   return rows.map((r) => {
     const parts = splitRiotId(r.riot_id);
+    // rankFromRow, not an inline spread of the six columns: the unranked-vs-
+    // unknown decision has exactly one implementation, and a second copy here
+    // is what would silently miss the next fix to it (CLAUDE.md gotcha (dd)).
+    const rank = rankFromRow(r);
     return {
       id: r.id,
       riotId: r.riot_id,
@@ -175,6 +197,7 @@ export async function listAccounts(sql: Sql): Promise<MyAccountSummary[]> {
       active: r.active,
       lastSeenAt: r.last_seen_at,
       games: r.games,
+      ...rank,
     };
   });
 }

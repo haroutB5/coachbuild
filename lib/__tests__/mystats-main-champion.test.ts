@@ -26,6 +26,10 @@ function rec(championId: number, role: number, games: number, wins: number): MyS
     wins,
     winrate: games > 0 ? wins / games : 0,
     lastPlayed: "2026-07-27T00:00:00.000Z",
+    // engy §1b (2026-07-30). Irrelevant to main-champion selection, which is a
+    // pure games/wins question — present only to satisfy the widened record.
+    csPerMin: null,
+    csGames: 0,
   };
 }
 

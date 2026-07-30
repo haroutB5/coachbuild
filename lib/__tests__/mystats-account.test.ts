@@ -381,6 +381,18 @@ describe("listAccounts", () => {
     // The games count must be joined on puuid, not on id -- match rows are keyed
     // by puuid (migration 0020), so joining on anything else would report 0.
     expect(text).toContain("m.puuid = a.puuid");
+    // Rows with no rank columns at all (never fetched) must come back as
+    // UNKNOWN — every rank field null AND rankUnknown true. Never a fabricated
+    // "unranked", which is a DIFFERENT state carrying a rank_checked_at.
+    const UNKNOWN = {
+      tier: null,
+      division: null,
+      lp: null,
+      rankWins: null,
+      rankLosses: null,
+      rankUnknown: true,
+      rankCheckedAt: null,
+    };
     expect(accounts).toEqual([
       {
         id: 2,
@@ -391,6 +403,7 @@ describe("listAccounts", () => {
         active: true,
         lastSeenAt: "2026-07-29T00:00:00.000Z",
         games: 4,
+        ...UNKNOWN,
       },
       {
         id: 1,
@@ -401,8 +414,42 @@ describe("listAccounts", () => {
         active: false,
         lastSeenAt: null,
         games: 138,
+        ...UNKNOWN,
       },
     ]);
     expect(JSON.stringify(accounts)).not.toContain("puuid");
+  });
+
+  it("carries a stored rank through, and reports UNRANKED distinctly from UNKNOWN", async () => {
+    const sql = sqlMock(() =>
+      Promise.resolve([
+        // Ranked: read succeeded, has a standing.
+        {
+          id: 1, riot_id: "A#EUW", region: "EUW", active: true, last_seen_at: null, games: 138,
+          rank_tier: "PLATINUM", rank_division: "IV", rank_lp: 89, rank_wins: 65, rank_losses: 66,
+          rank_checked_at: "2026-07-30T12:00:00.000Z", rank_attempted_at: "2026-07-30T12:00:00.000Z",
+        },
+        // UNRANKED: read succeeded (checked_at set), no standing.
+        {
+          id: 2, riot_id: "B#EUW", region: "EUW", active: false, last_seen_at: null, games: 3,
+          rank_tier: null, rank_division: null, rank_lp: null, rank_wins: null, rank_losses: null,
+          rank_checked_at: "2026-07-30T12:00:00.000Z", rank_attempted_at: "2026-07-30T12:00:00.000Z",
+        },
+        // UNKNOWN: never successfully read, even though it HAS been attempted.
+        {
+          id: 3, riot_id: "C#EUW", region: "EUW", active: false, last_seen_at: null, games: 0,
+          rank_tier: null, rank_division: null, rank_lp: null, rank_wins: null, rank_losses: null,
+          rank_checked_at: null, rank_attempted_at: "2026-07-30T12:00:00.000Z",
+        },
+      ])
+    );
+    const [ranked, unranked, unknown] = await listAccounts(sql as never);
+    expect(ranked).toMatchObject({ tier: "PLATINUM", division: "IV", lp: 89, rankUnknown: false });
+    expect(unranked).toMatchObject({ tier: null, rankUnknown: false }); // genuinely unranked
+    expect(unknown).toMatchObject({ tier: null, rankUnknown: true }); // we don't know
+    // The pair that must never collapse into each other.
+    expect(unranked.rankUnknown).not.toBe(unknown.rankUnknown);
+    // A failed attempt does not manufacture a checked_at.
+    expect(unknown.rankCheckedAt).toBeNull();
   });
 });

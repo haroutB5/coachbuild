@@ -32,11 +32,30 @@ export interface RecentGameRow {
   /** null/undefined = build-adherence not resolved for this game (old data,
    *  or the pipeline hasn't backfilled it yet) — renders no chip at all. */
   onWpaBuild: boolean | null | undefined;
+  /** engy §1c (2026-07-30). Kept structurally identical to
+   *  MyStatsRecentGame so the two interfaces stay mutually assignable — see
+   *  that type's doc comment. `csPerMin` is deliberately withheld (null) on a
+   *  game under 5 minutes while `cs`/`gameDurationSec` survive, so a surface can
+   *  still say "12 CS in 3:41" without quoting a meaningless rate. */
+  cs: number | null;
+  gameDurationSec: number | null;
+  csPerMin: number | null;
 }
 
 export interface RecentGamesListProps {
   games: RecentGameRow[];
   iconOf: IconLookup;
+  /**
+   * Render the bar chart above the rows. ON by default so this component is
+   * still complete on its own.
+   *
+   * /mystats passes FALSE as of the 2026-07-30 profile redesign: the chart moved
+   * to `MatchPerformancePanel` (the reference's lower-right panel) and both
+   * panels stay mounted behind the tab strip, so leaving it on rendered the SAME
+   * five bars twice on one page — measured, 10 bars in the DOM where there
+   * should be 5. Same data, two charts, one of them redundant.
+   */
+  showChart?: boolean;
 }
 
 function BuildChip({ onWpaBuild }: { onWpaBuild: boolean | null | undefined }) {
@@ -57,7 +76,7 @@ function BuildChip({ onWpaBuild }: { onWpaBuild: boolean | null | undefined }) {
   return null;
 }
 
-export default function RecentGamesList({ games, iconOf }: RecentGamesListProps) {
+export default function RecentGamesList({ games, iconOf, showChart = true }: RecentGamesListProps) {
   if (games.length === 0) {
     return (
       <div className="bg-panel border border-line rounded-xl p-8 text-center">
@@ -75,9 +94,11 @@ export default function RecentGamesList({ games, iconOf }: RecentGamesListProps)
     <div className="bg-panel border border-line rounded-xl px-4 sm:px-5 pt-4 pb-1">
       <PanelHeading meta={`Last ${wl.n} games · ${wl.wins}W-${wl.losses}L`}>Recent games</PanelHeading>
 
-      <div className="pt-4 pb-4 border-b border-line">
-        <RecentGamesChart games={games} iconOf={iconOf} />
-      </div>
+      {showChart && (
+        <div className="pt-4 pb-4 border-b border-line">
+          <RecentGamesChart games={games} iconOf={iconOf} />
+        </div>
+      )}
 
       {games.map((g, i) => {
         const entry = iconOf(g.championId);

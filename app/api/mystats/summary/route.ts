@@ -7,11 +7,14 @@ import {
   summarizeMatchup,
   computeBuildAdherence,
   computePriorSplitWinrate,
+  computeCsSummary,
   buildRecentGames,
   type MyMatchRecord,
 } from "@/lib/mystats/aggregate";
 import { SEASON_LABEL, currentSplitNumber } from "@/lib/mystats/season";
 import { readHistoryComplete } from "@/lib/mystats/ingest";
+import { refreshStaleRanks, UNKNOWN_RANK } from "@/lib/mystats/rank";
+import { routingForServer } from "@/lib/pro/regionMap";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,6 +25,8 @@ interface Row {
   opp_champion_id: number | null;
   win: boolean;
   game_creation: string;
+  cs: number | null;
+  game_duration_sec: number | null;
 }
 
 interface AdherenceRow {
@@ -42,6 +47,8 @@ interface RecentRow {
   assists: number | null;
   on_wpa_build: boolean | null;
   game_creation: string;
+  cs: number | null;
+  game_duration_sec: number | null;
 }
 
 const EMPTY_STATS = {
@@ -52,6 +59,11 @@ const EMPTY_STATS = {
   nOnBuild: null as number | null,
   nOffBuild: null as number | null,
   priorSplitWinrate: null as number | null,
+  // CS headline. csGames 0 is a REAL count (zero games backed it), which is
+  // why it is 0 and not null, while csPerMin is null because there is no rate
+  // to state -- the same "count vs figure" split nOnBuild/nOffBuild use.
+  csPerMin: null as number | null,
+  csGames: 0,
   recentGames: [] as ReturnType<typeof buildRecentGames>,
 };
 
@@ -171,7 +183,13 @@ export async function GET(req: NextRequest) {
           accountId: null,
           accounts: await listAccounts(sql),
           records: [],
+          championPool: [],
           matchup: null,
+          // No account resolved => nothing was looked up => UNKNOWN, never a
+          // fabricated "unranked". Spread so this response carries the exact
+          // same seven rank keys as the resolved one -- a consumer must not
+          // have to branch on which response shape it got.
+          ...UNKNOWN_RANK,
           ...EMPTY_STATS,
         },
         { status: 200, headers: { "Cache-Control": "no-store" } }
@@ -189,7 +207,7 @@ export async function GET(req: NextRequest) {
     // visible symptom. HARD RULE 4. If you add a fifth query here, it takes the
     // puuid filter too.
     const rows = (await sql`
-      SELECT champion_id, role, opp_champion_id, win, game_creation
+      SELECT champion_id, role, opp_champion_id, win, game_creation, cs, game_duration_sec
       FROM coachbuild.my_matches
       WHERE puuid = ${account.puuid}
         AND split = ${split}
@@ -203,6 +221,8 @@ export async function GET(req: NextRequest) {
       oppChampionId: r.opp_champion_id,
       win: r.win,
       gameCreation: r.game_creation,
+      cs: r.cs,
+      gameDurationSec: r.game_duration_sec,
     }));
 
     const matchup =
@@ -231,12 +251,36 @@ export async function GET(req: NextRequest) {
         : null;
 
     const recentRows = (await sql`
-      SELECT champion_id, role, win, kills, deaths, assists, on_wpa_build, game_creation
+      SELECT champion_id, role, win, kills, deaths, assists, on_wpa_build, game_creation,
+             cs, game_duration_sec
       FROM coachbuild.my_matches
       WHERE puuid = ${account.puuid}
       ORDER BY game_creation DESC
-      LIMIT 5
+      -- 20, not 5: the Match Performance panel is headed "(Last 20 Games)" and
+      -- its bar chart is sized for that. At 5 the heading was a claim the data
+      -- did not back, which is the same defect class as an unlabelled partial
+      -- history -- just smaller. The panel renders however many rows come back,
+      -- so a newly-linked account with 3 games still reads correctly.
+      LIMIT 20
     `) as unknown as RecentRow[];
+
+    // RANK REFRESH, before listAccounts reads the stored values back. Bounded
+    // at RANK_REFRESH_MAX_PER_REQUEST Riot calls and gated per account by a
+    // DATABASE timestamp, so the steady state on a warm account is ZERO calls
+    // -- this is the "must not add a call per page view" constraint, and the
+    // reason the TTL lives in Postgres rather than in module state (a
+    // per-lambda-instance cache would make N cold instances issue N calls for
+    // the same fact). Never throws; see refreshStaleRanks.
+    const rankTargets = (await sql`
+      SELECT id, puuid, region, active, rank_attempted_at FROM coachbuild.my_account
+    `) as unknown as {
+      id: number;
+      puuid: string;
+      region: string;
+      active: boolean;
+      rank_attempted_at: string | null;
+    }[];
+    await refreshStaleRanks(sql, rankTargets, (region) => routingForServer(region)?.platform ?? null);
     // The picker's feed, shipped ON the summary response rather than behind a
     // second endpoint: the My Stats page already fetches this, so the account
     // switcher costs no extra round trip and can never render a list that
@@ -262,8 +306,39 @@ export async function GET(req: NextRequest) {
         assists: r.assists ?? 0,
         onWpaBuild: r.on_wpa_build ?? null,
         gameCreation: r.game_creation,
+        cs: r.cs,
+        gameDurationSec: r.game_duration_sec,
       }))
     );
+
+    // ONE array, TWO names. `records` is what every already-shipped consumer
+    // reads (components/hextech/myStats.ts, ChampionPickPrompt.tsx);
+    // `championPool` is the name the /mystats redesign brief uses. They are the
+    // SAME array by reference -- built once, emitted twice -- deliberately not
+    // two calls to summarizeByChampion, because two independent computations of
+    // one fact is precisely the pattern that silently misses the next fix
+    // (CLAUDE.md gotcha (dd)). Pinned by a test asserting reference identity.
+    const championPool = summarizeByChampion(records);
+    // Account-wide CS headline, CURRENT SPLIT -- the same scope
+    // buildAdherencePct uses, and re-aggregated from the raw rows rather than
+    // averaged out of championPool's per-champion rates (see computeCsSummary).
+    const { csPerMin, csGames } = computeCsSummary(records);
+    // The ACTIVE account's rank, mirrored to the top level so the hero does not
+    // have to search accounts[]. Read from the SAME listAccounts result the
+    // array ships, so the two can never disagree; UNKNOWN_RANK only if the
+    // active row somehow vanished between the two reads.
+    const activeAccount = accounts.find((a) => a.id === account.id);
+    const activeRank = activeAccount
+      ? {
+          tier: activeAccount.tier,
+          division: activeAccount.division,
+          lp: activeAccount.lp,
+          rankWins: activeAccount.rankWins,
+          rankLosses: activeAccount.rankLosses,
+          rankUnknown: activeAccount.rankUnknown,
+          rankCheckedAt: activeAccount.rankCheckedAt,
+        }
+      : UNKNOWN_RANK;
 
     return NextResponse.json(
       {
@@ -273,7 +348,8 @@ export async function GET(req: NextRequest) {
         accountId: account.id,
         accounts,
         historyComplete,
-        records: summarizeByChampion(records),
+        records: championPool,
+        championPool,
         matchup,
         buildAdherencePct,
         winrateOnBuild,
@@ -281,6 +357,9 @@ export async function GET(req: NextRequest) {
         nOnBuild,
         nOffBuild,
         priorSplitWinrate,
+        csPerMin,
+        csGames,
+        ...activeRank,
         recentGames,
       },
       { status: 200, headers: { "Cache-Control": "no-store" } }

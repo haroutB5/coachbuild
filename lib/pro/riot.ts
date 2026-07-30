@@ -30,7 +30,13 @@ import { holdPacer, observeRateLimitBuckets, pacedCall } from "./pacer";
 import { parseRateBuckets, parseRetryAfterSec, type RateBucket } from "./rateLimits";
 import { RiotUnavailableError } from "./errors";
 import { fetchWithTimeout } from "../fetchTimeout";
-import type { RiotAccountDto, RiotMatch, RiotRegionDto, RiotTimeline } from "./types";
+import type {
+  RiotAccountDto,
+  RiotLeagueEntryDto,
+  RiotMatch,
+  RiotRegionDto,
+  RiotTimeline,
+} from "./types";
 
 /** Attempts AFTER the first for a 429 specifically. Each one waits out the
  *  server-stated delay first, so 2 is "give Riot two chances to mean it"
@@ -177,6 +183,33 @@ export function getRegionByPuuid(regional: string, puuid: string): Promise<RiotR
 /** Any regional cluster answers account-v1 identically (see getRegionByPuuid's
  *  header) — `europe` is the arbitrary default, not a claim about the user. */
 export const DEFAULT_ACCOUNT_ROUTING = "europe";
+
+/** league-v4 `entries/by-puuid/{puuid}` — every ranked queue this account has a
+ *  standing in, as an ARRAY. Added for My Stats rank/LP (2026-07-30).
+ *
+ *  TAKES A PLATFORM HOST ("euw1"), NOT A REGIONAL CLUSTER. league-v4 is
+ *  platform-routed, unlike match-v5 (regional) and account-v1 (any cluster
+ *  answers) — the two other Riot families this repo already calls. Passing
+ *  `europe` here 404s. Callers pass `routing.platform` (lib/pro/regionMap.ts).
+ *
+ *  RETURNS AN ARRAY, AND AN EMPTY ARRAY IS A VALID, MEANINGFUL ANSWER: it is
+ *  what an UNRANKED account looks like. It is NOT an error and must not be
+ *  reported as one — see lib/mystats/rank.ts's soloQueueEntry, which is the
+ *  single place that turns this array into a rank.
+ *
+ *  Probed live 2026-07-30 against both linked accounts, HTTP 200 both times.
+ *  MunsterHunter#EUW returned exactly one entry (RANKED_SOLO_5x5); K1ayer#swift
+ *  returned TWO — solo AND RANKED_FLEX_SR — which is why picking an entry by
+ *  index instead of by queueType would silently show a flex rank on a badge
+ *  labelled solo queue for one of the two accounts already in this database. */
+export function getLeagueEntriesByPuuid(
+  platform: string,
+  puuid: string
+): Promise<RiotLeagueEntryDto[]> {
+  return riotFetch<RiotLeagueEntryDto[]>(
+    `https://${platform}.api.riotgames.com/lol/league/v4/entries/by-puuid/${encodeURIComponent(puuid)}`
+  );
+}
 
 export function getMatchIdsByPuuid(
   regional: string,

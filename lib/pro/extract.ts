@@ -131,6 +131,25 @@ export interface ExtractedGameStats {
   gold: number;
 }
 
+/** THE creep-score formula for this repo — lane minions plus neutral monsters.
+ *
+ *  Structurally typed on purpose so BOTH match-v5 participant shapes can pass
+ *  through it: lib/pro/types.ts's RiotParticipant (pro/OTP pipelines, via
+ *  extractGameStats below) and lib/mystats/types.ts's narrower
+ *  MyRiotParticipant (My Stats). Those two interfaces are deliberately separate
+ *  contracts (see the mystats types.ts header) and neither imports the other, so
+ *  a shared FUNCTION over the two fields they have in common is the only way the
+ *  two pipelines can be guaranteed to mean the same thing by "CS". A second
+ *  `a + b` written inline in the My Stats extractor would be a second definition
+ *  of creep score, and the next person to decide whether e.g. Yorick's ghouls or
+ *  a support's shared-XP minions count would only fix one of them.
+ *
+ *  Explicitly NOT included: anything from the timeline. This is the end-of-game
+ *  participant total, which is what every consumer of `cs` in this repo means. */
+export function creepScore(p: { totalMinionsKilled: number; neutralMinionsKilled: number }): number {
+  return p.totalMinionsKilled + p.neutralMinionsKilled;
+}
+
 /** Pure extraction of just the migration-0004 stat columns from a match
  *  detail response — no timeline needed. Shared by extractMatch (new
  *  ingest) AND scripts/backfill-game-stats.mjs (historical rows: re-fetches
@@ -146,7 +165,7 @@ export function extractGameStats(match: RiotMatch, puuid: string): ExtractedGame
     .filter((p) => p.teamId === participant.teamId)
     .reduce((sum, p) => sum + p.kills, 0);
   return {
-    cs: participant.totalMinionsKilled + participant.neutralMinionsKilled,
+    cs: creepScore(participant),
     damageChampions: participant.totalDamageDealtToChampions,
     teamKills,
     gold: participant.goldEarned,
