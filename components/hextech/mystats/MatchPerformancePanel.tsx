@@ -143,7 +143,18 @@ export default function MatchPerformancePanel({
   ];
 
   return (
-    <div className="bg-panel border border-line rounded-xl px-4 sm:px-5 pt-4 pb-4">
+    // `min-w-0` IS LOad-BEARING, do not drop it as redundant. This panel is a
+    // grid child, and a grid/flex child defaults to `min-width: auto`, meaning
+    // it refuses to shrink below its content. The bar chart inside has its own
+    // `overflow-x-auto`, but that container can only scroll if it is ALLOWED to
+    // be narrower than its contents — without this the chart's real width wins,
+    // the panel grows past its column, and the overflow escapes all the way to
+    // the document. Shipped exactly that way in v0.84.0: the chart's own
+    // `overflow-x-auto` looked correct in isolation while `/mystats` scrolled
+    // sideways 383px at 390px wide. Note `document.body` measured CLEAN in that
+    // state and only `documentElement` showed it, which is why a scrollWidth
+    // check on the body alone passed.
+    <div className="min-w-0 bg-panel border border-line rounded-xl px-4 sm:px-5 pt-4 pb-4">
       <PanelHeading meta={lastActive ? `Last active: ${lastActive}` : undefined}>
         Match performance {chips.n > 0 ? `(last ${chips.n} games)` : ""}
       </PanelHeading>

@@ -64,7 +64,10 @@ export default function ChampionPerformancePanel({ rows, scopeLabel }: ChampionP
   }
 
   return (
-    <div className="bg-panel border border-line rounded-xl px-4 sm:px-5 pt-4 pb-1">
+    // `min-w-0` for the same reason as MatchPerformancePanel's root — this is a
+    // grid child, and `min-width: auto` would let long champion names push the
+    // column wider than its track instead of truncating inside it.
+    <div className="min-w-0 bg-panel border border-line rounded-xl px-4 sm:px-5 pt-4 pb-1">
       <PanelHeading meta={`Top ${rows.length} · ${scopeLabel}`}>Most played champions</PanelHeading>
 
       {/* Column headers. The reference has none, but the reference's centre
