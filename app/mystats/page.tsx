@@ -276,7 +276,10 @@ export default function MyStatsPage() {
   // is a signpost to it, never a second implementation of it.
   const pickerRef = useRef<HTMLDivElement | null>(null);
   const { phase } = useCompanion();
-  const liveNow = isLiveGamePhase(phase);
+  const clientInGame = isLiveGamePhase(phase);
+  /** The Riot ID the client is signed in as, reported by AccountPicker's single
+   *  `/me` read. `undefined` = not answered yet, `null` = we could not tell. */
+  const [clientRiotId, setClientRiotId] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
     getChampionIconMap().then(setChampIcons);
@@ -447,6 +450,11 @@ export default function MyStatsPage() {
     rankCheckedAt: summary?.rankCheckedAt ?? null,
   };
   const heroRank = formatRank(activeRank);
+  // A live game belongs to the account the CLIENT is signed in as, which is not
+  // necessarily the account being displayed. Requires a positive match, so an
+  // unanswered or unknowable identity renders no claim at all.
+  const liveIsThisAccount =
+    clientInGame && !!clientRiotId && !!accountScope?.riotId && clientRiotId === accountScope.riotId;
   const regionChip = formatRegionChip(
     accountScope?.accounts.find((a) => a.id === accountScope.activeId)?.region ?? ""
   );
@@ -474,7 +482,7 @@ export default function MyStatsPage() {
           avatarSrc={mainRow ? heroAvatar : null}
           avatarAlt={mainRow?.name ?? ""}
           avatarGlyph={mainRow?.name}
-          live={liveNow}
+          live={liveIsThisAccount}
           eyebrow={seasonLabel ? `My Stats · ${seasonLabel}` : "My Stats"}
           title={riotId ?? "My Stats"}
           lines={
@@ -500,7 +508,17 @@ export default function MyStatsPage() {
               </p>
               <p>
                 {lastActive ? `Last recorded game ${lastActive}.` : "No games recorded yet."}
-                {liveNow && <span className="text-bad font-semibold"> In a game now.</span>}
+                {/* "In a game now" is a claim about THIS account, but the
+                    gameflow phase only says the CLIENT is in a game. With two
+                    accounts linked those diverge, and v0.84.x printed a live
+                    K1ayer game under MunsterHunter's name. `liveIsThisAccount`
+                    is only true once the client's identity is known AND
+                    matches; when it is someone else we say whose, and while it
+                    is unknown we say nothing rather than guess. */}
+                {liveIsThisAccount && <span className="text-bad font-semibold"> In a game now.</span>}
+                {clientInGame && clientRiotId && clientRiotId !== accountScope?.riotId && (
+                  <span className="text-mut"> Your client is in a game as {clientRiotId}.</span>
+                )}
               </p>
             </>
           }
@@ -682,6 +700,7 @@ export default function MyStatsPage() {
                 activeRiotId={accountScope.riotId}
                 activeId={accountScope.activeId}
                 onSwitched={handleAccountSwitched}
+                onIdentityDetected={setClientRiotId}
               />
             </div>
           )}

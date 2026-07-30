@@ -81,6 +81,22 @@ export interface AccountPickerProps {
    * if the server reported `switched: true`.
    */
   onSwitched: (riotId: string | null) => void;
+  /**
+   * The Riot ID the League client is actually signed in as, reported once per
+   * page load, or null when we could not tell (no companion, a pre-1.10.0
+   * companion's 404, a closed client).
+   *
+   * WHY THE PAGE NEEDS THIS AND NOT JUST THIS COMPONENT. The hero's `LIVE` ring
+   * and "In a game now." are driven by the companion's gameflow phase, which
+   * says only that THE CLIENT is in a game — never whose. With two linked
+   * accounts those are different questions, and v0.84.x painted a live K1ayer
+   * game onto MunsterHunter's hero: a true fact attached to the wrong subject,
+   * which is the same defect class as an unscoped number. This component
+   * already performs the one `/me` read per load, so it reports the answer
+   * upward rather than the page duplicating a call the shared Riot-adjacent
+   * budget does not need.
+   */
+  onIdentityDetected?: (riotId: string | null) => void;
 }
 
 /**
@@ -100,7 +116,13 @@ export function __resetDetectionForTests(): void {
 
 type SecretState = "unknown" | "missing" | "present" | "rejected";
 
-export default function AccountPicker({ accounts, activeRiotId, activeId, onSwitched }: AccountPickerProps) {
+export default function AccountPicker({
+  accounts,
+  activeRiotId,
+  activeId,
+  onSwitched,
+  onIdentityDetected,
+}: AccountPickerProps) {
   const { session } = useCompanion();
 
   // Seeded from the summary, then owned locally so a successful write can show
@@ -219,6 +241,11 @@ export default function AccountPicker({ accounts, activeRiotId, activeId, onSwit
   accountsRef.current = accounts;
   const activeRiotIdRef = useRef(activeRiotId);
   activeRiotIdRef.current = activeRiotId;
+  // Ref, not a dependency: the detection effect is keyed on `session` alone so
+  // it fires exactly once per load, and taking the callback as a dep would
+  // re-run the /me read every time the page re-renders with a new closure.
+  const onIdentityDetectedRef = useRef(onIdentityDetected);
+  onIdentityDetectedRef.current = onIdentityDetected;
   // NOT a per-effect `cancelled` closure, and this is load-bearing. React
   // StrictMode double-invokes effects in dev (mount -> cleanup -> mount): the
   // module-level once-per-load guard makes the second run a no-op, and a
@@ -241,7 +268,15 @@ export default function AccountPicker({ accounts, activeRiotId, activeId, onSwit
         // here. This feature only refines which account is shown; it must never
         // be the reason My Stats shows an error banner.
         void getMe(port, session).then((identity) => {
-          if (!mountedRef.current || !identity) return;
+          if (!mountedRef.current) return;
+          // Reported on BOTH branches, and null is a real answer meaning "we
+          // could not tell". The hero uses it to decide whether a live game
+          // belongs to the account on screen, and "unknown" must not read as
+          // "matches" — see onIdentityDetected's doc comment.
+          onIdentityDetectedRef.current?.(
+            identity ? `${identity.gameName}#${identity.tagLine}` : null
+          );
+          if (!identity) return;
           setPrompt(
             resolveDetectPrompt(
               { gameName: identity.gameName, tagLine: identity.tagLine },
