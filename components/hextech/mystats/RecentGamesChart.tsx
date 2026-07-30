@@ -91,7 +91,20 @@ export default function RecentGamesChart({ games, iconOf }: RecentGamesChartProp
                 : "build not recorded";
 
           return (
-            <li key={`${g.championId}-${i}`} className="flex flex-col items-center gap-1.5 w-[34px] flex-shrink-0">
+            // `relative` IS THE FIX FOR A REAL BUG, not decoration. The
+            // `sr-only` sentence at the bottom of this <li> is
+            // `position: absolute`, and an absolutely positioned element is
+            // laid out against its nearest POSITIONED ancestor — the parent
+            // <ul>'s `overflow-x-auto` does not clip it, because overflow only
+            // clips descendants it is a containing block for. With no
+            // positioned ancestor these spans resolved against the document and
+            // sat at x=773 on a 390px viewport, so `/mystats` scrolled sideways
+            // 383px on a phone while every VISIBLE element was correctly
+            // contained. Making each <li> the containing block puts each label
+            // back inside its own column. Shipped broken in v0.84.0; a first fix
+            // attempt added `min-w-0` to the panels, which was the wrong
+            // diagnosis and changed nothing.
+            <li key={`${g.championId}-${i}`} className="relative flex flex-col items-center gap-1.5 w-[34px] flex-shrink-0">
               {/* A 0-death game is accented rather than annotated — there is no
                   room for the word "perfect" in a 34px column, and the sr-only
                   line below says it in full. */}
