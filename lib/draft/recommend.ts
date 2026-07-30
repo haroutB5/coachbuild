@@ -56,6 +56,7 @@ import { resolveDraftPatchLabel } from "@/lib/draft/patch";
 import type { DifficultyBand } from "@/lib/draft/difficulty";
 import { suggestedDefense, type SuggestedDefense } from "@/lib/draft/damageProfile";
 import { getChampionMeta } from "@/lib/staticData";
+import { getActiveAccount } from "@/lib/mystats/account";
 
 /** P3-1 (audit, 2026-07-21): a patch needs at least this many distinct
  *  champions present in draft_champ_stats before resolveServingPatch will
@@ -316,6 +317,14 @@ interface MyMatchDbRow {
   win: boolean;
 }
 
+/** Zeroed personal decoration — the shape callers already get for a champion
+ *  with no personal games, reused for "no active account" and "personal data
+ *  unavailable" so those states are indistinguishable from "you haven't played
+ *  this", which is what they mean to the UI. */
+function decorateEmpty(plays: PlayResult[]): PersonalPlayResult[] {
+  return plays.map((p) => ({ ...p, personalOverall: { games: 0, wins: 0 }, personal: null }));
+}
+
 /** Decorates already-ranked plays with personal-record fields, in ONE extra
  *  indexed query (coachbuild.my_matches has an index on (champion_id, role,
  *  opp_champion_id) for exactly this — migration 0012). Runs strictly AFTER
@@ -340,10 +349,25 @@ async function attachPersonalRecords(
   const allPlays = mainPlays.length === 0 && potentialPlays.length === 0 ? [] : [...mainPlays, ...potentialPlays];
   if (allPlays.length === 0) return { main: [], potential: [] };
 
+  // ACCOUNT SCOPING (migration 0020) — this was a REAL cross-account bleed
+  // site, not a hypothetical one, and it is not on the My Stats page: these
+  // rows become the Draft recommender's `personal`/`personalOverall` badges.
+  // Unscoped, a second linked account would have made every "you: 7-3 on this
+  // champion" badge the SUM of two players' records. The account read is
+  // wrapped in the same soft `.catch` as the row query, so a DB hiccup or a
+  // not-yet-migrated table still degrades to all-zero personal records rather
+  // than taking down a recommend response that never depended on them.
+  //
+  // NO ACTIVE ACCOUNT -> no query at all. Returning zeroed records is the
+  // honest answer; falling back to an unscoped read to "have something to
+  // show" is exactly the bug.
+  const account = await getActiveAccount(sql).catch(() => null);
+  if (!account) return { main: decorateEmpty(mainPlays), potential: decorateEmpty(potentialPlays) };
+
   const champIds = allPlays.map((p) => p.champId);
   const rows = await sql`
     SELECT champion_id, opp_champion_id, win FROM coachbuild.my_matches
-    WHERE role = ${lane} AND champion_id = ANY(${champIds}::int[])
+    WHERE puuid = ${account.puuid} AND role = ${lane} AND champion_id = ANY(${champIds}::int[])
   `.catch(() => []) as unknown as MyMatchDbRow[];
 
   const overall = new Map<number, PersonalRecord>();

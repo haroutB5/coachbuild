@@ -44,7 +44,7 @@ import { loadEnvLocal } from "./_env.mjs";
 loadEnvLocal();
 
 const { getSql } = await import("../lib/pro/db.ts");
-const { getMyAccount } = await import("../lib/mystats/account.ts");
+const { getActiveAccount } = await import("../lib/mystats/account.ts");
 const { getMatch, RiotRequestError } = await import("../lib/pro/riot.ts");
 const { extractMyMatch } = await import("../lib/mystats/extract.ts");
 const { computeAdherence } = await import("../lib/mystats/adherence.ts");
@@ -58,16 +58,23 @@ async function main() {
   if (!sql) throw new Error("DATABASE_URL missing");
   if (!process.env.RIOT_API_KEY) throw new Error("RIOT_API_KEY missing");
 
-  const account = await getMyAccount(sql);
+  const account = await getActiveAccount(sql);
   if (!account) {
     console.log(JSON.stringify({ accountUnresolved: true }, null, 2));
     process.exitCode = 1;
     return;
   }
 
+  // ACCOUNT-SCOPED (migration 0020) -- and this one is load-bearing, not
+  // cosmetic: every row selected here is re-fetched from Riot USING THE ACTIVE
+  // ACCOUNT'S puuid and routing. An unscoped select would hand another
+  // account's match ids to this account's extractMyMatch, which looks the
+  // active puuid up in the participant list, fails to find it, and logs
+  // "puuid not found in participants" forever -- burning a paced Riot call per
+  // row, per run, to accomplish nothing.
   const pending = await sql`
     SELECT match_id FROM coachbuild.my_matches
-    WHERE kills IS NULL
+    WHERE puuid = ${account.puuid} AND kills IS NULL
     ORDER BY game_creation DESC
   `;
   const rows = limitArg ? pending.slice(0, limitArg) : pending;
@@ -113,7 +120,7 @@ async function main() {
         SET kills = ${row.kills}, deaths = ${row.deaths}, assists = ${row.assists},
             item_ids = ${row.itemIds}::integer[], primary_keystone = ${row.primaryKeystone},
             on_wpa_build = ${onWpaBuild}
-        WHERE match_id = ${matchId}
+        WHERE puuid = ${account.puuid} AND match_id = ${matchId}
       `;
       updated += 1;
       if (onWpaBuild !== null) onWpaResolvedCount += 1;

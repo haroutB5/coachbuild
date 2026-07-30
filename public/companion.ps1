@@ -13,10 +13,17 @@ COMPLIANCE BRIGHT LINES (product law -- do not cross, ever):
     anonymity). Champ-select reads ONLY championId / championPickIntent /
     session.actions (own-action championId, own actorCellId only) /
     assignedPosition -- never summonerId or any name field.
-  - GET /lol-summoner/v1/current-summoner (item-sets flow) reads only the
-    LOCAL USER'S OWN summonerId, purely to address their own
-    /lol-item-sets/v1/item-sets/{id}/sets -- never another player's identity,
-    never surfaced anywhere, never logged.
+  - GET /lol-summoner/v1/current-summoner reads the LOCAL USER'S OWN identity
+    and nothing else. TWO consumers, both narrow:
+      (a) the item-sets flow reads only their own summonerId, purely to address
+          their own /lol-item-sets/v1/item-sets/{id}/sets;
+      (b) v1.10.0's GET /me reports their own gameName/tagLine/puuid to the web
+          app so My Stats can follow whichever account is logged in.
+    Never another player's identity, never logged. The bright line is the
+    SUBJECT, not the field: "the user's own name" is fine here and always was;
+    any other player's name is banned outright (Patch 12.22 anonymity), which is
+    why champ-select reads stay IDs-only and why the web side refuses to read
+    name fields off /live's allgamedata blob at all.
   - v1.3.0 COMPLIANCE UPDATE (deliberate, documented -- supersedes the prior
     "runes strictly user-clicked" line): rune WRITES may now fire
     automatically on a champ-select deep-link too (same class as a
@@ -99,6 +106,35 @@ WIRE CONTRACT (must match components/live/companionClient.ts exactly):
                           PUBLISHED schema, not from an observed payload --
                           it had not been exercised against a live game as
                           of the commit that added it.
+  - GET  /me           -> 200 {gameName:string, tagLine:string, puuid:string}
+                          | 200 {error:"no-client"}
+                          -- v1.10.0. The LOCAL USER'S OWN Riot identity, read
+                          off the League CLIENT (/lol-summoner/v1/
+                          current-summoner), so the web app can scope My Stats
+                          to whichever account is actually logged in instead of
+                          a constant baked into a database row. Works whenever
+                          the CLIENT is open (lobby / champ select / idle), not
+                          only in-game -- it is an LCU read, not a Live Client
+                          Data read.
+                          ALL OR NOTHING: any of the three fields missing or
+                          blank answers no-client rather than a partial identity
+                          (a partial one would let the server activate the wrong
+                          account row -- see ConvertTo-MeIdentity).
+                          NARROW BY CONSTRUCTION: current-summoner describes the
+                          person running this companion and nobody else. This is
+                          NOT scraped from /live's allgamedata (which contains
+                          every player); the web side's refusal to read names
+                          off that blob -- components/live/livePanelModel.ts --
+                          is untouched and must stay that way. Reading the
+                          user's OWN identity here was already permitted for the
+                          item-sets flow (see COMPLIANCE BRIGHT LINES above);
+                          reading any OTHER player's remains banned.
+                          Never logged (companion.log carries no names).
+                          Field names are OBSERVED from a real capture of this
+                          user's own client, not assumed from docs -- but the
+                          endpoint has NOT been exercised against a live client
+                          end to end (no League client on the authoring
+                          machine). See HANDOFF-engy.md.
   - POST /apply-runes  body {name, primaryStyleId, subStyleId,
                               selectedPerkIds:number[9], current:true,
                               mode:'auto'|'manual' (optional, validated,
@@ -310,7 +346,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.9.0'
+    Version     = '1.10.0'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -716,6 +752,83 @@ function Get-LiveSkillState {
     }
 
     return ConvertTo-LiveSkillState -ActivePlayer $active -Abilities $abilities
+}
+
+function ConvertTo-MeIdentity {
+    # PURE. Given whatever /lol-summoner/v1/current-summoner returned, produce
+    #   @{ gameName = <string>; tagLine = <string>; puuid = <string> }
+    # or $null.
+    #
+    # v1.10.0 (My Stats multi-account). The user reported the app showing a
+    # DIFFERENT account than the one they were playing on ("Currently I'm in
+    # game with K1ayer #swift but in myStats its still MunsterHunter"), because
+    # the web app had no way to learn who is logged in -- the account was a
+    # fixed constant baked into a database row. This is that way.
+    #
+    # PRIVACY LINE, stated precisely because it is narrow. This reads the LOCAL
+    # USER'S OWN identity, and only that: the three fields below come from
+    # current-summoner, which by definition describes the person running this
+    # companion. It is NOT scraped from /live's allgamedata blob -- that blob
+    # contains every player in the game, and components/live/livePanelModel.ts
+    # deliberately refuses to read name fields off it. That refusal stays
+    # intact and is unaffected by this function. The distinction is the whole
+    # compliance argument: "the user's own name" was already permitted here
+    # (the item-sets flow reads current-summoner for the user's own summonerId,
+    # see this script's header) whereas "another player's name" remains banned
+    # outright. If a change to this file would make reading ANOTHER player's
+    # name easier, it is the wrong change.
+    #
+    # ALL OR NOTHING, same rule as ConvertTo-LiveSkillState and for the same
+    # class of reason: a partial identity is not a weaker identity, it is a
+    # DIFFERENT one. A missing tagLine would form the riot id "K1ayer#" and a
+    # missing puuid would leave the web side unable to scope anything, but the
+    # dangerous case is subtler -- a blank-but-present field would let the
+    # server link and activate an account row that is not the user's, quietly
+    # repointing every My Stats number. So any missing or blank field answers
+    # $null and the browser is told there is nothing to report.
+    #
+    # Field names are OBSERVED, not assumed: a real capture from the user's own
+    # client (_capture/lcu-raw-20260727-192506.jsonl, endpoint
+    # /lol-summoner/v1/current-summoner, HTTP 200) carries gameName, tagLine and
+    # puuid alongside displayName/internalName/summonerLevel. Values in that
+    # capture are redacted, the keys are not.
+    param($Summoner)
+
+    if ($null -eq $Summoner) { return $null }
+
+    $out = [ordered]@{}
+    foreach ($key in @('gameName', 'tagLine', 'puuid')) {
+        $value = $Summoner.$key
+        if ($null -eq $value) { return $null }
+        if ($value -isnot [string]) { return $null }
+        $trimmed = $value.Trim()
+        if ([string]::IsNullOrEmpty($trimmed)) { return $null }
+        $out[$key] = $trimmed
+    }
+
+    # displayName/internalName/summonerId are deliberately NOT forwarded. The
+    # web side needs exactly these three (gameName+tagLine to display, puuid to
+    # scope match rows by) and nothing else, so nothing else crosses the bridge.
+    return $out
+}
+
+function Get-CurrentSummonerIdentity {
+    # The LOCAL USER'S OWN Riot identity, read off the League CLIENT (LCU), not
+    # the in-game Live Client Data API. That distinction is what makes this work
+    # whenever the client is merely OPEN -- lobby, champ select, idle at the
+    # main menu -- rather than only during a live game. The user is not
+    # necessarily in a game when they open My Stats, and an endpoint that only
+    # answered mid-game would fail at exactly the moment it is wanted.
+    #
+    # Returns $null on any failure: no client, a non-2xx, or a payload missing
+    # any of the three fields. The caller answers {error:'no-client'} and the
+    # browser degrades silently, exactly as it already does for a pre-1.8.0
+    # companion's missing /skills.
+    param([int]$LcuPort, [string]$LcuToken, [string]$Scheme = 'https')
+    if (-not $LcuPort) { return $null }
+    $summoner = Invoke-LcuRaw -Method GET -Path '/lol-summoner/v1/current-summoner' -Port $LcuPort -Token $LcuToken -Scheme $Scheme
+    if (-not $summoner.Ok -or -not $summoner.Content) { return $null }
+    return ConvertTo-MeIdentity -Summoner $summoner.Content
 }
 
 function Set-CorsHeaders {
@@ -1893,6 +2006,35 @@ while ($Sync.Running) {
             } else {
                 Write-JsonResponse -Response $res -StatusCode 200 -Obj $skills
             }
+        } elseif ($path -eq '/me' -and $req.HttpMethod -eq 'GET') {
+            # v1.10.0 -- WHO IS LOGGED IN. The local user's own Riot identity
+            # (gameName / tagLine / puuid) off the League client, so the web app
+            # can scope My Stats to the account actually being played instead of
+            # a fixed constant in a database row. See ConvertTo-MeIdentity for
+            # the privacy line and the all-or-nothing rule.
+            #
+            # Answers 200 {error:'no-client'} rather than a status code when the
+            # client is closed, for the same reason /skills answers
+            # {error:'no-live'}: a closed client is the normal state of the
+            # world most of the day, not a failed request, and the page must not
+            # have to branch on an HTTP error to decide whether to offer an
+            # optional feature. A PRE-1.10.0 companion has no branch for this
+            # path at all and falls through to the 404 below, which
+            # companionClient.ts's getMe treats identically to no-client.
+            #
+            # DELIBERATELY NOT LOGGED. Every other write path here ends in a
+            # Write-CompanionLog line, and this one does not: companion.log
+            # never contains a summoner name (this script's header, LOGGING),
+            # and the whole payload of this endpoint is one. There is nothing to
+            # log that would not break that promise -- and nothing worth
+            # logging, since the browser reports its own outcome.
+            $scheme = if ($Sync.LcuScheme) { $Sync.LcuScheme } else { 'https' }
+            $me = Get-CurrentSummonerIdentity -LcuPort $Sync.LcuPort -LcuToken $Sync.LcuToken -Scheme $scheme
+            if ($null -eq $me) {
+                Write-JsonResponse -Response $res -StatusCode 200 -Obj @{ error = 'no-client' }
+            } else {
+                Write-JsonResponse -Response $res -StatusCode 200 -Obj $me
+            }
         } elseif ($path -eq '/apply-runes' -and $req.HttpMethod -eq 'POST') {
             $reader = New-Object IO.StreamReader($req.InputStream, [Text.Encoding]::UTF8)
             $bodyRaw = $reader.ReadToEnd()
@@ -2369,7 +2511,26 @@ while ($Sync.Running) {
             if ($Sync.SummonerGetShouldFail) {
                 Write-JsonResponse -Response $res -StatusCode 500 -Obj @{ error = 'mock-summoner-get-failed' }
             } else {
-                Write-JsonResponse -Response $res -StatusCode 200 -Obj @{ summonerId = 999 }
+                # v1.10.0: gameName/tagLine/puuid added so GET /me can be
+                # exercised end to end through the real bridge. These are the
+                # REAL field names from a live capture of the user's own client
+                # (_capture/lcu-raw-20260727-192506.jsonl) -- the mock is
+                # shape-faithful, so a SelfTest pass means the parse would work
+                # against the real payload, not merely against this fixture.
+                # $Sync.SummonerIdentity lets a test override them (e.g. to a
+                # blank tagLine, exercising the all-or-nothing refusal).
+                $identity = $Sync.SummonerIdentity
+                if ($null -eq $identity) {
+                    $identity = @{ gameName = 'MockPlayer'; tagLine = 'MOCK'; puuid = 'mock-puuid-0123456789abcdef0123456789' }
+                }
+                Write-JsonResponse -Response $res -StatusCode 200 -Obj @{
+                    summonerId   = 999
+                    displayName  = "$($identity.gameName)#$($identity.tagLine)"
+                    gameName     = $identity.gameName
+                    tagLine      = $identity.tagLine
+                    puuid        = $identity.puuid
+                    summonerLevel = 222
+                }
             }
         } elseif ($path -like '/lol-item-sets/v1/item-sets/*/sets' -and $method -eq 'GET') {
             if ($Sync.ItemSetsGetShouldFail) {
@@ -2421,6 +2582,10 @@ function Start-MockLcu {
         DeleteShouldFail          = $false
         Calls                     = [System.Collections.ArrayList]::Synchronized((New-Object System.Collections.ArrayList))
         SummonerGetShouldFail     = $false
+        # v1.10.0: overrides current-summoner's gameName/tagLine/puuid so GET
+        # /me's all-or-nothing refusal can be exercised (blank/absent field).
+        # $null = serve the default well-formed identity.
+        SummonerIdentity          = $null
         ItemSetsGetShouldFail     = $false
         ItemSetsPutShouldFail     = $false
         ExistingItemSets          = [pscustomobject]@{ accountId = 1; timestamp = 0; itemSets = @() }
@@ -2680,6 +2845,105 @@ function Invoke-SelfTest {
         $code = $null
         if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
         if ($code -ne 403) { $failures.Add("/skills bad-session expected 403, got $code") }
+    }
+
+    # 4g. v1.10.0 GET /me -- and unlike /skills this one IS exercised against a
+    # real (mock) LCU through the real bridge, because the bridge's LcuPort/
+    # LcuScheme are already pointed at the mock HttpListener above. So the whole
+    # chain runs for real: HTTP request -> origin/session gate -> dispatch ->
+    # Invoke-LcuRaw -> mock current-summoner -> ConvertTo-MeIdentity -> JSON. The
+    # mock serves the REAL field names from a live capture of the user's own
+    # client, so a pass here means the parse handles the shape the real endpoint
+    # actually returns.
+    #
+    # WHAT THIS STILL DOES NOT PROVE: that a real League client answers on the
+    # real port with the real credentials. The mock is plain HTTP with a mock
+    # token; the live path involves the self-signed loopback cert and
+    # Get-LcuCredentials. See HANDOFF-engy.md's manual checklist.
+    $mockLcu.Sync.SummonerGetShouldFail = $false
+    $mockLcu.Sync.SummonerIdentity = $null
+    try {
+        $r = Invoke-WebRequest -Uri "$base/me?session=$session" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing
+        if ($r.StatusCode -ne 200) { $failures.Add("/me expected 200, got $($r.StatusCode)") }
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.gameName -ne 'MockPlayer') { $failures.Add("/me gameName expected MockPlayer, got $($r.Content)") }
+        if ($obj.tagLine -ne 'MOCK') { $failures.Add("/me tagLine expected MOCK, got $($r.Content)") }
+        if ([string]::IsNullOrEmpty($obj.puuid)) { $failures.Add("/me puuid missing: $($r.Content)") }
+        if ($null -ne $obj.error) { $failures.Add("/me happy path must not carry an error field: $($r.Content)") }
+        # LEAK GUARD, not a cosmetic assertion: current-summoner carries
+        # displayName/internalName/summonerId/summonerLevel and the response must
+        # forward NONE of them. ConvertTo-MeIdentity builds a fresh object with
+        # exactly three keys precisely so a future field added to the LCU payload
+        # cannot start crossing the bridge by accident.
+        $meKeys = @($obj.PSObject.Properties.Name | Sort-Object)
+        if (($meKeys -join ',') -ne 'gameName,puuid,tagLine') {
+            $failures.Add("/me must return EXACTLY gameName/tagLine/puuid, got: $($meKeys -join ',')")
+        }
+    } catch { $failures.Add("/me request threw: $($_.Exception.Message)") }
+
+    # ALL OR NOTHING: a blank tagLine must answer no-client, NOT a partial
+    # identity. A partial one is the dangerous case -- the server would link and
+    # activate an account row that is not the user's, silently repointing every
+    # My Stats number (see ConvertTo-MeIdentity's header).
+    $mockLcu.Sync.SummonerIdentity = @{ gameName = 'MockPlayer'; tagLine = '  '; puuid = 'mock-puuid-0123456789abcdef0123456789' }
+    try {
+        $r = Invoke-WebRequest -Uri "$base/me?session=$session" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.error -ne 'no-client') { $failures.Add("/me with a blank tagLine expected {error:'no-client'}, got $($r.Content)") }
+        if ($null -ne $obj.gameName) { $failures.Add("/me must not emit a partial identity: $($r.Content)") }
+    } catch { $failures.Add("/me blank-tagLine request threw: $($_.Exception.Message)") }
+
+    # A missing puuid is the same refusal -- the web side cannot scope anything
+    # without it, so a name-only answer is worse than no answer.
+    $mockLcu.Sync.SummonerIdentity = @{ gameName = 'MockPlayer'; tagLine = 'MOCK'; puuid = '' }
+    try {
+        $r = Invoke-WebRequest -Uri "$base/me?session=$session" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.error -ne 'no-client') { $failures.Add("/me with a blank puuid expected {error:'no-client'}, got $($r.Content)") }
+    } catch { $failures.Add("/me blank-puuid request threw: $($_.Exception.Message)") }
+
+    # A non-2xx from the LCU must degrade the same way -- never a 500 out of the
+    # bridge, and never a PUT/write of any kind (this route only reads).
+    $mockLcu.Sync.SummonerIdentity = $null
+    $mockLcu.Sync.SummonerGetShouldFail = $true
+    try {
+        $r = Invoke-WebRequest -Uri "$base/me?session=$session" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing
+        if ($r.StatusCode -ne 200) { $failures.Add("/me on an LCU 500 expected 200, got $($r.StatusCode)") }
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.error -ne 'no-client') { $failures.Add("/me on an LCU 500 expected {error:'no-client'}, got $($r.Content)") }
+    } catch { $failures.Add("/me LCU-failure request threw: $($_.Exception.Message)") }
+    $mockLcu.Sync.SummonerGetShouldFail = $false
+
+    # NO CLIENT AT ALL: the state a user is actually in most of the time. Must be
+    # cheap and silent, and must not even attempt an LCU call.
+    $savedMePort = $bridge.Sync.LcuPort
+    $bridge.Sync.LcuPort = $null
+    try {
+        $r = Invoke-WebRequest -Uri "$base/me?session=$session" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing
+        if ($r.StatusCode -ne 200) { $failures.Add("/me with no client expected 200, got $($r.StatusCode)") }
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.error -ne 'no-client') { $failures.Add("/me with no client expected {error:'no-client'}, got $($r.Content)") }
+    } catch { $failures.Add("/me no-client request threw: $($_.Exception.Message)") }
+    $bridge.Sync.LcuPort = $savedMePort
+
+    # Same origin+session gate as every other route -- asserted, not assumed,
+    # because /me is a new entry in the dispatch chain and it is the one route
+    # whose whole payload is the user's identity.
+    try {
+        $r = Invoke-WebRequest -Uri "$base/me?session=$session" -Method GET -Headers @{ Origin = 'https://evil.example' } -UseBasicParsing
+        $failures.Add("/me wrong-origin expected 403, got $($r.StatusCode)")
+    } catch {
+        $code = $null
+        if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+        if ($code -ne 403) { $failures.Add("/me wrong-origin expected 403, got $code") }
+    }
+    try {
+        $r = Invoke-WebRequest -Uri "$base/me?session=wrong-token" -Method GET -Headers @{ Origin = $appOrigin } -UseBasicParsing
+        $failures.Add("/me bad-session expected 403, got $($r.StatusCode)")
+    } catch {
+        $code = $null
+        if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+        if ($code -ne 403) { $failures.Add("/me bad-session expected 403, got $code") }
     }
 
     $applyBody = @{ name = 'CoachBuild Test Mid'; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = @(8005, 9111, 9104, 8014, 8017, 8009, 8017, 5008, 5008); current = $true }
@@ -3429,6 +3693,78 @@ function Invoke-SelfTest {
         if ($skillJson -ne '{"level":9,"abilities":{"Q":5,"W":2,"E":1,"R":1}}') {
             $failures.Add("GET /skills JSON shape drifted from what lib/nextSkill.ts parses: $skillJson")
         }
+    }
+
+    # 8f. v1.10.0 ConvertTo-MeIdentity -- the PURE half of GET /me. The bridge
+    # tests in 4g cover the reachable-through-HTTP cases; these cover the shapes
+    # a mock HttpListener cannot easily produce (a non-string field, a null
+    # payload) and, most importantly, the exact REAL captured payload.
+    #
+    # THE REAL SHAPE, not an invented one: the FIELD SET below is the one
+    # observed in _capture/lcu-raw-20260727-192506.jsonl for
+    # /lol-summoner/v1/current-summoner on this user's own client (values there
+    # are redacted, keys are not). Asserting against it is what makes the
+    # "observed, not assumed" claim in this script's header checkable rather
+    # than a promise.
+    #
+    # THE VALUES ARE SYNTHETIC AND MUST STAY THAT WAY. This file is SERVED
+    # PUBLICLY from the web app (https://coachbuild.vercel.app/companion.ps1),
+    # so anything written here is published. Until 2026-07-30 the `puuid` below
+    # was the user's REAL 78-character puuid, copied from the live client while
+    # the comment above pointed at a capture whose values are in fact redacted --
+    # the capture was clean, the fixture was not. A puuid is a stable,
+    # API-addressable account identifier; a Riot ID is a public display name, so
+    # the two are not the same exposure and only the shape of the former is
+    # needed here. ConvertTo-MeIdentity only checks present/string/non-blank
+    # (there is no length or charset assertion anywhere), so a synthetic value of
+    # the same 78-char length tests exactly as much as the real one did.
+    $realShape = [pscustomobject]@{
+        displayName                 = 'MunsterHunter#EUW'
+        gameName                    = 'MunsterHunter'
+        internalName                = 'munsterhunter'
+        nameChangeFlag              = $false
+        percentCompleteForNextLevel = 82
+        privacy                     = 'PUBLIC'
+        profileIconId               = 3367
+        puuid                       = 'SYNTHETIC-PUUID-NOT-A-REAL-ACCOUNT-0000000000000000000000000000000000000000000'
+        summonerId                  = 1000000
+        summonerLevel               = 222
+        tagLine                     = 'EUW'
+        unnamed                     = $false
+    }
+    $meShaped = ConvertTo-MeIdentity -Summoner $realShape
+    if ($null -eq $meShaped) {
+        $failures.Add('ConvertTo-MeIdentity returned null on the REAL captured current-summoner shape')
+    } else {
+        # Serialized shape is the wire contract with companionClient.ts's getMe.
+        $meJson = ConvertTo-Json -InputObject $meShaped -Depth 10 -Compress
+        $expectedMeJson = '{"gameName":"MunsterHunter","tagLine":"EUW","puuid":"SYNTHETIC-PUUID-NOT-A-REAL-ACCOUNT-0000000000000000000000000000000000000000000"}'
+        if ($meJson -ne $expectedMeJson) {
+            $failures.Add("GET /me JSON shape drifted from what companionClient.ts's getMe parses: $meJson")
+        }
+    }
+
+    if ($null -ne (ConvertTo-MeIdentity -Summoner $null)) {
+        $failures.Add('ConvertTo-MeIdentity accepted a null payload')
+    }
+    # A non-string field must REFUSE, not coerce. Coercing a number to a string
+    # here would produce a syntactically valid identity that names nobody.
+    if ($null -ne (ConvertTo-MeIdentity -Summoner ([pscustomobject]@{ gameName = 12345; tagLine = 'EUW'; puuid = 'x0123456789abcdef0123' }))) {
+        $failures.Add('ConvertTo-MeIdentity accepted a non-string gameName')
+    }
+    foreach ($missing in @('gameName', 'tagLine', 'puuid')) {
+        $partial = [pscustomobject]@{ gameName = 'A'; tagLine = 'B'; puuid = 'c0123456789abcdef0123' }
+        $partial.PSObject.Properties.Remove($missing)
+        if ($null -ne (ConvertTo-MeIdentity -Summoner $partial)) {
+            $failures.Add("ConvertTo-MeIdentity accepted a payload missing $missing -- all-or-nothing violated")
+        }
+    }
+    # A custom (non-region) tagLine must pass through untouched. This is the
+    # user's ACTUAL second account and the reason the region is resolved
+    # server-side from the puuid instead of parsed out of the tag.
+    $swift = ConvertTo-MeIdentity -Summoner ([pscustomobject]@{ gameName = 'K1ayer'; tagLine = 'swift'; puuid = 'd0123456789abcdef0123' })
+    if ($null -eq $swift -or $swift.tagLine -ne 'swift') {
+        $failures.Add('ConvertTo-MeIdentity mangled or rejected a custom tagLine ("K1ayer#swift")')
     }
 
     # 9. LCU credentials cache (Round-B P3 fix) -- resolver (stands in for

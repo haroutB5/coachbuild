@@ -33,6 +33,12 @@
 //                          by the ~3s since that tab's last poll and no more
 //                          — the pre-1.7.0 behaviour, not a new failure mode.
 //   GET  /live         -> raw allgamedata passthrough | {error:'no-live'}
+//   GET  /me           -> {gameName, tagLine, puuid} | {error:'no-client'}
+//                          -- v1.10.0. The LOCAL USER'S OWN identity off the
+//                          League CLIENT (not the in-game API), so My Stats can
+//                          follow whichever account is logged in. 404 on a
+//                          pre-1.10.0 companion; getMe treats that identically
+//                          to no-client. See getMe's doc comment.
 //   POST /apply-runes  body {..., mode:'auto'|'manual'} ->
 //                          {ok:true, selected, verified, mismatch} |
 //                          {ok:false, reason, hint?}
@@ -685,6 +691,76 @@ export async function getSkills(
     const res = await f(bridgeUrl(port, "/skills", session), { method: "GET" });
     if (!res.ok) return null;
     return parseLiveSkillState(await res.json());
+  } catch {
+    return null;
+  }
+}
+
+/** The LOCAL USER'S OWN Riot identity, as reported by the League client.
+ *
+ *  Never contains another player's anything. The companion reads this from the
+ *  LCU's own current-summoner endpoint, which by definition describes the
+ *  person running it — it is NOT derived from the `/live` allgamedata blob, and
+ *  livePanelModel.ts's refusal to read name fields off that blob is untouched
+ *  by this type existing. See companion.ps1's ConvertTo-MeIdentity header. */
+export interface CompanionIdentity {
+  gameName: string;
+  tagLine: string;
+  puuid: string;
+}
+
+/** Defensive narrow of GET /me. All-or-nothing on the web side too, mirroring
+ *  the companion's own rule: a partial identity would let the caller link and
+ *  activate an account row that is not the user's, silently repointing every My
+ *  Stats number, so a missing or blank field is treated exactly like "no
+ *  client". Exported for direct unit testing without a mocked fetch. */
+export function parseCompanionIdentity(raw: unknown): CompanionIdentity | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  // The `no-client` sentinel is a well-formed answer meaning "nothing to
+  // report", handled here rather than at the call site so every caller gets
+  // the same null.
+  if (typeof r.error === "string") return null;
+  const read = (k: string): string | null => {
+    const v = r[k];
+    if (typeof v !== "string") return null;
+    const t = v.trim();
+    return t.length > 0 ? t : null;
+  };
+  const gameName = read("gameName");
+  const tagLine = read("tagLine");
+  const puuid = read("puuid");
+  if (!gameName || !tagLine || !puuid) return null;
+  return { gameName, tagLine, puuid };
+}
+
+/**
+ * GET /me — who is logged into the League client (companion 1.10.0+).
+ *
+ * Returns null for EVERY failure that is not a well-formed identity: transport
+ * error, 404 from a PRE-1.10.0 companion, `{error:'no-client'}`, or a body that
+ * doesn't narrow. That collapse is deliberate and follows the precedent getSkills
+ * already set for pre-1.8.0 companions — from the caller's point of view "the
+ * companion is too old to answer", "the client is closed" and "the payload was
+ * malformed" are the same state: there is no account to report, so report none
+ * and change nothing. The user keeps whichever account is already active and
+ * sees no error, which is the correct degrade for a feature that only ever
+ * REFINES existing behaviour.
+ *
+ * Narrowing happens HERE, not at the call site, because the companion updates on
+ * its own schedule over `irm | iex` — the browser can always be talking to an
+ * older or newer companion than the page was built against.
+ */
+export async function getMe(
+  port: CompanionPort,
+  session: string,
+  deps: CompanionClientDeps = {}
+): Promise<CompanionIdentity | null> {
+  const f = deps.fetchImpl ?? fetch;
+  try {
+    const res = await f(bridgeUrl(port, "/me", session), { method: "GET" });
+    if (!res.ok) return null; // includes the 404 a pre-1.10.0 companion returns for an unknown path
+    return parseCompanionIdentity(await res.json());
   } catch {
     return null;
   }

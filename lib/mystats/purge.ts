@@ -7,8 +7,16 @@
 // IDEMPOTENT BY CONSTRUCTION: the DELETE's WHERE clause re-evaluates
 // game_creation < the purge boundary against whatever rows currently exist —
 // a second run simply finds nothing left to delete (rowsDeleted: 0) rather
-// than erroring or double-counting, and the cursor reset is a plain
-// INSERT ... ON CONFLICT DO UPDATE (safe to run any number of times).
+// than erroring or double-counting, and the cursor reset is an unconditional
+// UPDATE to fixed values (safe to run any number of times).
+//
+// ACCOUNT SCOPE (migration 0020, multi-account): this purge is deliberately
+// ACCOUNT-WIDE and stays that way. It is a time-based RETENTION policy, not an
+// aggregation — deleting every account's pre-boundary rows is the same
+// intention applied uniformly, and it cannot blend one account's numbers into
+// another's the way an unscoped SELECT would. `rowsBefore`/`rowsDeleted`/
+// `rowsKept` below are therefore totals across every linked account, not the
+// active one's. Read them that way.
 //
 // PURGE BOUNDARY (v0.51, split tagging): the cutoff used to actually DELETE
 // rows is now max(SEASON_START_MS, prior-split start) — see
@@ -96,11 +104,13 @@ export async function runSeasonPurge(
     SELECT count(*)::int AS n FROM coachbuild.my_matches WHERE patch NOT LIKE ${SEASON_PATCH_PREFIX + "%"}
   `) as unknown as { n: number }[];
 
-  // See this file's header re: why the cursor resets after a purge.
+  // See this file's header re: why the cursor resets after a purge. EVERY
+  // account's cursor resets, not just the active one (migration 0020): the
+  // DELETE above is deliberately account-WIDE, so leaving a non-active
+  // account's cursor claiming backfill_done would strand it with a hole its
+  // next backfill would refuse to re-walk.
   await sql`
-    INSERT INTO coachbuild.my_ingest_cursor (id, next_start, backfill_done, updated_at)
-    VALUES (1, 0, false, now())
-    ON CONFLICT (id) DO UPDATE SET next_start = 0, backfill_done = false, updated_at = now()
+    UPDATE coachbuild.my_ingest_cursor SET next_start = 0, backfill_done = false, updated_at = now()
   `;
 
   return {

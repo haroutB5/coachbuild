@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
 import { DbUnavailableError } from "@/lib/pro/errors";
-import { getMyAccount } from "@/lib/mystats/account";
+import { getActiveAccount, listAccounts } from "@/lib/mystats/account";
 import {
   summarizeByChampion,
   summarizeMatchup,
@@ -11,6 +11,7 @@ import {
   type MyMatchRecord,
 } from "@/lib/mystats/aggregate";
 import { SEASON_LABEL, currentSplitNumber } from "@/lib/mystats/season";
+import { readHistoryComplete } from "@/lib/mystats/ingest";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,6 +45,7 @@ interface RecentRow {
 }
 
 const EMPTY_STATS = {
+  historyComplete: false,
   buildAdherencePct: null as number | null,
   winrateOnBuild: null as number | null,
   winrateOffBuild: null as number | null,
@@ -114,6 +116,29 @@ function parseIntParam(raw: string | null): number | null | undefined {
  *    other filter on this route.
  * All of the above are DISPLAY ONLY — see PersonalRecord's doc comment
  * (lib/draft/recommend.ts) for the no-blending rule this inherits.
+ *
+ * MULTI-ACCOUNT (v0.83, migration 0020). Every figure on this response is
+ * scoped to the ACTIVE linked account, and three additive fields describe that
+ * scope so a UI never has to guess which account it is looking at:
+ *  - `accountId`: the active account's local id, or null when unresolved. The
+ *    handle the picker sends back to POST /api/mystats/accounts.
+ *  - `accounts`: MyAccountSummary[] — every linked account (id, riotId,
+ *    gameName, tagLine, region, active, lastSeenAt, games), active first. Never
+ *    contains a puuid. Present even on the accountUnresolved response, so a
+ *    picker can still offer a choice when nothing is active yet.
+ *  - `riotId`: unchanged meaning — the ACTIVE account's display tag.
+ * Switching accounts changes every number here and nothing else; the two
+ * accounts' rows never mix, because my_matches is keyed and indexed by puuid.
+ *
+ * `historyComplete` (2026-07-30, additive): whether the ACTIVE account's season
+ * window has been fully walked, read from the one place that owns that flag
+ * (lib/mystats/ingest.ts's readHistoryComplete over
+ * my_ingest_cursor.backfill_done). FALSE means every figure on this response is
+ * computed over a PARTIAL history — normal and temporary for a just-linked
+ * account, since the catch-up walk converges over several runs inside a 60s
+ * serverless budget. It is here so a `season` label ("Season 2026") is never
+ * rendered over a truncated denominator as though it were the whole season. Not
+ * yet rendered by the UI as of this ship — see HANDOFF-engy.md.
  */
 export async function GET(req: NextRequest) {
   const sql = getSql();
@@ -136,10 +161,19 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const account = await getMyAccount(sql);
+    const account = await getActiveAccount(sql);
     if (!account) {
       return NextResponse.json(
-        { accountUnresolved: true, season: SEASON_LABEL, riotId: null, records: [], matchup: null, ...EMPTY_STATS },
+        {
+          accountUnresolved: true,
+          season: SEASON_LABEL,
+          riotId: null,
+          accountId: null,
+          accounts: await listAccounts(sql),
+          records: [],
+          matchup: null,
+          ...EMPTY_STATS,
+        },
         { status: 200, headers: { "Cache-Control": "no-store" } }
       );
     }
@@ -147,10 +181,18 @@ export async function GET(req: NextRequest) {
     const split = currentSplitNumber();
     const priorSplit = split - 1;
 
+    // EVERY query below is scoped to `account.puuid` (migration 0020). This is
+    // the whole point of that migration: before it, my_matches had no account
+    // column and each of these four SELECTs read the entire table, so linking a
+    // second account would have merged two players into one win rate, one
+    // champion pool, one adherence figure and one recent-games strip — with no
+    // visible symptom. HARD RULE 4. If you add a fifth query here, it takes the
+    // puuid filter too.
     const rows = (await sql`
       SELECT champion_id, role, opp_champion_id, win, game_creation
       FROM coachbuild.my_matches
-      WHERE split = ${split}
+      WHERE puuid = ${account.puuid}
+        AND split = ${split}
         AND (${role ?? null}::smallint IS NULL OR role = ${role ?? null})
         AND (${championId ?? null}::integer IS NULL OR champion_id = ${championId ?? null})
     `) as unknown as Row[];
@@ -169,7 +211,8 @@ export async function GET(req: NextRequest) {
     // Account-wide (never role/championId-scoped) current-split adherence --
     // see this route's doc comment.
     const adherenceRows = (await sql`
-      SELECT on_wpa_build, win FROM coachbuild.my_matches WHERE split = ${split}
+      SELECT on_wpa_build, win FROM coachbuild.my_matches
+      WHERE puuid = ${account.puuid} AND split = ${split}
     `) as unknown as AdherenceRow[];
     const { buildAdherencePct, winrateOnBuild, winrateOffBuild, nOnBuild, nOffBuild } = computeBuildAdherence(
       adherenceRows.map((r) => ({ win: r.win, onWpaBuild: r.on_wpa_build ?? null }))
@@ -181,7 +224,8 @@ export async function GET(req: NextRequest) {
       priorSplit >= 1
         ? computePriorSplitWinrate(
             (await sql`
-              SELECT win FROM coachbuild.my_matches WHERE split = ${priorSplit}
+              SELECT win FROM coachbuild.my_matches
+              WHERE puuid = ${account.puuid} AND split = ${priorSplit}
             `) as unknown as PriorSplitRow[]
           )
         : null;
@@ -189,9 +233,25 @@ export async function GET(req: NextRequest) {
     const recentRows = (await sql`
       SELECT champion_id, role, win, kills, deaths, assists, on_wpa_build, game_creation
       FROM coachbuild.my_matches
+      WHERE puuid = ${account.puuid}
       ORDER BY game_creation DESC
       LIMIT 5
     `) as unknown as RecentRow[];
+    // The picker's feed, shipped ON the summary response rather than behind a
+    // second endpoint: the My Stats page already fetches this, so the account
+    // switcher costs no extra round trip and can never render a list that
+    // disagrees with the stats beside it.
+    const accounts = await listAccounts(sql);
+    // IS THIS ACCOUNT'S HISTORY WHOLE? (2026-07-30.) Every figure above is
+    // computed over whatever rows my_matches happens to hold, and until now
+    // nothing on this response said whether that was the account's full season or
+    // the newest 30 games of it. A freshly linked account genuinely has a partial
+    // history for a while (see lib/mystats/ingest.ts's header -- the catch-up
+    // walk converges over several runs inside a 60s serverless budget), and
+    // labelling a partial denominator "Season 2026" is a HARD RULE 4 problem, so
+    // the fact travels with the numbers.
+    const historyComplete = await readHistoryComplete(sql, account.puuid);
+
     const recentGames = buildRecentGames(
       recentRows.map((r) => ({
         championId: r.champion_id,
@@ -210,6 +270,9 @@ export async function GET(req: NextRequest) {
         accountUnresolved: false,
         season: SEASON_LABEL,
         riotId: account.riotId,
+        accountId: account.id,
+        accounts,
+        historyComplete,
         records: summarizeByChampion(records),
         matchup,
         buildAdherencePct,

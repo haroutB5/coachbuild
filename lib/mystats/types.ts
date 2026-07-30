@@ -15,6 +15,13 @@ export interface MyAccountRow {
   puuid: string;
   region: string;
   created_at: string;
+  /** Migration 0020 (multi-account): exactly one row has this true, enforced
+   *  by the partial unique index my_account_one_active_idx. */
+  active: boolean;
+  /** Migration 0020: when the companion last reported this account as the one
+   *  logged into the League client. Null = never detected (env-seeded, or
+   *  linked before this column existed). */
+  last_seen_at: string | null;
 }
 
 /** DisplayRoleId-shaped (lib/pro/types.ts): 0-4 concrete, -1 unresolved. Kept
@@ -47,6 +54,11 @@ export interface ExtractedMyMatch {
 
 export interface MyMatchRow {
   match_id: string;
+  /** Migration 0020 — WHOSE game this is. Half of the primary key
+   *  (puuid, match_id), and the mandatory filter on every read: an unscoped
+   *  SELECT over this table merges two players into one set of numbers with no
+   *  visible symptom (see the migration's header). */
+  puuid: string;
   queue_id: number;
   game_creation: string;
   patch: string;

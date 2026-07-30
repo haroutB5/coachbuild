@@ -32,6 +32,15 @@ function sqlText(strings: TemplateStringsArray): string {
   return strings.join("|");
 }
 
+/** Migration 0020: attachPersonalRecords now resolves the ACTIVE linked account
+ *  before reading my_matches, so a personal-record test must serve a my_account
+ *  row or it gets the (correct, but uninteresting) all-zeros no-account path.
+ *  Shape matches lib/mystats/account.ts's own SELECT. */
+const MY_ACCOUNT_ROW = { id: 1, riot_id: "MunsterHunter#EUW", puuid: "my-puuid", region: "EUW" };
+function isMyAccountQuery(text: string): boolean {
+  return text.includes("FROM coachbuild.my_account");
+}
+
 /** Every fixture below defaults total_games comfortably above
  *  POOL_MIN_TOTAL_GAMES unless a test is specifically exercising the floor —
  *  otherwise every one of these pre-existing fixtures would get filtered
@@ -348,6 +357,7 @@ describe("computeDraftRecommend", () => {
       mockSql.mockImplementation((strings: TemplateStringsArray) => {
         const text = sqlText(strings);
         if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (isMyAccountQuery(text)) return Promise.resolve([MY_ACCOUNT_ROW]);
         if (text.includes("FROM coachbuild.my_matches")) {
           return Promise.resolve([
             { champion_id: 1, opp_champion_id: 55, win: true },
@@ -369,6 +379,7 @@ describe("computeDraftRecommend", () => {
       mockSql.mockImplementation((strings: TemplateStringsArray) => {
         const text = sqlText(strings);
         if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (isMyAccountQuery(text)) return Promise.resolve([MY_ACCOUNT_ROW]);
         if (text.includes("FROM coachbuild.my_matches")) {
           return Promise.resolve([
             { champion_id: 1, opp_champion_id: 7, win: true }, // matches the resolved laneOpp (7)
@@ -491,6 +502,7 @@ describe("computeDraftRecommend", () => {
         if (text.includes("FROM coachbuild.draft_matchup")) {
           return Promise.resolve([{ champ_id: 1, opp_id: 7, wins: 300, games: 500 }]); // n=500 -> potential
         }
+        if (isMyAccountQuery(text)) return Promise.resolve([MY_ACCOUNT_ROW]);
         if (text.includes("FROM coachbuild.my_matches")) {
           return Promise.resolve([{ champion_id: 1, opp_champion_id: 7, win: true }]);
         }

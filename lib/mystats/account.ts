@@ -1,104 +1,362 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// lib/mystats/account.ts — resolves + caches the ONE personal account this
-// feature tracks. Deliberately narrow (no roster, no fallback-puuid-probe
-// dance like lib/pro/puuidResolve.ts — that file exists because lolpros
-// supplies an untrusted puuid that needs a live validation probe; here the
-// ONLY input is a literal Riot ID, so account-v1 by-riot-id is the single
-// path, no probe needed).
+// lib/mystats/account.ts — the linked-account registry behind My Stats.
 //
-// Brief contract: the Riot ID is BELIEVED to be "MunsterHunter#EUW" — if
-// that literal tag doesn't resolve, this does NOT try alternate taglines
-// (EUW1, euw, etc.) or alternate gameName spellings. A wrong guess degrades
-// to `accountUnresolved` everywhere (ingest + both aggregation routes) and
-// stays that way until corrected (via MY_RIOT_ID/MY_RIOT_REGION env
-// overrides — see below — or a manual DB fix) — never a silent auto-retry
-// with a mutated tag.
+// WAS single-account (migration 0012's `CHECK (id = 1)`); is now MULTI-account
+// with exactly one ACTIVE row (migration 0020). The user asked for this
+// directly on 2026-07-29 — "get the account based on what I'm logged in with,
+// then save it so it can be fetched from a list when needed. Currently I'm in
+// game with K1ayer #swift but in myStats its still MunsterHunter".
+//
+// THREE WAYS AN ACCOUNT GETS HERE, in descending order of trustworthiness:
+//
+//  1. DETECTED from the League client (the point of the feature). The
+//     companion's GET /me (1.10.0+) reads /lol-summoner/v1/current-summoner and
+//     reports gameName/tagLine/puuid; the browser POSTs that to
+//     /api/mystats/accounts, which calls linkAccount below. This is the only
+//     path that needs no guessing at all — the puuid comes from the client the
+//     user is actually logged into.
+//  2. SELECTED from the list (setActiveAccount) — already-linked, nothing to
+//     resolve.
+//  3. SEEDED FROM ENV (seedAccountFromEnv) — MY_RIOT_ID/MY_RIOT_REGION, kept
+//     ONLY as the cold-start path for a database with no accounts at all
+//     (a fresh deploy, or after a purge). See its own doc comment for the
+//     behaviour change: it used to be reachable via a helper that claimed to
+//     let env "correct" a wrong account and in practice never could.
+//
+// REGION IS RESOLVED, NEVER DERIVED. match-v5 is routed by regional cluster, so
+// an account is useless for ingest until its region is known, and NOTHING in
+// the detected identity carries one: a tagLine is not a region (the user's own
+// "K1ayer#swift" proves it — routingForServer("swift") is null) and the real
+// captured current-summoner payload has no region/platformId field at all. The
+// answer comes from Riot's own account-v1 region-by-puuid endpoint via
+// lib/pro/riot.ts's getRegionByPuuid — one call, authoritative, and only ever
+// made for a puuid this table has never seen before (an already-linked account
+// reuses its stored region, so switching back and forth is free).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { getAccountByRiotId, RiotRequestError } from "@/lib/pro/riot";
+import {
+  getAccountByRiotId,
+  getRegionByPuuid,
+  DEFAULT_ACCOUNT_ROUTING,
+  RiotRequestError,
+} from "@/lib/pro/riot";
 import { RiotUnavailableError } from "@/lib/pro/errors";
-import { routingForServer, type RiotRouting } from "@/lib/pro/regionMap";
+import { routingForServer, routingForPlatform, type RiotRouting } from "@/lib/pro/regionMap";
 import type { getSql } from "@/lib/pro/db";
 import type { MyAccountRow } from "./types";
 
-/** Overridable via env so a wrong initial guess can be corrected without a
- *  code change/redeploy — the brief's literal is the default. */
+type Sql = NonNullable<ReturnType<typeof getSql>>;
+
+/** Cold-start seed only — see seedAccountFromEnv. NOT an override: once any
+ *  account row exists, these are never read again. */
 export const MY_RIOT_ID = process.env.MY_RIOT_ID ?? "MunsterHunter#EUW";
 export const MY_RIOT_REGION = process.env.MY_RIOT_REGION ?? "EUW";
 
+/** The account every My Stats read is scoped to. `puuid` is the scoping key
+ *  (see migration 0020's header for why puuid and not riot_id) and `routing`
+ *  is what the Riot ingest calls need. */
 export interface ResolvedMyAccount {
+  id: number;
   puuid: string;
   riotId: string;
+  gameName: string;
+  tagLine: string;
   region: string;
   routing: RiotRouting;
 }
 
-function splitRiotId(riotId: string): [string, string] | null {
+/** ONE ENTRY IN THE PICKER LIST — the public, browser-facing shape.
+ *
+ *  Deliberately carries NO puuid. The picker switches by `id`, an opaque local
+ *  smallint, so the account's Riot-side identifier never has to be shipped to
+ *  the client or accepted back from it. That also means a client cannot ask to
+ *  activate an arbitrary puuid it made up — only an id this table already
+ *  holds. */
+export interface MyAccountSummary {
+  id: number;
+  /** "gameName#tagLine", the display tag. */
+  riotId: string;
+  gameName: string;
+  tagLine: string;
+  /** This app's server key, e.g. "EUW" (lib/pro/regionMap.ts). */
+  region: string;
+  active: boolean;
+  /** ISO, or null if the companion has never reported this account. Display
+   *  ordering hint only — never a filter, never auto-switches anything. */
+  lastSeenAt: string | null;
+  /** How many stored matches this account has. Lets the picker show "138
+   *  games" beside a name instead of an unlabelled tag. */
+  games: number;
+}
+
+export function splitRiotId(riotId: string): { gameName: string; tagLine: string } | null {
   const idx = riotId.indexOf("#");
   if (idx < 0) return null;
   const gameName = riotId.slice(0, idx);
   const tagLine = riotId.slice(idx + 1);
   if (!gameName || !tagLine) return null;
-  return [gameName, tagLine];
+  return { gameName, tagLine };
 }
 
-/** Reads the persisted account row, or null if never resolved. */
-export async function getMyAccount(
-  sql: NonNullable<ReturnType<typeof getSql>>
-): Promise<ResolvedMyAccount | null> {
+export function formatRiotId(gameName: string, tagLine: string): string {
+  return `${gameName}#${tagLine}`;
+}
+
+interface AccountDbRow extends Pick<MyAccountRow, "riot_id" | "puuid" | "region"> {
+  id: number;
+}
+
+function toResolved(row: AccountDbRow): ResolvedMyAccount | null {
+  const routing = routingForServer(row.region);
+  if (!routing) return null; // region was validated at link time -- stay defensive rather than route a Riot call at a guess
+  const parts = splitRiotId(row.riot_id);
+  return {
+    id: row.id,
+    puuid: row.puuid,
+    riotId: row.riot_id,
+    gameName: parts?.gameName ?? row.riot_id,
+    tagLine: parts?.tagLine ?? "",
+    region: row.region,
+    routing,
+  };
+}
+
+/** THE account read. Every My Stats surface scopes to whatever this returns,
+ *  and null means "show the accountUnresolved empty state" — never "show
+ *  everything", which is what an unscoped query would have done. */
+export async function getActiveAccount(sql: Sql): Promise<ResolvedMyAccount | null> {
   const rows = (await sql`
-    SELECT riot_id, puuid, region FROM coachbuild.my_account WHERE id = 1
-  `) as unknown as Pick<MyAccountRow, "riot_id" | "puuid" | "region">[];
+    SELECT id, riot_id, puuid, region FROM coachbuild.my_account WHERE active ORDER BY id LIMIT 1
+  `) as unknown as AccountDbRow[];
   const row = rows[0];
   if (!row) return null;
-  const routing = routingForServer(row.region);
-  if (!routing) return null; // shouldn't happen (region was validated at resolve time), but stay defensive
-  return { puuid: row.puuid, riotId: row.riot_id, region: row.region, routing };
+  return toResolved(row);
 }
 
-/** Attempts to resolve MY_RIOT_ID against Riot's account-v1 and persists the
- *  result. Returns null on a DEFINITIVE failure (account genuinely doesn't
- *  exist under this literal tag — a clean 4xx-not-429) OR a transient one
- *  (network blip / 5xx / 429) — both cases mean "not resolved right now,"
- *  and the caller (runMyStatsIngest) surfaces `accountUnresolved` either
- *  way. Unlike lib/pro/puuidResolve.ts's resolveAccount, there's no prior
- *  `active` state to protect from a false downgrade (this table has no row
- *  at all until resolution first succeeds), so the transient/definitive
- *  distinction doesn't need to be exposed to the caller — it only matters
- *  for whether a future retry is worth attempting, and retrying the SAME
- *  literal tag on the next ingest tick is always safe and cheap (one paced
- *  Riot call) regardless of which kind of failure this was. */
-export async function resolveMyAccount(
-  sql: NonNullable<ReturnType<typeof getSql>>
-): Promise<ResolvedMyAccount | null> {
-  const routing = routingForServer(MY_RIOT_REGION);
-  if (!routing) return null; // MY_RIOT_REGION misconfigured — not a Riot call, nothing to retry differently
+/** Backwards-compatible alias. The old name read "the one account"; it now
+ *  reads "the ACTIVE account", which is a different question with the same
+ *  answer only while a single account is linked. Kept so nothing outside this
+ *  module has to care, but new code should say what it means. */
+export const getMyAccount = getActiveAccount;
 
-  const split = splitRiotId(MY_RIOT_ID);
-  if (!split) return null; // MY_RIOT_ID misconfigured (no '#') — same, not a Riot-side failure
+/** The picker's feed. One query, LEFT JOINed against a per-puuid match count
+ *  — grouped in SQL rather than in JS because unlike lib/mystats/aggregate.ts
+ *  (which deliberately aggregates a few hundred rows in JS) this is a count
+ *  over the WHOLE table for every account, and there is nothing to unit-test
+ *  about it.
+ *
+ *  Ordered active-first, then most-recently-seen, then id — so the list reads
+ *  in the order a user would expect to find things in it, deterministically. */
+export async function listAccounts(sql: Sql): Promise<MyAccountSummary[]> {
+  const rows = (await sql`
+    SELECT a.id, a.riot_id, a.region, a.active, a.last_seen_at,
+           COALESCE(m.games, 0)::int AS games
+    FROM coachbuild.my_account a
+    LEFT JOIN (
+      SELECT puuid, count(*)::int AS games FROM coachbuild.my_matches GROUP BY puuid
+    ) m ON m.puuid = a.puuid
+    ORDER BY a.active DESC, a.last_seen_at DESC NULLS LAST, a.id
+  `) as unknown as {
+    id: number;
+    riot_id: string;
+    region: string;
+    active: boolean;
+    last_seen_at: string | null;
+    games: number;
+  }[];
+  return rows.map((r) => {
+    const parts = splitRiotId(r.riot_id);
+    return {
+      id: r.id,
+      riotId: r.riot_id,
+      gameName: parts?.gameName ?? r.riot_id,
+      tagLine: parts?.tagLine ?? "",
+      region: r.region,
+      active: r.active,
+      lastSeenAt: r.last_seen_at,
+      games: r.games,
+    };
+  });
+}
 
-  const [gameName, tagLine] = split;
-  try {
-    const acc = await getAccountByRiotId(routing.regional, gameName, tagLine);
-    const riotId = `${acc.gameName}#${acc.tagLine}`;
-    await sql`
-      INSERT INTO coachbuild.my_account (id, riot_id, puuid, region)
-      VALUES (1, ${riotId}, ${acc.puuid}, ${MY_RIOT_REGION})
-      ON CONFLICT (id) DO UPDATE SET riot_id = EXCLUDED.riot_id, puuid = EXCLUDED.puuid, region = EXCLUDED.region
-    `;
-    return { puuid: acc.puuid, riotId, region: MY_RIOT_REGION, routing };
-  } catch (err) {
-    if (err instanceof RiotUnavailableError) throw err; // no key configured -- caller must distinguish this from "unresolved"
-    if (err instanceof RiotRequestError) return null; // definitive rejection (404/400) -- do NOT guess alternate tags
-    return null; // transient (network throw / 5xx / 429) -- next ingest tick retries the same literal tag
+/** Makes exactly one account active. ATOMICALLY — the two UPDATEs run in one
+ *  Postgres transaction (2026-07-30), not as two independent round trips.
+ *
+ *  WHY THE TRANSACTION IS NOT BELT-AND-BRACES. Migration 0020's partial unique
+ *  index `my_account_one_active_idx` already makes the bad direction
+ *  (TWO active rows, which would make getActiveAccount's `LIMIT 1` pick a row
+ *  arbitrarily) unrepresentable. What it cannot prevent is the other direction:
+ *  a crash, a serverless timeout or a dropped connection landing BETWEEN the
+ *  deactivate and the activate leaves ZERO active rows, and My Stats then renders
+ *  its accountUnresolved empty state for an account the user has definitely
+ *  linked — recoverable only by switching again. That fails in the safe
+ *  direction, which is why it was never a P0, but two statements that must both
+ *  land are a transaction, so they are one now.
+ *
+ *  ORDER STILL MATTERS INSIDE THE TRANSACTION: deactivate first. Statements in a
+ *  Neon HTTP transaction execute sequentially, and the partial unique index is
+ *  checked per statement, so activating before deactivating would violate it
+ *  even though the transaction as a whole is fine.
+ *
+ *  NOT collapsed into a single `SET active = (id = $1)` UPDATE, which looks
+ *  simpler and is a trap: one UPDATE touching both rows can be executed in
+ *  either row order, and the partial unique index rejects the ordering that sets
+ *  the new row active while the old one still is — a duplicate-key error that
+ *  depends on the plan rather than on the data.
+ *
+ *  Returns null when `id` matches no row (a client asking for an account that
+ *  isn't there gets a clean 404, never a silent no-op that looks like success). */
+export async function setActiveAccount(sql: Sql, id: number): Promise<ResolvedMyAccount | null> {
+  const exists = (await sql`
+    SELECT id FROM coachbuild.my_account WHERE id = ${id}
+  `) as unknown as { id: number }[];
+  if (exists.length === 0) return null;
+
+  await sql.transaction([
+    sql`UPDATE coachbuild.my_account SET active = false WHERE active AND id <> ${id}`,
+    sql`UPDATE coachbuild.my_account SET active = true WHERE id = ${id}`,
+  ]);
+  return getActiveAccount(sql);
+}
+
+/** Identity as reported by the League client (companion GET /me). */
+export interface DetectedIdentity {
+  gameName: string;
+  tagLine: string;
+  puuid: string;
+}
+
+/** NOTE what is deliberately ABSENT: a `switched` flag. Whether the active
+ *  account actually CHANGED is computed in exactly one place — the route, which
+ *  reads the active account before the mutation and compares ids, and which
+ *  needs the same answer for `select` mode anyway. Computing it here as well
+ *  would be a second copy of one fact, and a second copy is what silently misses
+ *  the next fix (CLAUDE.md gotcha (dd)). */
+export type LinkAccountResult =
+  | { ok: true; account: ResolvedMyAccount; created: boolean }
+  /** The puuid is new AND Riot would not tell us where it plays. Nothing is
+   *  written — an account with an unknown region cannot be ingested for, so
+   *  storing it would create a row that silently never gets any games. */
+  | { ok: false; reason: "region-unresolved" }
+  | { ok: false; reason: "riot-unavailable" };
+
+/** Links (or re-links) a detected account and makes it active.
+ *
+ *  RIOT-CALL BUDGET, deliberately: an already-linked puuid costs ZERO Riot
+ *  calls — its region is already stored, so re-detecting the same account on
+ *  every page view (which is exactly what the client does) is free, and
+ *  switching between two known accounts is free. Only a genuinely NEW puuid
+ *  spends one paced account-v1 call. That matters because this key is shared
+ *  with every other pipeline in the app (CLAUDE.md gotcha (d)).
+ *
+ *  `riot_id` is REFRESHED on every link, so a Riot name change follows the
+ *  account instead of leaving a stale display tag — the puuid is what the
+ *  match rows are keyed on (migration 0020), so a rename moves the label and
+ *  touches no history. */
+export async function linkAccount(sql: Sql, identity: DetectedIdentity): Promise<LinkAccountResult> {
+  const riotId = formatRiotId(identity.gameName, identity.tagLine);
+
+  // Selects only `region`, which is the one thing this function needs from an
+  // existing row: whether the (expensive, key-spending) Riot region lookup can
+  // be skipped, and what to write back. Deliberately NOT reading `active` —
+  // whether the switch changed anything is the route's single computation, see
+  // LinkAccountResult's note.
+  const existing = (await sql`
+    SELECT region FROM coachbuild.my_account WHERE puuid = ${identity.puuid}
+  `) as unknown as { region: string }[];
+
+  let region: string;
+  let created: boolean;
+  if (existing.length > 0) {
+    region = existing[0].region;
+    created = false;
+  } else {
+    try {
+      const dto = await getRegionByPuuid(DEFAULT_ACCOUNT_ROUTING, identity.puuid);
+      const mapped = routingForPlatform(dto.region);
+      // An unmapped platform is a REFUSAL, not a fallback. Guessing "EUW"
+      // here would point a Chinese/Vietnamese account's ingest at the wrong
+      // cluster and report zero games as if that were the truth.
+      if (!mapped) return { ok: false, reason: "region-unresolved" };
+      region = mapped.server;
+    } catch (err) {
+      if (err instanceof RiotUnavailableError) return { ok: false, reason: "riot-unavailable" };
+      if (err instanceof RiotRequestError) return { ok: false, reason: "region-unresolved" };
+      return { ok: false, reason: "riot-unavailable" }; // transient transport failure -- retryable, so don't write a half-known row
+    }
+    created = true;
   }
+
+  await sql`
+    INSERT INTO coachbuild.my_account (riot_id, puuid, region, active, last_seen_at)
+    VALUES (${riotId}, ${identity.puuid}, ${region}, false, now())
+    ON CONFLICT (puuid) DO UPDATE
+      SET riot_id = EXCLUDED.riot_id, region = EXCLUDED.region, last_seen_at = now()
+  `;
+
+  const inserted = (await sql`
+    SELECT id FROM coachbuild.my_account WHERE puuid = ${identity.puuid}
+  `) as unknown as { id: number }[];
+  const id = inserted[0]?.id;
+  if (id === undefined) return { ok: false, reason: "riot-unavailable" }; // write vanished -- treat as transient, never claim success
+
+  const account = await setActiveAccount(sql, id);
+  if (!account) return { ok: false, reason: "region-unresolved" };
+  return { ok: true, account, created };
 }
 
-/** Convenience: cached row if present, else attempts a fresh resolution. */
-export async function ensureMyAccount(
-  sql: NonNullable<ReturnType<typeof getSql>>
-): Promise<ResolvedMyAccount | null> {
-  const existing = await getMyAccount(sql);
-  if (existing) return existing;
-  return resolveMyAccount(sql);
+/** COLD START ONLY — resolves MY_RIOT_ID against account-v1 and links it.
+ *
+ *  BEHAVIOUR CHANGE WORTH KNOWING ABOUT (2026-07-29). The predecessor of this
+ *  function was reachable through a helper named `ensureMyAccount`, whose doc
+ *  comment claimed MY_RIOT_ID let a "wrong initial guess be corrected without
+ *  a code change". It never could: the helper returned the existing row
+ *  whenever there was one and only resolved when there was none, and the
+ *  aggregation routes never called it at all. So once the id=1 row existed,
+ *  changing MY_RIOT_ID changed nothing anywhere — the comment described an
+ *  override that did not exist. The honest correction path is now the DETECTED
+ *  one (linkAccount) plus the picker, and this function is only what bootstraps
+ *  an empty table. The misleading claim is removed rather than reworded.
+ *
+ *  Unlike linkAccount this DOES trust MY_RIOT_REGION, because an env-configured
+ *  Riot ID has an env-configured region beside it and there is no client to ask. */
+export async function seedAccountFromEnv(sql: Sql): Promise<ResolvedMyAccount | null> {
+  const routing = routingForServer(MY_RIOT_REGION);
+  if (!routing) return null; // MY_RIOT_REGION misconfigured -- not a Riot-side failure, nothing to retry differently
+  const parts = splitRiotId(MY_RIOT_ID);
+  if (!parts) return null; // MY_RIOT_ID misconfigured (no '#')
+
+  let dto;
+  try {
+    dto = await getAccountByRiotId(routing.regional, parts.gameName, parts.tagLine);
+  } catch (err) {
+    if (err instanceof RiotUnavailableError) throw err; // no key -- caller must distinguish this from "unresolved"
+    return null; // definitive 404/400, or transient -- either way not resolved right now
+  }
+
+  const riotId = formatRiotId(dto.gameName, dto.tagLine);
+  await sql`
+    INSERT INTO coachbuild.my_account (riot_id, puuid, region, active)
+    VALUES (${riotId}, ${dto.puuid}, ${MY_RIOT_REGION}, false)
+    ON CONFLICT (puuid) DO UPDATE SET riot_id = EXCLUDED.riot_id
+  `;
+  const rows = (await sql`
+    SELECT id FROM coachbuild.my_account WHERE puuid = ${dto.puuid}
+  `) as unknown as { id: number }[];
+  const id = rows[0]?.id;
+  if (id === undefined) return null;
+  return setActiveAccount(sql, id);
 }
+
+/** Active account if there is one, else a cold-start seed from env. Used by the
+ *  ingest paths, which need SOMETHING to walk; read-only surfaces call
+ *  getActiveAccount directly and show the empty state instead of resolving. */
+export async function ensureActiveAccount(sql: Sql): Promise<ResolvedMyAccount | null> {
+  const existing = await getActiveAccount(sql);
+  if (existing) return existing;
+  return seedAccountFromEnv(sql);
+}
+
+/** Deprecated alias for ensureActiveAccount — see seedAccountFromEnv's header
+ *  for what this name used to imply and why that was wrong. */
+export const ensureMyAccount = ensureActiveAccount;

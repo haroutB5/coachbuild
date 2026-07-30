@@ -8,14 +8,27 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mockGetMyAccount = vi.fn();
-vi.mock("@/lib/mystats/account", () => ({ getMyAccount: (...args: unknown[]) => mockGetMyAccount(...args) }));
+// getActiveAccount is the post-migration-0020 name (getMyAccount survives as an
+// alias); both are provided so this mock matches the real module's surface.
+vi.mock("@/lib/mystats/account", () => ({
+  getActiveAccount: (...args: unknown[]) => mockGetMyAccount(...args),
+  getMyAccount: (...args: unknown[]) => mockGetMyAccount(...args),
+}));
 
 const mockRunMyStatsIngest = vi.fn();
 vi.mock("@/lib/mystats/ingest", () => ({ runMyStatsIngest: (...args: unknown[]) => mockRunMyStatsIngest(...args) }));
 
 import { runMyStatsRefresh, shouldRunIncremental, REFRESH_COOLDOWN_MS } from "@/lib/mystats/refresh";
 
-const ACCOUNT = { puuid: "my-puuid", riotId: "MunsterHunter#EUW", region: "EUW", routing: { platform: "euw1", regional: "europe" } };
+const ACCOUNT = {
+  id: 1,
+  puuid: "my-puuid",
+  riotId: "MunsterHunter#EUW",
+  gameName: "MunsterHunter",
+  tagLine: "EUW",
+  region: "EUW",
+  routing: { platform: "euw1", regional: "europe" },
+};
 
 describe("shouldRunIncremental", () => {
   it("true when never run before (lastAt null)", () => {
@@ -74,12 +87,54 @@ describe("runMyStatsRefresh", () => {
       matchesSeen: 5,
       matchesUpserted: 2,
       nextStart: null,
+      historyComplete: true,
+      truncatedBy: null,
+      pagesWalked: 1,
       errors: [],
     });
 
     const result = await runMyStatsRefresh(mockSql as never);
     expect(mockRunMyStatsIngest).toHaveBeenCalledWith({ mode: "incremental" });
-    expect(result).toEqual({ refreshed: true, skipped: false, newGames: 2, latest: "2026-07-24T11:00:00.000Z" });
+    expect(result).toEqual({
+      refreshed: true,
+      skipped: false,
+      newGames: 2,
+      latest: "2026-07-24T11:00:00.000Z",
+      historyComplete: true,
+      truncatedBy: null,
+    });
+  });
+
+  it("passes an INCOMPLETE sync straight through -- a truncated walk must not reach the client as a finished one", async () => {
+    // The plumbing test for the 2026-07-30 fix. `toEqual` treats a missing key and
+    // an `undefined` one as equal, so a dropped field here would pass silently in
+    // the tests above -- which is exactly how a truncation would become invisible
+    // again one layer up.
+    mockGetMyAccount.mockResolvedValueOnce(ACCOUNT);
+    mockSql
+      .mockResolvedValueOnce([{ last_incremental_at: new Date(Date.now() - 10 * 60_000).toISOString() }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ latest: "2026-07-29T19:14:32.349Z" }]);
+    mockRunMyStatsIngest.mockResolvedValueOnce({
+      accountUnresolved: false,
+      matchesSeen: 100,
+      matchesUpserted: 29,
+      nextStart: null,
+      historyComplete: false,
+      truncatedBy: "per-run Riot call budget spent (30 calls)",
+      pagesWalked: 1,
+      errors: [],
+    });
+
+    const result = await runMyStatsRefresh(mockSql as never);
+    expect(result).toEqual({
+      refreshed: true,
+      skipped: false,
+      newGames: 29,
+      latest: "2026-07-29T19:14:32.349Z",
+      historyComplete: false,
+      truncatedBy: "per-run Riot call budget spent (30 calls)",
+    });
   });
 
   it("never run before (lastAt null) still runs and reports newGames:0/latest:null when nothing new", async () => {
@@ -93,11 +148,21 @@ describe("runMyStatsRefresh", () => {
       matchesSeen: 0,
       matchesUpserted: 0,
       nextStart: null,
+      historyComplete: true,
+      truncatedBy: null,
+      pagesWalked: 1,
       errors: [],
     });
 
     const result = await runMyStatsRefresh(mockSql as never);
-    expect(result).toEqual({ refreshed: true, skipped: false, newGames: 0, latest: null });
+    expect(result).toEqual({
+      refreshed: true,
+      skipped: false,
+      newGames: 0,
+      latest: null,
+      historyComplete: true,
+      truncatedBy: null,
+    });
   });
 
   it("fail-soft: a thrown error from the ingest call never propagates, returns error:true", async () => {

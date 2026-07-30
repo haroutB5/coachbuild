@@ -22,7 +22,7 @@ loadEnvLocal();
 
 const { runMyStatsIngest } = await import("../lib/mystats/ingest.ts");
 const { getSql } = await import("../lib/pro/db.ts");
-const { getMyAccount } = await import("../lib/mystats/account.ts");
+const { getActiveAccount } = await import("../lib/mystats/account.ts");
 const { summarizeByChampion } = await import("../lib/mystats/aggregate.ts");
 
 const pageSize = Number(process.argv[2]) || undefined;
@@ -60,12 +60,18 @@ async function main() {
   }
 
   const sql = getSql();
-  const account = await getMyAccount(sql);
+  const account = await getActiveAccount(sql);
 
-  const rows = await sql`
-    SELECT champion_id, role, opp_champion_id, win, game_creation
-    FROM coachbuild.my_matches
-  `;
+  // ACCOUNT-SCOPED (migration 0020). Unscoped, this report's "top 5 personal
+  // champions" would be every linked account's pool added together -- a
+  // plausible-looking table describing nobody.
+  const rows = account
+    ? await sql`
+        SELECT champion_id, role, opp_champion_id, win, game_creation
+        FROM coachbuild.my_matches
+        WHERE puuid = ${account.puuid}
+      `
+    : [];
   const records = rows.map((r) => ({
     championId: r.champion_id,
     role: r.role,
@@ -92,7 +98,7 @@ async function main() {
 
   console.log("");
   console.log(`Resolved account: ${account?.riotId ?? "(unresolved)"} (${account?.region ?? "?"})`);
-  console.log(`Total rows in coachbuild.my_matches: ${rows.length}`);
+  console.log(`Rows in coachbuild.my_matches for THIS account: ${rows.length}`);
   console.log("Top 5 personal champions by games:");
   for (const c of top5) {
     console.log(`  champion ${c.championId}: ${c.games} games, ${(c.winrate * 100).toFixed(1)}% winrate (${c.wins}W-${c.games - c.wins}L)`);

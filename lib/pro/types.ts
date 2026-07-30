@@ -243,6 +243,17 @@ export interface RiotAccountDto {
   tagLine: string;
 }
 
+/** account-v1 `region/by-game/lol/by-puuid` response (lib/pro/riot.ts's
+ *  getRegionByPuuid). `region` is a PLATFORM id ("euw1"), not one of this
+ *  app's "EUW"-style server keys and not a regional cluster — convert it with
+ *  lib/pro/regionMap.ts's routingForPlatform. Shape observed live 2026-07-29,
+ *  not assumed from docs. */
+export interface RiotRegionDto {
+  puuid: string;
+  game: string;
+  region: string;
+}
+
 export interface RiotPerkSelection {
   perk: number;
   var1?: number;

@@ -34,3 +34,33 @@ export function routingForServer(server: string | undefined | null): RiotRouting
   if (!server) return null;
   return ROUTING[server.toUpperCase()] ?? null;
 }
+
+/** Reverse lookup: Riot PLATFORM id ("euw1") -> this table's own server key
+ *  ("EUW") plus its routing. Derived from ROUTING above rather than declared
+ *  as a second literal map, so the two directions can never drift apart.
+ *
+ *  WHY THIS EXISTS (My Stats multi-account, v0.83). A tagLine is NOT a region
+ *  and cannot be turned into one: the user's own second account is
+ *  "K1ayer#swift", and `routingForServer("swift")` returns null — a custom tag
+ *  carries no routing information whatsoever. Neither does the League client's
+ *  own current-summoner payload (a real capture in _capture/ has gameName,
+ *  tagLine and puuid, and no region/platformId/locale field of any kind). The
+ *  authoritative answer comes from Riot's own account-v1
+ *  `region/by-game/lol/by-puuid` endpoint, which answers with a platform id
+ *  ("euw1") — verified live 2026-07-29 against the stored puuid, HTTP 200
+ *  {"game":"lol","region":"euw1"}, and it returns the same answer from ANY
+ *  regional route, so no bootstrap region is needed to ask the question. This
+ *  function converts that answer into the app's existing region vocabulary so
+ *  my_account.region keeps the same "EUW"-style values migration 0012 stored.
+ *
+ *  Case-insensitive on input; null (never a guess) for an unmapped platform. */
+export function routingForPlatform(
+  platform: string | undefined | null
+): { server: string; routing: RiotRouting } | null {
+  if (!platform) return null;
+  const wanted = platform.toLowerCase();
+  for (const [server, routing] of Object.entries(ROUTING)) {
+    if (routing.platform === wanted) return { server, routing };
+  }
+  return null;
+}

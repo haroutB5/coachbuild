@@ -41,9 +41,11 @@ import MyStatsRefresher from "@/components/hextech/MyStatsRefresher";
 import HeroBand, { Pill } from "@/components/hextech/HeroBand";
 import PanelHeading from "@/components/hextech/PanelHeading";
 import StatTiles from "@/components/hextech/mystats/StatTiles";
+import AccountPicker from "@/components/hextech/mystats/AccountPicker";
 import RecentGamesList, { type RecentGameRow } from "@/components/hextech/mystats/RecentGamesList";
 import ChampionPoolCard from "@/components/hextech/mystats/ChampionPoolCard";
 import { getChampionIconMap, type ChampionIconEntry } from "@/components/proAssets";
+import type { AccountSummary } from "@/components/live/mystatsAccount";
 import {
   fetchMyStatsSummary,
   fetchMyStatsMatchups,
@@ -51,6 +53,7 @@ import {
   buildMyStatsMatchupRows,
   computeMyStatsOverall,
   computeMainChampion,
+  computeHistoryCoverage,
   type MyStatsSummary,
   type MyStatsChampionRow,
   type MyStatsMatchupRow,
@@ -72,6 +75,12 @@ interface MyStatsSummaryExtended extends MyStatsSummary {
    *  the state this field pair was added to end. Pass BOTH to StatTiles. */
   nOnBuild?: number | null;
   nOffBuild?: number | null;
+  /** 2026-07-30 — false when a refresh run was cut off by its Riot-call budget
+   *  before it finished walking this account's season, i.e. every figure below is
+   *  over a PARTIAL history. Null/absent means the response did not say. Read only
+   *  through computeHistoryCoverage, never branched on directly here — see
+   *  StillSyncingCallout and the `coverage` prop on StatTiles. */
+  historyComplete?: boolean | null;
 }
 
 function pct(fraction: number): string {
@@ -92,6 +101,44 @@ function EmptyPanel({ title, body }: { title: string; body: string }) {
     <div className="bg-panel border border-line rounded-xl p-8 text-center">
       <div className="text-txt font-semibold mb-1 text-[13.5px]">{title}</div>
       <div className="text-mut text-[12px]">{body}</div>
+    </div>
+  );
+}
+
+/**
+ * The stronger form of the "still syncing" signal, for an account whose stored
+ * history is at or below one truncated run's yield (MYSTATS_THIN_HISTORY_GAMES).
+ *
+ * "Still collecting" reads very differently at 20 games than at 900, and the chip
+ * on the hero is not enough at 20: a brand-new account's win rate can be a coin
+ * flip over a handful of games while looking exactly as authoritative as a
+ * 900-game one. This is the same move `FeaturedOtpCard` makes below its own
+ * sample floor — say plainly that we are still collecting, and quote only the
+ * number we actually hold.
+ *
+ * It differs from that precedent in one way, deliberately: the OTP card can say
+ * "N of the 12 needed" because 12 is a known floor. Here there is NO known
+ * denominator — that is the whole reason `historyComplete` is a flag rather than a
+ * count — so this says how many games it has and how they grow, and never
+ * pretends to a percentage of a total nothing knows.
+ *
+ * Sits ABOVE the KPI strip in DOM order, so it is read (and heard) before the
+ * figures it qualifies. Fixed content, no animation — nothing here to reduce for
+ * prefers-reduced-motion.
+ */
+function StillSyncingCallout({ games }: { games: number }) {
+  return (
+    <div className="bg-panel border border-line rounded-xl px-4 py-3 sm:px-5 flex items-start gap-3">
+      <span
+        aria-hidden="true"
+        className="mt-[5px] w-1.5 h-1.5 rounded-full bg-teal/80 flex-shrink-0 shadow-[0_0_0_3px_rgba(64,180,170,0.14)]"
+      />
+      <p className="text-[12px] text-mut leading-relaxed">
+        <span className="text-txt font-semibold">Still collecting your games.</span> We hold{" "}
+        <span className="text-txt tabular-nums">{games}</span> so far, and each refresh reaches further
+        back. Everything below is worked out over those {games} games — read the rates as an early
+        sketch, not your season.
+      </p>
     </div>
   );
 }
@@ -143,8 +190,22 @@ export default function MyStatsPage() {
   const [expanded, setExpanded] = useState<{ championId: number; role: number } | null>(null);
   const [detail, setDetail] = useState<DetailState>({ status: "idle" });
   // v0.50.0: bumped by MyStatsRefresher's onRefreshed when the on-demand
-  // incremental ingest actually found new games.
+  // incremental ingest actually found new games. v0.83: ALSO bumped by an
+  // account switch — see handleAccountSwitched.
   const [refetchKey, setRefetchKey] = useState(0);
+  // The account list, held OUTSIDE `state` on purpose. An account switch puts
+  // the stats back into their loading state (see handleAccountSwitched), and the
+  // picker must survive that: unmounting it would drop the menu, the detection
+  // prompt and the secret field at the exact moment the user is using them.
+  // Re-seeded from every summary response, so the server stays authoritative.
+  const [accountScope, setAccountScope] = useState<{
+    accounts: AccountSummary[];
+    activeId: number | null;
+    riotId: string | null;
+  } | null>(null);
+  // Non-null only while a just-switched account's stats are in flight — lets the
+  // loading state name the account it is loading instead of going silently blank.
+  const [pendingRiotId, setPendingRiotId] = useState<string | null>(null);
 
   useEffect(() => {
     getChampionIconMap().then(setChampIcons);
@@ -155,11 +216,38 @@ export default function MyStatsPage() {
     fetchMyStatsSummary().then((data) => {
       if (cancelled) return; // stale-response guard, same pattern as BuildTabContent/draft page
       setState(data ? { status: "ok", summary: data as MyStatsSummaryExtended } : { status: "error" });
+      if (data) {
+        setAccountScope({
+          accounts: data.accounts ?? [],
+          activeId: data.accountId ?? null,
+          riotId: data.riotId,
+        });
+      }
+      setPendingRiotId(null);
     });
     return () => {
       cancelled = true;
     };
   }, [refetchKey]);
+
+  /**
+   * THE hard requirement of the multi-account ship. `switched: true` means the
+   * active account changed, which means every number on this page has just
+   * changed MEANING — the figures themselves are still the old account's.
+   *
+   * So this does two things, and both matter. It re-fetches the summary, and it
+   * blanks the stats until that lands. Patching the active label and leaving the
+   * old figures up would produce a confident, plausible, wrong number belonging
+   * to a different player — the exact failure the backend change exists to
+   * prevent (HANDOFF-engy.md §5c: scoped adherence returns null and renders "—",
+   * unscoped returns a confident 0.0%). A brief skeleton is the honest state.
+   */
+  function handleAccountSwitched(riotId: string | null): void {
+    setPendingRiotId(riotId);
+    setState({ status: "loading" });
+    setExpanded(null); // the matchup drill-down belonged to the old account
+    setRefetchKey((k) => k + 1);
+  }
 
   useEffect(() => {
     if (expanded === null) {
@@ -199,6 +287,20 @@ export default function MyStatsPage() {
       ? computeMainChampion(state.summary.records, (id) => champIcons.get(id))
       : null;
   const recentGames = state.status === "ok" ? state.summary.recentGames ?? [] : [];
+  // IS THIS A SEASON, OR THE PART OF ONE WE HAPPEN TO HOLD? Derived once, here,
+  // and read by every surface below that makes a coverage claim — the hero
+  // eyebrow/pills, the KPI strip's GAMES cell and the matchup panel's heading.
+  // Deriving it per-surface is how two of them would eventually disagree.
+  //
+  // `overall.games` (not recentGames.length): the count the page actually shows.
+  // accountUnresolved is passed through so this can never produce a coverage
+  // claim for an account that is not even resolved — computeHistoryCoverage
+  // returns state "none" with no pill for that case.
+  const coverage = computeHistoryCoverage({
+    accountUnresolved: state.status === "ok" ? state.summary.accountUnresolved : true,
+    historyComplete: state.status === "ok" ? state.summary.historyComplete : null,
+    games: overall?.games ?? 0,
+  });
   const seasonLabel = state.status === "ok" ? state.summary.season || "" : "";
   const riotId = state.status === "ok" ? state.summary.riotId : null;
   // Splash art = the account's main champion. Falls back to no art (scrim
@@ -220,18 +322,58 @@ export default function MyStatsPage() {
           title={riotId ?? "My Stats"}
           reservePills
           pills={
-            overall && overall.games > 0 ? (
+            coverage.pill || (overall && overall.games > 0) ? (
               <>
-                <Pill tone="good" title="Wins this season">
-                  {overall.wins}W
-                </Pill>
-                <Pill tone="bad" title="Losses this season">
-                  {overall.losses}L
-                </Pill>
-                {mainRow && (
-                  <Pill tone="accent" title="Most-played champion this season">
-                    Main · {mainRow.name} {mainRow.games}g
+                {/* FIRST in the row on purpose: the caveat is read before the
+                    counts it qualifies, rather than trailing them as a footnote.
+                    `neutral` rather than `bad` — nothing is broken, the history is
+                    filling, and a red pill beside a W-L record would read as an
+                    error the user has to act on. */}
+                {coverage.pill && (
+                  <Pill tone="neutral" title={coverage.pill.title}>
+                    {coverage.pill.text}
                   </Pill>
+                )}
+                {overall && overall.games > 0 && (
+                  <>
+                    {/* The titles say "recorded so far" whenever the season claim
+                        isn't safe. A tooltip reading "Wins this season" over a
+                        truncated history is the same over-claim as the heading,
+                        just quieter. */}
+                    <Pill tone="good" title={coverage.seasonClaimSafe ? "Wins this season" : "Wins recorded so far"}>
+                      {overall.wins}W
+                    </Pill>
+                    <Pill tone="bad" title={coverage.seasonClaimSafe ? "Losses this season" : "Losses recorded so far"}>
+                      {overall.losses}L
+                    </Pill>
+                    {/* THE MAIN PILL YIELDS ITS SLOT TO THE SYNCING PILL, and that
+                        is a CLS fix as much as an editorial one. Measured at 390px:
+                        a FOURTH pill wraps this row to two lines and grows the hero
+                        ~26px — which is precisely the shift HeroBand's
+                        `reservePills` exists to have already closed (see its doc
+                        comment: that single growth was this page's entire CLS,
+                        0.103 -> 0). Reserving two rows for every account to make
+                        room for a caveat most accounts never see is the wrong
+                        trade.
+                        Editorially it is also the right pill to drop: "most-played
+                        THIS SEASON" is itself a season claim, and it is the least
+                        reliable one over a truncated walk — the true main can
+                        change as older games arrive. Nothing is lost, because the
+                        main champion is ALSO this hero's splash art and portrait
+                        (see StatTiles' header for why the tile moved here). */}
+                    {mainRow && coverage.pill === null && (
+                      <Pill
+                        tone="accent"
+                        title={
+                          coverage.seasonClaimSafe
+                            ? "Most-played champion this season"
+                            : "Most-played champion in the games recorded so far"
+                        }
+                      >
+                        Main · {mainRow.name} {mainRow.games}g
+                      </Pill>
+                    )}
+                  </>
                 )}
               </>
             ) : undefined
@@ -239,7 +381,25 @@ export default function MyStatsPage() {
           right={<MyStatsRefresher onRefreshed={() => setRefetchKey((k) => k + 1)} />}
         />
 
-        {state.status === "loading" && <TilesSkeleton />}
+        {accountScope && (
+          <AccountPicker
+            accounts={accountScope.accounts}
+            activeRiotId={accountScope.riotId}
+            activeId={accountScope.activeId}
+            onSwitched={handleAccountSwitched}
+          />
+        )}
+
+        {state.status === "loading" && (
+          <>
+            {pendingRiotId && (
+              <p role="status" aria-live="polite" className="text-[11.5px] text-mut">
+                Loading stats for <span className="text-txt font-semibold">{pendingRiotId}</span>…
+              </p>
+            )}
+            <TilesSkeleton />
+          </>
+        )}
 
         {state.status === "error" && (
           <EmptyPanel
@@ -250,20 +410,31 @@ export default function MyStatsPage() {
 
         {state.status === "ok" && state.summary.accountUnresolved && (
           <EmptyPanel
-            title="Account not linked yet"
-            body="Your Riot account hasn't been resolved on the server yet — this is set once via a server config value and should populate automatically once ingest runs."
+            title="No account is active yet"
+            body="Nothing is linked as the active account, so there are no stats to show. Open the League client with the companion running and the panel above will offer to link the account you're signed in as."
           />
         )}
 
+        {/* Zero rows has TWO causes and they are not the same message. If the
+            history is known incomplete, "no games this season" is a claim about
+            the season made from a walk that never finished — the account may have
+            played plenty and we simply have not reached it yet. Only a COMPLETE
+            (or complete-as-far-as-we-were-told) history earns the original copy. */}
         {state.status === "ok" && !state.summary.accountUnresolved && rows.length === 0 && (
           <EmptyPanel
-            title="No games yet this season"
-            body={`No recorded games for ${state.summary.season || "the current season"} yet — check back after your next few games.`}
+            title={coverage.seasonClaimSafe ? "No games yet this season" : "Still collecting your games"}
+            body={
+              coverage.seasonClaimSafe
+                ? `No recorded games for ${state.summary.season || "the current season"} yet — check back after your next few games.`
+                : "Nothing has been stored for this account yet. The sync works backwards through your match history a batch at a time, so give it a few refreshes before reading anything into an empty page."
+            }
           />
         )}
 
         {state.status === "ok" && !state.summary.accountUnresolved && rows.length > 0 && overall && (
           <div className="space-y-5">
+            {coverage.state === "thin" && <StillSyncingCallout games={coverage.games} />}
+
             <StatTiles
               games={overall.games}
               seasonLabel={state.summary.season || ""}
@@ -274,6 +445,7 @@ export default function MyStatsPage() {
               winrateOffBuild={state.summary.winrateOffBuild ?? null}
               nOnBuild={state.summary.nOnBuild ?? null}
               nOffBuild={state.summary.nOffBuild ?? null}
+              coverage={coverage}
             />
 
             {/* `items-start`: without it the two panels are forced to equal
@@ -289,9 +461,19 @@ export default function MyStatsPage() {
                 verbatim (same fetch/toggle logic), just demoted below the
                 new tiles/lists as a secondary drill-down. */}
             <div className="bg-panel border border-line rounded-xl px-4 sm:px-5 pt-4 pb-1">
-              <PanelHeading meta={`${rows.length} champions, this season`}>Matchup history</PanelHeading>
+              {/* "this season" is a coverage claim too — a champion pool built
+                  from a truncated walk is the champions we have SEEN, not the ones
+                  played. Same wording swap as the KPI strip's GAMES cell. */}
+              <PanelHeading meta={`${rows.length} champions, ${coverage.seasonClaimSafe ? "this season" : "recorded so far"}`}>
+                Matchup history
+              </PanelHeading>
               <p className="sr-only" role="status">
-                {rows.length} champions with recorded games this season, sorted by games played.
+                {/* "so far this season" and not "which is still syncing": this line
+                    also renders in the `unknown` state, where we were never told
+                    whether a sync is running. Withdrawing the claim is honest;
+                    asserting the sync would be a second invented fact. */}
+                {rows.length} champions with recorded games{" "}
+                {coverage.seasonClaimSafe ? "this season" : "so far this season"}, sorted by games played.
               </p>
               {rows.map((row) => {
                 // (championId, role), not championId alone -- see the

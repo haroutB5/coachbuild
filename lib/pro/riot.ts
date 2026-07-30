@@ -30,7 +30,7 @@ import { holdPacer, observeRateLimitBuckets, pacedCall } from "./pacer";
 import { parseRateBuckets, parseRetryAfterSec, type RateBucket } from "./rateLimits";
 import { RiotUnavailableError } from "./errors";
 import { fetchWithTimeout } from "../fetchTimeout";
-import type { RiotAccountDto, RiotMatch, RiotTimeline } from "./types";
+import type { RiotAccountDto, RiotMatch, RiotRegionDto, RiotTimeline } from "./types";
 
 /** Attempts AFTER the first for a 429 specifically. Each one waits out the
  *  server-stated delay first, so 2 is "give Riot two chances to mean it"
@@ -150,6 +150,33 @@ export function getAccountByRiotId(
     )}/${encodeURIComponent(tagLine)}`
   );
 }
+
+/** account-v1 `region/by-game/{game}/by-puuid/{puuid}` — the AUTHORITATIVE
+ *  platform id ("euw1") for an account we know only by puuid.
+ *
+ *  Added for My Stats multi-account (v0.83). The League client tells the
+ *  companion who is logged in (gameName/tagLine/puuid) but NOT where they
+ *  play, and match-v5 is routed by regional cluster, so something has to
+ *  supply the region. Deriving it from the tagLine is not an option — see
+ *  lib/pro/regionMap.ts's routingForPlatform header for why ("K1ayer#swift").
+ *
+ *  Verified live 2026-07-29 against the stored MunsterHunter puuid: HTTP 200
+ *  {"puuid":"...","game":"lol","region":"euw1"}, identical from both the
+ *  `europe` and `americas` routes — so the `regional` argument here is just a
+ *  host to talk to, NOT a filter on the answer, and a caller with no region
+ *  yet can safely pass any cluster. Callers pass DEFAULT_ACCOUNT_ROUTING
+ *  unless they have a better reason. */
+export function getRegionByPuuid(regional: string, puuid: string): Promise<RiotRegionDto> {
+  return riotFetch<RiotRegionDto>(
+    `https://${regional}.api.riotgames.com/riot/account/v1/region/by-game/lol/by-puuid/${encodeURIComponent(
+      puuid
+    )}`
+  );
+}
+
+/** Any regional cluster answers account-v1 identically (see getRegionByPuuid's
+ *  header) — `europe` is the arbitrary default, not a claim about the user. */
+export const DEFAULT_ACCOUNT_ROUTING = "europe";
 
 export function getMatchIdsByPuuid(
   regional: string,

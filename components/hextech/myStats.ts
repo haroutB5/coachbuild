@@ -21,6 +21,8 @@
 // is preserved as-is, only decorated with display fields.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import type { AccountSummary } from "@/components/live/mystatsAccount";
+
 export const MYSTATS_LOW_SAMPLE_THRESHOLD = 10;
 
 // ── Wire shapes (this module's own contract, not imported from lib/) ───────
@@ -98,6 +100,32 @@ export interface MyStatsSummary {
    *  genuinely absent. */
   nOnBuild?: number | null;
   nOffBuild?: number | null;
+  /** v0.83 (migration 0020) — WHICH linked account every figure above belongs
+   *  to, and the full list so a picker costs no second round trip and can never
+   *  render a list that disagrees with the stats beside it. Both are present on
+   *  the accountUnresolved response too (`accountId: null`, `accounts` possibly
+   *  non-empty), so a user with nothing active can still be offered a choice.
+   *  See HANDOFF-engy.md §1b. Optional for the same TS2430 reason as every
+   *  field above; normalizeMyStatsSummary ALWAYS populates a real value.
+   *  Deliberately carries NO puuid — the picker switches by opaque `id`. */
+  accountId?: number | null;
+  accounts?: AccountSummary[];
+  /** 2026-07-30 — has the ACTIVE account's season window actually been walked
+   *  all the way, or is every figure on this response computed over a PARTIAL
+   *  history? Sent by `GET /api/mystats/summary` (from
+   *  lib/mystats/ingest.ts's readHistoryComplete over
+   *  my_ingest_cursor.backfill_done). `false` is normal and temporary for a
+   *  just-linked account: the catch-up walk converges over several runs inside a
+   *  60s serverless budget.
+   *
+   *  `boolOrNull` on purpose, and the null is load-bearing: a payload that does
+   *  not carry the field at all (older cached bundle, a wire regression) means we
+   *  do not KNOW whether the history is whole, which is a different thing from
+   *  knowing it is. computeHistoryCoverage below maps that third case to a state
+   *  that withdraws the season claim without asserting a sync is in progress —
+   *  see its doc comment. Never coerced to `true`, which would be a coverage
+   *  claim made from an absent field. */
+  historyComplete?: boolean | null;
 }
 
 export interface MyStatsMatchups {
@@ -183,9 +211,30 @@ function normalizeRecentGame(raw: unknown): MyStatsRecentGame | null {
  *  interface AND here, or it silently degrades to undefined on every real
  *  load exactly like the original five did. See this file's test for a
  *  round-trip check against a realistic payload. */
+/** One picker row. Same defensive posture as normalizeRecord: a malformed entry
+ *  is dropped rather than tainting the list, and a missing `id`/`riotId` makes
+ *  the row unusable (the id is the ONLY handle a switch has), so those two are
+ *  required and everything else has an honest fallback. */
+function normalizeAccountSummary(raw: unknown): AccountSummary | null {
+  if (!raw || typeof raw !== "object") return null;
+  const a = raw as Partial<AccountSummary>;
+  if (typeof a.id !== "number" || !Number.isFinite(a.id)) return null;
+  if (typeof a.riotId !== "string" || a.riotId.length === 0) return null;
+  return {
+    id: a.id,
+    riotId: a.riotId,
+    gameName: typeof a.gameName === "string" ? a.gameName : "",
+    tagLine: typeof a.tagLine === "string" ? a.tagLine : "",
+    region: typeof a.region === "string" ? a.region : "",
+    active: a.active === true,
+    lastSeenAt: typeof a.lastSeenAt === "string" ? a.lastSeenAt : null,
+    games: num(a.games),
+  };
+}
+
 export function normalizeMyStatsSummary(raw: unknown): MyStatsSummary | null {
   if (!raw || typeof raw !== "object") return null;
-  const r = raw as Partial<MyStatsSummary> & { records?: unknown; recentGames?: unknown };
+  const r = raw as Partial<MyStatsSummary> & { records?: unknown; recentGames?: unknown; accounts?: unknown };
   return {
     accountUnresolved: r.accountUnresolved === true,
     season: typeof r.season === "string" ? r.season : "",
@@ -202,6 +251,16 @@ export function normalizeMyStatsSummary(raw: unknown): MyStatsSummary | null {
     recentGames: Array.isArray(r.recentGames)
       ? r.recentGames.map(normalizeRecentGame).filter((x): x is MyStatsRecentGame => x !== null)
       : [],
+    accountId: numOrNull(r.accountId),
+    accounts: Array.isArray(r.accounts)
+      ? r.accounts.map(normalizeAccountSummary).filter((x): x is AccountSummary => x !== null)
+      : [],
+    // The route has sent this since 2026-07-30 and this normalizer dropped it,
+    // which is exactly the P1 shape recorded above (the server sends a field, the
+    // page's cast to its own extended type hides that it never arrives). Passed
+    // through as boolean|null — see the field's doc comment for why the null case
+    // is not collapsed into either boolean.
+    historyComplete: boolOrNull(r.historyComplete),
   };
 }
 
@@ -577,6 +636,131 @@ export interface MyStatsWinLossCounts {
    *  buildMyStatsMatchupRows — lets the count pills mute themselves on a
    *  thin window instead of inventing a second threshold. */
   lowSample: boolean;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HISTORY COVERAGE (2026-07-30) — is a "Season 2026" number actually a season?
+//
+// /mystats presents every figure under a season label. Those figures are computed
+// over whatever rows my_matches happens to hold, and a refresh run can be cut off
+// by its per-run Riot-call budget before it has walked the account's whole season
+// window (lib/mystats/ingest.ts's INCREMENTAL_CALL_BUDGET, sized for the refresh
+// route's maxDuration = 60). When that happens the backend says so
+// (`historyComplete: false`), and until this helper existed no surface said
+// anything: a partially synced account showed confident percentages under a
+// heading that claimed the whole season. That is HARD RULE 4 (CLAUDE.md) — a
+// confident number over a truncated denominator.
+//
+// What this deliberately does NOT do is quote progress. Nothing anywhere knows
+// the true denominator — that is the entire reason the flag exists rather than a
+// count — so there is no "62% synced" here and there must never be one. The only
+// numbers this helper hands back are games we actually hold.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * At or below this many stored games, an incomplete history is treated as THIN
+ * rather than merely filling, and the page says so in a sentence instead of a
+ * chip — see MyStatsHistoryCoverage.
+ *
+ * 30 is not a taste number: `lib/mystats/ingest.ts`'s `INCREMENTAL_CALL_BUDGET`
+ * is 30 Riot calls per run, one of which is the id page, so a single truncated
+ * run can store at most ~29 games. An account sitting at or below 30 has
+ * effectively had ONE pass and nothing more — its win rate is one run's slice of
+ * a season, not a season. Above it, several runs have landed and the numbers are
+ * worth reading with a caveat rather than a paragraph.
+ *
+ * Duplicated rather than imported: `lib/mystats/ingest.ts` is server-side (Neon +
+ * Riot) and importing it here would drag both into the client bundle — the same
+ * reason this module owns its own wire shapes (see this file's header). If that
+ * budget changes, change this with it.
+ */
+export const MYSTATS_THIN_HISTORY_GAMES = 30;
+
+export type MyStatsHistoryCoverageState =
+  /** No active account — there are no figures, so there is no claim to make. */
+  | "none"
+  /** The season window has been walked. Numbers mean what their labels say. */
+  | "complete"
+  /** The response did not carry `historyComplete` at all. We do not know. */
+  | "unknown"
+  /** Known incomplete, with enough games stored to be worth reading. */
+  | "filling"
+  /** Known incomplete and at/below one truncated run's yield. */
+  | "thin";
+
+export interface MyStatsHistoryCoverage {
+  state: MyStatsHistoryCoverageState;
+  /**
+   * May a surface present its figures as covering the whole season?
+   *
+   * `true` ONLY for `"complete"`. Both `"unknown"` and the two incomplete states
+   * withdraw the claim — a label that cannot be justified is downgraded ("Games
+   * so far") rather than kept and footnoted.
+   */
+  seasonClaimSafe: boolean;
+  /** Games actually held, echoed so no consumer re-derives it from a different
+   *  denominator (the v0.73.1 bug class). Never negative. */
+  games: number;
+  /**
+   * A short badge for the identity header, or null when nothing should render.
+   *
+   * Null for `"unknown"` on purpose: we cannot say a sync is in progress when we
+   * were not told whether it is. Withdrawing the label is honest; announcing a
+   * sync would be a second invented fact.
+   */
+  pill: { text: string; title: string } | null;
+  /** ≤18-character note for the GAMES KPI cell (KpiStrip reserves that row
+   *  already, so this costs no layout shift), or null. */
+  gamesNote: string | null;
+}
+
+export interface MyStatsHistoryCoverageInput {
+  accountUnresolved: boolean;
+  /** Straight from a normalized MyStatsSummary — boolean, or null when the
+   *  response never carried it. */
+  historyComplete: boolean | null | undefined;
+  /** Games the page is actually showing (computeMyStatsOverall's `games`). */
+  games: number;
+}
+
+/**
+ * Pure. DISPLAY ONLY (HARD RULE 3) — nothing here feeds a score or a ranking; it
+ * only decides how honestly a heading may be worded.
+ *
+ * Precedence: `accountUnresolved` wins over everything (no account, no claim),
+ * then an absent flag, then the games count splits the two incomplete states.
+ */
+export function computeHistoryCoverage(input: MyStatsHistoryCoverageInput): MyStatsHistoryCoverage {
+  const games = Math.max(0, num(input.games));
+
+  if (input.accountUnresolved) {
+    return { state: "none", seasonClaimSafe: false, games, pill: null, gamesNote: null };
+  }
+  if (typeof input.historyComplete !== "boolean") {
+    return { state: "unknown", seasonClaimSafe: false, games, pill: null, gamesNote: null };
+  }
+  if (input.historyComplete) {
+    return { state: "complete", seasonClaimSafe: true, games, pill: null, gamesNote: null };
+  }
+
+  // Wording note: "Still syncing" / "still collecting", never "incomplete",
+  // "missing" or "error". Nothing is broken — the history is filling, and each
+  // refresh brings more. But it is also not whisper-quiet: the badge sits on the
+  // identity header ABOVE the numbers it qualifies, and the GAMES cell stops
+  // claiming a season, so the caveat is read before the figures are.
+  const pill = {
+    text: "Still syncing",
+    title:
+      `Your match history is still being collected — ${games} games stored so far. ` +
+      "Every figure below is computed over those games, not your full season. More arrive with each refresh.",
+  };
+  return {
+    state: games <= MYSTATS_THIN_HISTORY_GAMES ? "thin" : "filling",
+    seasonClaimSafe: false,
+    games,
+    pill,
+    gamesNote: "still syncing",
+  };
 }
 
 /** Win/loss counts over whatever window of games is passed in (e.g.

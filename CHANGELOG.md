@@ -2,6 +2,110 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.83.0] — 2026-07-30 — My Stats holds more than one account, and every number knows whose it is
+
+My Stats tracked exactly one hardcoded Riot ID. It now detects the account from the League client,
+persists it, and lets you switch between linked accounts. Companion **1.10.0**, overlay **0.4.3**.
+
+### Added
+- **Companion `GET /me`.** Reads `/lol-summoner/v1/current-summoner` and returns exactly
+  `{gameName, tagLine, puuid}`. Works whenever the League *client* is open, not only in-game.
+  Pre-1.10.0 companions 404 and the UI degrades silently, following the `/skills` precedent.
+
+  **The puuid was the wrong half of the problem, and probing found it.** It solves *identity* but
+  match-v5 is regional-cluster routed, so an account with no region can never be ingested for — and
+  a tagLine is not a region (`routingForServer("swift")` → `null`, which is exactly the user's own
+  account). `account-v1 region/by-game/lol/by-puuid` returns `{"region":"euw1"}` from *any* cluster,
+  verified live. An already-linked puuid costs **zero** Riot calls, so per-page-view detection is
+  safe against the shared key.
+- **The account picker on `/mystats`** (`AccountPicker`, decisions in the pure
+  `accountPickerModel`). Detection **offers**, never switches — silently repointing every number on
+  the page is not a thing this app does. One `/me` read per page load, no polling.
+
+  **One linked account renders a labelled line, not a menu** — a dropdown whose only row is the row
+  already selected is a dead control. It becomes a real menu when a second account links.
+- **`POST /api/mystats/accounts`**, the only write, gated by `MYSTATS_ACCOUNT_SECRET` and failing
+  closed when unset (503 before touching a body or the DB). `timingSafeEqual` with a length
+  pre-check. The secret is entered once, kept in local storage, never rendered back, never logged,
+  header-only on the wire. Missing or rejected makes the picker visibly read-only rather than
+  throwing on click.
+- **Migration 0020.** `my_matches` is keyed and indexed by `puuid`; the **138 existing rows are
+  attributed to `MunsterHunter#EUW`**; `CHECK (id = 1)` dropped; one-active enforced by a partial
+  unique index, so two-active is unrepresentable rather than merely unlikely.
+- **`/mystats` says when its numbers cover a partial history.** `computeHistoryCoverage` derives five
+  states (`none` / `complete` / `unknown` / `filling` / `thin`) once, read by the hero pill, the GAMES
+  tile, the matchup heading, its screen-reader line and the empty panel. Wording is "still syncing",
+  styled neutral — nothing is broken — and a test pins the copy against `error|fail|broken|missing`
+  so a later edit cannot turn it into an error message. **No progress percentage anywhere**, asserted
+  by a test: nothing knows the true denominator, which is the whole reason the flag exists.
+
+### Fixed
+- **Nine cross-account bleed sites, two of them outside My Stats.** `lib/draft/recommend.ts` was a
+  genuine leak — the Draft page's "you: 7-3" badges would have summed two players — and
+  `scripts/ingest-otp-priority.mjs` drives which champions the OTP walk deepens. A Fable cold-start
+  audit then read all nine independently and confirmed each is scoped.
+- **A tenth site the audit was sent to find, and did.** `maybeRefreshMine` in
+  `scripts/ingest-otp-priority.mjs` still ran `WHERE id = 1` against `my_ingest_cursor` — a column
+  migration 0020 **dropped**. Proven against the live DB: `column "id" does not exist`. The catch
+  block swallowed it every pass, so the walk's 6-hour self-refresh of `my_matches` was **permanently
+  dead** and a newly played champion only entered the priority walk if the daily cron or a page view
+  happened to ingest first. Now reads by active puuid, and the log line distinguishes "no cursor row"
+  from a schema error — a swallowed exception that looked identical to a normal empty state is how
+  this survived.
+- **Incremental ingest paged once and stopped, leaving silent holes.** It fetched only the newest 30
+  (`start=0`, one page), and nothing anywhere schedules backfill mode. So a newly linked account got
+  30 games and nothing older, **labelled "Season 2026"** — a confident number over a truncated
+  denominator; and switching back after >30 games away left a permanent hole that `backfill_done`
+  then blocked. It now pages **until it overlaps an already-stored id**, which fixes both cases with
+  one mechanism, since for a fresh account "until overlap" naturally continues until the window is
+  exhausted.
+
+  **Overlap alone is not completeness**, and that is the load-bearing part: a run stopped part-way
+  stores a fresh front block, so the next run would find overlap on page 0 and declare itself synced
+  over the hole it just made. So `backfill_done` is reused with one meaning and two writers who
+  agree — set on proven exhaustion, **cleared** on truncation. `INCREMENTAL_CALL_BUDGET = 30` is
+  derived from the routes' `maxDuration = 60` at the 1.3s pacer, not picked: a bigger budget does not
+  fetch more games, it gets the function killed before it can record anything. Truncation is recorded
+  three ways — a loud `INCOMPLETE SYNC` log, the flag cleared, and `truncatedBy`/`historyComplete` on
+  the response — because a silent truncation reads as "fully synced" and would reintroduce the same
+  defect one level up. The window is the **season** boundary (2026-01-08), never widened.
+- **The cursor table is per-puuid and its `id` column is gone**, so a forgotten filter is now a hard
+  error instead of a silent cross-account write, and a new account genuinely starts unwalked rather
+  than inheriting `backfill_done = true`.
+- **`normalizeMyStatsSummary` was dropping `historyComplete`.** The route had been sending it; the
+  page's cast to its own extended type hid the loss. Third time that shape has hit that one file.
+- **`setActiveAccount` is atomic** (`sql.transaction`). Deliberately not collapsed into
+  `SET active = (id = $1)`: one UPDATE touching both rows may execute in either order and the partial
+  unique index rejects one of them — a duplicate-key error that depends on the query plan, not the
+  data.
+- **A real puuid was committed in a publicly-served file.** `public/companion.ps1`'s SelfTest fixture
+  carried the full 78-character puuid of the live account, under a comment claiming capture values
+  were redacted. Replaced with a labelled synthetic, and the same identifier was scrubbed from a
+  44-char prefix in `components/__tests__/companionMe.test.ts` — fixing one file and leaving it in a
+  sibling is fixing the instance, not the invariant. `_capture/` was checked and is genuinely
+  redacted; the leak was authored straight into the fixture.
+- **A syncing pill re-opened a CLS regression `HeroBand` had already closed.** As a fourth pill the
+  row wrapped at 390px and the hero grew ~26px. The MAIN pill now yields its slot instead — also the
+  right one to drop, since "most-played this season" is itself a season claim and the least reliable
+  one over a partial walk. Measured on a production build: 0.13057 at 390px in complete, filling and
+  thin — identical to live prod to five decimals.
+
+### Known
+- **Nothing past the companion stub has run.** No League client on the build machine and port 2999
+  dead, so `GET /me` has never answered a real LCU handshake, no real POST of either mode has left a
+  browser, and the real secret has never gone over the wire. The overlay auto-update and a live
+  client test are the next step.
+- **No real truncated run has rendered the coverage UI.** Every incomplete state came from a
+  rewritten response; it cannot occur until a second account links. Likewise the two-account menu is
+  untested against the real route, because the DB holds one row.
+- A fresh account converges over roughly 14 refresh runs (~45 min with the page open, ~2 weeks on the
+  cron alone). `scripts/ingest-mystats.mjs` still does it in one pass. `REFRESH_COOLDOWN_MS` was
+  deliberately **not** shortened — that is a shared-key decision.
+- **Pre-existing, not from this ship:** `/api/mystats/matchups` applies no split filter while
+  summary's `records` are split-scoped, so a row's expansion can show more games than its header. The
+  picker's "138 games" (all splits) also sits beside a KPI strip reading 84 (current split) — both
+  true, neither labelled with its scope. `/mystats` already carries 0.131 CLS at 390px on live prod.
+
 ## [0.82.1] — 2026-07-29 — OTP matches the other tabs, and two tests that missed the boat
 
 ### Changed

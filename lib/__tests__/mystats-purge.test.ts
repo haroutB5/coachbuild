@@ -27,6 +27,7 @@ describe("runSeasonPurge", () => {
   it("first run: deletes pre-season rows, keeps in-season rows, resets the cursor", async () => {
     let deleteCalled = false;
     let cursorReset = false;
+    let cursorResetSql = "";
     mockSql.mockImplementation((strings: TemplateStringsArray) => {
       const text = sqlText(strings);
       if (text.includes("SELECT match_id, game_creation, patch FROM coachbuild.my_matches")) {
@@ -44,6 +45,7 @@ describe("runSeasonPurge", () => {
       }
       if (text.includes("my_ingest_cursor")) {
         cursorReset = true;
+        cursorResetSql = text;
         return Promise.resolve([]);
       }
       return Promise.resolve([]);
@@ -53,6 +55,13 @@ describe("runSeasonPurge", () => {
 
     expect(deleteCalled).toBe(true);
     expect(cursorReset).toBe(true);
+    // Migration 0020: the DELETE above is deliberately account-WIDE, so the
+    // cursor reset must be too. A reset scoped to one account would leave
+    // every OTHER account claiming backfill_done over a hole the purge just
+    // made, and its next backfill would refuse to re-walk it. Asserted as
+    // "no WHERE clause" because that is exactly the property that matters.
+    expect(cursorResetSql).toContain("UPDATE coachbuild.my_ingest_cursor");
+    expect(cursorResetSql.toLowerCase()).not.toContain("where");
     expect(result.rowsBefore).toBe(2);
     expect(result.rowsDeleted).toBe(1);
     expect(result.rowsKept).toBe(1);

@@ -8602,3 +8602,850 @@ per the brief.
 <!-- merged into HANDOFF.md 2026-07-29 22:09:00Z; previous content preserved there. Append new rounds below. -->
 
 
+
+
+---
+
+## Latest dispatch -- 2026-07-30 00:32
+
+> ⚠️ DELIVERABLE WARNINGS for engy
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Test Results|## Verification|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+
+### engy
+
+<!-- merged into HANDOFF.md 2026-07-29 22:02:57Z; previous content preserved there. Append new rounds below. -->
+
+# My Stats multi-account — backend core (engy, 2026-07-29)
+
+Delivers the user's ask: *"get the account based on what I'm logged in with, then save it so it can be
+fetched from a list when needed. Currently I'm in game with K1ayer #swift but in myStats its still
+MunsterHunter."* They chose the full feature over an env-override patch.
+
+**Version NOT bumped, nothing committed, nothing deployed** — per brief, urgot owns those.
+Companion.ps1 IS bumped internally to **1.10.0** (its version is independent of the app's, and the
+`/me` endpoint is what needs it). `public/companion.version` auto-updated to `1.10.0` by the prebuild
+hook.
+
+---
+
+## 1. THE CONTRACT (for the picker UI — fronty)
+
+The picker is deliberately NOT built. Everything it needs exists and is tested. This repo already
+banked the lesson that a UI half-built against a stub produces a shape mismatch that passes both
+agents' tests and renders nothing, so here are exact shapes.
+
+### 1a. Types
+
+`MyAccountSummary` — `lib/mystats/account.ts` (server) and `AccountSummary` in
+`components/live/mystatsAccount.ts` (client mirror; identical fields):
+
+```ts
+{
+  id: number;              // opaque local id — the handle you send back to switch
+  riotId: string;          // "MunsterHunter#EUW" — display tag
+  gameName: string;        // "MunsterHunter"
+  tagLine: string;         // "EUW" — MAY be a custom tag like "swift", never assume a region
+  region: string;          // "EUW" — this app's server key (lib/pro/regionMap.ts)
+  active: boolean;         // exactly one entry in the list has this true (DB-enforced)
+  lastSeenAt: string | null; // ISO, when the companion last reported this account; null = never
+  games: number;           // stored match count for this account
+}
+```
+
+**There is no `puuid` in the contract, anywhere, in either direction.** The picker switches by `id`.
+That is deliberate: the account's Riot-side identifier never has to reach the browser, and a client
+cannot ask to activate a puuid it invented — only an `id` the table already holds.
+
+### 1b. `GET /api/mystats/summary` — additive fields (no breaking changes)
+
+Existing fields keep their exact meaning. Three added, present on BOTH the resolved and
+`accountUnresolved` responses:
+
+| field | type | notes |
+|---|---|---|
+| `accountId` | `number \| null` | active account's id; null when unresolved |
+| `accounts` | `MyAccountSummary[]` | every linked account, **active first**, then `lastSeenAt` desc, then id |
+| `riotId` | `string \| null` | unchanged meaning: the ACTIVE account's display tag |
+
+`accounts` ships on the summary response on purpose — the My Stats page already fetches it, so the
+picker costs no extra round trip and can never render a list that disagrees with the stats beside it.
+
+`GET /api/mystats/matchups` also now echoes `riotId` and `accountId` (additive).
+
+### 1c. `GET /api/mystats/accounts`
+
+Not secret-gated (see §4). `→ 200 { accounts: MyAccountSummary[], activeId: number | null }`,
+`Cache-Control: no-store`. Use this if the picker ever needs to refresh the list without re-fetching
+the whole summary; otherwise prefer `summary.accounts`.
+
+### 1d. `POST /api/mystats/accounts` — the only write
+
+Requires header `x-coachbuild-account-secret`. Two discriminated bodies:
+
+```ts
+{ mode: "detect", gameName: string, tagLine: string, puuid: string }  // from companion GET /me
+{ mode: "select", id: number }                                        // switch to a linked account
+```
+
+Success `→ 200`:
+
+```ts
+{ accounts: MyAccountSummary[], activeId: number, riotId: string, created: boolean, switched: boolean }
+```
+
+- `created` — a new account row was inserted (detect only).
+- `switched` — **the active account actually changed.** On `switched: true` the picker MUST re-fetch
+  `/api/mystats/summary`: every number on it is account-scoped and has just changed meaning.
+
+Failures: `400 invalid-body` · `401 unauthorized` · `404 no-such-account` (select) ·
+`502 region-unresolved` / `502 riot-unavailable` (detect; nothing was written, retry is safe) ·
+`503 not-configured` (server has no secret set) · `503` no DATABASE_URL.
+
+### 1e. Client helpers — `components/live/mystatsAccount.ts` (no JSX, ready to call)
+
+```ts
+getAccountSecret() / setAccountSecret(s) / clearAccountSecret() / hasAccountSecret()
+detectAndReportAccount(port, session, activeRiotId, deps?)   // reads GET /me, POSTs if it differs
+selectAccount(id, deps?)                                    // the picker's switch action
+fetchAccounts(deps?)                                        // { accounts, activeId } | null
+shouldReportIdentity(detected, activeRiotId)                // PURE, exported for tests
+```
+
+Plus `getMe(port, session, deps?) → CompanionIdentity | null` in `components/live/companionClient.ts`.
+
+**What fronty still owns:** mounting the detect call (pass `summary.riotId` as `activeRiotId`),
+the picker UI itself, and a one-time secret-entry field (suggest `/live-setup`, beside the existing
+automation toggles). Every no-op path is already silent — no companion, a pre-1.10.0 companion, a
+closed League client, no stored secret, or an identity matching the active account all return without
+a request and without an error. This feature only REFINES which account is shown; it must never be
+the reason My Stats shows an error banner.
+
+---
+
+## 2. WHAT I DEVIATED FROM, AND WHY
+
+### 2a. Decision 1 was wrong that no region lookup is needed. It is. (implemented differently)
+
+The brief said reading the puuid off `current-summoner` means "no account-v1 call and no region
+lookup, so the `swift`-is-not-a-region problem disappears." The puuid does solve *identity*. It does
+not solve *routing*: **match-v5 is routed by regional cluster** (`lib/pro/riot.ts`'s
+`getMatchIdsByPuuid` takes a `regional` host), and `ResolvedMyAccount.routing` is required for every
+ingest call. A puuid alone does not say which cluster. So an account linked with no region is a row
+that can never be ingested for — it would silently sit at zero games forever.
+
+Rather than guess, I probed. **Verified live 2026-07-29** against the stored MunsterHunter puuid with
+the real `RIOT_API_KEY`:
+
+```
+GET https://europe.api.riotgames.com/riot/account/v1/region/by-game/lol/by-puuid/{puuid}
+  -> HTTP 200 {"puuid":"WBGC6KIe…","game":"lol","region":"euw1"}
+GET https://americas.api.riotgames.com/... (same puuid)
+  -> HTTP 200 {"puuid":"WBGC6KIe…","game":"lol","region":"euw1"}   // identical from any route
+```
+
+So the region is obtainable **authoritatively from the puuid alone, with one call, from any cluster** —
+no bootstrap region needed, no tagLine parsing, no probing four clusters. Added
+`getRegionByPuuid` (`lib/pro/riot.ts`) + `routingForPlatform` (`lib/pro/regionMap.ts`, a reverse
+lookup derived from the existing `ROUTING` table so the two directions cannot drift).
+
+Net effect on the brief's actual concern: **the `swift` problem is still solved, and by a stronger
+mechanism than a tagLine guess.** Cost is bounded — `linkAccount` spends this call **only for a puuid
+the table has never seen**; an already-linked account (including every repeat detect on every page
+view, and every switch between two known accounts) costs **zero** Riot calls. That property is
+unit-pinned, because it is what makes per-page-view detection safe against the shared key budget
+(gotcha (d)).
+
+I deliberately did **not** read a region from the LCU (`/riotclient/region-locale` or similar). That
+shape is unobserved on this machine, and depending on an unverified payload when an authoritative
+verified endpoint exists would be the wrong trade.
+
+### 2b. `my_ingest_cursor.id` DROPPED, not merely supplemented (beyond the brief's scope)
+
+The brief scoped decision 4 to `my_matches`. **The cursor table was an equally hard blocker and the
+brief did not mention it.** Its single `id = 1` row currently reads `backfill_done = true`, so
+`runMyStatsIngest`'s backfill mode would have treated a brand-new account's *empty* history as
+already fully walked and returned a no-op — the new account would show zero games forever. The 3-minute
+incremental cooldown was shared between accounts too.
+
+It is now keyed by puuid, and I **removed the `id` column** rather than leaving it beside the new key.
+Reason: every cursor query used `WHERE id = 1` / `ON CONFLICT (id)`. If the column survived, any one of
+those left un-rewritten would keep working perfectly while silently reading or clobbering another
+account's cursor. Dropping it turns that mistake class into a hard error at query time. Contents were
+backed up before the migration and are preserved keyed by puuid (verified below).
+
+### 2c. `linkAccount` does NOT return `switched` (one computation, not two)
+
+The route computes it from the pre-mutation active account and needs the same answer for `select` mode
+anyway. Computing it in both places would be a second copy of one fact, which is this repo's own
+gotcha (dd) ("an independent second aggregation is a second copy of a query, and it WILL miss the next
+fix"). Removed from `LinkAccountResult`.
+
+### 2d. `MY_RIOT_ID`'s doc comment corrected rather than reworded
+
+The brief noted the env override appears dead. Confirmed: `ensureMyAccount` returned the existing row
+whenever there was one and only resolved when there was none, and the aggregation routes never called
+it at all — so once the `id=1` row existed, changing `MY_RIOT_ID` changed nothing anywhere, directly
+contradicting its own comment. It is now `seedAccountFromEnv`, explicitly documented as **cold-start
+only** (empty table). The false "override" claim is deleted, not softened. The honest correction path
+is now detection + the picker.
+
+---
+
+## 3. THE SCOPING WORK — WIDER THAN BRIEFED
+
+The brief said to audit `lib/mystats/aggregate.ts` and both `/api/mystats/*` routes. `aggregate.ts` is
+clean by construction (pure arithmetic, no DB — the routes hand it rows). But the actual bleed surface
+is **nine query sites across five files, two of them outside My Stats entirely**:
+
+| site | what it feeds | status |
+|---|---|---|
+| `app/api/mystats/summary/route.ts` (4 queries) | every My Stats number | scoped |
+| `app/api/mystats/matchups/route.ts` (2 branches) | matchup history | scoped |
+| **`lib/draft/recommend.ts`** `attachPersonalRecords` | **the Draft page's `personal`/`personalOverall` badges** | scoped |
+| `lib/mystats/refresh.ts` | `max(game_creation)` → "latest game" | scoped |
+| `lib/mystats/ingest.ts` | existing-ids dedupe + INSERT | scoped |
+| **`scripts/ingest-otp-priority.mjs`** (2 queries) | **which champions the OTP deep-walk prioritises** | scoped |
+| `scripts/backfill-mystats-kda.mjs` | pending-row select + UPDATE | scoped |
+| `scripts/ingest-mystats.mjs` | the "top 5 champions" report | scoped |
+| `lib/mystats/purge.ts` | time-based retention DELETE | **left account-wide, deliberately** |
+
+Two worth calling out:
+
+- **`lib/draft/recommend.ts` was a real cross-account bleed site on a completely different page.** A
+  second linked account would have made every "you: 7-3 on this champion" badge on the Draft page the
+  sum of two players' records. With no active account it now reads `my_matches` zero times and returns
+  the zeroed shape (`{games:0,wins:0}` / `personal: null`) rather than falling back to an unscoped read.
+- **`scripts/backfill-mystats-kda.mjs` would have burned Riot calls to accomplish nothing.** It
+  re-fetches each selected match using the ACTIVE account's puuid and routing; an unscoped select hands
+  another account's match ids to `extractMyMatch`, which cannot find the active puuid in the participant
+  list and logs "puuid not found in participants" — one paced Riot call wasted per row, per run, forever.
+
+**One site I knowingly did NOT scope:** `scripts/_tmp-probe-priority.mts` (tracked, `_tmp-`-prefixed
+throwaway diagnostic) still reads `my_matches` unscoped in three places. It keeps *running* correctly
+after migration 0020 — its queries never referenced the dropped `id` column — but with two accounts
+linked its printed champion/game totals would be the union. Left alone because it is a scratch probe
+of the same class as the root `_*.mjs` files the brief said to ignore, and because scoping a file that
+may be deleted adds churn. **If it is kept, it needs the puuid filter.** Flagging rather than
+silently leaving it.
+
+**`purge.ts` stays account-wide on purpose**, and I documented it in the file rather than only here: it
+is a time-based *retention policy*, not an aggregation. Deleting every account's pre-boundary rows is
+one intention applied uniformly and cannot blend one account's numbers into another's. Its
+`rowsBefore`/`rowsDeleted`/`rowsKept` are therefore totals across all accounts — stated in the header
+so the next reader does not misread them as the active account's. Its cursor reset is now unscoped
+too (all accounts), which is a *fix*: a per-account reset would leave other accounts claiming
+`backfill_done` over a hole the purge just made.
+
+---
+
+## 4. THE SECRET, AND THE READ/WRITE ASYMMETRY
+
+`MYSTATS_ACCOUNT_SECRET` (server env) + `x-coachbuild-account-secret` (request header), constant-time
+compared. **No unauthenticated fallback**: an unset secret answers `503 not-configured` and writes
+nothing. A misconfiguration must fail closed — an endpoint that quietly works without a secret is
+indistinguishable in effect from one that was never protected, and it would fail silently.
+
+I looked for a better option already in the repo, per the brief. The only existing gate is
+`CRON_SECRET` (Bearer, on `/api/ingest/*`). I did **not** reuse it: that secret authorises cron
+ingest, it lives only server-side today, and this flow requires the value to sit in the user's browser
+localStorage — putting `CRON_SECRET` there would hand a browser-resident token the ability to trigger
+every ingest route. A separate secret keeps the blast radius to account switching. **Recommendation:
+a fresh random value, not a copy of anything.**
+
+**The read side is deliberately NOT gated** (`GET /api/mystats/accounts`, and `summary.accounts`).
+That is the same exposure class as `/api/mystats/summary` itself, which has always served this user's
+own full match history openly on a public Vercel URL. Gating the read while the summary stays open
+would be theatre. Gating the WRITE is not, because a write has effects a read does not: it repoints
+every My Stats surface and can spend the shared Riot key. This asymmetry is intentional and documented
+in `lib/mystats/accountAuth.ts`. **The pre-existing open-read posture is unchanged by this ship, but it
+is worth a deliberate decision at some point** — it is now a list of accounts rather than one.
+
+---
+
+## 5. WHAT I VERIFIED, AND HOW
+
+### 5a. Gate
+
+```
+bash C:/Claude/AI/urgot/scripts/verify-fix.sh C:/Claude/AI/coachbuild
+  [PASS] tsc -b clean
+  [PASS] lint clean (warnings: 0)
+  [PASS] tests 2426 passed        (was 2357 — +69 net)
+  [PASS] build clean
+  [PASS] sw versioned  /  [PASS] manifest present
+verify-fix: ALL CHECKS PASSED
+```
+
+### 5b. Migration applied to the REAL database and verified
+
+`node scripts/db-migrate.mjs` → `done 0020_mystats_multi_account.sql`. Full row backups
+(account / 138 matches / cursor) taken to the scratchpad first. Verified by direct query:
+
+```
+1. attribution:  [{riot_id:"MunsterHunter#EUW", matches_account:true, rows:138}]
+2. orphans:      {null_puuid:0, no_such_account:0, total:138}
+3. my_account:   [{id:1, riot_id:"MunsterHunter#EUW", region:"EUW", active:true, last_seen_at:null}]
+4. constraints:  my_account_pkey PK(id) · my_account_puuid_key UNIQUE(puuid)
+                 my_account_one_active_idx UNIQUE (active) WHERE active
+                 id → is_identity YES / BY DEFAULT   (CHECK (id=1) gone)
+5. my_matches:   PK (puuid, match_id)   ·   puuid is_nullable NO
+                 indexes: (puuid,champion_id,role,opp_champion_id) · (puuid,game_creation DESC)
+                          · (puuid,split)   — the three un-prefixed originals DROPPED
+6. cursor:       PK (puuid) · columns: next_start, backfill_done, updated_at,
+                 last_incremental_at, puuid   ← NO `id`
+                 row preserved: next_start=0, backfill_done=true,
+                 last_incremental_at=2026-07-29T20:47:46.917Z, puuid=WBGC6KIe…
+```
+
+All 138 rows are attributed to `MunsterHunter#EUW` — correct per the real capture in
+`_capture/live-client-report-20260727-140136.txt` (`riotId: "MunsterHunter#EUW"`) and because that
+account's puuid is the only one the ingest has ever walked. None orphaned, none deleted, none ambiguous.
+
+### 5c. Cross-account isolation proven live, then rolled back
+
+I inserted a real second account plus 5 real match rows on a champion the real account also plays
+(champion 112, role 2, split 1 — all losses, all off-build), ran the scoped and unscoped forms of the
+app's own queries side by side, then deleted everything. Final state re-verified as
+`{accounts:1, active_accounts:1, matches:138, cursors:1}`.
+
+```
+SCOPED   (what the app now runs):   {games:17, wins:10}
+UNSCOPED (what the app ran before): {games:22, wins:10}
+  → inflated by exactly the 5 foreign rows
+
+adherence SCOPED   = null   ({resolved:0, on_build:0})
+adherence UNSCOPED = 0.0%   ({resolved:5, on_build:0})
+```
+
+**That adherence pair is the whole argument for this migration.** Scoped, the app honestly reports
+"no resolved recommendations for this account in this split" → `null` → the UI renders "—". Unscoped,
+it reports a confident **0.0% build adherence** that belongs to a different player entirely. A
+fabricated number that looks completely plausible — HARD RULE 4, exactly the failure mode the brief
+called the worst this app can have.
+
+Also proven in the same run:
+
+- **One-active is enforced by the DATABASE, not by careful code.** Inserting a second `active = true`
+  row was *rejected*: `duplicate key value violates unique constraint "my_account_one_active_idx"`.
+- **Cursors are independent.** Two rows coexisted with `backfill_done` `true` and `false` — the new
+  account is not blocked by the old one's completed backfill.
+- **The composite PK prevents silent row loss.** The same `match_id` (`EUW1_7862543144`) now coexists
+  under two accounts. Under the old `PRIMARY KEY (match_id)` the second account's insert would have
+  been silently swallowed by `ON CONFLICT DO NOTHING`.
+- Identity allocation works: the second account got its own id with no collision against `id = 1`.
+
+### 5d. The scoping test is STRUCTURAL, and I confirmed it fails when scoping breaks
+
+`lib/__tests__/mystats-scoping-invariant.test.ts` intercepts **every** statement each route issues and
+asserts the property over all of them: if it touches `my_matches`, the active puuid is among its bound
+values. An example-based test ("summary returns 2 games for account A") would only pin today's
+queries — the realistic regression is a *fifth* query added to the summary route months from now
+without a filter, and every existing assertion would still pass. This one fails automatically.
+
+**Mutation-checked, not assumed.** I deleted the puuid filter from the summary route's adherence query
+and re-ran: 3 tests failed with
+`UNSCOPED my_matches query -- the active puuid is not among its bound values. This query returns
+EVERY linked account's rows: <the SQL>`. Restored, green again.
+
+### 5e. Companion `/me` — exercised end to end against a real bridge, and mutation-checked
+
+`powershell -File public/companion.ps1 -SelfTest`.
+
+The `/me` tests are **not simulated**: SelfTest already points the real bridge's `LcuPort`/`LcuScheme`
+at a mock LCU HttpListener, so the whole chain runs for real — HTTP request → origin/session gate →
+dispatch → `Invoke-LcuRaw` → `current-summoner` → `ConvertTo-MeIdentity` → JSON. Covered: happy path,
+exact-three-keys leak guard, blank `tagLine` → `no-client`, blank `puuid` → `no-client`, LCU 500 →
+`no-client`, no client at all → `no-client`, wrong origin → 403, bad session → 403. Plus pure tests
+(section 8f) against the real captured payload, a null payload, a non-string field, each field removed
+in turn, and `K1ayer#swift` passing through untouched.
+
+**Mutation-checked:** I made `ConvertTo-MeIdentity` forward `displayName`. Two assertions fired —
+the end-to-end leak guard (`/me must return EXACTLY gameName/tagLine/puuid, got:
+displayName,gameName,puuid,tagLine`) and the pure wire-shape assertion. Reverted.
+
+**Result: 3 failures, all pre-existing and unrelated** — the double-launch mutex guard. Confirmed by
+running SelfTest on `git show HEAD:public/companion.ps1`: byte-identical 3 failures. Environment-
+specific (a real companion or stale mutex on this machine). **My changes add zero new failures.**
+
+### 5f. The field names are OBSERVED, not assumed — a real upgrade over `/skills`
+
+`_capture/lcu-raw-20260727-192506.jsonl` contains a genuine HTTP 200 capture of
+`/lol-summoner/v1/current-summoner` **from this user's own League client**. Values are redacted; the
+keys are not. It carries `gameName`, `tagLine`, `puuid` (alongside `displayName`, `internalName`,
+`summonerLevel`, `summonerId`, …). So unlike companion 1.8.0's `/skills` — whose wire shape was
+inferred from Riot's published schema and never observed — **`/me`'s parse is pinned against a real
+payload**, and SelfTest 8f asserts exactly that field set.
+
+---
+
+## 6. PRIVACY / COMPLIANCE POSTURE
+
+Held exactly to the brief's line, and narrowed further where I could.
+
+- **`components/live/livePanelModel.ts` NOT TOUCHED.** Its refusal to read name fields off the raw
+  `/live` passthrough is byte-unchanged, and `components/__tests__/livePanelModel.test.ts` is
+  unchanged and still passing. Verify with `git diff --stat` — neither file appears.
+- `/me` reads `/lol-summoner/v1/current-summoner`, which **by definition describes only the person
+  running the companion**. Nothing is scraped from the allgamedata blob (which contains every player).
+- **Nothing makes reading another player's name easier.** `/me` returns a freshly-built object with
+  exactly three keys, so a future field added to the LCU payload cannot start crossing the bridge by
+  accident — and that is the leak guard SelfTest asserts and that I mutation-checked.
+- **`/me` is deliberately NOT logged.** Every other write path in the bridge ends in a
+  `Write-CompanionLog` line; this one does not. `companion.log` promises to contain no summoner name,
+  and this endpoint's entire payload is one. Noted in the code so it does not look like an omission.
+- `companion.ps1`'s COMPLIANCE BRIGHT LINES header updated: the `current-summoner` bullet now lists
+  both consumers and states the actual rule — **the bright line is the SUBJECT, not the field.** The
+  user's own name was always permitted here (the item-sets flow already read it); any other player's
+  remains banned (Patch 12.22 anonymity).
+- No puuid is ever returned to the browser by any app endpoint.
+
+---
+
+## 7. MANUAL CHECKLIST — NEEDS A LIVE LEAGUE CLIENT (permanent constraint)
+
+Port 2999 is not listening on this machine and `/status` reports `phase: "None"` with an LCU
+connection error. The user does not play here, so **this is permanent, not temporary** — the list is
+built to be done in ONE pass on the gaming PC. Nothing below is claimed as verified.
+
+**Prerequisites (do these first, in order):**
+
+1. Set `MYSTATS_ACCOUNT_SECRET` to a fresh random value in Vercel (all 3 envs) and in `.env.local`.
+   Without it, every write answers `503 not-configured` — by design.
+2. Re-install the companion: `irm https://coachbuild.vercel.app/companion.ps1 | iex -Install`.
+   **Required** — 1.10.0 is served over `irm | iex`, so an old install has no `/me` route.
+3. Confirm `GET /status` reports `"version":"1.10.0"`.
+
+**The checks (League CLIENT open, no game needed — that is the point of using the LCU):**
+
+| # | Do this | Expected |
+|---|---|---|
+| 1 | Open the League client, log in as **K1ayer#swift**. Browser: `http://127.0.0.1:<port>/me?session=<token>` | `200 {"gameName":"K1ayer","tagLine":"swift","puuid":"..."}` — and **exactly those 3 keys**, no `displayName`/`summonerId` |
+| 2 | Close the League client entirely, repeat | `200 {"error":"no-client"}` — never a 500, never a hang |
+| 3 | Sit at the client MAIN MENU (not in a game), repeat | Still the full identity. **This is the check that proves it is an LCU read, not a Live Client Data read** |
+| 4 | With the client open, POST the identity: `curl -X POST https://coachbuild.vercel.app/api/mystats/accounts -H "content-type: application/json" -H "x-coachbuild-account-secret: <secret>" -d '{"mode":"detect","gameName":"K1ayer","tagLine":"swift","puuid":"<from step 1>"}'` | `200` with `created:true`, `switched:true`, and **`accounts[]` containing BOTH** MunsterHunter#EUW and K1ayer#swift |
+| 5 | Same POST **without** the secret header | `401 {"error":"unauthorized"}` and no change to `accounts[]` |
+| 6 | `GET /api/mystats/summary` | `riotId` is now `"K1ayer#swift"`; `games` reflects K1ayer ONLY (starts near 0 until ingest runs). **MunsterHunter's 138 games must NOT be included** |
+| 7 | Wait for a refresh (or `POST /api/mystats/refresh`), then re-check summary | K1ayer's real games appear. Its cursor is independent, so backfill actually walks despite MunsterHunter's `backfill_done=true` |
+| 8 | `POST {"mode":"select","id":1}` (with secret) | Back to MunsterHunter#EUW, **138 games again, unchanged** — the switch is lossless in both directions |
+| 9 | Open `/draft`, pick a lane | The `personal`/`personalOverall` badges reflect the ACTIVE account only. Switch accounts and confirm they change |
+| 10 | Check `%LOCALAPPDATA%\CoachBuild\companion.log` after all of the above | **No summoner name anywhere in it** |
+
+**The one genuinely unverifiable-here item:** step 1's LCU call goes over the **self-signed loopback
+HTTPS cert** using credentials from `Get-LcuCredentials`. SelfTest's mock LCU is plain HTTP with a mock
+token, so it cannot exercise `Initialize-TlsShim`'s certificate callback on this path. This is the same
+open caveat gotcha (z) already records for the companion generally — `/me` does not add a new risk
+(the item-sets flow already reaches `current-summoner` the same way, over the same shim, and works on
+the user's machine), but it is not *proven* by anything I ran.
+
+**Also worth one look:** `region-by-puuid` returned `euw1` for MunsterHunter. If K1ayer#swift is on a
+different platform, step 4 exercises the `routingForPlatform` mapping for real. If it returns
+`502 region-unresolved`, the platform is not in `lib/pro/regionMap.ts`'s table — the refusal is
+deliberate (never a guessed region), and the fix is to add the platform.
+
+---
+
+## 8. FILES
+
+**New:** `migrations/0020_mystats_multi_account.sql` · `app/api/mystats/accounts/route.ts` ·
+`lib/mystats/accountAuth.ts` · `lib/mystats/accountRequest.ts` ·
+`components/live/mystatsAccount.ts` · `lib/__tests__/mystats-accounts.test.ts` ·
+`lib/__tests__/mystats-account.test.ts` · `lib/__tests__/mystats-scoping-invariant.test.ts` ·
+`lib/__tests__/regionMap-platform.test.ts` · `components/__tests__/companionMe.test.ts`
+
+**Changed:** `public/companion.ps1` (1.10.0 · `/me` · `ConvertTo-MeIdentity` ·
+`Get-CurrentSummonerIdentity` · mock-LCU identity fields · SelfTest 4g + 8f · header) ·
+`public/companion.version` (prebuild) · `components/live/companionClient.ts` (`getMe`,
+`parseCompanionIdentity`) · `lib/mystats/account.ts` (rewritten) ·
+`lib/mystats/{types,ingest,refresh,purge}.ts` · `lib/pro/{riot,regionMap,types}.ts` ·
+`lib/draft/recommend.ts` · `app/api/mystats/{summary,matchups}/route.ts` ·
+`scripts/{ingest-mystats,backfill-mystats-kda,ingest-otp-priority}.mjs` ·
+4 existing test files (mock-name + SQL-text drift; the matchups scoping test was *extended* to cover
+cross-account leakage rather than merely repaired)
+
+**Untouched, deliberately:** `components/live/livePanelModel.ts` and its test · the OTP tab surfaces
+another agent holds (`FeaturedOtpCard.tsx`, `BuildTabContent.tsx`, `buildTabLayout.ts`) · root
+`_*.mjs` probes.
+
+---
+
+## 9. WIKI / DOC UPDATES PROPOSED (urgot to merge — not edited mid-run)
+
+`CLAUDE.md` is stale (documents v0.71.0) and needs, once this ships:
+
+- **My Stats** section: no longer "ONE fixed linked Riot account". Multi-account, detected from the
+  League client, one active at a time; `MY_RIOT_ID` is cold-start seed only, not an override.
+- **API routes** table: add `app/api/mystats/accounts/route.ts  GET|POST /api/mystats/accounts`
+  (POST is `MYSTATS_ACCOUNT_SECRET`-gated).
+- **Companion integration**: bump 1.8.0 → **1.10.0** (it was already stale at 1.9.0) and add the
+  `GET /me` bullet. Tag the CHANGELOG entry **"(COMPANION CHANGE → 1.10.0 — re-install required)"**.
+- **migrations/** list: add `0015`, `0016`, `0018`, `0019` (all missing) and `0020`.
+- **Environment**: add `MYSTATS_ACCOUNT_SECRET`.
+- **New gotcha, worth its own letter:** *"`my_matches` is account-scoped by `puuid` and every read
+  must filter on it. `lib/__tests__/mystats-scoping-invariant.test.ts` enforces this structurally over
+  all statements a route issues — if you add a query to a My Stats surface or to
+  `lib/draft/recommend.ts`'s personal decoration, it takes the puuid filter or that test fails. The
+  indexes deliberately all lead with `puuid` so an unscoped query cannot look healthy."*
+- **New gotcha:** *"A tagLine is not a region. `routingForServer("swift")` is null and the LCU's
+  current-summoner payload carries no region field. Resolve it from the puuid via account-v1
+  `region/by-game/lol/by-puuid` (`getRegionByPuuid`), which answers a platform id from any regional
+  route, then map with `routingForPlatform`. Never derive a region from a tag."*
+
+
+> ⚠️ DELIVERABLE WARNINGS for fronty
+>   - missing required section: ## Summary (aliases: ## Summary|## Overview|## What Was Done)
+>   - missing required section: ## Files Touched (aliases: ## Files Touched|## Files Changed|## Modified Files|## Changed Files)
+>   - missing required section: ## Tests (aliases: ## Tests|## Testing|## Verification|## Browser Testing|## Skipped Tests)
+>   - advisory: consider adding section: ## Known Issues
+>   - advisory: consider adding section: ## Deploy
+
+### fronty
+
+<!-- merged into HANDOFF.md 2026-07-29 22:09:00Z; previous content preserved there. Append new rounds below. -->
+
+# My Stats account picker — the UI half (fronty, 2026-07-30)
+
+Builds on engy's uncommitted backend change (`HANDOFF-engy.md` §1 is the contract; nothing of it was
+reverted). Delivers the third piece of *"get the account based on what I'm logged in with, then save
+it so it can be fetched from a list when needed."* Detection and persistence were already done; this
+is the list, the offer, and the secret.
+
+**Version NOT bumped, nothing committed, nothing deployed** — urgot owns those.
+
+---
+
+## 1. WHAT I BUILT
+
+**New:** `components/hextech/mystats/accountPickerModel.ts` (pure decisions) ·
+`components/hextech/mystats/AccountPicker.tsx` (the DOM half) ·
+`components/__tests__/accountPickerModel.test.ts` (33 tests).
+
+**Changed:** `app/mystats/page.tsx` · `components/hextech/myStats.ts` ·
+`components/__tests__/myStats.test.ts` (+8 tests).
+
+**Not touched:** `components/live/livePanelModel.ts` and its test (verify with `git status` — neither
+appears) · `components/live/mystatsAccount.ts` and `companionClient.ts` (engy's client helpers were
+call-ready and are consumed as-is, unedited) · every `/api/**` route.
+
+The model/component split is the same one `HextechTabs.tsx` + `tabKeyboard.ts` set: this repo has no
+JSX render harness, so a rule written inline in a component is testable only through a browser.
+Everything that is a *decision* — keyboard destinations, what a row says, whether to offer a detected
+account, which failures the user can fix, and the re-fetch invariant — lives in the `.ts` and is
+unit-tested. The `.tsx` owns focus, class names and `preventDefault`.
+
+### The hard requirement, and where it lives
+
+`switchAccount` / `linkDetectedAccount` (accountPickerModel.ts) call their injected `refetchSummary`
+**if and only if** the server reported `switched: true`. The component cannot bypass it: there is one
+construction site for the deps, and the component never inspects `switched` itself.
+
+The page's `handleAccountSwitched` then does **two** things, and both matter:
+
+1. bumps `refetchKey`, which re-fetches `/api/mystats/summary`;
+2. puts the stats back into their **loading** state.
+
+(2) is not decoration. Every figure on /mystats is scoped to the active account, so a switch does not
+change the numbers — it changes what they MEAN. Rendering the new Riot ID beside the old account's win
+rate is exactly the confidently-wrong-numbers failure the backend change exists to prevent
+(HANDOFF-engy.md §5c: scoped adherence returns `null` and renders "—", unscoped returns a confident
+`0.0%` belonging to a different player). A named skeleton — *"Loading stats for K1ayer#swift…"* — is the
+honest state. **Browser-verified mid-flight** (§6c, scenario B2): account A's record string is gone
+before account B's arrives, at no point are both on screen.
+
+The account list is held in `accountScope`, **outside** the page's `state`, on purpose: the switch
+blanks `state`, and unmounting the picker at that moment would drop the menu, the detect prompt and the
+secret field while the user is using them.
+
+### `accounts` had to be added to the client normalizer
+
+`components/hextech/myStats.ts` now declares and normalizes `accountId` + `accounts`. That file's own
+header records a P1 where the server sent five fields the normalizer silently dropped, and the page's
+cast to its own extended type meant TypeScript never noticed. The picker is entirely fed by
+`accounts`, so that failure mode here renders an **empty picker against a populated response** — the
+exact shape-mismatch this repo banked the lesson about. Four tests pin it, and `accountId`/`accounts`
+went into the shared `EXTENDED_DEFAULTS` object that every exhaustive `toEqual` in that file uses, so
+the *next* wire field cannot be added without one of them failing.
+
+`normalizeAccountSummary` requires `id` and a non-empty `riotId` (the id is the only handle a switch
+has) and drops any row lacking them, rather than tainting the list. A test asserts a `puuid` cannot
+appear even if the server ever sent one.
+
+---
+
+## 2. WHAT A SINGLE-ACCOUNT USER SEES — AND WHY
+
+**Not a menu.** `pickerModeFor` has three modes and `single` is a distinct one, not a degenerate
+`menu`:
+
+```
+LINKED ACCOUNT
+MunsterHunter#EUW
+EUW · 138 games
+Change account secret
+```
+
+No trigger, no chevron, nothing to open. A control whose only option is the option already selected is
+a dead control: it opens, shows one row, and the row can do nothing. That reads as a broken menu and
+invites a click that cannot have an effect. The **information** still earns its place — region and
+stored game count are not on the page anywhere else, and the game count is the one number that answers
+"has this account got anything ingested yet". The **affordance** does not. It upgrades to `menu` the
+moment a second account is linked, which detection does on its own.
+
+Two consequences of that decision, both deliberate:
+
+- The *"switching is read-only"* note renders **only** in `menu` mode. With one account there is
+  nothing to switch between, so on the most common state that sentence would warn about a capability
+  the surface is not offering.
+- The secret-entry link stays in every mode, because **linking** a second account needs the secret too.
+
+`empty` mode (nothing linked) says so plainly and points at the League client. `accountUnresolved` is a
+real state that still ships `accounts`, so it renders the full menu with **"No account active"** on the
+trigger — a user with rows but nothing active can still pick one.
+
+### Which fields earn a row
+
+`riotId` primary; `region · N games · seen 3h ago` secondary, tabular-nums. `lastSeenAt: null` omits
+that segment entirely rather than printing "never" — never-seen is a fact about our own detection
+plumbing, not about the account, and it would read as a warning. A future timestamp (clock skew) clamps
+to "just now" instead of a negative age. The visual meta is a middot fragment, so each row also carries
+a spelled-out `aria-label` ("…, region EUW, 138 games stored, currently active").
+
+---
+
+## 3. THE SECRET, AND HOW IT IS HANDLED
+
+`POST /api/mystats/accounts` fails closed without `x-coachbuild-account-secret`, so the browser has to
+carry it. It is a bearer token in a browser and is treated as one:
+
+- **Never rendered back.** The field is write-only: it is *not* pre-filled from storage, there is no
+  reveal, `type="password"`, `autoComplete="off"`, `spellCheck={false}`. Browser-verified: after a
+  rejection the field is empty and the value appears **nowhere** in `document.documentElement.outerHTML`.
+- **Never logged, never in a URL or query string.** It travels only as a request header, via engy's
+  `postAccounts`. No `console.*` anywhere in either new file.
+- **Never held in React state longer than the submit** — `setSecretDraft("")` runs in the submit handler.
+- **Verified without a mutation.** On save, if an account is active, the picker re-selects the
+  **already-active** account. That is a write which changes nothing (server answers `switched: false`,
+  so no re-fetch fires) but exercises the exact auth path — so a wrong secret surfaces immediately
+  instead of on the user's next real switch.
+- **A rejection clears it.** A stored-but-rejected secret will keep being rejected, so `401` calls
+  `clearAccountSecret()`, sets the state to `rejected`, and re-opens the field. Honest read-only beats a
+  silently-broken button.
+- **Missing or rejected ⇒ visibly read-only, never a throw.** Rows still render, are still focusable and
+  still announce themselves; the click handler is what refuses. Browser-verified: clicking a row with no
+  secret fires **zero** POSTs and produces zero page errors.
+
+Rows use `aria-disabled`, **never** the `disabled` attribute. A disabled button leaves the focus order,
+which would make the read-only picker a menu a keyboard user cannot even read — and the ACTIVE row,
+where focus lands when the menu opens, would refuse focus and dump it on the body.
+
+Failure messages distinguish the three failures whose **fixes** differ (`unauthorized` → re-enter,
+`not-configured` → the server has no secret, `network-error`/`region-unresolved` → *"nothing changed —
+try again"*), and an unknown reason degrades to generic text plus the token. Never a raw status code
+dressed up as a diagnosis.
+
+---
+
+## 4. DETECTION — IT OFFERS, IT NEVER SWITCHES
+
+One `GET /me` read per **page load** (`detectRanThisLoad`, module-scoped, not a ref — a remount is not
+new information). No polling. `getMe` collapses every non-identity outcome to null (no companion, a
+pre-1.10.0 404, a closed client, a malformed body), so there is no error path to render: this feature
+only refines which account is shown and must never be why My Stats shows a banner.
+
+`resolveDetectPrompt` returns `switch` (already linked → by opaque `id`, no Riot call), `link` (not
+linked → engy's `detectAndReportAccount`), or `none`. The user clicks; nothing switches on its own.
+Silently repointing every number because a different client happened to be open is worse than a stale
+label, because the numbers stay confident while their meaning changes underneath.
+
+**No puuid enters this component.** The "Link it" path calls `detectAndReportAccount`, which re-reads
+`/me` itself, so the identifier never lands in React state or in any type `accountPickerModel.ts`
+declares. Browser-verified: with `/me` returning `puuid:"PUUID-MUST-NOT-LEAK"`, that string appears
+nowhere in the DOM.
+
+### A real bug the browser caught and code review would not have
+
+The first implementation used the usual `let cancelled` cleanup. Combined with the once-per-load guard,
+React StrictMode's dev double-invoke (mount → cleanup → mount) meant the **first** run's cleanup
+cancelled the only in-flight `/me` read while the second run short-circuited on the guard — **the prompt
+never appeared at all**. Now `mountedRef`, the same pattern `MyStatsRefresher.tsx` documents for exactly
+this trap. Called out because "detection runs once" reads correct on the page and was silently dead.
+
+---
+
+## 5. ACCESSIBILITY
+
+Matches the standard v0.81.0 set for the tab strip, with one deliberate inversion.
+
+| | tab strip (v0.81.0) | this picker |
+|---|---|---|
+| roles | `tablist` / `tab` | `menu` / `menuitemradio` (each row both reports and sets which account is active) |
+| tab stop | roving, one stop | roving, one stop — **measured: exactly 1 focusable row while open** |
+| arrows | Left/Right + Home/End, wrapping | Down/Up + Home/End, wrapping |
+| activation | **automatic** (selection follows focus) | **manual** — Enter/Space commits |
+| `preventDefault` | only keys the resolver owns | same, via `isMenuNavigationKey` |
+
+The inversion is the point: the tab strip can select-on-focus because revealing a panel is instantaneous
+and free. Arrowing across THIS control would fire a write per keystroke. WAI-ARIA prescribes exactly
+that split.
+
+`resolveMenuKeydown` is a deliberate **sibling** of `resolveTabKeydown`, not a reuse: `tabKeyboard.ts`
+documents excluding the vertical arrows on purpose (swallowing them breaks scrolling), and this control
+needs exactly the keys that one refuses. Wrap behaviour, out-of-range-index safety and the
+`is…NavigationKey` companion are matched so the two agree wherever they overlap.
+
+Also: Escape closes and returns focus to the trigger (verified); focus enters on the **active** row;
+44px minimum on the trigger, the secret input, Save/Cancel and the prompt buttons (measured: trigger 44,
+rows 51–52, secret link 44, input 44); `focus-visible` gold ring on every interactive element (verified
+in a screenshot); Tailwind responsive classes only, **no `matchMedia` anywhere**; every transition
+carries `motion-reduce:transition-none` and the scale press carries `motion-reduce:active:scale-100`.
+
+**Reduced motion measured, not assumed:** computed `transitionDuration` on the chevron and trigger is
+`0.15s` at `no-preference` and `1e-05s` under `prefers-reduced-motion: reduce`.
+
+One visual deviation from repo idiom, on purpose: the disclosure chevron is an inline SVG, not the
+`&#9662;` entity the older matchup rows use. In this app's display font that character falls back to a
+~3px dash that reads as a hyphen, not an affordance (visible in the desktop screenshot of the untouched
+matchup rows). Existing rows left alone — out of scope.
+
+---
+
+## 6. WHAT I VERIFIED, AND HOW
+
+### 6a. Gate
+
+```
+bash C:/Claude/AI/urgot/scripts/verify-fix.sh C:/Claude/AI/coachbuild
+  [PASS] tsc -b clean
+  [PASS] lint clean (warnings: 0)
+  [PASS] tests 2464 passed        (engy left it at 2426 -- +38 from this ship)
+  [PASS] build clean
+  [PASS] sw versioned  /  [PASS] manifest present
+verify-fix: ALL CHECKS PASSED
+```
+
+### 6b. The re-fetch invariant is MUTATION-CHECKED, both directions
+
+Not merely asserted. I broke it twice and confirmed the suite catches each break:
+
+| mutation | result |
+|---|---|
+| delete `if (switched) deps.refetchSummary()` | **2 failed** — "re-fetches the summary when the active account actually changed", "re-fetches on switched:true, same rule as a switch" |
+| make it unconditional | **1 failed** — "does NOT re-fetch when the server says nothing changed" |
+
+Restored → 33 passed. A test that cannot fail is not a test; these can, in both directions.
+
+### 6c. Browser verification — real Chrome, real dev server, FRESH profile per run
+
+`puppeteer-core` + system Chrome, `userDataDir` freshly minted per run (a reused profile lets the PWA
+service worker serve the pre-change shell and turns correct work into a false negative). 390×844 and
+1920×1080. **Every scenario: zero `pageerror`, zero console errors, `scrollWidth − clientWidth === 0`.**
+
+| # | scenario | result |
+|---|---|---|
+| A | **REAL route, real DB, one account** (no stubs at all) | `LINKED ACCOUNT / MunsterHunter#EUW / EUW · 138 games`, **no trigger** — 390 + 1920. This is the shape-mismatch check: `accounts`/`accountId` really do arrive from the real `/api/mystats/summary` |
+| B | two accounts | menu opens; `aria-checked` `[true,false]`; `tabindex` `[0,-1]`; focus lands on the active row; ArrowDown → other row, Home → back; Escape closes **and** returns focus to the trigger; heights 44/52/51; `document.elementFromPoint` at each row centre lands **inside that row** (hit-test, not just geometry) |
+| B2 | **the switch** | POST body exactly `{"mode":"select","id":2}` with the secret header; mid-flight: skeleton + "Loading stats for K1ayer#swift…", account A's `9W-6L` **gone**, account B's `1W-3L` not yet shown; settled: `1W-3L` present, `9W-6L` absent, picker on K1ayer#swift; call log shows **exactly one** extra `GET summary` |
+| C | **no secret** | rows `aria-disabled="true"` but still focusable (native `disabled` false); clicking a row → **zero POSTs**, no throw; read-only note shown |
+| D | **rejected secret (401)** | "That account secret was rejected…"; `localStorage` secret **null**; field open, empty, `type=password`; the value is **not** in the DOM; **no** summary re-fetch; still MunsterHunter |
+| E | `accountUnresolved` **with** accounts | menu renders, trigger reads "No account active", "No account is active yet" panel below — a user with no active account can still pick one |
+| F | detect, account already linked | offers "SWITCH TO IT"; **zero POSTs before the click** (it does not switch on its own); `puuid` not in the DOM; after the click → `{"mode":"select","id":2}` → switched |
+| G | detect, account **not** linked | offers "LINK IT" for `Someone#NEW1` — a custom tagLine treated as a tag, never a region |
+| H | **pre-1.10.0 companion** (`/me` → 404) | `/me` attempted once, no prompt, no error, picker unchanged |
+| I | no companion at all (fetch rejects) | identical silent degrade |
+
+Screenshots read, not merely captured: `acc-A-390-crop/-hover/-secretform`, `acc-B-open-390`,
+`acc-B-open-1920`, `acc-B2-midflight`, `acc-D-rejected`, `acc-F-detect`, `acc-focus-ring-390` — in this
+session's scratchpad. Two design fixes came out of *reading* them: the desktop menu was a full-bleed
+1000px slab (now `max-w-[420px]`), and the rejected-secret state said "rejected" twice (the grey
+read-only line is now suppressed while the field is open).
+
+CLS: the mid-flight blank does shift layout (the hero loses its splash/pills). It is user-initiated and
+inside the 500ms interaction window, so it does not accrue to CLS — and the alternative is leaving one
+account's numbers on screen under another account's name. `TilesSkeleton` still renders at the KPI
+strip's final dimensions.
+
+### 6d. What is NOT verified — and cannot be, here
+
+**No League client runs on this machine and port 2999 is not listening.** So:
+
+- Every companion path above was exercised against a **stubbed** `GET /me` at the bridge URL, not a real
+  companion. What that proves: my code's handling of a well-formed identity, a 404, and a refused
+  connection. What it does **not** prove: that a real companion 1.10.0 answers `/me` at all from a real
+  LCU over the self-signed loopback cert. That is engy's §7 step 1, and it is the same open caveat
+  gotcha (z) already records.
+- The **detect** POST (`mode:"detect"`, the only path that carries a puuid and may spend a Riot call)
+  has never run against the real route from this browser. Only `mode:"select"` did, and only against a
+  stub. Scenario A proves the real GET shape; **no real POST of either mode was made from the browser.**
+- The real `MYSTATS_ACCOUNT_SECRET` was never sent. Auth was exercised as stubbed 200/401 only.
+- Only one account exists in the real DB, so the real two-account menu is unverified against the real
+  route. Its shape is engy's `listAccounts`; my normalizer tests pin how the client reads it.
+
+The user does not play on this machine, so this is permanent, not temporary.
+
+---
+
+## 7. MANUAL CHECKLIST — ONE PASS ON THE GAMING PC
+
+Do this **immediately after** engy's §7 prerequisites (secret set in Vercel + `.env.local`, companion
+re-installed to 1.10.0, `/status` confirms `"version":"1.10.0"`) and interleaved with its steps 1–3,
+which prove `/me` works before any of the below can.
+
+| # | do this | expected |
+|---|---|---|
+| 1 | Open `/mystats` with only MunsterHunter linked | ONE panel: `LINKED ACCOUNT / MunsterHunter#EUW / EUW · 138 games`. **No dropdown** — intended, see §2 |
+| 2 | Click **"Enter account secret"**, paste `MYSTATS_ACCOUNT_SECRET`, Save | The field closes. **No error appears** — that silence is the verification call succeeding (§3). A wrong value instead shows "That account secret was rejected" and re-opens the field empty |
+| 3 | Reload. Click **"Change account secret"** | Field is **empty**, `type=password`. It must never show the value you saved |
+| 4 | Log the League client in as **K1ayer#swift**, reload `/mystats` | Within ~1s: *"Your League client is signed in as K1ayer#swift — not linked yet."* + **LINK IT** + Not now |
+| 5 | **Before clicking**, check the numbers | Still MunsterHunter's 138-game figures. **Nothing may switch on its own** |
+| 6 | Click **LINK IT** | Skeleton + *"Loading stats for K1ayer#swift…"*, then K1ayer's own (near-zero) stats. The panel becomes a **dropdown reading "2 linked"**. A `502 region-unresolved` here means K1ayer's platform is missing from `lib/pro/regionMap.ts` — engy's §7 note |
+| 7 | Open the dropdown, click **MunsterHunter#EUW** | Back to **138 games, unchanged**. The switch is lossless both ways |
+| 8 | Repeat step 7 with the **keyboard only**: Tab to the trigger, Enter, ArrowDown, Enter | Same result. The control is ONE tab stop; Escape closes and returns focus to the trigger |
+| 9 | Open the dropdown and click the row already marked **ACTIVE** | Menu just closes. **No network request** — re-picking the current account is a no-op by definition |
+| 10 | DevTools → Application → Local Storage, then Network on a switch | Secret only under `coachbuild:mystats:accountSecret`; on the wire only as the `x-coachbuild-account-secret` **header** — never a query string, never a response body |
+| 11 | With the client open as K1ayer while MunsterHunter is active, click **"Not now"** | Prompt disappears for this page load and does not return. A reload brings it back once |
+| 12 | Open `/mystats` with the companion **not running** | Picker renders normally, no prompt, no error banner anywhere |
+| 13 | Clear `coachbuild:mystats:accountSecret`, reload, open the dropdown, click a row | Rows visibly dimmed, *"Switching is read-only until you enter your account secret."*, and **nothing happens on click** — no error dialog, no console throw |
+
+**The one thing to watch that this build cannot rule out:** step 6's LINK IT is the first real
+`mode:"detect"` POST from a browser. If it answers 200 but `created`/`switched` behave unexpectedly, the
+picker reports it verbatim in the red line under the panel — read that text before re-clicking, and note
+that every `502` path guarantees nothing was written, so a retry is safe.
+
+---
+
+## 8. FOR URGOT
+
+1. **Three untracked probe files are mine and should be deleted:** `_acc-verify.mjs`, `_acc-shot1.mjs`,
+   `_acc-shot2.mjs` (repo root). I tried; the safety gate blocks deletion and I did not route around it.
+   Same throwaway class as the pre-existing `_*.mjs` files.
+2. **I killed four `next dev` processes** while recovering from a wedged one on port 3111 (accepting
+   connections, never responding, started 2026-07-29 20:05 — it blocked all browser verification). The
+   PowerShell filter matched `*start-server*`, so **if another agent or the user had a dev server up for
+   a different project, it was killed too.** Flagging rather than leaving it to be discovered. My own
+   server on 3111 is stopped; nothing of mine is left running.
+3. **CLAUDE.md additions** (on top of engy's §9 list, not instead of it — I did not edit shared docs
+   mid-run):
+   - **My Stats** section: the page now opens with an account picker. One linked account renders a
+     labelled line, **not** a dropdown, deliberately; two or more render a `menu`/`menuitemradio`
+     control. A switch **blanks the stats and re-fetches the summary** — it never patches the label.
+   - **New gotcha, worth its own letter:** *"Every figure on /mystats is scoped to the active account.
+     Anything that changes the active account MUST re-fetch `/api/mystats/summary` and must blank the
+     old figures while it does. `components/hextech/mystats/accountPickerModel.ts`'s `switchAccount`
+     owns that rule and its test is mutation-checked in both directions; do not compute `switched`
+     anywhere else."*
+   - **Test conventions:** the model/component split has a second instance now
+     (`accountPickerModel.ts` + `AccountPicker.tsx`). Note the case-collision trap: a `.ts` model and a
+     `.tsx` component in one folder cannot differ only in the first letter's case — `tsc` errors out on
+     a case-insensitive filesystem. Hence the `…Model` suffix, matching `livePanelModel.ts` /
+     `skillOrderModel.ts`.
+   - **A11Y note:** two keyboard resolvers now exist by design — `tabKeyboard.ts` (horizontal, automatic
+     activation) and `accountPickerModel.ts`'s `resolveMenuKeydown` (vertical, **manual** activation,
+     because activating fires a write). Don't "unify" them.
+4. **Open, small, not mine to decide:** `StatTiles` rendered `buildAdherencePct: 0.42` as `0%`. Seen only
+   with a hand-built fixture, so most likely the field is already a percentage (the real account renders
+   `24%` correctly). Not investigated — outside this ship's scope, and no real payload produced a wrong
+   number.
+
+

@@ -90,6 +90,7 @@ const { freshStartTimeEpochSec } = await import("../lib/pro/fresh.ts");
 const { getAllChampions } = await import("../lib/staticData.ts");
 const { getSql } = await import("../lib/pro/db.ts");
 const { runMyStatsRefresh } = await import("../lib/mystats/refresh.ts");
+const { getActiveAccount } = await import("../lib/mystats/account.ts");
 
 // ── Tunables ────────────────────────────────────────────────────────────────
 
@@ -282,7 +283,28 @@ const isBlindVerdict = (v) => v.busy && v.matches.length === 0;
  * holds rows from the retired eight-account consensus walk, and counting those
  * would report depth we do not have for the account we are actually paging.
  */
-async function loadStates(sql, championNames) {
+/** The ACTIVE linked account's puuid, re-read on EVERY pass rather than once at
+ *  startup: this script runs as a long-lived loop (the CoachBuildOtpIngest
+ *  scheduled task), so the user can switch accounts underneath it, and a
+ *  startup-cached puuid would keep prioritising the old account's champion pool
+ *  for the rest of the run. Null on any failure -- see loadStates for what a
+ *  null means (zeros, never a union). */
+async function activePuuid(sql) {
+  try {
+    const account = await getActiveAccount(sql);
+    return account?.puuid ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** `myPuuid` scopes the my_games count to the ACTIVE linked account (migration
+ *  0020). Unscoped, every linked account's champion pool would be summed into
+ *  one `myGames` figure, and the deep walk would spend Riot calls deepening
+ *  champions the user does not currently play on the account they are playing.
+ *  A null puuid (no active account) yields my_games 0 everywhere, which is what
+ *  "we do not know what you play" honestly means -- never the union. */
+async function loadStates(sql, championNames, myPuuid) {
   const rows = await sql`
     SELECT
       f.champion_id,
@@ -297,7 +319,9 @@ async function loadStates(sql, championNames) {
     FROM coachbuild.otp_featured f
     LEFT JOIN (
       SELECT champion_id, count(*)::int AS my_games
-      FROM coachbuild.my_matches GROUP BY champion_id
+      FROM coachbuild.my_matches
+      WHERE puuid = ${myPuuid ?? ""}
+      GROUP BY champion_id
     ) mm ON mm.champion_id = f.champion_id
     LEFT JOIN LATERAL (
       SELECT count(*)::int AS stored
@@ -324,11 +348,12 @@ async function loadStates(sql, championNames) {
  *  be walked (no account to page) and the featured refresh owns fixing that —
  *  but they must be VISIBLE, or a champion that never deepens looks like a bug
  *  in this walk. */
-async function loadUnfeaturedMine(sql, championNames) {
+async function loadUnfeaturedMine(sql, championNames, myPuuid) {
   const rows = await sql`
     SELECT champion_id, count(*)::int AS my_games
     FROM coachbuild.my_matches
-    WHERE champion_id NOT IN (SELECT champion_id FROM coachbuild.otp_featured)
+    WHERE puuid = ${myPuuid ?? ""}
+      AND champion_id NOT IN (SELECT champion_id FROM coachbuild.otp_featured)
     GROUP BY champion_id
     ORDER BY my_games DESC
   `;
@@ -620,6 +645,26 @@ async function pagedIds(routing, puuid, offset) {
 
 // ── Nightly / periodic new-champion check ───────────────────────────────────
 
+/** Repeated non-actionable states in maybeRefreshMine (a broken cursor query, no
+ *  active account) recur on EVERY pass — roughly every 8s — so logging them
+ *  unthrottled buries them in their own volume. That is not hypothetical: the
+ *  pre-2026-07-30 version of the freshness check wrote one identical line per
+ *  pass for an unknown period, and the sheer repetition is what made a hard
+ *  schema error read as routine noise. One line per state per 30 minutes, plus
+ *  one immediately on entering a state, keeps it visible AND legible. */
+const MINE_STATE_LOG_INTERVAL_MS = 30 * 60_000;
+let mineStateKey = null;
+let mineStateLoggedAt = 0;
+let mineCheckFailures = 0;
+
+function noteMineCheckState(key, message) {
+  const now = Date.now();
+  if (key === mineStateKey && now - mineStateLoggedAt < MINE_STATE_LOG_INTERVAL_MS) return;
+  mineStateKey = key;
+  mineStateLoggedAt = now;
+  log(message);
+}
+
 /**
  * Refresh the user's OWN recent games, then let the caller recompute
  * priorities. This is Riot work and runs only after a yield check has passed.
@@ -630,16 +675,52 @@ async function pagedIds(routing, puuid, offset) {
  * today cannot enter the list, which is precisely the "appears automatically"
  * property this walk is supposed to have.
  */
-async function maybeRefreshMine(sql) {
+async function maybeRefreshMine(sql, myPuuid) {
+  if (!myPuuid) {
+    // Not an error and not actionable from here: with no active linked account
+    // there is no cursor to read and runMyStatsRefresh would answer
+    // accountUnresolved. Throttled because it would otherwise repeat every unit.
+    noteMineCheckState("no-active-account", "no active linked account — nothing to refresh");
+    return false;
+  }
+
   let last = null;
   try {
+    // PER-ACCOUNT (migration 0020). This read used `WHERE id = 1` until
+    // 2026-07-30, and migration 0020 DROPPED that column — so it threw
+    // `column "id" does not exist` on every pass and the catch below returned
+    // false, leaving this 6h self-refresh PERMANENTLY DEAD. Scope by the active
+    // puuid, exactly as loadStates/activePuuid above and
+    // lib/mystats/ingest.ts's getPersistedCursor already do.
     const rows = await sql`
-      SELECT last_incremental_at FROM coachbuild.my_ingest_cursor WHERE id = 1
+      SELECT last_incremental_at FROM coachbuild.my_ingest_cursor WHERE puuid = ${myPuuid}
     `;
-    const raw = rows[0]?.last_incremental_at;
-    last = raw ? new Date(raw) : null;
+    mineCheckFailures = 0;
+    mineStateKey = null; // healthy read -- a later failure must announce itself immediately, not wait out a throttle window
+    if (rows.length === 0) {
+      // NORMAL EMPTY STATE, distinct from the failure branch below on purpose:
+      // a freshly linked account has no cursor row until its first ingest
+      // stamps one. `last` stays null, which means "never refreshed" -> refresh
+      // now, which is the correct answer for a new account.
+      log(`my_matches: no ingest cursor row for the active account yet — treating as never refreshed`);
+    } else {
+      const raw = rows[0].last_incremental_at;
+      last = raw ? new Date(raw) : null;
+    }
   } catch (err) {
-    log(`my_matches freshness check failed — ${err?.message ?? err}`);
+    // A QUERY/SCHEMA error is NOT an empty state, and the old log line
+    // ("my_matches freshness check failed — ...") read exactly like a transient
+    // blip, which is how a dead column survived for an unknown period across
+    // 2,000+ identical lines. Say plainly that the refresh is not running, and
+    // throttle so the message stays legible instead of becoming the noise it
+    // hid inside.
+    mineCheckFailures += 1;
+    noteMineCheckState(
+      "cursor-query-broken",
+      `MY_MATCHES SELF-REFRESH IS BROKEN — the ${mins(MINE_REFRESH_INTERVAL_MS)}min freshness ` +
+        `check cannot read coachbuild.my_ingest_cursor, so my_matches is NOT being refreshed by ` +
+        `this walk (${mineCheckFailures} consecutive failures). QUERY/SCHEMA ERROR: ${err?.message ?? err}`
+    );
     return false;
   }
   if (last && Date.now() - last.getTime() < MINE_REFRESH_INTERVAL_MS) return false;
@@ -705,8 +786,9 @@ async function main() {
   if (DRY_RUN) {
     // Zero Riot calls, on purpose: this is the mode that is safe to run while a
     // scheduled job holds the key.
-    const states = await loadStates(sql, championNames);
-    const unfeatured = await loadUnfeaturedMine(sql, championNames);
+    const myPuuid = await activePuuid(sql);
+    const states = await loadStates(sql, championNames, myPuuid);
+    const unfeatured = await loadUnfeaturedMine(sql, championNames, myPuuid);
     const plan = rankPriorities(states, { includeUnplayed: FLEET });
     log(`DRY RUN — no Riot calls will be made${FLEET ? " (fleet mode)" : ""}`);
     logPlan(plan, states, unfeatured);
@@ -782,9 +864,14 @@ async function main() {
       yieldingSince = null;
     }
 
-    await maybeRefreshMine(sql);
+    // ONE puuid resolution per pass, feeding both the refresh's cursor read and
+    // the priority reads below. Resolved BEFORE the refresh rather than after:
+    // the refresh cannot change which account is active, so both see the same
+    // answer, and a second query per pass would be a second copy of one fact.
+    const myPuuid = await activePuuid(sql);
+    await maybeRefreshMine(sql, myPuuid);
 
-    const states = await loadStates(sql, championNames);
+    const states = await loadStates(sql, championNames, myPuuid);
     const statesById = new Map(states.map((s) => [s.championId, s]));
     const plan = rankPriorities(states, { includeUnplayed: FLEET });
 
@@ -793,7 +880,7 @@ async function main() {
     // per-unit lines.
     if (Date.now() - lastPlanLogAt >= 30 * 60_000 || lastPlanLogAt === 0) {
       lastPlanLogAt = Date.now();
-      logPlan(plan, states, await loadUnfeaturedMine(sql, championNames));
+      logPlan(plan, states, await loadUnfeaturedMine(sql, championNames, myPuuid));
     }
 
     if (plan.ranked.length === 0) {

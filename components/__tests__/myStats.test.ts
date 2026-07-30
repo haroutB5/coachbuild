@@ -13,6 +13,8 @@ import {
   normalizeKdaBars,
   computeBuildWinrateDelta,
   computeRecentWinLoss,
+  computeHistoryCoverage,
+  MYSTATS_THIN_HISTORY_GAMES,
   MYSTATS_LOW_SAMPLE_THRESHOLD,
   MYSTATS_KDA_BAR_CEILING,
   type MyStatsRecord,
@@ -28,6 +30,18 @@ const EXTENDED_DEFAULTS = {
   nOffBuild: null,
   priorSplitWinrate: null,
   recentGames: [],
+  // v0.83 multi-account. Deliberately part of the SAME defaults object every
+  // exhaustive `toEqual` above uses: adding a wire field without adding it here
+  // is how the v0.51 P1 (a normalizer silently dropping five fields the server
+  // was already sending) got past this file the first time.
+  accountId: null,
+  accounts: [],
+  // 2026-07-30. Same reason as the two lines above: the summary route sends
+  // `historyComplete` and this normalizer dropped it, which is the identical P1
+  // shape (server sends a field, the page's cast to its own extended type hides
+  // that it never arrives). null = the payload did not carry it, which is
+  // deliberately NOT the same as `false` — see computeHistoryCoverage.
+  historyComplete: null,
 };
 
 describe("normalizeMyStatsSummary", () => {
@@ -216,6 +230,92 @@ describe("normalizeMyStatsSummary", () => {
 
   it("a non-array recentGames degrades to [] rather than crashing", () => {
     expect(normalizeMyStatsSummary({ recentGames: "not-an-array" })?.recentGames).toEqual([]);
+  });
+
+  // ── v0.83 multi-account (migration 0020). These exist because of the P1 this
+  // file's own header records: a field the server sends but the normalizer does
+  // not copy silently reads as undefined on every real load, and the page's cast
+  // to its own extended type means TypeScript never catches it. The account
+  // picker is entirely fed by `accounts`, so that failure would render an empty
+  // picker against a populated response.
+  it("passes accountId and accounts through from the wire response", () => {
+    const result = normalizeMyStatsSummary({
+      accountUnresolved: false,
+      season: "Season 2026",
+      riotId: "K1ayer#swift",
+      accountId: 2,
+      accounts: [
+        {
+          id: 2,
+          riotId: "K1ayer#swift",
+          gameName: "K1ayer",
+          tagLine: "swift",
+          region: "EUW",
+          active: true,
+          lastSeenAt: "2026-07-29T11:00:00.000Z",
+          games: 4,
+        },
+        {
+          id: 1,
+          riotId: "MunsterHunter#EUW",
+          gameName: "MunsterHunter",
+          tagLine: "EUW",
+          region: "EUW",
+          active: false,
+          lastSeenAt: null,
+          games: 138,
+        },
+      ],
+      records: [],
+    });
+    expect(result?.accountId).toBe(2);
+    expect(result?.accounts?.map((a) => a.id)).toEqual([2, 1]);
+    expect(result?.accounts?.[0].active).toBe(true);
+    expect(result?.accounts?.[1].lastSeenAt).toBeNull();
+    expect(result?.accounts?.[1].games).toBe(138);
+  });
+
+  it("ships accounts on the accountUnresolved response too, so a picker can still offer a choice", () => {
+    const result = normalizeMyStatsSummary({
+      accountUnresolved: true,
+      season: "Season 2026",
+      riotId: null,
+      accountId: null,
+      accounts: [
+        { id: 1, riotId: "MunsterHunter#EUW", gameName: "MunsterHunter", tagLine: "EUW", region: "EUW", active: false, lastSeenAt: null, games: 138 },
+      ],
+      records: [],
+    });
+    expect(result?.accountUnresolved).toBe(true);
+    expect(result?.accountId).toBeNull();
+    expect(result?.accounts).toHaveLength(1);
+  });
+
+  it("drops an account entry with no usable id or riotId, and keeps the rest", () => {
+    // `id` is the ONLY handle a switch has, so a row without one is unusable.
+    const result = normalizeMyStatsSummary({
+      accounts: [
+        { riotId: "NoId#EUW", region: "EUW", active: false, games: 1 },
+        { id: 3, riotId: "", region: "EUW", active: false, games: 1 },
+        { id: 4, riotId: "Good#EUW", region: "EUW", active: true, games: 2 },
+        "not-an-object",
+      ],
+    });
+    expect(result?.accounts?.map((a) => a.id)).toEqual([4]);
+  });
+
+  it("a missing/non-array accounts degrades to [] and accountId to null", () => {
+    expect(normalizeMyStatsSummary({})?.accounts).toEqual([]);
+    expect(normalizeMyStatsSummary({})?.accountId).toBeNull();
+    expect(normalizeMyStatsSummary({ accounts: "nope" })?.accounts).toEqual([]);
+  });
+
+  it("never surfaces a puuid even if the server ever sent one", () => {
+    const result = normalizeMyStatsSummary({
+      accounts: [{ id: 1, riotId: "A#EUW", region: "EUW", active: true, games: 1, puuid: "SHOULD-NOT-APPEAR" }],
+    });
+    expect(JSON.stringify(result?.accounts)).not.toMatch(/SHOULD-NOT-APPEAR/);
+    expect(Object.keys(result?.accounts?.[0] ?? {})).not.toContain("puuid");
   });
 });
 
@@ -533,5 +633,131 @@ describe("computeRecentWinLoss", () => {
 
   it("a single game is a real input", () => {
     expect(computeRecentWinLoss([{ win: false }])).toEqual({ wins: 0, losses: 1, n: 1, lowSample: true });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HISTORY COVERAGE — the guard that stops /mystats presenting a truncated
+// history as a whole season (2026-07-30). Three states the UI treats
+// differently, plus the two ways there is nothing to claim at all.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("normalizeMyStatsSummary — historyComplete passthrough", () => {
+  const base = { accountUnresolved: false, season: "Season 2026", riotId: "A#EUW", records: [] };
+
+  it("passes a real true/false through unchanged", () => {
+    expect(normalizeMyStatsSummary({ ...base, historyComplete: true })?.historyComplete).toBe(true);
+    expect(normalizeMyStatsSummary({ ...base, historyComplete: false })?.historyComplete).toBe(false);
+  });
+
+  it("an ABSENT field is null, never coerced to true -- an absent flag is not a coverage claim", () => {
+    expect(normalizeMyStatsSummary(base)?.historyComplete).toBeNull();
+  });
+
+  it("a non-boolean value degrades to null rather than being truthiness-tested", () => {
+    // "false" (a string) is truthy; treating it as complete would be the worst
+    // possible direction for this particular field.
+    expect(normalizeMyStatsSummary({ ...base, historyComplete: "false" })?.historyComplete).toBeNull();
+    expect(normalizeMyStatsSummary({ ...base, historyComplete: 1 })?.historyComplete).toBeNull();
+    expect(normalizeMyStatsSummary({ ...base, historyComplete: null })?.historyComplete).toBeNull();
+  });
+});
+
+describe("computeHistoryCoverage", () => {
+  it("complete history -> the season claim is safe and nothing extra renders", () => {
+    const c = computeHistoryCoverage({ accountUnresolved: false, historyComplete: true, games: 138 });
+    expect(c).toEqual({ state: "complete", seasonClaimSafe: true, games: 138, pill: null, gamesNote: null });
+  });
+
+  it("incomplete with a broad sample -> filling: claim withdrawn, chip + note, no paragraph", () => {
+    const c = computeHistoryCoverage({ accountUnresolved: false, historyComplete: false, games: 420 });
+    expect(c.state).toBe("filling");
+    expect(c.seasonClaimSafe).toBe(false);
+    expect(c.games).toBe(420);
+    expect(c.pill?.text).toBe("Still syncing");
+    expect(c.gamesNote).toBe("still syncing");
+  });
+
+  it("incomplete with a thin sample -> thin, which is what triggers the stronger callout", () => {
+    const c = computeHistoryCoverage({ accountUnresolved: false, historyComplete: false, games: 20 });
+    expect(c.state).toBe("thin");
+    expect(c.seasonClaimSafe).toBe(false);
+    expect(c.pill).not.toBeNull();
+  });
+
+  it(`the thin/filling boundary is INCLUSIVE at MYSTATS_THIN_HISTORY_GAMES (${MYSTATS_THIN_HISTORY_GAMES})`, () => {
+    // exactly one truncated run's yield is still one run's slice, not a season
+    const at = computeHistoryCoverage({
+      accountUnresolved: false,
+      historyComplete: false,
+      games: MYSTATS_THIN_HISTORY_GAMES,
+    });
+    const above = computeHistoryCoverage({
+      accountUnresolved: false,
+      historyComplete: false,
+      games: MYSTATS_THIN_HISTORY_GAMES + 1,
+    });
+    expect(at.state).toBe("thin");
+    expect(above.state).toBe("filling");
+  });
+
+  it("zero games with an incomplete history is thin, not complete -- an empty page is not proof of an empty season", () => {
+    const c = computeHistoryCoverage({ accountUnresolved: false, historyComplete: false, games: 0 });
+    expect(c.state).toBe("thin");
+    expect(c.seasonClaimSafe).toBe(false);
+  });
+
+  it("accountUnresolved renders NO coverage claim, whatever the flag says", () => {
+    for (const historyComplete of [true, false, null, undefined] as const) {
+      const c = computeHistoryCoverage({ accountUnresolved: true, historyComplete, games: 0 });
+      expect(c.state).toBe("none");
+      expect(c.pill).toBeNull();
+      expect(c.gamesNote).toBeNull();
+      // false, not true: with no account there is nothing whose coverage could be
+      // vouched for, so no surface may present a season total.
+      expect(c.seasonClaimSafe).toBe(false);
+    }
+  });
+
+  it("accountUnresolved wins over a thin/filling games count (precedence, not a coincidence)", () => {
+    expect(computeHistoryCoverage({ accountUnresolved: true, historyComplete: false, games: 5 }).state).toBe("none");
+  });
+
+  it("an absent flag -> unknown: withdraws the claim WITHOUT announcing a sync that may not be running", () => {
+    for (const historyComplete of [null, undefined] as const) {
+      const c = computeHistoryCoverage({ accountUnresolved: false, historyComplete, games: 138 });
+      expect(c.state).toBe("unknown");
+      expect(c.seasonClaimSafe).toBe(false);
+      expect(c.pill).toBeNull();
+      expect(c.gamesNote).toBeNull();
+    }
+  });
+
+  it("never quotes progress -- no percentage appears anywhere in the copy it hands back", () => {
+    const c = computeHistoryCoverage({ accountUnresolved: false, historyComplete: false, games: 17 });
+    expect(c.pill!.text).not.toMatch(/%/);
+    expect(c.pill!.title).not.toMatch(/%/);
+    expect(c.gamesNote).not.toMatch(/%/);
+    // the only number allowed through is the count we actually hold
+    expect(c.pill!.title).toContain("17 games stored so far");
+  });
+
+  it("the chip's wording is not an error message", () => {
+    const c = computeHistoryCoverage({ accountUnresolved: false, historyComplete: false, games: 60 });
+    for (const s of [c.pill!.text, c.pill!.title, c.gamesNote!]) {
+      expect(s.toLowerCase()).not.toMatch(/error|fail|broken|missing|incomplete/);
+    }
+  });
+
+  it("a garbage games count degrades to 0 rather than a negative or NaN denominator", () => {
+    expect(computeHistoryCoverage({ accountUnresolved: false, historyComplete: false, games: -4 }).games).toBe(0);
+    expect(
+      computeHistoryCoverage({ accountUnresolved: false, historyComplete: false, games: NaN as number }).games
+    ).toBe(0);
+  });
+
+  it("the note stays inside KpiStrip's ~18-character cell budget", () => {
+    const c = computeHistoryCoverage({ accountUnresolved: false, historyComplete: false, games: 20 });
+    expect(c.gamesNote!.length).toBeLessThanOrEqual(18);
   });
 });

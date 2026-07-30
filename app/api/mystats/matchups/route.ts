@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
 import { DbUnavailableError } from "@/lib/pro/errors";
-import { getMyAccount } from "@/lib/mystats/account";
+import { getActiveAccount } from "@/lib/mystats/account";
 import { summarizeMatchupsByOpponent, type MyMatchRecord } from "@/lib/mystats/aggregate";
 import { SEASON_LABEL } from "@/lib/mystats/season";
 
@@ -40,6 +40,11 @@ function parseIntParam(raw: string | null): number | null | undefined {
  * Per-user private data -> always `no-store` (see summary route's doc
  * comment — same posture). DISPLAY DATA ONLY, same no-blending posture as
  * /api/mystats/summary — see lib/draft/recommend.ts's PersonalPlayResult.
+ *
+ * MULTI-ACCOUNT (v0.83, migration 0020): scoped to the ACTIVE linked account.
+ * `riotId`/`accountId` are echoed (additive) so a consumer can tell WHOSE
+ * matchup history it is holding — the same reason /api/mystats/summary echoes
+ * them.
  */
 export async function GET(req: NextRequest) {
   const sql = getSql();
@@ -60,25 +65,36 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const account = await getMyAccount(sql);
+    const account = await getActiveAccount(sql);
     if (!account) {
       return NextResponse.json(
-        { accountUnresolved: true, season: SEASON_LABEL, championId, role: role ?? null, matchups: [] },
+        {
+          accountUnresolved: true,
+          season: SEASON_LABEL,
+          riotId: null,
+          accountId: null,
+          championId,
+          role: role ?? null,
+          matchups: [],
+        },
         { status: 200, headers: { "Cache-Control": "no-store" } }
       );
     }
 
+    // ACCOUNT-SCOPED (migration 0020) — both branches. An unscoped matchup
+    // history is two players' lane records added together, which reads as a
+    // confident number and is nobody's record.
     const rows = (
       role !== undefined
         ? await sql`
             SELECT role, opp_champion_id, win, game_creation
             FROM coachbuild.my_matches
-            WHERE champion_id = ${championId} AND role = ${role}
+            WHERE puuid = ${account.puuid} AND champion_id = ${championId} AND role = ${role}
           `
         : await sql`
             SELECT role, opp_champion_id, win, game_creation
             FROM coachbuild.my_matches
-            WHERE champion_id = ${championId}
+            WHERE puuid = ${account.puuid} AND champion_id = ${championId}
           `
     ) as unknown as Row[];
 
@@ -94,6 +110,8 @@ export async function GET(req: NextRequest) {
       {
         accountUnresolved: false,
         season: SEASON_LABEL,
+        riotId: account.riotId,
+        accountId: account.id,
         championId,
         role: role ?? null,
         matchups: summarizeMatchupsByOpponent(records),

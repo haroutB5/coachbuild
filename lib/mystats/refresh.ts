@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getSql } from "@/lib/pro/db";
-import { getMyAccount } from "./account";
+import { getActiveAccount } from "./account";
 import { runMyStatsIngest } from "./ingest";
 
 /** Named per the brief — 3 minutes. Long enough that a user rapidly
@@ -35,32 +35,55 @@ export function shouldRunIncremental(lastAt: Date | null, now: Date, cooldownMs:
   return now.getTime() - lastAt.getTime() >= cooldownMs;
 }
 
-async function getLastIncrementalAt(sql: NonNullable<ReturnType<typeof getSql>>): Promise<Date | null> {
+/** PER-ACCOUNT since migration 0020. A shared cooldown would have meant
+ *  switching to a second account and immediately finding its refresh blocked by
+ *  the FIRST account's clock — for up to 3 minutes, on the one page view where
+ *  the user is most likely to be checking whether the switch worked. */
+async function getLastIncrementalAt(
+  sql: NonNullable<ReturnType<typeof getSql>>,
+  puuid: string
+): Promise<Date | null> {
   const rows = (await sql`
-    SELECT last_incremental_at FROM coachbuild.my_ingest_cursor WHERE id = 1
+    SELECT last_incremental_at FROM coachbuild.my_ingest_cursor WHERE puuid = ${puuid}
   `) as unknown as { last_incremental_at: string | null }[];
   const raw = rows[0]?.last_incremental_at;
   return raw ? new Date(raw) : null;
 }
 
-/** Upserts the id=1 cursor row so this works even before a backfill has ever
- *  persisted one (migration 0012 seeds it, but stay defensive — same
- *  ON CONFLICT shape lib/mystats/ingest.ts's persistCursor uses). Only
- *  touches last_incremental_at; next_start/backfill_done keep their
- *  existing values (or DEFAULT on a genuine first insert; backfill mode
- *  owns those columns, not this function). */
-async function stampLastIncrementalAt(sql: NonNullable<ReturnType<typeof getSql>>, at: Date): Promise<void> {
+/** Upserts this ACCOUNT's cursor row so a newly-linked account (which has no
+ *  row at all until its first backfill) still gets a cooldown stamp. Only
+ *  touches last_incremental_at; next_start/backfill_done keep their existing
+ *  values (or DEFAULT on a genuine first insert; backfill mode owns those
+ *  columns, not this function). */
+async function stampLastIncrementalAt(
+  sql: NonNullable<ReturnType<typeof getSql>>,
+  puuid: string,
+  at: Date
+): Promise<void> {
   await sql`
-    INSERT INTO coachbuild.my_ingest_cursor (id, last_incremental_at)
-    VALUES (1, ${at.toISOString()})
-    ON CONFLICT (id) DO UPDATE SET last_incremental_at = EXCLUDED.last_incremental_at
+    INSERT INTO coachbuild.my_ingest_cursor (puuid, last_incremental_at)
+    VALUES (${puuid}, ${at.toISOString()})
+    ON CONFLICT (puuid) DO UPDATE SET last_incremental_at = EXCLUDED.last_incremental_at
   `;
 }
 
 export type MyStatsRefreshResult =
   | { accountUnresolved: true }
   | { refreshed: false; skipped: true; reason: "cooldown" }
-  | { refreshed: true; skipped: false; newGames: number; latest: string | null }
+  | {
+      refreshed: true;
+      skipped: false;
+      newGames: number;
+      latest: string | null;
+      /** Is this account's season-window history fully walked after this run?
+       *  Passed straight through from the ingest (lib/mystats/ingest.ts's
+       *  `historyComplete`) rather than re-derived, so there is one answer.
+       *  FALSE means every figure on the My Stats page is currently computed over
+       *  a PARTIAL history — which is why it is on the wire at all. */
+      historyComplete: boolean;
+      /** Why the walk stopped short, or null. See ingest.ts's `truncatedBy`. */
+      truncatedBy: string | null;
+    }
   | { refreshed: false; skipped: false; error: true };
 
 /** Orchestrates one refresh attempt. Never throws -- a Riot/DB error inside
@@ -73,13 +96,13 @@ export async function runMyStatsRefresh(sql: NonNullable<ReturnType<typeof getSq
   // NOT ensureMyAccount here: that would attempt a live Riot resolution on
   // every single page view for an unresolved account, with no cooldown
   // protecting it (this guard runs BEFORE the cooldown check below).
-  const account = await getMyAccount(sql);
+  const account = await getActiveAccount(sql);
   if (!account) {
     return { accountUnresolved: true };
   }
 
   const now = new Date();
-  const lastAt = await getLastIncrementalAt(sql);
+  const lastAt = await getLastIncrementalAt(sql, account.puuid);
   if (!shouldRunIncremental(lastAt, now, REFRESH_COOLDOWN_MS)) {
     return { refreshed: false, skipped: true, reason: "cooldown" };
   }
@@ -93,12 +116,23 @@ export async function runMyStatsRefresh(sql: NonNullable<ReturnType<typeof getSq
       // an error state.
       return { accountUnresolved: true };
     }
-    await stampLastIncrementalAt(sql, now);
+    await stampLastIncrementalAt(sql, account.puuid, now);
+    // ACCOUNT-SCOPED (migration 0020): unscoped, "your latest game" would be
+    // whichever of the user's accounts played most recently -- so a freshly
+    // switched account with no games yet would report the OTHER account's last
+    // game as its own.
     const latestRows = (await sql`
-      SELECT max(game_creation) AS latest FROM coachbuild.my_matches
+      SELECT max(game_creation) AS latest FROM coachbuild.my_matches WHERE puuid = ${account.puuid}
     `) as unknown as { latest: string | null }[];
     const latest = latestRows[0]?.latest ?? null;
-    return { refreshed: true, skipped: false, newGames: result.matchesUpserted, latest };
+    return {
+      refreshed: true,
+      skipped: false,
+      newGames: result.matchesUpserted,
+      latest,
+      historyComplete: result.historyComplete,
+      truncatedBy: result.truncatedBy,
+    };
   } catch {
     // Fail-soft (per this feature's brief): DbUnavailableError/
     // RiotUnavailableError/any transport throw all collapse to the same

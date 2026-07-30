@@ -32,6 +32,15 @@
 // EVERY number here is season-scoped, summed over the same `records[]` the
 // tables below list. None of it comes from `recentGames[]`, which is a short
 // recent window with a different denominator — keep it that way.
+//
+// …WITH ONE CAVEAT ADDED 2026-07-30: "season-scoped" describes the QUERY, not
+// necessarily the account's whole season. A refresh run can be truncated by its
+// Riot-call budget before the season window has been walked, in which case these
+// figures cover only the games stored so far. The `coverage` prop carries that
+// fact and the GAMES cell stops calling itself a season total when it is set —
+// see MyStatsHistoryCoverage in components/hextech/myStats.ts. The VALUES are not
+// touched: they were always "over the rows we hold", and that was true before
+// this prop existed too. What changed is that the label no longer over-claims.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import KpiStrip, { type KpiItem, type KpiDelta } from "@/components/hextech/KpiStrip";
@@ -39,6 +48,7 @@ import {
   computeBuildWinrateDelta,
   MYSTATS_LOW_SAMPLE_THRESHOLD,
   type MyStatsBuildWinrateDelta,
+  type MyStatsHistoryCoverage,
 } from "@/components/hextech/myStats";
 
 export interface StatTilesProps {
@@ -59,6 +69,19 @@ export interface StatTilesProps {
    *  honest "sample unknown" instead of crashing — always pass them. */
   nOnBuild?: number | null;
   nOffBuild?: number | null;
+  /**
+   * Whether this account's season history has actually been walked
+   * (components/hextech/myStats.ts's computeHistoryCoverage). Optional in the
+   * TYPE only, for the same degrade-gracefully reason as nOnBuild/nOffBuild —
+   * always pass it.
+   *
+   * When `seasonClaimSafe` is false the GAMES cell stops calling itself a season
+   * total: the label drops the season and the cell's note row (already reserved
+   * by KpiStrip, so this costs no layout shift) says why. The value itself never
+   * changes — the count of games we hold is true either way; it is the LABEL that
+   * was over-claiming.
+   */
+  coverage?: MyStatsHistoryCoverage;
 }
 
 type NotComparable = Extract<MyStatsBuildWinrateDelta, { comparable: false }>["reason"];
@@ -134,17 +157,26 @@ export default function StatTiles({
   winrateOffBuild,
   nOnBuild,
   nOffBuild,
+  coverage,
 }: StatTilesProps) {
   // Four-arg on purpose — see this file's header. Two-arg answers
   // "sample-unknown" forever.
   const buildDelta = computeBuildWinrateDelta(winrateOnBuild, winrateOffBuild, nOnBuild, nOffBuild);
 
+  // An ABSENT `coverage` prop is a caller that has not been wired yet, not a data
+  // gap — it keeps the pre-2026-07-30 label rather than inventing a caveat from
+  // nothing. The DATA gap ("the response never carried historyComplete") is a
+  // different case and is already handled inside computeHistoryCoverage, which
+  // answers `seasonClaimSafe: false` for it.
+  const seasonClaimSafe = coverage ? coverage.seasonClaimSafe : true;
+
   const items: KpiItem[] = [
     {
       key: "games",
-      label: seasonLabel ? `Games, ${seasonLabel}` : "Games",
+      label: seasonClaimSafe ? (seasonLabel ? `Games, ${seasonLabel}` : "Games") : "Games so far",
       value: games,
       countUp: true,
+      note: coverage?.gamesNote ?? undefined,
     },
     {
       key: "winrate",

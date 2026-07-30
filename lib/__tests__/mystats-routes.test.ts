@@ -6,13 +6,30 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mockRunMyStatsIngest = vi.fn();
-vi.mock("@/lib/mystats/ingest", () => ({ runMyStatsIngest: (...args: unknown[]) => mockRunMyStatsIngest(...args) }));
+// `readHistoryComplete` (2026-07-30) is the summary route's read of
+// my_ingest_cursor.backfill_done -- whether the numbers it is about to serve sit
+// on a whole season or a partial one. Defaults to true here so every
+// pre-existing assertion below is untouched; the false case has its own coverage.
+const mockReadHistoryComplete = vi.fn(async () => true);
+vi.mock("@/lib/mystats/ingest", () => ({
+  runMyStatsIngest: (...args: unknown[]) => mockRunMyStatsIngest(...args),
+  readHistoryComplete: (...args: unknown[]) => mockReadHistoryComplete(...(args as [])),
+}));
 
 const mockSql = vi.fn();
 vi.mock("@/lib/pro/db", () => ({ getSql: vi.fn(() => mockSql) }));
 
 const mockGetMyAccount = vi.fn();
-vi.mock("@/lib/mystats/account", () => ({ getMyAccount: (...args: unknown[]) => mockGetMyAccount(...args) }));
+const mockListAccounts = vi.fn(async () => []);
+// Post-migration-0020 surface. `listAccounts` is mocked (rather than left to
+// hit mockSql) because the summary route now ships the picker's account list on
+// its own response, and these tests are about scoping/validation -- the list
+// itself has its own coverage in mystats-accounts.test.ts.
+vi.mock("@/lib/mystats/account", () => ({
+  getActiveAccount: (...args: unknown[]) => mockGetMyAccount(...args),
+  getMyAccount: (...args: unknown[]) => mockGetMyAccount(...args),
+  listAccounts: (...args: unknown[]) => mockListAccounts(...(args as [])),
+}));
 
 const mockRunMyStatsRefresh = vi.fn();
 vi.mock("@/lib/mystats/refresh", () => ({ runMyStatsRefresh: (...args: unknown[]) => mockRunMyStatsRefresh(...args) }));
@@ -201,25 +218,37 @@ describe("GET /api/mystats/matchups", () => {
     // mockResolvedValue (not -Once): this test drives the route 3 times
     // (Mid-scoped, Top-scoped, champion-wide) and needs the account resolved
     // on every call, not just the first.
-    mockGetMyAccount.mockResolvedValue({ puuid: "p", riotId: "X#EUW", region: "EUW", routing: {} });
+    mockGetMyAccount.mockResolvedValue({ id: 1, puuid: "p", riotId: "X#EUW", gameName: "X", tagLine: "EUW", region: "EUW", routing: {} });
     const GALIO = 3;
     const MID = 2;
     const TOP = 0;
     const allRows = [
       // Galio MID: 3 games, 3W-0L against 3 distinct opponents (matches the report's header: "3g · 3W-0L · 100.0%")
-      { champion_id: GALIO, role: MID, opp_champion_id: 9, win: true, game_creation: "2026-01-01T00:00:00.000Z" }, // vs Fiddlesticks
-      { champion_id: GALIO, role: MID, opp_champion_id: 35, win: true, game_creation: "2026-01-02T00:00:00.000Z" }, // vs Shaco
-      { champion_id: GALIO, role: MID, opp_champion_id: 84, win: true, game_creation: "2026-01-03T00:00:00.000Z" }, // vs Akali
+      { puuid: "p", champion_id: GALIO, role: MID, opp_champion_id: 9, win: true, game_creation: "2026-01-01T00:00:00.000Z" }, // vs Fiddlesticks
+      { puuid: "p", champion_id: GALIO, role: MID, opp_champion_id: 35, win: true, game_creation: "2026-01-02T00:00:00.000Z" }, // vs Shaco
+      { puuid: "p", champion_id: GALIO, role: MID, opp_champion_id: 84, win: true, game_creation: "2026-01-03T00:00:00.000Z" }, // vs Akali
       // Same champion, played TOP too -- different opponents, must never bleed into the Mid-scoped result
-      { champion_id: GALIO, role: TOP, opp_champion_id: 24, win: false, game_creation: "2026-01-04T00:00:00.000Z" },
-      { champion_id: GALIO, role: TOP, opp_champion_id: 82, win: true, game_creation: "2026-01-05T00:00:00.000Z" },
+      { puuid: "p", champion_id: GALIO, role: TOP, opp_champion_id: 24, win: false, game_creation: "2026-01-04T00:00:00.000Z" },
+      { puuid: "p", champion_id: GALIO, role: TOP, opp_champion_id: 82, win: true, game_creation: "2026-01-05T00:00:00.000Z" },
+      // ── A SECOND ACCOUNT's Galio Mid games (migration 0020). Same champion,
+      // same role, DIFFERENT player. If any of these ever appear in a result
+      // below, the puuid filter has been dropped from that query and every
+      // My Stats number has silently become two people added together. These
+      // are deliberately wins-heavy so a leak would move the win rate too, not
+      // just the game count.
+      { puuid: "other", champion_id: GALIO, role: MID, opp_champion_id: 9, win: false, game_creation: "2026-02-01T00:00:00.000Z" },
+      { puuid: "other", champion_id: GALIO, role: MID, opp_champion_id: 238, win: false, game_creation: "2026-02-02T00:00:00.000Z" },
+      { puuid: "other", champion_id: GALIO, role: TOP, opp_champion_id: 24, win: false, game_creation: "2026-02-03T00:00:00.000Z" },
     ];
-    // Emulates the real WHERE clause: filters by champion_id, and by role only
-    // when the route actually passed one (mirroring Postgres's real behavior
-    // for the two SQL branches in app/api/mystats/matchups/route.ts).
+    // Emulates the real WHERE clause: filters by puuid (always, first bound
+    // value since migration 0020) and champion_id, and by role only when the
+    // route actually passed one (mirroring Postgres's real behavior for the two
+    // SQL branches in app/api/mystats/matchups/route.ts).
     mockSql.mockImplementation((_strings: TemplateStringsArray, ...values: unknown[]) => {
-      const [championId, role] = values as [number, number | undefined];
-      const filtered = allRows.filter((r) => r.champion_id === championId && (role === undefined || r.role === role));
+      const [puuid, championId, role] = values as [string, number, number | undefined];
+      const filtered = allRows.filter(
+        (r) => r.puuid === puuid && r.champion_id === championId && (role === undefined || r.role === role)
+      );
       return Promise.resolve(filtered);
     });
 
@@ -244,11 +273,53 @@ describe("GET /api/mystats/matchups", () => {
 
     // Backward compatibility: omitting role still returns the champion-wide
     // total (5) -- a legitimate, different question from either role scope.
+    // Critically it is 5, NOT 8: the champion-wide question widens the ROLE
+    // filter and nothing else. The account filter is not a scope the caller can
+    // widen at all.
     const wideRes = await matchupsGET(req(`http://localhost/api/mystats/matchups?championId=${GALIO}`));
     const wideBody = await wideRes.json();
     const wideTotalGames = wideBody.matchups.reduce((sum: number, m: { games: number }) => sum + m.games, 0);
     expect(wideTotalGames).toBe(5);
     expect(wideBody.role).toBeNull();
+    // The other account's exclusive opponent (Neeko, 238) must appear nowhere.
+    expect(wideBody.matchups.map((m: { oppChampionId: number }) => m.oppChampionId)).not.toContain(238);
+    expect(wideBody.accountId).toBe(1);
+    expect(wideBody.riotId).toBe("X#EUW");
+  });
+
+  // ── Migration 0020: the SAME champion+role played by TWO linked accounts.
+  // The pre-migration table had no account column at all, so this is the case
+  // that would have produced a confident, unlabelled merge of two players. The
+  // test above proves the leak does not happen via the champion-wide widening;
+  // this one proves the ACTIVE ACCOUNT is what selects between two candidate
+  // datasets -- switch the account, get the other one, never the union. ──
+  it("switching the active account switches the dataset, and never returns the union", async () => {
+    const GALIO = 3;
+    const MID = 2;
+    const allRows = [
+      { puuid: "p1", champion_id: GALIO, role: MID, opp_champion_id: 9, win: true, game_creation: "2026-01-01T00:00:00.000Z" },
+      { puuid: "p1", champion_id: GALIO, role: MID, opp_champion_id: 35, win: true, game_creation: "2026-01-02T00:00:00.000Z" },
+      { puuid: "p2", champion_id: GALIO, role: MID, opp_champion_id: 238, win: false, game_creation: "2026-02-01T00:00:00.000Z" },
+    ];
+    mockSql.mockImplementation((_s: TemplateStringsArray, ...values: unknown[]) => {
+      const [puuid, championId, role] = values as [string, number, number | undefined];
+      return Promise.resolve(
+        allRows.filter((r) => r.puuid === puuid && r.champion_id === championId && (role === undefined || r.role === role))
+      );
+    });
+
+    mockGetMyAccount.mockResolvedValue({ id: 1, puuid: "p1", riotId: "MunsterHunter#EUW", gameName: "MunsterHunter", tagLine: "EUW", region: "EUW", routing: {} });
+    const first = await (await matchupsGET(req(`http://localhost/api/mystats/matchups?championId=${GALIO}&role=${MID}`))).json();
+    expect(first.matchups.reduce((s: number, m: { games: number }) => s + m.games, 0)).toBe(2);
+    expect(first.riotId).toBe("MunsterHunter#EUW");
+
+    mockGetMyAccount.mockResolvedValue({ id: 2, puuid: "p2", riotId: "K1ayer#swift", gameName: "K1ayer", tagLine: "swift", region: "EUW", routing: {} });
+    const second = await (await matchupsGET(req(`http://localhost/api/mystats/matchups?championId=${GALIO}&role=${MID}`))).json();
+    // ONE game, not three. A union would read 3 and look entirely plausible.
+    expect(second.matchups.reduce((s: number, m: { games: number }) => s + m.games, 0)).toBe(1);
+    expect(second.matchups.map((m: { oppChampionId: number }) => m.oppChampionId)).toEqual([238]);
+    expect(second.riotId).toBe("K1ayer#swift");
+    expect(second.accountId).toBe(2);
   });
 });
 
