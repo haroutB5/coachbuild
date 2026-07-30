@@ -99,15 +99,35 @@
 // my_matches' boundary is the SEASON start, ~7 months, not 90 days. The 90-day
 // figure is FRESH_WINDOW_DAYS and governs the pro/OTP pipelines, not this one.)
 //
-// QUEUE FILTER: deliberately NONE at the ids-fetch step (see lib/pro/riot.ts's
-// getMatchIdsByPuuid — `queue` param made optional for exactly this caller).
-// The brief's target queues are 420/440/400/430 (ranked+normal), but this
-// ingest fetches EVERY queue (including ARAM=450) and stores all of them
-// with their real queue_id — see extract.ts's header for why rows are never
-// dropped for an unresolved lane. Filtering by queue happens at READ time
-// (lib/mystats/aggregate.ts's callers), not at ingest time — one paginated
-// stream instead of four interleaved per-queue ones, and no games are ever
-// silently discarded before they're even looked at.
+// ── QUEUE FILTER: NONE HERE, AND THAT IS A CONTRACT WITH A SECOND HALF ──────
+//
+// This ingest fetches EVERY queue at the ids-fetch step (see lib/pro/riot.ts's
+// getMatchIdsByPuuid — its `queue` param was made optional for exactly this
+// caller) and stores all of them with their real queue_id: ranked solo (420),
+// ranked flex (440), normal draft (400), quickplay (480), swiftplay (2450),
+// ARAM (450), whatever else. See extract.ts's header for why rows are never
+// dropped for an unresolved lane either. The reason is one paginated match-id
+// stream instead of several interleaved per-queue ones, and no game silently
+// discarded before it has even been looked at.
+//
+// THE OTHER HALF IS lib/mystats/queues.ts, AND IT NOW EXISTS. Storing every
+// queue is only correct if every READ filters to the queues that count. Until
+// 2026-07-30 this comment asserted that "filtering by queue happens at READ
+// time" while NOTHING anywhere filtered by queue — the intent was written down
+// and the enforcement was never built, so 45 of one account's 186 stored games
+// were being counted into its win rate, champion pool, build adherence, CS/min,
+// account-card game count and the 20-game Match Performance chart. The filter
+// is now COUNTED_QUEUE_IDS (lib/mystats/queues.ts), bound by every read of
+// coachbuild.my_matches: both /api/mystats routes, lib/mystats/account.ts's
+// listAccounts, and lib/draft/recommend.ts's personal-record badges. It is
+// pinned structurally by lib/__tests__/mystats-queue-invariant.test.ts, so a
+// new unfiltered read fails the suite instead of shipping a wrong average.
+//
+// DO NOT "OPTIMISE" THIS INTO AN INGEST-TIME FILTER. The non-counted rows cost
+// nothing, keep this walk to one stream, and are what a future flex-queue view
+// would read. If you ever do add a queue filter here, the read filter is not
+// thereby redundant — the table would still hold every row ingested before the
+// change.
 //
 // SEASON SCOPING (user refinement, 2026-07-21): My Stats covers the CURRENT
 // SEASON only (see lib/mystats/season.ts's SEASON_START_MS + its source

@@ -97,6 +97,36 @@ export interface AccountPickerProps {
    * budget does not need.
    */
   onIdentityDetected?: (riotId: string | null) => void;
+  /**
+   * Render as a bare prompt instead of a full panel (2026-07-30 user directive:
+   * "the linked accounts bar remove it and just make it into a small link next
+   * to the accounts").
+   *
+   * WHAT COLLAPSED STILL RENDERS, AND WHY IT IS NOT NOTHING. The routine job of
+   * this panel — pick a different linked account — moved onto the account CARDS,
+   * which have done it through the same `switchAccount` since v0.85.0. What did
+   * NOT move are the two things the cards cannot do:
+   *
+   *   · THE MISMATCH PROMPT ("your client is signed in as X, not the account
+   *     shown"). This is the only surface in the app that says it — v0.84.3
+   *     deliberately made the hero silent about client identity — and it is
+   *     news, arriving unprompted, about a state the user did not choose. Hiding
+   *     news behind a disclosure is how it stops being news, so it renders
+   *     INLINE and always, collapsed or not.
+   *   · THE SECRET. Occasional and user-initiated, so it lives behind the
+   *     disclosure — except when a blocked prompt needs it, which is why
+   *     `onRequestExpand` exists.
+   *
+   * The component stays MOUNTED while collapsed. That is load-bearing: the
+   * once-per-load `/me` detection read, `onIdentityDetected` (which the hero's
+   * live-attribution rule depends on) and the secret state all live here, and
+   * unmounting to "save" a panel would silently switch the detection off.
+   */
+  collapsed?: boolean;
+  /** Called when a COLLAPSED picker needs its full surface — i.e. the user hit
+   *  something that requires the secret field. The page opens the disclosure;
+   *  this component opens the field inside it. */
+  onRequestExpand?: () => void;
 }
 
 /**
@@ -122,6 +152,8 @@ export default function AccountPicker({
   activeId,
   onSwitched,
   onIdentityDetected,
+  collapsed = false,
+  onRequestExpand,
 }: AccountPickerProps) {
   const { session } = useCompanion();
 
@@ -416,15 +448,21 @@ export default function AccountPicker({
     </form>
   ) : null;
 
+  /** Open the secret field, expanding the panel first if it is collapsed. ONE
+   *  entry point, so no path can open the field into a hidden panel. */
+  function openSecret(): void {
+    onRequestExpand?.();
+    setSecretOpen(true);
+    // Focus after paint — the input does not exist yet on this tick, and when
+    // the panel was collapsed neither did its container.
+    requestAnimationFrame(() => secretInputRef.current?.focus());
+  }
+
   const secretLink =
     !secretOpen && (mode !== "empty" || prompt.kind !== "none") ? (
       <button
         type="button"
-        onClick={() => {
-          setSecretOpen(true);
-          // Focus after paint — the input does not exist yet on this tick.
-          requestAnimationFrame(() => secretInputRef.current?.focus());
-        }}
+        onClick={openSecret}
         className="min-h-[44px] -my-2 text-left text-[11px] font-medium text-teal/90 hover:text-teal underline decoration-dotted underline-offset-2 transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg rounded"
       >
         {canWrite ? "Change account secret" : "Enter account secret"}
@@ -434,7 +472,12 @@ export default function AccountPicker({
   // ── The detection prompt ───────────────────────────────────────────────────
   const promptBlock =
     prompt.kind !== "none" && !promptDismissed ? (
-      <div className="mt-2.5 flex flex-wrap items-center gap-2 rounded-lg border border-line-gold/70 bg-panel2/60 px-3 py-2">
+      // `mt-0` when collapsed: there is no panel above it to sit under, it IS
+      // the surface. The page's own `space-y` handles the gap there.
+      <div
+        data-testid="mystats-detect-prompt"
+        className={`${collapsed ? "" : "mt-2.5 "}flex flex-wrap items-center gap-2 rounded-lg border border-line-gold/70 bg-panel2/60 px-3 py-2`}
+      >
         <p className="basis-full sm:basis-auto sm:flex-1 text-[11.5px] text-txt">
           Your League client is signed in as{" "}
           <span className="font-semibold tabular-nums">{prompt.riotId}</span>
@@ -455,10 +498,65 @@ export default function AccountPicker({
         >
           Not now
         </button>
+        {/* A prompt whose only button is disabled is a dead end, and with the
+            panel collapsed the secret field it needs is off screen. So the
+            reason and the way out ship WITH the prompt rather than in a note
+            somewhere below it. Only when there is genuinely no secret — when
+            `canWrite`, this row does not render at all. */}
+        {!canWrite && (
+          <div className="basis-full flex flex-wrap items-center gap-x-2">
+            <span className="text-[10.5px] text-mut">
+              {secretState === "rejected"
+                ? "That account secret was rejected, so this can't run yet."
+                : "This needs your account secret."}
+            </span>
+            {/* A real 44px target, not an inline text link inside the sentence:
+                the sentence is 10.5px and a tap target that size fails on a
+                phone, which is where this prompt is least expected. */}
+            <button
+              type="button"
+              onClick={openSecret}
+              className="min-h-[44px] -my-2 text-[11px] font-semibold text-teal/90 hover:text-teal underline decoration-dotted underline-offset-2 transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg rounded"
+            >
+              Enter account secret
+            </button>
+          </div>
+        )}
       </div>
     ) : null;
 
   // ── Render ─────────────────────────────────────────────────────────────────
+
+  // COLLAPSED: the prompt, the two lines that report what a prompt action did,
+  // and nothing else. `null` when there is nothing to say — an empty bordered
+  // box announcing that everything is fine is the panel this directive removed.
+  //
+  // The secret FORM is still rendered here when it has been opened, because
+  // `openSecret` calls `onRequestExpand` first and the page un-collapses on the
+  // same tick — but rendering it in this branch too means a page that ignores
+  // `onRequestExpand` still gets a reachable field rather than a button that
+  // does nothing. Defensive on purpose: an unreachable secret entry is the one
+  // outcome this refactor was told not to produce.
+  if (collapsed) {
+    if (!promptBlock && !busy && !error && !secretForm) return null;
+    return (
+      <div ref={containerRef} className="space-y-2" data-testid="mystats-account-picker-collapsed">
+        {promptBlock}
+        {busy && (
+          <p role="status" aria-live="polite" className="text-[11px] text-mut">
+            Switching account…
+          </p>
+        )}
+        {error && (
+          <p role="status" aria-live="polite" className="text-[11px] text-bad">
+            {error}
+          </p>
+        )}
+        {secretForm}
+      </div>
+    );
+  }
+
   return (
     <div
       ref={containerRef}

@@ -239,15 +239,34 @@ describe("GET /api/mystats/matchups", () => {
       { puuid: "other", champion_id: GALIO, role: MID, opp_champion_id: 9, win: false, game_creation: "2026-02-01T00:00:00.000Z" },
       { puuid: "other", champion_id: GALIO, role: MID, opp_champion_id: 238, win: false, game_creation: "2026-02-02T00:00:00.000Z" },
       { puuid: "other", champion_id: GALIO, role: TOP, opp_champion_id: 24, win: false, game_creation: "2026-02-03T00:00:00.000Z" },
-    ];
-    // Emulates the real WHERE clause: filters by puuid (always, first bound
-    // value since migration 0020) and champion_id, and by role only when the
+    ].map((r) => ({ ...r, queue_id: 420 })).concat([
+      // ── 2026-07-30: MY OWN Galio Mid games in FLEX and normal draft. Same
+      // account, same champion, same role, and they must not count toward the
+      // Mid header or the champion-wide total either. The role bug and the
+      // queue bug are the same shape (a scope the caller never asked to widen)
+      // and this fixture now pins both at once.
+      { puuid: "p", champion_id: GALIO, role: MID, opp_champion_id: 777, win: false, game_creation: "2026-03-01T00:00:00.000Z", queue_id: 440 },
+      { puuid: "p", champion_id: GALIO, role: TOP, opp_champion_id: 888, win: false, game_creation: "2026-03-02T00:00:00.000Z", queue_id: 400 },
+    ]);
+    // Emulates the real WHERE clause: filters by puuid (migration 0020), by
+    // queue (lib/mystats/queues.ts), by champion_id, and by role only when the
     // route actually passed one (mirroring Postgres's real behavior for the two
     // SQL branches in app/api/mystats/matchups/route.ts).
+    //
+    // Decoded BY TYPE, not by position. Positional decoding broke the moment the
+    // queue array was bound ahead of championId — a test that reads its inputs
+    // positionally fails on the next predicate added rather than on the bug it
+    // was written to catch.
     mockSql.mockImplementation((_strings: TemplateStringsArray, ...values: unknown[]) => {
-      const [puuid, championId, role] = values as [string, number, number | undefined];
+      const puuid = values.find((v) => typeof v === "string") as string;
+      const queues = values.find((v) => Array.isArray(v)) as number[] | undefined;
+      const [championId, role] = values.filter((v) => typeof v === "number") as number[];
       const filtered = allRows.filter(
-        (r) => r.puuid === puuid && r.champion_id === championId && (role === undefined || r.role === role)
+        (r) =>
+          r.puuid === puuid &&
+          (queues ? queues.includes(r.queue_id) : true) &&
+          r.champion_id === championId &&
+          (role === undefined || r.role === role)
       );
       return Promise.resolve(filtered);
     });
@@ -283,6 +302,10 @@ describe("GET /api/mystats/matchups", () => {
     expect(wideBody.role).toBeNull();
     // The other account's exclusive opponent (Neeko, 238) must appear nowhere.
     expect(wideBody.matchups.map((m: { oppChampionId: number }) => m.oppChampionId)).not.toContain(238);
+    // Nor may my OWN flex/normal-draft opponents (777, 888) — widening the role
+    // filter does not widen the queue filter.
+    expect(wideBody.matchups.map((m: { oppChampionId: number }) => m.oppChampionId)).not.toContain(777);
+    expect(wideBody.matchups.map((m: { oppChampionId: number }) => m.oppChampionId)).not.toContain(888);
     expect(wideBody.accountId).toBe(1);
     expect(wideBody.riotId).toBe("X#EUW");
   });
@@ -297,14 +320,23 @@ describe("GET /api/mystats/matchups", () => {
     const GALIO = 3;
     const MID = 2;
     const allRows = [
-      { puuid: "p1", champion_id: GALIO, role: MID, opp_champion_id: 9, win: true, game_creation: "2026-01-01T00:00:00.000Z" },
-      { puuid: "p1", champion_id: GALIO, role: MID, opp_champion_id: 35, win: true, game_creation: "2026-01-02T00:00:00.000Z" },
-      { puuid: "p2", champion_id: GALIO, role: MID, opp_champion_id: 238, win: false, game_creation: "2026-02-01T00:00:00.000Z" },
+      { puuid: "p1", champion_id: GALIO, role: MID, opp_champion_id: 9, win: true, game_creation: "2026-01-01T00:00:00.000Z", queue_id: 420 },
+      { puuid: "p1", champion_id: GALIO, role: MID, opp_champion_id: 35, win: true, game_creation: "2026-01-02T00:00:00.000Z", queue_id: 420 },
+      { puuid: "p2", champion_id: GALIO, role: MID, opp_champion_id: 238, win: false, game_creation: "2026-02-01T00:00:00.000Z", queue_id: 420 },
     ];
+    // Decoded by type, not by position — see the sibling test above.
     mockSql.mockImplementation((_s: TemplateStringsArray, ...values: unknown[]) => {
-      const [puuid, championId, role] = values as [string, number, number | undefined];
+      const puuid = values.find((v) => typeof v === "string") as string;
+      const queues = values.find((v) => Array.isArray(v)) as number[] | undefined;
+      const [championId, role] = values.filter((v) => typeof v === "number") as number[];
       return Promise.resolve(
-        allRows.filter((r) => r.puuid === puuid && r.champion_id === championId && (role === undefined || r.role === role))
+        allRows.filter(
+          (r) =>
+            r.puuid === puuid &&
+            (queues ? queues.includes(r.queue_id) : true) &&
+            r.champion_id === championId &&
+            (role === undefined || r.role === role)
+        )
       );
     });
 

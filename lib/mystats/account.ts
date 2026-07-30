@@ -43,6 +43,7 @@ import {
 import { RiotUnavailableError } from "@/lib/pro/errors";
 import { routingForServer, routingForPlatform, type RiotRouting } from "@/lib/pro/regionMap";
 import { rankFromRow, type RankRow } from "./rank";
+import { COUNTED_QUEUE_IDS } from "./queues";
 import type { getSql } from "@/lib/pro/db";
 import type { MyAccountRow } from "./types";
 
@@ -85,9 +86,27 @@ export interface MyAccountSummary {
   /** ISO, or null if the companion has never reported this account. Display
    *  ordering hint only — never a filter, never auto-switches anything. */
   lastSeenAt: string | null;
-  /** How many stored matches this account has. Lets the picker show "138
-   *  games" beside a name instead of an unlabelled tag. */
+  /** How many COUNTED matches this account has — solo/duo only, the same scope
+   *  every figure on /api/mystats/summary is computed over
+   *  (lib/mystats/queues.ts). Lets the picker show "138 games" beside a name
+   *  instead of an unlabelled tag.
+   *
+   *  DELIBERATELY NOT "stored matches", which is what it used to be and what
+   *  the SQL below still could report trivially. The card sits directly beside
+   *  the stats it describes, so a card reading "186g" next to a win rate
+   *  computed over 141 games is two numbers on one screen disagreeing about
+   *  what a game is. The card must count what the stats count. */
   games: number;
+  /** Wins among those same `games` (2026-07-30, user directive: "just add the
+   *  percentage WR into the account section above").
+   *
+   *  A COUNT, not a rate, and counted in the same SQL pass over the same
+   *  predicate as `games`. The card divides. Shipping a pre-divided percentage
+   *  would hide its denominator from the one surface that also displays it, and
+   *  a numerator and denominator sourced from two queries are two denominators
+   *  waiting to drift — which this app has already shipped once (v0.73.1).
+   *  `games === 0` means there is no rate to state; render a dash, never 0%. */
+  wins: number;
   /** Migration 0022 — ranked solo/duo standing, spread onto this shape rather
    *  than nested, so a card can read `account.tier` directly.
    *
@@ -168,10 +187,25 @@ export async function listAccounts(sql: Sql): Promise<MyAccountSummary[]> {
     SELECT a.id, a.riot_id, a.region, a.active, a.last_seen_at,
            a.rank_tier, a.rank_division, a.rank_lp, a.rank_wins, a.rank_losses,
            a.rank_checked_at, a.rank_attempted_at,
-           COALESCE(m.games, 0)::int AS games
+           COALESCE(m.games, 0)::int AS games,
+           COALESCE(m.wins, 0)::int AS wins
     FROM coachbuild.my_account a
     LEFT JOIN (
-      SELECT puuid, count(*)::int AS games FROM coachbuild.my_matches GROUP BY puuid
+      -- SOLO QUEUE ONLY (2026-07-30) — see MyAccountSummary.games. A LEFT JOIN,
+      -- so an account whose stored games are ALL non-counted still yields a row
+      -- with COALESCE(...,0) games rather than vanishing from the picker.
+      -- wins is counted in the SAME pass and over the SAME predicate as games,
+      -- deliberately. A win rate whose numerator and denominator come from two
+      -- queries is two denominators waiting to drift, which this repo has
+      -- shipped before (v0.73.1). One row, one filter, one truth.
+      -- (No backticks in this comment on purpose: it lives inside a JS template
+      -- literal, and a backtick here terminates the query mid-string.)
+      SELECT puuid,
+             count(*)::int AS games,
+             count(*) FILTER (WHERE win)::int AS wins
+      FROM coachbuild.my_matches
+      WHERE queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
+      GROUP BY puuid
     ) m ON m.puuid = a.puuid
     ORDER BY a.active DESC, a.last_seen_at DESC NULLS LAST, a.id
   `) as unknown as ({
@@ -181,6 +215,7 @@ export async function listAccounts(sql: Sql): Promise<MyAccountSummary[]> {
     active: boolean;
     last_seen_at: string | null;
     games: number;
+    wins: number;
   } & RankRow)[];
   return rows.map((r) => {
     const parts = splitRiotId(r.riot_id);
@@ -197,6 +232,7 @@ export async function listAccounts(sql: Sql): Promise<MyAccountSummary[]> {
       active: r.active,
       lastSeenAt: r.last_seen_at,
       games: r.games,
+      wins: r.wins,
       ...rank,
     };
   });

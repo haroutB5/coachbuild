@@ -2,8 +2,19 @@
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AccountCardGrid — the reference's 3x2 grid of account cards, each showing a
-// portrait-less avatar block, `Name #tag` (tag muted), a region chip, the rank
-// and LP, with the ACTIVE card lifted on a lighter surface and a gold border.
+// portrait-less avatar block, `Name #tag` (tag muted), a region chip, the rank,
+// the LP and the account's own WIN RATE, with the ACTIVE card lifted on a
+// lighter surface and a gold border.
+//
+// ── WHY THE WIN RATE IS HERE AND NOT IN A STRIP ─────────────────────────────
+// 2026-07-30 user directive: the page's KPI strip (games / win rate / build
+// adherence) was deleted and the win rate moved onto these cards. The strip was
+// the ACTIVE account's figures only, so it printed one win rate above a grid of
+// accounts that each have their own — the number and its subject were in
+// different places. On the card, the figure sits inside the box that names whose
+// it is, and every account carries its own instead of one borrowing the look of
+// a page-wide total. `card.record` is per-account by construction; see
+// resolveAccountWinrate in ./profileModel.
 //
 // ── IT DOES NOT OWN THE SWITCH, AND THAT IS DELIBERATE ──────────────────────
 // Switching accounts goes through `switchAccount` in ./accountPickerModel — the
@@ -37,7 +48,7 @@
 
 import { IconWithFallback } from "@/components/IconWithFallback";
 import type { AccountCard, AccountCardGridModel, RankDisplay } from "./profileModel";
-import { formatRegionChip } from "./profileModel";
+import { formatPct, formatRegionChip } from "./profileModel";
 
 const RANK_TONE: Record<RankDisplay["state"], string> = {
   // Colour is state, not decoration: only a REAL standing is accented.
@@ -88,10 +99,15 @@ export default function AccountCardGrid({
               // aria-current, not aria-pressed: this is "which of these is the
               // one in use", not a toggle.
               aria-current={card.active ? "true" : undefined}
+              // The win rate is spoken too, and with its denominator — a bare
+              // "52.1%" in a label is a percentage of nothing stated.
               aria-label={
-                card.active
+                (card.active
                   ? `${card.riotId}, the active account. ${card.rank.label}.`
-                  : `Switch to ${card.riotId}. ${card.rank.label}.`
+                  : `Switch to ${card.riotId}. ${card.rank.label}.`) +
+                (card.record.pct === null
+                  ? ""
+                  : ` ${formatPct(card.record.pct)} win rate over ${card.record.games} games.`)
               }
               // 58px, not 76. The reference's cards are 59px on a 1290px page
               // and that shortness is most of what makes its grid read as dense
@@ -138,9 +154,23 @@ export default function AccountCardGrid({
                       wrong trade. */}
                   <span
                     className="text-[9px] text-mut/80 tabular-nums truncate"
-                    title="Matches stored for this account, across every split"
+                    // Wording updated 2026-07-30 with the solo-queue-only
+                    // filter: every My Stats read now counts solo queue and
+                    // nothing else, so "matches" alone over-claimed — the count
+                    // dropped materially on at least one live account when the
+                    // filter landed. The QUEUE RULE itself lives server-side
+                    // (lib/mystats/queues.ts); this is a label, not a second
+                    // copy of it, and no queue id appears on the client.
+                    title="Solo-queue matches stored for this account, across every split"
                   >
-                    {card.games}g stored
+                    {/* "141g", not "141g stored". MEASURED, not trimmed for
+                        taste: with the win rate now sharing the right-hand
+                        column, 1024px (three 241px columns) truncated BOTH the
+                        account name and this line — "Munst…" beside "138g
+                        sto…", which is two clipped strings in a 58px card. The
+                        word cost ~30px and the tooltip already carries the full
+                        sentence, so dropping it buys the name back. */}
+                    {card.games}g
                   </span>
                 </span>
               </span>
@@ -148,24 +178,52 @@ export default function AccountCardGrid({
               {/* The reference's right-aligned pair: standing on top, LP under
                   it. Both slots keep their box when empty so a mixed grid of
                   ranked and never-synced accounts still aligns row to row. */}
-              {/* Capped at 40% of the card. At 1024px the grid is three 241px
-                  columns and an uncapped rank string ("Platinum IV") ate enough
-                  of the row that the SHORTER of two account names started
-                  truncating. The reference truncates names too — its own grid
-                  shows "DepressedMegaMind #7…" — so a cap rather than a wrap is
-                  the faithful answer; 40% is just where both fit. */}
-              <span className="flex-shrink-0 text-right max-w-[40%]">
+              {/* Capped at 46% of the card. It was 40% when this column held
+                  rank-over-LP only; the win rate moved in beside the LP
+                  (2026-07-30 user directive, replacing the deleted KPI strip)
+                  and two tabular figures on one line need the extra six points.
+                  A cap rather than a wrap is still the faithful answer — the
+                  reference truncates account names too ("DepressedMegaMind
+                  #7…") — and the name keeps `truncate` on the other side. */}
+              <span className="flex-shrink-0 text-right max-w-[46%]">
                 <span
                   className={`block text-[9.5px] font-semibold truncate leading-[1.3] min-h-[13px] ${RANK_TONE[card.rank.state]}`}
                   title={card.rank.title}
                 >
                   {card.rank.label}
                 </span>
-                {/* LP is the reference's right-aligned figure. Absent (unranked
-                    or unread) leaves the slot EMPTY rather than printing a 0 —
-                    and the slot keeps its width so cards stay aligned. */}
-                <span className="block text-[13px] font-bold tabular-nums text-txt min-h-[17px] leading-[1.3]">
-                  {card.rank.lp ?? <span className="text-mut/50">&mdash;</span>}
+                {/* LP, then the account's own win rate.
+                    BOTH slots keep their box when empty — an em dash, never a
+                    0 and never a collapsed row. LP absent means unranked or
+                    unread; win rate absent means the response carried no
+                    honestly-readable rate for this account (see
+                    resolveAccountWinrate). The two are independent, so a
+                    ranked account with no rate and an unranked account with a
+                    rate both still align row-to-row.
+                    `justify-end` + `whitespace-nowrap`: at 1024px this column
+                    is ~110px and a wrap here would put the win rate under the
+                    LP, which reads as a second, unlabelled figure. */}
+                <span className="flex items-baseline justify-end gap-1.5 min-h-[17px] whitespace-nowrap">
+                  <span className="text-[13px] font-bold tabular-nums text-txt leading-[1.3]">
+                    {card.rank.lp ?? <span className="text-mut/50">&mdash;</span>}
+                  </span>
+                  {/* Colour is STATE, not decoration: a rate over too small a
+                      sample stays muted rather than wearing a green/red verdict
+                      it has not earned — the same rule the champion rows use. */}
+                  <span
+                    title={card.record.title}
+                    className={`text-[13px] font-bold tabular-nums leading-[1.3] ${
+                      card.record.pct === null
+                        ? "text-mut/50"
+                        : card.record.lowSample
+                          ? "text-mut"
+                          : card.record.pct >= 0.5
+                            ? "text-good"
+                            : "text-bad"
+                    }`}
+                  >
+                    {card.record.pct === null ? <>&mdash;</> : formatPct(card.record.pct)}
+                  </span>
                 </span>
               </span>
             </button>

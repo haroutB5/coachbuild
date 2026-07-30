@@ -10,6 +10,7 @@ import {
   csRateIsQuotable,
   formatRank,
   buildAccountCards,
+  resolveAccountWinrate,
   computeLastActiveMs,
   formatRelativeTime,
   buildMatchPerformanceChips,
@@ -435,5 +436,80 @@ describe("formatters", () => {
     expect(formatRegionChip("euw1")).toBe("EUW1");
     expect(formatRegionChip("  ")).toBeNull();
     expect(formatRegionChip("")).toBeNull();
+  });
+});
+
+// ── Per-account win rate ────────────────────────────────────────────────────
+//
+// The field name on the wire landed in a parallel lane, so the resolver accepts
+// more than one shape. These tests pin the two things that must not drift: the
+// PRECEDENCE (a count beats a rate, because a count cannot be misread as a
+// percentage) and the REFUSALS (anything that could be a percentage in a
+// fraction's clothing resolves to null, not to a number).
+
+describe("resolveAccountWinrate", () => {
+  it("prefers a wins COUNT and reports the real W-L in the title", () => {
+    const r = resolveAccountWinrate({ games: 100, wins: 55 });
+    expect(r.pct).toBeCloseTo(0.55, 10);
+    expect(r.wins).toBe(55);
+    expect(r.games).toBe(100);
+    expect(r.title).toContain("55W 45L");
+  });
+
+  it("takes a 0-1 fraction when there is no count, and never back-derives wins", () => {
+    const r = resolveAccountWinrate({ games: 141, winrate: 0.5106 });
+    expect(r.pct).toBeCloseTo(0.5106, 10);
+    // NOT Math.round(0.5106 * 141) — a rounded fiction printed as a real W-L.
+    expect(r.wins).toBeNull();
+  });
+
+  it("accepts the winRate alias", () => {
+    expect(resolveAccountWinrate({ games: 40, winRate: 0.25 }).pct).toBeCloseTo(0.25, 10);
+  });
+
+  it("REFUSES a percentage arriving in a fraction's field", () => {
+    // 52 in a field documented as 0-1 is a unit mismatch. It is not a 5200% win
+    // rate, and we have not earned the right to call it 52% either — so we say
+    // nothing rather than divide by 100 on a hunch.
+    expect(resolveAccountWinrate({ games: 100, winrate: 52 }).pct).toBeNull();
+  });
+
+  it("refuses a wins count larger than the denominator", () => {
+    expect(resolveAccountWinrate({ games: 10, wins: 11 }).pct).toBeNull();
+  });
+
+  it("returns null — never 0% — when the response carried no rate at all", () => {
+    const r = resolveAccountWinrate({ games: 138 });
+    expect(r.pct).toBeNull();
+    expect(r.games).toBe(0);
+  });
+
+  it("keeps a real 0% and a real 100% rather than treating them as absent", () => {
+    expect(resolveAccountWinrate({ games: 20, wins: 0 }).pct).toBe(0);
+    expect(resolveAccountWinrate({ games: 20, wins: 20 }).pct).toBe(1);
+  });
+
+  it("has no rate at all when there are no games to divide by", () => {
+    expect(resolveAccountWinrate({ games: 0, wins: 0 }).pct).toBeNull();
+  });
+
+  it("flags a thin denominator so the card can withhold the good/bad colour", () => {
+    expect(resolveAccountWinrate({ games: 3, wins: 2 }).lowSample).toBe(true);
+    expect(resolveAccountWinrate({ games: 141, wins: 72 }).lowSample).toBe(false);
+  });
+});
+
+describe("buildAccountCards — win rate", () => {
+  it("puts each account's OWN win rate on its own card", () => {
+    const model = buildAccountCards([
+      account({ games: 141, wins: 72 }),
+      account({ id: 2, riotId: "K1ayer#swift", active: false, games: 28, wins: 11 }),
+    ]);
+    expect(model.cards[0].record.pct).toBeCloseTo(72 / 141, 10);
+    expect(model.cards[1].record.pct).toBeCloseTo(11 / 28, 10);
+  });
+
+  it("renders nothing rather than a zero when the wire has no rate yet", () => {
+    expect(buildAccountCards([account()]).cards[0].record.pct).toBeNull();
   });
 });

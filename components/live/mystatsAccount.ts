@@ -85,6 +85,27 @@ export interface AccountSummary {
   lastSeenAt: string | null;
   games: number;
 
+  // ── Per-account record (2026-07-30) ───────────────────────────────────────
+  // The account CARD prints a win rate beside the LP, so the denominator has to
+  // be per-account, not the active account's season total.
+  //
+  // OPTIONAL, and read through `resolveAccountWinrate`
+  // (components/hextech/mystats/profileModel.ts) rather than here, for one
+  // reason: the server side of this landed in a parallel lane, so the FIELD NAME
+  // is the one thing this file must not assume. The resolver accepts `wins` (a
+  // count — preferred, because a count has no unit ambiguity and yields the W-L
+  // for the tooltip) and `winrate`/`winRate` (a 0-1 FRACTION, same convention as
+  // `records[].winrate`). Anything else, including a percentage in a field named
+  // like a fraction, resolves to null and the card renders an em dash. A card
+  // that prints "0.5%" because a 0-1 fraction was read as a percentage is worse
+  // than a card that prints nothing.
+  /** Wins among `games`. */
+  wins?: number | null;
+  /** Win rate as a FRACTION, 0-1. */
+  winrate?: number | null;
+  /** Alias of `winrate`. Same 0-1 fraction. */
+  winRate?: number | null;
+
   // ── Ranked solo/duo standing (2026-07-30, engy — HANDOFF-engy.md §1a) ─────
   // Mirrors lib/mystats/rank.ts's AccountRank exactly. Solo queue only; flex is
   // not fetched, not stored, and would arrive under separate `flex*` names.

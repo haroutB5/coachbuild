@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // /mystats — "My Stats" personal match tracker (backend by engy, 2026-07-21 —
 // see HANDOFF.md's "My Stats" entries + lib/mystats/**). v0.51 wave B:
-// rebuilt around StatTiles/RecentGamesList/ChampionPoolCard (mockup 6.png),
+// rebuilt around RecentGamesList/ChampionPoolCard (mockup 6.png),
 // consuming the EXTENDED /api/mystats/summary (buildAdherencePct,
 // winrateOnBuild, winrateOffBuild, priorSplitWinrate, recentGames[]) engo is
 // adding concurrently in myStats.ts's normalizer. Every extended field is
@@ -41,8 +41,8 @@ import MyStatsRefresher from "@/components/hextech/MyStatsRefresher";
 import { Pill } from "@/components/hextech/HeroBand";
 import HextechTabs from "@/components/hextech/HextechTabs";
 import PanelHeading from "@/components/hextech/PanelHeading";
-import StatTiles from "@/components/hextech/mystats/StatTiles";
 import AccountPicker from "@/components/hextech/mystats/AccountPicker";
+import BuildAdherenceNote from "@/components/hextech/mystats/BuildAdherenceNote";
 import RecentGamesList, { type RecentGameRow } from "@/components/hextech/mystats/RecentGamesList";
 import ChampionPoolCard from "@/components/hextech/mystats/ChampionPoolCard";
 import ProfileHero from "@/components/hextech/mystats/ProfileHero";
@@ -94,14 +94,14 @@ interface MyStatsSummaryExtended extends MyStatsSummary {
    *  Same optional pattern as the five above, for the same TS2430 reason.
    *  These are what let `computeBuildWinrateDelta` return `comparable: true` on
    *  a real load — without them it answers "sample-unknown" forever, which is
-   *  the state this field pair was added to end. Pass BOTH to StatTiles. */
+   *  the state this field pair was added to end. Pass BOTH to BuildAdherenceNote. */
   nOnBuild?: number | null;
   nOffBuild?: number | null;
   /** 2026-07-30 — false when a refresh run was cut off by its Riot-call budget
    *  before it finished walking this account's season, i.e. every figure below is
    *  over a PARTIAL history. Null/absent means the response did not say. Read only
    *  through computeHistoryCoverage, never branched on directly here — see
-   *  StillSyncingCallout and the `coverage` prop on StatTiles. */
+   *  StillSyncingCallout and the hero coverage pill. */
   historyComplete?: boolean | null;
 }
 
@@ -189,30 +189,16 @@ function AccountsSkeleton({ cards }: { cards: number }) {
           <div key={i} className="min-h-[58px] rounded-xl border border-line bg-panel" />
         ))}
       </div>
-      <TilesSkeleton />
+      {/* No KPI-strip placeholder any more — the strip it stood in for was
+          deleted (see the Accounts tab). A skeleton for a block that no longer
+          arrives does not prevent shift, it CAUSES one: it would reserve ~74px
+          that nothing ever fills, then vanish. */}
       {/* Track AccountsTab's real lower grid EXACTLY — same columns, same gaps.
           A skeleton at the wrong proportions does not reduce shift, it moves it. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.9fr)] gap-4 lg:gap-5 items-start">
         <div className="h-[420px] rounded-xl border border-line bg-panel" />
         <div className="h-[420px] rounded-xl border border-line bg-panel" />
       </div>
-    </div>
-  );
-}
-
-/** Renders at the FINAL dimensions of the real KPI strip (3 cells, value +
- *  2-line label + delta row) so swapping in real numbers costs no layout
- *  shift. */
-function TilesSkeleton() {
-  return (
-    <div className="grid grid-cols-3 gap-px bg-line rounded-xl overflow-hidden border border-line animate-pulse">
-      {[0, 1, 2].map((i) => (
-        <div key={i} className="bg-panel2/70 px-2.5 sm:px-4 py-3 sm:py-3.5">
-          <div className="h-[21px] sm:h-[26px] w-14 bg-panel2 rounded" />
-          <div className="mt-1.5 h-2 w-16 max-w-full bg-panel2 rounded" />
-          <div className="mt-1.5 h-[17px] w-12 bg-panel2 rounded-full" />
-        </div>
-      ))}
     </div>
   );
 }
@@ -272,6 +258,11 @@ export default function MyStatsPage() {
   const [switchingId, setSwitchingId] = useState<number | null>(null);
   // Non-null only after a failed card switch — see switchFromGrid.
   const [gridError, setGridError] = useState<string | null>(null);
+  // Is the linking panel (the old "Linked accounts" bar) disclosed? Closed by
+  // default — it is the occasional surface now, reached from the small "Manage"
+  // affordance beside the Accounts heading. See that button for what moved and
+  // what did not.
+  const [manageOpen, setManageOpen] = useState(false);
   // "Link another account" scrolls to (and focuses) the real linking surface,
   // which is AccountPicker — that flow owns the companion read, the secret entry
   // and the detection prompt, and is the tested path. The grid's trailing cell
@@ -391,9 +382,21 @@ export default function MyStatsPage() {
     [accountScope]
   );
 
+  /**
+   * Send the user to the linking panel — opening it first, because it is closed
+   * by default now.
+   *
+   * The focus call has to wait a frame: when the panel was collapsed the button
+   * being focused does not exist yet on this tick, and focusing nothing silently
+   * drops a keyboard user on the document body. `mustShowManage` covers the
+   * zero-account case where the toggle itself is not rendered.
+   */
   function focusPicker(): void {
-    pickerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-    pickerRef.current?.querySelector("button")?.focus();
+    setManageOpen(true);
+    requestAnimationFrame(() => {
+      pickerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      pickerRef.current?.querySelector("button")?.focus();
+    });
   }
 
   function toggleRow(championId: number, role: number) {
@@ -463,6 +466,12 @@ export default function MyStatsPage() {
   const mostPlayed = buildMostPlayedStrip(rows);
   const championPerformance = buildChampionPerformanceRows(rows);
   const accountGrid = buildAccountCards(accountScope?.accounts ?? [], { expanded: accountsExpanded });
+  // With NOTHING linked there is no "N linked · Manage" toggle to render (a
+  // toggle reading "0 linked" is a control onto an empty room), so the panel
+  // cannot be reached by the normal route — and it is the only place the link
+  // flow and the secret live. It stays open in that state rather than becoming
+  // unreachable, which is the one outcome this refactor was told to avoid.
+  const mustShowManage = (accountScope?.accounts.length ?? 0) === 0;
   const matchChips = buildMatchPerformanceChips(recentGames, activeRank);
   // "Last active" is the newest game we have STORED, not the companion's
   // last-seen — see computeLastActiveMs. Computed against a render-time clock;
@@ -582,7 +591,7 @@ export default function MyStatsPage() {
                         reliable one over a truncated walk — the true main can
                         change as older games arrive. Nothing is lost, because the
                         main champion is ALSO this hero's splash art and portrait
-                        (see StatTiles' header for why the tile moved here). */}
+                        (the MAIN tile moved onto this hero when the KPI strip still existed, and outlived it). */}
                     {mainRow && coverage.pill === null && (
                       <Pill
                         tone="accent"
@@ -684,10 +693,60 @@ export default function MyStatsPage() {
               that is the premium tell and it only starts helping above ~24px.
               `min-h` tracks the tallest of (heading, portrait strip) at each
               width so the row cannot change height when the strip resolves. */}
-          <div className="flex items-end justify-between gap-3 flex-wrap min-h-[36px] sm:min-h-[42px] lg:min-h-[46px]">
-            <h2 className="text-[22px] sm:text-[28px] lg:text-[32px] font-semibold text-txt tracking-[-0.03em] leading-none">
-              Accounts
-            </h2>
+          {/* `min-h-[44px]` at EVERY width, not the old 36/42/46 ramp: the
+              manage toggle beside the heading is a 44px touch target, so the row
+              is 44px tall the moment it renders. Keeping the floor below that
+              would have let the row grow when the account list arrives — a shift
+              in the first band under the hero, which is the worst place for one. */}
+          <div className="flex items-end justify-between gap-3 flex-wrap min-h-[44px] sm:min-h-[46px]">
+            <div className="flex items-end gap-2.5 min-w-0">
+              <h2 className="text-[22px] sm:text-[28px] lg:text-[32px] font-semibold text-txt tracking-[-0.03em] leading-none">
+                Accounts
+              </h2>
+              {/* THE PANEL THAT USED TO BE A BAR (2026-07-30 user directive).
+                  "Linked accounts" was a full panel below the grid holding a
+                  dropdown that named the account already highlighted in a card
+                  directly above it, plus a count, plus a link. The dropdown was
+                  the duplicate — the cards have switched accounts through the
+                  same tested mutation since v0.85.0 — so what is left behind
+                  this toggle is the LINKING flow: the secret, and the full
+                  picker for a keyboard user who wants a list rather than a grid.
+                  The client-mismatch prompt is NOT behind it; see the picker's
+                  `collapsed` prop. */}
+              {accountScope && accountScope.accounts.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setManageOpen((o) => !o)}
+                  aria-expanded={manageOpen}
+                  aria-controls="mystats-account-manage"
+                  className="min-h-[44px] -my-2 flex items-center gap-1.5 px-2 -mx-2 rounded-lg text-[11.5px] font-medium text-mut hover:text-txt transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+                >
+                  <span className="tabular-nums">{accountScope.accounts.length} linked</span>
+                  <span aria-hidden="true" className="text-mut/70">
+                    &middot;
+                  </span>
+                  <span className="text-teal/90">{manageOpen ? "Hide" : "Manage"}</span>
+                  {/* Same SVG the picker's own trigger uses — the `&#9662;`
+                      glyph renders as a 3px dash in this app's display font. */}
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 12 12"
+                    className={`w-2.5 h-2.5 flex-shrink-0 transition-transform duration-150 motion-reduce:transition-none ${
+                      manageOpen ? "rotate-180" : ""
+                    }`}
+                  >
+                    <path
+                      d="M2.5 4.5 6 8l3.5-3.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              )}
+            </div>
             <MostPlayedStrip champions={mostPlayed} />
           </div>
 
@@ -721,13 +780,21 @@ export default function MyStatsPage() {
           )}
 
           {state.status !== "loading" && accountScope && (
-            <div ref={pickerRef}>
+            <div ref={pickerRef} id="mystats-account-manage">
               <AccountPicker
                 accounts={accountScope.accounts}
                 activeRiotId={accountScope.riotId}
                 activeId={accountScope.activeId}
                 onSwitched={handleAccountSwitched}
                 onIdentityDetected={setClientRiotId}
+                // Collapsed = prompt only. NOT unmounted: this component owns
+                // the once-per-load `/me` read and reports the client's identity
+                // upward, which is what the hero's live-attribution rule
+                // (v0.84.3) is decided from. Unmounting it to hide a panel would
+                // switch that off and put a live K1ayer game back under
+                // MunsterHunter's name.
+                collapsed={!manageOpen && !mustShowManage}
+                onRequestExpand={() => setManageOpen(true)}
               />
             </div>
           )}
@@ -736,18 +803,31 @@ export default function MyStatsPage() {
             <div className="space-y-5">
               {coverage.state === "thin" && <StillSyncingCallout games={coverage.games} />}
 
-              <StatTiles
-                games={overall.games}
-                seasonLabel={state.summary.season || ""}
-                winrate={overall.winrate}
-                priorSplitWinrate={state.summary.priorSplitWinrate ?? null}
-                buildAdherencePct={state.summary.buildAdherencePct ?? null}
-                winrateOnBuild={state.summary.winrateOnBuild ?? null}
-                winrateOffBuild={state.summary.winrateOffBuild ?? null}
-                nOnBuild={state.summary.nOnBuild ?? null}
-                nOffBuild={state.summary.nOffBuild ?? null}
-                coverage={coverage}
-              />
+              {/* THE KPI STRIP THAT WAS HERE IS GONE (2026-07-30 user directive:
+                  "this red section is useless just add the percentage WR into
+                  the account section above"). It carried three cells and each one
+                  was resolved separately rather than deleted as a group:
+                    · WIN RATE  -> onto every account CARD, beside the LP. It is
+                      also strictly better there: the strip showed the ACTIVE
+                      account's rate above a grid of accounts that each have
+                      their own.
+                    · GAMES     -> already on each card ("141g"), and the
+                      season W-L is already a pair of pills on the hero. The only
+                      thing lost with the cell is `coverage.gamesNote`, which read
+                      "still syncing" — the same fact the hero's coverage pill
+                      states at length, and which StillSyncingCallout states again
+                      above. Nothing about the five coverage states is now unsaid.
+                    · BUILD ADHERENCE -> moved to the Match history tab, beside
+                      the per-game on/off-build chips it summarises. See
+                      BuildAdherenceNote's header for why it moved rather than
+                      being dropped.
+                  `priorSplitWinrate` no longer renders anywhere: it was the
+                  "vs last split" delta on the deleted win-rate cell, and the
+                  card's win rate is account-wide, so hanging a split-scoped
+                  comparison off it would put two different denominators in one
+                  figure — the exact drift v0.73.1 shipped. It stays on the wire,
+                  unread, rather than being re-attached to a number it does not
+                  belong to. */}
 
               {/* The reference's two-column lower section. `items-start` so the
                   taller panel never stretches the shorter one into empty space.
@@ -795,8 +875,40 @@ export default function MyStatsPage() {
           hidden={tab !== "history"}
           className="space-y-5"
         >
+        {/* A REAL, RESOLVED ACCOUNT WITH NOTHING STORED IS NOW A LIVE STATE, not
+            a hypothetical: the 2026-07-30 solo-queue-only filter means an account
+            whose stored games are all flex/normal answers `accountUnresolved:
+            false` with `records: []` and every figure null. Measured before this
+            block existed, that made this tab render ZERO children at ZERO height
+            — a tab in the strip leading to a blank page, which reads as broken
+            rather than as deliberate. It now says which of the two it is: a
+            finished answer, or a caveat while the walk is still filling.
+            The Accounts tab has always had its own copy for this (above); this
+            is the same fact told in this tab's terms. */}
+        {state.status === "ok" && !state.summary.accountUnresolved && rows.length === 0 && (
+          <EmptyPanel
+            title={coverage.seasonClaimSafe ? "No match history yet" : "Still collecting your match history"}
+            body={
+              coverage.seasonClaimSafe
+                ? "Per-game results, matchups and build adherence all appear here once there are recorded games for this account."
+                : "The sync works backwards through your match history a batch at a time. Per-game results and build adherence will appear here as it reaches them."
+            }
+          />
+        )}
+
         {state.status === "ok" && !state.summary.accountUnresolved && rows.length > 0 && overall && (
           <div className="space-y-5">
+            {/* Adherence's new home — ABOVE the list whose per-game on/off-build
+                chips it summarises, not on the Accounts tab the user cleared. */}
+            <BuildAdherenceNote
+              buildAdherencePct={state.summary.buildAdherencePct ?? null}
+              winrateOnBuild={state.summary.winrateOnBuild ?? null}
+              winrateOffBuild={state.summary.winrateOffBuild ?? null}
+              nOnBuild={state.summary.nOnBuild ?? null}
+              nOffBuild={state.summary.nOffBuild ?? null}
+              scopeLabel={scopeLabel}
+            />
+
             {/* `items-start`: without it the two panels are forced to equal
                 height, and the champion pool (44 rows on this account) stretched
                 the 5-row recent-games card into ~600px of empty panel. */}

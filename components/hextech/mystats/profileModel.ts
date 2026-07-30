@@ -273,15 +273,105 @@ export interface AccountCard {
   riotId: string;
   region: string;
   active: boolean;
-  /** Games stored for this account, ACCOUNT-WIDE across splits — which is a
-   *  different denominator from the KPI strip's current-split count. The card
-   *  labels it as stored games for exactly that reason; the two numbers
-   *  legitimately differ and neither is wrong. */
+  /** Solo-queue games stored for this account, ACCOUNT-WIDE across splits —
+   *  a different denominator from the current-split figures elsewhere on the
+   *  page. The card labels it as stored games for exactly that reason; the two
+   *  numbers legitimately differ and neither is wrong. Since the 2026-07-30
+   *  solo-queue-only filter this excludes flex/normal/other entirely, which moved
+   *  it materially on at least one live account. */
   games: number;
   /** The account's ranked solo/duo standing, already reduced to what the card
    *  should print — see `formatRank`, which is the ONLY place the
    *  unranked-vs-unknown discriminator is interpreted. */
   rank: RankDisplay;
+  /** The account's own win rate over its own stored games — see
+   *  `resolveAccountWinrate`. `pct` is null whenever it cannot be quoted
+   *  honestly, and the card prints an em dash for that. */
+  record: AccountRecord;
+}
+
+// ── Per-account win rate ────────────────────────────────────────────────────
+
+/**
+ * What the card can honestly print for one account's record.
+ *
+ * `pct` is a FRACTION (0-1), matching `records[].winrate`, or null. Null is the
+ * normal state, not an error: it means either the response did not carry a win
+ * rate for this account, or the denominator is too small to quote.
+ */
+export interface AccountRecord {
+  /** 0-1, or null when it cannot be quoted. */
+  pct: number | null;
+  /** Games behind `pct`. 0 whenever `pct` is null. */
+  games: number;
+  /** Wins, when the wire gave a count rather than only a rate. Null otherwise —
+   *  it is never back-derived from `pct * games`, which would print a rounded
+   *  fiction as a W-L. */
+  wins: number | null;
+  /** Below MYSTATS_LOW_SAMPLE_THRESHOLD games. Quotable, but the card must not
+   *  colour it as if it were a verdict. */
+  lowSample: boolean;
+  /** Hover/assistive text stating the denominator, or why there is no figure. */
+  title: string;
+}
+
+/**
+ * ONE place decides what an account's win rate is, from a wire shape that is
+ * deliberately not assumed.
+ *
+ * The precedence is `wins` (a count) FIRST, then `winrate`/`winRate` (a 0-1
+ * fraction), and the order is not arbitrary: a count carries its own units, so
+ * it cannot be misread, and it also yields the real W-L for the tooltip. A
+ * fraction can be confused with a percentage, so it is accepted ONLY inside
+ * [0,1]; a `50` arriving in a field named `winrate` resolves to null rather than
+ * being divided by 100 on a hunch. A wrong number rendered confidently is worse
+ * than an em dash — this page has shipped that bug (a live game printed under
+ * the wrong account's name, v0.84.3) and it is what the em dash is for.
+ *
+ * `games` is the account's own stored-game count, so this figure is per-account
+ * by construction. It is NOT the current-split denominator the season figures
+ * use; the card's tooltip says which one it is.
+ */
+export function resolveAccountWinrate(a: {
+  games?: number | null;
+  wins?: number | null;
+  winrate?: number | null;
+  winRate?: number | null;
+}): AccountRecord {
+  const games = typeof a.games === "number" && Number.isFinite(a.games) && a.games > 0 ? Math.floor(a.games) : 0;
+  const absent: AccountRecord = {
+    pct: null,
+    games: 0,
+    wins: null,
+    lowSample: false,
+    title: "No win rate has been reported for this account yet.",
+  };
+  if (games === 0) return absent;
+
+  const wins = typeof a.wins === "number" && Number.isFinite(a.wins) && a.wins >= 0 ? Math.floor(a.wins) : null;
+  if (wins !== null && wins <= games) {
+    return {
+      pct: wins / games,
+      games,
+      wins,
+      lowSample: games < MYSTATS_LOW_SAMPLE_THRESHOLD,
+      title:
+        `${wins}W ${games - wins}L over the ${games} games stored for this account` +
+        (games < MYSTATS_LOW_SAMPLE_THRESHOLD ? " — too few to read much into." : "."),
+    };
+  }
+
+  const raw = [a.winrate, a.winRate].find((v) => typeof v === "number" && Number.isFinite(v)) as number | undefined;
+  if (raw === undefined || raw < 0 || raw > 1) return absent;
+  return {
+    pct: raw,
+    games,
+    wins: null,
+    lowSample: games < MYSTATS_LOW_SAMPLE_THRESHOLD,
+    title:
+      `Win rate over the ${games} games stored for this account` +
+      (games < MYSTATS_LOW_SAMPLE_THRESHOLD ? " — too few to read much into." : "."),
+  };
 }
 
 // ── Ranked standing ─────────────────────────────────────────────────────────
@@ -404,6 +494,7 @@ export function buildAccountCards(
       active: a.active,
       games: a.games,
       rank: formatRank(a),
+      record: resolveAccountWinrate(a),
     })),
     hiddenCount: truncated ? accounts.length - limit : 0,
     action: accounts.length > limit ? "show-all" : "link-another",

@@ -12,6 +12,7 @@ import {
   type MyMatchRecord,
 } from "@/lib/mystats/aggregate";
 import { SEASON_LABEL, currentSplitNumber } from "@/lib/mystats/season";
+import { COUNTED_QUEUE_IDS } from "@/lib/mystats/queues";
 import { readHistoryComplete } from "@/lib/mystats/ingest";
 import { refreshStaleRanks, UNKNOWN_RANK } from "@/lib/mystats/rank";
 import { routingForServer } from "@/lib/pro/regionMap";
@@ -206,17 +207,31 @@ export async function GET(req: NextRequest) {
     const split = currentSplitNumber();
     const priorSplit = split - 1;
 
-    // EVERY query below is scoped to `account.puuid` (migration 0020). This is
-    // the whole point of that migration: before it, my_matches had no account
-    // column and each of these four SELECTs read the entire table, so linking a
-    // second account would have merged two players into one win rate, one
-    // champion pool, one adherence figure and one recent-games strip — with no
-    // visible symptom. HARD RULE 4. If you add a fifth query here, it takes the
-    // puuid filter too.
+    // EVERY query below is scoped to `account.puuid` (migration 0020) AND to
+    // COUNTED_QUEUE_IDS (2026-07-30). Two invariants, same reason.
+    //
+    // The puuid one: before migration 0020, my_matches had no account column and
+    // each of these SELECTs read the entire table, so linking a second account
+    // would have merged two players into one win rate, one champion pool, one
+    // adherence figure and one recent-games strip — with no visible symptom.
+    //
+    // The queue one: the table holds EVERY queue the account played (flex,
+    // normal draft, quickplay, swiftplay, ARAM — see lib/mystats/ingest.ts's
+    // header), and until this filter existed every figure on this response was a
+    // blend of solo queue and everything else. Measured on the live DB
+    // 2026-07-30: 45 of K1ayer#swift's 186 stored games were not solo queue.
+    // Same failure class as the account bleed — a confident number describing
+    // nobody's actual solo-queue record. HARD RULE 4.
+    //
+    // If you add another query here it takes BOTH filters. Both are pinned
+    // structurally by lib/__tests__/mystats-scoping-invariant.test.ts and
+    // lib/__tests__/mystats-queue-invariant.test.ts respectively, so a query
+    // that forgets one fails the suite.
     const rows = (await sql`
       SELECT champion_id, role, opp_champion_id, win, game_creation, cs, game_duration_sec
       FROM coachbuild.my_matches
       WHERE puuid = ${account.puuid}
+        AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
         AND split = ${split}
         AND (${role ?? null}::smallint IS NULL OR role = ${role ?? null})
         AND (${championId ?? null}::integer IS NULL OR champion_id = ${championId ?? null})
@@ -239,7 +254,9 @@ export async function GET(req: NextRequest) {
     // see this route's doc comment.
     const adherenceRows = (await sql`
       SELECT on_wpa_build, win FROM coachbuild.my_matches
-      WHERE puuid = ${account.puuid} AND split = ${split}
+      WHERE puuid = ${account.puuid}
+        AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
+        AND split = ${split}
     `) as unknown as AdherenceRow[];
     const { buildAdherencePct, winrateOnBuild, winrateOffBuild, nOnBuild, nOffBuild } = computeBuildAdherence(
       adherenceRows.map((r) => ({ win: r.win, onWpaBuild: r.on_wpa_build ?? null }))
@@ -252,7 +269,9 @@ export async function GET(req: NextRequest) {
         ? computePriorSplitWinrate(
             (await sql`
               SELECT win FROM coachbuild.my_matches
-              WHERE puuid = ${account.puuid} AND split = ${priorSplit}
+              WHERE puuid = ${account.puuid}
+                AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
+                AND split = ${priorSplit}
             `) as unknown as PriorSplitRow[]
           )
         : null;
@@ -262,6 +281,11 @@ export async function GET(req: NextRequest) {
              cs, game_duration_sec
       FROM coachbuild.my_matches
       WHERE puuid = ${account.puuid}
+        -- SOLO QUEUE ONLY (2026-07-30). This strip IS the Match Performance
+        -- chart the user complained about: measured live before the fix, 9 of
+        -- the newest 20 stored rows on the active account were flex/normal/
+        -- quickplay games, so nearly half the chart was not solo queue.
+        AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
       ORDER BY game_creation DESC
       -- 20, not 5: the Match Performance panel is headed "(Last 20 Games)" and
       -- its bar chart is sized for that. At 5 the heading was a claim the data

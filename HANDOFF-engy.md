@@ -308,3 +308,163 @@ the response. Assessed individually rather than dismissed as a group:
 
 The `records`/`championPool` entries and `recentGames` entries carry exactly the fields in
 §1 and nothing speculative alongside them.
+
+---
+
+# engy — SoloQ-only read filter (2026-07-30, round 2)
+
+## What was wrong
+
+`lib/mystats/ingest.ts`'s header asserted that "filtering by queue happens at READ time."
+Nothing filtered by queue at any read path. The intent was written down and the
+enforcement was never built — a contract with one half missing.
+
+Live DB before the fix:
+
+```
+K1ayer#swift       420 -> 141   440 -> 26   400 -> 15   2450 -> 2   480 -> 2   (186 stored)
+MunsterHunter#EUW  420 -> 138                                                  (138 stored)
+```
+
+So 45 of K1ayer's 186 games were flex / normal draft / quickplay / swiftplay, and every
+figure on `/mystats` counted them: season game count, win rate, build adherence, champion
+pool, CS/min, prior-split delta, the account-card `games` number, and the 20-game Match
+Performance chart (9 of its newest 20 rows were not solo queue). MunsterHunter was clean
+only by accident.
+
+## The fix
+
+**One constant, one place: `lib/mystats/queues.ts`.** `COUNTED_QUEUE_IDS = [420]`,
+`RANKED_SOLO_QUEUE_ID`, `isCountedQueue()`, `COUNTED_QUEUE_LABEL`. Every read binds the
+ARRAY (`queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])`). No read inlines `420`.
+
+Read paths changed — all six queries:
+
+| File | Query | Feeds |
+|---|---|---|
+| `app/api/mystats/summary/route.ts` | main rows | `records` / `championPool` / `matchup` / `csPerMin` / `csGames` |
+| `app/api/mystats/summary/route.ts` | adherence rows | `buildAdherencePct` / `winrateOnBuild` / `winrateOffBuild` / `nOnBuild` / `nOffBuild` |
+| `app/api/mystats/summary/route.ts` | prior-split rows | `priorSplitWinrate` |
+| `app/api/mystats/summary/route.ts` | recent rows | `recentGames` (Match Performance) |
+| `app/api/mystats/matchups/route.ts` | both branches (role given / omitted) | `matchups` |
+| `lib/mystats/account.ts` `listAccounts` | games subquery | `MyAccountSummary.games` (the account card) |
+
+**Plus a seventh the brief did not list: `lib/draft/recommend.ts`'s
+`attachPersonalRecords`.** It is a real read of `my_matches` on a different page — the
+Draft board's `personal` / `personalOverall` badges ("you: 7-3 on this champion"), read
+while drafting a ranked solo game. Same constant, same predicate. CLAUDE.md gotcha (dd)
+applies: the card is never the only consumer.
+
+**No rows were deleted.** The non-420 rows stay in the table. The one-stream ingest
+rationale still holds and a future flex-queue view would want them.
+
+**The ingest header now describes what actually happens** — it names
+`lib/mystats/queues.ts` as the other half, names every read that binds it, and warns
+against "optimising" the filter into an ingest-time one (the table would still hold every
+row ingested before such a change, so the read filter would not become redundant).
+
+## Live proof
+
+Through the REAL modules (`scripts/_tmp-verify-queue-filter.mts`, `npx tsx`):
+
+```
+COUNTED_QUEUE_IDS = [ 420 ]
+
+BEFORE -> AFTER (listAccounts):
+  K1ayer#swift         186 -> 141
+  MunsterHunter#EUW    138 -> 138
+
+recentGames for K1ayer#swift (newest 20):
+  BEFORE queue ids: 2450,2450,420,420,440,420,420,420,420,420,420,440,440,440,420,420,420,440,440,440
+  AFTER  queue ids: 420,420,420,420,420,420,420,420,420,420,420,420,420,420,420,420,420,420,420,420
+  non-420 rows: 9 -> 0
+
+priorSplitWinrate, K1ayer split 1:  0.5519 over 183  ->  0.6000 over 140
+matchups, K1ayer champion 112:      76 games -> 71 games
+```
+
+And over HTTP against a real `next start` + the live DB:
+
+```
+GET /api/mystats/summary -> 200, cache-control: no-store
+accounts: [{"riotId":"K1ayer#swift","games":141,"active":true},
+           {"riotId":"MunsterHunter#EUW","games":138,"active":false}]
+records:  [{championId:112, role:2, games:1, wins:1, winrate:1, csPerMin:6.4, csGames:1}]
+buildAdherencePct: null   nOnBuild: null   nOffBuild: null
+winrateOnBuild: null      winrateOffBuild: null
+priorSplitWinrate: 0.6    csPerMin: 6.4    csGames: 1
+NaN anywhere in the body? false
+```
+
+Note K1ayer's CURRENT split (2) holds only 3 stored games, 1 of them solo — so the live
+response is already exercising near-zero denominators, and it answers `null` (not `0.0%`,
+not `NaN`) for every figure with nothing behind it. That is the shipped code, not a
+fixture.
+
+## Tests (2622 -> 2633)
+
+`lib/__tests__/mystats-queue-invariant.test.ts` — new, and STRUCTURAL, deliberately
+mirroring `mystats-scoping-invariant.test.ts`. It intercepts every statement each route
+issues and asserts that any statement touching `my_matches` binds `COUNTED_QUEUE_IDS`. A
+query added six months from now without the predicate fails the suite without anyone
+having to think to write a new test. It also fails a query that hardcodes `queue_id = 420`
+instead of importing the constant, by construction — it asserts the bound array, not the
+SQL text.
+
+Behavioural halves in the same file: a mixed-queue fake table proving flex / normal /
+quickplay / swiftplay / ARAM rows reach no figure (records, win rate, adherence, CS/min,
+recent games), the same for the matchups route, and — the consequence this fix creates —
+an account whose stored games are ALL non-counted renders the empty state: `records: []`,
+every winrate/adherence field `null`, `csGames: 0` (a real zero count, not a null figure),
+`recentGames: []`, plus a whole-body assertion that no `NaN` appears anywhere.
+
+`lib/__tests__/mystats-account.test.ts` — new case pinning `listAccounts`' games count to
+the constant, and pinning the `LEFT JOIN` + `COALESCE`: an account whose games are all
+non-counted must stay in the picker with 0 games, not vanish from the list the user needs
+in order to switch back to it.
+
+**I verified the invariant test actually fires.** Removing the filter from one matchups
+branch failed both the structural assertion and the behavioural one; reverted.
+
+`lib/__tests__/mystats-routes.test.ts` — two existing matchups tests decoded their bound
+values POSITIONALLY (`const [puuid, championId, role] = values`), which broke the moment a
+queue array was bound ahead of `championId`. Rewritten to decode by TYPE, and their
+fixtures gained flex / normal-draft rows for the same champion+role so they now pin the
+role scope and the queue scope at once. A test that reads its inputs positionally fails on
+the next predicate added rather than on the bug it was written to catch.
+
+## Reads deliberately NOT filtered, with reasons
+
+- **`lib/mystats/ingest.ts`'s already-stored id check.** MUST stay unfiltered. It asks
+  "have I stored this match id", and the ingest stores every queue. Filtering it would
+  re-fetch every non-420 match forever against a shared Riot key, and would break the
+  overlap signal the incremental walk's termination depends on.
+- **`lib/mystats/purge.ts`** — pre-season row deletion and its counts. Storage
+  maintenance; queue-agnostic on purpose.
+- **`lib/mystats/refresh.ts`'s `latest`** (`max(game_creation)`). Ingest freshness, not a
+  stat. It is declared in `MyStatsRefresher.tsx`'s prop type and never rendered. If it
+  ever IS rendered as "your last game", it needs the filter — flagging rather than
+  pre-emptively changing it.
+- **`scripts/backfill-mystats-kda.mjs` / `backfill-mystats-cs.mjs`** — they fill columns
+  on stored rows. Filtering would leave non-420 rows permanently unbackfilled for no gain.
+- **`scripts/ingest-otp-priority.mjs`'s `myGames`** — the one real judgment call. It
+  counts a user's games per champion to decide which OTP champions get deep-walked. It is
+  scheduling input, never displayed, and `lib/otp/deepWalk.ts`'s header already argues at
+  length that it is not a stat and not a ranking of anything shown. Left unfiltered:
+  "which champions do I play" is a legitimately broader question than "my solo record".
+  Say the word and it is a one-line change.
+
+## Open / for urgot
+
+- **`app/mystats/page.tsx` and `components/hextech/mystats/*` are fronty's** and were not
+  touched. Worth one check on their side: with `accountUnresolved: false` but
+  `records: []` and every figure `null`, does the page render its empty state cleanly?
+  The backend now produces that combination for a real account.
+- **`CLAUDE.md`'s My Stats paragraph** still reads as though all stored queues count. Left
+  alone to avoid a merge conflict with fronty's in-flight edits — worth a one-line
+  amendment when the tree settles.
+- Version NOT bumped, nothing committed, nothing deployed.
+- `verify-fix.sh` green: tsc clean, lint 0 warnings, **2633 tests**, build clean, sw,
+  manifest. (One earlier run failed tsc on `app/mystats/page.tsx` referencing
+  `BuildAdherenceNote` — fronty's untracked new component mid-edit, not this change; green
+  on re-run once that landed.)

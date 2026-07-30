@@ -4,6 +4,7 @@ import { DbUnavailableError } from "@/lib/pro/errors";
 import { getActiveAccount } from "@/lib/mystats/account";
 import { summarizeMatchupsByOpponent, type MyMatchRecord } from "@/lib/mystats/aggregate";
 import { SEASON_LABEL } from "@/lib/mystats/season";
+import { COUNTED_QUEUE_IDS } from "@/lib/mystats/queues";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -81,20 +82,27 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // ACCOUNT-SCOPED (migration 0020) — both branches. An unscoped matchup
-    // history is two players' lane records added together, which reads as a
-    // confident number and is nobody's record.
+    // ACCOUNT-SCOPED (migration 0020) and SOLO-QUEUE-SCOPED (2026-07-30) — both
+    // branches, both filters. An unscoped matchup history is two players' lane
+    // records added together, which reads as a confident number and is nobody's
+    // record; a queue-unscoped one folds flex and normal-draft lanes into a
+    // "your record vs Darius" that the user never played in solo queue. Same
+    // failure class, same answer (lib/mystats/queues.ts).
     const rows = (
       role !== undefined
         ? await sql`
             SELECT role, opp_champion_id, win, game_creation
             FROM coachbuild.my_matches
-            WHERE puuid = ${account.puuid} AND champion_id = ${championId} AND role = ${role}
+            WHERE puuid = ${account.puuid}
+              AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
+              AND champion_id = ${championId} AND role = ${role}
           `
         : await sql`
             SELECT role, opp_champion_id, win, game_creation
             FROM coachbuild.my_matches
-            WHERE puuid = ${account.puuid} AND champion_id = ${championId}
+            WHERE puuid = ${account.puuid}
+              AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
+              AND champion_id = ${championId}
           `
     ) as unknown as Row[];
 

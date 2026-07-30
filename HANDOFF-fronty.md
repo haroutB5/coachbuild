@@ -528,3 +528,237 @@ and `lib/__tests__/mystats-account.test.ts` fail against **your own** current co
 (`totalMinionsKilled`/`gameDuration` now required in `lib/mystats/types.ts`;
 `buildRecentGames` and `listAccounts` emit fields their exhaustive `toEqual`s do
 not expect). I left them alone — your lane.
+
+---
+
+# fronty — round 2, 2026-07-30: the Linked Accounts bar and the KPI strip both go
+
+Two user asks off a marked-up screenshot. Both done, gate green (**2,644 tests**),
+nothing committed, no version bump.
+
+## 1. The `LINKED ACCOUNTS` panel is now a small toggle beside the heading
+
+`Accounts    2 linked · Manage ⌄`
+
+The panel was three things wearing one box. Only one of them was a duplicate, so
+only one of them was deleted:
+
+| what it did | where it went | why |
+|---|---|---|
+| dropdown naming the active account | **deleted as the primary path** | the account CARDS directly above it already switch, through the same `switchAccount` mutation. The dropdown named the account highlighted in a card 40px above it. |
+| the full picker (list, keyboard menu, "N linked") | **behind the toggle** | still the better surface for a keyboard user who wants a list; `mode: single`/`empty` copy lives here too. Not deleted, just not the front door. |
+| the **secret** entry | **behind the toggle** | occasional and user-initiated. |
+| the **client-mismatch prompt** | **INLINE, always, collapsed or not** | see below. |
+
+**The mismatch prompt does not go behind the disclosure, and that was the one
+real decision here.** It is news — it arrives unprompted, about a state the user
+did not choose, and since v0.84.3 made the hero deliberately silent about client
+identity it is the *only* surface in the app that says "your client is signed in
+as someone else". Hiding news behind a toggle is how it stops being news. So
+`AccountPicker` gained a `collapsed` prop that renders the prompt (plus the
+busy/error lines a prompt action produces) and nothing else.
+
+**The component stays MOUNTED while collapsed** — that is load-bearing, not
+tidiness. It owns the once-per-load `/me` read and `onIdentityDetected`, which is
+what the hero's live-attribution rule is decided from. Unmounting it to hide a
+panel would silently switch detection off and put a live K1ayer game back under
+MunsterHunter's name.
+
+**Two ways the secret stays reachable**, because a disabled button with its field
+off screen is a dead end:
+- `onRequestExpand` — any path that opens the field opens the panel first
+  (`openSecret`, one entry point, so no path can open the field into a hidden
+  panel). `focusPicker` on the page does the same, one frame later, because the
+  button being focused does not exist yet on the tick the panel opens.
+- the prompt itself carries an **`Enter account secret`** button whenever
+  `!canWrite`, so a blocked `SWITCH TO IT` explains itself in place.
+- `mustShowManage` force-opens the panel at zero linked accounts, where the
+  toggle is not rendered at all and the panel is the only link flow.
+
+## 2. The KPI strip is gone; the win rate is on the cards
+
+Card right column is now **rank / `57 LP` `51.1%`**. Each cell keeps its box when
+empty, independently — a ranked account with no rate and an unranked account with
+a rate both still align row to row.
+
+**Per-account by construction.** The strip was the ACTIVE account's win rate
+printed above a grid of accounts that each have their own; the number and its
+subject were in different boxes. `resolveAccountWinrate` (profileModel) is the one
+place that decides what a card may print.
+
+### The wire field does not exist yet — READ THIS BEFORE WIRING
+
+`GET /api/mystats/summary`'s `accounts[]` carries **no win rate**, verified live
+against prod-build localhost today:
+
+```
+["id","riotId","gameName","tagLine","region","active","lastSeenAt","games",
+ "tier","division","lp","rankWins","rankLosses","rankUnknown","rankCheckedAt"]
+```
+
+So **every card renders an em dash on real data right now.** I did not derive one
+from a second denominator — that is the v0.73.1 trap, and there is no per-account
+W-L on the response to derive it from.
+
+The client is ready for it and needs **no further frontend change**.
+`resolveAccountWinrate` accepts, in precedence order:
+
+1. **`wins`** (a count) — preferred. A count carries its own units so it cannot be
+   misread, and it yields the real W-L for the tooltip. Divided by the existing
+   `games`.
+2. **`winrate`** / **`winRate`** — a **0-1 fraction**, the same convention
+   `records[]` already uses.
+
+Anything else resolves to **null → em dash**. A `50` arriving in a field named
+`winrate` is refused rather than divided by 100 on a hunch: a wrong number
+rendered confidently is worse than a blank, and this page has already shipped that
+class of bug. `normalizeAccountSummary` passes all three through with `numOrNull`
+— the "client normalizer silently drops a field the server sends" bug is now
+five-for-five on this page, so the pass-through is explicit and commented.
+
+**Verified by interception, not by hope:** replaying the real summary response
+with `wins` injected renders `51.1%` / `50.0%` on the two cards at 390/768/1024/
+1290/1920, card height unchanged at 58px, no overflow.
+
+## Where the strip's other two cells went
+
+- **GAMES** — already on every card. The only thing lost is `coverage.gamesNote`,
+  which read `"still syncing"` — the same fact the hero's coverage pill states at
+  length and `StillSyncingCallout` states again. **All five coverage states are
+  still represented**; none of them depended on the strip.
+- **BUILD ADHERENCE** — **moved, not dropped**, to the Match history tab as
+  `BuildAdherenceNote`, directly above the list whose per-game on/off-build chips
+  it summarises. It moved rather than dying because it is the only figure on this
+  page derived from CoachBuild's *own* recommendation; everything else here is
+  Riot's data restated. The four non-comparable reasons each render a plain
+  sentence; a percentage never appears without its n.
+- **`priorSplitWinrate`** now renders **nowhere**, deliberately. It was the "vs
+  last split" delta on the deleted cell. The card's win rate is account-wide, so
+  hanging a split-scoped comparison off it would be two denominators in one
+  figure. It stays on the wire, unread.
+
+## The near-empty active account (engy's question) — answered, and it was NOT clean
+
+`accountUnresolved:false` + `records:[]` + every figure null. Forced through
+interception, both `historyComplete` variants, 390 and 1290.
+
+**No `NaN`, no `Infinity`, no `0.0%` standing in for absent data, zero console
+errors** — at any width, either variant.
+
+**But the Match History tab rendered literally nothing**: `childCount: 0`,
+`height: 0`. A tab in the strip leading to a blank page, which reads as broken
+rather than as deliberate — exactly what was asked about. Pre-existing (the block
+was already gated on `rows.length > 0`), now reachable because the solo-queue
+filter makes an all-flex account a live state. **Fixed**: the tab now carries its
+own empty state, and says which of the two facts it is —
+
+- `historyComplete: true` → "No match history yet" (a finished answer)
+- `historyComplete: false` → "Still collecting your match history" (a caveat)
+
+Measured after the fix: 144px / 1 child at 390, 108px at 1290.
+
+## Solo-queue filter — what I changed on my side
+
+Nothing functional; **no queue id appears anywhere on the client** and I did not
+touch `lib/mystats/queues.ts`. Two labels were over-claiming once every read
+became solo-only:
+
+- the card's games tooltip → "**Solo-queue** matches stored for this account,
+  across every split"
+- `AccountCard.games`' doc comment
+
+No count is snapshotted. K1ayer read 141 and MunsterHunter 138 during
+verification; both come straight off the response.
+
+## Verified
+
+| claim | how |
+|---|---|
+| **no horizontal scroll** | `window.scrollTo(9999,0)` then `scrollX === 0`, at 390 / 768 / 1024 / 1290 / 1920, on **both tabs**, in every fixture (layout, populated, prompt, empty). Not a `body.scrollWidth` check — that passed straight through v0.84.0. |
+| the LINKED ACCOUNTS panel is gone | `linkedAccountsTextPresent: false`, `pickerPanelPresent: false` at all widths until Manage is clicked |
+| win rate renders per account | intercepted response, `51.1%` / `50.0%`, aria-labels carry the rate **with its denominator** |
+| win rate absent renders an em dash | live data, all widths |
+| adherence left the Accounts tab | `buildAdherenceOnAccountsTab: false`, `buildAdherenceOnHistoryTab: true` |
+| **mismatch prompt** | localStorage seeded with a paired session, the bridge's `GET /me` fulfilled with a linked-but-inactive identity. Prompt renders **inline with the panel still collapsed** (`aria-expanded: "false"`), 390 and 1290. `SWITCH TO IT` correctly disabled with no secret; `Enter account secret` opens the panel AND focuses the field (`panelExpanded: "true"`, `focused: "mystats-account-secret"`). |
+| **secret entry** | driven end to end at 390: Manage → panel → "Enter account secret" → field is `type=password`, **not prefilled**, focused, 44px → typed → Save → **real 401 from the API**. Stored value cleared (`localStorage` keys `[]`), field reopened empty, failure message shown, and **the typed value is not in the DOM** (`valueInDom: false`). |
+| switch-forces-re-fetch | untouched by construction — both UIs still route through `switchAccount`; no second mutation path added |
+| clicks land | `elementFromPoint` centre hit-test on every button in the accounts panel and both tabs, all widths — **zero blocked** |
+| touch targets | **zero** interactive elements under 44px, all widths, including the new Manage toggle and the prompt's secret button |
+| console | zero errors, zero page errors, every fixture |
+| gate | **ALL CHECKS PASSED** — tsc, lint 0 warnings, **2,644 tests**, build, SW, manifest |
+
+### CLS — measured, at parity
+
+Production build (`next build` + `next start -p 3031`),
+`PerformanceObserver({type:'layout-shift'})`, fresh `userDataDir` per case.
+
+| width | this ship | previous ship's live-prod baseline |
+|---|---|---|
+| 390 | **0.117 – 0.144** over 4 runs | 0.1305 |
+| 1290 | **0.018** | — |
+| 1920 | **0.012** | 0.0737 |
+
+One 0.229 outlier on the very first run against a cold build; four subsequent runs
+sat in 0.117–0.144. Attributed the shift by node: the dominant 0.117 comes from
+the **hero's content arrival** pushing the tab strip down — the pre-existing shift
+the previous ship already scoped out, not anything added here.
+
+Two heights are pinned for it: the Accounts heading row is now `min-h-[44px]` at
+**every** width (the toggle is a 44px target, so the row must already be that tall
+before the account list lands), and `TilesSkeleton` was **removed** from
+`AccountsSkeleton` — a skeleton for a block that no longer arrives does not
+prevent shift, it causes one.
+
+## Not verified — be explicit
+
+- **No successful account switch.** No secret on this machine, so the only switch
+  I could drive was the failing one, which I drove for real (401, above). The
+  success path routes through the same tested `switchAccount`; read that as "not
+  regressed by construction", not as re-tested.
+- **The prompt's `link` variant** (an *unlinked* client account → "Link it") was
+  not driven. I forced the `switch` variant only. Same `promptBlock`, same
+  disabled/secret logic; the branch difference is one ternary.
+- **No reduced-motion screenshot, no Lighthouse, no axe run.** The only motion I
+  added is the toggle chevron's rotation, which carries
+  `motion-reduce:transition-none`.
+- **Keyboard was not driven through the new toggle.** It is a plain `<button>`
+  with `aria-expanded`/`aria-controls`; focus-visible ring present in markup, not
+  photographed.
+- **`rankUnknown` / `unranked` cards still never rendered on real data** — both
+  linked accounts came back ranked, same as last round.
+
+## One thing I noticed and left
+
+At **1024px** the card grid is three 241px columns and the longer account name
+truncates (`Munst…#EUW`). Adding the win rate made this worse before I fixed it —
+it was truncating the name *and* the games line (`138g sto…`), two clipped strings
+in a 58px card. Dropping the word "stored" from the meta line (~30px, and the
+tooltip already carries the full sentence) bought the meta line back. The name
+still truncates at that one width; it clears at 1280+, 768 and 390, and the
+reference truncates names too. Judged below the bar for another round.
+
+## Left behind / follow-ups for urgot
+
+- **`components/hextech/mystats/StatTiles.tsx` is now DEAD CODE** — nothing
+  imports it. I tried to delete it; **the safety gate blocked the `rm` and I did
+  not route around it**. It still typechecks and lints clean, so the gate is
+  green either way. Please approve the deletion or delete it yourself.
+- Four untracked read-only probes in the repo root, all fresh-`userDataDir`,
+  none spending the Riot key: `_fronty-wr-verify.mjs` (layout / populated /
+  prompt / secret), `_fronty-wr-cls.mjs` (CLS with per-node shift attribution),
+  `_fronty-empty-verify.mjs` (the empty-records account), `_fronty-mid-widths.mjs`
+  (768/1024). Screenshots in `_capture/wr/`.
+- **I stopped a `next start -p 3011` that was already running on this checkout**
+  when I started, and my own `:3031` is stopped now. If that 3011 server was
+  engy's, it needs restarting.
+
+## Proposed CLAUDE.md updates (not applied)
+
+- The My Stats section still says "ONE fixed linked Riot account" — stale, and now
+  two rounds behind.
+- New gotcha worth recording: **a component that owns a background read must not
+  be unmounted to hide its UI.** `AccountPicker` owns the once-per-load `/me`
+  detection that the hero's live-attribution rule depends on; collapsing it to a
+  `null`-returning render keeps the effect alive, unmounting it would not. This is
+  the second time a /mystats surface has been coupled to a component's mount
+  lifetime.

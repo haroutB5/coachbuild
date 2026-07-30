@@ -57,6 +57,7 @@ import type { DifficultyBand } from "@/lib/draft/difficulty";
 import { suggestedDefense, type SuggestedDefense } from "@/lib/draft/damageProfile";
 import { getChampionMeta } from "@/lib/staticData";
 import { getActiveAccount } from "@/lib/mystats/account";
+import { COUNTED_QUEUE_IDS } from "@/lib/mystats/queues";
 
 /** P3-1 (audit, 2026-07-21): a patch needs at least this many distinct
  *  champions present in draft_champ_stats before resolveServingPatch will
@@ -364,10 +365,18 @@ async function attachPersonalRecords(
   const account = await getActiveAccount(sql).catch(() => null);
   if (!account) return { main: decorateEmpty(mainPlays), potential: decorateEmpty(potentialPlays) };
 
+  // SOLO QUEUE ONLY (2026-07-30, lib/mystats/queues.ts). These badges read
+  // "you: 7-3 on this champion" on the Draft page, and the user is drafting a
+  // RANKED SOLO game when they read them — a record padded with flex, normal
+  // draft and quickplay games is a different claim than the one on screen.
+  // Same constant, same predicate, as every /api/mystats read; the two must not
+  // be able to disagree about what counts as a game.
   const champIds = allPlays.map((p) => p.champId);
   const rows = await sql`
     SELECT champion_id, opp_champion_id, win FROM coachbuild.my_matches
-    WHERE puuid = ${account.puuid} AND role = ${lane} AND champion_id = ANY(${champIds}::int[])
+    WHERE puuid = ${account.puuid}
+      AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
+      AND role = ${lane} AND champion_id = ANY(${champIds}::int[])
   `.catch(() => []) as unknown as MyMatchDbRow[];
 
   const overall = new Map<number, PersonalRecord>();

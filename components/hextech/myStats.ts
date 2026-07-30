@@ -285,6 +285,19 @@ function normalizeAccountSummary(raw: unknown): AccountSummary | null {
     active: a.active === true,
     lastSeenAt: typeof a.lastSeenAt === "string" ? a.lastSeenAt : null,
     games: num(a.games),
+    // PASS THESE THROUGH, do not "tidy them away". A client normalizer that
+    // silently drops a field the server already sends is this repo's most
+    // repeated frontend bug (four occurrences on this page alone): both sides
+    // pass their own tests and the surface renders nothing. `numOrNull`, never
+    // `num` — 0 is a real win count and a real 0% win rate, so an absent field
+    // must stay null and reach the em dash, not become a confident zero.
+    //
+    // All three are read by `resolveAccountWinrate`, which is the only place
+    // that decides which one wins. See AccountSummary's comment for why the
+    // field name is deliberately not assumed here.
+    wins: numOrNull((a as { wins?: unknown }).wins),
+    winrate: numOrNull((a as { winrate?: unknown }).winrate),
+    winRate: numOrNull((a as { winRate?: unknown }).winRate),
     ...normalizeRank(a),
   };
 }

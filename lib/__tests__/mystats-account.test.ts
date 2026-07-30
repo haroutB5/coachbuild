@@ -37,6 +37,7 @@ import {
 } from "@/lib/mystats/account";
 import { RiotRequestError } from "@/lib/pro/riot";
 import { RiotUnavailableError } from "@/lib/pro/errors";
+import { COUNTED_QUEUE_IDS } from "@/lib/mystats/queues";
 
 function sqlText(strings: TemplateStringsArray): string {
   return strings.join("|");
@@ -451,5 +452,29 @@ describe("listAccounts", () => {
     expect(unranked.rankUnknown).not.toBe(unknown.rankUnknown);
     // A failed attempt does not manufacture a checked_at.
     expect(unknown.rankCheckedAt).toBeNull();
+  });
+
+  it("the games count is SOLO-QUEUE ONLY — the card must count what the stats count", async () => {
+    // The account card sits directly beside the figures /api/mystats/summary
+    // computes. Before 2026-07-30 the card said "186g stored" while every
+    // figure beside it was about to be recomputed over 141 games — two numbers
+    // on one screen disagreeing about what a game is. Binds the shared constant
+    // rather than an inlined 420, for the same reason every other read does
+    // (lib/mystats/queues.ts).
+    let text = "";
+    let values: unknown[] = [];
+    const sql = sqlMock((strings: TemplateStringsArray, ...v: unknown[]) => {
+      text = sqlText(strings);
+      values = v;
+      return Promise.resolve([]);
+    });
+    await listAccounts(sql as never);
+    expect(text).toContain("queue_id");
+    expect(values.find((v) => Array.isArray(v))).toEqual(COUNTED_QUEUE_IDS);
+    // The join must stay a LEFT JOIN: an account whose stored games are ALL
+    // non-counted still belongs in the picker, with 0 games, rather than
+    // vanishing from the list it is supposed to let the user switch back to.
+    expect(text).toContain("LEFT JOIN");
+    expect(text).toContain("COALESCE");
   });
 });
