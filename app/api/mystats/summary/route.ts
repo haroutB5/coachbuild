@@ -16,6 +16,13 @@ import { readHistoryComplete } from "@/lib/mystats/ingest";
 import { refreshStaleRanks, UNKNOWN_RANK } from "@/lib/mystats/rank";
 import { routingForServer } from "@/lib/pro/regionMap";
 
+/** How many games the Match Performance panel shows, and the ONE number that
+ *  decides it. Both the SQL below and buildRecentGames' own limit read from
+ *  this — they used to disagree, and the panel quietly served 5 rows under a
+ *  heading that said 20. Its name is on screen, so changing it changes the
+ *  heading too. */
+const RECENT_GAMES_LIMIT = 20;
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -123,7 +130,7 @@ function parseIntParam(raw: string | null): number | null | undefined {
  *  - `priorSplitWinrate`: overall win rate for the PRIOR split (not
  *    role/championId-scoped — the whole-account delta comparison point), or
  *    null when there is no prior split yet (still in split 1).
- *  - `recentGames`: latest 5 games account-wide (any split, any role/champ),
+ *  - `recentGames`: latest RECENT_GAMES_LIMIT games account-wide (any split, any role/champ),
  *    newest first — a dashboard strip, deliberately independent of every
  *    other filter on this route.
  * All of the above are DISPLAY ONLY — see PersonalRecord's doc comment
@@ -261,7 +268,7 @@ export async function GET(req: NextRequest) {
       -- did not back, which is the same defect class as an unlabelled partial
       -- history -- just smaller. The panel renders however many rows come back,
       -- so a newly-linked account with 3 games still reads correctly.
-      LIMIT 20
+      LIMIT ${RECENT_GAMES_LIMIT}
     `) as unknown as RecentRow[];
 
     // RANK REFRESH, before listAccounts reads the stored values back. Bounded
@@ -308,7 +315,15 @@ export async function GET(req: NextRequest) {
         gameCreation: r.game_creation,
         cs: r.cs,
         gameDurationSec: r.game_duration_sec,
-      }))
+      })),
+      // THE CAP IS IN TWO PLACES and both have to agree. The SQL above limits
+      // what is fetched; buildRecentGames defaults to 5 and would silently
+      // re-truncate whatever arrives. Raising only the query left prod serving
+      // 5 rows under a heading that says 20 — the second cap is invisible from
+      // the route unless you pass it. Keep this argument explicit rather than
+      // changing the default, so the next person reading the SQL sees that the
+      // number they are looking at is not the only one.
+      RECENT_GAMES_LIMIT
     );
 
     // ONE array, TWO names. `records` is what every already-shipped consumer
