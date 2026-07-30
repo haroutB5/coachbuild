@@ -110,13 +110,17 @@ export async function POST(req: NextRequest) {
     const result = await linkAccount(sql, {
       gameName: parsed.gameName,
       tagLine: parsed.tagLine,
-      puuid: parsed.puuid,
     });
     if (!result.ok) {
-      // 502 for a Riot-side failure, not 500: nothing is wrong with this app or
-      // the request — the upstream that knows where the account plays did not
-      // answer. Nothing was written either way, so a retry is safe.
-      return json({ error: result.reason }, 502);
+      // 404 for "this Riot ID does not exist" — a final answer about the
+      // REQUEST, which the caller fixes by sending a different name. 502 for
+      // everything else: nothing is wrong with this app or the request, the
+      // upstream just did not answer, and a retry is worth making. Returning
+      // 502 for a genuinely absent account would invite a client to retry
+      // forever; returning 404 for a rate-limited key would tell someone their
+      // real account does not exist. Nothing is written in either case.
+      const status = result.reason === "account-not-found" ? 404 : 502;
+      return json({ error: result.reason }, status);
     }
     return json(
       {

@@ -219,11 +219,26 @@ export async function setActiveAccount(sql: Sql, id: number): Promise<ResolvedMy
   return getActiveAccount(sql);
 }
 
-/** Identity as reported by the League client (companion GET /me). */
+/** Identity as reported by the League client (companion GET /me).
+ *
+ *  NOTE THE ABSENT FIELD. `GET /me` also returns a `puuid`, and v0.83.0 trusted
+ *  it. It must not be trusted and is deliberately not carried here: the LCU's
+ *  `/lol-summoner/v1/current-summoner` returns a **36-character local UUID**,
+ *  while every Riot public endpoint requires the **78-character encrypted
+ *  PUUID** and rejects the short form outright:
+ *
+ *    LCU        -> "45f94caa-fbf1-59df-8d21-60efd5516ae6"            (36)
+ *    account-v1 -> 400 "Bad Request - Exception decrypting 45f94caa-..."
+ *
+ *  Measured 2026-07-30 against a real client (K1ayer#swift). This is the same
+ *  failure class this repo already banked for op.gg's site-scoped player ids —
+ *  identical "Exception decrypting" error — whose standing rule is: never trust
+ *  an id from an external source, re-resolve from game_name + tag_line through
+ *  account-v1. linkAccount does exactly that now. A field NAMED `puuid` is not
+ *  evidence it is *the* puuid. */
 export interface DetectedIdentity {
   gameName: string;
   tagLine: string;
-  puuid: string;
 }
 
 /** NOTE what is deliberately ABSENT: a `switched` flag. Whether the active
@@ -238,6 +253,12 @@ export type LinkAccountResult =
    *  written — an account with an unknown region cannot be ingested for, so
    *  storing it would create a row that silently never gets any games. */
   | { ok: false; reason: "region-unresolved" }
+  /** account-v1 by-riot-id returned 404 — this Riot ID genuinely does not
+   *  exist. Distinct from `riot-unavailable` on purpose: "no such player" is
+   *  final and the user should correct the name, while a transient failure is
+   *  worth retrying. Collapsing the two would tell someone their real account
+   *  does not exist because our key was rate-limited. */
+  | { ok: false; reason: "account-not-found" }
   | { ok: false; reason: "riot-unavailable" };
 
 /** Links (or re-links) a detected account and makes it active.
@@ -256,23 +277,52 @@ export type LinkAccountResult =
 export async function linkAccount(sql: Sql, identity: DetectedIdentity): Promise<LinkAccountResult> {
   const riotId = formatRiotId(identity.gameName, identity.tagLine);
 
-  // Selects only `region`, which is the one thing this function needs from an
-  // existing row: whether the (expensive, key-spending) Riot region lookup can
-  // be skipped, and what to write back. Deliberately NOT reading `active` —
-  // whether the switch changed anything is the route's single computation, see
-  // LinkAccountResult's note.
-  const existing = (await sql`
-    SELECT region FROM coachbuild.my_account WHERE puuid = ${identity.puuid}
-  `) as unknown as { region: string }[];
+  // FAST PATH, and the reason the zero-call promise above still holds. The
+  // client re-detects on every page view, so the overwhelmingly common case is
+  // an account we already store. We can no longer answer that from the caller's
+  // puuid (it is the LCU's, see DetectedIdentity), so the shortcut keys on
+  // riot_id — the one identifier the client CAN supply that we also store.
+  //
+  // A renamed account misses this shortcut and falls through to the full
+  // resolve, which is correct rather than merely tolerable: the resolve returns
+  // the same puuid, and the INSERT's ON CONFLICT (puuid) then updates the
+  // existing row's riot_id in place. A rename costs one call, once, and moves
+  // the label without touching a single match row.
+  const known = (await sql`
+    SELECT puuid, region FROM coachbuild.my_account WHERE riot_id = ${riotId}
+  `) as unknown as { puuid: string; region: string }[];
 
+  let puuid: string;
   let region: string;
   let created: boolean;
-  if (existing.length > 0) {
-    region = existing[0].region;
+
+  if (known.length > 0) {
+    puuid = known[0].puuid;
+    region = known[0].region;
     created = false;
   } else {
     try {
-      const dto = await getRegionByPuuid(DEFAULT_ACCOUNT_ROUTING, identity.puuid);
+      // Step 1 — the REAL puuid. Never the caller's: theirs is a 36-char local
+      // UUID that account-v1 rejects with "Exception decrypting".
+      const account = await getAccountByRiotId(DEFAULT_ACCOUNT_ROUTING, identity.gameName, identity.tagLine);
+      if (!account.puuid) return { ok: false, reason: "account-not-found" };
+      puuid = account.puuid;
+    } catch (err) {
+      if (err instanceof RiotUnavailableError) return { ok: false, reason: "riot-unavailable" };
+      // 404 is the only FINAL answer here — the Riot ID does not exist. 400 is a
+      // malformed request, 403 a dead/suspended key, 429 our own rate limit:
+      // all ours to fix and all retryable, so none of them may be reported as
+      // "no such player".
+      if (err instanceof RiotRequestError) {
+        return { ok: false, reason: err.status === 404 ? "account-not-found" : "riot-unavailable" };
+      }
+      return { ok: false, reason: "riot-unavailable" };
+    }
+
+    try {
+      // Step 2 — where they play. Uses the RESOLVED puuid; passing the LCU's
+      // here is what shipped broken in v0.83.0.
+      const dto = await getRegionByPuuid(DEFAULT_ACCOUNT_ROUTING, puuid);
       const mapped = routingForPlatform(dto.region);
       // An unmapped platform is a REFUSAL, not a fallback. Guessing "EUW"
       // here would point a Chinese/Vietnamese account's ingest at the wrong
@@ -289,13 +339,13 @@ export async function linkAccount(sql: Sql, identity: DetectedIdentity): Promise
 
   await sql`
     INSERT INTO coachbuild.my_account (riot_id, puuid, region, active, last_seen_at)
-    VALUES (${riotId}, ${identity.puuid}, ${region}, false, now())
+    VALUES (${riotId}, ${puuid}, ${region}, false, now())
     ON CONFLICT (puuid) DO UPDATE
       SET riot_id = EXCLUDED.riot_id, region = EXCLUDED.region, last_seen_at = now()
   `;
 
   const inserted = (await sql`
-    SELECT id FROM coachbuild.my_account WHERE puuid = ${identity.puuid}
+    SELECT id FROM coachbuild.my_account WHERE puuid = ${puuid}
   `) as unknown as { id: number }[];
   const id = inserted[0]?.id;
   if (id === undefined) return { ok: false, reason: "riot-unavailable" }; // write vanished -- treat as transient, never claim success

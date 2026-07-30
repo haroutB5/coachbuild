@@ -185,7 +185,9 @@ export async function detectAndReportAccount(
   const identity = await getMe(port, session, deps);
   if (!shouldReportIdentity(identity, activeRiotId)) return { ok: false, reason: "nothing-to-report" };
   return postAccounts(
-    { mode: "detect", gameName: identity!.gameName, tagLine: identity!.tagLine, puuid: identity!.puuid },
+    // No puuid. The one GET /me hands back is the LCU's 36-char local UUID,
+    // which Riot rejects; the server re-resolves from the Riot ID instead.
+    { mode: "detect", gameName: identity!.gameName, tagLine: identity!.tagLine },
     deps
   );
 }

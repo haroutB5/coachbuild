@@ -13,7 +13,10 @@
 
 export type AccountsRequest =
   /** "The League client reports this identity" — link it and make it active. */
-  | { mode: "detect"; gameName: string; tagLine: string; puuid: string }
+  /** No `puuid`: the League client's is not the one Riot accepts, so the
+   *  server re-resolves it from gameName + tagLine. See DetectedIdentity in
+   *  lib/mystats/account.ts for the measurement behind that. */
+  | { mode: "detect"; gameName: string; tagLine: string }
   /** "Switch to this already-linked account" — by local id, never by puuid, so
    *  a client can only ever name an account the table already holds. */
   | { mode: "select"; id: number };
@@ -57,9 +60,13 @@ export function parseAccountsBody(body: unknown): AccountsRequest | { error: str
     if (!gameName) return { error: `gameName must be a non-blank string <= ${NAME_MAX} chars` };
     const tagLine = nonBlankString(b.tagLine, TAG_MAX);
     if (!tagLine) return { error: `tagLine must be a non-blank string <= ${TAG_MAX} chars` };
-    const puuid = typeof b.puuid === "string" ? b.puuid.trim() : "";
-    if (!PUUID_RE.test(puuid)) return { error: "puuid must be 20-128 URL-safe characters" };
-    return { mode: "detect", gameName, tagLine, puuid };
+    // `puuid` is ACCEPTED AND IGNORED if present, never validated and never
+    // read. v0.83.0 took it and used it; the LCU's value is a 36-char local
+    // UUID that Riot rejects, so linkAccount now re-resolves from the Riot ID
+    // (see DetectedIdentity). Rejecting the field outright would 400 every
+    // client still sending it — including a cached bundle mid-deploy — for a
+    // value we no longer care about, so it is simply dropped here.
+    return { mode: "detect", gameName, tagLine };
   }
 
   return { error: 'mode must be "detect" or "select"' };

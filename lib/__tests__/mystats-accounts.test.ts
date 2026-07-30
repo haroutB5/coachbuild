@@ -124,34 +124,47 @@ describe("parseAccountsBody (pure)", () => {
     }
   });
 
-  it("detect requires all three identity fields", () => {
-    const ok = parseAccountsBody({ mode: "detect", gameName: "K1ayer", tagLine: "swift", puuid: "a".repeat(78) });
-    expect(ok).toEqual({ mode: "detect", gameName: "K1ayer", tagLine: "swift", puuid: "a".repeat(78) });
+  it("detect requires the Riot ID, and NOTHING else", () => {
+    const ok = parseAccountsBody({ mode: "detect", gameName: "K1ayer", tagLine: "swift" });
+    expect(ok).toEqual({ mode: "detect", gameName: "K1ayer", tagLine: "swift" });
     for (const bad of [
-      { mode: "detect", tagLine: "swift", puuid: "a".repeat(78) },
-      { mode: "detect", gameName: "", tagLine: "swift", puuid: "a".repeat(78) },
-      { mode: "detect", gameName: "  ", tagLine: "swift", puuid: "a".repeat(78) },
-      { mode: "detect", gameName: "K1ayer", tagLine: "", puuid: "a".repeat(78) },
-      { mode: "detect", gameName: "K1ayer", tagLine: "swift" },
-      { mode: "detect", gameName: "K1ayer", tagLine: "swift", puuid: "short" },
-      { mode: "detect", gameName: 123, tagLine: "swift", puuid: "a".repeat(78) },
+      { mode: "detect", tagLine: "swift" },
+      { mode: "detect", gameName: "", tagLine: "swift" },
+      { mode: "detect", gameName: "  ", tagLine: "swift" },
+      { mode: "detect", gameName: "K1ayer", tagLine: "" },
+      { mode: "detect", gameName: 123, tagLine: "swift" },
     ]) {
       expect(isAccountsRequestError(parseAccountsBody(bad))).toBe(true);
     }
   });
 
-  it("rejects a puuid carrying URL path characters -- it is interpolated into a Riot request path", () => {
-    for (const bad of ["../../etc/passwd0000000000", "a".repeat(30) + "/x", "a".repeat(30) + "?q=1", "a".repeat(30) + "#f"]) {
-      expect(isAccountsRequestError(parseAccountsBody({ mode: "detect", gameName: "A", tagLine: "B", puuid: bad }))).toBe(true);
+  it("a puuid in the body is ACCEPTED AND DROPPED, however hostile -- it is never read or interpolated", () => {
+    // v0.83.0 took this field and passed it to Riot. It is now dead weight:
+    // dropping rather than rejecting means a cached client bundle still
+    // sending one mid-deploy keeps working instead of 400ing.
+    for (const hostile of [
+      "../../etc/passwd0000000000",
+      "a".repeat(30) + "/x",
+      "a".repeat(30) + "?q=1",
+      "a".repeat(30) + "#f",
+      "short",
+      "45f94caa-fbf1-59df-8d21-60efd5516ae6", // the real LCU shape that broke v0.83.0
+      12345,
+      null,
+    ]) {
+      expect(parseAccountsBody({ mode: "detect", gameName: "A", tagLine: "B", puuid: hostile })).toEqual({
+        mode: "detect",
+        gameName: "A",
+        tagLine: "B",
+      });
     }
   });
 
   it("accepts a CUSTOM (non-region) tagLine -- the user's own second account is K1ayer#swift", () => {
-    expect(parseAccountsBody({ mode: "detect", gameName: "K1ayer", tagLine: "swift", puuid: "b".repeat(78) })).toEqual({
+    expect(parseAccountsBody({ mode: "detect", gameName: "K1ayer", tagLine: "swift" })).toEqual({
       mode: "detect",
       gameName: "K1ayer",
       tagLine: "swift",
-      puuid: "b".repeat(78),
     });
   });
 });
@@ -255,7 +268,7 @@ describe("POST /api/mystats/accounts -- select mode", () => {
 });
 
 describe("POST /api/mystats/accounts -- detect mode", () => {
-  const IDENTITY = { mode: "detect", gameName: "K1ayer", tagLine: "swift", puuid: "c".repeat(78) };
+  const IDENTITY = { mode: "detect", gameName: "K1ayer", tagLine: "swift" };
 
   beforeEach(() => {
     mockSql.mockReset();
@@ -277,10 +290,10 @@ describe("POST /api/mystats/accounts -- detect mode", () => {
     expect(body.created).toBe(true);
     expect(body.switched).toBe(true);
     expect(body.activeId).toBe(2);
+    // No puuid reaches linkAccount -- the server re-resolves it from the Riot ID.
     expect(mockLinkAccount).toHaveBeenCalledWith(mockSql, {
       gameName: "K1ayer",
       tagLine: "swift",
-      puuid: "c".repeat(78),
     });
   });
 
@@ -289,10 +302,22 @@ describe("POST /api/mystats/accounts -- detect mode", () => {
     mockLinkAccount.mockResolvedValueOnce({ ok: true, account: ACCOUNT_A, created: false });
     mockListAccounts.mockResolvedValueOnce([summary(ACCOUNT_A, true)]);
     const body = await (
-      await accountsPOST(authed({ mode: "detect", gameName: "MunsterHunter", tagLine: "EUW", puuid: "d".repeat(78) }))
+      await accountsPOST(authed({ mode: "detect", gameName: "MunsterHunter", tagLine: "EUW" }))
     ).json();
     expect(body.switched).toBe(false);
     expect(body.created).toBe(false);
+  });
+
+  it("404 (not 502) when the Riot ID genuinely does not exist -- a final answer about the REQUEST", async () => {
+    // The status split matters to a client: 502 invites a retry, 404 tells the
+    // user to fix the name. Getting it backwards means either retrying forever
+    // against a typo, or telling someone their real account does not exist
+    // because our key was rate-limited.
+    mockGetActiveAccount.mockResolvedValueOnce(ACCOUNT_A);
+    mockLinkAccount.mockResolvedValueOnce({ ok: false, reason: "account-not-found" });
+    const res = await accountsPOST(authed({ mode: "detect", gameName: "NoSuchPlayer", tagLine: "XXXX" }));
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toBe("account-not-found");
   });
 
   it("502 (not 500) when the region cannot be resolved -- upstream failed, nothing was written, retry is safe", async () => {

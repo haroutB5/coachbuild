@@ -178,8 +178,12 @@ describe("linkAccount", () => {
     let nextId = Math.max(0, ...rows.map((r) => r.id)) + 1;
     const sql = sqlMock((strings: TemplateStringsArray, ...values: unknown[]) => {
       const text = sqlText(strings);
-      if (text.includes("SELECT region FROM coachbuild.my_account WHERE puuid")) {
-        return Promise.resolve(rows.filter((r) => r.puuid === values[0]).map((r) => ({ region: r.region })));
+      // The already-linked fast path keys on riot_id, not puuid: the client can
+      // no longer supply a usable puuid (see DetectedIdentity).
+      if (text.includes("SELECT puuid, region FROM coachbuild.my_account WHERE riot_id")) {
+        return Promise.resolve(
+          rows.filter((r) => r.riot_id === values[0]).map((r) => ({ puuid: r.puuid, region: r.region }))
+        );
       }
       if (text.includes("INSERT INTO coachbuild.my_account")) {
         const [riotId, puuid, region] = values as [string, string, string];
@@ -218,11 +222,15 @@ describe("linkAccount", () => {
     return { sql, rows };
   }
 
-  it("a NEW puuid resolves its region from Riot (one call) and becomes active", async () => {
-    mockGetRegionByPuuid.mockResolvedValueOnce({ puuid: "p2", game: "lol", region: "euw1" });
+  it("a NEW account resolves its REAL puuid from the Riot ID, then its region -- never the caller's puuid", async () => {
+    // The whole point of this test. v0.83.0 passed the client's puuid straight
+    // to getRegionByPuuid; the LCU's value is a 36-char local UUID that Riot
+    // 400s with "Exception decrypting", so a new account could never link.
+    mockGetAccountByRiotId.mockResolvedValueOnce({ puuid: "REAL-78", gameName: "K1ayer", tagLine: "swift" });
+    mockGetRegionByPuuid.mockResolvedValueOnce({ puuid: "REAL-78", game: "lol", region: "euw1" });
     const { sql, rows } = makeSql([{ id: 1, riot_id: "MunsterHunter#EUW", puuid: "p1", region: "EUW", active: true }]);
 
-    const result = await linkAccount(sql as never, { gameName: "K1ayer", tagLine: "swift", puuid: "p2" });
+    const result = await linkAccount(sql as never, { gameName: "K1ayer", tagLine: "swift" });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.created).toBe(true);
@@ -230,27 +238,33 @@ describe("linkAccount", () => {
     // "swift" is NOT a region -- euw1 came from Riot, mapped through routingForPlatform.
     expect(result.account.region).toBe("EUW");
     expect(result.account.routing.regional).toBe("europe");
-    expect(mockGetRegionByPuuid).toHaveBeenCalledTimes(1);
+    // Resolved by NAME first...
+    expect(mockGetAccountByRiotId).toHaveBeenCalledTimes(1);
+    expect(mockGetAccountByRiotId).toHaveBeenCalledWith(expect.anything(), "K1ayer", "swift");
+    // ...and the region lookup used the RESOLVED puuid, which is the fix.
+    expect(mockGetRegionByPuuid).toHaveBeenCalledWith(expect.anything(), "REAL-78");
     expect(rows.find((r) => r.puuid === "p1")!.active).toBe(false); // exactly one active
-    expect(rows.find((r) => r.puuid === "p2")!.active).toBe(true);
+    expect(rows.find((r) => r.puuid === "REAL-78")!.active).toBe(true);
   });
 
-  it("an ALREADY-LINKED puuid costs ZERO Riot calls -- this is what makes per-page-view detection safe", async () => {
+  it("an ALREADY-LINKED account costs ZERO Riot calls -- this is what makes per-page-view detection safe", async () => {
     const { sql } = makeSql([
       { id: 1, riot_id: "MunsterHunter#EUW", puuid: "p1", region: "EUW", active: false },
       { id: 2, riot_id: "K1ayer#swift", puuid: "p2", region: "EUW", active: true },
     ]);
-    const result = await linkAccount(sql as never, { gameName: "MunsterHunter", tagLine: "EUW", puuid: "p1" });
+    const result = await linkAccount(sql as never, { gameName: "MunsterHunter", tagLine: "EUW" });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.created).toBe(false);
     expect(result.account.id).toBe(1); // the previously-INACTIVE account is now the active one
+    // The fast path keys on riot_id now, so NEITHER call is made.
+    expect(mockGetAccountByRiotId).not.toHaveBeenCalled();
     expect(mockGetRegionByPuuid).not.toHaveBeenCalled();
   });
 
   it("re-linking the ALREADY-ACTIVE account is idempotent and free", async () => {
     const { sql, rows } = makeSql([{ id: 1, riot_id: "MunsterHunter#EUW", puuid: "p1", region: "EUW", active: true }]);
-    const result = await linkAccount(sql as never, { gameName: "MunsterHunter", tagLine: "EUW", puuid: "p1" });
+    const result = await linkAccount(sql as never, { gameName: "MunsterHunter", tagLine: "EUW" });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.created).toBe(false);
@@ -258,50 +272,97 @@ describe("linkAccount", () => {
     expect(rows).toHaveLength(1);
     // The property that makes per-page-view detection safe against the shared
     // Riot key budget (CLAUDE.md gotcha (d)).
+    expect(mockGetAccountByRiotId).not.toHaveBeenCalled();
     expect(mockGetRegionByPuuid).not.toHaveBeenCalled();
   });
 
-  it("a RENAME updates riot_id in place and keeps the same account id (so no match history is orphaned)", async () => {
+  it("a RENAME misses the riot_id fast path, re-resolves to the SAME puuid, and updates in place", async () => {
+    // Costs one resolve because the new name is not in the table -- but the
+    // puuid comes back identical, so ON CONFLICT (puuid) moves the label and
+    // orphans no match history. One call, once, per rename.
+    mockGetAccountByRiotId.mockResolvedValueOnce({ puuid: "p1", gameName: "NewName", tagLine: "EUW" });
+    mockGetRegionByPuuid.mockResolvedValueOnce({ puuid: "p1", game: "lol", region: "euw1" });
     const { sql, rows } = makeSql([{ id: 1, riot_id: "OldName#EUW", puuid: "p1", region: "EUW", active: true }]);
-    const result = await linkAccount(sql as never, { gameName: "NewName", tagLine: "EUW", puuid: "p1" });
+    const result = await linkAccount(sql as never, { gameName: "NewName", tagLine: "EUW" });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.account.id).toBe(1);
     expect(result.account.riotId).toBe("NewName#EUW");
     expect(rows).toHaveLength(1); // renamed, NOT duplicated -- puuid is the identity
-    expect(mockGetRegionByPuuid).not.toHaveBeenCalled();
   });
 
+  it("a Riot ID that does not exist is account-not-found, NOT riot-unavailable", async () => {
+    // 404 is final and the user fixes it by correcting the name. Reporting it
+    // as a transient failure would invite an endless retry; reporting a
+    // rate-limited key as this would tell someone their real account is gone.
+    mockGetAccountByRiotId.mockRejectedValueOnce(
+      new RiotRequestError("https://europe.api.riotgames.com/riot/account/v1/accounts", 404, "Not Found")
+    );
+    const { sql, rows } = makeSql([]);
+    const result = await linkAccount(sql as never, { gameName: "NoSuchPlayer", tagLine: "XXXX" });
+    expect(result).toEqual({ ok: false, reason: "account-not-found" });
+    expect(rows).toHaveLength(0);
+    expect(mockGetRegionByPuuid).not.toHaveBeenCalled(); // never reached
+  });
+
+  it.each([400, 403, 429, 503])(
+    "HTTP %i while resolving is riot-unavailable -- ours to fix, and retryable",
+    async (status) => {
+      mockGetAccountByRiotId.mockRejectedValueOnce(
+        new RiotRequestError("https://europe.api.riotgames.com/riot/account/v1/accounts", status, "x")
+      );
+      const { sql, rows } = makeSql([]);
+      const result = await linkAccount(sql as never, { gameName: "A", tagLine: "B" });
+      expect(result).toEqual({ ok: false, reason: "riot-unavailable" });
+      expect(rows).toHaveLength(0); // never write a half-known row
+    }
+  );
+
   it("REFUSES to write when Riot returns a platform this app cannot map -- never a default region", async () => {
+    mockGetAccountByRiotId.mockResolvedValueOnce({ puuid: "p9", gameName: "Someone", tagLine: "TAG" });
     mockGetRegionByPuuid.mockResolvedValueOnce({ puuid: "p9", game: "lol", region: "zz9" });
     const { sql, rows } = makeSql([]);
-    const result = await linkAccount(sql as never, { gameName: "Someone", tagLine: "TAG", puuid: "p9" });
+    const result = await linkAccount(sql as never, { gameName: "Someone", tagLine: "TAG" });
     expect(result).toEqual({ ok: false, reason: "region-unresolved" });
     expect(rows).toHaveLength(0); // a row with an unknown region would silently never get any games
   });
 
-  it("region-unresolved on a definitive Riot rejection, riot-unavailable on a missing key or transient failure", async () => {
+  it("REGION-step failures: region-unresolved on a definitive rejection, riot-unavailable on a missing key or transient failure", async () => {
     const { sql } = makeSql([]);
+    // Each case gets past the resolve step first, so the region step is what is
+    // under test here.
+    mockGetAccountByRiotId.mockResolvedValue({ puuid: "px", gameName: "A", tagLine: "B" });
 
     mockGetRegionByPuuid.mockRejectedValueOnce(
       new RiotRequestError("https://europe.api.riotgames.com/riot/account/v1/region", 404, "Not Found")
     );
-    expect(await linkAccount(sql as never, { gameName: "A", tagLine: "B", puuid: "px" })).toEqual({
+    expect(await linkAccount(sql as never, { gameName: "A", tagLine: "B" })).toEqual({
       ok: false,
       reason: "region-unresolved",
     });
 
     mockGetRegionByPuuid.mockRejectedValueOnce(new RiotUnavailableError());
-    expect(await linkAccount(sql as never, { gameName: "A", tagLine: "B", puuid: "py" })).toEqual({
+    expect(await linkAccount(sql as never, { gameName: "A", tagLine: "B" })).toEqual({
       ok: false,
       reason: "riot-unavailable",
     });
 
     mockGetRegionByPuuid.mockRejectedValueOnce(new TypeError("socket hang up"));
-    expect(await linkAccount(sql as never, { gameName: "A", tagLine: "B", puuid: "pz" })).toEqual({
+    expect(await linkAccount(sql as never, { gameName: "A", tagLine: "B" })).toEqual({
       ok: false,
       reason: "riot-unavailable",
     });
+  });
+
+  it("a transport failure while RESOLVING is riot-unavailable, and never reaches the region step", async () => {
+    mockGetAccountByRiotId.mockRejectedValueOnce(new TypeError("socket hang up"));
+    const { sql, rows } = makeSql([]);
+    expect(await linkAccount(sql as never, { gameName: "A", tagLine: "B" })).toEqual({
+      ok: false,
+      reason: "riot-unavailable",
+    });
+    expect(mockGetRegionByPuuid).not.toHaveBeenCalled();
+    expect(rows).toHaveLength(0);
   });
 });
 

@@ -2,6 +2,56 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.83.1] — 2026-07-30 — The League client's puuid is not Riot's puuid
+
+### Fixed
+- **v0.83.0's account detection could never link a new account.** Found on the first contact with a
+  real League client, minutes after shipping.
+
+  `GET /me` works — it returned `K1ayer#swift` correctly, exactly three keys, nothing leaked. But the
+  LCU's `/lol-summoner/v1/current-summoner` returns a **36-character local UUID** in a field named
+  `puuid`, while every Riot public endpoint requires the **78-character encrypted PUUID** and rejects
+  the short form:
+
+  ```
+  LCU        -> "45f94caa-fbf1-59df-8d21-60efd5516ae6"                 (36 chars)
+  account-v1 -> 400 {"message":"Bad Request - Exception decrypting 45f94caa-..."}
+  ```
+
+  That value was not merely passed to the region lookup — it was the **identity** `linkAccount` keyed
+  everything on: the existing-row SELECT, the INSERT, and the `ON CONFLICT` target. So a genuinely new
+  account failed at the first Riot call and never linked at all. Detection would find the right
+  account and then silently do nothing with it.
+
+  `linkAccount` now resolves `gameName` + `tagLine` through **`account-v1 by-riot-id`** to get the
+  real puuid first, then looks up the region with *that*. Verified live: the resolve returns the
+  78-char id and the region lookup then answers `euw1` — for an account whose tagLine is `swift`,
+  which is exactly the case the region step exists for.
+
+  **`puuid` is gone from the detect contract**, both directions. It is accepted and dropped rather
+  than rejected, so a cached client bundle still sending one mid-deploy keeps working instead of
+  400ing on a field nobody reads. A test pins that, including against the real LCU shape.
+
+  **The zero-Riot-call promise still holds** — the already-linked fast path now keys on `riot_id`,
+  the one identifier a client can supply that we also store. A rename misses that path and costs one
+  resolve, which returns the same puuid, so `ON CONFLICT (puuid)` moves the label and orphans no
+  match history.
+
+  **404 is now distinct from everything else.** A Riot ID that does not exist returns
+  `account-not-found` and the route answers **404**; 400/403/429/503 stay `riot-unavailable` and
+  **502**. Collapsing them would either retry forever against a typo or tell someone their real
+  account does not exist because our key was rate-limited.
+
+### Known
+- **This is the same failure class this repo already banked for op.gg's site-scoped player ids** —
+  identical `Exception decrypting` error — whose standing rule was *never trust an id from an external
+  source, re-resolve from game_name + tag_line*. The multi-account design broke that rule on my
+  instruction. It survived two implementers and a Fable cold-start audit because there was no League
+  client on the build machine, so every companion path was exercised against a stub, and a stub
+  returns whatever shape its author expected.
+- Still unverified end to end: no real `{mode:"detect"}` POST has been made from a browser with the
+  real secret. The resolve and region calls above were verified directly against Riot.
+
 ## [0.83.0] — 2026-07-30 — My Stats holds more than one account, and every number knows whose it is
 
 My Stats tracked exactly one hardcoded Riot ID. It now detects the account from the League client,
