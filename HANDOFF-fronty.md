@@ -1,5 +1,261 @@
 <!-- merged into HANDOFF.md 2026-07-30 02:27:49Z; previous content preserved there. Append new rounds below. -->
 
+# fronty — ROUND 2: /mystats visual-fidelity pass against the reference (2026-07-30)
+
+**On top of v0.84.3. No version bump, no commit, no deploy.**
+
+Closed the gap between `/mystats` and `_reference-trackdiff.png`. It was a
+density-and-scale problem, not a structural one — the brief's read was right.
+Nothing was added to fill an empty slot and nothing deliberately-absent came back.
+
+## How the reference was measured
+
+The reference is a **1290px-wide desktop page**, full-bleed, ~14px gutters. The
+image is 1290×2796 with letterbox bars; the page content is the middle ~1290×1120
+band. Every "reference px" below is a measurement off that image.
+
+Ours was measured in a real browser with `_fronty-measure.mjs` (computed geometry,
+fresh `userDataDir` per width), at 390 / 1024 / **1290** / 1920. 1290 is the width
+that makes the comparison apples-to-apples.
+
+One structural fact that governs everything: at a 1290px viewport our content
+column is **1058px**, not 1290 — the desktop rail takes 232px. So the reference's
+composition always has to fit in ~82% of the room it was drawn for.
+
+## Region by region — reference / before / after
+
+All "after" figures measured at a **1290px viewport** unless noted.
+
+### 1. Container
+
+| | reference | before | after |
+|---|---|---|---|
+| content column | 1290 (full-bleed) | 1100 max | **1280 max** |
+
+Every "ours is looser" reading traced back to the same cause: a 1100px cap
+re-flowing a 1290px composition. Widening was the cheapest density gain on the
+page — no font shrank to get it. At 1290 the cap does not bind (rail-limited to
+1058); at 1920 the column is now 1232 rather than 1052.
+
+### 2. Hero band
+
+| | reference | before | after |
+|---|---|---|---|
+| height | 225 | 199 | **170** |
+| name font | ~40 | 30 | **40** (26 at 390, 34 at sm) |
+| name tracking | — | −0.025em | **−0.03em** |
+| portrait | 106 | 88 | **96** (68 at 390) |
+| chip rows | 1 | 2 reserved | **1 at ≥1024, 2 below** |
+| copy lines | 12 | 11.5 | **12** |
+| splash art | legible right half | scrimmed to near-black | **visible** |
+
+Two real changes beyond type scale:
+
+- **The right-hand scrim was lightened** (`0.58/0.74` → `0.46/0.62` at the 74%/100%
+  stops). The left stops are untouched at `0.96/0.90` — that is the half the name,
+  chips and copy sit on, and its contrast budget was never the problem. Splash
+  opacity `0.60` → `0.72`.
+- **The two-row chip reservation now collapses to one row at `lg`.** This is the
+  one change that could have re-opened a closed CLS bug, so it is measured, not
+  reasoned about: at 1024px the chip row has **203px of slack** against the
+  WIDEST chip set the page produces (`EUW · Emerald IV · 57 LP · 1W · 2L ·
+  Main · Viktor 1g`, 355px natural against 558px available). Below 1024 the
+  two-row reservation is **unchanged**, which is where the wrap is real.
+
+### 3. Tab strip
+
+| | reference | before | after |
+|---|---|---|---|
+| case | sentence | UPPERCASE | **sentence** |
+| font | ~14 | 13 | **13.5** |
+| tracking | ~0 | +0.06em | **+0.005em** |
+| gap | ~40 | 24 | **24 / 36 at sm** |
+
+`HextechTabs` is **shared with the Builds page** (`BuildTabContent` renders it
+twice), so none of this touched the component. It is done through the tablist's
+own `className` with arbitrary variants (`[&_[role=tab]]:normal-case` etc.),
+scoped to `/mystats`, leaving both Builds call sites byte-identical.
+
+### 4. "Accounts" heading
+
+| | reference | before | after |
+|---|---|---|---|
+| font | ~40 | **15** | **32** (22 at 390, 28 at sm) |
+| tracking | — | −0.015em | **−0.03em** |
+
+The single largest reason the shipped page read as a settings screen where the
+reference reads as a profile. The most-played portrait strip is unchanged.
+
+### 5. Account card grid
+
+| | reference | before | after |
+|---|---|---|---|
+| card height | 59 | 76 | **58** |
+| avatar | ~36 | 36 | **32** |
+| shape | 2 lines left, 2 right | 3 down the middle + 2 right | **2 left, 2 right** |
+
+The card was **re-laid-out, not just squeezed**. Rank moved to the right column
+above LP, per the reference; the games count moved down beside the region chip.
+**Nothing was dropped** — `138g stored` is still on the card and still labelled
+on hover.
+
+The rank column is capped at 40% of the card. At 1024 an uncapped `Platinum IV`
+ate enough of the row that the *shorter* of two account names truncated. The
+reference truncates names too (`DepressedMegaMind #7…`), so a cap is the faithful
+answer; at 1290+ neither name truncates any more.
+
+### 6. Lower panels
+
+| | reference | before | after |
+|---|---|---|---|
+| split | ~1 : 2 (31.5% / 63.7%) | 1 : 1 | **1 : 1.9 at ≥1280** |
+| champion row pitch | ~52 | 57 | **49** |
+| champion portrait | ~31 | 36 | **32** |
+
+**The 1:2 split is an `xl` rule and that is a measured correction, not caution.**
+Applied at `lg` it gave the champion panel a 250px track, the NAME column fell to
+~60px, every row wrapped, and the pitch went **57 → 70** — i.e. the "make it
+denser" change made that panel *taller* than what it replaced. Caught in the
+browser, not in review. The reference is a 1290px desktop; its ratio is honest
+from 1280 up and nowhere below.
+
+### 7. KPI treatment
+
+| | reference | before | after |
+|---|---|---|---|
+| arrangement | numerals left, chips right, ONE row | chips on their own row ABOVE | **one row at ≥1280** |
+| numeral size | ~30 | 26 | **26 (unchanged)** |
+
+The chips-above-KPIs arrangement cost ~34px and separated the standing (a chip)
+from the numbers it qualifies. **DOM order is chips-then-KPIs at every width** —
+the visual swap is CSS `order`, so a screen reader still hears the standing
+before the figures.
+
+`xl:min-w-[360px]` on the strip is a floor, and it is there because without it the
+third cell **clipped `45.0%` mid-glyph at 1290px**. Found in a screenshot.
+
+The 26px numeral was **left alone**: `KpiStrip` is shared with `FeaturedOtpCard`
+and `StatTiles`, and 26 vs ~30 did not justify moving a shared component.
+
+### 8. Bar chart
+
+| | reference | before | after |
+|---|---|---|---|
+| block height | ~126 | ~143 (bars alone) | **~121** |
+| track | — | 84 | **64** |
+| column pitch | ~35 | 38 | **36** |
+| portrait | ~22 | 28 | **24** |
+| 20 bars without scroll | yes | no | **yes at 1920, no at 1290** |
+
+Shortening the TRACK is the only lever that costs no information — no bar
+dropped, no label shrunk, and `fraction` is still normalised upstream against the
+fixed ceiling of 10, so every bar's height *relative to every other* is
+unchanged. `normalizeKdaBars` was not touched.
+
+## What still differs, and why
+
+- **The hero is shorter than the reference's** (170 vs 225 at the same width).
+  Direct consequence of the deliberately-absent PRO chip, country flag, ladder
+  placing and social row. **If any region still looks under-filled, this is the
+  one.** The composition that would fix it without inventing data: move the two
+  muted copy lines out of the text column and run them **full-width along the
+  hero's bottom edge**, the way the reference's "Register or Login to TrackDIFF…"
+  line does — that reclaims the reference's silhouette (portrait + name block
+  left, a wide footer line under everything) and adds ~25px of deliberate height.
+  Not done: it is a composition change rather than a fidelity fix, and it wants
+  your call.
+- **Twenty bars still need horizontal scroll at 1290** (720px of bars into a 621px
+  panel). Fits at 1920. Cannot close without a wider page or a narrower bar; the
+  reference gets it free because its panel is 820px wide.
+- **KPI numerals are 26px, reference ~30px.** Shared component; see above.
+- **The season KPI band (`3 / 33.3% / —`) has no reference counterpart** and is the
+  airiest region left at 1920. Real data; left full-width rather than invent a
+  treatment for it.
+- **The left champion panel is short** in every screenshot because the active
+  account (`K1ayer#swift`) has 3 champions. With `MunsterHunter#EUW` active it
+  renders 5 rows and the two panels are close to level. Data, not layout.
+- **Deliberately still absent**, per the brief and the test that asserts it:
+  `Avg Score`, `MVP`/`ACE`, per-match placement, `Avg Game ELO`, the `PRO` chip,
+  country flag, social buttons, `Decay` and `VODs` tabs. Untouched.
+
+## Files changed
+
+- `app/mystats/page.tsx` — container max-width, tab-strip overrides, section
+  heading scale, lower-grid split, skeleton kept in sync with both.
+- `components/hextech/mystats/ProfileHero.tsx` — name/portrait scale, scrim,
+  splash opacity, chip-row collapse at `lg`, padding.
+- `components/hextech/mystats/AccountCardGrid.tsx` — card re-layout to 58px.
+- `components/hextech/mystats/ChampionPerformancePanel.tsx` — row pitch, portrait,
+  column widths, padding.
+- `components/hextech/mystats/MatchPerformancePanel.tsx` — inline KPI/chip row.
+- `components/hextech/mystats/RecentGamesChart.tsx` — track height, pitch, portrait.
+
+**No shared component was edited.** `HextechTabs`, `KpiStrip`, `PanelHeading`,
+`MostPlayedStrip` and `normalizeKdaBars` are untouched, so the Builds page cannot
+have moved.
+
+## Verified (round 2)
+
+| claim | how |
+|---|---|
+| verify-fix gate | **ALL CHECKS PASSED** — tsc, lint (0 warnings), **2622 tests**, build, SW, manifest. Run twice; dev servers killed first both times. |
+| **no horizontal scroll** | `window.scrollTo(9999,0)` then `window.scrollX === 0` at 390 / 1024 / 1290 / 1920 — **the check that cannot be fooled**. `documentElement.scrollWidth === innerWidth` too. |
+| CLS, production build | 390 **0.1274** · 1024 0.0137 · 1290 0.0121 · 1920 0.0067. The 390 figure is the pre-existing baseline (0.128 last ship, 0.13057 live prod) — **unchanged, not regressed**. |
+| hero chips do not wrap at `lg` | widest chip set: 355px natural vs 558px available at 1024, **203px slack** |
+| both accounts render | `K1ayer#swift` Emerald IV 57 LP 186g (active, still ingesting) and `MunsterHunter#EUW` Platinum IV 89 LP 138g, all four widths |
+| both tabs switch | `hidden` flip verified in the DOM at 390 / 1024 / 1920; Match History screenshotted at each |
+| clicks land | `elementFromPoint` **edge scan** (centre + 4 inset corners) over every link, button, tab and input at 390 — zero blocked points |
+| touch targets | one element under 44px: the global TopBar search input at 43px. **Pre-existing, not my file, not touched.** |
+| reduced motion | `prefers-reduced-motion: reduce` emulated at 390 — zero running animations |
+| console | zero console errors, zero page errors, all widths, both tabs |
+| screenshots read | 390 / 1024 / 1290 / 1920, **production build**, fresh `userDataDir` per width — `_capture/final-*-full.png` |
+
+## NOT verified — be explicit (round 2)
+
+- **No account switch was performed.** No account secret on this machine, so every
+  switch returns `no-secret`. The picker's menu semantics, roving tabindex,
+  switch-forces-a-refetch and the secret entry are **unmodified** and covered by
+  existing tests, but I did not exercise the success path.
+- **No keyboard drive of the tab strip.** Only its appearance changed, via the
+  tablist className; `HextechTabs` is byte-identical, so the roving-tabindex and
+  arrow-key contract is untouched by construction — but I did not tab through it.
+- **The `LIVE` hero ring never rendered.** Companion is off (`Not paired`), so
+  `liveIsThisAccount` was false in every capture. v0.84.3's live-attribution rule
+  is untouched by this pass — I changed neither `ProfileHero`'s `live` prop nor
+  anything that computes it.
+- **`unranked` / `rankUnknown` card states never rendered** — both accounts came
+  back ranked. Unit-tested, but no pixels. Same for the `filling` coverage state;
+  `still syncing` DID render.
+- **No Lighthouse, no axe.** Contrast on the lightened hero scrim was judged from
+  screenshots, not measured with a contrast tool. Text sits over the 0.90–0.96
+  stops, which are unchanged, so the risk is low — but it is a judgement, not a
+  measurement.
+
+## Left behind (round 2)
+
+Untracked read-only probes in the repo root, none spending the Riot key:
+`_fronty-measure.mjs` (geometry + screenshots + the scrollX check),
+`_fronty-a11y.mjs` (touch targets, edge-scan hit tests, reduced motion),
+`_fronty-cls2.mjs` (CLS + hero chip slack). Screenshots in `_capture/`
+(`before-*`, `after-*`, `final-*`). All use a **fresh `userDataDir` per case**.
+
+**Both my servers (dev :3007, prod :3008) were stopped.** Also killed an orphan on
+**:3021** left over from the previous session.
+
+## New gotcha for the wiki
+
+**`next dev` deletes the production build.** Starting dev after `next build` wiped
+`.next`, and `next start` then failed with `Could not find a production build`.
+Cost one full rebuild. Measure prod CLS BEFORE restarting dev, or rebuild after.
+
+## Proposed CLAUDE.md update (round 2, not applied)
+
+**`/mystats` is laid out against a 1290px reference on a 1058px column.** Any
+future "match the screenshot" pass on this page should measure at a 1290px
+viewport and remember the 232px rail, or it will chase a ratio that cannot fit.
+
+---
+
 # fronty — /mystats rebuilt against the TrackDIFF profile reference (2026-07-30)
 
 ## What shipped

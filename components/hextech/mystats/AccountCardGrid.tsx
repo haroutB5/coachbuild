@@ -93,55 +93,79 @@ export default function AccountCardGrid({
                   ? `${card.riotId}, the active account. ${card.rank.label}.`
                   : `Switch to ${card.riotId}. ${card.rank.label}.`
               }
-              className={`w-full min-h-[76px] text-left rounded-xl border px-3 py-2.5 flex items-center gap-2.5 transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
+              // 58px, not 76. The reference's cards are 59px on a 1290px page
+              // and that shortness is most of what makes its grid read as dense
+              // rather than as a list of settings rows. Everything still fits
+              // because the layout changed shape with the height: the reference
+              // puts TWO lines on each side of the card (name / region on the
+              // left, rank / LP right-aligned on the right), where ours put
+              // three things down the middle. Nothing was dropped to get here.
+              className={`w-full min-h-[58px] text-left rounded-xl border px-2.5 py-2 flex items-center gap-2.5 transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
                 card.active
                   ? "border-line-gold bg-panel2 cursor-default"
                   : "border-line bg-panel hover:bg-panel2/70 active:scale-[0.99] motion-reduce:active:scale-100"
               } ${disabled || pending ? "opacity-60" : ""}`}
             >
-              <span className="w-9 h-9 rounded-full overflow-hidden bg-black/40 border border-line flex items-center justify-center flex-shrink-0">
+              <span className="w-8 h-8 rounded-full overflow-hidden bg-black/40 border border-line flex items-center justify-center flex-shrink-0">
                 <IconWithFallback
                   src={avatar}
                   alt=""
                   fallbackGlyph={card.gameName}
                   className="w-full h-full object-cover"
-                  size={36}
+                  size={32}
                 />
               </span>
 
               <span className="min-w-0 flex-1">
                 <span className="flex items-baseline gap-1 min-w-0">
-                  <span className="text-[13px] font-semibold text-txt truncate tracking-[-0.01em]">
+                  <span className="text-[12.5px] font-semibold text-txt truncate tracking-[-0.01em] leading-[1.25]">
                     {card.gameName}
                   </span>
                   {card.tagLine && (
-                    <span className="text-[11px] text-mut flex-shrink-0">#{card.tagLine}</span>
+                    <span className="text-[10.5px] text-mut flex-shrink-0">#{card.tagLine}</span>
                   )}
                 </span>
-                <span className="mt-1 flex items-center gap-1.5 flex-wrap">
+                <span className="mt-0.5 flex items-center gap-1.5 min-w-0">
                   {region && (
-                    <span className="inline-flex items-center h-[16px] px-1.5 rounded bg-white/[0.05] border border-line text-[8.5px] font-bold uppercase tracking-[0.07em] text-mut">
+                    <span className="inline-flex items-center h-[15px] px-1.5 rounded bg-white/[0.05] border border-line text-[8px] font-bold uppercase tracking-[0.07em] text-mut flex-shrink-0">
                       {region}
                     </span>
                   )}
+                  {/* The games count moved off the right-hand column to keep
+                      that column to the reference's rank-over-LP pair. It is
+                      still on the card and still labelled on hover — it is a
+                      real denominator and dropping it to save 12px would be the
+                      wrong trade. */}
                   <span
-                    className={`text-[10.5px] font-semibold truncate ${RANK_TONE[card.rank.state]}`}
-                    title={card.rank.title}
+                    className="text-[9px] text-mut/80 tabular-nums truncate"
+                    title="Matches stored for this account, across every split"
                   >
-                    {card.rank.label}
+                    {card.games}g stored
                   </span>
                 </span>
               </span>
 
-              <span className="flex-shrink-0 text-right">
+              {/* The reference's right-aligned pair: standing on top, LP under
+                  it. Both slots keep their box when empty so a mixed grid of
+                  ranked and never-synced accounts still aligns row to row. */}
+              {/* Capped at 40% of the card. At 1024px the grid is three 241px
+                  columns and an uncapped rank string ("Platinum IV") ate enough
+                  of the row that the SHORTER of two account names started
+                  truncating. The reference truncates names too — its own grid
+                  shows "DepressedMegaMind #7…" — so a cap rather than a wrap is
+                  the faithful answer; 40% is just where both fit. */}
+              <span className="flex-shrink-0 text-right max-w-[40%]">
+                <span
+                  className={`block text-[9.5px] font-semibold truncate leading-[1.3] min-h-[13px] ${RANK_TONE[card.rank.state]}`}
+                  title={card.rank.title}
+                >
+                  {card.rank.label}
+                </span>
                 {/* LP is the reference's right-aligned figure. Absent (unranked
                     or unread) leaves the slot EMPTY rather than printing a 0 —
                     and the slot keeps its width so cards stay aligned. */}
-                <span className="block text-[13px] font-bold tabular-nums text-txt min-h-[17px]">
+                <span className="block text-[13px] font-bold tabular-nums text-txt min-h-[17px] leading-[1.3]">
                   {card.rank.lp ?? <span className="text-mut/50">&mdash;</span>}
-                </span>
-                <span className="block text-[9.5px] text-mut tabular-nums mt-0.5" title="Matches stored for this account, across every split">
-                  {card.games}g stored
                 </span>
               </span>
             </button>
@@ -153,9 +177,9 @@ export default function AccountCardGrid({
         <button
           type="button"
           onClick={() => (model.action === "show-all" ? onShowAll?.() : onLinkAnother?.())}
-          className="w-full min-h-[76px] rounded-xl border border-dashed border-line bg-transparent px-3 py-2.5 flex flex-col items-center justify-center gap-1 text-mut hover:text-txt hover:border-line-gold transition-colors motion-reduce:transition-none active:scale-[0.99] motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+          className="w-full min-h-[58px] rounded-xl border border-dashed border-line bg-transparent px-3 py-2 flex flex-col items-center justify-center gap-0.5 text-mut hover:text-txt hover:border-line-gold transition-colors motion-reduce:transition-none active:scale-[0.99] motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
         >
-          <span className="text-[12px] font-semibold">
+          <span className="text-[11.5px] font-semibold">
             {model.action === "show-all" ? "Show all accounts" : "Link another account"}
           </span>
           <span className="text-[9.5px] text-mut/80">

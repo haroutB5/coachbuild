@@ -42,7 +42,13 @@ import type { RecentGameRow } from "./RecentGamesList";
 
 /** Fixed track height — bars are sized inside it, so the chart occupies the
  *  same box before and after data resolves. CLS 0 by construction. */
-const TRACK_PX = 84;
+// 64, down from 84 (2026-07-30). The reference packs its whole 20-bar block —
+// value labels, bars, portraits and the row beneath — into ~126px; ours came to
+// ~143px for the bars alone. Shortening the TRACK is the only lever that does
+// not cost information: no bar is dropped, no label shrinks, and `fraction` is
+// still normalised against the fixed ceiling upstream, so every bar's height
+// relative to every other is unchanged.
+const TRACK_PX = 64;
 
 function BuildMark({ onWpaBuild }: { onWpaBuild: boolean | null | undefined }) {
   // Tri-state, same as BuildChip in RecentGamesList: unresolved renders an
@@ -104,7 +110,12 @@ export default function RecentGamesChart({ games, iconOf }: RecentGamesChartProp
             // back inside its own column. Shipped broken in v0.84.0; a first fix
             // attempt added `min-w-0` to the panels, which was the wrong
             // diagnosis and changed nothing.
-            <li key={`${g.championId}-${i}`} className="relative flex flex-col items-center gap-1.5 w-[34px] flex-shrink-0">
+            // 32px + the 4px flex gap = a 36px column pitch, so twenty of them
+            // measure 720px and sit inside the widened right-hand panel without
+            // needing the horizontal scroll at desktop — which is how the
+            // reference reads. The scroll container stays, because at 390px
+            // twenty bars will never fit and that is the correct answer there.
+            <li key={`${g.championId}-${i}`} className="relative flex flex-col items-center gap-1.5 w-[32px] flex-shrink-0">
               {/* A 0-death game is accented rather than annotated — there is no
                   room for the word "perfect" in a 34px column, and the sr-only
                   line below says it in full. */}
@@ -120,19 +131,19 @@ export default function RecentGamesChart({ games, iconOf }: RecentGamesChartProp
                   wrapper still reserves the space. */}
               <span className="w-full flex items-end justify-center" style={{ height: TRACK_PX }}>
                 <span
-                  className={`w-[20px] rounded-[3px] ${g.win ? "bg-good/85" : "bg-bad/80"}`}
+                  className={`w-[18px] rounded-[3px] ${g.win ? "bg-good/85" : "bg-bad/80"}`}
                   style={{ height }}
                   aria-hidden="true"
                 />
               </span>
 
-              <span className="w-7 h-7 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center">
+              <span className="w-6 h-6 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center">
                 <IconWithFallback
                   src={entry?.icon ?? ""}
                   alt=""
                   fallbackGlyph={name}
                   className="w-full h-full object-cover"
-                  size={28}
+                  size={24}
                 />
               </span>
 

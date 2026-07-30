@@ -175,7 +175,7 @@ function StillSyncingCallout({ games }: { games: number }) {
  * dev build: CLS 0.736. The KPI strip was the only thing reserving any space.
  *
  * Each block below is sized to the real thing it stands in for:
- *   · cards      76px min-height, the exact `min-h-[76px]` AccountCardGrid uses
+ *   · cards      58px min-height, the exact `min-h-[58px]` AccountCardGrid uses
  *   · panels     the two lower panels, side by side at `lg` exactly as they land
  * A skeleton that is not the final size does not reduce shift, it relocates it,
  * so these track their real counterparts — if a panel's height changes, change
@@ -186,11 +186,13 @@ function AccountsSkeleton({ cards }: { cards: number }) {
     <div className="space-y-5 animate-pulse motion-reduce:animate-none" aria-hidden="true">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
         {Array.from({ length: Math.max(3, cards + 1) }).map((_, i) => (
-          <div key={i} className="min-h-[76px] rounded-xl border border-line bg-panel" />
+          <div key={i} className="min-h-[58px] rounded-xl border border-line bg-panel" />
         ))}
       </div>
       <TilesSkeleton />
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+      {/* Track AccountsTab's real lower grid EXACTLY — same columns, same gaps.
+          A skeleton at the wrong proportions does not reduce shift, it moves it. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.9fr)] gap-4 lg:gap-5 items-start">
         <div className="h-[420px] rounded-xl border border-line bg-panel" />
         <div className="h-[420px] rounded-xl border border-line bg-panel" />
       </div>
@@ -475,7 +477,14 @@ export default function MyStatsPage() {
 
   return (
     <div className="min-h-screen pb-16">
-      <div className="max-w-[1100px] mx-auto px-4 sm:px-6 pt-6 space-y-5">
+      {/* 1280, not 1100. Measured against the reference: its content column is
+          the FULL 1290px viewport with ~14px gutters, and every "ours is looser
+          than the reference" reading traced back to the same 1010px column
+          re-flowing the reference's 1290px composition into less room. Widening
+          is the cheapest density gain on the page — the card grid, the two lower
+          panels and the 20-bar chart all get their reference proportions back
+          without a single font shrinking. */}
+      <div className="max-w-[1280px] mx-auto px-4 sm:px-6 pt-6 space-y-5">
         <ProfileHero
           headingLevel={1}
           splashKey={heroSplashKey}
@@ -601,7 +610,14 @@ export default function MyStatsPage() {
           value={tab}
           onChange={setTab}
           ariaLabel="My Stats sections"
-          className="-mt-1"
+          // The reference's strip is SENTENCE CASE at ~14px with normal
+          // tracking and ~40px between tabs; HextechTabs' own default is
+          // uppercase/13px/+0.06em/24px because that is what the Builds page
+          // wants. Overriding through the tablist's className rather than
+          // adding a variant prop keeps the Builds page's strip untouched —
+          // BuildTabContent renders the SAME component twice and neither call
+          // site asked for this.
+          className="-mt-1 sm:gap-9 [&_[role=tab]]:normal-case [&_[role=tab]]:tracking-[0.005em] [&_[role=tab]]:text-[13.5px] [&_[role=tab]]:font-medium"
         />
 
         {state.status === "loading" && (
@@ -659,8 +675,19 @@ export default function MyStatsPage() {
           hidden={tab !== "accounts"}
           className="space-y-5"
         >
-          <div className="flex items-end justify-between gap-3 flex-wrap min-h-[32px]">
-            <h2 className="text-[15px] font-semibold text-txt tracking-[-0.015em]">Accounts</h2>
+          {/* The reference's "Accounts" is a DISPLAY heading — roughly 40px on
+              its 1290px column, i.e. ~32px on ours — with the most-played strip
+              hung off its baseline at the right. Ours shipped at 15px, which is
+              the single largest reason the shipped page read as a settings
+              screen where the reference reads as a profile. Negative tracking
+              scales with size (−0.03em here, versus −0.015em at 15px) because
+              that is the premium tell and it only starts helping above ~24px.
+              `min-h` tracks the tallest of (heading, portrait strip) at each
+              width so the row cannot change height when the strip resolves. */}
+          <div className="flex items-end justify-between gap-3 flex-wrap min-h-[36px] sm:min-h-[42px] lg:min-h-[46px]">
+            <h2 className="text-[22px] sm:text-[28px] lg:text-[32px] font-semibold text-txt tracking-[-0.03em] leading-none">
+              Accounts
+            </h2>
             <MostPlayedStrip champions={mostPlayed} />
           </div>
 
@@ -726,7 +753,24 @@ export default function MyStatsPage() {
                   taller panel never stretches the shorter one into empty space.
                   One column under `lg` — a 3-column card grid and a 20-bar chart
                   both need a real mobile answer, and stacking is it. */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+              {/* NOT 50/50. Measured off the reference: its champion panel is
+                  ~31.5% of the page and the match-performance panel ~63.7%, a
+                  1:2 split. That ratio is not cosmetic — the right panel has to
+                  carry three KPIs, a chip cluster and twenty bars, and at 50/50
+                  the bars compress to the point the chart needs its own
+                  horizontal scroll on a 1280px desktop, which is exactly the
+                  "ours is less dense" reading. `minmax(0,…)` on BOTH tracks, not
+                  bare `1fr`/`1.9fr`: a grid track defaults to `min-width:auto`
+                  and the chart inside would refuse to shrink, which is gotcha
+                  (v0.84.2)'s 383px sideways scroll all over again. */}
+              {/* The 1:2 split is an `xl` rule, NOT an `lg` one, and that is a
+                  measured correction rather than caution: at 1024px it gave the
+                  champion panel a 250px track, the champion NAME column fell to
+                  ~60px, and every row wrapped to two lines — row pitch went 57 ->
+                  70, i.e. the "make it denser" change made that panel taller
+                  than what it replaced. The reference is a 1290px desktop, so
+                  its ratio is honest from 1280 up and nowhere below. */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.9fr)] gap-4 lg:gap-5 items-start">
                 <ChampionPerformancePanel rows={championPerformance} scopeLabel={scopeLabel} />
                 <MatchPerformancePanel
                   games={recentGames}

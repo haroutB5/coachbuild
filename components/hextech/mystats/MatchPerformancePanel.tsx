@@ -154,14 +154,31 @@ export default function MatchPerformancePanel({
     // sideways 383px at 390px wide. Note `document.body` measured CLEAN in that
     // state and only `documentElement` showed it, which is why a scrollWidth
     // check on the body alone passed.
-    <div className="min-w-0 bg-panel border border-line rounded-xl px-4 sm:px-5 pt-4 pb-4">
+    <div className="min-w-0 bg-panel border border-line rounded-xl px-3.5 sm:px-4 pt-3.5 pb-3.5">
       <PanelHeading meta={lastActive ? `Last active: ${lastActive}` : undefined}>
         Match performance {chips.n > 0 ? `(last ${chips.n} games)` : ""}
       </PanelHeading>
 
-      {/* Chip cluster. `flush` on the strip below would fight the panel's own
-          frame, so the strip keeps its border and the chips sit above it. */}
-      <div className="pt-3 flex items-center gap-1.5 flex-wrap">
+      {/*
+        ONE ROW at `xl`, not two stacked bands.
+
+        In the reference the three big numerals and the chip cluster share a
+        single line — numerals left, chips right — and that pairing is what makes
+        the panel read as a dense scoreboard header rather than as two unrelated
+        strips. Ours shipped with the chips on their own row ABOVE the KPI strip,
+        which cost ~34px and, worse, separated the standing (a chip) from the
+        numbers it qualifies.
+
+        It stays STACKED below `xl`: at 390px five chips and a 3-column KPI grid
+        cannot share a line without one of them shrinking past legibility, and
+        the panel is full-width there anyway so nothing is gained.
+
+        DOM ORDER IS CHIPS-THEN-KPIS at every width, and the visual swap at `xl`
+        is `order`, not a re-render — a screen reader still hears the standing
+        before the figures, which is the order the copy was written in.
+      */}
+      <div className="pt-3 flex flex-col xl:flex-row xl:items-center gap-2.5 xl:gap-4">
+      <div className="flex items-center gap-1.5 flex-wrap xl:order-2 xl:justify-end xl:flex-shrink xl:min-w-0">
         <Chip
           tone={chips.rank.state === "ranked" ? "accent" : "muted"}
           title={chips.rank.title}
@@ -190,12 +207,20 @@ export default function MatchPerformancePanel({
         )}
       </div>
 
-      <div className="pt-3">
-        <KpiStrip items={items} columns={3} />
+        {/* `min-w-0` lets the strip shrink inside the flex row instead of
+            forcing the chips to wrap off the end — the same `min-width:auto`
+            hazard this file's root comment is about. `xl:min-w-[360px]` is the
+            FLOOR under that, and it is not a guess: three cells of a 26px
+            tabular value plus `px-4` gutters need ~100px each, and without the
+            floor the third cell clipped "45.0%" mid-glyph at 1290px. Measured,
+            not reasoned about. */}
+        <div className="min-w-0 xl:order-1 xl:flex-1 xl:min-w-[360px]">
+          <KpiStrip items={items} columns={3} />
+        </div>
       </div>
 
       {games.length > 0 && (
-        <div className="pt-4">
+        <div className="pt-3.5">
           <RecentGamesChart games={games} iconOf={iconOf} />
         </div>
       )}

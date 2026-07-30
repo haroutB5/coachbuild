@@ -53,8 +53,13 @@ const AURORA =
   "radial-gradient(115% 150% at 88% 6%, rgba(200,170,110,0.20) 0%, rgba(200,170,110,0) 58%)," +
   "radial-gradient(95% 130% at 4% 104%, rgba(200,170,110,0.10) 0%, rgba(200,170,110,0) 62%)";
 
+// Lightened on the RIGHT only, 2026-07-30. In the reference the splash art is a
+// legible painting across the right half of the band; ours was scrimmed to
+// near-black and the hero read as a flat panel with a portrait on it. The left
+// stops are UNCHANGED (0.96/0.90) because that is the half the name, chips and
+// two copy lines sit on, and their contrast budget is not what was wrong.
 const SCRIM_X =
-  "linear-gradient(90deg, rgba(10,13,11,0.97) 0%, rgba(10,13,11,0.92) 44%, rgba(10,13,11,0.58) 78%, rgba(10,13,11,0.74) 100%)";
+  "linear-gradient(90deg, rgba(10,13,11,0.96) 0%, rgba(10,13,11,0.90) 42%, rgba(10,13,11,0.46) 74%, rgba(10,13,11,0.62) 100%)";
 
 const SCRIM_Y =
   "linear-gradient(180deg, rgba(10,13,11,0.30) 0%, rgba(10,13,11,0.20) 45%, rgba(10,13,11,0.74) 100%)";
@@ -112,7 +117,7 @@ export default function ProfileHero({
             aria-hidden="true"
             loading="lazy"
             decoding="async"
-            className="w-full h-full object-cover object-[50%_16%] opacity-60"
+            className="w-full h-full object-cover object-[50%_16%] opacity-[0.72]"
             onError={(e) => {
               // A wrong/unknown ddragon key answers 403, not 404 (lib/splash.ts).
               // Either way the band degrades to the scrim, which is finished.
@@ -131,14 +136,14 @@ export default function ProfileHero({
 
       {/* items-start, not items-center: at 390px the copy lines wrap to two or
           three lines and a centred portrait would drift down the block. */}
-      <div className="relative flex items-start gap-4 sm:gap-5 px-4 sm:px-6 py-5 sm:py-6">
+      <div className="relative flex items-start gap-3.5 sm:gap-5 px-4 sm:px-6 py-4 sm:py-5">
         {avatarSrc !== undefined && avatarSrc !== null && (
           <div className="relative flex-shrink-0">
             {/* The ring is a ring, not a border, so turning it red for LIVE
                 cannot change the portrait's box size — no reflow when the
                 companion connects mid-view. */}
             <span
-              className={`relative block w-[64px] h-[64px] sm:w-[88px] sm:h-[88px] rounded-full overflow-hidden bg-black/50 shadow-[0_14px_34px_-16px_rgba(0,0,0,0.95)] ring-2 ${
+              className={`relative block w-[68px] h-[68px] sm:w-[88px] sm:h-[88px] lg:w-[96px] lg:h-[96px] rounded-full overflow-hidden bg-black/50 shadow-[0_14px_34px_-16px_rgba(0,0,0,0.95)] ring-2 ${
                 live ? "ring-bad" : "ring-teal/55"
               }`}
             >
@@ -147,7 +152,7 @@ export default function ProfileHero({
                 alt={avatarAlt}
                 fallbackGlyph={avatarGlyph ?? avatarAlt}
                 className="w-full h-full object-cover"
-                size={88}
+                size={96}
               />
             </span>
             {live && (
@@ -166,7 +171,7 @@ export default function ProfileHero({
           )}
           {/* Negative tracking scales with size — the premium tell, and it
               actively hurts legibility below ~20px, so 390px gets less of it. */}
-          <Heading className="mt-1.5 text-[22px] sm:text-[30px] font-semibold text-txt leading-[1.08] tracking-[-0.025em] break-words">
+          <Heading className="mt-1 text-[26px] sm:text-[34px] lg:text-[40px] font-semibold text-txt leading-[1.05] tracking-[-0.03em] break-words">
             {title}
           </Heading>
 
@@ -191,10 +196,22 @@ export default function ProfileHero({
             The alternative — dropping chips until they fit one row — trades a
             real fact (this account's rank) for 26px, on a hero the reference
             gives plenty of vertical room to.
-          */}
-          <div className="mt-2 flex items-start content-start gap-1.5 flex-wrap min-h-[46px]">{chips}</div>
 
-          {lines && <div className="mt-2 space-y-0.5 text-[11.5px] text-mut leading-relaxed">{lines}</div>}
+            2026-07-30, `lg:min-h-[20px]`: the reference's chips ARE one tight
+            row, and above 1024px they genuinely are one row here too — the text
+            column is ~1000px and all five chips measure well under that
+            (verified in the browser at 1024 / 1290 / 1920, not reasoned about).
+            Reserving two rows at a width where only one can ever be used was
+            26px of dead space and it is most of what made our hero read looser
+            than the reference's. The two-row reservation is UNCHANGED below
+            1024px, where the wrap is real, so the CLS fix this comment
+            describes is intact at exactly the widths that needed it.
+          */}
+          <div className="mt-2 flex items-start content-start gap-1.5 flex-wrap min-h-[46px] lg:min-h-[20px]">
+            {chips}
+          </div>
+
+          {lines && <div className="mt-2 space-y-0.5 text-[12px] text-mut leading-[1.45]">{lines}</div>}
         </div>
 
         {actions && <div className="flex-shrink-0 flex items-center gap-1.5 self-start">{actions}</div>}

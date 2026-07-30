@@ -67,7 +67,7 @@ export default function ChampionPerformancePanel({ rows, scopeLabel }: ChampionP
     // `min-w-0` for the same reason as MatchPerformancePanel's root — this is a
     // grid child, and `min-width: auto` would let long champion names push the
     // column wider than its track instead of truncating inside it.
-    <div className="min-w-0 bg-panel border border-line rounded-xl px-4 sm:px-5 pt-4 pb-1">
+    <div className="min-w-0 bg-panel border border-line rounded-xl px-3.5 sm:px-4 pt-3.5 pb-1">
       <PanelHeading meta={`Top ${rows.length} · ${scopeLabel}`}>Most played champions</PanelHeading>
 
       {/* Column headers. The reference has none, but the reference's centre
@@ -76,14 +76,14 @@ export default function ChampionPerformancePanel({ rows, scopeLabel }: ChampionP
           other. `aria-hidden` because every row already carries its own labelled
           sr-only sentence. */}
       <div
-        className="flex items-center gap-3 pt-2.5 pb-1.5 text-[8.5px] uppercase tracking-[0.08em] text-mut/70 font-semibold"
+        className="flex items-center gap-2.5 pt-2 pb-1 text-[8px] uppercase tracking-[0.08em] text-mut/70 font-semibold"
         aria-hidden="true"
       >
-        <span className="w-9 flex-shrink-0" />
+        <span className="w-8 flex-shrink-0" />
         <span className="min-w-0 flex-1">Champion</span>
-        <span className="w-[52px] text-right flex-shrink-0">CS/min</span>
-        <span className="w-[62px] text-right flex-shrink-0">Record</span>
-        <span className="w-[58px] text-right flex-shrink-0">Win rate</span>
+        <span className="w-[42px] text-right flex-shrink-0">CS/min</span>
+        <span className="w-[50px] text-right flex-shrink-0">Record</span>
+        <span className="w-[50px] text-right flex-shrink-0">Win rate</span>
       </div>
 
       {rows.map((row) => {
@@ -93,21 +93,27 @@ export default function ChampionPerformancePanel({ rows, scopeLabel }: ChampionP
           <Link
             key={`${row.championId}-${row.role}`}
             href={`/?championId=${row.championId}&role=${row.role}`}
-            className="flex items-center gap-3 py-2.5 border-b border-line last:border-b-0 rounded-md transition-colors motion-reduce:transition-none hover:bg-white/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal"
+            // py-2 + a 32px portrait puts the row pitch at ~50px, which is the
+            // reference's ~52px on its wider page. py-2.5 + 36px was 57px, and
+            // five rows of that is what made this panel read as a list where the
+            // reference reads as a table.
+            className="flex items-center gap-2.5 py-2 border-b border-line last:border-b-0 rounded-md transition-colors motion-reduce:transition-none hover:bg-white/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal"
           >
-            <span className="w-9 h-9 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
-              <IconWithFallback src={row.icon} alt="" fallbackGlyph={row.name} className="w-full h-full object-cover" size={36} />
+            <span className="w-8 h-8 rounded-lg bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
+              <IconWithFallback src={row.icon} alt="" fallbackGlyph={row.name} className="w-full h-full object-cover" size={32} />
             </span>
 
             <span className="min-w-0 flex-1">
-              <span className="block text-[12.5px] text-txt font-semibold truncate tracking-[-0.01em]">{row.name}</span>
-              <span className="block text-[10px] text-mut tabular-nums">
+              <span className="block text-[12.5px] text-txt font-semibold truncate tracking-[-0.01em] leading-[1.25]">
+                {row.name}
+              </span>
+              <span className="block text-[9.5px] text-mut tabular-nums leading-[1.3]">
                 {row.roleLabel} · {row.games}g
               </span>
             </span>
 
             {/* The reference's gold CS/min figure. */}
-            <span className="w-[52px] text-right flex-shrink-0">
+            <span className="w-[42px] text-right flex-shrink-0">
               {cs !== null ? (
                 <>
                   <span className="block text-[12.5px] font-bold tabular-nums text-teal">{cs}</span>
@@ -128,20 +134,20 @@ export default function ChampionPerformancePanel({ rows, scopeLabel }: ChampionP
             </span>
 
             {/* Centre column — the account's record, NOT a KDA. See header. */}
-            <span className="w-[62px] text-right flex-shrink-0">
-              <span className={`block text-[12.5px] font-bold tabular-nums ${wrColorClass(row.winrate, row.lowSample)}`}>
+            <span className="w-[50px] text-right flex-shrink-0">
+              <span className={`block text-[12.5px] font-bold tabular-nums leading-[1.25] ${wrColorClass(row.winrate, row.lowSample)}`}>
                 {row.wins}&ndash;{row.losses}
               </span>
-              <span className="block text-[9px] text-mut/75 tabular-nums">
+              <span className="block text-[9px] text-mut/75 tabular-nums leading-[1.3]">
                 {row.wins}W {row.losses}L
               </span>
             </span>
 
-            <span className="w-[58px] text-right flex-shrink-0">
-              <span className={`block text-[13px] font-bold tabular-nums ${wrColorClass(row.winrate, row.lowSample)}`}>
+            <span className="w-[50px] text-right flex-shrink-0">
+              <span className={`block text-[13px] font-bold tabular-nums leading-[1.25] ${wrColorClass(row.winrate, row.lowSample)}`}>
                 {formatPct(row.winrate)}
               </span>
-              <span className="block text-[9px] text-mut/75 tabular-nums">{row.games} games</span>
+              <span className="block text-[9px] text-mut/75 tabular-nums leading-[1.3]">{row.games}g</span>
             </span>
 
             <span className="sr-only">
