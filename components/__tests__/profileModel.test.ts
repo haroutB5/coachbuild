@@ -16,6 +16,7 @@ import {
   buildMatchPerformanceChips,
   formatPct,
   formatCsPerMin,
+  formatCsNote,
   formatRegionChip,
   PROFILE_ACCOUNT_CARD_LIMIT,
 } from "@/components/hextech/mystats/profileModel";
@@ -206,6 +207,29 @@ describe("csRateIsQuotable", () => {
 
   it("quotes a genuine 0.0 CS/min — a real reading, not an absence", () => {
     expect(csRateIsQuotable(0, 40)).toBe(true);
+  });
+});
+
+describe("formatCsNote (2026-07-31 audit P2 re-score follow-up)", () => {
+  it("no CS recorded at all", () => {
+    expect(formatCsNote(0, 20)).toBe("no CS recorded");
+  });
+
+  it("a genuine subset -- csGames smaller than the real split total -- says 'only'", () => {
+    expect(formatCsNote(15, 20)).toBe("only 15g with CS");
+  });
+
+  // Live bug (2026-07-31): an account with exactly 2 games this split, BOTH
+  // carrying CS, read "only 2g with CS" -- "only" out of what, when 2 IS the
+  // whole split? Full coverage must never say "only", regardless of how small
+  // the count is.
+  it("full coverage -- csGames equals the total split games -- drops 'only' even when the count is tiny", () => {
+    expect(formatCsNote(2, 2)).toBe("2g this split");
+    expect(formatCsNote(1, 1)).toBe("1g this split");
+  });
+
+  it("csGames somehow exceeding the total (defensive) is still treated as full coverage, never 'only'", () => {
+    expect(formatCsNote(5, 3)).toBe("5g this split");
   });
 });
 

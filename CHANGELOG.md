@@ -2,6 +2,22 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.87.1] — 2026-07-31 — The re-score follow-ups
+
+The two items the 19/20 re-verification surfaced.
+
+### Fixed
+- **Half the prostage scheduled run recorded no health.** The scheduled task runs two scripts and
+  v0.87.0 instrumented only the Leaguepedia leg — `ingest-prostage-live.mjs`, the live-scrape leg
+  that exists because of the TheShy incident, could still fail silently. It now records under its
+  own `prostage-live` key with the same summary-path + top-level-catch placement.
+  (`scripts/ingest-prostage-live.mjs`; note: `/api/ingest/prostage`'s `lastScheduledRun` still
+  reads only the `prostage` key — both keys land in `ingest_health` either way.)
+- **"only 2g with CS" when both games had CS.** The CS tile's note compared against the quotable
+  threshold instead of the real games-this-split total, so "only" fired even at 100% coverage.
+  New `formatCsNote(csGames, totalSplitGames)` says "only" exactly when there is a genuine gap.
+  (`components/hextech/mystats/profileModel.ts`)
+
 ## [0.87.0] — 2026-07-31 — The audit round: every label tells the truth
 
 Fix round for the five P2s from the 2026-07-31 17/20 audit. No new features — six fixes to

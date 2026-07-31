@@ -858,6 +858,10 @@ export default function MyStatsPage() {
                   chips={matchChips}
                   splitCsPerMin={state.summary.csPerMin ?? null}
                   splitCsGames={state.summary.csGames ?? 0}
+                  // 2026-07-31 audit P2 re-score follow-up: the true denominator
+                  // for "only Ng with CS" -- overall.games (ALL current-split
+                  // records, not the capped 20-game recentGames window).
+                  totalSplitGames={overall?.games ?? 0}
                   lastActive={lastActive}
                 />
               </div>

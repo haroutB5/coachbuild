@@ -239,6 +239,27 @@ export function csRateIsQuotable(csPerMin: number | null, csGames: number): bool
   return csPerMin !== null && Number.isFinite(csPerMin) && csGames >= MYSTATS_LOW_SAMPLE_THRESHOLD;
 }
 
+/**
+ * The CS tile's denominator caption (2026-07-31 audit P2 re-score follow-up).
+ *
+ * "only Ng with CS" is a claim that CS is MISSING for some games — it must
+ * only appear when `csGames` is a genuine subset of the games actually
+ * played this split (`totalSplitGames`, e.g. `computeMyStatsOverall(records).games`,
+ * NOT the capped 20-game display window `games.length`/`chips.n` — a split
+ * can hold more games than the window shows). When every game this split
+ * already carries CS (`csGames >= totalSplitGames`), "only" is simply false —
+ * the real reason the rate is withheld (when it is) is too FEW games overall,
+ * not missing data, so the caption drops the qualifier entirely rather than
+ * implying a coverage gap that doesn't exist. Bug seen live: an account with
+ * exactly 2 games this split, both carrying CS, read "only 2g with CS" —
+ * "only" out of what, when 2 IS the whole split?
+ */
+export function formatCsNote(csGames: number, totalSplitGames: number): string {
+  if (csGames <= 0) return "no CS recorded";
+  if (csGames < totalSplitGames) return `only ${csGames}g with CS`;
+  return `${csGames}g this split`;
+}
+
 // ── Account cards ───────────────────────────────────────────────────────────
 
 /**

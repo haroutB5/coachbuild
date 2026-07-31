@@ -55,6 +55,7 @@ import {
 } from "@/components/hextech/myStats";
 import {
   csRateIsQuotable,
+  formatCsNote,
   formatCsPerMin,
   type MatchPerformanceChips,
 } from "./profileModel";
@@ -94,6 +95,13 @@ export interface MatchPerformancePanelProps {
    *  silently presented as a figure over the bars below. */
   splitCsPerMin: number | null;
   splitCsGames: number;
+  /** Total games played THIS SPLIT (e.g. `computeMyStatsOverall(records).games`)
+   *  — NOT `games.length`/`chips.n`, which is the capped 20-game display
+   *  window and can be smaller than the real split total. This is the honest
+   *  denominator `formatCsNote` compares `splitCsGames` against to decide
+   *  whether "only" belongs in the CS tile's caption (2026-07-31 audit P2
+   *  re-score follow-up — see that function's doc comment). */
+  totalSplitGames: number;
   /** "33 minutes ago", or null when nothing is known. */
   lastActive: string | null;
 }
@@ -104,6 +112,7 @@ export default function MatchPerformancePanel({
   chips,
   splitCsPerMin,
   splitCsGames,
+  totalSplitGames,
   lastActive,
 }: MatchPerformancePanelProps) {
   const avg = computeAverageKda(games);
@@ -128,8 +137,11 @@ export default function MatchPerformancePanel({
       format: (n) => n.toFixed(1),
       countUp: true,
       // The note carries this cell's OWN denominator, which is deliberately not
-      // the window the bars below are drawn over.
-      note: csQuotable ? `${splitCsGames}g this split` : splitCsGames > 0 ? `only ${splitCsGames}g with CS` : "no CS recorded",
+      // the window the bars below are drawn over. formatCsNote only says
+      // "only" when csGames is a genuine subset of totalSplitGames (2026-07-31
+      // audit P2 re-score follow-up) -- when quotable, the split-total phrasing
+      // is identical either way, so this always calls the same helper.
+      note: formatCsNote(splitCsGames, totalSplitGames),
     },
     {
       key: "winrate",

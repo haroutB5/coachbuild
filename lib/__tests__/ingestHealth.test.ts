@@ -64,6 +64,41 @@ describe("recordIngestRun", () => {
   });
 });
 
+describe("prostage-live is a DISTINCT key from prostage (2026-07-31 re-score follow-up)", () => {
+  it("recordIngestRun writes 'prostage-live' independently -- the two legs must never share a row", async () => {
+    const calls: { text: string; values: unknown[] }[] = [];
+    const mockSql = vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => {
+      calls.push({ text: sqlText(strings), values });
+      return Promise.resolve([]);
+    });
+    await recordIngestRun(mockSql as never, "prostage-live", { ok: false, error: "lolesports feed timeout" });
+    expect(calls[0].values).toContain("prostage-live");
+    expect(calls[0].values).not.toContain("prostage");
+    expect(calls[0].values).toContain("lolesports feed timeout");
+  });
+
+  it("getIngestHealth reads 'prostage-live' and 'prostage' as independent rows", async () => {
+    const mockSql = vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => {
+      const ingest = values[0];
+      if (ingest === "prostage-live") {
+        return Promise.resolve([
+          { ingest: "prostage-live", last_run_at: "x", last_success_at: null, ok: false, last_error: "lolesports feed timeout", last_error_at: "x" },
+        ]);
+      }
+      if (ingest === "prostage") {
+        return Promise.resolve([
+          { ingest: "prostage", last_run_at: "y", last_success_at: "y", ok: true, last_error: null, last_error_at: null },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    const live = await getIngestHealth(mockSql as never, "prostage-live");
+    const leaguepedia = await getIngestHealth(mockSql as never, "prostage");
+    expect(live).toMatchObject({ ok: false, lastError: "lolesports feed timeout" });
+    expect(leaguepedia).toMatchObject({ ok: true, lastError: null });
+  });
+});
+
 describe("getIngestHealth", () => {
   it("maps the row's snake_case columns to the camelCase IngestHealth shape", async () => {
     const mockSql = vi.fn(() =>
