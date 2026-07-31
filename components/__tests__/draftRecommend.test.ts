@@ -101,7 +101,16 @@ describe("normalizeDraftRecommendResponse", () => {
         },
       ],
       bans: [{ champId: 64, score: 0.08, confidence: "low", minGames: 20, winVsYou: null }],
-      meta: { patch: "16.14", tier: 10, fetchedAt: "2026-07-20T00:00:00.000Z", laneOppInferred: 64, currentPatch: "16.14" },
+      meta: {
+        patch: "16.14",
+        tier: 10,
+        fetchedAt: "2026-07-20T00:00:00.000Z",
+        laneOppInferred: 64,
+        currentPatch: "16.14",
+        // 2026-07-31 audit P2 (#2) -- absent on this input, defaults to null/null.
+        ingestHealthy: null,
+        ingestLastError: null,
+      },
       pending: false,
       enemyAnalysis: [
         {
@@ -258,10 +267,28 @@ describe("normalizeDraftRecommendResponse", () => {
       plays: [],
       potentialPlays: [],
       bans: null,
-      meta: { patch: "", tier: 0, fetchedAt: "", laneOppInferred: null, currentPatch: null },
+      meta: {
+        patch: "",
+        tier: 0,
+        fetchedAt: "",
+        laneOppInferred: null,
+        currentPatch: null,
+        ingestHealthy: null,
+        ingestLastError: null,
+      },
       pending: false,
       enemyAnalysis: [],
     });
+  });
+
+  it("meta.ingestHealthy/ingestLastError (2026-07-31 audit P2, #2) parse through when present, degrade to null otherwise", () => {
+    expect(normalizeDraftRecommendResponse({ meta: {} })?.meta.ingestHealthy).toBeNull();
+    expect(normalizeDraftRecommendResponse({ meta: { ingestHealthy: false } })?.meta.ingestHealthy).toBe(false);
+    expect(normalizeDraftRecommendResponse({ meta: { ingestHealthy: "false" } })?.meta.ingestHealthy).toBeNull();
+    expect(
+      normalizeDraftRecommendResponse({ meta: { ingestHealthy: false, ingestLastError: "u.gg 403" } })?.meta.ingestLastError
+    ).toBe("u.gg 403");
+    expect(normalizeDraftRecommendResponse({ meta: {} })?.meta.ingestLastError).toBeNull();
   });
 
   it("drops a malformed individual play entry without dropping the rest of the list", () => {

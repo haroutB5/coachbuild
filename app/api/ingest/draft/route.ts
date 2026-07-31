@@ -3,6 +3,7 @@ import { isAuthorized } from "@/lib/pro/auth";
 import { getSql } from "@/lib/pro/db";
 import { DbUnavailableError } from "@/lib/pro/errors";
 import { runDraftIngest, getPersistedCursor, setPersistedCursor, type DraftIngestResult } from "@/lib/draft/ingest";
+import { getIngestHealth } from "@/lib/ingestHealth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,6 +83,15 @@ export async function GET(req: NextRequest) {
       console.error("[draft-ingest-cron] ingest errors:", errors);
     }
 
+    // 2026-07-31 audit P2 (#2) — this cron is ALSO Cloudflare-blocked from
+    // reaching u.gg on Vercel's egress; the real production ingest runs from
+    // this box via Scheduled Task CoachBuildDraftIngest
+    // (scripts/ingest-draft.mjs), which persists its own last-run status.
+    // Surfaced here best-effort, never blocking the response — the Draft
+    // page (lib/draft/recommend.ts's meta) is the primary user-facing home
+    // for this fact; this is the operator-facing one.
+    const lastScheduledRun = await getIngestHealth(sql, "draft").catch(() => null);
+
     return NextResponse.json({
       patch: batches.at(-1)?.patch ?? null,
       batchesRun: batches.length,
@@ -93,6 +103,7 @@ export async function GET(req: NextRequest) {
       nextCursor: cursor,
       persistedCursor: !explicitCursor,
       errorCount: errors.length,
+      lastScheduledRun,
     });
   } catch (err) {
     if (err instanceof DbUnavailableError) {

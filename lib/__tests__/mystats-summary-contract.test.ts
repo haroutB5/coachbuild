@@ -34,6 +34,14 @@ vi.mock("@/lib/mystats/rank", async (importOriginal) => {
   return { ...actual, refreshStaleRanks: (...a: unknown[]) => mockRefreshStaleRanks(...(a as [])) };
 });
 
+// The summary route now resolves the populated patch (2026-07-31 audit P2,
+// #4 — "waiting for patch data" vs "build not recorded") to classify a null
+// on_wpa_build honestly. Mocked here so this SHAPE-focused file never makes a
+// real network call; the exact label doesn't matter to any assertion below.
+vi.mock("@/lib/staticData", () => ({
+  getLatestPatch: vi.fn(async () => ({ major: 16, patch: 13, patchAdditions: 0, label: "16.13" })),
+}));
+
 import { GET as summaryGET } from "@/app/api/mystats/summary/route";
 
 function req(url: string) {

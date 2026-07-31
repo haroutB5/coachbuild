@@ -2,6 +2,45 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.87.0] — 2026-07-31 — The audit round: every label tells the truth
+
+Fix round for the five P2s from the 2026-07-31 17/20 audit. No new features — six fixes to
+things already shipped.
+
+### Fixed
+- **Draft's freshness label was fabricated.** `meta.fetchedAt` was `new Date()` at serve time, so
+  "Upd <date>" always showed today no matter how old the data was. It now carries
+  `MAX(ingested_at)` from the rows actually served — the page shows when the data was ingested,
+  not when you asked for it. (`lib/draft/recommend.ts`)
+- **Two scheduled ingests failed silently.** The draft (u.gg) and prostage (Leaguepedia) ingests
+  were exiting 1 on Cloudflare challenges with partial success masking it — the failure class that
+  cost weeks once before (gotcha o). New `ingest_health` table (migration 0023) +
+  `lib/ingestHealth.ts`; both production entry points record every run, the Draft page surfaces an
+  unhealthy ingest, and both `/api/ingest/*` diagnostic routes report `lastScheduledRun`.
+- **Match Performance blended two splits.** The last-20 query had no split filter, so 18 April
+  games sat under a "this split"-adjacent heading next to 2 July ones and the win-rate figure
+  described a blend. `recentRows` is now split-scoped like every other figure on the page.
+  (`app/api/mystats/summary/route.ts`)
+- **Build adherence's empty state blamed the wrong thing.** Adherence has been structurally dead
+  since patch 16.14 — coachless has no data past 16.13, and the exact-patch gate correctly refuses
+  to compare across patches (cross-patch adherence would be fabricated). But the UI said "build
+  not recorded", pointing at the user's history instead of upstream lag. The two null causes are
+  now distinguished: matches on a patch coachless hasn't populated yet show "waiting for patch
+  data". The gate itself is unchanged. (`lib/mystats/adherence.ts` and the mystats read path)
+- **/live-setup described item sets that no longer exist.** The automation toggle copy claimed
+  "up to 3 item sets (Core, Optimized, Pro)" — a shape removed in v0.71.0. It now describes the
+  real contract: one set per champion+role with WPA / Pro / OTP / Hidden gem blocks plus Starting.
+  (`components/hextech/companion/AutomationToggles.tsx`)
+
+### Housekeeping
+- Untracked 3.1MB of root scratch JSONs (real PUUIDs and a third party's Riot ID; repo is private,
+  so hygiene not exposure) plus stale AUDIT/INVESTIGATION/HANDOFF stubs; all now gitignored, files
+  kept on disk.
+- Deleted the dead `SITUATIONAL_CAP` constant (`components/hextech/itemSetBody.ts`).
+- CLAUDE.md ops map corrected: companion version now points at its source instead of a stale
+  hardcoded 1.8.0; the `CoachBuildOtpPriority` hourly task is documented; gotcha (cc) now credits
+  the process-scan yield guard that actually prevents Riot 429 contention.
+
 ## [0.86.0] — 2026-07-30 — Solo queue only, and the accounts section earns its space
 
 Three asks from a marked-up screenshot of the live page.

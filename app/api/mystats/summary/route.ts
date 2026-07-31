@@ -16,6 +16,8 @@ import { COUNTED_QUEUE_IDS } from "@/lib/mystats/queues";
 import { readHistoryComplete } from "@/lib/mystats/ingest";
 import { refreshStaleRanks, UNKNOWN_RANK } from "@/lib/mystats/rank";
 import { routingForServer } from "@/lib/pro/regionMap";
+import { isWaitingForPatchData } from "@/lib/mystats/adherence";
+import { getLatestPatch } from "@/lib/staticData";
 
 /** How many games the Match Performance panel shows, and the ONE number that
  *  decides it. Both the SQL below and buildRecentGames' own limit read from
@@ -57,6 +59,10 @@ interface RecentRow {
   game_creation: string;
   cs: number | null;
   game_duration_sec: number | null;
+  /** This game's own patch label (e.g. "16.15") -- see isWaitingForPatchData's
+   *  doc comment for why this is read alongside on_wpa_build rather than
+   *  trusted to explain a null on its own. */
+  patch: string | null;
 }
 
 const EMPTY_STATS = {
@@ -278,7 +284,7 @@ export async function GET(req: NextRequest) {
 
     const recentRows = (await sql`
       SELECT champion_id, role, win, kills, deaths, assists, on_wpa_build, game_creation,
-             cs, game_duration_sec
+             cs, game_duration_sec, patch
       FROM coachbuild.my_matches
       WHERE puuid = ${account.puuid}
         -- SOLO QUEUE ONLY (2026-07-30). This strip IS the Match Performance
@@ -286,12 +292,23 @@ export async function GET(req: NextRequest) {
         -- the newest 20 stored rows on the active account were flex/normal/
         -- quickplay games, so nearly half the chart was not solo queue.
         AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
+        -- CURRENT SPLIT ONLY (2026-07-31 audit P2). This strip used to ignore
+        -- the split column entirely while every OTHER figure on this response
+        -- (records, adherence, priorSplitWinrate) is split-scoped -- on an account with
+        -- only 2 solo-queue games in the current split, 18 of the "last 20"
+        -- bars were leftover April games from the prior split, and "WIN RATE,
+        -- LAST 20: 70.0%" silently blended two splits into one number. Same
+        -- denominator discipline as every other query on this route now.
+        AND split = ${split}
       ORDER BY game_creation DESC
       -- 20, not 5: the Match Performance panel is headed "(Last 20 Games)" and
       -- its bar chart is sized for that. At 5 the heading was a claim the data
       -- did not back, which is the same defect class as an unlabelled partial
       -- history -- just smaller. The panel renders however many rows come back,
-      -- so a newly-linked account with 3 games still reads correctly.
+      -- so a newly-linked account with 3 games (now honestly reduced by the
+      -- split filter above) still reads correctly -- MatchPerformanceChips.n
+      -- and the panel heading both derive from the actual array length, never
+      -- a hardcoded 20.
       LIMIT ${RECENT_GAMES_LIMIT}
     `) as unknown as RecentRow[];
 
@@ -327,6 +344,16 @@ export async function GET(req: NextRequest) {
     // the fact travels with the numbers.
     const historyComplete = await readHistoryComplete(sql, account.puuid);
 
+    // "waiting for patch data" vs "build not recorded" (2026-07-31 audit P2,
+    // #4) — the same populated-patch resolution lib/mystats/ingest.ts's
+    // resolveRecommendedBuild gates on, re-read here so a null on_wpa_build
+    // can be classified honestly at DISPLAY time without touching how/when
+    // it was resolved. Soft-fail like every other best-effort patch read in
+    // this app (see lib/draft/recommend.ts's currentPatch) — a resolution
+    // failure degrades every pending row to the existing "not-recorded"
+    // copy, never a guess.
+    const populatedPatch = (await getLatestPatch().catch(() => null))?.label ?? null;
+
     const recentGames = buildRecentGames(
       recentRows.map((r) => ({
         championId: r.champion_id,
@@ -339,6 +366,12 @@ export async function GET(req: NextRequest) {
         gameCreation: r.game_creation,
         cs: r.cs,
         gameDurationSec: r.game_duration_sec,
+        patchDataPending: isWaitingForPatchData({
+          onWpaBuild: r.on_wpa_build ?? null,
+          role: r.role,
+          matchPatch: r.patch,
+          populatedPatch,
+        }),
       })),
       // THE CAP IS IN TWO PLACES and both have to agree. The SQL above limits
       // what is fetched; buildRecentGames defaults to 5 and would silently

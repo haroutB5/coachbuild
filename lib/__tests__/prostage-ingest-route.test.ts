@@ -16,9 +16,14 @@ vi.mock("@/lib/prostage/ingest", () => ({
 vi.mock("@/lib/pro/auth", () => ({
   isAuthorized: vi.fn(() => true),
 }));
+const mockSql = vi.fn();
+vi.mock("@/lib/pro/db", () => ({ getSql: vi.fn(() => mockSql) }));
+const mockGetIngestHealth = vi.fn();
+vi.mock("@/lib/ingestHealth", () => ({ getIngestHealth: (...a: unknown[]) => mockGetIngestHealth(...a) }));
 
 import { GET } from "@/app/api/ingest/prostage/route";
 import { runProstageIngest } from "@/lib/prostage/ingest";
+import { getSql } from "@/lib/pro/db";
 
 const req = (qs = "") =>
   ({
@@ -31,6 +36,8 @@ describe("GET /api/ingest/prostage diagnosability", () => {
 
   beforeEach(() => {
     vi.mocked(runProstageIngest).mockReset();
+    vi.mocked(getSql).mockReturnValue(mockSql as never);
+    mockGetIngestHealth.mockReset().mockResolvedValue(null);
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -90,6 +97,32 @@ describe("GET /api/ingest/prostage diagnosability", () => {
       nextCursor: null,
       errors: [],
       errorCount: 0,
+    });
+  });
+
+  describe("lastScheduledRun (2026-07-31 audit P2, #2)", () => {
+    it("surfaces the persisted health of the REAL (locally-scheduled) ingest run", async () => {
+      vi.mocked(runProstageIngest).mockResolvedValueOnce({
+        tournament: "LEC 2026 Summer", rowsSeen: 1, rowsUpserted: 1, nextCursor: null, errors: [],
+      });
+      mockGetIngestHealth.mockResolvedValueOnce({
+        ingest: "prostage", lastRunAt: "x", lastSuccessAt: null, ok: false, lastError: "Cloudflare 403", lastErrorAt: "x",
+      });
+      const res = await GET(req());
+      const json = await res.json();
+      expect(mockGetIngestHealth).toHaveBeenCalledWith(mockSql, "prostage");
+      expect(json.lastScheduledRun).toMatchObject({ ok: false, lastError: "Cloudflare 403" });
+    });
+
+    it("null (never fabricated healthy) when DATABASE_URL is unset", async () => {
+      vi.mocked(getSql).mockReturnValueOnce(null as never);
+      vi.mocked(runProstageIngest).mockResolvedValueOnce({
+        tournament: "LEC 2026 Summer", rowsSeen: 1, rowsUpserted: 1, nextCursor: null, errors: [],
+      });
+      const res = await GET(req());
+      const json = await res.json();
+      expect(json.lastScheduledRun).toBeNull();
+      expect(mockGetIngestHealth).not.toHaveBeenCalled();
     });
   });
 });

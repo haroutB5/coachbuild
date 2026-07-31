@@ -40,6 +40,26 @@ const { runDraftIngest } = await import("../lib/draft/ingest.ts");
 const { getAllChampions } = await import("../lib/staticData.ts");
 const { UGG_REFERER } = await import("../lib/draft/ugg.ts");
 const { withRetryTransport } = await import("../lib/retryTransport.ts");
+const { getSql } = await import("../lib/pro/db.ts");
+const { recordIngestRun } = await import("../lib/ingestHealth.ts");
+
+// 2026-07-31 audit P2 (#2) — this run already failed silently once (u.gg
+// Cloudflare-challenged on every 6xxxx-keyed champion id, 2026-07-30) with
+// nothing but a rotating local log to notice it in. recordIngestRun persists
+// whether THIS run's whole walk came back clean so the Draft page (see
+// lib/draft/recommend.ts's meta) can surface it honestly instead of the
+// staleness only being visible days later via meta.currentPatch drifting.
+// Best-effort: never let a failure recording status mask/crash over the
+// ingest run itself, which has already finished by the time this fires.
+async function recordHealth(ok, error) {
+  try {
+    const sql = getSql();
+    if (!sql) return; // no DATABASE_URL -- nothing to record against
+    await recordIngestRun(sql, "draft", { ok, error: error ?? null });
+  } catch (err) {
+    console.error("ingest-draft: failed to record ingest health (non-fatal):", err);
+  }
+}
 
 /** curlTransportWithHeaders, pre-bound with u.gg's required Referer, and
  *  wrapped with a bounded retry-with-backoff for the transient curl-level
@@ -221,10 +241,27 @@ async function main() {
   if (allErrors.length > 0) {
     console.log(`\nfirst 5 errors:\n  ${allErrors.slice(0, 5).join("\n  ")}`);
   }
-  if (allErrors.length > 0 || roleProbeFailures.length > 0 || guardOk === false || lolalyticsVerdict === "fail") process.exitCode = 1;
+  const failed = allErrors.length > 0 || roleProbeFailures.length > 0 || guardOk === false || lolalyticsVerdict === "fail";
+  if (failed) {
+    process.exitCode = 1;
+    const summary = [
+      ...allErrors.slice(0, 3),
+      guardOk === false ? "ingest guard failed" : null,
+      lolalyticsVerdict === "fail" ? "lolalytics tripwire failed" : null,
+      roleProbeFailures.length > 0 ? `${roleProbeFailures.length} role-probe failure(s)` : null,
+    ].filter(Boolean).join("; ");
+    await recordHealth(false, summary);
+  } else {
+    await recordHealth(true);
+  }
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
+  // A thrown error here means the walk never reached the summary above (e.g.
+  // getAllChampions itself failed) -- record it as a failure too, or the
+  // worst outages (the ones that abort the whole script) are exactly the
+  // ones this table would otherwise stay silent about.
+  await recordHealth(false, err instanceof Error ? err.message : String(err));
   if (err?.name === "DbUnavailableError") {
     console.error(`ingest-draft: ${err.message}`);
     process.exit(1);

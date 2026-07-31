@@ -107,6 +107,15 @@ export interface DraftRecommendMeta {
    *  server's own resolver failed — degrades to "no staleness notice"
    *  rather than a false positive. */
   currentPatch: string | null;
+  /** 2026-07-31 audit P2 (#2) — mirrors lib/draft/recommend.ts's
+   *  RecommendMeta.ingestHealthy: did the last scheduled draft ingest run
+   *  come back clean? `null` = unknown, NOT healthy — only render a warning
+   *  on an explicit `false`. Absent/malformed on an older cached response
+   *  degrades to null (no warning), same posture as currentPatch above. */
+  ingestHealthy: boolean | null;
+  /** Best-effort summary of the last failure; null when healthy/unknown or
+   *  absent on the wire. */
+  ingestLastError: string | null;
 }
 
 /** Draft redesign plan §2.3 — mirrors lib/draft/recommend.ts's EnemyAnalysis
@@ -296,6 +305,8 @@ export function normalizeDraftRecommendResponse(raw: unknown): DraftRecommendRes
     fetchedAt: typeof r.meta?.fetchedAt === "string" ? r.meta.fetchedAt : "",
     laneOppInferred: typeof r.meta?.laneOppInferred === "number" ? r.meta.laneOppInferred : null,
     currentPatch: typeof r.meta?.currentPatch === "string" ? r.meta.currentPatch : null,
+    ingestHealthy: typeof r.meta?.ingestHealthy === "boolean" ? r.meta.ingestHealthy : null,
+    ingestLastError: typeof r.meta?.ingestLastError === "string" ? r.meta.ingestLastError : null,
   };
   // Draft redesign plan §2.3: absent/malformed (older cached response, or
   // Stage 0 not landed yet) degrades to [] -- never crashes, never treated

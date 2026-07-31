@@ -302,6 +302,14 @@ export default function DraftPage() {
     state.data.meta.patch !== null &&
     state.data.meta.currentPatch !== state.data.meta.patch;
 
+  // 2026-07-31 audit P2 (#2) — the scheduled draft ingest itself failing is a
+  // DIFFERENT fact from the served patch being behind (isStalePatchData
+  // above): a run can fail today while yesterday's data still looks fine, or
+  // succeed today while still serving an old patch because it hasn't reached
+  // it yet. Only warn on an explicit `false` — `null` means unknown, never a
+  // manufactured warning.
+  const isIngestUnhealthy = state.status === "ok" && state.data.meta.ingestHealthy === false;
+
   // audit P2-1: the enemy chip highlight reflects EITHER the user's own
   // explicit tag (laneOpponentId) OR — when the user hasn't tagged anyone —
   // the server's own statistical inference (meta.laneOppInferred), never a
@@ -371,6 +379,15 @@ export default function DraftPage() {
               {isStalePatchData && (
                 <p className="text-[10px] mt-0.5 normal-case">
                   Patch {state.data.meta.currentPatch} data isn&apos;t ready yet — showing patch {state.data.meta.patch}.
+                </p>
+              )}
+              {/* 2026-07-31 audit P2 (#2) — makes a real, previously-silent
+                  ingest failure visible instead of only a rotating local log
+                  file. Independent of the stale-patch notice above (see
+                  isIngestUnhealthy's doc comment). */}
+              {isIngestUnhealthy && (
+                <p className="text-[10px] mt-0.5 normal-case text-bad/80" title={state.data.meta.ingestLastError ?? undefined}>
+                  Last data refresh hit an error — this may be showing older data than usual.
                 </p>
               )}
             </div>

@@ -332,6 +332,99 @@ describe("computeDraftRecommend", () => {
     });
   });
 
+  describe("meta.ingestHealthy / ingestLastError (2026-07-31 audit P2, #2)", () => {
+    function mockWithHealth(healthRows: unknown[]) {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.ingest_health")) return Promise.resolve(healthRows);
+        if (text.includes("FROM coachbuild.draft_champ_stats")) return Promise.resolve([champStatsRow({ champ_id: 1 })]);
+        return Promise.resolve([]);
+      });
+    }
+
+    it("surfaces a failed last run", async () => {
+      mockWithHealth([{ ingest: "draft", last_run_at: "x", last_success_at: "y", ok: false, last_error: "u.gg 403 on 12 champs", last_error_at: "x" }]);
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.meta.ingestHealthy).toBe(false);
+      expect(result.meta.ingestLastError).toBe("u.gg 403 on 12 champs");
+    });
+
+    it("surfaces a healthy last run with no error", async () => {
+      mockWithHealth([{ ingest: "draft", last_run_at: "x", last_success_at: "x", ok: true, last_error: null, last_error_at: null }]);
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.meta.ingestHealthy).toBe(true);
+      expect(result.meta.ingestLastError).toBeNull();
+    });
+
+    it("null (unknown), never a fabricated false, when no health row exists yet", async () => {
+      mockWithHealth([]);
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.meta.ingestHealthy).toBeNull();
+      expect(result.meta.ingestLastError).toBeNull();
+    });
+
+    it("degrades to unknown (not a thrown error) if the health read itself fails", async () => {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.ingest_health")) return Promise.reject(new Error("db hiccup"));
+        if (text.includes("FROM coachbuild.draft_champ_stats")) return Promise.resolve([champStatsRow({ champ_id: 1 })]);
+        return Promise.resolve([]);
+      });
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.meta.ingestHealthy).toBeNull();
+    });
+
+    it("also populated on the pending path", async () => {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.ingest_health")) {
+          return Promise.resolve([{ ingest: "draft", last_run_at: "x", last_success_at: null, ok: false, last_error: "boom", last_error_at: "x" }]);
+        }
+        return Promise.resolve([]);
+      });
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.pending).toBe(true);
+      expect(result.meta.ingestHealthy).toBe(false);
+      expect(result.meta.ingestLastError).toBe("boom");
+    });
+  });
+
+  describe("meta.fetchedAt (P2 fix, 2026-07-31 audit — data age, not request time)", () => {
+    it("reflects MAX(ingested_at) from the served pool rows, not the request clock", async () => {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.draft_champ_stats")) {
+          return Promise.resolve([
+            { ...champStatsRow({ champ_id: 1 }), latest_ingested_at: "2026-07-28T08:59:00.000Z" },
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+      const before = Date.now();
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.meta.fetchedAt).toBe("2026-07-28T08:59:00.000Z");
+      // Sanity: the real ingested_at is well before "now" -- proves this isn't
+      // accidentally still the request-time value from a broken mock.
+      expect(new Date(result.meta.fetchedAt).getTime()).toBeLessThan(before);
+    });
+
+    it("falls back to request time on the pending path (no pool rows to source freshness from)", async () => {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        return Promise.resolve([]);
+      });
+      const before = Date.now();
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.pending).toBe(true);
+      expect(new Date(result.meta.fetchedAt).getTime()).toBeGreaterThanOrEqual(before);
+    });
+  });
+
   it("bans computed when hover has a baseline", async () => {
     mockSql.mockImplementation((strings: TemplateStringsArray) => {
       const text = sqlText(strings);

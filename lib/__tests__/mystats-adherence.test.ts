@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { computeAdherence, ADHERENCE_MIN_CORE_ITEM_HITS, type AdherenceInput } from "@/lib/mystats/adherence";
+import {
+  computeAdherence,
+  ADHERENCE_MIN_CORE_ITEM_HITS,
+  comparePatchLabels,
+  isWaitingForPatchData,
+  type AdherenceInput,
+} from "@/lib/mystats/adherence";
 
 function input(over: Partial<AdherenceInput> = {}): AdherenceInput {
   return {
@@ -56,5 +62,60 @@ describe("computeAdherence", () => {
     expect(
       computeAdherence(input({ matchItemIds: [0, 0, 0, 0, 0, 0] }))
     ).toBe(false);
+  });
+});
+
+describe("comparePatchLabels", () => {
+  it("numeric major.minor comparison, not lexical -- 16.9 < 16.14", () => {
+    expect(comparePatchLabels("16.14", "16.9")).toBe(1);
+    expect(comparePatchLabels("16.9", "16.14")).toBe(-1);
+  });
+
+  it("equal patches -> 0", () => {
+    expect(comparePatchLabels("16.15", "16.15")).toBe(0);
+  });
+
+  it("different major versions compare on major first", () => {
+    expect(comparePatchLabels("17.1", "16.20")).toBe(1);
+  });
+
+  it("unparseable labels -> 0 (can't tell, never a false claim either way)", () => {
+    expect(comparePatchLabels("garbage", "16.15")).toBe(0);
+    expect(comparePatchLabels("16.15", "")).toBe(0);
+  });
+});
+
+describe("isWaitingForPatchData (2026-07-31 audit P2, #4)", () => {
+  const base = { onWpaBuild: null as boolean | null, role: 2, matchPatch: "16.15", populatedPatch: "16.13" };
+
+  it("true: null on_wpa_build, valid role, match patch NEWER than the populated patch (upstream lag)", () => {
+    expect(isWaitingForPatchData(base)).toBe(true);
+  });
+
+  it("false when onWpaBuild is a real boolean -- a comparison WAS made, nothing to reclassify", () => {
+    expect(isWaitingForPatchData({ ...base, onWpaBuild: true })).toBe(false);
+    expect(isWaitingForPatchData({ ...base, onWpaBuild: false })).toBe(false);
+  });
+
+  it("false when role is unresolved (ARAM/remake) -- genuinely unresolvable, not a patch-lag question", () => {
+    expect(isWaitingForPatchData({ ...base, role: -1 })).toBe(false);
+    expect(isWaitingForPatchData({ ...base, role: 5 })).toBe(false);
+  });
+
+  it("false when the match patch is OLDER than the populated patch -- a real historical patch, stays 'not-recorded'", () => {
+    expect(isWaitingForPatchData({ ...base, matchPatch: "16.10", populatedPatch: "16.13" })).toBe(false);
+  });
+
+  it("false when the match patch EQUALS the populated patch -- would have resolved if it could", () => {
+    expect(isWaitingForPatchData({ ...base, matchPatch: "16.13", populatedPatch: "16.13" })).toBe(false);
+  });
+
+  it("false when either patch is null/unresolvable -- nothing to compare, stays honestly 'not-recorded'", () => {
+    expect(isWaitingForPatchData({ ...base, matchPatch: null })).toBe(false);
+    expect(isWaitingForPatchData({ ...base, populatedPatch: null })).toBe(false);
+  });
+
+  it("live-probed real-world case (2026-07-31): ddragon 16.15 vs coachless's populated 16.13", () => {
+    expect(isWaitingForPatchData({ onWpaBuild: null, role: 0, matchPatch: "16.15", populatedPatch: "16.13" })).toBe(true);
   });
 });

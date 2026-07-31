@@ -59,8 +59,11 @@ const EXTENDED_DEFAULTS = {
 
 /** The per-game CS trio as it normalizes from a payload that predates engy's CS
  *  ship — all null, never a fabricated 0. Spread into every exhaustive
- *  `recentGames` assertion for the same reason EXTENDED_DEFAULTS exists. */
-const RECENT_GAME_CS_DEFAULTS = { cs: null, gameDurationSec: null, csPerMin: null };
+ *  `recentGames` assertion for the same reason EXTENDED_DEFAULTS exists.
+ *  `patchDataPending` (2026-07-31 audit P2, #4) joins it here for the same
+ *  reason — a payload that predates that ship also carries no such field, and
+ *  normalizeRecentGame must default it to false, never true. */
+const RECENT_GAME_CS_DEFAULTS = { cs: null, gameDurationSec: null, csPerMin: null, patchDataPending: false };
 
 /** Same idea for a champion-pool record: no rate, and a ZERO denominator, which
  *  is what makes the UI withhold the figure instead of printing "0.0". */

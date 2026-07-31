@@ -82,6 +82,14 @@ export interface MyStatsRecentGame {
    *  noise, so the RATE is withheld while `cs`/`gameDurationSec` stay populated
    *  and a surface may still say "12 CS in 3:41". */
   csPerMin: number | null;
+  /** 2026-07-31 audit P2 (#4) — true when `onWpaBuild` is null specifically
+   *  because this game's own patch is ahead of coachless's populated data
+   *  (upstream ingest lag), not because nothing was recorded for this match.
+   *  See lib/mystats/adherence.ts's isWaitingForPatchData for the full
+   *  reasoning. Only meaningful when `onWpaBuild` is null/undefined; ignored
+   *  otherwise. Always a real boolean from the server (never undefined) —
+   *  see normalizeRecentGame's default below for the one place that matters. */
+  patchDataPending: boolean;
 }
 
 export interface MyStatsSummary {
@@ -243,6 +251,10 @@ function normalizeRecentGame(raw: unknown): MyStatsRecentGame | null {
     cs: numOrNull(r.cs),
     gameDurationSec: numOrNull(r.gameDurationSec),
     csPerMin: numOrNull(r.csPerMin),
+    // Defaults to false (never true) on an absent/malformed field — an older
+    // cached bundle or a wire regression must degrade to the existing
+    // "not-recorded" copy, never a fabricated "waiting for patch data" claim.
+    patchDataPending: r.patchDataPending === true,
   };
 }
 

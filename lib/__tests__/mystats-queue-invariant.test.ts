@@ -42,7 +42,13 @@ vi.mock("@/lib/mystats/account", () => ({
 }));
 
 vi.mock("@/lib/draft/patch", () => ({ resolveDraftPatchLabel: vi.fn(async () => "16.14") }));
-vi.mock("@/lib/staticData", () => ({ getChampionMeta: vi.fn(async () => null) }));
+// getLatestPatch (2026-07-31 audit P2, #4 — summary route's "waiting for
+// patch data" classification) joins getChampionMeta here since this file's
+// mock is a full module replacement, not a partial one.
+vi.mock("@/lib/staticData", () => ({
+  getChampionMeta: vi.fn(async () => null),
+  getLatestPatch: vi.fn(async () => ({ major: 16, patch: 14, patchAdditions: 0, label: "16.14" })),
+}));
 
 import { GET as summaryGET } from "@/app/api/mystats/summary/route";
 import { GET as matchupsGET } from "@/app/api/mystats/matchups/route";

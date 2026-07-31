@@ -38,3 +38,24 @@ scripts/.backfill-team-comps-reorder-cursor.json
 
 # live-client capture evidence (scripts/capture-live-client.ps1)
 _capture/
+
+# scratch data pulled down by ad-hoc Riot/LCU probes at the repo root — real
+# PUUIDs / Riot IDs, never meant to be committed (found tracked 2026-07-31)
+/acct.json
+/acct2.json
+/chal.json
+/cm.json
+/gm.json
+/ids.json
+/ids2.json
+/lv.json
+/m.json
+/ma.json
+/t.json
+
+# session handoffs / one-off audit + investigation notes — regenerated per
+# session, never a durable artifact worth versioning
+HANDOFF.md
+HANDOFF-*.md
+AUDIT-*.md
+INVESTIGATION-*.md

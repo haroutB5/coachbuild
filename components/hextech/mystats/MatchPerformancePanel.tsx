@@ -133,7 +133,7 @@ export default function MatchPerformancePanel({
     },
     {
       key: "winrate",
-      label: `Win rate, last ${chips.n}`,
+      label: `Win rate, last ${chips.n} (this split)`,
       value: chips.n > 0 ? winrate * 100 : null,
       format: (n) => `${n.toFixed(1)}%`,
       valueClassName: chips.lowSample ? "text-mut" : winrate >= 0.5 ? "text-good" : "text-bad",
@@ -156,7 +156,12 @@ export default function MatchPerformancePanel({
     // check on the body alone passed.
     <div className="min-w-0 bg-panel border border-line rounded-xl px-3.5 sm:px-4 pt-3.5 pb-3.5">
       <PanelHeading meta={lastActive ? `Last active: ${lastActive}` : undefined}>
-        Match performance {chips.n > 0 ? `(last ${chips.n} games)` : ""}
+        {/* 2026-07-31 audit P2 (#3): `games` (and therefore chips.n) is now
+            scoped to the CURRENT SPLIT (app/api/mystats/summary/route.ts) —
+            "this split" makes that scope explicit rather than implying a
+            fixed rolling window of N games regardless of when they were
+            played. */}
+        Match performance {chips.n > 0 ? `(last ${chips.n} games this split)` : ""}
       </PanelHeading>
 
       {/*

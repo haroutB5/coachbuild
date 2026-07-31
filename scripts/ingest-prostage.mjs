@@ -59,6 +59,28 @@ const { resolveActiveTournaments, buildTournamentsQuerySpec, MAX_TOURNAMENTS } =
 );
 const { cargoExportQuery, cargoField, CargoRequestError } = await import("../lib/prostage/cargo.ts");
 const { retryWithBackoff } = await import("../lib/retryTransport.ts");
+const { getSql } = await import("../lib/pro/db.ts");
+const { recordIngestRun } = await import("../lib/ingestHealth.ts");
+
+// 2026-07-31 audit P2 (#2) — this is the leg that actually hits Cloudflare
+// (Special:CargoExport, see this file's header): live-verified 2026-07-31
+// 14:25Z failing on every major tournament (LCK/LCS/LEC/LPL/MSI/EWC) while
+// still exiting "partial success" (some tournaments/rows DID land), which is
+// exactly the shape that hid the failure in a log file nobody reads
+// proactively. recordIngestRun below persists whether THIS run's whole walk
+// came back clean, so the fact survives past this process and this log file.
+// Best-effort: a failure writing the status must never be confused with (or
+// mask/crash over) the ingest run itself, which has already finished by the
+// time this fires.
+async function recordHealth(ok, error) {
+  try {
+    const sql = getSql();
+    if (!sql) return; // no DATABASE_URL -- nothing to record against
+    await recordIngestRun(sql, "prostage", { ok, error: error ?? null });
+  } catch (err) {
+    console.error("ingest-prostage: failed to record ingest health (non-fatal):", err);
+  }
+}
 
 const viaExport = process.argv.includes("--via-export");
 
@@ -145,10 +167,21 @@ async function main() {
   }
 
   console.log(JSON.stringify({ tournaments, totalSeen, totalUpserted, errors: allErrors }, null, 2));
-  if (allErrors.length > 0) process.exitCode = 1;
+  if (allErrors.length > 0) {
+    process.exitCode = 1;
+    await recordHealth(false, allErrors.slice(0, 5).join("; "));
+  } else {
+    await recordHealth(true);
+  }
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
+  // A thrown error (tournament resolution itself failed, e.g. every retry
+  // exhausted against a sustained Cloudflare challenge) is a run that never
+  // even got to `allErrors` above -- record it as a failure too, or the
+  // WORST outages (the ones that abort the whole script) would be the ones
+  // this table stays silent about.
+  await recordHealth(false, err instanceof Error ? err.message : String(err));
   if (err?.name === "DbUnavailableError") {
     console.error(`ingest-prostage: ${err.message}`);
     process.exit(1);

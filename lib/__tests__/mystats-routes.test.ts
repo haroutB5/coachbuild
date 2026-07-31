@@ -34,6 +34,17 @@ vi.mock("@/lib/mystats/account", () => ({
 const mockRunMyStatsRefresh = vi.fn();
 vi.mock("@/lib/mystats/refresh", () => ({ runMyStatsRefresh: (...args: unknown[]) => mockRunMyStatsRefresh(...args) }));
 
+// The summary route now resolves the populated patch (2026-07-31 audit P2,
+// #4 — "waiting for patch data" vs "build not recorded") to classify a null
+// on_wpa_build honestly. Mocked here so these tests never make a real
+// network call — same reason lib/__tests__/mystats-ingest.test.ts mocks this
+// module. The exact label is irrelevant to every test in this file (none of
+// them assert on patchDataPending); a stable value just keeps the route from
+// reaching the network.
+vi.mock("@/lib/staticData", () => ({
+  getLatestPatch: vi.fn(async () => ({ major: 16, patch: 13, patchAdditions: 0, label: "16.13" })),
+}));
+
 import { GET as ingestGET } from "@/app/api/ingest/mystats/route";
 import { GET as summaryGET } from "@/app/api/mystats/summary/route";
 import { GET as matchupsGET } from "@/app/api/mystats/matchups/route";

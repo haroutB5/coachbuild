@@ -30,7 +30,8 @@ export interface RecentGameRow {
   deaths: number;
   assists: number;
   /** null/undefined = build-adherence not resolved for this game (old data,
-   *  or the pipeline hasn't backfilled it yet) — renders no chip at all. */
+   *  or the pipeline hasn't backfilled it yet) — renders no chip at all,
+   *  unless `patchDataPending` says WHY (see that field). */
   onWpaBuild: boolean | null | undefined;
   /** engy §1c (2026-07-30). Kept structurally identical to
    *  MyStatsRecentGame so the two interfaces stay mutually assignable — see
@@ -40,6 +41,11 @@ export interface RecentGameRow {
   cs: number | null;
   gameDurationSec: number | null;
   csPerMin: number | null;
+  /** 2026-07-31 audit P2 (#4) — only meaningful when `onWpaBuild` is
+   *  null/undefined: true means the null is upstream ingest lag (this game's
+   *  patch has no populated coachless data yet), not an unresolvable game.
+   *  See lib/mystats/adherence.ts's isWaitingForPatchData. */
+  patchDataPending: boolean;
 }
 
 export interface RecentGamesListProps {
@@ -58,7 +64,13 @@ export interface RecentGamesListProps {
   showChart?: boolean;
 }
 
-function BuildChip({ onWpaBuild }: { onWpaBuild: boolean | null | undefined }) {
+function BuildChip({
+  onWpaBuild,
+  patchDataPending,
+}: {
+  onWpaBuild: boolean | null | undefined;
+  patchDataPending: boolean;
+}) {
   if (onWpaBuild === true) {
     return (
       <span className="flex-shrink-0 text-[9px] font-bold uppercase tracking-[0.05em] px-1.5 py-1 rounded-md bg-teal/15 text-teal border border-teal/30">
@@ -70,6 +82,20 @@ function BuildChip({ onWpaBuild }: { onWpaBuild: boolean | null | undefined }) {
     return (
       <span className="flex-shrink-0 text-[9px] font-bold uppercase tracking-[0.05em] px-1.5 py-1 rounded-md bg-white/[0.04] text-mut border border-line">
         Off-build
+      </span>
+    );
+  }
+  // Upstream ingest lag (2026-07-31 audit P2, #4), not an unresolvable game —
+  // see isWaitingForPatchData. Shown as its own honest chip rather than
+  // silently rendering nothing, which used to read as "this game has no
+  // adherence data" with no hint that a whole recent patch is affected.
+  if (patchDataPending) {
+    return (
+      <span
+        className="flex-shrink-0 text-[9px] font-bold uppercase tracking-[0.05em] px-1.5 py-1 rounded-md bg-white/[0.03] text-mut/70 border border-line/60"
+        title="This game's patch isn't in coachless's data yet — build adherence can't be checked until it is."
+      >
+        Patch pending
       </span>
     );
   }
@@ -136,7 +162,7 @@ export default function RecentGamesList({ games, iconOf, showChart = true }: Rec
               {g.kills} / {g.deaths} / {g.assists}
             </span>
 
-            <BuildChip onWpaBuild={g.onWpaBuild} />
+            <BuildChip onWpaBuild={g.onWpaBuild} patchDataPending={g.patchDataPending} />
           </div>
         );
       })}

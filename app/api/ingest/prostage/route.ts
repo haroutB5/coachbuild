@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { isAuthorized } from "@/lib/pro/auth";
 import { DbUnavailableError } from "@/lib/pro/errors";
 import { runProstageIngest } from "@/lib/prostage/ingest";
+import { getSql } from "@/lib/pro/db";
+import { getIngestHealth } from "@/lib/ingestHealth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -61,7 +63,16 @@ export async function GET(req: NextRequest) {
     if (result.errors.length > 0) {
       console.error("[prostage-cron] ingest errors:", result.errors);
     }
-    return NextResponse.json({ ...result, errorCount: result.errors.length });
+    // 2026-07-31 audit P2 (#2) — this route itself is Cloudflare-blocked from
+    // Vercel (gotcha (o)); the REAL production ingest runs from this box via
+    // Scheduled Task CoachBuildProstageIngest (scripts/ingest-prostage.mjs),
+    // which now persists its own last-run status to coachbuild.ingest_health.
+    // Surfaced here (best-effort, never blocks the response) so a manual
+    // curl of this diagnostic endpoint answers "is the REAL pipeline healthy"
+    // as well as "did THIS invocation work" — the two can disagree.
+    const sql = getSql();
+    const lastScheduledRun = sql ? await getIngestHealth(sql, "prostage").catch(() => null) : null;
+    return NextResponse.json({ ...result, errorCount: result.errors.length, lastScheduledRun });
   } catch (err) {
     if (err instanceof DbUnavailableError) {
       return NextResponse.json({ error: "DATABASE_URL not configured" }, { status: 503 });

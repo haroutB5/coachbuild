@@ -213,7 +213,6 @@ export interface ProConsensusItemsInput {
 }
 
 const LINE_LEN = 6;
-const SITUATIONAL_CAP = 6;
 
 // ── Cross-family de-dup (audit P1-B) ────────────────────────────────────────
 // The shop panel used to carry Core build + Buy order + Pro build + OTP build

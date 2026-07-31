@@ -221,6 +221,9 @@ describe("buildRecentGames", () => {
       cs: null,
       gameDurationSec: null,
       csPerMin: null,
+      // 2026-07-31 audit P2 (#4) -- defaults to false when the caller omits
+      // it, same back-compat convention as cs/gameDurationSec above.
+      patchDataPending: false,
     });
   });
 

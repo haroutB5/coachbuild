@@ -53,7 +53,11 @@ const TRACK_PX = 64;
 function BuildMark({ onWpaBuild }: { onWpaBuild: boolean | null | undefined }) {
   // Tri-state, same as BuildChip in RecentGamesList: unresolved renders an
   // EMPTY box of the same height rather than nothing, so a column with no
-  // adherence data is still the same height as its neighbours.
+  // adherence data is still the same height as its neighbours. Whether the
+  // unresolved case is genuinely unrecorded or just waiting on patch data
+  // (see isWaitingForPatchData) doesn't change this mark's pixels — that
+  // distinction is carried in words only, via `buildText` below and
+  // RecentGamesList's own chip.
   if (onWpaBuild === true) {
     return <span className="block h-[3px] w-5 rounded-full bg-teal" aria-hidden="true" />;
   }
@@ -89,12 +93,20 @@ export default function RecentGamesChart({ games, iconOf }: RecentGamesChartProp
           const entry = iconOf(g.championId);
           const name = entry?.name ?? `Champion #${g.championId}`;
           const height = Math.max(4, Math.round(bar.fraction * TRACK_PX));
+          // 2026-07-31 audit P2 (#4): a null onWpaBuild reads as "build not
+          // recorded" (implying this app failed to record something about
+          // THIS game) unless patchDataPending says the real reason is
+          // upstream ingest lag — coachless simply has no data for this
+          // game's patch yet. See lib/mystats/adherence.ts's
+          // isWaitingForPatchData for the full distinction.
           const buildText =
             g.onWpaBuild === true
               ? "on the WPA build"
               : g.onWpaBuild === false
                 ? "off the WPA build"
-                : "build not recorded";
+                : g.patchDataPending
+                  ? "waiting for patch data"
+                  : "build not recorded";
 
           return (
             // `relative` IS THE FIX FOR A REAL BUG, not decoration. The

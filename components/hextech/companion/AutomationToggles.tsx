@@ -74,8 +74,9 @@ export default function AutomationToggles({
         title="Auto-add item builds on champ select"
         description={
           <>
-            Up to 3 item sets (Core, Optimized, Pro) appear in your in-client shop — a passive
-            suggestion, same as Blitz/u.gg import.
+            One item set for your champion and role appears in your in-client shop, holding four
+            build lines side by side — WPA build, Pro build, OTP build and Hidden gem — plus your
+            starting items. A passive suggestion, same as Blitz/u.gg import.
           </>
         }
       />

@@ -58,6 +58,7 @@ import { suggestedDefense, type SuggestedDefense } from "@/lib/draft/damageProfi
 import { getChampionMeta } from "@/lib/staticData";
 import { getActiveAccount } from "@/lib/mystats/account";
 import { COUNTED_QUEUE_IDS } from "@/lib/mystats/queues";
+import { getIngestHealth } from "@/lib/ingestHealth";
 
 /** P3-1 (audit, 2026-07-21): a patch needs at least this many distinct
  *  champions present in draft_champ_stats before resolveServingPatch will
@@ -127,6 +128,16 @@ export interface RecommendParams {
 export interface RecommendMeta {
   patch: string | null;
   tier: number;
+  /** P2 fix (2026-07-31 audit): the DATA's age, not the request's. Was
+   *  `new Date().toISOString()` at serve time — every request, byte-for-byte
+   *  identical, always "now" — so the Draft page's "Upd <date>" label
+   *  silently reported today regardless of how stale the underlying
+   *  draft_champ_stats rows actually were. Now sourced from
+   *  MAX(ingested_at) over the pool rows actually served for this
+   *  patch+tier+lane (see the poolRows query below) — the real last-ingest
+   *  timestamp for the data on screen. Falls back to request time only on
+   *  the pending path (no pool rows exist yet, so there IS no data age to
+   *  report, and the field is never rendered in that state anyway). */
   fetchedAt: string;
   laneOppInferred: number | null;
   /** Round-B (2026-07-21) stale-data honesty fix: the patch the REST of the
@@ -148,6 +159,22 @@ export interface RecommendMeta {
    *  its own fallback chain) — degrades to "no notice" rather than a
    *  false-positive staleness warning. */
   currentPatch: string | null;
+  /** 2026-07-31 audit P2 (#2) — did the LAST scheduled draft ingest run
+   *  (`CoachBuildDraftIngest`, scripts/ingest-draft.mjs) come back clean?
+   *  Read from coachbuild.ingest_health (lib/ingestHealth.ts), written once
+   *  per completed run. `null` = unknown (never run since migration 0023, or
+   *  this read itself failed) — NOT the same as healthy; the client must
+   *  only show a warning on an explicit `false`, never manufacture one from
+   *  `null`. Independent of `patch`/`currentPatch` above: a stale served
+   *  patch can exist even with a perfectly healthy last run (the run just
+   *  hasn't reached today's patch yet), and conversely a run can fail while
+   *  `patch` still looks fine (yesterday's data is still being served). */
+  ingestHealthy: boolean | null;
+  /** Best-effort summary of the last failure, or null when healthy/unknown.
+   *  Truncated at the source (lib/ingestHealth.ts's MAX_ERROR_LEN) — never
+   *  the full per-champion error list, just enough for a human to know
+   *  where to look (the local ingest log has the rest). */
+  ingestLastError: string | null;
 }
 
 /** Draft redesign plan §2.3 — additive, per-enemy analysis backing the
@@ -235,6 +262,11 @@ interface ChampStatsRow {
   pickrate: number | null;
   banrate: number | null;
   total_games: number | null;
+  /** MAX(ingested_at) OVER () -- same value on every row of this result set,
+   *  the real freshness signal for meta.fetchedAt (see that field's doc
+   *  comment). A window function rather than a second query: this rides the
+   *  existing per-request poolRows fetch at zero extra round trips. */
+  latest_ingested_at: string | null;
 }
 
 interface MatchupDbRow {
@@ -485,11 +517,17 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
   // resolver's own fallback chain currently never throws, but a null here
   // must never block serving the real `patch` data below.
   const currentPatch = await resolveDraftPatchLabel().catch(() => null);
+  // 2026-07-31 audit P2 (#2) — soft-fail exactly like currentPatch above: a
+  // missing/failed health read must degrade to "unknown" (null), never block
+  // serving real data and never manufacture a false "unhealthy" warning.
+  const ingestHealth = await getIngestHealth(sql, "draft").catch(() => null);
+  const ingestHealthy = ingestHealth?.ok ?? null;
+  const ingestLastError = ingestHealth?.ok === false ? ingestHealth.lastError : null;
   const pendingMeta = (patch: string | null): RecommendResult => ({
     plays: [],
     potentialPlays: [],
     bans: null,
-    meta: { patch, tier: EMERALD_TIER, fetchedAt, laneOppInferred: null, currentPatch },
+    meta: { patch, tier: EMERALD_TIER, fetchedAt, laneOppInferred: null, currentPatch, ingestHealthy, ingestLastError },
     pending: true,
     enemyAnalysis: [],
   });
@@ -498,7 +536,9 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
   if (!patch) return pendingMeta(null);
 
   const poolRows = (await sql`
-    SELECT champ_id, winrate, pickrate, banrate, total_games FROM coachbuild.draft_champ_stats
+    SELECT champ_id, winrate, pickrate, banrate, total_games,
+           MAX(ingested_at) OVER () AS latest_ingested_at
+    FROM coachbuild.draft_champ_stats
     WHERE patch = ${patch} AND tier = ${EMERALD_TIER} AND role = ${params.lane}
   `) as unknown as ChampStatsRow[];
   const fullPool: ChampBaseline[] = poolRows.map((r) => ({
@@ -509,6 +549,11 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
     totalGames: r.total_games ?? 0,
   }));
   if (fullPool.length === 0) return pendingMeta(patch);
+  // Real data-freshness signal (see RecommendMeta.fetchedAt's doc comment) --
+  // every row in this result set carries the same window-function value, so
+  // the first is as good as any. Falls back to request time only if the
+  // column somehow comes back null (defensive; the column is NOT NULL).
+  const dataFetchedAt = poolRows[0]?.latest_ingested_at ?? fetchedAt;
 
   // audit P1-1: filterPoolByPickrate alone is currently a no-op (pickrate is
   // always null — see ChampBaseline's doc comment), which left the pool
@@ -586,7 +631,7 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
     plays: personalMain,
     potentialPlays: personalPotential,
     bans,
-    meta: { patch, tier: EMERALD_TIER, fetchedAt, laneOppInferred, currentPatch },
+    meta: { patch, tier: EMERALD_TIER, fetchedAt: dataFetchedAt, laneOppInferred, currentPatch, ingestHealthy, ingestLastError },
     enemyAnalysis,
   };
 }

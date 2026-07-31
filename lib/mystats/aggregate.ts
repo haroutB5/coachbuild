@@ -212,6 +212,15 @@ export interface RecentGameInput {
    *  MyMatchRecord's; absent === null === NOT MEASURED. */
   cs?: number | null;
   gameDurationSec?: number | null;
+  /** 2026-07-31 audit P2 (#4) — true iff `onWpaBuild === null` because this
+   *  game's own patch is newer than coachless's populated data (upstream
+   *  ingest lag), not because the app failed to record anything for this
+   *  match. See lib/mystats/adherence.ts's isWaitingForPatchData for the
+   *  full reasoning; the route computes this per-row before calling
+   *  buildRecentGames, since it's the only layer that knows both this game's
+   *  patch AND the currently-populated one. Optional/defaulted to false for
+   *  the same back-compat reason as cs/gameDurationSec above. */
+  patchDataPending?: boolean;
 }
 
 export interface RecentGame {
@@ -232,6 +241,9 @@ export interface RecentGame {
    *  and `gameDurationSec` survive on such a row regardless, so a caller can
    *  still render "12 CS in 3:41" if it wants to. */
   csPerMin: number | null;
+  /** See RecentGameInput's doc comment — always populated (never left
+   *  optional) on the way out, so a consumer never has to guess a default. */
+  patchDataPending: boolean;
 }
 
 /** Latest `limit` games, newest first — sorts here (rather than trusting the
@@ -242,11 +254,12 @@ export function buildRecentGames(rows: RecentGameInput[], limit = 5): RecentGame
     .slice()
     .sort((a, b) => (a.gameCreation < b.gameCreation ? 1 : a.gameCreation > b.gameCreation ? -1 : 0))
     .slice(0, limit)
-    .map(({ gameCreation: _gameCreation, cs = null, gameDurationSec = null, ...rest }) => ({
+    .map(({ gameCreation: _gameCreation, cs = null, gameDurationSec = null, patchDataPending = false, ...rest }) => ({
       ...rest,
       cs,
       gameDurationSec,
       csPerMin: csPerMinForGame({ cs, gameDurationSec }),
+      patchDataPending,
     }));
 }
 

@@ -17,6 +17,8 @@ vi.mock("@/lib/draft/ingest", () => ({
   setPersistedCursor: vi.fn(),
 }));
 vi.mock("@/lib/pro/auth", () => ({ isAuthorized: vi.fn(() => true) }));
+const mockGetIngestHealth = vi.fn();
+vi.mock("@/lib/ingestHealth", () => ({ getIngestHealth: (...a: unknown[]) => mockGetIngestHealth(...a) }));
 
 import { GET } from "@/app/api/ingest/draft/route";
 import { getSql } from "@/lib/pro/db";
@@ -52,6 +54,7 @@ describe("GET /api/ingest/draft", () => {
     vi.mocked(getPersistedCursor).mockReset().mockResolvedValue(0);
     vi.mocked(setPersistedCursor).mockReset().mockResolvedValue(undefined);
     vi.mocked(isAuthorized).mockReset().mockReturnValue(true);
+    mockGetIngestHealth.mockReset().mockResolvedValue(null);
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -137,6 +140,27 @@ describe("GET /api/ingest/draft", () => {
     vi.mocked(runDraftIngest).mockRejectedValueOnce(new Error("boom"));
     const res = await GET(req());
     expect(res.status).toBe(500);
+  });
+
+  describe("lastScheduledRun (2026-07-31 audit P2, #2)", () => {
+    it("surfaces the persisted health of the REAL (locally-scheduled) ingest run", async () => {
+      vi.mocked(runDraftIngest).mockResolvedValueOnce(batchResult({ nextCursor: null }));
+      mockGetIngestHealth.mockResolvedValueOnce({
+        ingest: "draft", lastRunAt: "x", lastSuccessAt: null, ok: false, lastError: "u.gg 403", lastErrorAt: "x",
+      });
+      const res = await GET(req());
+      const json = await res.json();
+      expect(mockGetIngestHealth).toHaveBeenCalledWith(mockSql, "draft");
+      expect(json.lastScheduledRun).toMatchObject({ ok: false, lastError: "u.gg 403" });
+    });
+
+    it("null when nothing has ever recorded a run -- never fabricated as healthy", async () => {
+      vi.mocked(runDraftIngest).mockResolvedValueOnce(batchResult({ nextCursor: null }));
+      mockGetIngestHealth.mockResolvedValueOnce(null);
+      const res = await GET(req());
+      const json = await res.json();
+      expect(json.lastScheduledRun).toBeNull();
+    });
   });
 
   describe("cursor persistence (audit P1-2)", () => {
