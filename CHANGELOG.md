@@ -2,6 +2,150 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.86.0] — 2026-07-30 — Solo queue only, and the accounts section earns its space
+
+Three asks from a marked-up screenshot of the live page.
+
+### Fixed
+- **Every My Stats figure counted flex, normals and every other queue.** `lib/mystats/ingest.ts`'s
+  header had always said it fetches every queue on purpose and that "filtering by queue happens at
+  READ time". Nothing filtered by queue at read time — the intent was written down and the
+  enforcement never existed. 45 of K1ayer's 186 stored games (26 flex, 15 normals, 4 other modes)
+  reached the season total, win rate, build adherence, champion pool, CS/min and the 20-game chart.
+  `MunsterHunter#EUW` looked clean only by accident: it holds no non-420 rows.
+
+  `lib/mystats/queues.ts` now owns `COUNTED_QUEUE_IDS` and **seven reads bind the array**; no read
+  inlines `420`. The seventh was not in the brief and is not even on this page —
+  `lib/draft/recommend.ts`'s "you: 7-3" badges, read while drafting a ranked game, carried the same
+  defect.
+
+  Proven live: K1ayer 186 → 141, MunsterHunter 138 → 138, the newest-20 window went from nine
+  non-solo rows to zero, prior-split win rate 0.5519/183 → 0.6000/140. The zero-denominator case is
+  live rather than hypothetical — K1ayer's current split holds one solo game — and returns nulls,
+  not `0.0%`, not `NaN`. **No rows were deleted**; the filter is at read.
+- **The Match History tab rendered zero children at zero height** — a tab leading to a blank page.
+  It now carries an empty state that distinguishes "no history" from "still collecting".
+
+### Added
+- `lib/__tests__/mystats-queue-invariant.test.ts` — **structural**, not example-based. It intercepts
+  every statement each route issues and fails if anything touching `my_matches` omits the bound
+  array. A query written months from now fails without anyone thinking to write a new test, and so
+  does one that hardcodes `420` instead of importing the constant. Verified to actually fire by
+  removing a filter and watching it break.
+- `wins` on `MyAccountSummary`, as a **count**, counted in the same SQL pass over the same predicate
+  as `games`. The card divides. A pre-divided percentage would hide its denominator from the one
+  surface that also displays it. Live: K1ayer 85/141 = 60.3%, MunsterHunter 70/138 = 50.7%.
+
+### Changed
+- **The linked-accounts bar is now "Accounts · 2 linked · Manage".** The dropdown was the only true
+  duplicate — the cards already switch through the same tested mutation. The secret entry moved
+  behind the toggle. The **client-mismatch prompt did not** and renders inline always: it is news
+  about a state the user did not choose, and since v0.84.3 made the hero silent about client
+  identity it is the only surface that says it. `AccountPicker` stays **mounted** while collapsed
+  because it owns the once-per-load identity read the hero's live-attribution rule depends on.
+- The KPI strip is gone; the win rate sits on each account card beside the LP.
+- Build adherence moved to the Match History tab, above the on/off-build chips it summarises.
+- `priorSplitWinrate` now renders nowhere, deliberately: a split-scoped delta on an account-wide
+  figure is two denominators in one number.
+
+2,644 tests. tsc, lint, build clean.
+
+## [0.85.0] — 2026-07-30 — Match the reference's density, which was the whole gap
+
+Compared against the TrackDIFF screenshot `/mystats` was built from, the rebuild was not the same
+page. The difference was **scale, not structure** — every region was present and correct, and all of
+them were too roomy.
+
+### Changed
+- The single biggest miss: the "Accounts" heading was **15px against the reference's ~40px**. Now
+  32px.
+- The page column was capped at 1100px while re-flowing a 1290px composition; now 1280.
+- Hero name 30 → 40px, portrait 88 → 96, and the splash art is un-scrimmed on its right half so it
+  is actually visible.
+- Account cards 76px tall → 58px, re-laid out to the reference's two-lines-left / two-lines-right
+  shape with nothing dropped.
+- The lower panels were a 50/50 split where the reference is 1:2; now 1:1.9.
+- Champion row pitch 57 → 49. Chart track 84 → 64, which is what lets twenty bars sit inside the
+  panel at 1920 without scrolling, the way the reference reads.
+- KPIs and the chip cluster now share one row. Tab strip is sentence-case 13.5px rather than
+  uppercase 13px.
+
+### Fixed
+- Two defects only the browser could have found: the 1:2 split at `lg` made the champion panel
+  **taller**, not shorter — names wrapped and the pitch went 57 → 70 — so it moved to `xl`; and the
+  KPI strip clipped "45.0%" mid-glyph at 1290px until it got a 360px floor.
+
+### Known
+- **Nothing was invented to fill the gap.** Avg Score, MVP/ACE, placement, Game ELO, the PRO chip,
+  flag, socials, Decay and VODs are still absent and still pinned by a test. Density is the part
+  that *can* be matched without data, and it is what was wrong.
+- The hero is 170px against the reference's 225px, because four of its elements have no truthful
+  source. If that region reads under-filled, the fix without inventing data is to run the two muted
+  copy lines full-width along the bottom edge — left for the user to call.
+- Verified `scrollX === 0` after `scrollTo(9999,0)` at 390/1024/1290/1920 — the check that cannot be
+  fooled, and the one that would have caught v0.84.0's sideways scroll. CLS 0.1274 at 390 on a
+  production build, unchanged from baseline.
+
+## [0.84.3] — 2026-07-30 — A live game belongs to an account, not to the client
+
+### Fixed
+- **The hero printed "In a game now." and a red LIVE ring under `MunsterHunter` while the League
+  client was signed in as `K1ayer`.** Both facts were true and the pairing was not: the companion's
+  gameflow phase says only that *the client* is in a game, never whose, and with two linked accounts
+  those are different questions. Same defect class as an unscoped number — a true fact attached to
+  the wrong subject.
+
+  The claim now requires a **positive identity match**. `AccountPicker` already performs the one
+  `/me` read per page load, so it reports the signed-in Riot ID upward rather than the page
+  duplicating a call; the hero shows LIVE only when that equals the displayed account. When it is
+  someone else the line says so by name. When identity is **unknown** — no companion, a pre-1.10.0
+  404, a closed client — nothing is claimed at all, because "unknown" must never read as "matches".
+
+  Reported on **both branches** of the read, including `null`. A callback that fires only on success
+  would leave the page unable to distinguish "not answered yet" from "answered, and it is not you".
+
+  Found by the user, looking at their own screen, while the client was live as the non-active
+  account.
+
+## [0.84.2] — 2026-07-30 — The thing scrolling the page sideways was invisible
+
+### Fixed
+- **`/mystats` scrolled 383px sideways at 390px wide and every visible element was correctly
+  contained.** The culprit was the chart's `sr-only` sentences: `sr-only` is `position: absolute`,
+  and an absolutely positioned element is laid out against its nearest **positioned** ancestor, so
+  the parent `<ul>`'s `overflow-x-auto` never clipped them — overflow only clips descendants it is a
+  containing block for. With no positioned ancestor they resolved against the document and sat at
+  `x=773`. Making each `<li>` `relative` puts each label back inside its own column.
+
+### Known
+- **v0.84.1 was a wrong diagnosis**, kept in history rather than rewritten. Its `min-w-0` reasoning
+  from the flex/grid `min-width: auto` trap gated clean, deployed, and moved the number not at all.
+  The comments it added are still true and are left in place.
+- The measurement that actually found it: filter every element wider than the viewport by whether
+  **any** ancestor has a non-visible `overflow-x`, and the list came back **empty** while
+  `documentElement.scrollWidth` was still 773 — the signature of positioned descendants escaping
+  their scroll container, which pointed straight at the `sr-only` spans.
+- Two things worth keeping for the next one of these: `document.body` measured clean throughout
+  (`scrollWidth === clientWidth === 390`) and only `documentElement` ever showed it, so a body-only
+  assertion passes straight through; and `window.scrollTo(9999,0)` then reading `scrollX` is the
+  check that cannot be fooled, because it asks the browser whether the page actually moves.
+
+## [0.84.1] — 2026-07-30 — /mystats scrolled sideways 383px on a phone
+
+### Fixed
+- Attempted fix for the horizontal scroll on `/mystats`: `min-w-0` on both lower panel roots. The
+  bar chart's own `overflow-x-auto` was correct in isolation and did nothing, because both lower
+  panels are **grid children** and a grid child defaults to `min-width: auto` — it refuses to shrink
+  below its content, so the chart's real width won, the panel grew past its column, and the overflow
+  escaped all the way to the document.
+
+  Measured at 390px before: `documentElement.scrollWidth` 773 against `clientWidth` 390, and
+  `window.scrollTo(9999,0)` genuinely moved the page 383px. Also 375px at 1024.
+
+### Known
+- **This did not fix it.** See v0.84.2 — the real cause was `sr-only` labels escaping their scroll
+  container. The `min-w-0` change is sound on its own terms and was kept.
+
 ## [0.84.0] — 2026-07-30 — My Stats as a profile page, and the numbers behind it
 
 Rebuilt `/mystats` in the shape of a TrackDIFF profile: hero band, account card grid,
