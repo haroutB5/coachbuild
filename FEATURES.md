@@ -40,6 +40,7 @@ The Tactical Draft Analyzer — statistically-favored PLAY and BAN suggestions f
 - **My Stats badges (display-only).** A small muted "you: 8-3" chip when you have personal record data against the resolved matchup — visually distinct from the scored win-rate color, never blended into the ranking. A "My pool" toggle filters (never re-scores) the list to champions you've actually played.
 - **Live sync via the Companion** — auto-fills your champion and updates as champ select progresses; a manual edit enters "Manual mode" (clearly bannered) until the next fresh champ select re-attaches live pickup automatically.
 - **Staleness honesty.** Shows a one-line notice when the underlying u.gg data is behind the app's own resolved current patch, rather than silently serving old numbers.
+- **Ingest health notice (v0.87.0).** A separate one-line notice appears only when the scheduled data-ingest job behind this page is confirmed unhealthy (a real recorded failure) — never shown on merely-unknown status, never a false "healthy."
 
 ## Companion (`/live-setup`)
 
@@ -57,7 +58,7 @@ Setup and status for the optional PowerShell tray companion that bridges the app
 Your own recorded League history for one linked personal Riot account — **display-only, current split only, never feeds any recommendation or score.**
 
 - **4 stat tiles:** Games, Win Rate (with a delta vs. your prior split), Main (most-played champion), Build Adherence.
-- **Recent games list** — per-game KDA and a WPA-build / off-build chip, shown only when a real comparison was possible (the match's patch must match the live recommend pipeline's current patch; older-patch games honestly show no chip rather than a guessed one).
+- **Recent games list**, scoped to the current split (v0.87.0 fix — the query previously lacked a split filter and could mix in prior-split games under a "this split" heading; every figure on the page is now genuinely split-scoped) — per-game KDA and a WPA-build / off-build chip, shown only when a real comparison was possible (the match's patch must match the live recommend pipeline's current patch). When it isn't possible, the chip now distinguishes *why* (v0.87.0): a match on a patch newer than what the build data covers reads "waiting for patch data" (upstream lag, not your history); a genuinely unresolved build still reads "build not recorded."
 - **Champion-pool card** with an on-build insight line.
 - **On-demand refresh** — the page triggers an incremental sync on every view (cooldown-gated server-side so it can't be spammed), so "today's games" show up without waiting for the nightly cron.
 - **Account-not-linked / zero-games / fetch-error states** are all distinct, never a bare spinner.
