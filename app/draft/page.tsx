@@ -95,7 +95,9 @@ interface BlindPickResponse {
     fetchedAt: string | null;
     poolCandidates: number;
     qualifiedCandidates: number;
+    excludedByLaneShare: number;
     excludedByMassGate: number;
+    excludedUncomputable: number;
     returnedCandidates: number;
     topN: number;
   };
@@ -119,7 +121,15 @@ function normalizeBlindPickResponse(raw: unknown): BlindPickResponse | null {
     typeof meta.tier !== "number" ||
     typeof meta.lane !== "number" ||
     (typeof meta.fetchedAt !== "string" && meta.fetchedAt !== null) ||
-    ![meta.poolCandidates, meta.qualifiedCandidates, meta.excludedByMassGate, meta.returnedCandidates, meta.topN].every(
+    ![
+      meta.poolCandidates,
+      meta.qualifiedCandidates,
+      meta.excludedByLaneShare,
+      meta.excludedByMassGate,
+      meta.excludedUncomputable,
+      meta.returnedCandidates,
+      meta.topN,
+    ].every(
       (value) => typeof value === "number" && Number.isFinite(value) && value >= 0
     )
   ) {
@@ -181,7 +191,9 @@ function normalizeBlindPickResponse(raw: unknown): BlindPickResponse | null {
       fetchedAt: meta.fetchedAt,
       poolCandidates: meta.poolCandidates,
       qualifiedCandidates: meta.qualifiedCandidates,
+      excludedByLaneShare: meta.excludedByLaneShare,
       excludedByMassGate: meta.excludedByMassGate,
+      excludedUncomputable: meta.excludedUncomputable,
       returnedCandidates: meta.returnedCandidates,
       topN: meta.topN,
     },
@@ -525,6 +537,26 @@ export default function DraftPage() {
 
   const bans = state.status === "ok" ? state.data.bans ?? [] : [];
 
+  const blindMeta = blindState.status === "ok" || blindState.status === "empty" ? blindState.data.meta : null;
+  const blindPoolAfterShare = blindMeta
+    ? Math.max(0, blindMeta.poolCandidates - blindMeta.excludedByLaneShare)
+    : 0;
+  const blindExclusionNote = blindMeta
+    ? [
+        blindMeta.excludedByLaneShare > 0
+          ? `${blindMeta.excludedByLaneShare} of ${blindMeta.poolCandidates} pool champions excluded: below 0.5% lane share`
+          : null,
+        blindMeta.excludedByMassGate > 0
+          ? `${blindMeta.excludedByMassGate} of ${blindPoolAfterShare} remaining pool champions excluded: less than 90% of their opponent mass is backed by 30+ game cells`
+          : null,
+        blindMeta.excludedUncomputable > 0
+          ? `${blindMeta.excludedUncomputable} remaining pool champions excluded: no usable matchup rows`
+          : null,
+      ]
+        .filter((part): part is string => part !== null)
+        .join("; ")
+    : "";
+
   return (
     <div className="px-4 sm:px-6 lg:px-8 py-6">
       <div className="max-w-[1440px] mx-auto">
@@ -759,9 +791,9 @@ export default function DraftPage() {
                 />
               )}
 
-              {(blindState.status === "ok" || blindState.status === "empty") && blindState.data.meta.excludedByMassGate > 0 && (
+              {blindExclusionNote && (
                 <p className="text-mut text-[10.5px] mt-2 px-0.5">
-                  {blindState.data.meta.excludedByMassGate} of {blindState.data.meta.poolCandidates} pool champions excluded: less than 90% of their opponent mass is backed by 30+ game cells.
+                  {blindExclusionNote}.
                 </p>
               )}
 

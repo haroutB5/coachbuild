@@ -27,7 +27,9 @@ export interface BlindPickMeta {
   fetchedAt: string | null;
   poolCandidates: number;
   qualifiedCandidates: number;
+  excludedByLaneShare: number;
   excludedByMassGate: number;
+  excludedUncomputable: number;
   returnedCandidates: number;
   topN: number;
 }
@@ -84,7 +86,9 @@ function emptyResponse(lane: RoleId, patch: string | null, pending = false): Bli
       fetchedAt: null,
       poolCandidates: 0,
       qualifiedCandidates: 0,
+      excludedByLaneShare: 0,
       excludedByMassGate: 0,
+      excludedUncomputable: 0,
       returnedCandidates: 0,
       topN: 10,
     },
@@ -129,7 +133,9 @@ async function computeBlindPick(lane: RoleId): Promise<BlindPickResponse> {
       fetchedAt,
       poolCandidates: ranking.poolCandidates,
       qualifiedCandidates: ranking.qualifiedCandidates,
+      excludedByLaneShare: ranking.excludedByLaneShare,
       excludedByMassGate: ranking.excludedByMassGate,
+      excludedUncomputable: ranking.excludedUncomputable,
       returnedCandidates: ranking.picks.length,
       topN: 10,
     },

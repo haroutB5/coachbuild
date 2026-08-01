@@ -2,6 +2,42 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.89.1] — 2026-08-01 — Blind Pick was recommending off-role one-tricks
+
+User-caught from game knowledge, then confirmed in data: none of the champions Blind Pick listed
+for mid were credible mid blind picks.
+
+### Fixed
+- **The pool floor was absolute, so it let one-tricks through.** `POOL_MIN_TOTAL_GAMES = 5000` reads
+  as a lot until you notice 11,476 games is **0.12%** of a 9.8M-game lane. Nine of the ten mid
+  entries sat at 0.12%–0.28% lane share and ranked 52nd–72nd of 173 by pickrate — Singed, Quinn,
+  Zilean, Tryndamere, Gwen. Real mid staples are at 2.8%–6.2%. Only Diana belonged.
+- **Blind Pick now applies a lane-share floor**, `laneShare(c) = Σ_o games(c,o) / Σ_c Σ_o games(c,o)`,
+  reusing the `POOL_MIN_PICKRATE` (0.5%) constant that `score.ts` already declared and that has been
+  dead since the rankings decoder was stubbed. The share proxy supplies what the NULL `pickrate`
+  column could not; `filterPoolByPickrate` stays for when the decoder lands.
+- Mid pool 97 → 43, top 111 → 51. New mid list: **Diana, Riven, Vladimir, Vex, Xerath, Ahri, Fizz,
+  Viktor, Twisted Fate, Lissandra**. Top keeps Singed and Garen, correctly — they are top laners and
+  Singed is a genuine blind pick there.
+- The Floor column got more useful as a side effect: it was a flat 47–50% band across the old top
+  ten, and spans 41.2%–48.6% across the corrected pool.
+
+**Why an off-meta pick is specifically wrong here, and not merely untidy.** Its win rate is measured
+in the conditions it is normally picked in — late in draft, as a counterpick, against an opponent who
+has never faced it. First-picking gives up both advantages. The list was recommending, as safe first
+picks, the champions whose measured strength depends on *not* being first-picked. Our u.gg data
+carries no pick-order information, so the bias cannot be corrected directly; excluding the pool it
+lives in is the available fix.
+
+### Notes
+- **Suggested Picks is deliberately untouched** and still shows Singed first for mid. Its copy
+  promises that "a genuinely strong niche pick can sit above a popular staple", so tightening that
+  pool is a separate product decision. The asymmetry is documented in `lib/draft/blindPick.ts`'s
+  header so it reads as a choice, not an oversight.
+- Lane-share, mass-gate and uncomputable exclusions are now three separate counters, surfaced
+  separately in the UI note. With the share floor in place the mass gate excludes 0 in both lanes —
+  the thin-coverage champions were the sub-0.5% ones all along.
+
 ## [0.89.0] — 2026-08-01 — Blind Pick
 
 New section on `/draft`: the top 10 champions to first-pick in a lane before you know your lane

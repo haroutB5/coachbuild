@@ -12,7 +12,13 @@ import {
   rankBlindPicks,
   type BlindPickMatchupRow,
 } from "@/lib/draft/blindPick";
-import { K, POOL_MIN_TOTAL_GAMES } from "@/lib/draft/score";
+import {
+  K,
+  POOL_MIN_PICKRATE,
+  POOL_MIN_TOTAL_GAMES,
+  filterPoolByLaneShare,
+  laneShare,
+} from "@/lib/draft/score";
 
 describe("blind-pick metrics", () => {
   it("uses fractional mass at the ES10 boundary", () => {
@@ -107,6 +113,55 @@ describe("blind-pick metrics", () => {
     expect(result.poolCandidates).toBe(1);
     expect(result.excludedByMassGate).toBe(0);
     expect(result.picks.map((pick) => pick.champId)).toEqual([2]);
+  });
+
+  it("uses the lane-share floor after the total-game floor", () => {
+    const rows: BlindPickMatchupRow[] = [
+      { champId: 1, oppId: 10, wins: 3000, games: 6000 },
+      { champId: 2, oppId: 10, wins: 500000, games: 1000000 },
+      { champId: 3, oppId: 10, wins: 2500, games: 5000 },
+    ];
+    const candidates = deriveBlindPickCandidates(rows);
+    const totalLaneGames = candidates.reduce((sum, candidate) => sum + candidate.totalGames, 0);
+    const shares = new Map(candidates.map((candidate) => [candidate.champId, laneShare(candidate, totalLaneGames)]));
+
+    expect(POOL_MIN_PICKRATE).toBe(0.005);
+    expect(shares.get(1)).toBeGreaterThan(POOL_MIN_PICKRATE);
+    expect(shares.get(3)).toBeLessThan(POOL_MIN_PICKRATE);
+    expect(filterPoolByLaneShare(candidates, shares).map((candidate) => candidate.champId)).toEqual([1, 2]);
+
+    const result = rankBlindPicks(candidates, rows);
+    expect(result.poolCandidates).toBe(3);
+    expect(result.excludedByLaneShare).toBe(1);
+    expect(result.excludedByMassGate).toBe(0);
+    expect(result.excludedUncomputable).toBe(0);
+    expect(result.picks.map((pick) => pick.champId)).toEqual([1, 2]);
+  });
+
+  it("keeps lane-share, mass-gate, and uncomputable exclusions disjoint", () => {
+    const candidates = [
+      { champId: 1, baselineWr: 0.5, pickrate: null, banrate: null, totalGames: 5001 },
+      { champId: 2, baselineWr: 0.5, pickrate: null, banrate: null, totalGames: 7000 },
+      // Deliberately has enough declared volume to clear both pool floors, but
+      // no usable matchup rows, so it must reach the uncomputable counter.
+      { champId: 3, baselineWr: 0.5, pickrate: null, banrate: null, totalGames: 1200000 },
+    ];
+    const rows: BlindPickMatchupRow[] = [
+      { champId: 1, oppId: 10, wins: 2500, games: 5001 },
+      { champId: 2, oppId: 10, wins: 15, games: 29 },
+      { champId: 2, oppId: 20, wins: 3485, games: 6971 },
+    ];
+
+    const result = rankBlindPicks(candidates, rows);
+
+    expect(result.poolCandidates).toBe(3);
+    expect(result.excludedByLaneShare).toBe(1);
+    expect(result.excludedByMassGate).toBe(1);
+    expect(result.excludedUncomputable).toBe(1);
+    expect(result.qualifiedCandidates).toBe(0);
+    expect(
+      result.excludedByLaneShare + result.excludedByMassGate + result.excludedUncomputable
+    ).toBe(result.poolCandidates);
   });
 
   it("reports the worst matchup's OWN game count, not the champion's lane total", () => {

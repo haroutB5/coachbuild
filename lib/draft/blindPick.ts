@@ -15,9 +15,22 @@
 // cells removes rare-but-real counters and overstates safety. Shrinkage already
 // handles those cells (a six-game cell has weight 6/(6+K), so it collapses back
 // toward baseline without fabricating a scary tail).
+//
+// Pool asymmetry is deliberate: rankBlindPicks applies a lane-share floor
+// because Blind Pick is a first-pick safety surface, where an off-meta pick's
+// measured strength may depend on being saved for a counterpick or on an
+// opponent seeing it late. Suggested Picks in recommend.ts keeps its existing
+// pool because that surface explicitly allows a genuinely strong niche pick to
+// sit above a popular staple.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { K, filterPoolByTotalGames, type ChampBaseline } from "@/lib/draft/score";
+import {
+  K,
+  filterPoolByLaneShare,
+  filterPoolByTotalGames,
+  laneShare,
+  type ChampBaseline,
+} from "@/lib/draft/score";
 
 /** Engineering default, not a measured optimum: penalty for a tail below 50%. */
 export const RISK_AVERSION = 0.5;
@@ -78,10 +91,13 @@ export interface BlindPickResult {
 
 export interface BlindPickRanking {
   picks: BlindPickResult[];
-  /** Count after the existing POOL_MIN_TOTAL_GAMES filter and before the mass gate. */
+  /** Count after the existing POOL_MIN_TOTAL_GAMES filter and before the
+   *  Blind-Pick lane-share floor. */
   poolCandidates: number;
   qualifiedCandidates: number;
-  /** Candidates in the pool that failed MASS_COVERAGE_GATE. */
+  /** Candidates in the total-game pool that failed the lane-share floor. */
+  excludedByLaneShare: number;
+  /** Candidates in the lane-share pool that failed MASS_COVERAGE_GATE. */
   excludedByMassGate: number;
   /** Candidates that produced no result at all (no usable rows) — a different
    *  failure from failing the gate, counted separately so neither number lies.
@@ -260,12 +276,18 @@ export function rankBlindPicks(
   rows: BlindPickMatchupRow[],
   topN = BLIND_PICK_TOP_N
 ): BlindPickRanking {
-  const pool = filterPoolByTotalGames(candidates);
   // Both derived from `rows` ONCE and threaded through every candidate — see
   // computeBlindPickCandidate's params for the cost of not doing this.
   const aggregated = aggregateRows(rows);
   const opponentPrior = buildOpponentPrior(rows);
+  // deriveBlindPickCandidates sets totalGames to Σ_o games(c,o); summing every
+  // candidate therefore gives the lane-wide denominator Σ_c Σ_o games(c,o).
+  const totalLaneGames = candidates.reduce((sum, candidate) => sum + candidate.totalGames, 0);
+  const shares = new Map(candidates.map((candidate) => [candidate.champId, laneShare(candidate, totalLaneGames)]));
+  const totalGamePool = filterPoolByTotalGames(candidates);
+  const pool = filterPoolByLaneShare(totalGamePool, shares);
   const qualified: BlindPickResult[] = [];
+  const excludedByLaneShare = totalGamePool.length - pool.length;
   let excludedByMassGate = 0;
   let excludedUncomputable = 0;
 
@@ -292,8 +314,9 @@ export function rankBlindPicks(
 
   return {
     picks,
-    poolCandidates: pool.length,
+    poolCandidates: totalGamePool.length,
     qualifiedCandidates: qualified.length,
+    excludedByLaneShare,
     excludedByMassGate,
     excludedUncomputable,
   };

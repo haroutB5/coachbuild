@@ -199,6 +199,31 @@ export function filterPoolByTotalGames(candidates: ChampBaseline[]): ChampBaseli
   return candidates.filter((c) => c.totalGames >= POOL_MIN_TOTAL_GAMES);
 }
 
+/** Lane share within one (patch, tier, role) bucket: this champion's
+ *  aggregate games divided by the aggregate games for every champion in the
+ *  lane. The denominator is supplied by the caller because the candidate pool
+ *  already owns the complete lane total. */
+export function laneShare(c: ChampBaseline, totalLaneGames: number): number {
+  if (!Number.isFinite(totalLaneGames) || totalLaneGames <= 0) return 0;
+  return c.totalGames / totalLaneGames;
+}
+
+/** Blind-Pick lane-share floor. The share proxy now supplies the popularity
+ *  signal that the nullable `pickrate` column cannot provide: it is computed
+ *  directly from the lane matchup matrix. `filterPoolByPickrate` stays in
+ *  place for when the rankings decoder lands and populates that column. A
+ *  missing share is excluded rather than treated as a fabricated zero. */
+export function filterPoolByLaneShare(
+  candidates: ChampBaseline[],
+  shares: ReadonlyMap<number, number>,
+  minShare = POOL_MIN_PICKRATE
+): ChampBaseline[] {
+  return candidates.filter((c) => {
+    const share = shares.get(c.champId);
+    return share !== undefined && share > minShare;
+  });
+}
+
 /** Stable sort: score DESC, champId ASC on an exact tie. Mutates nothing —
  *  returns a new array. */
 function sortStable<T extends { score: number; champId: number }>(items: T[]): T[] {
