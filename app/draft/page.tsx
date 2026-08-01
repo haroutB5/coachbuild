@@ -6,8 +6,9 @@
 // this is an auxiliary surface, reachable from Sidebar's "Draft" link).
 //
 // Compliance (plan §7 — enforced structurally, not just by copy choice):
-// this file NEVER imports applyRunes/applyItemSets/any companion POST, and
-// only ever reads championId/name/icon — never a summoner/riotId field.
+// this file never calls applyRunes/applyItemSets or any companion POST; the
+// shared ApplyRunesButton is rendered as a separate, user-triggered control.
+// It only reads championId/name/icon — never a summoner/riotId field.
 // Copy is framed as suggestions ("statistically favored"), never "pick this."
 //
 // Live mode: consumes CompanionProvider READ-ONLY via useCompanion() (plan
@@ -17,11 +18,10 @@
 // below). No companion at all is simply the quiet default; nothing here
 // nags the user to connect one (manual-first UX, plan §6a).
 //
-// GOLD RESKIN (v0.51.0, CoachBuild redesign wave — mockup 3): every state/
-// ref/effect/handler below this comment block is preserved BYTE-FOR-BYTE from
-// the pre-reskin version (the highest-risk item: the live-sync effect,
-// entryStateRef, the dirty latch, and the debounced/race-guarded fetch must
-// survive verbatim). Only the `return` JSX changed: the retired cyan
+// GOLD RESKIN (v0.51.0, CoachBuild redesign wave — mockup 3): the preserved
+// live-sync effect, entryStateRef, dirty latch, and debounced/race-guarded
+// fetch remain unchanged. Presentation-only state and handlers below support
+// the Draft Assistant controls. The retired cyan
 // `.draft-tactical`/`.dt-*` HUD theme (app/globals.css) is gone — this page
 // now uses the app-wide navy/gold tokens, same as Builds — and DraftCompRadar
 // is replaced by DraftCompBars (6 horizontal bars, mockup 3's "ENEMY COMP
@@ -34,8 +34,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ChampionRef } from "@/lib/types";
-import { LANE_TO_ROLE_ID, LANE_LABEL, type LaneId } from "@/components/hextech/heroContracts";
+import { LANE_ORDER, LANE_TO_ROLE_ID, LANE_LABEL, type LaneId } from "@/components/hextech/heroContracts";
 import { getChampionIconMap, type ChampionIconEntry } from "@/components/proAssets";
+import { getSplashUrl } from "@/lib/splash";
+import { POOL_MIN_PICKRATE } from "@/lib/draft/score";
 import { useCompanion } from "@/components/live/CompanionProvider";
 import {
   resolveDraftLiveTarget,
@@ -51,27 +53,24 @@ import {
   type DraftRecommendMeta,
   type DraftPlayResult,
 } from "@/components/live/draftRecommend";
-import { filterToMyPool } from "@/components/live/personalBadge";
-import EnemyTeamPanel from "@/components/hextech/EnemyTeamPanel";
-import MyChampionPanel from "@/components/hextech/MyChampionPanel";
-import DraftCompBars from "@/components/hextech/DraftCompBars";
-import DraftPicksTable from "@/components/hextech/DraftPicksTable";
-import BlindPickTable from "@/components/hextech/BlindPickTable";
+import ChampionPicker from "@/components/ChampionPicker";
+import { IconWithFallback } from "@/components/IconWithFallback";
+import ApplyRunesButton from "@/components/hextech/GlobalNav/ApplyRunesButton";
+import {
+  DEFAULT_DRAFT_ASSISTANT_FILTERS,
+  filterComfortCandidates,
+  filterCounterCandidates,
+  filterDraftAssistantCandidates,
+  isOffMetaLaneShare,
+  resolveTopRecommendationCards,
+  type DraftAssistantCandidate,
+  type DraftAssistantCard,
+  type DraftLaneStat,
+  type DraftMatchupPreview,
+} from "@/components/hextech/draftAssistantModel";
 import type { BlindPickResult } from "@/lib/draft/blindPick";
 
 const RECOMMEND_DEBOUNCE_MS = 300;
-
-const TIER_LABEL: Record<number, string> = { 10: "Emerald+" };
-function tierLabel(tier: number): string {
-  return TIER_LABEL[tier] ?? (tier ? `Tier ${tier}` : "—");
-}
-
-function formatFetchedAt(iso: string): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
 
 function arraysEqual(a: readonly number[], b: readonly number[]): boolean {
   if (a.length !== b.length) return false;
@@ -201,23 +200,6 @@ function normalizeBlindPickResponse(raw: unknown): BlindPickResponse | null {
   };
 }
 
-function ResultsSkeleton() {
-  return (
-    <div className="bg-panel border border-line rounded-xl p-5 animate-pulse space-y-3">
-      {Array.from({ length: 5 }).map((_, i) => (
-        <div key={i} className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-panel2 flex-shrink-0" />
-          <div className="flex-1 space-y-1.5">
-            <div className="h-2.5 w-24 bg-panel2 rounded" />
-            <div className="h-2 w-14 bg-panel2 rounded" />
-          </div>
-          <div className="h-3 w-10 bg-panel2 rounded flex-shrink-0" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function EmptyPanel({ title, body }: { title: string; body: string }) {
   return (
     <div className="bg-panel border border-line rounded-xl p-8 text-center">
@@ -241,6 +223,494 @@ function BlindPickSkeleton() {
         </div>
       ))}
     </div>
+  );
+}
+
+const MAX_ALLIED_ADDITIONAL = 4;
+type AssistantView = "recommended" | "blind" | "counters" | "comfort";
+type DetailSort = "winRate" | "pickRate" | "games";
+
+function formatPercent(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "—";
+}
+
+function formatGames(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value).toLocaleString() : "—";
+}
+
+function formatRelativeTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const timestamp = new Date(iso).getTime();
+  if (!Number.isFinite(timestamp)) return "—";
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+function championEntry(champIcons: Map<number, ChampionIconEntry>, id: number) {
+  const entry = champIcons.get(id);
+  return {
+    name: entry?.name ?? `Champion #${id}`,
+    icon: entry?.icon ?? "",
+    difficultyBand: entry?.difficultyBand ?? null,
+  };
+}
+
+function championSplashUrl(entry: ChampionIconEntry | ReturnType<typeof championEntry>): string {
+  const keyFromIcon = entry.icon.match(/\/([^/]+)\.(?:webp|png|jpg)(?:\?.*)?$/i)?.[1];
+  return getSplashUrl(keyFromIcon ?? entry.name.replace(/\s+/g, "")) ?? entry.icon;
+}
+
+interface TeamSlotsProps {
+  label: "ALLIED TEAM" | "ENEMY TEAM";
+  primaryId: number | null;
+  additionalIds: number[];
+  champIcons: Map<number, ChampionIconEntry>;
+  placeholder: string;
+  onAdd: (champ: ChampionRef) => void;
+  onRemove?: (id: number) => void;
+  onToggleLaneOpponent?: (id: number) => void;
+  effectiveLaneOpponentId?: number | null;
+  laneOpponentId?: number | null;
+}
+
+function TeamSlots({
+  label,
+  primaryId,
+  additionalIds,
+  champIcons,
+  placeholder,
+  onAdd,
+  onRemove,
+  onToggleLaneOpponent,
+  effectiveLaneOpponentId = null,
+  laneOpponentId = null,
+}: TeamSlotsProps) {
+  const slotIds = label === "ENEMY TEAM" ? additionalIds : [primaryId, ...additionalIds];
+  const slots = Array.from({ length: 5 }, (_, index) => slotIds[index] ?? null);
+  const selectedIds = new Set(slotIds.filter((id): id is number => id !== null));
+  const options = Array.from(champIcons.entries())
+    .filter(([id]) => !selectedIds.has(id))
+    .sort(([, a], [, b]) => a.name.localeCompare(b.name));
+  return (
+    <div className="min-w-0">
+      <p className="text-[10px] tracking-[0.14em] uppercase text-mut font-semibold mb-2">{label}</p>
+      <div className="grid grid-cols-5 gap-1.5">
+        {slots.map((id, index) => {
+          const entry = id !== null ? championEntry(champIcons, id) : null;
+          const isYourPick = label === "ALLIED TEAM" && index === 0;
+          const isLaneOpponent = id !== null && effectiveLaneOpponentId === id;
+          const isServerInferredOnly = isLaneOpponent && laneOpponentId === null;
+          return (
+            <div
+              key={`${label}-${index}-${id ?? "empty"}`}
+              className={`group relative flex aspect-square min-w-0 items-center justify-center rounded-lg border bg-panel2/60 ${
+                isLaneOpponent ? "border-teal" : id !== null ? "border-line" : "border-dashed border-line"
+              }`}
+            >
+              {id !== null ? (
+                <>
+                  <IconWithFallback
+                    src={entry?.icon ?? ""}
+                    alt={entry?.name ?? `Champion #${id}`}
+                    fallbackGlyph={entry?.name}
+                    className="w-full h-full object-cover rounded-lg"
+                    size={52}
+                  />
+                  {!isYourPick && onRemove && (
+                    <button
+                      type="button"
+                      onClick={() => onRemove(id)}
+                      aria-label={`Remove ${entry?.name ?? "champion"} from ${label.toLowerCase()}`}
+                      className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full border border-line bg-panel text-[10px] leading-none text-mut hover:text-bad"
+                    >
+                      ×
+                    </button>
+                  )}
+                  {onToggleLaneOpponent && (
+                    <button
+                      type="button"
+                      onClick={() => onToggleLaneOpponent(id)}
+                      aria-pressed={isLaneOpponent}
+                      aria-label={isLaneOpponent ? `${entry?.name ?? "Champion"} is the lane opponent` : `Mark ${entry?.name ?? "Champion"} as lane opponent`}
+                      title={isServerInferredOnly ? "Auto-detected lane opponent" : "Toggle lane opponent"}
+                      className={`absolute bottom-0.5 left-1/2 -translate-x-1/2 rounded px-1 text-[7px] font-bold uppercase tracking-[0.03em] ${
+                        isLaneOpponent ? "bg-teal text-bg" : "bg-bg/80 text-mut opacity-0 group-hover:opacity-100"
+                      }`}
+                    >
+                      {isLaneOpponent ? "lane" : "+lane"}
+                    </button>
+                  )}
+                </>
+              ) : isYourPick ? (
+                <span className="text-xl font-light text-mut/70" aria-hidden="true">+</span>
+              ) : (
+                <label className="absolute inset-0 flex cursor-pointer items-center justify-center rounded-lg">
+                  <span className="text-xl font-light text-mut/70" aria-hidden="true">+</span>
+                  <select
+                    value=""
+                    aria-label={`Add a champion to ${label.toLowerCase()} slot ${index + 1}`}
+                    onChange={(event) => {
+                      const id = Number(event.target.value);
+                      const selected = champIcons.get(id);
+                      if (!selected) return;
+                      onAdd({ id, key: selected.name.replace(/\s+/g, ""), name: selected.name, icon: selected.icon });
+                    }}
+                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                  >
+                    <option value="" disabled>{placeholder}</option>
+                    {options.map(([id, option]) => <option key={id} value={id}>{option.name}</option>)}
+                  </select>
+                </label>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function RecommendationCard({
+  card,
+  rank,
+  champIcons,
+  preview,
+  onViewDetails,
+}: {
+  card: DraftAssistantCard;
+  rank: number;
+  champIcons: Map<number, ChampionIconEntry>;
+  preview: DraftMatchupPreview | undefined;
+  onViewDetails: (id: number) => void;
+}) {
+  const candidate = card.candidate;
+  const status = card.slot === "best" ? "BEST OVERALL" : card.slot === "blind" ? "SAFEST BLIND" : "RELIABLE PICK";
+  const entry = candidate ? championEntry(champIcons, candidate.champId) : null;
+  const offMeta = candidate ? isOffMetaLaneShare(candidate.laneShare) : false;
+  const worst = preview?.worst[0];
+  const worstName = worst ? championEntry(champIcons, worst.oppId).name : null;
+  const support = candidate
+    ? [
+        candidate.floor !== null ? `Floor ${formatPercent(candidate.floor)}` : null,
+        candidate.totalGames !== null ? `${formatGames(candidate.totalGames)} games` : null,
+        worst && worstName ? `Worst popular matchup: ${worstName} ${formatPercent(worst.winRate)}` : null,
+      ].filter((part): part is string => part !== null)
+    : [];
+
+  return (
+    <article className="relative flex min-w-0 flex-col rounded-xl border border-line bg-panel p-4 shadow-[0_8px_24px_rgba(0,0,0,0.16)]">
+      <span className={`absolute left-3 top-3 flex h-7 w-7 items-center justify-center rounded-full text-[12px] font-bold ${rank === 1 ? "bg-teal text-bg" : "bg-panel2 text-mut border border-line"}`}>
+        {rank}
+      </span>
+      {candidate && entry ? (
+        <>
+          <div className="flex justify-center pt-3">
+            <span className="h-24 w-full max-w-[230px] overflow-hidden rounded-lg border border-line-gold bg-black/30">
+              <IconWithFallback src={championSplashUrl(entry)} alt={`${entry.name} splash art`} fallbackGlyph={entry.name} className="h-full w-full object-cover object-[center_20%]" size={230} />
+            </span>
+          </div>
+          <div className="mt-3 text-center">
+            <h3 className="truncate text-[18px] font-bold text-txt">{entry.name}</h3>
+            <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
+              <span className="inline-flex rounded-full border border-line-gold bg-teal/10 px-2 py-1 text-[9px] font-bold tracking-[0.1em] text-teal">{status}</span>
+              {offMeta && <span className="inline-flex rounded-full border border-line-gold px-2 py-1 text-[9px] font-semibold tracking-[0.08em] text-mut">OFF-META</span>}
+              {candidate.isPotential && <span className="inline-flex rounded-full border border-line-gold px-2 py-1 text-[9px] font-semibold tracking-[0.08em] text-mut">LOW SAMPLE</span>}
+            </div>
+          </div>
+          <div className="mt-4 text-center">
+            <div className="flex items-baseline justify-center gap-1.5">
+              <p className="tabular-nums text-[28px] font-extrabold leading-none text-txt">{formatPercent(candidate.winRate)}</p>
+              <p className="text-[11px] text-mut">Win Rate</p>
+            </div>
+            <p className="mt-1 text-[11px] tabular-nums text-mut">{formatGames(candidate.totalGames)} games</p>
+          </div>
+          <div className="mt-4 min-h-[46px] text-center">
+            <p className="text-[12px] font-semibold text-txt">{candidate.floor !== null ? `Floor ${formatPercent(candidate.floor)}` : `${formatPercent(candidate.winRate)} estimated in this draft`}</p>
+            <p className="mt-1 text-[10.5px] leading-4 text-mut">{support.length > 0 ? support.join(" · ") : "No supporting matchup figures available."}</p>
+          </div>
+        </>
+      ) : (
+        <div className="flex min-h-[230px] flex-col items-center justify-center text-center">
+          <span className="flex h-16 w-16 items-center justify-center rounded-full border border-dashed border-line text-2xl text-mut/60">—</span>
+          <p className="mt-3 text-[13px] font-semibold text-txt">No honest pick yet</p>
+          <p className="mt-1 max-w-[190px] text-[10.5px] leading-4 text-mut">This slot needs a distinct champion with the required evidence.</p>
+        </div>
+      )}
+      <button
+        type="button"
+        disabled={!candidate}
+        onClick={() => candidate && onViewDetails(candidate.champId)}
+        aria-label={candidate ? `View details for ${entry?.name ?? "champion"}` : "View details unavailable"}
+        className="mt-4 w-full rounded-lg border border-line py-2.5 text-[11px] font-bold text-txt transition-colors hover:border-line-gold hover:text-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-not-allowed disabled:text-mut/50"
+      >
+        View details →
+      </button>
+    </article>
+  );
+}
+
+function MatchupGroup({
+  label,
+  rows,
+  champIcons,
+}: {
+  label: "Worst" | "Best";
+  rows: DraftMatchupPreview["worst"];
+  champIcons: Map<number, ChampionIconEntry>;
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="mb-2 text-[9px] font-bold uppercase tracking-[0.14em] text-mut">{label}</p>
+      <div className="grid grid-cols-3 gap-2">
+        {rows.length > 0 ? (
+          rows.map((row) => {
+            const entry = championEntry(champIcons, row.oppId);
+            return (
+              <div key={`${label}-${row.oppId}`} className="min-w-0 text-center">
+                <span className="mx-auto block h-8 w-8 overflow-hidden rounded-full bg-black/30">
+                  <IconWithFallback src={entry.icon} alt={entry.name} fallbackGlyph={entry.name} className="h-full w-full object-cover" size={32} />
+                </span>
+                {/* truncate, NOT break-words. Three names share a card here, so
+                    each gets ~48px; `break-words` split them mid-word into
+                    "Lissan dra", "LeBla nc" and "Kassa dlin" — the last reads as
+                    a misspelling of a champion, which is worse than a clipped
+                    name. One line with an ellipsis and the full name on hover. */}
+                <span className="mt-1 block truncate text-[10px] leading-3 text-txt" title={entry.name}>
+                  {entry.name}
+                </span>
+                <span className={`mt-1 block text-[10px] font-semibold tabular-nums ${row.winRate < 0.5 ? "text-bad" : "text-good"}`}>
+                  {formatPercent(row.winRate)}
+                </span>
+              </div>
+            );
+          })
+        ) : (
+          <p className="text-[10.5px] text-mut">No popular matchup rows.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MatchupPreviewBlock({
+  candidate,
+  preview,
+  champIcons,
+}: {
+  candidate: DraftAssistantCandidate | null;
+  preview: DraftMatchupPreview | undefined;
+  champIcons: Map<number, ChampionIconEntry>;
+}) {
+  if (!candidate) {
+    return (
+      <article className="rounded-xl border border-dashed border-line bg-panel p-4 text-center">
+        <p className="text-[11px] font-semibold text-txt">No honest matchup preview for this slot yet.</p>
+        <p className="mt-1 text-[10.5px] text-mut">A distinct recommendation with popular-opponent evidence is required.</p>
+      </article>
+    );
+  }
+  const entry = championEntry(champIcons, candidate.champId);
+  return (
+    <article className="rounded-xl border border-line bg-panel p-4">
+      <div className="flex items-center gap-2.5">
+        <span className="h-9 w-9 flex-shrink-0 overflow-hidden rounded-full border border-line-gold bg-black/30">
+          <IconWithFallback src={entry.icon} alt={entry.name} fallbackGlyph={entry.name} className="h-full w-full object-cover" size={36} />
+        </span>
+        <div className="min-w-0">
+          <h3 className="truncate text-[13px] font-semibold text-txt">{entry.name}</h3>
+          <p className="text-[10px] text-mut">vs Popular Picks</p>
+        </div>
+      </div>
+      <div className="mt-4 grid grid-cols-1 gap-5 sm:grid-cols-2">
+        <MatchupGroup label="Worst" rows={preview?.worst ?? []} champIcons={champIcons} />
+        <MatchupGroup label="Best" rows={preview?.best ?? []} champIcons={champIcons} />
+      </div>
+    </article>
+  );
+}
+
+interface DetailRow {
+  candidate: DraftAssistantCandidate;
+  name: string;
+  icon: string;
+  difficultyBand: ChampionIconEntry["difficultyBand"];
+}
+
+function laneAverage(laneStats: DraftLaneStat[]): number | null {
+  let games = 0;
+  let wins = 0;
+  for (const stat of laneStats) {
+    if (stat.baselineWr === null || stat.totalGames === null || stat.totalGames <= 0) continue;
+    games += stat.totalGames;
+    wins += stat.baselineWr * stat.totalGames;
+  }
+  return games > 0 ? wins / games : null;
+}
+
+function DetailedRankings({
+  rows,
+  laneAverageValue,
+  sort,
+  onSortChange,
+  grid,
+  onGridChange,
+  selectedChampionId,
+  onSelect,
+  showAll,
+  onShowAll,
+  preserveOrder,
+}: {
+  rows: DetailRow[];
+  laneAverageValue: number | null;
+  sort: DetailSort;
+  onSortChange: (sort: DetailSort) => void;
+  grid: boolean;
+  onGridChange: (grid: boolean) => void;
+  selectedChampionId: number | null;
+  onSelect: (id: number) => void;
+  showAll: boolean;
+  onShowAll: () => void;
+  preserveOrder: boolean;
+}) {
+  const sortedRows = preserveOrder
+    ? rows
+    : [...rows].sort((a, b) => {
+        const valueA = sort === "winRate" ? a.candidate.winRate : sort === "pickRate" ? a.candidate.laneShare ?? -1 : a.candidate.totalGames ?? -1;
+        const valueB = sort === "winRate" ? b.candidate.winRate : sort === "pickRate" ? b.candidate.laneShare ?? -1 : b.candidate.totalGames ?? -1;
+        return valueB !== valueA ? valueB - valueA : a.candidate.rank - b.candidate.rank;
+      });
+  const visibleRows = showAll ? sortedRows : sortedRows.slice(0, 10);
+
+  function delta(candidate: DraftAssistantCandidate): number | null {
+    return laneAverageValue === null ? null : candidate.winRate - laneAverageValue;
+  }
+
+  return (
+    <section id="draft-detailed-rankings" className="flex min-w-0 flex-col rounded-xl border border-line bg-panel">
+      <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-4">
+        <h2 className="text-[11px] font-bold tracking-[0.14em] text-txt">DETAILED RANKINGS</h2>
+        <div className="flex items-center gap-1" role="group" aria-label="Ranking display">
+          <button
+            type="button"
+            onClick={() => onGridChange(false)}
+            aria-label="List view"
+            aria-pressed={!grid}
+            className={`flex h-7 w-7 items-center justify-center rounded-md border text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${!grid ? "border-teal text-teal" : "border-line text-mut hover:text-txt"}`}
+          >
+            ☰
+          </button>
+          <button
+            type="button"
+            onClick={() => onGridChange(true)}
+            aria-label="Grid view"
+            aria-pressed={grid}
+            className={`flex h-7 w-7 items-center justify-center rounded-md border text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${grid ? "border-teal text-teal" : "border-line text-mut hover:text-txt"}`}
+          >
+            ▦
+          </button>
+        </div>
+      </div>
+      <div className="border-b border-line px-4 py-3">
+        <label className="flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-mut">
+          <span>Sort by</span>
+          <select value={sort} disabled={preserveOrder} aria-label={preserveOrder ? "Sorting disabled for Comfort Picks" : "Sort detailed rankings"} onChange={(event) => onSortChange(event.target.value as DetailSort)} className="rounded-md border border-line bg-panel2 px-2 py-1.5 text-[11px] normal-case tracking-normal text-txt outline-none focus:border-teal disabled:cursor-not-allowed disabled:opacity-60">
+            <option value="winRate">Win Rate</option>
+            <option value="pickRate">Pick Rate</option>
+            <option value="games">Games</option>
+          </select>
+        </label>
+      </div>
+
+      {grid ? (
+        <div className="grid grid-cols-1 gap-2 p-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+          {visibleRows.map((row) => {
+            const rowDelta = delta(row.candidate);
+            const offMeta = isOffMetaLaneShare(row.candidate.laneShare);
+            return (
+              <button
+                type="button"
+                key={row.candidate.champId}
+                onClick={() => onSelect(row.candidate.champId)}
+                className={`min-w-0 rounded-lg border p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${selectedChampionId === row.candidate.champId ? "border-teal bg-teal/8" : "border-line hover:border-line-gold"}`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] tabular-nums text-mut">{row.candidate.rank}</span>
+                  <span className="h-8 w-8 flex-shrink-0 overflow-hidden rounded-md bg-black/30">
+                    <IconWithFallback src={row.icon} alt={row.name} fallbackGlyph={row.name} className="h-full w-full object-cover" size={32} />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-txt">{row.name}</span>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
+                  <span className="text-mut">WIN RATE <strong className="block text-[12px] text-good">{formatPercent(row.candidate.winRate)}</strong><small className={rowDelta === null ? "text-mut" : rowDelta >= 0 ? "text-good" : "text-bad"}>{rowDelta === null ? "—" : `${rowDelta >= 0 ? "+" : ""}${formatPercent(rowDelta)}`}</small></span>
+                  <span className="text-mut">PICK RATE <strong className="block text-[12px] text-txt">{formatPercent(row.candidate.laneShare)}</strong><small className="text-mut">{formatGames(row.candidate.totalGames)}</small></span>
+                </div>
+                {offMeta && <span className="mt-2 inline-flex rounded border border-line-gold px-1.5 py-0.5 text-[9px] font-semibold text-mut">Off-Meta</span>}
+                {row.candidate.isPotential && <span className="mt-2 ml-1 inline-flex rounded border border-line-gold px-1.5 py-0.5 text-[9px] font-semibold text-mut">Low-Sample</span>}
+                {row.difficultyBand && <span className="mt-2 ml-1 inline-flex rounded border border-line px-1.5 py-0.5 text-[9px] font-semibold text-mut">{row.difficultyBand}</span>}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full w-full border-collapse text-left">
+            <caption className="sr-only">Draft champions ranked for the selected view</caption>
+            <thead>
+              <tr className="border-b border-line text-[9px] font-bold uppercase tracking-[0.1em] text-mut">
+                <th scope="col" className="w-8 px-3 py-3">#</th>
+                <th scope="col" className="px-2 py-3">CHAMPION</th>
+                <th scope="col" className="px-2 py-3 text-right">WIN RATE</th>
+                <th scope="col" className="px-3 py-3 text-right">PICK RATE</th>
+                <th scope="col" className="px-3 py-3 text-right">DIFFICULTY</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleRows.map((row) => {
+                const rowDelta = delta(row.candidate);
+                const offMeta = isOffMetaLaneShare(row.candidate.laneShare);
+                return (
+                  <tr key={row.candidate.champId} className={`border-b border-line/60 ${selectedChampionId === row.candidate.champId ? "bg-teal/8" : "hover:bg-white/[0.02]"}`}>
+                    <td className="px-3 py-3 text-[10px] tabular-nums text-mut">{row.candidate.rank}</td>
+                    <td className="px-2 py-3">
+                      <button type="button" onClick={() => onSelect(row.candidate.champId)} className="flex min-w-0 items-center gap-2 text-left">
+                        <span className="h-8 w-8 flex-shrink-0 overflow-hidden rounded-md bg-black/30">
+                          <IconWithFallback src={row.icon} alt={row.name} fallbackGlyph={row.name} className="h-full w-full object-cover" size={32} />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block max-w-[110px] truncate text-[11px] font-semibold text-txt">{row.name}</span>
+                          {offMeta && <span className="mt-0.5 block text-[9px] text-mut">Off-Meta</span>}
+                          {row.candidate.isPotential && <span className="mt-0.5 block text-[9px] text-mut">Low-Sample</span>}
+                        </span>
+                      </button>
+                    </td>
+                    <td className="px-2 py-3 text-right tabular-nums">
+                      <span className="block text-[12px] font-semibold text-good">{formatPercent(row.candidate.winRate)}</span>
+                      <span className={`block text-[10px] ${rowDelta === null ? "text-mut" : rowDelta >= 0 ? "text-good" : "text-bad"}`}>{rowDelta === null ? "—" : `${rowDelta >= 0 ? "+" : ""}${formatPercent(rowDelta)}`}</span>
+                    </td>
+                    <td className="px-3 py-3 text-right tabular-nums">
+                      <span className="block text-[12px] text-txt">{formatPercent(row.candidate.laneShare)}</span>
+                      <span className="block text-[10px] text-mut">{formatGames(row.candidate.totalGames)}</span>
+                    </td>
+                    <td className="px-3 py-3 text-right text-[10px] text-mut">{row.difficultyBand ?? "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {rows.length === 0 && <p className="px-4 py-8 text-center text-[11px] text-mut">No rankings meet the active filters.</p>}
+      <div className="border-t border-line px-4 py-3 text-center">
+        <button type="button" onClick={onShowAll} disabled={showAll || rows.length <= 10} className="mb-2 block w-full text-[10.5px] font-semibold text-teal hover:text-teal-hover disabled:cursor-default disabled:text-mut">
+          {showAll ? "Showing full table" : "View full table →"}
+        </button>
+        <span className="text-[10px] text-mut">Figures are estimated from this lane&apos;s matchup data.</span>
+      </div>
+    </section>
   );
 }
 
@@ -282,6 +752,20 @@ export default function DraftPage() {
   // filterToMyPool doc comment). Independent of `dirty`/live-sync — purely
   // a display toggle over whatever the server already returned.
   const [myPoolOnly, setMyPoolOnly] = useState(false);
+  // Allied picks are stored for the Draft Assistant control row only. There
+  // is no ally-pair data in coachbuild.draft_matchup, so this state is
+  // deliberately excluded from the recommendation request and every score.
+  const [allyIds, setAllyIds] = useState<number[]>([]);
+  const [assistantView, setAssistantView] = useState<AssistantView>("recommended");
+  const [minPickRate, setMinPickRate] = useState(DEFAULT_DRAFT_ASSISTANT_FILTERS.minPickRate);
+  const [includeOffMeta, setIncludeOffMeta] = useState(DEFAULT_DRAFT_ASSISTANT_FILTERS.includeOffMeta);
+  const [minimumGames, setMinimumGames] = useState(DEFAULT_DRAFT_ASSISTANT_FILTERS.minimumGames);
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [showRecommendationHelp, setShowRecommendationHelp] = useState(false);
+  const [detailSort, setDetailSort] = useState<DetailSort>("winRate");
+  const [detailGrid, setDetailGrid] = useState(false);
+  const [selectedDetailChampionId, setSelectedDetailChampionId] = useState<number | null>(null);
+  const [showFullTable, setShowFullTable] = useState(false);
 
   const [champIcons, setChampIcons] = useState<Map<number, ChampionIconEntry>>(new Map());
   const [state, setState] = useState<FetchState>({ status: "loading" });
@@ -430,6 +914,42 @@ export default function DraftPage() {
     setEnemyIds((prev) => (prev.includes(champ.id) || prev.length >= MAX_DRAFT_ENEMIES ? prev : [...prev, champ.id]));
   }
 
+  function handleAddAlly(champ: ChampionRef) {
+    setAllyIds((prev) => (prev.includes(champ.id) || prev.length >= MAX_ALLIED_ADDITIONAL ? prev : [...prev, champ.id]));
+  }
+
+  function handleRemoveAlly(id: number) {
+    setAllyIds((prev) => prev.filter((x) => x !== id));
+  }
+
+  function handleAssistantViewChange(view: AssistantView) {
+    setAssistantView(view);
+    setMyPoolOnly(view === "comfort");
+    setShowFullTable(false);
+  }
+
+  function handleAssistantTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, current: AssistantView) {
+    const views: AssistantView[] = ["recommended", "blind", "counters", "comfort"];
+    const currentIndex = views.indexOf(current);
+    let nextIndex = currentIndex;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (currentIndex + 1) % views.length;
+    if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (currentIndex - 1 + views.length) % views.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = views.length - 1;
+    if (nextIndex === currentIndex) return;
+    event.preventDefault();
+    const next = views[nextIndex];
+    handleAssistantViewChange(next);
+    window.setTimeout(() => document.getElementById(`draft-tab-${next}`)?.focus(), 0);
+  }
+
+  function handleViewDetails(champId: number) {
+    setAssistantView("recommended");
+    setMyPoolOnly(false);
+    setSelectedDetailChampionId(champId);
+    window.setTimeout(() => document.getElementById("draft-detailed-rankings")?.scrollIntoView({ block: "nearest", behavior: "auto" }), 0);
+  }
+
   function handleRemoveEnemy(id: number) {
     setDirty(true);
     setEnemyIds((prev) => prev.filter((x) => x !== id));
@@ -494,48 +1014,14 @@ export default function DraftPage() {
   const serverInferredLaneOpponentId = state.status === "ok" ? state.data.meta.laneOppInferred : null;
   const effectiveLaneOpponentId = laneOpponentId ?? serverInferredLaneOpponentId;
 
-  // Plain-language explainer (user request 2026-07-21) — what "Suggested
-  // picks" actually MEANS, adapting to whether enemies / a lane opponent are
-  // in play. Kept to one muted line.
-  const laneOppName =
-    effectiveLaneOpponentId !== null ? champIcons.get(effectiveLaneOpponentId)?.name ?? null : null;
-  const picksExplainer =
-    enemyIds.length === 0
-      ? "Each champion's own win rate in this lane on the current patch."
-      : laneOppName
-        ? `Win rate in this lane, adjusted by matchup records against the enemy team — weighted heaviest against your lane opponent (${laneOppName}).`
-        : "Win rate in this lane, adjusted by each champion's matchup records against the enemies you've added.";
-
-  // The sample-size note has to adapt for the same reason picksExplainer does
-  // (P1 fix, 2026-07-26). The 5,000-game pool floor is unconditional — it gates
-  // on `totalGames` via filterPoolByTotalGames in either mode, so that sentence
-  // stays true throughout. What changes is the GAMES COLUMN: once a lane
-  // opponent resolves, draftPicksModel switches it to
-  // `winVsLaneOppGames ?? minGames`, i.e. games against THAT opponent rather
-  // than total lane games. The old static copy pointed at the column as the
-  // trust signal while the column had quietly changed population underneath it
-  // — live repro was "#1 Swain, GAMES 1568" sitting directly under a sentence
-  // promising 5,000+, when Swain's real mid sample is ~22,639. The number was
-  // never wrong; the label described a different population than the one shown.
-  const picksSampleNote =
-    laneOppName !== null
-      ? `Champions still need 5,000+ games in this lane this patch to appear, which filters out one-trick noise. Within that, ranking is by win rate — so a genuinely strong niche pick can sit above a popular staple. The games column now counts games against ${laneOppName} specifically, not total lane games, so expect much smaller numbers than that floor.`
-      : "Champions need 5,000+ games in this lane this patch to appear, which filters out one-trick noise. Within that, ranking is by win rate — so a genuinely strong niche pick can sit above a popular staple. Check the games column before you trust a name you don't recognise here.";
-
   // My pool filter — applied to a DISPLAY copy only; state.data.plays/
   // potentialPlays (and their order) are never mutated, so toggling this off
   // always restores the exact server-ranked list.
   const basePlays: DraftPlayResult[] = state.status === "ok" ? state.data.plays : [];
   const basePotentialPlays: DraftPlayResult[] = state.status === "ok" ? state.data.potentialPlays : [];
-  const displayedPlays = myPoolOnly ? filterToMyPool(basePlays) : basePlays;
-  const displayedPotentialPlays = myPoolOnly ? filterToMyPool(basePotentialPlays) : basePotentialPlays;
+  const displayedPlays = myPoolOnly ? filterComfortCandidates(basePlays) : basePlays;
+  const displayedPotentialPlays = myPoolOnly ? filterComfortCandidates(basePotentialPlays) : basePotentialPlays;
   const hasAnyMyPoolData = basePlays.some((p) => p.personalOverall.games >= 1) || basePotentialPlays.some((p) => p.personalOverall.games >= 1);
-
-  // enemyAnalysis (plan §2.3/§4) — engo's Stage 0 field on
-  // DraftRecommendResponse, always [] (never undefined) once normalized.
-  const enemyAnalysisRaw = state.status === "ok" ? state.data.enemyAnalysis : undefined;
-
-  const bans = state.status === "ok" ? state.data.bans ?? [] : [];
 
   const blindMeta = blindState.status === "ok" || blindState.status === "empty" ? blindState.data.meta : null;
   const blindPoolAfterShare = blindMeta
@@ -544,7 +1030,7 @@ export default function DraftPage() {
   const blindExclusionNote = blindMeta
     ? [
         blindMeta.excludedByLaneShare > 0
-          ? `${blindMeta.excludedByLaneShare} of ${blindMeta.poolCandidates} pool champions excluded: below 0.5% lane share`
+          ? `${blindMeta.excludedByLaneShare} of ${blindMeta.poolCandidates} pool champions excluded: below ${formatPercent(POOL_MIN_PICKRATE)} lane share`
           : null,
         blindMeta.excludedByMassGate > 0
           ? `${blindMeta.excludedByMassGate} of ${blindPoolAfterShare} remaining pool champions excluded: less than 90% of their opponent mass is backed by 30+ game cells`
@@ -557,256 +1043,235 @@ export default function DraftPage() {
         .join("; ")
     : "";
 
+  const laneStats: DraftLaneStat[] = state.status === "ok" ? (state.data.laneStats ?? []) : [];
+  const laneStatMap = new Map<number, DraftLaneStat>(laneStats.map((stat) => [stat.champId, stat]));
+  const matchupPreviewMap = new Map<number, DraftMatchupPreview>(
+    state.status === "ok" ? (state.data.matchupPreviews ?? []).map((preview) => [preview.champId, preview]) : []
+  );
+  const fullLaneCandidates: DraftAssistantCandidate[] = laneStats
+    .filter((stat) => stat.baselineWr !== null)
+    .map((stat, index) => ({
+      champId: stat.champId,
+      winRate: stat.baselineWr ?? 0.5,
+      floor: null,
+      totalGames: stat.totalGames,
+      laneShare: stat.laneShare,
+      rank: Number.MAX_SAFE_INTEGER - index,
+      isPotential: false,
+      personalOverall: { games: 0, wins: 0 },
+      source: "recommended" as const,
+    }));
+  const activeFilters = { minPickRate, includeOffMeta, minimumGames };
+  const recommendedFilterRows = displayedPlays.map((play, index) => {
+    const stat = laneStatMap.get(play.champId);
+    return { play, rank: index + 1, synergyDelta: play.synergyDelta, champId: play.champId, laneShare: stat?.laneShare ?? null, totalGames: stat?.totalGames ?? null };
+  });
+  const potentialFilterRows = displayedPotentialPlays.map((play, index) => {
+    const stat = laneStatMap.get(play.champId);
+    return { play, rank: index + 1, synergyDelta: play.synergyDelta, champId: play.champId, laneShare: stat?.laneShare ?? null, totalGames: stat?.totalGames ?? null };
+  });
+  const filteredRecommendedRows = filterDraftAssistantCandidates(recommendedFilterRows, activeFilters);
+  const filteredPotentialRows = filterDraftAssistantCandidates(potentialFilterRows, activeFilters);
+  const filteredRecommendedPlays = filteredRecommendedRows.map((row) => row.play);
+  const filteredPotentialPlays = filteredPotentialRows.map((row) => row.play);
+
+  const blindPicks = blindState.status === "ok" ? blindState.data.picks : [];
+  const blindFilterRows = blindPicks.map((pick) => {
+    const stat = laneStatMap.get(pick.champId);
+    return { pick, champId: pick.champId, laneShare: stat?.laneShare ?? null, totalGames: stat?.totalGames ?? pick.totalGames };
+  });
+  const filteredBlindRows = filterDraftAssistantCandidates(blindFilterRows, activeFilters);
+  const filteredBlindPicks = filteredBlindRows.map((row) => row.pick);
+
+  const filteredCounterRows = filterCounterCandidates([...filteredRecommendedRows, ...filteredPotentialRows]);
+
+  const toRecommendedCandidate = (row: (typeof recommendedFilterRows)[number], isPotential: boolean): DraftAssistantCandidate => {
+    const stat = laneStatMap.get(row.play.champId);
+    return {
+      champId: row.play.champId,
+      winRate: row.play.score,
+      floor: null,
+      totalGames: stat?.totalGames ?? null,
+      laneShare: stat?.laneShare ?? null,
+      rank: row.rank,
+      isPotential,
+      personalOverall: row.play.personalOverall,
+      source: "recommended",
+    };
+  };
+
+  const currentViewRows: DraftAssistantCandidate[] =
+    assistantView === "blind"
+      ? filteredBlindPicks.map((pick) => {
+          const stat = laneStatMap.get(pick.champId);
+          return {
+            champId: pick.champId,
+            winRate: pick.fieldWr,
+            floor: pick.es10,
+            totalGames: stat?.totalGames ?? pick.totalGames,
+            laneShare: stat?.laneShare ?? null,
+            rank: pick.rank,
+            isPotential: false,
+            personalOverall: { games: 0, wins: 0 },
+            source: "blind" as const,
+          };
+        })
+      : assistantView === "counters" && enemyIds.length === 0
+        ? []
+        : (assistantView === "counters" ? filteredCounterRows.map((row) => toRecommendedCandidate(row, displayedPotentialPlays.includes(row.play))) : [
+            ...filteredRecommendedRows.map((row) => toRecommendedCandidate(row, false)),
+            ...filteredPotentialRows.map((row) => toRecommendedCandidate(row, true)),
+          ]);
+
+  const topCards = resolveTopRecommendationCards({
+    recommended: filteredRecommendedPlays,
+    potential: filteredPotentialPlays,
+    blind: filteredBlindPicks,
+    laneStats: laneStatMap,
+    fullList: fullLaneCandidates,
+  });
+  const detailRows: DetailRow[] = currentViewRows.map((candidate) => {
+    const entry = championEntry(champIcons, candidate.champId);
+    return { candidate, name: entry.name, icon: entry.icon, difficultyBand: entry.difficultyBand };
+  });
+  const detailAverage = laneAverage(laneStats);
+
   return (
-    <div className="px-4 sm:px-6 lg:px-8 py-6">
-      <div className="max-w-[1440px] mx-auto">
-        <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 mb-6">
-          <div>
-            {/* Sans, matching PageHeader on every other route — the display face is for
-                champion names, not page titles. */}
-            <h1 className="text-[22px] sm:text-2xl font-extrabold tracking-[-0.02em] text-txt">Draft</h1>
-            <p className="text-mut text-[12.5px] mt-0.5">Statistically favored picks &amp; bans vs the enemy comp.</p>
+    <div className="min-w-0 overflow-x-clip px-4 py-5 sm:px-6 lg:px-8 lg:py-6">
+      <div className="mx-auto min-w-0 max-w-[1560px]">
+        <header className="mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-line pb-4">
+          <div className="min-w-0">
+            <p className="flex items-center gap-1.5 text-[11px] tabular-nums text-mut">
+              <span aria-hidden="true" className="text-teal">ⓘ</span>
+              Data: Patch {state.status === "ok" ? state.data.meta.patch || "—" : "—"} · Last refreshed {state.status === "ok" ? formatRelativeTime(state.data.meta.fetchedAt) : "—"}
+            </p>
+            {isStalePatchData && state.status === "ok" && <p className="mt-1 text-[10px] text-mut">Patch {state.data.meta.currentPatch} data is not ready yet — showing patch {state.data.meta.patch}.</p>}
+            {isIngestUnhealthy && state.status === "ok" && <p className="mt-1 text-[10px] text-bad/80" title={state.data.meta.ingestLastError ?? undefined}>Last data refresh reported an error.</p>}
           </div>
-          {state.status === "ok" && (
-            <div className="text-right text-[11px] text-mut tabular-nums pt-1">
-              Patch {state.data.meta.patch || "—"} · {tierLabel(state.data.meta.tier)}
-              {state.data.meta.fetchedAt && ` · Upd ${formatFetchedAt(state.data.meta.fetchedAt)}`}
-              {isStalePatchData && (
-                <p className="text-[10px] mt-0.5 normal-case">
-                  Patch {state.data.meta.currentPatch} data isn&apos;t ready yet — showing patch {state.data.meta.patch}.
-                </p>
-              )}
-              {/* 2026-07-31 audit P2 (#2) — makes a real, previously-silent
-                  ingest failure visible instead of only a rotating local log
-                  file. Independent of the stale-patch notice above (see
-                  isIngestUnhealthy's doc comment). */}
-              {isIngestUnhealthy && (
-                <p className="text-[10px] mt-0.5 normal-case text-bad/80" title={state.data.meta.ingestLastError ?? undefined}>
-                  Last data refresh hit an error — this may be showing older data than usual.
-                </p>
-              )}
-            </div>
-          )}
+          <ApplyRunesButton />
         </header>
 
-        {/* Live-sync status strip — a quiet "LIVE" pulse while passively
-            syncing, a gold "UPDATE READY" control when the user has gone
-            manual mid a live champ select. Same underlying booleans
-            (showResetToLive/liveSyncing) as before the reskin — only the
-            markup/tokens changed. */}
-        {liveSyncing && (
-          <div className="flex items-center gap-2 mb-4">
-            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-teal">
-              <span className="w-1.5 h-1.5 rounded-full bg-teal animate-pulse" aria-hidden="true" />
-              Live — syncing from champ select
-            </span>
-          </div>
-        )}
-
+        {liveSyncing && <div className="mb-4 flex items-center gap-2 text-[11px] font-semibold text-teal"><span className="h-1.5 w-1.5 rounded-full bg-teal motion-reduce:animate-none animate-pulse" aria-hidden="true" />Live — syncing from champ select</div>}
         {showResetToLive && (
           <div role="status" className="mb-4">
-            <button
-              type="button"
-              onClick={handleResetToLive}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-[12px] font-bold uppercase tracking-[0.06em] text-bg bg-teal hover:bg-teal-hover active:scale-95 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-            >
-              Update ready <span aria-hidden="true">⟳</span>
-            </button>
+            <button type="button" onClick={handleResetToLive} className="rounded-lg bg-teal px-4 py-2 text-[12px] font-bold uppercase tracking-[0.06em] text-bg hover:bg-teal-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal">Update ready <span aria-hidden="true">↻</span></button>
           </div>
         )}
 
-        {/* v0.51.0 (mockup 3): two-column layout — LEFT: Enemy Team then My
-            Champion (bans rendered inline inside it); RIGHT: Enemy Comp
-            Profile then Suggested Picks. Mobile (`grid-cols-1`) stacks in DOM
-            order: enemy team → my champion → comp bars → picks. */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <div className="space-y-5">
-            <EnemyTeamPanel
-              enemyIds={enemyIds}
-              champIcons={champIcons}
-              effectiveLaneOpponentId={effectiveLaneOpponentId}
-              laneOpponentId={laneOpponentId}
-              serverInferredLaneOpponentId={serverInferredLaneOpponentId}
-              onAddEnemy={handleAddEnemy}
-              onRemoveEnemy={handleRemoveEnemy}
-              onToggleLaneOpponent={handleToggleLaneOpponent}
-              enemyAnalysis={enemyAnalysisRaw}
-              hoverSelected={hover !== null}
-            />
-            <MyChampionPanel
-              lane={lane}
-              onLaneChange={handleLaneChange}
-              hoverChamp={hoverChamp}
-              onHoverChange={handleHoverChange}
-              onClearHover={handleClearHover}
-              autoDetected={liveSyncing}
-              bans={bans}
-              champIcons={champIcons}
-            />
-          </div>
+        <section className="mb-6">
+          <h1 className="text-[28px] font-extrabold tracking-[-0.03em] text-txt sm:text-[34px]">DRAFT ASSISTANT</h1>
+          <p className="mt-1 text-[13px] text-mut">Get the best pick for your draft.</p>
+        </section>
 
-          <div className="space-y-5">
-            <DraftCompBars enemyIds={enemyIds} />
-
-            <section>
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <p className="text-[10px] tracking-[0.14em] uppercase text-mut font-semibold px-0.5">
-                  Suggested Picks — {LANE_LABEL[lane]}
-                </p>
-                {state.status === "ok" && hasAnyMyPoolData && (
-                  <button
-                    type="button"
-                    onClick={() => setMyPoolOnly((v) => !v)}
-                    aria-pressed={myPoolOnly}
-                    title="Show only champions you've played this season — a filter, never a re-ranking"
-                    className={`px-2 py-1 rounded-md text-[10.5px] font-semibold border transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal ${
-                      myPoolOnly ? "text-bg bg-teal border-teal" : "text-mut border-line hover:border-line-gold hover:text-txt"
-                    }`}
-                  >
-                    My pool
-                  </button>
-                )}
-              </div>
-              {state.status === "ok" && <p className="text-mut text-[11px] mb-1 px-0.5">{picksExplainer}</p>}
-              {state.status === "ok" && (
-                <p className="text-mut text-[10.5px] mb-2 px-0.5">{picksSampleNote}</p>
-              )}
-
-              {state.status === "loading" && <ResultsSkeleton />}
-
-              {state.status === "pending" && (
-                <EmptyPanel
-                  title="Draft data being prepared"
-                  body={`Patch ${state.meta?.patch || "the current"} data is still being ingested — check back shortly.`}
-                />
-              )}
-
-              {state.status === "error" && (
-                <EmptyPanel title="Couldn't load — try again" body="Something went wrong fetching draft recommendations." />
-              )}
-
-              {state.status === "empty" && (
-                <EmptyPanel title="No data yet for this lane" body="Try a different lane, or add fewer/different enemies." />
-              )}
-
-              {state.status === "ok" && state.data.plays.length === 0 && state.data.potentialPlays.length > 0 && (
-                // v0.37.4: a laneOpp is resolved but nothing cleared the
-                // 1,000-game main-list floor yet -- real data exists (below,
-                // in Potential counters), so this is NOT the "empty" state.
-                <p className="text-mut text-[11px] px-0.5 py-2">
-                  No well-sampled (1,000+ game) counters yet for this matchup — see potential counters below.
-                </p>
-              )}
-
-              {state.status === "ok" && state.data.plays.length > 0 && myPoolOnly && displayedPlays.length === 0 && (
-                // My pool filter narrowed a non-empty list down to nothing --
-                // distinct from "no data yet" above (the server has data, the
-                // filter is just narrow right now).
-                <p className="text-mut text-[11px] px-0.5 py-2">
-                  None of your played champions are in this list yet. Toggle &quot;My pool&quot; off to see all suggestions.
-                </p>
-              )}
-
-              {state.status === "ok" && displayedPlays.length > 0 && (
-                <DraftPicksTable plays={displayedPlays} champIcons={champIcons} caption="Suggested picks" />
-              )}
-            </section>
-
-            {/* Potential counters (v0.37.4) — same scoring as the main list
-                above, just under the 1,000-game floor on this specific
-                matchup. Only rendered when there's something to show; never
-                conflated with the main "Suggested picks" empty/loading
-                states. */}
-            {state.status === "ok" && displayedPotentialPlays.length > 0 && (
-              <section>
-                <p className="text-[10px] tracking-[0.14em] uppercase text-mut font-semibold mb-1 px-0.5">Potential counters</p>
-                <p className="text-mut text-[10.5px] mb-2 px-0.5">
-                  Promising but under 1,000 games — treat as leads, not conclusions.
-                </p>
-                <DraftPicksTable plays={displayedPotentialPlays} champIcons={champIcons} caption="Potential counters" />
-              </section>
-            )}
-
-            <section>
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <p className="text-[10px] tracking-[0.14em] uppercase text-mut font-semibold px-0.5">Blind Pick</p>
-                {blindState.status !== "loading" && blindState.status !== "error" && (
-                  <div className="text-[10px] text-mut tabular-nums">
-                    Patch {blindState.data.meta.patch ?? "—"}
-                    {blindState.data.meta.fetchedAt && ` · Upd ${formatFetchedAt(blindState.data.meta.fetchedAt)}`}
-                  </div>
-                )}
-              </div>
-              {/* REWRITTEN after the 2026-08-01 audit measured what this list
-                  can actually distinguish. The old copy promised an order that
-                  "can differ from Suggested Picks"; in fact Spearman against
-                  plain win rate is 0.974 and 8 of the top 10 names are shared
-                  with the table directly above. A reader who was told to expect
-                  a different order and sees the same first three champions reads
-                  that as broken, not as insight.
-                  What the feature genuinely adds is the FLOOR column — Singed
-                  50.2% vs Heimerdinger 47.2% is a real three-point gap that win
-                  rate alone cannot show. So the copy leads with FLOOR, states
-                  the ordering is close on purpose, and says where it stops being
-                  meaningful (rank 10 and rank 11 differ by 0.00027). */}
-              <p className="text-mut text-[11px] mb-1 px-0.5">
-                Champions you can first-pick before seeing your lane opponent. Ranked by win rate with a penalty for a bad
-                worst case, so the order stays close to Suggested Picks — the column that adds something is{" "}
-                <span className="text-txt font-semibold">Floor</span>, your win rate in the 10% of matchups that go worst.
-                Two champions with the same win rate can differ by three points there. Below the top few the scores are
-                near-identical, so read the floor, not the rank.
-              </p>
-
-              {blindState.status === "loading" && <BlindPickSkeleton />}
-
-              {blindState.status === "pending" && (
-                <EmptyPanel
-                  title="Blind-pick data being prepared"
-                  body={`Patch ${blindState.data.meta.patch ?? "the current"} has no complete matchup matrix for this lane yet — check back shortly.`}
-                />
-              )}
-
-              {blindState.status === "error" && (
-                <div className="bg-panel border border-line rounded-xl p-8 text-center">
-                  <p className="text-txt text-[12.5px] font-semibold">Couldn&apos;t load blind picks</p>
-                  <p className="text-mut text-[11px] mt-1">Something went wrong fetching first-pick safety rankings.</p>
-                  <button
-                    type="button"
-                    onClick={() => setBlindRetry((n) => n + 1)}
-                    className="mt-3 px-3 py-1.5 rounded-md border border-line text-[11px] font-semibold text-txt transition-colors motion-reduce:transition-none hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal"
-                  >
-                    Try again
-                  </button>
+        <div className="grid min-w-0 grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,7fr)_minmax(320px,3fr)]">
+          <div className="min-w-0 space-y-5">
+            <section className="grid min-w-0 grid-cols-1 overflow-visible rounded-xl border border-line bg-panel lg:grid-cols-[minmax(136px,0.85fr)_minmax(176px,1.6fr)_minmax(0,1.7fr)_36px_minmax(0,1.7fr)]">
+              <label className="min-w-0 border-b border-line p-4 lg:border-b-0 lg:border-r">
+                <span className="mb-2 block text-[9px] font-bold uppercase tracking-[0.14em] text-mut">YOUR ROLE</span>
+                <span className="relative block">
+                  <select value={lane} onChange={(event) => handleLaneChange(event.target.value as LaneId)} aria-label="Your role" className="w-full appearance-none rounded-lg border border-line bg-panel2 px-3 py-2.5 pr-9 text-[12px] font-semibold text-txt outline-none focus:border-teal">
+                    {LANE_ORDER.map((role) => <option key={role} value={role}>{LANE_LABEL[role]} Lane</option>)}
+                  </select>
+                  <svg aria-hidden="true" viewBox="0 0 16 16" className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-mut" fill="none">
+                    <path d="m4 6 4 4 4-4" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
+                  </svg>
+                </span>
+              </label>
+              <div className="min-w-0 border-b border-line p-4 lg:border-b-0 lg:border-r">
+                <span className="mb-2 block text-[9px] font-bold uppercase tracking-[0.14em] text-mut">YOUR PICK <span className="font-normal normal-case tracking-normal">(optional)</span></span>
+                <div className="relative min-w-0 [&>div]:min-w-0 [&>div>input]:min-w-0 [&>div>input]:pr-8">
+                  <ChampionPicker value={hoverChamp} onChange={handleHoverChange} placeholder="Select a champion" />
+                  <svg aria-hidden="true" viewBox="0 0 20 20" className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-mut">
+                    <circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                    <path d="m12.5 12.5 4 4" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.5" />
+                  </svg>
+                  {hover !== null && <button type="button" onClick={handleClearHover} aria-label="Clear your champion" className="absolute right-8 top-1/2 -translate-y-1/2 rounded px-1 text-[16px] leading-none text-mut hover:text-bad">×</button>}
                 </div>
-              )}
+              </div>
+              <div className="min-w-0 border-b border-line p-4 lg:border-b-0 lg:border-r">
+                <TeamSlots label="ALLIED TEAM" primaryId={hover} additionalIds={allyIds} champIcons={champIcons} placeholder="Add an ally" onAdd={handleAddAlly} onRemove={handleRemoveAlly} />
+              </div>
+              <div className="flex items-center justify-center border-b border-line px-3 py-2 text-[12px] font-bold lowercase text-mut lg:border-b-0 lg:border-r">vs</div>
+              <div className="min-w-0 p-4">
+                <TeamSlots label="ENEMY TEAM" primaryId={null} additionalIds={enemyIds} champIcons={champIcons} placeholder="Add an enemy" onAdd={handleAddEnemy} onRemove={handleRemoveEnemy} onToggleLaneOpponent={handleToggleLaneOpponent} effectiveLaneOpponentId={effectiveLaneOpponentId} laneOpponentId={laneOpponentId} />
+              </div>
+            </section>
 
-              {blindState.status === "empty" && (
-                <EmptyPanel
-                  title="No qualifying blind picks yet"
-                  body={
-                    blindState.data.meta.excludedByMassGate > 0
-                      ? "The available champions do not yet have enough well-sampled opponent mass for an honest published list."
-                      : "There is not enough matchup data for this lane to publish a first-pick list."
-                  }
-                />
-              )}
+            <div className="flex items-center gap-2 rounded-lg border border-line bg-panel2/60 px-4 py-3 text-[11px] text-mut"><span aria-hidden="true" className="text-[14px] text-teal">✨</span>Recommendations update as you add enemies and change your role.</div>
 
-              {blindExclusionNote && (
-                <p className="text-mut text-[10.5px] mt-2 px-0.5">
-                  {blindExclusionNote}.
-                </p>
-              )}
+            <section>
+              <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+                <div><h2 className="text-[12px] font-bold tracking-[0.14em] text-txt">TOP RECOMMENDATIONS</h2><p className="mt-1 text-[11px] text-mut">Our top picks for this draft right now</p></div>
+                <button type="button" aria-expanded={showRecommendationHelp} onClick={() => setShowRecommendationHelp((value) => !value)} className="rounded-full border border-line px-3 py-1.5 text-[10px] font-semibold text-mut hover:border-line-gold hover:text-txt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg">ⓘ How recommendations work</button>
+              </div>
+              {showRecommendationHelp && <p className="mb-3 rounded-lg border border-line bg-panel2/60 px-3 py-2 text-[10.5px] leading-4 text-mut">Recommendations combine estimated win rate, the worst 10% matchup floor, true lane pick rate, and available matchup evidence. Low-sample rows stay visibly tagged.</p>}
+              <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-3">
+                {topCards.map((card, index) => <RecommendationCard key={card.slot} card={card} rank={index + 1} champIcons={champIcons} preview={card.candidate ? matchupPreviewMap.get(card.candidate.champId) : undefined} onViewDetails={handleViewDetails} />)}
+              </div>
+              {state.status === "loading" && <p className="mt-2 text-[10.5px] text-mut">Loading current recommendation data…</p>}
+              {state.status === "error" && <EmptyPanel title="Couldn't load recommendations" body="Something went wrong fetching the current draft data." />}
+              {state.status === "pending" && <EmptyPanel title="Draft data being prepared" body={"Patch " + (state.meta?.patch || "the current") + " data is still being ingested — check back shortly."} />}
+              {state.status === "empty" && <EmptyPanel title="No data yet for this lane" body="Try a different role, or check back after the next data refresh." />}
+            </section>
 
-              {blindState.status === "ok" && <BlindPickTable picks={blindState.data.picks} champIcons={champIcons} />}
+            <section>
+              <div className="mb-3 flex flex-wrap items-center gap-3">
+                <span className="text-[11px] font-semibold text-mut">View by:</span>
+                <div className="flex min-w-0 flex-wrap gap-1.5" role="tablist" aria-label="Draft views">
+                  {([["recommended", "Recommended"], ["blind", "Blind Picks"], ["counters", "Counters"], ["comfort", "Comfort Picks"]] as const).map(([value, label]) => (
+                    <button key={value} id={`draft-tab-${value}`} type="button" role="tab" aria-selected={assistantView === value} aria-controls="draft-view-panel" tabIndex={assistantView === value ? 0 : -1} onClick={() => handleAssistantViewChange(value)} onKeyDown={(event) => handleAssistantTabKeyDown(event, value)} className={assistantView === value ? "rounded-full bg-teal px-3 py-1.5 text-[10.5px] font-bold text-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg" : "rounded-full border border-line bg-panel px-3 py-1.5 text-[10.5px] font-semibold text-mut hover:border-line-gold hover:text-txt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"}>{label}</button>
+                  ))}
+                </div>
+              </div>
+              <div id="draft-view-panel" role="tabpanel" aria-labelledby={`draft-tab-${assistantView}`} tabIndex={0}>
+                {assistantView === "counters" && enemyIds.length === 0 && <EmptyPanel title="Add an enemy to see counters" body="Counters use favourable shrunk matchup deltas against the entered enemies." />}
+                {assistantView === "counters" && enemyIds.length > 0 && filteredCounterRows.length === 0 && <EmptyPanel title="No favourable counters in this ranking" body="No candidate has a positive shrunk matchup delta against the entered enemies." />}
+                {assistantView === "comfort" && !hasAnyMyPoolData && <EmptyPanel title="No Comfort Picks yet" body="Link an account and play ranked solo games this season to see your pool." />}
+                {assistantView === "comfort" && hasAnyMyPoolData && filteredRecommendedPlays.length === 0 && <EmptyPanel title="No Comfort Picks meet the filters" body="Lower the filters or return to Recommended to see the full ranking." />}
+                {assistantView === "blind" && blindState.status === "loading" && <BlindPickSkeleton />}
+                {assistantView === "blind" && blindState.status === "error" && <div className="rounded-xl border border-line bg-panel p-6 text-center"><p className="text-[12px] font-semibold text-txt">Couldn&apos;t load blind picks</p><button type="button" onClick={() => setBlindRetry((value) => value + 1)} className="mt-3 rounded-md border border-line px-3 py-1.5 text-[11px] font-semibold text-txt hover:border-line-gold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal">Try again</button></div>}
+                {assistantView === "blind" && blindState.status === "empty" && <EmptyPanel title="No qualifying blind picks yet" body="There is not enough matchup evidence for an honest first-pick list." />}
+                {blindExclusionNote && assistantView === "blind" && <p className="mb-2 text-[10px] text-mut">{blindExclusionNote}.</p>}
+                {assistantView !== "recommended" && (assistantView !== "counters" || enemyIds.length > 0) ? <p className="mb-2 text-[10.5px] text-mut">{assistantView === "blind" ? "Blind Picks emphasize the average win rate across the worst 10% of likely matchup mass." : assistantView === "comfort" ? "Comfort Picks filter the existing ranking to champions you have actually played; they never re-score or reorder it." : "Counters keep only candidates with a positive shrunk matchup delta against the entered enemies."}</p> : null}
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-line bg-panel p-3">
+              <div className="grid min-w-0 grid-cols-1 items-center gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
+                <label className="min-w-0"><span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-mut"><span aria-hidden="true" className="text-[13px] text-teal">◈</span>Min. Pick Rate</span><select value={String(minPickRate)} onChange={(event) => setMinPickRate(Number(event.target.value))} className="w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-[11px] text-txt outline-none focus:border-teal"><option value="0">0%</option><option value="0.005">0.5%</option><option value="0.01">1.0%</option><option value="0.02">2.0%</option><option value="0.05">5.0%</option></select></label>
+                {/* justify-START, not justify-between. `between` pushed the switch
+                    to the far edge of its grid cell, where it read as belonging to
+                    the "Minimum Games" control beside it rather than to its own
+                    label. It must sit next to the thing it toggles. */}
+                <div className="flex min-w-0 items-end justify-start gap-3"><div><span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-mut"><span aria-hidden="true" className="text-[13px] text-teal">✧</span>Include Off-Meta</span><span className="block text-[11px] text-txt">Show niche picks</span></div><button type="button" role="switch" aria-checked={includeOffMeta} aria-label="Include off-meta picks" onClick={() => setIncludeOffMeta((value) => !value)} className={`relative mb-0.5 h-5 w-9 flex-shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${includeOffMeta ? "bg-teal" : "bg-line"}`}><span className={`absolute top-1 h-3 w-3 rounded-full bg-txt transition-transform ${includeOffMeta ? "translate-x-5" : "translate-x-1"}`} /></button></div>
+                <label className="min-w-0"><span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-mut"><span aria-hidden="true" className="text-[13px] text-teal">⌁</span>Minimum Games</span><select value={String(minimumGames)} onChange={(event) => setMinimumGames(Number(event.target.value))} className="w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-[11px] text-txt outline-none focus:border-teal"><option value="0">Any games</option><option value="1000">1,000</option><option value="5000">5,000</option><option value="10000">10,000</option></select></label>
+                <button type="button" aria-pressed={filtersExpanded} onClick={() => setFiltersExpanded((value) => !value)} className="flex items-center justify-center gap-1 rounded-md border border-line px-3 py-2 text-[11px] font-semibold text-mut hover:border-line-gold hover:text-txt">⚙ Filters</button>
+              </div>
+              {filtersExpanded && <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3 text-[10px] text-mut"><span>Filters apply to the selected view and never change the server ranking.</span><button type="button" onClick={() => { setMinPickRate(DEFAULT_DRAFT_ASSISTANT_FILTERS.minPickRate); setIncludeOffMeta(DEFAULT_DRAFT_ASSISTANT_FILTERS.includeOffMeta); setMinimumGames(DEFAULT_DRAFT_ASSISTANT_FILTERS.minimumGames); }} className="rounded border border-line px-2 py-1 text-txt hover:border-line-gold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal">Reset filters</button></div>}
+            </section>
+
+
+            <section>
+              <div className="grid grid-cols-1 gap-3 border-b border-line pb-3 sm:grid-cols-2 lg:grid-cols-4">
+                <p className="text-[10px] leading-4 text-mut"><strong className="text-[10px] tracking-[0.1em] text-txt">WIN RATE</strong><br />Estimated win rate with this pick in this draft.</p>
+                <p className="text-[10px] leading-4 text-mut"><strong className="text-[10px] tracking-[0.1em] text-txt">FLOOR</strong><br />Average win rate across the worst 10% of matchups you&apos;re likely to face.</p>
+                <p className="text-[10px] leading-4 text-mut"><strong className="text-[10px] tracking-[0.1em] text-txt">PICK RATE</strong><br />How often this champion is played in this role.</p>
+                <p className="text-[10px] leading-4 text-mut"><strong className="text-[10px] tracking-[0.1em] text-txt">DIFFICULTY</strong><br />How hard the champion is to master.</p>
+              </div>
+
+              <div className="mb-3 flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-[12px] font-bold tracking-[0.14em] text-txt">WORST MATCHUPS PREVIEW</h2><p className="mt-1 text-[11px] text-mut">Your top picks vs popular enemy champions</p></div><button type="button" onClick={() => handleAssistantViewChange("counters")} className="text-[10.5px] font-semibold text-teal hover:text-teal-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal">View all matchups →</button></div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                {topCards.map((card) => <MatchupPreviewBlock key={card.slot} candidate={card.candidate} preview={card.candidate ? matchupPreviewMap.get(card.candidate.champId) : undefined} champIcons={champIcons} />)}
+              </div>
             </section>
           </div>
+
+          <aside className="min-w-0 lg:sticky lg:top-4">
+            <DetailedRankings rows={detailRows} laneAverageValue={detailAverage} sort={detailSort} onSortChange={(sort) => { setDetailSort(sort); setShowFullTable(false); }} grid={detailGrid} onGridChange={setDetailGrid} selectedChampionId={selectedDetailChampionId} onSelect={setSelectedDetailChampionId} showAll={showFullTable} onShowAll={() => setShowFullTable(true)} preserveOrder={assistantView === "comfort"} />
+          </aside>
         </div>
 
-        <footer className="mt-10 pt-4 border-t border-line text-center text-[11px] text-mut space-y-1">
-          <p>Suggestions only — statistical trends, not a recommendation to auto-pick. Never applied to the client automatically.</p>
-          <p>Build data © coachless.gg / Riot Games. Not endorsed by Riot Games.</p>
-          {process.env.NEXT_PUBLIC_APP_VERSION && <p className="text-mut">v{process.env.NEXT_PUBLIC_APP_VERSION}</p>}
-        </footer>
+        <footer className="mt-8 border-t border-line pt-4 text-center text-[10.5px] text-mut"><p>Suggestions only — statistical trends, not a recommendation to auto-pick. Never applied to the client automatically.</p><p className="mt-1">Build data © coachless.gg / Riot Games. Not endorsed by Riot Games.</p>{process.env.NEXT_PUBLIC_APP_VERSION && <p className="mt-1">v{process.env.NEXT_PUBLIC_APP_VERSION}</p>}</footer>
       </div>
     </div>
   );

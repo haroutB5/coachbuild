@@ -208,8 +208,8 @@ export default function ChampionPicker({
   }
 
   return (
-    <div ref={containerRef} className="relative">
-      <div className="relative flex items-center min-w-[200px]">
+    <div ref={containerRef} className="relative min-w-0 w-full">
+      <div className="relative flex min-w-0 w-full items-center">
         {value && (
           <span className="absolute left-2.5 top-1/2 -translate-y-1/2 flex items-center pointer-events-none">
             <ChampIcon icon={value.icon} name={value.name} size={22} eager />
@@ -237,8 +237,8 @@ export default function ChampionPicker({
           aria-activedescendant={
             open && filtered[activeIndex] ? optId(activeIndex) : undefined
           }
-          className={`w-full bg-panel2 border border-line hover:border-teal-dim rounded-xl py-2.5 text-sm text-txt placeholder:text-mut outline-none transition-colors focus:border-teal-dim focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
-            value ? "pl-10 pr-3" : "pl-4 pr-3"
+          className={`w-full min-w-0 bg-panel2 border border-line hover:border-teal-dim rounded-xl py-2.5 text-sm text-txt placeholder:text-mut outline-none transition-colors focus:border-teal-dim focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
+            value ? "pl-10 pr-8" : "pl-4 pr-8"
           }`}
         />
       </div>

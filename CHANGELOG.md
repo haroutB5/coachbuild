@@ -2,6 +2,55 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.90.0] — 2026-08-01 — Draft Assistant
+
+`/draft` rebuilt to a supplied redesign mockup. Three rounds and a browser audit — the first build
+was not shippable and the audit is the only reason that was caught.
+
+### Added
+- **Two-column Draft Assistant layout**: one header row (patch + freshness + APPLY RUNES), a control
+  card (role dropdown, optional your-pick, ALLIED and ENEMY team slots), three **TOP RECOMMENDATIONS**
+  cards, a **Recommended / Blind Picks / Counters / Comfort Picks** tab strip, a live filter row
+  (min pick rate, include off-meta, minimum games), a legend, **WORST MATCHUPS PREVIEW**, and a
+  **DETAILED RANKINGS** panel with `Off-Meta` tags and win-rate deltas.
+- **Counters** now genuinely narrows to candidates with a positive shrunk matchup delta against the
+  entered enemies. It previously rendered the identical list while claiming to filter.
+- **Comfort Picks** filters the existing ranking to champions you have played. It never re-scores or
+  reorders — hard rule 3, pinned by a structural test.
+
+### Changed
+- **Hero cards draw from meta champions only** (user directive). An off-meta one-trick at 0.2% pick
+  rate should not be the first thing on the page captioned "BEST OVERALL". The tables still show
+  off-meta rows, tagged, because that is where you go looking for a niche pick. If a lane has fewer
+  than three meta candidates the remaining cards fall back to the full list and are tagged.
+- **Ban suggestions are archived, not deleted.** The redesign has no place for them. Still computed
+  by the API, unreachable in the UI; the ban formula, the ten now-dormant components and the
+  revival steps are in `docs/archive/draft-bans/README.md`.
+- Team synergy and a My-Stats weighting control both appear in the mockup and were both **cut** —
+  synergy because we have no ally-pair data at all, weighting because it would have let personal
+  data re-score the ranking.
+
+### Fixed
+- **PICK RATE was exactly half the true value.** `buildLaneStats` divided by `Σ_c Σ_o games(c,o)`,
+  but the matchup matrix is symmetric — verified independently, 500 of 500 mirror pairs identical —
+  so every lane game was counted twice. Mid has 4,910,691 real games, not 9,821,382. Champion 805
+  reads 12.38% now, not 6.19%. The `/2` lives in one named helper beside `laneShare`.
+  Knock-on: v0.89.1's Blind Pick floor used the same doubled denominator, so `POOL_MIN_PICKRATE`
+  had been enforcing an effective 1%. The constant was raised to match, deliberately preserving the
+  validated pools — mid 97→43 and top 111→51 are unchanged, and re-verified.
+- **The page rendered empty on first load.** Default filters (`minPickRate 0.01`,
+  `includeOffMeta false`) deleted every row the server returned; mid, the default lane, kept zero.
+  Defaults are now off-meta-inclusive and unfiltered. A test asserts a non-empty default for all
+  five lanes.
+- **ENEMY TEAM was clipped on ordinary laptops** — 139px hidden at 1366×768, only 2 of 5 slots
+  visible. Caused by two team text inputs the mockup does not have.
+- Diana's WORST MATCHUPS card was empty: previews were limited to ranked play candidates while
+  blind-pick champions came from a separate feed.
+- The legend rendered twice; champion names broke mid-word into "Kassa dlin" and "LeBla nc";
+  the "Your pick" placeholder was clipped by its own column; the off-meta switch sat at the far edge
+  of its cell, reading as part of the neighbouring control; the global search bar stacked a second
+  header row that the mockup does not have; rankings showed 6 rows instead of 10.
+
 ## [0.89.1] — 2026-08-01 — Blind Pick was recommending off-role one-tricks
 
 User-caught from game knowledge, then confirmed in data: none of the champions Blind Pick listed

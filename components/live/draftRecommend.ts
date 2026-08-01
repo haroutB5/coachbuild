@@ -118,6 +118,29 @@ export interface DraftRecommendMeta {
   ingestLastError: string | null;
 }
 
+/** Lane-share facts derived from the matchup matrix. These are additive
+ * display data for Draft Assistant filters/table rows; they never participate
+ * in the server's recommendation score. */
+export interface DraftLaneStat {
+  champId: number;
+  baselineWr: number | null;
+  totalGames: number | null;
+  laneShare: number | null;
+}
+
+export interface DraftMatchupPreviewRow {
+  oppId: number;
+  winRate: number;
+  games: number;
+  opponentLaneShare: number;
+}
+
+export interface DraftMatchupPreview {
+  champId: number;
+  worst: DraftMatchupPreviewRow[];
+  best: DraftMatchupPreviewRow[];
+}
+
 /** Draft redesign plan §2.3 — mirrors lib/draft/recommend.ts's EnemyAnalysis
  *  on the wire. `laneThreatBand` reuses lib/draft/difficulty.ts's
  *  DifficultyBand union for its label vocabulary (Low/Medium/High) — a
@@ -160,6 +183,11 @@ export interface DraftRecommendResponse {
    *  Stage 0 not landed yet) — never crashes the client over a field it
    *  doesn't know about. */
   enemyAnalysis: DraftEnemyAnalysis[];
+  /** Full lane-share facts for the currently served patch/tier/role. Older
+   * cached responses may omit this additive field. */
+  laneStats?: DraftLaneStat[];
+  /** Shrunk popular-opponent preview rows for the current lane. */
+  matchupPreviews?: DraftMatchupPreview[];
 }
 
 export interface DraftRecommendParams {
@@ -266,6 +294,47 @@ function normalizeEnemyAnalysis(raw: unknown): DraftEnemyAnalysis | null {
   };
 }
 
+function normalizeMatchupPreviewRow(raw: unknown): DraftMatchupPreviewRow | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<DraftMatchupPreviewRow>;
+  if (
+    typeof r.oppId !== "number" ||
+    typeof r.winRate !== "number" ||
+    typeof r.games !== "number" ||
+    typeof r.opponentLaneShare !== "number" ||
+    ![r.oppId, r.winRate, r.games, r.opponentLaneShare].every(Number.isFinite) ||
+    r.games <= 0 ||
+    r.opponentLaneShare < 0
+  ) {
+    return null;
+  }
+  return {
+    oppId: r.oppId,
+    winRate: r.winRate,
+    games: r.games,
+    opponentLaneShare: r.opponentLaneShare,
+  };
+}
+
+function normalizeMatchupPreview(raw: unknown): DraftMatchupPreview | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<DraftMatchupPreview>;
+  if (typeof r.champId !== "number" || !Number.isFinite(r.champId)) return null;
+  const worst = Array.isArray(r.worst) ? r.worst.map(normalizeMatchupPreviewRow).filter((row): row is DraftMatchupPreviewRow => row !== null) : [];
+  const best = Array.isArray(r.best) ? r.best.map(normalizeMatchupPreviewRow).filter((row): row is DraftMatchupPreviewRow => row !== null) : [];
+  return { champId: r.champId, worst, best };
+}
+
+function normalizeLaneStat(raw: unknown): DraftLaneStat | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<DraftLaneStat>;
+  if (typeof r.champId !== "number" || !Number.isFinite(r.champId)) return null;
+  const baselineWr = typeof r.baselineWr === "number" && Number.isFinite(r.baselineWr) ? r.baselineWr : null;
+  const totalGames = typeof r.totalGames === "number" && Number.isFinite(r.totalGames) && r.totalGames >= 0 ? r.totalGames : null;
+  const laneShare = typeof r.laneShare === "number" && Number.isFinite(r.laneShare) && r.laneShare >= 0 ? r.laneShare : null;
+  return { champId: r.champId, baselineWr, totalGames, laneShare };
+}
+
 function normalizeBan(raw: unknown): DraftBanResult | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Partial<DraftBanResult>;
@@ -315,7 +384,23 @@ export function normalizeDraftRecommendResponse(raw: unknown): DraftRecommendRes
     ? r.enemyAnalysis.map(normalizeEnemyAnalysis).filter((e): e is DraftEnemyAnalysis => e !== null)
     : [];
 
-  return { plays, potentialPlays, bans, meta, pending: r.pending === true, enemyAnalysis };
+  const laneStats = Array.isArray(r.laneStats)
+    ? r.laneStats.map(normalizeLaneStat).filter((entry): entry is DraftLaneStat => entry !== null)
+    : undefined;
+  const matchupPreviews = Array.isArray(r.matchupPreviews)
+    ? r.matchupPreviews.map(normalizeMatchupPreview).filter((entry): entry is DraftMatchupPreview => entry !== null)
+    : undefined;
+
+  return {
+    plays,
+    potentialPlays,
+    bans,
+    meta,
+    pending: r.pending === true,
+    enemyAnalysis,
+    ...(laneStats ? { laneStats } : {}),
+    ...(matchupPreviews ? { matchupPreviews } : {}),
+  };
 }
 
 export interface DraftRecommendDeps {

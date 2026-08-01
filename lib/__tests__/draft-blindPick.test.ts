@@ -18,6 +18,7 @@ import {
   POOL_MIN_TOTAL_GAMES,
   filterPoolByLaneShare,
   laneShare,
+  realLaneGames,
 } from "@/lib/draft/score";
 
 describe("blind-pick metrics", () => {
@@ -125,7 +126,7 @@ describe("blind-pick metrics", () => {
     const totalLaneGames = candidates.reduce((sum, candidate) => sum + candidate.totalGames, 0);
     const shares = new Map(candidates.map((candidate) => [candidate.champId, laneShare(candidate, totalLaneGames)]));
 
-    expect(POOL_MIN_PICKRATE).toBe(0.005);
+    expect(POOL_MIN_PICKRATE).toBe(0.01);
     expect(shares.get(1)).toBeGreaterThan(POOL_MIN_PICKRATE);
     expect(shares.get(3)).toBeLessThan(POOL_MIN_PICKRATE);
     expect(filterPoolByLaneShare(candidates, shares).map((candidate) => candidate.champId)).toEqual([1, 2]);
@@ -136,6 +137,11 @@ describe("blind-pick metrics", () => {
     expect(result.excludedByMassGate).toBe(0);
     expect(result.excludedUncomputable).toBe(0);
     expect(result.picks.map((pick) => pick.champId)).toEqual([1, 2]);
+  });
+
+  it("halves the symmetric matrix total once before calculating lane share", () => {
+    expect(realLaneGames(2000)).toBe(1000);
+    expect(laneShare({ champId: 1, baselineWr: 0.5, pickrate: null, banrate: null, totalGames: 250 }, 2000)).toBe(0.25);
   });
 
   it("keeps lane-share, mass-gate, and uncomputable exclusions disjoint", () => {

@@ -102,7 +102,7 @@ describe("computeDraftRecommend", () => {
     expect(result.meta.patch).toBe("16.13");
   });
 
-  it("empty enemies -> pure baseline ranking, laneOppInferred null, no matchup query needed", async () => {
+  it("empty enemies -> pure baseline ranking, laneOppInferred null, with additive lane facts", async () => {
     mockSql.mockImplementation((strings: TemplateStringsArray) => {
       const text = sqlText(strings);
       if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
@@ -119,7 +119,8 @@ describe("computeDraftRecommend", () => {
     expect(result.meta.laneOppInferred).toBeNull();
     expect(result.plays.map((p) => p.champId)).toEqual([2, 1]); // sorted by baselineWr desc
     const matchupCall = mockSql.mock.calls.find(([s]) => sqlText(s as TemplateStringsArray).includes("FROM coachbuild.draft_matchup"));
-    expect(matchupCall).toBeUndefined();
+    expect(matchupCall).toBeDefined();
+    expect(result.laneStats?.map((stat) => stat.champId)).toEqual([1, 2]);
   });
 
   describe("pool total-games floor (audit P1-1)", () => {

@@ -10,7 +10,8 @@
 // has no meaning on a phone). The champion search is ALSO hidden below `lg`
 // on routes whose page already owns a champion/player search (/history,
 // /draft — see topBarChrome.ts), so mobile never stacks two-to-three search
-// boxes on one screen. Desktop keeps the search everywhere. See TopBar()'s
+// boxes on one screen. Desktop keeps the search everywhere except /draft,
+// whose own control row is the primary champion search. See TopBar()'s
 // own `emptyOnMobile` for how the bar avoids rendering as an empty bordered
 // strip when both zones are hidden on those two routes.
 //
@@ -215,16 +216,18 @@ export default function TopBar() {
   // session on first paint), so this never causes a hydration mismatch.
   const [chipVisible, setChipVisible] = useState(false);
   const emptyOnMobile = hideSearchOnMobile && !chipVisible;
+  const emptyOnDraft = pathname === "/draft" && !chipVisible;
+  const hideSearchOnDraft = pathname === "/draft";
 
   return (
     <div
-      className={`${emptyOnMobile ? "hidden lg:flex" : "flex"} sticky top-0 z-30 bg-sidebar/95 backdrop-blur border-b border-line px-3 sm:px-4 lg:px-6 py-2.5 items-center gap-2.5 sm:gap-3 overflow-x-clip`}
+      className={`${emptyOnDraft ? "hidden" : emptyOnMobile ? "hidden lg:flex" : "flex"} sticky top-0 z-30 bg-sidebar/95 backdrop-blur border-b border-line px-3 sm:px-4 lg:px-6 py-2.5 items-center gap-2.5 sm:gap-3 overflow-x-clip`}
     >
-      <div className={hideSearchOnMobile ? "hidden lg:block flex-1 min-w-0 max-w-[420px]" : "flex-1 min-w-0 max-w-[420px]"}>
+      {!hideSearchOnDraft && <div className={hideSearchOnMobile ? "hidden lg:block flex-1 min-w-0 max-w-[420px]" : "flex-1 min-w-0 max-w-[420px]"}>
         <TopBarChampionSearch />
-      </div>
+      </div>}
       <ChampSelectChip onVisibleChange={setChipVisible} />
-      <ApplyRunesButton />
+      {pathname !== "/draft" && <ApplyRunesButton />}
     </div>
   );
 }

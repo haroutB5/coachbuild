@@ -42,6 +42,9 @@ import type { RoleId } from "@/lib/types";
 import {
   filterPoolByPickrate,
   filterPoolByTotalGames,
+  laneShare,
+  POOL_MIN_PICKRATE,
+  realLaneGames,
   rankBans,
   shrunkDelta,
   splitPlaysBySampleSize,
@@ -51,6 +54,7 @@ import {
   type MatchupRow,
   type PlayResult,
 } from "@/lib/draft/score";
+import { matchupEstimate } from "@/lib/draft/blindPick";
 import { EMERALD_TIER } from "@/lib/draft/ugg";
 import { resolveDraftPatchLabel } from "@/lib/draft/patch";
 import type { DifficultyBand } from "@/lib/draft/difficulty";
@@ -254,6 +258,30 @@ export interface RecommendResult {
    *  computation soft-fails (see computeEnemyAnalysis's doc comment) — never
    *  throws, never taints plays/bans/meta. */
   enemyAnalysis: EnemyAnalysis[];
+  /** Additive lane-share facts for Draft Assistant filters and rankings. */
+  laneStats?: DraftLaneStat[];
+  /** Shrunk matchup estimates against popular lane opponents. */
+  matchupPreviews?: DraftMatchupPreview[];
+}
+
+export interface DraftLaneStat {
+  champId: number;
+  baselineWr: number | null;
+  totalGames: number | null;
+  laneShare: number | null;
+}
+
+export interface DraftMatchupPreviewRow {
+  oppId: number;
+  winRate: number;
+  games: number;
+  opponentLaneShare: number;
+}
+
+export interface DraftMatchupPreview {
+  champId: number;
+  worst: DraftMatchupPreviewRow[];
+  best: DraftMatchupPreviewRow[];
 }
 
 interface ChampStatsRow {
@@ -274,6 +302,91 @@ interface MatchupDbRow {
   opp_id: number;
   wins: number;
   games: number;
+}
+
+function aggregateGamesByChampion(rows: MatchupDbRow[]): Map<number, number> {
+  const games = new Map<number, number>();
+  for (const row of rows) {
+    if (!Number.isFinite(row.champ_id) || !Number.isFinite(row.games) || row.games <= 0) continue;
+    games.set(row.champ_id, (games.get(row.champ_id) ?? 0) + row.games);
+  }
+  return games;
+}
+
+function aggregateGamesByOpponent(rows: MatchupDbRow[]): Map<number, number> {
+  const games = new Map<number, number>();
+  for (const row of rows) {
+    if (!Number.isFinite(row.opp_id) || !Number.isFinite(row.games) || row.games <= 0) continue;
+    games.set(row.opp_id, (games.get(row.opp_id) ?? 0) + row.games);
+  }
+  return games;
+}
+
+function buildLaneStats(fullPool: ChampBaseline[], rows: MatchupDbRow[]): DraftLaneStat[] {
+  const matrixGames = aggregateGamesByChampion(rows);
+  // `draft_champ_stats.total_games` is itself derived as Σ_o games(c,o) by
+  // the draft ingest. The fallback keeps defensive/mocked responses useful
+  // when a matrix read is empty; a populated matrix is always authoritative.
+  const hasMatrix = rows.length > 0;
+  const totals = fullPool.map((candidate) => {
+    if (!hasMatrix) return candidate.totalGames;
+    return matrixGames.has(candidate.champId) ? matrixGames.get(candidate.champId)! : null;
+  });
+  const laneTotal = totals.reduce<number>((sum, total) => sum + (total ?? 0), 0);
+  return fullPool.map((candidate, index) => {
+    const totalGames = totals[index];
+    return {
+      champId: candidate.champId,
+      baselineWr: candidate.baselineWr,
+      totalGames,
+      laneShare: totalGames !== null && laneTotal > 0 ? laneShare({ ...candidate, totalGames }, laneTotal) : null,
+    };
+  });
+}
+
+function buildMatchupPreviews(
+  fullPool: ChampBaseline[],
+  rows: MatchupDbRow[],
+  laneStats: DraftLaneStat[],
+  previewChampIds: ReadonlySet<number>
+): DraftMatchupPreview[] {
+  if (rows.length === 0) return [];
+  if (laneStats.some((stat) => stat.totalGames === null)) return [];
+  const laneTotal = laneStats.reduce((sum, stat) => sum + (stat.totalGames ?? 0), 0);
+  const realTotal = realLaneGames(laneTotal);
+  if (realTotal <= 0 || previewChampIds.size === 0) return [];
+  const opponentGames = aggregateGamesByOpponent(rows);
+  const opponentShares = new Map<number, number>();
+  opponentGames.forEach((games, oppId) => opponentShares.set(oppId, games / realTotal));
+  const baselineByChampion = new Map(fullPool.map((candidate) => [candidate.champId, candidate.baselineWr]));
+  const previewRows = new Map<number, DraftMatchupPreviewRow[]>();
+
+  for (const row of rows) {
+    if (!previewChampIds.has(row.champ_id)) continue;
+    if (row.games <= 0 || row.wins < 0 || row.wins > row.games) continue;
+    const baseline = baselineByChampion.get(row.champ_id);
+    const opponentLaneShare = opponentShares.get(row.opp_id) ?? 0;
+    if (baseline === undefined || baseline === null || opponentLaneShare < POOL_MIN_PICKRATE) continue;
+    const winRate = matchupEstimate(baseline, row.wins, row.games);
+    if (winRate === null || !Number.isFinite(winRate)) continue;
+    const candidateRows = previewRows.get(row.champ_id) ?? [];
+    candidateRows.push({ oppId: row.opp_id, winRate, games: row.games, opponentLaneShare });
+    previewRows.set(row.champ_id, candidateRows);
+  }
+
+  return fullPool
+    .filter((candidate) => previewChampIds.has(candidate.champId))
+    .map((candidate) => {
+      const rowsForChampion = previewRows.get(candidate.champId) ?? [];
+      const worst = [...rowsForChampion]
+        .sort((a, b) => (a.winRate !== b.winRate ? a.winRate - b.winRate : a.oppId - b.oppId))
+        .slice(0, 3);
+      const best = [...rowsForChampion]
+        .sort((a, b) => (a.winRate !== b.winRate ? b.winRate - a.winRate : a.oppId - b.oppId))
+        .slice(0, 3);
+      return { champId: candidate.champId, worst, best };
+    })
+    .filter((preview) => preview.worst.length > 0 || preview.best.length > 0);
 }
 
 /** The patch currently being served (plan §4: "meta from max(ingested_at) +
@@ -555,6 +668,25 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
   // column somehow comes back null (defensive; the column is NOT NULL).
   const dataFetchedAt = poolRows[0]?.latest_ingested_at ?? fetchedAt;
 
+  // The Assistant's lane-share and matchup preview figures are derived from
+  // the complete champion-vs-opponent matrix for this bucket. This is a read
+  // only, additive payload; it does not change the existing recommendation
+  // score or the personal decoration path below.
+  let allMatchupRows: MatchupDbRow[] = [];
+  try {
+    allMatchupRows = (await sql`
+      SELECT champ_id, opp_id, wins, games
+      FROM coachbuild.draft_matchup
+      WHERE patch = ${patch} AND tier = ${EMERALD_TIER} AND role = ${params.lane}
+    `) as unknown as MatchupDbRow[];
+  } catch {
+    // Lane facts are additive. A matrix read failure must not turn a valid
+    // recommendation response into an error; the targeted query below still
+    // preserves the original scoring path when enemies are present.
+    allMatchupRows = [];
+  }
+  const laneStats = buildLaneStats(fullPool, allMatchupRows);
+
   // audit P1-1: filterPoolByPickrate alone is currently a no-op (pickrate is
   // always null — see ChampBaseline's doc comment), which left the pool
   // completely ungated and let off-role low-sample artifacts (e.g. a
@@ -573,15 +705,26 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
 
   const matchups = new Map<number, Map<number, MatchupRow>>();
   if (params.enemies.length > 0 && pool.length > 0) {
-    const poolIds = pool.map((c) => c.champId);
-    const rows = (await sql`
-      SELECT champ_id, opp_id, wins, games FROM coachbuild.draft_matchup
-      WHERE patch = ${patch} AND tier = ${EMERALD_TIER} AND role = ${params.lane}
-        AND champ_id = ANY(${poolIds}::int[]) AND opp_id = ANY(${params.enemies}::int[])
-    `) as unknown as MatchupDbRow[];
-    for (const row of rows) {
-      if (!matchups.has(row.champ_id)) matchups.set(row.champ_id, new Map());
-      matchups.get(row.champ_id)!.set(row.opp_id, { wins: row.wins, games: row.games });
+    const poolIds = new Set(pool.map((candidate) => candidate.champId));
+    const enemyIds = new Set(params.enemies);
+    if (allMatchupRows.length > 0) {
+      for (const row of allMatchupRows) {
+        if (!poolIds.has(row.champ_id) || !enemyIds.has(row.opp_id)) continue;
+        if (!matchups.has(row.champ_id)) matchups.set(row.champ_id, new Map());
+        matchups.get(row.champ_id)!.set(row.opp_id, { wins: row.wins, games: row.games });
+      }
+    } else {
+      const rows = (await sql`
+        SELECT champ_id, opp_id, wins, games
+        FROM coachbuild.draft_matchup
+        WHERE patch = ${patch} AND tier = ${EMERALD_TIER} AND role = ${params.lane}
+          AND opp_id = ANY(${params.enemies}::int[])
+      `) as unknown as MatchupDbRow[];
+      for (const row of rows) {
+        if (!poolIds.has(row.champ_id) || !enemyIds.has(row.opp_id)) continue;
+        if (!matchups.has(row.champ_id)) matchups.set(row.champ_id, new Map());
+        matchups.get(row.champ_id)!.set(row.opp_id, { wins: row.wins, games: row.games });
+      }
     }
   }
 
@@ -590,6 +733,14 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
   // comment) — degrades to today's unchanged single-list behavior when
   // laneOppInferred is null (empty enemies, or no enemy has known pickrate).
   const { main: rankedMain, potential: rankedPotential } = splitPlaysBySampleSize(pool, matchups, enemyInputs);
+
+  // The page's hero cards combine this ranked feed with the separate blind-
+  // pick feed. Build previews for the complete lane pool so a champion that
+  // only appears in SAFEST BLIND (for example Diana) still receives the same
+  // popular-opponent rows as the play cards. This remains a compact derived
+  // payload: only three worst and three best rows survive per champion.
+  const previewChampIds = new Set(fullPool.map((candidate) => candidate.champId));
+  const matchupPreviews = buildMatchupPreviews(fullPool, allMatchupRows, laneStats, previewChampIds);
 
   let bans: BanResult[] | null = null;
   if (params.hover !== null) {
@@ -633,5 +784,7 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
     bans,
     meta: { patch, tier: EMERALD_TIER, fetchedAt: dataFetchedAt, laneOppInferred, currentPatch, ingestHealthy, ingestLastError },
     enemyAnalysis,
+    laneStats,
+    matchupPreviews,
   };
 }

@@ -345,7 +345,7 @@ describe("filterPoolByPickrate (pool cutoff)", () => {
     const candidates = [
       baseline(1, 0.5, 0.001), // below cutoff -- dropped
       baseline(2, 0.5, POOL_MIN_PICKRATE), // exactly at cutoff -- dropped (strictly greater required)
-      baseline(3, 0.5, 0.01), // above cutoff -- kept
+      baseline(3, 0.5, 0.02), // above cutoff -- kept
       baseline(4, 0.5, null), // unknown -- kept (never excluded on unknown data)
     ];
     const kept = filterPoolByPickrate(candidates).map((c) => c.champId);

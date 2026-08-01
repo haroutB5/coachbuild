@@ -31,7 +31,7 @@ export const W_DIRECT = 1.0;
 export const W_OFFLANE = 0.2;
 /** Pool cutoff — a champion must clear this pickrate (in the same lane+tier)
  *  to be considered a viable recommendation at all. */
-export const POOL_MIN_PICKRATE = 0.005;
+export const POOL_MIN_PICKRATE = 0.01;
 /** Pool cutoff, playrate PROXY (audit P1-1, 2026-07-21): with pickrate
  *  always null right now (see ChampBaseline's doc comment — the rankings
  *  decoder is a deliberate stub), filterPoolByPickrate alone is a total
@@ -199,12 +199,23 @@ export function filterPoolByTotalGames(candidates: ChampBaseline[]): ChampBaseli
   return candidates.filter((c) => c.totalGames >= POOL_MIN_TOTAL_GAMES);
 }
 
+/** Return real lane games from the raw matchup-matrix total. The matrix is
+ *  symmetric: every mirror pair has identical `games` (500/500 checked in the
+ *  live evidence, e.g. (805,157) and (157,805) are both 31,150), so
+ *  Σ_c Σ_o games(c,o) counts every lane game twice. Keep the correction in
+ *  this one named helper so pick-rate math cannot drift between surfaces. */
+export function realLaneGames(matrixGames: number): number {
+  if (!Number.isFinite(matrixGames) || matrixGames <= 0) return 0;
+  return matrixGames / 2;
+}
+
 /** Lane share within one (patch, tier, role) bucket: this champion's
- *  aggregate games divided by the aggregate games for every champion in the
- *  lane. The denominator is supplied by the caller because the candidate pool
- *  already owns the complete lane total. */
-export function laneShare(c: ChampBaseline, totalLaneGames: number): number {
-  if (!Number.isFinite(totalLaneGames) || totalLaneGames <= 0) return 0;
+ *  aggregate games divided by the real lane-wide game total. The input is the
+ *  raw aggregate from the symmetric matchup matrix; realLaneGames() applies
+ *  the single /2 correction above. */
+export function laneShare(c: ChampBaseline, matrixGames: number): number {
+  const totalLaneGames = realLaneGames(matrixGames);
+  if (totalLaneGames <= 0) return 0;
   return c.totalGames / totalLaneGames;
 }
 
