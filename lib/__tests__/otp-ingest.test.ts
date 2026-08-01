@@ -15,11 +15,12 @@ vi.mock("../pro/riot", async (importOriginal) => {
     getAccountByRiotId: vi.fn(),
     getMatchIdsByPuuid: vi.fn(),
     getMatch: vi.fn(),
+    getMatchTimeline: vi.fn(),
   };
 });
 
 import { fetchOtpCandidates } from "../otp/leaderboard";
-import { getAccountByRiotId, getMatch, getMatchIdsByPuuid } from "../pro/riot";
+import { getAccountByRiotId, getMatch, getMatchIdsByPuuid, getMatchTimeline } from "../pro/riot";
 import {
   MIN_CHAMPION_PLAYS,
   discoverOtpAccounts,
@@ -83,6 +84,7 @@ beforeEach(() => {
   vi.mocked(getAccountByRiotId).mockReset();
   vi.mocked(getMatchIdsByPuuid).mockReset();
   vi.mocked(getMatch).mockReset();
+  vi.mocked(getMatchTimeline).mockReset();
   process.env.RIOT_API_KEY = "test-key";
 });
 
@@ -203,6 +205,31 @@ describe("ingestOneOtpAccount", () => {
 
     await ingestOneOtpAccount(mockSql as never, account, 20, () => {});
     expect(vi.mocked(getMatch)).toHaveBeenCalledTimes(1);
+  });
+
+  it("fetches a capped timeline only for a surfaced featured account", async () => {
+    vi.mocked(getMatchIdsByPuuid).mockResolvedValue(["M1"]);
+    vi.mocked(getMatch).mockResolvedValue(riotMatch("M1", "p1", 112));
+    vi.mocked(getMatchTimeline).mockResolvedValue({
+      info: {
+        frames: [
+          {
+            timestamp: 1000,
+            events: [
+              { type: "SKILL_LEVEL_UP", participantId: 1, skillSlot: 1, timestamp: 1000 },
+              { type: "SKILL_LEVEL_UP", participantId: 1, skillSlot: 3, timestamp: 2000 },
+            ],
+          },
+        ],
+      },
+    } as never);
+    // Featured-account check, then no existing match row, then the insert.
+    mockSql.mockResolvedValueOnce([{ featured: 1 }]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+
+    await ingestOneOtpAccount(mockSql as never, account, 20, () => {}, 30);
+
+    expect(vi.mocked(getMatchTimeline)).toHaveBeenCalledWith("europe", "M1");
+    expect(mockSql.mock.calls.some((c) => String(c[0]?.join?.("") ?? "").includes("skill_order"))).toBe(true);
   });
 });
 

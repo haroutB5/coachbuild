@@ -65,9 +65,9 @@
 //      half of it went with it by the same user directive — the constraint it
 //      protected is still absolute and is enforced structurally instead: the
 //      tiles are unnumbered, unordered-looking, and `resolveFullBuild` sorts
-//      them by BUILD RATE, never by inventory slot. `otp_matches` is written
-//      with no timeline call, so purchase order was never fetched and no
-//      surface here may imply one. Do not number these tiles.
+//      them by BUILD RATE, never by inventory slot. A capped timeline may be
+//      stored for skill order, but purchase order is not stored or rendered,
+//      so no surface here may imply one. Do not number these tiles.
 //   2. The "indented items are built instead of the one above them" paragraph.
 //      Replaced by a four-word inline key, and the relationship itself is
 //      unchanged and still carried three ways by BuildSlotList: the literal
@@ -81,7 +81,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState } from "react";
-import type { ChampionRef } from "@/lib/types";
+import type { BuildResponse, ChampionRef } from "@/lib/types";
 import {
   itemIconUrl,
   spellIconUrl,
@@ -104,6 +104,9 @@ import KpiStrip, { type KpiItem } from "./KpiStrip";
 import PanelHeading from "./PanelHeading";
 import { sortPerkIdsByRow } from "./perkSlots";
 import { opggProfileUrl } from "./opggProfile";
+import { AddProItemBuildButton, ApplyProRunesButton, type OtpRunePageForApply } from "./ProConsensusCard";
+import type { ProConsensusItemsInput } from "./itemSetBody";
+import type { LaneId } from "./heroContracts";
 
 interface FeaturedPlayer {
   gameName: string;
@@ -115,15 +118,6 @@ interface FeaturedPlayer {
   sourceGames: number | null;
   winratePct: number | null;
   kda: number | null;
-}
-
-interface RunePage {
-  primaryTree: number | null;
-  keystone: number | null;
-  primary: number[];
-  secondaryTree: number | null;
-  secondary: number[];
-  shards: number[];
 }
 
 interface FeaturedResponse {
@@ -139,8 +133,9 @@ interface FeaturedResponse {
    *  rename still renders its item slots. Inventories only, no outcomes, so a
    *  build derived from it can never claim a win — see the mapping below. */
   gameItems?: number[][];
-  runes: { page: RunePage; games: number; pct: number } | null;
+  runes: { page: OtpRunePageForApply; games: number; pct: number } | null;
   spells: { spells: number[]; games: number; pct: number } | null;
+  skillOrder?: { order: string[]; games: number } | null;
 }
 
 // ── DESKTOP COMPOSITION (2026-07-29) ─────────────────────────────────────────
@@ -408,7 +403,17 @@ const SHARD_ROW_LABELS = ["Offense", "Flex", "Defense"] as const;
  * by the render rather than inherited from an upstream detail that could change
  * without this card noticing. */
 
-export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ver: string }) {
+export default function FeaturedOtpCard({
+  champ,
+  ver,
+  lane,
+  build,
+}: {
+  champ: ChampionRef;
+  ver: string;
+  lane: LaneId;
+  build: BuildResponse;
+}) {
   const [data, setData] = useState<FeaturedResponse | null>(null);
   const [meta, setMeta] = useState<ReadonlyMap<number, ItemDetail>>(new Map());
   /** Every rune id on the page (keystone + minors + secondary picks) -> art.
@@ -540,6 +545,11 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
     minDisplayPct: MIN_DISPLAY_PCT,
     minSampleGames: MIN_SAMPLE_GAMES,
   });
+  const measuredSkillOrder = data!.skillOrder ?? null;
+  const otpItems: ProConsensusItemsInput = {
+    items: view.items.map(({ itemId, pct }) => ({ itemId, share: pct / 100 })),
+    boots: view.boots.map(({ itemId, pct }) => ({ itemId, share: pct / 100 })),
+  };
   const fullBuild = view.fullBuild;
   // The played build is a RECORD of one game, so a snowball stack they really
   // held stays in it — while `view.items`/`view.slots` below still exclude it,
@@ -694,6 +704,26 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
       {kpis.length > 0 && <KpiStrip flush columns={3} items={kpis} />}
 
       <div className="p-4 sm:p-5">
+        <div className="flex items-start justify-between gap-3 mb-3.5">
+          <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">OTP setup</p>
+          <div className="flex items-start gap-2.5">
+            <ApplyProRunesButton
+              champ={champ}
+              roleLabel={build.roleLabel}
+              fallbackShards={build.runes.shards}
+              runePage={runePage}
+              variant="otp"
+            />
+            <AddProItemBuildButton
+              champ={champ}
+              lane={lane}
+              roleLabel={build.roleLabel}
+              build={build}
+              otpItems={otpItems}
+              variant="otp"
+            />
+          </div>
+        </div>
         {thinSample ? (
           <p className="text-[12px] text-mut leading-relaxed">
             Still collecting their games — we hold{" "}
@@ -840,26 +870,40 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
               </section>
             )}
 
-            {skillPriority && (
+            {(measuredSkillOrder?.order ?? skillPriority) && (
               <div className="mt-5">
-                <PanelHeading rule={false}>Skill order</PanelHeading>
+                <PanelHeading
+                  rule={false}
+                  meta={measuredSkillOrder ? `${measuredSkillOrder.games} of ${sample.games} games` : undefined}
+                >
+                  Skill order
+                </PanelHeading>
                 <div className="mt-2 flex items-center gap-1.5">
-                  {skillPriority.map((s, i) => (
-                    <span key={s} className="flex items-center gap-1.5">
-                      <span className="w-6 h-6 rounded-md bg-panel2 border border-line grid place-items-center text-[11px] font-semibold text-txt">
+                  {(measuredSkillOrder?.order ?? skillPriority)!.map((s, i) => (
+                    <span key={`${s}-${i}`} className="flex items-center gap-1.5">
+                      <span
+                        title={`Level ${i + 1}: ${s}`}
+                        className="w-6 h-6 rounded-md bg-panel2 border border-line grid place-items-center text-[11px] font-semibold text-txt"
+                      >
                         {s}
                       </span>
-                      {i < skillPriority.length - 1 && <span className="text-mut text-[11px]">›</span>}
+                      {i < (measuredSkillOrder?.order ?? skillPriority)!.length - 1 && (
+                        <span className="text-mut text-[11px]">›</span>
+                      )}
                     </span>
                   ))}
                 </div>
-                {/* Said out loud rather than implied. Every other number on this
-                    card is this player's own; this one is not, because match-v5
-                    does not carry skill order without a timeline call per game. */}
-                <p className="mt-1.5 text-[10.5px] text-mut/70 leading-relaxed">
-                  The champion&apos;s common order, not {player.gameName}&apos;s own — skill order is
-                  not in the match data we store.
-                </p>
+                {measuredSkillOrder ? (
+                  <p className="mt-1.5 text-[10.5px] text-mut/70 leading-relaxed">
+                    Most common first {measuredSkillOrder.order.length} levels from {measuredSkillOrder.games} of{" "}
+                    {sample.games} stored games with a recorded timeline.
+                  </p>
+                ) : (
+                  <p className="mt-1.5 text-[10.5px] text-mut/70 leading-relaxed">
+                    The champion&apos;s common order, not {player.gameName}&apos;s own — skill order is not recorded
+                    for this one-trick yet.
+                  </p>
+                )}
               </div>
             )}
             </div>
@@ -934,9 +978,9 @@ export default function FeaturedOtpCard({ champ, ver }: { champ: ChampionRef; ve
                         section below, under one stated denominator.
 
                         UNNUMBERED, and that is a constraint rather than a
-                        style: `otp_matches` is written with no timeline call,
-                        so purchase order was never fetched. Left-to-right here
-                        is build rate. Do not add a step number, an arrow, or a
+                        style: timelines may be fetched for skill order, but
+                        purchase order is not stored. Left-to-right here is
+                        build rate. Do not add a step number, an arrow, or a
                         "first/then" affordance. */}
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       {fullBuild.items.map((slot) => (

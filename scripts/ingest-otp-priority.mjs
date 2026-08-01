@@ -84,8 +84,9 @@ const {
   DEPTH_TARGET,
   REEXHAUST_INTERVAL_MS,
 } = await import("../lib/otp/deepWalk.ts");
-const { getMatchIdsByPuuid, getMatch, RiotRequestError } = await import("../lib/pro/riot.ts");
+const { getMatchIdsByPuuid, getMatch, getMatchTimeline, RiotRequestError } = await import("../lib/pro/riot.ts");
 const { extractMatch } = await import("../lib/pro/extract.ts");
+const { FEATURED_TIMELINE_GAME_LIMIT } = await import("../lib/otp/ingest.ts");
 const { freshStartTimeEpochSec } = await import("../lib/pro/fresh.ts");
 const { getAllChampions } = await import("../lib/staticData.ts");
 const { getSql } = await import("../lib/pro/db.ts");
@@ -157,10 +158,8 @@ const RATE_LIMIT_BACKOFF_MS = 120_000;
 const MAX_TRANSIENT_RETRIES = 3;
 
 /** extractMatch reads `timeline.info` unconditionally, so a null timeline
- *  throws. Empty frames is the "we did not fetch one" sentinel, same as
- *  lib/otp/ingest.ts and ingest-otp-featured.mjs use. No timeline is fetched
- *  here: it is a second Riot call per match and nothing on the featured card
- *  claims purchase or skill order. */
+ *  throws. Empty frames is the "we did not fetch one" sentinel for rows
+ *  outside the featured account's capped timeline queue or failed retries. */
 const NO_TIMELINE = { info: { frames: [] } };
 
 // ── Args ────────────────────────────────────────────────────────────────────
@@ -485,14 +484,41 @@ async function runUnit(sql, state) {
   `;
 
   const seenRows = await sql`
-    SELECT match_id FROM coachbuild.otp_featured_scanned
+    SELECT match_id, match_champion_id FROM coachbuild.otp_featured_scanned
     WHERE puuid = ${puuid} AND match_id = ANY(${cached.ids}::text[])
   `;
   const seen = new Set(seenRows.map((r) => r.match_id));
+  const seenChampions = new Map(seenRows.map((r) => [r.match_id, r.match_champion_id]));
   const selection = selectUnitIds(cached.ids, seen, UNIT_MATCHES);
+  // Timeline coverage is an independent, capped queue: old featured rows
+  // were already marked scanned by the deep walk, but NULL skill_order still
+  // needs one retryable timeline pass. Only the first N most-recent ids for
+  // this featured account are eligible; non-NULL rows are done forever.
+  const timelineCandidateIds =
+    offset < FEATURED_TIMELINE_GAME_LIMIT
+      ? cached.ids.slice(0, FEATURED_TIMELINE_GAME_LIMIT - offset)
+      : [];
+  const timelineRows = timelineCandidateIds.length
+    ? await sql`
+        SELECT match_id, skill_order FROM coachbuild.otp_matches
+        WHERE puuid = ${puuid} AND match_id = ANY(${timelineCandidateIds}::text[])
+      `
+    : [];
+  const timelineDone = new Set(
+    timelineRows.filter((r) => r.skill_order != null).map((r) => r.match_id)
+  );
+  const timelinePending = timelineCandidateIds.filter(
+    (id) =>
+      !timelineDone.has(id) &&
+      (!seenChampions.has(id) || seenChampions.get(id) === championId)
+  );
+  const timelinePendingSet = new Set(timelinePending);
+  const timelineTake = timelinePending.slice(0, UNIT_MATCHES);
+  const freshTake = selection.take.filter((id) => !timelinePendingSet.has(id));
+  const take = [...timelineTake, ...freshTake].slice(0, UNIT_MATCHES);
 
   // ── Page fully examined: advance, or declare the window exhausted ──
-  if (selection.pageDrained) {
+  if (selection.pageDrained && timelinePending.length === 0) {
     pageCache.delete(championId);
     const short = cached.ids.length < ID_PAGE_SIZE;
     const nextOffset = short ? offset : offset + cached.ids.length;
@@ -516,7 +542,6 @@ async function runUnit(sql, state) {
   }
 
   // ── Fetch up to UNIT_MATCHES of them ──
-  const take = selection.take;
   let dScanned = 0;
   let dStored = 0;
   let interrupted = false;
@@ -528,27 +553,57 @@ async function runUnit(sql, state) {
       interrupted = true;
       break;
     }
+    const wasSeen = seen.has(matchId);
     try {
       const match = await getMatch(routing, matchId);
       riotCalls += 1;
-      const row = extractMatch(match, NO_TIMELINE, puuid);
+      let timeline = NO_TIMELINE;
+      let timelineFetched = false;
+      const wantsTimeline = timelinePendingSet.has(matchId);
+      if (wantsTimeline) {
+        const timelineVerdict = await getVerdict(YIELD_VERDICT_MAX_AGE_MS);
+        if (timelineVerdict.busy) {
+          log(`${championKey}: timeline unit cut short after ${dScanned} - ${timelineVerdict.reason}`);
+          interrupted = true;
+        } else {
+          try {
+            timeline = await getMatchTimeline(routing, matchId);
+            riotCalls += 1;
+            timelineFetched = true;
+          } catch (timelineErr) {
+            if (timelineErr instanceof RiotRequestError && timelineErr.status === 429) throw timelineErr;
+            log(`${championKey}: timeline ${matchId} failed - ${timelineErr?.message ?? timelineErr}`);
+          }
+        }
+      }
+      const row = extractMatch(match, timeline, puuid);
       const onChampion = Boolean(row) && row.championId === championId;
       if (onChampion) {
-        await sql`
-          INSERT INTO coachbuild.otp_matches (
-            match_id, puuid, champion_id, champion_name, role, patch, win,
-            kills, deaths, assists, game_creation, game_duration_sec,
-            spells, final_items, trinket, runes
-          ) VALUES (
-            ${row.matchId}, ${row.puuid}, ${row.championId}, ${row.championName}, ${row.role},
-            ${row.patch}, ${row.win}, ${row.kills}, ${row.deaths}, ${row.assists},
-            ${row.gameCreation}, ${row.gameDurationSec},
-            ${JSON.stringify(row.spells)}, ${JSON.stringify(row.finalItems)},
-            ${row.trinket}, ${JSON.stringify(row.runes)}
-          )
-          ON CONFLICT (match_id, puuid) DO NOTHING
-        `;
-        dStored += 1;
+        if (wasSeen && timelineFetched) {
+          await sql`
+            UPDATE coachbuild.otp_matches
+            SET skill_order = ${JSON.stringify(row.skillOrder)}::jsonb
+            WHERE puuid = ${puuid} AND match_id = ${matchId}
+              AND skill_order IS NULL
+          `;
+        } else {
+          await sql`
+            INSERT INTO coachbuild.otp_matches (
+              match_id, puuid, champion_id, champion_name, role, patch, win,
+              kills, deaths, assists, game_creation, game_duration_sec,
+              spells, final_items, trinket, runes, skill_order
+            ) VALUES (
+              ${row.matchId}, ${row.puuid}, ${row.championId}, ${row.championName}, ${row.role},
+              ${row.patch}, ${row.win}, ${row.kills}, ${row.deaths}, ${row.assists},
+              ${row.gameCreation}, ${row.gameDurationSec},
+              ${JSON.stringify(row.spells)}::jsonb, ${JSON.stringify(row.finalItems)}::jsonb,
+              ${row.trinket}, ${JSON.stringify(row.runes)}::jsonb,
+              ${timelineFetched ? JSON.stringify(row.skillOrder) : null}::jsonb
+            )
+            ON CONFLICT (match_id, puuid) DO NOTHING
+          `;
+          dStored += 1;
+        }
       }
       // `stored` records the OUTCOME of the examination, which is what makes
       // "we fetched 348 and kept 232" readable from this table alone. A row
@@ -556,7 +611,7 @@ async function runUnit(sql, state) {
       // recording onChampion here is accurate, not optimistic.
       await recordScanned(sql, puuid, matchId, championId, row ? row.championId : null, onChampion);
       transientFailures.delete(matchId);
-      dScanned += 1;
+      if (!wasSeen) dScanned += 1;
     } catch (err) {
       const status = err instanceof RiotRequestError ? err.status : 0;
       if (status === 429) {
@@ -575,7 +630,7 @@ async function runUnit(sql, state) {
         // champion, which is exactly what match_champion_id NULL means.
         log(`${championKey}: match ${matchId} riot ${status} (definitive) — marking examined`);
         await recordScanned(sql, puuid, matchId, championId, null, false);
-        dScanned += 1;
+        if (!wasSeen) dScanned += 1;
         continue;
       }
       const n = (transientFailures.get(matchId) ?? 0) + 1;
@@ -586,7 +641,7 @@ async function runUnit(sql, state) {
         // must not hold the page open forever.
         await recordScanned(sql, puuid, matchId, championId, null, false);
         transientFailures.delete(matchId);
-        dScanned += 1;
+        if (!wasSeen) dScanned += 1;
       }
     }
   }
@@ -604,7 +659,11 @@ async function runUnit(sql, state) {
     resetTotals,
   });
 
-  const remaining = selection.remaining + (take.length - dScanned);
+  const timelineProcessed = take.filter((id) => timelinePendingSet.has(id)).length;
+  const remaining =
+    selection.remaining +
+    (freshTake.length - dScanned) +
+    Math.max(0, timelinePending.length - timelineProcessed);
   log(
     `${championKey}: unit +${dStored} stored / ${dScanned} examined ` +
       `(page offset ${offset}, ${remaining} unexamined left on page, ` +

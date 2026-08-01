@@ -2,6 +2,41 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.91.0] — 2026-08-01 — OTP parity: apply buttons and the one-trick's real skill order
+
+User: "for OTPs, I dont see a apply runes button. also make sure each ability level order is
+implemented from OTPs as well. I will chose which page to have in game." BUILD, PRO and OTP are
+meant to be interchangeable as the thing you actually use in champ select; OTP was the odd one out.
+
+### Added
+- **Apply Runes and Add Item Build on the OTP card.** The buttons already existed with a working
+  `variant="otp"` path in `ProConsensusCard` — the OTP TAB just does not render that component. It
+  renders `FeaturedOtpCard`, which never had them, so the capability was orphaned rather than
+  missing. Wired the existing buttons in; no new apply code, and the manual-click-only posture is
+  unchanged.
+- **Real skill order from the one-trick's own games.** `migrations/0024_otp_skill_order.sql` adds a
+  nullable `skill_order jsonb` to `otp_matches`; the ingest now fetches the match-v5 timeline and
+  feeds the EXISTING `buildSkillOrder` parser in `lib/pro/extract.ts` (which already de-dups the
+  known Riot bug where level-up events fire twice) instead of the empty timeline it was passing on
+  purpose. Live result for Dun#NA1 on Viktor: **Q › E › E › E › E › R over 22 of 386 stored games**,
+  rendered with that denominator. The old "the champion's common order, not Dun's own" disclaimer is
+  gone.
+
+### Note on cost
+A timeline is one extra Riot call per match, and every Riot call in the process queues through one
+shared 1.3s pacer. Fetching all 386 of Dun's games would be ~8 minutes of that budget for a single
+champion. Capped at the **30 most recent games per surfaced featured account**, skipping matches
+that already have an order so re-runs are free. That is why the denominator is 22 and not 386; it
+grows as the priority worker walks.
+
+### Not verified
+The apply buttons are gated on a live companion session (`hasSession()`), the same gate PRO's have
+always used, so they cannot be seen in a headless browser with no League client. Confirmed instead
+that the code path is unconditional in the JSX and that the second gate passes — the featured rune
+page carries both a primary tree (8200) and a secondary (8000) plus three shards, so
+`ApplyProRunesButton`'s `if (!primaryTree || !secondaryTree) return null` will not fire. The button
+appearing in champ select is the one part of this release checked by reading rather than by running.
+
 ## [0.90.2] — 2026-08-01 — Fits on one screen, types on one click
 
 ### Changed

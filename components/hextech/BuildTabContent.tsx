@@ -563,7 +563,7 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
         tabIndex={0}
         className={buildTab === "otp" ? "" : "hidden"}
       >
-        <FeaturedOtpCard champ={champ} ver={ver} />
+        <FeaturedOtpCard champ={champ} ver={ver} lane={lane} build={build} />
       </div>
 
       {/* Always mounted (once any item/rune/shard/spell has ever been

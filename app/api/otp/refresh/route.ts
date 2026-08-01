@@ -116,6 +116,7 @@ export async function POST(req: NextRequest) {
       championId,
       batch: ACCOUNTS_PER_CALL,
       matchesPerAccount: MATCHES_PER_ACCOUNT,
+      fetchFeaturedTimelines: true,
     });
 
     return NextResponse.json({

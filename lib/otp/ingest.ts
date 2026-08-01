@@ -14,9 +14,10 @@
 // not just quota:
 //   discovery  = 1 op.gg call + <=N account-v1 calls per champion
 //   matches    = 1 ids call + <=`matchesPerAccount` match calls per account
-// The match half deliberately does NOT fetch match-v5 TIMELINE, which would
-// double it. See migration 0017's otp_matches comment for why nothing this
-// feature renders needs it.
+// The regular roster pass deliberately does NOT fetch match-v5 TIMELINE. The
+// on-demand featured path opts into a capped first-N timeline sample only for
+// the account currently surfaced by otp_featured; the rest of the roster keeps
+// the cheaper empty-timeline path.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getSql } from "../pro/db";
@@ -24,7 +25,7 @@ import { DbUnavailableError, RiotUnavailableError } from "../pro/errors";
 import { extractMatch } from "../pro/extract";
 import { freshStartTimeEpochSec } from "../pro/fresh";
 import { routingForServer } from "../pro/regionMap";
-import { getAccountByRiotId, getMatch, getMatchIdsByPuuid, RiotRequestError } from "../pro/riot";
+import { getAccountByRiotId, getMatch, getMatchIdsByPuuid, getMatchTimeline, RiotRequestError } from "../pro/riot";
 import type { RiotTimeline } from "../pro/types";
 import { opggChampionName } from "../opgg";
 import { fetchOtpCandidates, type OtpCandidate } from "./leaderboard";
@@ -59,6 +60,13 @@ export const MIN_CHAMPION_PLAYS = 100;
 
 /** Recent ranked games pulled per account per pass. */
 export const MATCHES_PER_ACCOUNT = 20;
+
+/** Timeline-backed games per surfaced featured one-trick account. Thirty
+ *  timeline calls at the shared 1.3s Riot pacer are about 39 seconds per
+ *  account; this is deliberately not a roster-wide backfill of every OTP
+ *  match. Existing non-NULL orders are skipped, so reruns spend no timeline
+ *  calls on games already measured. */
+export const FEATURED_TIMELINE_GAME_LIMIT = 30;
 
 export interface DiscoverResult {
   championId: number;
@@ -231,6 +239,8 @@ export async function runOtpMatchIngest(
     championId?: number;
     batch?: number;
     matchesPerAccount?: number;
+    /** Only timeline the account currently surfaced by otp_featured. */
+    fetchFeaturedTimelines?: boolean;
     log?: (msg: string) => void;
   } = {}
 ): Promise<OtpMatchIngestResult> {
@@ -260,7 +270,13 @@ export async function runOtpMatchIngest(
   for (const account of accounts) {
     result.accountsProcessed += 1;
     try {
-      result.matchesUpserted += await ingestOneOtpAccount(sql, account, matchesPerAccount, log);
+      result.matchesUpserted += await ingestOneOtpAccount(
+        sql,
+        account,
+        matchesPerAccount,
+        log,
+        opts.fetchFeaturedTimelines ? FEATURED_TIMELINE_GAME_LIMIT : 0
+      );
     } catch (err) {
       result.errors.push(`${account.game_name}#${account.tag_line}: ${(err as Error).message}`);
       // Termination guard, same as lib/pro/ingestMatches.ts: an account that
@@ -285,7 +301,8 @@ export async function ingestOneOtpAccount(
   sql: Sql,
   account: OtpAccountRow,
   matchesPerAccount: number,
-  log: (msg: string) => void
+  log: (msg: string) => void,
+  timelineLimit = 0
 ): Promise<number> {
   const routing = routingForServer(account.region);
   if (!routing) {
@@ -307,20 +324,48 @@ export async function ingestOneOtpAccount(
   });
 
   let existing = new Set<string>();
+  const existingSkillOrders = new Map<string, unknown>();
+  let featured = false;
+  if (timelineLimit > 0) {
+    const featuredRows = await sql`
+      SELECT 1 FROM coachbuild.otp_featured
+      WHERE champion_id = ${account.champion_id} AND puuid = ${account.puuid}
+      LIMIT 1
+    `;
+    featured = featuredRows.length > 0;
+  }
   if (matchIds.length > 0) {
     const rows = (await sql`
-      SELECT match_id FROM coachbuild.otp_matches
+      SELECT match_id, skill_order FROM coachbuild.otp_matches
       WHERE puuid = ${account.puuid} AND match_id = ANY(${matchIds}::text[])
-    `) as unknown as { match_id: string }[];
+    `) as unknown as { match_id: string; skill_order: unknown }[];
     existing = new Set(rows.map((r) => r.match_id));
+    rows.forEach((r) => existingSkillOrders.set(r.match_id, r.skill_order));
   }
-  const newIds = matchIds.filter((id) => !existing.has(id));
+  const timelineIds = new Set(
+    featured
+      ? matchIds
+          .slice(0, timelineLimit)
+          .filter((id) => existingSkillOrders.get(id) == null)
+      : []
+  );
+  const workIds = matchIds.filter((id) => !existing.has(id) || timelineIds.has(id));
 
   let upserted = 0;
-  for (const matchId of newIds) {
+  for (const matchId of workIds) {
     try {
       const match = await getMatch(routing.regional, matchId);
-      const row = extractMatch(match, NO_TIMELINE, account.puuid);
+      let timeline = NO_TIMELINE;
+      let timelineFetched = false;
+      if (timelineIds.has(matchId)) {
+        try {
+          timeline = await getMatchTimeline(routing.regional, matchId);
+          timelineFetched = true;
+        } catch (err) {
+          log(`match ${matchId}: timeline unavailable — ${(err as Error).message}`);
+        }
+      }
+      const row = extractMatch(match, timeline, account.puuid);
       if (!row) {
         log(`match ${matchId}: unresolvable role/participant, skipping`);
         continue;
@@ -331,21 +376,31 @@ export async function ingestOneOtpAccount(
       // else," which is not what the card says it shows.
       if (row.championId !== account.champion_id) continue;
 
-      await sql`
-        INSERT INTO coachbuild.otp_matches (
+      if (existing.has(matchId) && timelineFetched) {
+        await sql`
+          UPDATE coachbuild.otp_matches
+          SET skill_order = ${JSON.stringify(row.skillOrder)}::jsonb
+          WHERE puuid = ${account.puuid} AND match_id = ${matchId}
+            AND skill_order IS NULL
+        `;
+      } else {
+        await sql`
+          INSERT INTO coachbuild.otp_matches (
           match_id, puuid, champion_id, champion_name, role, patch, win,
           kills, deaths, assists, game_creation, game_duration_sec,
-          spells, final_items, trinket, runes
-        ) VALUES (
+          spells, final_items, trinket, runes, skill_order
+          ) VALUES (
           ${row.matchId}, ${row.puuid}, ${row.championId}, ${row.championName},
           ${row.role}, ${row.patch}, ${row.win}, ${row.kills}, ${row.deaths}, ${row.assists},
           ${row.gameCreation}, ${row.gameDurationSec},
           ${JSON.stringify(row.spells)}::jsonb, ${JSON.stringify(row.finalItems)}::jsonb,
-          ${row.trinket}, ${JSON.stringify(row.runes)}::jsonb
-        )
-        ON CONFLICT (match_id, puuid) DO NOTHING
-      `;
-      upserted += 1;
+          ${row.trinket}, ${JSON.stringify(row.runes)}::jsonb,
+          ${timelineFetched ? JSON.stringify(row.skillOrder) : null}::jsonb
+          )
+          ON CONFLICT (match_id, puuid) DO NOTHING
+        `;
+        upserted += 1;
+      }
     } catch (err) {
       if (err instanceof RiotRequestError) {
         log(`match ${matchId}: riot ${err.status}, skipping`);

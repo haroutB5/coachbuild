@@ -123,7 +123,8 @@ export interface ItemBuildRate {
 export interface FeaturedGame {
   /** Deduplicated final inventory (item0..item5, zeros already stripped at
    *  ingest), in stored inventory-slot order. NOT purchase order — the OTP
-   *  pipeline makes no timeline call, so purchase order was never fetched. */
+   *  pipeline may fetch a capped timeline for skill order, but purchase order
+   *  is not stored or rendered here, so this remains final inventory only. */
   items: number[];
   win: boolean | null;
 }
@@ -167,6 +168,10 @@ export interface FeaturedBuildModel {
   runes: { page: RunePage; games: number; pct: number } | null;
   /** Summoner spell pair they run most often. */
   spells: { spells: [number, number]; games: number; pct: number } | null;
+  /** The most common ability at each of the first few levels, over the games
+   *  whose stored timeline actually contains a skill order. Null means no
+   *  timeline-backed skill order is recorded yet. */
+  skillOrder: { order: string[]; games: number } | null;
 }
 
 export interface RunePage {
@@ -184,10 +189,59 @@ export interface FeaturedMatchRow {
   final_items: unknown;
   runes: unknown;
   spells: unknown;
+  /** Nullable in coachbuild.otp_matches. `[]` means a timeline was fetched but
+   *  carried no usable level-up events; null means no timeline was recorded. */
+  skill_order: unknown;
 }
 
 function asNumberArray(v: unknown): number[] {
   return Array.isArray(v) ? v.filter((x): x is number => typeof x === "number" && x > 0) : [];
+}
+
+/** Keep this card's measured sequence deliberately short. A first-level modal
+ *  is useful at a glance; an 18-chip row is not, and the card's narrow rail
+ *  cannot make it readable. The denominator remains the number of games that
+ *  carry a non-empty stored skill order, never the whole item sample. */
+export const FEATURED_SKILL_LEVEL_LIMIT = 6;
+
+const SKILL_TIE_ORDER = ["Q", "W", "E", "R"] as const;
+
+function asSkillOrder(v: unknown): string[] {
+  if (typeof v === "string") {
+    try {
+      return asSkillOrder(JSON.parse(v));
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(v)) return [];
+  return v.filter((x): x is string => typeof x === "string" && SKILL_TIE_ORDER.includes(x as (typeof SKILL_TIE_ORDER)[number]));
+}
+
+/** Modal first-N-levels order. We only render a common prefix: if a stored
+ *  timeline stops before a level, that level is omitted rather than shown
+ *  against a smaller hidden denominator. Every displayed chip therefore uses
+ *  the same `games` denominator. Ties use the stable Q/W/E/R slot order. */
+function modalSkillOrder(rows: readonly FeaturedMatchRow[]): { order: string[]; games: number } | null {
+  const orders = rows.map((row) => asSkillOrder(row.skill_order)).filter((order) => order.length > 0);
+  if (orders.length === 0) return null;
+
+  const commonLevels = Math.min(FEATURED_SKILL_LEVEL_LIMIT, ...orders.map((order) => order.length));
+  const order: string[] = [];
+  for (let level = 0; level < commonLevels; level += 1) {
+    const counts = new Map<string, number>();
+    for (const skillOrder of orders) {
+      const skill = skillOrder[level];
+      counts.set(skill, (counts.get(skill) ?? 0) + 1);
+    }
+    const modal = Array.from(counts.entries()).sort(
+      (a, b) => b[1] - a[1] || SKILL_TIE_ORDER.indexOf(a[0] as (typeof SKILL_TIE_ORDER)[number]) - SKILL_TIE_ORDER.indexOf(b[0] as (typeof SKILL_TIE_ORDER)[number])
+    )[0];
+    if (!modal) break;
+    order.push(modal[0]);
+  }
+
+  return order.length > 0 ? { order, games: orders.length } : null;
 }
 
 /** Stable key for grouping identical rune pages. */
@@ -278,6 +332,7 @@ export function buildFeaturedModel(
 
   const topRunes = Array.from(runeGroups.values()).sort((a, b) => b.n - a.n)[0] ?? null;
   const topSpells = Array.from(spellGroups.values()).sort((a, b) => b.n - a.n)[0] ?? null;
+  const skillOrder = modalSkillOrder(rows);
 
   return {
     games,
@@ -286,5 +341,6 @@ export function buildFeaturedModel(
     gameLog,
     runes: topRunes ? { page: topRunes.page, games: topRunes.n, pct: pct(topRunes.n) } : null,
     spells: topSpells ? { spells: topSpells.spells, games: topSpells.n, pct: pct(topSpells.n) } : null,
+    skillOrder,
   };
 }

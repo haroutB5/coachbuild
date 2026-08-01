@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { ChampionRef, BuildResponse, ShardSet } from "@/lib/types";
+import type { ChampionRef, BuildResponse, Pick as RunePick, RunesBlock, ShardSet, TreeRef } from "@/lib/types";
 import type { ProGame, ProGamesApiResponse } from "@/components/proGames.types";
 import type { OtpPlayerSummary, OtpResponse } from "@/lib/otp/types";
 import type { EntityKind } from "@/components/EntityDetailPopover";
@@ -15,6 +15,7 @@ import {
   missingRunePageReason,
   proConsensusRuneApplyInput,
   type ProConsensusModel,
+  type ProConsensusRuneApplyResult,
   type RuneSlotBreakdown,
 } from "./proConsensus";
 import { sortPerksByRow } from "./perkSlots";
@@ -22,6 +23,7 @@ import BuildSlotList from "./BuildSlotList";
 import { isContested, slotFromFrequencies, type SlotView } from "./buildSlotView";
 import { buildRuneApplyBody } from "./runeApplyBody";
 import { applyItemSetsForBuild } from "./itemSetsApply";
+import type { ProConsensusItemsInput } from "./itemSetBody";
 import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/components/live/companionClient";
 
 // Sample size below which the fraction shown is more noise than signal — the
@@ -147,6 +149,63 @@ type ApplyUiState =
   | { status: "success"; message: string }
   | { status: "error"; message: string };
 
+/** The featured OTP API stores the exact page observed in a match sample. It
+ *  is intentionally a separate input from ProConsensusModel: the shared
+ *  button remains the one manual apply surface, while each tab supplies its
+ *  own already-displayed rune data. */
+export interface OtpRunePageForApply {
+  primaryTree: number | null;
+  keystone: number | null;
+  primary: number[];
+  secondaryTree: number | null;
+  secondary: number[];
+  shards: number[];
+}
+
+const OTP_TREE_IDS = new Set([8000, 8100, 8200, 8300, 8400]);
+
+function otpTree(id: number | null): TreeRef | null {
+  return id !== null && OTP_TREE_IDS.has(id) ? { id: id as TreeRef["id"], name: treeName(id), icon: treeIconUrl(id) } : null;
+}
+
+function otpPick(id: number): RunePick {
+  return { id, name: `Rune #${id}`, icon: "", wpa: 0, winrate: null, occurrence: 1 };
+}
+
+function featuredOtpRuneApplyInput(
+  page: OtpRunePageForApply | null,
+  fallbackShards: ShardSet
+): ProConsensusRuneApplyResult | null {
+  if (
+    !page ||
+    page.keystone == null ||
+    page.keystone <= 0 ||
+    page.primary.length !== 3 ||
+    page.secondary.length !== 2 ||
+    page.primary.some((id) => id <= 0) ||
+    page.secondary.some((id) => id <= 0)
+  ) {
+    return null;
+  }
+  const primaryTree = otpTree(page.primaryTree);
+  const secondaryTree = otpTree(page.secondaryTree);
+  if (!primaryTree || !secondaryTree) return null;
+
+  const useStoredShards = page.shards.length === 3 && page.shards.every((id) => id > 0);
+  const shards: ShardSet = useStoredShards
+    ? { offense: otpPick(page.shards[0]), flex: otpPick(page.shards[1]), defense: otpPick(page.shards[2]) }
+    : fallbackShards;
+  const runes: RunesBlock = {
+    primaryTree,
+    secondaryTree,
+    keystone: otpPick(page.keystone),
+    primary: page.primary.map(otpPick),
+    secondary: page.secondary.map(otpPick),
+    shards,
+  };
+  return { runes, shardsFromFallback: !useStoredShards };
+}
+
 /** "Apply pro runes" — the manual pro-page counterpart to RunesSummonersCard's
  *  "Apply runes" button. Same compliance posture (v0.32.0 plan §3: applyRunes
  *  is only ever invoked from a user click, strictly manual mode, never a
@@ -165,11 +224,13 @@ type ApplyUiState =
  *  can't fill a complete page — see proConsensus.ts's missingRunePageReason,
  *  the single source of truth this button and proConsensusRuneApplyInput both
  *  read. */
-function ApplyProRunesButton({ champ, roleLabel, model, fallbackShards, variant = "pro" }: {
+export function ApplyProRunesButton({ champ, roleLabel, model, fallbackShards, runePage, variant = "pro" }: {
   champ: ChampionRef;
   roleLabel: string;
-  model: ProConsensusModel;
+  model?: ProConsensusModel;
   fallbackShards: ShardSet;
+  /** When supplied, apply this featured OTP page instead of pro consensus. */
+  runePage?: OtpRunePageForApply | null;
   /** 2026-07-28. "otp" writes a THIRD page, `"CoachBuild <champ> <role> OTP"`.
    *
    *  No companion change was needed for this, which is worth stating because
@@ -198,8 +259,20 @@ function ApplyProRunesButton({ champ, roleLabel, model, fallbackShards, variant 
     setReady(hasSession());
   }, []);
 
-  const reason = missingRunePageReason(model);
-  const input = reason === null ? proConsensusRuneApplyInput(model, fallbackShards) : null;
+  const input =
+    runePage !== undefined
+      ? featuredOtpRuneApplyInput(runePage, fallbackShards)
+      : model
+        ? proConsensusRuneApplyInput(model, fallbackShards)
+        : null;
+  const reason =
+    runePage !== undefined
+      ? input === null
+        ? "The one-trick's stored rune page is incomplete."
+        : null
+      : model
+        ? missingRunePageReason(model)
+        : "No rune page is recorded yet.";
   const disabled = state.status === "applying" || input === null;
   const base = `Saves the ${isOtp ? "one-trick" : "pro"}-consensus runes as a separate "${pageSuffix}" rune page (kept alongside the recommended page).`;
   const tooltip =
@@ -294,11 +367,13 @@ type ItemSetsUiState =
  *  section for a user who's looking at this card specifically. No new
  *  plumbing: same gating (session-ready only), same result shape as
  *  RunesSummonersCard's ItemSetsButton. */
-function AddProItemBuildButton({ champ, lane, roleLabel, build, variant = "pro" }: {
+export function AddProItemBuildButton({ champ, lane, roleLabel, build, otpItems, variant = "pro" }: {
   champ: ChampionRef;
   lane: LaneId;
   roleLabel: string;
   build: BuildResponse;
+  /** Optional already-aggregated OTP line from FeaturedOtpCard. */
+  otpItems?: ProConsensusItemsInput | null;
   variant?: ConsensusVariant;
 }) {
   const isOtp = variant === "otp";
@@ -318,7 +393,7 @@ function AddProItemBuildButton({ champ, lane, roleLabel, build, variant = "pro" 
     }
 
     setState({ status: "applying" });
-    const result = await applyItemSetsForBuild({ champ, lane, roleLabel, build, port, session });
+    const result = await applyItemSetsForBuild({ champ, lane, roleLabel, build, port, session, otp: otpItems });
     if (result.ok) {
       setState({
         status: "success",

@@ -27,8 +27,9 @@ const { parseOneTricksRows, pickFeaturedOneTrick, riotId, MIN_CHAMPION_GAMES } =
   "../lib/otp/onetricks.ts"
 );
 const { resolveFeaturedAccount } = await import("../lib/otp/featured.ts");
-const { getMatchIdsByPuuid, getMatch } = await import("../lib/pro/riot.ts");
+const { getMatchIdsByPuuid, getMatch, getMatchTimeline } = await import("../lib/pro/riot.ts");
 const { extractMatch } = await import("../lib/pro/extract.ts");
+const { FEATURED_TIMELINE_GAME_LIMIT } = await import("../lib/otp/ingest.ts");
 const { freshStartTimeEpochSec } = await import("../lib/pro/fresh.ts");
 const { getAllChampions } = await import("../lib/staticData.ts");
 const { getSql } = await import("../lib/pro/db.ts");
@@ -142,43 +143,69 @@ async function ingestChampion(sql, page, champ, matchCount) {
     // and just spends a Riot call against a shared key budget.
     if (page.length < 100) break;
   }
-  const known = ids.length
-    ? new Set(
-        (
-          await sql`SELECT match_id FROM coachbuild.otp_matches
-                    WHERE puuid = ${resolved.puuid} AND match_id = ANY(${ids}::text[])`
-        ).map((r) => r.match_id)
-      )
-    : new Set();
-  const fresh = ids.filter((id) => !known.has(id));
-  log(`${champ.key}: ${ids.length} recent ranked games, ${fresh.length} not yet stored`);
+  const knownRows = ids.length
+    ? await sql`SELECT match_id, skill_order FROM coachbuild.otp_matches
+                WHERE puuid = ${resolved.puuid} AND match_id = ANY(${ids}::text[])`
+    : [];
+  const known = new Set(knownRows.map((r) => r.match_id));
+  const knownSkillOrder = new Map(knownRows.map((r) => [r.match_id, r.skill_order]));
+  const timelineIds = new Set(
+    ids.slice(0, FEATURED_TIMELINE_GAME_LIMIT).filter((id) => knownSkillOrder.get(id) == null)
+  );
+  const work = ids.filter((id) => !known.has(id) || timelineIds.has(id));
+  log(
+    `${champ.key}: ${ids.length} recent ranked games, ${work.length} to ingest, ` +
+      `${timelineIds.size} timeline candidates (cap ${FEATURED_TIMELINE_GAME_LIMIT})`
+  );
 
   let stored = 0;
-  for (const matchId of fresh) {
+  let timelineFailures = 0;
+  for (const matchId of work) {
     try {
-      // NO_TIMELINE, not null: extractMatch reads timeline.info unconditionally,
-      // so null throws. We deliberately do not fetch timelines here — that is a
-      // second Riot call per match and the card makes no claim about purchase
-      // or skill order.
-      const row = extractMatch(await getMatch(resolved.matchRouting, matchId), NO_TIMELINE, resolved.puuid);
+      // NO_TIMELINE is the sentinel for games outside the capped timeline
+      // sample, or for a failed timeline request; extractMatch requires an
+      // object even when the optional timeline data is unavailable.
+      const match = await getMatch(resolved.matchRouting, matchId);
+      let timeline = NO_TIMELINE;
+      let timelineFetched = false;
+      if (timelineIds.has(matchId)) {
+        try {
+          timeline = await getMatchTimeline(resolved.matchRouting, matchId);
+          timelineFetched = true;
+        } catch (err) {
+          timelineFailures += 1;
+          log(`${champ.key}: timeline ${matchId} failed - ${err?.message ?? err}`);
+        }
+      }
+      const row = extractMatch(match, timeline, resolved.puuid);
       // A one-trick still plays other champions. Only this champion's games are
       // evidence for this champion's card.
       if (!row || row.championId !== champ.id) continue;
-      await sql`
-        INSERT INTO coachbuild.otp_matches (
-          match_id, puuid, champion_id, champion_name, role, patch, win,
-          kills, deaths, assists, game_creation, game_duration_sec,
-          spells, final_items, trinket, runes
-        ) VALUES (
-          ${row.matchId}, ${row.puuid}, ${row.championId}, ${row.championName}, ${row.role},
-          ${row.patch}, ${row.win}, ${row.kills}, ${row.deaths}, ${row.assists},
-          ${row.gameCreation}, ${row.gameDurationSec},
-          ${JSON.stringify(row.spells)}, ${JSON.stringify(row.finalItems)},
-          ${row.trinket}, ${JSON.stringify(row.runes)}
-        )
-        ON CONFLICT (match_id, puuid) DO NOTHING
-      `;
-      stored += 1;
+      if (known.has(matchId) && timelineFetched) {
+        await sql`
+          UPDATE coachbuild.otp_matches
+          SET skill_order = ${JSON.stringify(row.skillOrder)}::jsonb
+          WHERE puuid = ${resolved.puuid} AND match_id = ${matchId}
+            AND skill_order IS NULL
+        `;
+      } else {
+        await sql`
+          INSERT INTO coachbuild.otp_matches (
+            match_id, puuid, champion_id, champion_name, role, patch, win,
+            kills, deaths, assists, game_creation, game_duration_sec,
+            spells, final_items, trinket, runes, skill_order
+          ) VALUES (
+            ${row.matchId}, ${row.puuid}, ${row.championId}, ${row.championName}, ${row.role},
+            ${row.patch}, ${row.win}, ${row.kills}, ${row.deaths}, ${row.assists},
+            ${row.gameCreation}, ${row.gameDurationSec},
+            ${JSON.stringify(row.spells)}::jsonb, ${JSON.stringify(row.finalItems)}::jsonb,
+            ${row.trinket}, ${JSON.stringify(row.runes)}::jsonb,
+            ${timelineFetched ? JSON.stringify(row.skillOrder) : null}::jsonb
+          )
+          ON CONFLICT (match_id, puuid) DO NOTHING
+        `;
+        stored += 1;
+      }
     } catch (err) {
       log(`${champ.key}: match ${matchId} failed — ${err?.message ?? err}`);
     }
@@ -187,7 +214,10 @@ async function ingestChampion(sql, page, champ, matchCount) {
     await sql`SELECT count(*)::int AS n FROM coachbuild.otp_matches
               WHERE puuid = ${resolved.puuid} AND champion_id = ${champ.id}`
   )[0].n;
-  log(`${champ.key}: stored ${stored} new, ${total} total on champion`);
+  log(
+    `${champ.key}: stored ${stored} new, ${total} total on champion; ` +
+      `${timelineFailures} timeline fetch failure(s)`
+  );
   return true;
 }
 

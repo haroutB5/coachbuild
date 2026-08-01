@@ -52,6 +52,7 @@ export interface FeaturedOtpResponse {
   gameLog: FeaturedGame[];
   runes: { page: unknown; games: number; pct: number } | null;
   spells: { spells: number[]; games: number; pct: number } | null;
+  skillOrder: { order: string[]; games: number } | null;
 }
 
 const EMPTY: FeaturedOtpResponse = {
@@ -61,6 +62,7 @@ const EMPTY: FeaturedOtpResponse = {
   gameLog: [],
   runes: null,
   spells: null,
+  skillOrder: null,
 };
 
 export async function GET(req: NextRequest) {
@@ -99,7 +101,7 @@ export async function GET(req: NextRequest) {
     const f = featured[0];
 
     const rows = (await sql`
-      SELECT win, final_items, runes, spells
+      SELECT win, final_items, runes, spells, skill_order
       FROM coachbuild.otp_matches
       WHERE puuid = ${f.puuid} AND champion_id = ${championId}
       ORDER BY game_creation DESC
@@ -130,6 +132,7 @@ export async function GET(req: NextRequest) {
       spells: model.spells
         ? { spells: model.spells.spells, games: model.spells.games, pct: model.spells.pct }
         : null,
+      skillOrder: model.skillOrder,
     };
     return NextResponse.json(body);
   } catch (err) {

@@ -15,6 +15,7 @@ const game = (over: Partial<FeaturedMatchRow> = {}): FeaturedMatchRow => ({
   final_items: [3100, 6653],
   runes: page(8992),
   spells: [4, 6],
+  skill_order: null,
   ...over,
 });
 
@@ -76,6 +77,26 @@ describe("buildFeaturedModel", () => {
     expect(m.spells?.games).toBe(2);
   });
 
+  it("returns the modal first six skill levels over timeline-backed games", () => {
+    const m = buildFeaturedModel([
+      game({ skill_order: ["Q", "W", "E", "Q", "Q", "R"] }),
+      game({ skill_order: ["Q", "W", "E", "Q", "Q", "R"] }),
+      game({ skill_order: ["W", "Q", "E", "Q", "W", "R"] }),
+      game({ skill_order: null }),
+      game({ skill_order: [] }),
+    ]);
+    expect(m.skillOrder).toEqual({ order: ["Q", "W", "E", "Q", "Q", "R"], games: 3 });
+  });
+
+  it("uses a common prefix and never treats missing timelines as a skill-order sample", () => {
+    const m = buildFeaturedModel([
+      game({ skill_order: ["Q", "W", "E", "Q"] }),
+      game({ skill_order: ["Q", "W"] }),
+      game({ skill_order: null }),
+    ]);
+    expect(m.skillOrder).toEqual({ order: ["Q", "W"], games: 2 });
+  });
+
   it("survives malformed rows without throwing", () => {
     const m = buildFeaturedModel([
       game({ final_items: null, runes: null, spells: null }),
@@ -88,7 +109,7 @@ describe("buildFeaturedModel", () => {
 
   it("reports zero games without dividing by zero", () => {
     const m = buildFeaturedModel([]);
-    expect(m).toEqual({ games: 0, wins: 0, items: [], gameLog: [], runes: null, spells: null });
+    expect(m).toEqual({ games: 0, wins: 0, items: [], gameLog: [], runes: null, spells: null, skillOrder: null });
   });
 
   it("returns the per-game records the build strip needs", () => {

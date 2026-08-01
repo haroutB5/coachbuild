@@ -182,6 +182,8 @@ export async function applyItemSetsForBuild(params: {
   build: BuildResponse;
   port: CompanionPort;
   session: string;
+  /** Optional already-aggregated OTP line from the card being applied. */
+  otp?: ProConsensusItemsInput | null;
 }): Promise<ApplyItemSetsResult> {
   const [pro, itemMeta, otp] = await Promise.all([
     resolveProConsensusForSets(params.champ, params.lane, params.build.patch),
@@ -190,7 +192,9 @@ export async function applyItemSetsForBuild(params: {
     // user click and on the champ-select auto-export, where champ select is
     // a 30-second window. Both consensus fetches are independent and both
     // fail soft, so serialising them would only add latency.
-    resolveOtpConsensusForSets(params.champ, params.lane, params.build.patch),
+    params.otp === undefined
+      ? resolveOtpConsensusForSets(params.champ, params.lane, params.build.patch)
+      : Promise.resolve(params.otp),
   ]);
   const sets = buildItemSets(params.champ, params.roleLabel, params.build, pro, itemMeta, otp);
   return applyItemSets(params.port, params.session, {
