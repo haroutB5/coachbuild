@@ -2,6 +2,29 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.90.1] — 2026-08-01 — The team picker was a raw OS dropdown listing every champion twice
+
+User-reported, one click into the shipped page. Both bugs were invisible in a screenshot of the
+resting page, which is why the audit missed them.
+
+### Fixed
+- **The `+` team slots opened a native `<select>`.** Windows draws those in OS chrome — a white
+  panel with a blue highlight — which no CSS can touch, in the middle of a dark app. Replaced with
+  the app's own `ChampionPicker`, which already portals a themed listbox with filtering and keyboard
+  navigation. It opens under the slot row rather than inside a 40px tile, and closes on select.
+- **Every flexible champion was listed twice.** `/api/champions` returned 233 entries for a
+  173-champion roster: the upstream data carries 60 skin variants (`Jade_Ahri` at id 60103,
+  `Jade_Alistar` at 60012, …) sharing the display name of the champion they re-skin.
+  **Worse than cosmetic** — those ids exist in no gameplay table, so picking the second "Ahri" set
+  an enemy to 60103, which `draft_matchup` has never heard of. The pick appeared to register and
+  then silently changed nothing. Filtered at the endpoint every consumer reads; nothing in the app
+  referenced an id in that range. 233 in, 173 out, zero duplicate names.
+
+### Note
+Four small native `<select>` controls remain on the page — role, sort-by, min pick rate, minimum
+games. Their closed state is themed and their option lists are 4–5 items, so the OS dropdown is
+conventional there rather than jarring. Left deliberately; the 233-item white list was the problem.
+
 ## [0.90.0] — 2026-08-01 — Draft Assistant
 
 `/draft` rebuilt to a supplied redesign mockup. Three rounds and a browser audit — the first build

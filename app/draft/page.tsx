@@ -291,9 +291,13 @@ function TeamSlots({
   const slotIds = label === "ENEMY TEAM" ? additionalIds : [primaryId, ...additionalIds];
   const slots = Array.from({ length: 5 }, (_, index) => slotIds[index] ?? null);
   const selectedIds = new Set(slotIds.filter((id): id is number => id !== null));
-  const options = Array.from(champIcons.entries())
-    .filter(([id]) => !selectedIds.has(id))
-    .sort(([, a], [, b]) => a.name.localeCompare(b.name));
+  // Which empty slot (if any) currently has the picker open. A native <select>
+  // used to live invisibly over each "+" — it worked, but Windows draws its
+  // dropdown in OS chrome: a white panel with a blue highlight, unstyleable by
+  // CSS, in the middle of a dark page (2026-08-01, user-reported). Replaced with
+  // the app's own ChampionPicker, which already portals a themed listbox with
+  // filtering and keyboard nav.
+  const [addingSlot, setAddingSlot] = useState<number | null>(null);
   return (
     <div className="min-w-0">
       <p className="text-[10px] tracking-[0.14em] uppercase text-mut font-semibold mb-2">{label}</p>
@@ -347,28 +351,35 @@ function TeamSlots({
               ) : isYourPick ? (
                 <span className="text-xl font-light text-mut/70" aria-hidden="true">+</span>
               ) : (
-                <label className="absolute inset-0 flex cursor-pointer items-center justify-center rounded-lg">
+                <button
+                  type="button"
+                  aria-label={`Add a champion to ${label.toLowerCase()} slot ${index + 1}`}
+                  aria-expanded={addingSlot === index}
+                  onClick={() => setAddingSlot(addingSlot === index ? null : index)}
+                  className="absolute inset-0 flex cursor-pointer items-center justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+                >
                   <span className="text-xl font-light text-mut/70" aria-hidden="true">+</span>
-                  <select
-                    value=""
-                    aria-label={`Add a champion to ${label.toLowerCase()} slot ${index + 1}`}
-                    onChange={(event) => {
-                      const id = Number(event.target.value);
-                      const selected = champIcons.get(id);
-                      if (!selected) return;
-                      onAdd({ id, key: selected.name.replace(/\s+/g, ""), name: selected.name, icon: selected.icon });
-                    }}
-                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                  >
-                    <option value="" disabled>{placeholder}</option>
-                    {options.map(([id, option]) => <option key={id} value={id}>{option.name}</option>)}
-                  </select>
-                </label>
+                </button>
               )}
             </div>
           );
         })}
       </div>
+      {/* Rendered UNDER the row rather than inside the 40px slot: the picker is
+          a search input plus a listbox, and neither fits a square tile. Closing
+          on select keeps the interaction as short as the old native one. */}
+      {addingSlot !== null && (
+        <div className="mt-2">
+          <ChampionPicker
+            value={null}
+            placeholder={placeholder}
+            onChange={(champ) => {
+              onAdd(champ);
+              setAddingSlot(null);
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
