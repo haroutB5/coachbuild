@@ -2,6 +2,56 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.89.0] — 2026-08-01 — Blind Pick
+
+New section on `/draft`: the top 10 champions to first-pick in a lane before you know your lane
+opponent. The premise is that **the best blind pick is not the highest win rate, it is the champion
+with no bad matchups** — a 54% champion that collapses into three common counters is a worse first
+pick than a 51% one that never leaves 48–53%.
+
+### Added
+- **`lib/draft/blindPick.ts`** — pure scoring engine over the existing `draft_matchup` matrix. No
+  migration, no new ingest.
+  - Opponent prior `p(o)` is aggregated **lane-wide across every champion**, not from the
+    candidate's own rows. The per-candidate version measures who a champion has *faced*, which is
+    already distorted by counterpicking — the exact effect being measured.
+  - `m(c,o) = baseline + n/(n+K)·(rawWR − baseline)`, reusing `score.ts`'s `K = 200`.
+  - **`N_FLOOR` is deliberately NOT applied**, unlike `playScore`. Dropping thin cells removes
+    rare-but-real counters and overstates safety; shrinkage already collapses them toward baseline.
+  - `field_WR`, `ES10` (mass-weighted mean over the worst 10% of opponent probability mass, boundary
+    opponent consumed fractionally), `bad_mass`, and
+    `blind_score = field_WR − 0.5·max(0, 0.50 − ES10)`.
+  - Publication gate is **mass coverage**, not cell count: ≥90% of opponent mass in cells with ≥30
+    games. A cell-count gate was considered and measured first — it would have failed 83 of 97 mid
+    champions and shipped a near-empty table. The mass gate passes 93 of 97, and exclusions are
+    counted and surfaced rather than silently dropped.
+- **`GET /api/draft/blind-pick?lane=0-4`** — separate from `/api/draft/recommend` because the output
+  depends only on `(patch, tier, lane)` and not on the enemies entered, so it stays cacheable.
+  `meta.fetchedAt` is `MAX(ingested_at)` over rows actually served, never serve time.
+- **`BlindPickTable`** on `/draft` below Suggested Picks, with a working retry on error.
+
+### Notes on what this can and cannot tell you
+Measured, and reflected in the on-page copy rather than hidden: the ranking correlates with plain
+win rate at Spearman 0.974, and 8 of the mid top 10 are shared with Suggested Picks. That is not a
+bug — on this data each champion's opponent distribution is nearly identical to the lane-wide one,
+so almost the entire signal beyond win rate is the tail penalty. **The column that adds something is
+Floor**, where Singed's 50.2% against Heimerdinger's 47.2% is a real three-point gap win rate cannot
+show. Below the top few the scores are near-identical (rank 10 to rank 11 differ by 0.00027), so the
+copy tells the reader to read the floor rather than the rank.
+
+### Fixed in the same pass (audit)
+- Table was `min-w-[720px]` inside a 560px column, so two columns were cut off at **every** desktop
+  size with no scroll hint. Now 540, matching the sibling picks table.
+- Dropped the RISKY column: it spanned 0.0–7.5% across the top 10, cost width, separated nothing,
+  and restated in aggregate what Worst matchup says concretely. `badMass` stays on the wire.
+- Worst-matchup cell now carries **its own** game count. Singed's worst rests on 137 games while his
+  row reads 11,476, and nothing distinguished the two.
+- That badge failed contrast at `text-mut/70` (3.19:1 at 9px, under AA's 4.5:1). Now 5.17:1.
+- `aggregateRows` was recomputed once per candidate — ~150ms per uncached request, comparable to the
+  DB query. Hoisted; output verified byte-identical.
+- `excludedByMassGate` was also counting uncomputable candidates. Split into two counters so neither
+  number can lie.
+
 ## [0.88.1] — 2026-08-01 — CS/min always shows
 
 User directive: "Some stats like cs/min aren't showing for all champs. I want that included

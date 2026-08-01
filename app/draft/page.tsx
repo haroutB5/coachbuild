@@ -56,6 +56,8 @@ import EnemyTeamPanel from "@/components/hextech/EnemyTeamPanel";
 import MyChampionPanel from "@/components/hextech/MyChampionPanel";
 import DraftCompBars from "@/components/hextech/DraftCompBars";
 import DraftPicksTable from "@/components/hextech/DraftPicksTable";
+import BlindPickTable from "@/components/hextech/BlindPickTable";
+import type { BlindPickResult } from "@/lib/draft/blindPick";
 
 const RECOMMEND_DEBOUNCE_MS = 300;
 
@@ -84,6 +86,109 @@ type FetchState =
   | { status: "empty"; meta: DraftRecommendMeta }
   | { status: "error" };
 
+interface BlindPickResponse {
+  picks: BlindPickResult[];
+  meta: {
+    patch: string | null;
+    tier: number;
+    lane: number;
+    fetchedAt: string | null;
+    poolCandidates: number;
+    qualifiedCandidates: number;
+    excludedByMassGate: number;
+    returnedCandidates: number;
+    topN: number;
+  };
+  pending?: boolean;
+}
+
+type BlindPickFetchState =
+  | { status: "loading" }
+  | { status: "ok"; data: BlindPickResponse }
+  | { status: "pending"; data: BlindPickResponse }
+  | { status: "empty"; data: BlindPickResponse }
+  | { status: "error" };
+
+function normalizeBlindPickResponse(raw: unknown): BlindPickResponse | null {
+  if (!raw || typeof raw !== "object") return null;
+  const body = raw as Partial<BlindPickResponse> & { meta?: Partial<BlindPickResponse["meta"]> };
+  const meta = body.meta;
+  if (
+    !meta ||
+    (typeof meta.patch !== "string" && meta.patch !== null) ||
+    typeof meta.tier !== "number" ||
+    typeof meta.lane !== "number" ||
+    (typeof meta.fetchedAt !== "string" && meta.fetchedAt !== null) ||
+    ![meta.poolCandidates, meta.qualifiedCandidates, meta.excludedByMassGate, meta.returnedCandidates, meta.topN].every(
+      (value) => typeof value === "number" && Number.isFinite(value) && value >= 0
+    )
+  ) {
+    return null;
+  }
+
+  const picks: BlindPickResult[] = [];
+  if (Array.isArray(body.picks)) {
+    for (const rawPick of body.picks) {
+      if (!rawPick || typeof rawPick !== "object") continue;
+      const pick = rawPick as Partial<BlindPickResult>;
+      if (
+        typeof pick.rank !== "number" ||
+        typeof pick.champId !== "number" ||
+        typeof pick.blindScore !== "number" ||
+        typeof pick.fieldWr !== "number" ||
+        typeof pick.es10 !== "number" ||
+        typeof pick.badMass !== "number" ||
+        typeof pick.totalGames !== "number" ||
+        typeof pick.coverageMass !== "number" ||
+        ![pick.rank, pick.champId, pick.blindScore, pick.fieldWr, pick.es10, pick.badMass, pick.totalGames, pick.coverageMass].every(
+          (value) => Number.isFinite(value)
+        )
+      ) {
+        continue;
+      }
+      const worst = pick.worstMatchup;
+      const worstMatchup =
+        worst &&
+        typeof worst === "object" &&
+        typeof worst.oppId === "number" &&
+        typeof worst.wr === "number" &&
+        typeof worst.games === "number" &&
+        Number.isFinite(worst.oppId) &&
+        Number.isFinite(worst.wr) &&
+        Number.isFinite(worst.games)
+          ? { oppId: worst.oppId, wr: worst.wr, games: worst.games }
+          : null;
+      picks.push({
+        rank: pick.rank,
+        champId: pick.champId,
+        blindScore: pick.blindScore,
+        fieldWr: pick.fieldWr,
+        es10: pick.es10,
+        badMass: pick.badMass,
+        worstMatchup,
+        totalGames: pick.totalGames,
+        coverageMass: pick.coverageMass,
+      });
+    }
+  }
+
+  return {
+    picks,
+    meta: {
+      patch: meta.patch,
+      tier: meta.tier,
+      lane: meta.lane,
+      fetchedAt: meta.fetchedAt,
+      poolCandidates: meta.poolCandidates,
+      qualifiedCandidates: meta.qualifiedCandidates,
+      excludedByMassGate: meta.excludedByMassGate,
+      returnedCandidates: meta.returnedCandidates,
+      topN: meta.topN,
+    },
+    pending: body.pending === true,
+  };
+}
+
 function ResultsSkeleton() {
   return (
     <div className="bg-panel border border-line rounded-xl p-5 animate-pulse space-y-3">
@@ -106,6 +211,23 @@ function EmptyPanel({ title, body }: { title: string; body: string }) {
     <div className="bg-panel border border-line rounded-xl p-8 text-center">
       <div className="text-txt font-semibold mb-1 text-[13.5px]">{title}</div>
       <div className="text-mut text-[12px]">{body}</div>
+    </div>
+  );
+}
+
+function BlindPickSkeleton() {
+  return (
+    <div className="bg-panel border border-line rounded-xl p-5 motion-reduce:animate-none animate-pulse space-y-3" aria-label="Loading blind picks">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg bg-panel2 flex-shrink-0" />
+          <div className="flex-1 space-y-1.5">
+            <div className="h-2.5 w-24 bg-panel2 rounded" />
+            <div className="h-2 w-14 bg-panel2 rounded" />
+          </div>
+          <div className="h-3 w-10 bg-panel2 rounded flex-shrink-0" />
+        </div>
+      ))}
     </div>
   );
 }
@@ -151,6 +273,7 @@ export default function DraftPage() {
 
   const [champIcons, setChampIcons] = useState<Map<number, ChampionIconEntry>>(new Map());
   const [state, setState] = useState<FetchState>({ status: "loading" });
+  const [blindState, setBlindState] = useState<BlindPickFetchState>({ status: "loading" });
 
   const laneRef = useRef(lane);
   laneRef.current = lane;
@@ -244,6 +367,46 @@ export default function DraftPage() {
     }, RECOMMEND_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [lane, enemyIds, laneOpponentId, hover]);
+
+  // Blind picks depend only on the concrete lane, patch, and tier. Keep this
+  // fetch independent from enemy edits so the section remains valid for a
+  // first pick even after other champions are entered in the draft. The
+  // request id also protects the table when the user changes lanes quickly.
+  const blindReqIdRef = useRef(0);
+  // Bumping this re-runs the effect below without changing lane — it is what
+  // makes the error panel's "Try again" an actual retry. The panel said
+  // "try again" with nothing to click before (2026-08-01 audit P2).
+  const [blindRetry, setBlindRetry] = useState(0);
+  useEffect(() => {
+    const requestId = ++blindReqIdRef.current;
+    setBlindState({ status: "loading" });
+    const controller = new AbortController();
+    const laneNum = LANE_TO_ROLE_ID[lane];
+
+    fetch(`/api/draft/blind-pick?lane=${laneNum}`, { signal: controller.signal })
+      .then((res) => {
+        if (!res.ok) throw new Error(`blind pick ${res.status}`);
+        return res.json() as Promise<unknown>;
+      })
+      .then((raw) => {
+        if (blindReqIdRef.current !== requestId) return;
+        const data = normalizeBlindPickResponse(raw);
+        if (!data) {
+          setBlindState({ status: "error" });
+          return;
+        }
+        if (data.pending) {
+          setBlindState({ status: "pending", data });
+          return;
+        }
+        setBlindState({ status: data.picks.length > 0 ? "ok" : "empty", data });
+      })
+      .catch(() => {
+        if (blindReqIdRef.current === requestId) setBlindState({ status: "error" });
+      });
+
+    return () => controller.abort();
+  }, [lane, blindRetry]);
 
   function handleLaneChange(next: LaneId) {
     setDirty(true);
@@ -531,6 +694,79 @@ export default function DraftPage() {
                 <DraftPicksTable plays={displayedPotentialPlays} champIcons={champIcons} caption="Potential counters" />
               </section>
             )}
+
+            <section>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <p className="text-[10px] tracking-[0.14em] uppercase text-mut font-semibold px-0.5">Blind Pick</p>
+                {blindState.status !== "loading" && blindState.status !== "error" && (
+                  <div className="text-[10px] text-mut tabular-nums">
+                    Patch {blindState.data.meta.patch ?? "—"}
+                    {blindState.data.meta.fetchedAt && ` · Upd ${formatFetchedAt(blindState.data.meta.fetchedAt)}`}
+                  </div>
+                )}
+              </div>
+              {/* REWRITTEN after the 2026-08-01 audit measured what this list
+                  can actually distinguish. The old copy promised an order that
+                  "can differ from Suggested Picks"; in fact Spearman against
+                  plain win rate is 0.974 and 8 of the top 10 names are shared
+                  with the table directly above. A reader who was told to expect
+                  a different order and sees the same first three champions reads
+                  that as broken, not as insight.
+                  What the feature genuinely adds is the FLOOR column — Singed
+                  50.2% vs Heimerdinger 47.2% is a real three-point gap that win
+                  rate alone cannot show. So the copy leads with FLOOR, states
+                  the ordering is close on purpose, and says where it stops being
+                  meaningful (rank 10 and rank 11 differ by 0.00027). */}
+              <p className="text-mut text-[11px] mb-1 px-0.5">
+                Champions you can first-pick before seeing your lane opponent. Ranked by win rate with a penalty for a bad
+                worst case, so the order stays close to Suggested Picks — the column that adds something is{" "}
+                <span className="text-txt font-semibold">Floor</span>, your win rate in the 10% of matchups that go worst.
+                Two champions with the same win rate can differ by three points there. Below the top few the scores are
+                near-identical, so read the floor, not the rank.
+              </p>
+
+              {blindState.status === "loading" && <BlindPickSkeleton />}
+
+              {blindState.status === "pending" && (
+                <EmptyPanel
+                  title="Blind-pick data being prepared"
+                  body={`Patch ${blindState.data.meta.patch ?? "the current"} has no complete matchup matrix for this lane yet — check back shortly.`}
+                />
+              )}
+
+              {blindState.status === "error" && (
+                <div className="bg-panel border border-line rounded-xl p-8 text-center">
+                  <p className="text-txt text-[12.5px] font-semibold">Couldn&apos;t load blind picks</p>
+                  <p className="text-mut text-[11px] mt-1">Something went wrong fetching first-pick safety rankings.</p>
+                  <button
+                    type="button"
+                    onClick={() => setBlindRetry((n) => n + 1)}
+                    className="mt-3 px-3 py-1.5 rounded-md border border-line text-[11px] font-semibold text-txt transition-colors motion-reduce:transition-none hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal"
+                  >
+                    Try again
+                  </button>
+                </div>
+              )}
+
+              {blindState.status === "empty" && (
+                <EmptyPanel
+                  title="No qualifying blind picks yet"
+                  body={
+                    blindState.data.meta.excludedByMassGate > 0
+                      ? "The available champions do not yet have enough well-sampled opponent mass for an honest published list."
+                      : "There is not enough matchup data for this lane to publish a first-pick list."
+                  }
+                />
+              )}
+
+              {(blindState.status === "ok" || blindState.status === "empty") && blindState.data.meta.excludedByMassGate > 0 && (
+                <p className="text-mut text-[10.5px] mt-2 px-0.5">
+                  {blindState.data.meta.excludedByMassGate} of {blindState.data.meta.poolCandidates} pool champions excluded: less than 90% of their opponent mass is backed by 30+ game cells.
+                </p>
+              )}
+
+              {blindState.status === "ok" && <BlindPickTable picks={blindState.data.picks} champIcons={champIcons} />}
+            </section>
           </div>
         </div>
 
