@@ -4,18 +4,9 @@ import { useEffect, useState } from "react";
 import type { ChampionRef } from "@/lib/types";
 import type { LaneId } from "./heroContracts";
 import { LANE_TO_ROLE_ID } from "./heroContracts";
-import SkillGrid from "@/components/SkillGrid";
 import { formatSharePct } from "./proConsensus";
-import {
-  LOW_SAMPLE_THRESHOLD,
-  buildRecommendedSkillGrid,
-  fetchSkillOrder,
-  formatPriorityString,
-  formatSkillOrderSampleLine,
-  hasDerivedTail,
-  inferredTailRange,
-  type SkillOrderModel,
-} from "./skillOrder";
+import { fetchSkillOrder, formatSkillOrderSampleLine, type SkillOrderModel } from "./skillOrder";
+import SkillOrderGrid from "./SkillOrderGrid";
 
 interface SkillOrderCardProps {
   champ: ChampionRef;
@@ -112,118 +103,14 @@ export default function SkillOrderCard({ champ, lane }: SkillOrderCardProps) {
   }
 
   const { model } = state;
-  const lowSample = model.sampleSize < LOW_SAMPLE_THRESHOLD;
-  // One implementation of "which levels are ours", imported rather than
-  // reimplemented (see skillOrder.ts's re-export note) so the card, the grid
-  // and the desktop overlay cannot disagree about it.
-  const grid = buildRecommendedSkillGrid(model);
-  const derivedTail = hasDerivedTail(model);
-  const inferred = inferredTailRange(model);
-  // The genuinely-unknown case: the derivation refused AND the inference could
-  // not fill the gap either (the priority named nothing left under a cap), so
-  // the tail columns are empty. Rare, and it must still be said out loud.
-  const knownLevels = model.order.length + (model.inferredTail?.length ?? 0);
-  const incompleteGrid = knownLevels < 18;
 
   return (
     <div className="bg-panel border border-line rounded-xl p-5">
       <CardHeader>Skill Order</CardHeader>
-
-      {/* Part 1 — skill PRIORITY, the compact max-order string, deliberately
-          FIRST (module header: "the thing players actually memorise"). */}
-      <p
-        className="text-[20px] font-semibold tracking-[-0.01em] text-txt mb-4"
-        aria-label={`Skill priority: ${model.priority.join(", then ")}`}
-      >
-        {formatPriorityString(model.priority)}
-      </p>
-
-      {/* Part 2 — THE GRID. 18 columns always: a recommendation answers the
-          whole game. `max-w` caps how big the cells get on a wide desktop so
-          it reads as a compact chart rather than 18 giant squares; on a 390px
-          phone the 1fr tracks shrink to fit and the page gains no horizontal
-          scroll (see SkillGrid.tsx's header). */}
-      <SkillGrid grid={grid} className="max-w-[560px]" />
-
-      {/* Honesty requirements below. All three are about the same thing —
-          saying which levels are ours — and they are deliberately separate
-          sentences rather than one merged line, because a reader who sees only
-          solid chips should see NO caption at all. */}
-
-      {/* The tail was INFERRED: the derivation refused for this champion and
-          the levels were filled from the published max-priority order so the
-          grid reads complete. That is a good guess and it is still a guess.
-          Dashed chips say so visually; this says it in words, because a visual
-          convention nobody explained is not a disclosure. */}
-      {inferred && (
-        <p className="text-[10.5px] text-gold/70 mt-3 flex items-start gap-1">
-          <span aria-hidden="true">⚠</span>
-          <span>
-            The source publishes levels 1–{model.order.length} only, and this champion&apos;s last
-            points can&apos;t be worked out from them. Level{inferred.from === inferred.to ? " " : "s "}
-            <span className="tabular-nums">
-              {inferred.from === inferred.to ? inferred.from : `${inferred.from}–${inferred.to}`}
-            </span>{" "}
-            {inferred.from === inferred.to ? "is" : "are"} inferred from{" "}
-            {model.inferredBasis === "published"
-              ? "the champion's published max order"
-              : "the levelling path above"}{" "}
-            (dashed) — a best guess, not recorded data.
-          </span>
-        </p>
-      )}
-
-      {/* Neither derived nor inferable. Rare, and the one case where the grid
-          genuinely has holes — never padded to look tidy. */}
-      {incompleteGrid && (
-        <p className="text-[10.5px] text-gold/70 mt-3 flex items-center gap-1">
-          <span aria-hidden="true">⚠</span>
-          <span className="tabular-nums">
-            Levels {knownLevels + 1}–18 are unknown for this champion and left blank.
-          </span>
-        </p>
-      )}
-
-      {/* The other half of the same honesty requirement, and the one that is
-          easy to forget: a COMPLETED order shows all 18 levels, and three of
-          them are ours. The outlined chips already say so visually; this says
-          it in words, because a visual convention nobody explained is not a
-          disclosure. Deliberately not styled as a warning — a DERIVED tail is
-          arithmetic with exactly one answer, a legitimate and useful result,
-          just not a measured one. That is why it reads differently from the
-          INFERRED caption above, which is a genuine guess. */}
-      {derivedTail && (
-        <p className="text-[10.5px] text-mut/70 mt-3">
-          {/* Three states, not two. A payload cached before `completionBasis`
-              existed carries no basis at all, and the old two-way ternary
-              silently called those "levelling path" — naming a provenance we
-              do not actually hold, which is the same fabrication the chip
-              treatments exist to prevent, just in prose. When we don't know, we
-              say only what we do know: these levels are ours, not the
-              source's. */}
-          {model.completionBasis === "published"
-            ? "Outlined levels are derived from this champion's published max order, not recorded"
-            : model.completionBasis === "derived"
-              ? "Outlined levels are derived from this champion's levelling path, not recorded"
-              : "Outlined levels are derived, not recorded"}
-          {" — the source publishes levels 1–15 only."}
-        </p>
-      )}
-
-      {lowSample && (
-        <p className="text-[10.5px] text-gold/70 mt-2 flex items-center gap-1">
-          <span aria-hidden="true">⚠</span>
-          Low sample size — treat this order with caution.
-        </p>
-      )}
-
-      {/* Honesty requirement — never present a recommendation without the N
-          behind it. Reuses proConsensus.ts's formatSharePct so this card's
-          percentages round the exact same way ProConsensusCard's do (whole
-          percent, never a decimal) — one house rounding rule, not two. */}
-      <p className="text-[10px] text-mut/70 mt-3.5 pt-3 border-t border-line tabular-nums">
-        From {formatSkillOrderSampleLine(model, formatSharePct)}
-      </p>
+      <SkillOrderGrid
+        model={model}
+        sampleLabel={formatSkillOrderSampleLine(model, formatSharePct)}
+      />
     </div>
   );
 }

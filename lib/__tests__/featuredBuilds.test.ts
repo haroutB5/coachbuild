@@ -77,7 +77,7 @@ describe("buildFeaturedModel", () => {
     expect(m.spells?.games).toBe(2);
   });
 
-  it("returns the modal first six skill levels over timeline-backed games", () => {
+  it("returns the full modal skill model over timeline-backed games", () => {
     const m = buildFeaturedModel([
       game({ skill_order: ["Q", "W", "E", "Q", "Q", "R"] }),
       game({ skill_order: ["Q", "W", "E", "Q", "Q", "R"] }),
@@ -85,16 +85,30 @@ describe("buildFeaturedModel", () => {
       game({ skill_order: null }),
       game({ skill_order: [] }),
     ]);
-    expect(m.skillOrder).toEqual({ order: ["Q", "W", "E", "Q", "Q", "R"], games: 3 });
+    expect(m.skillOrder).toMatchObject({
+      priority: ["Q", "W", "E"],
+      order: ["Q", "W", "E", "Q", "Q", "R"],
+      observedLevels: 6,
+      sampleSize: 3,
+      completed: false,
+    });
+    expect(m.skillOrder?.inferredTail).toBeUndefined();
+    expect(m.skillOrder?.completionBasis).toBeUndefined();
+    expect(m.skillOrder?.inferredBasis).toBeUndefined();
   });
 
-  it("uses a common prefix and never treats missing timelines as a skill-order sample", () => {
+  it("keeps levels reached by fewer games and never treats missing timelines as a sample", () => {
     const m = buildFeaturedModel([
       game({ skill_order: ["Q", "W", "E", "Q"] }),
       game({ skill_order: ["Q", "W"] }),
       game({ skill_order: null }),
     ]);
-    expect(m.skillOrder).toEqual({ order: ["Q", "W"], games: 2 });
+    expect(m.skillOrder).toMatchObject({
+      order: ["Q", "W", "E", "Q"],
+      observedLevels: 4,
+      sampleSize: 2,
+      completed: false,
+    });
   });
 
   it("survives malformed rows without throwing", () => {

@@ -2,6 +2,46 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.92.0] — 2026-08-01 — The skill-order grid on OTP and Pro
+
+User: "Add the same skill order template as in the current Build page, into the OTP and Pro page."
+
+### Added
+- **The 18-level skill-order grid now renders on OTP and Pro**, not just Builds. The grid markup was
+  extracted from `SkillOrderCard` into a shared `SkillOrderGrid` that takes a `SkillOrderModel` —
+  one grid, three surfaces, no duplicated markup. New `lib/skillOrderAggregate.ts` turns stored
+  per-game sequences into that model.
+- The data was already there on both surfaces: `pro_matches.skill_order` since `0001_init.sql`, and
+  `otp_matches.skill_order` since yesterday's migration 0024. `buildSkillOrder` has always stored the
+  full 18 levels; OTP was simply only surfacing the first six.
+- Live: **OTP** (Dun#NA1, Viktor) `Q,E,E,E,E,R,E,Q,Q,Q,R,Q,W,W,W,R,W,W` over 22 of 386 games.
+  **Pro** `Q,E,E,W,E,R,E,E,Q,Q,R,Q,Q,W,W,R,W,W` over 106 timeline-backed of 200 games.
+
+### Fixed before shipping — the first implementation produced an ILLEGAL build
+The aggregation picked the modal ability at each level **independently**, with nothing tracking how
+many ranks an ability had left. Caught on the live output before deploy:
+
+```
+Q,E,E,E,E,R,E,E,Q,E,Q,Q,R,W,Q,Q,R,W   →  Q=6  E=7  R at 6,13,17
+```
+
+Basic abilities cap at 5 ranks and the ultimate exists only at levels 6/11/16, so that is a build no
+player can perform. It rendered perfectly, which is precisely the danger — it looked authoritative.
+
+Aggregation is now capacity-aware: it walks levels 1→18 and picks the most common ability **among
+those still legal at that level**, forcing R at 6/11/16 and skipping any basic already at 5. Ties
+break on modal count, then remaining observations, then Q>W>E. `assertLegalSkillOrder` is exported
+and used by the tests, so an illegal order fails the suite rather than shipping. Verified
+independently against the live API and again against the rendered grid on all three tabs:
+Q5/W5/E5/R3, R at 6/11/16.
+
+### Honesty
+The Builds grid outlines levels 16–18 as derived, because its source publishes only 1–15. **That
+behaviour is deliberately NOT copied to OTP or Pro** — their orders come from real recorded
+timelines, so a level nobody in the sample reached stays an empty cell rather than a guess. Builds
+keeps its own behaviour unchanged, regression-tested. A one-trick with no timeline-backed games at
+all keeps the existing honest fallback instead of an empty grid.
+
 ## [0.91.0] — 2026-08-01 — OTP parity: apply buttons and the one-trick's real skill order
 
 User: "for OTPs, I dont see a apply runes button. also make sure each ability level order is

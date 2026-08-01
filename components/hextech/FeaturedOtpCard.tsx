@@ -105,6 +105,8 @@ import PanelHeading from "./PanelHeading";
 import { sortPerkIdsByRow } from "./perkSlots";
 import { opggProfileUrl } from "./opggProfile";
 import { AddProItemBuildButton, ApplyProRunesButton, type OtpRunePageForApply } from "./ProConsensusCard";
+import SkillOrderGrid from "./SkillOrderGrid";
+import type { SkillOrderModel } from "./skillOrder";
 import type { ProConsensusItemsInput } from "./itemSetBody";
 import type { LaneId } from "./heroContracts";
 
@@ -135,7 +137,20 @@ interface FeaturedResponse {
   gameItems?: number[][];
   runes: { page: OtpRunePageForApply; games: number; pct: number } | null;
   spells: { spells: number[]; games: number; pct: number } | null;
-  skillOrder?: { order: string[]; games: number } | null;
+  skillOrder?: SkillOrderModel | null;
+}
+
+function isSkillOrderModel(value: unknown): value is SkillOrderModel {
+  if (!value || typeof value !== "object") return false;
+  const model = value as Record<string, unknown>;
+  return (
+    Array.isArray(model.priority) &&
+    model.levels !== null &&
+    typeof model.levels === "object" &&
+    Array.isArray(model.order) &&
+    typeof model.completed === "boolean" &&
+    typeof model.sampleSize === "number"
+  );
 }
 
 // ── DESKTOP COMPOSITION (2026-07-29) ─────────────────────────────────────────
@@ -545,7 +560,7 @@ export default function FeaturedOtpCard({
     minDisplayPct: MIN_DISPLAY_PCT,
     minSampleGames: MIN_SAMPLE_GAMES,
   });
-  const measuredSkillOrder = data!.skillOrder ?? null;
+  const measuredSkillOrder = isSkillOrderModel(data!.skillOrder) ? data!.skillOrder : null;
   const otpItems: ProConsensusItemsInput = {
     items: view.items.map(({ itemId, pct }) => ({ itemId, share: pct / 100 })),
     boots: view.boots.map(({ itemId, pct }) => ({ itemId, share: pct / 100 })),
@@ -870,16 +885,20 @@ export default function FeaturedOtpCard({
               </section>
             )}
 
-            {(measuredSkillOrder?.order ?? skillPriority) && (
+            {measuredSkillOrder ? (
+              <section className="mt-5">
+                <PanelHeading rule={false}>Skill order</PanelHeading>
+                <SkillOrderGrid
+                  model={measuredSkillOrder}
+                  sampleLabel={`${measuredSkillOrder.sampleSize} of ${sample.games} games`}
+                  missingLevelsContext="recorded sample"
+                />
+              </section>
+            ) : skillPriority ? (
               <div className="mt-5">
-                <PanelHeading
-                  rule={false}
-                  meta={measuredSkillOrder ? `${measuredSkillOrder.games} of ${sample.games} games` : undefined}
-                >
-                  Skill order
-                </PanelHeading>
+                <PanelHeading rule={false}>Skill order</PanelHeading>
                 <div className="mt-2 flex items-center gap-1.5">
-                  {(measuredSkillOrder?.order ?? skillPriority)!.map((s, i) => (
+                  {skillPriority.map((s, i) => (
                     <span key={`${s}-${i}`} className="flex items-center gap-1.5">
                       <span
                         title={`Level ${i + 1}: ${s}`}
@@ -887,25 +906,16 @@ export default function FeaturedOtpCard({
                       >
                         {s}
                       </span>
-                      {i < (measuredSkillOrder?.order ?? skillPriority)!.length - 1 && (
-                        <span className="text-mut text-[11px]">›</span>
-                      )}
+                      {i < skillPriority.length - 1 && <span className="text-mut text-[11px]">›</span>}
                     </span>
                   ))}
                 </div>
-                {measuredSkillOrder ? (
-                  <p className="mt-1.5 text-[10.5px] text-mut/70 leading-relaxed">
-                    Most common first {measuredSkillOrder.order.length} levels from {measuredSkillOrder.games} of{" "}
-                    {sample.games} stored games with a recorded timeline.
-                  </p>
-                ) : (
-                  <p className="mt-1.5 text-[10.5px] text-mut/70 leading-relaxed">
-                    The champion&apos;s common order, not {player.gameName}&apos;s own — skill order is not recorded
-                    for this one-trick yet.
-                  </p>
-                )}
+                <p className="mt-1.5 text-[10.5px] text-mut/70 leading-relaxed">
+                  The champion&apos;s common order, not {player.gameName}&apos;s own — skill order is not recorded
+                  for this one-trick yet.
+                </p>
               </div>
-            )}
+            ) : null}
             </div>
 
             {/* ── WHAT THEY BUILD ─────────────────────────────────────────────

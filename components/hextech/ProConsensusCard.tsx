@@ -25,6 +25,9 @@ import { buildRuneApplyBody } from "./runeApplyBody";
 import { applyItemSetsForBuild } from "./itemSetsApply";
 import type { ProConsensusItemsInput } from "./itemSetBody";
 import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/components/live/companionClient";
+import { aggregateRecordedSkillOrders } from "@/lib/skillOrderAggregate";
+import SkillOrderGrid from "./SkillOrderGrid";
+import type { SkillOrderModel } from "./skillOrder";
 
 // Sample size below which the fraction shown is more noise than signal — the
 // card still renders (a real user request, "Rocketbelt shows up a lot," can
@@ -108,6 +111,7 @@ type FetchState =
       status: "ok";
       model: ProConsensusModel;
       itemMeta: Map<number, ItemDetail>;
+      skillOrder: SkillOrderModel | null;
       /** OTP variant only — who the sample came from, for the footer. */
       otpPlayers: OtpPlayerSummary[];
     }
@@ -655,6 +659,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
             status: "ok",
             model: aggregateProConsensus(games, itemMeta),
             itemMeta,
+            skillOrder: aggregateRecordedSkillOrders(games.map((game) => game.skillOrder)),
             otpPlayers: players,
           });
         })
@@ -764,7 +769,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
     );
   }
 
-  const { model } = state;
+  const { model, skillOrder } = state;
   const lowSample = model.gamesTotal < LOW_SAMPLE_THRESHOLD;
 
   // ── Everything in the items column, as SLOTS ───────────────────────────────
@@ -1266,6 +1271,17 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
           )}
         </div>
       </div>
+
+      {skillOrder && (
+        <section className="mt-5">
+          <CardHeader>Skill order</CardHeader>
+          <SkillOrderGrid
+            model={skillOrder}
+            sampleLabel={`${skillOrder.sampleSize} of ${model.gamesTotal} pro games`}
+            missingLevelsContext="recorded sample"
+          />
+        </section>
+      )}
 
       {additionalRuneNotes.length > 0 && (
         <p className="text-[9.5px] text-mut/50 mt-1 mb-1">{additionalRuneNotes.join(" · ")}</p>

@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
 import { buildFeaturedModel, type FeaturedGame, type FeaturedMatchRow } from "@/lib/otp/featured";
+import type { SkillOrderModel } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -52,7 +53,7 @@ export interface FeaturedOtpResponse {
   gameLog: FeaturedGame[];
   runes: { page: unknown; games: number; pct: number } | null;
   spells: { spells: number[]; games: number; pct: number } | null;
-  skillOrder: { order: string[]; games: number } | null;
+  skillOrder: SkillOrderModel | null;
 }
 
 const EMPTY: FeaturedOtpResponse = {
