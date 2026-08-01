@@ -34,6 +34,12 @@ interface ChampionPickerProps {
    *  no way to tell which box did what. Defaults to the generic wording, so
    *  every other call site is unchanged. */
   placeholder?: string;
+  /** Focus the input and open the list on mount. For pickers that only exist
+   *  BECAUSE the user just clicked something to summon them (the /draft team
+   *  slots) — making them click a second time into the box before they can
+   *  type is a wasted interaction. Off by default so the always-present
+   *  pickers (Builds, /history) do not steal focus on page load. */
+  autoFocus?: boolean;
 }
 
 const LISTBOX_ID = "champ-listbox";
@@ -44,6 +50,7 @@ export default function ChampionPicker({
   onChange,
   withFavorites = false,
   placeholder = "Search champion…",
+  autoFocus = false,
 }: ChampionPickerProps) {
   // The accessible name tracks the visible placeholder rather than being pinned
   // to the generic wording — otherwise a screen-reader user hears "Search
@@ -68,6 +75,14 @@ export default function ChampionPicker({
   // handler recognize clicks inside the now-detached-from-containerRef list.
   const [mounted, setMounted] = useState(false);
   const [coords, setCoords] = useState<DropdownCoords | null>(null);
+
+  // Focus on mount when summoned. Deliberately calls .focus() rather than using
+  // the DOM `autoFocus` attribute: the existing onFocus handler is what opens
+  // the list and selects any current text, so routing through it keeps one code
+  // path for "the input became active" instead of two that can drift.
+  useEffect(() => {
+    if (autoFocus) inputRef.current?.focus();
+  }, [autoFocus]);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => setMounted(true), []);

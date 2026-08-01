@@ -373,6 +373,7 @@ function TeamSlots({
           <ChampionPicker
             value={null}
             placeholder={placeholder}
+            autoFocus
             onChange={(champ) => {
               onAdd(champ);
               setAddingSlot(null);
@@ -412,39 +413,39 @@ function RecommendationCard({
     : [];
 
   return (
-    <article className="relative flex min-w-0 flex-col rounded-xl border border-line bg-panel p-4 shadow-[0_8px_24px_rgba(0,0,0,0.16)]">
+    <article className="relative flex min-w-0 flex-col rounded-xl border border-line bg-panel p-3 shadow-[0_8px_24px_rgba(0,0,0,0.16)]">
       <span className={`absolute left-3 top-3 flex h-7 w-7 items-center justify-center rounded-full text-[12px] font-bold ${rank === 1 ? "bg-teal text-bg" : "bg-panel2 text-mut border border-line"}`}>
         {rank}
       </span>
       {candidate && entry ? (
         <>
-          <div className="flex justify-center pt-3">
-            <span className="h-24 w-full max-w-[230px] overflow-hidden rounded-lg border border-line-gold bg-black/30">
+          <div className="flex justify-center pt-1.5">
+            <span className="h-14 w-full max-w-[230px] overflow-hidden rounded-lg border border-line-gold bg-black/30">
               <IconWithFallback src={championSplashUrl(entry)} alt={`${entry.name} splash art`} fallbackGlyph={entry.name} className="h-full w-full object-cover object-[center_20%]" size={230} />
             </span>
           </div>
-          <div className="mt-3 text-center">
-            <h3 className="truncate text-[18px] font-bold text-txt">{entry.name}</h3>
+          <div className="mt-2 text-center">
+            <h3 className="truncate text-[16px] font-bold text-txt">{entry.name}</h3>
             <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
-              <span className="inline-flex rounded-full border border-line-gold bg-teal/10 px-2 py-1 text-[9px] font-bold tracking-[0.1em] text-teal">{status}</span>
+              <span className="inline-flex rounded-full border border-line-gold bg-teal/10 px-2 py-0.5 text-[9px] font-bold tracking-[0.1em] text-teal">{status}</span>
               {offMeta && <span className="inline-flex rounded-full border border-line-gold px-2 py-1 text-[9px] font-semibold tracking-[0.08em] text-mut">OFF-META</span>}
               {candidate.isPotential && <span className="inline-flex rounded-full border border-line-gold px-2 py-1 text-[9px] font-semibold tracking-[0.08em] text-mut">LOW SAMPLE</span>}
             </div>
           </div>
-          <div className="mt-4 text-center">
+          <div className="mt-2 text-center">
             <div className="flex items-baseline justify-center gap-1.5">
-              <p className="tabular-nums text-[28px] font-extrabold leading-none text-txt">{formatPercent(candidate.winRate)}</p>
+              <p className="tabular-nums text-[24px] font-extrabold leading-none text-txt">{formatPercent(candidate.winRate)}</p>
               <p className="text-[11px] text-mut">Win Rate</p>
             </div>
             <p className="mt-1 text-[11px] tabular-nums text-mut">{formatGames(candidate.totalGames)} games</p>
           </div>
-          <div className="mt-4 min-h-[46px] text-center">
+          <div className="mt-2 min-h-[34px] text-center">
             <p className="text-[12px] font-semibold text-txt">{candidate.floor !== null ? `Floor ${formatPercent(candidate.floor)}` : `${formatPercent(candidate.winRate)} estimated in this draft`}</p>
             <p className="mt-1 text-[10.5px] leading-4 text-mut">{support.length > 0 ? support.join(" · ") : "No supporting matchup figures available."}</p>
           </div>
         </>
       ) : (
-        <div className="flex min-h-[230px] flex-col items-center justify-center text-center">
+        <div className="flex min-h-[180px] flex-col items-center justify-center text-center">
           <span className="flex h-16 w-16 items-center justify-center rounded-full border border-dashed border-line text-2xl text-mut/60">—</span>
           <p className="mt-3 text-[13px] font-semibold text-txt">No honest pick yet</p>
           <p className="mt-1 max-w-[190px] text-[10.5px] leading-4 text-mut">This slot needs a distinct champion with the required evidence.</p>
@@ -455,7 +456,7 @@ function RecommendationCard({
         disabled={!candidate}
         onClick={() => candidate && onViewDetails(candidate.champId)}
         aria-label={candidate ? `View details for ${entry?.name ?? "champion"}` : "View details unavailable"}
-        className="mt-4 w-full rounded-lg border border-line py-2.5 text-[11px] font-bold text-txt transition-colors hover:border-line-gold hover:text-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-not-allowed disabled:text-mut/50"
+        className="mt-2.5 w-full rounded-lg border border-line py-2 text-[11px] font-bold text-txt transition-colors hover:border-line-gold hover:text-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-not-allowed disabled:text-mut/50"
       >
         View details →
       </button>
@@ -474,14 +475,14 @@ function MatchupGroup({
 }) {
   return (
     <div className="min-w-0">
-      <p className="mb-2 text-[9px] font-bold uppercase tracking-[0.14em] text-mut">{label}</p>
+      <p className="mb-1.5 text-[9px] font-bold uppercase tracking-[0.14em] text-mut">{label}</p>
       <div className="grid grid-cols-3 gap-2">
         {rows.length > 0 ? (
           rows.map((row) => {
             const entry = championEntry(champIcons, row.oppId);
             return (
               <div key={`${label}-${row.oppId}`} className="min-w-0 text-center">
-                <span className="mx-auto block h-8 w-8 overflow-hidden rounded-full bg-black/30">
+                <span className="mx-auto block h-7 w-7 overflow-hidden rounded-full bg-black/30">
                   <IconWithFallback src={entry.icon} alt={entry.name} fallbackGlyph={entry.name} className="h-full w-full object-cover" size={32} />
                 </span>
                 {/* truncate, NOT break-words. Three names share a card here, so
@@ -492,7 +493,7 @@ function MatchupGroup({
                 <span className="mt-1 block truncate text-[10px] leading-3 text-txt" title={entry.name}>
                   {entry.name}
                 </span>
-                <span className={`mt-1 block text-[10px] font-semibold tabular-nums ${row.winRate < 0.5 ? "text-bad" : "text-good"}`}>
+                <span className={`mt-0.5 block text-[10px] font-semibold tabular-nums ${row.winRate < 0.5 ? "text-bad" : "text-good"}`}>
                   {formatPercent(row.winRate)}
                 </span>
               </div>
@@ -525,9 +526,9 @@ function MatchupPreviewBlock({
   }
   const entry = championEntry(champIcons, candidate.champId);
   return (
-    <article className="rounded-xl border border-line bg-panel p-4">
+    <article className="rounded-xl border border-line bg-panel p-2.5">
       <div className="flex items-center gap-2.5">
-        <span className="h-9 w-9 flex-shrink-0 overflow-hidden rounded-full border border-line-gold bg-black/30">
+        <span className="h-8 w-8 flex-shrink-0 overflow-hidden rounded-full border border-line-gold bg-black/30">
           <IconWithFallback src={entry.icon} alt={entry.name} fallbackGlyph={entry.name} className="h-full w-full object-cover" size={36} />
         </span>
         <div className="min-w-0">
@@ -535,7 +536,7 @@ function MatchupPreviewBlock({
           <p className="text-[10px] text-mut">vs Popular Picks</p>
         </div>
       </div>
-      <div className="mt-4 grid grid-cols-1 gap-5 sm:grid-cols-2">
+      <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <MatchupGroup label="Worst" rows={preview?.worst ?? []} champIcons={champIcons} />
         <MatchupGroup label="Best" rows={preview?.best ?? []} champIcons={champIcons} />
       </div>
@@ -637,7 +638,7 @@ function DetailedRankings({
 
       {grid ? (
         <div className="grid grid-cols-1 gap-2 p-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-          {visibleRows.map((row) => {
+          {visibleRows.map((row, position) => {
             const rowDelta = delta(row.candidate);
             const offMeta = isOffMetaLaneShare(row.candidate.laneShare);
             return (
@@ -648,7 +649,7 @@ function DetailedRankings({
                 className={`min-w-0 rounded-lg border p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${selectedChampionId === row.candidate.champId ? "border-teal bg-teal/8" : "border-line hover:border-line-gold"}`}
               >
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] tabular-nums text-mut">{row.candidate.rank}</span>
+                  <span className="text-[10px] tabular-nums text-mut">{position + 1}</span>
                   <span className="h-8 w-8 flex-shrink-0 overflow-hidden rounded-md bg-black/30">
                     <IconWithFallback src={row.icon} alt={row.name} fallbackGlyph={row.name} className="h-full w-full object-cover" size={32} />
                   </span>
@@ -679,12 +680,12 @@ function DetailedRankings({
               </tr>
             </thead>
             <tbody>
-              {visibleRows.map((row) => {
+              {visibleRows.map((row, position) => {
                 const rowDelta = delta(row.candidate);
                 const offMeta = isOffMetaLaneShare(row.candidate.laneShare);
                 return (
                   <tr key={row.candidate.champId} className={`border-b border-line/60 ${selectedChampionId === row.candidate.champId ? "bg-teal/8" : "hover:bg-white/[0.02]"}`}>
-                    <td className="px-3 py-3 text-[10px] tabular-nums text-mut">{row.candidate.rank}</td>
+                    <td className="px-3 py-3 text-[10px] tabular-nums text-mut">{position + 1}</td>
                     <td className="px-2 py-3">
                       <button type="button" onClick={() => onSelect(row.candidate.champId)} className="flex min-w-0 items-center gap-2 text-left">
                         <span className="h-8 w-8 flex-shrink-0 overflow-hidden rounded-md bg-black/30">
@@ -1148,9 +1149,9 @@ export default function DraftPage() {
   const detailAverage = laneAverage(laneStats);
 
   return (
-    <div className="min-w-0 overflow-x-clip px-4 py-5 sm:px-6 lg:px-8 lg:py-6">
+    <div className="min-w-0 overflow-x-clip px-4 py-3 sm:px-6 lg:px-8 lg:py-4">
       <div className="mx-auto min-w-0 max-w-[1560px]">
-        <header className="mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-line pb-4">
+        <header className="mb-3 flex flex-wrap items-start justify-between gap-4 border-b border-line pb-2.5">
           <div className="min-w-0">
             <p className="flex items-center gap-1.5 text-[11px] tabular-nums text-mut">
               <span aria-hidden="true" className="text-teal">ⓘ</span>
@@ -1169,13 +1170,13 @@ export default function DraftPage() {
           </div>
         )}
 
-        <section className="mb-6">
-          <h1 className="text-[28px] font-extrabold tracking-[-0.03em] text-txt sm:text-[34px]">DRAFT ASSISTANT</h1>
-          <p className="mt-1 text-[13px] text-mut">Get the best pick for your draft.</p>
+        <section className="mb-3">
+          <h1 className="text-[22px] font-extrabold tracking-[-0.03em] text-txt sm:text-[26px]">DRAFT ASSISTANT</h1>
+          <p className="mt-0.5 text-[12px] text-mut">Get the best pick for your draft.</p>
         </section>
 
-        <div className="grid min-w-0 grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,7fr)_minmax(320px,3fr)]">
-          <div className="min-w-0 space-y-5">
+        <div className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,7fr)_minmax(320px,3fr)]">
+          <div className="min-w-0 space-y-2">
             <section className="grid min-w-0 grid-cols-1 overflow-visible rounded-xl border border-line bg-panel lg:grid-cols-[minmax(136px,0.85fr)_minmax(176px,1.6fr)_minmax(0,1.7fr)_36px_minmax(0,1.7fr)]">
               <label className="min-w-0 border-b border-line p-4 lg:border-b-0 lg:border-r">
                 <span className="mb-2 block text-[9px] font-bold uppercase tracking-[0.14em] text-mut">YOUR ROLE</span>
@@ -1188,7 +1189,7 @@ export default function DraftPage() {
                   </svg>
                 </span>
               </label>
-              <div className="min-w-0 border-b border-line p-4 lg:border-b-0 lg:border-r">
+              <div className="min-w-0 border-b border-line p-3 lg:border-b-0 lg:border-r">
                 <span className="mb-2 block text-[9px] font-bold uppercase tracking-[0.14em] text-mut">YOUR PICK <span className="font-normal normal-case tracking-normal">(optional)</span></span>
                 <div className="relative min-w-0 [&>div]:min-w-0 [&>div>input]:min-w-0 [&>div>input]:pr-8">
                   <ChampionPicker value={hoverChamp} onChange={handleHoverChange} placeholder="Select a champion" />
@@ -1199,19 +1200,19 @@ export default function DraftPage() {
                   {hover !== null && <button type="button" onClick={handleClearHover} aria-label="Clear your champion" className="absolute right-8 top-1/2 -translate-y-1/2 rounded px-1 text-[16px] leading-none text-mut hover:text-bad">×</button>}
                 </div>
               </div>
-              <div className="min-w-0 border-b border-line p-4 lg:border-b-0 lg:border-r">
+              <div className="min-w-0 border-b border-line p-3 lg:border-b-0 lg:border-r">
                 <TeamSlots label="ALLIED TEAM" primaryId={hover} additionalIds={allyIds} champIcons={champIcons} placeholder="Add an ally" onAdd={handleAddAlly} onRemove={handleRemoveAlly} />
               </div>
               <div className="flex items-center justify-center border-b border-line px-3 py-2 text-[12px] font-bold lowercase text-mut lg:border-b-0 lg:border-r">vs</div>
-              <div className="min-w-0 p-4">
+              <div className="min-w-0 p-3">
                 <TeamSlots label="ENEMY TEAM" primaryId={null} additionalIds={enemyIds} champIcons={champIcons} placeholder="Add an enemy" onAdd={handleAddEnemy} onRemove={handleRemoveEnemy} onToggleLaneOpponent={handleToggleLaneOpponent} effectiveLaneOpponentId={effectiveLaneOpponentId} laneOpponentId={laneOpponentId} />
               </div>
             </section>
 
-            <div className="flex items-center gap-2 rounded-lg border border-line bg-panel2/60 px-4 py-3 text-[11px] text-mut"><span aria-hidden="true" className="text-[14px] text-teal">✨</span>Recommendations update as you add enemies and change your role.</div>
+            <div className="flex items-center gap-2 rounded-lg border border-line bg-panel2/60 px-4 py-2 text-[11px] text-mut"><span aria-hidden="true" className="text-[14px] text-teal">✨</span>Recommendations update as you add enemies and change your role.</div>
 
             <section>
-              <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+              <div className="mb-2 flex flex-wrap items-end justify-between gap-3">
                 <div><h2 className="text-[12px] font-bold tracking-[0.14em] text-txt">TOP RECOMMENDATIONS</h2><p className="mt-1 text-[11px] text-mut">Our top picks for this draft right now</p></div>
                 <button type="button" aria-expanded={showRecommendationHelp} onClick={() => setShowRecommendationHelp((value) => !value)} className="rounded-full border border-line px-3 py-1.5 text-[10px] font-semibold text-mut hover:border-line-gold hover:text-txt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg">ⓘ How recommendations work</button>
               </div>
@@ -1247,14 +1248,21 @@ export default function DraftPage() {
               </div>
             </section>
 
-            <section className="rounded-xl border border-line bg-panel p-3">
+            <section className="rounded-xl border border-line bg-panel p-2.5">
               <div className="grid min-w-0 grid-cols-1 items-center gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
                 <label className="min-w-0"><span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-mut"><span aria-hidden="true" className="text-[13px] text-teal">◈</span>Min. Pick Rate</span><select value={String(minPickRate)} onChange={(event) => setMinPickRate(Number(event.target.value))} className="w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-[11px] text-txt outline-none focus:border-teal"><option value="0">0%</option><option value="0.005">0.5%</option><option value="0.01">1.0%</option><option value="0.02">2.0%</option><option value="0.05">5.0%</option></select></label>
                 {/* justify-START, not justify-between. `between` pushed the switch
                     to the far edge of its grid cell, where it read as belonging to
                     the "Minimum Games" control beside it rather than to its own
                     label. It must sit next to the thing it toggles. */}
-                <div className="flex min-w-0 items-end justify-start gap-3"><div><span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-mut"><span aria-hidden="true" className="text-[13px] text-teal">✧</span>Include Off-Meta</span><span className="block text-[11px] text-txt">Show niche picks</span></div><button type="button" role="switch" aria-checked={includeOffMeta} aria-label="Include off-meta picks" onClick={() => setIncludeOffMeta((value) => !value)} className={`relative mb-0.5 h-5 w-9 flex-shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${includeOffMeta ? "bg-teal" : "bg-line"}`}><span className={`absolute top-1 h-3 w-3 rounded-full bg-txt transition-transform ${includeOffMeta ? "translate-x-5" : "translate-x-1"}`} /></button></div>
+                {/* The knob previously had `absolute top-1` and NO `left`, so it started from
+    its static position rather than the track's left edge and the translate
+    carried it outside the pill — the "clunky" the user saw. `left-0` anchors
+    it; the geometry then works out exactly (36px track, 12px knob, 4px inset
+    each end, so the travel is 4px → 20px).
+    The whole control is one <button> now, so the label text toggles too — a
+    36px hit target beside its own words was needlessly fiddly to hit. */}
+<button type="button" role="switch" aria-checked={includeOffMeta} onClick={() => setIncludeOffMeta((value) => !value)} className="flex min-w-0 items-end justify-start gap-3 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"><span><span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-mut"><span aria-hidden="true" className="text-[13px] text-teal">✧</span>Include Off-Meta</span><span className="block text-[11px] text-txt">Show niche picks</span></span><span aria-hidden="true" className={`relative mb-0.5 h-5 w-9 flex-shrink-0 rounded-full transition-colors motion-reduce:transition-none ${includeOffMeta ? "bg-teal" : "bg-line"}`}><span className={`absolute left-0 top-1 h-3 w-3 rounded-full bg-txt transition-transform duration-150 motion-reduce:transition-none ${includeOffMeta ? "translate-x-5" : "translate-x-1"}`} /></span></button>
                 <label className="min-w-0"><span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-mut"><span aria-hidden="true" className="text-[13px] text-teal">⌁</span>Minimum Games</span><select value={String(minimumGames)} onChange={(event) => setMinimumGames(Number(event.target.value))} className="w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-[11px] text-txt outline-none focus:border-teal"><option value="0">Any games</option><option value="1000">1,000</option><option value="5000">5,000</option><option value="10000">10,000</option></select></label>
                 <button type="button" aria-pressed={filtersExpanded} onClick={() => setFiltersExpanded((value) => !value)} className="flex items-center justify-center gap-1 rounded-md border border-line px-3 py-2 text-[11px] font-semibold text-mut hover:border-line-gold hover:text-txt">⚙ Filters</button>
               </div>
@@ -1263,14 +1271,14 @@ export default function DraftPage() {
 
 
             <section>
-              <div className="grid grid-cols-1 gap-3 border-b border-line pb-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="grid grid-cols-1 gap-2 border-b border-line pb-2 sm:grid-cols-2 lg:grid-cols-4">
                 <p className="text-[10px] leading-4 text-mut"><strong className="text-[10px] tracking-[0.1em] text-txt">WIN RATE</strong><br />Estimated win rate with this pick in this draft.</p>
                 <p className="text-[10px] leading-4 text-mut"><strong className="text-[10px] tracking-[0.1em] text-txt">FLOOR</strong><br />Average win rate across the worst 10% of matchups you&apos;re likely to face.</p>
                 <p className="text-[10px] leading-4 text-mut"><strong className="text-[10px] tracking-[0.1em] text-txt">PICK RATE</strong><br />How often this champion is played in this role.</p>
                 <p className="text-[10px] leading-4 text-mut"><strong className="text-[10px] tracking-[0.1em] text-txt">DIFFICULTY</strong><br />How hard the champion is to master.</p>
               </div>
 
-              <div className="mb-3 flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-[12px] font-bold tracking-[0.14em] text-txt">WORST MATCHUPS PREVIEW</h2><p className="mt-1 text-[11px] text-mut">Your top picks vs popular enemy champions</p></div><button type="button" onClick={() => handleAssistantViewChange("counters")} className="text-[10.5px] font-semibold text-teal hover:text-teal-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal">View all matchups →</button></div>
+              <div className="mb-2 flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-[12px] font-bold tracking-[0.14em] text-txt">WORST MATCHUPS PREVIEW</h2><p className="mt-1 text-[11px] text-mut">Your top picks vs popular enemy champions</p></div><button type="button" onClick={() => handleAssistantViewChange("counters")} className="text-[10.5px] font-semibold text-teal hover:text-teal-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal">View all matchups →</button></div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                 {topCards.map((card) => <MatchupPreviewBlock key={card.slot} candidate={card.candidate} preview={card.candidate ? matchupPreviewMap.get(card.candidate.champId) : undefined} champIcons={champIcons} />)}
               </div>

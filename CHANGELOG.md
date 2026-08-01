@@ -2,6 +2,32 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.90.2] — 2026-08-01 — Fits on one screen, types on one click
+
+### Changed
+- **`/draft` fits without scrolling.** Measured at 1920×1125: page height 1439 → **1168**, overflow
+  314px → 43px, and the 43 is the legal footer. Most of it came from the recommendation cards
+  (399px → ~270 each: splash 96→56, win rate 28→24px, tighter padding throughout), the rest from
+  page rhythm — title 34→26px, section spacing 20→8px, and trimmed padding on the control row,
+  filter row, legend and matchup cards. Nothing was removed; every section the redesign shipped is
+  still on the page.
+  Below roughly 1000px of viewport height it still scrolls, which is unavoidable with this much
+  content — a 768px laptop cannot hold it.
+
+### Fixed
+- **Clicking a team `+` now focuses the picker immediately.** It rendered the input but left focus
+  where it was, so you had to click a second time before you could type. New opt-in `autoFocus` on
+  `ChampionPicker`, off by default so the always-present pickers on Builds and /history do not
+  steal focus on load.
+- **The off-meta switch knob rendered outside its own track.** It was `absolute` with no `left`, so
+  it started from its static position and the translate carried it out of the pill — the "clunky"
+  look. `left-0` anchors it; the geometry then lands exactly (36px track, 12px knob, 4px inset).
+  The label is part of the button now, so the words toggle it too.
+- **The rankings `#` column ran 1,2,1,3,4,2,5,3…** with an enemy entered. Two source lists (main
+  and low-sample) each carried their own rank, and the merged table is sorted by win rate, so the
+  numbers came from the source arrays rather than display order. Numbered by position now.
+  Found by adding an enemy and reading the column — not visible on the default page.
+
 ## [0.90.1] — 2026-08-01 — The team picker was a raw OS dropdown listing every champion twice
 
 User-reported, one click into the shipped page. Both bugs were invisible in a screenshot of the
