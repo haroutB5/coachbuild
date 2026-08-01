@@ -151,7 +151,7 @@ describe("GET /api/mystats/summary", () => {
 
   it("v0.74: nOnBuild/nOffBuild are the real row counts behind winrateOnBuild/winrateOffBuild, distinct from buildAdherencePct's resolved-row-% denominator", async () => {
     mockGetMyAccount.mockResolvedValueOnce({ puuid: "p", riotId: "X#EUW", region: "EUW", routing: {} });
-    // The route issues three separate SQL calls (records, adherence rows, prior-split/recent) --
+    // The route issues separate SQL calls for records, adherence rows, and the recent window --
     // key the mock off the query text so each returns its own fixture.
     mockSql.mockImplementation((strings: TemplateStringsArray) => {
       const sqlText = strings.join("");

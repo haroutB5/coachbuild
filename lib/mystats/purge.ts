@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// lib/mystats/purge.ts — season/split-boundary purge orchestration for
+// lib/mystats/purge.ts — season-boundary purge orchestration for
 // coachbuild.my_matches, extracted out of scripts/purge-mystats-preseason.mjs
 // so it's testable with a mocked sql (same "queries in an orchestration
 // function, script just calls + prints" split as lib/mystats/ingest.ts).
@@ -18,17 +18,12 @@
 // `rowsKept` below are therefore totals across every linked account, not the
 // active one's. Read them that way.
 //
-// PURGE BOUNDARY (v0.51, split tagging): the cutoff used to actually DELETE
-// rows is now max(SEASON_START_MS, prior-split start) — see
-// lib/mystats/season.ts's SPLIT_BOUNDARIES/priorSplitStartMs. This ALWAYS
-// keeps the current split + the prior split intact (the prior split is what
-// the My Stats delta compares against — see lib/mystats/aggregate.ts's
-// computePriorSplitWinrate) and only retires data from splits before that.
-// Right now (still within split 2) this boundary is numerically IDENTICAL to
-// SEASON_START_MS (split 1's start, the only split preceding split 2) — it
-// only diverges once a 4th split exists and split 3 becomes current. Both
-// `seasonStartIso` (unchanged, back-compat) and the new `purgeBoundaryIso`
-// are reported so a caller can tell the two apart once they do diverge.
+// PURGE BOUNDARY (2026-08-01, season retention): the cutoff used to actually
+// DELETE rows is the current season start. The split column remains stored for
+// ingest metadata, but it is no longer a retention unit. Keep the Math.max
+// lower-bound guard explicit so a future boundary change can never move the
+// DELETE earlier than SEASON_START_MS. Both `seasonStartIso` (back-compat) and
+// `purgeBoundaryIso` are retained in the result and now intentionally coincide.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { getSql } from "@/lib/pro/db";
@@ -36,7 +31,6 @@ import {
   SEASON_START_MS,
   SEASON_PATCH_PREFIX,
   checkSeasonAnomaly,
-  priorSplitStartMs,
   type MySeasonCheckRow,
 } from "./season";
 
@@ -49,9 +43,9 @@ export interface SeasonPurgeResult {
    *  See `purgeBoundaryIso` for the boundary actually used by this run's
    *  DELETE (the two coincide today; see this file's header). */
   seasonStartIso: string;
-  /** The actual DELETE cutoff for this run: max(SEASON_START_MS, prior-split
-   *  start). Rows with game_creation before this are purged; the prior split
-   *  and everything newer always survive. */
+  /** The actual DELETE cutoff for this run: the season boundary, protected by
+   *  the SEASON_START_MS lower-bound guard. Rows before it are purged; every
+   *  game in the current season survives regardless of its split tag. */
   purgeBoundaryIso: string;
   rowsBefore: number;
   rowsDeleted: number;
@@ -74,8 +68,7 @@ interface RawMatchRow {
 }
 
 export async function runSeasonPurge(
-  sql: NonNullable<ReturnType<typeof getSql>>,
-  now: () => number = Date.now
+  sql: NonNullable<ReturnType<typeof getSql>>
 ): Promise<SeasonPurgeResult> {
   const before = (await sql`
     SELECT match_id, game_creation, patch FROM coachbuild.my_matches
@@ -89,10 +82,10 @@ export async function runSeasonPurge(
   }
 
   const seasonStartIso = new Date(SEASON_START_MS).toISOString();
-  // See this file's header — the boundary is never allowed to move EARLIER
-  // than SEASON_START_MS (Math.max), so a misconfigured/future split table
-  // can never resurrect genuinely pre-season data.
-  const purgeBoundaryMs = Math.max(SEASON_START_MS, priorSplitStartMs(now) ?? SEASON_START_MS);
+  // See this file's header — keep the boundary explicitly protected by Math.max
+  // even though the season is currently the only retention candidate.
+  const seasonRetentionBoundaryMs = SEASON_START_MS;
+  const purgeBoundaryMs = Math.max(SEASON_START_MS, seasonRetentionBoundaryMs);
   const purgeBoundaryIso = new Date(purgeBoundaryMs).toISOString();
   const deleted = (await sql`
     DELETE FROM coachbuild.my_matches WHERE game_creation < ${purgeBoundaryIso}::timestamptz

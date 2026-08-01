@@ -42,7 +42,7 @@
 // heading says how many. The KPI strip above this panel on the page is SEASON
 // totals over a different array. The two must never borrow numbers from each
 // other (v0.73.1). The one exception is the ranked W-L inside `chips.rank`,
-// which is Riot's own split-long tally and is labelled as such.
+// which is Riot's own ranked-record tally and is labelled as such.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import KpiStrip, { type KpiItem } from "@/components/hextech/KpiStrip";
@@ -90,18 +90,20 @@ export interface MatchPerformancePanelProps {
   games: RecentGameRow[];
   iconOf: IconLookup;
   chips: MatchPerformanceChips;
-  /** Account-wide CURRENT-SPLIT CS/min and its denominator (engy §1d). A
+  /** Account-wide current-season CS/min and its denominator (engy §1d). A
    *  different window from `games` — labelled as such in the cell's note, never
    *  silently presented as a figure over the bars below. */
-  splitCsPerMin: number | null;
-  splitCsGames: number;
-  /** Total games played THIS SPLIT (e.g. `computeMyStatsOverall(records).games`)
+  seasonCsPerMin: number | null;
+  seasonCsGames: number;
+  /** Coverage-aware season phrase supplied by the page's shared scope helper. */
+  scopeLabel: string;
+  /** Total games played THIS SEASON (e.g. `computeMyStatsOverall(records).games`)
    *  — NOT `games.length`/`chips.n`, which is the capped 20-game display
-   *  window and can be smaller than the real split total. This is the honest
-   *  denominator `formatCsNote` compares `splitCsGames` against to decide
+   *  window and can be smaller than the real season total. This is the honest
+   *  denominator `formatCsNote` compares `seasonCsGames` against to decide
    *  whether "only" belongs in the CS tile's caption (2026-07-31 audit P2
    *  re-score follow-up — see that function's doc comment). */
-  totalSplitGames: number;
+  totalSeasonGames: number;
   /** "33 minutes ago", or null when nothing is known. */
   lastActive: string | null;
 }
@@ -110,14 +112,15 @@ export default function MatchPerformancePanel({
   games,
   iconOf,
   chips,
-  splitCsPerMin,
-  splitCsGames,
-  totalSplitGames,
+  seasonCsPerMin,
+  seasonCsGames,
+  scopeLabel,
+  totalSeasonGames,
   lastActive,
 }: MatchPerformancePanelProps) {
   const avg = computeAverageKda(games);
   const winrate = chips.n > 0 ? chips.wins / chips.n : 0;
-  const csQuotable = csRateIsQuotable(splitCsPerMin, splitCsGames);
+  const csQuotable = csRateIsQuotable(seasonCsPerMin, seasonCsGames);
 
   const items: KpiItem[] = [
     {
@@ -133,19 +136,27 @@ export default function MatchPerformancePanel({
       label: "Avg. CS/min",
       // Null renders KpiStrip's em dash — an honest absence. Never a 0, which
       // is a real farming figure.
-      value: csQuotable ? splitCsPerMin : null,
+      value: csQuotable ? seasonCsPerMin : null,
       format: (n) => n.toFixed(1),
       countUp: true,
       // The note carries this cell's OWN denominator, which is deliberately not
       // the window the bars below are drawn over. formatCsNote only says
-      // "only" when csGames is a genuine subset of totalSplitGames (2026-07-31
-      // audit P2 re-score follow-up) -- when quotable, the split-total phrasing
+      // "only" when csGames is a genuine subset of totalSeasonGames (2026-07-31
+      // audit P2 re-score follow-up) -- when quotable, the season-total phrasing
       // is identical either way, so this always calls the same helper.
-      note: formatCsNote(splitCsGames, totalSplitGames),
+      note: formatCsNote(seasonCsGames, totalSeasonGames, scopeLabel),
     },
     {
       key: "winrate",
-      label: `Win rate, last ${chips.n} (this split)`,
+      // NOT "last N games <scopeLabel>". The panel heading directly above
+      // already reads "(last N games this season)", so repeating the scope here
+      // bought nothing and cost the strip's baseline: at 1440px the longer
+      // string wrapped to 3 lines against the neighbouring cells' 1, and on an
+      // account still filling history ("...so far this season") to 4, dropping
+      // this cell's note 13-26px below the others. KpiStrip reserves a fixed
+      // label row precisely so the labels DON'T stair-step -- see its header.
+      // 2026-08-01 audit P2.
+      label: `Win rate, last ${chips.n}`,
       value: chips.n > 0 ? winrate * 100 : null,
       format: (n) => `${n.toFixed(1)}%`,
       valueClassName: chips.lowSample ? "text-mut" : winrate >= 0.5 ? "text-good" : "text-bad",
@@ -169,11 +180,11 @@ export default function MatchPerformancePanel({
     <div className="min-w-0 bg-panel border border-line rounded-xl px-3.5 sm:px-4 pt-3.5 pb-3.5">
       <PanelHeading meta={lastActive ? `Last active: ${lastActive}` : undefined}>
         {/* 2026-07-31 audit P2 (#3): `games` (and therefore chips.n) is now
-            scoped to the CURRENT SPLIT (app/api/mystats/summary/route.ts) —
-            "this split" makes that scope explicit rather than implying a
+            scoped to the CURRENT SEASON (app/api/mystats/summary/route.ts) —
+            the season phrase makes that scope explicit rather than implying a
             fixed rolling window of N games regardless of when they were
             played. */}
-        Match performance {chips.n > 0 ? `(last ${chips.n} games this split)` : ""}
+        Match performance {chips.n > 0 ? `(last ${chips.n} games ${scopeLabel})` : ""}
       </PanelHeading>
 
       {/*
@@ -208,7 +219,7 @@ export default function MatchPerformancePanel({
           </Chip>
         )}
         {chips.rank.record && (
-          <Chip tone="neutral" title="Riot's own ranked solo/duo record for the current split — a longer window than the games charted below">
+          <Chip tone="neutral" title="Riot's own ranked solo/duo record — a longer window than the games charted below">
             Ranked {chips.rank.record}
           </Chip>
         )}

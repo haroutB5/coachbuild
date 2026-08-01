@@ -6,12 +6,11 @@ import {
   summarizeByChampion,
   summarizeMatchup,
   computeBuildAdherence,
-  computePriorSplitWinrate,
   computeCsSummary,
   buildRecentGames,
   type MyMatchRecord,
 } from "@/lib/mystats/aggregate";
-import { SEASON_LABEL, currentSplitNumber } from "@/lib/mystats/season";
+import { SEASON_LABEL } from "@/lib/mystats/season";
 import { COUNTED_QUEUE_IDS } from "@/lib/mystats/queues";
 import { readHistoryComplete } from "@/lib/mystats/ingest";
 import { refreshStaleRanks, UNKNOWN_RANK } from "@/lib/mystats/rank";
@@ -44,10 +43,6 @@ interface AdherenceRow {
   win: boolean;
 }
 
-interface PriorSplitRow {
-  win: boolean;
-}
-
 interface RecentRow {
   champion_id: number;
   role: number;
@@ -72,7 +67,6 @@ const EMPTY_STATS = {
   winrateOffBuild: null as number | null,
   nOnBuild: null as number | null,
   nOffBuild: null as number | null,
-  priorSplitWinrate: null as number | null,
   // CS headline. csGames 0 is a REAL count (zero games backed it), which is
   // why it is 0 and not null, while csPerMin is null because there is no rate
   // to state -- the same "count vs figure" split nOnBuild/nOffBuild use.
@@ -119,27 +113,28 @@ function parseIntParam(raw: string | null): number | null | undefined {
  * a future UI can render the scope without re-deriving/duplicating the
  * boundary constant — NOT built here (backend-only ship; see HANDOFF).
  *
- * SPLIT SCOPING + BUILD ADHERENCE (v0.51, additive): `records`/`matchup` are
- * now filtered to the CURRENT split (lib/mystats/season.ts's
- * currentSplitNumber) on top of the existing role/championId filters — see
- * that file's header for the split-boundary source. Additional top-level,
- * ACCOUNT-WIDE (never role/championId-scoped) fields:
- *  - `buildAdherencePct`/`winrateOnBuild`/`winrateOffBuild`: current-split
+ * SEASON SCOPE + BUILD ADHERENCE (2026-08-01): every stored row is already
+ * bounded to the current season by ingest/storage (lib/mystats/season.ts,
+ * lib/mystats/ingest.ts). The read path therefore uses the active account's
+ * full stored season history and applies no `split` predicate; the split column
+ * remains ingest metadata only. `records`/`matchup` still honor the optional
+ * role/championId filters. Additional top-level, ACCOUNT-WIDE (never
+ * role/championId-scoped) fields:
+ *  - `buildAdherencePct`/`winrateOnBuild`/`winrateOffBuild`: season-wide
  *    build-adherence stats (lib/mystats/aggregate.ts's computeBuildAdherence)
- *    — null when no row in the current split has a resolved recommendation
- *    yet (see lib/mystats/adherence.ts's null/false distinction).
+ *    — null when no season row has a resolved recommendation yet (see
+ *    lib/mystats/adherence.ts's null/false distinction).
  *  - `nOnBuild`/`nOffBuild` (v0.74, additive): the row counts BEHIND
  *    `winrateOnBuild`/`winrateOffBuild` respectively — same null-exactly-
  *    when-the-corresponding-winrate-is-null convention, never a fabricated
  *    0. Lets a consumer refuse to render a winrate delta computed over a
  *    handful of games as if it meant the same thing as one over hundreds —
  *    see components/hextech/myStats.ts's computeBuildWinrateDelta.
- *  - `priorSplitWinrate`: overall win rate for the PRIOR split (not
- *    role/championId-scoped — the whole-account delta comparison point), or
- *    null when there is no prior split yet (still in split 1).
- *  - `recentGames`: latest RECENT_GAMES_LIMIT games account-wide (any split, any role/champ),
- *    newest first — a dashboard strip, deliberately independent of every
- *    other filter on this route.
+ *  - `recentGames`: latest RECENT_GAMES_LIMIT games account-wide (any role/
+ *    champion), newest first — a dashboard strip, deliberately independent of
+ *    every other filter on this route. Its rows are still season-bounded by
+ *    ingest/storage, and its queue predicate is the same ranked solo/duo
+ *    predicate as every other my_matches read.
  * All of the above are DISPLAY ONLY — see PersonalRecord's doc comment
  * (lib/draft/recommend.ts) for the no-blending rule this inherits.
  *
@@ -210,9 +205,6 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const split = currentSplitNumber();
-    const priorSplit = split - 1;
-
     // EVERY query below is scoped to `account.puuid` (migration 0020) AND to
     // COUNTED_QUEUE_IDS (2026-07-30). Two invariants, same reason.
     //
@@ -238,7 +230,6 @@ export async function GET(req: NextRequest) {
       FROM coachbuild.my_matches
       WHERE puuid = ${account.puuid}
         AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
-        AND split = ${split}
         AND (${role ?? null}::smallint IS NULL OR role = ${role ?? null})
         AND (${championId ?? null}::integer IS NULL OR champion_id = ${championId ?? null})
     `) as unknown as Row[];
@@ -256,31 +247,16 @@ export async function GET(req: NextRequest) {
     const matchup =
       championId != null && oppChampionId != null ? summarizeMatchup(records, oppChampionId) : null;
 
-    // Account-wide (never role/championId-scoped) current-split adherence --
+    // Account-wide (never role/championId-scoped) season adherence --
     // see this route's doc comment.
     const adherenceRows = (await sql`
       SELECT on_wpa_build, win FROM coachbuild.my_matches
       WHERE puuid = ${account.puuid}
         AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
-        AND split = ${split}
     `) as unknown as AdherenceRow[];
     const { buildAdherencePct, winrateOnBuild, winrateOffBuild, nOnBuild, nOffBuild } = computeBuildAdherence(
       adherenceRows.map((r) => ({ win: r.win, onWpaBuild: r.on_wpa_build ?? null }))
     );
-
-    // No prior split yet (still in split 1) -- skip the query entirely
-    // rather than asking for split=0, which would just be an empty result.
-    const priorSplitWinrate =
-      priorSplit >= 1
-        ? computePriorSplitWinrate(
-            (await sql`
-              SELECT win FROM coachbuild.my_matches
-              WHERE puuid = ${account.puuid}
-                AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
-                AND split = ${priorSplit}
-            `) as unknown as PriorSplitRow[]
-          )
-        : null;
 
     const recentRows = (await sql`
       SELECT champion_id, role, win, kills, deaths, assists, on_wpa_build, game_creation,
@@ -292,21 +268,13 @@ export async function GET(req: NextRequest) {
         -- the newest 20 stored rows on the active account were flex/normal/
         -- quickplay games, so nearly half the chart was not solo queue.
         AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
-        -- CURRENT SPLIT ONLY (2026-07-31 audit P2). This strip used to ignore
-        -- the split column entirely while every OTHER figure on this response
-        -- (records, adherence, priorSplitWinrate) is split-scoped -- on an account with
-        -- only 2 solo-queue games in the current split, 18 of the "last 20"
-        -- bars were leftover April games from the prior split, and "WIN RATE,
-        -- LAST 20: 70.0%" silently blended two splits into one number. Same
-        -- denominator discipline as every other query on this route now.
-        AND split = ${split}
       ORDER BY game_creation DESC
       -- 20, not 5: the Match Performance panel is headed "(Last 20 Games)" and
       -- its bar chart is sized for that. At 5 the heading was a claim the data
       -- did not back, which is the same defect class as an unlabelled partial
       -- history -- just smaller. The panel renders however many rows come back,
-      -- so a newly-linked account with 3 games (now honestly reduced by the
-      -- split filter above) still reads correctly -- MatchPerformanceChips.n
+      -- so a newly-linked account with 3 games (now honestly limited by the
+      -- season/queue scope) still reads correctly -- MatchPerformanceChips.n
       -- and the panel heading both derive from the actual array length, never
       -- a hardcoded 20.
       LIMIT ${RECENT_GAMES_LIMIT}
@@ -391,7 +359,7 @@ export async function GET(req: NextRequest) {
     // one fact is precisely the pattern that silently misses the next fix
     // (CLAUDE.md gotcha (dd)). Pinned by a test asserting reference identity.
     const championPool = summarizeByChampion(records);
-    // Account-wide CS headline, CURRENT SPLIT -- the same scope
+    // Account-wide CS headline, full season -- the same scope
     // buildAdherencePct uses, and re-aggregated from the raw rows rather than
     // averaged out of championPool's per-champion rates (see computeCsSummary).
     const { csPerMin, csGames } = computeCsSummary(records);
@@ -428,7 +396,6 @@ export async function GET(req: NextRequest) {
         winrateOffBuild,
         nOnBuild,
         nOffBuild,
-        priorSplitWinrate,
         csPerMin,
         csGames,
         ...activeRank,

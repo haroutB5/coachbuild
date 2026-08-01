@@ -161,7 +161,7 @@ export default function AccountCardGrid({
                     // filter landed. The QUEUE RULE itself lives server-side
                     // (lib/mystats/queues.ts); this is a label, not a second
                     // copy of it, and no queue id appears on the client.
-                    title="Solo-queue matches stored for this account, across every split"
+                    title="Solo-queue matches stored for this account this season"
                   >
                     {/* "141g", not "141g stored". MEASURED, not trimmed for
                         taste: with the win rate now sharing the right-hand

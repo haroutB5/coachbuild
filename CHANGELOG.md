@@ -2,6 +2,49 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.88.0] — 2026-08-01 — One season, no splits
+
+User directive: "Don't separate games into splits. I just want all games from the same season
+counted together." My Stats now has exactly one scope.
+
+### Changed
+- **My Stats counts the whole season, not the current split.** Every read in
+  `app/api/mystats/summary/route.ts` dropped its `AND split = ${split}` predicate. On the account
+  that prompted this, the page went from 2 games to 142 — the games were always stored and
+  correctly split-tagged; only the read hid them. The account that looked healthy was truncated
+  too (138 stored, 84 shown), so this was not a one-account symptom.
+  This closes a visible contradiction: the account card renders a season figure ("142g · 60.6%")
+  directly above panels that were rendering a split figure, with nothing saying the denominators
+  differed. It also reconciles `/draft` with `/mystats` — draft's personal badges were never
+  split-scoped, so the two surfaces had been giving different answers for the same data.
+- **Every scope label comes from one helper.** `getMyStatsScopeLabels` in
+  `components/hextech/myStats.ts`; "this season", degrading to "recorded so far" / "so far this
+  season" when `coverage.seasonClaimSafe` is false. Three labels that were previously
+  unconditional (`MostPlayedStrip`'s heading, the Match Performance heading, and the
+  no-standing empty state) are now coverage-aware, which they were not before.
+- **`priorSplitWinrate` removed** from the route, the client contract and the page. It was a
+  "vs the previous split" delta — the exact separation being removed — and already rendered
+  nowhere. `currentSplitNumber` and `priorSplitStartMs` are gone with it.
+
+### Fixed
+- **The purge would have deleted this data on 2026-08-26.** `lib/mystats/purge.ts` cut at
+  `max(SEASON_START_MS, priorSplitStartMs())`. Those coincide today, but split 3 starting would
+  have moved the cutoff to 2026-04-29 and deleted 140 of the 142 games this release just
+  surfaced — silently re-creating the bug three weeks after fixing it. The cutoff is now pinned
+  to `SEASON_START_MS` and takes no clock argument, so no input can move it.
+- **Win-rate KPI label broke the strip's baseline.** "Win rate, last 20 games this season" wrapped
+  to 3 lines against its neighbours' 1 (4 lines mid-backfill), dropping its note 13–26px and
+  stair-stepping the row `KpiStrip` reserves a fixed label row to prevent. Shortened to
+  "Win rate, last 20" — the panel heading above it already names the scope.
+  (`components/hextech/mystats/MatchPerformancePanel.tsx`)
+
+### Notes
+- The `split` column and `splitForGameCreation` survive: ingest still tags every row, nothing
+  reads it. `mystats-queue-invariant.test.ts` now asserts structurally that no `my_matches`
+  statement carries a `split =` predicate, so re-introducing one fails the suite.
+- Ingest, backfill caps, the season boundary and queue scoping (ranked solo/duo only) are
+  unchanged. All seven `my_matches` reads still bind `COUNTED_QUEUE_IDS`.
+
 ## [0.87.1] — 2026-07-31 — The re-score follow-ups
 
 The two items the 19/20 re-verification surfaced.

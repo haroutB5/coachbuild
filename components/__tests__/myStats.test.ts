@@ -14,6 +14,7 @@ import {
   computeBuildWinrateDelta,
   computeRecentWinLoss,
   computeHistoryCoverage,
+  getMyStatsScopeLabels,
   MYSTATS_THIN_HISTORY_GAMES,
   MYSTATS_LOW_SAMPLE_THRESHOLD,
   MYSTATS_KDA_BAR_CEILING,
@@ -28,7 +29,6 @@ const EXTENDED_DEFAULTS = {
   winrateOffBuild: null,
   nOnBuild: null,
   nOffBuild: null,
-  priorSplitWinrate: null,
   recentGames: [],
   // v0.83 multi-account. Deliberately part of the SAME defaults object every
   // exhaustive `toEqual` above uses: adding a wire field without adding it here
@@ -68,6 +68,16 @@ const RECENT_GAME_CS_DEFAULTS = { cs: null, gameDurationSec: null, csPerMin: nul
 /** Same idea for a champion-pool record: no rate, and a ZERO denominator, which
  *  is what makes the UI withhold the figure instead of printing "0.0". */
 const RECORD_CS_DEFAULTS = { csPerMin: null, csGames: 0 };
+
+describe("getMyStatsScopeLabels", () => {
+  it("uses one season vocabulary when history is complete", () => {
+    expect(getMyStatsScopeLabels(true)).toEqual({ label: "this season", phrase: "this season" });
+  });
+
+  it("withdraws the full-season claim while history is still collecting", () => {
+    expect(getMyStatsScopeLabels(false)).toEqual({ label: "recorded so far", phrase: "so far this season" });
+  });
+});
 
 describe("normalizeMyStatsSummary", () => {
   it("returns null for a non-object payload", () => {
@@ -121,11 +131,11 @@ describe("normalizeMyStatsSummary", () => {
   });
 
   // ── v0.51 Wave B P1 bug fix (2026-07-24): buildAdherencePct/winrateOnBuild/
-  // winrateOffBuild/priorSplitWinrate/recentGames were being silently
+  // winrateOffBuild/recentGames were being silently
   // stripped by this normalizer even though the server had already been
   // sending them -- reproduced here with the ACTUAL prod response shape
   // (fields/values as reported live: recentGames has 5 rows,
-  // priorSplitWinrate=0.5185) rather than a synthetic minimal fixture, so
+  // rather than a synthetic minimal fixture, so
   // this test would have caught the real regression. ──────────────────────
   const PROD_PAYLOAD = {
     accountUnresolved: false,
@@ -138,7 +148,6 @@ describe("normalizeMyStatsSummary", () => {
     winrateOffBuild: 0.45,
     nOnBuild: 22,
     nOffBuild: 14,
-    priorSplitWinrate: 0.5185,
     recentGames: [
       { championId: 112, role: 2, win: true, kills: 8, deaths: 2, assists: 11, onWpaBuild: true },
       { championId: 122, role: 0, win: false, kills: 3, deaths: 6, assists: 2, onWpaBuild: false },
@@ -155,7 +164,6 @@ describe("normalizeMyStatsSummary", () => {
     expect(result?.winrateOffBuild).toBe(0.45);
     expect(result?.nOnBuild).toBe(22);
     expect(result?.nOffBuild).toBe(14);
-    expect(result?.priorSplitWinrate).toBe(0.5185);
     expect(result?.recentGames).toHaveLength(5);
     // This fixture predates engy's CS ship, so every row normalizes with the CS
     // trio ABSENT -> null. That is the assertion worth having: an old payload
@@ -256,12 +264,11 @@ describe("normalizeMyStatsSummary", () => {
     });
   });
 
-  it("buildAdherencePct/winrateOnBuild/winrateOffBuild/priorSplitWinrate/nOnBuild/nOffBuild of exactly 0 survive (never coerced to null)", () => {
+  it("buildAdherencePct/winrateOnBuild/winrateOffBuild/nOnBuild/nOffBuild of exactly 0 survive (never coerced to null)", () => {
     const result = normalizeMyStatsSummary({
       buildAdherencePct: 0,
       winrateOnBuild: 0,
       winrateOffBuild: 0,
-      priorSplitWinrate: 0,
       // nOnBuild/nOffBuild are never actually 0 in practice (the aggregate
       // layer returns null instead, see mystats-aggregate.test.ts) -- this
       // exercises the NORMALIZER's own numOrNull passthrough in isolation,
@@ -272,7 +279,6 @@ describe("normalizeMyStatsSummary", () => {
     expect(result?.buildAdherencePct).toBe(0);
     expect(result?.winrateOnBuild).toBe(0);
     expect(result?.winrateOffBuild).toBe(0);
-    expect(result?.priorSplitWinrate).toBe(0);
     expect(result?.nOnBuild).toBe(0);
     expect(result?.nOffBuild).toBe(0);
   });
@@ -281,13 +287,11 @@ describe("normalizeMyStatsSummary", () => {
     const result = normalizeMyStatsSummary({
       buildAdherencePct: NaN,
       winrateOnBuild: "0.5",
-      priorSplitWinrate: undefined,
       nOnBuild: "22",
       nOffBuild: NaN,
     });
     expect(result?.buildAdherencePct).toBeNull();
     expect(result?.winrateOnBuild).toBeNull();
-    expect(result?.priorSplitWinrate).toBeNull();
     expect(result?.nOnBuild).toBeNull();
     expect(result?.nOffBuild).toBeNull();
   });

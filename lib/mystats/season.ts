@@ -86,12 +86,9 @@ export function checkSeasonAnomaly(row: MySeasonCheckRow): string | null {
 // file/lib/pro/extract.ts's patchFromGameVersion actually produces -- see this
 // file's own SEASON_START_MS comment for that same 26/16 dual-naming note.)
 //
-// Used for: (a) tagging every my_matches row with which split it falls in at
-// ingest time (see lib/mystats/extract.ts), so live display can filter to
-// "this split" instead of the whole season: (b) lib/mystats/purge.ts's purge
-// boundary, which now retires data older than the PRIOR split (instead of the
-// whole-season boundary) so a delta against "last split" always has something
-// to compare against, while anything older is eventually cleaned up.
+// Used only for tagging every my_matches row with which split it falls in at
+// ingest time (see lib/mystats/extract.ts). Reads and retention deliberately
+// use the whole season; the tag remains stored metadata at no additional cost.
 export interface SplitBoundary {
   split: number;
   startMs: number;
@@ -119,27 +116,4 @@ export function splitForGameCreation(
     else break;
   }
   return current;
-}
-
-/** The split `now` currently falls into -- what a "current split" display
- *  filter compares a row's `split` column against. `now` is injectable for
- *  tests; defaults to the real clock. */
-export function currentSplitNumber(
-  now: () => number = Date.now,
-  boundaries: SplitBoundary[] = SPLIT_BOUNDARIES
-): number {
-  return splitForGameCreation(now(), boundaries);
-}
-
-/** Start-of-PRIOR-split epoch ms, or null when there IS no prior split yet
- *  (currently in split 1 -- nothing precedes it within the season). Used by
- *  lib/mystats/purge.ts to compute a purge boundary that always keeps the
- *  prior split's rows intact (never just the current one). */
-export function priorSplitStartMs(
-  now: () => number = Date.now,
-  boundaries: SplitBoundary[] = SPLIT_BOUNDARIES
-): number | null {
-  const current = currentSplitNumber(now, boundaries);
-  const prior = boundaries.find((b) => b.split === current - 1);
-  return prior ? prior.startMs : null;
 }

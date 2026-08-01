@@ -5,8 +5,8 @@
 // see HANDOFF.md's "My Stats" entries + lib/mystats/**). v0.51 wave B:
 // rebuilt around RecentGamesList/ChampionPoolCard (mockup 6.png),
 // consuming the EXTENDED /api/mystats/summary (buildAdherencePct,
-// winrateOnBuild, winrateOffBuild, priorSplitWinrate, recentGames[]) engo is
-// adding concurrently in myStats.ts's normalizer. Every extended field is
+// winrateOnBuild, winrateOffBuild, recentGames[]) engo is adding concurrently
+// in myStats.ts's normalizer. Every extended field is
 // read through MyStatsSummaryExtended (declared locally below, NOT added to
 // myStats.ts itself — that file is engo's pure-.ts contract territory this
 // wave) and defaults to null/[] when absent, so this page renders correctly
@@ -76,6 +76,7 @@ import {
   computeMyStatsOverall,
   computeMainChampion,
   computeHistoryCoverage,
+  getMyStatsScopeLabels,
   type MyStatsSummary,
   type MyStatsChampionRow,
   type MyStatsMatchupRow,
@@ -87,7 +88,6 @@ interface MyStatsSummaryExtended extends MyStatsSummary {
   buildAdherencePct?: number | null;
   winrateOnBuild?: number | null;
   winrateOffBuild?: number | null;
-  priorSplitWinrate?: number | null;
   recentGames?: RecentGameRow[];
   /** v0.74 — the row counts BEHIND winrateOnBuild/winrateOffBuild
    *  (lib/mystats/aggregate.ts -> the summary route -> normalizeMyStatsSummary).
@@ -481,7 +481,9 @@ export default function MyStatsPage() {
     computeLastActiveMs(summary?.records ?? []),
     Date.now()
   );
-  const scopeLabel = coverage.seasonClaimSafe ? "this split" : "recorded so far";
+  const scopeCopy = getMyStatsScopeLabels(coverage.seasonClaimSafe);
+  const scopeLabel = scopeCopy.label;
+  const scopePhrase = scopeCopy.phrase;
   const TABS = buildProfileTabs();
 
   return (
@@ -519,7 +521,7 @@ export default function MyStatsPage() {
                     {heroRank.record ? <span className="whitespace-nowrap"> · {heroRank.record}</span> : ""}
                   </>
                 ) : heroRank.state === "unranked" ? (
-                  "No ranked solo/duo standing this split."
+                  `No ranked solo/duo standing ${scopePhrase}.`
                 ) : (
                   "Ranked standing not read yet for this account."
                 )}
@@ -571,10 +573,10 @@ export default function MyStatsPage() {
                         isn't safe. A tooltip reading "Wins this season" over a
                         truncated history is the same over-claim as the heading,
                         just quieter. */}
-                    <Pill tone="good" title={coverage.seasonClaimSafe ? "Wins this season" : "Wins recorded so far"}>
+                    <Pill tone="good" title={`Wins ${scopePhrase}`}>
                       {overall.wins}W
                     </Pill>
-                    <Pill tone="bad" title={coverage.seasonClaimSafe ? "Losses this season" : "Losses recorded so far"}>
+                    <Pill tone="bad" title={`Losses ${scopePhrase}`}>
                       {overall.losses}L
                     </Pill>
                     {/* THE MAIN PILL YIELDS ITS SLOT TO THE SYNCING PILL, and that
@@ -595,11 +597,7 @@ export default function MyStatsPage() {
                     {mainRow && coverage.pill === null && (
                       <Pill
                         tone="accent"
-                        title={
-                          coverage.seasonClaimSafe
-                            ? "Most-played champion this season"
-                            : "Most-played champion in the games recorded so far"
-                        }
+                        title={`Most-played champion ${scopePhrase}`}
                       >
                         Main · {mainRow.name} {mainRow.games}g
                       </Pill>
@@ -660,7 +658,7 @@ export default function MyStatsPage() {
             (or complete-as-far-as-we-were-told) history earns the original copy. */}
         {state.status === "ok" && !state.summary.accountUnresolved && rows.length === 0 && (
           <EmptyPanel
-            title={coverage.seasonClaimSafe ? "No games yet this season" : "Still collecting your games"}
+            title={coverage.seasonClaimSafe ? `No games yet ${scopePhrase}` : "Still collecting your games"}
             body={
               coverage.seasonClaimSafe
                 ? `No recorded games for ${state.summary.season || "the current season"} yet — check back after your next few games.`
@@ -747,7 +745,7 @@ export default function MyStatsPage() {
                 </button>
               )}
             </div>
-            <MostPlayedStrip champions={mostPlayed} />
+            <MostPlayedStrip champions={mostPlayed} scopeLabel={scopePhrase} />
           </div>
 
           {/* The skeleton lives INSIDE this panel, standing in for exactly the
@@ -821,13 +819,11 @@ export default function MyStatsPage() {
                       the per-game on/off-build chips it summarises. See
                       BuildAdherenceNote's header for why it moved rather than
                       being dropped.
-                  `priorSplitWinrate` no longer renders anywhere: it was the
-                  "vs last split" delta on the deleted win-rate cell, and the
-                  card's win rate is account-wide, so hanging a split-scoped
-                  comparison off it would put two different denominators in one
-                  figure — the exact drift v0.73.1 shipped. It stays on the wire,
-                  unread, rather than being re-attached to a number it does not
-                  belong to. */}
+                  No split comparison remains on the wire or in the UI. The
+                  account-wide card win rate has no separate historical denominator,
+                  so every personal figure on this page uses the current-season
+                  scope.
+                  */}
 
               {/* The reference's two-column lower section. `items-start` so the
                   taller panel never stretches the shorter one into empty space.
@@ -856,12 +852,13 @@ export default function MyStatsPage() {
                   games={recentGames}
                   iconOf={(id) => champIcons.get(id)}
                   chips={matchChips}
-                  splitCsPerMin={state.summary.csPerMin ?? null}
-                  splitCsGames={state.summary.csGames ?? 0}
+                  scopeLabel={scopePhrase}
+                  seasonCsPerMin={state.summary.csPerMin ?? null}
+                  seasonCsGames={state.summary.csGames ?? 0}
                   // 2026-07-31 audit P2 re-score follow-up: the true denominator
-                  // for "only Ng with CS" -- overall.games (ALL current-split
+                  // for "only Ng with CS" -- overall.games (ALL current-season
                   // records, not the capped 20-game recentGames window).
-                  totalSplitGames={overall?.games ?? 0}
+                  totalSeasonGames={overall?.games ?? 0}
                   lastActive={lastActive}
                 />
               </div>
@@ -932,7 +929,7 @@ export default function MyStatsPage() {
               {/* "this season" is a coverage claim too — a champion pool built
                   from a truncated walk is the champions we have SEEN, not the ones
                   played. Same wording swap as the KPI strip's GAMES cell. */}
-              <PanelHeading meta={`${rows.length} champions, ${coverage.seasonClaimSafe ? "this season" : "recorded so far"}`}>
+              <PanelHeading meta={`${rows.length} champions, ${scopeLabel}`}>
                 Matchup history
               </PanelHeading>
               <p className="sr-only" role="status">
@@ -941,7 +938,7 @@ export default function MyStatsPage() {
                     whether a sync is running. Withdrawing the claim is honest;
                     asserting the sync would be a second invented fact. */}
                 {rows.length} champions with recorded games{" "}
-                {coverage.seasonClaimSafe ? "this season" : "so far this season"}, sorted by games played.
+                {scopePhrase}, sorted by games played.
               </p>
               {rows.map((row) => {
                 // (championId, role), not championId alone -- see the

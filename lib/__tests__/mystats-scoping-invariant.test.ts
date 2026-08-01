@@ -138,7 +138,7 @@ describe("scoping invariant: GET /api/mystats/summary", () => {
   });
 
   it("a second account's rows never reach the response, on ANY of the four figures", async () => {
-    // One fake table, two accounts, same champion and split. Every query is
+    // One fake table, two accounts, same champion across the season. Every query is
     // answered by filtering on whichever puuid the route actually bound -- so if
     // a query binds nothing, it gets nothing, and the assertions below catch the
     // shape of the mistake rather than only its magnitude.

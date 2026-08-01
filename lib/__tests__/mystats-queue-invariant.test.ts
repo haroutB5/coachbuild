@@ -164,19 +164,32 @@ describe("queue invariant: GET /api/mystats/summary", () => {
     assertEveryMyMatchesReadIsQueueFiltered(collected);
   });
 
-  it("the PRIOR-SPLIT query is filtered too (only issued when a prior split exists)", async () => {
+  it("counts every stored counted-queue row across the season, without a split predicate", async () => {
     const collected: Statement[] = [];
-    mockSql.mockImplementation(recordingSql(collected));
+    const storedRows = [
+      { puuid: ACTIVE_PUUID, queue_id: RANKED_SOLO_QUEUE_ID, champion_id: 3, role: 2, opp_champion_id: 9, win: true, split: 1, game_creation: "2026-03-01T00:00:00.000Z", cs: 200, game_duration_sec: 1800 },
+      { puuid: ACTIVE_PUUID, queue_id: RANKED_SOLO_QUEUE_ID, champion_id: 3, role: 2, opp_champion_id: 35, win: false, split: 2, game_creation: "2026-06-01T00:00:00.000Z", cs: 220, game_duration_sec: 1800 },
+      { puuid: ACTIVE_PUUID, queue_id: RANKED_SOLO_QUEUE_ID, champion_id: 77, role: 1, opp_champion_id: 5, win: true, split: 2, game_creation: "2026-07-01T00:00:00.000Z", cs: 180, game_duration_sec: 1800 },
+      { puuid: ACTIVE_PUUID, queue_id: FLEX, champion_id: 99, role: -1, opp_champion_id: null, win: false, split: 1, game_creation: "2026-02-01T00:00:00.000Z", cs: 10, game_duration_sec: 1800 },
+    ];
+    mockSql.mockImplementation(
+      recordingSql(collected, (text, values) => {
+        if (!text.includes("coachbuild.my_matches")) return [];
+        const queues = values.find((v) => Array.isArray(v)) as number[] | undefined;
+        return storedRows.filter((r) => queues?.includes(r.queue_id) ?? true);
+      })
+    );
     mockGetActiveAccount.mockResolvedValue(ACTIVE);
 
-    await summaryGET(req("http://localhost/api/mystats/summary"));
-    // Guarded by `priorSplit >= 1`, so it is skipped in split 1. Assert it only
-    // when it ran — the structural assertion above already covers whichever
-    // queries DID run; this one is here so the prior-split path is named.
-    const prior = collected.filter((s) => s.text.includes("SELECT win FROM coachbuild.my_matches"));
-    for (const stmt of prior) {
-      expect(stmt.values.find((v) => Array.isArray(v))).toEqual(COUNTED_QUEUE_IDS);
+    const body = await (await summaryGET(req("http://localhost/api/mystats/summary"))).json();
+    const games = body.records.reduce((sum: number, record: { games: number }) => sum + record.games, 0);
+    expect(games).toBe(3); // split 1 and split 2 both count; flex does not
+    expect(body.records.find((record: { championId: number }) => record.championId === 3)).toMatchObject({ games: 2, wins: 1 });
+    expect(collected.filter((stmt) => stmt.text.includes("coachbuild.my_matches"))).not.toEqual([]);
+    for (const stmt of collected.filter((statement) => statement.text.includes("coachbuild.my_matches"))) {
+      expect(stmt.text).not.toMatch(/\bsplit\s*=/i);
     }
+    assertEveryMyMatchesReadIsQueueFiltered(collected);
   });
 
   it("flex/normal/quickplay rows reach NO figure on the response", async () => {

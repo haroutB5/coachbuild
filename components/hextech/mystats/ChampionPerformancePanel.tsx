@@ -49,7 +49,7 @@ function wrColorClass(winrate: number, lowSample: boolean): string {
 
 export interface ChampionPerformancePanelProps {
   rows: ChampionPerformanceRow[];
-  /** Names the denominator these rows are over — "this split", "recorded so
+  /** Names the denominator these rows are over — "this season", "recorded so
    *  far" when the history is known incomplete. Never omitted. */
   scopeLabel: string;
 }

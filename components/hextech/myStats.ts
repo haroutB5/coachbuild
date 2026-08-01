@@ -25,6 +25,20 @@ import type { AccountSummary } from "@/components/live/mystatsAccount";
 
 export const MYSTATS_LOW_SAMPLE_THRESHOLD = 10;
 
+/** The one coverage-aware vocabulary used by every season-scoped My Stats
+ *  label. `label` fits after "of games" / in a compact panel meta line;
+ *  `phrase` fits after "last N games" and in a standalone sentence. */
+export interface MyStatsScopeLabels {
+  label: "this season" | "recorded so far";
+  phrase: "this season" | "so far this season";
+}
+
+export function getMyStatsScopeLabels(seasonClaimSafe: boolean): MyStatsScopeLabels {
+  return seasonClaimSafe
+    ? { label: "this season", phrase: "this season" }
+    : { label: "recorded so far", phrase: "so far this season" };
+}
+
 // ── Wire shapes (this module's own contract, not imported from lib/) ───────
 
 export interface MyStatsRecord {
@@ -114,7 +128,6 @@ export interface MyStatsSummary {
   buildAdherencePct?: number | null;
   winrateOnBuild?: number | null;
   winrateOffBuild?: number | null;
-  priorSplitWinrate?: number | null;
   recentGames?: MyStatsRecentGame[];
   /** v0.74 additions — row counts behind winrateOnBuild/winrateOffBuild
    *  respectively (lib/mystats/aggregate.ts's computeBuildAdherence /
@@ -158,7 +171,7 @@ export interface MyStatsSummary {
   historyComplete?: boolean | null;
 
   // ── 2026-07-30, engy §1d + §1a top-level mirror ───────────────────────────
-  /** Account-wide, CURRENT-SPLIT time-weighted CS/min — same scope as
+  /** Account-wide, current-season time-weighted CS/min — same scope as
    *  `buildAdherencePct`. null when `csGames` is 0. */
   csPerMin?: number | null;
   /** Games behind `csPerMin`. 0 => csPerMin is null. Always rendered with it. */
@@ -265,8 +278,7 @@ function normalizeRecentGame(raw: unknown): MyStatsRecentGame | null {
  *
  *  BUG FIX (P1, 2026-07-24): previously rebuilt the return object with ONLY
  *  the legacy accountUnresolved/season/riotId/records fields, silently
- *  stripping buildAdherencePct/winrateOnBuild/winrateOffBuild/
- *  priorSplitWinrate/recentGames even though the server had already been
+ *  stripping buildAdherencePct/winrateOnBuild/winrateOffBuild/recentGames even though the server had already been
  *  sending them since this same wave shipped — app/mystats/page.tsx's cast
  *  to its own extended type meant TypeScript never caught the mismatch, and
  *  every one of those fields silently read as undefined/[] on a real page
@@ -380,7 +392,6 @@ export function normalizeMyStatsSummary(raw: unknown): MyStatsSummary | null {
     winrateOffBuild: numOrNull(r.winrateOffBuild),
     nOnBuild: numOrNull(r.nOnBuild),
     nOffBuild: numOrNull(r.nOffBuild),
-    priorSplitWinrate: numOrNull(r.priorSplitWinrate),
     recentGames: Array.isArray(r.recentGames)
       ? r.recentGames.map(normalizeRecentGame).filter((x): x is MyStatsRecentGame => x !== null)
       : [],
@@ -736,7 +747,7 @@ export type MyStatsBuildWinrateDelta =
  * DISPLAY ONLY (HARD RULE 3, CLAUDE.md) — never feeds a score/ranking.
  *
  * `nOnBuild`/`nOffBuild` are the sample sizes BEHIND `winrateOnBuild`/
- * `winrateOffBuild` (how many current-split games actually landed in each
+ * `winrateOffBuild` (how many current-season games actually landed in each
  * bucket) — as of v0.74, `GET /api/mystats/summary` sends both
  * (`MyStatsSummary.nOnBuild`/`nOffBuild`, from
  * `lib/mystats/aggregate.ts`'s `computeBuildAdherence`); feed them straight

@@ -215,21 +215,25 @@ describe("formatCsNote (2026-07-31 audit P2 re-score follow-up)", () => {
     expect(formatCsNote(0, 20)).toBe("no CS recorded");
   });
 
-  it("a genuine subset -- csGames smaller than the real split total -- says 'only'", () => {
+  it("a genuine subset -- csGames smaller than the real season total -- says 'only'", () => {
     expect(formatCsNote(15, 20)).toBe("only 15g with CS");
   });
 
-  // Live bug (2026-07-31): an account with exactly 2 games this split, BOTH
+  // Live bug (2026-07-31): an account with exactly 2 games this season, BOTH
   // carrying CS, read "only 2g with CS" -- "only" out of what, when 2 IS the
-  // whole split? Full coverage must never say "only", regardless of how small
+  // whole season? Full coverage must never say "only", regardless of how small
   // the count is.
-  it("full coverage -- csGames equals the total split games -- drops 'only' even when the count is tiny", () => {
-    expect(formatCsNote(2, 2)).toBe("2g this split");
-    expect(formatCsNote(1, 1)).toBe("1g this split");
+  it("full coverage -- csGames equals the total season games -- drops 'only' even when the count is tiny", () => {
+    expect(formatCsNote(2, 2)).toBe("2g this season");
+    expect(formatCsNote(1, 1)).toBe("1g this season");
   });
 
   it("csGames somehow exceeding the total (defensive) is still treated as full coverage, never 'only'", () => {
-    expect(formatCsNote(5, 3)).toBe("5g this split");
+    expect(formatCsNote(5, 3)).toBe("5g this season");
+  });
+
+  it("uses the coverage-aware season phrase when history is still collecting", () => {
+    expect(formatCsNote(2, 2, "so far this season")).toBe("2g so far this season");
   });
 });
 

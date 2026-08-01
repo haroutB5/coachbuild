@@ -6,7 +6,7 @@
 // "Most Played Champions:".
 //
 // Purely decorative-adjacent but NOT invented: every portrait is a champion the
-// account has actually played this split, ordered by games summed across roles
+// account has actually played in the current season, ordered by games summed across roles
 // (buildMostPlayedStrip). The count is in each portrait's tooltip and in the
 // strip's sr-only sentence, so the visual shorthand always has the real numbers
 // behind it.
@@ -21,17 +21,19 @@ import type { MostPlayedChampion } from "./profileModel";
 
 export interface MostPlayedStripProps {
   champions: MostPlayedChampion[];
-  /** Label text; the reference reads "Most Played Champions:". */
+  /** Coverage-aware season phrase supplied by the page's shared scope helper. */
+  scopeLabel: string;
+  /** Label text before the coverage phrase; the reference reads "Most Played Champions". */
   label?: string;
 }
 
-export default function MostPlayedStrip({ champions, label = "Most played champions:" }: MostPlayedStripProps) {
+export default function MostPlayedStrip({ champions, scopeLabel, label = "Most played champions" }: MostPlayedStripProps) {
   if (champions.length === 0) return null;
 
   return (
     <div className="flex items-center gap-2.5 min-w-0">
       <span className="text-[10px] tracking-[0.09em] uppercase text-mut font-semibold whitespace-nowrap">
-        {label}
+        {label} {scopeLabel}:
       </span>
       {/* `dir=rtl` + row-reverse is the trick that makes the FIRST (most played)
           portrait stack on TOP without a z-index ladder — the leftmost element
@@ -54,7 +56,7 @@ export default function MostPlayedStrip({ champions, label = "Most played champi
         ))}
       </ul>
       <span className="sr-only">
-        Most played champions this split:{" "}
+        Most played champions {scopeLabel}:{" "}
         {champions.map((c) => `${c.name}, ${c.games} game${c.games === 1 ? "" : "s"}`).join("; ")}.
       </span>
     </div>

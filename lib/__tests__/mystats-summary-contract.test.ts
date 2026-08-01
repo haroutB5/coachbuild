@@ -193,10 +193,11 @@ describe("existing fields are unchanged (additive-only)", () => {
     for (const k of [
       "accountUnresolved", "season", "riotId", "accountId", "accounts", "historyComplete",
       "records", "matchup", "buildAdherencePct", "winrateOnBuild", "winrateOffBuild",
-      "nOnBuild", "nOffBuild", "priorSplitWinrate", "recentGames",
+      "nOnBuild", "nOffBuild", "recentGames",
     ]) {
       expect(body).toHaveProperty(k);
     }
+    expect(body).not.toHaveProperty("priorSplitWinrate");
     // and the champion-pool entry's original fields still mean what they did
     expect(body.records[0]).toMatchObject({ championId: 1, role: 2, games: 1, wins: 1, winrate: 1 });
     expect(body.records[0].lastPlayed).toBe("2026-07-01T00:00:00.000Z");

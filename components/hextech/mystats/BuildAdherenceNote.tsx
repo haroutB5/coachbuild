@@ -50,7 +50,7 @@ export interface BuildAdherenceNoteProps {
    *  answers "sample-unknown" and says so — see the header. */
   nOnBuild?: number | null;
   nOffBuild?: number | null;
-  /** "this split" / "recorded so far" — the page's single coverage-aware scope
+  /** "this season" / "recorded so far" — the page's single coverage-aware scope
    *  wording, passed in rather than re-derived so this can never claim a season
    *  the hero has already withdrawn. */
   scopeLabel: string;

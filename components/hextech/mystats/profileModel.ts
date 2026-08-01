@@ -244,20 +244,20 @@ export function csRateIsQuotable(csPerMin: number | null, csGames: number): bool
  *
  * "only Ng with CS" is a claim that CS is MISSING for some games — it must
  * only appear when `csGames` is a genuine subset of the games actually
- * played this split (`totalSplitGames`, e.g. `computeMyStatsOverall(records).games`,
- * NOT the capped 20-game display window `games.length`/`chips.n` — a split
- * can hold more games than the window shows). When every game this split
- * already carries CS (`csGames >= totalSplitGames`), "only" is simply false —
+ * played this season (`totalSeasonGames`, e.g. `computeMyStatsOverall(records).games`,
+ * NOT the capped 20-game display window `games.length`/`chips.n` — a season
+ * can hold more games than the window shows). When every game this season
+ * already carries CS (`csGames >= totalSeasonGames`), "only" is simply false —
  * the real reason the rate is withheld (when it is) is too FEW games overall,
  * not missing data, so the caption drops the qualifier entirely rather than
  * implying a coverage gap that doesn't exist. Bug seen live: an account with
- * exactly 2 games this split, both carrying CS, read "only 2g with CS" —
- * "only" out of what, when 2 IS the whole split?
+ * exactly 2 games this season, both carrying CS, read "only 2g with CS" —
+ * "only" out of what, when 2 IS the whole season?
  */
-export function formatCsNote(csGames: number, totalSplitGames: number): string {
+export function formatCsNote(csGames: number, totalSeasonGames: number, scopeLabel = "this season"): string {
   if (csGames <= 0) return "no CS recorded";
-  if (csGames < totalSplitGames) return `only ${csGames}g with CS`;
-  return `${csGames}g this split`;
+  if (csGames < totalSeasonGames) return `only ${csGames}g with CS`;
+  return `${csGames}g ${scopeLabel}`;
 }
 
 // ── Account cards ───────────────────────────────────────────────────────────
@@ -294,8 +294,8 @@ export interface AccountCard {
   riotId: string;
   region: string;
   active: boolean;
-  /** Solo-queue games stored for this account, ACCOUNT-WIDE across splits —
-   *  a different denominator from the current-split figures elsewhere on the
+  /** Solo-queue games stored for this account, ACCOUNT-WIDE for the season —
+   *  the same denominator as the season figures elsewhere on the
    *  page. The card labels it as stored games for exactly that reason; the two
    *  numbers legitimately differ and neither is wrong. Since the 2026-07-30
    *  solo-queue-only filter this excludes flex/normal/other entirely, which moved
@@ -350,7 +350,7 @@ export interface AccountRecord {
  * the wrong account's name, v0.84.3) and it is what the em dash is for.
  *
  * `games` is the account's own stored-game count, so this figure is per-account
- * by construction. It is NOT the current-split denominator the season figures
+ * by construction. It is the same current-season denominator the other figures
  * use; the card's tooltip says which one it is.
  */
 export function resolveAccountWinrate(a: {
@@ -423,7 +423,7 @@ export interface RankDisplay {
   /** "47 LP", or null when there is no LP to show. Kept apart from `label` so
    *  the two can be typeset differently, per the reference. */
   lp: string | null;
-  /** Ranked W-L for the split, or null. */
+  /** Ranked W-L for the season, or null. */
   record: string | null;
   /** Hover/assistive text saying what state this is and, where relevant, when
    *  it was last read. */
@@ -587,7 +587,7 @@ export function formatRelativeTime(ms: number | null, nowMs: number): string | n
  * Win/Lose over the shown window is real and stays, and `rank` is real as of
  * engy §1a — but note the two are over DIFFERENT windows and are labelled that
  * way: the W-L counts are over the games shown in this panel, while the ranked
- * record inside `rank` is Riot's own split-long solo-queue tally.
+ * record inside `rank` is Riot's own season-long solo-queue tally.
  */
 export interface MatchPerformanceChips {
   wins: number;

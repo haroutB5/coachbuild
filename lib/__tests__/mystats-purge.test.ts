@@ -26,15 +26,17 @@ describe("runSeasonPurge", () => {
 
   it("first run: deletes pre-season rows, keeps in-season rows, resets the cursor", async () => {
     let deleteCalled = false;
+    let deleteValues: unknown[] = [];
     let cursorReset = false;
     let cursorResetSql = "";
-    mockSql.mockImplementation((strings: TemplateStringsArray) => {
+    mockSql.mockImplementation((strings: TemplateStringsArray, ...values: unknown[]) => {
       const text = sqlText(strings);
       if (text.includes("SELECT match_id, game_creation, patch FROM coachbuild.my_matches")) {
         return Promise.resolve([PRE_SEASON_ROW, IN_SEASON_ROW]);
       }
       if (text.includes("DELETE FROM coachbuild.my_matches")) {
         deleteCalled = true;
+        deleteValues = values;
         return Promise.resolve([{ match_id: "OLD1" }]); // one row deleted
       }
       if (text.includes("SELECT count(*)::int AS n FROM coachbuild.my_matches WHERE patch NOT LIKE")) {
@@ -54,6 +56,7 @@ describe("runSeasonPurge", () => {
     const result = await runSeasonPurge(mockSql as never);
 
     expect(deleteCalled).toBe(true);
+    expect(deleteValues).toContain(new Date(SEASON_START_MS).toISOString());
     expect(cursorReset).toBe(true);
     // Migration 0020: the DELETE above is deliberately account-WIDE, so the
     // cursor reset must be too. A reset scoped to one account would leave
