@@ -1,6 +1,6 @@
 # CoachBuild — technical reference
 
-**Describes v0.87.1, 2026-07-31.** `package.json`'s `version` is the single source of truth for the app version — if it's moved on since this date, treat anything below with more skepticism the further it's fallen behind (check `CHANGELOG.md` for what shipped after this doc's version).
+**Describes v0.92.1, 2026-08-01.** `package.json`'s `version` is the single source of truth for the app version — if it's moved on since this date, treat anything below with more skepticism the further it's fallen behind (check `CHANGELOG.md` for what shipped after this doc's version).
 
 League of Legends coaching companion. Next.js 14 (App Router) + TypeScript + Tailwind, Vercel (prod: `coachbuild.vercel.app`, personal account). Serverless throughout — no server processes besides Vercel functions + three daily crons, plus a user-run PowerShell companion (`public/companion.ps1`) that bridges the app to the local League client. `NEXT_PUBLIC_APP_VERSION` is injected by `next.config.mjs` from `package.json` and shown in the global nav's rail/tab-bar footer; the SW cache name is version-tied. Read this file before exploring source; it's the map, not a substitute for reading the actual code before changing it.
 
@@ -45,7 +45,14 @@ app/api/pros/route.ts               GET  /api/pros?championId=|proId=|player=&ro
                                           wants). See gotcha (aa) and lib/pro/mergeGames.ts.
 app/api/otp/route.ts                GET  /api/otp?championId=&role=&limit=   (one-trick consensus feed)
 app/api/otp/refresh/route.ts        POST /api/otp/refresh?championId=&championKey=  (on-demand fill; ATOMIC
-                                          claim + cooldown, POST because it spends the shared Riot key)
+                                          claim + cooldown, POST because it spends the shared Riot key.
+                                          Since v0.92.1 it ALSO pulls match-v5 timelines for the FEATURED
+                                          one-trick — capped at FEATURED_TIMELINE_GAME_LIMIT=30 recent
+                                          games, skipping rows that already carry an order.)
+app/api/otp/featured/route.ts       GET  /api/otp/featured?championId=&role=  (the named one-trick behind
+                                          the OTP tab; carries `skillOrder` as a SkillOrderModel or null)
+app/api/draft/blind-pick/route.ts   GET  /api/draft/blind-pick?lane=0-4  (v0.89.0; cacheable — depends only
+                                          on patch+tier+lane, never on the enemies entered)
 app/api/pros/team-players/route.ts  GET  /api/pros/team-players?source=&gameId=&championId=|player=
 app/api/prostage/timeline/route.ts  GET  /api/prostage/timeline?player=&game=  (claim-gated + backoff since v0.58.0 — 429s
                                           a concurrent/too-soon request without any outbound call; see gotcha (w))
@@ -83,6 +90,7 @@ lib/otp/                       — OTP (one-trick) pipeline, v0.70.0
   leaderboard.ts                  op.gg champion-leaderboard client + parser (same undocumented MCP
                                   endpoint as lib/opgg.ts; shares its class-header parsing helpers
                                   and its fail-to-null-never-to-wrong discipline)
+  featured.ts                     the named one-trick behind the OTP tab + its aggregated skill order
   ingest.ts                       discovery (leaderboard -> account-v1 -> otp_accounts) + match
                                   ingest (otp_accounts -> match-v5 -> otp_matches). NO timeline call.
   types.ts                        OtpResponse / OtpPlayerSummary
@@ -91,7 +99,17 @@ lib/prostage/                  — pro-play (Leaguepedia) pipeline; cargo.ts now
                                   old ">500-row truncation" risk is closed, not just theoretical anymore.
 lib/draft/                     — "Draft" recommender
   ugg.ts                          u.gg stats2 CDN client + patch/matchup/rankings decoders
-  score.ts                        shrinkage scoring (K=200, floor 30), rankBans (1000-game floor)
+  score.ts                        shrinkage scoring (K=200, floor 30), rankBans (1000-game floor),
+                                  laneShare + filterPoolByLaneShare. **laneShare divides by
+                                  Sum/2** — the matchup matrix is SYMMETRIC (verified: 500/500 mirror
+                                  pairs identical), so the raw sum counts every lane game twice.
+                                  Getting this wrong halved every displayed pick rate (v0.90.0).
+  blindPick.ts                    v0.89.0 blind-pick safety: lane-wide opponent prior (NOT p(o|c) —
+                                  that is counterpick-distorted), es10 = mass-weighted mean over the
+                                  worst 10% of opponent mass, blindScore = fieldWr - 0.5*max(0,.5-es10).
+                                  N_FLOOR deliberately NOT applied here (see its header). Pool floor is
+                                  lane SHARE, not absolute games — 5,000 games is 0.12% of a 9.8M-game
+                                  lane and let off-role one-tricks top the list (v0.89.1).
   recommend.ts                    lane-opponent inference, personal-record extension (PersonalPlayResult)
   ingest.ts, ingestGuard.ts       ingest orchestration + cross-source drift guard (>4pt vs coachless fails loud)
   compRatings.ts                  curated 173-champion 0-3 kit-rating table (comp bars input)
@@ -186,6 +204,8 @@ Vitest, pure-function-only — **no JSX rendering harness** (no jsdom/RTL config
 **(b) Never CDN-cache an empty API response.** `Cache-Control: no-store` on any empty/degraded result; only non-empty responses earn a long `s-maxage`. Applies to every route serving possibly-sparse data, including the newer `/api/patch-movers` and `/api/patch` routes (audit-verified in v0.51.0).
 
 **(c) Leaguepedia (lol.fandom.com) rate limiting.** `api.php`'s anonymous limit can trip after ONE call and stay sticky 3+ minutes — every caller serialized through one process-wide pacer (`lib/prostage/cargo.ts`, 30s floor). `Special:CargoExport` has a lighter limit (5s floor) but Node's own fetch gets Cloudflare-403'd against it (TLS/JA3-fingerprint block) — script paths shell out to curl instead (`scripts/_curl-transport.mjs`). Never run two concurrent Leaguepedia consumers. Pagination via `offset` now exists on both transports (past the 500-row-per-call cap).
+
+**(cc) SWAPPING WHAT A TAB RENDERS SILENTLY STRIPS EVERY BEHAVIOUR ATTACHED TO THE OLD COMPONENT.** Bit us THREE times on 2026-08-01, all on the OTP tab, which renders `FeaturedOtpCard` where it once rendered `ProConsensusCard`'s `variant="otp"`. Lost, one at a time and each found only by a user: (1) the Apply Runes / Add Item Build buttons (v0.91.0), (2) the `POST /api/otp/refresh` trigger, so no champion ever fetched skill-order timelines — the feature worked for exactly one champion, and only because a script had been run by hand (v0.92.1), (3) the LOW SAMPLE badge, which is why a hero card and the table beside it could name different "best" champions (v0.90.x). **Nothing errors when this happens** — the old component keeps compiling, its tests keep passing, and the capability just stops existing. When you change what a tab renders, enumerate what the outgoing component DID (effects, fetch triggers, buttons, badges) and re-home each one deliberately. Grep for the old component name: if the only hits are comments, its behaviours are orphaned.
 
 **(d) Riot API key budget is shared across every process that calls it.** `lib/pro/pacer.ts` serializes all Riot calls (roster/match ingest, `ingest-player.mjs`, audits, My Stats backfill/refresh) through one process-wide 1.3s-interval queue — but only within a single process. Don't parallelize Riot-calling scripts. The My Stats on-demand refresh endpoint (`/api/mystats/refresh`) is cooldown-gated server-side (3 min) specifically so it's safe to call on every page view without contending for this budget.
 
