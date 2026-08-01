@@ -2,6 +2,33 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.88.1] — 2026-08-01 — CS/min always shows
+
+User directive: "Some stats like cs/min aren't showing for all champs. I want that included
+always."
+
+### Fixed
+- **CS/min was hidden on 34 of 35 champion rows.** `csRateIsQuotable` suppressed any rate backed
+  by fewer than 10 games behind an em dash. Every suppressed row had a real, measured,
+  time-weighted rate — Corki rendered "—" while holding 7.0 over 9 games; Malzahar 7.8 over 7,
+  Galio 5.8 over 5. The account-wide CS tile had the same gate (it happened to pass today at 137
+  games, but would blank on any freshly linked account).
+  The rate now renders wherever one exists, in both the champion table and the KPI tile.
+- **A thin sample is now weight, not absence.** Below 10 games the figure renders muted instead of
+  gold — the same lowSample-forces-grey convention this page already applies to win rates — with
+  its own denominator printed beneath it. An em dash in a CS column now means exactly one thing:
+  nothing was measured (`csPerMin === null`; pre-migration-0021 rows, or games under
+  `CS_MIN_GAME_SEC`). "Not measured" and "measured over few" no longer share a glyph.
+
+### Notes
+- `csRateIsQuotable` is kept and still returns exactly what it did; it answers "is this sample
+  thick" for styling only, and no longer gates visibility. Its name is historical.
+- New `components/__tests__/csAlwaysVisible.test.ts` asserts structurally that neither panel gates
+  the displayed value on quotability, and that both still use it for colour. Mutation-checked:
+  reinstating the old gate fails it.
+- No data change. Ingest, the CS arithmetic (`lib/mystats/cs.ts`, time-weighted, sub-5-minute
+  games excluded) and the season scope are untouched.
+
 ## [0.88.0] — 2026-08-01 — One season, no splits
 
 User directive: "Don't separate games into splits. I just want all games from the same season

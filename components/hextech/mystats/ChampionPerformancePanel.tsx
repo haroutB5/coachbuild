@@ -23,12 +23,28 @@
 // coloured figure over a smaller breakdown). Every column is HEADED, which is
 // what makes the swap read as a decision rather than as a mislabelled KDA.
 //
-// ── CS/MIN REFUSES ITS OWN THIN SAMPLE ──────────────────────────────────────
-// engy §1b is explicit that `csGames` is routinely far smaller than `games`
-// (pre-ship rows carry no CS; sub-5-minute games are excluded from every rate).
-// `csRateIsQuotable` is the refusal, and a refused rate renders an em dash with
-// the reason on hover — never a number computed over three games in the same
-// gold as one computed over sixty.
+// ── CS/MIN ALWAYS SHOWS, AND SHOWS ITS SAMPLE ───────────────────────────────
+// HARD USER DIRECTIVE (2026-08-01): "Some stats like cs/min aren't showing for
+// all champs. I want that included always."
+//
+// This column used to hide any rate backed by fewer than
+// MYSTATS_LOW_SAMPLE_THRESHOLD games behind an em dash. On the account that
+// prompted the change that suppressed 34 of 35 rows — every one of which had a
+// real, measured, time-weighted rate. Corki read "—" while holding 7.0 over 9
+// games. A blanket em dash is not more honest than a number; it destroys a real
+// measurement to avoid a misreading the row already prevents by printing its own
+// denominator ("9g") directly beneath the figure.
+//
+// The thin-sample concern was legitimate and is kept — as WEIGHT, not as
+// absence. Below the threshold the figure renders in muted grey rather than
+// gold, the same lowSample-forces-grey convention `wrColorClass` and
+// ChampionPoolCard already use for win rates on this page. One page, one way of
+// saying "true, but thin".
+//
+// An em dash now means exactly one thing: `csPerMin === null`, i.e. NOTHING was
+// measured (rows ingested before migration 0021, or every game under
+// CS_MIN_GAME_SEC). Not measured and measured-over-few are different statements
+// and no longer share a glyph.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Link from "next/link";
@@ -87,8 +103,10 @@ export default function ChampionPerformancePanel({ rows, scopeLabel }: ChampionP
       </div>
 
       {rows.map((row) => {
-        const quotable = csRateIsQuotable(row.csPerMin, row.csGames);
-        const cs = quotable ? formatCsPerMin(row.csPerMin) : null;
+        // Rendered whenever a rate EXISTS — see this file's header. `quotable`
+        // no longer gates visibility, only colour weight.
+        const cs = row.csPerMin !== null ? formatCsPerMin(row.csPerMin) : null;
+        const csThinSample = !csRateIsQuotable(row.csPerMin, row.csGames);
         return (
           <Link
             key={`${row.championId}-${row.role}`}
@@ -116,17 +134,22 @@ export default function ChampionPerformancePanel({ rows, scopeLabel }: ChampionP
             <span className="w-[42px] text-right flex-shrink-0">
               {cs !== null ? (
                 <>
-                  <span className="block text-[12.5px] font-bold tabular-nums text-teal">{cs}</span>
+                  <span
+                    className={`block text-[12.5px] font-bold tabular-nums ${csThinSample ? "text-mut" : "text-teal"}`}
+                    title={
+                      csThinSample
+                        ? `Time-weighted CS per minute over ${row.csGames} game${row.csGames === 1 ? "" : "s"} — a real average, but a thin sample.`
+                        : `Time-weighted CS per minute over ${row.csGames} games.`
+                    }
+                  >
+                    {cs}
+                  </span>
                   <span className="block text-[9px] text-mut/75 tabular-nums">{row.csGames}g</span>
                 </>
               ) : (
                 <span
                   className="block text-[12.5px] font-bold tabular-nums text-mut/50"
-                  title={
-                    row.csPerMin === null
-                      ? "No CS recorded for this champion yet — games ingested before CS tracking landed carry none."
-                      : `CS is recorded for only ${row.csGames} of these games — too few to quote a rate.`
-                  }
+                  title="No CS recorded for this champion yet — games ingested before CS tracking landed carry none, and games under 5 minutes are excluded from every rate."
                 >
                   &mdash;
                 </span>
@@ -153,7 +176,10 @@ export default function ChampionPerformancePanel({ rows, scopeLabel }: ChampionP
             <span className="sr-only">
               {row.name} {row.roleLabel}: {row.games} games, {row.wins} wins {row.losses} losses,{" "}
               {formatPct(row.winrate)} win rate
-              {cs !== null ? `, ${cs} CS per minute over ${row.csGames} games` : ", CS per minute not available"}.
+              {cs !== null
+                ? `, ${cs} CS per minute over ${row.csGames} game${row.csGames === 1 ? "" : "s"}${csThinSample ? " (thin sample)" : ""}`
+                : ", CS per minute not recorded"}
+              .
             </span>
           </Link>
         );

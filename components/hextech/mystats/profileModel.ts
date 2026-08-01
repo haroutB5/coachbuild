@@ -223,17 +223,24 @@ export function buildChampionPerformanceRows(
 /**
  * May a CS/min figure be shown at all?
  *
- * engy's §1b is explicit that `csGames` is "frequently smaller" than `games` and
- * that a consumer should "render the denominator, or at least refuse to show
- * csPerMin when csGames is tiny". This is that refusal, in one place.
+ * NAME IS HISTORICAL — this NO LONGER decides whether a rate is shown.
+ * (User directive 2026-08-01: "I want that included always.") It answers only
+ * "is this sample thick enough to render in gold rather than grey", the same
+ * question `lowSample` answers for a win rate. Every caller now shows the
+ * figure either way, alongside its denominator.
  *
- * The floor is MYSTATS_LOW_SAMPLE_THRESHOLD rather than a new number of its own:
+ * Why the change: on the account that prompted it, `csGames >= 10` suppressed 34
+ * of 35 champion rows, every one of which had a real time-weighted rate — Corki
+ * rendered an em dash while holding 7.0 over 9 games. engy's §1b asked callers to
+ * "render the denominator, OR at least refuse to show csPerMin when csGames is
+ * tiny"; these callers do the first, which was always the stronger half. An em
+ * dash that means both "not measured" and "measured over few" is less honest
+ * than a grey number over a printed denominator, not more.
+ *
+ * The floor stays MYSTATS_LOW_SAMPLE_THRESHOLD rather than a number of its own:
  * this page already mutes a win rate under that threshold, and having CS/min
  * answer to a different bar would mean two adjacent columns on the same row
  * disagreeing about what counts as enough games. One threshold, one meaning.
- *
- * A quotable rate still renders WITH its denominator — this decides whether the
- * number appears, not whether the sample size does.
  */
 export function csRateIsQuotable(csPerMin: number | null, csGames: number): boolean {
   return csPerMin !== null && Number.isFinite(csPerMin) && csGames >= MYSTATS_LOW_SAMPLE_THRESHOLD;

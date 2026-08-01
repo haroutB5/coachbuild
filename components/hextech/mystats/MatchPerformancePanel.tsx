@@ -134,11 +134,17 @@ export default function MatchPerformancePanel({
     {
       key: "cs",
       label: "Avg. CS/min",
-      // Null renders KpiStrip's em dash — an honest absence. Never a 0, which
-      // is a real farming figure.
-      value: csQuotable ? seasonCsPerMin : null,
+      // ALWAYS shown when a rate exists (user directive 2026-08-01, same one
+      // that un-hid the per-champion column). An em dash here now means only
+      // `seasonCsPerMin === null` — nothing measured at all — never "measured,
+      // but over few games". Never a 0, which is a real farming figure.
+      value: seasonCsPerMin,
       format: (n) => n.toFixed(1),
       countUp: true,
+      // Thin sample is carried as WEIGHT, matching the per-champion column and
+      // the winrate cell below: muted instead of gold, with the denominator in
+      // the note. The figure is real either way.
+      valueClassName: csQuotable ? undefined : "text-mut",
       // The note carries this cell's OWN denominator, which is deliberately not
       // the window the bars below are drawn over. formatCsNote only says
       // "only" when csGames is a genuine subset of totalSeasonGames (2026-07-31
