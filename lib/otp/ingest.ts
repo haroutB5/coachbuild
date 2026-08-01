@@ -29,6 +29,7 @@ import { getAccountByRiotId, getMatch, getMatchIdsByPuuid, getMatchTimeline, Rio
 import type { RiotTimeline } from "../pro/types";
 import { opggChampionName } from "../opgg";
 import { fetchOtpCandidates, type OtpCandidate } from "./leaderboard";
+import { ROUTINGS, type Routing } from "./featured";
 
 /** Regions the leaderboard is read from, best-first.
  *
@@ -227,6 +228,18 @@ interface OtpAccountRow {
   tag_line: string;
 }
 
+interface OtpFeaturedRow {
+  puuid: string;
+  champion_id: number;
+  game_name: string;
+  tag_line: string;
+  match_routing: string | null;
+}
+
+function featuredMatchRouting(value: string | null): Routing | null {
+  return value && (ROUTINGS as readonly string[]).includes(value) ? (value as Routing) : null;
+}
+
 /**
  * Pull recent ranked games for the stalest tracked OTP accounts.
  *
@@ -253,6 +266,45 @@ export async function runOtpMatchIngest(
   const log = opts.log ?? (() => {});
   const result: OtpMatchIngestResult = { accountsProcessed: 0, matchesUpserted: 0, errors: [] };
 
+  // The featured account is a separate discovery product from the roster in
+  // otp_accounts. It is therefore not safe to select a roster row and hope it
+  // happens to have the same puuid as otp_featured: the surfaced account may
+  // not be in that roster at all. The refresh route asks for timelines for the
+  // one featured player, so resolve that row directly and do not walk any
+  // other account for this invocation.
+  if (opts.fetchFeaturedTimelines) {
+    if (opts.championId == null) {
+      result.errors.push("featured timeline ingest requires championId");
+      return result;
+    }
+
+    const featuredRows = (await sql`
+      SELECT puuid, champion_id, game_name, tag_line, match_routing
+      FROM coachbuild.otp_featured
+      WHERE champion_id = ${opts.championId}
+      LIMIT 1
+    `) as unknown as OtpFeaturedRow[];
+
+    if (featuredRows.length === 0) {
+      log(`champion ${opts.championId}: no featured account to timeline`);
+      return result;
+    }
+
+    const featured = featuredRows[0];
+    result.accountsProcessed = 1;
+    try {
+      result.matchesUpserted += await ingestFeaturedOtpAccount(
+        sql,
+        featured,
+        matchesPerAccount,
+        log
+      );
+    } catch (err) {
+      result.errors.push(`${featured.game_name}#${featured.tag_line}: ${(err as Error).message}`);
+    }
+    return result;
+  }
+
   // `discovered_at ASC` is the load-bearing tiebreaker, not decoration: a
   // bare `last_fetched_at ASC NULLS FIRST` leaves every never-fetched account
   // in an unstable relative order, and an unstably-ordered LIMIT window can
@@ -275,7 +327,7 @@ export async function runOtpMatchIngest(
         account,
         matchesPerAccount,
         log,
-        opts.fetchFeaturedTimelines ? FEATURED_TIMELINE_GAME_LIMIT : 0
+        0
       );
     } catch (err) {
       result.errors.push(`${account.game_name}#${account.tag_line}: ${(err as Error).message}`);
@@ -297,26 +349,65 @@ export async function runOtpMatchIngest(
   return result;
 }
 
+async function ingestFeaturedOtpAccount(
+  sql: Sql,
+  featured: OtpFeaturedRow,
+  matchesPerAccount: number,
+  log: (msg: string) => void
+): Promise<number> {
+  const regional = featuredMatchRouting(featured.match_routing);
+  if (!regional) {
+    log(
+      `${featured.game_name}#${featured.tag_line}: unsupported featured match routing ` +
+        `${featured.match_routing ?? "(null)"}, skipping`
+    );
+    return 0;
+  }
+
+  return ingestOneOtpAccount(
+    sql,
+    {
+      puuid: featured.puuid,
+      champion_id: featured.champion_id,
+      // The featured row's stored match_routing is authoritative. This field
+      // is unused when regionalOverride is supplied and is only present to
+      // satisfy the shared account shape.
+      region: "",
+      game_name: featured.game_name,
+      tag_line: featured.tag_line,
+    },
+    matchesPerAccount,
+    log,
+    FEATURED_TIMELINE_GAME_LIMIT,
+    regional,
+    false
+  );
+}
+
 export async function ingestOneOtpAccount(
   sql: Sql,
   account: OtpAccountRow,
   matchesPerAccount: number,
   log: (msg: string) => void,
-  timelineLimit = 0
+  timelineLimit = 0,
+  regionalOverride: string | null = null,
+  updateRosterStamp = true
 ): Promise<number> {
-  const routing = routingForServer(account.region);
-  if (!routing) {
+  const regional = regionalOverride ?? routingForServer(account.region)?.regional ?? null;
+  if (!regional) {
     log(`${account.game_name}: unmapped region ${account.region}, skipping`);
     // Permanent condition — stamp it so the walk terminates rather than
     // re-selecting this account at the front of every page forever.
-    await sql`
-      UPDATE coachbuild.otp_accounts SET last_fetched_at = now()
-      WHERE champion_id = ${account.champion_id} AND puuid = ${account.puuid}
-    `;
+    if (updateRosterStamp) {
+      await sql`
+        UPDATE coachbuild.otp_accounts SET last_fetched_at = now()
+        WHERE champion_id = ${account.champion_id} AND puuid = ${account.puuid}
+      `;
+    }
     return 0;
   }
 
-  const matchIds = await getMatchIdsByPuuid(routing.regional, account.puuid, {
+  const matchIds = await getMatchIdsByPuuid(regional, account.puuid, {
     queue: 420,
     start: 0,
     count: matchesPerAccount,
@@ -325,14 +416,16 @@ export async function ingestOneOtpAccount(
 
   let existing = new Set<string>();
   const existingSkillOrders = new Map<string, unknown>();
-  let featured = false;
+  let featured = regionalOverride !== null;
   if (timelineLimit > 0) {
-    const featuredRows = await sql`
-      SELECT 1 FROM coachbuild.otp_featured
-      WHERE champion_id = ${account.champion_id} AND puuid = ${account.puuid}
-      LIMIT 1
-    `;
-    featured = featuredRows.length > 0;
+    if (!featured) {
+      const featuredRows = await sql`
+        SELECT 1 FROM coachbuild.otp_featured
+        WHERE champion_id = ${account.champion_id} AND puuid = ${account.puuid}
+        LIMIT 1
+      `;
+      featured = featuredRows.length > 0;
+    }
   }
   if (matchIds.length > 0) {
     const rows = (await sql`
@@ -354,12 +447,12 @@ export async function ingestOneOtpAccount(
   let upserted = 0;
   for (const matchId of workIds) {
     try {
-      const match = await getMatch(routing.regional, matchId);
+      const match = await getMatch(regional, matchId);
       let timeline = NO_TIMELINE;
       let timelineFetched = false;
       if (timelineIds.has(matchId)) {
         try {
-          timeline = await getMatchTimeline(routing.regional, matchId);
+          timeline = await getMatchTimeline(regional, matchId);
           timelineFetched = true;
         } catch (err) {
           log(`match ${matchId}: timeline unavailable — ${(err as Error).message}`);
@@ -410,10 +503,12 @@ export async function ingestOneOtpAccount(
     }
   }
 
-  await sql`
-    UPDATE coachbuild.otp_accounts SET last_fetched_at = now()
-    WHERE champion_id = ${account.champion_id} AND puuid = ${account.puuid}
-  `;
+  if (updateRosterStamp) {
+    await sql`
+      UPDATE coachbuild.otp_accounts SET last_fetched_at = now()
+      WHERE champion_id = ${account.champion_id} AND puuid = ${account.puuid}
+    `;
+  }
 
   return upserted;
 }

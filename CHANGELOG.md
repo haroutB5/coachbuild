@@ -2,6 +2,43 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.92.1] — 2026-08-01 — OTP skill order worked for exactly one champion
+
+User-reported on Ziggs: the OTP card still showed the three-letter fallback while Pro showed the
+grid. The card was right — it was honestly reporting missing data. **Nothing in the running app ever
+created that data.** Viktor only worked because the ingest script had been run by hand once.
+
+### Fixed
+- **The timeline gate compared against a set the ingest never walks.** `runOtpMatchIngest` fetched
+  timelines only when the account it was processing matched a row in `otp_featured` — but the
+  accounts it walks come from `otp_accounts`, and the two are populated by separate discovery paths.
+  For Ziggs: `otp_featured` has a row, `otp_accounts` has nine, and the featured player
+  (`Little Bomb#HK1`) is **not among them**. So the condition was false for every account, forever.
+  Proven before the fix: `POST /api/otp/refresh?championId=115` returned
+  `{"refreshed":true,"matchesUpserted":6}` while the Ziggs `skill_order` count stayed at 0.
+  The ingest now resolves the featured account from `otp_featured` and fetches it **directly**,
+  using its stored routing, without inserting into or stamping `otp_accounts`.
+- **Nothing was asking for a refresh either.** `ProConsensusCard` had a trigger, but its OTP variant
+  is no longer rendered — the tab shows `FeaturedOtpCard` — and its condition only fired when
+  NOTHING was stored, which is useless for a one-trick with 230 stored games and no timelines.
+  `FeaturedOtpCard` now fires the refresh when the payload comes back with a null `skillOrder`.
+  Same orphaning that hid the apply buttons in v0.91.0; third time this pattern has bitten.
+
+### Measured, before → after
+| champion | one-trick | games with a recorded order |
+|---|---|---|
+| Ziggs | Little Bomb#HK1 | 0 → **17** |
+| Annie | Annie IRL | 0 → **16** |
+| Viktor | Dun#NA1 | 22 (unchanged) |
+
+All three verified independently against the live API: 18 levels, Q/W/E 5 each, R 3, ultimate at
+6/11/16.
+
+### Note
+`otp_featured` holding a puuid absent from `otp_accounts` is **legitimate**, not a data bug — the two
+are filled by different discovery paths. They were deliberately not merged; the ingest now just stops
+assuming they overlap. The per-call budget and the 30-game timeline cap are unchanged.
+
 ## [0.92.0] — 2026-08-01 — The skill-order grid on OTP and Pro
 
 User: "Add the same skill order template as in the current Build page, into the OTP and Pro page."

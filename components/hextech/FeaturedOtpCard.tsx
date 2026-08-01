@@ -464,6 +464,33 @@ export default function FeaturedOtpCard({
       setData(body);
       setMeta(m);
       setLoading(false);
+
+      // Pull the timelines for the champion someone is ACTUALLY looking at.
+      //
+      // Why this is here and not in ProConsensusCard, which already has a
+      // trigger: that component's OTP variant is not rendered any more — this
+      // card is what the OTP tab shows — so its trigger never fires. Same
+      // orphaning that left the apply buttons behind when the tab swapped
+      // components (v0.91.0).
+      //
+      // And its condition would not have helped: it fires only when NOTHING is
+      // stored. The real gap is a one-trick with plenty of stored games and no
+      // recorded skill orders — Little Bomb#HK1 on Ziggs had 35 games and a
+      // null skillOrder, so the card correctly fell back to "not recorded for
+      // this one-trick yet" and nothing ever went to fetch them. Viktor only
+      // worked because the timeline ingest was run by hand once.
+      //
+      // Fire-and-forget on purpose: the route is claim- AND cooldown-gated
+      // server-side (it spends the shared Riot key, paced at 1.3s), it takes
+      // tens of seconds, and a failure must never turn a working card into an
+      // error. The grid appears on a later visit — which is exactly what the
+      // fallback copy already promises.
+      if (body && !body.skillOrder) {
+        void fetch(
+          `/api/otp/refresh?championId=${champ.id}&championKey=${encodeURIComponent(champ.key)}`,
+          { method: "POST" }
+        ).catch(() => {});
+      }
       // Rune art resolves separately and is DECORATIVE — a failure here costs
       // icons and names, never the card, and never the page STRUCTURE: the tree
       // labels, the rows and their order all come from perkSlots.ts and the

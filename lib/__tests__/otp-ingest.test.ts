@@ -234,6 +234,59 @@ describe("ingestOneOtpAccount", () => {
 });
 
 describe("runOtpMatchIngest", () => {
+  it("ingests the surfaced featured account directly, outside otp_accounts", async () => {
+    vi.mocked(getMatchIdsByPuuid).mockResolvedValue(["M1"]);
+    vi.mocked(getMatch).mockResolvedValue(riotMatch("M1", "featured-puuid", 112));
+    vi.mocked(getMatchTimeline).mockResolvedValue({
+      info: {
+        frames: [
+          {
+            timestamp: 1000,
+            events: [
+              { type: "SKILL_LEVEL_UP", participantId: 1, skillSlot: 1, timestamp: 1000 },
+              { type: "SKILL_LEVEL_UP", participantId: 1, skillSlot: 3, timestamp: 2000 },
+            ],
+          },
+        ],
+      },
+    } as never);
+    // Featured lookup, existing-match lookup, then the insert. There is no
+    // otp_accounts selection or roster stamp in this path.
+    mockSql
+      .mockResolvedValueOnce([
+        {
+          puuid: "featured-puuid",
+          champion_id: 112,
+          game_name: "Featured",
+          tag_line: "EUW",
+          match_routing: "europe",
+        },
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    const out = await runOtpMatchIngest({
+      championId: 112,
+      batch: 1,
+      matchesPerAccount: 20,
+      fetchFeaturedTimelines: true,
+    });
+
+    expect(out.accountsProcessed).toBe(1);
+    expect(out.matchesUpserted).toBe(1);
+    expect(vi.mocked(getMatchIdsByPuuid)).toHaveBeenCalledWith(
+      "europe",
+      "featured-puuid",
+      expect.objectContaining({ count: 20 })
+    );
+    expect(vi.mocked(getMatchTimeline)).toHaveBeenCalledWith("europe", "M1");
+    expect(
+      mockSql.mock.calls.some((c) =>
+        String(c[0]?.join?.("") ?? "").includes("UPDATE coachbuild.otp_accounts")
+      )
+    ).toBe(false);
+  });
+
   it("bumps the stamp of an account that throws, so a failing page can't loop", async () => {
     mockSql.mockResolvedValueOnce([
       { puuid: "p1", champion_id: 112, region: "EUW", game_name: "A", tag_line: "1" },
