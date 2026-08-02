@@ -2,6 +2,32 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.93.0] — 2026-08-02 — Detailed Rankings finally lists the champions being recommended
+
+### Fixed
+- **Draft Assistant, no enemies picked: the rankings panel showed one champion while the cards
+  recommended three.** User report, Mid Lane — cards read Riven / Diana / Ahri, DETAILED RANKINGS
+  read "Riven" and nothing else. The two surfaces were reading different pools. The hero cards call
+  `resolveTopRecommendationCards` with four sources (recommended, potential, blind, full lane list)
+  and its `chooseSlot` happily fills from the blind feed; the table rendered only
+  `filteredRecommendedRows` + `filteredPotentialRows`, which come from the matchup-driven feed and
+  are near-empty before any enemy is locked in. With no enemies the Recommended view now merges the
+  filtered blind-pick rows — de-duplicated by champion, filters still authoritative, matchup rows
+  ahead of blind rows on ties — and says so: "No enemies picked yet — showing blind-pick rankings."
+  Behaviour with enemies selected is unchanged. The full lane list is deliberately NOT merged in;
+  it is a per-slot fallback for the cards, and folding it in would duplicate "View full table".
+- **The recommended champions could still fall out of the visible rankings entirely.** Caught in a
+  browser after the first fix, at the DEFAULT 0% Min. Pick Rate rather than the 1.0% in the user's
+  screenshot: the cards prefer meta rows (`chooseSlot` exhausts non-off-meta candidates first) while
+  the table sorts purely by value, so a wall of 0.2%-pick-rate champions with inflated win rates
+  pushed Diana and Ahri off the list — the original complaint, in a different filter state. Any
+  champion on a hero card is now guaranteed to appear, under a
+  "CARDED RECOMMENDATIONS · SHOWN FOR REFERENCE" divider, **at its true rank and true values** —
+  Diana as #13 (51.4%), Ahri as #17 (50.8%). The honest sorted top ten is not reordered, nothing is
+  pinned up to look better, and a card excluded by an active filter stays excluded, because a filter
+  is an explicit instruction. When the carded champions already rank inside the top ten (as at 1.0%)
+  no reference section renders at all.
+
 ## [0.92.1] — 2026-08-01 — OTP skill order worked for exactly one champion
 
 User-reported on Ziggs: the OTP card still showed the three-letter fallback while Pro showed the

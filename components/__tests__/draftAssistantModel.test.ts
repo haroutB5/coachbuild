@@ -4,11 +4,15 @@ import type { BlindPickResult } from "@/lib/draft/blindPick";
 import { POOL_MIN_PICKRATE } from "@/lib/draft/score";
 import {
   DEFAULT_DRAFT_ASSISTANT_FILTERS,
+  compareDraftAssistantCandidates,
   filterCounterCandidates,
   filterComfortCandidates,
   filterDraftAssistantCandidates,
   isOffMetaLaneShare,
+  resolveRecommendedDetailCandidates,
   resolveTopRecommendationCards,
+  resolveVisibleDraftAssistantRanking,
+  type DraftAssistantCandidate,
   type DraftLaneStat,
 } from "../hextech/draftAssistantModel";
 
@@ -43,6 +47,27 @@ function blind(champId: number, fieldWr: number, floor: number, games: number): 
 
 function stat(champId: number, laneShare: number, totalGames: number): DraftLaneStat {
   return { champId, baselineWr: 0.5, laneShare, totalGames };
+}
+
+function candidate(
+  champId: number,
+  source: DraftAssistantCandidate["source"],
+  rank: number,
+  winRate: number,
+  totalGames: number,
+  laneShare = 0.02
+): DraftAssistantCandidate {
+  return {
+    champId,
+    winRate,
+    floor: source === "blind" ? winRate - 0.03 : null,
+    totalGames,
+    laneShare,
+    rank,
+    isPotential: false,
+    personalOverall: { games: 0, wins: 0 },
+    source,
+  };
 }
 
 describe("Draft Assistant recommendation slots", () => {
@@ -173,6 +198,149 @@ describe("Draft Assistant filters", () => {
       { champId: 3, synergyDelta: -0.004 },
     ];
     expect(filterCounterCandidates(rows).map((row) => row.champId)).toEqual([1]);
+  });
+});
+
+describe("Recommended detail ranking source", () => {
+  it("uses the filtered blind pool for no-enemy details, matching the three cards and de-duplicating", () => {
+    // Reported first-pick shape: Riven is the matchup recommendation, while
+    // Diana and Ahri come from the blind ranking.
+    const cards = resolveTopRecommendationCards({
+      recommended: [play(92, 0.58, 12000)],
+      blind: [blind(131, 0.56, 0.53, 227014), blind(103, 0.55, 0.52, 429501)],
+      laneStats: new Map([
+        [92, stat(92, 0.04, 12000)],
+        [131, stat(131, 0.03, 227014)],
+        [103, stat(103, 0.02, 429501)],
+      ]),
+    });
+    const cardIds = cards.flatMap((card) => (card.candidate ? [card.candidate.champId] : []));
+    const detailCandidates = resolveRecommendedDetailCandidates({
+      noEnemies: true,
+      recommended: [candidate(92, "recommended", 1, 0.58, 12000)],
+      blind: [
+        candidate(92, "blind", 1, 0.57, 12000),
+        candidate(131, "blind", 1, 0.56, 227014),
+        candidate(103, "blind", 2, 0.55, 429501),
+      ],
+    });
+
+    expect(cardIds).toEqual([92, 131, 103]);
+    expect(detailCandidates.map((item) => item.champId)).toEqual(cardIds);
+    expect(new Set(detailCandidates.map((item) => item.champId)).size).toBe(3);
+    expect(detailCandidates[0].source).toBe("recommended");
+  });
+
+  it("keeps matchup-only rows unchanged when enemies are selected", () => {
+    const recommended = [candidate(92, "recommended", 1, 0.58, 12000), candidate(7, "recommended", 2, 0.55, 7000)];
+    const detailCandidates = resolveRecommendedDetailCandidates({
+      noEnemies: false,
+      recommended,
+      blind: [candidate(131, "blind", 1, 0.56, 227014)],
+    });
+
+    expect(detailCandidates).toBe(recommended);
+    expect(detailCandidates.map((item) => item.champId)).toEqual([92, 7]);
+    expect(detailCandidates.some((item) => item.source === "blind")).toBe(false);
+  });
+
+  it("does not let a filtered-out blind row leak into no-enemy details", () => {
+    const filteredBlind = filterDraftAssistantCandidates(
+      [
+        candidate(131, "blind", 1, 0.56, 227014),
+        candidate(103, "blind", 2, 0.55, 429501),
+        candidate(999, "blind", 3, 0.54, 999),
+      ],
+      { minPickRate: 0.01, includeOffMeta: false, minimumGames: 1000 }
+    );
+    const detailCandidates = resolveRecommendedDetailCandidates({
+      noEnemies: true,
+      recommended: [candidate(92, "recommended", 1, 0.58, 12000)],
+      blind: filteredBlind,
+    });
+
+    expect(detailCandidates.map((item) => item.champId)).toEqual([92, 131, 103]);
+    expect(detailCandidates.some((item) => item.champId === 999)).toBe(false);
+  });
+
+  it("puts matchup recommendations ahead of blind rows when the sorted figure ties", () => {
+    const recommended = candidate(92, "recommended", 3, 0.55, 5000);
+    const blindRow = candidate(131, "blind", 1, 0.55, 5000);
+    expect(compareDraftAssistantCandidates(recommended, blindRow, "winRate")).toBeLessThan(0);
+    expect(compareDraftAssistantCandidates(recommended, blindRow, "pickRate")).toBeLessThan(0);
+    expect(compareDraftAssistantCandidates(recommended, blindRow, "games")).toBeLessThan(0);
+  });
+});
+
+describe("Carded recommendations in the visible ranking window", () => {
+  function fixture() {
+    const cards = resolveTopRecommendationCards({
+      recommended: [play(92, 0.524, 56878)],
+      blind: [blind(131, 0.514, 0.49, 227014), blind(103, 0.508, 0.47, 429501)],
+      laneStats: new Map([
+        [92, stat(92, 0.012, 56878)],
+        [131, stat(131, 0.046, 227014)],
+        [103, stat(103, 0.087, 429501)],
+      ]),
+    });
+    const carded = cards.flatMap((card) => (card.candidate ? [card.candidate] : []));
+    const offMeta = [0.6, 0.59, 0.58, 0.57, 0.56, 0.55, 0.54, 0.53, 0.52, 0.51].map((winRate, index) =>
+      candidate(200 + index, "recommended", index + 1, winRate, 10000 + index, 0.005)
+    );
+    return { carded, rows: [...offMeta, ...carded] };
+  }
+
+  function visibleAt(minPickRate: number) {
+    const { carded, rows } = fixture();
+    const filters = { minPickRate, includeOffMeta: true, minimumGames: 1000 };
+    const filteredRows = filterDraftAssistantCandidates(rows, filters);
+    const filteredCarded = filterDraftAssistantCandidates(carded, filters);
+    return {
+      carded,
+      filteredRows,
+      visible: resolveVisibleDraftAssistantRanking({ rows: filteredRows, carded: filteredCarded, sort: "winRate" }),
+    };
+  }
+
+  it("keeps every carded champion in the visible rows with a 0% floor and off-meta included", () => {
+    const { carded, filteredRows, visible } = visibleAt(0);
+    const cardIds = carded.map((item) => item.champId);
+    const sorted = [...filteredRows].sort((a, b) => compareDraftAssistantCandidates(a, b, "winRate"));
+
+    expect(visible).toHaveLength(12);
+    expect(new Set(visible.map((row) => row.candidate.champId)).size).toBeGreaterThanOrEqual(cardIds.length);
+    for (const cardId of cardIds) expect(visible.some((row) => row.candidate.champId === cardId)).toBe(true);
+    expect(visible.filter((row) => row.isAppended).map((row) => row.candidate.champId)).toEqual([131, 103]);
+    expect(visible.filter((row) => !row.isAppended).map((row) => row.candidate.champId)).toEqual(sorted.slice(0, 10).map((row) => row.champId));
+  });
+
+  it("keeps every carded champion in the natural top ten when the 1% floor removes off-meta rows", () => {
+    const { carded, filteredRows, visible } = visibleAt(0.01);
+    const sorted = [...filteredRows].sort((a, b) => compareDraftAssistantCandidates(a, b, "winRate"));
+
+    expect(visible.map((row) => row.candidate.champId)).toEqual(sorted.map((row) => row.champId));
+    expect(visible.every((row) => !row.isAppended)).toBe(true);
+    expect(new Set(visible.map((row) => row.candidate.champId))).toEqual(new Set(carded.map((row) => row.champId)));
+  });
+
+  it("keeps appended rank and displayed values truthful, while respecting filter exclusions", () => {
+    const { carded, filteredRows, visible } = visibleAt(0);
+    const sorted = [...filteredRows].sort((a, b) => compareDraftAssistantCandidates(a, b, "winRate"));
+    for (const row of visible) {
+      const trueRank = sorted.findIndex((candidate) => candidate.champId === row.candidate.champId) + 1;
+      expect(row.rank).toBe(trueRank);
+      expect(row.candidate.winRate).toBe(sorted[trueRank - 1].winRate);
+    }
+
+    const excludedCard = candidate(555, "blind", 4, 0.6, 999, 0.03);
+    const filters = { minPickRate: 0, includeOffMeta: true, minimumGames: 1000 };
+    const filteredExcludedCard = filterDraftAssistantCandidates([excludedCard], filters);
+    const excludedVisible = resolveVisibleDraftAssistantRanking({
+      rows: filteredRows,
+      carded: [...carded, ...filteredExcludedCard],
+      sort: "winRate",
+    });
+    expect(excludedVisible.some((row) => row.candidate.champId === excludedCard.champId)).toBe(false);
   });
 });
 

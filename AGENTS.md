@@ -15,9 +15,10 @@ working in this same tree at the same time.
 - Do not fix an unrelated defect silently. Note it in your handoff and leave it.
 
 **Reporting**
-- Write your handoff to `C:/Claude/AI/coachbuild/HANDOFF-<your-agent-name>.md`: what changed, what you
-  verified, what you did NOT touch, what the orchestrator must know.
-- Never edit another agent's HANDOFF file.
+- Your handoff is your FINAL MESSAGE. Dispatches from the orchestrator provide a JSON schema for
+  it — return that JSON and do NOT write any HANDOFF-*.md file yourself; the orchestrator renders
+  `HANDOFF-<agent>.md` from your return and cross-checks the claims against git.
+- Never create or edit any HANDOFF file, yours or another agent's.
 - Cite file paths and symbol names. Never cite `path:line` — line numbers drift and become lies.
 - State plainly what you could not verify. An unverified claim reported as done is the
   single most expensive thing you can do here.

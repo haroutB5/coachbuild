@@ -86,6 +86,15 @@ export interface DraftAssistantCandidate {
   source: "recommended" | "blind";
 }
 
+export type DraftAssistantDetailSort = "winRate" | "pickRate" | "games";
+
+export interface DraftAssistantVisibleRankingRow {
+  candidate: DraftAssistantCandidate;
+  rank: number;
+  isCarded: boolean;
+  isAppended: boolean;
+}
+
 export interface DraftAssistantCard {
   slot: "best" | "blind" | "reliable";
   candidate: DraftAssistantCandidate | null;
@@ -141,6 +150,74 @@ function uniqueCandidates(candidates: DraftAssistantCandidate[]): DraftAssistant
     seen.add(candidate.champId);
     return true;
   });
+}
+
+/** Recommended detail rows use the matchup feed unless there is no enemy
+ * information yet. In that first-pick state, append the already-filtered
+ * blind feed and let the real matchup rows win any champion-level duplicate. */
+export function resolveRecommendedDetailCandidates(args: {
+  recommended: DraftAssistantCandidate[];
+  blind: DraftAssistantCandidate[];
+  noEnemies: boolean;
+}): DraftAssistantCandidate[] {
+  return args.noEnemies ? uniqueCandidates([...args.recommended, ...args.blind]) : args.recommended;
+}
+
+/** Sort detail rows by the selected figure. Matchup-driven recommendations
+ * are the stable source tiebreak ahead of blind rows when the figure is equal;
+ * rank then preserves each feed's existing order. */
+export function compareDraftAssistantCandidates(
+  a: DraftAssistantCandidate,
+  b: DraftAssistantCandidate,
+  sort: DraftAssistantDetailSort
+): number {
+  const valueA = sort === "winRate" ? a.winRate : sort === "pickRate" ? a.laneShare ?? -1 : a.totalGames ?? -1;
+  const valueB = sort === "winRate" ? b.winRate : sort === "pickRate" ? b.laneShare ?? -1 : b.totalGames ?? -1;
+  if (valueB !== valueA) return valueB - valueA;
+  const sourceA = a.source === "recommended" ? 0 : 1;
+  const sourceB = b.source === "recommended" ? 0 : 1;
+  return sourceA !== sourceB ? sourceA - sourceB : a.rank - b.rank;
+}
+
+/** Keep the honest sorted window intact, then append only carded candidates
+ * that fell outside it. Appended rows carry their true insertion rank; they
+ * are reference rows, not a reorder of the active ranking. Candidates are
+ * expected to have already passed the active filters before this function is
+ * called. */
+export function resolveVisibleDraftAssistantRanking(args: {
+  rows: DraftAssistantCandidate[];
+  carded: DraftAssistantCandidate[];
+  sort: DraftAssistantDetailSort;
+  limit?: number;
+  preserveOrder?: boolean;
+}): DraftAssistantVisibleRankingRow[] {
+  const limit = args.limit ?? 10;
+  const baseRows = args.rows;
+  const rankedRows = args.preserveOrder
+    ? baseRows
+    : [...baseRows].sort((a, b) => compareDraftAssistantCandidates(a, b, args.sort));
+  const cardedCandidates = uniqueCandidates(args.carded);
+  const cardedIds = new Set(cardedCandidates.map((candidate) => candidate.champId));
+  const visibleRows = rankedRows.slice(0, limit);
+  const visibleIds = new Set(visibleRows.map((candidate) => candidate.champId));
+  const rankFor = (candidate: DraftAssistantCandidate): number => {
+    const baseIndex = rankedRows.findIndex((row) => row.champId === candidate.champId);
+    if (baseIndex >= 0) return baseIndex + 1;
+    if (args.preserveOrder) return 1 + rankedRows.filter((row) => row.rank < candidate.rank).length;
+    return 1 + rankedRows.filter((row) => compareDraftAssistantCandidates(row, candidate, args.sort) < 0).length;
+  };
+
+  const result: DraftAssistantVisibleRankingRow[] = visibleRows.map((candidate, index) => ({
+    candidate,
+    rank: index + 1,
+    isCarded: cardedIds.has(candidate.champId),
+    isAppended: false,
+  }));
+  const appended = cardedCandidates
+    .filter((candidate) => !visibleIds.has(candidate.champId))
+    .sort((a, b) => (args.preserveOrder ? a.rank - b.rank : compareDraftAssistantCandidates(a, b, args.sort)))
+    .map((candidate) => ({ candidate, rank: rankFor(candidate), isCarded: true, isAppended: true }));
+  return [...result, ...appended];
 }
 
 /** The three hero cards are deliberately resolved from separate ranked

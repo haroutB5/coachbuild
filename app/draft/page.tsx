@@ -32,7 +32,7 @@
 // rendered inline by EnemyTeamPanel, never a routed/portalled surface.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { ChampionRef } from "@/lib/types";
 import { LANE_ORDER, LANE_TO_ROLE_ID, LANE_LABEL, type LaneId } from "@/components/hextech/heroContracts";
 import { getChampionIconMap, type ChampionIconEntry } from "@/components/proAssets";
@@ -62,9 +62,12 @@ import {
   filterCounterCandidates,
   filterDraftAssistantCandidates,
   isOffMetaLaneShare,
+  resolveVisibleDraftAssistantRanking,
   resolveTopRecommendationCards,
+  resolveRecommendedDetailCandidates,
   type DraftAssistantCandidate,
   type DraftAssistantCard,
+  type DraftAssistantDetailSort,
   type DraftLaneStat,
   type DraftMatchupPreview,
 } from "@/components/hextech/draftAssistantModel";
@@ -228,7 +231,7 @@ function BlindPickSkeleton() {
 
 const MAX_ALLIED_ADDITIONAL = 4;
 type AssistantView = "recommended" | "blind" | "counters" | "comfort";
-type DetailSort = "winRate" | "pickRate" | "games";
+type DetailSort = DraftAssistantDetailSort;
 
 function formatPercent(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "—";
@@ -574,8 +577,11 @@ function DetailedRankings({
   showAll,
   onShowAll,
   preserveOrder,
+  showNoEnemyBlindHint,
+  cardedRows,
 }: {
   rows: DetailRow[];
+  cardedRows: DetailRow[];
   laneAverageValue: number | null;
   sort: DetailSort;
   onSortChange: (sort: DetailSort) => void;
@@ -586,15 +592,25 @@ function DetailedRankings({
   showAll: boolean;
   onShowAll: () => void;
   preserveOrder: boolean;
+  showNoEnemyBlindHint: boolean;
 }) {
-  const sortedRows = preserveOrder
-    ? rows
-    : [...rows].sort((a, b) => {
-        const valueA = sort === "winRate" ? a.candidate.winRate : sort === "pickRate" ? a.candidate.laneShare ?? -1 : a.candidate.totalGames ?? -1;
-        const valueB = sort === "winRate" ? b.candidate.winRate : sort === "pickRate" ? b.candidate.laneShare ?? -1 : b.candidate.totalGames ?? -1;
-        return valueB !== valueA ? valueB - valueA : a.candidate.rank - b.candidate.rank;
-      });
-  const visibleRows = showAll ? sortedRows : sortedRows.slice(0, 10);
+  const detailRowByChampionId = new Map<number, DetailRow>();
+  for (const row of [...rows, ...cardedRows]) {
+    if (!detailRowByChampionId.has(row.candidate.champId)) detailRowByChampionId.set(row.candidate.champId, row);
+  }
+  const rankingRows = resolveVisibleDraftAssistantRanking({
+    rows: rows.map((row) => row.candidate),
+    carded: cardedRows.map((row) => row.candidate),
+    sort,
+    limit: showAll ? Number.MAX_SAFE_INTEGER : 10,
+    preserveOrder,
+  });
+  const displayRows = rankingRows
+    .map((rankingRow) => {
+      const row = detailRowByChampionId.get(rankingRow.candidate.champId);
+      return row ? { ...rankingRow, row } : null;
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null);
 
   function delta(candidate: DraftAssistantCandidate): number | null {
     return laneAverageValue === null ? null : candidate.winRate - laneAverageValue;
@@ -625,6 +641,7 @@ function DetailedRankings({
           </button>
         </div>
       </div>
+      {showNoEnemyBlindHint && <p className="border-b border-line px-4 py-2 text-[10px] text-mut">No enemies picked yet — showing blind-pick rankings.</p>}
       <div className="border-b border-line px-4 py-3">
         <label className="flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-mut">
           <span>Sort by</span>
@@ -638,31 +655,35 @@ function DetailedRankings({
 
       {grid ? (
         <div className="grid grid-cols-1 gap-2 p-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-          {visibleRows.map((row, position) => {
+          {displayRows.map((displayRow, position) => {
+            const row = displayRow.row;
             const rowDelta = delta(row.candidate);
             const offMeta = isOffMetaLaneShare(row.candidate.laneShare);
+            const startsCardedSection = displayRow.isAppended && (position === 0 || !displayRows[position - 1].isAppended);
             return (
-              <button
-                type="button"
-                key={row.candidate.champId}
-                onClick={() => onSelect(row.candidate.champId)}
-                className={`min-w-0 rounded-lg border p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${selectedChampionId === row.candidate.champId ? "border-teal bg-teal/8" : "border-line hover:border-line-gold"}`}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] tabular-nums text-mut">{position + 1}</span>
-                  <span className="h-8 w-8 flex-shrink-0 overflow-hidden rounded-md bg-black/30">
-                    <IconWithFallback src={row.icon} alt={row.name} fallbackGlyph={row.name} className="h-full w-full object-cover" size={32} />
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-txt">{row.name}</span>
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
-                  <span className="text-mut">WIN RATE <strong className="block text-[12px] text-good">{formatPercent(row.candidate.winRate)}</strong><small className={rowDelta === null ? "text-mut" : rowDelta >= 0 ? "text-good" : "text-bad"}>{rowDelta === null ? "—" : `${rowDelta >= 0 ? "+" : ""}${formatPercent(rowDelta)}`}</small></span>
-                  <span className="text-mut">PICK RATE <strong className="block text-[12px] text-txt">{formatPercent(row.candidate.laneShare)}</strong><small className="text-mut">{formatGames(row.candidate.totalGames)}</small></span>
-                </div>
-                {offMeta && <span className="mt-2 inline-flex rounded border border-line-gold px-1.5 py-0.5 text-[9px] font-semibold text-mut">Off-Meta</span>}
-                {row.candidate.isPotential && <span className="mt-2 ml-1 inline-flex rounded border border-line-gold px-1.5 py-0.5 text-[9px] font-semibold text-mut">Low-Sample</span>}
-                {row.difficultyBand && <span className="mt-2 ml-1 inline-flex rounded border border-line px-1.5 py-0.5 text-[9px] font-semibold text-mut">{row.difficultyBand}</span>}
-              </button>
+              <Fragment key={`${row.candidate.champId}-${displayRow.isAppended ? "card" : "rank"}`}>
+                {startsCardedSection && <div className="col-span-full border-t border-line pt-2 text-[9px] font-bold tracking-[0.12em] text-mut">CARDED RECOMMENDATIONS · SHOWN FOR REFERENCE</div>}
+                <button
+                  type="button"
+                  onClick={() => onSelect(row.candidate.champId)}
+                  className={`min-w-0 rounded-lg border p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${selectedChampionId === row.candidate.champId ? "border-teal bg-teal/8" : "border-line hover:border-line-gold"}`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] tabular-nums text-mut">{displayRow.rank}</span>
+                    <span className="h-8 w-8 flex-shrink-0 overflow-hidden rounded-md bg-black/30">
+                      <IconWithFallback src={row.icon} alt={row.name} fallbackGlyph={row.name} className="h-full w-full object-cover" size={32} />
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-txt">{row.name}</span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
+                    <span className="text-mut">WIN RATE <strong className="block text-[12px] text-good">{formatPercent(row.candidate.winRate)}</strong><small className={rowDelta === null ? "text-mut" : rowDelta >= 0 ? "text-good" : "text-bad"}>{rowDelta === null ? "—" : `${rowDelta >= 0 ? "+" : ""}${formatPercent(rowDelta)}`}</small></span>
+                    <span className="text-mut">PICK RATE <strong className="block text-[12px] text-txt">{formatPercent(row.candidate.laneShare)}</strong><small className="text-mut">{formatGames(row.candidate.totalGames)}</small></span>
+                  </div>
+                  {offMeta && <span className="mt-2 inline-flex rounded border border-line-gold px-1.5 py-0.5 text-[9px] font-semibold text-mut">Off-Meta</span>}
+                  {row.candidate.isPotential && <span className="mt-2 ml-1 inline-flex rounded border border-line-gold px-1.5 py-0.5 text-[9px] font-semibold text-mut">Low-Sample</span>}
+                  {row.difficultyBand && <span className="mt-2 ml-1 inline-flex rounded border border-line px-1.5 py-0.5 text-[9px] font-semibold text-mut">{row.difficultyBand}</span>}
+                </button>
+              </Fragment>
             );
           })}
         </div>
@@ -680,34 +701,39 @@ function DetailedRankings({
               </tr>
             </thead>
             <tbody>
-              {visibleRows.map((row, position) => {
+              {displayRows.map((displayRow, position) => {
+                const row = displayRow.row;
                 const rowDelta = delta(row.candidate);
                 const offMeta = isOffMetaLaneShare(row.candidate.laneShare);
+                const startsCardedSection = displayRow.isAppended && (position === 0 || !displayRows[position - 1].isAppended);
                 return (
-                  <tr key={row.candidate.champId} className={`border-b border-line/60 ${selectedChampionId === row.candidate.champId ? "bg-teal/8" : "hover:bg-white/[0.02]"}`}>
-                    <td className="px-3 py-3 text-[10px] tabular-nums text-mut">{position + 1}</td>
-                    <td className="px-2 py-3">
-                      <button type="button" onClick={() => onSelect(row.candidate.champId)} className="flex min-w-0 items-center gap-2 text-left">
-                        <span className="h-8 w-8 flex-shrink-0 overflow-hidden rounded-md bg-black/30">
-                          <IconWithFallback src={row.icon} alt={row.name} fallbackGlyph={row.name} className="h-full w-full object-cover" size={32} />
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block max-w-[110px] truncate text-[11px] font-semibold text-txt">{row.name}</span>
-                          {offMeta && <span className="mt-0.5 block text-[9px] text-mut">Off-Meta</span>}
-                          {row.candidate.isPotential && <span className="mt-0.5 block text-[9px] text-mut">Low-Sample</span>}
-                        </span>
-                      </button>
-                    </td>
-                    <td className="px-2 py-3 text-right tabular-nums">
-                      <span className="block text-[12px] font-semibold text-good">{formatPercent(row.candidate.winRate)}</span>
-                      <span className={`block text-[10px] ${rowDelta === null ? "text-mut" : rowDelta >= 0 ? "text-good" : "text-bad"}`}>{rowDelta === null ? "—" : `${rowDelta >= 0 ? "+" : ""}${formatPercent(rowDelta)}`}</span>
-                    </td>
-                    <td className="px-3 py-3 text-right tabular-nums">
-                      <span className="block text-[12px] text-txt">{formatPercent(row.candidate.laneShare)}</span>
-                      <span className="block text-[10px] text-mut">{formatGames(row.candidate.totalGames)}</span>
-                    </td>
-                    <td className="px-3 py-3 text-right text-[10px] text-mut">{row.difficultyBand ?? "—"}</td>
-                  </tr>
+                  <Fragment key={`${row.candidate.champId}-${displayRow.isAppended ? "card" : "rank"}`}>
+                    {startsCardedSection && <tr><td colSpan={5} className="border-t border-line px-3 py-2 text-[9px] font-bold tracking-[0.12em] text-mut">CARDED RECOMMENDATIONS · SHOWN FOR REFERENCE</td></tr>}
+                    <tr className={`border-b border-line/60 ${selectedChampionId === row.candidate.champId ? "bg-teal/8" : "hover:bg-white/[0.02]"}`}>
+                      <td className="px-3 py-3 text-[10px] tabular-nums text-mut">{displayRow.rank}</td>
+                      <td className="px-2 py-3">
+                        <button type="button" onClick={() => onSelect(row.candidate.champId)} className="flex min-w-0 items-center gap-2 text-left">
+                          <span className="h-8 w-8 flex-shrink-0 overflow-hidden rounded-md bg-black/30">
+                            <IconWithFallback src={row.icon} alt={row.name} fallbackGlyph={row.name} className="h-full w-full object-cover" size={32} />
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block max-w-[110px] truncate text-[11px] font-semibold text-txt">{row.name}</span>
+                            {offMeta && <span className="mt-0.5 block text-[9px] text-mut">Off-Meta</span>}
+                            {row.candidate.isPotential && <span className="mt-0.5 block text-[9px] text-mut">Low-Sample</span>}
+                          </span>
+                        </button>
+                      </td>
+                      <td className="px-2 py-3 text-right tabular-nums">
+                        <span className="block text-[12px] font-semibold text-good">{formatPercent(row.candidate.winRate)}</span>
+                        <span className={`block text-[10px] ${rowDelta === null ? "text-mut" : rowDelta >= 0 ? "text-good" : "text-bad"}`}>{rowDelta === null ? "—" : `${rowDelta >= 0 ? "+" : ""}${formatPercent(rowDelta)}`}</span>
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums">
+                        <span className="block text-[12px] text-txt">{formatPercent(row.candidate.laneShare)}</span>
+                        <span className="block text-[10px] text-mut">{formatGames(row.candidate.totalGames)}</span>
+                      </td>
+                      <td className="px-3 py-3 text-right text-[10px] text-mut">{row.difficultyBand ?? "—"}</td>
+                    </tr>
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -1094,6 +1120,20 @@ export default function DraftPage() {
   });
   const filteredBlindRows = filterDraftAssistantCandidates(blindFilterRows, activeFilters);
   const filteredBlindPicks = filteredBlindRows.map((row) => row.pick);
+  const filteredBlindCandidates: DraftAssistantCandidate[] = filteredBlindRows.map(({ pick }) => {
+    const stat = laneStatMap.get(pick.champId);
+    return {
+      champId: pick.champId,
+      winRate: pick.fieldWr,
+      floor: pick.es10,
+      totalGames: stat?.totalGames ?? pick.totalGames,
+      laneShare: stat?.laneShare ?? null,
+      rank: pick.rank,
+      isPotential: false,
+      personalOverall: { games: 0, wins: 0 },
+      source: "blind" as const,
+    };
+  });
 
   const filteredCounterRows = filterCounterCandidates([...filteredRecommendedRows, ...filteredPotentialRows]);
 
@@ -1112,28 +1152,20 @@ export default function DraftPage() {
     };
   };
 
+  const matchupDetailCandidates = [
+    ...filteredRecommendedRows.map((row) => toRecommendedCandidate(row, false)),
+    ...filteredPotentialRows.map((row) => toRecommendedCandidate(row, true)),
+  ];
   const currentViewRows: DraftAssistantCandidate[] =
     assistantView === "blind"
-      ? filteredBlindPicks.map((pick) => {
-          const stat = laneStatMap.get(pick.champId);
-          return {
-            champId: pick.champId,
-            winRate: pick.fieldWr,
-            floor: pick.es10,
-            totalGames: stat?.totalGames ?? pick.totalGames,
-            laneShare: stat?.laneShare ?? null,
-            rank: pick.rank,
-            isPotential: false,
-            personalOverall: { games: 0, wins: 0 },
-            source: "blind" as const,
-          };
-        })
+      ? filteredBlindCandidates
       : assistantView === "counters" && enemyIds.length === 0
         ? []
-        : (assistantView === "counters" ? filteredCounterRows.map((row) => toRecommendedCandidate(row, displayedPotentialPlays.includes(row.play))) : [
-            ...filteredRecommendedRows.map((row) => toRecommendedCandidate(row, false)),
-            ...filteredPotentialRows.map((row) => toRecommendedCandidate(row, true)),
-          ]);
+        : assistantView === "counters"
+          ? filteredCounterRows.map((row) => toRecommendedCandidate(row, displayedPotentialPlays.includes(row.play)))
+          : assistantView === "recommended"
+            ? resolveRecommendedDetailCandidates({ recommended: matchupDetailCandidates, blind: filteredBlindCandidates, noEnemies: enemyIds.length === 0 })
+            : matchupDetailCandidates;
 
   const topCards = resolveTopRecommendationCards({
     recommended: filteredRecommendedPlays,
@@ -1142,10 +1174,18 @@ export default function DraftPage() {
     laneStats: laneStatMap,
     fullList: fullLaneCandidates,
   });
-  const detailRows: DetailRow[] = currentViewRows.map((candidate) => {
+  const cardedCandidates = assistantView === "recommended"
+    ? filterDraftAssistantCandidates(
+        topCards.flatMap((card) => (card.candidate ? [card.candidate] : [])),
+        activeFilters
+      )
+    : [];
+  const toDetailRow = (candidate: DraftAssistantCandidate): DetailRow => {
     const entry = championEntry(champIcons, candidate.champId);
     return { candidate, name: entry.name, icon: entry.icon, difficultyBand: entry.difficultyBand };
-  });
+  };
+  const detailRows: DetailRow[] = currentViewRows.map(toDetailRow);
+  const cardedRows: DetailRow[] = cardedCandidates.map(toDetailRow);
   const detailAverage = laneAverage(laneStats);
 
   return (
@@ -1286,7 +1326,7 @@ export default function DraftPage() {
           </div>
 
           <aside className="min-w-0 lg:sticky lg:top-4">
-            <DetailedRankings rows={detailRows} laneAverageValue={detailAverage} sort={detailSort} onSortChange={(sort) => { setDetailSort(sort); setShowFullTable(false); }} grid={detailGrid} onGridChange={setDetailGrid} selectedChampionId={selectedDetailChampionId} onSelect={setSelectedDetailChampionId} showAll={showFullTable} onShowAll={() => setShowFullTable(true)} preserveOrder={assistantView === "comfort"} />
+            <DetailedRankings rows={detailRows} cardedRows={cardedRows} laneAverageValue={detailAverage} sort={detailSort} onSortChange={(sort) => { setDetailSort(sort); setShowFullTable(false); }} grid={detailGrid} onGridChange={setDetailGrid} selectedChampionId={selectedDetailChampionId} onSelect={setSelectedDetailChampionId} showAll={showFullTable} onShowAll={() => setShowFullTable(true)} preserveOrder={assistantView === "comfort"} showNoEnemyBlindHint={assistantView === "recommended" && enemyIds.length === 0} />
           </aside>
         </div>
 
