@@ -45,6 +45,10 @@ describe("championSearchBus (with a fake window, exercises the real pub/sub path
     const champ = ref({ id: 42, name: "Ahri" });
     emitChampionSearch(champ);
     expect(received).toEqual([champ]);
+    // The external listener above is intentionally not a bus subscriber, so
+    // drain the handoff slot before the next test simulates a fresh mount.
+    const drain = subscribeChampionSearch(() => {});
+    drain();
   });
 
   it("subscribeChampionSearch's callback fires with the emitted ref", () => {
@@ -56,12 +60,25 @@ describe("championSearchBus (with a fake window, exercises the real pub/sub path
     unsub();
   });
 
+  it("drains a champion emitted before the Builds page listener mounted", () => {
+    const received: ChampionRef[] = [];
+    const champ = ref({ id: 19, name: "Ahri" });
+    emitChampionSearch(champ);
+    const unsub = subscribeChampionSearch((r) => received.push(r));
+    expect(received).toEqual([champ]);
+    unsub();
+  });
+
   it("unsubscribe stops further callbacks from firing", () => {
     const received: ChampionRef[] = [];
     const unsub = subscribeChampionSearch((r) => received.push(r));
     unsub();
     emitChampionSearch(ref({ id: 9 }));
     expect(received).toEqual([]);
+    // The no-subscriber emit is intentionally buffered for a future Builds
+    // mount; consume it here so this isolated test does not seed the next one.
+    const drain = subscribeChampionSearch(() => {});
+    drain();
   });
 
   it("supports multiple independent subscribers", () => {

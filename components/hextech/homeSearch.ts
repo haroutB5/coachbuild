@@ -105,7 +105,40 @@ export interface HomeRestoreState {
   champ?: ChampionRef;
 }
 
-export function applyWireMainView(wire: WireMainView): HomeRestoreState {
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function isHextechTab(v: unknown): v is HextechTab {
+  return v === "build" || v === "proBuilds";
+}
+
+function isProGameSource(v: unknown): v is ProGameSource {
+  return v === "all" || v === "soloq" || v === "prostage";
+}
+
+function isLaneId(v: unknown): v is LaneId {
+  return v === "top" || v === "jungle" || v === "mid" || v === "bot" || v === "support";
+}
+
+function isChampionRef(v: unknown): v is ChampionRef {
+  if (!isRecord(v)) return false;
+  return typeof v.id === "number" && Number.isFinite(v.id) && typeof v.key === "string" && typeof v.name === "string" && typeof v.icon === "string";
+}
+
+/** Runtime guard for the home page's own wire shape. The history API is
+ *  untyped at runtime, so this must run before `applyWireMainView` reads
+ *  `view.kind`; a history entry from /history has no `view` at all. */
+export function isWireMainView(v: unknown): v is WireMainView {
+  if (!isRecord(v) || !isHextechTab(v.tab) || !isProGameSource(v.source) || !isRecord(v.view)) return false;
+  if (v.view.kind === "prompt") return true;
+  return v.view.kind === "champion" && isLaneId(v.view.lane) && isChampionRef(v.view.champ);
+}
+
+export function applyWireMainView(wire: WireMainView): HomeRestoreState;
+export function applyWireMainView(wire: unknown): HomeRestoreState | null;
+export function applyWireMainView(wire: unknown): HomeRestoreState | null {
+  if (!isWireMainView(wire)) return null;
   const base = {
     searchMode: "champions" as const,
     tab: wire.tab,

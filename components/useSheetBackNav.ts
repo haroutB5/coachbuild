@@ -28,12 +28,42 @@ import { useEffect, useRef, useState } from "react";
 
 export interface NavSheetState<S> {
   v: 1;
+  /** Owner namespace — raw history.state is global, so every consumer must
+   *  reject entries written by another page before touching its payload. */
+  namespace: string;
   selection: S | null;
   openGameId: string | null;
 }
 
-export function isNavSheetState<S>(v: unknown): v is NavSheetState<S> {
-  return typeof v === "object" && v !== null && (v as { v?: unknown }).v === 1;
+export const HOME_NAV_NAMESPACE = "home";
+export const HISTORY_NAV_NAMESPACE = "history";
+
+export function isNavSheetState<S>(v: unknown, namespace: string): v is NavSheetState<S> {
+  if (typeof v !== "object" || v === null) return false;
+  const state = v as { v?: unknown; namespace?: unknown; openGameId?: unknown };
+  return (
+    state.v === 1 &&
+    state.namespace === namespace &&
+    (state.openGameId === null || typeof state.openGameId === "string")
+  );
+}
+
+/** The restore gate is kept as a tiny pure seam so its failure behavior is
+ *  testable without a DOM/React rendering harness. The microtask release is
+ *  intentional: it preserves the existing contract that the synchronous
+ *  state-update batch is still considered a restore, while `finally` makes a
+ *  throwing callback unable to leave the page permanently inert. */
+export function runNavRestore(restoringRef: { current: boolean }, restore: () => void): void {
+  restoringRef.current = true;
+  try {
+    restore();
+  } catch (error) {
+    console.error("useSheetBackNav restore failed", error);
+  } finally {
+    queueMicrotask(() => {
+      restoringRef.current = false;
+    });
+  }
 }
 
 // Sentinel for "not captured yet" in the mount-time snapshot below — `unknown`
@@ -42,6 +72,9 @@ export function isNavSheetState<S>(v: unknown): v is NavSheetState<S> {
 const UNCAPTURED: unique symbol = Symbol("useSheetBackNav.uncaptured");
 
 interface UseSheetBackNavOptions<S> {
+  /** Namespace owned by this page. It is written into every entry and is
+   *  required when validating an entry on mount or popstate. */
+  namespace: string;
   /** Repaint page state from a landed-on entry's selection — fired on
    *  mount-resume (a same-tab refresh retains history.state for the CURRENT
    *  entry) and on every popstate. The hook owns `openGameId` itself (see
@@ -87,9 +120,10 @@ export interface UseSheetBackNavResult<S> {
 }
 
 export function useSheetBackNav<S>({
+  namespace,
   onApplySelection,
   seedInitialSelection,
-}: UseSheetBackNavOptions<S> = {}): UseSheetBackNavResult<S> {
+}: UseSheetBackNavOptions<S>): UseSheetBackNavResult<S> {
   const [openGameId, setOpenGameId] = useState<string | null>(null);
   // True while a popstate-driven restore is applying — see isRestoring's doc.
   const restoringRef = useRef(false);
@@ -119,14 +153,14 @@ export function useSheetBackNav<S>({
   function pushSelection(selection: S | null) {
     setOpenGameId(null);
     if (restoringRef.current) return;
-    const state: NavSheetState<S> = { v: 1, selection, openGameId: null };
+    const state: NavSheetState<S> = { v: 1, namespace, selection, openGameId: null };
     window.history.pushState(state, "");
   }
 
   function openGame(gameId: string, currentSelection: S | null) {
     setOpenGameId(gameId);
     if (restoringRef.current) return;
-    const state: NavSheetState<S> = { v: 1, selection: currentSelection, openGameId: gameId };
+    const state: NavSheetState<S> = { v: 1, namespace, selection: currentSelection, openGameId: gameId };
     window.history.pushState(state, "");
   }
 
@@ -136,8 +170,16 @@ export function useSheetBackNav<S>({
 
   function replaceSelection(selection: S | null) {
     if (restoringRef.current) return;
-    const state: NavSheetState<S> = { v: 1, selection, openGameId: null };
+    const state: NavSheetState<S> = { v: 1, namespace, selection, openGameId: null };
     window.history.replaceState(state, "");
+  }
+
+  function applySelectionSafely(selection: S | null) {
+    try {
+      onApplySelection?.(selection);
+    } catch (error) {
+      console.error("useSheetBackNav mount restore failed", error);
+    }
   }
 
   // Mount: either resume an already-seeded entry (a same-tab refresh — the
@@ -149,13 +191,13 @@ export function useSheetBackNav<S>({
   // from (no extra entry).
   useEffect(() => {
     const existing = existingHistoryStateRef.current;
-    if (isNavSheetState<S>(existing)) {
+    if (isNavSheetState<S>(existing, namespace)) {
       setOpenGameId(existing.openGameId);
-      onApplySelection?.(existing.selection);
+      applySelectionSafely(existing.selection);
       return;
     }
     const initial = seedInitialSelection ? seedInitialSelection() : null;
-    const seeded: NavSheetState<S> = { v: 1, selection: initial, openGameId: null };
+    const seeded: NavSheetState<S> = { v: 1, namespace, selection: initial, openGameId: null };
     window.history.replaceState(seeded, "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -163,15 +205,10 @@ export function useSheetBackNav<S>({
   // Back/forward: repaint from whatever entry the browser landed on.
   useEffect(() => {
     function onPopState(e: PopStateEvent) {
-      restoringRef.current = true;
-      const state = isNavSheetState<S>(e.state) ? e.state : null;
-      setOpenGameId(state?.openGameId ?? null);
-      onApplySelection?.(state?.selection ?? null);
-      // Released on the next microtask — after this synchronous batch of
-      // state updates has been scheduled, so a genuinely new user action
-      // right after a restore is never mistaken for part of it.
-      queueMicrotask(() => {
-        restoringRef.current = false;
+      runNavRestore(restoringRef, () => {
+        const state = isNavSheetState<S>(e.state, namespace) ? e.state : null;
+        setOpenGameId(state?.openGameId ?? null);
+        applySelectionSafely(state?.selection ?? null);
       });
     }
     window.addEventListener("popstate", onPopState);

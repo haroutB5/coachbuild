@@ -22,10 +22,19 @@ import type { ChampionRef } from "@/lib/types";
 
 export const CHAMPION_SEARCH_EVENT = "cb:champion-search";
 
+// App Router transitions are asynchronous and the Builds page subscriber is
+// mounted only after the destination segment commits. Keep one pending pick
+// when there is no subscriber yet; the first subscriber drains it on mount.
+// The slot is deliberately module-local rather than a timer: it survives the
+// route transition without guessing how long that transition will take.
+let pendingChampionSearch: ChampionRef | null = null;
+const subscribers = new Set<EventListener>();
+
 /** Fire a champion pick from the GlobalNav rail search. No-ops on the server
  *  (SSR/build) — there is no window to dispatch on and nothing listening. */
 export function emitChampionSearch(ref: ChampionRef): void {
   if (typeof window === "undefined") return;
+  if (subscribers.size === 0) pendingChampionSearch = ref;
   window.dispatchEvent(new CustomEvent<ChampionRef>(CHAMPION_SEARCH_EVENT, { detail: ref }));
 }
 
@@ -41,6 +50,13 @@ export function subscribeChampionSearch(cb: (ref: ChampionRef) => void): () => v
     const detail = (e as CustomEvent<ChampionRef>).detail;
     if (detail) cb(detail);
   };
+  subscribers.add(handler);
   window.addEventListener(CHAMPION_SEARCH_EVENT, handler);
-  return () => window.removeEventListener(CHAMPION_SEARCH_EVENT, handler);
+  const pending = pendingChampionSearch;
+  pendingChampionSearch = null;
+  if (pending) cb(pending);
+  return () => {
+    subscribers.delete(handler);
+    window.removeEventListener(CHAMPION_SEARCH_EVENT, handler);
+  };
 }

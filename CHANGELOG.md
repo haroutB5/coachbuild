@@ -2,6 +2,21 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.95.1] — 2026-08-03 — Navigation state stays on its own page
+
+### Fixed
+- **Builds and Pro Players no longer share untyped history payloads.** Navigation
+  entries now carry an owner namespace, and each page validates its own wire
+  shape before restoring it. A preserved entry from the other page is treated
+  as absent instead of producing an undefined champion request or crashing on
+  a missing `view`.
+- **A failed history restore can no longer freeze the page.** The restore gate
+  is released from a `finally` path, and both route-level and global error
+  boundaries now offer a dark-shell retry screen.
+- **Global champion search survives the route transition.** Picks emitted while
+  Builds is not mounted are buffered and drained by its subscriber after the
+  destination page mounts.
+
 ## [0.95.0] — 2026-08-03 — We were asking u.gg for champions that do not exist
 
 ### Fixed

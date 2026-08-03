@@ -26,7 +26,7 @@ import {
   markFollowedChampSelectChampion,
 } from "@/components/live/champSelectFollowState";
 import { useCompanion } from "@/components/live/CompanionProvider";
-import { useSheetBackNav, isNavSheetState } from "@/components/useSheetBackNav";
+import { useSheetBackNav, isNavSheetState, HOME_NAV_NAMESPACE } from "@/components/useSheetBackNav";
 import {
   STATIC_FALLBACK_LANE_CHAMPIONS,
   getMostPlayedLane,
@@ -178,6 +178,7 @@ export default function HomePage() {
   // this hook's own mount effect runs in the same flush — so there was never
   // a real hub entry and back() always bottomed out on Viktor).
   const sheetNav = useSheetBackNav<WireMainView>({
+    namespace: HOME_NAV_NAMESPACE,
     onApplySelection: restoreMainView,
     seedInitialSelection: () => wireViewForPrompt(FIXED_TAB, source),
   });
@@ -201,7 +202,7 @@ export default function HomePage() {
   const hadExistingHistoryStateRef = useRef<boolean | null>(null);
   if (hadExistingHistoryStateRef.current === null) {
     hadExistingHistoryStateRef.current =
-      typeof window !== "undefined" && isNavSheetState<WireMainView>(window.history.state);
+      typeof window !== "undefined" && isNavSheetState<WireMainView>(window.history.state, HOME_NAV_NAMESPACE);
   }
 
   // Push the restored last champion ON TOP of the just-seeded hub entry, so
@@ -380,10 +381,11 @@ export default function HomePage() {
    *  and every popstate. Delegates the actual wire->state mapping to
    *  homeSearch.ts's pure `applyWireMainView` and only owns the imperative
    *  setState calls here. */
-  function restoreMainView(wire: WireMainView | null) {
+  function restoreMainView(wire: unknown) {
     if (!wire) return;
     mostPlayedLaneRequestRef.current++;
     const applied = applyWireMainView(wire);
+    if (!applied) return;
     // v0.69.1: the seed is now always a "prompt" entry (see wireViewForPrompt),
     // so landing back on it — mount-resume on a same-tab refresh, or a real
     // back() from a champion — must send the page back to the pick prompt.

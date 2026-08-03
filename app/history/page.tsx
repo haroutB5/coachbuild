@@ -14,7 +14,12 @@ import { isFavorite, isFavoriteChampion } from "@/lib/favorites";
 import { FAVORITES_CHANGED_EVENT, CHAMPION_FAVORITES_CHANGED_EVENT, toggleFavoritePlayer, toggleFavoriteChampion } from "@/components/favoritesSync";
 import type { PlayerRef } from "@/components/proHistory.types";
 import { consumePendingPlayerSelect, type PendingPlayerSelect } from "@/components/playerSelectHandoff";
-import { useSheetBackNav } from "@/components/useSheetBackNav";
+import { useSheetBackNav, HISTORY_NAV_NAMESPACE } from "@/components/useSheetBackNav";
+import {
+  restoreSelectionState,
+  type WirePlayerSubject,
+  type WireSelection,
+} from "@/components/historyRestore";
 import PageHeader from "@/components/hextech/PageHeader";
 import ProPlayersSpotlight from "@/components/ProPlayersSpotlight";
 
@@ -77,30 +82,6 @@ type PlayerSubject =
   | { kind: "tracked"; ref: PlayerRef }
   | { kind: "link"; playerLink: string; name: string };
 
-interface WirePlayerSubjectTracked {
-  kind: "tracked";
-  id: string;
-  name: string;
-  team: string | null;
-}
-interface WirePlayerSubjectLink {
-  kind: "link";
-  playerLink: string;
-  name: string;
-}
-type WirePlayerSubject = WirePlayerSubjectTracked | WirePlayerSubjectLink;
-
-type WireSelection =
-  | { mode: "player"; subject: WirePlayerSubject }
-  | {
-      mode: "champion";
-      championId: number;
-      championKey: string;
-      championName: string;
-      championIcon: string;
-      lane: number;
-    };
-
 function toWirePlayerSubject(p: PlayerSubject): WirePlayerSubject {
   if (p.kind === "tracked") {
     return { kind: "tracked", id: p.ref.id, name: p.ref.name, team: p.ref.team };
@@ -160,25 +141,29 @@ export default function HistoryPage() {
   /** Repaints mode/player/champ/lane from a landed-on entry's selection —
    *  handed to useSheetBackNav as `onApplySelection`, fired on mount-resume
    *  and every popstate. The hook owns `openGameId` itself. */
-  function restoreSelection(selection: WireSelection | null) {
-    if (!selection) {
+  function restoreSelection(selection: unknown) {
+    if (selection === null) {
       setMode("player");
       setPlayer(null);
       setChamp(null);
-    } else if (selection.mode === "player") {
+      return;
+    }
+    const validated = restoreSelectionState(selection);
+    if (!validated) return;
+    if (validated.mode === "player") {
       setMode("player");
       setChamp(null);
-      setPlayer(fromWirePlayerSubject(selection.subject));
+      setPlayer(fromWirePlayerSubject(validated.subject));
     } else {
       setMode("champion");
       setPlayer(null);
       setChamp({
-        id: selection.championId,
-        key: selection.championKey,
-        name: selection.championName,
-        icon: selection.championIcon,
+        id: validated.championId,
+        key: validated.championKey,
+        name: validated.championName,
+        icon: validated.championIcon,
       });
-      setLane(selection.lane);
+      setLane(validated.lane);
     }
   }
 
@@ -198,6 +183,7 @@ export default function HistoryPage() {
   }
 
   const sheetNav = useSheetBackNav<WireSelection>({
+    namespace: HISTORY_NAV_NAMESPACE,
     onApplySelection: restoreSelection,
     seedInitialSelection,
   });

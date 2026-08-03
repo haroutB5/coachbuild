@@ -4,6 +4,7 @@ import {
   modeAfterChampionSelect,
   defaultSourceForKind,
   applyWireMainView,
+  isWireMainView,
   wireViewForChampion,
   wireViewForPrompt,
   champChosenAfterRestore,
@@ -135,6 +136,20 @@ describe("applyWireMainView", () => {
     });
     expect(applied).not.toHaveProperty("activeLane");
     expect(applied).not.toHaveProperty("champ");
+  });
+
+  it("rejects a /history selection payload without reading through an absent view", () => {
+    const foreignSelection: unknown = {
+      mode: "champion",
+      championId: 112,
+      championKey: "Viktor",
+      championName: "Viktor",
+      championIcon: "x",
+      lane: 2,
+    };
+    expect(isWireMainView(foreignSelection)).toBe(false);
+    expect(() => applyWireMainView(foreignSelection)).not.toThrow();
+    expect(applyWireMainView(foreignSelection)).toBeNull();
   });
 });
 

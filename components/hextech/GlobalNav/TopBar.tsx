@@ -97,16 +97,13 @@ function TopBarChampionSearch() {
   }, [activeIndex, open]);
 
   function select(champ: ChampionRef) {
-    // On any route other than "/", land on Builds first, then emit next tick
-    // so app/page.tsx's subscribeChampionSearch listener is mounted before
-    // the event fires — a same-tick emit right after router.push would race
-    // the new page's own mount effect.
+    // On any route other than "/", land on Builds first. The bus owns the
+    // asynchronous handoff, so this remains safe while the destination page
+    // is still mounting.
     if (pathname !== "/") {
       router.push("/");
-      window.setTimeout(() => emitChampionSearch(champ), 0);
-    } else {
-      emitChampionSearch(champ);
     }
+    emitChampionSearch(champ);
     setQuery("");
     setOpen(false);
   }
