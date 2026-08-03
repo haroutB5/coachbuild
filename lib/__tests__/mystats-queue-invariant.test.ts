@@ -29,7 +29,6 @@
  * zeros — never NaN% from a zero denominator.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { readFileSync } from "node:fs";
 
 const mockSql = vi.fn();
 vi.mock("@/lib/pro/db", () => ({ getSql: vi.fn(() => mockSql) }));
@@ -137,10 +136,26 @@ describe("lib/mystats/queues.ts — the constant itself", () => {
     expect(isCountedQueue(99999)).toBe(false);
   });
 
-  it("the manual My Stats report binds the same counted-queue set", () => {
-    const source = readFileSync(new URL("../../scripts/ingest-mystats.mjs", import.meta.url), "utf8");
-    expect(source).toContain("COUNTED_QUEUE_IDS");
-    expect(source).toMatch(/queue_id\s*=\s*ANY/);
+  it("the manual My Stats report filters every my_matches statement", async () => {
+    const { main } = await import("../../scripts/ingest-mystats.mjs");
+    const collected: Statement[] = [];
+    const sql = recordingSql(collected);
+
+    await main({
+      runIngest: async () => ({
+        accountUnresolved: false,
+        matchesSeen: 0,
+        matchesUpserted: 0,
+        nextStart: null,
+        errors: [],
+        historyComplete: true,
+        truncatedBy: null,
+        pagesWalked: 0,
+      }),
+      getSqlFn: () => sql as never,
+      getActiveAccountFn: async () => ACTIVE,
+    });
+    assertEveryMyMatchesReadIsQueueFiltered(collected);
   });
 });
 

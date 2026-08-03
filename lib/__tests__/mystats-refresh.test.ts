@@ -1,7 +1,7 @@
 /**
  * Tests for lib/mystats/refresh.ts — the on-demand incremental-refresh
- * orchestration behind POST /api/mystats/refresh (v0.49.3). Covers the pure
- * `shouldRunIncremental` cooldown decision plus `runMyStatsRefresh`'s four
+ * orchestration behind POST /api/mystats/refresh (v0.49.3). Covers
+ * `runMyStatsRefresh`'s four
  * response-shape branches (accountUnresolved / cooldown-skipped / refreshed
  * / fail-soft error). account.ts + ingest.ts are mocked — no network/DB.
  */
@@ -18,7 +18,7 @@ vi.mock("@/lib/mystats/account", () => ({
 const mockRunMyStatsIngest = vi.fn();
 vi.mock("@/lib/mystats/ingest", () => ({ runMyStatsIngest: (...args: unknown[]) => mockRunMyStatsIngest(...args) }));
 
-import { runMyStatsRefresh, shouldRunIncremental, REFRESH_COOLDOWN_MS } from "@/lib/mystats/refresh";
+import { runMyStatsRefresh } from "@/lib/mystats/refresh";
 import { COUNTED_QUEUE_IDS } from "@/lib/mystats/queues";
 
 const ACCOUNT = {
@@ -31,23 +31,19 @@ const ACCOUNT = {
   routing: { platform: "euw1", regional: "europe" },
 };
 
-describe("shouldRunIncremental", () => {
-  it("true when never run before (lastAt null)", () => {
-    expect(shouldRunIncremental(null, new Date(), REFRESH_COOLDOWN_MS)).toBe(true);
-  });
-
-  it("false when within the cooldown window", () => {
-    const now = new Date("2026-07-24T12:03:00.000Z");
-    const lastAt = new Date("2026-07-24T12:01:00.000Z"); // 2 min ago, cooldown is 3 min
-    expect(shouldRunIncremental(lastAt, now, REFRESH_COOLDOWN_MS)).toBe(false);
-  });
-
-  it("true once the cooldown has fully elapsed", () => {
-    const now = new Date("2026-07-24T12:03:00.000Z");
-    const lastAt = new Date("2026-07-24T12:00:00.000Z"); // exactly 3 min ago
-    expect(shouldRunIncremental(lastAt, now, REFRESH_COOLDOWN_MS)).toBe(true);
-  });
-});
+function expectOwnLeaseRelease(mockSql: ReturnType<typeof vi.fn>) {
+  expect(mockSql).toHaveBeenCalledTimes(2);
+  const releaseCall = mockSql.mock.calls[1] as unknown[];
+  const releaseSql = (releaseCall[0] as readonly string[]).join(" ");
+  expect(releaseSql).toContain("UPDATE coachbuild.my_ingest_cursor");
+  expect(releaseSql).toContain("SET last_incremental_at = NULL");
+  expect(releaseSql).toContain("WHERE puuid =");
+  expect(releaseSql).toContain("AND last_incremental_at =");
+  const releaseValues = releaseCall.slice(1);
+  expect(releaseValues).toHaveLength(2);
+  expect(releaseValues[0]).toBe(ACCOUNT.puuid);
+  expect(releaseValues[1]).toEqual(expect.stringMatching(/Z$/));
+}
 
 describe("runMyStatsRefresh", () => {
   let mockSql: ReturnType<typeof vi.fn>;
@@ -223,6 +219,7 @@ describe("runMyStatsRefresh", () => {
 
     const result = await runMyStatsRefresh(mockSql as never);
     expect(result).toEqual({ refreshed: false, skipped: false, error: true });
+    expectOwnLeaseRelease(mockSql);
   });
 
   it("ingest reporting accountUnresolved mid-call surfaces the same accountUnresolved shape", async () => {
@@ -238,5 +235,6 @@ describe("runMyStatsRefresh", () => {
 
     const result = await runMyStatsRefresh(mockSql as never);
     expect(result).toEqual({ accountUnresolved: true });
+    expectOwnLeaseRelease(mockSql);
   });
 });

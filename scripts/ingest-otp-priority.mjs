@@ -134,7 +134,10 @@ const YIELD_HEARTBEAT_MS = 15 * 60_000;
  *  NOTE: the clock is coachbuild.my_ingest_cursor.last_incremental_at, which
  *  the page-view endpoint (/api/mystats/refresh) also stamps. A user browsing
  *  My Stats therefore resets this interval — which is correct, the refresh
- *  happened, it just was not us who did it. */
+ *  happened, it just was not us who did it. A failed page-view attempt releases
+ *  its exact lease by setting this column to NULL; that is read below as
+ *  "never refreshed" and may make this walk try again, while the refresh
+ *  itself remains lease-gated so the retry cannot duplicate an active run. */
 const MINE_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 /** Bounded like the sibling logs (~1MB, keep the newest half). */

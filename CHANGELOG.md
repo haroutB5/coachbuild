@@ -2,6 +2,38 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.94.1] — 2026-08-03 — Making the v0.94.0 guards actually guard
+
+An adversarial review attacked every claim in v0.94.0. No P0, nothing regressed, and the maths held —
+the denominator change was proved to move no correct number against nine million games of live data,
+the KDA exclusion shrinks numerator and denominator together, and the refresh lease is genuinely
+atomic with no permanent strand. Two of the fixes were weaker than claimed. Each item below was proved
+by breaking it on purpose, watching the test fail, then restoring it.
+
+### Fixed
+- **A tie-break that never fired.** `compareConditionedCandidates` broke ties on `itemId`, but the
+  keystone call site passes entries keyed by `rune`, so the comparator fell straight to `return 0` and
+  the tie stayed arbitrary — the exact defect it was meant to remove. It now takes a generic id
+  accessor and both shapes are pinned. Note this path is **dormant**: both call sites sit behind a
+  matchup-support flag that is permanently false today, and `buildOptimizedLine` has no callers. Fixed
+  correctly anyway, for whenever it wakes up.
+- **A safety test that was really a text search.** The queue invariant for `scripts/ingest-mystats.mjs`
+  asserted the file *contained* the string `COUNTED_QUEUE_IDS` — so adding a second, unscoped query to
+  the script would have kept it green. It now runs the script through an injectable path with
+  statement-level interception, the same enforcement the TypeScript routes get. This repo's own lesson
+  is that a comment is not an enforcement; neither is a regex over source text.
+- **The lease-release half was untested.** Tests now assert the release runs on failure and targets
+  only the caller's own PUUID and timestamp.
+- **Undocumented side effects, now resolved.** The deliberate NULL lease release and its interaction
+  with `scripts/ingest-otp-priority.mjs` is documented at both ends; fail-soft callers confirmed; and
+  the newly-dead `shouldRunIncremental` was removed along with the tests that were pinning nothing.
+- A stale line in `lib/pro/mergeGames.ts` claiming the merge was byte-for-byte unchanged, which the
+  new tiebreak made false.
+
+### Reported, not fixed
+`FeaturedOtpCard` still has a lint-reported missing effect dependency. SQL invariants were validated
+through recording mocks rather than a live database.
+
 ## [0.94.0] — 2026-08-03 — Overnight sweep: nothing invented, nothing arbitrary
 
 A whole-app hunt for **silent bugs** — the class where a confidently wrong number is shown and nobody
@@ -40,6 +72,26 @@ notices. Every fix below is pinned by a test that fails before it and passes aft
   picked. Driving the live app disproved it: Recommended read Singed, Tryndamere, Garen while the
   actual Blind Picks tab read Riven, Vladimir, Vex, Diana. It now says the ranking is based on overall
   lane performance rather than matchups, which is what is actually shown.
+
+### Correction — how much of the above was actually reachable
+An adversarial audit of this release checked each fix against live production data. All six are
+technically correct and nothing regressed, but **three of them fix defects that cannot occur in the
+current data**, and the entries above overstated their impact. Recording that plainly:
+- The **fabricated 50% baseline** was unreachable: `winrate IS NULL` is zero across all five roles on
+  both retained patches, and the ingest derives `winrate = totalWins / totalGames` behind a
+  `totalGames <= 0` guard, so a NULL can never be written. The **denominator change moved no correct
+  number** — Σ `laneStats.totalGames` is 9,719,454 against an implied lane total of exactly Σ/2, and
+  matrix champions match `champ_stats` rows 165/165. It diverges only mid-ingest, where the new value
+  is the more correct one.
+- The **absent sample sizes** fix is real but surfaces nowhere: `DraftPicksTable`,
+  `draftPicksModel`, `DraftResultRow` and `BlindPickTable` are the dormant pre-redesign stack, and the
+  one live renderer already printed `n={minGames ?? "—"}`.
+- The **missing KDA** fix is real and the maths is right, but all 335 rows in `my_matches` have every
+  KDA component populated back to 2026-01-09, so no such row exists to mislabel.
+Two of the ten tie orderings were weaker than claimed — the conditioned-build keystone tiebreak is a
+silent no-op (it compares `itemId` on rune-keyed entries) and its call path is currently dead. Being
+fixed separately. The pro-merge tiebreak, by contrast, is genuinely live: 11,840 prostage rows span
+only 1,164 distinct timestamps.
 
 ### Verified clean, not changed
 Personal data remains display-only and strictly post-ranking; build caps, starter-slot partitioning,

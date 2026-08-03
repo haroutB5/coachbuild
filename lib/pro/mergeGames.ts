@@ -40,9 +40,10 @@ function byRecencyDesc(a: ProGame, b: ProGame): number {
  *  WHEN THAT MANY EXIST — it is a floor, never a quota that pads with
  *  nothing and never a cap on how many prostage rows may appear (if soloq
  *  runs short, prostage backfills past the floor, and vice versa).
- *  `proFloor = 0` (the default) reproduces the original plain-merge
- *  behaviour byte for byte, which is what every caller that wants a pure
- *  "most recent games" list (the /history page) still passes. */
+ *  `proFloor = 0` (the default) keeps the original plain recency-merge
+ *  policy, with deterministic source/id tie-breaks. This is what every caller
+ *  that wants a pure "most recent games" list (the /history page) still
+ *  passes. */
 export function mergeProGames(
   soloq: ProGame[],
   prostage: ProGame[],

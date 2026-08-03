@@ -17,6 +17,12 @@ const item = (itemId: number, occ: number, wpa: number) => ({
   wpaOverall: wpa,
 });
 
+const rune = (rune: number, occ: number, wpa: number) => ({
+  rune,
+  occurrence: occ,
+  wpaOverall: wpa,
+});
+
 describe("conditionedLeader", () => {
   it("picks highest WPA among candidates clearing the sample floor", () => {
     const pool = [item(1, 5000, 0.2), item(2, 4000, 1.9), item(3, 100, 9.0)];
@@ -25,7 +31,11 @@ describe("conditionedLeader", () => {
   });
   it("breaks equal-WPA item ties by item id, independent of provider order", () => {
     const pool = [item(2, 5000, 1.0), item(1, 5000, 1.0)];
-    expect(conditionedLeader(pool, 300)?.itemId).toBe(1);
+    expect(conditionedLeader(pool, 300, undefined, 0, (entry) => entry.itemId)?.itemId).toBe(1);
+  });
+  it("breaks equal-WPA rune ties by rune id, independent of provider order", () => {
+    const pool = [rune(8126, 5000, 1.0), rune(8100, 5000, 1.0)];
+    expect(conditionedLeader(pool, 300, undefined, 0, (entry) => entry.rune)?.rune).toBe(8100);
   });
   it("returns null when nothing clears the floor", () => {
     expect(conditionedLeader([item(1, 100, 5)], 300)).toBeNull();
@@ -105,6 +115,12 @@ describe("resolveMatchupSlot (per-slot conditioned-or-fallback)", () => {
     const r = resolveMatchupSlot(cond, fallback, MATCHUP_MIN_SAMPLE);
     expect(r.conditioned).toBe(true);
     expect(r.entry.itemId).toBe(1);
+  });
+  it("uses the generic rune id accessor for equal-WPA keystone ties", () => {
+    const cond = [rune(8126, MATCHUP_MIN_SAMPLE + 50, 1.5), rune(8100, MATCHUP_MIN_SAMPLE + 50, 1.5)];
+    const r = resolveMatchupSlot(cond, rune(9999, 100000, 0), MATCHUP_MIN_SAMPLE, undefined, (entry) => entry.rune);
+    expect(r.conditioned).toBe(true);
+    expect(r.entry.rune).toBe(8100);
   });
   it("falls back (conditioned:false) when the conditioned pool is empty (403 case)", () => {
     const r = resolveMatchupSlot([], fallback, MATCHUP_MIN_SAMPLE);

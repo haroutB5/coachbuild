@@ -17,6 +17,7 @@
 // script does not check for a concurrent process itself (same as
 // ingest-matches.mjs) — the operator is responsible for serializing.
 import { loadEnvLocal } from "./_env.mjs";
+import { pathToFileURL } from "node:url";
 
 loadEnvLocal();
 
@@ -28,14 +29,33 @@ const { COUNTED_QUEUE_IDS } = await import("../lib/mystats/queues.ts");
 
 const pageSize = Number(process.argv[2]) || undefined;
 
-async function main() {
+/**
+ * The manual report's only my_matches read lives here so the queue invariant
+ * can intercept the actual statement, not a copy of this source file.
+ */
+export async function readMyStatsRows(sql, account) {
+  return account
+    ? await sql`
+        SELECT champion_id, role, opp_champion_id, win, game_creation
+        FROM coachbuild.my_matches
+        WHERE puuid = ${account.puuid}
+          AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
+      `
+    : [];
+}
+
+export async function main({
+  runIngest = runMyStatsIngest,
+  getSqlFn = getSql,
+  getActiveAccountFn = getActiveAccount,
+} = {}) {
   let totalSeen = 0;
   let totalUpserted = 0;
   const allErrors = [];
   let accountUnresolved = false;
 
   for (;;) {
-    const result = await runMyStatsIngest({
+    const result = await runIngest({
       mode: "backfill",
       pageSize,
       onProgress: (msg) => console.log(`  ${msg}`),
@@ -60,20 +80,13 @@ async function main() {
     return;
   }
 
-  const sql = getSql();
-  const account = await getActiveAccount(sql);
+  const sql = getSqlFn();
+  const account = await getActiveAccountFn(sql);
 
   // ACCOUNT-SCOPED (migration 0020). Unscoped, this report's "top 5 personal
   // champions" would be every linked account's pool added together -- a
   // plausible-looking table describing nobody.
-  const rows = account
-    ? await sql`
-        SELECT champion_id, role, opp_champion_id, win, game_creation
-        FROM coachbuild.my_matches
-        WHERE puuid = ${account.puuid}
-          AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
-      `
-    : [];
+  const rows = await readMyStatsRows(sql, account);
   const records = rows.map((r) => ({
     championId: r.champion_id,
     role: r.role,
@@ -116,11 +129,13 @@ async function main() {
   if (allErrors.length > 0) process.exitCode = 1;
 }
 
-main().catch((err) => {
-  if (err?.name === "RiotUnavailableError" || err?.name === "DbUnavailableError") {
-    console.error(`ingest-mystats: ${err.message}`);
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  main().catch((err) => {
+    if (err?.name === "RiotUnavailableError" || err?.name === "DbUnavailableError") {
+      console.error(`ingest-mystats: ${err.message}`);
+      process.exit(1);
+    }
+    console.error("ingest-mystats failed:", err);
     process.exit(1);
-  }
-  console.error("ingest-mystats failed:", err);
-  process.exit(1);
-});
+  });
+}

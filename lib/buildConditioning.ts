@@ -12,11 +12,13 @@ export interface OccWpa {
   wpaOverall: number;
 }
 
-function compareConditionedCandidates(a: OccWpa, b: OccWpa): number {
+function compareConditionedCandidates<T extends OccWpa>(
+  a: T,
+  b: T,
+  idOf?: (entry: T) => number
+): number {
   if (a.wpaOverall !== b.wpaOverall) return b.wpaOverall - a.wpaOverall;
-  const aItemId = (a as OccWpa & { itemId?: unknown }).itemId;
-  const bItemId = (b as OccWpa & { itemId?: unknown }).itemId;
-  if (typeof aItemId === "number" && typeof bItemId === "number") return aItemId - bItemId;
+  if (idOf) return idOf(a) - idOf(b);
   return 0;
 }
 
@@ -53,7 +55,8 @@ export function conditionedLeader<T extends OccWpa>(
   entries: T[],
   minSample: number,
   isExcluded?: (e: T) => boolean,
-  adoptFrac = 0
+  adoptFrac = 0,
+  idOf?: (entry: T) => number
 ): T | null {
   const total = entries.reduce((s, e) => s + e.occurrence, 0);
   const floor = Math.max(minSample, total * adoptFrac);
@@ -61,7 +64,7 @@ export function conditionedLeader<T extends OccWpa>(
     (e) => e.occurrence >= floor && !(isExcluded?.(e) ?? false)
   );
   if (pool.length === 0) return null;
-  return pool.slice().sort(compareConditionedCandidates)[0];
+  return pool.slice().sort((a, b) => compareConditionedCandidates(a, b, idOf))[0];
 }
 
 /** Greedy sequential item optimizer (Feature 2).
@@ -93,7 +96,7 @@ export async function buildOptimizedPath<T extends OccWpa & { itemId: number }>(
   for (let depth = 0; depth < maxDepth; depth++) {
     const prefix = [...seedItemIds, ...chosen.map((c) => c.itemId)];
     const pool = await fetchSlot(prefix);
-    const next = conditionedLeader(pool, minSample, (e) => usedIds.has(e.itemId), adoptFrac);
+    const next = conditionedLeader(pool, minSample, (e) => usedIds.has(e.itemId), adoptFrac, (e) => e.itemId);
     if (!next) break; // conditioned samples collapsed → truncate here
     chosen.push(next);
     usedIds.add(next.itemId);
@@ -118,9 +121,10 @@ export function resolveMatchupSlot<T extends OccWpa>(
   conditionedPool: T[],
   fallback: T,
   minSample: number,
-  isExcluded?: (e: T) => boolean
+  isExcluded?: (e: T) => boolean,
+  idOf?: (entry: T) => number
 ): Conditioned<T> {
-  const leader = conditionedLeader(conditionedPool, minSample, isExcluded);
+  const leader = conditionedLeader(conditionedPool, minSample, isExcluded, 0, idOf);
   if (leader) return { entry: leader, conditioned: true };
   return { entry: fallback, conditioned: false };
 }

@@ -28,14 +28,6 @@ import { COUNTED_QUEUE_IDS } from "./queues";
  *  just-finished game. */
 export const REFRESH_COOLDOWN_MS = 3 * 60 * 1000;
 
-/** Pure decision function — kept separate from the DB/ingest orchestration
- *  below so it's trivially unit-testable. `lastAt === null` (never run
- *  before) always elapses. */
-export function shouldRunIncremental(lastAt: Date | null, now: Date, cooldownMs: number): boolean {
-  if (lastAt === null) return true;
-  return now.getTime() - lastAt.getTime() >= cooldownMs;
-}
-
 /** PER-ACCOUNT since migration 0020. A shared cooldown would have meant
  *  switching to a second account and immediately finding its refresh blocked by
  *  the FIRST account's clock — for up to 3 minutes, on the one page view where
@@ -63,7 +55,13 @@ async function claimIncrementalAt(
 }
 
 /** A failed attempt must not pin the cooldown: release only the exact lease
- *  this request acquired, so a later page view can retry. */
+ *  this request acquired, so a later page view can retry.
+ *
+ *  This deliberately clears `last_incremental_at` rather than restoring an
+ *  older value. The OTP priority script reads the same column and will log
+ *  "never refreshed" after a failed page-view attempt, then try its own
+ *  refresh; that path is itself lease-gated, so the conservative retry signal
+ *  is safe and does not create duplicate Riot work. */
 async function releaseIncrementalClaim(
   sql: NonNullable<ReturnType<typeof getSql>>,
   puuid: string,
@@ -96,8 +94,10 @@ export type MyStatsRefreshResult =
   | { refreshed: false; skipped: false; error: true };
 
 /** Orchestrates one refresh attempt. Never throws -- a Riot/DB error inside
- *  the ingest call is caught and turned into `{refreshed:false, error:true}`
- *  so the endpoint can never 500 the client; the page keeps showing whatever
+ *  the account guard, lease claim, or ingest call is caught and turned into
+ *  `{refreshed:false, error:true}`. The refresh route returns that stable
+ *  shape with HTTP 200, and MyStatsRefresher deliberately ignores it because
+ *  this is a background freshness nicety; the page keeps showing whatever
  *  /api/mystats/summary already had cached. */
 export async function runMyStatsRefresh(sql: NonNullable<ReturnType<typeof getSql>>): Promise<MyStatsRefreshResult> {
   // Cheap DB-only check (no Riot call) -- an account that has never resolved
@@ -168,12 +168,10 @@ export async function runMyStatsRefresh(sql: NonNullable<ReturnType<typeof getSq
     }
     // Fail-soft (per this feature's brief): DbUnavailableError/
     // RiotUnavailableError/any transport throw all collapse to the same
-    // client-facing shape -- the cooldown is deliberately NOT stamped here,
-    // since the failing call never actually reached Riot in the
-    // RiotUnavailableError case (missing key) and a DB outage means the
-    // stamp write would fail anyway; letting the next call retry sooner
-    // costs nothing extra (still gated by the SAME unstamped cooldown from
-    // the last successful run, if any).
+    // client-facing shape. The cooldown is deliberately released above;
+    // the OTP priority script may therefore observe NULL and log "never
+    // refreshed", which is a conservative retry signal and remains lease-
+    // gated in that process too.
     return { refreshed: false, skipped: false, error: true };
   }
 }

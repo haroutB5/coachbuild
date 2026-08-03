@@ -630,7 +630,7 @@ export async function buildRecommendations(
       const condItemPicks = await Promise.all(
         condSlots.map(async ([fallback, pool]) => {
           const res = resolveMatchupSlot(
-            pool, fallback, MATCHUP_MIN_SAMPLE, (e) => usedM.has(e.itemId)
+            pool, fallback, MATCHUP_MIN_SAMPLE, (e) => usedM.has(e.itemId), (e) => e.itemId
           );
           usedM.add(res.entry.itemId);
           const pick = await itemEntryToPick(res.entry, bar);
@@ -814,7 +814,7 @@ export async function buildRecommendations(
           const treeKs = matchupKeystoneData.filter(
             (k) => keystoneTree(k.rune) === pg.cfg.treeId
           );
-          const res = resolveMatchupSlot(treeKs, pg.cfg.keystone, MATCHUP_MIN_SAMPLE);
+          const res = resolveMatchupSlot(treeKs, pg.cfg.keystone, MATCHUP_MIN_SAMPLE, undefined, (e) => e.rune);
           keystoneEntry = res.entry;
           keystoneConditioned = res.conditioned;
         } else {
