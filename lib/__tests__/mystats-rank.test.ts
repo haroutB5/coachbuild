@@ -253,6 +253,14 @@ describe("TTL gating: a warm rank costs zero Riot calls", () => {
     expect(selectRankRefreshTargets(accounts, NOW).map((a) => a.id)).toEqual([1, 3]);
   });
 
+  it("breaks equally stale refresh-target ties by account id", () => {
+    const accounts = [
+      { id: 9, active: false, rank_attempted_at: null },
+      { id: 3, active: false, rank_attempted_at: null },
+    ];
+    expect(selectRankRefreshTargets(accounts, NOW, undefined, 1).map((a) => a.id)).toEqual([3]);
+  });
+
   it("skips a warm active account but still refreshes a stale inactive one", () => {
     const accounts = [
       { id: 1, active: true, rank_attempted_at: new Date(NOW - 60_000).toISOString() },

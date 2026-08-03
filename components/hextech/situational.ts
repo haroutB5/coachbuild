@@ -20,5 +20,5 @@ export function flattenSituational(items: ItemsBlock): PickType[] {
       out.push(pick);
     }
   }
-  return out.sort((a, b) => b.wpa - a.wpa);
+  return out.sort((a, b) => b.wpa - a.wpa || a.id - b.id);
 }

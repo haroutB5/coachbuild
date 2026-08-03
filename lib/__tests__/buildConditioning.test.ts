@@ -23,6 +23,10 @@ describe("conditionedLeader", () => {
     // #3's 9.0 is a sub-floor fluke (occ 100 < 300); #2 wins on WPA above it.
     expect(conditionedLeader(pool, 300)?.itemId).toBe(2);
   });
+  it("breaks equal-WPA item ties by item id, independent of provider order", () => {
+    const pool = [item(2, 5000, 1.0), item(1, 5000, 1.0)];
+    expect(conditionedLeader(pool, 300)?.itemId).toBe(1);
+  });
   it("returns null when nothing clears the floor", () => {
     expect(conditionedLeader([item(1, 100, 5)], 300)).toBeNull();
   });

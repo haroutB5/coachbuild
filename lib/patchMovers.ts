@@ -182,7 +182,7 @@ export function computeRankedMovers(
 
   return movers
     .slice()
-    .sort((a, b) => Math.abs(b.deltaPp) - Math.abs(a.deltaPp))
+    .sort((a, b) => Math.abs(b.deltaPp) - Math.abs(a.deltaPp) || a.championId - b.championId)
     .slice(0, opts.maxRows);
 }
 

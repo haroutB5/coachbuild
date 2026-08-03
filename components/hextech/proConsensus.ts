@@ -1218,9 +1218,8 @@ export function aggregateProConsensus(
 }
 
 /** Re-orders tournamentNames (first-seen order) by actual occurrence count
- *  desc, stable on ties (Array.prototype.sort is stable per spec) — so e.g.
- *  a tournament with 6 of the sample's games surfaces before one with 1,
- *  regardless of which game happened to be fetched first. */
+ *  desc, then alphabetically on ties, so equal-frequency labels do not depend
+ *  on which game happened to be fetched first. */
 function tournamentNamesSortedByFrequency(games: ProGame[], firstSeenOrder: string[]): string[] {
   const freq = new Map<string, number>();
   for (const game of games) {
@@ -1228,7 +1227,9 @@ function tournamentNamesSortedByFrequency(games: ProGame[], firstSeenOrder: stri
       freq.set(game.tournament, (freq.get(game.tournament) ?? 0) + 1);
     }
   }
-  return [...firstSeenOrder].sort((a, b) => (freq.get(b) ?? 0) - (freq.get(a) ?? 0));
+  return [...firstSeenOrder].sort(
+    (a, b) => (freq.get(b) ?? 0) - (freq.get(a) ?? 0) || a.localeCompare(b)
+  );
 }
 
 /** Formats a 0-1 share as a whole-percent string ("90%") — rounds, never

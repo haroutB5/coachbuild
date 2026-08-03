@@ -24,6 +24,7 @@ const { runMyStatsIngest } = await import("../lib/mystats/ingest.ts");
 const { getSql } = await import("../lib/pro/db.ts");
 const { getActiveAccount } = await import("../lib/mystats/account.ts");
 const { summarizeByChampion } = await import("../lib/mystats/aggregate.ts");
+const { COUNTED_QUEUE_IDS } = await import("../lib/mystats/queues.ts");
 
 const pageSize = Number(process.argv[2]) || undefined;
 
@@ -70,6 +71,7 @@ async function main() {
         SELECT champion_id, role, opp_champion_id, win, game_creation
         FROM coachbuild.my_matches
         WHERE puuid = ${account.puuid}
+          AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
       `
     : [];
   const records = rows.map((r) => ({

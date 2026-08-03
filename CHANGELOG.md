@@ -2,6 +2,56 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.94.0] — 2026-08-03 — Overnight sweep: nothing invented, nothing arbitrary
+
+A whole-app hunt for **silent bugs** — the class where a confidently wrong number is shown and nobody
+notices. Every fix below is pinned by a test that fails before it and passes after.
+
+### Fixed — invented values
+- **A champion with no measured baseline was ranked as if it had won 50%.** `lib/draft/recommend.ts`
+  fabricated a midpoint win rate for a missing baseline and then ranked on it, so a champion with no
+  data could outrank one with real, slightly-below-average data. Missing baselines are now rejected
+  rather than imagined, and the lane-share denominators are taken from the complete matrix instead of
+  a partial slice.
+- **Absent sample sizes rendered as `0` games** in the cached draft paths
+  (`components/live/draftRecommend.ts`, `components/hextech/draftPicksModel.ts`). "We don't know how
+  many games" and "zero games" are different claims; absent now stays absent.
+- **Missing historical KDA became `0/0/0`** across the My Stats API, normaliser, aggregation, chart
+  and list. A game with no recorded KDA now renders as an honest gap — em dashes in the list, a break
+  in the chart — and is excluded from KDA maths rather than dragging the average toward zero.
+
+### Fixed — arbitrary ordering
+- **Ten places where ties were broken non-deterministically**, so equally-ranked rows could reorder
+  between requests for no reason: patch movers, situational items, featured runes and spells,
+  pro-game merges by equal timestamp, summoner-spell recommendations, OTP ingest candidates,
+  conditioned build leaders, My Stats rank-refresh targets, and equal-frequency pro tournaments.
+  Each now has an explicit secondary key.
+
+### Fixed — data layer
+- **My Stats refresh could double-claim.** The cooldown check and the claim were separate steps; it
+  now takes an atomic lease, releases the claim when a refresh fails instead of leaving it stuck, and
+  scopes "latest game" reporting to counted queues.
+- **The manual My Stats report ignored queue scoping** (`scripts/ingest-mystats.mjs`), so non-ranked-solo
+  games could reach a season-scoped personal report. The queue invariant is now enforced by test, not
+  just by a comment.
+
+### Fixed — honesty of copy
+- The v0.93.0 hint claimed the Recommended view was "showing blind-pick rankings" with no enemies
+  picked. Driving the live app disproved it: Recommended read Singed, Tryndamere, Garen while the
+  actual Blind Picks tab read Riven, Vladimir, Vex, Diana. It now says the ranking is based on overall
+  lane performance rather than matchups, which is what is actually shown.
+
+### Verified clean, not changed
+Personal data remains display-only and strictly post-ranking; build caps, starter-slot partitioning,
+damage-family item categories, '(low data)' labelling, season-scoped My Stats and CS/min rendering all
+hold. No SWR `refreshInterval` sites exist in this app, so the polling defect found in the sibling app
+tonight does not apply here.
+
+### Reported, not fixed
+Draft hover still refetches the full recommendation endpoint and computes unused enemy-analysis data;
+a few non-output-affecting tie comparators and a lint-reported effect dependency in `FeaturedOtpCard`
+remain.
+
 ## [0.93.0] — 2026-08-02 — Detailed Rankings finally lists the champions being recommended
 
 ### Fixed

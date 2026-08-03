@@ -82,9 +82,11 @@ export interface MyStatsRecentGame {
   championId: number;
   role: number;
   win: boolean;
-  kills: number;
-  deaths: number;
-  assists: number;
+  /** NULL on historical rows whose KDA was not stored. A missing value is not
+   *  a measured 0, so the client keeps it absent through to the display. */
+  kills: number | null;
+  deaths: number | null;
+  assists: number | null;
   onWpaBuild: boolean | null | undefined;
   /** Raw creep score for this ONE game (minions + neutral monsters). null =
    *  not stored for this row (pre-ship, not yet backfilled). engy §1c. */
@@ -253,9 +255,9 @@ function normalizeRecentGame(raw: unknown): MyStatsRecentGame | null {
     championId: r.championId,
     role: typeof r.role === "number" ? r.role : -1,
     win: r.win,
-    kills: num(r.kills),
-    deaths: num(r.deaths),
-    assists: num(r.assists),
+    kills: numOrNull(r.kills),
+    deaths: numOrNull(r.deaths),
+    assists: numOrNull(r.assists),
     onWpaBuild: boolOrNull(r.onWpaBuild),
     // All three stay null on absence. `cs: 0` is a real reading (a 3-minute
     // remake where nobody farmed) and must not be manufactured from a missing
@@ -653,6 +655,10 @@ export function buildMyStatsMatchupRows(matchups: MyStatsMatchupRecord[], iconOf
 
 type KdaInput = Pick<MyStatsRecentGame, "kills" | "deaths" | "assists">;
 
+function hasCompleteKda(game: KdaInput): game is { kills: number; deaths: number; assists: number } {
+  return game.kills !== null && game.deaths !== null && game.assists !== null;
+}
+
 /** KDA convention used everywhere below: (kills + assists) / deaths, with a
  *  zero-deaths floor of dividing by 1 rather than 0 — so a perfect (0-death)
  *  game reads as a real finite number (kills+assists), matching the
@@ -680,9 +686,10 @@ export interface MyStatsAverageKda {
 
 /** Zero games -> all-zero, kda 0 (not NaN) — an empty state, not an error. */
 export function computeAverageKda(games: KdaInput[]): MyStatsAverageKda {
-  const n = games.length;
+  const measuredGames = games.filter(hasCompleteKda);
+  const n = measuredGames.length;
   if (n === 0) return { avgKills: 0, avgDeaths: 0, avgAssists: 0, kda: 0, n: 0 };
-  const totals = games.reduce(
+  const totals = measuredGames.reduce(
     (acc, g) => ({ kills: acc.kills + g.kills, deaths: acc.deaths + g.deaths, assists: acc.assists + g.assists }),
     { kills: 0, deaths: 0, assists: 0 }
   );
@@ -693,14 +700,16 @@ export function computeAverageKda(games: KdaInput[]): MyStatsAverageKda {
 }
 
 export interface MyStatsGameKda {
-  kda: number;
+  /** NULL when one or more raw KDA components was not measured. */
+  kda: number | null;
   /** true when the game had 0 deaths — the UI's "Perfect" badge convention.
-   *  `kda` is always finite regardless (see kdaRatio's doc comment), so a
+   *  When present, `kda` is always finite (see kdaRatio's doc comment), so a
    *  consumer that ignores this flag still renders a sane number/bar. */
   perfect: boolean;
 }
 
 export function computeGameKda(game: KdaInput): MyStatsGameKda {
+  if (!hasCompleteKda(game)) return { kda: null, perfect: false };
   return { kda: kdaRatio(game.kills, game.deaths, game.assists), perfect: game.deaths === 0 };
 }
 
@@ -716,10 +725,11 @@ export function computeGameKda(game: KdaInput): MyStatsGameKda {
 export const MYSTATS_KDA_BAR_CEILING = 10;
 
 export interface MyStatsKdaBar {
-  kda: number;
+  /** NULL when the source game has no complete KDA. */
+  kda: number | null;
   perfect: boolean;
   /** 0..1, clamped — see MYSTATS_KDA_BAR_CEILING's doc comment. */
-  fraction: number;
+  fraction: number | null;
 }
 
 /** Does NOT re-sort — one bar per input game, in input order, same
@@ -727,7 +737,7 @@ export interface MyStatsKdaBar {
 export function normalizeKdaBars(games: KdaInput[]): MyStatsKdaBar[] {
   return games.map((g) => {
     const { kda, perfect } = computeGameKda(g);
-    const fraction = Math.max(0, Math.min(kda, MYSTATS_KDA_BAR_CEILING)) / MYSTATS_KDA_BAR_CEILING;
+    const fraction = kda === null ? null : Math.max(0, Math.min(kda, MYSTATS_KDA_BAR_CEILING)) / MYSTATS_KDA_BAR_CEILING;
     return { kda, perfect, fraction };
   });
 }

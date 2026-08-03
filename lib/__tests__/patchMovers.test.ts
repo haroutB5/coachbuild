@@ -88,6 +88,17 @@ describe("computeRankedMovers", () => {
     expect(ranked.map((m) => m.championId)).toEqual([3, 2]);
   });
 
+  it("breaks equal-magnitude mover ties by champion id, independent of input order", () => {
+    const ranked = computeRankedMovers(
+      [
+        row({ championId: 2, curr: wr(10000, 52), prev: wr(10000, 50) }),
+        row({ championId: 1, curr: wr(10000, 48), prev: wr(10000, 50) }),
+      ],
+      { minGames: 500, maxRows: 5 }
+    );
+    expect(ranked.map((m) => m.championId)).toEqual([1, 2]);
+  });
+
   it("a dual-role champion contributes exactly ONE mover (its primary role)", () => {
     const rows: ChampRoleWinrateData[] = [
       row({ championId: 4, role: 0, curr: wr(2000, 51), prev: wr(2000, 50) }),

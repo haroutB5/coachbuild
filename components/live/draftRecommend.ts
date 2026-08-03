@@ -43,7 +43,9 @@ export interface DraftPlayResult {
    *  conditions as `winVsLaneOpp`. */
   winVsLaneOppGames: number | null;
   confidence: DraftConfidence;
-  minGames: number;
+  /** Real sample size from the server. Null when an older cached payload
+   *  predates this field; absence stays absent rather than becoming n=0. */
+  minGames: number | null;
   /** My Stats decoration (2026-07-21, additive): my record vs the resolved
    *  lane opponent specifically. Null when no lane opponent is resolved, OR
    *  absent/malformed on the wire (older cached response) — never a
@@ -73,8 +75,7 @@ export interface DraftPlayResult {
  *  from the server's own type entirely — this file's old `minGames: number`
  *  + a 0-default normalizer papered over that gap, producing a fabricated
  *  "n=0 / low sample" on every single ban regardless of actual data).
- *  `minGames` is nullable (unlike DraftPlayResult's, which always has at
- *  least the candidate's own baseline sample) — a ban target with no
+ *  `minGames` is nullable — a ban target with no
  *  matchup row against the hovered champion genuinely has nothing to
  *  report. */
 export interface DraftBanResult {
@@ -251,7 +252,7 @@ function normalizePlay(raw: unknown): DraftPlayResult | null {
     winVsLaneOpp: typeof r.winVsLaneOpp === "number" ? r.winVsLaneOpp : null,
     winVsLaneOppGames: typeof r.winVsLaneOppGames === "number" ? r.winVsLaneOppGames : null,
     confidence: isConfidence(r.confidence) ? r.confidence : "low", // unknown -> the CAUTIOUS default, never a false "normal"
-    minGames: typeof r.minGames === "number" ? r.minGames : 0,
+    minGames: typeof r.minGames === "number" && Number.isFinite(r.minGames) ? r.minGames : null,
     // My Stats fields absent/malformed (older cached response, or a server
     // that hasn't shipped this yet) degrade to "no personal data" -- never
     // crash, never a fabricated non-zero record.

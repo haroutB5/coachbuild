@@ -26,9 +26,10 @@ export interface RecentGameRow {
   championId: number;
   role: number;
   win: boolean;
-  kills: number;
-  deaths: number;
-  assists: number;
+  /** null = KDA was not stored for this historical row; never render it as 0. */
+  kills: number | null;
+  deaths: number | null;
+  assists: number | null;
   /** null/undefined = build-adherence not resolved for this game (old data,
    *  or the pipeline hasn't backfilled it yet) — renders no chip at all,
    *  unless `patchDataPending` says WHY (see that field). */
@@ -159,7 +160,7 @@ export default function RecentGamesList({ games, iconOf, showChart = true }: Rec
             </div>
 
             <span className="text-[12px] text-txt tabular-nums flex-shrink-0">
-              {g.kills} / {g.deaths} / {g.assists}
+              {g.kills ?? "—"} / {g.deaths ?? "—"} / {g.assists ?? "—"}
             </span>
 
             <BuildChip onWpaBuild={g.onWpaBuild} patchDataPending={g.patchDataPending} />

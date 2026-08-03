@@ -129,6 +129,19 @@ describe("recentGames CS fields", () => {
     const body = await (await summaryGET(req("http://localhost/api/mystats/summary"))).json();
     expect(body.recentGames[0]).toMatchObject({ cs: 12, gameDurationSec: 221, csPerMin: null });
   });
+
+  it("keeps historical rows' missing KDA absent while preserving measured zeroes", async () => {
+    mockGetMyAccount.mockResolvedValue({ id: 1, puuid: "p", riotId: "X#EUW", region: "EUW", routing: {} });
+    mockSql.mockImplementation(() => Promise.resolve([
+      row({ kills: null, deaths: null, assists: null }),
+      row({ champion_id: 7, kills: 0, deaths: 0, assists: 0 }),
+    ]));
+    const body = await (await summaryGET(req("http://localhost/api/mystats/summary"))).json();
+    expect(body.recentGames.map(({ kills, deaths, assists }: { kills: number | null; deaths: number | null; assists: number | null }) => ({ kills, deaths, assists }))).toEqual([
+      { kills: null, deaths: null, assists: null },
+      { kills: 0, deaths: 0, assists: 0 },
+    ]);
+  });
 });
 
 describe("rank fields", () => {

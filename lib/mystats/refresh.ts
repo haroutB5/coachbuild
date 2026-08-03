@@ -20,6 +20,7 @@
 import { getSql } from "@/lib/pro/db";
 import { getActiveAccount } from "./account";
 import { runMyStatsIngest } from "./ingest";
+import { COUNTED_QUEUE_IDS } from "./queues";
 
 /** Named per the brief — 3 minutes. Long enough that a user rapidly
  *  switching tabs back to My Stats can't trigger more than one real ingest
@@ -38,32 +39,40 @@ export function shouldRunIncremental(lastAt: Date | null, now: Date, cooldownMs:
 /** PER-ACCOUNT since migration 0020. A shared cooldown would have meant
  *  switching to a second account and immediately finding its refresh blocked by
  *  the FIRST account's clock — for up to 3 minutes, on the one page view where
- *  the user is most likely to be checking whether the switch worked. */
-async function getLastIncrementalAt(
+ *  the user is most likely to be checking whether the switch worked.
+ *
+ * The check and stamp are one PostgreSQL upsert, not a read followed by a
+ * write. Two page views can arrive at the same time; only the request whose
+ * conditional upsert returns a row owns the refresh lease. */
+async function claimIncrementalAt(
   sql: NonNullable<ReturnType<typeof getSql>>,
-  puuid: string
-): Promise<Date | null> {
+  puuid: string,
+  at: Date
+): Promise<boolean> {
+  const cutoff = new Date(at.getTime() - REFRESH_COOLDOWN_MS);
   const rows = (await sql`
-    SELECT last_incremental_at FROM coachbuild.my_ingest_cursor WHERE puuid = ${puuid}
-  `) as unknown as { last_incremental_at: string | null }[];
-  const raw = rows[0]?.last_incremental_at;
-  return raw ? new Date(raw) : null;
+    INSERT INTO coachbuild.my_ingest_cursor (puuid, last_incremental_at)
+    VALUES (${puuid}, ${at.toISOString()})
+    ON CONFLICT (puuid) DO UPDATE
+      SET last_incremental_at = EXCLUDED.last_incremental_at
+      WHERE coachbuild.my_ingest_cursor.last_incremental_at IS NULL
+         OR coachbuild.my_ingest_cursor.last_incremental_at <= ${cutoff.toISOString()}
+    RETURNING puuid
+  `) as unknown as { puuid: string }[];
+  return rows.length > 0;
 }
 
-/** Upserts this ACCOUNT's cursor row so a newly-linked account (which has no
- *  row at all until its first backfill) still gets a cooldown stamp. Only
- *  touches last_incremental_at; next_start/backfill_done keep their existing
- *  values (or DEFAULT on a genuine first insert; backfill mode owns those
- *  columns, not this function). */
-async function stampLastIncrementalAt(
+/** A failed attempt must not pin the cooldown: release only the exact lease
+ *  this request acquired, so a later page view can retry. */
+async function releaseIncrementalClaim(
   sql: NonNullable<ReturnType<typeof getSql>>,
   puuid: string,
   at: Date
 ): Promise<void> {
   await sql`
-    INSERT INTO coachbuild.my_ingest_cursor (puuid, last_incremental_at)
-    VALUES (${puuid}, ${at.toISOString()})
-    ON CONFLICT (puuid) DO UPDATE SET last_incremental_at = EXCLUDED.last_incremental_at
+    UPDATE coachbuild.my_ingest_cursor
+    SET last_incremental_at = NULL
+    WHERE puuid = ${puuid} AND last_incremental_at = ${at.toISOString()}
   `;
 }
 
@@ -96,14 +105,28 @@ export async function runMyStatsRefresh(sql: NonNullable<ReturnType<typeof getSq
   // NOT ensureMyAccount here: that would attempt a live Riot resolution on
   // every single page view for an unresolved account, with no cooldown
   // protecting it (this guard runs BEFORE the cooldown check below).
-  const account = await getActiveAccount(sql);
+  let account: Awaited<ReturnType<typeof getActiveAccount>>;
+  try {
+    account = await getActiveAccount(sql);
+  } catch {
+    // The endpoint's contract is fail-soft even when the cheap guard query
+    // itself is unavailable; do not turn a transient DB outage into a 500.
+    return { refreshed: false, skipped: false, error: true };
+  }
   if (!account) {
     return { accountUnresolved: true };
   }
 
   const now = new Date();
-  const lastAt = await getLastIncrementalAt(sql, account.puuid);
-  if (!shouldRunIncremental(lastAt, now, REFRESH_COOLDOWN_MS)) {
+  let claimed: boolean;
+  try {
+    claimed = await claimIncrementalAt(sql, account.puuid, now);
+  } catch {
+    // No lease was acquired when the claim failed, so there is nothing to
+    // release. Keep the same stable error shape as an ingest failure.
+    return { refreshed: false, skipped: false, error: true };
+  }
+  if (!claimed) {
     return { refreshed: false, skipped: true, reason: "cooldown" };
   }
 
@@ -114,15 +137,18 @@ export async function runMyStatsRefresh(sql: NonNullable<ReturnType<typeof getSq
       // vanishingly unlikely (this table's id=1 row is never deleted), but
       // stay consistent with the same guard rather than falling through to
       // an error state.
+      await releaseIncrementalClaim(sql, account.puuid, now);
       return { accountUnresolved: true };
     }
-    await stampLastIncrementalAt(sql, account.puuid, now);
     // ACCOUNT-SCOPED (migration 0020): unscoped, "your latest game" would be
     // whichever of the user's accounts played most recently -- so a freshly
     // switched account with no games yet would report the OTHER account's last
     // game as its own.
     const latestRows = (await sql`
-      SELECT max(game_creation) AS latest FROM coachbuild.my_matches WHERE puuid = ${account.puuid}
+      SELECT max(game_creation) AS latest
+      FROM coachbuild.my_matches
+      WHERE puuid = ${account.puuid}
+        AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
     `) as unknown as { latest: string | null }[];
     const latest = latestRows[0]?.latest ?? null;
     return {
@@ -134,6 +160,12 @@ export async function runMyStatsRefresh(sql: NonNullable<ReturnType<typeof getSq
       truncatedBy: result.truncatedBy,
     };
   } catch {
+    try {
+      await releaseIncrementalClaim(sql, account.puuid, now);
+    } catch {
+      // Best-effort release only. The lease expires naturally after the same
+      // cooldown window if a DB outage also prevents this cleanup write.
+    }
     // Fail-soft (per this feature's brief): DbUnavailableError/
     // RiotUnavailableError/any transport throw all collapse to the same
     // client-facing shape -- the cooldown is deliberately NOT stamped here,

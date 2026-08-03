@@ -399,6 +399,15 @@ describe("aggregateProConsensus", () => {
     expect(model.tournaments.names).toEqual(["LEC 2026 Summer", "LCK Summer 2026"]);
   });
 
+  it("breaks equal-frequency tournament ties alphabetically, independent of input order", () => {
+    const games = [
+      game({ source: "prostage", tournament: "Zulu" }),
+      game({ source: "prostage", tournament: "Alpha" }),
+    ];
+    const model = aggregateProConsensus(games, itemMeta());
+    expect(model.tournaments.names).toEqual(["Alpha", "Zulu"]);
+  });
+
   it("never crashes on missing/undefined finalItems or spells arrays", () => {
     const malformed = { ...game(), finalItems: undefined, spells: undefined } as unknown as ProGame;
     expect(() => aggregateProConsensus([malformed], itemMeta())).not.toThrow();

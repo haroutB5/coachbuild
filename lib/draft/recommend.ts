@@ -332,7 +332,13 @@ function buildLaneStats(fullPool: ChampBaseline[], rows: MatchupDbRow[]): DraftL
     if (!hasMatrix) return candidate.totalGames;
     return matrixGames.has(candidate.champId) ? matrixGames.get(candidate.champId)! : null;
   });
-  const laneTotal = totals.reduce<number>((sum, total) => sum + (total ?? 0), 0);
+  // When the scoring pool omits a row with no usable baseline, its games still
+  // belong to the matrix's lane-wide denominator. Use the complete matrix
+  // total whenever it exists; the candidate total remains the no-matrix
+  // fallback for defensive/mocked responses.
+  const candidateTotal = totals.reduce<number>((sum, total) => sum + (total ?? 0), 0);
+  const matrixTotal = Array.from(matrixGames.values()).reduce((sum, total) => sum + total, 0);
+  const laneTotal = hasMatrix ? matrixTotal : candidateTotal;
   return fullPool.map((candidate, index) => {
     const totalGames = totals[index];
     return {
@@ -352,8 +358,11 @@ function buildMatchupPreviews(
 ): DraftMatchupPreview[] {
   if (rows.length === 0) return [];
   if (laneStats.some((stat) => stat.totalGames === null)) return [];
-  const laneTotal = laneStats.reduce((sum, stat) => sum + (stat.totalGames ?? 0), 0);
-  const realTotal = realLaneGames(laneTotal);
+  // Use every valid matrix row for the opponent prior denominator, not just
+  // candidates that survived baseline validation. A missing-baseline champion
+  // is excluded from recommendations but its games still describe the lane.
+  const matrixTotal = Array.from(aggregateGamesByChampion(rows).values()).reduce((sum, total) => sum + total, 0);
+  const realTotal = realLaneGames(matrixTotal);
   if (realTotal <= 0 || previewChampIds.size === 0) return [];
   const opponentGames = aggregateGamesByOpponent(rows);
   const opponentShares = new Map<number, number>();
@@ -654,13 +663,19 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
     FROM coachbuild.draft_champ_stats
     WHERE patch = ${patch} AND tier = ${EMERALD_TIER} AND role = ${params.lane}
   `) as unknown as ChampStatsRow[];
-  const fullPool: ChampBaseline[] = poolRows.map((r) => ({
-    champId: r.champ_id,
-    baselineWr: r.winrate ?? 0.5,
-    pickrate: r.pickrate,
-    banrate: r.banrate,
-    totalGames: r.total_games ?? 0,
-  }));
+  // A missing baseline is not a neutral 50% baseline: it is absent evidence.
+  // The scorer requires a real baseline for every candidate, so leave such a
+  // row out of every derived pool rather than fabricating a number that can
+  // rank it or feed its matchup deltas.
+  const fullPool: ChampBaseline[] = poolRows
+    .filter((r): r is ChampStatsRow & { winrate: number } => typeof r.winrate === "number" && Number.isFinite(r.winrate))
+    .map((r) => ({
+      champId: r.champ_id,
+      baselineWr: r.winrate,
+      pickrate: r.pickrate,
+      banrate: r.banrate,
+      totalGames: r.total_games ?? 0,
+    }));
   if (fullPool.length === 0) return pendingMeta(patch);
   // Real data-freshness signal (see RecommendMeta.fetchedAt's doc comment) --
   // every row in this result set carries the same window-function value, so

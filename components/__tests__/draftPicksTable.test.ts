@@ -88,9 +88,9 @@ describe("buildPickRows", () => {
     expect(rows[0].games).toBe(800);
   });
 
-  it("games is always a number, never null, even when both sources are absent", () => {
-    const rows = buildPickRows([play({ champId: 1, minGames: 0, winVsLaneOppGames: null })], new Map());
-    expect(rows[0].games).toBe(0);
+  it("keeps games absent when both sample-size sources are absent", () => {
+    const rows = buildPickRows([play({ champId: 1, minGames: null, winVsLaneOppGames: null })], new Map());
+    expect(rows[0].games).toBeNull();
   });
 });
 

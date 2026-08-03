@@ -217,6 +217,17 @@ describe("normalizeDraftRecommendResponse", () => {
     expect(result?.plays[0].personalOverall).toEqual({ games: 0, wins: 0 });
   });
 
+  it("keeps a missing play sample size absent instead of fabricating n=0, while preserving a real sample", () => {
+    const result = normalizeDraftRecommendResponse({
+      plays: [
+        { champId: 103, score: 0.5, confidence: "normal", minGames: 300 },
+        { champId: 104, score: 0.49, confidence: "low" },
+      ],
+      meta: {},
+    });
+    expect(result?.plays.map((play) => play.minGames)).toEqual([300, null]);
+  });
+
   it("v0.37.4: potentialPlays absent (older cached response / server hasn't shipped it) degrades to [], never crashes", () => {
     const result = normalizeDraftRecommendResponse({
       plays: [{ champId: 103, score: 0.52, winVsLaneOpp: null, confidence: "normal", minGames: 400 }],

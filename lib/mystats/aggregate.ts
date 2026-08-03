@@ -203,9 +203,11 @@ export interface RecentGameInput {
   championId: number;
   role: number;
   win: boolean;
-  kills: number;
-  deaths: number;
-  assists: number;
+  /** NULL on rows stored before migration 0014's KDA additions were populated.
+   * Missing KDA is not the same fact as a measured 0/0/0 game. */
+  kills: number | null;
+  deaths: number | null;
+  assists: number | null;
   onWpaBuild: boolean | null;
   gameCreation: string; // ISO
   /** Migration 0021 — optional for the same back-compat reason as
@@ -227,9 +229,11 @@ export interface RecentGame {
   championId: number;
   role: number;
   win: boolean;
-  kills: number;
-  deaths: number;
-  assists: number;
+  /** NULL means this historical row has no measured KDA, never a fabricated
+   * zero. */
+  kills: number | null;
+  deaths: number | null;
+  assists: number | null;
   onWpaBuild: boolean | null;
   /** RAW creep score for this one game. null = not stored for this row. */
   cs: number | null;

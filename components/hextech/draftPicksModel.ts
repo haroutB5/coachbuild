@@ -46,7 +46,8 @@ export interface PickRow {
    *  kept as a separate field (not a rename) so a future divergence (e.g.
    *  minGames someday meaning a genuinely different threshold) doesn't
    *  silently break the GAMES column. */
-  games: number;
+  /** Null when the server/cached payload has no honest sample size. */
+  games: number | null;
   personal: PersonalRecord | null;
   personalOverall: PersonalRecord;
   difficulty: number | null;
@@ -76,7 +77,7 @@ export function buildPickRows(plays: DraftPlayResult[], champIcons: Map<number, 
       winVsLaneOpp: play.winVsLaneOpp,
       confidence: play.confidence,
       minGames: play.winVsLaneOppGames ?? play.minGames,
-      games: play.winVsLaneOppGames ?? play.minGames ?? 0,
+      games: play.winVsLaneOppGames ?? play.minGames,
       personal: play.personal,
       personalOverall: play.personalOverall,
       difficulty: entry?.difficulty ?? null,

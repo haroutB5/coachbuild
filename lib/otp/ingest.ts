@@ -140,7 +140,13 @@ export async function discoverOtpAccounts(
     // one-trick floor," which is a false statement about the data.
     const aboveFloor = candidates.filter((c) => c.championPlays >= MIN_CHAMPION_PLAYS);
     const qualified = [...aboveFloor]
-      .sort((a, b) => b.championPlays - a.championPlays)
+      .sort(
+        (a, b) =>
+          b.championPlays - a.championPlays ||
+          a.gameName.localeCompare(b.gameName) ||
+          a.tagLine.localeCompare(b.tagLine) ||
+          a.rank - b.rank
+      )
       .slice(0, perRegion);
 
     const belowFloor = candidates.length - aboveFloor.length;

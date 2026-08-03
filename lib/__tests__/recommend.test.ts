@@ -154,4 +154,9 @@ describe("pickSpells", () => {
   it("returns a single spell when the pool has only one", () => {
     expect(pickSpells([sp(4, 0.0, 50000)], 5000).length).toBe(1);
   });
+
+  it("breaks tied spell WPA and occurrence by spell id, independent of provider order", () => {
+    const pool = [sp(14, 1.0, 50000), sp(6, 1.0, 50000), sp(4, 1.0, 50000)];
+    expect(pickSpells(pool, 5000).map((entry) => entry.summonerSpell)).toEqual([4, 6]);
+  });
 });

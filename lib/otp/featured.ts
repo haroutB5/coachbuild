@@ -286,8 +286,10 @@ export function buildFeaturedModel(
     .map(([itemId, n]) => ({ itemId, games: n, pct: pct(n) }))
     .sort((a, b) => b.games - a.games || a.itemId - b.itemId);
 
-  const topRunes = Array.from(runeGroups.values()).sort((a, b) => b.n - a.n)[0] ?? null;
-  const topSpells = Array.from(spellGroups.values()).sort((a, b) => b.n - a.n)[0] ?? null;
+  const topRunes = Array.from(runeGroups.values()).sort((a, b) => b.n - a.n || runeKey(a.page).localeCompare(runeKey(b.page)))[0] ?? null;
+  const topSpells = Array.from(spellGroups.values()).sort(
+    (a, b) => b.n - a.n || a.spells[0] - b.spells[0] || a.spells[1] - b.spells[1]
+  )[0] ?? null;
   const skillOrder = aggregateRecordedSkillOrders(rows.map((row) => row.skill_order));
 
   return {

@@ -12,6 +12,14 @@ export interface OccWpa {
   wpaOverall: number;
 }
 
+function compareConditionedCandidates(a: OccWpa, b: OccWpa): number {
+  if (a.wpaOverall !== b.wpaOverall) return b.wpaOverall - a.wpaOverall;
+  const aItemId = (a as OccWpa & { itemId?: unknown }).itemId;
+  const bItemId = (b as OccWpa & { itemId?: unknown }).itemId;
+  if (typeof aItemId === "number" && typeof bItemId === "number") return aItemId - bItemId;
+  return 0;
+}
+
 // ── Guard thresholds ─────────────────────────────────────────────────────────
 // Conditioned pools are SUBSETS of the unconditioned pool, so their absolute
 // samples are much smaller. These are FLAT floors (not fractions of the
@@ -53,7 +61,7 @@ export function conditionedLeader<T extends OccWpa>(
     (e) => e.occurrence >= floor && !(isExcluded?.(e) ?? false)
   );
   if (pool.length === 0) return null;
-  return pool.slice().sort((a, b) => b.wpaOverall - a.wpaOverall)[0];
+  return pool.slice().sort(compareConditionedCandidates)[0];
 }
 
 /** Greedy sequential item optimizer (Feature 2).

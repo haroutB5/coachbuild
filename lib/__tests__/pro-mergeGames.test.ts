@@ -80,6 +80,12 @@ describe("mergeProGames", () => {
     expect(times).toEqual([...times].sort((a, b) => b - a));
   });
 
+  it("breaks equal-timestamp ties by source and id, independent of input order", () => {
+    const sameTimeSolos = [game("soloq", 1, "s2"), game("soloq", 1, "s1")];
+    const sameTimePro = [game("prostage", 1, "p2"), game("prostage", 1, "p1")];
+    expect(mergeProGames(sameTimeSolos, sameTimePro, 4).map((g) => g.id)).toEqual(["p1", "p2", "s1", "s2"]);
+  });
+
   it("never duplicates a row when backfilling", () => {
     const { soloq, prostage } = scenario(3, 40);
     const merged = mergeProGames(soloq, prostage, 30, 10);

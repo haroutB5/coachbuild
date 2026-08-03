@@ -55,6 +55,15 @@ describe("buildFeaturedModel", () => {
     expect(m.runes?.pct).toBe(67);
   });
 
+  it("breaks tied rune and spell modals by canonical id order, not first-seen order", () => {
+    const m = buildFeaturedModel([
+      game({ runes: page(8992), spells: [4, 12] }),
+      game({ runes: page(8112), spells: [4, 6] }),
+    ]);
+    expect(m.runes?.page.keystone).toBe(8112);
+    expect(m.spells?.spells).toEqual([4, 6]);
+  });
+
   it("treats pages with neither keystone nor tree as absent", () => {
     // Otherwise empty pages win the modal count by sheer volume and the card
     // claims a rune setup the player never ran.

@@ -27,7 +27,10 @@
 import type { ProGame } from "./types";
 
 function byRecencyDesc(a: ProGame, b: ProGame): number {
-  return new Date(b.gameCreation).getTime() - new Date(a.gameCreation).getTime();
+  const recency = new Date(b.gameCreation).getTime() - new Date(a.gameCreation).getTime();
+  if (recency !== 0) return recency;
+  const source = a.source.localeCompare(b.source);
+  return source !== 0 ? source : a.id.localeCompare(b.id);
 }
 
 /** Merges the two per-source result sets into one recency-sorted list of at

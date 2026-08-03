@@ -327,6 +327,19 @@ describe("normalizeMyStatsSummary", () => {
     expect(result?.recentGames?.map((g) => g.onWpaBuild)).toEqual([null, null, false, true]);
   });
 
+  it("keeps missing recent-game KDA absent while preserving measured zeroes", () => {
+    const result = normalizeMyStatsSummary({
+      recentGames: [
+        { championId: 1, role: 0, win: true },
+        { championId: 2, role: 0, win: false, kills: 0, deaths: 0, assists: 0 },
+      ],
+    });
+    expect(result?.recentGames?.map(({ kills, deaths, assists }) => ({ kills, deaths, assists }))).toEqual([
+      { kills: null, deaths: null, assists: null },
+      { kills: 0, deaths: 0, assists: 0 },
+    ]);
+  });
+
   it("a non-array recentGames degrades to [] rather than crashing", () => {
     expect(normalizeMyStatsSummary({ recentGames: "not-an-array" })?.recentGames).toEqual([]);
   });
@@ -625,6 +638,14 @@ describe("computeAverageKda", () => {
     const result = computeAverageKda([{ kills: 4, deaths: 2, assists: 6 }]);
     expect(result).toEqual({ avgKills: 4, avgDeaths: 2, avgAssists: 6, kda: 5, n: 1 });
   });
+
+  it("excludes an unmeasured KDA row from the average denominator", () => {
+    const result = computeAverageKda([
+      { kills: null, deaths: null, assists: null },
+      { kills: 4, deaths: 2, assists: 6 },
+    ]);
+    expect(result).toEqual({ avgKills: 4, avgDeaths: 2, avgAssists: 6, kda: 5, n: 1 });
+  });
 });
 
 describe("computeGameKda", () => {
@@ -640,6 +661,10 @@ describe("computeGameKda", () => {
 
   it("a scoreless game (0/0/0) is a real input -- 0 kda, perfect: true (0 deaths), not NaN", () => {
     expect(computeGameKda({ kills: 0, deaths: 0, assists: 0 })).toEqual({ kda: 0, perfect: true });
+  });
+
+  it("keeps KDA absent when a historical row has no stored components", () => {
+    expect(computeGameKda({ kills: null, deaths: null, assists: null })).toEqual({ kda: null, perfect: false });
   });
 });
 
@@ -666,6 +691,12 @@ describe("normalizeKdaBars", () => {
       { kills: 9, deaths: 1, assists: 9 },
     ]);
     expect(bars.map((b) => b.kda)).toEqual([2, 18]);
+  });
+
+  it("leaves a missing KDA bar absent instead of drawing a zero bar", () => {
+    expect(normalizeKdaBars([{ kills: null, deaths: null, assists: null }])).toEqual([
+      { kda: null, perfect: false, fraction: null },
+    ]);
   });
 
   it("empty input -> empty output", () => {

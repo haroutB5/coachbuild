@@ -53,4 +53,12 @@ describe("flattenSituational", () => {
     const out = flattenSituational(baseItems(alts));
     expect(out.map((p) => p.id)).toEqual([21, 22, 20]);
   });
+
+  it("breaks equal-WPA ties by item id, independent of alternative order", () => {
+    const alts = {
+      first: [pick(22, 0.02), pick(21, 0.02)],
+    };
+    const out = flattenSituational(baseItems(alts));
+    expect(out.map((p) => p.id)).toEqual([21, 22]);
+  });
 });

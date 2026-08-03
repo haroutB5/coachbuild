@@ -15,9 +15,8 @@
 // draftPicksModel.ts) — read defensively via a locally-widened type (same
 // "consume engo's in-flight fields without editing the shared contract or
 // guessing" pattern as the matchday tennis defensive-field convention) so
-// this compiles whether or not the field has landed yet, falling back to
-// `minGames` (the sample-size figure already on the wire) so the column is
-// never blank either way.
+// this compiles whether or not the field has landed yet. Missing sample data
+// stays absent in the column rather than becoming a fabricated zero.
 //
 // Honesty carryover (unchanged): default sort is ALWAYS the server's own
 // rank; any other sort is purely a display transform and shows a caption

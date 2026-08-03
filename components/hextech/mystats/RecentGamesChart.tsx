@@ -15,7 +15,8 @@
 //     point — max-based scaling lets one 0-death stomp flatten every other bar
 //     toward invisibility. DO NOT renormalise it here.
 //   · zero-death games floor to divide-by-1, so `kda` is always finite and
-//     `perfect` is the flag for badging them. No Infinity, no NaN.
+//     `perfect` is the flag for badging them. Missing historical KDA stays null
+//     and renders as an absent bar. No Infinity, no NaN.
 // This component's only jobs are pixels and words.
 //
 // DENOMINATOR (the trap this repo has already been bitten by, v0.73.1):
@@ -78,7 +79,7 @@ export default function RecentGamesChart({ games, iconOf }: RecentGamesChartProp
   const bars = normalizeKdaBars(games);
   const avg = computeAverageKda(games);
   const anyBuildData = games.some((g) => g.onWpaBuild === true || g.onWpaBuild === false);
-  const anyAtCeiling = bars.some((b) => b.kda >= MYSTATS_KDA_BAR_CEILING);
+  const anyAtCeiling = bars.some((b) => b.kda !== null && b.kda >= MYSTATS_KDA_BAR_CEILING);
 
   return (
     <div>
@@ -92,7 +93,7 @@ export default function RecentGamesChart({ games, iconOf }: RecentGamesChartProp
           const bar = bars[i];
           const entry = iconOf(g.championId);
           const name = entry?.name ?? `Champion #${g.championId}`;
-          const height = Math.max(4, Math.round(bar.fraction * TRACK_PX));
+          const height = bar.fraction === null ? 0 : Math.max(4, Math.round(bar.fraction * TRACK_PX));
           // 2026-07-31 audit P2 (#4): a null onWpaBuild reads as "build not
           // recorded" (implying this app failed to record something about
           // THIS game) unless patchDataPending says the real reason is
@@ -135,18 +136,20 @@ export default function RecentGamesChart({ games, iconOf }: RecentGamesChartProp
                 className={`text-[9px] leading-none tabular-nums h-[10px] ${bar.perfect ? "text-teal" : "text-mut"}`}
                 title={bar.perfect ? "Perfect KDA — no deaths" : undefined}
               >
-                {bar.kda.toFixed(1)}
+                {bar.kda === null ? "—" : bar.kda.toFixed(1)}
               </span>
 
               {/* No track behind the bar: a full-height grey column reads as
                   the other half of a STACKED bar, i.e. as data. The fixed-height
                   wrapper still reserves the space. */}
               <span className="w-full flex items-end justify-center" style={{ height: TRACK_PX }}>
-                <span
-                  className={`w-[18px] rounded-[3px] ${g.win ? "bg-good/85" : "bg-bad/80"}`}
-                  style={{ height }}
-                  aria-hidden="true"
-                />
+                {bar.kda !== null && (
+                  <span
+                    className={`w-[18px] rounded-[3px] ${g.win ? "bg-good/85" : "bg-bad/80"}`}
+                    style={{ height }}
+                    aria-hidden="true"
+                  />
+                )}
               </span>
 
               <span className="w-6 h-6 rounded-md bg-black/30 border border-line overflow-hidden flex items-center justify-center">
@@ -162,9 +165,8 @@ export default function RecentGamesChart({ games, iconOf }: RecentGamesChartProp
               <BuildMark onWpaBuild={g.onWpaBuild} />
 
               <span className="sr-only">
-                {name} {myStatsRoleLabel(g.role)}, {g.win ? "win" : "loss"}, {g.kills}/{g.deaths}/{g.assists},
-                KDA {bar.kda.toFixed(1)}
-                {bar.perfect ? " (perfect, no deaths)" : ""}, {buildText}.
+                {name} {myStatsRoleLabel(g.role)}, {g.win ? "win" : "loss"}, {g.kills ?? "—"}/{g.deaths ?? "—"}/{g.assists ?? "—"},
+                {bar.kda === null ? "KDA not recorded" : `KDA ${bar.kda.toFixed(1)}${bar.perfect ? " (perfect, no deaths)" : ""}`}, {buildText}.
               </span>
             </li>
           );
@@ -197,8 +199,9 @@ export default function RecentGamesChart({ games, iconOf }: RecentGamesChartProp
           names. `computeAverageKda` divides summed components once rather than
           averaging per-game ratios, so one low-death game can't dominate it. */}
       <p className="mt-1.5 text-[10px] text-mut/80 tabular-nums">
-        Average {avg.avgKills.toFixed(1)} / {avg.avgDeaths.toFixed(1)} / {avg.avgAssists.toFixed(1)} ·{" "}
-        {avg.kda.toFixed(2)} KDA over {avg.n} games
+        {avg.n > 0
+          ? `Average ${avg.avgKills.toFixed(1)} / ${avg.avgDeaths.toFixed(1)} / ${avg.avgAssists.toFixed(1)} · ${avg.kda.toFixed(2)} KDA over ${avg.n} games`
+          : "Average KDA unavailable — no games have complete KDA data"}
       </p>
     </div>
   );

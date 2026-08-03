@@ -124,6 +124,21 @@ describe("discoverOtpAccounts", () => {
     expect(resolved).toEqual(["High", "Mid"]);
   });
 
+  it("breaks equal-play ties by Riot ID, independent of leaderboard order", async () => {
+    vi.mocked(fetchOtpCandidates).mockResolvedValue([
+      candidate("Zulu", 900, 1),
+      candidate("Alpha", 900, 2),
+      candidate("Middle", 800, 3),
+    ]);
+    vi.mocked(getAccountByRiotId).mockImplementation(
+      async (_r, name) => ({ puuid: `p-${name}`, gameName: name, tagLine: "EUW" }) as never
+    );
+
+    await discoverOtpAccounts(112, "Viktor", { regions: ["EUW"], perRegion: 2 });
+    const resolved = vi.mocked(getAccountByRiotId).mock.calls.map((c) => c[1]);
+    expect(resolved).toEqual(["Alpha", "Zulu"]);
+  });
+
   it("does not let one unresolvable account sink the champion's pass", async () => {
     vi.mocked(fetchOtpCandidates).mockResolvedValue([
       candidate("Gone", 900, 1),

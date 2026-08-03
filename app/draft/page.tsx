@@ -641,7 +641,7 @@ function DetailedRankings({
           </button>
         </div>
       </div>
-      {showNoEnemyBlindHint && <p className="border-b border-line px-4 py-2 text-[10px] text-mut">No enemies picked yet — showing blind-pick rankings.</p>}
+      {showNoEnemyBlindHint && <p className="border-b border-line px-4 py-2 text-[10px] text-mut">No enemies picked yet — ranked on overall lane performance, not matchups.</p>}
       <div className="border-b border-line px-4 py-3">
         <label className="flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-mut">
           <span>Sort by</span>

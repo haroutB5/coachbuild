@@ -190,9 +190,9 @@ export function pickSpells(spellPool: SpellEntry[], bar: number): SpellEntry[] {
   add(
     spellPool
       .filter((s) => s.occurrence >= bar)
-      .sort((a, b) => b.wpaOverall - a.wpaOverall)
+      .sort((a, b) => b.wpaOverall - a.wpaOverall || a.summonerSpell - b.summonerSpell)
   );
-  add(spellPool.slice().sort((a, b) => b.occurrence - a.occurrence));
+  add(spellPool.slice().sort((a, b) => b.occurrence - a.occurrence || a.summonerSpell - b.summonerSpell));
   return picks.slice(0, 2);
 }
 

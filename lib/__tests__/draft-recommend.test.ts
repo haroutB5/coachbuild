@@ -154,6 +154,46 @@ describe("computeDraftRecommend", () => {
       const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
       expect(result.plays).toEqual([]);
     });
+
+    it("does not turn a missing baseline winrate into a fabricated 50% recommendation", async () => {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.draft_champ_stats") && text.includes("role = ")) {
+          return Promise.resolve([
+            champStatsRow({ champ_id: 350, winrate: null, total_games: 120000 }),
+            champStatsRow({ champ_id: 86, winrate: 0.51, total_games: 120000 }),
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.plays.map((p) => p.champId)).toEqual([86]);
+      expect(result.plays.some((p) => p.champId === 350)).toBe(false);
+    });
+
+    it("keeps a missing-baseline row in the lane-share denominator without ranking it", async () => {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.draft_champ_stats") && text.includes("role = ")) {
+          return Promise.resolve([
+            champStatsRow({ champ_id: 350, winrate: null, total_games: 100000 }),
+            champStatsRow({ champ_id: 86, winrate: 0.51, total_games: 100000 }),
+          ]);
+        }
+        if (text.includes("FROM coachbuild.draft_matchup")) {
+          return Promise.resolve([
+            { champ_id: 350, opp_id: 9, wins: 50000, games: 100000 },
+            { champ_id: 86, opp_id: 9, wins: 50000, games: 100000 },
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.plays.map((p) => p.champId)).toEqual([86]);
+      expect(result.laneStats?.find((stat) => stat.champId === 86)?.laneShare).toBe(1);
+    });
   });
 
   it("explicit laneOpp, present in enemies, wins over inference", async () => {

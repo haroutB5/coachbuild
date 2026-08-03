@@ -19,6 +19,7 @@ const mockRunMyStatsIngest = vi.fn();
 vi.mock("@/lib/mystats/ingest", () => ({ runMyStatsIngest: (...args: unknown[]) => mockRunMyStatsIngest(...args) }));
 
 import { runMyStatsRefresh, shouldRunIncremental, REFRESH_COOLDOWN_MS } from "@/lib/mystats/refresh";
+import { COUNTED_QUEUE_IDS } from "@/lib/mystats/queues";
 
 const ACCOUNT = {
   id: 1,
@@ -66,21 +67,49 @@ describe("runMyStatsRefresh", () => {
     expect(mockSql).not.toHaveBeenCalled();
   });
 
+  it("fail-softs an account lookup failure instead of rejecting the refresh request", async () => {
+    mockGetMyAccount.mockRejectedValueOnce(new Error("database unavailable"));
+    const result = await runMyStatsRefresh(mockSql as never);
+    expect(result).toEqual({ refreshed: false, skipped: false, error: true });
+    expect(mockRunMyStatsIngest).not.toHaveBeenCalled();
+  });
+
+  it("fail-softs an atomic claim failure instead of rejecting the refresh request", async () => {
+    mockGetMyAccount.mockResolvedValueOnce(ACCOUNT);
+    mockSql.mockRejectedValueOnce(new Error("database unavailable"));
+    const result = await runMyStatsRefresh(mockSql as never);
+    expect(result).toEqual({ refreshed: false, skipped: false, error: true });
+    expect(mockRunMyStatsIngest).not.toHaveBeenCalled();
+  });
+
   it("skips with reason:cooldown when called again inside the window, never calling Riot", async () => {
     mockGetMyAccount.mockResolvedValueOnce(ACCOUNT);
-    const recentlyRun = new Date(Date.now() - 60_000).toISOString(); // 1 min ago, cooldown is 3 min
-    mockSql.mockResolvedValueOnce([{ last_incremental_at: recentlyRun }]);
+    // The atomic claim returns no row while the existing cursor is inside the
+    // cooldown window.
+    mockSql.mockResolvedValueOnce([]);
     const result = await runMyStatsRefresh(mockSql as never);
     expect(result).toEqual({ refreshed: false, skipped: true, reason: "cooldown" });
     expect(mockRunMyStatsIngest).not.toHaveBeenCalled();
   });
 
-  it("runs incremental ingest once the cooldown has elapsed, stamps the timestamp, returns newGames+latest", async () => {
+  it("treats a lost atomic cooldown claim as a cooldown skip", async () => {
     mockGetMyAccount.mockResolvedValueOnce(ACCOUNT);
-    const staleRun = new Date(Date.now() - 10 * 60_000).toISOString(); // 10 min ago
+    // The database claim returns no row when another request won the race.
+    mockSql.mockResolvedValueOnce([]);
+
+    const result = await runMyStatsRefresh(mockSql as never);
+
+    expect(result).toEqual({ refreshed: false, skipped: true, reason: "cooldown" });
+    expect(mockRunMyStatsIngest).not.toHaveBeenCalled();
+    const claimSql = (mockSql.mock.calls[0][0] as readonly string[]).join(" ");
+    expect(claimSql).toContain("ON CONFLICT (puuid)");
+    expect(claimSql).toContain("RETURNING puuid");
+  });
+
+  it("runs incremental ingest after claiming the cooldown lease, returns newGames+latest", async () => {
+    mockGetMyAccount.mockResolvedValueOnce(ACCOUNT);
     mockSql
-      .mockResolvedValueOnce([{ last_incremental_at: staleRun }]) // getLastIncrementalAt
-      .mockResolvedValueOnce([]) // stampLastIncrementalAt (INSERT ... ON CONFLICT, ignored return)
+      .mockResolvedValueOnce([{ puuid: ACCOUNT.puuid }]) // atomic claim
       .mockResolvedValueOnce([{ latest: "2026-07-24T11:00:00.000Z" }]); // latest game_creation query
     mockRunMyStatsIngest.mockResolvedValueOnce({
       accountUnresolved: false,
@@ -105,6 +134,30 @@ describe("runMyStatsRefresh", () => {
     });
   });
 
+  it("scopes the reported latest game to counted queues", async () => {
+    mockGetMyAccount.mockResolvedValueOnce(ACCOUNT);
+    mockSql
+      .mockResolvedValueOnce([{ puuid: ACCOUNT.puuid }])
+      .mockResolvedValueOnce([{ latest: "2026-07-24T11:00:00.000Z" }]);
+    mockRunMyStatsIngest.mockResolvedValueOnce({
+      accountUnresolved: false,
+      matchesSeen: 1,
+      matchesUpserted: 1,
+      nextStart: null,
+      historyComplete: true,
+      truncatedBy: null,
+      pagesWalked: 1,
+      errors: [],
+    });
+
+    await runMyStatsRefresh(mockSql as never);
+
+    const latestCall = mockSql.mock.calls[1] as unknown[];
+    const latestSql = (latestCall[0] as readonly string[]).join(" ");
+    expect(latestSql).toContain("queue_id = ANY(");
+    expect(latestCall).toContain(COUNTED_QUEUE_IDS);
+  });
+
   it("passes an INCOMPLETE sync straight through -- a truncated walk must not reach the client as a finished one", async () => {
     // The plumbing test for the 2026-07-30 fix. `toEqual` treats a missing key and
     // an `undefined` one as equal, so a dropped field here would pass silently in
@@ -112,8 +165,7 @@ describe("runMyStatsRefresh", () => {
     // again one layer up.
     mockGetMyAccount.mockResolvedValueOnce(ACCOUNT);
     mockSql
-      .mockResolvedValueOnce([{ last_incremental_at: new Date(Date.now() - 10 * 60_000).toISOString() }])
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ puuid: ACCOUNT.puuid }])
       .mockResolvedValueOnce([{ latest: "2026-07-29T19:14:32.349Z" }]);
     mockRunMyStatsIngest.mockResolvedValueOnce({
       accountUnresolved: false,
@@ -140,8 +192,7 @@ describe("runMyStatsRefresh", () => {
   it("never run before (lastAt null) still runs and reports newGames:0/latest:null when nothing new", async () => {
     mockGetMyAccount.mockResolvedValueOnce(ACCOUNT);
     mockSql
-      .mockResolvedValueOnce([]) // no cursor row at all yet
-      .mockResolvedValueOnce([]) // stamp
+      .mockResolvedValueOnce([{ puuid: ACCOUNT.puuid }]) // first atomic claim inserts the cursor row
       .mockResolvedValueOnce([{ latest: null }]); // no matches ever ingested
     mockRunMyStatsIngest.mockResolvedValueOnce({
       accountUnresolved: false,
@@ -167,8 +218,7 @@ describe("runMyStatsRefresh", () => {
 
   it("fail-soft: a thrown error from the ingest call never propagates, returns error:true", async () => {
     mockGetMyAccount.mockResolvedValueOnce(ACCOUNT);
-    const staleRun = new Date(Date.now() - 10 * 60_000).toISOString();
-    mockSql.mockResolvedValueOnce([{ last_incremental_at: staleRun }]);
+    mockSql.mockResolvedValueOnce([{ puuid: ACCOUNT.puuid }]);
     mockRunMyStatsIngest.mockRejectedValueOnce(new Error("riot 503"));
 
     const result = await runMyStatsRefresh(mockSql as never);
@@ -177,8 +227,7 @@ describe("runMyStatsRefresh", () => {
 
   it("ingest reporting accountUnresolved mid-call surfaces the same accountUnresolved shape", async () => {
     mockGetMyAccount.mockResolvedValueOnce(ACCOUNT);
-    const staleRun = new Date(Date.now() - 10 * 60_000).toISOString();
-    mockSql.mockResolvedValueOnce([{ last_incremental_at: staleRun }]);
+    mockSql.mockResolvedValueOnce([{ puuid: ACCOUNT.puuid }]);
     mockRunMyStatsIngest.mockResolvedValueOnce({
       accountUnresolved: true,
       matchesSeen: 0,

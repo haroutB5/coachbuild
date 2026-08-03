@@ -322,7 +322,7 @@ export function selectRankRefreshTargets<
     .slice()
     .sort((a, b) => {
       if (a.active !== b.active) return a.active ? -1 : 1;
-      return attemptAge(b) - attemptAge(a);
+      return attemptAge(b) - attemptAge(a) || a.id - b.id;
     })
     .slice(0, Math.max(0, max));
 }
