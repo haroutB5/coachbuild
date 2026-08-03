@@ -77,7 +77,7 @@ export default function ChampionHero({ champ, lane, onLaneChange, rankBracket, o
       {/* Splash background */}
       <div className="absolute inset-0">
         {splash && (
-          // eslint-disable-next-line @next/next/no-img-element
+          // eslint-disable-next-line @next/next/no-img-element -- Splash art uses a runtime CDN URL and intentionally degrades by hiding a failed background image.
           <img
             src={splash}
             alt=""
@@ -107,6 +107,7 @@ export default function ChampionHero({ champ, lane, onLaneChange, rankBracket, o
       <div className="relative flex flex-col lg:flex-row lg:items-center gap-4 px-5 py-6 min-h-[128px]">
         <div className="flex items-center gap-4 min-w-0 flex-1">
           <div className="flex-shrink-0 w-[76px] h-[76px] rounded-lg overflow-hidden border-2 border-teal shadow-[0_0_22px_rgba(200,170,110,0.3)] bg-black/40">
+            {/* eslint-disable-next-line @next/next/no-img-element -- The champion icon URL is runtime data and this fixed-size tile owns its error fallback. */}
             <img
               src={champ.icon}
               alt={champ.name}

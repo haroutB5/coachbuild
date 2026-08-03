@@ -347,6 +347,7 @@ function ChampIcon({
       className="flex-shrink-0 rounded-md overflow-hidden bg-black/20"
       style={{ width: size, height: size }}
     >
+      {/* eslint-disable-next-line @next/next/no-img-element -- Champion icons use runtime CDN URLs and this wrapper owns the fixed box plus error fallback. */}
       <img
         src={icon}
         alt={name}

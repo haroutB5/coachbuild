@@ -56,6 +56,7 @@ export function IconWithFallback({ src, alt, className, fallbackGlyph, size }: I
   }
 
   return (
+    /* eslint-disable-next-line @next/next/no-img-element -- This shared sink accepts arbitrary CDN/data-URI URLs and must retain its onError glyph fallback. */
     <img
       src={src}
       alt={alt}

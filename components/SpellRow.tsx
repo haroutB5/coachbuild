@@ -20,6 +20,7 @@ function ImgWithFallback({
   size?: number;
 }) {
   return (
+    /* eslint-disable-next-line @next/next/no-img-element -- Summoner-spell icons are runtime CDN URLs and this wrapper intentionally hides failed art. */
     <img
       src={src}
       alt={alt}

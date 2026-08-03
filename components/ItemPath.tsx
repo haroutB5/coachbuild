@@ -29,6 +29,7 @@ function ImgWithFallback({
   size?: number;
 }) {
   return (
+    /* eslint-disable-next-line @next/next/no-img-element -- Item icons are runtime CDN URLs and this local wrapper preserves its intentional failure behavior. */
     <img
       src={src}
       alt={alt}

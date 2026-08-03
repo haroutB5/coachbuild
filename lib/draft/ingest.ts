@@ -17,7 +17,7 @@
 
 import { getSql } from "@/lib/pro/db";
 import { DbUnavailableError } from "@/lib/pro/errors";
-import { getAllChampions } from "@/lib/staticData";
+import { getAllChampions, MAX_REAL_CHAMPION_ID } from "@/lib/staticData";
 import type { RoleId } from "@/lib/types";
 import {
   EMERALD_TIER,
@@ -194,7 +194,9 @@ export async function runDraftIngest(opts: DraftIngestOptions = {}): Promise<Dra
   const fastFail = opts.fastFailOnRatelimit ?? false;
 
   const allChampions = opts.champions ?? (await getAllChampions());
-  const champIds = Array.from(new Set(allChampions.map((c) => c.id))).sort((a, b) => a - b);
+  const champIds = Array.from(
+    new Set(allChampions.filter((c) => c.id < MAX_REAL_CHAMPION_ID).map((c) => c.id))
+  ).sort((a, b) => a - b);
 
   const result: DraftIngestResult = {
     patch: "",

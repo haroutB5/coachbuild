@@ -2,6 +2,28 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.95.0] — 2026-08-03 — We were asking u.gg for champions that do not exist
+
+### Fixed
+- **The live ingest failure was our own fault, not a blocked scraper.** Production
+  `/api/draft/recommend` had been reporting `ingestHealthy: false` with a u.gg Cloudflare challenge on
+  champion ids **60001 / 60002 / 60004**. Those are not champions — they are **alternate-art entries**
+  in the 60000+ range, so the ingest was requesting data for things that cannot have any, and the
+  provider's bot protection was the only thing answering. The roster is now filtered to real gameplay
+  ids before any request is made, in both `lib/draft/ingest.ts` and the production
+  `scripts/ingest-draft.mjs`. The honest fix was to stop asking, not to defeat a challenge — and no
+  attempt was made to evade the protection.
+- **`FeaturedOtpCard` reran unsafely when `champ.key` changed.** The missing effect dependency is now
+  present without introducing a render loop, so a key change no longer risks rendering stale data.
+- **All five raw-image lint advisories resolved** with explicit, justified suppressions rather than a
+  blanket disable. `npm run lint` now reports **zero** warnings.
+
+### Known, and honest about it
+Plain Node `fetch` is still Cloudflare-challenged in this environment even for a perfectly normal
+champion (266), so the challenge is not specific to the bad ids. Production's scheduled ingest uses a
+different transport and is unaffected. Bypassing the protection was neither safe nor permitted, so the
+local-environment limitation stands as a limitation.
+
 ## [0.94.1] — 2026-08-03 — Making the v0.94.0 guards actually guard
 
 An adversarial review attacked every claim in v0.94.0. No P0, nothing regressed, and the maths held —

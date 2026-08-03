@@ -49,6 +49,11 @@ export const ICON_BASES = {
 // The API returns numeric rune IDs for shards (runeType=2).
 // Icon filenames observed from the live site / sampleBuild.
 
+/** Upstream champion data can carry skin/alternate-art entries in the
+ * 60000+ id range. They have no gameplay rows, so consumers that walk the
+ * real champion roster must exclude them. */
+export const MAX_REAL_CHAMPION_ID = 10000;
+
 export const SHARD_ICON: Record<number, string> = {
   5008: "adaptiveforce.png",
   5005: "as.png", // attack speed

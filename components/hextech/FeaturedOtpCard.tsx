@@ -80,7 +80,7 @@
 // A second denominator is the bug, not a clarification.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { BuildResponse, ChampionRef } from "@/lib/types";
 import {
   itemIconUrl,
@@ -109,6 +109,7 @@ import SkillOrderGrid from "./SkillOrderGrid";
 import type { SkillOrderModel } from "./skillOrder";
 import type { ProConsensusItemsInput } from "./itemSetBody";
 import type { LaneId } from "./heroContracts";
+import { featuredOtpRequestInputs } from "./featuredOtpRequest";
 
 interface FeaturedPlayer {
   gameName: string;
@@ -437,6 +438,15 @@ export default function FeaturedOtpCard({
   const [skillPriority, setSkillPriority] = useState<string[] | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Keep the effect's request object stable across state updates, but rebuild
+  // it when the champion key changes as well as when its numeric id/version do.
+  // That avoids both stale keyed requests and an effect loop from a fresh
+  // object on every render.
+  const request = useMemo(
+    () => featuredOtpRequestInputs({ id: champ.id, key: champ.key }, ver),
+    [champ.id, champ.key, ver]
+  );
+
   useEffect(() => {
     // `cancelled` closure, not an AbortController: the same stale-response guard
     // ProConsensusCard uses. Switching champion fast otherwise lets an older
@@ -447,17 +457,17 @@ export default function FeaturedOtpCard({
     setSkillPriority(null);
     // Champion-level, from the same op.gg feed the skill-order card uses. Its
     // failure costs one line, so it is fetched separately and never blocks.
-    fetch(`/api/skill-order?champ=${champ.id}&role=2`)
+    fetch(`/api/skill-order?champ=${request.champId}&role=2`)
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
         if (!cancelled && Array.isArray(j?.priority) && j.priority.length) setSkillPriority(j.priority);
       })
       .catch(() => {});
     Promise.all([
-      fetch(`/api/otp/featured?championId=${champ.id}`)
+      fetch(`/api/otp/featured?championId=${request.champId}`)
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null),
-      getItemDetailMap(ver).catch(() => new Map<number, ItemDetail>()),
+      getItemDetailMap(request.ver).catch(() => new Map<number, ItemDetail>()),
     ]).then(async ([res, m]) => {
       if (cancelled) return;
       const body = res as FeaturedResponse | null;
@@ -487,7 +497,7 @@ export default function FeaturedOtpCard({
       // fallback copy already promises.
       if (body && !body.skillOrder) {
         void fetch(
-          `/api/otp/refresh?championId=${champ.id}&championKey=${encodeURIComponent(champ.key)}`,
+          `/api/otp/refresh?championId=${request.champId}&championKey=${encodeURIComponent(request.champKey)}`,
           { method: "POST" }
         ).catch(() => {});
       }
@@ -504,7 +514,7 @@ export default function FeaturedOtpCard({
       );
       if (ids.length === 0) return;
       const resolved = await Promise.all(
-        ids.map((id) => resolveRuneDisplay(id, ver).catch(() => null))
+        ids.map((id) => resolveRuneDisplay(id, request.ver).catch(() => null))
       );
       if (cancelled) return;
       const next = new Map<number, { name: string; icon: string }>();
@@ -516,7 +526,7 @@ export default function FeaturedOtpCard({
     return () => {
       cancelled = true;
     };
-  }, [champ.id, ver]);
+  }, [request]);
 
   if (loading) {
     // Rendered at the FINAL dimensions of the real card's first two bands

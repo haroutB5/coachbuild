@@ -106,6 +106,22 @@ describe("runDraftIngest", () => {
     expect(last.nextCursor).toBeNull();
   });
 
+  it("does not request upstream data for skin/alternate-art champion IDs", async () => {
+    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0 });
+
+    const result = await runDraftIngest({
+      cursor: 0,
+      champions: [{ id: 1 }, { id: 60001 }, { id: 60002 }, { id: 60004 }],
+    });
+
+    expect(result.champStart).toBe(1);
+    expect(result.champCount).toBe(1);
+    expect(result.nextCursor).toBeNull();
+    expect(fetchMatchups).toHaveBeenCalledTimes(1);
+    expect(fetchMatchups).toHaveBeenCalledWith(1, expect.any(String), expect.anything(), expect.anything());
+    expect(fetchRankings).toHaveBeenCalledTimes(1);
+  });
+
   it("cursor past the end of the list -> no-op result, nextCursor stays null", async () => {
     const champions = [{ id: 1 }, { id: 2 }];
     const result = await runDraftIngest({ cursor: 99, champions });

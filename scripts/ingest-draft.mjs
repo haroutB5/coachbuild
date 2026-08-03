@@ -37,7 +37,7 @@ import { curlTransportWithHeaders } from "./_curl-transport.mjs";
 loadEnvLocal();
 
 const { runDraftIngest } = await import("../lib/draft/ingest.ts");
-const { getAllChampions } = await import("../lib/staticData.ts");
+const { getAllChampions, MAX_REAL_CHAMPION_ID } = await import("../lib/staticData.ts");
 const { UGG_REFERER } = await import("../lib/draft/ugg.ts");
 const { withRetryTransport } = await import("../lib/retryTransport.ts");
 const { getSql } = await import("../lib/pro/db.ts");
@@ -155,7 +155,7 @@ async function runRoleIndexProbes(champions) {
 }
 
 async function main() {
-  const champions = await getAllChampions();
+  const champions = (await getAllChampions()).filter((c) => c.id < MAX_REAL_CHAMPION_ID);
   console.log(`resolved ${champions.length} champions`);
   if (champions.length === 0) {
     console.log("nothing to ingest -- champion list came back empty");
@@ -175,6 +175,7 @@ async function main() {
     console.log(`batch: cursor=${cursor}`);
     const result = await runDraftIngest({
       cursor,
+      champions,
       transport: uggCurlTransport,
       onProgress: (msg) => console.log(`  ${msg}`),
     });

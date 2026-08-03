@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAllChampions } from "@/lib/staticData";
+import { getAllChampions, MAX_REAL_CHAMPION_ID } from "@/lib/staticData";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,12 +27,10 @@ const CORS_HEADERS = { "Access-Control-Allow-Origin": "*" };
  *  of — the pick appeared to register and then silently changed nothing.
  *
  *  Real champion ids are all below 10000 (the roster tops out in the 900s);
- *  every alternate is 60000+. Filtered HERE, at the one endpoint every consumer
- *  reads, rather than in each list. Nothing in the app referenced an id in that
- *  range — checked before cutting them. 233 entries in, 173 out, zero duplicate
- *  names. */
-const MAX_REAL_CHAMPION_ID = 10000;
-
+ *  every alternate is 60000+. Filtered HERE for the public roster and again in
+ *  the draft ingest's own champion walk, since that worker does not consume
+ *  this endpoint. Nothing in the app referenced an id in that range — checked
+ *  before cutting them. 233 entries in, 173 out, zero duplicate names. */
 export async function GET() {
   try {
     const champions = (await getAllChampions()).filter((c) => c.id < MAX_REAL_CHAMPION_ID);
