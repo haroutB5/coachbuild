@@ -79,6 +79,24 @@ function timeline(events: RiotTimeline["info"]["frames"][number]["events"] = [])
   return { info: { frames: [{ timestamp: 0, events }] } };
 }
 
+function levelTimeline(rLevels: readonly number[], lastLevel: number): RiotTimeline {
+  const rSet = new Set(rLevels);
+  let basicSlot = 1;
+  const events = Array.from({ length: lastLevel }, (_, i) => {
+    const level = i + 1;
+    const skillSlot = rSet.has(level) ? 4 : basicSlot;
+    if (!rSet.has(level)) basicSlot = basicSlot === 3 ? 1 : basicSlot + 1;
+    return {
+      type: "SKILL_LEVEL_UP",
+      participantId: 1,
+      skillSlot,
+      levelUpType: "NORMAL",
+      timestamp: level * 100,
+    };
+  });
+  return timeline(events);
+}
+
 describe("patchFromGameVersion", () => {
   it("keeps only major.minor", () => {
     expect(patchFromGameVersion("16.13.567.1234")).toBe("16.13");
@@ -158,17 +176,26 @@ describe("buildSkillOrder", () => {
     expect(buildSkillOrder(tl, 1)).toEqual(["Q", "W", "E", "R"]);
   });
 
-  it("drops Viego R events past his three-rank cap, in timestamp order", () => {
-    const tl = timeline(
-      Array.from({ length: 5 }, (_, i) => ({
-        type: "SKILL_LEVEL_UP",
-        participantId: 1,
-        skillSlot: 4,
-        levelUpType: "NORMAL",
-        timestamp: (i + 1) * 100,
-      }))
+  it("keeps Viego R at legal positions 6/11/16 instead of first-arrival positions", () => {
+    const order = buildSkillOrder(
+      levelTimeline([6, 7, 8, 9, 11, 15, 16], 16),
+      1,
+      { championId: 234, championName: "Viego" }
     );
-    expect(buildSkillOrder(tl, 1, { championId: 234, championName: "Viego" })).toEqual(["R", "R", "R"]);
+    expect(order.filter((ability) => ability === "R")).toHaveLength(3);
+    // The compact output has no holes for skipped phantoms; the source event
+    // positions represented here are still levels 6, 11, and 16.
+    expect(order).toEqual(["Q", "W", "E", "Q", "W", "R", "E", "R", "Q", "W", "E", "R"]);
+  });
+
+  it("drops a standard-ultimate R event at level 5", () => {
+    const order = buildSkillOrder(levelTimeline([5], 5), 1, { championId: 234, championName: "Viego" });
+    expect(order).not.toContain("R");
+  });
+
+  it("keeps a banked-point R taken at level 8", () => {
+    const order = buildSkillOrder(levelTimeline([8], 8), 1, { championId: 234, championName: "Viego" });
+    expect(order[7]).toBe("R");
   });
 
   it("keeps all six Udyr R events because R is a six-rank basic-like slot", () => {
@@ -184,25 +211,31 @@ describe("buildSkillOrder", () => {
     expect(buildSkillOrder(tl, 1, { championId: 77, championName: "Udyr" })).toHaveLength(6);
   });
 
-  it("uses the standard three-rank R cap for a resolved standard champion", () => {
-    const tl = timeline(
-      Array.from({ length: 4 }, (_, i) => ({
-        type: "SKILL_LEVEL_UP",
-        participantId: 1,
-        skillSlot: 4,
-        levelUpType: "NORMAL",
-        timestamp: (i + 1) * 100,
-      }))
+  it("uses the R4 form-swap schedule and leaves the R1 auto-R shape ungated", () => {
+    const formOrder = buildSkillOrder(
+      levelTimeline([6, 11, 16], 16),
+      1,
+      { championId: 60, championName: "Elise" }
     );
-    expect(buildSkillOrder(tl, 1, { championId: 112, championName: "Viktor" })).toEqual(["R", "R", "R"]);
-    // No identity still means the pre-guard behavior: do not guess a kit.
-    expect(buildSkillOrder(tl, 1)).toEqual(["R", "R", "R", "R"]);
-    expect(buildSkillOrder(tl, 1, { championId: 234, championName: "Viego", kit: null })).toEqual([
-      "R",
-      "R",
-      "R",
-      "R",
+    expect(formOrder.filter((ability) => ability === "R")).toHaveLength(3);
+    expect(formOrder).toEqual(buildSkillOrder(levelTimeline([6, 11, 16], 16), 1, { championId: 60, championName: "Elise" }));
+
+    const jayceTimeline = timeline([
+      { type: "SKILL_LEVEL_UP", participantId: 1, skillSlot: 4, levelUpType: "NORMAL", timestamp: 100 },
+      { type: "SKILL_LEVEL_UP", participantId: 1, skillSlot: 4, levelUpType: "NORMAL", timestamp: 200 },
     ]);
+    expect(buildSkillOrder(jayceTimeline, 1, { championId: 126, championName: "Jayce" })).toEqual(["R"]);
+  });
+
+  it("keeps the standard cap for a measured champion and stores fallback kits raw", () => {
+    const tl = levelTimeline([6, 11, 16, 17], 17);
+    expect(buildSkillOrder(tl, 1, { championId: 234, championName: "Viego" }).filter((a) => a === "R")).toHaveLength(3);
+    // Viktor is not in the measured synchronous table: the compatibility
+    // STANDARD_KIT fallback must not silently clip a future rework.
+    expect(buildSkillOrder(tl, 1, { championId: 112, championName: "Viktor" }).filter((a) => a === "R")).toHaveLength(4);
+    // No identity still means the pre-guard behavior.
+    expect(buildSkillOrder(tl, 1).filter((a) => a === "R")).toHaveLength(4);
+    expect(buildSkillOrder(tl, 1, { championId: 234, championName: "Viego", kit: null }).filter((a) => a === "R")).toHaveLength(4);
   });
 
   it("caps at 18 entries as a second safety net", () => {
@@ -264,16 +297,9 @@ describe("extractMatch", () => {
   });
 
   it("threads the participant champion into the skill-order cap guard", () => {
-    const events = Array.from({ length: 5 }, (_, i) => ({
-      type: "SKILL_LEVEL_UP",
-      participantId: 1,
-      skillSlot: 4,
-      levelUpType: "NORMAL",
-      timestamp: (i + 1) * 100,
-    }));
     const m = match({}, [participant({ championId: 234, championName: "Viego" })]);
-    const row = extractMatch(m, timeline(events), "puuid-1");
-    expect(row?.skillOrder).toEqual(["R", "R", "R"]);
+    const row = extractMatch(m, levelTimeline([6, 11, 16], 16), "puuid-1");
+    expect(row?.skillOrder.filter((a) => a === "R")).toHaveLength(3);
   });
 
   it("computes cs/damage/gold from the participant and teamKills from same-team participants only", () => {

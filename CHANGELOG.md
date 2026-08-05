@@ -2,6 +2,15 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.96.1] — 2026-08-05 — Viego phantom ultimates dropped by legality, not luck
+
+### Fixed
+- **The ingest guard now selects ultimate ranks by when they are legal, not by arrival order.**
+  Viego possession could fire fake early R events; the guard previously kept the first three by
+  timestamp (keeping fakes, discarding real late ranks). It now accepts an R event only when
+  that rank is legal at that point, so real ranks taken at 6/11/16 survive and phantoms drop.
+  Unknown-kit champions are stored raw rather than clipped. Affected historical rows rebuilt.
+
 ## [0.96.0] — 2026-08-05 — Skill orders tell the truth
 
 ### Fixed

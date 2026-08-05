@@ -18,6 +18,10 @@ Verified facts that cost real debugging time. Cite these before touching the rel
   distinct timestamps, survive dedupe; e.g. EUW1_7937343328 stored 4 R ranks). The timeline
   exposes no possessed-champion marker. `buildSkillOrder`'s kit-aware budget guard drops events
   exceeding the champion's own caps; under-cap phantoms are undetectable and accepted.
+- **Dropped events shift kept positions.** The extract guard removes phantom events, so a kept
+  R taken at champion level 11 can sit at position 10. This is fine: no surface renders otp
+  per-game orders raw, and the aggregate re-slots R by evidence at 6/11/16. Do not "fix"
+  position gaps by re-inserting anything.
 - **Sequence position ≠ champion level** when a player banks a skill point (real games show R at
   position 5: Kled, Sona, Zeri) or for Yuumi (one extra starting point, ±1 skew). The grids
   render position-as-level as an approximation; the aggregate's R normalization to 6/11/16

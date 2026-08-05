@@ -23,7 +23,10 @@ import {
   purchasableUltimateRanks,
   tailUltimateRanks,
   STANDARD_KIT,
+  MEASURED_CHAMPION_KITS,
   KNOWN_NON_STANDARD_CHAMPION_IDS,
+  kitForChampionIdentity,
+  isMeasuredChampionIdentity,
   TOTAL_LEVELS,
 } from "@/lib/championKit";
 import { parseChampionKit } from "@/lib/staticData";
@@ -222,6 +225,21 @@ describe("KNOWN_NON_STANDARD_CHAMPION_IDS — identity list for the degraded pat
 
   it("does not contain a standard champion (a false entry would blank Ahri)", () => {
     expect(KNOWN_NON_STANDARD_CHAMPION_IDS.has(REAL.Ahri.id)).toBe(false);
+  });
+});
+
+describe("MEASURED_CHAMPION_KITS — the single identity/cap table", () => {
+  it("contains the seven exceptional kits plus measured standard Viego", () => {
+    expect(MEASURED_CHAMPION_KITS.size).toBe(8);
+    expect(MEASURED_CHAMPION_KITS.get(234)?.maxRanks).toEqual({ Q: 5, W: 5, E: 5, R: 3 });
+    expect(MEASURED_CHAMPION_KITS.get(77)?.maxRanks).toEqual({ Q: 6, W: 6, E: 6, R: 6 });
+  });
+
+  it("distinguishes a measured standard identity from the compatibility fallback", () => {
+    expect(kitForChampionIdentity(234, "Viego")).toBe(MEASURED_CHAMPION_KITS.get(234));
+    expect(isMeasuredChampionIdentity(234, "Viego")).toBe(true);
+    expect(kitForChampionIdentity(112, "Viktor")).toBe(STANDARD_KIT);
+    expect(isMeasuredChampionIdentity(112, "Viktor")).toBe(false);
   });
 });
 

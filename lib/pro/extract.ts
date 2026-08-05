@@ -4,7 +4,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { roleFromTeamPosition, SKILL_SLOT_LABEL } from "./roleMap";
-import { kitFromMaxRanks, STANDARD_KIT } from "../championKit";
+import {
+  isMeasuredChampionIdentity,
+  isUltimateRankLegal,
+  kitForChampionIdentity as resolveKitForChampionIdentity,
+} from "../championKit";
 import type {
   ProGamePurchase,
   ProGameRunes,
@@ -97,55 +101,13 @@ export interface SkillOrderChampionIdentity {
   kit?: ChampionKit | null;
 }
 
-/** The seven measured non-standard shapes from championKit.ts, plus Viego's
- *  standard shape. The normal ingest path is synchronous and cannot await
- *  staticData.resolveChampionKit, so this small identity bridge keeps its
- *  guard useful without inventing caps for an absent identity. The values are
- *  still constructed by kitFromMaxRanks, which owns the R-slot semantics. */
-const EXTRACT_KITS_BY_ID: ReadonlyMap<number, ChampionKit> = new Map([
-  [523, kitFromMaxRanks([6, 6, 6, 3], "Aphelios")!],
-  [60, kitFromMaxRanks([5, 5, 5, 4], "Elise")!],
-  [126, kitFromMaxRanks([6, 6, 6, 1], "Jayce")!],
-  [43, kitFromMaxRanks([5, 5, 5, 4], "Karma")!],
-  [76, kitFromMaxRanks([5, 5, 5, 4], "Nidalee")!],
-  [77, kitFromMaxRanks([6, 6, 6, 6], "Udyr")!],
-  [350, kitFromMaxRanks([6, 5, 5, 3], "Yuumi")!],
-  [234, STANDARD_KIT], // Viego — the phantom R4 case
-]);
-
-const EXTRACT_KITS_BY_NAME: ReadonlyMap<string, ChampionKit> = new Map([
-  ["aphelios", EXTRACT_KITS_BY_ID.get(523)!],
-  ["elise", EXTRACT_KITS_BY_ID.get(60)!],
-  ["jayce", EXTRACT_KITS_BY_ID.get(126)!],
-  ["karma", EXTRACT_KITS_BY_ID.get(43)!],
-  ["nidalee", EXTRACT_KITS_BY_ID.get(76)!],
-  ["udyr", EXTRACT_KITS_BY_ID.get(77)!],
-  ["yuumi", EXTRACT_KITS_BY_ID.get(350)!],
-  ["viego", STANDARD_KIT],
-]);
-
-function normalizeChampionIdentity(value: string | undefined): string {
-  return String(value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-/** Resolve a kit without guessing when the identity itself is absent. A real
- * Riot participant carries both a positive numeric id and a display key, so a
- * non-special participant gets the model's standard kit. A caller that knows
- * resolution failed can pass `kit: null`, which deliberately disables the
- * guard and preserves the old extractor behavior. */
+/** Backfill compatibility export. The measured kit table and identity lookup
+ * now live in championKit.ts so extraction cannot carry a second cap table. */
 export function kitForChampionIdentity(
   championId?: number,
   championName?: string
 ): ChampionKit | null | undefined {
-  const byId = Number.isInteger(championId) ? EXTRACT_KITS_BY_ID.get(championId!) : undefined;
-  if (byId) return byId;
-
-  const normalizedName = normalizeChampionIdentity(championName);
-  const byName = EXTRACT_KITS_BY_NAME.get(normalizedName);
-  if (byName) return byName;
-
-  if (Number.isInteger(championId) && championId! > 0 && normalizedName.length > 0) return STANDARD_KIT;
-  return undefined;
+  return resolveKitForChampionIdentity(championId, championName);
 }
 
 function isChampionKit(value: unknown): value is ChampionKit {
@@ -154,15 +116,33 @@ function isChampionKit(value: unknown): value is ChampionKit {
   return Boolean(candidate.maxRanks && candidate.freeRanks && "ultimateLevels" in candidate);
 }
 
+interface SkillOrderKitResolution {
+  kit: ChampionKit | null | undefined;
+  measured: boolean;
+}
+
 function kitFromBuildIdentity(
   identity: ChampionKit | SkillOrderChampionIdentity | string | number | null | undefined
-): ChampionKit | null | undefined {
-  if (identity === null || identity === undefined) return undefined;
-  if (isChampionKit(identity)) return identity;
-  if (typeof identity === "string") return kitForChampionIdentity(undefined, identity);
-  if (typeof identity === "number") return kitForChampionIdentity(identity, undefined);
-  if (identity.kit !== undefined) return identity.kit;
-  return kitForChampionIdentity(identity.championId, identity.championName);
+): SkillOrderKitResolution {
+  if (identity === null || identity === undefined) return { kit: undefined, measured: false };
+  if (isChampionKit(identity)) return { kit: identity, measured: true };
+  if (typeof identity === "string") {
+    return {
+      kit: kitForChampionIdentity(undefined, identity),
+      measured: isMeasuredChampionIdentity(undefined, identity),
+    };
+  }
+  if (typeof identity === "number") {
+    return {
+      kit: kitForChampionIdentity(identity, undefined),
+      measured: isMeasuredChampionIdentity(identity, undefined),
+    };
+  }
+  if (identity.kit !== undefined) return { kit: identity.kit, measured: identity.kit !== null };
+  return {
+    kit: kitForChampionIdentity(identity.championId, identity.championName),
+    measured: isMeasuredChampionIdentity(identity.championId, identity.championName),
+  };
 }
 
 /** Skill order ["Q","W","E",...] for one participant. Dedupes exact-duplicate
@@ -181,7 +161,15 @@ export function buildSkillOrder(
   champion?: ChampionKit | SkillOrderChampionIdentity | string | number | null,
   resolvedKit?: ChampionKit | null
 ): string[] {
-  const kit = resolvedKit !== undefined ? resolvedKit : kitFromBuildIdentity(champion);
+  const resolution =
+    resolvedKit !== undefined
+      ? { kit: resolvedKit, measured: resolvedKit !== null }
+      : kitFromBuildIdentity(champion);
+  // A STANDARD_KIT returned only as the compatibility fallback is not evidence
+  // of this champion's current caps. Keep its raw events rather than silently
+  // clipping a future rework; only measured identities or an explicitly
+  // supplied kit may activate the guard.
+  const kit = resolution.measured ? resolution.kit : null;
   const seen = new Set<string>();
   const events: RiotTimelineEvent[] = [];
   for (const frame of timeline.info.frames) {
@@ -210,9 +198,26 @@ export function buildSkillOrder(
 
   const counts: Record<Ability, number> = { Q: 0, W: 0, E: 0, R: 0 };
   const order: string[] = [];
+  const hasTrueUltimateSchedule =
+    kit.ultimateLevels !== null && kit.rAuto !== true && kit.maxRanks.R !== 1;
+  let observedEventCount = 0;
   for (const ev of events) {
     const label = SKILL_SLOT_LABEL[ev.skillSlot as number] as Ability | undefined;
-    if (!label || counts[label] >= kit.maxRanks[label]) continue;
+    if (!label) continue;
+    const approximateLevel = observedEventCount + 1;
+    observedEventCount += 1;
+    if (counts[label] >= kit.maxRanks[label]) continue;
+    if (
+      label === "R" &&
+      hasTrueUltimateSchedule &&
+      !isUltimateRankLegal(counts.R + kit.freeRanks.R + 1, approximateLevel, kit)
+    ) {
+      // A phantom or an early event for a banked point is skipped here. Keep
+      // its timeline position in the level approximation: for a banked real
+      // point, the next event at a legal position still lands; this is honest
+      // without inventing a separate point ledger.
+      continue;
+    }
     counts[label] += 1;
     order.push(label);
     if (order.length >= 18) break;

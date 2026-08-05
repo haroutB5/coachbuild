@@ -175,38 +175,90 @@ export function kitFromMaxRanks(maxranks: readonly number[], championKey?: strin
  *  believe that champion is non-standard (see resolveChampionKit). */
 export const STANDARD_KIT: ChampionKit = kitFromMaxRanks([5, 5, 5, 3])!;
 
-/**
- * Riot numeric ids of every champion measured to be OFF the 5/5/5/3 model
- * (ddragon 16.14.1, full-roster sweep, 2026-07-27).
- *
- * ── Read what this list does and does not claim ─────────────────────────────
- * It carries IDENTITY ONLY — "this champion is not standard" — never cap
- * VALUES. That is deliberate. A parallel table of caps is exactly the thing
- * this repo has been bitten by before (gotcha (y): curated item ids rotting
- * silently every patch), and lib/opgg.ts refuses to ship a second champion
- * table for the same reason. A table of values that goes stale would produce
- * confidently wrong in-game advice; a list of names that goes stale produces,
- * at worst, the behaviour we already ship today.
- *
- * It is consulted ONLY on the degraded path where ddragon could not be
- * reached. There, falling back to 5/5/5/3 for a champion on this list would
- * hand a Jayce player an off-by-one recommendation for the whole game, so we
- * refuse instead; every other champion gets STANDARD_KIT, which is what the
- * app already assumed for all of them before this change.
- *
- * If it rots: a newly non-standard champion simply is not on it, and gets
- * STANDARD_KIT on the ddragon-down path — i.e. exactly today's exposure, not
- * a new one. The happy path never reads this list at all.
- */
-export const KNOWN_NON_STANDARD_CHAMPION_IDS: ReadonlySet<number> = new Set([
-  523, // Aphelios  6/6/6/3
-  60, //  Elise     5/5/5/4
-  126, // Jayce     6/6/6/1
-  43, //  Karma     5/5/5/4
-  76, //  Nidalee   5/5/5/4
-  77, //  Udyr      6/6/6/6
-  350, // Yuumi     6/5/5/3
+/** The measured champion identities whose caps are needed by synchronous
+ * timeline extraction. This is the ONE source of truth for the exceptional
+ * rank shapes plus Viego's measured standard shape. `championKey` is retained
+ * here because Aphelios's otherwise standard R3 shape has automatic-R
+ * timeline semantics that maxranks alone cannot identify. */
+const MEASURED_CHAMPION_KIT_SPECS: ReadonlyMap<
+  number,
+  { championKey: string; maxRanks: readonly [number, number, number, number] }
+> = new Map([
+  [523, { championKey: "Aphelios", maxRanks: [6, 6, 6, 3] }],
+  [60, { championKey: "Elise", maxRanks: [5, 5, 5, 4] }],
+  [126, { championKey: "Jayce", maxRanks: [6, 6, 6, 1] }],
+  [43, { championKey: "Karma", maxRanks: [5, 5, 5, 4] }],
+  [76, { championKey: "Nidalee", maxRanks: [5, 5, 5, 4] }],
+  [77, { championKey: "Udyr", maxRanks: [6, 6, 6, 6] }],
+  [350, { championKey: "Yuumi", maxRanks: [6, 5, 5, 3] }],
+  [234, { championKey: "Viego", maxRanks: [5, 5, 5, 3] }],
 ]);
+
+/** Measured kits keyed by Riot numeric champion id. Consumers that need a
+ * synchronous cap guard must use this map rather than carrying another
+ * champion table of their own. */
+export const MEASURED_CHAMPION_KITS: ReadonlyMap<number, ChampionKit> = new Map(
+  Array.from(MEASURED_CHAMPION_KIT_SPECS.entries()).map(([championId, spec]) => [
+    championId,
+    kitFromMaxRanks(spec.maxRanks, spec.championKey)!,
+  ])
+);
+
+function sameKitShape(a: ChampionKit, b: ChampionKit): boolean {
+  return (
+    SPELL_SLOTS.every((ability) => a.maxRanks[ability] === b.maxRanks[ability]) &&
+    SPELL_SLOTS.every((ability) => a.freeRanks[ability] === b.freeRanks[ability]) &&
+    a.ultimateLevels?.join(",") === b.ultimateLevels?.join(",") &&
+    a.rAuto === b.rAuto
+  );
+}
+
+/** Resolve the measured kit for a champion identity when one is known. A
+ * non-empty identity with no measured entry receives STANDARD_KIT as the
+ * existing compatibility fallback; callers that need to decide whether it
+ * is safe to guard must also use isMeasuredChampionIdentity. */
+export function kitForChampionIdentity(
+  championId?: number,
+  championName?: string
+): ChampionKit | null | undefined {
+  if (Number.isInteger(championId)) {
+    const byId = MEASURED_CHAMPION_KITS.get(championId!);
+    if (byId) return byId;
+  }
+
+  const normalizedName = String(championName ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (normalizedName) {
+    const byName = Array.from(MEASURED_CHAMPION_KIT_SPECS.entries()).find(
+      ([, spec]) => spec.championKey.toLowerCase().replace(/[^a-z0-9]/g, "") === normalizedName
+    );
+    if (byName) return MEASURED_CHAMPION_KITS.get(byName[0]);
+  }
+
+  if (Number.isInteger(championId) && championId! > 0 && normalizedName.length > 0) return STANDARD_KIT;
+  return undefined;
+}
+
+/** True only when the identity selected an entry in the measured kit table.
+ * This deliberately does not treat the STANDARD_KIT compatibility fallback
+ * as measured: an unknown future rework must remain raw rather than being
+ * clipped by guessed 5/5/5/3 caps. */
+export function isMeasuredChampionIdentity(championId?: number, championName?: string): boolean {
+  if (Number.isInteger(championId) && MEASURED_CHAMPION_KITS.has(championId!)) return true;
+  const normalizedName = String(championName ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!normalizedName) return false;
+  return Array.from(MEASURED_CHAMPION_KIT_SPECS.values()).some(
+    (spec) => spec.championKey.toLowerCase().replace(/[^a-z0-9]/g, "") === normalizedName
+  );
+}
+
+/** Riot numeric ids of the measured champions whose kits are not the standard
+ *  5/5/5/3 shape. The set is derived from MEASURED_CHAMPION_KITS; it remains
+ *  an identity-only compatibility export for staticData's degraded path. */
+export const KNOWN_NON_STANDARD_CHAMPION_IDS: ReadonlySet<number> = new Set(
+  Array.from(MEASURED_CHAMPION_KITS.entries())
+    .filter(([, kit]) => !sameKitShape(kit, STANDARD_KIT))
+    .map(([championId]) => championId)
+);
 
 /** Ranks that actually cost a skill point. The free level-1 form-swap rank of
  *  a Jayce/Karma/Elise/Nidalee is excluded, because it was never spent.
