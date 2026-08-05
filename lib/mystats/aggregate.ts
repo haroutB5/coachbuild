@@ -142,6 +142,10 @@ export interface AdherenceRecord {
    *  (see lib/mystats/adherence.ts's computeAdherence doc comment) — these
    *  rows are excluded from EVERY figure below, not counted as "off build". */
   onWpaBuild: boolean | null;
+  /** The game's own patch plus the snapshot patch are carried into this pure
+   * aggregate so an invalid/cross-patch boolean cannot enter measured totals. */
+  matchPatch: string | null;
+  recommendationPatch: string | null;
 }
 
 export interface BuildAdherenceSummary {
@@ -173,7 +177,12 @@ function round1(n: number): number {
 /** DISPLAY ONLY (see lib/mystats/adherence.ts's header) — never feeds any
  *  score/ranking. */
 export function computeBuildAdherence(rows: AdherenceRecord[]): BuildAdherenceSummary {
-  const resolved = rows.filter((r) => r.onWpaBuild !== null);
+  const resolved = rows.filter(
+    (r) =>
+      r.onWpaBuild !== null &&
+      r.matchPatch !== null &&
+      r.matchPatch === r.recommendationPatch
+  );
   if (resolved.length === 0) {
     return { buildAdherencePct: null, winrateOnBuild: null, winrateOffBuild: null, nOnBuild: null, nOffBuild: null };
   }

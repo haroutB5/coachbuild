@@ -54,4 +54,27 @@ describe("computeDropdownPosition", () => {
     const coords = computeDropdownPosition(anchor, { width: 250, height: 600 });
     expect(coords.width).toBeCloseTo(225); // 250 * 0.9, under the 280 cap
   });
+
+  it("uses an explicit trigger width when requested", () => {
+    const anchor = { top: 100, bottom: 140, left: 50 };
+    const coords = computeDropdownPosition(anchor, VIEWPORT, 105);
+    expect(coords.width).toBe(105);
+    expect(coords.left).toBe(50);
+  });
+
+  it("allows a wide trigger to exceed the legacy 280px cap", () => {
+    const coords = computeDropdownPosition(
+      { top: 100, bottom: 140, left: 20 },
+      { width: 390, height: 800 },
+      324
+    );
+    expect(coords.width).toBe(324);
+  });
+
+  it("caps an explicit width inside the viewport edges", () => {
+    const viewport = { width: 390, height: 800 };
+    const coords = computeDropdownPosition({ top: 100, bottom: 140, left: 20 }, viewport, 500);
+    expect(coords.width).toBe(viewport.width - 16);
+    expect(coords.left + coords.width).toBeLessThanOrEqual(viewport.width - 8);
+  });
 });

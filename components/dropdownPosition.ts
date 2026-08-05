@@ -39,9 +39,20 @@ const EDGE_PADDING_PX = 8;
  *  there isn't enough room below AND there's strictly more room above than
  *  below; otherwise (including "neither side has enough room") stays below,
  *  matching the pre-portal default. Left is clamped so the fixed-width
- *  dropdown never renders off-screen. */
-export function computeDropdownPosition(anchor: AnchorRect, viewport: ViewportSize): DropdownCoords {
-  const width = Math.min(MAX_WIDTH_PX, viewport.width * WIDTH_VW_FRACTION);
+ *  dropdown never renders off-screen.
+ *
+ * `requestedWidth` is opt-in for controls whose popup should match their
+ * trigger. Omitting it preserves ChampionPicker/TopBar's existing capped
+ * width exactly; an explicit width is only capped by the viewport edges. */
+export function computeDropdownPosition(
+  anchor: AnchorRect,
+  viewport: ViewportSize,
+  requestedWidth?: number
+): DropdownCoords {
+  const width =
+    requestedWidth === undefined
+      ? Math.min(MAX_WIDTH_PX, viewport.width * WIDTH_VW_FRACTION)
+      : Math.min(Math.max(requestedWidth, 0), Math.max(viewport.width - EDGE_PADDING_PX * 2, 0));
   const left = Math.max(
     EDGE_PADDING_PX,
     Math.min(anchor.left, viewport.width - width - EDGE_PADDING_PX)

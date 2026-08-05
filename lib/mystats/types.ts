@@ -97,6 +97,9 @@ export interface MyMatchRow {
    *  backfilled (see the migration's header) — see lib/mystats/adherence.ts's
    *  computeAdherence doc comment for the null/false distinction. */
   on_wpa_build: boolean | null;
+  /** The exact patch of the immutable recommendation snapshot used for this
+   * boolean. Null with on_wpa_build null means no measured comparison exists. */
+  wpa_recommendation_patch: string | null;
   split: number | null;
   /** Migration 0021. NULL on any row stored before that migration and not yet
    *  run through scripts/backfill-mystats-cs.mjs. NULL means NOT MEASURED and

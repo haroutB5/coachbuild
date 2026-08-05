@@ -27,15 +27,11 @@
 // this run (or a prior interrupted one) already updated is never re-selected
 // -- safe to Ctrl-C and re-run at any time. No cursor table needed.
 //
-// on_wpa_build: reuses lib/mystats/ingest.ts's EXPORTED resolveRecommendedBuild
-// (same per-run (championId,role,patch) cache + the same "only compute when
-// the row's own patch equals TODAY's live recommend-pipeline patch" gate --
-// see that function's header for the full rationale: buildRecommendations
-// has no historical-patch override, so comparing an old match against
-// today's current-patch build would be dishonest). For the overwhelming
-// majority of these old rows (played on a since-superseded patch), this
-// correctly leaves on_wpa_build NULL -- the honest outcome, not a bug, and
-// NEVER guessed some other way.
+// on_wpa_build: reuses lib/mystats/ingest.ts's EXPORTED
+// resolveRecommendedBuild. It first uses a snapshot keyed to the historical
+// game's own patch; only an unsnapshotted row on today's populated
+// recommendation patch may create a new snapshot. Old rows with no snapshot
+// stay NULL rather than being guessed against today's build.
 //
 // Run via:
 //   npx tsx scripts/backfill-mystats-kda.mjs [limit]
@@ -83,7 +79,7 @@ async function main() {
   console.log(`${pending.length} row(s) missing KDA/items/keystone` + (limitArg ? `; processing ${rows.length} (limit=${limitArg})` : "") + ".");
 
   const currentPatchLabel = (await getLatestPatch()).label;
-  console.log(`Current recommend-pipeline patch: ${currentPatchLabel} (on_wpa_build only resolves for rows on this exact patch).`);
+  console.log(`Current recommend-pipeline patch: ${currentPatchLabel} (unsnapshotted rows resolve only on this exact patch).`);
 
   const buildCache = new Map();
   let updated = 0;
@@ -101,6 +97,7 @@ async function main() {
       }
 
       const recommended = await resolveRecommendedBuild(
+        sql,
         buildCache,
         currentPatchLabel,
         row.championId,
@@ -119,7 +116,8 @@ async function main() {
         UPDATE coachbuild.my_matches
         SET kills = ${row.kills}, deaths = ${row.deaths}, assists = ${row.assists},
             item_ids = ${row.itemIds}::integer[], primary_keystone = ${row.primaryKeystone},
-            on_wpa_build = ${onWpaBuild}
+            on_wpa_build = ${onWpaBuild},
+            wpa_recommendation_patch = ${recommended ? row.patch : null}
         WHERE puuid = ${account.puuid} AND match_id = ${matchId}
       `;
       updated += 1;

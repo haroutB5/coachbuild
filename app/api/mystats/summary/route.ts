@@ -40,6 +40,8 @@ interface Row {
 
 interface AdherenceRow {
   on_wpa_build: boolean | null;
+  patch: string | null;
+  wpa_recommendation_patch: string | null;
   win: boolean;
 }
 
@@ -250,12 +252,17 @@ export async function GET(req: NextRequest) {
     // Account-wide (never role/championId-scoped) season adherence --
     // see this route's doc comment.
     const adherenceRows = (await sql`
-      SELECT on_wpa_build, win FROM coachbuild.my_matches
+      SELECT on_wpa_build, patch, wpa_recommendation_patch, win FROM coachbuild.my_matches
       WHERE puuid = ${account.puuid}
         AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
     `) as unknown as AdherenceRow[];
     const { buildAdherencePct, winrateOnBuild, winrateOffBuild, nOnBuild, nOffBuild } = computeBuildAdherence(
-      adherenceRows.map((r) => ({ win: r.win, onWpaBuild: r.on_wpa_build ?? null }))
+      adherenceRows.map((r) => ({
+        win: r.win,
+        onWpaBuild: r.on_wpa_build ?? null,
+        matchPatch: r.patch,
+        recommendationPatch: r.wpa_recommendation_patch,
+      }))
     );
 
     const recentRows = (await sql`

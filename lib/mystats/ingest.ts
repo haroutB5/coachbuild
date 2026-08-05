@@ -151,6 +151,12 @@ import { buildRecommendations, NotPlayedInRoleError } from "../recommend";
 import { getLatestPatch } from "../staticData";
 import type { RoleId } from "../types";
 import type { ExtractedMyMatch, MyRiotMatch } from "./types";
+import {
+  captureRecommendationSnapshot,
+  findRecommendationSnapshot,
+  type MyStatsSql,
+  type RecommendedSignature,
+} from "./recommendationSnapshots";
 
 // ── Build-adherence resolution (v0.51) ──────────────────────────────────────
 //
@@ -159,18 +165,11 @@ import type { ExtractedMyMatch, MyRiotMatch } from "./types";
 // directly (no self-HTTP-fetch of /api/build) is both cheaper and can't drift
 // from what /api/build actually returns.
 //
-// CRITICAL LIMITATION (document, don't paper over): buildRecommendations has
-// NO historical-patch override -- it always evaluates against
-// getLatestPatch()'s CURRENT resolved patch internally, regardless of what
-// patch is passed here. Comparing a match played on an OLDER patch against
-// today's current-patch recommendation would be a dishonest signal (the
-// recommended build for 16.9 is not "the recommended build" for a 16.5 game).
-// So resolution below is gated on `patch === currentPatchLabel` -- in
-// practice this means only matches from TODAY's live patch (overwhelmingly
-// incremental-mode games; a long backfill walk spans many older patches and
-// gets `on_wpa_build: null` for almost all of it, which is the honest
-// outcome, not a bug). Once/if lib/recommend.ts grows a patch parameter, this
-// gate can be dropped and every in-season row can be resolved.
+// buildRecommendations has no historical-patch override: it always evaluates
+// against getLatestPatch()'s current populated patch. First use a stored
+// signature keyed by the game's own patch; only when that is absent AND the
+// game is on the current populated patch may we ask the live engine and capture
+// its answer. No historical game is scored against a later patch's live build.
 //
 // Cached per (championId, role, patch) WITHIN one ingest run -- a personal
 // account plays a small, repeated champion pool, so this keeps the number of
@@ -178,16 +177,10 @@ import type { ExtractedMyMatch, MyRiotMatch } from "./types";
 // distinct combos actually seen in the batch, not one per match. Resolution
 // stays fully SEQUENTIAL (awaited inline in the same per-match loop that
 // already paces Riot calls) -- no parallel fan-out is added.
-export interface RecommendedSignature {
-  coreItemIds: number[];
-  keystoneId: number;
-}
-
-/** Exported (not just used internally by ingestOnePage below) so
- *  scripts/backfill-mystats-kda.mjs can reuse the EXACT same resolution +
- *  patch-gate + per-run cache contract for old rows that predate migration
- *  0014 — see that script's header for why reuse beats reimplementing this. */
+/** Exported so scripts/backfill-mystats-kda.mjs reuses the same per-patch
+ * snapshot lookup and capture contract rather than reimplementing it. */
 export async function resolveRecommendedBuild(
+  sql: MyStatsSql,
   cache: Map<string, RecommendedSignature | null>,
   currentPatchLabel: string,
   championId: number,
@@ -196,10 +189,25 @@ export async function resolveRecommendedBuild(
   log: (msg: string) => void
 ): Promise<RecommendedSignature | null> {
   if (role < 0 || role > 4) return null; // unresolved lane (ARAM/remake) -- no per-role recommendation exists
-  if (patch !== currentPatchLabel) return null; // see this file's header -- only today's live patch is comparable
 
   const key = `${championId}:${role}:${patch}`;
   if (cache.has(key)) return cache.get(key)!;
+
+  // Lookup is deliberately by GAME patch, never by currentPatchLabel. This is
+  // what keeps a late-ingested game on an already-snapshotted patch measured.
+  const snapshot = await findRecommendationSnapshot(sql, patch, championId, role);
+  if (snapshot) {
+    cache.set(key, snapshot);
+    return snapshot;
+  }
+
+  // Without a snapshot we cannot truthfully ask the current-only engine about
+  // an older or newer game patch. Leave the game unresolved rather than blend
+  // a current-build comparison into measured adherence.
+  if (patch !== currentPatchLabel) {
+    cache.set(key, null);
+    return null;
+  }
 
   try {
     const [top] = await buildRecommendations(championId, role as RoleId);
@@ -209,6 +217,23 @@ export async function resolveRecommendedBuild(
           keystoneId: top.runes.keystone.id,
         }
       : null;
+    if (sig) {
+      // buildRecommendations resolves getLatestPatch internally. If that cache
+      // advanced while its request was in flight, this signature might belong
+      // to a newer patch than the run-level label. Do not freeze it under the
+      // older game's key; a later ingest can resolve it safely.
+      const patchAfterBuild = (await getLatestPatch()).label;
+      if (patchAfterBuild !== currentPatchLabel) {
+        log(
+          `recommend lookup for champ ${championId} role ${role}: populated patch moved ${currentPatchLabel} -> ${patchAfterBuild}; snapshot skipped`
+        );
+        cache.set(key, null);
+        return null;
+      }
+      const canonical = await captureRecommendationSnapshot(sql, patch, championId, role, sig);
+      cache.set(key, canonical);
+      return canonical;
+    }
     cache.set(key, sig);
     return sig;
   } catch (err) {
@@ -221,6 +246,92 @@ export async function resolveRecommendedBuild(
     cache.set(key, null);
     return null;
   }
+}
+
+/** At most ten rows per ingest. A current patch can arrive before its
+ * coachless data, so INSERT-only ingestion leaves these rows NULL until this
+ * pass revisits them after the populated patch catches up. */
+export const BUILD_ADHERENCE_RESCORE_LIMIT = 10;
+
+interface BuildRescoreRow {
+  match_id: string;
+  champion_id: number;
+  role: number;
+  patch: string;
+  item_ids: number[];
+  primary_keystone: number;
+}
+
+export interface BuildRescoreResult {
+  candidates: number;
+  scored: number;
+}
+
+/**
+ * Re-score only eligible NULL rows on the currently populated patch. The
+ * UPDATE repeats the eligibility predicate so a concurrent ingest can never
+ * overwrite an already-measured boolean. A successful resolve captures the
+ * same immutable patch snapshot as normal ingest.
+ */
+export async function rescoreCurrentPatchBuildAdherence(
+  sql: MyStatsSql,
+  account: ResolvedMyAccount,
+  buildCache: Map<string, RecommendedSignature | null>,
+  currentPatchLabel: string,
+  log: (msg: string) => void
+): Promise<BuildRescoreResult> {
+  const rows = (await sql`
+    SELECT match_id, champion_id, role, patch, item_ids, primary_keystone
+    FROM coachbuild.my_matches
+    WHERE puuid = ${account.puuid}
+      AND on_wpa_build IS NULL
+      AND role BETWEEN 0 AND 4
+      AND patch = ${currentPatchLabel}
+      AND item_ids IS NOT NULL
+      AND primary_keystone IS NOT NULL
+    ORDER BY game_creation DESC
+    LIMIT ${BUILD_ADHERENCE_RESCORE_LIMIT}
+  `) as unknown as BuildRescoreRow[];
+
+  let scored = 0;
+  for (const row of rows) {
+    const recommended = await resolveRecommendedBuild(
+      sql,
+      buildCache,
+      currentPatchLabel,
+      row.champion_id,
+      row.role,
+      row.patch,
+      log
+    );
+    if (!recommended) continue;
+
+    const onWpaBuild = computeAdherence({
+      matchItemIds: row.item_ids,
+      matchKeystone: row.primary_keystone,
+      recommendedCoreItemIds: recommended.coreItemIds,
+      recommendedKeystoneId: recommended.keystoneId,
+    });
+    if (onWpaBuild === null) continue;
+
+    const updated = (await sql`
+      UPDATE coachbuild.my_matches
+      SET on_wpa_build = ${onWpaBuild},
+          wpa_recommendation_patch = ${row.patch}
+      WHERE puuid = ${account.puuid}
+        AND match_id = ${row.match_id}
+        AND on_wpa_build IS NULL
+        AND role BETWEEN 0 AND 4
+        AND patch = ${currentPatchLabel}
+      RETURNING match_id
+    `) as unknown as { match_id: string }[];
+    scored += updated.length;
+  }
+
+  if (rows.length > 0) {
+    log(`build adherence re-score: candidates=${rows.length} scored=${scored} patch=${currentPatchLabel}`);
+  }
+  return { candidates: rows.length, scored };
 }
 
 /** Riot match-v5 ids endpoint's own documented max `count` per call. */
@@ -514,6 +625,7 @@ async function ingestOnePage(
       }
       // SEQUENTIAL, cached per (champ, role, patch) -- see resolveRecommendedBuild's header.
       const recommended = await resolveRecommendedBuild(
+        sql,
         buildCache,
         currentPatchLabel,
         row.championId,
@@ -527,16 +639,17 @@ async function ingestOnePage(
         recommendedCoreItemIds: recommended?.coreItemIds ?? [],
         recommendedKeystoneId: recommended?.keystoneId ?? null,
       });
+      const recommendationPatch = recommended ? row.patch : null;
       await sql`
         INSERT INTO coachbuild.my_matches (
           puuid, match_id, queue_id, game_creation, patch, champion_id, role, opp_champion_id, win,
-          kills, deaths, assists, item_ids, primary_keystone, on_wpa_build, split,
+          kills, deaths, assists, item_ids, primary_keystone, on_wpa_build, wpa_recommendation_patch, split,
           cs, game_duration_sec
         ) VALUES (
           ${account.puuid}, ${row.matchId}, ${row.queueId}, ${row.gameCreation}, ${row.patch},
           ${row.championId}, ${row.role}, ${row.oppChampionId}, ${row.win},
           ${row.kills}, ${row.deaths}, ${row.assists}, ${row.itemIds}::integer[], ${row.primaryKeystone},
-          ${onWpaBuild}, ${row.split},
+          ${onWpaBuild}, ${recommendationPatch}, ${row.split},
           ${row.cs}, ${row.gameDurationSec}
         )
         ON CONFLICT (puuid, match_id) DO NOTHING
@@ -582,6 +695,7 @@ export async function runMyStatsIngest(opts: MyStatsIngestOptions): Promise<MySt
   // resolveRecommendedBuild's header for why this is keyed AND scoped this way.
   const buildCache = new Map<string, RecommendedSignature | null>();
   const currentPatchLabel = (await getLatestPatch()).label;
+  await rescoreCurrentPatchBuildAdherence(sql, account, buildCache, currentPatchLabel, log);
 
   if (opts.mode === "incremental") {
     return runIncrementalWalk(sql, account, opts, errors, log, buildCache, currentPatchLabel);

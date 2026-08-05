@@ -504,6 +504,9 @@ export default function MyStatsPage() {
   const scopeCopy = getMyStatsScopeLabels(coverage.seasonClaimSafe);
   const scopeLabel = scopeCopy.label;
   const scopePhrase = scopeCopy.phrase;
+  const storedRecordSource = coverage.seasonClaimSafe
+    ? "Recorded games we hold this season"
+    : "Recorded games we hold so far";
   const TABS = buildProfileTabs();
 
   return (
@@ -530,7 +533,7 @@ export default function MyStatsPage() {
               {/* Real copy in the reference's CTA slot, not marketing. Line one
                   is the ranked standing in words (which also says plainly when
                   it has not been read); line two is freshness. */}
-              <p title={heroRank.title}>
+              <p title={heroRank.record ? `${heroRank.title} This W-L is Riot's ranked solo/duo ledger.` : heroRank.title}>
                 {heroRank.state === "ranked" ? (
                   <>
                     Ranked solo/duo: {heroRank.label}
@@ -589,15 +592,14 @@ export default function MyStatsPage() {
                 )}
                 {overall && overall.games > 0 && (
                   <>
-                    {/* The titles say "recorded so far" whenever the season claim
-                        isn't safe. A tooltip reading "Wins this season" over a
-                        truncated history is the same over-claim as the heading,
-                        just quieter. */}
-                    <Pill tone="good" title={`Wins ${scopePhrase}`}>
-                      {overall.wins}W
+                    {/* These titles name the held-games source (and whether the
+                        history is complete) so the stored record cannot be
+                        mistaken for Riot's ranked solo/duo ledger above. */}
+                    <Pill tone="good" title={`${storedRecordSource}: ${overall.wins} wins.`}>
+                      Stored {overall.wins}W
                     </Pill>
-                    <Pill tone="bad" title={`Losses ${scopePhrase}`}>
-                      {overall.losses}L
+                    <Pill tone="bad" title={`${storedRecordSource}: ${overall.losses} losses.`}>
+                      Stored {overall.losses}L
                     </Pill>
                     {/* THE MAIN PILL YIELDS ITS SLOT TO THE SYNCING PILL, and that
                         is a CLS fix as much as an editorial one. Measured at 390px:

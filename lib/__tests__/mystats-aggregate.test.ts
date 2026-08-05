@@ -93,7 +93,13 @@ describe("summarizeMatchupsByOpponent", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function adh(over: Partial<AdherenceRecord>): AdherenceRecord {
-  return { win: true, onWpaBuild: null, ...over };
+  return {
+    win: true,
+    onWpaBuild: null,
+    matchPatch: "16.15",
+    recommendationPatch: "16.15",
+    ...over,
+  };
 }
 
 describe("computeBuildAdherence", () => {
@@ -108,13 +114,17 @@ describe("computeBuildAdherence", () => {
     });
   });
 
-  it("excludes unresolved (null) rows from the denominator", () => {
+  it("never blends an otherwise-resolved comparison from another patch into measured adherence", () => {
     const out = computeBuildAdherence([
-      adh({ onWpaBuild: null, win: true }), // excluded entirely
+      adh({ onWpaBuild: null, win: true }), // no comparison, excluded
       adh({ onWpaBuild: true, win: true }),
-      adh({ onWpaBuild: false, win: false }),
+      // A display-only "vs current build" result is a different question. It
+      // must not become an off-build result for this game's own 16.15 patch.
+      adh({ onWpaBuild: false, win: false, recommendationPatch: "16.16" }),
     ]);
-    expect(out.buildAdherencePct).toBe(50); // 1 of 2 RESOLVED rows on-build
+    expect(out.buildAdherencePct).toBe(100); // only the same-patch boolean remains
+    expect(out.nOnBuild).toBe(1);
+    expect(out.nOffBuild).toBeNull();
   });
 
   it("computes buildAdherencePct + separate on/off win rates + the row count behind each", () => {

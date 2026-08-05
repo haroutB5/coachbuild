@@ -15,12 +15,8 @@
 // product.
 //
 // It moved to the MATCH HISTORY tab rather than to another band on the Accounts
-// tab, and that is not a compromise. `RecentGamesList` prints a per-game "on
-// WPA build" / "off build" chip on every row directly below this — so the
-// summary of those chips now sits with the chips it summarises, instead of
-// floating three panels above them beside a games count and a win rate it has
-// nothing to do with. It is also, correctly, out of the way: the user called
-// that band useless in the position it was in.
+// tab, and that is not a compromise. It is also, correctly, out of the way:
+// the user called that band useless in the position it was in.
 //
 // ── WHAT IT MAY NOT DO ──────────────────────────────────────────────────────
 // Never guess. `computeBuildWinrateDelta` is a discriminated union with four
@@ -107,7 +103,7 @@ export default function BuildAdherenceNote({
       </div>
       <p className="mt-1 text-[11.5px] text-mut leading-relaxed">
         {buildAdherencePct === null
-          ? "Not worked out for this account yet — adherence only resolves on games ingested after the build-tracking migration, and only when the game's patch matches the live recommendation."
+          ? "No same-patch build snapshot has measured a game for this account yet. Unresolved games are excluded rather than compared with a newer build."
           : comparisonSentence(delta)}
       </p>
     </div>

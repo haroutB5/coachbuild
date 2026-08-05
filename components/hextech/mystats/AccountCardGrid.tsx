@@ -48,7 +48,7 @@
 
 import { IconWithFallback } from "@/components/IconWithFallback";
 import type { AccountCard, AccountCardGridModel, RankDisplay } from "./profileModel";
-import { formatPct, formatRegionChip } from "./profileModel";
+import { formatPct, formatRegionChip, opggRegionSlug } from "./profileModel";
 
 const RANK_TONE: Record<RankDisplay["state"], string> = {
   // Colour is state, not decoration: only a REAL standing is accented.
@@ -90,8 +90,13 @@ export default function AccountCardGrid({
         const region = formatRegionChip(card.region);
         const pending = pendingId === card.id;
         const avatar = avatarOf?.(card) ?? "";
+        const opggRegion = opggRegionSlug(card.region);
+        const opggUrl =
+          opggRegion && card.gameName && card.tagLine
+            ? `https://op.gg/lol/summoners/${opggRegion}/${encodeURIComponent(card.gameName)}-${encodeURIComponent(card.tagLine)}`
+            : null;
         return (
-          <li key={card.id}>
+          <li key={card.id} className="relative">
             <button
               type="button"
               onClick={() => !card.active && onSelect(card.id)}
@@ -116,7 +121,7 @@ export default function AccountCardGrid({
               // puts TWO lines on each side of the card (name / region on the
               // left, rank / LP right-aligned on the right), where ours put
               // three things down the middle. Nothing was dropped to get here.
-              className={`w-full min-h-[58px] text-left rounded-xl border px-2.5 py-2 flex items-center gap-2.5 transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
+              className={`w-full min-h-[58px] text-left rounded-xl border px-2.5 py-2 pr-12 flex items-center gap-2.5 transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
                 card.active
                   ? "border-line-gold bg-panel2 cursor-default"
                   : "border-line bg-panel hover:bg-panel2/70 active:scale-[0.99] motion-reduce:active:scale-100"
@@ -227,6 +232,21 @@ export default function AccountCardGrid({
                 </span>
               </span>
             </button>
+            {opggUrl && (
+              <a
+                href={opggUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`Open ${card.riotId} on OP.GG`}
+                title={`Open ${card.riotId} on OP.GG`}
+                onClick={(event) => event.stopPropagation()}
+                className="absolute right-1 top-1/2 z-10 flex min-h-[44px] min-w-[44px] -translate-y-1/2 items-center justify-center rounded-md text-mut transition-colors hover:text-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+              >
+                <svg aria-hidden="true" viewBox="0 0 20 20" className="h-3.5 w-3.5" fill="none">
+                  <path d="M7.5 12.5 12.5 7.5M9 5h6v6M15 10v5H5V5h5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.4" />
+                </svg>
+              </a>
+            )}
           </li>
         );
       })}

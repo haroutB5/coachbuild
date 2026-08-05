@@ -2,6 +2,26 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.98.0] — 2026-08-06 — Build Adherence measures for real, plus quality-of-life
+
+### Fixed
+- **Build Adherence can now actually resolve.** Recommendations are snapshotted per patch, every
+  game is scored only against its own patch's recommendation, and games that were waiting on a
+  matching patch are re-scored automatically as recommendation data reaches them. Stats stay
+  measured-only — no cross-patch guesses.
+
+### Added
+- **Champion search understands shorthand** — "j4", "mf", "kata", "asol", "tk", "reksai" and
+  three dozen more aliases, plus space/apostrophe-insensitive prefixes ("leesin", "chogath").
+- **OP.GG links on each linked account card**, alongside the existing hero-name link.
+
+### Changed
+- **Draft page dropdowns are fully themed** — the four remaining native OS selects (sort, role,
+  min pick rate, minimum games) now match the app while open, size to their control, and honor
+  reduced-motion.
+- **The two W-L records on My Stats say what they are** — stored games we hold vs Riot's ranked
+  solo/duo ledger.
+
 ## [0.97.1] — 2026-08-05 — iPhone champion search list fix
 
 ### Fixed

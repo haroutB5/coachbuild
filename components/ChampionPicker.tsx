@@ -8,6 +8,7 @@ import FavoriteStarButton from "./FavoriteStarButton";
 import { CHAMPION_FAVORITES_CHANGED_EVENT, toggleFavoriteChampion } from "./favoritesSync";
 import { computeDropdownPosition, type DropdownCoords } from "./dropdownPosition";
 import { openSearchFromPointer } from "./searchOpenState";
+import { matchChampions } from "./championSearch";
 
 // Module-level (stable reference) so FavoriteStarButton's subscribe effect
 // doesn't re-run on every ChampionPicker re-render (e.g. each keystroke).
@@ -170,12 +171,7 @@ export default function ChampionPicker({
     };
   }, [open]);
 
-  const filtered = query.trim()
-    ? champions.filter((c) =>
-        c.name.toLowerCase().includes(query.toLowerCase()) ||
-        c.key.toLowerCase().includes(query.toLowerCase())
-      )
-    : champions;
+  const filtered = matchChampions(query, champions);
 
   // Keep the active option in view as it changes.
   useEffect(() => {

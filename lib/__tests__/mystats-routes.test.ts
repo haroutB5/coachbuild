@@ -155,13 +155,17 @@ describe("GET /api/mystats/summary", () => {
     // key the mock off the query text so each returns its own fixture.
     mockSql.mockImplementation((strings: TemplateStringsArray) => {
       const sqlText = strings.join("");
-      if (sqlText.includes("on_wpa_build, win FROM")) {
+      if (sqlText.includes("wpa_recommendation_patch")) {
         // 22 on-build rows, 14 off-build rows, 1 unresolved -- mirrors the
         // aggregate-layer fixture in mystats-aggregate.test.ts.
         const rows = [
-          ...Array.from({ length: 22 }, (_, i) => ({ on_wpa_build: true, win: i % 3 !== 0 })),
-          ...Array.from({ length: 14 }, (_, i) => ({ on_wpa_build: false, win: i % 2 === 0 })),
-          { on_wpa_build: null, win: true },
+          ...Array.from({ length: 22 }, (_, i) => ({
+            on_wpa_build: true, win: i % 3 !== 0, patch: "16.15", wpa_recommendation_patch: "16.15",
+          })),
+          ...Array.from({ length: 14 }, (_, i) => ({
+            on_wpa_build: false, win: i % 2 === 0, patch: "16.15", wpa_recommendation_patch: "16.15",
+          })),
+          { on_wpa_build: null, win: true, patch: "16.15", wpa_recommendation_patch: null },
         ];
         return Promise.resolve(rows);
       }

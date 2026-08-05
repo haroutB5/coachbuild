@@ -54,6 +54,7 @@ import {
   type DraftPlayResult,
 } from "@/components/live/draftRecommend";
 import ChampionPicker from "@/components/ChampionPicker";
+import ThemedSelect, { type ThemedSelectOption } from "@/components/ThemedSelect";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import ApplyRunesButton from "@/components/hextech/GlobalNav/ApplyRunesButton";
 import {
@@ -233,6 +234,32 @@ const MAX_ALLIED_ADDITIONAL = 4;
 type AssistantView = "recommended" | "blind" | "counters" | "comfort";
 type DetailSort = DraftAssistantDetailSort;
 
+const DETAIL_SORT_OPTIONS: readonly ThemedSelectOption<DetailSort>[] = [
+  { value: "winRate", label: "Win Rate" },
+  { value: "pickRate", label: "Pick Rate" },
+  { value: "games", label: "Games" },
+];
+
+const LANE_SELECT_OPTIONS: readonly ThemedSelectOption<LaneId>[] = LANE_ORDER.map((role) => ({
+  value: role,
+  label: `${LANE_LABEL[role]} Lane`,
+}));
+
+const MIN_PICK_RATE_OPTIONS: readonly ThemedSelectOption<number>[] = [
+  { value: 0, label: "0%" },
+  { value: 0.005, label: "0.5%" },
+  { value: 0.01, label: "1.0%" },
+  { value: 0.02, label: "2.0%" },
+  { value: 0.05, label: "5.0%" },
+];
+
+const MINIMUM_GAMES_OPTIONS: readonly ThemedSelectOption<number>[] = [
+  { value: 0, label: "Any games" },
+  { value: 1000, label: "1,000" },
+  { value: 5000, label: "5,000" },
+  { value: 10000, label: "10,000" },
+];
+
 function formatPercent(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "—";
 }
@@ -294,7 +321,7 @@ function TeamSlots({
   const slotIds = label === "ENEMY TEAM" ? additionalIds : [primaryId, ...additionalIds];
   const slots = Array.from({ length: 5 }, (_, index) => slotIds[index] ?? null);
   const selectedIds = new Set(slotIds.filter((id): id is number => id !== null));
-  // Which empty slot (if any) currently has the picker open. A native <select>
+  // Which empty slot (if any) currently has the picker open. A browser-native
   // used to live invisibly over each "+" — it worked, but Windows draws its
   // dropdown in OS chrome: a white panel with a blue highlight, unstyleable by
   // CSS, in the middle of a dark page (2026-08-01, user-reported). Replaced with
@@ -645,11 +672,14 @@ function DetailedRankings({
       <div className="border-b border-line px-4 py-3">
         <label className="flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-mut">
           <span>Sort by</span>
-          <select value={sort} disabled={preserveOrder} aria-label={preserveOrder ? "Sorting disabled for Comfort Picks" : "Sort detailed rankings"} onChange={(event) => onSortChange(event.target.value as DetailSort)} className="rounded-md border border-line bg-panel2 px-2 py-1.5 text-[11px] normal-case tracking-normal text-txt outline-none focus:border-teal disabled:cursor-not-allowed disabled:opacity-60">
-            <option value="winRate">Win Rate</option>
-            <option value="pickRate">Pick Rate</option>
-            <option value="games">Games</option>
-          </select>
+          <ThemedSelect
+            value={sort}
+            options={DETAIL_SORT_OPTIONS}
+            disabled={preserveOrder}
+            ariaLabel={preserveOrder ? "Sorting disabled for Comfort Picks" : "Sort detailed rankings"}
+            onChange={onSortChange}
+            triggerClassName="min-w-[112px] normal-case tracking-normal"
+          />
         </label>
       </div>
 
@@ -1221,12 +1251,13 @@ export default function DraftPage() {
               <label className="min-w-0 border-b border-line p-4 lg:border-b-0 lg:border-r">
                 <span className="mb-2 block text-[9px] font-bold uppercase tracking-[0.14em] text-mut">YOUR ROLE</span>
                 <span className="relative block">
-                  <select value={lane} onChange={(event) => handleLaneChange(event.target.value as LaneId)} aria-label="Your role" className="w-full appearance-none rounded-lg border border-line bg-panel2 px-3 py-2.5 pr-9 text-[12px] font-semibold text-txt outline-none focus:border-teal">
-                    {LANE_ORDER.map((role) => <option key={role} value={role}>{LANE_LABEL[role]} Lane</option>)}
-                  </select>
-                  <svg aria-hidden="true" viewBox="0 0 16 16" className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-mut" fill="none">
-                    <path d="m4 6 4 4 4-4" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
-                  </svg>
+                  <ThemedSelect
+                    value={lane}
+                    options={LANE_SELECT_OPTIONS}
+                    ariaLabel="Your role"
+                    onChange={handleLaneChange}
+                    triggerClassName="rounded-lg px-3 py-2.5 text-[12px] font-semibold"
+                  />
                 </span>
               </label>
               <div className="min-w-0 border-b border-line p-3 lg:border-b-0 lg:border-r">
@@ -1290,7 +1321,7 @@ export default function DraftPage() {
 
             <section className="rounded-xl border border-line bg-panel p-2.5">
               <div className="grid min-w-0 grid-cols-1 items-center gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
-                <label className="min-w-0"><span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-mut"><span aria-hidden="true" className="text-[13px] text-teal">◈</span>Min. Pick Rate</span><select value={String(minPickRate)} onChange={(event) => setMinPickRate(Number(event.target.value))} className="w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-[11px] text-txt outline-none focus:border-teal"><option value="0">0%</option><option value="0.005">0.5%</option><option value="0.01">1.0%</option><option value="0.02">2.0%</option><option value="0.05">5.0%</option></select></label>
+                <label className="min-w-0"><span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-mut"><span aria-hidden="true" className="text-[13px] text-teal">◈</span>Min. Pick Rate</span><ThemedSelect value={minPickRate} options={MIN_PICK_RATE_OPTIONS} onChange={setMinPickRate} ariaLabel="Min. Pick Rate" triggerClassName="px-2.5 py-2" /></label>
                 {/* justify-START, not justify-between. `between` pushed the switch
                     to the far edge of its grid cell, where it read as belonging to
                     the "Minimum Games" control beside it rather than to its own
@@ -1303,7 +1334,7 @@ export default function DraftPage() {
     The whole control is one <button> now, so the label text toggles too — a
     36px hit target beside its own words was needlessly fiddly to hit. */}
 <button type="button" role="switch" aria-checked={includeOffMeta} onClick={() => setIncludeOffMeta((value) => !value)} className="flex min-w-0 items-end justify-start gap-3 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"><span><span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-mut"><span aria-hidden="true" className="text-[13px] text-teal">✧</span>Include Off-Meta</span><span className="block text-[11px] text-txt">Show niche picks</span></span><span aria-hidden="true" className={`relative mb-0.5 h-5 w-9 flex-shrink-0 rounded-full transition-colors motion-reduce:transition-none ${includeOffMeta ? "bg-teal" : "bg-line"}`}><span className={`absolute left-0 top-1 h-3 w-3 rounded-full bg-txt transition-transform duration-150 motion-reduce:transition-none ${includeOffMeta ? "translate-x-5" : "translate-x-1"}`} /></span></button>
-                <label className="min-w-0"><span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-mut"><span aria-hidden="true" className="text-[13px] text-teal">⌁</span>Minimum Games</span><select value={String(minimumGames)} onChange={(event) => setMinimumGames(Number(event.target.value))} className="w-full rounded-md border border-line bg-panel2 px-2.5 py-2 text-[11px] text-txt outline-none focus:border-teal"><option value="0">Any games</option><option value="1000">1,000</option><option value="5000">5,000</option><option value="10000">10,000</option></select></label>
+                <label className="min-w-0"><span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-mut"><span aria-hidden="true" className="text-[13px] text-teal">⌁</span>Minimum Games</span><ThemedSelect value={minimumGames} options={MINIMUM_GAMES_OPTIONS} onChange={setMinimumGames} ariaLabel="Minimum Games" triggerClassName="px-2.5 py-2" /></label>
                 <button type="button" aria-pressed={filtersExpanded} onClick={() => setFiltersExpanded((value) => !value)} className="flex items-center justify-center gap-1 rounded-md border border-line px-3 py-2 text-[11px] font-semibold text-mut hover:border-line-gold hover:text-txt">⚙ Filters</button>
               </div>
               {filtersExpanded && <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3 text-[10px] text-mut"><span>Filters apply to the selected view and never change the server ranking.</span><button type="button" onClick={() => { setMinPickRate(DEFAULT_DRAFT_ASSISTANT_FILTERS.minPickRate); setIncludeOffMeta(DEFAULT_DRAFT_ASSISTANT_FILTERS.includeOffMeta); setMinimumGames(DEFAULT_DRAFT_ASSISTANT_FILTERS.minimumGames); }} className="rounded border border-line px-2 py-1 text-txt hover:border-line-gold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal">Reset filters</button></div>}

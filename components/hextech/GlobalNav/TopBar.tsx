@@ -31,6 +31,7 @@ import type { ChampionRef } from "@/lib/types";
 import { emitChampionSearch } from "../championSearchBus";
 import { openSearchFromPointer } from "../../searchOpenState";
 import { computeDropdownPosition, type DropdownCoords } from "../../dropdownPosition";
+import { matchChampions } from "../../championSearch";
 import ChampSelectChip from "./ChampSelectChip";
 import ApplyRunesButton from "./ApplyRunesButton";
 import { topBarChromeConfig } from "./topBarChrome";
@@ -133,9 +134,7 @@ function TopBarChampionSearch() {
     };
   }, [open]);
 
-  const filtered = query.trim()
-    ? champions.filter((c) => c.name.toLowerCase().includes(query.toLowerCase()) || c.key.toLowerCase().includes(query.toLowerCase()))
-    : champions;
+  const filtered = matchChampions(query, champions);
 
   useEffect(() => {
     if (!open) return;
