@@ -1,0 +1,28 @@
+# Deploys to Vercel from GitHub's runners. Added 2026-08-05 because this
+# machine's network path drops large uploads to Vercel's API (curl and the
+# CLI both die mid-upload), so the tgz upload happens from CI instead —
+# only a git push leaves the local machine.
+name: Deploy to Vercel
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: vercel-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_ORG_ID: team_D1kf7jRXjEkLE9tUtQEpdzcL
+      VERCEL_PROJECT_ID: prj_txKd62GEzd4tGLQWd43pyVtdJHj6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Deploy (production)
+        run: npx vercel@58 deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
