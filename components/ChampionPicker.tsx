@@ -7,6 +7,7 @@ import { isFavoriteChampion } from "@/lib/favorites";
 import FavoriteStarButton from "./FavoriteStarButton";
 import { CHAMPION_FAVORITES_CHANGED_EVENT, toggleFavoriteChampion } from "./favoritesSync";
 import { computeDropdownPosition, type DropdownCoords } from "./dropdownPosition";
+import { openSearchFromPointer } from "./searchOpenState";
 
 // Module-level (stable reference) so FavoriteStarButton's subscribe effect
 // doesn't re-run on every ChampionPicker re-render (e.g. each keystroke).
@@ -199,6 +200,12 @@ export default function ChampionPicker({
     e.target.select();
   }
 
+  function onInputPointer() {
+    const next = openSearchFromPointer({ open, activeIndex });
+    setOpen(next.open);
+    setActiveIndex(next.activeIndex);
+  }
+
   function onInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -242,6 +249,7 @@ export default function ChampionPicker({
             if (!open) setOpen(true);
           }}
           onFocus={onInputFocus}
+          onClick={onInputPointer}
           onKeyDown={onInputKeyDown}
           placeholder={placeholder}
           aria-label={pickerLabel}

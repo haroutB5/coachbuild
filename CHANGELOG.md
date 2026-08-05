@@ -2,6 +2,12 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.97.1] — 2026-08-05 — iPhone champion search list fix
+
+### Fixed
+- **Global champion search suggestions now appear on iPhone Safari.** The top-bar list escapes
+  the bar's horizontal clipping context and reopens when the already-focused search is tapped.
+
 ## [0.97.0] — 2026-08-05 — My Stats links and a cleaner history view
 
 ### Changed

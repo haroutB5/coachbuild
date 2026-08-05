@@ -25,9 +25,12 @@
 // app/page.tsx (the ONLY current subscriber) owns actually changing the
 // shown champion — this bar never touches page-level state directly.
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter, usePathname } from "next/navigation";
 import type { ChampionRef } from "@/lib/types";
 import { emitChampionSearch } from "../championSearchBus";
+import { openSearchFromPointer } from "../../searchOpenState";
+import { computeDropdownPosition, type DropdownCoords } from "../../dropdownPosition";
 import ChampSelectChip from "./ChampSelectChip";
 import ApplyRunesButton from "./ApplyRunesButton";
 import { topBarChromeConfig } from "./topBarChrome";
@@ -58,8 +61,14 @@ function TopBarChampionSearch() {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [mounted, setMounted] = useState(false);
+  const [coords, setCoords] = useState<DropdownCoords | null>(null);
+
+  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     fetch("/api/champions")
@@ -74,7 +83,10 @@ function TopBarChampionSearch() {
 
   useEffect(() => {
     function onDown(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      const insideContainer = containerRef.current?.contains(target);
+      const insideDropdown = dropdownRef.current?.contains(target);
+      if (!insideContainer && !insideDropdown) setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
@@ -86,6 +98,40 @@ function TopBarChampionSearch() {
       document.removeEventListener("keydown", onKey);
     };
   }, []);
+
+  // The list is portaled to document.body so neither the bar's horizontal
+  // overflow clip nor any future containing-block/stacking-context change can
+  // swallow it on Safari. Position it from the input's viewport rect and use
+  // the same resize/scroll behavior as ChampionPicker: resize re-measures,
+  // page/ancestor scroll closes, and scrolling inside the list is ignored.
+  useEffect(() => {
+    if (!open) {
+      setCoords(null);
+      return;
+    }
+    function measure() {
+      const el = inputRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      setCoords(
+        computeDropdownPosition(
+          { top: rect.top, bottom: rect.bottom, left: rect.left },
+          { width: window.innerWidth, height: window.innerHeight }
+        )
+      );
+    }
+    measure();
+    function onScroll(e: Event) {
+      if (dropdownRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    }
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [open]);
 
   const filtered = query.trim()
     ? champions.filter((c) => c.name.toLowerCase().includes(query.toLowerCase()) || c.key.toLowerCase().includes(query.toLowerCase()))
@@ -113,6 +159,12 @@ function TopBarChampionSearch() {
     setActiveIndex(0);
   }
 
+  function onPointerOpen() {
+    const next = openSearchFromPointer({ open, activeIndex });
+    setOpen(next.open);
+    setActiveIndex(next.activeIndex);
+  }
+
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -135,6 +187,7 @@ function TopBarChampionSearch() {
       <div className="relative flex items-center">
         {SEARCH_ICON}
         <input
+          ref={inputRef}
           id="topbar-champion-search"
           name="topbar-champion-search"
           type="text"
@@ -145,6 +198,7 @@ function TopBarChampionSearch() {
             if (!open) setOpen(true);
           }}
           onFocus={onFocus}
+          onClick={onPointerOpen}
           onKeyDown={onKeyDown}
           placeholder="Search champion…"
           aria-label="Search champion"
@@ -157,8 +211,18 @@ function TopBarChampionSearch() {
         />
       </div>
 
-      {open && (
-        <div className="absolute z-50 top-full mt-1.5 left-0 w-[min(280px,90vw)] bg-panel border border-line rounded-lg shadow-[0_12px_32px_rgba(0,0,0,0.7)] overflow-hidden">
+      {open && mounted && coords && createPortal(
+        <div
+          ref={dropdownRef}
+          style={{
+            position: "fixed",
+            top: coords.top,
+            bottom: coords.bottom,
+            left: coords.left,
+            width: coords.width,
+          }}
+          className="z-50 bg-panel border border-line rounded-lg shadow-[0_12px_32px_rgba(0,0,0,0.7)] overflow-hidden"
+        >
           <ul ref={listRef} id={LISTBOX_ID} role="listbox" className="max-h-[300px] overflow-y-auto divide-y divide-line/40">
             {filtered.length === 0 && <li className="px-3 py-2.5 text-[12px] text-mut">No champions found</li>}
             {filtered.map((champ, i) => {
@@ -193,7 +257,8 @@ function TopBarChampionSearch() {
               );
             })}
           </ul>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

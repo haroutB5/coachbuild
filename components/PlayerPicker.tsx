@@ -6,6 +6,7 @@ import { PRO_ROLE_LABEL } from "./proHistory.types";
 import { isFavorite } from "@/lib/favorites";
 import FavoriteStarButton from "./FavoriteStarButton";
 import { FAVORITES_CHANGED_EVENT, toggleFavoritePlayer } from "./favoritesSync";
+import { openSearchFromPointer } from "./searchOpenState";
 
 // Module-level (stable reference) so FavoriteStarButton's subscribe effect
 // doesn't re-run on every PlayerPicker re-render (e.g. each keystroke).
@@ -127,6 +128,12 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
     e.target.select();
   }
 
+  function onInputPointer() {
+    const next = openSearchFromPointer({ open, activeIndex });
+    setOpen(next.open);
+    setActiveIndex(next.activeIndex);
+  }
+
   function onInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -164,6 +171,7 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
           if (!open) setOpen(true);
         }}
         onFocus={onInputFocus}
+        onClick={onInputPointer}
         onKeyDown={onInputKeyDown}
         placeholder="Search a pro player…"
         aria-label="Search a pro player"
