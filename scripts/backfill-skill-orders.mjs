@@ -29,7 +29,16 @@ loadEnvLocal();
 
 const { getSql } = await import("../lib/pro/db.ts");
 const { buildSkillOrder, kitForChampionIdentity } = await import("../lib/pro/extract.ts");
-const { getMatchTimeline, RiotRequestError } = await import("../lib/pro/riot.ts");
+const {
+  DEFAULT_429_HOLD_SEC,
+  MAX_RATE_LIMIT_RETRIES,
+  RiotRequestError,
+  isRateLimited,
+  readRateBuckets,
+} = await import("../lib/pro/riot.ts");
+const { holdPacer, observeRateLimitBuckets, pacedCall } = await import("../lib/pro/pacer.ts");
+const { parseRetryAfterSec } = await import("../lib/pro/rateLimits.ts");
+const { fetchWithTimeout } = await import("../lib/fetchTimeout.ts");
 
 const TARGET_CHAMPIONS = new Set([
   "viktor",
@@ -45,6 +54,9 @@ const PRO_TARGET_CHAMPIONS = new Set(["viktor", "kaisa", "khazix", "viego"]);
 const PRO_FRESH_WINDOW_DAYS = 90;
 
 const MAX_SCRIPT_429_RETRIES = 2;
+const FETCH_TIMEOUT_MS = 20_000;
+const MAX_TRANSIENT_FETCH_RETRIES = 3;
+const TRANSIENT_FETCH_BACKOFF_MS = [5_000, 15_000, 45_000];
 
 // Match-v5 prefixes are platform ids, not the regional cluster names used in
 // the URL. Keep this mapping local because an otp_matches row stores only the
@@ -200,27 +212,96 @@ function sleep(ms) {
 }
 
 /**
- * getMatchTimeline already retries 429s through the shared Riot pacer. This
- * outer bounded retry covers a 429 that remains after that helper's retries,
- * and keeps the retry delay conservative when Riot omitted Retry-After.
+ * Keep the script's timeline request on the shared Riot pacer, but use a
+ * longer timeout than the general app fetch default. This is local to the
+ * long-running backfill so the script can tolerate a slow timeline response
+ * without changing every other Riot call in the application.
+ */
+async function getMatchTimelineWithTimeout(regional, matchId) {
+  const url =
+    `https://${regional}.api.riotgames.com/lol/match/v5/matches/` +
+    `${matchId}/timeline`;
+  const key = process.env.RIOT_API_KEY;
+
+  async function attempt() {
+    const response = await fetchWithTimeout(
+      url,
+      { headers: { "X-Riot-Token": key } },
+      FETCH_TIMEOUT_MS
+    );
+    if (!response.ok) {
+      const err = new RiotRequestError(url, response.status, response.statusText, {
+        retryAfterSec: parseRetryAfterSec(response.headers.get("retry-after")),
+        limitType: response.headers.get("x-rate-limit-type"),
+      });
+      if (isRateLimited(err)) {
+        holdPacer(1000 * (err.retryAfterSec ?? DEFAULT_429_HOLD_SEC));
+      } else {
+        observeRateLimitBuckets(readRateBuckets(response.headers));
+      }
+      throw err;
+    }
+    observeRateLimitBuckets(readRateBuckets(response.headers));
+    return response.json();
+  }
+
+  for (let attemptNumber = 0; ; attemptNumber += 1) {
+    try {
+      return await pacedCall(attempt);
+    } catch (err) {
+      if (isRateLimited(err) && attemptNumber < MAX_RATE_LIMIT_RETRIES) continue;
+      throw err;
+    }
+  }
+}
+
+function errorMessage(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isTransientFetchFailure(err) {
+  if (err instanceof RiotRequestError) return false;
+  const code = [err?.code, err?.cause?.code, err?.cause?.cause?.code]
+    .filter((value) => value != null)
+    .map(String)
+    .join(" ");
+  return /ECONNRESET|fetch failed|timeout|timed out/i.test(`${code} ${errorMessage(err)}`);
+}
+
+/**
+ * 429s retain their existing Riot-client and script-level retries. Network
+ * failures are row-local: retry the same match with 5s/15s/45s backoff, then
+ * let the row loop record the error and continue with the next row.
  */
 async function fetchTimelineWithRetry(regional, matchId, log) {
-  for (let attempt = 0; ; attempt += 1) {
+  let rateLimitRetries = 0;
+  let transientRetries = 0;
+  for (;;) {
     try {
-      return { kind: "ok", timeline: await getMatchTimeline(regional, matchId) };
+      return { kind: "ok", timeline: await getMatchTimelineWithTimeout(regional, matchId) };
     } catch (err) {
       if (err instanceof RiotRequestError && err.status === 404) {
         return { kind: "aged-out" };
       }
-      if (!(err instanceof RiotRequestError) || err.status !== 429 || attempt >= MAX_SCRIPT_429_RETRIES) {
-        throw err;
+      if (isRateLimited(err)) {
+        if (rateLimitRetries >= MAX_SCRIPT_429_RETRIES) throw err;
+        rateLimitRetries += 1;
+        const retryAfterSec =
+          typeof err.retryAfterSec === "number" && err.retryAfterSec > 0 ? err.retryAfterSec : 120;
+        const backoffMs = retryAfterSec * 1000;
+        log(
+          `${matchId}: 429 after Riot-client retries; waiting ${retryAfterSec}s before ` +
+            `script retry ${rateLimitRetries}/${MAX_SCRIPT_429_RETRIES}`
+        );
+        await sleep(backoffMs);
+        continue;
       }
-      const retryAfterSec =
-        typeof err.retryAfterSec === "number" && err.retryAfterSec > 0 ? err.retryAfterSec : 120;
-      const backoffMs = retryAfterSec * 1000;
+      if (!isTransientFetchFailure(err) || transientRetries >= MAX_TRANSIENT_FETCH_RETRIES) throw err;
+      transientRetries += 1;
+      const backoffMs = TRANSIENT_FETCH_BACKOFF_MS[transientRetries - 1];
       log(
-        `${matchId}: 429 after Riot-client retries; waiting ${retryAfterSec}s before ` +
-          `script retry ${attempt + 1}/${MAX_SCRIPT_429_RETRIES}`
+        `${matchId}: transient fetch failure (${errorMessage(err)}); waiting ${backoffMs / 1000}s before ` +
+          `retry ${transientRetries}/${MAX_TRANSIENT_FETCH_RETRIES}`
       );
       await sleep(backoffMs);
     }
@@ -371,6 +452,13 @@ async function main() {
         const reason = `riot ${err.status}`;
         console.log(`  ${row.match_id}: ${reason}, skipping`);
         failures.push({ matchId: row.match_id, puuid: row.puuid, reason: err.message });
+        skipped += 1;
+        continue;
+      }
+      if (isTransientFetchFailure(err)) {
+        const reason = errorMessage(err);
+        console.log(`  ${row.match_id}: ${reason}, retries exhausted; skipping`);
+        failures.push({ matchId: row.match_id, puuid: row.puuid, reason });
         skipped += 1;
         continue;
       }
