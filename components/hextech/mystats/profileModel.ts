@@ -106,7 +106,7 @@ export interface ProfileTab {
  * `Accounts` holds the reference's visible state — the account card grid, the
  * most-played strip and the two-column lower section — so that composition stays
  * intact rather than being split across tabs. `Match History` holds the deeper
- * drill-downs the reference does not show: the per-game list and the
+ * drill-downs the reference does not show: the champion pool and the
  * per-champion matchup table this page already had.
  */
 export function buildProfileTabs(): ProfileTab[] {
@@ -641,6 +641,48 @@ export function formatCsPerMin(v: number | null): string | null {
 export function formatRegionChip(region: string): string | null {
   const r = region.trim().toUpperCase();
   return r.length > 0 ? r : null;
+}
+
+/** The region path segment used by an OP.GG summoner URL. Account rows normally
+ *  carry this app's server key (for example, "EUW"), but platform IDs can also
+ *  arrive on older or differently shaped account feeds. Unknown values are
+ *  refused so callers never render a dead link to a guessed region. */
+const OPGG_REGION_BY_VALUE: Record<string, string> = {
+  euw: "euw",
+  eune: "eune",
+  na: "na",
+  br: "br",
+  lan: "lan",
+  las: "las",
+  oce: "oce",
+  tr: "tr",
+  ru: "ru",
+  kr: "kr",
+  jp: "jp",
+  vn: "vn",
+  ph: "ph",
+  sg: "sg",
+  th: "th",
+  tw: "tw",
+  euw1: "euw",
+  eun1: "eune",
+  na1: "na",
+  br1: "br",
+  la1: "lan",
+  la2: "las",
+  oc1: "oce",
+  tr1: "tr",
+  jp1: "jp",
+  vn2: "vn",
+  ph2: "ph",
+  sg2: "sg",
+  th2: "th",
+  tw2: "tw",
+};
+
+export function opggRegionSlug(region: string | null | undefined): string | null {
+  const normalized = region?.trim().toLowerCase();
+  return normalized ? OPGG_REGION_BY_VALUE[normalized] ?? null : null;
 }
 
 export { myStatsRoleLabel, type IconLookup };

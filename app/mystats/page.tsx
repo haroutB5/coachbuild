@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // /mystats — "My Stats" personal match tracker (backend by engy, 2026-07-21 —
 // see HANDOFF.md's "My Stats" entries + lib/mystats/**). v0.51 wave B:
-// rebuilt around RecentGamesList/ChampionPoolCard (mockup 6.png),
+// rebuilt around MatchPerformancePanel/ChampionPoolCard (mockup 6.png),
 // consuming the EXTENDED /api/mystats/summary (buildAdherencePct,
 // winrateOnBuild, winrateOffBuild, recentGames[]) engo is adding concurrently
 // in myStats.ts's normalizer. Every extended field is
@@ -43,7 +43,7 @@ import HextechTabs from "@/components/hextech/HextechTabs";
 import PanelHeading from "@/components/hextech/PanelHeading";
 import AccountPicker from "@/components/hextech/mystats/AccountPicker";
 import BuildAdherenceNote from "@/components/hextech/mystats/BuildAdherenceNote";
-import RecentGamesList, { type RecentGameRow } from "@/components/hextech/mystats/RecentGamesList";
+import { type RecentGameRow } from "@/components/hextech/mystats/RecentGamesList";
 import ChampionPoolCard from "@/components/hextech/mystats/ChampionPoolCard";
 import ProfileHero from "@/components/hextech/mystats/ProfileHero";
 import MostPlayedStrip from "@/components/hextech/mystats/MostPlayedStrip";
@@ -61,6 +61,7 @@ import {
   formatRelativeTime,
   formatRank,
   formatRegionChip,
+  opggRegionSlug,
   isLiveGamePhase,
   type ProfileTabId,
   type RankInput,
@@ -460,9 +461,28 @@ export default function MyStatsPage() {
   // unanswered or unknowable identity renders no claim at all.
   const liveIsThisAccount =
     clientInGame && !!clientRiotId && !!accountScope?.riotId && clientRiotId === accountScope.riotId;
-  const regionChip = formatRegionChip(
-    accountScope?.accounts.find((a) => a.id === accountScope.activeId)?.region ?? ""
-  );
+  const activeAccount = accountScope?.accounts.find((a) => a.id === accountScope.activeId);
+  const regionChip = formatRegionChip(activeAccount?.region ?? "");
+  const opggRegion = opggRegionSlug(activeAccount?.region);
+  const opggUrl =
+    riotId && activeAccount?.gameName && activeAccount.tagLine && opggRegion
+      ? `https://op.gg/lol/summoners/${opggRegion}/${encodeURIComponent(activeAccount.gameName)}-${encodeURIComponent(activeAccount.tagLine)}`
+      : null;
+  const heroTitle =
+    opggUrl && riotId ? (
+      <a
+        href={opggUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={`Open ${riotId} on OP.GG`}
+        title={`Open ${riotId} on OP.GG`}
+        className="text-inherit underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg rounded-sm"
+      >
+        {riotId}
+      </a>
+    ) : (
+      riotId ?? "My Stats"
+    );
   const mostPlayed = buildMostPlayedStrip(rows);
   const championPerformance = buildChampionPerformanceRows(rows);
   const accountGrid = buildAccountCards(accountScope?.accounts ?? [], { expanded: accountsExpanded });
@@ -504,7 +524,7 @@ export default function MyStatsPage() {
           avatarGlyph={mainRow?.name}
           live={liveIsThisAccount}
           eyebrow={seasonLabel ? `My Stats · ${seasonLabel}` : "My Stats"}
-          title={riotId ?? "My Stats"}
+          title={heroTitle}
           lines={
             <>
               {/* Real copy in the reference's CTA slot, not marketing. Line one
@@ -867,8 +887,8 @@ export default function MyStatsPage() {
         </div>
 
         {/* ── MATCH HISTORY TAB ─────────────────────────────────────────────
-            The drill-downs the reference does not show: the per-game list and
-            the per-champion matchup table this page already had. */}
+            The drill-downs the reference does not show: the per-champion pool
+            and matchup table this page already had. */}
         <div
           id="hextech-tabpanel-history"
           role="tabpanel"
@@ -899,8 +919,8 @@ export default function MyStatsPage() {
 
         {state.status === "ok" && !state.summary.accountUnresolved && rows.length > 0 && overall && (
           <div className="space-y-5">
-            {/* Adherence's new home — ABOVE the list whose per-game on/off-build
-                chips it summarises, not on the Accounts tab the user cleared. */}
+            {/* Adherence's home in Match History, beside the history it
+                contextualizes rather than on the Accounts tab. */}
             <BuildAdherenceNote
               buildAdherencePct={state.summary.buildAdherencePct ?? null}
               winrateOnBuild={state.summary.winrateOnBuild ?? null}
@@ -910,16 +930,7 @@ export default function MyStatsPage() {
               scopeLabel={scopeLabel}
             />
 
-            {/* `items-start`: without it the two panels are forced to equal
-                height, and the champion pool (44 rows on this account) stretched
-                the 5-row recent-games card into ~600px of empty panel. */}
-            <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-5 items-start">
-              {/* showChart=false: MatchPerformancePanel on the Accounts tab owns
-                  the bar chart now, and both panels stay mounted behind the tab
-                  strip, so leaving it on rendered the same five bars twice. */}
-              <RecentGamesList games={recentGames} iconOf={(id) => champIcons.get(id)} showChart={false} />
-              <ChampionPoolCard rows={rows} />
-            </div>
+            <ChampionPoolCard rows={rows} />
 
             {/* Secondary section — the pre-wave-B per-champion expandable
                 matchup table, lightly restyled. Capability preserved

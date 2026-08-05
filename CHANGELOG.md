@@ -2,6 +2,12 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.97.0] — 2026-08-05 — My Stats links and a cleaner history view
+
+### Changed
+- **Open the active Riot ID directly on OP.GG** from the My Stats hero when its region is known.
+- **Match History now shows one champion pool section instead of a duplicated recent-games card.**
+
 ## [0.96.1] — 2026-08-05 — Viego phantom ultimates dropped by legality, not luck
 
 ### Fixed

@@ -18,6 +18,7 @@ import {
   formatCsPerMin,
   formatCsNote,
   formatRegionChip,
+  opggRegionSlug,
   PROFILE_ACCOUNT_CARD_LIMIT,
 } from "@/components/hextech/mystats/profileModel";
 
@@ -464,6 +465,20 @@ describe("formatters", () => {
     expect(formatRegionChip("euw1")).toBe("EUW1");
     expect(formatRegionChip("  ")).toBeNull();
     expect(formatRegionChip("")).toBeNull();
+  });
+
+  it("maps stored server keys and platform IDs to OP.GG slugs", () => {
+    expect(opggRegionSlug("EUW")).toBe("euw");
+    expect(opggRegionSlug("euw")).toBe("euw");
+    expect(opggRegionSlug("NA1")).toBe("na");
+    expect(opggRegionSlug("eun1")).toBe("eune");
+    expect(opggRegionSlug("KR")).toBe("kr");
+  });
+
+  it("refuses absent and unknown regions", () => {
+    expect(opggRegionSlug(null)).toBeNull();
+    expect(opggRegionSlug("  ")).toBeNull();
+    expect(opggRegionSlug("unknown1")).toBeNull();
   });
 });
 
