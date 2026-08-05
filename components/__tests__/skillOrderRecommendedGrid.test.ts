@@ -19,6 +19,7 @@ import {
   type SkillOrderModel,
 } from "../hextech/skillOrder";
 import { SKILL_GRID_COLUMNS, SKILL_ROWS, levelsWithProvenance } from "../skillOrderGrid";
+import { kitFromMaxRanks } from "@/lib/championKit";
 
 const A = (s: string): Ability[] => s.split("") as Ability[];
 
@@ -111,6 +112,17 @@ describe("buildRecommendedSkillGrid", () => {
     const grid = buildRecommendedSkillGrid(m);
     expect(levelsOf(grid, "measured")).toEqual([1, 2, 3]);
     expect(levelsOf(grid, "derived")).toEqual([]);
+  });
+
+  it("passes a non-standard kit through to the shared grid", () => {
+    const jayce = model({
+      kit: kitFromMaxRanks([6, 6, 6, 1]),
+      order: A("QWEQQWQWQWQWWEEEEE"),
+      observedLevels: 18,
+    });
+    const grid = buildRecommendedSkillGrid(jayce);
+    expect(levelsWithProvenance(grid[SKILL_ROWS.indexOf("R")], "auto")).toEqual([1]);
+    expect(levelsWithProvenance(grid[SKILL_ROWS.indexOf("R")], "measured")).toEqual([]);
   });
 });
 

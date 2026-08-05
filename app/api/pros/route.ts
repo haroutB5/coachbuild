@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
 import { FRESH_WINDOW_DAYS } from "@/lib/pro/fresh";
 import { mergeProGames } from "@/lib/pro/mergeGames";
+import { getChampionById, resolveChampionKit } from "@/lib/staticData";
 import { cleanLeaguepediaName } from "@/lib/prostage/displayName";
 import {
   buildProstageCompsMap,
@@ -115,6 +116,28 @@ function rowToProGame(row: ProGameRow): ProGame {
     }),
     ...soloqComps(row),
   };
+}
+
+/** Resolve each distinct champion once and carry the result with every game.
+ * The history endpoint can contain several champions on a player lookup, so
+ * resolving only the request's champion would leave GameDetailSheet's
+ * non-standard games ambiguous. A failed resolution is explicit null; it is
+ * never silently replaced with standard caps. */
+async function attachChampionKits(games: readonly ProGame[]): Promise<ProGame[]> {
+  const championIds = Array.from(new Set(games.map((game) => game.championId)));
+  const resolved = await Promise.all(
+    championIds.map(async (championId) => {
+      try {
+        const champion = await getChampionById(championId);
+        const kit = champion?.key ? await resolveChampionKit(championId, champion.key) : null;
+        return [championId, kit] as const;
+      } catch {
+        return [championId, null] as const;
+      }
+    })
+  );
+  const kitByChampion = new Map(resolved);
+  return games.map((game) => ({ ...game, kit: kitByChampion.get(game.championId) ?? null }));
 }
 
 interface ProstageGameRow {
@@ -596,7 +619,7 @@ export async function GET(req: NextRequest) {
       )
       .filter((g): g is ProGame => g !== null);
 
-    const games = mergeProGames(soloqGames, prostageGames, limit, proMin);
+    const games = await attachChampionKits(mergeProGames(soloqGames, prostageGames, limit, proMin));
 
     const body: ProsResponse = { games };
     // Empty results are never CDN-cached: an empty set is either genuinely

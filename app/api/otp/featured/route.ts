@@ -15,7 +15,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
 import { buildFeaturedModel, type FeaturedGame, type FeaturedMatchRow } from "@/lib/otp/featured";
-import type { SkillOrderModel } from "@/lib/types";
+import { getChampionById, resolveChampionKit } from "@/lib/staticData";
+import type { ChampionKit, SkillOrderModel } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -108,10 +109,20 @@ export async function GET(req: NextRequest) {
       ORDER BY game_creation DESC
     `) as unknown as FeaturedMatchRow[];
 
+    let kit: ChampionKit | null = null;
+    try {
+      const champion = await getChampionById(championId);
+      kit = champion?.key ? await resolveChampionKit(championId, champion.key) : null;
+    } catch {
+      // A recorded order must not silently fall back to standard caps when kit
+      // resolution fails for a champion that may be non-standard.
+      kit = null;
+    }
+
     // No item filter here: the client already holds the item metadata map and
     // knows which ids are completed items. Filtering by a guess on the server
     // is how components end up presented as builds.
-    const model = buildFeaturedModel(rows);
+    const model = buildFeaturedModel(rows, undefined, kit);
 
     const body: FeaturedOtpResponse = {
       player: {

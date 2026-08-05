@@ -12,6 +12,7 @@
 import { describe, it, expect } from "vitest";
 import {
   ABILITY_PALETTE,
+  BASIC_R_PALETTE,
   EMPTY_CELL_CLASS,
   SKILL_GRID_COLUMNS,
   SKILL_ROWS,
@@ -20,6 +21,7 @@ import {
   levelsWithProvenance,
   skillCellClass,
 } from "../skillOrderGrid";
+import { kitFromMaxRanks } from "@/lib/championKit";
 
 const rowOf = (letter: (typeof SKILL_ROWS)[number]) => SKILL_ROWS.indexOf(letter);
 
@@ -75,6 +77,33 @@ describe("buildSkillGrid — structure", () => {
     expect(() => buildSkillGrid(["Q", "X", "W"])).not.toThrow();
     // "X" at index 1 is skipped; "W" at index 2 still lands at level 3.
     expect(buildSkillGrid(["Q", "X", "W"])[rowOf("W")][2]?.level).toBe(3);
+  });
+
+  it("styles Udyr R as a measured fourth-basic row", () => {
+    const kit = kitFromMaxRanks([6, 6, 6, 6])!;
+    const grid = buildSkillGrid(["Q", "R", "W"], { kit });
+    const cell = grid[rowOf("R")][1];
+    expect(cell?.provenance).toBe("measured");
+    expect(skillCellClass("R", cell, { rAsBasic: true })).toBe(BASIC_R_PALETTE.measured);
+    expect(skillCellClass("R", cell)).toBe(ABILITY_PALETTE.R.measured);
+  });
+
+  it("renders Jayce's automatic Transform without inventing a measured R chip", () => {
+    const kit = kitFromMaxRanks([6, 6, 6, 1])!;
+    const order = "QWEQQWQWQWQWWEEEEE".split("");
+    const grid = buildSkillGrid(order, { kit });
+    expect(levelsWithProvenance(grid[rowOf("R")], "auto")).toEqual([1]);
+    expect(levelsWithProvenance(grid[rowOf("R")], "measured")).toEqual([]);
+    expect(describeSkillRow("R", grid[rowOf("R")])).toContain("auto-ranked, not recorded");
+  });
+
+  it("normalizes Aphelios timeline R markers and marks them auto", () => {
+    const kit = kitFromMaxRanks([6, 6, 6, 3], "Aphelios")!;
+    const order = "WQQQQREQEQEREEEWWR".split("");
+    const grid = buildSkillGrid(order, { kit });
+    expect(levelsWithProvenance(grid[rowOf("R")], "auto")).toEqual([6, 11, 16]);
+    expect(levelsWithProvenance(grid[rowOf("R")], "measured")).toEqual([]);
+    expect(levelsWithProvenance(grid[rowOf("Q")], "measured")).toEqual([2, 3, 4, 5, 8, 10]);
   });
 });
 
@@ -171,6 +200,13 @@ describe("cell styling", () => {
       expect(ABILITY_PALETTE[letter].inferred).toContain("border-dashed");
       expect(ABILITY_PALETTE[letter].derived).not.toContain("border-dashed");
       expect(ABILITY_PALETTE[letter].measured).not.toContain("border-dashed");
+    }
+  });
+
+  it("keeps automatic markers visibly distinct from measured and derived cells", () => {
+    for (const letter of SKILL_ROWS) {
+      expect(ABILITY_PALETTE[letter].auto).not.toBe(ABILITY_PALETTE[letter].measured);
+      expect(ABILITY_PALETTE[letter].auto).toContain("border-dashed");
     }
   });
 });

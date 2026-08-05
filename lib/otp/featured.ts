@@ -23,7 +23,7 @@
 
 import { getAccountByRiotId, getMatchIdsByPuuid } from "../pro/riot";
 import { aggregateRecordedSkillOrders } from "../skillOrderAggregate";
-import type { SkillOrderModel } from "../types";
+import type { ChampionKit, SkillOrderModel } from "../types";
 
 /** Riot regional routings, in the order worth trying. */
 export const ROUTINGS = ["europe", "americas", "asia"] as const;
@@ -239,7 +239,8 @@ function toRunePage(v: unknown): RunePage | null {
  */
 export function buildFeaturedModel(
   rows: readonly FeaturedMatchRow[],
-  keepItem: (itemId: number) => boolean = () => true
+  keepItem: (itemId: number) => boolean = () => true,
+  kit?: ChampionKit | null
 ): FeaturedBuildModel {
   const games = rows.length;
   const itemGames = new Map<number, number>();
@@ -290,7 +291,7 @@ export function buildFeaturedModel(
   const topSpells = Array.from(spellGroups.values()).sort(
     (a, b) => b.n - a.n || a.spells[0] - b.spells[0] || a.spells[1] - b.spells[1]
   )[0] ?? null;
-  const skillOrder = aggregateRecordedSkillOrders(rows.map((row) => row.skill_order));
+  const skillOrder = aggregateRecordedSkillOrders(rows.map((row) => row.skill_order), kit);
 
   return {
     games,

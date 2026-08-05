@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
 import { FRESH_WINDOW_DAYS } from "@/lib/pro/fresh";
+import { getChampionById, resolveChampionKit } from "@/lib/staticData";
 import type { ProGame, ProGameRunes, ProRoleId } from "@/lib/pro/types";
+import type { ChampionKit } from "@/lib/types";
 import type { OtpPlayerSummary, OtpResponse } from "@/lib/otp/types";
 
 export const runtime = "nodejs";
@@ -167,7 +169,18 @@ export async function GET(req: NextRequest) {
     ]);
 
     const rows = asRows<OtpGameRow>(gameRows);
-    const games = rows.map(rowToProGame);
+    let kit: ChampionKit | null = null;
+    if (rows.length > 0) {
+      try {
+        const champion = await getChampionById(championId);
+        kit = champion?.key ? await resolveChampionKit(championId, champion.key) : null;
+      } catch {
+        // Do not guess standard caps when a non-standard champion's kit could
+        // not be resolved; the recorded aggregate will refuse this sample.
+        kit = null;
+      }
+    }
+    const games = rows.map((row) => ({ ...rowToProGame(row), kit }));
 
     // Per-player sample counts come from the RETURNED rows, never from the
     // roster table — a tracked account with zero games in the window must

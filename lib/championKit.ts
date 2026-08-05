@@ -127,12 +127,15 @@ const ZERO_FREE: Readonly<Record<Ability, number>> = Object.freeze({ Q: 0, W: 0,
 
 /**
  * Build a ChampionKit from ddragon's four `maxrank` values, in Q,W,E,R order.
+ * `championKey` is optional for the old cap-only callers; the ddragon boundary
+ * supplies it so the recorded Aphelios path can distinguish its serialized
+ * automatic R from an ordinary R3 ultimate.
  *
  * Returns null — never a guess — when the values are not integers ≥ 1, when
  * there are not exactly four of them, or when R's maxrank is a shape this
  * module has no verified semantics for. A null kit refuses downstream.
  */
-export function kitFromMaxRanks(maxranks: readonly number[]): ChampionKit | null {
+export function kitFromMaxRanks(maxranks: readonly number[], championKey?: string): ChampionKit | null {
   if (!Array.isArray(maxranks) || maxranks.length !== SPELL_SLOTS.length) return null;
   if (!maxranks.every((n) => Number.isInteger(n) && n >= 1)) return null;
 
@@ -158,6 +161,11 @@ export function kitFromMaxRanks(maxranks: readonly number[]): ChampionKit | null
     freeRanks,
     ultimateLevels: semantics.levels === null ? null : Object.freeze([...semantics.levels]),
     purchasableTotal,
+    // R maxrank alone cannot distinguish standard champions from Aphelios:
+    // both are 6/6/6/3, but live Riot timelines serialize Aphelios's automatic
+    // R as a zero-cost SKILL_LEVEL_UP marker. Identity is therefore threaded
+    // through the existing ddragon boundary rather than guessed downstream.
+    rAuto: maxranks[3] === 1 || championKey?.toLowerCase() === "aphelios",
   });
 }
 

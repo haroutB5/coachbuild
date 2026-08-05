@@ -22,11 +22,13 @@
 // an "always 18" default in here, it is in the wrong layer.
 //
 // What this module DOES own is provenance: every cell carries whether its level
-// was MEASURED, DERIVED or INFERRED, and components/SkillGrid.tsx gives each a
-// visually distinct treatment. Repo CLAUDE.md hard rule #4 — a guess rendered
+// was MEASURED, DERIVED, INFERRED or AUTO, and components/SkillGrid.tsx gives
+// each a visually distinct treatment. Repo CLAUDE.md hard rule #4 — a guess rendered
 // identically to a measurement is a fabrication even when the guess is a good
 // one.
 // ─────────────────────────────────────────────────────────────────────────────
+
+import type { ChampionKit } from "@/lib/types";
 
 export type SkillLetter = "Q" | "W" | "E" | "R";
 
@@ -37,7 +39,7 @@ export const SKILL_ROWS: readonly SkillLetter[] = ["Q", "W", "E", "R"];
 export const SKILL_GRID_COLUMNS = 18;
 
 /**
- * Where a cell's level came from. The three states are not decoration:
+ * Where a cell's level came from. The four states are not decoration:
  *
  *   * `measured` — the upstream source published this level verbatim.
  *   * `derived`  — this app computed it by arithmetic that has exactly one
@@ -48,7 +50,7 @@ export const SKILL_GRID_COLUMNS = 18;
  *                  recommendation reads as a complete 18. This is the honest
  *                  name for a good guess, and it must always be visible as one.
  */
-export type SkillCellProvenance = "measured" | "derived" | "inferred";
+export type SkillCellProvenance = "measured" | "derived" | "inferred" | "auto";
 
 export interface SkillGridCell {
   /** 1-based champion level this chip sits at. */
@@ -72,6 +74,45 @@ export interface BuildSkillGridOptions {
    *  over-claims. Clamped up to `measuredThrough`, so it can never demote a
    *  measured cell. */
   derivedThrough?: number;
+  /** Champion rank rules for recorded non-standard kits. Omitted means the
+   * historical standard grid behavior. */
+  kit?: ChampionKit | null;
+}
+
+interface NormalizedSkillEntry {
+  letter: string;
+  auto: boolean;
+}
+
+/**
+ * Normalize the two automatic-R wire shapes before placing cells. Aphelios's
+ * timeline includes zero-cost R markers, so strip them and put them back at
+ * the canonical levels; Jayce's transform is not a timeline entry at all and
+ * is represented only by a level-1 overlay. Both paths are bounded by the
+ * observed order length so a short factual grid never gains a guessed tail.
+ */
+function normalizeSkillEntries(order: readonly string[], kit?: ChampionKit | null): NormalizedSkillEntry[] {
+  const observedLength = Math.min(order.length, SKILL_GRID_COLUMNS);
+  const rAuto = kit?.rAuto === true || kit?.maxRanks.R === 1;
+  if (!rAuto) {
+    return order.slice(0, observedLength).map((letter) => ({ letter, auto: false }));
+  }
+
+  const basics = order.slice(0, observedLength).filter((letter) => letter !== "R");
+  const autoLevels = kit?.maxRanks.R === 1
+    ? []
+    : (kit?.ultimateLevels ?? [6, 11, 16]).filter((level) => level <= observedLength);
+  const entries: NormalizedSkillEntry[] = [];
+  let basicIndex = 0;
+  for (let level = 1; level <= observedLength; level += 1) {
+    if (autoLevels.includes(level)) {
+      entries.push({ letter: "R", auto: true });
+    } else if (basicIndex < basics.length) {
+      entries.push({ letter: basics[basicIndex], auto: false });
+      basicIndex += 1;
+    }
+  }
+  return entries;
 }
 
 /**
@@ -87,23 +128,41 @@ export function buildSkillGrid(
   options: BuildSkillGridOptions = {}
 ): (SkillGridCell | null)[][] {
   const columns = options.columns ?? SKILL_GRID_COLUMNS;
-  const measuredThrough = clampCount(options.measuredThrough, order.length, order.length);
+  const entries = normalizeSkillEntries(order, options.kit);
+  const measuredThrough = clampCount(options.measuredThrough, entries.length, entries.length);
   const derivedThrough = Math.max(
     measuredThrough,
-    clampCount(options.derivedThrough, order.length, order.length)
+    clampCount(options.derivedThrough, entries.length, entries.length)
   );
 
   const grid: (SkillGridCell | null)[][] = SKILL_ROWS.map(() =>
     new Array<SkillGridCell | null>(columns).fill(null)
   );
 
-  for (let i = 0; i < order.length && i < columns; i += 1) {
-    const rowIdx = SKILL_ROWS.indexOf(order[i] as SkillLetter);
+  for (let i = 0; i < entries.length && i < columns; i += 1) {
+    const entry = entries[i];
+    const rowIdx = SKILL_ROWS.indexOf(entry.letter as SkillLetter);
     if (rowIdx === -1) continue;
     grid[rowIdx][i] = {
       level: i + 1,
-      provenance: i < measuredThrough ? "measured" : i < derivedThrough ? "derived" : "inferred",
+      provenance: entry.auto
+        ? "auto"
+        : i < measuredThrough
+          ? "measured"
+          : i < derivedThrough
+            ? "derived"
+            : "inferred",
     };
+  }
+
+  // Jayce's transform is automatic at level 1 but is not serialized as a
+  // skill event. Overlay it only when this order has at least one observed
+  // cell; an empty order stays genuinely empty.
+  if (options.kit?.maxRanks.R === 1 && entries.length > 0 && columns > 0) {
+    const rRow = SKILL_ROWS.indexOf("R");
+    if (rRow >= 0 && grid[rRow][0] === null) {
+      grid[rRow][0] = { level: 1, provenance: "auto" };
+    }
   }
   return grid;
 }
@@ -145,6 +204,10 @@ export function describeSkillRow(
       `Level${inferred.length === 1 ? "" : "s"} ${inferred.join(", ")} inferred from the max-priority order, not recorded`
     );
   }
+  const auto = levelsWithProvenance(cells, "auto");
+  if (auto.length) {
+    parts.push(`Level${auto.length === 1 ? "" : "s"} ${auto.join(", ")} auto-ranked, not recorded`);
+  }
   return parts.join(". ");
 }
 
@@ -172,6 +235,8 @@ export interface AbilityPalette {
   derived: string;
   /** Dashed outline, no fill — an INFERRED level. */
   inferred: string;
+  /** Muted marker — a kit-provided automatic rank, not a skill point. */
+  auto: string;
   /** The row's leading letter label. */
   label: string;
 }
@@ -181,26 +246,40 @@ export const ABILITY_PALETTE: Readonly<Record<SkillLetter, AbilityPalette>> = {
     measured: "bg-[#4c8ff0] text-[#07130f] border border-[#4c8ff0]",
     derived: "bg-[#4c8ff0]/22 border border-[#4c8ff0]/85 text-[#9dc4f8]",
     inferred: "bg-transparent border border-dashed border-[#4c8ff0]/70 text-[#7fb0f2]",
+    auto: "bg-[#9aa4ad]/18 border border-dashed border-[#9aa4ad]/65 text-[#c2c9cf]",
     label: "text-[#9dc4f8]",
   },
   W: {
     measured: "bg-[#e2903f] text-[#07130f] border border-[#e2903f]",
     derived: "bg-[#e2903f]/22 border border-[#e2903f]/85 text-[#f0c08a]",
     inferred: "bg-transparent border border-dashed border-[#e2903f]/70 text-[#eab073]",
+    auto: "bg-[#9aa4ad]/18 border border-dashed border-[#9aa4ad]/65 text-[#c2c9cf]",
     label: "text-[#f0c08a]",
   },
   E: {
     measured: "bg-[#a878e4] text-[#07130f] border border-[#a878e4]",
     derived: "bg-[#a878e4]/22 border border-[#a878e4]/85 text-[#cbaef1]",
     inferred: "bg-transparent border border-dashed border-[#a878e4]/70 text-[#bd9aec]",
+    auto: "bg-[#9aa4ad]/18 border border-dashed border-[#9aa4ad]/65 text-[#c2c9cf]",
     label: "text-[#cbaef1]",
   },
   R: {
     measured: "bg-[#e8595c] text-[#07130f] border border-[#e8595c]",
     derived: "bg-[#e8595c]/22 border border-[#e8595c]/85 text-[#f3a0a2]",
     inferred: "bg-transparent border border-dashed border-[#e8595c]/70 text-[#ef8c8f]",
+    auto: "bg-[#9aa4ad]/18 border border-dashed border-[#9aa4ad]/65 text-[#c2c9cf]",
     label: "text-[#f3a0a2]",
   },
+};
+
+/** Udyr's R is a fourth basic ability, so it uses a basic-row palette rather
+ * than the red ultimate palette. */
+export const BASIC_R_PALETTE: AbilityPalette = {
+  measured: "bg-[#54b6a2] text-[#07130f] border border-[#54b6a2]",
+  derived: "bg-[#54b6a2]/22 border border-[#54b6a2]/85 text-[#a5e0d4]",
+  inferred: "bg-transparent border border-dashed border-[#54b6a2]/70 text-[#8bd2c3]",
+  auto: "bg-[#9aa4ad]/18 border border-dashed border-[#9aa4ad]/65 text-[#c2c9cf]",
+  label: "text-[#a5e0d4]",
 };
 
 /** Empty cell — a level this ability took no point at. Low-contrast on
@@ -208,7 +287,16 @@ export const ABILITY_PALETTE: Readonly<Record<SkillLetter, AbilityPalette>> = {
 export const EMPTY_CELL_CLASS = "bg-black/25 border border-line/25";
 
 /** Chip classes for one cell. `null` → the empty treatment. */
-export function skillCellClass(letter: SkillLetter, cell: SkillGridCell | null): string {
+export function skillCellClass(
+  letter: SkillLetter,
+  cell: SkillGridCell | null,
+  options: { rAsBasic?: boolean } = {}
+): string {
   if (!cell) return EMPTY_CELL_CLASS;
-  return ABILITY_PALETTE[letter][cell.provenance];
+  const palette = letter === "R" && options.rAsBasic ? BASIC_R_PALETTE : ABILITY_PALETTE[letter];
+  return palette[cell.provenance];
+}
+
+export function skillRowLabelClass(letter: SkillLetter, options: { rAsBasic?: boolean } = {}): string {
+  return letter === "R" && options.rAsBasic ? BASIC_R_PALETTE.label : ABILITY_PALETTE[letter].label;
 }

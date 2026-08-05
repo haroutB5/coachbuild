@@ -149,7 +149,7 @@ export function recommendedSkillOrder(
 
 /**
  * The 4×18 grid for the recommendation card, with every cell tagged by
- * provenance so SkillGrid can render measured / derived / inferred levels
+ * provenance so SkillGrid can render measured / derived / inferred / auto levels
  * distinguishably.
  *
  * Always 18 columns wide — a recommendation answers the whole game (user
@@ -158,12 +158,13 @@ export function recommendedSkillOrder(
  * keep showing 16 and must never be padded.
  */
 export function buildRecommendedSkillGrid(
-  model: Pick<SkillOrderModel, "order" | "completed" | "observedLevels" | "inferredTail">
+  model: Pick<SkillOrderModel, "order" | "completed" | "observedLevels" | "inferredTail" | "kit">
 ): (SkillGridCell | null)[][] {
   return buildSkillGrid(recommendedSkillOrder(model), {
     columns: SKILL_GRID_COLUMNS,
     measuredThrough: observedLevelCount(model),
     derivedThrough: Array.isArray(model.order) ? model.order.length : 0,
+    kit: model.kit,
   });
 }
 

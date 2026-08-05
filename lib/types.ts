@@ -186,6 +186,13 @@ export interface ChampionKit {
    *  every point; >18 for Yuumi/Aphelios/Udyr, who must skip something — which
    *  is exactly why their level 16-18 tail is not derivable. */
   purchasableTotal: number;
+  /**
+   * Recorded timeline data carries an R marker for Aphelios's otherwise
+   * automatic R, even though it costs no point. Jayce's R is also automatic
+   * but is not serialized in the recorded order. Optional for old hand-built
+   * kits; consumers fall back to the verified maxrank-1 Jayce rule.
+   */
+  rAuto?: boolean;
 }
 
 export interface SkillOrderModel {

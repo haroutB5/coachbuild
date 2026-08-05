@@ -2,6 +2,28 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.96.0] — 2026-08-05 — Skill orders tell the truth
+
+### Fixed
+- **OTP and pro skill orders no longer misplace early abilities.** The aggregate previously
+  voted level-by-level, so an ability every game took in the first three levels (at varying
+  spots) could surface at level 9 — Zaahen's W did exactly that. Aggregation now follows real
+  played prefixes; a rendered opening is always one actual games used.
+- **Evolve/augment points no longer count as skill ranks.** Viktor augments and Kha'Zix/Kai'Sa
+  evolutions were stored as extra Q/E ranks (six-rank Q grids, shifted everything after).
+  The extractor now keeps only real point spends; ~3,000 stored games across both tables were
+  re-fetched and rewritten clean.
+- **Viego's possession no longer fabricates ultimate ranks.** Phantom skill-up events under
+  Viego's participant are dropped by a per-champion budget guard.
+- **Pro game detail sheets render legal grids.** The pro table had 2,300+ contaminated games
+  (some rendering six Q ranks and R at levels 7/13 as fact); all fresh-window rows rebuilt.
+
+### Added
+- **Champion kit awareness for recorded skill orders.** Udyr ranks R as a fourth basic (no fake
+  ultimate at 6/11), Jayce shows all 18 levels with his auto-improving R, Aphelios shows his
+  auto-R at 6/11/16 with stat points landing one per level, Yuumi/Elise/Nidalee/Karma use their
+  real caps. Kits flow from ddragon through the aggregate, both consumer cards, and every grid.
+
 ## [0.95.1] — 2026-08-03 — Navigation state stays on its own page
 
 ### Fixed

@@ -40,7 +40,7 @@ export default function SkillOrderGrid({ model, sampleLabel, missingLevelsContex
         {formatPriorityString(model.priority)}
       </p>
 
-      <SkillGrid grid={grid} className="max-w-[560px]" />
+      <SkillGrid grid={grid} className="max-w-[560px]" kit={model.kit} />
 
       {inferred && (
         <p className="text-[10.5px] text-gold/70 mt-3 flex items-start gap-1">

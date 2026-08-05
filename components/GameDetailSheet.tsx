@@ -430,7 +430,7 @@ export default function GameDetailSheet({
   // deliberately NO padding: a game that ended at level 16 shows 16 points and
   // leaves 17-18 empty. Padding a factual record to look like the
   // recommendation card would invent levels a player never took.
-  const skillGrid = buildSkillGrid(game.skillOrder);
+  const skillGrid = buildSkillGrid(game.skillOrder, { kit: game.kit });
 
   // Per-player Teams-box roster — fetched separately from GET
   // /api/pros/team-players once the sheet opens (engy's concurrent contract
@@ -863,7 +863,7 @@ export default function GameDetailSheet({
               {game.skillOrder.length > 0 && (
                 <section>
                   <SectionLabel>Skill Order</SectionLabel>
-                  <SkillGrid grid={skillGrid} />
+                  <SkillGrid grid={skillGrid} kit={game.kit} />
                 </section>
               )}
             </>

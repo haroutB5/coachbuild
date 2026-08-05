@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { roleFromTeamPosition, SKILL_SLOT_LABEL } from "./roleMap";
+import { kitFromMaxRanks, STANDARD_KIT } from "../championKit";
 import type {
   ProGamePurchase,
   ProGameRunes,
@@ -13,6 +14,7 @@ import type {
   RiotTimelineEvent,
   TeamCompPlayer,
 } from "./types";
+import type { Ability, ChampionKit } from "../types";
 
 export interface ExtractedMatch {
   matchId: string;
@@ -85,17 +87,112 @@ function findLastIndex<T>(arr: T[], pred: (v: T) => boolean): number {
   return -1;
 }
 
+/** The identity known by an extractMatch caller. `kit` is optional so callers
+ *  that have already resolved Data Dragon can provide the exact measured kit;
+ *  extractMatch itself supplies the Riot participant's id/name and uses the
+ *  synchronous identity bridge below. */
+export interface SkillOrderChampionIdentity {
+  championId?: number;
+  championName?: string;
+  kit?: ChampionKit | null;
+}
+
+/** The seven measured non-standard shapes from championKit.ts, plus Viego's
+ *  standard shape. The normal ingest path is synchronous and cannot await
+ *  staticData.resolveChampionKit, so this small identity bridge keeps its
+ *  guard useful without inventing caps for an absent identity. The values are
+ *  still constructed by kitFromMaxRanks, which owns the R-slot semantics. */
+const EXTRACT_KITS_BY_ID: ReadonlyMap<number, ChampionKit> = new Map([
+  [523, kitFromMaxRanks([6, 6, 6, 3], "Aphelios")!],
+  [60, kitFromMaxRanks([5, 5, 5, 4], "Elise")!],
+  [126, kitFromMaxRanks([6, 6, 6, 1], "Jayce")!],
+  [43, kitFromMaxRanks([5, 5, 5, 4], "Karma")!],
+  [76, kitFromMaxRanks([5, 5, 5, 4], "Nidalee")!],
+  [77, kitFromMaxRanks([6, 6, 6, 6], "Udyr")!],
+  [350, kitFromMaxRanks([6, 5, 5, 3], "Yuumi")!],
+  [234, STANDARD_KIT], // Viego — the phantom R4 case
+]);
+
+const EXTRACT_KITS_BY_NAME: ReadonlyMap<string, ChampionKit> = new Map([
+  ["aphelios", EXTRACT_KITS_BY_ID.get(523)!],
+  ["elise", EXTRACT_KITS_BY_ID.get(60)!],
+  ["jayce", EXTRACT_KITS_BY_ID.get(126)!],
+  ["karma", EXTRACT_KITS_BY_ID.get(43)!],
+  ["nidalee", EXTRACT_KITS_BY_ID.get(76)!],
+  ["udyr", EXTRACT_KITS_BY_ID.get(77)!],
+  ["yuumi", EXTRACT_KITS_BY_ID.get(350)!],
+  ["viego", STANDARD_KIT],
+]);
+
+function normalizeChampionIdentity(value: string | undefined): string {
+  return String(value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/** Resolve a kit without guessing when the identity itself is absent. A real
+ * Riot participant carries both a positive numeric id and a display key, so a
+ * non-special participant gets the model's standard kit. A caller that knows
+ * resolution failed can pass `kit: null`, which deliberately disables the
+ * guard and preserves the old extractor behavior. */
+export function kitForChampionIdentity(
+  championId?: number,
+  championName?: string
+): ChampionKit | null | undefined {
+  const byId = Number.isInteger(championId) ? EXTRACT_KITS_BY_ID.get(championId!) : undefined;
+  if (byId) return byId;
+
+  const normalizedName = normalizeChampionIdentity(championName);
+  const byName = EXTRACT_KITS_BY_NAME.get(normalizedName);
+  if (byName) return byName;
+
+  if (Number.isInteger(championId) && championId! > 0 && normalizedName.length > 0) return STANDARD_KIT;
+  return undefined;
+}
+
+function isChampionKit(value: unknown): value is ChampionKit {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<ChampionKit>;
+  return Boolean(candidate.maxRanks && candidate.freeRanks && "ultimateLevels" in candidate);
+}
+
+function kitFromBuildIdentity(
+  identity: ChampionKit | SkillOrderChampionIdentity | string | number | null | undefined
+): ChampionKit | null | undefined {
+  if (identity === null || identity === undefined) return undefined;
+  if (isChampionKit(identity)) return identity;
+  if (typeof identity === "string") return kitForChampionIdentity(undefined, identity);
+  if (typeof identity === "number") return kitForChampionIdentity(identity, undefined);
+  if (identity.kit !== undefined) return identity.kit;
+  return kitForChampionIdentity(identity.championId, identity.championName);
+}
+
 /** Skill order ["Q","W","E",...] for one participant. Dedupes exact-duplicate
  *  SKILL_LEVEL_UP events (known bug since ~patch 15.17: identical events fire
  *  twice) on (participantId, skillSlot, levelUpType, timestamp), then caps at
- *  18 entries (max level) as a second safety net against any residual dupes. */
-export function buildSkillOrder(timeline: RiotTimeline, participantId: number): string[] {
+ *  18 entries (max level) as a second safety net against any residual dupes.
+ *
+ * The optional champion identity/kit enables a per-ability budget guard. It is
+ * intentionally opt-in: missing or unresolved identity keeps the old output.
+ * The guard only drops events proven impossible by a cap. Phantom events that
+ * remain under a champion's cap are not identifiable from timeline data alone
+ * and therefore remain in the recorded order. */
+export function buildSkillOrder(
+  timeline: RiotTimeline,
+  participantId: number,
+  champion?: ChampionKit | SkillOrderChampionIdentity | string | number | null,
+  resolvedKit?: ChampionKit | null
+): string[] {
+  const kit = resolvedKit !== undefined ? resolvedKit : kitFromBuildIdentity(champion);
   const seen = new Set<string>();
   const events: RiotTimelineEvent[] = [];
   for (const frame of timeline.info.frames) {
     for (const ev of frame.events) {
       if (ev.type !== "SKILL_LEVEL_UP" || ev.participantId !== participantId) continue;
       if (typeof ev.skillSlot !== "number") continue;
+      // EVOLVE is emitted for augment/evolve mechanics (for example Viktor's
+      // four ability evolutions), not for a player spending a level-up point.
+      // Older fixtures/timeline payloads omit levelUpType, which is the same
+      // as NORMAL for this extractor.
+      if (ev.levelUpType !== undefined && ev.levelUpType !== "NORMAL") continue;
       const key = `${ev.participantId}:${ev.skillSlot}:${ev.levelUpType ?? ""}:${ev.timestamp}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -103,10 +200,24 @@ export function buildSkillOrder(timeline: RiotTimeline, participantId: number): 
     }
   }
   events.sort((a, b) => a.timestamp - b.timestamp);
-  return events
-    .slice(0, 18)
-    .map((ev) => SKILL_SLOT_LABEL[ev.skillSlot as number])
-    .filter((label): label is string => Boolean(label));
+
+  if (!kit) {
+    return events
+      .slice(0, 18)
+      .map((ev) => SKILL_SLOT_LABEL[ev.skillSlot as number])
+      .filter((label): label is string => Boolean(label));
+  }
+
+  const counts: Record<Ability, number> = { Q: 0, W: 0, E: 0, R: 0 };
+  const order: string[] = [];
+  for (const ev of events) {
+    const label = SKILL_SLOT_LABEL[ev.skillSlot as number] as Ability | undefined;
+    if (!label || counts[label] >= kit.maxRanks[label]) continue;
+    counts[label] += 1;
+    order.push(label);
+    if (order.length >= 18) break;
+  }
+  return order;
 }
 
 export function extractRunes(participant: RiotParticipant): ProGameRunes {
@@ -384,7 +495,10 @@ export function extractMatch(
     finalItems,
     trinket,
     purchaseOrder: buildPurchaseOrder(timeline, participant.participantId),
-    skillOrder: buildSkillOrder(timeline, participant.participantId),
+    skillOrder: buildSkillOrder(timeline, participant.participantId, {
+      championId: participant.championId,
+      championName: participant.championName,
+    }),
     runes: extractRunes(participant),
     cs: stats.cs,
     damageChampions: stats.damageChampions,

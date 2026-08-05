@@ -606,7 +606,7 @@ export function parseChampionKit(raw: unknown, championKey: string): ChampionKit
   const maxranks = (spells as DdragonSpellRaw[]).map((s) =>
     typeof s?.maxrank === "number" ? s.maxrank : NaN
   );
-  return kitFromMaxRanks(maxranks);
+  return kitFromMaxRanks(maxranks, championKey);
 }
 
 /**

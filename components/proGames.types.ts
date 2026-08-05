@@ -5,6 +5,8 @@
 // built against.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import type { ChampionKit } from "@/lib/types";
+
 export interface ProGamePlayer {
   name: string;
   team: string | null;
@@ -85,6 +87,8 @@ export interface ProGame {
   trinket: number | null;
   purchaseOrder: ProGamePurchase[]; // [] for prostage (no purchase data)
   skillOrder: string[]; // ["Q","W","E","Q",...] — [] for prostage
+  /** Per-champion rank rules used by recorded-order aggregation and grids. */
+  kit?: ChampionKit | null;
   runes: ProGameRunes; // primary/secondary/shards may be [] for prostage
   /** Leaguepedia player-slug identifier for prostage rows — required by
    *  GET /api/prostage/timeline?gameId=&player=. NOT YET on the backend

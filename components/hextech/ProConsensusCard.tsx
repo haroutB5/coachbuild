@@ -659,7 +659,14 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
             status: "ok",
             model: aggregateProConsensus(games, itemMeta),
             itemMeta,
-            skillOrder: aggregateRecordedSkillOrders(games.map((game) => game.skillOrder)),
+            // The API resolves the champion kit once and carries it on each
+            // recorded game so this card and GameDetailSheet share the same
+            // semantics. Keep old cached payloads safe: absent means the
+            // aggregate's standard-kit compatibility default.
+            skillOrder: aggregateRecordedSkillOrders(
+              games.map((game) => game.skillOrder),
+              games.find((game) => game.kit !== undefined)?.kit
+            ),
             otpPlayers: players,
           });
         })

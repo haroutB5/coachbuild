@@ -5,7 +5,8 @@
 // Extracted from GameDetailSheet 2026-07-29 when the Builds page's recommended
 // skill order moved from per-ability level lists to this same grid. ONE
 // primitive on purpose: two grids that look alike and drift apart is the
-// failure mode here, and provenance rendering (measured / derived / inferred)
+// failure mode here, and provenance rendering (measured / derived / inferred /
+// auto)
 // is exactly the kind of rule that would drift.
 //
 // TAKES NO VIEW ON COMPLETENESS. It renders `columns` columns and fills the
@@ -25,12 +26,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Fragment } from "react";
+import type { ChampionKit } from "@/lib/types";
 import {
-  ABILITY_PALETTE,
   SKILL_GRID_COLUMNS,
   SKILL_ROWS,
   describeSkillRow,
   skillCellClass,
+  skillRowLabelClass,
   type SkillGridCell,
 } from "./skillOrderGrid";
 
@@ -41,9 +43,12 @@ export interface SkillGridProps {
   columns?: number;
   /** Extra classes on the grid element itself (e.g. a `max-w-*` cap). */
   className?: string;
+  /** Kit used to style Udyr's R as a basic row. */
+  kit?: ChampionKit | null;
 }
 
-export default function SkillGrid({ grid, columns = SKILL_GRID_COLUMNS, className = "" }: SkillGridProps) {
+export default function SkillGrid({ grid, columns = SKILL_GRID_COLUMNS, className = "", kit }: SkillGridProps) {
+  const rAsBasic = kit?.ultimateLevels === null;
   return (
     <div className="overflow-x-auto">
       {/* The visual grid is aria-hidden and the same information is served to
@@ -59,7 +64,9 @@ export default function SkillGrid({ grid, columns = SKILL_GRID_COLUMNS, classNam
         {SKILL_ROWS.map((letter, ri) => (
           <Fragment key={letter}>
             <div
-              className={`flex items-center justify-center text-[10px] font-bold leading-none ${ABILITY_PALETTE[letter].label}`}
+              className={`flex items-center justify-center text-[10px] font-bold leading-none ${skillRowLabelClass(letter, {
+                rAsBasic,
+              })}`}
             >
               {letter}
             </div>
@@ -68,7 +75,8 @@ export default function SkillGrid({ grid, columns = SKILL_GRID_COLUMNS, classNam
                 key={ci}
                 className={`aspect-square min-w-0 rounded-[3px] flex items-center justify-center text-[8px] sm:text-[10px] font-bold tabular-nums leading-none ${skillCellClass(
                   letter,
-                  cell
+                  cell,
+                  { rAsBasic }
                 )}`}
               >
                 {cell ? cell.level : ""}

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildFeaturedModel, type FeaturedMatchRow } from "../otp/featured";
+import { kitFromMaxRanks } from "../championKit";
 
 const page = (keystone: number, primaryTree = 8200) => ({
   primaryTree,
@@ -104,6 +105,17 @@ describe("buildFeaturedModel", () => {
     expect(m.skillOrder?.inferredTail).toBeUndefined();
     expect(m.skillOrder?.completionBasis).toBeUndefined();
     expect(m.skillOrder?.inferredBasis).toBeUndefined();
+  });
+
+  it("passes a resolved non-standard kit into recorded aggregation", () => {
+    const model = buildFeaturedModel(
+      [game({ skill_order: "QWEQQWQWQWQWWEEEEE".split("") })],
+      undefined,
+      kitFromMaxRanks([6, 6, 6, 1])
+    );
+    expect(model.skillOrder?.order.join("")).toBe("QWEQQWQWQWQWWEEEEE");
+    expect(model.skillOrder?.levels.R).toEqual([]);
+    expect(model.skillOrder?.kit?.maxRanks).toEqual({ Q: 6, W: 6, E: 6, R: 1 });
   });
 
   it("keeps levels reached by fewer games and never treats missing timelines as a sample", () => {

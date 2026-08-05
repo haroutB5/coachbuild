@@ -12,6 +12,7 @@ vi.mock("@/lib/pro/db", () => ({
 
 import { GET } from "@/app/api/pros/route";
 import { getSql } from "@/lib/pro/db";
+import { STANDARD_KIT } from "@/lib/championKit";
 
 const req = (qs: string) =>
   ({ url: `http://localhost/api/pros${qs}` }) as unknown as Parameters<typeof GET>[0];
@@ -103,6 +104,7 @@ describe("GET /api/pros validation", () => {
       assists: 7,
       gameCreation: "2026-07-01T00:00:00.000Z",
       gameDurationSec: 1800,
+      kit: STANDARD_KIT,
       spells: [4, 14],
       finalItems: [6655, 4645, 3020],
       trinket: 3364,

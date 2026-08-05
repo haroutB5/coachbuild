@@ -5,6 +5,8 @@
 // these exactly. Do not diverge without updating both sides.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import type { ChampionKit } from "../types";
+
 /** 0=TOP 1=JUNGLE 2=MIDDLE 3=BOTTOM 4=UTILITY — same numbering as app RoleId,
  *  minus the 5=auto sentinel (pro match data always has a concrete role).
  *  Kept intentionally NARROW (no -1 here) — lib/pro/extract.ts and
@@ -81,6 +83,10 @@ export interface ProGame {
   trinket: number | null; // item6
   purchaseOrder: ProGamePurchase[]; // undo-adjusted, chronological; always [] for prostage
   skillOrder: string[]; // ["Q","W","E","Q",...]; always [] for prostage
+  /** Per-champion rank rules used by recorded-order aggregation and grids.
+   *  Null means resolution refused for a known non-standard champion; absent
+   *  is retained only for older payloads. */
+  kit?: ChampionKit | null;
   runes: ProGameRunes;
   tournament?: string; // prostage only — tournament_display, e.g. "LEC 2026 Summer"
   playerLink?: string; // prostage only — prostage_matches.player_link, the `player` param for /api/prostage/timeline

@@ -31,6 +31,13 @@ working in this same tree at the same time.
 - Verify before reporting done: npm run build, npm run lint, npm run typecheck, npm run test. Do not claim a check passed that you did not run.
 - The orchestrator owns version bumps, changelogs, commits and deploys. Do not run them.
 
+**Long-running commands**
+- Never run a command expected to exceed ~10 minutes (paced API batches, big backfills,
+  full-corpus fetches) inline or in a background cell — tool timeouts kill it and the work is
+  lost (a 70-minute paced dry-run died exactly this way on 2026-08-04). Instead: write the
+  script with `--limit`/`--offset` chunking flags, prove it on a small `--limit` sample,
+  and report the exact full command in your handoff for the orchestrator to run detached.
+
 **Never without being asked**
 - No destructive operations: no dropping tables, no `rm -rf`, no force push, no deleting config or database files.
 - No new dependencies unless the brief names them.

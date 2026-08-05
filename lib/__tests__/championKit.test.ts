@@ -91,6 +91,12 @@ describe("kitFromMaxRanks — the four R shapes that exist on the live roster", 
     expect(kitOf("Yuumi").maxRanks).toEqual({ Q: 6, W: 5, E: 5, R: 3 });
     expect(kitOf("Yuumi").purchasableTotal).toBe(19);
   });
+
+  it("marks automatic-R identities without confusing them with standard R3", () => {
+    expect(kitFromMaxRanks([6, 6, 6, 3], "Aphelios")?.rAuto).toBe(true);
+    expect(kitFromMaxRanks([6, 6, 6, 3], "Ahri")?.rAuto).toBe(false);
+    expect(kitFromMaxRanks([6, 6, 6, 1], "Jayce")?.rAuto).toBe(true);
+  });
 });
 
 describe("the 18-point identity — the evidence the free-rank rule rests on", () => {
