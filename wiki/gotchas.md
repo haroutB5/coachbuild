@@ -2,6 +2,46 @@
 
 Verified facts that cost real debugging time. Cite these before touching the relevant area.
 
+## Auto-export ownership + SW updates (v0.101.0 / companion v1.11.0, 2026-08-07)
+
+- **Champ-select auto-export dedup is PER BROWSER DOCUMENT and always will be.**
+  `champSelectFollowState.ts` is a module singleton and its phase epoch is a
+  counter that document increments — a tab opened mid-champ-select starts fresh
+  and re-exports. The companion opens replacement tabs whenever its 150s attach
+  window lapses, so this happens routinely. Never place a correctness guarantee
+  about "export only once" in the web layer.
+- **The rune-overwrite guard therefore lives in `public/companion.ps1`,
+  `Invoke-ApplyRunes` STEP 2**, keyed off what the companion itself last wrote
+  (a per-champ-select ledger in the bridge's Sync hashtable, cleared on
+  ChampSelect ENTRY). In AUTO mode: page contents == what we'd write → write
+  nothing AND do not re-select (re-selecting drags a user off the page they
+  chose); contents != our last write → `user-modified`, touch nothing. MANUAL
+  mode bypasses all of it — a click is consent. Four SelfTest cases pin it,
+  including the manual-still-overwrites block direction.
+  Fixture gotcha: any SelfTest rune case that hands a CoachBuild-titled page
+  contents this run never wrote must reset `$bridge.Sync.RuneWrites` first, or
+  the guard correctly reads it as a user edit.
+- **A rune apply now has THREE success shapes, not two:** `ok:true`,
+  `ok:true + unchanged:true` (no write, no re-select — must not toast), and
+  `ok:false + reason:"user-modified"` (not an error — toasts "Kept your rune
+  changes"). `selected:false` no longer implies "tell the user to go pick the
+  page in the client".
+- **No SW update prompt exists any more.** sw.js calls `skipWaiting()` on
+  install; `ServiceWorkerRegister.tsx` is registration only. The toast rendered
+  off `reg.waiting`, and a waiting worker persists until applied, so ignoring it
+  once meant it re-appeared on every later load — v0.51.1's dismiss-persistence
+  fix could not reach that. Fetches are network-first, so nothing was ever
+  stale. Do not reintroduce a forced reload here: a reload mid-champ-select
+  re-fires the auto-export.
+- **`companion.log` status=0 failures are EDGE-triggered** (one line entering
+  the unreachable state, one recovering). They used to log every 60s forever
+  while League was closed and had flushed 200KB of real history away. Real HTTP
+  rejections keep `Write-ThrottledErrorLog`'s 60s throttle.
+- **The companion does not hot-update.** It re-downloads on launch
+  (`irm .../companion.ps1 | iex`), so a running instance keeps its old code
+  until quit + relaunch — worth stating explicitly whenever a companion-side
+  fix ships.
+
 ## Build-surface invariants (v0.100.1, 2026-08-06 — all three user-reported on Jax)
 
 - **Hidden-gem pools dedupe by item id, keeping the largest-occurrence entry** — the pool
