@@ -392,6 +392,22 @@ describe("selectHiddenGemPicks", () => {
     expect(out.map((p) => p.id)).toEqual([103]);
   });
 
+  it("dedupes an item across source pools, keeping the larger sample", () => {
+    const out = selectHiddenGemPicks(
+      [
+        ...gemPool(),
+        // Same id from a differently-conditioned source: the larger sample is
+        // more credible even though its win rate is slightly less dramatic.
+        pick(103, 0.02, { winrate: 57.5, occurrence: 2500 }),
+      ],
+      new Set(),
+      M
+    );
+    const gems = out.filter((p) => p.id === 103);
+    expect(gems).toHaveLength(1);
+    expect(gems[0].occurrence).toBe(2500);
+  });
+
   it("refuses a SNOWBALL item however large its sample", () => {
     // The defect the first version shipped with, caught by looking at the
     // rendered card and not by any threshold test: Ahri's top "gem" came back

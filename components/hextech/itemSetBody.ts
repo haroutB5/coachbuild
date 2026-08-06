@@ -603,6 +603,16 @@ export function selectHiddenGemPicks(
   excludeIds: ReadonlySet<number>,
   meta: ReadonlyMap<number, ItemDetail>
 ): PickType[] {
+  // One item can arrive from core, the conditioned optimizer, and a
+  // situational pool with different conditioning and therefore different
+  // statistics. A gem is one item, not one card per source. Keep the largest
+  // sample before calculating the baseline so duplicate observations cannot
+  // skew it either; ties preserve the caller's deterministic pool order.
+  const byId = new Map<number, PickType>();
+  for (const pick of pool) {
+    const existing = byId.get(pick.id);
+    if (!existing || pick.occurrence > existing.occurrence) byId.set(pick.id, pick);
+  }
   // NOTE what is deliberately NOT filtered here: `Pick.lowSample`. That flag is
   // the app's own confidence guard, so excluding it looks like the obviously
   // correct thing to do — and it is exactly wrong for this block. Measured
@@ -618,7 +628,7 @@ export function selectHiddenGemPicks(
   // whole, not about whatever is left once the popular picks are removed. Doing
   // it after would raise the bar precisely where the popular items were taken
   // out, and quietly promote mid-tier picks into "gems".
-  const eligible = pool.filter(
+  const eligible = Array.from(byId.values()).filter(
     (p) =>
       isFullItem(p.id, meta.get(p.id)) &&
       typeof p.winrate === "number" &&

@@ -106,6 +106,44 @@ describe("buildOptimizedPath (greedy conditioned chain)", () => {
     );
     expect(rest[0].itemId).toBe(20); // seed excluded despite higher WPA
   });
+
+  it("never admits a conditioned candidate outside the regular build", async () => {
+    const rest = await buildOptimizedPath(
+      async (prefix) =>
+        prefix.length === 1
+          ? [item(999, 9000, 9.0), item(20, 4000, 0.8)]
+          : [item(998, 8000, 8.0), item(30, 2000, 0.6)],
+      2,
+      300,
+      [3078],
+      0,
+      new Set([3078, 20, 30])
+    );
+    expect(rest.map((entry) => entry.itemId)).toEqual([20, 30]);
+    expect(rest.map((entry) => entry.itemId)).not.toContain(999);
+    expect(rest.map((entry) => entry.itemId)).not.toContain(998);
+  });
+
+  it("computes the adoption floor over the FULL conditioned pool, not the allowed subset", async () => {
+    // Regression: enforcing allowedItemIds by pre-filtering the pool shrank
+    // conditionedLeader's total-games denominator to the few allowed items,
+    // silently weakening the adoption-relative floor (measured live: Lee Sin's
+    // floor dropped 8.7x and admitted a pick the guard was designed to reject).
+    // Out-of-build entries must still count toward the floor even though they
+    // can never be picked. Here: total = 9000 + 400 = 9400, floor =
+    // max(300, 9400 * 0.05) = 470, so allowed item 20 at 400 games must be
+    // REJECTED. A subset-total floor (max(300, 400 * 0.05) = 300) would
+    // wrongly admit it.
+    const rest = await buildOptimizedPath(
+      async () => [item(999, 9000, 9.0), item(20, 400, 0.8)],
+      2,
+      300,
+      [3078],
+      0.05,
+      new Set([3078, 20])
+    );
+    expect(rest).toEqual([]);
+  });
 });
 
 describe("resolveMatchupSlot (per-slot conditioned-or-fallback)", () => {

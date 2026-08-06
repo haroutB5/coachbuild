@@ -84,7 +84,16 @@ export async function buildOptimizedPath<T extends OccWpa & { itemId: number }>(
   maxDepth: number,
   minSample: number,
   seedItemIds: number[] = [],
-  adoptFrac = 0
+  adoptFrac = 0,
+  /** When supplied, conditioned candidates must belong to the regular build.
+   *  Enforced through the EXCLUSION predicate, never by pre-filtering the pool:
+   *  `conditionedLeader`'s adoption-relative floor is a fraction of the
+   *  conditioned slot's TOTAL games, and a pre-filter would shrink that total
+   *  to the handful of allowed items — silently weakening the floor by up to
+   *  ~9x (measured live) and re-admitting the thin-adoption spikes
+   *  OPTIMIZER_ADOPT_FRAC exists to reject. The seed exclusion below works the
+   *  same way for the same reason. */
+  allowedItemIds?: ReadonlySet<number>
 ): Promise<T[]> {
   // Returns ONLY the newly-optimized picks (the caller prepends whatever seed it
   // passed). `seedItemIds` are already-committed items (e.g. the core first
@@ -96,7 +105,13 @@ export async function buildOptimizedPath<T extends OccWpa & { itemId: number }>(
   for (let depth = 0; depth < maxDepth; depth++) {
     const prefix = [...seedItemIds, ...chosen.map((c) => c.itemId)];
     const pool = await fetchSlot(prefix);
-    const next = conditionedLeader(pool, minSample, (e) => usedIds.has(e.itemId), adoptFrac, (e) => e.itemId);
+    const next = conditionedLeader(
+      pool,
+      minSample,
+      (e) => usedIds.has(e.itemId) || (allowedItemIds != null && !allowedItemIds.has(e.itemId)),
+      adoptFrac,
+      (e) => e.itemId
+    );
     if (!next) break; // conditioned samples collapsed → truncate here
     chosen.push(next);
     usedIds.add(next.itemId);

@@ -467,6 +467,16 @@ export async function buildRecommendations(
     /* fixedCount = */ 3,
     role
   );
+  // The optimizer is a different, conditioned reading of this same WPA build,
+  // never an invitation to introduce a separate item. Boots are intentionally
+  // absent: this is the legendary chain, matching the existing core order.
+  // LATENT: the matchup block below can REPLACE first/second/third after this
+  // set is built — dead today (coachless 403s matchupChampionIds), but if that
+  // path ever wakes up, rebuild this set from the post-matchup picks or the
+  // strip can again show items absent from the displayed build.
+  const wpaBuildItemIds = new Set(
+    [leg1Best, leg2Best, leg3Best, ...fourthPlusBests].map((entry) => entry.itemId)
+  );
 
   // Per-slot alternatives (situational swaps): top items in the slot's pool by
   // WPA above the noise floor, excluding the items already in the core path.
@@ -569,7 +579,8 @@ export async function buildRecommendations(
     2,
     OPTIMIZER_MIN_SAMPLE,
     [leg1Best.itemId],
-    OPTIMIZER_ADOPT_FRAC
+    OPTIMIZER_ADOPT_FRAC,
+    wpaBuildItemIds
   );
   // Defensive: the optimizer's own depth cap (buildOptimizedPath's maxDepth=2
   // beyond the seed) already keeps this at <=3 entries today, well under any

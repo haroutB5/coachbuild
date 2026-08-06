@@ -213,6 +213,110 @@ describe("buildFeaturedView — items", () => {
       VOID_STAFF,
     ]);
   });
+
+  it("backfills a sparse floored list to five full items without changing boot choices", () => {
+    // Only the first three completed items clear 60%; the next two are still
+    // real completed items and make this a usable five-item OTP build.
+    const view = buildFeaturedView(
+      RATES,
+      Array.from({ length: SAMPLE_GAMES }, () => ({
+        items: [ROCKETBELT, RABADONS, SHADOWFLAME, ZHONYAS, VOID_STAFF],
+        win: true,
+      })),
+      SAMPLE_GAMES,
+      META,
+      { minDisplayPct: 60 }
+    );
+    expect(view.items.map((i) => i.itemId)).toEqual([
+      ROCKETBELT,
+      RABADONS,
+      SHADOWFLAME,
+      ZHONYAS,
+      VOID_STAFF,
+    ]);
+    expect(view.items.slice(3).every((i) => i.pct < 60)).toBe(true);
+    expect(view.boots.map((i) => i.itemId)).toEqual([SORCS, SWIFTMARCH, IONIANS]);
+    expect(
+      view.slots
+        .flatMap((slot) => [slot.primary, ...slot.alternatives])
+        .map((item) => item.itemId)
+        .sort((a, b) => a - b)
+    ).toEqual([ROCKETBELT, RABADONS, SHADOWFLAME, ZHONYAS, VOID_STAFF].sort((a, b) => a - b));
+  });
+
+  it("keeps support-quest finals out of items and slots for a non-support lane", () => {
+    // A handful of mis-roled stored games put Bloodsong into a top-laner's
+    // sample (measured live: Jax TOP, 3 of 38 games), and the sparse-build
+    // backfill surfaced it — into the rendered build AND the exported in-game
+    // item set. `excludeSupportFinalItems` is the guard; the WPA path has its
+    // own (lib/supportFinalGroup.ts collapseSupportFinalPools).
+    const BLOODSONG = 3877;
+    const metaWithBloodsong = new Map([
+      ...META,
+      [BLOODSONG, meta({ id: BLOODSONG, name: "Bloodsong" })],
+    ]);
+    // 20/37 = 54%: below the 60% floor but ABOVE Void Staff (49%), so without
+    // the guard the backfill would prefer it — the exact failure shape.
+    const rates = [...RATES, rate(BLOODSONG, 20)];
+    const gameLog = Array.from({ length: SAMPLE_GAMES }, () => ({
+      items: [ROCKETBELT, RABADONS, SHADOWFLAME, ZHONYAS, VOID_STAFF, BLOODSONG],
+      win: true,
+    }));
+
+    const guarded = buildFeaturedView(rates, gameLog, SAMPLE_GAMES, metaWithBloodsong, {
+      minDisplayPct: 60,
+      excludeSupportFinalItems: true,
+    });
+    expect(guarded.items.map((i) => i.itemId)).toEqual([
+      ROCKETBELT,
+      RABADONS,
+      SHADOWFLAME,
+      ZHONYAS,
+      VOID_STAFF,
+    ]);
+    const slotIds = guarded.slots.flatMap((s) => [s.primary, ...s.alternatives]).map((i) => i.itemId);
+    expect(slotIds).not.toContain(BLOODSONG);
+
+    // Control: without the guard the backfill picks it — proving the fixture
+    // exercises the boundary rather than clearing it by a mile.
+    const unguarded = buildFeaturedView(rates, gameLog, SAMPLE_GAMES, metaWithBloodsong, {
+      minDisplayPct: 60,
+    });
+    expect(unguarded.items.map((i) => i.itemId)).toContain(BLOODSONG);
+  });
+
+  it("admits every floor-clearing completed id to slots, not just the displayed six", () => {
+    // Regression: restricting the slots include-set to the DISPLAYED items
+    // re-priced contested pairs — a pair used to cost one slot but no item
+    // budget, so a deep-sampled champion's sixth item vanished (measured live:
+    // Viktor lost Rabadon's, Teemo lost Zhonya's). Banshee's clears the 15%
+    // floor (6/37 = 16%) but is seventh by rate, so it is NOT in the displayed
+    // six — yet it must still be able to appear as a contested alternative.
+    const gameLog = Array.from({ length: SAMPLE_GAMES }, (_, i) => ({
+      items: [
+        ROCKETBELT,
+        ...(i < 30 ? [RABADONS] : []),
+        ...(i < 26 ? [SHADOWFLAME] : []),
+        ...(i < 21 ? [ZHONYAS] : []),
+        ...(i < 19 ? [VOID_STAFF] : []),
+        ...(i < 12 ? [CRYPTBLOOM] : []),
+        ...(i >= 21 && i < 27 ? [BANSHEES] : []),
+      ],
+      win: true,
+    }));
+    const view = buildFeaturedView(RATES, gameLog, SAMPLE_GAMES, META, { minDisplayPct: 15 });
+    // The displayed list is unchanged — Banshee's is a slots concern only.
+    expect(view.items.map((i) => i.itemId)).toEqual([
+      ROCKETBELT,
+      RABADONS,
+      SHADOWFLAME,
+      ZHONYAS,
+      VOID_STAFF,
+      CRYPTBLOOM,
+    ]);
+    const slotIds = view.slots.flatMap((s) => [s.primary, ...s.alternatives]).map((i) => i.itemId);
+    expect(slotIds).toContain(BANSHEES);
+  });
 });
 
 describe("buildFeaturedView — boots as their own slot", () => {

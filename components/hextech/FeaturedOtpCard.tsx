@@ -94,9 +94,9 @@ import {
 } from "@/components/proAssets";
 import { getItemDetailMap, type ItemDetail } from "@/components/itemDetail";
 import { IconWithFallback } from "@/components/IconWithFallback";
-import { buildFeaturedView, classifyFeaturedItem } from "@/lib/otp/featuredBuild";
+import { buildFeaturedView } from "@/lib/otp/featuredBuild";
 import type { FeaturedGame } from "@/lib/otp/featured";
-import { resolveBuildSlots, type BuildSlot } from "@/lib/buildSlots";
+import type { BuildSlot } from "@/lib/buildSlots";
 import BuildSlotList from "./BuildSlotList";
 import { isContested } from "./buildSlotView";
 import HeroBand, { Pill } from "./HeroBand";
@@ -601,6 +601,9 @@ export default function FeaturedOtpCard({
   const view = buildFeaturedView(data!.items, gameLog, sample.games, meta, {
     minDisplayPct: MIN_DISPLAY_PCT,
     minSampleGames: MIN_SAMPLE_GAMES,
+    // A mis-roled stored game can put Bloodsong in a top-laner's sample, and
+    // the sparse-build backfill would surface it — see FeaturedViewOptions.
+    excludeSupportFinalItems: lane !== "support",
   });
   const measuredSkillOrder = isSkillOrderModel(data!.skillOrder) ? data!.skillOrder : null;
   const otpItems: ProConsensusItemsInput = {
@@ -648,22 +651,7 @@ export default function FeaturedOtpCard({
   // one section, free to drift apart.
   const itemSlots: BuildSlot[] =
     gameLog.length > 0
-      ? resolveBuildSlots(
-          gameLog.map((g) => g.items),
-          sample.games,
-          {
-            // `meta` passed as the THIRD arg, not just the per-item lookup: with
-            // a catalog `classifyFeaturedItem` resolves boots by recipe
-            // ancestry, and without one it falls back to the tag plus a pinned
-            // exception list. Item 3172 Gunmetal Greaves is a tier-3 boot whose
-            // live catalog record carries no `Boots` tag, so on the weaker rule
-            // it reads as a completed item and lands in a build slot — measured
-            // live on Yone mid at 178 of 200 games. This was the one call site
-            // still on that weaker path.
-            include: (id) => classifyFeaturedItem(id, meta.get(id), meta) === "completed",
-            minPct: MIN_DISPLAY_PCT,
-          }
-        )
+      ? view.slots
       : view.items.map((it) => ({
           primary: { itemId: it.itemId, games: it.games, pct: it.pct },
           alternatives: [],

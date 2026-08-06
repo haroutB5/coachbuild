@@ -194,6 +194,7 @@ import { isSnowballStackItem } from "@/lib/snowballStacks";
 import { STARTING_ITEM_ALLOWLIST } from "@/lib/startingItems";
 import { resolveBuildSlots, type BuildSlot } from "@/lib/buildSlots";
 import { isFinalBootsItem, type ItemCatalog } from "@/lib/bootsItems";
+import { isSupportFinalItem } from "@/lib/supportFinalGroup";
 
 /** One item and how often this player finishes a game holding it — the shape
  *  `/api/otp/featured` already returns (`ItemBuildRate`), restated here so this
@@ -348,7 +349,8 @@ export type FeaturedFullBuild =
 
 export interface FeaturedBuildView {
   /** Completed, non-boots items, most-built first, already truncated to
-   *  `itemLimit`. Snowball stacks and starters are removed BEFORE the
+   *  `itemLimit` unless the display floor would otherwise leave fewer than
+   *  five. Snowball stacks and starters are removed BEFORE the
    *  truncation, so the freed slot is backfilled by the next-most-built item
    *  rather than left empty (the user's "put another full item in its place"). */
   items: FeaturedItemRate[];
@@ -493,6 +495,11 @@ const SHOWABLE_MIN_ITEMS = 4;
 const EXACT_SET_MIN_GAMES = 2;
 
 const DEFAULT_ITEM_LIMIT = 6;
+/** A usable OTP recommendation always names five full items; boots are kept
+ *  in their own slot. The display floor remains the primary signal, but a
+ *  sparse consensus is backfilled below that floor rather than rendering a
+ *  three-item "build". */
+const MIN_FULL_ITEMS_FOR_BUILD = 5;
 /** Three, per the user's directive ("show the top three boots with
  *  percentages"). The Pro card shows two; a one-trick's boot choice is a
  *  sharper read on how they play, which is the point of this card. */
@@ -539,6 +546,17 @@ export interface FeaturedViewOptions {
    * that have their own guard.
    */
   minSampleGames?: number;
+  /**
+   * Keep the five mutually-exclusive support-quest finals (Bloodsong et al,
+   * lib/supportFinalGroup.ts) out of `items` and `slots` — the RECOMMENDATION
+   * surfaces. Callers set this for every non-support lane: a handful of
+   * mis-roled stored games can put Bloodsong into a top-laner's sample, and
+   * the display floor was the only thing hiding it before the sparse-build
+   * backfill existed. `fullBuild` is deliberately untouched — it is a RECORD
+   * of games actually played, and editing a record fabricates a game nobody
+   * played (same reasoning as Mejai's three-carrier rule above).
+   */
+  excludeSupportFinalItems?: boolean;
 }
 
 function byRateDesc(a: FeaturedItemRate, b: FeaturedItemRate): number {
@@ -594,13 +612,39 @@ export function buildFeaturedView(
   const sorted = [...rates].sort(byRateDesc);
   const inClass = (c: FeaturedItemClass) => sorted.filter((r) => classOf(r.itemId) === c);
 
-  const items = inClass("completed")
-    .filter((r) => r.pct >= minPct)
-    .slice(0, itemLimit);
+  const completed = opts.excludeSupportFinalItems
+    ? inClass("completed").filter((r) => !isSupportFinalItem(r.itemId))
+    : inClass("completed");
+  const floorItems = completed.filter((r) => r.pct >= minPct).slice(0, itemLimit);
+  // Keep the floor as the primary signal. Only when it leaves fewer than a
+  // full five-item recommendation do the highest-usage below-floor completed
+  // items fill the missing slots; percentages are the original, honest rates.
+  const items =
+    floorItems.length >= MIN_FULL_ITEMS_FOR_BUILD
+      ? floorItems
+      : [
+          ...floorItems,
+          ...completed
+            .filter((r) => r.pct < minPct)
+            .slice(0, MIN_FULL_ITEMS_FOR_BUILD - floorItems.length),
+        ];
   const boots = inClass("boots")
     .filter((r) => r.pct >= bootsMinPct)
     .slice(0, bootsLimit);
   const starters = inClass("starter").slice(0, starterLimit);
+  const displayedItemIds = new Set(items.map((item) => item.itemId));
+  // Slots admit every floor-clearing completed id, NOT just the displayed six.
+  // `displayedItemIds` alone re-priced contested pairs: a pair used to cost one
+  // SLOT but no item budget, so capping slot membership at the displayed list
+  // silently dropped a deep-sampled champion's sixth item (measured live:
+  // Viktor lost Rabadon's, Teemo lost Zhonya's). The union keeps the old
+  // budget for well-sampled ids while still letting backfilled below-floor
+  // ids form slots at all (they need `minPct: 0` to survive resolveBuildSlots'
+  // own floor).
+  const slotItemIds = new Set([
+    ...completed.filter((r) => r.pct >= minPct).map((r) => r.itemId),
+    ...displayedItemIds,
+  ]);
 
   return {
     items,
@@ -615,8 +659,8 @@ export function buildFeaturedView(
       gameLog.map((g) => g.items),
       sampleGames,
       {
-        include: (id) => classOf(id) === "completed",
-        minPct: minPct > 0 ? minPct : undefined,
+        include: (id) => classOf(id) === "completed" && slotItemIds.has(id),
+        minPct: 0,
       }
     ),
   };

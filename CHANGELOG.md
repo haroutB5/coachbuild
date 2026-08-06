@@ -2,6 +2,34 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.100.1] — 2026-08-06 — Build-surface fixes (Jax report)
+
+### Fixed
+- **Hidden Gem no longer lists the same item twice.** The candidate pool merges
+  core, optimized-path, and situational entries, and the same item could arrive
+  from several conditioned fetches with slightly different stats. Gems now
+  dedupe by item id, keeping the largest-sample entry, inside the shared
+  selector — so the build page card and the exported in-game shop block agree.
+- **OPTIMIZED ORDER only reorders the build above it.** The sequential
+  optimizer could introduce items absent from the WPA build (Jax showed
+  Hextech Rocketbelt and Zhonya's out of nowhere). Conditioned candidates are
+  now constrained to the build's own legendary ids — enforced through the
+  exclusion predicate so the adoption-sample guard keeps its full-pool
+  denominator — and the strip disappears cleanly when the constrained chain
+  cannot reach two items.
+- **OTP builds always present a full build.** The 15% display floor could
+  leave a 3-item "build" on sparse-consensus champions. The list now backfills
+  with the highest-usage below-floor completed items to five full items plus
+  boots, showing their real (low) percentages.
+- **Support quest finals stay out of non-support OTP builds.** A few mis-roled
+  stored games could put Bloodsong into a top-laner's backfilled build (and its
+  exported item set). Recommendation surfaces now exclude the five support
+  finals outside the support lane; the played-game record is untouched.
+- **Deep-sampled OTP champions keep their sixth item.** The slots list admits
+  every floor-clearing completed item again, not just the displayed six, so a
+  contested pair no longer silently drops an item (Viktor lost Rabadon's,
+  Teemo lost Zhonya's in the interim state).
+
 ## [0.100.0] — 2026-08-06 — React Compiler-ready hooks
 
 ### Changed
