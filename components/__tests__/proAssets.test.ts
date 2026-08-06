@@ -114,6 +114,34 @@ describe("versionFromPatch / getCachedLiveIconVersion", () => {
     expect(getCachedLiveIconVersion()).toBeNull();
     expect(versionFromPatch(undefined)).toBe("16.11.1");
   });
+
+  it("uses the live static-data version for an old-patch spell while preserving current-patch bytes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        championsResponse([
+          {
+            id: 112,
+            name: "Viktor",
+            icon: "https://cdn.coachless.gg/static-files/16.13.1/16.13.1/img/champion/Viktor.webp",
+          },
+        ])
+      )
+    );
+
+    const { getChampionIconMap, spellIconUrl } = await import("../proAssets");
+    await getChampionIconMap();
+
+    // 16.11.1 is the stored game patch in the regression: the folder is no
+    // longer available, but the spell art itself is unchanged.
+    expect(spellIconUrl(4, "16.11.1")).toBe(
+      "https://cdn.coachless.gg/static-files/16.13.1/16.13.1/img/spell/SummonerFlash.webp"
+    );
+    // A game already on the current version remains byte-identical.
+    expect(spellIconUrl(4, "16.13.1")).toBe(
+      "https://cdn.coachless.gg/static-files/16.13.1/16.13.1/img/spell/SummonerFlash.webp"
+    );
+  });
 });
 
 /**

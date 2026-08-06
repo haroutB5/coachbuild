@@ -2,6 +2,13 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.99.1] — 2026-08-06 — Old-game spell icons
+
+### Fixed
+- **Summoner-spell icons on older pro games load again** — icon URLs now resolve against
+  the current data patch instead of retired CDN folders; the handful of spell IDs the CDN
+  never carries degrade to the standard glyph fallback.
+
 ## [0.99.0] — 2026-08-06 — Next.js 16.3 + React 19
 
 ### Changed

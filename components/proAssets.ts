@@ -91,18 +91,22 @@ function extractVersionFromIconUrl(url: string | undefined): string | null {
   return m ? m[1] : null;
 }
 
+/** Capture the version embedded in the live champion map as soon as the map
+ * resolves. This is intentionally synchronous with the map's own cache write
+ * so a parent that is already rerendering from the map fetch sees the live
+ * version on that same render. */
+function cacheLiveIconVersion(map: ReadonlyMap<number, { icon: string }>): void {
+  if (liveIconVersionCache) return;
+  map.forEach((entry) => {
+    if (liveIconVersionCache) return;
+    const v = extractVersionFromIconUrl(entry.icon);
+    if (v) liveIconVersionCache = v;
+  });
+}
+
 export function getCachedLiveIconVersion(): string | null {
   if (liveIconVersionCache) return liveIconVersionCache;
-  void getChampionIconMap().then((map) => {
-    // .forEach, not for...of — matches this codebase's Map-iteration
-    // convention (itemDetail.ts/runeDetail.ts/summonerDetail.ts), and avoids
-    // tsc's TS2802 without a target/downlevelIteration bump.
-    map.forEach((entry) => {
-      if (liveIconVersionCache) return; // already found one this pass
-      const v = extractVersionFromIconUrl(entry.icon);
-      if (v) liveIconVersionCache = v;
-    });
-  });
+  void getChampionIconMap().then(cacheLiveIconVersion);
   return liveIconVersionCache;
 }
 
@@ -174,9 +178,15 @@ const SUMMONER_NAME_MAP: Record<number, string> = {
   32: "Mark",
 };
 
+/** Build a summoner-spell icon URL. Spell art is stable across patches, so
+ * prefer the live static-data version when it is already available; old game
+ * patches can point at CDN folders that have since been retired. `ver` stays
+ * as the synchronous fallback for first paint or when the live map failed.
+ * Unknown ids still produce a URL and are deliberately left to
+ * IconWithFallback's visible glyph degradation if that asset is absent. */
 export function spellIconUrl(id: number, ver: string): string {
   const suffix = SUMMONER_SUFFIX_MAP[id] ?? String(id);
-  return SPELL_ICON_BASE(suffix, ver);
+  return SPELL_ICON_BASE(suffix, getCachedLiveIconVersion() ?? ver);
 }
 
 export function spellName(id: number): string {
@@ -353,6 +363,7 @@ export async function getChampionIconMap(): Promise<Map<number, ChampionIconEntr
         }
       }
       championIconMapCache = map;
+      cacheLiveIconVersion(map);
       return map;
     })
     .catch((err) => {
