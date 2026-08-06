@@ -201,24 +201,35 @@ export function resetChampSelectFollowState(): void {
 const AUTO_EXPORT_LOCK_TTL_MS = 30000;
 
 /** Cheap multi-tab dedupe: before auto-exporting, claim a localStorage lock
- *  keyed by (kind, phase epoch, championId, laneId) so two open tabs (the
- *  original + one the user opened manually) don't both fire the same write.
+ *  keyed by (kind, championId, laneId) so two open tabs (the original + one
+ *  the companion or the user opened) don't both fire the same write.
  *  laneId joined the key in v0.35.0 alongside the dedup generalization above
  *  — without it, a lock claimed for one lane could wrongly starve a
  *  legitimate re-fire for a DIFFERENT lane on the same champion within the
  *  same 30s window. Writes are merge-safe on the companion side regardless
  *  (item-sets merge logic, rune CoachBuild-page replacement) — this is
  *  waste-avoidance, not a correctness requirement. Fails OPEN (returns true,
- *  proceed) on any storage error/SSR — best-effort only. */
+ *  proceed) on any storage error/SSR — best-effort only.
+ *
+ *  v0.101.0: the phase EPOCH is no longer part of the key, and the parameter
+ *  is ignored. The epoch is a counter this MODULE increments, and the module
+ *  is per document — a tab opened mid-champ-select starts at 0 and reaches 1
+ *  on its first poll, while a tab that has been open for five games is at 5.
+ *  Two tabs in the same champ select therefore wrote two different keys and
+ *  the lock deduped nothing across exactly the case it exists for. Dropping
+ *  it makes the key the same in every tab; the 30s TTL still bounds it, and a
+ *  genuinely new champ select differs by champion or lane in practice (and by
+ *  more than 30s when it doesn't). The parameter stays in the signature so
+ *  call sites and the injected-dep test seam don't churn. */
 export function tryClaimAutoExportLock(
   kind: AutoExportKind,
-  phaseEpoch: number,
+  _phaseEpoch: number,
   championId: number,
   laneId: string
 ): boolean {
   if (typeof window === "undefined") return true;
   try {
-    const storageKey = `coachbuild:autoExport:${kind}:${phaseEpoch}:${championId}:${laneId}`;
+    const storageKey = `coachbuild:autoExport:${kind}:${championId}:${laneId}`;
     const now = Date.now();
     const existing = window.localStorage.getItem(storageKey);
     if (existing) {

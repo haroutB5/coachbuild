@@ -325,6 +325,39 @@ describe("executeAutoExport — error hardening", () => {
     expect(runeToast?.toast).toEqual({ kind: "error", message: "all rune pages are yours" });
   });
 
+  // v0.101.0 — the two quiet outcomes of the companion's user-edit ownership
+  // guard. Both are the feature working, and neither may be dressed as either
+  // a failure or a "go select your page in the client" instruction.
+  it("a user-edited rune page is reported as kept, never as an error", async () => {
+    enterChampSelect(VIKTOR);
+    const h = makeDeps({
+      runeOutcome: {
+        attempted: true,
+        result: { ok: false, reason: "user-modified", hint: "you changed this rune page in the client" },
+      },
+    });
+    const res = await executeAutoExport(VIKTOR, "mid", h.deps);
+    expect(res.runes).toBe("user-edited");
+    const runeToast = h.toasts.find((t) => t.kind === "runes");
+    expect(runeToast?.toast.kind).toBe("success");
+    expect(runeToast?.toast.message).toBe("Kept your rune changes.");
+  });
+
+  it("an unchanged page (already our build, not re-selected) toasts nothing at all", async () => {
+    enterChampSelect(VIKTOR);
+    const h = makeDeps({
+      runeOutcome: {
+        attempted: true,
+        result: { ok: true, selected: false, verified: true, mismatch: [], unchanged: true },
+      },
+    });
+    const res = await executeAutoExport(VIKTOR, "mid", h.deps);
+    expect(res.runes).toBe("exported-ok");
+    // selected:false would otherwise print "open the client to select the
+    // page" — wrong here, and the opposite of what the no-op protects.
+    expect(h.toasts.find((t) => t.kind === "runes")).toBeUndefined();
+  });
+
   it("build fetch returning null yields no-data (no attempt)", async () => {
     enterChampSelect(VIKTOR);
     const h = makeDeps({ build: null });

@@ -2,6 +2,41 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.101.0] — 2026-08-07 — Your rune edits stick; the update nag is gone
+
+### Fixed
+- **Editing the imported runes in the client no longer gets them overwritten.**
+  The champ-select auto-export fires per browser document, and its dedup lives
+  in page memory — so any fresh tab (the companion opens replacements when its
+  attach window lapses, and the old "Update ready" toast asked for a reload)
+  started with an empty dedup and re-exported over whatever the user had just
+  changed. The companion (v1.11.0) now remembers what it wrote to each of its
+  own rune pages for the duration of a champ select: if the page's contents
+  differ from that, a human edited it and the auto-export leaves it alone
+  (`user-modified`, reported as "Kept your rune changes"). A new champ select
+  clears the ledger, so the next game still gets its recommendation, and the
+  manual **Apply runes** button still always overwrites — a click is consent.
+- **Auto-export no longer drags you back to the CoachBuild page.** When the
+  page already holds exactly the recommended build, the companion now writes
+  nothing *and* skips the re-select, so switching to your own rune page in the
+  client sticks.
+- **The "Update ready" toast is gone.** It rendered whenever a service worker
+  sat waiting, and a waiting worker waits until someone applies it — so
+  ignoring the toast once meant seeing it again on every later page load,
+  several times a champ select, while the app itself was already serving the
+  newest version (fetches are network-first; the footer version was correct the
+  whole time). New versions now activate on their own and rotate their cache.
+  Nothing force-reloads the page.
+- **The cross-tab export lock actually works across tabs.** Its key embedded a
+  per-document counter, so two tabs in one champ select claimed two different
+  locks and deduped nothing.
+- **companion.log is readable again.** A closed League client logged an
+  "unable to connect" line every 60s forever, and the 200KB rolling log had
+  flushed every champ-select and apply-runes line away — 115KB of one repeated
+  sentence, right when two live bugs needed a history. Unreachable-client
+  failures are now edge-triggered: one line when it starts, one when it
+  recovers. Real HTTP rejections keep their throttled logging.
+
 ## [0.100.1] — 2026-08-06 — Build-surface fixes (Jax report)
 
 ### Fixed

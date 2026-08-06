@@ -278,12 +278,24 @@ describe("tryClaimAutoExportLock", () => {
     expect(tryClaimAutoExportLock("runes", 1, 103, "mid")).toBe(false);
   });
 
-  it("different championId/kind/epoch/laneId are independent locks", () => {
+  it("different championId/kind/laneId are independent locks", () => {
     stubWindow(makeLocalStorageShim());
     expect(tryClaimAutoExportLock("runes", 1, 103, "mid")).toBe(true);
     expect(tryClaimAutoExportLock("items", 1, 103, "mid")).toBe(true); // different kind
     expect(tryClaimAutoExportLock("runes", 1, 7, "mid")).toBe(true); // different championId
-    expect(tryClaimAutoExportLock("runes", 2, 103, "mid")).toBe(true); // different epoch
     expect(tryClaimAutoExportLock("runes", 1, 103, "bot")).toBe(true); // different laneId -- a lane flip's lock must not be starved by the OLD lane's lock (v0.35.0)
+  });
+
+  // v0.101.0, the BLOCK direction of the same change: the epoch is a per-
+  // DOCUMENT counter, so a tab opened mid-champ-select and a tab that has been
+  // open for five games hold different epochs for the identical champ select.
+  // While it was in the key, the cross-tab lock deduped nothing in exactly the
+  // case it exists for, and each fresh tab re-fired the auto-export -- which is
+  // how a user's manual rune edits got overwritten. Same key now, regardless.
+  it("the epoch argument does NOT split the lock -- two tabs in one champ select share it", () => {
+    stubWindow(makeLocalStorageShim());
+    expect(tryClaimAutoExportLock("runes", 1, 103, "mid")).toBe(true);
+    expect(tryClaimAutoExportLock("runes", 2, 103, "mid")).toBe(false);
+    expect(tryClaimAutoExportLock("runes", 99, 103, "mid")).toBe(false);
   });
 });

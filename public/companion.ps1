@@ -42,6 +42,15 @@ COMPLIANCE BRIGHT LINES (product law -- do not cross, ever):
     mode (the user-clicked button) keeps the original consented behavior --
     it may still replace whatever page is currently selected, exactly as
     before, since a real click is real consent.
+  - v1.11.0 adds a SECOND non-moving line, on the same principle: an AUTO
+    export never overwrites a page a HUMAN edited. If the page's current
+    contents differ from what this companion last wrote to that exact title
+    during this champ select, the export is refused with
+    {reason:'user-modified'} and nothing is touched; if they already match
+    what we would write, nothing is written AND the page is not re-selected
+    (re-selecting yanks a user who deliberately switched pages back to
+    ours). The ledger is per champ select, so the next game still gets its
+    recommendation. See Invoke-ApplyRunes STEP 2.
   - Item-SET writes (POST /apply-itemsets) are inert shop-panel suggestions
     (same class as Blitz/u.gg's auto-import; compliance-fine, not gameplay
     automation). The distinction that makes BOTH rune-auto-export and
@@ -346,7 +355,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.10.0'
+    Version     = '1.11.0'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -526,6 +535,46 @@ function Write-ThrottledErrorLog {
     }
 }
 
+function Write-LcuFailureLog {
+    # v1.11.0 LOG-NOISE FIX. Evidence: a 115KB companion.log on the author's
+    # own machine contained 115KB of ONE line -- "GET /lol-gameflow/v1/
+    # gameflow-phase -- WebException: Unable to connect to the remote server
+    # (status=0)" -- repeating every 60s, and NOTHING else. Not one champ-
+    # select open, not one apply-runes result. The 200KB rolling log had
+    # flushed every useful line away, so when two live bugs were reported
+    # there was no forensic history at all to diagnose them from.
+    #
+    # The cause is that "status=0" is not really an error: it is the LCU
+    # being unreachable, which is the NORMAL state whenever League is closed,
+    # and Write-ThrottledErrorLog's 60s-per-key throttle was designed for a
+    # failure that ends, not for one that lasts for days. So a status-0
+    # failure is now EDGE-triggered per key: one line when the call starts
+    # failing, one line when it works again, silence in between. Every other
+    # status code -- a real rejection the LCU actively returned -- keeps the
+    # 60s throttle, because those genuinely are errors and their repetition
+    # rate is diagnostic.
+    param([string]$Key, [string]$Message, [int]$StatusCode)
+    if ($StatusCode -ne 0) {
+        Write-ThrottledErrorLog -Key $Key -Message $Message
+        return
+    }
+    if (-not $script:LcuUnreachableKeys) { $script:LcuUnreachableKeys = @{} }
+    if ($script:LcuUnreachableKeys.ContainsKey($Key)) { return }
+    $script:LcuUnreachableKeys[$Key] = $true
+    Write-CompanionLog $Message -IsError
+}
+
+function Clear-LcuFailureLogState {
+    # The recovery edge: called on every SUCCESSFUL call so the next
+    # unreachable stretch logs its own opening line instead of being
+    # swallowed by the last one.
+    param([string]$Key)
+    if (-not $script:LcuUnreachableKeys) { return }
+    if (-not $script:LcuUnreachableKeys.ContainsKey($Key)) { return }
+    $script:LcuUnreachableKeys.Remove($Key)
+    Write-CompanionLog "lcu reachable again: $Key"
+}
+
 function Invoke-LcuRaw {
     param(
         [Parameter(Mandatory)][string]$Method,
@@ -568,6 +617,7 @@ function Invoke-LcuRaw {
         if ($res.Content) {
             try { $content = $res.Content | ConvertFrom-Json } catch { $content = $res.Content }
         }
+        Clear-LcuFailureLogState -Key "lcu:$Method $Path"
         return [pscustomobject]@{ Ok = $true; StatusCode = [int]$res.StatusCode; Content = $content; Body = $null }
     } catch {
         $status = 0
@@ -591,12 +641,14 @@ function Invoke-LcuRaw {
         # v1.2.2: this used to swallow the exception with ZERO trace -- the
         # exact gap that let a real "every LCU call dies" failure ship
         # invisibly (companion.log showed nothing past startup even while
-        # sitting in a live champ select). Throttled (see
-        # Write-ThrottledErrorLog) so a persistent failure logs once per
-        # ~60s, not once per 1.5s poll.
+        # sitting in a live champ select). v1.11.0 routes it through
+        # Write-LcuFailureLog instead: still throttled for real HTTP
+        # rejections, but EDGE-triggered for status=0 (League simply not
+        # running), which was flooding the whole rolling log -- see that
+        # function's header for the measured evidence.
         $logMsg = "Invoke-LcuRaw failed: $Method $Path -- $($_.Exception.GetType().Name): $($_.Exception.Message) (status=$status)"
         if ($bodySnippet) { $logMsg += " | body: $bodySnippet" }
-        Write-ThrottledErrorLog -Key "lcu:$Method $Path" -Message $logMsg
+        Write-LcuFailureLog -Key "lcu:$Method $Path" -Message $logMsg -StatusCode $status
         return [pscustomobject]@{ Ok = $false; StatusCode = $status; Content = $null; Body = $bodySnippet }
     }
 }
@@ -861,6 +913,59 @@ function Write-JsonResponse {
     $Response.OutputStream.Close()
 }
 
+function ConvertTo-RuneFingerprint {
+    # A rune page's CONTENTS as one comparable string. Deliberately excludes
+    # the page id and name: the ownership guard asks "does this page still
+    # hold what we put in it," and a page the user renamed is a page we no
+    # longer match by title at all (STEP 2 is exact-title), so identity is
+    # already handled a layer up.
+    #
+    # selectedPerkIds is ORDER-SENSITIVE on purpose -- the LCU stores the
+    # slot order, and Complete-RuneApply's readback already compares it
+    # index by index, so a reordered page is a changed page to both.
+    param($PrimaryStyleId, $SubStyleId, $SelectedPerkIds)
+    $perks = @(@($SelectedPerkIds) | ForEach-Object { [int]$_ }) -join ','
+    return "$([int]$PrimaryStyleId)|$([int]$SubStyleId)|$perks"
+}
+
+function Get-RuneWriteLedger {
+    # What THIS companion last wrote to each of its own rune pages, keyed by
+    # page title -> fingerprint. Lives in the shared Sync hashtable so the
+    # BRIDGE runspace (which runs Invoke-ApplyRunes) and the MAIN thread
+    # (which clears it on champ-select entry) see the same one; falls back to
+    # runspace-local state when there is no bridge at all (-Mock).
+    $sync = Get-CompanionSyncRef
+    if ($sync) {
+        if (-not $sync.RuneWrites) { $sync.RuneWrites = @{} }
+        return $sync.RuneWrites
+    }
+    if (-not $script:RuneWritesFallback) { $script:RuneWritesFallback = @{} }
+    return $script:RuneWritesFallback
+}
+
+function Set-RuneWriteRecord {
+    param([string]$Name, [string]$Fingerprint)
+    (Get-RuneWriteLedger)[$Name] = $Fingerprint
+}
+
+function Get-RuneWriteRecord {
+    param([string]$Name)
+    $ledger = Get-RuneWriteLedger
+    if ($ledger.ContainsKey($Name)) { return [string]$ledger[$Name] }
+    return $null
+}
+
+function Clear-RuneWriteLedger {
+    # Called on champ-select ENTRY, alongside Reset-ChampSelectState. The
+    # user-edit guard is scoped to ONE champ select on purpose: inside a game
+    # a manual edit must survive every re-fire, but the NEXT game is a fresh
+    # decision and must get its recommendation exported again. Without this
+    # the ledger would remember last game's edit forever and quietly stop
+    # exporting for that champion.
+    $ledger = Get-RuneWriteLedger
+    @($ledger.Keys) | ForEach-Object { $ledger.Remove($_) }
+}
+
 function Complete-RuneApply {
     # v1.3.0 BLOCKER FIX (live-reported, 2nd screenshot): the created page
     # DID save correctly (creation was never the bug) -- the client just
@@ -941,6 +1046,11 @@ function Invoke-ApplyRunes {
     if (-not (Test-RunePayload -Body $Body)) {
         return @{ ok = $false; reason = 'invalid-page' }
     }
+
+    # What this call would leave on the page, in the one comparable form the
+    # ownership guard (STEP 2) and the write ledger both use. Computed once,
+    # up here, because every write path below records it on success.
+    $desiredFingerprint = ConvertTo-RuneFingerprint -PrimaryStyleId $Body.primaryStyleId -SubStyleId $Body.subStyleId -SelectedPerkIds $Body.selectedPerkIds
 
     $pagesResult = Invoke-LcuRaw -Method GET -Path '/lol-perks/v1/pages' -Port $LcuPort -Token $LcuToken -Scheme $Scheme
     if (-not $pagesResult.Ok) {
@@ -1025,6 +1135,59 @@ function Invoke-ApplyRunes {
         # NOT fall back to delete+create on an edit failure: the page is likely
         # still selected, so a delete would fail the same way.
         $target = ($exactMatches | Sort-Object -Property id)[0]
+
+        # -- v1.11.0 USER-EDIT OWNERSHIP GUARD (auto mode only) ---------------
+        # Live-reported: "recommended runes are imported, but when I manually
+        # change them they get reverted again."
+        #
+        # The web-side dedup that was supposed to make an auto-export fire once
+        # per champ-select is PER TAB and PER PAGE LOAD (a module singleton in
+        # champSelectFollowState.ts, plus a localStorage lock whose key embeds
+        # that tab's own phase-epoch COUNTER). Anything that starts a fresh
+        # document therefore re-fires the export with a fresh, empty dedup:
+        # the companion opening a replacement Builds//draft tab when the
+        # attach window lapses, a second tab the user opened themselves, or a
+        # plain reload -- including the reload the "Update ready" toast asks
+        # for (fixed separately, same ship). Each of those re-fires overwrote
+        # the page in place, wiping whatever the user had just edited in the
+        # client.
+        #
+        # No amount of web-side dedup can close this: the browser cannot see
+        # what the user typed into the League client. The companion can, so
+        # the guard belongs HERE, where the truth is, and it holds no matter
+        # how many tabs re-fire.
+        #
+        # Two decisions, both from the page's ACTUAL current contents:
+        #   (a) already exactly what we would write -> do nothing at all, and
+        #       specifically do NOT re-PUT currentpage. Re-selecting is its own
+        #       flavour of the same complaint: the user deliberately switches to
+        #       another page and a re-export yanks them back to ours.
+        #   (b) it differs from what WE last wrote to this title THIS champ
+        #       select -> a human edited it. Leave it alone; report
+        #       'user-modified' so the web can say so instead of claiming a
+        #       success it did not perform.
+        # No ledger entry for this title yet (first export of the champ select,
+        # or a companion restart) -> write, exactly as before. The ledger is
+        # cleared on every champ-select ENTRY, so the next game starts clean and
+        # still gets its recommendation.
+        #
+        # MANUAL mode is untouched: a real click is real consent, and the whole
+        # point of the "Apply runes" button is to overwrite what is there.
+        $actualFingerprint = ConvertTo-RuneFingerprint -PrimaryStyleId $target.primaryStyleId -SubStyleId $target.subStyleId -SelectedPerkIds $target.selectedPerkIds
+        if ($Mode -eq 'auto') {
+            if ($actualFingerprint -eq $desiredFingerprint) {
+                # Nothing to write. Record it anyway: a page that already holds
+                # our recommendation is a page we own the contents of, so a
+                # LATER user edit is still detectable as a change away from it.
+                Set-RuneWriteRecord -Name $Body.name -Fingerprint $desiredFingerprint
+                return [pscustomobject]@{ ok = $true; selected = $false; verified = $true; mismatch = @(); unchanged = $true }
+            }
+            $lastWritten = Get-RuneWriteRecord -Name $Body.name
+            if ($lastWritten -and $lastWritten -ne $actualFingerprint) {
+                return [pscustomobject]@{ ok = $false; reason = 'user-modified'; hint = 'you changed this rune page in the client -- CoachBuild left your version alone' }
+            }
+        }
+
         # Include its id in the body (LolPerksPerkPageResource) so the LCU
         # edits this exact page rather than treating it as a create.
         $editBody = @{
@@ -1039,6 +1202,10 @@ function Invoke-ApplyRunes {
         if (-not $put.Ok) {
             return [pscustomobject]@{ ok = $false; reason = 'edit-failed'; hint = (Get-LcuFailureHint -StatusCode $put.StatusCode -Action 'rune page edit') }
         }
+        # The page now holds exactly what we sent -- remember it so a later
+        # auto-export can tell "untouched since we wrote it" from "the user
+        # edited it" (the ownership guard above).
+        Set-RuneWriteRecord -Name $Body.name -Fingerprint $desiredFingerprint
         # Select (reaffirm) + readback-verify against the page we just edited.
         return Complete-RuneApply -PageId $target.id -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
     }
@@ -1055,7 +1222,10 @@ function Invoke-ApplyRunes {
 
     if ($hasFreeSlot -ne $false) {
         $post = Invoke-LcuRaw -Method POST -Path '/lol-perks/v1/pages' -Body $Body -Port $LcuPort -Token $LcuToken -Scheme $Scheme
-        if ($post.Ok) { return Complete-RuneApply -PageId $post.Content.id -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme }
+        if ($post.Ok) {
+            Set-RuneWriteRecord -Name $Body.name -Fingerprint $desiredFingerprint
+            return Complete-RuneApply -PageId $post.Content.id -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
+        }
         # POST failed -- the LCU's own rejection is authoritative regardless
         # of what the inventory guess said; fall through to the full path.
     }
@@ -1074,6 +1244,7 @@ function Invoke-ApplyRunes {
         if (-not $post2.Ok) {
             return [pscustomobject]@{ ok = $false; reason = 'create-failed'; hint = (Get-LcuFailureHint -StatusCode $post2.StatusCode -Action 'new rune page') }
         }
+        Set-RuneWriteRecord -Name $Body.name -Fingerprint $desiredFingerprint
         return Complete-RuneApply -PageId $post2.Content.id -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
     }
 
@@ -1863,6 +2034,10 @@ function Invoke-GameflowTick {
         if (-not $script:WasChampSelect) {
             Reset-ChampSelectState -State $script:ChampSelectState
             Reset-TabOpenGrace
+            # v1.11.0 -- a new champ select is a new decision: forget which
+            # rune pages we wrote last game so this game's recommendation can
+            # export, and so last game's manual edit does not block it forever.
+            Clear-RuneWriteLedger
             # v1.7.0 -- open the pages NOW, not at the first hover, so a cold
             # browser is loaded and attached before the user picks. Ordered
             # after Reset-TabOpenGrace so the previous game's grace can never
@@ -2123,6 +2298,11 @@ function Start-BridgeServer {
         LastDraftFollowAt   = $null
         LastBuildsDetachAt  = $null
         LastDraftDetachAt   = $null
+        # v1.11.0 rune-page write ledger (title -> content fingerprint). Lives
+        # here because Invoke-ApplyRunes runs in the BRIDGE runspace while the
+        # champ-select-entry reset runs on the main thread -- see
+        # Get-RuneWriteLedger.
+        RuneWrites          = @{}
     })
 
     $rs = [runspacefactory]::CreateRunspace()
@@ -3059,6 +3239,120 @@ function Invoke-SelfTest {
         }
     } catch { $failures.Add("apply-runes foreign-title threw: $($_.Exception.Message)") }
 
+    # ---- v1.11.0 USER-EDIT OWNERSHIP GUARD (the "my runes get reverted" bug)
+    # Four cases, because the guard has four distinct outcomes and three of
+    # them are silent no-ops -- the exact shape that ships broken unnoticed.
+    # Every case drives the REAL bridge route (not the function directly), so
+    # the cross-runspace ledger is exercised the same way a live champ select
+    # would exercise it.
+    $guardBody = @{ name = 'CoachBuild Guard Mid'; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = @(8005, 9111, 9104, 8014, 8017, 8009, 8017, 5008, 5008); current = $true; mode = 'auto' }
+    $guardDesired = ConvertTo-RuneFingerprint -PrimaryStyleId 8000 -SubStyleId 8100 -SelectedPerkIds @(8005, 9111, 9104, 8014, 8017, 8009, 8017, 5008, 5008)
+    $userEditedPerks = @(8010, 9111, 9104, 8014, 8017, 8009, 8017, 5008, 5008)
+
+    # 6g. THE BUG. We exported once (ledger holds our fingerprint), the user
+    # then edited that page in the client, and a second tab re-fires the auto
+    # export. Must refuse: no PUT of any kind, page untouched, and an honest
+    # reason rather than a claimed success.
+    $bridge.Sync.RuneWrites = @{ 'CoachBuild Guard Mid' = $guardDesired }
+    $mockLcu.Sync.MockPages = @(
+        [pscustomobject]@{ id = 333; name = 'CoachBuild Guard Mid'; isDeletable = $true; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = $userEditedPerks }
+    )
+    $mockLcu.Sync.MockInventory = @{ ownedPageCount = 5 }
+    $mockLcu.Sync.MockCurrentPageId = 333
+    $mockLcu.Sync.MockCurrentPageOverride = $null
+    $mockLcu.Sync.Calls.Clear()
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($guardBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.ok -ne $false -or $obj.reason -ne 'user-modified') {
+            $failures.Add("apply-runes AUTO over a user-edited page expected ok:false/user-modified, got $($r.Content)")
+        }
+        if (@($mockLcu.Sync.Calls) -contains 'PUT') {
+            $failures.Add('apply-runes AUTO overwrote a page the user had edited -- the exact reverted-runes bug')
+        }
+        $page333 = @(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 333 })
+        if ((@($page333[0].selectedPerkIds) -join ',') -ne ($userEditedPerks -join ',')) {
+            $failures.Add("apply-runes AUTO mutated the user's edited perks, got $(@($page333[0].selectedPerkIds) -join ',')")
+        }
+    } catch { $failures.Add("apply-runes user-edited guard threw: $($_.Exception.Message)") }
+
+    # 6h. The page ALREADY holds exactly what we would write, and the user is
+    # sitting on a DIFFERENT page. Nothing to write -- and specifically no
+    # currentpage PUT, because re-selecting is its own version of the same
+    # complaint (it drags the user off the page they chose).
+    $bridge.Sync.RuneWrites = @{}
+    $mockLcu.Sync.MockPages = @(
+        [pscustomobject]@{ id = 333; name = 'CoachBuild Guard Mid'; isDeletable = $true; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = @(8005, 9111, 9104, 8014, 8017, 8009, 8017, 5008, 5008) }
+        [pscustomobject]@{ id = 444; name = 'My Own Page'; isDeletable = $true; primaryStyleId = 8100; subStyleId = 8000; selectedPerkIds = @(1, 1, 1, 1, 1, 1, 1, 1, 1) }
+    )
+    $mockLcu.Sync.MockCurrentPageId = 444
+    $mockLcu.Sync.Calls.Clear()
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($guardBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.ok -ne $true -or $obj.unchanged -ne $true) {
+            $failures.Add("apply-runes AUTO no-op expected ok:true/unchanged:true, got $($r.Content)")
+        }
+        if (@($mockLcu.Sync.Calls) -contains 'PUT') {
+            $failures.Add('apply-runes AUTO wrote to a page that already held the recommendation')
+        }
+        if ([string]$mockLcu.Sync.MockCurrentPageId -ne '444') {
+            $failures.Add("apply-runes AUTO no-op re-selected our page and yanked the user off theirs (currentPageId=$($mockLcu.Sync.MockCurrentPageId))")
+        }
+    } catch { $failures.Add("apply-runes AUTO no-op threw: $($_.Exception.Message)") }
+
+    # 6i-guard. MANUAL mode is NOT gated by any of this. A real click is real
+    # consent and the button's whole job is to overwrite what is there --
+    # asserted in the BLOCK direction so a future tightening of the guard
+    # cannot silently break the button.
+    $bridge.Sync.RuneWrites = @{ 'CoachBuild Guard Mid' = $guardDesired }
+    $mockLcu.Sync.MockPages = @(
+        [pscustomobject]@{ id = 333; name = 'CoachBuild Guard Mid'; isDeletable = $true; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = $userEditedPerks }
+    )
+    $mockLcu.Sync.MockCurrentPageId = 333
+    $mockLcu.Sync.Calls.Clear()
+    $guardManualBody = @{ name = 'CoachBuild Guard Mid'; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = @(8005, 9111, 9104, 8014, 8017, 8009, 8017, 5008, 5008); current = $true; mode = 'manual' }
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($guardManualBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.ok -ne $true) { $failures.Add("apply-runes MANUAL over an edited page expected ok:true, got $($r.Content)") }
+        $page333 = @(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 333 })
+        if ((@($page333[0].selectedPerkIds) -join ',') -ne '8005,9111,9104,8014,8017,8009,8017,5008,5008') {
+            $failures.Add("apply-runes MANUAL was blocked by the auto-mode guard -- the button must always overwrite, got $(@($page333[0].selectedPerkIds) -join ',')")
+        }
+    } catch { $failures.Add("apply-runes MANUAL-over-edited threw: $($_.Exception.Message)") }
+
+    # 6j-guard. The scope of the guard: ONE champ select. Clear-RuneWriteLedger
+    # runs on champ-select ENTRY, and after it the same edited page IS
+    # overwritten again -- otherwise last game's edit would silently disable
+    # the feature for that champion forever.
+    $bridge.Sync.RuneWrites = @{ 'CoachBuild Guard Mid' = $guardDesired }
+    # Production clears from the MAIN thread (Invoke-GameflowTick), which
+    # reaches the bridge's ledger via $script:Bridge -- so point it at this
+    # test bridge for the call rather than reaching into the hashtable
+    # directly, or the test would prove nothing about the real path.
+    $savedBridgeRef = $script:Bridge
+    $script:Bridge = $bridge
+    try { Clear-RuneWriteLedger } finally { $script:Bridge = $savedBridgeRef }
+    if (@($bridge.Sync.RuneWrites.Keys).Count -ne 0) {
+        $failures.Add('Clear-RuneWriteLedger left entries behind -- next champ select would refuse to export')
+    }
+    $mockLcu.Sync.MockPages = @(
+        [pscustomobject]@{ id = 333; name = 'CoachBuild Guard Mid'; isDeletable = $true; primaryStyleId = 8000; subStyleId = 8100; selectedPerkIds = $userEditedPerks }
+    )
+    $mockLcu.Sync.MockCurrentPageId = 333
+    $mockLcu.Sync.Calls.Clear()
+    try {
+        $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($guardBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
+        $obj = $r.Content | ConvertFrom-Json
+        if ($obj.ok -ne $true) { $failures.Add("apply-runes AUTO after a champ-select reset expected ok:true, got $($r.Content)") }
+        $page333 = @(@($mockLcu.Sync.MockPages) | Where-Object { $_.id -eq 333 })
+        if ((@($page333[0].selectedPerkIds) -join ',') -ne '8005,9111,9104,8014,8017,8009,8017,5008,5008') {
+            $failures.Add('apply-runes AUTO did not re-export after the ledger was cleared -- the guard outlived its champ select')
+        }
+    } catch { $failures.Add("apply-runes post-reset re-export threw: $($_.Exception.Message)") }
+    $bridge.Sync.RuneWrites = @{}
+
     # Restore 6b's fixture: 6c below says "SAME adversarial 5-page/full
     # fixture" and inherits it from 6b rather than building its own, so this
     # case must hand it back exactly as it found it.
@@ -3238,6 +3532,13 @@ function Invoke-SelfTest {
     $mockLcu.Sync.MockCurrentPageId = 700
     $mockLcu.Sync.MockInventory = $null
     $mockLcu.Sync.DeleteShouldFail = $true
+    # v1.11.0: this fixture hands page 700 contents THIS COMPANION never wrote
+    # (an earlier case already exported the same title), which to the user-edit
+    # ownership guard is indistinguishable from a human editing the page -- and
+    # refusing would be the correct answer to that. The case is about
+    # cleanup fail-soft, not about ownership, so it declares a fresh champ
+    # select by clearing the ledger instead of accidentally testing the guard.
+    $bridge.Sync.RuneWrites = @{}
     $mockLcu.Sync.Calls.Clear()
     try {
         $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($wpaBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing

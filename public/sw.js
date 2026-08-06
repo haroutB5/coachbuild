@@ -17,27 +17,38 @@ const ICON_ORIGIN = "https://cdn.coachless.gg";
 const ICON_PATH_PREFIX = "/static-files/";
 
 self.addEventListener("install", (event) => {
-  // v0.31.0 (SW update toast, Feature 4): this used to call self.skipWaiting()
-  // unconditionally here, which meant a new SW version activated (and started
-  // serving fetches) silently on every deploy — there was no "waiting" phase
-  // for the client to detect and prompt on. Removed so an UPDATE (a new SW
-  // installing while one is already active for this scope) follows the
-  // standard lifecycle instead: installing -> installed -> WAITING, parked
-  // until ServiceWorkerRegister.tsx explicitly posts "SKIP_WAITING" (only
-  // once the user taps the toast — see the message listener below). A
-  // first-ever install (no existing active worker for this scope) is
-  // UNAFFECTED: the browser activates it immediately regardless, since
-  // there's nothing to wait for.
+  // v0.101.0 — skipWaiting is BACK, and the "Update ready" toast is gone with
+  // it. History, so this doesn't get flip-flopped a third time:
+  //
+  // v0.31.0 removed this call so a new SW would park in WAITING and a toast
+  // could offer "Refresh". v0.51.1 then had to fix that toast re-appearing
+  // for users already on the latest version. It re-appeared anyway, because
+  // the toast only ever hides for a version the user explicitly DISMISSES:
+  // ignore it once and every later page load re-reads the still-waiting
+  // worker and shows it again. The companion opens fresh tabs all through a
+  // champ select, so "every later page load" meant several times a game —
+  // while the page footer, served network-first, correctly showed the newest
+  // version the whole time. Nagging someone to update to what they are
+  // already reading is the definition of a false alarm.
+  //
+  // The prompt bought nothing anyway: fetches are network-first (see below),
+  // so the app is never serving a stale UI regardless of which SW is active.
+  // The only thing gated behind activation was the version-tied cache
+  // rotation in `activate`, which nobody needs to consent to. So: activate
+  // immediately, rotate the cache, and let the user carry on. Nothing
+  // force-reloads the page either — a surprise reload mid-champ-select would
+  // re-fire the rune auto-export, which is its own reported bug.
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE).then((c) => c.addAll(SHELL).catch(() => {}))
   );
 });
 
-// v0.31.0 (SW update toast, Feature 4): the client-side half of the
-// standard "new version waiting, refresh to update" pattern — postMessage's
-// payload is the plain string "SKIP_WAITING" (see ServiceWorkerRegister.tsx),
-// matched loosely against the common {type:"SKIP_WAITING"} shape too in case
-// a future caller (or browser devtools) sends that form instead.
+// Kept after the v0.101.0 toast removal even though nothing in the app posts
+// this any more: a worker installed by an OLDER build can still be sitting in
+// waiting on a returning user's device, and this is the one message that
+// releases it. Harmless otherwise — skipWaiting() on an already-active worker
+// is a no-op. Also the shape browser devtools sends.
 self.addEventListener("message", (event) => {
   if (event.data === "SKIP_WAITING" || (event.data && event.data.type === "SKIP_WAITING")) {
     self.skipWaiting();

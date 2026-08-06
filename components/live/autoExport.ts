@@ -111,6 +111,7 @@ export type AutoExportKindResult =
   | "deduped" //       shouldExportForLane false, or lock claim lost
   | "gate-refused" //  pipeline attempted:false (no session/port, toggle off) — slot left OPEN
   | "exported-ok"
+  | "user-edited" //   companion refused: the user edited that rune page in the client (v0.101.0)
   | "exported-error" // companion reached, returned ok:false
   | "threw"; //        uncaught exception in the attempt — surfaced as a toast, marked done
 
@@ -265,6 +266,13 @@ async function exportRunes(
     deps.markExported("runes", championId, laneId);
     if (outcome.result.ok) {
       const r = outcome.result;
+      // v0.101.0 — the companion found the page already holding exactly this
+      // build, so it wrote nothing and left the client's page selection alone.
+      // Silent: there is no news here, and the honest message ("nothing
+      // happened") is worse than no toast. Without this branch the fallback
+      // below would tell the user to go select a page, which is both wrong and
+      // the opposite of what the no-op is protecting.
+      if (r.unchanged) return "exported-ok";
       deps.onToast("runes", {
         kind: "success",
         message:
@@ -273,6 +281,14 @@ async function exportRunes(
             : `Runes saved for ${build.champion.name} — open the client to select the page.`,
       });
       return "exported-ok";
+    }
+    // v0.101.0 — the user edited that rune page in the client, so the companion
+    // refused to overwrite it. That is the feature working, not a failure:
+    // confirm it once (they just watched an auto-import land, so silence would
+    // read as "did it stomp me again?") and never dress it as an error.
+    if (outcome.result.reason === "user-modified") {
+      deps.onToast("runes", { kind: "success", message: "Kept your rune changes." });
+      return "user-edited";
     }
     deps.onToast("runes", {
       kind: "error",

@@ -202,8 +202,14 @@ export interface CompanionStatus {
  *  post-create selection PUT, or a content readback that didn't match what
  *  was sent), so the UI can report that honestly instead of implying full
  *  success on any 2xx. */
+/** `unchanged` (companion v1.11.0+) means the page already held exactly this
+ *  build, so nothing was written AND the page was deliberately not re-selected
+ *  — a user who has switched to another rune page must not be dragged back to
+ *  ours. Absent from older companions, hence optional.
+ *  `reason: "user-modified"` is the other half of the same guard: the user
+ *  edited our page in the client, so the auto-export left it alone. */
 export type ApplyRunesResult =
-  | { ok: true; selected: boolean; verified: boolean; mismatch: string[] }
+  | { ok: true; selected: boolean; verified: boolean; mismatch: string[]; unchanged?: boolean }
   | { ok: false; reason: string; hint?: string };
 
 /** Result of an apply-itemsets call — same discriminated shape convention
