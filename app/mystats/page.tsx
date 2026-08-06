@@ -233,6 +233,12 @@ export default function MyStatsPage() {
   // their `detailId`s collided. See toggleRow/isRowExpanded below.
   const [expanded, setExpanded] = useState<{ championId: number; role: number } | null>(null);
   const [detail, setDetail] = useState<DetailState>({ status: "idle" });
+  const detailKey = expanded ? `${expanded.championId}:${expanded.role}` : null;
+  const [previousDetailKey, setPreviousDetailKey] = useState(detailKey);
+  if (detailKey !== previousDetailKey) {
+    setPreviousDetailKey(detailKey);
+    setDetail(detailKey === null ? { status: "idle" } : { status: "loading" });
+  }
   // v0.50.0: bumped by MyStatsRefresher's onRefreshed when the on-demand
   // incremental ingest actually found new games. v0.83: ALSO bumped by an
   // account switch — see handleAccountSwitched.
@@ -319,11 +325,9 @@ export default function MyStatsPage() {
 
   useEffect(() => {
     if (expanded === null) {
-      setDetail({ status: "idle" });
       return;
     }
     let cancelled = false;
-    setDetail({ status: "loading" });
     // Pass the row's own role -- scopes the fetched matchups to exactly the
     // (championId, role) the header summed, instead of every role that
     // champion was ever played in.

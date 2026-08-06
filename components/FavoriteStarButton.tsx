@@ -1,6 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+
+const subscribeToHydration = () => () => {};
+const getHydratedSnapshot = () => true;
+const getServerHydratedSnapshot = () => false;
 
 interface FavoriteStarButtonProps {
   /** Stable identifier for the starred item — player id (string) or
@@ -47,11 +51,10 @@ export default function FavoriteStarButton({
   size = "sm",
   className = "",
 }: FavoriteStarButtonProps) {
-  const [mounted, setMounted] = useState(false);
+  const mounted = useSyncExternalStore(subscribeToHydration, getHydratedSnapshot, getServerHydratedSnapshot);
   const [favorited, setFavorited] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
     const refresh = () => setFavorited(checkFavorited(id));
     refresh();
     window.addEventListener(changedEvent, refresh);

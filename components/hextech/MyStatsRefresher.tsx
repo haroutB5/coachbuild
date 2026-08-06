@@ -41,7 +41,10 @@ export default function MyStatsRefresher({ onRefreshed }: MyStatsRefresherProps)
   const startedRef = useRef(false);
   const mountedRef = useRef(true);
   const onRefreshedRef = useRef(onRefreshed);
-  onRefreshedRef.current = onRefreshed;
+
+  useEffect(() => {
+    onRefreshedRef.current = onRefreshed;
+  }, [onRefreshed]);
 
   useEffect(() => {
     mountedRef.current = true;

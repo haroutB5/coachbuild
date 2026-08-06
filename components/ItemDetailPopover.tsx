@@ -20,11 +20,20 @@ interface ItemDetailPopoverProps {
 export default function ItemDetailPopover({ itemId, ver, open, onClose }: ItemDetailPopoverProps) {
   // undefined = loading, null = fetch failed / unknown item, else resolved.
   const [detail, setDetail] = useState<ItemDetail | null | undefined>(undefined);
+  const detailKey = `${itemId}:${ver}`;
+  const [previousDetailKey, setPreviousDetailKey] = useState(detailKey);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open && (!wasOpen || detailKey !== previousDetailKey)) {
+    setWasOpen(true);
+    setPreviousDetailKey(detailKey);
+    setDetail(undefined);
+  } else if (!open && wasOpen) {
+    setWasOpen(false);
+  }
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setDetail(undefined);
     getItemDetail(itemId, ver).then((d) => {
       if (!cancelled) setDetail(d);
     });

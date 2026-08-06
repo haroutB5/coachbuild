@@ -14,7 +14,7 @@
 // whatever champ select currently shows," not a replacement for the
 // per-card Apply buttons on the Builds page (which apply whatever build the
 // user is actively LOOKING at, live or not).
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useCompanion } from "@/components/live/CompanionProvider";
 import { resolveCurrentChampSelectChampionId, resolveChampSelectRoleId } from "@/components/live/champSelectFollow";
 import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/components/live/companionClient";
@@ -25,15 +25,13 @@ import type { BuildResponse } from "@/lib/types";
 
 type UiState = "idle" | "applying" | "success" | "error";
 
+const subscribeToSession = () => () => {};
+
 export default function ApplyRunesButton() {
   const companion = useCompanion();
-  const [ready, setReady] = useState(false);
+  const ready = useSyncExternalStore(subscribeToSession, hasSession, () => false);
   const [state, setState] = useState<UiState>("idle");
   const [message, setMessage] = useState<string | null>(null);
-
-  useEffect(() => {
-    setReady(hasSession());
-  }, [companion.session]);
 
   const championId = resolveCurrentChampSelectChampionId(companion.champSelect);
   const roleId = resolveChampSelectRoleId(companion.champSelect);

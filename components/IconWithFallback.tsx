@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 interface IconWithFallbackProps {
   src: string;
@@ -31,15 +31,17 @@ interface IconWithFallbackProps {
  */
 export function IconWithFallback({ src, alt, className, fallbackGlyph, size }: IconWithFallbackProps) {
   const [failed, setFailed] = useState(false);
+  const [failedSrc, setFailedSrc] = useState(src);
 
   // Reset on every `src` change — this component's callers reuse the same
   // element across a changing id (e.g. a tile whose runeId prop updates),
   // and plain `useState` only resets on remount, not on a prop change. A
   // stale `failed=true` from a PREVIOUS src would otherwise show the
   // fallback glyph forever even once a working src comes through.
-  useEffect(() => {
+  if (src !== failedSrc) {
+    setFailedSrc(src);
     setFailed(false);
-  }, [src]);
+  }
 
   if (!src || failed) {
     const source = (fallbackGlyph || alt || "?").trim();

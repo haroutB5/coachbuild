@@ -72,7 +72,6 @@ export default function MoversPage() {
 
   const load = useCallback(async () => {
     const requestId = ++reqIdRef.current;
-    setState({ status: "loading" });
     try {
       const res = await fetch(`/api/patch-movers`);
       if (reqIdRef.current !== requestId) return;
@@ -98,7 +97,8 @@ export default function MoversPage() {
   }, []);
 
   useEffect(() => {
-    load();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- `load` only updates from its asynchronous, request-id-guarded fetch response.
+    void load();
   }, [load]);
 
   return (

@@ -1,9 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { getFavorites, type FavoritePlayer } from "@/lib/favorites";
 import { FAVORITES_CHANGED_EVENT, toggleFavoritePlayer } from "./favoritesSync";
 import type { PlayerRef } from "./proHistory.types";
+
+const subscribeToHydration = () => () => {};
+const getHydratedSnapshot = () => true;
+const getServerHydratedSnapshot = () => false;
 
 interface FavoritePlayerChipsProps {
   onSelect: (player: PlayerRef) => void;
@@ -32,11 +36,10 @@ interface FavoritePlayerChipsProps {
  * would produce a server/client markup mismatch.
  */
 export default function FavoritePlayerChips({ onSelect, label }: FavoritePlayerChipsProps) {
-  const [mounted, setMounted] = useState(false);
+  const mounted = useSyncExternalStore(subscribeToHydration, getHydratedSnapshot, getServerHydratedSnapshot);
   const [favorites, setFavorites] = useState<FavoritePlayer[]>([]);
 
   useEffect(() => {
-    setMounted(true);
     const refresh = () => setFavorites(getFavorites());
     refresh();
     window.addEventListener(FAVORITES_CHANGED_EVENT, refresh);

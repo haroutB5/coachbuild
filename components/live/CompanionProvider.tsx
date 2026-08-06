@@ -54,7 +54,7 @@
 // incident.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import {
   getStoredSession,
@@ -70,7 +70,7 @@ import { noteCompanionPhase, markCompanionDriven, setCurrentChampSelectChampionI
 import { resolveCurrentChampSelectChampionId } from "./champSelectFollow";
 
 export interface CompanionContextValue {
-  /** Paired companion session token, hydrated from localStorage on mount and
+  /** Paired companion session token, read from localStorage after hydration and
    *  updatable via setSession (app/page.tsx's deep-link mount effect calls
    *  this when a fresh `?session=` arrives). Null until a session is known —
    *  the poll below doesn't start until this is non-null. */
@@ -102,16 +102,29 @@ const CompanionContext = createContext<CompanionContextValue>({
   tick: 0,
 });
 
+const subscribeToStoredSession = () => () => {};
+
 export function useCompanion(): CompanionContextValue {
   return useContext(CompanionContext);
 }
 
 export default function CompanionProvider({ children }: { children: ReactNode }) {
-  const [session, setSessionState] = useState<string | null>(null);
+  const [sessionOverride, setSessionState] = useState<string | null>(null);
+  const storedSession = useSyncExternalStore(subscribeToStoredSession, getStoredSession, () => null);
+  const session = sessionOverride ?? storedSession;
   const [phase, setPhase] = useState<string | null>(null);
   const [champSelect, setChampSelect] = useState<CompanionChampSelectSnapshot | null>(null);
   const [clientConnected, setClientConnected] = useState(false);
   const [tick, setTick] = useState(0);
+  const [previousSession, setPreviousSession] = useState(session);
+  if (session !== previousSession) {
+    setPreviousSession(session);
+    if (!session) {
+      setPhase(null);
+      setChampSelect(null);
+      setClientConnected(false);
+    }
+  }
 
   // v1.5.0 (attached-tab fix), widened to page IDENTITY in v1.6.0 (see
   // companionClient.ts's followKindForRoute): which route is current, read
@@ -158,15 +171,10 @@ export default function CompanionProvider({ children }: { children: ReactNode })
     return () => window.removeEventListener("pagehide", handlePageHide);
   }, [session]);
 
-  // Hydrate any previously-paired session on mount. A companion-opened deep
+  // The external-store snapshot hydrates any previously-paired session. A companion-opened deep
   // link's OWN `?session=` (app/page.tsx's mount effect) calls setSession
   // directly and wins regardless of ordering against this effect — both
   // paths converge on the same localStorage-backed value.
-  useEffect(() => {
-    const stored = getStoredSession();
-    if (stored) setSessionState(stored);
-  }, []);
-
   function setSession(next: string): void {
     setStoredSession(next);
     setSessionState(next);
@@ -174,9 +182,6 @@ export default function CompanionProvider({ children }: { children: ReactNode })
 
   useEffect(() => {
     if (!session) {
-      setPhase(null);
-      setChampSelect(null);
-      setClientConnected(false);
       return;
     }
     let cancelled = false;

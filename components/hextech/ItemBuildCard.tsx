@@ -8,7 +8,7 @@
 // (StartingCard/SupportItemCard/CoreBuildOrderCard/SituationalCard) already
 // owns its own label + content — this card only supplies the outer chrome +
 // header + divide-y hairlines between them (no data reshaping).
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import type { BuildResponse, ChampionRef } from "@/lib/types";
 import type { LaneId } from "./heroContracts";
 import StartingCard from "./StartingCard";
@@ -18,6 +18,8 @@ import HiddenGemCard from "./HiddenGemCard";
 import SupportItemCard from "./SupportItemCard";
 import { applyItemSetsForBuild } from "./itemSetsApply";
 import { hasSession, getStoredSession, getStoredPort } from "@/components/live/companionClient";
+
+const subscribeToSession = () => () => {};
 
 type ItemSetsUiState =
   | { status: "idle" }
@@ -42,12 +44,8 @@ function AddToClientButton({
   roleLabel: string;
   build: BuildResponse;
 }) {
-  const [ready, setReady] = useState(false);
+  const ready = useSyncExternalStore(subscribeToSession, hasSession, () => false);
   const [state, setState] = useState<ItemSetsUiState>({ status: "idle" });
-
-  useEffect(() => {
-    setReady(hasSession());
-  }, []);
 
   async function handleClick() {
     const session = getStoredSession();

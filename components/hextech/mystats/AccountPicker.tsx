@@ -163,9 +163,11 @@ export default function AccountPicker({
   // blanks them until it does; the two are never rendered from different
   // generations.
   const [rows, setRows] = useState<AccountSummary[]>(accounts);
-  useEffect(() => {
+  const [rowsSource, setRowsSource] = useState(accounts);
+  if (accounts !== rowsSource) {
+    setRowsSource(accounts);
     setRows(accounts);
-  }, [accounts]);
+  }
 
   const [open, setOpen] = useState(false);
   const [focusIndex, setFocusIndex] = useState(0);
@@ -187,6 +189,7 @@ export default function AccountPicker({
   const secretInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Account-secret storage is intentionally read after hydration to preserve SSR markup.
     setSecretState(hasAccountSecret() ? "present" : "missing");
   }, []);
 
@@ -270,14 +273,16 @@ export default function AccountPicker({
   // always resolves against the CURRENT list, whatever order the summary and the
   // companion session happen to arrive in.
   const accountsRef = useRef(accounts);
-  accountsRef.current = accounts;
   const activeRiotIdRef = useRef(activeRiotId);
-  activeRiotIdRef.current = activeRiotId;
   // Ref, not a dependency: the detection effect is keyed on `session` alone so
   // it fires exactly once per load, and taking the callback as a dep would
   // re-run the /me read every time the page re-renders with a new closure.
   const onIdentityDetectedRef = useRef(onIdentityDetected);
-  onIdentityDetectedRef.current = onIdentityDetected;
+  useEffect(() => {
+    accountsRef.current = accounts;
+    activeRiotIdRef.current = activeRiotId;
+    onIdentityDetectedRef.current = onIdentityDetected;
+  }, [accounts, activeRiotId, onIdentityDetected]);
   // NOT a per-effect `cancelled` closure, and this is load-bearing. React
   // StrictMode double-invokes effects in dev (mount -> cleanup -> mount): the
   // module-level once-per-load guard makes the second run a no-op, and a

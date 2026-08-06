@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { ChampionRef, BuildResponse, Pick as RunePick, RunesBlock, ShardSet, TreeRef } from "@/lib/types";
 import type { ProGame, ProGamesApiResponse } from "@/components/proGames.types";
 import type { OtpPlayerSummary, OtpResponse } from "@/lib/otp/types";
@@ -25,6 +25,8 @@ import { buildRuneApplyBody } from "./runeApplyBody";
 import { applyItemSetsForBuild } from "./itemSetsApply";
 import type { ProConsensusItemsInput } from "./itemSetBody";
 import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/components/live/companionClient";
+
+const subscribeToSession = () => () => {};
 import { aggregateRecordedSkillOrders } from "@/lib/skillOrderAggregate";
 import SkillOrderGrid from "./SkillOrderGrid";
 import type { SkillOrderModel } from "./skillOrder";
@@ -256,12 +258,8 @@ export function ApplyProRunesButton({ champ, roleLabel, model, fallbackShards, r
   const isOtp = variant === "otp";
   const label = isOtp ? "OTP" : "pro";
   const pageSuffix = isOtp ? "OTP" : "Pro";
-  const [ready, setReady] = useState(false);
+  const ready = useSyncExternalStore(subscribeToSession, hasSession, () => false);
   const [state, setState] = useState<ApplyUiState>({ status: "idle" });
-
-  useEffect(() => {
-    setReady(hasSession());
-  }, []);
 
   const input =
     runePage !== undefined
@@ -381,12 +379,8 @@ export function AddProItemBuildButton({ champ, lane, roleLabel, build, otpItems,
   variant?: ConsensusVariant;
 }) {
   const isOtp = variant === "otp";
-  const [ready, setReady] = useState(false);
+  const ready = useSyncExternalStore(subscribeToSession, hasSession, () => false);
   const [state, setState] = useState<ItemSetsUiState>({ status: "idle" });
-
-  useEffect(() => {
-    setReady(hasSession());
-  }, []);
 
   async function handleClick() {
     const session = getStoredSession();
@@ -582,6 +576,12 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
   // branch below; the effect itself also auto-retries before ever surfacing
   // the error state.
   const [retryToken, setRetryToken] = useState(0);
+  const requestKey = `${champ.id}:${champ.key}:${lane}:${ver}:${variant}:${retryToken}`;
+  const [previousRequestKey, setPreviousRequestKey] = useState(requestKey);
+  if (requestKey !== previousRequestKey) {
+    setPreviousRequestKey(requestKey);
+    setState({ status: "loading" });
+  }
   const [names, setNames] = useState<DisplayNames>({
     items: new Map(),
     keystone: null,
@@ -591,7 +591,6 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
 
   useEffect(() => {
     let cancelled = false;
-    setState({ status: "loading" });
     const role = LANE_TO_ROLE_ID[lane];
     // v0.27.0 (user request, "pro players seem to build Rocketbelt on
     // Viktor"): a separate, independent fetch from ProBuildsTab's own list —

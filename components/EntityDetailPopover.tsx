@@ -43,11 +43,20 @@ const KIND_LABEL: Record<EntityKind, string> = {
 export default function EntityDetailPopover({ kind, id, ver, open, onClose }: EntityDetailPopoverProps) {
   // undefined = loading, null = resolved but nothing further to show.
   const [resolved, setResolved] = useState<ResolvedEntity | undefined>(undefined);
+  const resolveKey = `${kind}:${id}:${ver}`;
+  const [previousResolveKey, setPreviousResolveKey] = useState(resolveKey);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open && (!wasOpen || resolveKey !== previousResolveKey)) {
+    setWasOpen(true);
+    setPreviousResolveKey(resolveKey);
+    setResolved(undefined);
+  } else if (!open && wasOpen) {
+    setWasOpen(false);
+  }
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setResolved(undefined);
 
     (async () => {
       if (kind === "shard") {

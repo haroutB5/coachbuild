@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import type { ChampionRef } from "@/lib/types";
 import { isFavoriteChampion } from "@/lib/favorites";
@@ -13,6 +13,9 @@ import { matchChampions } from "./championSearch";
 // Module-level (stable reference) so FavoriteStarButton's subscribe effect
 // doesn't re-run on every ChampionPicker re-render (e.g. each keystroke).
 const checkChampionFavorited = (id: string | number) => isFavoriteChampion(Number(id));
+const subscribeToHydration = () => () => {};
+const getHydratedSnapshot = () => true;
+const getServerHydratedSnapshot = () => false;
 
 const FALLBACK_CHAMPIONS: ChampionRef[] = [
   { id: 112, key: "Viktor", name: "Viktor", icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/Viktor.webp" },
@@ -62,6 +65,13 @@ export default function ChampionPicker({
   const pickerLabel = placeholder.replace(/[….]+$/, "");
   const [champions, setChampions] = useState<ChampionRef[]>(FALLBACK_CHAMPIONS);
   const [query, setQuery] = useState("");
+  const [selectionCleared, setSelectionCleared] = useState(value === null);
+  if (value === null && !selectionCleared) {
+    setSelectionCleared(true);
+    setQuery("");
+  } else if (value !== null && selectionCleared) {
+    setSelectionCleared(false);
+  }
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -75,7 +85,7 @@ export default function ChampionPicker({
   // `document`; `coords` is null until the first position measurement lands
   // (avoids a one-frame flash at (0,0)); `dropdownRef` lets the outside-click
   // handler recognize clicks inside the now-detached-from-containerRef list.
-  const [mounted, setMounted] = useState(false);
+  const mounted = useSyncExternalStore(subscribeToHydration, getHydratedSnapshot, getServerHydratedSnapshot);
   const [coords, setCoords] = useState<DropdownCoords | null>(null);
 
   // Focus on mount when summoned. Deliberately calls .focus() rather than using
@@ -86,8 +96,6 @@ export default function ChampionPicker({
     if (autoFocus) inputRef.current?.focus();
   }, [autoFocus]);
   const dropdownRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => setMounted(true), []);
 
   // Fetch champion list from API; silently fall back to hardcoded list
   useEffect(() => {
@@ -104,10 +112,6 @@ export default function ChampionPicker({
 
   // If the parent clears the selection (e.g. the page-level "Clear
   // selection" ×), reflect that by emptying the input back to placeholder.
-  useEffect(() => {
-    if (value === null) setQuery("");
-  }, [value]);
-
   // Close on outside click or Escape. The dropdown is portaled out of
   // containerRef's DOM subtree, so "outside" must also exclude dropdownRef —
   // otherwise a mousedown on a result row would close the dropdown (removing
@@ -144,6 +148,7 @@ export default function ChampionPicker({
     if (!open) {
       // Drop any stale measurement so the next open re-measures from
       // scratch instead of flashing at last time's position for a frame.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- plain reset-on-close; kept beside this effect's geometry writes so the coords lifecycle stays in one place (deriving open ? coords : null would split it).
       setCoords(null);
       return;
     }

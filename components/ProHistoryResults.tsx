@@ -76,10 +76,15 @@ export default function ProHistoryResults({
   // (unrendered, see sourceFilterRow below) `source` toggle state.
   const isLinkOnly = mode === "player" && !playerId && !!playerLink;
   const effectiveSource: ProGameSource = isLinkOnly ? "prostage" : source;
+  const requestKey = `${mode}:${playerId ?? ""}:${playerLink ?? ""}:${championId ?? ""}:${role ?? ""}:${limit}:${source}:${refreshTick}`;
+  const [previousRequestKey, setPreviousRequestKey] = useState(requestKey);
+  if (requestKey !== previousRequestKey) {
+    setPreviousRequestKey(requestKey);
+    setState({ status: "loading" });
+  }
 
   useEffect(() => {
     let cancelled = false;
-    setState({ status: "loading" });
 
     const url =
       mode === "player"

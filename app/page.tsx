@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useSyncExternalStore } from "react";
 import type { ChampionRef } from "@/lib/types";
 import ChampionHero from "@/components/hextech/ChampionHero";
 import type { HextechTab } from "@/components/hextech/HextechTabs";
@@ -45,6 +45,9 @@ import { DEFAULT_RANK_BRACKET } from "@/lib/rankBrackets";
 import { readStoredRankBracketId, writeStoredRankBracketId } from "@/components/hextech/rankBracketStorage";
 
 const INITIAL_LANE: LaneId = "mid";
+const subscribeToHydration = () => () => {};
+const getHydratedSnapshot = () => true;
+const getServerHydratedSnapshot = () => false;
 
 // v0.51.0 (D1, global-nav + Builds redesign): the BUILD/PRO BUILDS tab strip
 // and the sidebar's PROS search mode are both retired from "/" — this page
@@ -94,6 +97,7 @@ export default function HomePage() {
     );
     sessionChosenRef.current = session.chosen;
     if (session.chosen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Restoring the persisted visit is an atomic, test-pinned champion/lane session transaction.
       setChamp(session.champ);
       setActiveLane(session.lane);
       setChampChosen(true);
@@ -138,14 +142,20 @@ export default function HomePage() {
   // hydrate-after-mount + gate-the-first-fetch contract BuildTabContent used
   // to own directly (see rankHydrated's original doc comment, preserved
   // here): initialize to the default bracket (matches SSR), correct from
-  // localStorage in a mount-only effect, and don't let BuildTabContent fire
+  // localStorage after hydration, and don't let BuildTabContent fire
   // its fetch before that correction lands.
   const [rankBracket, setRankBracket] = useState<string>(DEFAULT_RANK_BRACKET.id);
-  const [rankHydrated, setRankHydrated] = useState(false);
-  useEffect(() => {
-    setRankBracket(readStoredRankBracketId());
-    setRankHydrated(true);
-  }, []);
+  const storedRankBracket = useSyncExternalStore(
+    subscribeToHydration,
+    readStoredRankBracketId,
+    () => DEFAULT_RANK_BRACKET.id
+  );
+  const [previousStoredRankBracket, setPreviousStoredRankBracket] = useState(storedRankBracket);
+  if (storedRankBracket !== previousStoredRankBracket) {
+    setPreviousStoredRankBracket(storedRankBracket);
+    setRankBracket(storedRankBracket);
+  }
+  const rankHydrated = useSyncExternalStore(subscribeToHydration, getHydratedSnapshot, getServerHydratedSnapshot);
   function handleRankChange(id: string) {
     setRankBracket(id);
     writeStoredRankBracketId(id);

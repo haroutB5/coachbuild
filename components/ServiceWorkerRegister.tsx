@@ -35,6 +35,7 @@ export default function ServiceWorkerRegister() {
   // Hydrate the last-dismissed version from localStorage on mount (SSR-safe).
   useEffect(() => {
     try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- The persisted dismissal is deliberately unavailable until after SSR hydration.
       setDismissedVersion(localStorage.getItem(SW_UPDATE_DISMISSED_STORAGE_KEY));
     } catch {
       /* localStorage unavailable (private mode / disabled) — just show the toast */

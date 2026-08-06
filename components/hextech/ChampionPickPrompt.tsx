@@ -31,7 +31,7 @@
 // short explanatory line still shows so the page never looks broken.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { LANE_ORDER, LANE_LABEL, LANE_TO_ROLE_ID, type LaneId } from "./heroContracts";
 import { fetchMyStatsSummary, buildMyStatsRows, type MyStatsRecord, type MyStatsChampionRow } from "./myStats";
@@ -39,6 +39,24 @@ import { getChampionIconMap, type ChampionIconEntry } from "@/components/proAsse
 import { IconWithFallback } from "@/components/IconWithFallback";
 import { readRecentChampions, type RecentChampionEntry } from "@/lib/recentChampions";
 import type { Mover } from "./MoverRow";
+
+const EMPTY_RECENT_CHAMPIONS: RecentChampionEntry[] = [];
+let recentChampionsSnapshot = EMPTY_RECENT_CHAMPIONS;
+const subscribeToRecentChampions = () => () => {};
+function getRecentChampionsSnapshot(): RecentChampionEntry[] {
+  const next = readRecentChampions();
+  if (
+    next.length === recentChampionsSnapshot.length &&
+    next.every((entry, index) => {
+      const previous = recentChampionsSnapshot[index];
+      return previous?.championId === entry.championId && previous?.lane === entry.lane;
+    })
+  ) {
+    return recentChampionsSnapshot;
+  }
+  recentChampionsSnapshot = next;
+  return recentChampionsSnapshot;
+}
 
 interface ChampionPickPromptProps {
   /** Selects `championId` and lands directly on `lane` — every section below
@@ -68,7 +86,7 @@ export default function ChampionPickPrompt({ onQuickPick }: ChampionPickPromptPr
   const [iconMap, setIconMap] = useState<Map<number, ChampionIconEntry> | null>(null);
   const [myRecords, setMyRecords] = useState<MyStatsRecord[] | null>(null); // null while loading
   const [myUnavailable, setMyUnavailable] = useState(false);
-  const [recent, setRecent] = useState<RecentChampionEntry[]>([]);
+  const recent = useSyncExternalStore(subscribeToRecentChampions, getRecentChampionsSnapshot, () => EMPTY_RECENT_CHAMPIONS);
   const [movers, setMovers] = useState<MoversWire | null>(null); // null while loading
   const [moversUnavailable, setMoversUnavailable] = useState(false);
 
@@ -102,10 +120,6 @@ export default function ChampionPickPrompt({ onQuickPick }: ChampionPickPromptPr
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  useEffect(() => {
-    setRecent(readRecentChampions());
   }, []);
 
   useEffect(() => {

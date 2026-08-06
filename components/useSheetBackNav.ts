@@ -66,11 +66,6 @@ export function runNavRestore(restoringRef: { current: boolean }, restore: () =>
   }
 }
 
-// Sentinel for "not captured yet" in the mount-time snapshot below — `unknown`
-// (not `null`) because `window.history.state` legitimately IS `null` for a
-// genuinely fresh entry, so `null` can't double as the sentinel.
-const UNCAPTURED: unique symbol = Symbol("useSheetBackNav.uncaptured");
-
 interface UseSheetBackNavOptions<S> {
   /** Namespace owned by this page. It is written into every entry and is
    *  required when validating an entry on mount or popstate. */
@@ -124,10 +119,6 @@ export function useSheetBackNav<S>({
   onApplySelection,
   seedInitialSelection,
 }: UseSheetBackNavOptions<S>): UseSheetBackNavResult<S> {
-  const [openGameId, setOpenGameId] = useState<string | null>(null);
-  // True while a popstate-driven restore is applying — see isRestoring's doc.
-  const restoringRef = useRef(false);
-
   // Snapshot `window.history.state` ONCE, synchronously, at the very first
   // render — before the mount effect below (or any effect) has run. Reading
   // it fresh INSIDE that effect is what used to happen, and it is not safe:
@@ -143,12 +134,15 @@ export function useSheetBackNav<S>({
   // sibling effect (e.g. a page's own session-restore effect) set in the
   // interim. Capturing once at render makes both StrictMode invokes agree:
   // either both take the resume branch or both take the fresh-seed branch,
-  // never a mismatch. (Sanctioned "compute once during render" ref idiom —
-  // see the React docs on refs written during render.)
-  const existingHistoryStateRef = useRef<unknown>(UNCAPTURED);
-  if (existingHistoryStateRef.current === UNCAPTURED) {
-    existingHistoryStateRef.current = typeof window !== "undefined" ? window.history.state : null;
-  }
+  // never a mismatch. A lazy state initializer retains that immutable snapshot
+  // without accessing a ref during render.
+  const [existingHistoryState] = useState<unknown>(() =>
+    typeof window !== "undefined" ? window.history.state : null
+  );
+  const [openGameId, setOpenGameId] = useState<string | null>(() =>
+    isNavSheetState<S>(existingHistoryState, namespace) ? existingHistoryState.openGameId : null
+  );
+  const restoringRef = useRef(false);
 
   function pushSelection(selection: S | null) {
     setOpenGameId(null);
@@ -190,10 +184,8 @@ export function useSheetBackNav<S>({
   // a "change," so back from here correctly exits to wherever the user came
   // from (no extra entry).
   useEffect(() => {
-    const existing = existingHistoryStateRef.current;
-    if (isNavSheetState<S>(existing, namespace)) {
-      setOpenGameId(existing.openGameId);
-      applySelectionSafely(existing.selection);
+    if (isNavSheetState<S>(existingHistoryState, namespace)) {
+      applySelectionSafely(existingHistoryState.selection);
       return;
     }
     const initial = seedInitialSelection ? seedInitialSelection() : null;

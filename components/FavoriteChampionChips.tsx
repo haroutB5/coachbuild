@@ -1,11 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { getFavoriteChampions, type FavoriteChampion } from "@/lib/favorites";
 import { CHAMPION_FAVORITES_CHANGED_EVENT, toggleFavoriteChampion } from "./favoritesSync";
 import { getChampionIconMap, type ChampionIconEntry } from "./proAssets";
 import { IconWithFallback } from "./IconWithFallback";
 import type { ChampionRef } from "@/lib/types";
+
+const subscribeToHydration = () => () => {};
+const getHydratedSnapshot = () => true;
+const getServerHydratedSnapshot = () => false;
 
 interface FavoriteChampionChipsProps {
   onSelect: (champ: ChampionRef) => void;
@@ -29,12 +33,11 @@ interface FavoriteChampionChipsProps {
  * localStorage doesn't exist during SSR).
  */
 export default function FavoriteChampionChips({ onSelect }: FavoriteChampionChipsProps) {
-  const [mounted, setMounted] = useState(false);
+  const mounted = useSyncExternalStore(subscribeToHydration, getHydratedSnapshot, getServerHydratedSnapshot);
   const [favorites, setFavorites] = useState<FavoriteChampion[]>([]);
   const [iconMap, setIconMap] = useState<Map<number, ChampionIconEntry> | null>(null);
 
   useEffect(() => {
-    setMounted(true);
     const refresh = () => setFavorites(getFavoriteChampions());
     refresh();
     window.addEventListener(CHAMPION_FAVORITES_CHANGED_EVENT, refresh);

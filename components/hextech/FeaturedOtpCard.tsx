@@ -437,6 +437,14 @@ export default function FeaturedOtpCard({
   const [runeArt, setRuneArt] = useState<ReadonlyMap<number, { name: string; icon: string }>>(new Map());
   const [skillPriority, setSkillPriority] = useState<string[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const requestKey = `${champ.id}:${champ.key}:${ver}`;
+  const [previousRequestKey, setPreviousRequestKey] = useState(requestKey);
+  if (requestKey !== previousRequestKey) {
+    setPreviousRequestKey(requestKey);
+    setLoading(true);
+    setRuneArt(new Map());
+    setSkillPriority(null);
+  }
 
   // Keep the effect's request object stable across state updates, but rebuild
   // it when the champion key changes as well as when its numeric id/version do.
@@ -452,9 +460,6 @@ export default function FeaturedOtpCard({
     // ProConsensusCard uses. Switching champion fast otherwise lets an older
     // response land last and paint the wrong player's build.
     let cancelled = false;
-    setLoading(true);
-    setRuneArt(new Map());
-    setSkillPriority(null);
     // Champion-level, from the same op.gg feed the skill-order card uses. Its
     // failure costs one line, so it is fetched separately and never blocks.
     fetch(`/api/skill-order?champ=${request.champId}&role=2`)

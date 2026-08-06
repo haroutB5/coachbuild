@@ -85,6 +85,7 @@ export default function LiveSetupPage() {
     const fromUrl = params.get("session");
     if (fromUrl) {
       setStoredSession(fromUrl);
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- The paired session and its local preferences hydrate together after SSR.
       setSession(fromUrl);
     } else {
       setSession(getStoredSession());

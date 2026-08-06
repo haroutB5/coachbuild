@@ -2,6 +2,16 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.100.0] — 2026-08-06 — React Compiler-ready hooks
+
+### Changed
+- **All React Hooks v6 rules now enforce at error.** 39 components restructured to
+  derive state during render instead of mirroring it through effects; 13 deliberate
+  timing exceptions documented at their call sites. No visible behavior changes —
+  verified by a cold-start audit driving every major surface, plus a StrictMode
+  dev pass. Pairing the companion mid-session now reveals Apply buttons without a
+  reload (a small win from the restructure).
+
 ## [0.99.1] — 2026-08-06 — Old-game spell icons
 
 ### Fixed

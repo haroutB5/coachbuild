@@ -57,6 +57,12 @@ export default function SkillOrderNextPanel({ championId, lane }: SkillOrderNext
   const companion = useCompanion();
   const [model, setModel] = useState<SkillOrderModel | null>(null);
   const [live, setLive] = useState<LiveSkillState | null>(null);
+  const modelRequestKey = `${championId}:${lane ?? ""}`;
+  const [previousModelRequestKey, setPreviousModelRequestKey] = useState(modelRequestKey);
+  if (modelRequestKey !== previousModelRequestKey) {
+    setPreviousModelRequestKey(modelRequestKey);
+    setModel(null);
+  }
 
   // The recommended order for whatever champion+lane /compact is currently
   // showing. Same request the Builds page's SkillOrderCard makes, and the
@@ -74,7 +80,6 @@ export default function SkillOrderNextPanel({ championId, lane }: SkillOrderNext
   // See HANDOFF-engy.md.
   useEffect(() => {
     let cancelled = false;
-    setModel(null);
     if (!championId || championId <= 0) return;
     // When the lane IS known, ask for it directly. When it is not, probe every
     // lane and keep the largest sample — this used to send `role=5` with the
@@ -102,11 +107,16 @@ export default function SkillOrderNextPanel({ championId, lane }: SkillOrderNext
   // panel disappears with the game rather than freezing on the last level.
   const inGame = companion.phase === "InProgress";
   const session = companion.session;
+  const liveRequestKey = inGame && session ? session : null;
+  const [previousLiveRequestKey, setPreviousLiveRequestKey] = useState(liveRequestKey);
+  if (liveRequestKey !== previousLiveRequestKey) {
+    setPreviousLiveRequestKey(liveRequestKey);
+    setLive(null);
+  }
   const requestRef = useRef(0);
 
   useEffect(() => {
     if (!inGame || !session) {
-      setLive(null);
       return;
     }
     let cancelled = false;

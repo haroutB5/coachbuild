@@ -19,7 +19,7 @@
 //      committed immediately instead.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 
 /** `useLayoutEffect` warns when React renders on the server. Every consumer
  *  here is gated behind client-side fetched state, so the layout variant is
@@ -27,24 +27,25 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
  *  if a future caller ever renders one of these during SSR. */
 const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
+function getReducedMotionSnapshot(): boolean {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    : false;
+}
+
+function subscribeToReducedMotion(onStoreChange: () => void): () => void {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {};
+  const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+  if (typeof mediaQuery.addEventListener === "function") {
+    mediaQuery.addEventListener("change", onStoreChange);
+    return () => mediaQuery.removeEventListener("change", onStoreChange);
+  }
+  mediaQuery.addListener(onStoreChange);
+  return () => mediaQuery.removeListener(onStoreChange);
+}
+
 export function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(false);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    setReduced(mq.matches);
-    const onChange = (e: MediaQueryListEvent) => setReduced(e.matches);
-    if (typeof mq.addEventListener === "function") {
-      mq.addEventListener("change", onChange);
-      return () => mq.removeEventListener("change", onChange);
-    }
-    // Safari < 14 only has the deprecated listener API.
-    mq.addListener(onChange);
-    return () => mq.removeListener(onChange);
-  }, []);
-
-  return reduced;
+  return useSyncExternalStore(subscribeToReducedMotion, getReducedMotionSnapshot, () => false);
 }
 
 /** ease-out-quint — the "settles rather than stops" curve the rest of this

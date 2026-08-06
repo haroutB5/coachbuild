@@ -34,6 +34,11 @@ function playerLabel(player: PlayerRef): string {
 
 export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
   const [query, setQuery] = useState("");
+  const [queryValue, setQueryValue] = useState(value);
+  if (value !== queryValue) {
+    setQueryValue(value);
+    setQuery(value ? playerLabel(value) : "");
+  }
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [search, setSearch] = useState<SearchState>({ status: "idle" });
@@ -41,6 +46,12 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queryKey = query.trim();
+  const [previousQueryKey, setPreviousQueryKey] = useState(queryKey);
+  if (queryKey !== previousQueryKey) {
+    setPreviousQueryKey(queryKey);
+    if (queryKey.length < MIN_CHARS) setSearch({ status: "idle" });
+  }
   // Bumped on every new query so a slow, stale response can't clobber a
   // faster, more recent one (classic typeahead race).
   const reqIdRef = useRef(0);
@@ -49,17 +60,12 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
   // selection" ✕ clears it back to placeholder, and a favorites-chip tap
   // (which sets `value` directly, bypassing this component's own `select()`)
   // needs the same "Name — Team" text a normal in-dropdown pick would show.
-  useEffect(() => {
-    setQuery(value ? playerLabel(value) : "");
-  }, [value]);
-
   // Debounced live search — fires ~250ms after the user stops typing, only
   // once the query clears the 2-char floor.
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    const q = query.trim();
+    const q = queryKey;
     if (q.length < MIN_CHARS) {
-      setSearch({ status: "idle" });
       return;
     }
     debounceRef.current = setTimeout(() => {
@@ -84,7 +90,7 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [query]);
+  }, [queryKey]);
 
   // Close on outside click or Escape
   useEffect(() => {

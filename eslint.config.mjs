@@ -4,12 +4,16 @@ import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
 export default defineConfig([{
     extends: [...nextCoreWebVitals],
     rules: {
-        // Next-16 migration (2026-08-06): eslint-plugin-react-hooks v6 ships two
-        // new React-Compiler-era rules that the pre-migration config never
-        // enforced. 63 pre-existing call sites trip them. Disabled to keep the
-        // lint contract identical across the upgrade; re-enabling them is a
-        // deliberate modernization pass of its own, not a migration side effect.
-        "react-hooks/set-state-in-effect": "off",
-        "react-hooks/refs": "off",
+        // React hooks v6 modernization (2026-08-06): both compiler-safety
+        // rules are enforced. The 16 deliberate set-state-in-effect exceptions
+        // have inline rationales: SSR/deep-link hydration (app/compact,
+        // app/live-setup, app/page, ServiceWorkerRegister, AccountPicker),
+        // request hand-offs (app/compact, app/movers, BuildTabContent),
+        // transition timing (DetailPopover, GameDetailSheet, BuildTabContent),
+        // DOM geometry (ChampionPicker, TopBar, ThemedSelect), and the
+        // byte-identical-pinned draft request state machines (app/draft).
+        // react-hooks/refs has no per-site exception.
+        "react-hooks/set-state-in-effect": "error",
+        "react-hooks/refs": "error",
     },
 }]);

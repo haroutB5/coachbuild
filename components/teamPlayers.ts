@@ -122,11 +122,20 @@ export function useTeamPlayers(
   open: boolean
 ): TeamPlayersState {
   const [state, setState] = useState<TeamPlayersState>({ status: "loading" });
+  const requestKey = `${game.id}:${game.source}:${game.championId}:${game.playerLink ?? ""}`;
+  const [previousRequestKey, setPreviousRequestKey] = useState(requestKey);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open && (!wasOpen || requestKey !== previousRequestKey)) {
+    setWasOpen(true);
+    setPreviousRequestKey(requestKey);
+    setState({ status: "loading" });
+  } else if (!open && wasOpen) {
+    setWasOpen(false);
+  }
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setState({ status: "loading" });
     loadTeamPlayers(game).then((result) => {
       if (!cancelled) setState(result);
     });

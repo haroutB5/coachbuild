@@ -490,6 +490,7 @@ export default function GameDetailSheet({
   useEffect(() => {
     if (open) {
       triggerFocusRef.current = document.activeElement;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- The deliberate second render mounts the sheet before its entry transition.
       setRendered(true);
       const raf = requestAnimationFrame(() => setVisible(true));
       return () => cancelAnimationFrame(raf);

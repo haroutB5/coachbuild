@@ -107,16 +107,22 @@ export function useProstageTimeline(
   gameId: string,
   playerLink: string | undefined
 ): { state: ProstageTimelineState; retry: () => void } {
-  const [state, setState] = useState<ProstageTimelineState>({ status: "loading" });
+  const [state, setState] = useState<ProstageTimelineState>(() =>
+    playerLink ? { status: "loading" } : { status: "unavailable" }
+  );
   const [retryTick, setRetryTick] = useState(0);
+  const requestKey = `${gameId}:${playerLink ?? ""}:${retryTick}`;
+  const [previousRequestKey, setPreviousRequestKey] = useState(requestKey);
+  if (requestKey !== previousRequestKey) {
+    setPreviousRequestKey(requestKey);
+    setState(playerLink ? { status: "loading" } : { status: "unavailable" });
+  }
 
   useEffect(() => {
     if (!playerLink) {
-      setState({ status: "unavailable" });
       return;
     }
     let cancelled = false;
-    setState({ status: "loading" });
     loadProstageTimeline(gameId, playerLink).then((result) => {
       if (!cancelled) setState(result);
     });

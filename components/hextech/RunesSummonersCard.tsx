@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import type { RunesBlock, Pick as PickType, BuildResponse } from "@/lib/types";
 import type { LaneId } from "./heroContracts";
 import type { EntityKind } from "@/components/EntityDetailPopover";
@@ -11,6 +11,8 @@ import type { AltKeystone } from "./altKeystone";
 import { buildRuneApplyBody } from "./runeApplyBody";
 import { applyItemSetsForBuild } from "./itemSetsApply";
 import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/components/live/companionClient";
+
+const subscribeToSession = () => () => {};
 
 function CardHeader({ children }: { children: React.ReactNode }) {
   return (
@@ -29,8 +31,8 @@ type ApplyUiState =
 /** v0.32.0 (Live mode, plan §2c): companion-connected "Apply runes" action —
  *  strictly user-clicked (compliance guardrail, plan §3: applyRunes is only
  *  ever invoked from this onClick, never from a poll/effect). Gated on
- *  companionClient.hasSession() (checked in a post-mount effect below, not
- *  during render, to avoid an SSR/client hydration mismatch on a
+ *  companionClient.hasSession() (read through an external-store snapshot, not
+ *  during the server render, to avoid an SSR/client hydration mismatch on a
  *  localStorage read — same pattern as BuildTabContent's rankHydrated) AND
  *  on the caller actually supplying
  *  championName/roleLabel — both optional so any OTHER future caller of this
@@ -45,12 +47,8 @@ function ApplyRunesButton({
   roleLabel: string;
   runes: RunesBlock;
 }) {
-  const [ready, setReady] = useState(false);
+  const ready = useSyncExternalStore(subscribeToSession, hasSession, () => false);
   const [state, setState] = useState<ApplyUiState>({ status: "idle" });
-
-  useEffect(() => {
-    setReady(hasSession());
-  }, []);
 
   async function handleClick() {
     const session = getStoredSession();
@@ -150,12 +148,8 @@ function ItemSetsButton({
   roleLabel: string;
   build: BuildResponse;
 }) {
-  const [ready, setReady] = useState(false);
+  const ready = useSyncExternalStore(subscribeToSession, hasSession, () => false);
   const [state, setState] = useState<ItemSetsUiState>({ status: "idle" });
-
-  useEffect(() => {
-    setReady(hasSession());
-  }, []);
 
   async function handleClick() {
     const session = getStoredSession();

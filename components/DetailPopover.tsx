@@ -45,6 +45,7 @@ export default function DetailPopover({ open, onClose, ariaLabel, header, childr
   useEffect(() => {
     if (open) {
       triggerFocusRef.current = document.activeElement;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- The deliberate second render mounts the shell before its entry transition.
       setRendered(true);
       const raf = requestAnimationFrame(() => setVisible(true));
       return () => cancelAnimationFrame(raf);

@@ -24,7 +24,7 @@
 // mounted before the event fires; if already on "/", emit immediately.
 // app/page.tsx (the ONLY current subscriber) owns actually changing the
 // shown champion — this bar never touches page-level state directly.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useRouter, usePathname } from "next/navigation";
 import type { ChampionRef } from "@/lib/types";
@@ -54,6 +54,9 @@ const SEARCH_ICON = (
 
 const LISTBOX_ID = "topbar-champ-listbox";
 const optId = (i: number) => `topbar-champ-opt-${i}`;
+const subscribeToHydration = () => () => {};
+const getHydratedSnapshot = () => true;
+const getServerHydratedSnapshot = () => false;
 
 function TopBarChampionSearch() {
   const router = useRouter();
@@ -66,10 +69,8 @@ function TopBarChampionSearch() {
   const containerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const [mounted, setMounted] = useState(false);
+  const mounted = useSyncExternalStore(subscribeToHydration, getHydratedSnapshot, getServerHydratedSnapshot);
   const [coords, setCoords] = useState<DropdownCoords | null>(null);
-
-  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     fetch("/api/champions")
@@ -107,6 +108,7 @@ function TopBarChampionSearch() {
   // page/ancestor scroll closes, and scrolling inside the list is ignored.
   useEffect(() => {
     if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- plain reset-on-close; kept beside this effect's geometry writes so the coords lifecycle stays in one place (deriving open ? coords : null would split it).
       setCoords(null);
       return;
     }

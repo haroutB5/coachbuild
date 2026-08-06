@@ -840,13 +840,15 @@ export default function DraftPage() {
   const [blindState, setBlindState] = useState<BlindPickFetchState>({ status: "loading" });
 
   const laneRef = useRef(lane);
-  laneRef.current = lane;
   const enemyIdsRef = useRef(enemyIds);
-  enemyIdsRef.current = enemyIds;
   const laneOpponentIdRef = useRef(laneOpponentId);
-  laneOpponentIdRef.current = laneOpponentId;
   const hoverRef = useRef(hover);
-  hoverRef.current = hover;
+  useEffect(() => {
+    laneRef.current = lane;
+    enemyIdsRef.current = enemyIds;
+    laneOpponentIdRef.current = laneOpponentId;
+    hoverRef.current = hover;
+  }, [lane, enemyIds, laneOpponentId, hover]);
   // v0.40.0 — see draftLiveSync.ts's resolveChampSelectEntry doc comment.
   // Tracks the last REAL (non-null) companion phase across ticks so the
   // live-sync effect below can detect a genuine champ-select ENTRY (not the
@@ -905,6 +907,7 @@ export default function DraftPage() {
   const reqIdRef = useRef(0);
   useEffect(() => {
     const requestId = ++reqIdRef.current;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- The debounced draft request state machine is regression-pinned; loading must begin in this effect.
     setState({ status: "loading" });
     const laneNum = LANE_TO_ROLE_ID[lane];
     const timer = setTimeout(() => {
@@ -942,6 +945,7 @@ export default function DraftPage() {
   const [blindRetry, setBlindRetry] = useState(0);
   useEffect(() => {
     const requestId = ++blindReqIdRef.current;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- The independent blind-pick request state machine is regression-pinned; loading must begin in this effect.
     setBlindState({ status: "loading" });
     const controller = new AbortController();
     const laneNum = LANE_TO_ROLE_ID[lane];

@@ -227,6 +227,12 @@ function BuildLoadingSkeleton({ tab }: { tab: BuildTab }) {
 
 export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated, onPatchResolved }: BuildTabContentProps) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
+  const requestKey = `${champ.id}:${champ.key}:${lane}:${rankBracket}`;
+  const [previousRequestKey, setPreviousRequestKey] = useState(requestKey);
+  if (requestKey !== previousRequestKey) {
+    setPreviousRequestKey(requestKey);
+    setState({ status: "loading" });
+  }
   const [activeDetail, setActiveDetail] = useState<DetailRef | null>(null);
   const [lastDetail, setLastDetail] = useState<DetailRef | null>(null);
   // The BUILD|PRO|OTP split, at EVERY width as of 2026-07-29 (this was
@@ -261,6 +267,7 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
   const [popoverMounted, setPopoverMounted] = useState(false);
   useEffect(() => {
     if (activeDetail !== null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- The popover must remain mounted through its timed exit transition.
       setPopoverMounted(true);
       return;
     }
@@ -302,7 +309,6 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
   // inert no matter which order the two requests actually resolve in.
   const load = useCallback(
     async (c: ChampionRef, l: LaneId, rank: string, isCancelled: () => boolean) => {
-      setState({ status: "loading" });
       try {
         const roleId = LANE_TO_ROLE_ID[l];
         // Feature 3: `rank` is only appended when non-default — keeps the
@@ -359,7 +365,8 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
     // bracket when a returning user actually has a different one stored.
     if (!rankHydrated) return;
     let cancelled = false;
-    load(champ, lane, rankBracket, () => cancelled);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- `load` only updates from its asynchronous, cancellation-guarded fetch response.
+    void load(champ, lane, rankBracket, () => cancelled);
     return () => {
       cancelled = true;
     };

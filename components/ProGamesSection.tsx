@@ -28,10 +28,15 @@ export default function ProGamesSection({
 }: ProGamesSectionProps) {
   const [state, setState] = useState<ProGamesState>({ status: "loading" });
   const [source, setSource] = useState<ProGameSource>("all");
+  const requestKey = `${championId}:${role}:${limit}:${source}`;
+  const [previousRequestKey, setPreviousRequestKey] = useState(requestKey);
+  if (requestKey !== previousRequestKey) {
+    setPreviousRequestKey(requestKey);
+    setState({ status: "loading" });
+  }
 
   useEffect(() => {
     let cancelled = false;
-    setState({ status: "loading" });
 
     fetch(`/api/pros?championId=${championId}&role=${role}&limit=${limit}&source=${source}`)
       .then(async (res) => {

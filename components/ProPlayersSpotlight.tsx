@@ -25,7 +25,7 @@
 //     rather than guessing — same "honest degrade" rule as everywhere else.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ChampionRef } from "@/lib/types";
 import type { PlayerRef } from "./proHistory.types";
 import {
@@ -38,6 +38,10 @@ import { FAVORITES_CHANGED_EVENT, CHAMPION_FAVORITES_CHANGED_EVENT } from "./fav
 import { getChampionIconMap, type ChampionIconEntry } from "./proAssets";
 import ProHistoryResults from "./ProHistoryResults";
 import ProGamesSkeleton from "./ProGamesSkeleton";
+
+const subscribeToHydration = () => () => {};
+const getHydratedSnapshot = () => true;
+const getServerHydratedSnapshot = () => false;
 
 type Mode = "player" | "champion";
 
@@ -121,14 +125,13 @@ function SpotlightHeader({ eyebrow, title, onOpen }: SpotlightHeaderProps) {
 }
 
 export default function ProPlayersSpotlight({ mode, onSelectPlayer, onSelectChampion }: ProPlayersSpotlightProps) {
-  const [mounted, setMounted] = useState(false);
+  const mounted = useSyncExternalStore(subscribeToHydration, getHydratedSnapshot, getServerHydratedSnapshot);
   const [playerFavs, setPlayerFavs] = useState<FavoritePlayer[]>([]);
   const [champFavs, setChampFavs] = useState<FavoriteChampion[]>([]);
   const [iconMap, setIconMap] = useState<Map<number, ChampionIconEntry> | null>(null);
   const [fallback, setFallback] = useState<FallbackState>({ status: "idle" });
 
   useEffect(() => {
-    setMounted(true);
     const refreshPlayers = () => setPlayerFavs(getFavorites());
     const refreshChamps = () => setChampFavs(getFavoriteChampions());
     refreshPlayers();

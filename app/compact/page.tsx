@@ -47,7 +47,6 @@ const roleParamToLane = (raw: string | null): LaneId | null => {
 
 export default function CompactPage() {
   const companion = useCompanion();
-  const [state, setState] = useState<LoadState>({ kind: "idle" });
   const [lane, setLane] = useState<LaneId | null>(null);
   const requestRef = useRef(0);
 
@@ -65,6 +64,7 @@ export default function CompactPage() {
     if (session) companion.setSession(session);
 
     const laneFromParam = roleParamToLane(params.get("role"));
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- URL parameters hydrate after SSR and must be applied once as one deep-link transaction.
     if (laneFromParam) setLane(laneFromParam);
 
     const championId = Number.parseInt(params.get("championId") ?? "", 10);
@@ -78,14 +78,18 @@ export default function CompactPage() {
     companion.phase === "ChampSelect" ? resolveCurrentChampSelectChampionId(companion.champSelect) : null;
   const liveRoleId = companion.phase === "ChampSelect" ? resolveChampSelectRoleId(companion.champSelect) : undefined;
   const championId = liveChampionId ?? initialChampionId;
-
-  useEffect(() => {
-    if (liveRoleId !== undefined) setLane(roleIdToLane(liveRoleId));
-  }, [liveRoleId]);
+  const [state, setState] = useState<LoadState>({ kind: "idle" });
+  const requestKey = championId == null ? null : `${championId}:${lane ?? ""}`;
+  const [previousRequestKey, setPreviousRequestKey] = useState<string | null>(null);
+  if (requestKey !== previousRequestKey) {
+    setPreviousRequestKey(requestKey);
+    if (championId !== null) setState({ kind: "loading", championId });
+  }
+  const liveLane = liveRoleId === undefined ? null : roleIdToLane(liveRoleId);
+  if (liveLane !== null && liveLane !== lane) setLane(liveLane);
 
   const load = useCallback(async (champion: number, forLane: LaneId | null) => {
     const requestId = ++requestRef.current;
-    setState({ kind: "loading", championId: champion });
     try {
       const roleId = forLane ? LANE_TO_ROLE_ID[forLane] : 5; // 5 = let the API pick
       const response = await fetch(`/api/build?champ=${champion}&role=${roleId}`);
@@ -108,10 +112,11 @@ export default function CompactPage() {
       if (requestRef.current !== requestId) return;
       setState({ kind: "error", message: "Couldn't reach the build service." });
     }
-  }, []);
+  }, [setState]);
 
   useEffect(() => {
     if (championId == null || championId <= 0) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- `load` only updates from its asynchronous, request-id-guarded fetch response.
     void load(championId, lane);
   }, [championId, lane, load]);
 

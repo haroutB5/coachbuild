@@ -1,8 +1,12 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { computeDropdownPosition, type DropdownCoords } from "./dropdownPosition";
+
+const subscribeToHydration = () => () => {};
+const getHydratedSnapshot = () => true;
+const getServerHydratedSnapshot = () => false;
 
 export interface ThemedSelectOption<T extends string | number> {
   value: T;
@@ -41,15 +45,14 @@ export default function ThemedSelect<T extends string | number>({
     options.findIndex((option) => option.value === value)
   );
   const [open, setOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(selectedIndex);
-  const [mounted, setMounted] = useState(false);
+  const [activeIndexState, setActiveIndex] = useState(selectedIndex);
+  const activeIndex = options.length === 0 ? 0 : Math.min(activeIndexState, options.length - 1);
+  const mounted = useSyncExternalStore(subscribeToHydration, getHydratedSnapshot, getServerHydratedSnapshot);
   const [coords, setCoords] = useState<DropdownCoords | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
-
-  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     if (!open) return;
@@ -82,6 +85,7 @@ export default function ThemedSelect<T extends string | number>({
 
   useEffect(() => {
     if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- plain reset-on-close; kept beside this effect's geometry writes so the coords lifecycle stays in one place (deriving open ? coords : null would split it).
       setCoords(null);
       return;
     }
@@ -112,14 +116,6 @@ export default function ThemedSelect<T extends string | number>({
       window.removeEventListener("scroll", onScroll, true);
     };
   }, [open]);
-
-  useEffect(() => {
-    if (!options.length) {
-      setActiveIndex(0);
-    } else if (activeIndex >= options.length) {
-      setActiveIndex(options.length - 1);
-    }
-  }, [activeIndex, options.length]);
 
   useEffect(() => {
     if (!open || !coords) return;

@@ -65,10 +65,15 @@ function SkillOrderSkeleton() {
 export default function SkillOrderCard({ champ, lane }: SkillOrderCardProps) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
   const [retryToken, setRetryToken] = useState(0);
+  const requestKey = `${champ.id}:${lane}:${retryToken}`;
+  const [previousRequestKey, setPreviousRequestKey] = useState(requestKey);
+  if (requestKey !== previousRequestKey) {
+    setPreviousRequestKey(requestKey);
+    setState({ status: "loading" });
+  }
 
   useEffect(() => {
     let cancelled = false;
-    setState({ status: "loading" });
     const role = LANE_TO_ROLE_ID[lane];
     fetchSkillOrder(champ.id, role).then((result) => {
       if (cancelled) return;
