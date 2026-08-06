@@ -2,6 +2,33 @@
 
 Verified facts that cost real debugging time. Cite these before touching the relevant area.
 
+## Build-surface invariants (v0.100.1, 2026-08-06 — all three user-reported on Jax)
+
+- **Hidden-gem pools dedupe by item id, keeping the largest-occurrence entry** — the pool
+  merges core + optimizedPath + situational, and the same id arrives from different
+  conditioned fetches with different stats. The dedupe lives INSIDE `selectHiddenGemPicks`
+  (components/hextech/itemSetBody.ts) so the build-page card and the exported shop block
+  cannot disagree. Dedupe happens BEFORE the median baseline, on purpose.
+- **OPTIMIZED ORDER only reorders the WPA build's own legendary ids** (`wpaBuildItemIds` in
+  lib/recommend.ts → `buildOptimizedPath`'s `allowedItemIds`). The constraint is enforced via
+  `conditionedLeader`'s EXCLUSION predicate, never by pre-filtering the pool: the
+  adoption-relative floor (`OPTIMIZER_ADOPT_FRAC`) is a fraction of the conditioned slot's
+  TOTAL games, and a pre-filter shrank that total up to 8.7x (measured: Lee Sin floor
+  8,707→999), re-admitting the thin-adoption spikes the floor exists to reject. LATENT: the
+  dead matchup path can replace first/second/third AFTER the set is built — see the warning
+  comment at the `wpaBuildItemIds` site before waking that path up. Known product question:
+  the constrained chain can surface a negative-WPA step (Lee Sin: Black Cleaver −0.17).
+- **OTP builds backfill to 5 full items + boots when the 15% display floor is sparse**
+  (`MIN_FULL_ITEMS_FOR_BUILD` in lib/otp/featuredBuild.ts), showing real low percentages.
+  Two guards discovered the hard way: (1) support-quest finals are excluded from
+  recommendation surfaces for non-support lanes (`excludeSupportFinalItems` — mis-roled
+  stored games put Bloodsong in Jax TOP's exported item set; `fullBuild` stays untouched,
+  it is a record); (2) the slots include-set is floor-clearing ids ∪ displayed ids — capping
+  it at the displayed six re-priced contested pairs and silently dropped deep-sampled
+  champions' sixth item (Viktor lost Rabadon's).
+- **`npm run dev` is broken on this machine** (Turbopack can't spawn its PostCSS worker,
+  `0xc0000142`; every page 500s). Use `npx next dev --webpack` for local browser checks.
+
 ## Riot timeline / skill orders (2026-08-04 session, all verified live)
 
 - **`SKILL_LEVEL_UP` events are NOT all skill points.** `levelUpType: "EVOLVE"` fires for
