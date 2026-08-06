@@ -2,6 +2,14 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.99.0] — 2026-08-06 — Next.js 16.3 + React 19
+
+### Changed
+- **The app now runs on Next.js 16.3.0 and React 19** (from 14.2 / React 18), migrated in
+  two validated hops. Builds use Turbopack. No feature changes — every surface was
+  driven in a browser on the new runtime before ship, including the back-navigation
+  flows, service worker, and API caching behavior.
+
 ## [0.98.0] — 2026-08-06 — Build Adherence measures for real, plus quality-of-life
 
 ### Fixed

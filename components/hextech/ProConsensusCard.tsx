@@ -736,7 +736,8 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `state` narrowed above; model identity changes every fetch resolution, which is exactly when a re-resolve is wanted
+    // `state` narrowed above; model identity changes every fetch resolution,
+    // which is exactly when a re-resolve is wanted.
   }, [state, ver]);
 
   const isOtp = variant === "otp";

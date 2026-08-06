@@ -899,7 +899,6 @@ export default function DraftPage() {
     // below via `inferredLaneOpponentId`) covers live mode instead.
 
     if (target.hover !== hoverRef.current) setHover(target.hover);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companion.tick, companion.phase, companion.champSelect, dirty]);
 
   // ── Debounced + race-guarded recommend fetch ───────────────────────────

@@ -379,7 +379,6 @@ export default function MyStatsPage() {
       );
       focusPicker();
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [accountScope]
   );
 
