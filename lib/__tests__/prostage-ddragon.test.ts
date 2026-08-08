@@ -9,6 +9,9 @@ const VERSIONS = ["16.13.1"];
 const CHAMPIONS = {
   data: {
     Ahri: { key: "103", id: "Ahri", name: "Ahri" },
+    Jade_Ahri: { key: "60103", id: "Jade_Ahri", name: "Ahri" },
+    Jade_Jax: { key: "60024", id: "Jade_Jax", name: "Jax" },
+    Jax: { key: "24", id: "Jax", name: "Jax" },
     MonkeyKing: { key: "62", id: "MonkeyKing", name: "Wukong" },
   },
 };
@@ -20,7 +23,9 @@ const ITEMS = {
 };
 const SUMMONERS = {
   data: {
+    SummonerCherryFlash: { key: "2202", name: "Flash" },
     SummonerFlash: { key: "4", name: "Flash" },
+    SummonerFlash_Jade: { key: "74", name: "Flash" },
     SummonerDot: { key: "14", name: "Ignite" },
   },
 };
@@ -71,9 +76,26 @@ describe("getDdragonMaps", () => {
   it("resolves champion names to ids, keyed by display name not internal id", () => {
     return getDdragonMaps().then((maps) => {
       expect(maps.championByName.get("ahri")).toBe(103);
+      expect(maps.championByName.get("jax")).toBe(24);
       expect(maps.championByName.get("wukong")).toBe(62); // ddragon `name` is "Wukong" though internal key is MonkeyKing
       expect(maps.championNameById.get(103)).toBe("Ahri");
     });
+  });
+
+  it("keeps the lowest numeric id for duplicate champions and summoner spells regardless of entry order", async () => {
+    const maps = await getDdragonMaps();
+
+    // Ahri is canonical-first while Jax is alt-mode-first in the fixture.
+    expect(maps.championByName.get("ahri")).toBe(103);
+    expect(maps.championByName.get("jax")).toBe(24);
+    expect(maps.collisionFixes.champion.get(60103)).toBe(103);
+    expect(maps.collisionFixes.champion.get(60024)).toBe(24);
+
+    // Cherry Flash precedes Flash while Jade Flash follows it; both collide
+    // on the same real display name and both must resolve to Flash (4).
+    expect(maps.summonerByName.get("flash")).toBe(4);
+    expect(maps.collisionFixes.summoner.get(2202)).toBe(4);
+    expect(maps.collisionFixes.summoner.get(74)).toBe(4);
   });
 
   it("resolves item and summoner spell names to ids", async () => {

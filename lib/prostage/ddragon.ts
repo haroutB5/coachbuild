@@ -44,31 +44,58 @@ const CHAMPION_ALIASES: Record<string, string> = {
   wukong: "wukong", // ddragon `name` is already "Wukong" (internal id key is MonkeyKing) — kept explicit for clarity
 };
 
+export interface DdragonCollisionFixes {
+  champion: Map<number, number>;
+  summoner: Map<number, number>;
+}
+
+type DdragonMapsWithCollisionFixes = DdragonMaps & {
+  /** Numeric ids that collided on a display name and must be rewritten. */
+  collisionFixes: DdragonCollisionFixes;
+};
+
+function setLowestNumericId(map: Map<string, number>, name: string, id: number): void {
+  const existing = map.get(name);
+  if (existing === undefined || id < existing) map.set(name, id);
+}
+
+function buildCollisionFixes(
+  nameById: Map<number, string>,
+  canonicalByName: Map<string, number>
+): Map<number, number> {
+  const fixes = new Map<number, number>();
+  for (const [id, name] of nameById) {
+    const canonicalId = canonicalByName.get(normalizeName(name));
+    if (canonicalId !== undefined && canonicalId !== id) fixes.set(id, canonicalId);
+  }
+  return fixes;
+}
+
 function buildDdragonMaps(
   version: string,
   championData: DdragonChampionData,
   itemData: DdragonItemData,
   summonerData: DdragonSummonerData,
   runesData: DdragonRunesReforged
-): DdragonMaps {
+): DdragonMapsWithCollisionFixes {
   const championByName = new Map<string, number>();
   const championNameById = new Map<number, string>();
   for (const [dataKey, entry] of Object.entries(championData.data)) {
     const id = parseInt(entry.key, 10);
     if (Number.isNaN(id)) continue;
-    championByName.set(normalizeName(entry.name), id);
+    setLowestNumericId(championByName, normalizeName(entry.name), id);
     championNameById.set(id, entry.name);
     // ALSO index ddragon's internal data key ("MonkeyKing", "Fiddlesticks"),
     // not just the display name ("Wukong"). The lolesports livestats feed
     // reports championId as the INTERNAL key, so a live-ingested Wukong game
-    // was unresolvable until this existed. Display name is set first and never
-    // overwritten, so the canonical mapping still wins on any collision.
+    // was unresolvable until this existed. The lowest numeric id wins on any
+    // normalized-name collision, independent of ddragon entry order.
     const keyNorm = normalizeName(dataKey);
-    if (!championByName.has(keyNorm)) championByName.set(keyNorm, id);
+    setLowestNumericId(championByName, keyNorm, id);
   }
   for (const [alias, canonical] of Object.entries(CHAMPION_ALIASES)) {
     const id = championByName.get(normalizeName(canonical));
-    if (id !== undefined) championByName.set(normalizeName(alias), id);
+    if (id !== undefined) setLowestNumericId(championByName, normalizeName(alias), id);
   }
 
   const itemByName = new Map<string, number>();
@@ -77,18 +104,17 @@ function buildDdragonMaps(
     if (Number.isNaN(id)) continue;
     // Don't overwrite an existing (earlier/lower-id) entry — ddragon's
     // item.json can carry multiple ids for stylistically-identical names
-    // across eras; first-seen (lowest key, since Object.entries preserves
-    // numeric-key insertion order ascending) wins.
-    if (!itemByName.has(normalizeName(entry.name))) {
-      itemByName.set(normalizeName(entry.name), id);
-    }
+    // across eras; the helper below explicitly keeps the lowest numeric id.
+    setLowestNumericId(itemByName, normalizeName(entry.name), id);
   }
 
   const summonerByName = new Map<string, number>();
+  const summonerNameById = new Map<number, string>();
   for (const entry of Object.values(summonerData.data)) {
     const id = parseInt(entry.key, 10);
     if (Number.isNaN(id)) continue;
-    summonerByName.set(normalizeName(entry.name), id);
+    setLowestNumericId(summonerByName, normalizeName(entry.name), id);
+    summonerNameById.set(id, entry.name);
   }
 
   const runeByName = new Map<string, { id: number; parentStyleId: number }>();
@@ -102,10 +128,22 @@ function buildDdragonMaps(
     }
   }
 
-  return { version, championByName, championNameById, itemByName, summonerByName, runeByName, styleByName };
+  return {
+    version,
+    championByName,
+    championNameById,
+    itemByName,
+    summonerByName,
+    runeByName,
+    styleByName,
+    collisionFixes: {
+      champion: buildCollisionFixes(championNameById, championByName),
+      summoner: buildCollisionFixes(summonerNameById, summonerByName),
+    },
+  };
 }
 
-let cachedMaps: Promise<DdragonMaps> | null = null;
+let cachedMaps: Promise<DdragonMapsWithCollisionFixes> | null = null;
 
 /** Fetches + memoizes champion/item/summoner/rune name->id maps from ddragon.
  *  Call __resetDdragonCacheForTests() between test cases that need a fresh
@@ -123,7 +161,7 @@ let cachedMaps: Promise<DdragonMaps> | null = null;
  *  Doubly important here because `runLiveProstageIngest` calls this ABOVE
  *  its own try block, so an unrecovered rejection would abort the whole
  *  live-ingest run, not just this one lookup. */
-export function getDdragonMaps(): Promise<DdragonMaps> {
+export function getDdragonMaps(): Promise<DdragonMapsWithCollisionFixes> {
   if (!cachedMaps) {
     cachedMaps = (async () => {
       const version = await fetchLatestVersion();

@@ -302,6 +302,7 @@ param(
     [switch]$Uninstall,
     [switch]$SelfTest,
     [switch]$Mock,
+    [switch]$TestAll,
     [switch]$Once,
     [int]$TimeoutSec = 15,
     # v1.2.1 -- runs the FULL real-mode harness (tray suppressed) for N
@@ -4700,10 +4701,50 @@ function Invoke-MockRun {
 }
 #endregion
 
+#region TestAll
+function Invoke-TestAll {
+    # Test-only runner: invoke each existing suite in a fresh PowerShell
+    # process because SelfTest/Mock/HarnessTest own their process exit codes.
+    # The installed companion path is unchanged; this only combines the three
+    # already-available checks into one CI/release gate.
+    $shellPath = (Get-Process -Id $PID).Path
+    if (-not $shellPath) { $shellPath = 'powershell.exe' }
+    $suites = @(
+        @{ Name = 'SelfTest'; Switch = '-SelfTest' },
+        @{ Name = 'Mock'; Switch = '-Mock' },
+        @{ Name = 'HarnessTest'; Switch = '-HarnessTest' }
+    )
+    $failed = $false
+
+    foreach ($suite in $suites) {
+        Write-Host "TESTALL running $($suite.Name)"
+        $exitCode = 1
+        try {
+            & $shellPath -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath $suite.Switch
+            $exitCode = [int]$LASTEXITCODE
+        } catch {
+            Write-Host "TESTALL $($suite.Name) threw: $($_.Exception.Message)" -ForegroundColor Red
+        }
+        if ($exitCode -ne 0) { $failed = $true }
+        $verdict = if ($exitCode -eq 0) { 'PASSED' } else { 'FAILED' }
+        Write-Host "TESTALL $($suite.Name) VERDICT: $verdict (exit $exitCode)"
+    }
+
+    if ($failed) {
+        Write-Host 'TESTALL FAILED' -ForegroundColor Red
+        exit 1
+    }
+    Write-Host 'TESTALL PASSED' -ForegroundColor Green
+    exit 0
+}
+#endregion
+
 #region Dispatch
 Initialize-TlsShim
 
-if ($SelfTest) {
+if ($TestAll) {
+    Invoke-TestAll
+} elseif ($SelfTest) {
     Invoke-SelfTest
 } elseif ($HarnessTest) {
     Invoke-HarnessTest

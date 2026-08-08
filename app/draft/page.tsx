@@ -602,6 +602,7 @@ function DetailedRankings({
   onShowAll,
   preserveOrder,
   showNoEnemyBlindHint,
+  showCountersNoEnemies,
 }: {
   rows: DetailRow[];
   laneAverageValue: number | null;
@@ -615,6 +616,7 @@ function DetailedRankings({
   onShowAll: () => void;
   preserveOrder: boolean;
   showNoEnemyBlindHint: boolean;
+  showCountersNoEnemies: boolean;
 }) {
   const detailRowByChampionId = new Map(rows.map((row) => [row.candidate.champId, row]));
   const rankingRows = resolveVisibleDraftAssistantRanking({
@@ -755,7 +757,7 @@ function DetailedRankings({
         </div>
       )}
 
-      {rows.length === 0 && <p className="px-4 py-8 text-center text-[11px] text-mut">No rankings meet the active filters.</p>}
+      {rows.length === 0 && <p className="px-4 py-8 text-center text-[11px] text-mut">{showCountersNoEnemies ? "Add an enemy to see counters" : "No rankings meet the active filters."}</p>}
       <div className="border-t border-line px-4 py-3 text-center">
         <button type="button" onClick={onShowAll} disabled={showAll || rows.length <= 10} className="mb-2 block w-full text-[10.5px] font-semibold text-teal hover:text-teal-hover disabled:cursor-default disabled:text-mut">
           {showAll ? "Showing full table" : "View full table →"}
@@ -867,9 +869,16 @@ export default function DraftPage() {
     // state, rather than trying to also apply the target in the same pass.
     const entryResult = resolveChampSelectEntry(entryStateRef.current, companion.phase);
     entryStateRef.current = entryResult.next;
-    if (entryResult.isEntry && dirty) {
-      setDirty(false);
-      return;
+    if (entryResult.isEntry) {
+      // Scope this dismissal to one champ select, just like the companion's
+      // Clear-RuneWriteLedger entry reset. A long-lived /draft page must show
+      // the same champion's locked-pick handoff again in the next game.
+      setDismissedLockedPickId(null);
+      if (dirty) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- the existing dirty latch must clear on the same one-time entry transition.
+        setDirty(false);
+        return;
+      }
     }
 
     const target = resolveDraftLiveTarget({ phase: companion.phase, champSelect: companion.champSelect, dirty });
@@ -1355,7 +1364,7 @@ export default function DraftPage() {
           </div>
 
           <aside className="min-w-0 lg:sticky lg:top-4">
-            <DetailedRankings rows={detailRows} laneAverageValue={detailAverage} sort={detailSort} onSortChange={(sort) => { setDetailSort(sort); setShowFullTable(false); }} grid={detailGrid} onGridChange={setDetailGrid} selectedChampionId={selectedDetailChampionId} onSelect={setSelectedDetailChampionId} showAll={showFullTable} onShowAll={() => setShowFullTable(true)} preserveOrder={preserveDetailOrder} showNoEnemyBlindHint={assistantView === "recommended" && enemyIds.length === 0} />
+            <DetailedRankings rows={detailRows} laneAverageValue={detailAverage} sort={detailSort} onSortChange={(sort) => { setDetailSort(sort); setShowFullTable(false); }} grid={detailGrid} onGridChange={setDetailGrid} selectedChampionId={selectedDetailChampionId} onSelect={setSelectedDetailChampionId} showAll={showFullTable} onShowAll={() => setShowFullTable(true)} preserveOrder={preserveDetailOrder} showNoEnemyBlindHint={assistantView === "recommended" && enemyIds.length === 0} showCountersNoEnemies={assistantView === "counters" && enemyIds.length === 0} />
           </aside>
         </div>
 

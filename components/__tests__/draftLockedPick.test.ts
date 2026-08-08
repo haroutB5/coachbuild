@@ -4,6 +4,10 @@ import {
   shouldShowLockedPickBanner,
   type DraftLockedPickBannerInput,
 } from "../live/draftLockedPick";
+import {
+  resolveChampSelectEntry,
+  type ChampSelectEntryState,
+} from "../live/draftLiveSync";
 
 function input(overrides: Partial<DraftLockedPickBannerInput> = {}): DraftLockedPickBannerInput {
   return {
@@ -45,6 +49,19 @@ describe("shouldShowLockedPickBanner", () => {
 
   it("shows again for a different locked champion", () => {
     expect(shouldShowLockedPickBanner(input({ cellChampionId: 64, dismissedChampionId: 112 }))).toBe(true);
+  });
+
+  it("shows the same champion again after dismissal is reset on a new ChampSelect entry", () => {
+    const dismissed = input({ dismissedChampionId: 112 });
+    expect(shouldShowLockedPickBanner(dismissed)).toBe(false);
+
+    const previousEntry: ChampSelectEntryState = { lastRealPhase: "InProgress" };
+    const entry = resolveChampSelectEntry(previousEntry, "ChampSelect");
+    expect(entry.isEntry).toBe(true);
+
+    // app/draft/page.tsx clears the dismissal only on this transition. The
+    // same champion locking in the fresh entry must therefore show again.
+    expect(shouldShowLockedPickBanner(input({ dismissedChampionId: null }))).toBe(true);
   });
 
   it("never renders without the live session even if a champion is locked", () => {

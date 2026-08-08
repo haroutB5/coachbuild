@@ -9,6 +9,7 @@ import { CHAMPION_FAVORITES_CHANGED_EVENT, toggleFavoriteChampion } from "./favo
 import { computeDropdownPosition, type DropdownCoords } from "./dropdownPosition";
 import { openSearchFromPointer } from "./searchOpenState";
 import { matchChampions } from "./championSearch";
+import { getChampionMap, liveVersionFromChampMap, withLiveIconVersion } from "./hextech/heroContracts";
 
 // Module-level (stable reference) so FavoriteStarButton's subscribe effect
 // doesn't re-run on every ChampionPicker re-render (e.g. each keystroke).
@@ -18,12 +19,12 @@ const getHydratedSnapshot = () => true;
 const getServerHydratedSnapshot = () => false;
 
 const FALLBACK_CHAMPIONS: ChampionRef[] = [
-  { id: 112, key: "Viktor", name: "Viktor", icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/Viktor.webp" },
-  { id: 103, key: "Ahri", name: "Ahri", icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/Ahri.webp" },
-  { id: 86, key: "Garen", name: "Garen", icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/Garen.webp" },
-  { id: 64, key: "LeeSin", name: "Lee Sin", icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/LeeSin.webp" },
-  { id: 51, key: "Caitlyn", name: "Caitlyn", icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/Caitlyn.webp" },
-  { id: 412, key: "Thresh", name: "Thresh", icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/Thresh.webp" },
+  { id: 112, key: "Viktor", name: "Viktor", icon: "" },
+  { id: 103, key: "Ahri", name: "Ahri", icon: "" },
+  { id: 86, key: "Garen", name: "Garen", icon: "" },
+  { id: 64, key: "LeeSin", name: "Lee Sin", icon: "" },
+  { id: 51, key: "Caitlyn", name: "Caitlyn", icon: "" },
+  { id: 412, key: "Thresh", name: "Thresh", icon: "" },
 ];
 
 interface ChampionPickerProps {
@@ -99,15 +100,17 @@ export default function ChampionPicker({
 
   // Fetch champion list from API; silently fall back to hardcoded list
   useEffect(() => {
-    fetch("/api/champions")
-      .then((r) => {
-        if (!r.ok) throw new Error("champions 404");
-        return r.json();
-      })
-      .then((data: ChampionRef[]) => {
-        if (Array.isArray(data) && data.length > 0) setChampions(data);
-      })
-      .catch(() => {/* stay on fallback */});
+    getChampionMap().then((championMap) => {
+      // Keep the degraded list glyph-only until a live map is available. If
+      // the map contains any rows, its icons already carry the current CDN
+      // version; the fallback path still runs through the shared helper so a
+      // future partial-map response cannot resurrect a retired icon folder.
+      const liveVersion = liveVersionFromChampMap(championMap);
+      const liveFallback = FALLBACK_CHAMPIONS.map((champion) =>
+        withLiveIconVersion(champion, liveVersion)
+      );
+      setChampions(championMap.size > 0 ? Array.from(championMap.values()) : liveFallback);
+    });
   }, []);
 
   // If the parent clears the selection (e.g. the page-level "Clear
@@ -356,19 +359,21 @@ function ChampIcon({
       className="flex-shrink-0 rounded-md overflow-hidden bg-black/20"
       style={{ width: size, height: size }}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element -- Champion icons use runtime CDN URLs and this wrapper owns the fixed box plus error fallback. */}
-      <img
-        src={icon}
-        alt={name}
-        width={size}
-        height={size}
-        loading={eager ? "eager" : "lazy"}
-        decoding="async"
-        className="w-full h-full object-cover"
-        onError={(e) => {
-          (e.currentTarget as HTMLImageElement).style.display = "none";
-        }}
-      />
+      {icon && (
+        /* eslint-disable-next-line @next/next/no-img-element -- Champion icons use runtime CDN URLs and this wrapper owns the fixed box plus error fallback. */
+        <img
+          src={icon}
+          alt={name}
+          width={size}
+          height={size}
+          loading={eager ? "eager" : "lazy"}
+          decoding="async"
+          className="w-full h-full object-cover"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).style.display = "none";
+          }}
+        />
+      )}
     </span>
   );
 }

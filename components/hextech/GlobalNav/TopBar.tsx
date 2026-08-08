@@ -35,14 +35,15 @@ import { matchChampions } from "../../championSearch";
 import ChampSelectChip from "./ChampSelectChip";
 import ApplyRunesButton from "./ApplyRunesButton";
 import { topBarChromeConfig } from "./topBarChrome";
+import { getChampionMap, liveVersionFromChampMap, withLiveIconVersion } from "../heroContracts";
 
 const FALLBACK_CHAMPIONS: ChampionRef[] = [
-  { id: 112, key: "Viktor", name: "Viktor", icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/Viktor.webp" },
-  { id: 103, key: "Ahri", name: "Ahri", icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/Ahri.webp" },
-  { id: 86, key: "Garen", name: "Garen", icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/Garen.webp" },
-  { id: 64, key: "LeeSin", name: "Lee Sin", icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/LeeSin.webp" },
-  { id: 222, key: "Jinx", name: "Jinx", icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/Jinx.webp" },
-  { id: 412, key: "Thresh", name: "Thresh", icon: "https://cdn.coachless.gg/static-files/16.12.1/16.12.1/img/champion/Thresh.webp" },
+  { id: 112, key: "Viktor", name: "Viktor", icon: "" },
+  { id: 103, key: "Ahri", name: "Ahri", icon: "" },
+  { id: 86, key: "Garen", name: "Garen", icon: "" },
+  { id: 64, key: "LeeSin", name: "Lee Sin", icon: "" },
+  { id: 222, key: "Jinx", name: "Jinx", icon: "" },
+  { id: 412, key: "Thresh", name: "Thresh", icon: "" },
 ];
 
 const SEARCH_ICON = (
@@ -73,14 +74,16 @@ function TopBarChampionSearch() {
   const [coords, setCoords] = useState<DropdownCoords | null>(null);
 
   useEffect(() => {
-    fetch("/api/champions")
-      .then((r) => (r.ok ? (r.json() as Promise<ChampionRef[]>) : []))
-      .then((data) => {
-        if (Array.isArray(data) && data.length > 0) setChampions(data);
-      })
-      .catch(() => {
-        /* stay on fallback */
-      });
+    getChampionMap().then((championMap) => {
+      // The shared map gives this always-mounted search the same live icon
+      // source as the page pickers. The empty-map branch deliberately stays
+      // glyph-only rather than issuing requests to a retired CDN folder.
+      const liveVersion = liveVersionFromChampMap(championMap);
+      const liveFallback = FALLBACK_CHAMPIONS.map((champion) =>
+        withLiveIconVersion(champion, liveVersion)
+      );
+      setChampions(championMap.size > 0 ? Array.from(championMap.values()) : liveFallback);
+    });
   }, []);
 
   useEffect(() => {
@@ -238,19 +241,21 @@ function TopBarChampionSearch() {
                     className={`w-full flex items-center gap-2.5 px-3 py-3 text-[12.5px] text-left transition-colors text-txt ${isActive ? "bg-teal/12" : ""}`}
                   >
                     <span className="flex-shrink-0 w-5 h-5 rounded overflow-hidden bg-black/30">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={champ.icon}
-                        alt=""
-                        width={20}
-                        height={20}
-                        loading="lazy"
-                        decoding="async"
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          (e.currentTarget as HTMLImageElement).style.display = "none";
-                        }}
-                      />
+                      {champ.icon && (
+                        /* eslint-disable-next-line @next/next/no-img-element */
+                        <img
+                          src={champ.icon}
+                          alt=""
+                          width={20}
+                          height={20}
+                          loading="lazy"
+                          decoding="async"
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                      )}
                     </span>
                     {champ.name}
                   </button>

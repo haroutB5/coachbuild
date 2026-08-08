@@ -2,6 +2,23 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.103.1] - 2026-08-08 - Review polish
+
+### Fixed
+- **Pro-stage and recorded-data cleanup.** Includes the pro-stage ID fix and
+  the two-table recorded skill-order backfill from the gptx lane.
+- **Champion picker icons** now resolve fallback entries through the live CDN
+  icon version instead of retired 16.12.1 URLs; a total-fetch failure stays
+  request-free and degrades to the existing empty/glyph treatment.
+- **Companion test coverage** now has a `-TestAll` entry point that runs
+  `-SelfTest`, `-Mock`, and `-HarnessTest` in sequence and fails if any suite
+  fails. This is test-only; the installed companion remains on version 1.13.0.
+- **Draft counters** now explain that an enemy must be added when the Counters
+  view has no enemies, while genuine filter-empty rankings keep their existing
+  message.
+- **Locked-pick handoff banners** reset their dismissal at each new ChampSelect
+  entry, so a champion dismissed in one game can be shown again in the next.
+
 ## [0.103.0] - 2026-08-08 - Draft-first champ-select handoff
 
 ### Changed

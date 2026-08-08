@@ -198,7 +198,7 @@ export const STATIC_FALLBACK_LANE_CHAMPIONS: Record<LaneId, ChampionRef> = {
  *  at the one call site that needs it) rather than a second cache/module
  *  dependency. Returns null if champMap is empty (total fetch failure) or
  *  no entry matches the expected shape. */
-function liveVersionFromChampMap(champMap: Map<number, ChampionRef>): string | null {
+export function liveVersionFromChampMap(champMap: ReadonlyMap<number, ChampionRef>): string | null {
   // .forEach, not for...of — matches this codebase's Map-iteration
   // convention (see proAssets.ts's getCachedLiveIconVersion) and avoids
   // tsc's TS2802 without a target/downlevelIteration bump.
@@ -217,7 +217,7 @@ function liveVersionFromChampMap(champMap: Map<number, ChampionRef>): string | n
  *  degraded path doesn't glyph-fallback forever on a frozen 16.12.1 the way
  *  it did before. Falls through to the champ unchanged (hardcoded ICON_VER)
  *  when no live version is available. */
-function withLiveIconVersion(champ: ChampionRef, liveVer: string | null): ChampionRef {
+export function withLiveIconVersion(champ: ChampionRef, liveVer: string | null): ChampionRef {
   if (!liveVer) return champ;
   return { ...champ, icon: champIconUrl(champ.key, liveVer) };
 }
@@ -225,7 +225,7 @@ function withLiveIconVersion(champ: ChampionRef, liveVer: string | null): Champi
 let champMapCache: Map<number, ChampionRef> | null = null;
 let champMapInFlight: Promise<Map<number, ChampionRef>> | null = null;
 
-async function getChampionMap(): Promise<Map<number, ChampionRef>> {
+export async function getChampionMap(): Promise<Map<number, ChampionRef>> {
   if (champMapCache) return champMapCache;
   if (champMapInFlight) return champMapInFlight;
   champMapInFlight = fetch("/api/champions")
