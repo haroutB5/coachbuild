@@ -34,6 +34,21 @@ export interface LiveDeepLink {
   session: string | null;
 }
 
+/** Canonical builds-page URL builder shared by companion-style handoffs.
+ * Keep this beside parseLiveDeepLink so every web-side handoff uses the
+ * companion's single championId/role/session convention. Role-less links omit
+ * `role` entirely, matching companion.ps1. */
+export interface LiveBuildDeepLinkInput {
+  championId: number;
+  role?: LiveRoleId | null;
+  session: string;
+}
+
+export function buildLiveDeepLink({ championId, role, session }: LiveBuildDeepLinkInput): string {
+  const roleParam = role === undefined || role === null ? "" : `&role=${role}`;
+  return `/?championId=${encodeURIComponent(String(championId))}${roleParam}&session=${encodeURIComponent(session)}`;
+}
+
 const VALID_ROLES: readonly LiveRoleId[] = [0, 1, 2, 3, 4];
 
 /** Parses the companion deep-link query string. Returns null for anything

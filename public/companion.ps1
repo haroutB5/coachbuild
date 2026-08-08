@@ -239,64 +239,31 @@ WIRE CONTRACT (must match components/live/companionClient.ts exactly):
     accepted + validated (wire back-compat) but is no longer the prune
     boundary -- the generic "CoachBuild" literal drops a strict superset of
     what any champ-scoped prefix would, exactly the payload-bounding wanted.
-  - Champ-select flow is ZERO-BRIDGE: the companion opens
-    "<AppOrigin>/?championId=<id>[&role=<0-4>]&session=<token>" directly via
-    Start-Process. `role` is OMITTED (not a bogus value) when
-    assignedPosition is blank/unmapped (custom lobbies, blind pick, ARAM) --
-    v1.1.0 silently skipped opening entirely in that case (a live-reported
-    bug); v1.2.0 still opens, just without a role, and the web side falls
-    back to its own most-played-lane resolution. RoleId map: top=0
-    jungle=1 middle=2 bottom=3 utility=4 (LCU assignedPosition strings ->
-    numeric RoleId; "" / unmapped = omit `role`). Champion resolution is a
-    3-way fallback (real-client evidence: a pre-lock hover often isn't
-    reflected on the cell at all): (1) cell championId if locked, (2) cell
-    championPickIntent if set, (3) scan session.actions (array OF ARRAYS --
-    flatten both levels) for the local player's own in-progress 'pick'
-    action.
-  - v1.6.0 ("two pages simultaneously" ship, user directive 2026-07-22):
-    a champion resolution that passes the debounce now opens the MISSING
-    page(s) of a TWO-page set -- the Builds deep-link above AND
-    "<AppOrigin>/draft?session=<token>" (Get-DraftDeepLinkUrl, no
-    championId/role -- /draft live-syncs entirely off its own /status poll,
-    see CompanionProvider.tsx) -- rather than only ever opening Builds.
-    Per-page attachment is now tracked independently
-    (Test-CompanionHasAttachedTab -Kind builds|draft, replacing the single
-    v1.3.0/v1.5.0 LastFollowPollAt with LastBuildsFollowAt/
-    LastDraftFollowAt): both missing -> open Builds FIRST, then /draft LAST
-    (Start-Process order is best-effort OS-level focus order -- lands the
-    user on /draft as the main focus page per the directive, in the common
-    case); only draft attached -> open Builds only; only Builds attached ->
-    open /draft only (this necessarily focuses the newly-opened Builds tab
-    instead -- an unavoidable consequence of Start-Process, not a violation
-    of the "draft as main focus" intent, which is specifically about the
-    both-missing case); both attached -> no opens (both already live-follow
-    via their own polls). See Update-ChampSelectState's own comment for the
-    exact decision table.
-  - v1.7.0 ("browser closed -> pages never open", live-reported 2026-07-26):
-    three related fixes to "the pages are ready when champ-select starts."
-    (a) PRE-WARM. Both pages are now opened on champ-select ENTRY
-    (Invoke-ChampSelectPrewarm), not on the first champion resolution --
-    Builds via a session-only "<AppOrigin>/?session=<token>" (no championId
-    yet; the tab adopts the session and then live-follows the hover in
-    place, exactly like a manually-opened tab always could) and /draft via
-    its usual URL. A cold browser therefore boots during bans instead of
-    mid-hover, which is what "ready" means. Update-ChampSelectState's
-    decision table is UNCHANGED -- the pre-warm just means its opens are
-    normally already covered by the open->attach grace / a real follow poll.
-    (b) EXPLICIT DETACH. `follow=<kind>&detach=1` on /status clears that
-    kind's attach stamp and records LastBuildsDetachAt/LastDraftDetachAt.
-    The web side sends it on `pagehide` and when a client-side nav leaves a
-    follow-capable route (CompanionProvider.tsx). Without this, closing the
-    browser left a stamp that looked attached for the full
-    AttachWindowSeconds (150s, i.e. most of a champ-select) and NOTHING
-    opened -- the exact live-reported symptom. A detach newer than the last
-    open also voids the open->attach grace (the tab is provably gone, so
-    the grace has nothing left to protect).
-    (c) BROWSER-LIVENESS GUARD. A stamp is only trusted while some browser
-    process actually exists (Test-BrowserProcessRunning). This catches the
-    hard-kill case where no pagehide ever fires (task-kill, crash, sign-out).
-    It can only ever WIDEN opening -- it never suppresses an open that the
-    old logic would have made -- so it cannot regress v1.6.4's tab-spam fix.
+  - Champ-select flow is ZERO-BRIDGE: on entry, the companion opens the draft
+    deep-link "<AppOrigin>/draft?session=<token>" directly via Start-Process.
+    The web side hands off to Builds in-page, so champ-select opens never
+    carry a championId or role and never launch a Builds window. Champion and
+    role resolution still feeds the /status snapshot and LastOpenedChampId /
+    LastOpenedRoleId state used by live-follow consumers and the tray's
+    post-game Builds reopen. RoleId map: top=0 jungle=1 middle=2 bottom=3
+    utility=4 (LCU assignedPosition strings -> numeric RoleId; blank/unmapped
+    remains null). Champion resolution is a 3-way fallback (real-client
+    evidence: a pre-lock hover often isn't reflected on the cell at all): (1)
+    cell championId if locked, (2) cell championPickIntent if set, (3) scan
+    session.actions (array OF ARRAYS -- flatten both levels) for the local
+    player's own in-progress 'pick' action.
+  - v1.13.0 ("one window per champ select", user directive): champ-select
+    ENTRY opens exactly one window, the draft deep-link
+    "<AppOrigin>/draft?session=<token>" (Get-DraftDeepLinkUrl). The web side
+    hands off to Builds in place, so this companion never opens a Builds page
+    during champ select. Builds and /draft remain independent follow-capable
+    attachment stamps in /status, but the open decision is intentionally
+    combined: either kind attached means open nothing; neither attached means
+    open the draft window. Champion changes still advance LastOpenedChampId/
+    LastOpenedRoleId for tray and /status consumers, and only open draft when
+    neither kind is attached. Tray Reopen page opens /draft during champ
+    select, and the last champion's Builds deep-link outside champ select.
+    The v1.7.0 detach and browser-liveness safeguards remain in force.
 
 LOGGING (diagnosability -- remote-debugging without a screen-share):
   - Rolling log at %LOCALAPPDATA%\CoachBuild\companion.log: one line per
@@ -359,7 +326,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.12.0'
+    Version     = '1.13.0'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -1567,20 +1534,6 @@ function Get-DraftDeepLinkUrl {
     return "$AppOrigin/draft?session=$SessionToken"
 }
 
-function Get-PrewarmBuildsUrl {
-    # v1.7.0 -- the Builds URL for the champ-select ENTRY pre-warm, before any
-    # champion has resolved. Session-only, deliberately WITHOUT championId/role:
-    # there is nothing to deep-link to yet, and inventing a placeholder id would
-    # make the page render a champion the user never hovered. The tab adopts the
-    # session (app/page.tsx's mount effect takes a session-only link since
-    # v0.59.0; a previously-paired browser also rehydrates it from localStorage)
-    # and then live-follows the first hover IN PLACE via its own /status poll --
-    # champSelectFollow.ts works for any tab holding a session, deep-linked or
-    # not. Same shape as Get-DraftDeepLinkUrl, and for the same reason.
-    param([string]$AppOrigin, [string]$SessionToken)
-    return "$AppOrigin/?session=$SessionToken"
-}
-
 function Open-CompanionUrl {
     # Testable seam: -Mock records opens instead of actually launching a
     # browser, so debounce/deep-link logic is asserted without a real
@@ -1600,6 +1553,29 @@ function Open-CompanionUrl {
             }
             Invoke-CompanionUrlLaunch -FallbackUrl $Url
         } catch {}
+    }
+}
+
+function Invoke-ReopenPage {
+    # Tray action: during champ select the draft page is the single live
+    # surface; outside champ select, preserve the post-game Builds reopen
+    # behavior for the last resolved champion. When no champion has been
+    # observed yet, keep the pairing-page fallback used by the old tray item.
+    param($State, [bool]$InChampSelect, [string]$AppOrigin, [string]$SessionToken)
+    if ($InChampSelect) {
+        Open-CompanionUrl -Url (Get-DraftDeepLinkUrl -AppOrigin $AppOrigin -SessionToken $SessionToken)
+        return
+    }
+
+    $champId = $State.LastOpenedChampId
+    $roleId = $State.LastOpenedRoleId
+    if ($champId) {
+        $url = Get-DeepLinkUrl -AppOrigin $AppOrigin -SessionToken $SessionToken -ChampionId $champId -RoleId $roleId
+        Open-CompanionUrl -Url $url
+    } else {
+        # No champ-select open yet this run -- still carry the session so
+        # /live-setup's Test Connection isn't greyed out on first use.
+        Open-CompanionUrl -Url "$AppOrigin/live-setup?session=$SessionToken"
     }
 }
 
@@ -1718,16 +1694,17 @@ function Set-LastOpen {
 #   this feature is used precisely while the tab is backgrounded behind a
 #   fullscreen game, where Chrome's intensive throttling drops hidden-tab
 #   timers to roughly once per MINUTE after 5 minutes hidden. 8s could not
-#   survive that, so every champ-select re-opened both tabs and they piled up
-#   (live-reported 2026-07-25, screenshot: 4 stacked tabs). 150s clears a
+#   survive that, so every champ-select re-opened the draft window and tabs
+#   piled up (live-reported 2026-07-25, screenshot: 4 stacked tabs). 150s clears a
 #   60s throttled cadence with room for jitter.
 #
 # OpenGraceSeconds -- a tab that was JUST opened has not had time to load,
 #   boot React and send its first follow poll (browser cold start is
 #   seconds). Without this, a champion change inside that gap sees "not
-#   attached" and opens a SECOND pair -- the open->attach race, which is how
-#   one champ-select alone could produce 4 tabs. Treat a just-opened kind as
-#   attached until it has had a fair chance to answer; if it never does (the
+#   attached" and opens a SECOND draft window -- the open->attach race, which
+#   is how one champ-select alone could produce duplicate tabs. Treat a
+#   just-opened kind as attached until it has had a fair chance to answer; if
+#   it never does (the
 #   open genuinely failed), the grace lapses and the next champion change
 #   opens again.
 #
@@ -1919,10 +1896,9 @@ function Test-CompanionHasAttachedTab {
     # v1.3.0 (attached-tab live-follow), NARROWED in v1.5.0 to follow-capable
     # pollers only, split PER-KIND in v1.6.0 ("two pages simultaneously"
     # ship): a "tab is attached" means a specific follow-capable PAGE (Builds
-    # or /draft) has polled /status recently, not merely any page, and not
-    # merely "some follow-capable page" either -- Builds and /draft are now
-    # opened/suppressed INDEPENDENTLY, so a /draft tab attached must never
-    # suppress opening Builds, and vice versa. Every route in the app polls
+    # or /draft) has polled /status recently, not merely any page. Builds and
+    # /draft remain independently stamped, but the caller combines the two
+    # kinds for its one draft-window OPEN decision. Every route in the app polls
     # /status once a session token exists (CompanionProvider is mounted
     # app-wide, app/layout.tsx), but only Builds (`/`) and `/draft`
     # themselves react to a live champ-select change -- a poll from
@@ -1937,19 +1913,19 @@ function Test-CompanionHasAttachedTab {
     # follow, for other diagnostics). A legacy `follow=1` (stale cached
     # pre-1.6.0 web build) stamps LastBuildsFollowAt only -- see the bridge
     # handler's own comment for why that's the safe degrade (at minimum keep
-    # suppressing the Builds open users already had; /draft simply behaves
-    # as though no tab is ever attached for an old web build, same as
-    # pre-1.3.0 companion behavior).
+    # suppressing the old Builds page users already had; under this model the
+    # combined gate simply treats /draft as though no page is attached for an
+    # old web build).
     #
-    # 8s window: generous versus the web poll's own ~3s cadence, tight
-    # enough that a genuinely closed tab (no follow poll in 8s) still gets a
-    # fresh Start-Process on the next hover.
+    # 150s window: wide enough for background-tab throttling, while a
+    # genuinely closed tab (no follow poll in 150s) still gets a fresh
+    # Start-Process on the next champion change.
     #
     # Back-compat: a companion running this code against a STALE cached web
     # build that never sends ANY follow param (pre-1.5.0 client) will never
     # see either field set at all -- both stay $null forever, so this always
-    # returns $false for both kinds and every champ-select change opens
-    # BOTH pages fresh, same as the pre-1.3.0 behavior. That's the
+    # returns $false for both kinds and every champ-select change opens the
+    # draft page fresh, same as the pre-1.3.0 behavior. That's the
     # deliberate degrade: correctness (always opens) over the live-follow
     # optimization (skip redundant opens) when the two sides disagree on the
     # contract.
@@ -1963,7 +1939,8 @@ function Test-CompanionHasAttachedTab {
     if (-not $ts) { return $false }
     # v1.7.0 hard-kill fallback -- see Test-BrowserProcessRunning. Checked AFTER
     # the grace deliberately: a browser launched microseconds ago may not have a
-    # process yet, and voiding the grace on that would re-open a second pair,
+    # process yet, and voiding the grace on that would re-open a second draft
+    # window,
     # which is precisely the race the grace exists to prevent.
     if (-not (Test-BrowserProcessRunning)) { return $false }
     try {
@@ -1974,40 +1951,24 @@ function Test-CompanionHasAttachedTab {
 }
 
 function Invoke-ChampSelectPrewarm {
-    # v1.7.0 -- "have the pages ready" (live-reported 2026-07-26: with the
-    # browser closed, nothing opened at all for a whole champ-select).
+    # v1.13.0 -- champ-select ENTRY opens exactly one window: /draft. Builds
+    # is handed off in-page by the web side, so there is no session-only
+    # Builds pre-warm anymore.
     #
-    # Runs ONCE on champ-select ENTRY, before any champion has resolved, and
-    # opens whichever of {Builds, /draft} is currently missing -- same per-kind
-    # decision (Test-CompanionHasAttachedTab), same Builds-then-/draft order and
-    # therefore the same best-effort focus outcome as Update-ChampSelectState's
-    # own opens. The point is TIMING, not new behaviour: a cold browser now
-    # boots during bans instead of at the first hover, so the pages are loaded
-    # and attached by the time the user picks.
-    #
-    # Interaction with Update-ChampSelectState (deliberate, no double-open):
-    # each open here stamps the open->attach grace, so the first champion
-    # resolution inside the next OpenGraceSeconds sees both kinds "attached" and
-    # opens nothing -- it just advances the debounce, and the pre-warmed tab
-    # picks the champion up in place via its own live-follow poll. A resolution
-    # AFTER the grace lapses sees the real follow stamps those tabs have been
-    # sending for ~25s, which is the same suppression by a different route. If
-    # the pre-warmed tab never polls (session never paired on this browser
-    # profile, open genuinely failed), both fall through and the champion change
-    # opens a proper deep link -- the pre-v1.7.0 behaviour, never worse.
+    # A fresh draft open stamps the draft-only open->attach grace, so the first
+    # champion resolution inside the next OpenGraceSeconds advances debounce
+    # without opening a second window. A follow-capable Builds tab still counts
+    # as attached, because it can live-follow the same champ-select state.
     param([string]$AppOrigin, [string]$SessionToken)
     $hasBuilds = Test-CompanionHasAttachedTab -Kind builds
     $hasDraft = Test-CompanionHasAttachedTab -Kind draft
-    if ($hasBuilds -and $hasDraft) { return }
-    if (-not $hasBuilds) {
-        Open-CompanionUrl -Url (Get-PrewarmBuildsUrl -AppOrigin $AppOrigin -SessionToken $SessionToken)
-        Set-TabOpenedNow -Kind builds
+    if ($hasBuilds -or $hasDraft) {
+        Write-CompanionLog "champ-select entry prewarm attached=$(if ($hasBuilds -or $hasDraft) { 'yes' } else { 'no' })"
+        return
     }
-    if (-not $hasDraft) {
-        Open-CompanionUrl -Url (Get-DraftDeepLinkUrl -AppOrigin $AppOrigin -SessionToken $SessionToken)
-        Set-TabOpenedNow -Kind draft
-    }
-    Write-CompanionLog "champ-select entry prewarm builds=$(if ($hasBuilds) { 'attached' } else { 'opened' }) draft=$(if ($hasDraft) { 'attached' } else { 'opened' })"
+    Open-CompanionUrl -Url (Get-DraftDeepLinkUrl -AppOrigin $AppOrigin -SessionToken $SessionToken)
+    Set-TabOpenedNow -Kind draft
+    Write-CompanionLog 'champ-select entry prewarm draft=opened'
 }
 
 function Update-ChampSelectState {
@@ -2039,51 +2000,34 @@ function Update-ChampSelectState {
     if ($champId -le 0) { $champId = $actionChampionId }
     if ($champId -le 0) { return }  # nothing hovered or locked yet, in any of the 3 sources
 
-    # NOTE (v1.2.0 fix): this used to `return` here when $roleId was $null
-    # (blank/unmapped assignedPosition) -- silently never opening for
-    # custom lobbies, blind pick, or ARAM. Get-DeepLinkUrl now accepts a
-    # null RoleId and simply omits `role=` from the URL instead.
+    # Role remains nullable for the state/status consumers (blank/unmapped
+    # assignedPosition is common in custom lobbies, blind pick, and ARAM), but
+    # the champ-select window is always the role-less /draft live surface.
     if ($State.LastOpenedChampId -eq $champId) { return }  # no change -- debounce
 
     $State.LastOpenedChampId = $champId
     $State.LastOpenedRoleId = $roleId
 
-    # v1.3.0 (attached-tab live-follow), split into TWO independent pages in
-    # v1.6.0 ("two pages simultaneously" ship, user directive 2026-07-22):
-    # open only whichever of {Builds, /draft} is currently MISSING, in that
-    # exact order (Builds first, /draft last -- Start-Process order is
-    # best-effort OS focus order, so /draft lands focused when both are
-    # opened together, per the directive). Debounce state above still
-    # advances regardless of which/whether opens happen (so we don't
-    # re-decide on every tick for the same champion) -- champion CHANGES
-    # mid-select keep exactly this semantics: opens only happen when the
-    # debounce admits a NEW champion resolution (this code path), never on a
-    # per-tick timer; an attached tab that's missing here stays missing
-    # until the NEXT champion change, it is not retro-opened mid-select.
+    # v1.13.0 single-window model: the web side hands off from /draft to
+    # Builds in place, so champion changes never open a Builds deep-link.
+    # Debounce state above still advances regardless of whether an open happens
+    # (so we do not re-decide on every tick for the same champion). The
+    # follow-capable page kinds remain independently stamped in /status, but
+    # the OPEN decision is intentionally one combined gate:
     #
-    # Decision table (hasBuilds / hasDraft from Test-CompanionHasAttachedTab):
-    #   neither attached -> open Builds, then open /draft (both; draft focus)
-    #   only draft attached -> open Builds only
-    #   only Builds attached -> open /draft only (this focuses the NEW
-    #     /draft tab instead -- unavoidable from Start-Process; the "draft
-    #     as main focus" preference is specifically about the both-missing
-    #     case above)
-    #   both attached -> no opens (both already live-follow via their own
-    #     polls, exactly like the pre-1.6.0 single-page behavior)
+    #   either Builds or /draft attached -> no open
+    #   neither attached                -> open /draft exactly once
+    #
+    # This same table applies to champion CHANGES mid-select: attached pages
+    # live-follow in place; only a change with no attached page opens draft.
     $hasBuilds = Test-CompanionHasAttachedTab -Kind builds
     $hasDraft = Test-CompanionHasAttachedTab -Kind draft
-    if (-not $hasBuilds) {
-        $url = Get-DeepLinkUrl -AppOrigin $AppOrigin -SessionToken $SessionToken -ChampionId $champId -RoleId $roleId
-        Open-CompanionUrl -Url $url
-        Set-TabOpenedNow -Kind builds
-    }
-    if (-not $hasDraft) {
-        $draftUrl = Get-DraftDeepLinkUrl -AppOrigin $AppOrigin -SessionToken $SessionToken
-        Open-CompanionUrl -Url $draftUrl
+    if (-not ($hasBuilds -or $hasDraft)) {
+        Open-CompanionUrl -Url (Get-DraftDeepLinkUrl -AppOrigin $AppOrigin -SessionToken $SessionToken)
         Set-TabOpenedNow -Kind draft
     }
     Set-LastOpen -ChampionId $champId -RoleId $roleId
-    Write-CompanionLog "champ-select champ=$champId role=$(if ($null -ne $roleId) { $roleId } else { 'none' }) builds=$(if ($hasBuilds) { 'attached' } else { 'opened' }) draft=$(if ($hasDraft) { 'attached' } else { 'opened' })"
+    Write-CompanionLog "champ-select champ=$champId role=$(if ($null -ne $roleId) { $roleId } else { 'none' }) attached=$(if ($hasBuilds -or $hasDraft) { 'yes' } else { 'no' }) draft=$(if ($hasDraft) { 'attached' } else { 'not-attached' }) builds=$(if ($hasBuilds) { 'attached' } else { 'not-attached' })"
 }
 #endregion
 
@@ -2490,16 +2434,7 @@ function Start-Companion {
         $quitItem = $menu.Items.Add('Quit')
 
         $reopenItem.add_Click({
-            $champId = $script:ChampSelectState.LastOpenedChampId
-            $roleId = $script:ChampSelectState.LastOpenedRoleId
-            if ($champId) {
-                $url = Get-DeepLinkUrl -AppOrigin $script:Config.AppOrigin -SessionToken $script:Config.Session -ChampionId $champId -RoleId $roleId
-                Open-CompanionUrl -Url $url
-            } else {
-                # No champ-select open yet this run -- still carry the session so
-                # /live-setup's Test Connection isn't greyed out on first use.
-                Open-CompanionUrl -Url "$($script:Config.AppOrigin)/live-setup?session=$($script:Config.Session)"
-            }
+            Invoke-ReopenPage -State $script:ChampSelectState -InChampSelect $script:WasChampSelect -AppOrigin $script:Config.AppOrigin -SessionToken $script:Config.Session
         })
         $quitItem.add_Click({ $script:CompanionRunning = $false })
         $icon.ContextMenuStrip = $menu
@@ -4355,9 +4290,9 @@ function Invoke-MockRun {
     # implicit -- nothing opens until ChampSelect): hover Ahri (103, top) ->
     # re-poll same hover (simulates a teammate action re-triggering our
     # session poll) -> lock Ahri (championId now set, still 103) -> swap to
-    # LeBlanc (7). Asserts: exactly 2 opens (initial hover, then the swap),
-    # with the debounce collapsing the same-champ hover/lock/re-poll steps
-    # into a single open, and the deep-link URL format is exact.
+    # LeBlanc (7). Asserts: exactly 2 draft opens (initial hover, then the
+    # swap after the open grace), with the debounce collapsing the
+    # same-champ hover/lock/re-poll steps into a single open.
     $script:MockMode = $true
     # v1.7.0 -- pin the browser-liveness guard ON for the whole mock run. Every
     # case here asserts the champ-select OPEN LOGIC; whether this dev/CI machine
@@ -4384,16 +4319,11 @@ function Invoke-MockRun {
         }
     }
 
-    # v1.6.0: every scenario BELOW this point (through the actions[]-only
-    # resolution block) predates the "two pages simultaneously" ship and was
-    # written/asserted purely against Builds opens. Simulate a /draft tab
-    # already attached (LastDraftFollowAt fresh, LastBuildsFollowAt absent)
-    # for this whole resolution-focused portion so those pre-existing
-    # assertions keep testing exactly what they always tested (Builds
-    # debounce + URL-format), undisturbed by the new two-page open decision
-    # -- which gets its own dedicated, exhaustive "Attached-tab gate"
-    # scenarios further down (neither/draft-only/Builds-only/both attached).
-    $script:Bridge = [pscustomobject]@{ Sync = @{ LastBuildsFollowAt = $null; LastDraftFollowAt = (Get-Date).ToUniversalTime().ToString('o') } }
+    # v1.13.0: the draft page is the only window this companion opens during
+    # champ select. Keep both per-kind follow stamps in the mock bridge so the
+    # combined any-attached gate is exercised below, but start this resolution
+    # block with neither kind attached.
+    $script:Bridge = [pscustomobject]@{ Sync = @{ LastBuildsFollowAt = $null; LastDraftFollowAt = $null } }
 
     Reset-ChampSelectState -State $state
     Reset-TabOpenGrace
@@ -4401,25 +4331,21 @@ function Invoke-MockRun {
     Update-ChampSelectState -State $state -Session (New-MockChampSelectSession -ChampId 0 -IntentId 103 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
     Update-ChampSelectState -State $state -Session (New-MockChampSelectSession -ChampId 103 -IntentId 103 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
 
-    # v1.6.4 BEHAVIOUR CHANGE (deliberate, this is the tab-spam fix): swapping
-    # champion seconds after the Builds tab was opened must NOT open a second
-    # tab. The tab opened for 103 is still cold-starting; once it boots it
-    # live-follows champ select to 7 on its own (app/page.tsx's follow effect
-    # off companion.tick), so a second open is pure tab spam. Pre-1.6.4 this
-    # asserted 2 opens, which is how one champ-select could stack tabs.
+    # v1.13.0: swapping champion during the draft open grace must NOT open a
+    # second window. Once the draft page boots it live-follows champ select to
+    # 7 in place, so a second open is pure tab spam.
     Update-ChampSelectState -State $state -Session (New-MockChampSelectSession -ChampId 7 -IntentId 7 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
-    $expected1 = "$appOrigin/?championId=103&role=0&session=$sessionToken"
+    $expected1 = "$appOrigin/draft?session=$sessionToken"
     if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expected1) {
-        $failures.Add("Champ swap during cold-start expected exactly 1 open ('$expected1'), got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
+        $failures.Add("Champ swap during cold-start expected exactly 1 draft open ('$expected1'), got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     }
 
-    # The debounce contract itself is unchanged: once the just-opened tab has
-    # had its chance and demonstrably never attached (grace lapsed, no follow
-    # poll), a genuine champion change DOES still re-open, with the role param
-    # formatted exactly as before.
+    # The debounce contract itself is unchanged: once the just-opened draft
+    # window's grace lapses with no follow poll, a genuine champion change DOES
+    # still re-open the draft page.
     Reset-TabOpenGrace
     Update-ChampSelectState -State $state -Session (New-MockChampSelectSession -ChampId 34 -IntentId 34 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
-    $expected2 = "$appOrigin/?championId=34&role=0&session=$sessionToken"
+    $expected2 = "$appOrigin/draft?session=$sessionToken"
     if ($script:OpenActions.Count -ne 2) {
         $failures.Add("Champ swap after grace lapse expected a 2nd open, got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     } elseif ($script:OpenActions[1] -ne $expected2) {
@@ -4428,13 +4354,13 @@ function Invoke-MockRun {
 
     # Role-LESS check (v1.2.0 fix -- was a live-reported bug: v1.1.0 silently
     # skipped opening ENTIRELY for a blank/unmapped assignedPosition, i.e.
-    # every custom lobby, blind pick, and ARAM game). Must still open, just
-    # WITHOUT a role param.
+    # every custom lobby, blind pick, and ARAM game). The draft page still
+    # opens; it resolves lane context from live-follow state.
     $script:OpenActions.Clear()
     Reset-TabOpenGrace  # independent scenario -- the previous block's opens must not suppress it
     $roleLessState = @{ LastOpenedChampId = $null }
     Update-ChampSelectState -State $roleLessState -Session (New-MockChampSelectSession -ChampId 99 -IntentId 99 -Position '') -AppOrigin $appOrigin -SessionToken $sessionToken
-    $expectedRoleLess = "$appOrigin/?championId=99&session=$sessionToken"
+    $expectedRoleLess = "$appOrigin/draft?session=$sessionToken"
     if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedRoleLess) {
         $failures.Add("Role-less open expected exactly 1 open to '$expectedRoleLess', got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     }
@@ -4458,7 +4384,7 @@ function Invoke-MockRun {
     $actionRow = @([pscustomobject]@{ actorCellId = 0; type = 'pick'; championId = 64; completed = $false })
     $actionsSession = New-MockChampSelectSession -ChampId 0 -IntentId 0 -Position 'jungle' -Actions (, $actionRow)
     Update-ChampSelectState -State $actionsOnlyState -Session $actionsSession -AppOrigin $appOrigin -SessionToken $sessionToken
-    $expectedActionsOnly = "$appOrigin/?championId=64&role=1&session=$sessionToken"
+    $expectedActionsOnly = "$appOrigin/draft?session=$sessionToken"
     if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedActionsOnly) {
         $failures.Add("actions[]-only resolution expected exactly 1 open to '$expectedActionsOnly', got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     }
@@ -4492,15 +4418,16 @@ function Invoke-MockRun {
     }
 
     # Attached-tab gate (v1.3.0 live-follow fold-in, NARROWED in v1.5.0 to
-    # follow-capable pollers only, split PER-KIND in v1.6.0 "two pages
-    # simultaneously" ship): Builds and /draft are now tracked and
-    # opened/suppressed INDEPENDENTLY via LastBuildsFollowAt/
-    # LastDraftFollowAt. -Mock fakes a lightweight $script:Bridge (no real
-    # HttpListener) purely so Test-CompanionHasAttachedTab has something to
-    # read -- these fields are what a real bridge's /status handler would
-    # have stamped from `follow=builds`/`follow=draft`/legacy `follow=1`
-    # (that HTTP-level parsing itself is covered by -SelfTest, which runs a
-    # real bridge; see Invoke-SelfTest's own "follow=<kind> stamping" case).
+    # follow-capable pollers only, still tracked PER-KIND in /status): Builds
+    # and /draft stamps remain separate because the web pages identify
+    # themselves independently. The OPEN decision is no longer independent,
+    # though: either kind attached suppresses the one draft open. -Mock fakes
+    # a lightweight $script:Bridge (no real HttpListener) purely so
+    # Test-CompanionHasAttachedTab has something to read -- these fields are
+    # what a real bridge's /status handler would have stamped from
+    # `follow=builds`/`follow=draft`/legacy `follow=1` (that HTTP-level parsing
+    # itself is covered by -SelfTest, which runs a real bridge; see
+    # Invoke-SelfTest's own "follow=<kind> stamping" case).
     # v1.6.4: each sub-test below isolates the FOLLOW-STAMP gate, so the
     # open->attach grace is reset before each one -- otherwise the opens
     # performed by the previous sub-test would legitimately suppress the next
@@ -4515,43 +4442,36 @@ function Invoke-MockRun {
     $attachState = @{ LastOpenedChampId = $null }
     Reset-TabOpenGrace
 
-    # Neither attached -> open BOTH, Builds first then /draft last (exact
-    # order asserted -- Start-Process order is the best-effort OS focus
-    # order the user directive relies on to land on /draft as the main
-    # focus page). This is also the back-compat path: a stale cached web
-    # build that never sends any follow param (pre-1.5.0 client, or only a
-    # non-follow-capable page like /live-setup is open) never sets either
-    # field, so it always degrades to opening both fresh.
+    # Neither attached -> open exactly ONE draft window. This is also the
+    # back-compat path: a stale cached web build that never sends any follow
+    # param (pre-1.5.0 client, or only a non-follow-capable page like
+    # /live-setup is open) never sets either field, so the draft window opens.
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 103 -IntentId 103 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
-    $expectedBuilds103 = "$appOrigin/?championId=103&role=0&session=$sessionToken"
     $expectedDraft = "$appOrigin/draft?session=$sessionToken"
-    if ($script:OpenActions.Count -ne 2) {
-        $failures.Add("Attached-tab gate (neither attached): expected 2 opens (Builds then draft), got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
-    } else {
-        if ($script:OpenActions[0] -ne $expectedBuilds103) { $failures.Add("Attached-tab gate (neither attached): open #1 should be Builds, got $($script:OpenActions[0])") }
-        if ($script:OpenActions[1] -ne $expectedDraft) { $failures.Add("Attached-tab gate (neither attached): open #2 should be /draft, got $($script:OpenActions[1])") }
+    if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedDraft) {
+        $failures.Add("Attached-tab gate (neither attached): expected exactly 1 draft open ('$expectedDraft'), got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     }
 
-    # Only draft attached -> open Builds only.
+    # Only draft attached -> no open.
     Reset-TabOpenGrace
     $script:Bridge.Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().ToString('o')
     $script:Bridge.Sync.LastBuildsFollowAt = $null
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 7 -IntentId 7 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
-    $expectedBuilds7 = "$appOrigin/?championId=7&role=0&session=$sessionToken"
-    if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedBuilds7) {
-        $failures.Add("Attached-tab gate (draft-only attached): expected exactly 1 open (Builds), got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
+    if ($script:OpenActions.Count -ne 0) {
+        $failures.Add("Attached-tab gate (draft-only attached): expected NO opens, got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     }
 
-    # Only Builds attached -> open /draft only.
+    # Only Builds attached -> no open. A user-opened Builds tab still counts as
+    # attached even though this companion never opens Builds itself anymore.
     Reset-TabOpenGrace
     $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().ToString('o')
     $script:Bridge.Sync.LastDraftFollowAt = $null
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 64 -IntentId 64 -Position 'jungle') -AppOrigin $appOrigin -SessionToken $sessionToken
-    if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedDraft) {
-        $failures.Add("Attached-tab gate (Builds-only attached): expected exactly 1 open (/draft), got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
+    if ($script:OpenActions.Count -ne 0) {
+        $failures.Add("Attached-tab gate (Builds-only attached): expected NO opens, got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     }
 
     # Both attached -> no opens at all, but debounce state still advances
@@ -4571,7 +4491,7 @@ function Invoke-MockRun {
     # v1.6.4 THROTTLED-TAB REGRESSION: a hidden tab behind a fullscreen game
     # is throttled by Chrome to roughly one timer tick per MINUTE. A 60s-old
     # follow poll therefore means "alive and following", not "gone" -- under
-    # the old 8s window this was the tab-spam bug (both tabs re-opened every
+    # the old 8s window this was the tab-spam bug (the draft window re-opened every
     # champ-select, piling up across games). Must count as ATTACHED.
     Reset-TabOpenGrace
     $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().AddSeconds(-60).ToString('o')
@@ -4583,22 +4503,21 @@ function Invoke-MockRun {
     }
 
     # Both polls genuinely stale (tabs actually closed, well past the widened
-    # window) -> the NEXT champion change resumes opening both fresh, in the
-    # same Builds-then-draft order.
+    # window) -> the NEXT champion change resumes opening one fresh draft page.
     Reset-TabOpenGrace
     $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().AddSeconds(-300).ToString('o')
     $script:Bridge.Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().AddSeconds(-300).ToString('o')
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 45 -IntentId 45 -Position 'utility') -AppOrigin $appOrigin -SessionToken $sessionToken
-    if ($script:OpenActions.Count -ne 2) {
-        $failures.Add("Attached-tab gate (both stale): expected 2 opens to resume once both polls go stale, got $($script:OpenActions.Count)")
+    if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedDraft) {
+        $failures.Add("Attached-tab gate (both stale): expected exactly 1 draft open once both polls go stale, got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     }
 
-    # v1.6.4 OPEN->ATTACH RACE: the two opens above just happened, and a
-    # freshly opened tab cannot have polled yet. A champion change inside that
-    # cold-start gap must NOT open a second pair -- that race is how a single
-    # champ-select could produce 4 tabs. Follow fields deliberately left at
-    # their stale 300s values: the grace alone must carry this.
+    # v1.6.4 OPEN->ATTACH RACE: the draft open above just happened, and a
+    # freshly opened draft page cannot have polled yet. A champion change inside
+    # that cold-start gap must NOT open a second window -- that race is how a
+    # single champ-select could produce tab spam. Follow fields deliberately
+    # left at their stale 300s values: the draft grace alone must carry this.
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 67 -IntentId 67 -Position 'bottom') -AppOrigin $appOrigin -SessionToken $sessionToken
     if ($script:OpenActions.Count -ne 0) {
@@ -4608,12 +4527,11 @@ function Invoke-MockRun {
     # ...but the grace is not a permanent suppressor: once it lapses with the
     # tabs still never having polled, the open genuinely failed and the next
     # champion change must try again.
-    $script:LastTabOpenAt.builds = (Get-Date).AddSeconds(-($script:OpenGraceSeconds + 5))
     $script:LastTabOpenAt.draft = (Get-Date).AddSeconds(-($script:OpenGraceSeconds + 5))
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 89 -IntentId 89 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
-    if ($script:OpenActions.Count -ne 2) {
-        $failures.Add("Open grace lapse: after the grace expires with no follow poll the open must be retried, got $($script:OpenActions.Count)")
+    if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedDraft) {
+        $failures.Add("Open grace lapse: after the draft grace expires with no follow poll the open must be retried once, got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     }
 
     # -- v1.7.0: "the browser was closed, so nothing ever opened" -------------
@@ -4624,7 +4542,7 @@ function Invoke-MockRun {
 
     # (a) EXPLICIT DETACH (pagehide / nav away from a follow-capable route).
     # Stamps are seconds old, i.e. maximally "attached" by the old rule; the
-    # detach must still make the next champion change open both.
+    # detach must still make the next champion change open the draft page.
     Reset-TabOpenGrace
     $script:Bridge.Sync.LastBuildsFollowAt = $null
     $script:Bridge.Sync.LastDraftFollowAt = $null
@@ -4632,11 +4550,11 @@ function Invoke-MockRun {
     $script:Bridge.Sync.LastDraftDetachAt = $null
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 12 -IntentId 12 -Position 'utility') -AppOrigin $appOrigin -SessionToken $sessionToken
-    if ($script:OpenActions.Count -ne 2) {
-        $failures.Add("Detach precondition: expected the initial 2 opens, got $($script:OpenActions.Count)")
+    if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedDraft) {
+        $failures.Add("Detach precondition: expected the initial draft open, got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     }
-    # Both tabs now report in (as a real browser would), then the user closes
-    # the browser and each page fires its detach beacon on pagehide.
+    # Both page kinds now report in (as a real browser would), then the user
+    # closes the browser and each page fires its detach beacon on pagehide.
     $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().ToString('o')
     $script:Bridge.Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().ToString('o')
     $script:OpenActions.Clear()
@@ -4657,8 +4575,8 @@ function Invoke-MockRun {
     $script:Bridge.Sync.LastDraftDetachAt = (Get-Date).ToUniversalTime().ToString('o')
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 99 -IntentId 99 -Position 'jungle') -AppOrigin $appOrigin -SessionToken $sessionToken
-    if ($script:OpenActions.Count -ne 2) {
-        $failures.Add("Detach: after both pages detached, the next champion change must re-open BOTH (this is the live-reported browser-closed bug), got $($script:OpenActions.Count)")
+    if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedDraft) {
+        $failures.Add("Detach: after both pages detached, the next champion change must re-open the draft page (this is the live-reported browser-closed bug), got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     }
 
     # (b) A detach ALSO voids an open->attach grace. Opening a tab and closing
@@ -4670,23 +4588,19 @@ function Invoke-MockRun {
     $script:Bridge.Sync.LastDraftFollowAt = $null
     $script:Bridge.Sync.LastBuildsDetachAt = $null
     $script:Bridge.Sync.LastDraftDetachAt = $null
-    Set-TabOpenedNow -Kind builds
     Set-TabOpenedNow -Kind draft
-    if (-not (Test-TabOpenGraceActive -Kind builds)) {
-        $failures.Add('Grace precondition: a just-opened kind must be inside its grace')
+    if (-not (Test-TabOpenGraceActive -Kind draft)) {
+        $failures.Add('Grace precondition: a just-opened draft kind must be inside its grace')
     }
     Start-Sleep -Milliseconds 30  # same ~15.6ms Get-Date resolution reason as above
-    $script:Bridge.Sync.LastBuildsDetachAt = (Get-Date).ToUniversalTime().ToString('o')
-    if (Test-TabOpenGraceActive -Kind builds) {
-        $failures.Add('Detach vs grace: a detach recorded AFTER the open must void the grace for that kind')
-    }
-    if (-not (Test-TabOpenGraceActive -Kind draft)) {
-        $failures.Add('Detach vs grace: a Builds detach must not void the DRAFT grace')
+    $script:Bridge.Sync.LastDraftDetachAt = (Get-Date).ToUniversalTime().ToString('o')
+    if (Test-TabOpenGraceActive -Kind draft) {
+        $failures.Add('Detach vs grace: a detach recorded AFTER the draft open must void the grace')
     }
     # A detach from BEFORE the open (a previous game's close) must not void it.
-    $script:Bridge.Sync.LastBuildsDetachAt = (Get-Date).ToUniversalTime().AddSeconds(-600).ToString('o')
-    if (-not (Test-TabOpenGraceActive -Kind builds)) {
-        $failures.Add('Detach vs grace: a STALE detach predating the open must not void the grace')
+    $script:Bridge.Sync.LastDraftDetachAt = (Get-Date).ToUniversalTime().AddSeconds(-600).ToString('o')
+    if (-not (Test-TabOpenGraceActive -Kind draft)) {
+        $failures.Add('Detach vs grace: a STALE draft detach predating the open must not void the grace')
     }
 
     # (c) BROWSER-LIVENESS GUARD -- the hard-kill case, where no pagehide ever
@@ -4700,8 +4614,8 @@ function Invoke-MockRun {
     $script:BrowserProbeOverride = $false
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $attachState -Session (New-MockChampSelectSession -ChampId 33 -IntentId 33 -Position 'middle') -AppOrigin $appOrigin -SessionToken $sessionToken
-    if ($script:OpenActions.Count -ne 2) {
-        $failures.Add("Browser-liveness guard: with NO browser process running, fresh follow stamps must not suppress the opens, got $($script:OpenActions.Count)")
+    if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedDraft) {
+        $failures.Add("Browser-liveness guard: with NO browser process running, fresh follow stamps must not suppress the draft open, got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     }
     $script:BrowserProbeOverride = $true
     Reset-TabOpenGrace
@@ -4711,9 +4625,8 @@ function Invoke-MockRun {
         $failures.Add("Browser-liveness guard: with a browser running, fresh follow stamps must still suppress (the guard only ever WIDENS opening), got $($script:OpenActions.Count)")
     }
 
-    # -- v1.7.0 PRE-WARM: champ-select ENTRY opens the pages, before any hover -
-    # "Have the pages ready" -- a cold browser boots during bans instead of at
-    # the first pick. Builds is session-only here (no championId exists yet).
+    # -- v1.13.0 PRE-WARM: champ-select ENTRY opens exactly one window, /draft,
+    # before any hover. The web side hands off to Builds in place.
     Reset-TabOpenGrace
     $script:Bridge.Sync.LastBuildsFollowAt = $null
     $script:Bridge.Sync.LastDraftFollowAt = $null
@@ -4721,26 +4634,22 @@ function Invoke-MockRun {
     $script:Bridge.Sync.LastDraftDetachAt = $null
     $script:OpenActions.Clear()
     Invoke-ChampSelectPrewarm -AppOrigin $appOrigin -SessionToken $sessionToken
-    $expectedPrewarmBuilds = "$appOrigin/?session=$sessionToken"
-    if ($script:OpenActions.Count -ne 2) {
-        $failures.Add("Prewarm (nothing attached): expected 2 opens, got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
-    } else {
-        if ($script:OpenActions[0] -ne $expectedPrewarmBuilds) { $failures.Add("Prewarm: open #1 must be the session-only Builds URL (no championId exists yet), got $($script:OpenActions[0])") }
-        if ($script:OpenActions[1] -ne $expectedDraft) { $failures.Add("Prewarm: open #2 must be /draft, got $($script:OpenActions[1])") }
+    if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedDraft) {
+        $failures.Add("Prewarm (nothing attached): expected exactly 1 /draft open, got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     }
     # The pre-warm stamped the grace, so the first champion resolution must NOT
-    # open a second pair -- the pre-warmed tab live-follows it in place. This is
+    # open a second window -- the pre-warmed tab live-follows it in place. This is
     # the interaction that would otherwise turn "ready earlier" into tab spam.
     $prewarmState = @{ LastOpenedChampId = $null }
     $script:OpenActions.Clear()
     Update-ChampSelectState -State $prewarmState -Session (New-MockChampSelectSession -ChampId 84 -IntentId 84 -Position 'top') -AppOrigin $appOrigin -SessionToken $sessionToken
     if ($script:OpenActions.Count -ne 0) {
-        $failures.Add("Prewarm: the first champion resolution after a prewarm must not open a second pair, got $($script:OpenActions.Count)")
+        $failures.Add("Prewarm: the first champion resolution after a prewarm must not open a second window, got $($script:OpenActions.Count)")
     }
     if ($prewarmState.LastOpenedChampId -ne 84) {
         $failures.Add('Prewarm: debounce state must still advance on the suppressed resolution')
     }
-    # Already-attached tabs: the pre-warm must be a no-op, not two more tabs.
+    # Already-attached tabs: the pre-warm must be a no-op, not another window.
     Reset-TabOpenGrace
     $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().ToString('o')
     $script:Bridge.Sync.LastDraftFollowAt = (Get-Date).ToUniversalTime().ToString('o')
@@ -4749,14 +4658,31 @@ function Invoke-MockRun {
     if ($script:OpenActions.Count -ne 0) {
         $failures.Add("Prewarm (both attached): expected NO opens, got $($script:OpenActions.Count)")
     }
-    # Only one side attached -> pre-warm opens only the missing one.
+    # Only Builds attached -> pre-warm is still a no-op: any follow-capable
+    # page counts as attached even though this companion never opens Builds.
     Reset-TabOpenGrace
     $script:Bridge.Sync.LastBuildsFollowAt = (Get-Date).ToUniversalTime().ToString('o')
     $script:Bridge.Sync.LastDraftFollowAt = $null
     $script:OpenActions.Clear()
     Invoke-ChampSelectPrewarm -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 0) {
+        $failures.Add("Prewarm (Builds attached): expected NO opens, got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
+    }
+
+    # Tray Reopen page: /draft while in champ select, the last champion's
+    # Builds deep-link after champ select. The latter preserves the post-game
+    # use case even though normal champ-select opens are draft-only.
+    $reopenState = @{ LastOpenedChampId = 103; LastOpenedRoleId = 0 }
+    $script:OpenActions.Clear()
+    Invoke-ReopenPage -State $reopenState -InChampSelect $true -AppOrigin $appOrigin -SessionToken $sessionToken
     if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedDraft) {
-        $failures.Add("Prewarm (Builds attached): expected exactly 1 open (/draft), got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
+        $failures.Add("Reopen page (in ChampSelect): expected exactly /draft, got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
+    }
+    $script:OpenActions.Clear()
+    $expectedReopenBuilds = "$appOrigin/?championId=103&role=0&session=$sessionToken"
+    Invoke-ReopenPage -State $reopenState -InChampSelect $false -AppOrigin $appOrigin -SessionToken $sessionToken
+    if ($script:OpenActions.Count -ne 1 -or $script:OpenActions[0] -ne $expectedReopenBuilds) {
+        $failures.Add("Reopen page (outside ChampSelect): expected the last champion's Builds URL, got $($script:OpenActions.Count): $($script:OpenActions -join ' | ')")
     }
 
     Reset-TabOpenGrace

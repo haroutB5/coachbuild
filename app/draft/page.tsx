@@ -33,12 +33,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { ChampionRef } from "@/lib/types";
 import { LANE_ORDER, LANE_TO_ROLE_ID, LANE_LABEL, type LaneId } from "@/components/hextech/heroContracts";
 import { getChampionIconMap, type ChampionIconEntry } from "@/components/proAssets";
 import { getSplashUrl } from "@/lib/splash";
 import { POOL_MIN_PICKRATE } from "@/lib/draft/score";
 import { useCompanion } from "@/components/live/CompanionProvider";
+import { buildLiveDeepLink } from "@/components/live/deepLink";
+import { resolveChampSelectRoleId } from "@/components/live/champSelectFollow";
 import {
   resolveDraftLiveTarget,
   shouldShowResetToLive,
@@ -47,6 +50,10 @@ import {
   MAX_DRAFT_ENEMIES,
   type ChampSelectEntryState,
 } from "@/components/live/draftLiveSync";
+import {
+  resolveLockedPickChampionId,
+  shouldShowLockedPickBanner,
+} from "@/components/live/draftLockedPick";
 import {
   fetchDraftRecommend,
   type DraftRecommendResponse,
@@ -760,6 +767,7 @@ function DetailedRankings({
 }
 
 export default function DraftPage() {
+  const router = useRouter();
   const companion = useCompanion();
 
   // Session adoption (v1.6.0, "two pages simultaneously" ship) — companion.ps1
@@ -791,6 +799,7 @@ export default function DraftPage() {
   // below; live auto-fill stops overwriting the user's inputs until they
   // explicitly tap "Reset to live".
   const [dirty, setDirty] = useState(false);
+  const [dismissedLockedPickId, setDismissedLockedPickId] = useState<number | null>(null);
   // "My pool" filter (My Stats, 2026-07-21) — a FILTER, never a re-scorer:
   // keeps only candidates I've played at least once in this lane, in the
   // SAME order the server already ranked them (see personalBadge.ts's
@@ -1027,6 +1036,24 @@ export default function DraftPage() {
 
   const showResetToLive = shouldShowResetToLive(dirty, companion.phase, companion.champSelect);
   const liveSyncing = companion.phase === "ChampSelect" && !dirty;
+  const lockedPickInput = {
+    phase: companion.phase,
+    session: companion.session,
+    cellChampionId: companion.champSelect?.cellChampionId,
+    dismissedChampionId: dismissedLockedPickId,
+  };
+  const lockedChampionId = resolveLockedPickChampionId(lockedPickInput);
+  const showLockedPickBanner = shouldShowLockedPickBanner(lockedPickInput);
+  const lockedChampionEntry = lockedChampionId !== null ? champIcons.get(lockedChampionId) : undefined;
+  const lockedChampionName = lockedChampionEntry?.name ?? (lockedChampionId !== null ? `Champion #${lockedChampionId}` : "");
+  const lockedBuildHref =
+    lockedChampionId !== null && companion.session
+      ? buildLiveDeepLink({
+          championId: lockedChampionId,
+          role: resolveChampSelectRoleId(companion.champSelect),
+          session: companion.session,
+        })
+      : null;
 
   // Round-B stale-data honesty fix: meta.patch is whatever the draft tables
   // actually have ingested (lib/draft/recommend.ts's resolveServingPatch);
@@ -1193,6 +1220,16 @@ export default function DraftPage() {
         </header>
 
         {liveSyncing && <div className="mb-4 flex items-center gap-2 text-[11px] font-semibold text-teal"><span className="h-1.5 w-1.5 rounded-full bg-teal motion-reduce:animate-none animate-pulse" aria-hidden="true" />Live — syncing from champ select</div>}
+        {showLockedPickBanner && lockedChampionId !== null && lockedBuildHref && (
+          <div role="status" className="mb-4 flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-line bg-panel2/60 px-3 py-2">
+            <span className="h-8 w-8 flex-shrink-0 overflow-hidden rounded-md border border-line bg-panel2">
+              <IconWithFallback src={lockedChampionEntry?.icon ?? ""} alt={`${lockedChampionName} icon`} fallbackGlyph={lockedChampionName} className="h-full w-full object-cover" size={32} />
+            </span>
+            <span className="min-w-0 flex-1 text-[11px] text-mut">Your pick: <strong className="font-bold text-txt">{lockedChampionName}</strong></span>
+            <button type="button" onClick={() => router.push(lockedBuildHref)} className="flex-shrink-0 rounded-md bg-teal px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.05em] text-bg hover:bg-teal-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal">Open build</button>
+            <button type="button" onClick={() => setDismissedLockedPickId(lockedChampionId)} aria-label={`Dismiss ${lockedChampionName} locked pick banner`} className="flex-shrink-0 rounded-md px-1.5 py-1 text-[16px] leading-none text-mut hover:text-txt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal">×</button>
+          </div>
+        )}
         {showResetToLive && (
           <div role="status" className="mb-4">
             <button type="button" onClick={handleResetToLive} className="rounded-lg bg-teal px-4 py-2 text-[12px] font-bold uppercase tracking-[0.06em] text-bg hover:bg-teal-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal">Update ready <span aria-hidden="true">↻</span></button>

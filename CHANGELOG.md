@@ -2,6 +2,14 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.103.0] - 2026-08-08 - Draft-first champ-select handoff
+
+### Changed
+- **One-window champ select (companion 1.13.0): one app window, draft-first,
+  in-page handoff to your locked pick's build.** The companion opens the Draft
+  page as the main focus window, and /draft hands the locked pick to the fully
+  wired Builds page.
+
 ## [0.102.1] - 2026-08-08 - Companion app windows
 
 ### Changed

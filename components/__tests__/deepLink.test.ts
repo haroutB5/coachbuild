@@ -1,5 +1,25 @@
 import { describe, it, expect } from "vitest";
-import { parseLiveDeepLink, roleIdToLane } from "../live/deepLink";
+import { buildLiveDeepLink, parseLiveDeepLink, roleIdToLane } from "../live/deepLink";
+
+describe("buildLiveDeepLink", () => {
+  it("builds the companion-shaped role-bearing builds URL", () => {
+    expect(buildLiveDeepLink({ championId: 112, role: 2, session: "abc123" })).toBe(
+      "/?championId=112&role=2&session=abc123"
+    );
+  });
+
+  it("omits role for a role-less companion link", () => {
+    expect(buildLiveDeepLink({ championId: 112, role: undefined, session: "abc123" })).toBe(
+      "/?championId=112&session=abc123"
+    );
+  });
+
+  it("encodes the session token without changing the parameter convention", () => {
+    expect(buildLiveDeepLink({ championId: 112, role: 2, session: "a/b+c" })).toBe(
+      "/?championId=112&role=2&session=a%2Fb%2Bc"
+    );
+  });
+});
 
 describe("parseLiveDeepLink", () => {
   it("parses a well-formed link", () => {
