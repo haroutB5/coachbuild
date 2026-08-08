@@ -2,6 +2,14 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.103.2] - 2026-08-09 - Companion liveness honesty
+
+### Fixed
+- **Dead companions no longer look live.** Companion-derived phase and live
+  surfaces now require a recent successful `/status` poll; connection-refused,
+  403/session-rotation, malformed, and timed-out polls clear cached phase state,
+  while recovery re-arms live-follow and champ-select handoff UI.
+
 ## [0.103.1] - 2026-08-08 - Review polish
 
 ### Fixed

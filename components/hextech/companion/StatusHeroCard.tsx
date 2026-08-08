@@ -30,6 +30,8 @@ export interface StatusHeroCardProps {
   /** ISO timestamp of the most recent successful poll, or null before the
    *  first one. */
   lastPollAt: string | null;
+  /** False once the browser has not heard a successful /status recently. */
+  statusFresh?: boolean;
 }
 
 const LOBBY_PHASES = new Set(["Lobby", "Matchmaking", "ReadyCheck"]);
@@ -68,8 +70,17 @@ function headlineFor(
   clientConnected: boolean,
   phase: string | null,
   championName: string | null | undefined,
-  role: string | null | undefined
+  role: string | null | undefined,
+  statusFresh: boolean,
+  hasPollEvidence: boolean
 ): Headline {
+  if (!statusFresh && hasPollEvidence) {
+    return {
+      title: "Companion not responding",
+      sub: "Check that it is running, then test the connection again.",
+      dot: "off",
+    };
+  }
   if (!clientConnected) {
     return {
       title: "Not connected yet",
@@ -133,9 +144,17 @@ export default function StatusHeroCard({
   champSelectRoleLabel,
   scriptVersion,
   lastPollAt,
+  statusFresh = true,
 }: StatusHeroCardProps) {
-  const headline = headlineFor(clientConnected, phase, champSelectChampionName, champSelectRoleLabel);
-  const currentRank = phaseRank(phase, clientConnected);
+  const headline = headlineFor(
+    clientConnected,
+    phase,
+    champSelectChampionName,
+    champSelectRoleLabel,
+    statusFresh,
+    Boolean(scriptVersion || lastPollAt)
+  );
+  const currentRank = phaseRank(statusFresh ? phase : null, statusFresh && clientConnected);
 
   return (
     <section className="bg-panel border border-line-gold rounded-xl p-5 sm:p-6">

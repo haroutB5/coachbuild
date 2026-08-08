@@ -35,7 +35,7 @@ export default function ApplyRunesButton() {
 
   const championId = resolveCurrentChampSelectChampionId(companion.champSelect);
   const roleId = resolveChampSelectRoleId(companion.champSelect);
-  const liveReady = companion.phase === "ChampSelect" && championId !== null && roleId !== undefined;
+  const liveReady = companion.statusFresh && companion.phase === "ChampSelect" && championId !== null && roleId !== undefined;
   const disabled = !ready || !liveReady || state === "applying";
 
   async function handleClick() {

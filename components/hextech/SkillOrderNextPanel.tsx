@@ -105,7 +105,7 @@ export default function SkillOrderNextPanel({ championId, lane }: SkillOrderNext
   // phase is already being polled app-wide by CompanionProvider, so the gate
   // is free. When the phase leaves InProgress the reading is dropped, so the
   // panel disappears with the game rather than freezing on the last level.
-  const inGame = companion.phase === "InProgress";
+  const inGame = companion.statusFresh && companion.phase === "InProgress";
   const session = companion.session;
   const liveRequestKey = inGame && session ? session : null;
   const [previousLiveRequestKey, setPreviousLiveRequestKey] = useState(liveRequestKey);

@@ -275,8 +275,8 @@ export default function MyStatsPage() {
   // and the detection prompt, and is the tested path. The grid's trailing cell
   // is a signpost to it, never a second implementation of it.
   const pickerRef = useRef<HTMLDivElement | null>(null);
-  const { phase } = useCompanion();
-  const clientInGame = isLiveGamePhase(phase);
+  const { phase, statusFresh } = useCompanion();
+  const clientInGame = statusFresh && isLiveGamePhase(phase);
   /** The Riot ID the client is signed in as, reported by AccountPicker's single
    *  `/me` read. `undefined` = not answered yet, `null` = we could not tell. */
   const [clientRiotId, setClientRiotId] = useState<string | null | undefined>(undefined);

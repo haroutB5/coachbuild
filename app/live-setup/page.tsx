@@ -31,6 +31,7 @@ import {
   type ProbeState,
   type CompanionErrorLogEntry,
 } from "@/components/live/companionClient";
+import { isCompanionStatusFresh } from "@/components/live/companionLiveness";
 import { resolveCurrentChampSelectChampionId, resolveChampSelectRoleId } from "@/components/live/champSelectFollow";
 import { roleIdToLane } from "@/components/live/deepLink";
 import { LANE_LABEL } from "@/components/hextech/heroContracts";
@@ -61,6 +62,8 @@ const INDICATOR_LABEL: Record<Indicator, string> = {
 export default function LiveSetupPage() {
   const [session, setSession] = useState<string | null>(null);
   const [probeState, setProbeState] = useState<ProbeState | null>(null);
+  const [lastSuccessfulPollAt, setLastSuccessfulPollAt] = useState<number | null>(null);
+  const [statusClock, setStatusClock] = useState(() => Date.now());
   const [probing, setProbing] = useState(false);
   // Hydrated post-mount (localStorage read) to avoid an SSR/client mismatch,
   // same pattern BuildTabContent's rankHydrated uses.
@@ -77,6 +80,20 @@ export default function LiveSetupPage() {
   // GlobalNav/ChampSelectChip.tsx already uses (only fires once champ select
   // is actually live and a championId has resolved).
   const [champions, setChampions] = useState<ChampionRef[]>([]);
+  const statusPollRequestRef = useRef(0);
+  const statusFresh = isCompanionStatusFresh(lastSuccessfulPollAt, statusClock);
+
+  const acceptProbeState = useCallback((next: ProbeState) => {
+    const now = Date.now();
+    setStatusClock(now);
+    setLastSuccessfulPollAt(next.kind === "connected" ? now : null);
+    setProbeState(next);
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => setStatusClock(Date.now()), COMPANION_STATUS_POLL_MS);
+    return () => clearInterval(id);
+  }, []);
 
   // Mount-only: capture ?session= from a companion-opened link, else fall
   // back to whatever's already stored from a previous pairing.
@@ -110,17 +127,19 @@ export default function LiveSetupPage() {
     let cancelled = false;
 
     async function poll() {
+      const requestId = ++statusPollRequestRef.current;
       const state = await refreshStatus(session as string, {}, null);
-      if (!cancelled) setProbeState(state);
+      if (!cancelled && requestId === statusPollRequestRef.current) acceptProbeState(state);
     }
 
     poll();
     const id = setInterval(poll, COMPANION_STATUS_POLL_MS);
     return () => {
       cancelled = true;
+      statusPollRequestRef.current += 1;
       clearInterval(id);
     };
-  }, [session]);
+  }, [acceptProbeState, session]);
 
   function handleClearErrorLog() {
     clearCompanionErrorLog();
@@ -145,13 +164,14 @@ export default function LiveSetupPage() {
     // lna-denied rather than the quieter no-companion (see companionClient's
     // ProbeState doc comment on why this is a heuristic).
     const state = await probeCompanion(session, "user-click");
-    setProbeState(state);
+    acceptProbeState(state);
     setProbing(false);
-  }, [session]);
+  }, [acceptProbeState, session]);
 
-  const indicator = indicatorFor(probeState);
-  const connected = probeState?.kind === "connected";
-  const status = connected ? probeState.status : null;
+  const indicator = statusFresh ? indicatorFor(probeState) : "off";
+  const rawStatus = probeState?.kind === "connected" ? probeState.status : null;
+  const connected = statusFresh && probeState?.kind === "connected";
+  const status = connected ? rawStatus : null;
 
   // StatusHeroCard's champion/role resolution — mirrors ChampSelectChip.tsx's
   // id -> display-string approach exactly.
@@ -187,8 +207,9 @@ export default function LiveSetupPage() {
             phase={status?.phase ?? null}
             champSelectChampionName={champSelectChampionName}
             champSelectRoleLabel={champSelectRoleLabel}
-            scriptVersion={status?.version ?? null}
-            lastPollAt={status?.lastPollAt ?? null}
+            scriptVersion={rawStatus?.version ?? null}
+            lastPollAt={rawStatus?.lastPollAt ?? null}
+            statusFresh={statusFresh}
           />
 
           <InstallCommands />
@@ -245,6 +266,12 @@ export default function LiveSetupPage() {
                   <p className="text-[11px] text-mut">
                     No pairing session yet — open this page from the companion&apos;s tray menu, or
                     from a champ-select auto-open link, first.
+                  </p>
+                )}
+
+                {session && !statusFresh && (
+                  <p className="text-[11.5px] text-mut">
+                    Companion not responding — check that it&apos;s running, then test again.
                   </p>
                 )}
 

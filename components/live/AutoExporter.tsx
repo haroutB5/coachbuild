@@ -122,6 +122,7 @@ export default function AutoExporter() {
   }, []);
 
   useEffect(() => {
+    if (!companion.statusFresh) return;
     const target = resolveAutoExportTarget(companion.phase, companion.champSelect);
     if (!target) return;
     const { championId, roleId } = target;
@@ -179,7 +180,7 @@ export default function AutoExporter() {
           // that gen bump is load-bearing, it is what discards the wrong-lane
           // build before any push (audit P1). laneId needs no direct check
           // here because every lane change is funnelled through the gen.
-          isStillCurrent: (cid) => genRef.current === myGen && getCurrentChampSelectChampionId() === cid,
+          isStillCurrent: (cid) => !cancelled && genRef.current === myGen && getCurrentChampSelectChampionId() === cid,
           isCompanionDriven: isCompanionDrivenChampion,
           epoch: getChampSelectPhaseEpoch(),
           autoItemSetsEnabled: getAutoItemSetsEnabled(),
@@ -207,7 +208,7 @@ export default function AutoExporter() {
     // page follow effect — champSelectFollowState's own dedup, not the effect
     // deps, decides what actually fires.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companion.tick, onToast]);
+  }, [companion.tick, companion.statusFresh, onToast]);
 
   if (!itemsToast && !runesToast) return null;
 

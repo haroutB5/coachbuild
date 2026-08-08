@@ -44,6 +44,16 @@ describe("champSelectChipModel", () => {
     expect(model).toEqual({ show: true, label: "CHAMP SELECT — SWAIN · TOP", tone: "live" });
   });
 
+  it("stale status hides a cached ChampSelect chip", () => {
+    const model = champSelectChipModel({
+      phase: "ChampSelect",
+      champSelect: { championName: "Swain", role: "Top" },
+      clientConnected: true,
+      statusFresh: false,
+    });
+    expect(model.show).toBe(false);
+  });
+
   it("ChampSelect with champion resolved but no role -> omits the role segment entirely", () => {
     const model = champSelectChipModel({
       phase: "ChampSelect",

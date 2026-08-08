@@ -31,8 +31,8 @@ export default function ChampSelectChip({ onVisibleChange }: ChampSelectChipProp
   const companion = useCompanion();
   const [champions, setChampions] = useState<ChampionRef[]>([]);
 
-  const championId = resolveCurrentChampSelectChampionId(companion.champSelect);
-  const roleId = resolveChampSelectRoleId(companion.champSelect);
+  const championId = companion.statusFresh ? resolveCurrentChampSelectChampionId(companion.champSelect) : null;
+  const roleId = companion.statusFresh ? resolveChampSelectRoleId(companion.champSelect) : undefined;
 
   // Only fetch the champion list once champ select is actually live and a
   // champion id has resolved — this chip is hidden entirely outside that
@@ -57,6 +57,7 @@ export default function ChampSelectChip({ onVisibleChange }: ChampSelectChipProp
     phase: companion.phase,
     champSelect: companion.champSelect ? { championName, role } : null,
     clientConnected: companion.clientConnected,
+    statusFresh: companion.statusFresh,
   });
 
   useEffect(() => {

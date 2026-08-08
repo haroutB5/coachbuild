@@ -10,12 +10,15 @@ export interface DraftLockedPickBannerInput {
   cellChampionId: number | null | undefined;
   /** The last champion for which the user dismissed the banner. */
   dismissedChampionId: number | null;
+  /** False when the phase/snapshot is no longer backed by a recent poll. */
+  statusFresh?: boolean;
 }
 
 /** Returns the local player's locked champion id, or null when the banner
  * must stay hidden. A live session and ChampSelect phase are both required. */
 export function resolveLockedPickChampionId(input: DraftLockedPickBannerInput): number | null {
   const championId = input.cellChampionId;
+  if (input.statusFresh === false) return null;
   if (input.phase !== "ChampSelect" || !input.session) return null;
   if (championId === null || championId === undefined || !Number.isFinite(championId) || championId <= 0) return null;
   return championId;

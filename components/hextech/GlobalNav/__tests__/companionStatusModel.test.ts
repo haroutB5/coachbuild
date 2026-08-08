@@ -74,4 +74,22 @@ describe("companionStatusModel", () => {
     expect(model.dotClass).toBe("bg-teal");
     expect(model.title).toBe("Client not detected");
   });
+
+  it("shows OFF when the last successful status poll is stale, even if cached phase says ChampSelect", () => {
+    const model = companionStatusModel({
+      session: "tok",
+      phase: "ChampSelect",
+      clientConnected: true,
+      champSelect: {},
+      statusFresh: false,
+    });
+    expect(model).toEqual({
+      tone: "off",
+      dotClass: "bg-mut",
+      header: "COMPANION · OFF",
+      title: "Not responding",
+      subtitle: "Check it's running →",
+      href: "/live-setup",
+    });
+  });
 });

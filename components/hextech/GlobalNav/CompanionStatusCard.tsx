@@ -15,6 +15,7 @@ export default function CompanionStatusCard() {
     phase: companion.phase,
     clientConnected: companion.clientConnected,
     champSelect: companion.champSelect,
+    statusFresh: companion.statusFresh,
   });
 
   const body = (

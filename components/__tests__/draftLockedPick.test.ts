@@ -67,4 +67,9 @@ describe("shouldShowLockedPickBanner", () => {
   it("never renders without the live session even if a champion is locked", () => {
     expect(shouldShowLockedPickBanner(input({ session: undefined }))).toBe(false);
   });
+
+  it("never renders from a stale cached lock", () => {
+    expect(shouldShowLockedPickBanner(input({ statusFresh: false }))).toBe(false);
+    expect(resolveLockedPickChampionId(input({ statusFresh: false }))).toBeNull();
+  });
 });

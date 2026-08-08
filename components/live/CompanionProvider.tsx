@@ -68,6 +68,7 @@ import {
 } from "./companionClient";
 import { noteCompanionPhase, markCompanionDriven, setCurrentChampSelectChampionId } from "./champSelectFollowState";
 import { resolveCurrentChampSelectChampionId } from "./champSelectFollow";
+import { isCompanionStatusFresh } from "./companionLiveness";
 
 export interface CompanionContextValue {
   /** Paired companion session token, read from localStorage after hydration and
@@ -81,6 +82,8 @@ export interface CompanionContextValue {
   phase: string | null;
   champSelect: CompanionChampSelectSnapshot | null;
   clientConnected: boolean;
+  /** True only while the last successful /status response is recent. */
+  statusFresh: boolean;
   /** Bumped once per COMPLETED poll tick, regardless of whether phase/
    *  champSelect actually changed value. Consumers that must re-evaluate on
    *  EVERY tick (app/page.tsx's follow effect ran on every 3s tick
@@ -99,6 +102,7 @@ const CompanionContext = createContext<CompanionContextValue>({
   phase: null,
   champSelect: null,
   clientConnected: false,
+  statusFresh: false,
   tick: 0,
 });
 
@@ -116,15 +120,42 @@ export default function CompanionProvider({ children }: { children: ReactNode })
   const [champSelect, setChampSelect] = useState<CompanionChampSelectSnapshot | null>(null);
   const [clientConnected, setClientConnected] = useState(false);
   const [tick, setTick] = useState(0);
+  const [lastSuccessfulPollAt, setLastSuccessfulPollAt] = useState<number | null>(null);
+  const [statusClock, setStatusClock] = useState(() => Date.now());
+  const statusFresh = isCompanionStatusFresh(lastSuccessfulPollAt, statusClock);
   const [previousSession, setPreviousSession] = useState(session);
   if (session !== previousSession) {
     setPreviousSession(session);
-    if (!session) {
+    setPhase(null);
+    setChampSelect(null);
+    setClientConnected(false);
+    setLastSuccessfulPollAt(null);
+    noteCompanionPhase("None");
+    setCurrentChampSelectChampionId(null);
+  }
+
+  // The status poll can hang forever when the bridge process dies between
+  // requests. Keep the UI clock moving so the shared freshness rule flips
+  // even when no failed request has returned yet.
+  useEffect(() => {
+    const id = setInterval(() => setStatusClock(Date.now()), COMPANION_STATUS_POLL_MS);
+    return () => clearInterval(id);
+  }, []);
+
+  // A stale timestamp is itself a failed liveness signal. Clear the phase
+  // singleton and React cache when it ages out, not only when fetch rejects,
+  // so a hung request cannot leave "In champ select" rendered forever.
+  useEffect(() => {
+    if (statusFresh || lastSuccessfulPollAt === null) return;
+    const id = setTimeout(() => {
       setPhase(null);
       setChampSelect(null);
       setClientConnected(false);
-    }
-  }
+      noteCompanionPhase("None");
+      setCurrentChampSelectChampionId(null);
+    }, 0);
+    return () => clearTimeout(id);
+  }, [lastSuccessfulPollAt, statusFresh]);
 
   // v1.5.0 (attached-tab fix), widened to page IDENTITY in v1.6.0 (see
   // companionClient.ts's followKindForRoute): which route is current, read
@@ -136,6 +167,7 @@ export default function CompanionProvider({ children }: { children: ReactNode })
   // correct `follow` kind.
   const pathname = usePathname();
   const followRef = useRef<FollowKind>(followKindForRoute(pathname));
+  const pollRequestRef = useRef(0);
   useEffect(() => {
     const next = followKindForRoute(pathname);
     const prev = followRef.current;
@@ -187,16 +219,34 @@ export default function CompanionProvider({ children }: { children: ReactNode })
     let cancelled = false;
 
     async function poll() {
+      const requestId = ++pollRequestRef.current;
       const state = await refreshStatus(session as string, {}, followRef.current);
-      if (cancelled) return;
+      if (cancelled || requestId !== pollRequestRef.current) return;
 
-      const nextPhase = state.kind === "connected" ? state.status.phase : null;
-      const nextChampSelect = state.kind === "connected" ? state.status.champSelect : null;
+      const now = Date.now();
+      setStatusClock(now);
+      if (state.kind !== "connected") {
+        // Connection refused, 403/session rotation, malformed responses, and
+        // request timeouts all take the same honest path: phase-derived state
+        // is no longer trustworthy until a fresh /status succeeds.
+        setLastSuccessfulPollAt(null);
+        setPhase(null);
+        setChampSelect(null);
+        setClientConnected(false);
+        noteCompanionPhase("None");
+        setCurrentChampSelectChampionId(null);
+        setTick((t) => t + 1);
+        return;
+      }
+
+      setLastSuccessfulPollAt(now);
+      const nextPhase = state.status.phase;
+      const nextChampSelect = state.status.champSelect;
       setPhase(nextPhase);
       setChampSelect(nextChampSelect);
-      setClientConnected(state.kind === "connected" ? state.status.clientConnected : false);
+      setClientConnected(state.status.clientConnected);
 
-      if (nextPhase) noteCompanionPhase(nextPhase);
+      noteCompanionPhase(nextPhase);
 
       const liveChampSelectId =
         nextPhase === "ChampSelect" ? resolveCurrentChampSelectChampionId(nextChampSelect) : null;
@@ -213,12 +263,13 @@ export default function CompanionProvider({ children }: { children: ReactNode })
     const id = setInterval(poll, COMPANION_STATUS_POLL_MS);
     return () => {
       cancelled = true;
+      pollRequestRef.current += 1;
       clearInterval(id);
     };
   }, [session]);
 
   return (
-    <CompanionContext.Provider value={{ session, setSession, phase, champSelect, clientConnected, tick }}>
+    <CompanionContext.Provider value={{ session, setSession, phase, champSelect, clientConnected, statusFresh, tick }}>
       {children}
     </CompanionContext.Provider>
   );

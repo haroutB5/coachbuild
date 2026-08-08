@@ -45,6 +45,8 @@ export interface ChampSelectChipInput {
     role?: string | null;
   } | null;
   clientConnected: boolean;
+  /** False when the phase/snapshot came from a stale /status response. */
+  statusFresh?: boolean;
 }
 
 /** Not connected, or no champSelect snapshot at all -> hidden. */
@@ -53,6 +55,7 @@ function hidden(): ChampSelectChip {
 }
 
 export function champSelectChipModel(i: ChampSelectChipInput): ChampSelectChip {
+  if (i.statusFresh === false) return hidden();
   if (!i.clientConnected) return hidden();
 
   // Only ChampSelect ever shows this chip -- InProgress/None/lobby phases

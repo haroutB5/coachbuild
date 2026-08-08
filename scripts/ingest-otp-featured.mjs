@@ -23,7 +23,12 @@ import { loadEnvLocal } from "./_env.mjs";
 
 loadEnvLocal();
 
-const { parseOneTricksRows, pickFeaturedOneTrick, riotId, MIN_CHAMPION_GAMES } = await import(
+const {
+  parseOneTricksRows,
+  selectFeaturedOneTrick,
+  riotId,
+  MIN_CHAMPION_GAMES,
+} = await import(
   "../lib/otp/onetricks.ts"
 );
 const { resolveFeaturedAccount } = await import("../lib/otp/featured.ts");
@@ -85,14 +90,58 @@ async function ingestChampion(sql, page, champ, matchCount) {
     log(`${champ.key}: no parseable rows`);
     return false;
   }
-  const featured = pickFeaturedOneTrick(rows);
-  if (!featured) {
+
+  // The source page carries share/OTP status, while otp_accounts carries the
+  // career sample and op.gg standing. Join by Riot ID so the ranking cannot
+  // accidentally use the source page's smaller sample or source-only order.
+  const [accountRows, incumbentRows] = await Promise.all([
+    sql`
+      SELECT puuid, game_name, tag_line, leaderboard_rank, champ_play, champ_win
+      FROM coachbuild.otp_accounts
+      WHERE champion_id = ${champ.id} AND active = true
+    `,
+    sql`
+      SELECT puuid, game_name, tag_line
+      FROM coachbuild.otp_featured
+      WHERE champion_id = ${champ.id}
+      LIMIT 1
+    `,
+  ]);
+  const accountByRiotId = new Map(
+    accountRows.map((account) => [
+      `${String(account.game_name).trim().toLowerCase()}#${String(account.tag_line).trim().toLowerCase()}`,
+      account,
+    ])
+  );
+  const candidates = rows.map((row) => {
+    const account = accountByRiotId.get(
+      `${row.gameName.trim().toLowerCase()}#${row.tagLine.trim().toLowerCase()}`
+    );
+    return {
+      ...row,
+      puuid: account?.puuid ?? null,
+      championPlays: Number(account?.champ_play ?? row.games),
+      championWins: Number(account?.champ_win ?? Math.round(row.games * row.winratePct / 100)),
+      leaderboardRank: Number(account?.leaderboard_rank ?? row.rank),
+    };
+  });
+  const incumbent = incumbentRows[0];
+  const incumbentKey = incumbent?.puuid ||
+    (incumbent?.game_name && incumbent?.tag_line
+      ? `${incumbent.game_name}#${incumbent.tag_line}`
+      : null);
+  const selection = selectFeaturedOneTrick(candidates, { incumbentKey });
+  if (!selection) {
     log(`${champ.key}: ${rows.length} rows, none both OTP-flagged and >= ${MIN_CHAMPION_GAMES} games`);
     return false;
   }
+  const featured = selection.candidate;
   log(
     `${champ.key}: ${riotId(featured)} — ${featured.tier} ${featured.lp} LP, ` +
-      `${featured.games}g ${featured.winratePct}% WR, share ${featured.championSharePct}% (source rank ${featured.rank})`
+      `score ${selection.score.toFixed(3)} (${selection.reason}), ` +
+      `${featured.championPlays} career games, ${featured.games} source games, ` +
+      `${featured.winratePct}% WR, share ${featured.championSharePct}% ` +
+      `(source rank ${featured.rank}, ladder rank ${featured.leaderboardRank})`
   );
 
   const resolved = await resolveFeaturedAccount(featured.gameName, featured.tagLine, log);

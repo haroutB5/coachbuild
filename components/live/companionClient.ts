@@ -96,6 +96,8 @@ export type CompanionPort = (typeof COMPANION_PORTS)[number];
  *  to catch a ChampSelect->InProgress transition, not track anything
  *  frame-accurate. */
 export const COMPANION_STATUS_POLL_MS = 3000;
+/** A hung loopback request must not hold the last phase forever. */
+export const COMPANION_STATUS_REQUEST_TIMEOUT_MS = 2000;
 /** In-game live-client-data poll cadence. Originally 1000ms (the plan's spec
  *  and the community-established Live Client Data polling norm, research
  *  §B) — slowed to 3000ms in Round-B (P2 "LivePanel churn" fix): the enemy
@@ -421,6 +423,27 @@ function bridgeUrl(port: number, path: string, session: string, followKind: Foll
   return detach ? `${base}&follow=${followKind}&detach=1` : `${base}&follow=${followKind}`;
 }
 
+async function fetchStatusWithTimeout(
+  f: typeof fetch,
+  url: string,
+  init: RequestInit
+): Promise<Response> {
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const request = f(url, controller ? { ...init, signal: controller.signal } : init);
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller?.abort();
+        reject(new Error("Companion /status request timed out"));
+      }, COMPANION_STATUS_REQUEST_TIMEOUT_MS);
+    });
+    return await Promise.race([request, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 /** v1.7.0 (companion 1.7.0) — tells the companion this page is GOING AWAY, so
  *  it stops counting as an attached tab immediately instead of decaying out of
  *  the companion's 150s attach window.
@@ -551,7 +574,7 @@ export async function getStatus(
 ): Promise<CompanionStatus | null> {
   const f = deps.fetchImpl ?? fetch;
   try {
-    const res = await f(bridgeUrl(port, "/status", session, followKind), { method: "GET" });
+    const res = await fetchStatusWithTimeout(f, bridgeUrl(port, "/status", session, followKind), { method: "GET" });
     if (!res.ok) return null;
     const data = (await res.json()) as Partial<CompanionStatus>;
     if (
@@ -594,7 +617,7 @@ export async function probeCompanion(
   let sawTypeError = false;
   for (const port of ports) {
     try {
-      const res = await f(bridgeUrl(port, "/status", session, followKind), { method: "GET" });
+      const res = await fetchStatusWithTimeout(f, bridgeUrl(port, "/status", session, followKind), { method: "GET" });
       if (!res.ok) continue;
       const data = (await res.json()) as Partial<CompanionStatus>;
       if (

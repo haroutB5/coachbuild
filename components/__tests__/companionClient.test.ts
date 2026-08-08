@@ -203,6 +203,25 @@ describe("companionClient — getStatus / refreshStatus", () => {
     expect(await getStatus(48291, "sess", { fetchImpl })).toBeNull();
   });
 
+  it("treats a 403 session rotation as an unavailable companion", async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: false, status: 403 })) as unknown as typeof fetch;
+    await expect(probeCompanion("old-session", "passive", { fetchImpl })).resolves.toEqual({
+      kind: "no-companion",
+    });
+  });
+
+  it("getStatus returns null when a status request times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn(() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+      const pending = getStatus(48291, "sess", { fetchImpl });
+      await vi.advanceTimersByTimeAsync(2500);
+      await expect(pending).resolves.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refreshStatus reuses the stored port without a full walk when it still answers", async () => {
     stubWindow(makeLocalStorageShim());
     setStoredPort(48293);

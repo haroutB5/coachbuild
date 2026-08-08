@@ -337,6 +337,7 @@ export default function HomePage() {
   // to change value.
   useEffect(() => {
     let cancelled = false;
+    if (!companion.statusFresh) return;
     const resolvedChampionId = resolveCurrentChampSelectChampionId(companion.champSelect);
     if (companion.phase !== "ChampSelect" || resolvedChampionId === null) return;
     if (!shouldFollowChampSelectChange(resolvedChampionId)) return;
@@ -385,7 +386,7 @@ export default function HomePage() {
     // must NOT re-run just because the user manually browsed to a different
     // champion. sheetNav/the ref objects are stable across renders.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companion.tick, activeLane]);
+  }, [companion.tick, companion.statusFresh, activeLane]);
 
   /** Repaints activeLane/champ from a landed-on entry — fired on mount-resume
    *  and every popstate. Delegates the actual wire->state mapping to
@@ -527,7 +528,7 @@ export default function HomePage() {
             1s live-client-data poll once mounted. Absent entirely
             otherwise, so this never reserves layout space or shows
             placeholder chrome for a feature most sessions won't use. */}
-        {companion.phase === "InProgress" && <LivePanel champ={champ} lane={activeLane} />}
+        {companion.statusFresh && companion.phase === "InProgress" && <LivePanel champ={champ} lane={activeLane} />}
 
         <footer className="mt-10 pt-4 border-t border-line text-center text-[11px] text-mut space-y-1">
           <p>Build data and icons © coachless.gg / Riot Games. For personal use.</p>

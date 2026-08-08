@@ -54,6 +54,8 @@ export function normalizeDraftEnemyIds(ids: readonly number[]): number[] {
 export interface DraftLiveSyncInput {
   phase: string | null;
   champSelect: CompanionChampSelectSnapshot | null;
+  /** False when the phase/snapshot is no longer backed by a recent poll. */
+  statusFresh?: boolean;
   /** True once the user has manually edited lane/enemies/hover since the
    *  last live sync (or since mount) — the caller owns exactly when this
    *  flips true/false (see "Reset to live"); this module only reacts to it. */
@@ -92,6 +94,7 @@ export interface DraftLiveTarget {
  * tap (handleToggleLaneOpponent in app/draft/page.tsx) for manual mode —
  * both already work correctly without any index-based guessing here. */
 export function resolveDraftLiveTarget(input: DraftLiveSyncInput): DraftLiveTarget | null {
+  if (input.statusFresh === false) return null;
   if (input.dirty) return null;
   if (input.phase !== "ChampSelect") return null;
   if (!input.champSelect) return null;
@@ -109,8 +112,13 @@ export function resolveDraftLiveTarget(input: DraftLiveSyncInput): DraftLiveTarg
  *  only meaningful once the user has actually dirtied their manual edits
  *  AND there's a live champ-select to reset back to (showing the button
  *  with nothing live behind it would be a dead-end control). */
-export function shouldShowResetToLive(dirty: boolean, phase: string | null, champSelect: CompanionChampSelectSnapshot | null): boolean {
-  return dirty && phase === "ChampSelect" && champSelect !== null;
+export function shouldShowResetToLive(
+  dirty: boolean,
+  phase: string | null,
+  champSelect: CompanionChampSelectSnapshot | null,
+  statusFresh = true
+): boolean {
+  return statusFresh && dirty && phase === "ChampSelect" && champSelect !== null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

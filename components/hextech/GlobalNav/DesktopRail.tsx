@@ -74,7 +74,7 @@ function NavGroup({
 export default function DesktopRail({ patch }: DesktopRailProps) {
   const pathname = usePathname();
   const companion = useCompanion();
-  const showPickBadge = buildsPickBadge(companion.phase);
+  const showPickBadge = companion.statusFresh && buildsPickBadge(companion.phase);
   const playItems = NAV_ITEMS.filter((item) => item.group === "play");
   const dataItems = NAV_ITEMS.filter((item) => item.group === "data");
 

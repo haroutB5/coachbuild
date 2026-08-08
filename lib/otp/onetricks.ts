@@ -1,74 +1,75 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// lib/otp/onetricks.ts — WHICH one-trick we feature, and why that one.
+// lib/otp/onetricks.ts - parse the source page and choose the featured account.
 //
-// Replaces op.gg's champion leaderboard as the SELECTION source (2026-07-29,
-// user directive). op.gg is still fine data, but it answers a different
-// question: its "rank 1" is whoever has the most games on the champion, so for
-// Viktor it returned a Diamond player while a Challenger sat at rank 2. It also
-// only exposes ten players per region, which is why the account the user
-// actually wanted for Akshan (Phanta #107) never appeared in it at all.
-//
-// onetricks.gg publishes the list the user reads, sorted by LP, and — the part
-// that matters — it marks which accounts are genuinely ONE-TRICKS rather than
-// merely good players who own the champion. That flag is the whole reason the
-// two disagreed:
-//
-//   Viktor  #1 Splash  2486 LP  33% champion share  — NOT flagged OTP
-//   Viktor  #2 Dun     2316 LP  67% champion share  — flagged OTP
-//
-// Ranking by LP alone gives Splash. Ranking by LP among OTP-FLAGGED accounts
-// gives Dun, which is the answer the user expects and the more useful one: a
-// build from someone who plays this champion two games in three is worth more
-// than one from a better player who picks it a third of the time.
-//
-// ── WHAT THIS MODULE IS NOT ──────────────────────────────────────────────────
-// No network. It parses row TEXT and applies the selection rule, nothing more.
-// The transport lives in scripts/ingest-otp-featured.mjs because the site
-// rate-limits plain fetches (HTTP 429, reproduced repeatedly) and only serves a
-// real browser, which belongs in the local ingest and not in the Next app.
-// Keeping the rule pure is what makes it unit-testable against captured rows.
-//
-// ── FAIL TO EMPTY, NEVER TO WRONG ────────────────────────────────────────────
-// Same discipline as lib/opgg.ts and lib/otp/leaderboard.ts: a row that does
-// not match the expected shape is DROPPED, not guessed at. A missing featured
-// player costs us one card. A misparsed one puts a stranger's build in front of
-// someone mid-game.
-// ─────────────────────────────────────────────────────────────────────────────
+// onetricks.gg supplies the champion share and its OTP marker. The active
+// otp_accounts roster supplies career champion volume, wins, and the op.gg
+// leaderboard standing. Both positions are standing signals: the roster rank
+// is the requested live ladder fact, while the source rank prevents a player
+// with a poor OTP-source standing from winning on one op.gg snapshot alone.
 
 /** One row of the champion ranking, reduced to the fields the app uses. */
 export interface OneTrickRow {
-  /** Position in the site's own list, 1-based. Sorted by LP descending. */
+  /** Position in the source site's list, 1-based. */
   rank: number;
   /** e.g. "Challenger", "Grandmaster", "Master". */
   tier: string;
   /** Riot ID name. May contain spaces ("Tears of Winter"). */
   gameName: string;
-  /** Riot ID tag. May contain spaces — "Splash #0 1" has the tag "0 1". */
+  /** Riot ID tag. May contain spaces ("0 1" is real source data). */
   tagLine: string;
   /** Platform label as shown, e.g. "EUW1", "NA1", "KR". */
   server: string;
   lp: number;
   /** Share of this account's games that are on this champion, 0-100. */
   championSharePct: number;
-  /** Games on this champion. */
+  /** Games on this champion according to the source page. */
   games: number;
-  /** Winrate on this champion, 0-100. */
+  /** Winrate on this champion according to the source page, 0-100. */
   winratePct: number;
   /** e.g. 2.93 from "2.93:1". */
   kda: number;
-  /** The site's own one-trick marker. Load-bearing — see the module header. */
+  /** The site's own one-trick marker. */
   isOtp: boolean;
 }
 
 /**
+ * A parsed source row enriched with active otp_accounts facts. The enrichment
+ * is optional so parser-only callers and old captures still work; the scorer
+ * falls back to the source row when no matching roster account is available.
+ */
+export interface FeaturedOtpCandidate extends OneTrickRow {
+  puuid?: string | null;
+  /** Career games on the champion (otp_accounts.champ_play). */
+  championPlays?: number;
+  /** Career wins on the champion (otp_accounts.champ_win). */
+  championWins?: number;
+  /** Current roster standing (otp_accounts.leaderboard_rank). */
+  leaderboardRank?: number;
+}
+
+/**
+ * Relative hysteresis margin. The incumbent keeps its slot unless a challenger
+ * beats its score by more than this fraction; this suppresses refresh churn
+ * without blocking a real takeover.
+ */
+export const FEATURED_FLIP_MARGIN = 0.10;
+
+/** Prior strength for empirical-Bayes winrate shrinkage. */
+export const WINRATE_PRIOR_GAMES = 200;
+
+/** Winrate is deliberately only a small adjustment to dedication signals. */
+export const FEATURED_WINRATE_WEIGHT = 0.20;
+
+/** Rank remains primary, but the square-root dampens rank-one outliers. */
+export const FEATURED_RANK_POWER = 0.5;
+
+/** The source ladder is also a standing signal; keep it sub-linear. */
+export const FEATURED_SOURCE_RANK_POWER = 0.8;
+
+/**
  * Minimum games on the champion before an account can be featured.
  *
- * 150, a hard user directive (2026-07-29). It is not arbitrary: the same
- * capture that motivated it has Phantasm #TWTV0 at 2982 LP with a 77% winrate
- * on **117 games** of Akshan, which reads as the best player on the page until
- * you notice the sample. A build derived from a hot streak is worse than no
- * build. The floor also happens to exclude every non-OTP-flagged account in the
- * captured samples, so the two guards agree rather than fight.
+ * 150 is a user directive from 2026-07-29. It keeps a hot streak such as 117
+ * games from replacing a deeper, more representative one-trick sample.
  */
 export const MIN_CHAMPION_GAMES = 150;
 
@@ -77,8 +78,7 @@ export const MIN_CHAMPION_GAMES = 150;
  *   `2 Challenger Dun #NA1 NA1: 2316 LP 67% 627 60% 2.93:1 OTP`
  *
  * Both name and tag can contain spaces, so the tag is matched non-greedily and
- * anchored by the server label that follows it — `Splash #0 1 EUW1:` has to
- * yield tag `0 1` and server `EUW1`, which a greedy match gets wrong.
+ * anchored by the server label that follows it.
  */
 const ROW =
   /^(\d+)\s+([A-Za-z]+)\s+(.+?)\s+#(.+?)\s+([A-Za-z]{2,4}\d?):\s*(\d+)\s*LP\s+(\d+)%\s+(\d+)\s+(\d+)%\s+([\d.]+):1(\s+OTP)?\s*$/;
@@ -89,8 +89,8 @@ function num(raw: string): number | null {
 }
 
 /**
- * Parse rendered ranking rows. Unparseable rows are dropped silently — the
- * caller gets fewer candidates, never a wrong one.
+ * Parse rendered ranking rows. Unparseable rows are dropped silently - the
+ * caller gets fewer candidates, never a guessed identity or statistic.
  */
 export function parseOneTricksRows(lines: readonly string[]): OneTrickRow[] {
   const out: OneTrickRow[] = [];
@@ -127,25 +127,181 @@ export function parseOneTricksRows(lines: readonly string[]): OneTrickRow[] {
   return out;
 }
 
-/**
- * The account to feature: highest LP among rows that are BOTH flagged as
- * one-tricks and past the games floor.
- *
- * LP is re-sorted here rather than trusting the source's order. The site does
- * sort by LP today, but "the list happens to arrive sorted" is not a property
- * worth depending on when the cost of being wrong is featuring the wrong
- * player's build.
- *
- * Returns null when nothing qualifies — a champion with no eligible one-trick
- * simply has no featured card, which is the honest outcome.
- */
-export function pickFeaturedOneTrick(rows: readonly OneTrickRow[]): OneTrickRow | null {
-  const eligible = rows.filter((r) => r.isOtp && r.games >= MIN_CHAMPION_GAMES);
-  if (eligible.length === 0) return null;
-  return [...eligible].sort((a, b) => b.lp - a.lp || b.games - a.games || a.rank - b.rank)[0];
+interface NormalizedFeaturedOtpCandidate extends FeaturedOtpCandidate {
+  championPlays: number;
+  championWins: number;
+  leaderboardRank: number;
 }
 
-/** `Dun#NA1` — the form Riot's account-v1 by-riot-id takes. */
+export interface FeaturedOtpScore {
+  score: number;
+  /** Natural-log career games term. */
+  dedication: number;
+  /** Share term, with a non-zero floor so low share is not free. */
+  shareFactor: number;
+  /** Combined lower-is-better roster and source ladder factors. */
+  ladderFactor: number;
+  /** Candidate-pool mean used as the Bayesian prior, in percent. */
+  poolMeanWinratePct: number;
+  /** Shrunk candidate winrate, in percent. */
+  shrunkWinratePct: number;
+  /** Small multiplicative adjustment derived from the shrunk winrate. */
+  winrateFactor: number;
+}
+
+export interface FeaturedOtpRankingEntry extends FeaturedOtpScore {
+  candidate: FeaturedOtpCandidate;
+}
+
+export interface FeaturedOtpSelectionOptions {
+  /** PUUID or Riot ID of the row currently stored in otp_featured. */
+  incumbentKey?: string | null;
+}
+
+export interface FeaturedOtpSelection extends FeaturedOtpRankingEntry {
+  reason: "argmax" | "challenger-margin" | "incumbent-hysteresis";
+}
+
+function clampPct(value: number, fallback = 0): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(100, Math.max(0, value));
+}
+
+function positiveNumber(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function normalizeCandidate(row: FeaturedOtpCandidate): NormalizedFeaturedOtpCandidate {
+  const championPlays = positiveNumber(row.championPlays, row.games);
+  const fallbackWins = championPlays * clampPct(Number(row.winratePct)) / 100;
+  const rawWins = Number(row.championWins);
+  const championWins = Number.isFinite(rawWins)
+    ? Math.min(championPlays, Math.max(0, rawWins))
+    : fallbackWins;
+  return {
+    ...row,
+    championPlays,
+    championWins,
+    leaderboardRank: Math.max(1, Math.floor(positiveNumber(row.leaderboardRank, row.rank))),
+    championSharePct: clampPct(Number(row.championSharePct)),
+  };
+}
+
+function candidateWinrate(candidate: NormalizedFeaturedOtpCandidate): number {
+  return candidate.championWins / candidate.championPlays;
+}
+
+function candidatePoolMean(candidates: readonly NormalizedFeaturedOtpCandidate[]): number {
+  const totalPlays = candidates.reduce((sum, c) => sum + c.championPlays, 0);
+  if (totalPlays <= 0) return 0.5;
+  const totalWins = candidates.reduce((sum, c) => sum + c.championWins, 0);
+  return totalWins / totalPlays;
+}
+
+/** Stable identity used to compare a candidate to the otp_featured row. */
+export function featuredCandidateKey(
+  candidate: Pick<FeaturedOtpCandidate, "puuid" | "gameName" | "tagLine">
+): string {
+  return (candidate.puuid?.trim() || riotId(candidate)).trim().toLowerCase();
+}
+
+/**
+ * Score one candidate. Career games are log-scaled, share and ladder standing
+ * are the primary multiplicative signals, and winrate is shrunk to the pool
+ * mean before receiving only a small adjustment.
+ */
+export function scoreFeaturedOtpCandidate(
+  row: FeaturedOtpCandidate,
+  poolMeanWinratePct?: number
+): FeaturedOtpScore {
+  const candidate = normalizeCandidate(row);
+  const poolMean =
+    typeof poolMeanWinratePct === "number" && Number.isFinite(poolMeanWinratePct)
+      ? clampPct(poolMeanWinratePct)
+      : candidateWinrate(candidate) * 100;
+  const priorWins = WINRATE_PRIOR_GAMES * poolMean / 100;
+  const shrunkWinratePct =
+    ((candidate.championWins + priorWins) / (candidate.championPlays + WINRATE_PRIOR_GAMES)) * 100;
+  const winrateFactor =
+    1 + FEATURED_WINRATE_WEIGHT * ((shrunkWinratePct - poolMean) / 100);
+  const dedication = Math.log1p(candidate.championPlays);
+  const shareFactor = 0.5 + candidate.championSharePct / 100;
+  const rosterLadderFactor = 1 / Math.pow(candidate.leaderboardRank, FEATURED_RANK_POWER);
+  const sourceLadderFactor = 1 / Math.pow(Math.max(1, candidate.rank), FEATURED_SOURCE_RANK_POWER);
+  const ladderFactor = rosterLadderFactor * sourceLadderFactor;
+
+  return {
+    score: dedication * shareFactor * ladderFactor * winrateFactor,
+    dedication,
+    shareFactor,
+    ladderFactor,
+    poolMeanWinratePct: poolMean,
+    shrunkWinratePct,
+    winrateFactor,
+  };
+}
+
+/** Rank eligible candidates without applying incumbent hysteresis. */
+export function rankFeaturedOtpCandidates(
+  rows: readonly FeaturedOtpCandidate[]
+): FeaturedOtpRankingEntry[] {
+  const eligible = rows
+    .map(normalizeCandidate)
+    .filter((candidate) => candidate.isOtp && candidate.championPlays >= MIN_CHAMPION_GAMES);
+  if (eligible.length === 0) return [];
+
+  const poolMean = candidatePoolMean(eligible);
+  return eligible
+    .map((candidate) => ({
+      candidate,
+      ...scoreFeaturedOtpCandidate(candidate, poolMean * 100),
+    }))
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        b.candidate.championPlays! - a.candidate.championPlays! ||
+        a.candidate.leaderboardRank! - b.candidate.leaderboardRank! ||
+        riotId(a.candidate).localeCompare(riotId(b.candidate))
+    );
+}
+
+/**
+ * Select the account for a refresh. A missing incumbent uses plain argmax;
+ * when the incumbent is present, a challenger must clear the relative margin
+ * before the slot changes.
+ */
+export function selectFeaturedOneTrick(
+  rows: readonly FeaturedOtpCandidate[],
+  opts: FeaturedOtpSelectionOptions = {}
+): FeaturedOtpSelection | null {
+  const ranked = rankFeaturedOtpCandidates(rows);
+  const top = ranked[0];
+  if (!top) return null;
+
+  const incumbentKey = opts.incumbentKey?.trim().toLowerCase();
+  if (!incumbentKey) return { ...top, reason: "argmax" };
+
+  const incumbent = ranked.find((entry) => featuredCandidateKey(entry.candidate) === incumbentKey);
+  if (!incumbent || featuredCandidateKey(incumbent.candidate) === featuredCandidateKey(top.candidate)) {
+    return { ...top, reason: "argmax" };
+  }
+
+  if (top.score > incumbent.score * (1 + FEATURED_FLIP_MARGIN)) {
+    return { ...top, reason: "challenger-margin" };
+  }
+  return { ...incumbent, reason: "incumbent-hysteresis" };
+}
+
+/** Backward-compatible convenience wrapper for parser callers. */
+export function pickFeaturedOneTrick(
+  rows: readonly FeaturedOtpCandidate[],
+  opts: FeaturedOtpSelectionOptions = {}
+): FeaturedOtpCandidate | null {
+  return selectFeaturedOneTrick(rows, opts)?.candidate ?? null;
+}
+
+/** `Dun#NA1` - the form Riot's account-v1 by-riot-id takes. */
 export function riotId(row: Pick<OneTrickRow, "gameName" | "tagLine">): string {
   return `${row.gameName}#${row.tagLine}`;
 }

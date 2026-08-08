@@ -75,8 +75,13 @@ export default function CompactPage() {
   // mount-time deep link, so the overlay tracks hovers in place exactly like
   // the Builds page does.
   const liveChampionId =
-    companion.phase === "ChampSelect" ? resolveCurrentChampSelectChampionId(companion.champSelect) : null;
-  const liveRoleId = companion.phase === "ChampSelect" ? resolveChampSelectRoleId(companion.champSelect) : undefined;
+    companion.statusFresh && companion.phase === "ChampSelect"
+      ? resolveCurrentChampSelectChampionId(companion.champSelect)
+      : null;
+  const liveRoleId =
+    companion.statusFresh && companion.phase === "ChampSelect"
+      ? resolveChampSelectRoleId(companion.champSelect)
+      : undefined;
   const championId = liveChampionId ?? initialChampionId;
   const [state, setState] = useState<LoadState>({ kind: "idle" });
   const requestKey = championId == null ? null : `${championId}:${lane ?? ""}`;

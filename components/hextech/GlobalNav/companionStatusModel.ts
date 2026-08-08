@@ -29,10 +29,12 @@ export interface CompanionStatusInput {
   phase: string | null;
   clientConnected: boolean;
   champSelect: unknown | null;
+  /** False when the last successful /status poll is stale or absent. */
+  statusFresh?: boolean;
 }
 
 export function companionStatusModel(input: CompanionStatusInput): CompanionStatusModel {
-  const { session, phase, clientConnected } = input;
+  const { session, phase, clientConnected, statusFresh = true } = input;
 
   if (session === null) {
     return {
@@ -41,6 +43,17 @@ export function companionStatusModel(input: CompanionStatusInput): CompanionStat
       header: "COMPANION · OFF",
       title: "Not paired",
       subtitle: "Set up →",
+      href: "/live-setup",
+    };
+  }
+
+  if (!statusFresh) {
+    return {
+      tone: "off",
+      dotClass: "bg-mut",
+      header: "COMPANION · OFF",
+      title: "Not responding",
+      subtitle: "Check it's running →",
       href: "/live-setup",
     };
   }

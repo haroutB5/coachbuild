@@ -859,6 +859,13 @@ export default function DraftPage() {
   // resolves to the SAME values never triggers a pointless re-render or
   // re-fetch.
   useEffect(() => {
+    if (!companion.statusFresh) {
+      // A stale poll is not a transient null blip: treat it as a real break
+      // in the live session so recovery re-arms entry/dismissal handling.
+      entryStateRef.current = INITIAL_CHAMP_SELECT_ENTRY_STATE;
+      return;
+    }
+
     // P0 fix (v0.40.0): a fresh champ-select ENTRY always wins over a
     // stale manual-dirty latch from a PREVIOUS draft, so live pickup
     // re-attaches on every new game rather than staying detached forever
@@ -881,7 +888,12 @@ export default function DraftPage() {
       }
     }
 
-    const target = resolveDraftLiveTarget({ phase: companion.phase, champSelect: companion.champSelect, dirty });
+    const target = resolveDraftLiveTarget({
+      phase: companion.phase,
+      champSelect: companion.champSelect,
+      statusFresh: companion.statusFresh,
+      dirty,
+    });
     if (!target) return;
 
     if (target.lane !== undefined && target.lane !== laneRef.current) setLane(target.lane);
@@ -896,7 +908,7 @@ export default function DraftPage() {
     // below via `inferredLaneOpponentId`) covers live mode instead.
 
     if (target.hover !== hoverRef.current) setHover(target.hover);
-  }, [companion.tick, companion.phase, companion.champSelect, dirty]);
+  }, [companion.tick, companion.phase, companion.champSelect, companion.statusFresh, dirty]);
 
   // ── Debounced + race-guarded recommend fetch ───────────────────────────
   const reqIdRef = useRef(0);
@@ -1043,13 +1055,14 @@ export default function DraftPage() {
   const hoverChamp: ChampionRef | null =
     hover !== null ? { id: hover, key: "", name: hoverEntry?.name ?? `Champion #${hover}`, icon: hoverEntry?.icon ?? "" } : null;
 
-  const showResetToLive = shouldShowResetToLive(dirty, companion.phase, companion.champSelect);
-  const liveSyncing = companion.phase === "ChampSelect" && !dirty;
+  const showResetToLive = shouldShowResetToLive(dirty, companion.phase, companion.champSelect, companion.statusFresh);
+  const liveSyncing = companion.statusFresh && companion.phase === "ChampSelect" && !dirty;
   const lockedPickInput = {
     phase: companion.phase,
     session: companion.session,
     cellChampionId: companion.champSelect?.cellChampionId,
     dismissedChampionId: dismissedLockedPickId,
+    statusFresh: companion.statusFresh,
   };
   const lockedChampionId = resolveLockedPickChampionId(lockedPickInput);
   const showLockedPickBanner = shouldShowLockedPickBanner(lockedPickInput);

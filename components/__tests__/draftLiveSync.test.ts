@@ -55,6 +55,17 @@ describe("resolveDraftLiveTarget", () => {
     ).toBeNull();
   });
 
+  it("returns null when the cached ChampSelect snapshot is stale", () => {
+    expect(
+      resolveDraftLiveTarget({
+        phase: "ChampSelect",
+        champSelect: snapshot({ cellChampionId: 103 }),
+        statusFresh: false,
+        dirty: false,
+      })
+    ).toBeNull();
+  });
+
   it("returns null when phase isn't ChampSelect", () => {
     expect(resolveDraftLiveTarget({ phase: "InProgress", champSelect: snapshot(), dirty: false })).toBeNull();
   });
@@ -232,5 +243,9 @@ describe("shouldShowResetToLive", () => {
 
   it("true when dirty, in ChampSelect, and a snapshot exists", () => {
     expect(shouldShowResetToLive(true, "ChampSelect", snapshot())).toBe(true);
+  });
+
+  it("false when the snapshot is stale", () => {
+    expect(shouldShowResetToLive(true, "ChampSelect", snapshot(), false)).toBe(false);
   });
 });
