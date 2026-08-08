@@ -160,3 +160,18 @@ Verified facts that cost real debugging time. Cite these before touching the rel
   b = games whose basics-prefix matches the chosen prefix; marginal fallback only when the
   electorate empties. While the electorate is non-empty, every emitted basics-prefix is one some
   real game played.
+
+## Featured-OTP selection (v0.103.2, 2026-08-09 — user-reported wrong pick)
+
+- **The selector was LP-ONLY and silently flipped picks** (Zaahen: Numbers#PLUH displaced
+  ozneviik despite rank 2 + 917 games vs rank 4 + 579). Now `lib/otp` scores by log-scaled
+  career champion games + champion share + ladder standing (leaderboard AND source rank),
+  with BAYESIAN-SHRUNK winrate toward the candidate-pool mean (small samples can't win on
+  winrate) and **10% incumbent hysteresis** (a challenger must clearly beat the current
+  featured pick — refreshes must not churn the face of the tab). Fixture-pinned on the real
+  Zaahen numbers. Scoped refresh: `npx tsx scripts/ingest-otp-featured.mjs --champion <id>`.
+- **Companion liveness is freshness-gated** (same release): any live badge/tile/banner needs
+  a successful /status poll within ~3 poll intervals; connection-refused, 403 (token rotates
+  on companion restart) and timeouts all clear cached phase state. A dead companion must
+  LOOK dead — the 2026-08-08 incident had "Live — syncing" showing through a real champ
+  select with no bridge listening.
