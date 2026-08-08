@@ -37,10 +37,17 @@ Verified facts that cost real debugging time. Cite these before touching the rel
   the unreachable state, one recovering). They used to log every 60s forever
   while League was closed and had flushed 200KB of real history away. Real HTTP
   rejections keep `Write-ThrottledErrorLog`'s 60s throttle.
-- **The companion does not hot-update.** It re-downloads on launch
-  (`irm .../companion.ps1 | iex`), so a running instance keeps its old code
-  until quit + relaunch — worth stating explicitly whenever a companion-side
-  fix ships.
+- **The companion does not hot-update, and the overlay path is stricter.** The
+  standalone install re-downloads on launch (`irm .../companion.ps1 | iex`), so
+  quit + relaunch gets the new version. The Electron overlay instead bundles
+  companion.ps1 at BUILD time (`overlay-host` extraResources from
+  `../public/companion.ps1`) and supervises that copy — **a companion fix does
+  not reach overlay users until an overlay release is built and published**
+  (`npm run dist:publish` in overlay-host, GH_TOKEN from ~/.git-credentials,
+  publishes to haroutB5/coachbuild-overlay-releases). Verified live 2026-08-08:
+  companion 1.11.0 shipped a day earlier, the overlay's /status still reported
+  1.10.0 until overlay v0.4.4 was published. Every companion-side ship must
+  ask: does this need an overlay release too?
 
 ## Build-surface invariants (v0.100.1, 2026-08-06 — all three user-reported on Jax)
 
