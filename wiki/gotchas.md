@@ -2,6 +2,18 @@
 
 Verified facts that cost real debugging time. Cite these before touching the relevant area.
 
+## Draft page invariant (v0.102.0, 2026-08-08 — user-reported mismatch)
+
+- **TOP RECOMMENDATIONS cards, WORST MATCHUPS PREVIEW, and the DETAILED RANKINGS
+  sidebar are ONE ranked list** — `resolveVisibleDraftAssistantRanking` over the
+  active tab's rows with the active sort/filters; cards are its first three.
+  Never reintroduce independent card selection (the old BEST OVERALL / SAFEST
+  BLIND / RELIABLE PICK logic disagreed with the visible list, which read as a
+  bug). Corollary the audit caught: `handleViewDetails` must select within the
+  CURRENT tab — forcing `setAssistantView("recommended")` dead-ended blind-only
+  champions. Card buttons are bottom-pinned with `mt-auto` (min-h floors on
+  wrapping text blocks do NOT equalize card internals).
+
 ## Auto-export ownership + SW updates (v0.101.0 / companion v1.11.0, 2026-08-07)
 
 - **Champ-select auto-export dedup is PER BROWSER DOCUMENT and always will be.**
