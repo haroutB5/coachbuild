@@ -2,6 +2,16 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.102.1] - 2026-08-08 - Companion app windows
+
+### Changed
+- **Companion deep links now open as app windows.** Chromium-family default
+  browsers launch CoachBuild with `--app=<url>` so champ-select pages open
+  without browser tabs or chrome; Firefox and unknown browsers keep the
+  existing URL-launch fallback.
+- **`-NoAppWindow` preserves the old launch behavior.** Use it when a normal
+  browser tab is preferred.
+
 ## [0.102.0] — 2026-08-08 — Draft cards mirror the rankings
 
 ### Fixed

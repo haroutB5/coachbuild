@@ -8,7 +8,7 @@ COMPLIANCE BRIGHT LINES (product law -- do not cross, ever):
   - NEVER compute or surface enemy ability/summoner cooldowns or ultimate
     timers (banned by Riot, Mar 13 2025).
   - NEVER automate game actions: no auto-accept, auto-pick, auto-lock,
-    auto-dodge. This companion only READS state and opens a browser tab.
+    auto-dodge. This companion only READS state and opens a browser page.
   - NEVER reveal non-party summoner names during champ select (Patch 12.22
     anonymity). Champ-select reads ONLY championId / championPickIntent /
     session.actions (own-action championId, own actorCellId only) /
@@ -350,16 +350,21 @@ param(
     # This is the route the Electron overlay-host supervisor uses to run this
     # script as a hidden child process: same tick loop, same bridge server,
     # just no NotifyIcon/menu because the Electron tray is the visible one.
-    [switch]$NoTray
+    [switch]$NoTray,
+    # v1.12.0 -- keep the pre-app-window Start-Process URL behavior when
+    # explicitly requested. The default is to use a chromeless app window
+    # whenever the resolved default browser supports Chromium's --app switch.
+    [switch]$NoAppWindow
 )
 
 #region Config
 $script:Config = @{
-    Version     = '1.11.0'
+    Version     = '1.12.0'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
     LivePollMs  = 1000
+    NoAppWindow = [bool]$NoAppWindow
     # Per-launch fallback only -- Start-Companion / Install-Companion both
     # overwrite this with the persistent token from Get-OrCreateSessionToken
     # before it's used for real. -SelfTest/-Mock pass their own explicit
@@ -1580,11 +1585,21 @@ function Open-CompanionUrl {
     # Testable seam: -Mock records opens instead of actually launching a
     # browser, so debounce/deep-link logic is asserted without a real
     # League client or browser on this machine.
-    param([string]$Url)
+    param([string]$Url, [switch]$NoAppWindow)
     if ($script:MockMode) {
         [void]$script:OpenActions.Add($Url)
     } else {
-        try { Start-Process $Url | Out-Null } catch {}
+        try {
+            $appWindowEnabled = -not ($NoAppWindow -or [bool]$script:Config.NoAppWindow)
+            if ($appWindowEnabled) {
+                $exe = Get-DefaultBrowserExecutablePath
+                if ($exe -and (Test-ChromiumBrowserExecutable -ExecutablePath $exe)) {
+                    Invoke-CompanionUrlLaunch -ExecutablePath $exe -AppArgument "--app=$Url"
+                    return
+                }
+            }
+            Invoke-CompanionUrlLaunch -FallbackUrl $Url
+        } catch {}
     }
 }
 
@@ -1734,10 +1749,24 @@ $script:KnownBrowserProcessNames = @(
     'chrome', 'msedge', 'firefox', 'brave', 'opera', 'opera_gx', 'vivaldi',
     'chromium', 'thorium', 'librewolf', 'waterfox', 'floorp', 'arc', 'zen', 'iexplore'
 )
+# Chromium-family process names that understand the stable --app=<url>
+# command-line switch. Keep this narrower than KnownBrowserProcessNames:
+# Firefox and the other known browsers still use the URL fallback below.
+$script:ChromiumBrowserProcessNames = @(
+    'chrome', 'msedge', 'brave', 'vivaldi', 'opera', 'opera_gx',
+    'chromium', 'thorium', 'arc'
+)
 # Test seam: $null = really probe. -Mock/-SelfTest set $true so the existing
 # attach-gate cases keep asserting the follow-stamp logic on a machine with no
 # browser running, and the dedicated liveness cases flip it to $false.
 $script:BrowserProbeOverride = $null
+# Test seam: $null = read the default-browser registry. A non-null value is
+# returned as the resolved executable path without touching the registry.
+$script:BrowserExecutableOverride = $null
+# Test seam: $null = perform the real executable invocation or Start-Process.
+# SelfTest captures both the --app launch and the URL fallback without opening
+# a real user-facing browser window.
+$script:CompanionUrlLaunchOverride = $null
 
 function Reset-TabOpenGrace {
     # Called on champ-select ENTRY alongside Reset-ChampSelectState: a grace
@@ -1759,6 +1788,73 @@ function Get-DefaultBrowserProcessName {
         if ($cmd -match '([^\\/"]+)\.exe') { return $matches[1] }
     } catch {}
     return $null
+}
+
+function Get-DefaultBrowserExecutablePath {
+    # HKCU UrlAssociations/https/UserChoice -> ProgId -> HKCR
+    # shell/open/command. Best-effort: a missing key, malformed command, or
+    # unresolved bare executable returns $null so Open-CompanionUrl keeps its
+    # existing Start-Process fallback.
+    if ($null -ne $script:BrowserExecutableOverride) {
+        return [string]$script:BrowserExecutableOverride
+    }
+    try {
+        $progId = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice' -ErrorAction Stop).ProgId
+        if (-not $progId) { return $null }
+        $cmd = (Get-ItemProperty -Path "Registry::HKEY_CLASSES_ROOT\$progId\shell\open\command" -ErrorAction Stop).'(default)'
+        if (-not $cmd) { return $null }
+
+        $match = [regex]::Match([string]$cmd, '^\s*"(?<exe>[^"]+?\.exe)"', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if (-not $match.Success) {
+            # The unquoted form is still common in older registrations. The
+            # non-greedy match stops at the first .exe followed by whitespace
+            # or end-of-string, including paths that contain spaces.
+            $match = [regex]::Match([string]$cmd, '^\s*(?<exe>.+?\.exe)(?:\s|$)', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        }
+        if (-not $match.Success) { return $null }
+
+        $exePath = [Environment]::ExpandEnvironmentVariables($match.Groups['exe'].Value)
+        if ([IO.Path]::IsPathRooted($exePath)) {
+            if (Test-Path -LiteralPath $exePath -PathType Leaf -ErrorAction SilentlyContinue) {
+                return $exePath
+            }
+            return $null
+        }
+
+        # A registry command may contain only a basename. Resolve it through
+        # PATH when possible, but never return a non-path command string.
+        $resolved = Get-Command -Name $exePath -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        if ($resolved -and $resolved.Path) { return $resolved.Path }
+        if ($resolved -and $resolved.Source) { return $resolved.Source }
+    } catch {}
+    return $null
+}
+
+function Test-ChromiumBrowserExecutable {
+    param([string]$ExecutablePath)
+    if ([string]::IsNullOrWhiteSpace($ExecutablePath)) { return $false }
+    try {
+        $name = [IO.Path]::GetFileNameWithoutExtension($ExecutablePath).ToLowerInvariant()
+        return @($script:ChromiumBrowserProcessNames) -contains $name
+    } catch {
+        return $false
+    }
+}
+
+function Invoke-CompanionUrlLaunch {
+    # One seam covers both production paths: a Chromium app-window invocation
+    # receives ExecutablePath + AppArgument, while the legacy path receives
+    # only FallbackUrl and uses Start-Process exactly as before.
+    param([string]$ExecutablePath, [string]$AppArgument, [string]$FallbackUrl)
+    if ($null -ne $script:CompanionUrlLaunchOverride) {
+        & $script:CompanionUrlLaunchOverride $ExecutablePath $AppArgument $FallbackUrl | Out-Null
+        return
+    }
+    if ($ExecutablePath) {
+        & $ExecutablePath $AppArgument | Out-Null
+    } else {
+        Start-Process $FallbackUrl | Out-Null
+    }
 }
 
 function Test-BrowserProcessRunning {
@@ -3882,7 +3978,67 @@ function Invoke-SelfTest {
         $failures.Add('Double-launch guard: still reported running after the mutex was released/disposed')
     }
 
-    # 8d. WHOLE-FILE ASCII guard (v1.6.3): companion.ps1 must be 100% ASCII --
+    # 8d. v1.12.0 Chromium app-window launch. The registry is deliberately
+    # bypassed through the same style of script-scoped seam as
+    # BrowserProbeOverride, and the invocation seam prevents SelfTest from
+    # opening a real user-facing browser window.
+    $oldBrowserExecutableOverride = $script:BrowserExecutableOverride
+    $oldCompanionUrlLaunchOverride = $script:CompanionUrlLaunchOverride
+    $oldNoAppWindow = $script:Config.NoAppWindow
+    try {
+        $script:MockMode = $false
+        $script:Config.NoAppWindow = $false
+        $script:CompanionUrlLaunchRecord = $null
+        $script:CompanionUrlLaunchOverride = {
+            param([string]$ExecutablePath, [string]$AppArgument, [string]$FallbackUrl)
+            $script:CompanionUrlLaunchRecord = [pscustomobject]@{
+                ExecutablePath = $ExecutablePath
+                AppArgument    = $AppArgument
+                FallbackUrl    = $FallbackUrl
+            }
+        }
+        $testUrl = 'https://coachbuild.vercel.app/?championId=103&session=selftest'
+
+        $script:BrowserExecutableOverride = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+        Open-CompanionUrl -Url $testUrl
+        $record = $script:CompanionUrlLaunchRecord
+        if (-not $record -or $record.ExecutablePath -ne $script:BrowserExecutableOverride -or $record.AppArgument -ne "--app=$testUrl" -or $record.FallbackUrl) {
+            $failures.Add("Chromium app-window launch: expected --app=$testUrl, got exe='$($record.ExecutablePath)' arg='$($record.AppArgument)' fallback='$($record.FallbackUrl)'")
+        }
+
+        $script:BrowserExecutableOverride = 'C:\Program Files\Mozilla Firefox\firefox.exe'
+        $script:CompanionUrlLaunchRecord = $null
+        Open-CompanionUrl -Url $testUrl
+        $record = $script:CompanionUrlLaunchRecord
+        if (-not $record -or $record.ExecutablePath -or $record.AppArgument -or $record.FallbackUrl -ne $testUrl) {
+            $failures.Add("Non-Chromium fallback: expected Start-Process URL fallback, got exe='$($record.ExecutablePath)' arg='$($record.AppArgument)' fallback='$($record.FallbackUrl)'")
+        }
+
+        $script:BrowserExecutableOverride = ''
+        $script:CompanionUrlLaunchRecord = $null
+        Open-CompanionUrl -Url $testUrl
+        $record = $script:CompanionUrlLaunchRecord
+        if (-not $record -or $record.ExecutablePath -or $record.AppArgument -or $record.FallbackUrl -ne $testUrl) {
+            $failures.Add("Unresolvable-browser fallback: expected Start-Process URL fallback, got exe='$($record.ExecutablePath)' arg='$($record.AppArgument)' fallback='$($record.FallbackUrl)'")
+        }
+
+        $script:BrowserExecutableOverride = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+        $script:CompanionUrlLaunchRecord = $null
+        Open-CompanionUrl -Url $testUrl -NoAppWindow
+        $record = $script:CompanionUrlLaunchRecord
+        if (-not $record -or $record.ExecutablePath -or $record.AppArgument -or $record.FallbackUrl -ne $testUrl) {
+            $failures.Add("-NoAppWindow fallback: expected Start-Process URL fallback, got exe='$($record.ExecutablePath)' arg='$($record.AppArgument)' fallback='$($record.FallbackUrl)'")
+        }
+    } catch {
+        $failures.Add("Chromium app-window SelfTest threw: $($_.Exception.Message)")
+    } finally {
+        $script:BrowserExecutableOverride = $oldBrowserExecutableOverride
+        $script:CompanionUrlLaunchOverride = $oldCompanionUrlLaunchOverride
+        $script:Config.NoAppWindow = $oldNoAppWindow
+        $script:CompanionUrlLaunchRecord = $null
+    }
+
+    # 8e. WHOLE-FILE ASCII guard (v1.6.3): companion.ps1 must be 100% ASCII --
     # PS 5.1 + the various encodings this script is downloaded/executed under
     # (irm | iex) make any non-ASCII byte (a stray box-drawing char in a
     # comment, a smart quote) a latent mojibake/parse risk. Read our own source
