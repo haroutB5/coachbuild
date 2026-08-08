@@ -2,6 +2,21 @@
 
 Verified facts that cost real debugging time. Cite these before touching the relevant area.
 
+## Champ-select window model (companion v1.13.0 / app v0.103.0, 2026-08-08)
+
+- **ONE window per champ select, draft-first.** The v1.6.0 two-page model
+  (Builds + /draft) is retired — user directive after app-window mode made
+  pairs heavy. The companion opens ONLY the draft deep link, and only when NO
+  follow-capable page is attached (either attach kind counts). Champion
+  changes open nothing while anything is attached; the pages live-follow.
+  Builds is reached via /draft's locked-pick banner (renders on
+  cellChampionId>0, canonical deep-link params from
+  components/live/deepLink.ts — never invent a second param convention).
+  Tray Reopen is phase-aware: draft link in champ select, builds link after.
+- App windows via `--app=<url>` (companion v1.12.0): chromium-family default
+  browsers only; ProgId-resolved exe; -NoAppWindow or non-chromium falls
+  back to tabs.
+
 ## Draft page invariant (v0.102.0, 2026-08-08 — user-reported mismatch)
 
 - **TOP RECOMMENDATIONS cards, WORST MATCHUPS PREVIEW, and the DETAILED RANKINGS
