@@ -2,6 +2,17 @@
 
 All notable changes to CoachBuild are documented here.
 
+## [0.102.0] — 2026-08-08 — Draft cards mirror the rankings
+
+### Fixed
+- **Top recommendations now mirror the detailed rankings.** The three cards and
+  worst-matchups preview follow the active view, filters, niche-picks toggle,
+  sort, and Comfort Picks order; empty views stay empty instead of inventing
+  fallback picks.
+- **Draft card details stay in the active view.** Viewing a Blind Pick or Comfort
+  Pick now selects and scrolls to that champion without resetting the tab, and
+  card status rows stay aligned while sort-aware copy explains the current list.
+
 ## [0.101.0] — 2026-08-07 — Your rune edits stick; the update nag is gone
 
 ### Fixed

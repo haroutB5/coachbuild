@@ -1,6 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { DraftPlayResult } from "../live/draftRecommend";
-import type { BlindPickResult } from "@/lib/draft/blindPick";
 import { POOL_MIN_PICKRATE } from "@/lib/draft/score";
 import {
   DEFAULT_DRAFT_ASSISTANT_FILTERS,
@@ -13,41 +11,7 @@ import {
   resolveTopRecommendationCards,
   resolveVisibleDraftAssistantRanking,
   type DraftAssistantCandidate,
-  type DraftLaneStat,
 } from "../hextech/draftAssistantModel";
-
-function play(champId: number, score: number, games: number): DraftPlayResult {
-  return {
-    champId,
-    score,
-    winVsLaneOpp: null,
-    winVsLaneOppGames: null,
-    confidence: "normal",
-    minGames: games,
-    personal: null,
-    personalOverall: { games: 0, wins: 0 },
-    synergyDelta: 0,
-    synergyBand: "Even",
-  };
-}
-
-function blind(champId: number, fieldWr: number, floor: number, games: number): BlindPickResult {
-  return {
-    rank: 1,
-    champId,
-    blindScore: fieldWr,
-    fieldWr,
-    es10: floor,
-    badMass: 0,
-    worstMatchup: null,
-    totalGames: games,
-    coverageMass: 1,
-  };
-}
-
-function stat(champId: number, laneShare: number, totalGames: number): DraftLaneStat {
-  return { champId, baselineWr: 0.5, laneShare, totalGames };
-}
 
 function candidate(
   champId: number,
@@ -70,21 +34,66 @@ function candidate(
   };
 }
 
-describe("Draft Assistant recommendation slots", () => {
-  it("resolves three distinct champions, falling through duplicate sources", () => {
+describe("Draft Assistant recommendation cards", () => {
+  it("uses the first three displayed rows for every view", () => {
+    const views = [
+      {
+        name: "Recommended",
+        rows: [candidate(1, "recommended", 1, 0.575, 12000), candidate(2, "recommended", 2, 0.552, 9000), candidate(3, "recommended", 3, 0.547, 8000), candidate(4, "recommended", 4, 0.523, 7000)],
+        expected: [1, 2, 3],
+      },
+      {
+        name: "Blind Picks",
+        rows: [candidate(11, "blind", 1, 0.59, 22000), candidate(12, "blind", 2, 0.57, 18000), candidate(13, "blind", 3, 0.55, 15000), candidate(14, "blind", 4, 0.53, 12000)],
+        expected: [11, 12, 13],
+      },
+      {
+        name: "Counters",
+        rows: [candidate(21, "recommended", 1, 0.61, 11000), candidate(22, "recommended", 2, 0.58, 9000), candidate(23, "recommended", 3, 0.56, 7000), candidate(24, "recommended", 4, 0.54, 6000)],
+        expected: [21, 22, 23],
+      },
+      {
+        name: "Comfort Picks",
+        rows: [candidate(31, "recommended", 4, 0.51, 4000), candidate(32, "recommended", 2, 0.59, 9000), candidate(33, "recommended", 3, 0.56, 7000), candidate(34, "recommended", 1, 0.62, 12000)],
+        expected: [31, 32, 33],
+        preserveOrder: true,
+      },
+    ];
+
+    for (const view of views) {
+      const cards = resolveTopRecommendationCards({ rows: view.rows, sort: "winRate", preserveOrder: view.preserveOrder });
+      expect(cards.map((card) => card.candidate.champId), view.name).toEqual(view.expected);
+    }
+  });
+
+  it("returns fewer cards when the displayed ranking has fewer than three rows", () => {
     const cards = resolveTopRecommendationCards({
-      recommended: [play(1, 0.58, 12000), play(2, 0.56, 4000), play(3, 0.55, 9000)],
-      blind: [blind(1, 0.57, 0.53, 12000), blind(2, 0.56, 0.54, 4000), blind(4, 0.54, 0.52, 7000)],
-      laneStats: new Map([
-        [1, stat(1, 0.06, 12000)],
-        [2, stat(2, 0.03, 4000)],
-        [3, stat(3, 0.04, 9000)],
-        [4, stat(4, 0.02, 7000)],
-      ]),
+      rows: [candidate(1, "recommended", 1, 0.58, 12000), candidate(2, "recommended", 2, 0.56, 9000)],
+      sort: "winRate",
     });
 
-    expect(cards.map((card) => card.candidate?.champId)).toEqual([1, 2, 3]);
-    expect(new Set(cards.flatMap((card) => (card.candidate ? [card.candidate.champId] : []))).size).toBe(3);
+    expect(cards.map((card) => card.candidate.champId)).toEqual([1, 2]);
+  });
+
+  it("does not render cards for an empty Counters ranking", () => {
+    const counterRows = filterCounterCandidates([
+      { ...candidate(1, "recommended", 1, 0.58, 12000), synergyDelta: 0 },
+      { ...candidate(2, "recommended", 2, 0.56, 9000), synergyDelta: -0.01 },
+    ]);
+
+    expect(resolveTopRecommendationCards({ rows: counterRows, sort: "winRate" })).toEqual([]);
+  });
+
+  it("reorders cards with the table sort and preserves Comfort Picks order", () => {
+    const rows = [
+      candidate(1, "recommended", 1, 0.52, 3000, 0.08),
+      candidate(2, "recommended", 2, 0.58, 1000, 0.01),
+      candidate(3, "recommended", 3, 0.55, 5000, 0.04),
+    ];
+
+    expect(resolveTopRecommendationCards({ rows, sort: "winRate" }).map((card) => card.candidate.champId)).toEqual([2, 3, 1]);
+    expect(resolveTopRecommendationCards({ rows, sort: "games" }).map((card) => card.candidate.champId)).toEqual([3, 1, 2]);
+    expect(resolveTopRecommendationCards({ rows, sort: "winRate", preserveOrder: true }).map((card) => card.candidate.champId)).toEqual([1, 2, 3]);
   });
 
   it("reads the off-meta threshold from POOL_MIN_PICKRATE", () => {
@@ -94,55 +103,14 @@ describe("Draft Assistant recommendation slots", () => {
   });
 
   it("keeps a high-win-rate potential row aligned with the table and tags it", () => {
+    const potential = candidate(2, "recommended", 2, 0.56, 500);
+    potential.isPotential = true;
     const cards = resolveTopRecommendationCards({
-      recommended: [play(1, 0.52, 12000)],
-      potential: [play(2, 0.56, 500)],
-      blind: [],
-      laneStats: new Map([
-        [1, stat(1, 0.04, 12000)],
-        [2, stat(2, 0.02, 500)],
-      ]),
+      rows: [candidate(1, "recommended", 1, 0.52, 12000), potential],
+      sort: "winRate",
     });
-    expect(cards[0].candidate?.champId).toBe(2);
-    expect(cards[0].candidate?.isPotential).toBe(true);
-  });
-
-  it("never uses an off-meta hero while three meta candidates are available", () => {
-    const cards = resolveTopRecommendationCards({
-      recommended: [play(1, 0.70, 12000), play(2, 0.60, 9000), play(3, 0.59, 8000)],
-      blind: [blind(4, 0.68, 0.50, 7000), blind(5, 0.58, 0.54, 6000)],
-      laneStats: new Map([
-        [1, stat(1, POOL_MIN_PICKRATE - 0.001, 12000)],
-        [2, stat(2, 0.03, 9000)],
-        [3, stat(3, 0.025, 8000)],
-        [4, stat(4, POOL_MIN_PICKRATE - 0.002, 7000)],
-        [5, stat(5, 0.02, 6000)],
-      ]),
-    });
-
-    expect(cards).toHaveLength(3);
-    expect(cards.every((card) => card.candidate && !isOffMetaLaneShare(card.candidate.laneShare))).toBe(true);
-    expect(new Set(cards.map((card) => card.candidate?.champId)).size).toBe(3);
-  });
-
-  it("uses the full lane list before filling a missing slot with off-meta", () => {
-    const cards = resolveTopRecommendationCards({
-      recommended: [play(1, 0.70, 12000)],
-      blind: [],
-      laneStats: new Map([
-        [1, stat(1, POOL_MIN_PICKRATE - 0.001, 12000)],
-        [2, stat(2, 0.03, 9000)],
-        [3, stat(3, 0.025, 8000)],
-        [4, stat(4, 0.02, 7000)],
-      ]),
-      fullList: [
-        { champId: 2, winRate: 0.56, floor: null, totalGames: 9000, laneShare: 0.03, rank: 99, isPotential: false, personalOverall: { games: 0, wins: 0 }, source: "recommended" },
-        { champId: 3, winRate: 0.55, floor: null, totalGames: 8000, laneShare: 0.025, rank: 100, isPotential: false, personalOverall: { games: 0, wins: 0 }, source: "recommended" },
-        { champId: 4, winRate: 0.54, floor: null, totalGames: 7000, laneShare: 0.02, rank: 101, isPotential: false, personalOverall: { games: 0, wins: 0 }, source: "recommended" },
-      ],
-    });
-
-    expect(cards.map((card) => card.candidate?.champId)).toEqual([2, 3, 4]);
+    expect(cards[0].candidate.champId).toBe(2);
+    expect(cards[0].candidate.isPotential).toBe(true);
   });
 });
 
@@ -205,16 +173,6 @@ describe("Recommended detail ranking source", () => {
   it("uses the filtered blind pool for no-enemy details, matching the three cards and de-duplicating", () => {
     // Reported first-pick shape: Riven is the matchup recommendation, while
     // Diana and Ahri come from the blind ranking.
-    const cards = resolveTopRecommendationCards({
-      recommended: [play(92, 0.58, 12000)],
-      blind: [blind(131, 0.56, 0.53, 227014), blind(103, 0.55, 0.52, 429501)],
-      laneStats: new Map([
-        [92, stat(92, 0.04, 12000)],
-        [131, stat(131, 0.03, 227014)],
-        [103, stat(103, 0.02, 429501)],
-      ]),
-    });
-    const cardIds = cards.flatMap((card) => (card.candidate ? [card.candidate.champId] : []));
     const detailCandidates = resolveRecommendedDetailCandidates({
       noEnemies: true,
       recommended: [candidate(92, "recommended", 1, 0.58, 12000)],
@@ -224,6 +182,8 @@ describe("Recommended detail ranking source", () => {
         candidate(103, "blind", 2, 0.55, 429501),
       ],
     });
+    const cards = resolveTopRecommendationCards({ rows: detailCandidates, sort: "winRate" });
+    const cardIds = cards.map((card) => card.candidate.champId);
 
     expect(cardIds).toEqual([92, 131, 103]);
     expect(detailCandidates.map((item) => item.champId)).toEqual(cardIds);
@@ -272,75 +232,28 @@ describe("Recommended detail ranking source", () => {
   });
 });
 
-describe("Carded recommendations in the visible ranking window", () => {
+describe("Visible ranking window", () => {
   function fixture() {
-    const cards = resolveTopRecommendationCards({
-      recommended: [play(92, 0.524, 56878)],
-      blind: [blind(131, 0.514, 0.49, 227014), blind(103, 0.508, 0.47, 429501)],
-      laneStats: new Map([
-        [92, stat(92, 0.012, 56878)],
-        [131, stat(131, 0.046, 227014)],
-        [103, stat(103, 0.087, 429501)],
-      ]),
-    });
-    const carded = cards.flatMap((card) => (card.candidate ? [card.candidate] : []));
-    const offMeta = [0.6, 0.59, 0.58, 0.57, 0.56, 0.55, 0.54, 0.53, 0.52, 0.51].map((winRate, index) =>
-      candidate(200 + index, "recommended", index + 1, winRate, 10000 + index, 0.005)
+    return [0.6, 0.59, 0.58, 0.57, 0.56, 0.55, 0.54, 0.53, 0.52, 0.51, 0.5].map((winRate, index) =>
+      candidate(200 + index, "recommended", index + 1, winRate, 10000 + index, 0.02)
     );
-    return { carded, rows: [...offMeta, ...carded] };
   }
 
-  function visibleAt(minPickRate: number) {
-    const { carded, rows } = fixture();
-    const filters = { minPickRate, includeOffMeta: true, minimumGames: 1000 };
-    const filteredRows = filterDraftAssistantCandidates(rows, filters);
-    const filteredCarded = filterDraftAssistantCandidates(carded, filters);
-    return {
-      carded,
-      filteredRows,
-      visible: resolveVisibleDraftAssistantRanking({ rows: filteredRows, carded: filteredCarded, sort: "winRate" }),
-    };
-  }
+  it("returns the sorted table window without appending card references", () => {
+    const rows = filterDraftAssistantCandidates(fixture(), { minPickRate: 0, includeOffMeta: true, minimumGames: 1000 });
+    const visible = resolveVisibleDraftAssistantRanking({ rows, sort: "winRate" });
+    const sorted = [...rows].sort((a, b) => compareDraftAssistantCandidates(a, b, "winRate"));
 
-  it("keeps every carded champion in the visible rows with a 0% floor and off-meta included", () => {
-    const { carded, filteredRows, visible } = visibleAt(0);
-    const cardIds = carded.map((item) => item.champId);
-    const sorted = [...filteredRows].sort((a, b) => compareDraftAssistantCandidates(a, b, "winRate"));
-
-    expect(visible).toHaveLength(12);
-    expect(new Set(visible.map((row) => row.candidate.champId)).size).toBeGreaterThanOrEqual(cardIds.length);
-    for (const cardId of cardIds) expect(visible.some((row) => row.candidate.champId === cardId)).toBe(true);
-    expect(visible.filter((row) => row.isAppended).map((row) => row.candidate.champId)).toEqual([131, 103]);
-    expect(visible.filter((row) => !row.isAppended).map((row) => row.candidate.champId)).toEqual(sorted.slice(0, 10).map((row) => row.champId));
+    expect(visible.map((row) => row.candidate.champId)).toEqual(sorted.slice(0, 10).map((row) => row.champId));
+    expect(visible.map((row) => row.rank)).toEqual(Array.from({ length: 10 }, (_, index) => index + 1));
   });
 
-  it("keeps every carded champion in the natural top ten when the 1% floor removes off-meta rows", () => {
-    const { carded, filteredRows, visible } = visibleAt(0.01);
-    const sorted = [...filteredRows].sort((a, b) => compareDraftAssistantCandidates(a, b, "winRate"));
+  it("uses the same first-three window for cards and the table after a sort change", () => {
+    const rows = fixture();
+    const cards = resolveTopRecommendationCards({ rows, sort: "games" });
+    const visible = resolveVisibleDraftAssistantRanking({ rows, sort: "games" });
 
-    expect(visible.map((row) => row.candidate.champId)).toEqual(sorted.map((row) => row.champId));
-    expect(visible.every((row) => !row.isAppended)).toBe(true);
-    expect(new Set(visible.map((row) => row.candidate.champId))).toEqual(new Set(carded.map((row) => row.champId)));
-  });
-
-  it("keeps appended rank and displayed values truthful, while respecting filter exclusions", () => {
-    const { carded, filteredRows, visible } = visibleAt(0);
-    const sorted = [...filteredRows].sort((a, b) => compareDraftAssistantCandidates(a, b, "winRate"));
-    for (const row of visible) {
-      const trueRank = sorted.findIndex((candidate) => candidate.champId === row.candidate.champId) + 1;
-      expect(row.rank).toBe(trueRank);
-      expect(row.candidate.winRate).toBe(sorted[trueRank - 1].winRate);
-    }
-
-    const excludedCard = candidate(555, "blind", 4, 0.6, 999, 0.03);
-    const filters = { minPickRate: 0, includeOffMeta: true, minimumGames: 1000 };
-    const filteredExcludedCard = filterDraftAssistantCandidates([excludedCard], filters);
-    const excludedVisible = resolveVisibleDraftAssistantRanking({
-      rows: filteredRows,
-      carded: [...carded, ...filteredExcludedCard],
-      sort: "winRate",
-    });
-    expect(excludedVisible.some((row) => row.candidate.champId === excludedCard.champId)).toBe(false);
+    expect(cards.map((card) => card.candidate.champId)).toEqual(visible.slice(0, 3).map((row) => row.candidate.champId));
   });
 });
 

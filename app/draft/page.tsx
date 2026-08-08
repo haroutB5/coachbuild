@@ -32,7 +32,7 @@
 // rendered inline by EnemyTeamPanel, never a routed/portalled surface.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChampionRef } from "@/lib/types";
 import { LANE_ORDER, LANE_TO_ROLE_ID, LANE_LABEL, type LaneId } from "@/components/hextech/heroContracts";
 import { getChampionIconMap, type ChampionIconEntry } from "@/components/proAssets";
@@ -240,6 +240,19 @@ const DETAIL_SORT_OPTIONS: readonly ThemedSelectOption<DetailSort>[] = [
   { value: "games", label: "Games" },
 ];
 
+const ASSISTANT_VIEW_LABELS: Record<AssistantView, string> = {
+  recommended: "Recommended",
+  blind: "Blind Picks",
+  counters: "Counters",
+  comfort: "Comfort Picks",
+};
+
+const DETAIL_SORT_LABELS: Record<DetailSort, string> = {
+  winRate: "Win Rate",
+  pickRate: "Pick Rate",
+  games: "Games",
+};
+
 const LANE_SELECT_OPTIONS: readonly ThemedSelectOption<LaneId>[] = LANE_ORDER.map((role) => ({
   value: role,
   label: `${LANE_LABEL[role]} Lane`,
@@ -429,64 +442,49 @@ function RecommendationCard({
   onViewDetails: (id: number) => void;
 }) {
   const candidate = card.candidate;
-  const status = card.slot === "best" ? "BEST OVERALL" : card.slot === "blind" ? "SAFEST BLIND" : "RELIABLE PICK";
-  const entry = candidate ? championEntry(champIcons, candidate.champId) : null;
-  const offMeta = candidate ? isOffMetaLaneShare(candidate.laneShare) : false;
+  const entry = championEntry(champIcons, candidate.champId);
+  const offMeta = isOffMetaLaneShare(candidate.laneShare);
   const worst = preview?.worst[0];
   const worstName = worst ? championEntry(champIcons, worst.oppId).name : null;
-  const support = candidate
-    ? [
-        candidate.floor !== null ? `Floor ${formatPercent(candidate.floor)}` : null,
-        candidate.totalGames !== null ? `${formatGames(candidate.totalGames)} games` : null,
-        worst && worstName ? `Worst popular matchup: ${worstName} ${formatPercent(worst.winRate)}` : null,
-      ].filter((part): part is string => part !== null)
-    : [];
+  const support = [
+    candidate.floor !== null ? `Floor ${formatPercent(candidate.floor)}` : null,
+    candidate.totalGames !== null ? `${formatGames(candidate.totalGames)} games` : null,
+    worst && worstName ? `Worst popular matchup: ${worstName} ${formatPercent(worst.winRate)}` : null,
+  ].filter((part): part is string => part !== null);
 
   return (
     <article className="relative flex min-w-0 flex-col rounded-xl border border-line bg-panel p-3 shadow-[0_8px_24px_rgba(0,0,0,0.16)]">
       <span className={`absolute left-3 top-3 flex h-7 w-7 items-center justify-center rounded-full text-[12px] font-bold ${rank === 1 ? "bg-teal text-bg" : "bg-panel2 text-mut border border-line"}`}>
-        {rank}
+        #{rank}
       </span>
-      {candidate && entry ? (
-        <>
-          <div className="flex justify-center pt-1.5">
-            <span className="h-14 w-full max-w-[230px] overflow-hidden rounded-lg border border-line-gold bg-black/30">
-              <IconWithFallback src={championSplashUrl(entry)} alt={`${entry.name} splash art`} fallbackGlyph={entry.name} className="h-full w-full object-cover object-[center_20%]" size={230} />
-            </span>
-          </div>
-          <div className="mt-2 text-center">
-            <h3 className="truncate text-[16px] font-bold text-txt">{entry.name}</h3>
-            <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
-              <span className="inline-flex rounded-full border border-line-gold bg-teal/10 px-2 py-0.5 text-[9px] font-bold tracking-[0.1em] text-teal">{status}</span>
-              {offMeta && <span className="inline-flex rounded-full border border-line-gold px-2 py-1 text-[9px] font-semibold tracking-[0.08em] text-mut">OFF-META</span>}
-              {candidate.isPotential && <span className="inline-flex rounded-full border border-line-gold px-2 py-1 text-[9px] font-semibold tracking-[0.08em] text-mut">LOW SAMPLE</span>}
-            </div>
-          </div>
-          <div className="mt-2 text-center">
-            <div className="flex items-baseline justify-center gap-1.5">
-              <p className="tabular-nums text-[24px] font-extrabold leading-none text-txt">{formatPercent(candidate.winRate)}</p>
-              <p className="text-[11px] text-mut">Win Rate</p>
-            </div>
-            <p className="mt-1 text-[11px] tabular-nums text-mut">{formatGames(candidate.totalGames)} games</p>
-          </div>
-          <div className="mt-2 min-h-[34px] text-center">
-            <p className="text-[12px] font-semibold text-txt">{candidate.floor !== null ? `Floor ${formatPercent(candidate.floor)}` : `${formatPercent(candidate.winRate)} estimated in this draft`}</p>
-            <p className="mt-1 text-[10.5px] leading-4 text-mut">{support.length > 0 ? support.join(" · ") : "No supporting matchup figures available."}</p>
-          </div>
-        </>
-      ) : (
-        <div className="flex min-h-[180px] flex-col items-center justify-center text-center">
-          <span className="flex h-16 w-16 items-center justify-center rounded-full border border-dashed border-line text-2xl text-mut/60">—</span>
-          <p className="mt-3 text-[13px] font-semibold text-txt">No honest pick yet</p>
-          <p className="mt-1 max-w-[190px] text-[10.5px] leading-4 text-mut">This slot needs a distinct champion with the required evidence.</p>
+      <div className="flex justify-center pt-1.5">
+        <span className="h-14 w-full max-w-[230px] overflow-hidden rounded-lg border border-line-gold bg-black/30">
+          <IconWithFallback src={championSplashUrl(entry)} alt={`${entry.name} splash art`} fallbackGlyph={entry.name} className="h-full w-full object-cover object-[center_20%]" size={230} />
+        </span>
+      </div>
+      <div className="mt-2 text-center">
+        <h3 className="truncate text-[16px] font-bold text-txt">{entry.name}</h3>
+        <div className="mt-1 flex min-h-[24px] flex-wrap items-center justify-center gap-1">
+          {offMeta && <span className="inline-flex rounded-full border border-line-gold px-2 py-1 text-[9px] font-semibold tracking-[0.08em] text-mut">OFF-META</span>}
+          {candidate.isPotential && <span className="inline-flex rounded-full border border-line-gold px-2 py-1 text-[9px] font-semibold tracking-[0.08em] text-mut">LOW SAMPLE</span>}
         </div>
-      )}
+      </div>
+      <div className="mt-2 text-center">
+        <div className="flex items-baseline justify-center gap-1.5">
+          <p className="tabular-nums text-[24px] font-extrabold leading-none text-txt">{formatPercent(candidate.winRate)}</p>
+          <p className="text-[11px] text-mut">Win Rate</p>
+        </div>
+        <p className="mt-1 text-[11px] tabular-nums text-mut">{formatGames(candidate.totalGames)} games</p>
+      </div>
+      <div className="mt-2 min-h-[34px] text-center">
+        <p className="text-[12px] font-semibold text-txt">{candidate.floor !== null ? `Floor ${formatPercent(candidate.floor)}` : `${formatPercent(candidate.winRate)} estimated in this draft`}</p>
+        <p className="mt-1 text-[10.5px] leading-4 text-mut">{support.length > 0 ? support.join(" · ") : "No supporting matchup figures available."}</p>
+      </div>
       <button
         type="button"
-        disabled={!candidate}
-        onClick={() => candidate && onViewDetails(candidate.champId)}
-        aria-label={candidate ? `View details for ${entry?.name ?? "champion"}` : "View details unavailable"}
-        className="mt-2.5 w-full rounded-lg border border-line py-2 text-[11px] font-bold text-txt transition-colors hover:border-line-gold hover:text-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-not-allowed disabled:text-mut/50"
+        onClick={() => onViewDetails(candidate.champId)}
+        aria-label={`View details for ${entry.name}`}
+        className="mt-auto w-full rounded-lg border border-line py-2 text-[11px] font-bold text-txt transition-colors hover:border-line-gold hover:text-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
       >
         View details →
       </button>
@@ -542,18 +540,10 @@ function MatchupPreviewBlock({
   preview,
   champIcons,
 }: {
-  candidate: DraftAssistantCandidate | null;
+  candidate: DraftAssistantCandidate;
   preview: DraftMatchupPreview | undefined;
   champIcons: Map<number, ChampionIconEntry>;
 }) {
-  if (!candidate) {
-    return (
-      <article className="rounded-xl border border-dashed border-line bg-panel p-4 text-center">
-        <p className="text-[11px] font-semibold text-txt">No honest matchup preview for this slot yet.</p>
-        <p className="mt-1 text-[10.5px] text-mut">A distinct recommendation with popular-opponent evidence is required.</p>
-      </article>
-    );
-  }
   const entry = championEntry(champIcons, candidate.champId);
   return (
     <article className="rounded-xl border border-line bg-panel p-2.5">
@@ -605,10 +595,8 @@ function DetailedRankings({
   onShowAll,
   preserveOrder,
   showNoEnemyBlindHint,
-  cardedRows,
 }: {
   rows: DetailRow[];
-  cardedRows: DetailRow[];
   laneAverageValue: number | null;
   sort: DetailSort;
   onSortChange: (sort: DetailSort) => void;
@@ -621,13 +609,9 @@ function DetailedRankings({
   preserveOrder: boolean;
   showNoEnemyBlindHint: boolean;
 }) {
-  const detailRowByChampionId = new Map<number, DetailRow>();
-  for (const row of [...rows, ...cardedRows]) {
-    if (!detailRowByChampionId.has(row.candidate.champId)) detailRowByChampionId.set(row.candidate.champId, row);
-  }
+  const detailRowByChampionId = new Map(rows.map((row) => [row.candidate.champId, row]));
   const rankingRows = resolveVisibleDraftAssistantRanking({
     rows: rows.map((row) => row.candidate),
-    carded: cardedRows.map((row) => row.candidate),
     sort,
     limit: showAll ? Number.MAX_SAFE_INTEGER : 10,
     preserveOrder,
@@ -685,15 +669,13 @@ function DetailedRankings({
 
       {grid ? (
         <div className="grid grid-cols-1 gap-2 p-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-          {displayRows.map((displayRow, position) => {
+          {displayRows.map((displayRow) => {
             const row = displayRow.row;
             const rowDelta = delta(row.candidate);
             const offMeta = isOffMetaLaneShare(row.candidate.laneShare);
-            const startsCardedSection = displayRow.isAppended && (position === 0 || !displayRows[position - 1].isAppended);
             return (
-              <Fragment key={`${row.candidate.champId}-${displayRow.isAppended ? "card" : "rank"}`}>
-                {startsCardedSection && <div className="col-span-full border-t border-line pt-2 text-[9px] font-bold tracking-[0.12em] text-mut">CARDED RECOMMENDATIONS · SHOWN FOR REFERENCE</div>}
                 <button
+                  key={row.candidate.champId}
                   type="button"
                   onClick={() => onSelect(row.candidate.champId)}
                   className={`min-w-0 rounded-lg border p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${selectedChampionId === row.candidate.champId ? "border-teal bg-teal/8" : "border-line hover:border-line-gold"}`}
@@ -713,7 +695,6 @@ function DetailedRankings({
                   {row.candidate.isPotential && <span className="mt-2 ml-1 inline-flex rounded border border-line-gold px-1.5 py-0.5 text-[9px] font-semibold text-mut">Low-Sample</span>}
                   {row.difficultyBand && <span className="mt-2 ml-1 inline-flex rounded border border-line px-1.5 py-0.5 text-[9px] font-semibold text-mut">{row.difficultyBand}</span>}
                 </button>
-              </Fragment>
             );
           })}
         </div>
@@ -731,15 +712,12 @@ function DetailedRankings({
               </tr>
             </thead>
             <tbody>
-              {displayRows.map((displayRow, position) => {
+              {displayRows.map((displayRow) => {
                 const row = displayRow.row;
                 const rowDelta = delta(row.candidate);
                 const offMeta = isOffMetaLaneShare(row.candidate.laneShare);
-                const startsCardedSection = displayRow.isAppended && (position === 0 || !displayRows[position - 1].isAppended);
                 return (
-                  <Fragment key={`${row.candidate.champId}-${displayRow.isAppended ? "card" : "rank"}`}>
-                    {startsCardedSection && <tr><td colSpan={5} className="border-t border-line px-3 py-2 text-[9px] font-bold tracking-[0.12em] text-mut">CARDED RECOMMENDATIONS · SHOWN FOR REFERENCE</td></tr>}
-                    <tr className={`border-b border-line/60 ${selectedChampionId === row.candidate.champId ? "bg-teal/8" : "hover:bg-white/[0.02]"}`}>
+                  <tr key={row.candidate.champId} className={`border-b border-line/60 ${selectedChampionId === row.candidate.champId ? "bg-teal/8" : "hover:bg-white/[0.02]"}`}>
                       <td className="px-3 py-3 text-[10px] tabular-nums text-mut">{displayRow.rank}</td>
                       <td className="px-2 py-3">
                         <button type="button" onClick={() => onSelect(row.candidate.champId)} className="flex min-w-0 items-center gap-2 text-left">
@@ -762,8 +740,7 @@ function DetailedRankings({
                         <span className="block text-[10px] text-mut">{formatGames(row.candidate.totalGames)}</span>
                       </td>
                       <td className="px-3 py-3 text-right text-[10px] text-mut">{row.difficultyBand ?? "—"}</td>
-                    </tr>
-                  </Fragment>
+                  </tr>
                 );
               })}
             </tbody>
@@ -1015,8 +992,6 @@ export default function DraftPage() {
   }
 
   function handleViewDetails(champId: number) {
-    setAssistantView("recommended");
-    setMyPoolOnly(false);
     setSelectedDetailChampionId(champId);
     window.setTimeout(() => document.getElementById("draft-detailed-rankings")?.scrollIntoView({ block: "nearest", behavior: "auto" }), 0);
   }
@@ -1119,19 +1094,6 @@ export default function DraftPage() {
   const matchupPreviewMap = new Map<number, DraftMatchupPreview>(
     state.status === "ok" ? (state.data.matchupPreviews ?? []).map((preview) => [preview.champId, preview]) : []
   );
-  const fullLaneCandidates: DraftAssistantCandidate[] = laneStats
-    .filter((stat) => stat.baselineWr !== null)
-    .map((stat, index) => ({
-      champId: stat.champId,
-      winRate: stat.baselineWr ?? 0.5,
-      floor: null,
-      totalGames: stat.totalGames,
-      laneShare: stat.laneShare,
-      rank: Number.MAX_SAFE_INTEGER - index,
-      isPotential: false,
-      personalOverall: { games: 0, wins: 0 },
-      source: "recommended" as const,
-    }));
   const activeFilters = { minPickRate, includeOffMeta, minimumGames };
   const recommendedFilterRows = displayedPlays.map((play, index) => {
     const stat = laneStatMap.get(play.champId);
@@ -1144,7 +1106,6 @@ export default function DraftPage() {
   const filteredRecommendedRows = filterDraftAssistantCandidates(recommendedFilterRows, activeFilters);
   const filteredPotentialRows = filterDraftAssistantCandidates(potentialFilterRows, activeFilters);
   const filteredRecommendedPlays = filteredRecommendedRows.map((row) => row.play);
-  const filteredPotentialPlays = filteredPotentialRows.map((row) => row.play);
 
   const blindPicks = blindState.status === "ok" ? blindState.data.picks : [];
   const blindFilterRows = blindPicks.map((pick) => {
@@ -1152,7 +1113,6 @@ export default function DraftPage() {
     return { pick, champId: pick.champId, laneShare: stat?.laneShare ?? null, totalGames: stat?.totalGames ?? pick.totalGames };
   });
   const filteredBlindRows = filterDraftAssistantCandidates(blindFilterRows, activeFilters);
-  const filteredBlindPicks = filteredBlindRows.map((row) => row.pick);
   const filteredBlindCandidates: DraftAssistantCandidate[] = filteredBlindRows.map(({ pick }) => {
     const stat = laneStatMap.get(pick.champId);
     return {
@@ -1200,26 +1160,22 @@ export default function DraftPage() {
             ? resolveRecommendedDetailCandidates({ recommended: matchupDetailCandidates, blind: filteredBlindCandidates, noEnemies: enemyIds.length === 0 })
             : matchupDetailCandidates;
 
+  const preserveDetailOrder = assistantView === "comfort";
   const topCards = resolveTopRecommendationCards({
-    recommended: filteredRecommendedPlays,
-    potential: filteredPotentialPlays,
-    blind: filteredBlindPicks,
-    laneStats: laneStatMap,
-    fullList: fullLaneCandidates,
+    rows: currentViewRows,
+    sort: detailSort,
+    preserveOrder: preserveDetailOrder,
   });
-  const cardedCandidates = assistantView === "recommended"
-    ? filterDraftAssistantCandidates(
-        topCards.flatMap((card) => (card.candidate ? [card.candidate] : [])),
-        activeFilters
-      )
-    : [];
   const toDetailRow = (candidate: DraftAssistantCandidate): DetailRow => {
     const entry = championEntry(champIcons, candidate.champId);
     return { candidate, name: entry.name, icon: entry.icon, difficultyBand: entry.difficultyBand };
   };
   const detailRows: DetailRow[] = currentViewRows.map(toDetailRow);
-  const cardedRows: DetailRow[] = cardedCandidates.map(toDetailRow);
   const detailAverage = laneAverage(laneStats);
+  const topRecommendationCount = topCards.length === 1 ? "Top pick" : `Top ${topCards.length}`;
+  const topRecommendationSubtitle = preserveDetailOrder
+    ? `${topRecommendationCount} in ${ASSISTANT_VIEW_LABELS[assistantView]} — preserved order`
+    : `${topRecommendationCount} by ${DETAIL_SORT_LABELS[detailSort]} — ${ASSISTANT_VIEW_LABELS[assistantView]}`;
 
   return (
     <div className="min-w-0 overflow-x-clip px-4 py-3 sm:px-6 lg:px-8 lg:py-4">
@@ -1285,20 +1241,22 @@ export default function DraftPage() {
 
             <div className="flex items-center gap-2 rounded-lg border border-line bg-panel2/60 px-4 py-2 text-[11px] text-mut"><span aria-hidden="true" className="text-[14px] text-teal">✨</span>Recommendations update as you add enemies and change your role.</div>
 
-            <section>
+            {(topCards.length > 0 || state.status !== "ok") && <section>
+              {topCards.length > 0 && <>
               <div className="mb-2 flex flex-wrap items-end justify-between gap-3">
-                <div><h2 className="text-[12px] font-bold tracking-[0.14em] text-txt">TOP RECOMMENDATIONS</h2><p className="mt-1 text-[11px] text-mut">Our top picks for this draft right now</p></div>
+                <div><h2 className="text-[12px] font-bold tracking-[0.14em] text-txt">TOP RECOMMENDATIONS</h2><p className="mt-1 text-[11px] text-mut">{topRecommendationSubtitle}</p></div>
                 <button type="button" aria-expanded={showRecommendationHelp} onClick={() => setShowRecommendationHelp((value) => !value)} className="rounded-full border border-line px-3 py-1.5 text-[10px] font-semibold text-mut hover:border-line-gold hover:text-txt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg">ⓘ How recommendations work</button>
               </div>
               {showRecommendationHelp && <p className="mb-3 rounded-lg border border-line bg-panel2/60 px-3 py-2 text-[10.5px] leading-4 text-mut">Recommendations combine estimated win rate, the worst 10% matchup floor, true lane pick rate, and available matchup evidence. Low-sample rows stay visibly tagged.</p>}
               <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-3">
-                {topCards.map((card, index) => <RecommendationCard key={card.slot} card={card} rank={index + 1} champIcons={champIcons} preview={card.candidate ? matchupPreviewMap.get(card.candidate.champId) : undefined} onViewDetails={handleViewDetails} />)}
+                {topCards.map((card, index) => <RecommendationCard key={card.slot} card={card} rank={index + 1} champIcons={champIcons} preview={matchupPreviewMap.get(card.candidate.champId)} onViewDetails={handleViewDetails} />)}
               </div>
+              </>}
               {state.status === "loading" && <p className="mt-2 text-[10.5px] text-mut">Loading current recommendation data…</p>}
               {state.status === "error" && <EmptyPanel title="Couldn't load recommendations" body="Something went wrong fetching the current draft data." />}
               {state.status === "pending" && <EmptyPanel title="Draft data being prepared" body={"Patch " + (state.meta?.patch || "the current") + " data is still being ingested — check back shortly."} />}
               {state.status === "empty" && <EmptyPanel title="No data yet for this lane" body="Try a different role, or check back after the next data refresh." />}
-            </section>
+            </section>}
 
             <section>
               <div className="mb-3 flex flex-wrap items-center gap-3">
@@ -1344,7 +1302,7 @@ export default function DraftPage() {
             </section>
 
 
-            <section>
+            {topCards.length > 0 && <section>
               <div className="grid grid-cols-1 gap-2 border-b border-line pb-2 sm:grid-cols-2 lg:grid-cols-4">
                 <p className="text-[10px] leading-4 text-mut"><strong className="text-[10px] tracking-[0.1em] text-txt">WIN RATE</strong><br />Estimated win rate with this pick in this draft.</p>
                 <p className="text-[10px] leading-4 text-mut"><strong className="text-[10px] tracking-[0.1em] text-txt">FLOOR</strong><br />Average win rate across the worst 10% of matchups you&apos;re likely to face.</p>
@@ -1354,13 +1312,13 @@ export default function DraftPage() {
 
               <div className="mb-2 flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-[12px] font-bold tracking-[0.14em] text-txt">WORST MATCHUPS PREVIEW</h2><p className="mt-1 text-[11px] text-mut">Your top picks vs popular enemy champions</p></div><button type="button" onClick={() => handleAssistantViewChange("counters")} className="text-[10.5px] font-semibold text-teal hover:text-teal-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal">View all matchups →</button></div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                {topCards.map((card) => <MatchupPreviewBlock key={card.slot} candidate={card.candidate} preview={card.candidate ? matchupPreviewMap.get(card.candidate.champId) : undefined} champIcons={champIcons} />)}
+                {topCards.map((card) => <MatchupPreviewBlock key={card.slot} candidate={card.candidate} preview={matchupPreviewMap.get(card.candidate.champId)} champIcons={champIcons} />)}
               </div>
-            </section>
+            </section>}
           </div>
 
           <aside className="min-w-0 lg:sticky lg:top-4">
-            <DetailedRankings rows={detailRows} cardedRows={cardedRows} laneAverageValue={detailAverage} sort={detailSort} onSortChange={(sort) => { setDetailSort(sort); setShowFullTable(false); }} grid={detailGrid} onGridChange={setDetailGrid} selectedChampionId={selectedDetailChampionId} onSelect={setSelectedDetailChampionId} showAll={showFullTable} onShowAll={() => setShowFullTable(true)} preserveOrder={assistantView === "comfort"} showNoEnemyBlindHint={assistantView === "recommended" && enemyIds.length === 0} />
+            <DetailedRankings rows={detailRows} laneAverageValue={detailAverage} sort={detailSort} onSortChange={(sort) => { setDetailSort(sort); setShowFullTable(false); }} grid={detailGrid} onGridChange={setDetailGrid} selectedChampionId={selectedDetailChampionId} onSelect={setSelectedDetailChampionId} showAll={showFullTable} onShowAll={() => setShowFullTable(true)} preserveOrder={preserveDetailOrder} showNoEnemyBlindHint={assistantView === "recommended" && enemyIds.length === 0} />
           </aside>
         </div>
 
