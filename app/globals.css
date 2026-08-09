@@ -2,57 +2,122 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Design tokens (Hextech redesign, 2026-07) ────────────────────────────
+/* ── Design tokens (Nocturne redesign, 2026-08) ───────────────────────────
    Single source of truth for color — tailwind.config.ts extends `colors`
-   from these hex values directly (Tailwind's opacity modifiers, e.g.
-   bg-teal/15, work fine against plain hex). CSS vars exist here too for the
-   few places raw CSS needs them (glass-card, body bg gradient, scrollbar).
+   from these values directly so Tailwind's opacity modifiers keep working.
 
-   Token NAMES are kept from the prior dpm.lol-era palette on purpose (same
-   pattern the previous cyan->teal reskin used: "gold aliases teal so
-   untouched call sites still resolve") — every existing bg-teal/text-teal/
-   border-teal-dim call site across the app (RunePage, TabNav, RoleSelector,
-   /history, etc.) picks up the new gold Hextech accent automatically with
-   zero code changes. `win`/`loss` are NEW tokens (the redesign's Pro Builds
-   W/L badge needs a hue distinct from the gold accent). */
+   Existing Hextech-era token NAMES stay in place deliberately. They alias
+   the Nocturne palette so untouched call sites pick up the reskin, just as
+   the previous cyan → gold reskin did. The canonical `--color-*` tokens are
+   included alongside those aliases for new Nocturne work. */
 :root {
-  --bg: #0a0d0b; /* near-black, green-tinted */
-  --sidebar: #060807; /* sidebar — one step darker than --bg for panel contrast */
-  --panel: #141916; /* opaque fallback — dropdown menus, skeleton blocks */
-  --panel-glass: rgba(20, 25, 22, 0.6); /* translucent card surface */
-  --panel2: #1a2019; /* inputs, pill tracks, hero card headers — one step up */
-  --line: rgba(255, 255, 255, 0.07); /* hairline border on dark */
-  --line-gold: rgba(200, 170, 110, 0.28); /* accent hairline — active lane row, keystone ring */
-  /* Primary accent — League Hextech gold (was cyan, then lavender-era teal).
-     Key name kept as `teal` so every existing text-teal/bg-teal/border-teal-dim
-     call site resolves to gold without a site-wide rename. */
-  --cyan: #c8aa6e;
-  --cyan-hover: #ddc48f;
-  --cyan-dim: #8a7440;
-  /* Secondary accent — same gold family (was lavender). Kept both keys:
-     `lavender` is the token going forward, `gold` aliases it so untouched
-     call sites still resolve. */
-  --lavender: #c8aa6e;
-  --txt: #ece7de; /* warm off-white */
-  --mut: #838d84; /* muted sage-gray */
-  --good: #3ecf8e; /* WPA / winrate / performance numbers ONLY */
-  --bad: #f2555a; /* WPA / winrate / performance numbers ONLY */
-  --win: #2f9e86; /* Pro Builds W badge fill — distinct hue from the gold accent */
-  --loss: #9c3b3b; /* Pro Builds L badge fill */
+  /* Existing aliases — kept for untouched Tailwind/CSS call sites. */
+  --bg: #161826; /* app ground */
+  --sidebar: #12141f; /* title/rail/code chrome */
+  --panel: #232532; /* raised surface */
+  --panel-glass: #1b1d2a; /* card ground */
+  --panel2: #1c1e2c; /* inputs and segmented-control tracks */
+  --line: rgba(233,233,237,.16); /* divider */
+  --line-gold: rgba(145,132,217,.22); /* accent hairline */
+  --cyan: #9184d9; /* primary accent — historical name */
+  --cyan-hover: #b5abfc; /* accent-400 hover state */
+  --cyan-dim: #5d5294; /* accent-700 dim state */
+  --lavender: #a7a1db; /* secondary accent — historical name */
+  --gold: #9184d9; /* primary accent alias for existing gold call sites */
+  --txt: #e9e9ed; /* body text */
+  --mut: #9397ab; /* neutral-500 muted text */
+  --good: #46c79b; /* positive data signal only */
+  --bad: #e8736e; /* negative data signal only */
+  --win: #46c79b; /* positive W badge/data signal */
+  --loss: #e8736e; /* negative L badge/data signal */
+
+  /* Nocturne canonical colors. */
+  --color-bg: #161826;
+  --color-surface: #232532;
+  --color-text: #e9e9ed;
+  --color-accent: #9184d9;
+  --color-accent-2: #a7a1db;
+  --color-divider: rgba(233,233,237,.16);
+
+  --color-neutral-100: #f3f5fe;
+  --color-neutral-200: #e4e7f5;
+  --color-neutral-300: #cfd3e5;
+  --color-neutral-400: #b2b6ca;
+  --color-neutral-500: #9397ab;
+  --color-neutral-600: #75798c;
+  --color-neutral-700: #595d6c;
+  --color-neutral-800: #3f424d;
+  --color-neutral-900: #292b31;
+
+  --color-accent-100: #f5f4ff;
+  --color-accent-200: #e7e5fe;
+  --color-accent-300: #d2cefd;
+  --color-accent-400: #b5abfc;
+  --color-accent-500: #968ae0;
+  --color-accent-600: #796cbf;
+  --color-accent-700: #5d5294;
+  --color-accent-800: #423a6a;
+  --color-accent-900: #2b2741;
+
+  --color-accent-2-100: #f5f4ff;
+  --color-accent-2-200: #e7e5fe;
+  --color-accent-2-300: #d2cefd;
+  --color-accent-2-400: #b5afe8;
+  --color-accent-2-500: #9690c9;
+  --color-accent-2-600: #7972a9;
+  --color-accent-2-700: #5c5783;
+  --color-accent-2-800: #423e5d;
+  --color-accent-2-900: #2b293a;
+
+  --color-section: #262a60;
+  --color-section-glow: #353b80;
+  --color-section-ghost: #4c5397;
+
+  /* Typography and geometry tokens from the Nocturne source sheet. */
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-heading: "Inter", system-ui, sans-serif;
+  --font-heading-weight: 500;
+  --font-body: "Inter", system-ui, sans-serif;
+
+  --space-1: 2.8px;
+  --space-2: 5.6px;
+  --space-3: 8.4px;
+  --space-4: 11.2px;
+  --space-6: 16.8px;
+  --space-8: 22.4px;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+
+  --shadow-sm: 0 0 0 1px #3f424d;
+  --shadow-md: 0 0 0 1px #595d6c, 0 6px 18px rgba(0,0,0,0.55);
+  --shadow-lg: 0 0 0 1px #9397ab, 0 16px 40px rgba(0,0,0,0.65);
+}
+
+/* The root layout supplies the self-hosted Inter face through next/font's
+   --font-sans variable. Keep the canonical heading/body tokens connected to
+   that variable while retaining the Inter fallback for non-Next consumers. */
+html {
+  --font-heading: var(--font-sans, "Inter", system-ui, sans-serif);
+  --font-body: var(--font-sans, "Inter", system-ui, sans-serif);
 }
 
 html,
 body {
-  background: radial-gradient(1200px 600px at 50% -200px, #101610, var(--bg));
+  background: var(--bg);
   color: var(--txt);
   min-height: 100vh;
-  font-family: var(--font-sans), system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
-    sans-serif;
-  font-feature-settings: "tnum" 0; /* opt-in per-element via .tabular-nums, not global */
+  font-family: var(--font-body);
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Numeric groundwork for stats surfaces; call sites can opt in incrementally. */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Glassy panel — the dpm.lol card language. Applied via `panel-glass`
