@@ -1,4 +1,7 @@
 # Changelog
+## 0.104.1 — 2026-08-09
+
+- RUNES card rebuilt as vertical tree columns (Blitz-style: keystone atop the primary tree, rune rows descending, secondary tree beside, shards + spells below) — user report; layout only, data wiring untouched
 ## 0.104.0 — 2026-08-09
 
 Nocturne redesign — full visual + UX redesign of every surface (design handoff in `design_handoff_coachbuild_redesign/`).

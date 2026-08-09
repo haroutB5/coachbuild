@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useState, useSyncExternalStore } from "react";
+import { Fragment, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   CaretRight,
   DownloadSimple,
@@ -12,7 +12,8 @@ import type { BuildResponse, Pick as PickType } from "@/lib/types";
 import type { EntityKind } from "@/components/EntityDetailPopover";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import type { AltKeystone } from "@/components/hextech/altKeystone";
-import { spellIconUrl, spellName, treeIconUrl, treeName, shardIconUrl } from "@/components/proAssets";
+import { resolveRuneDisplay, shardIconUrl, shardName, spellIconUrl, spellName, treeIconUrl, treeName } from "@/components/proAssets";
+import { PERK_TREES, primaryMinorRow } from "../perkSlots";
 import {
   buildRecommendedSkillGrid,
   fetchSkillOrder,
@@ -117,15 +118,30 @@ export function StatValue({ label, value, tone = "normal", sub }: { label: strin
   );
 }
 
-function RuneCircle({ pick, size = 31, keystone = false, onClick }: { pick: PickType; size?: number; keystone?: boolean; onClick?: () => void }) {
+function RuneCircle({
+  pick,
+  size = 28,
+  keystone = false,
+  selected = true,
+  onClick,
+}: {
+  pick: PickType;
+  size?: number;
+  keystone?: boolean;
+  selected?: boolean;
+  onClick?: () => void;
+}) {
   const inner = (
     <span
       className={`flex shrink-0 items-center justify-center overflow-hidden rounded-full ${
         keystone
-          ? "shadow-[0_0_0_2px_rgba(145,132,217,0.75),0_0_20px_rgba(145,132,217,0.28)]"
-          : "shadow-[inset_0_0_0_1px_rgba(233,233,237,0.18)]"
-      } bg-white/[0.05]`}
+          ? "bg-[radial-gradient(circle_at_40%_35%,#4a4380,#25243c)] shadow-[0_0_0_2px_rgba(145,132,217,0.75),0_0_22px_rgba(145,132,217,0.3)]"
+          : selected
+            ? "bg-[#9184d9]/[0.28] shadow-[inset_0_0_0_1.5px_#9184d9]"
+            : "bg-white/[0.05] opacity-50 shadow-[inset_0_0_0_1px_rgba(233,233,237,0.14)]"
+      }`}
       style={{ width: size, height: size }}
+      title={pick.name}
     >
       <IconWithFallback src={pick.icon} alt={pick.name} fallbackGlyph={pick.name} className="h-full w-full object-cover" size={size} />
     </span>
@@ -136,10 +152,102 @@ function RuneCircle({ pick, size = 31, keystone = false, onClick }: { pick: Pick
       type="button"
       onClick={onClick}
       aria-label={`View details for ${pick.name}`}
-      className={`${size >= 44 ? "h-[54px] w-[54px]" : "h-11 w-11"} relative flex shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1d2a] lg:h-auto lg:w-auto`}
+      className="relative flex shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1d2a]"
+      style={{ width: size, height: size }}
     >
       {inner}
     </button>
+  );
+}
+
+type RuneRow = { ids: number[]; selectedIds: Set<number> };
+
+const SHARD_ROWS: number[][] = [
+  [5005, 5008, 5007],
+  [5008, 5010, 5001],
+  [5002, 5003, 5011],
+];
+
+function pickPlaceholder(id: number, icon = "", name = `Rune #${id}`): PickType {
+  return { id, name, icon, wpa: 0, winrate: null, occurrence: 0 };
+}
+
+function runeRowsForTree(
+  treeId: number,
+  selected: PickType[],
+  alternatives: PickType[][] | undefined,
+  includeOnlySelectedRows: boolean,
+): RuneRow[] {
+  const tree = PERK_TREES[treeId];
+  const staticRows = tree?.minorRows.map((row) => [...row]) ?? [[], [], []];
+  const rows = staticRows.map((row, index) => {
+    const ids = new Set(row);
+    for (const pick of alternatives?.[index] ?? []) ids.add(pick.id);
+    return ids;
+  });
+
+  selected.forEach((pick, index) => {
+    const knownRow = primaryMinorRow(treeId, pick.id);
+    const rowIndex = knownRow ?? Math.min(index, rows.length - 1);
+    rows[rowIndex]?.add(pick.id);
+  });
+
+  const selectedIds = new Set(selected.map((pick) => pick.id));
+  return rows
+    .map((ids) => ({ ids: [...ids], selectedIds }))
+    .filter((row) => !includeOnlySelectedRows || row.ids.some((id) => selectedIds.has(id)));
+}
+
+function shardRowsForBuild(shards: PickType[]): RuneRow[] {
+  const selectedIds = new Set(shards.map((pick) => pick.id));
+  const rows = SHARD_ROWS.map((row) => new Set(row));
+  shards.forEach((pick, index) => rows[index]?.add(pick.id));
+  return rows.map((ids) => ({ ids: [...ids], selectedIds }));
+}
+
+function optionPick(
+  id: number,
+  selectedById: Map<number, PickType>,
+  resolvedById: Map<number, PickType>,
+  shard = false,
+): PickType {
+  const selected = selectedById.get(id);
+  if (selected) return selected;
+  const resolved = resolvedById.get(id);
+  if (resolved) return resolved;
+  return shard ? pickPlaceholder(id, shardIconUrl(id), shardName(id)) : pickPlaceholder(id);
+}
+
+function RuneOptionRow({
+  row,
+  selectedById,
+  resolvedById,
+  onOpenDetail,
+  size = 28,
+  shard = false,
+}: {
+  row: RuneRow;
+  selectedById: Map<number, PickType>;
+  resolvedById: Map<number, PickType>;
+  onOpenDetail: (kind: EntityKind, id: number) => void;
+  size?: number;
+  shard?: boolean;
+}) {
+  return (
+    <div className="flex justify-center gap-[7px]">
+      {row.ids.map((id) => {
+        const pick = optionPick(id, selectedById, resolvedById, shard);
+        return (
+          <RuneCircle
+            key={id}
+            pick={pick}
+            size={size}
+            selected={row.selectedIds.has(id)}
+            onClick={() => onOpenDetail(shard ? "shard" : "rune", id)}
+          />
+        );
+      })}
+    </div>
   );
 }
 
@@ -147,27 +255,43 @@ function RuneColumn({
   title,
   icon,
   keystone,
-  picks,
+  rows,
+  selectedById,
+  resolvedById,
+  primary = false,
   onOpenDetail,
 }: {
   title: string;
   icon: string;
   keystone?: PickType;
-  picks: PickType[];
+  rows: RuneRow[];
+  selectedById: Map<number, PickType>;
+  resolvedById: Map<number, PickType>;
+  primary?: boolean;
   onOpenDetail: (kind: EntityKind, id: number) => void;
 }) {
   return (
     <div className="min-w-0">
       <div className="mb-3 flex items-center gap-2">
-        <span className="h-5 w-5 overflow-hidden rounded-full bg-white/[0.04]">
+        <span className={`h-4 w-4 overflow-hidden rounded-full ${primary ? "bg-[#9184d9]/[0.25] shadow-[inset_0_0_0_1px_rgba(145,132,217,0.6)]" : "bg-white/[0.1] shadow-[inset_0_0_0_1px_rgba(233,233,237,0.28)]"}`}>
           <IconWithFallback src={icon} alt={title} fallbackGlyph={title} className="h-full w-full object-cover" size={20} />
         </span>
-        <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#9397ab]/70">{title}</span>
+        <span className={`text-[10px] font-semibold uppercase tracking-[0.1em] ${primary ? "text-[#b5abfc]" : "text-[#e9e9ed]/60"}`}>{title}</span>
       </div>
-      <div className="flex flex-wrap items-center gap-2.5">
-        {keystone && <RuneCircle pick={keystone} size={54} keystone onClick={() => onOpenDetail("rune", keystone.id)} />}
-        {picks.map((pick) => (
-          <RuneCircle key={pick.id} pick={pick} onClick={() => onOpenDetail("rune", pick.id)} />
+      {primary && keystone && (
+        <div className="mb-3 flex justify-center">
+          <RuneCircle pick={keystone} size={54} keystone onClick={() => onOpenDetail("rune", keystone.id)} />
+        </div>
+      )}
+      <div className="space-y-2">
+        {rows.map((row, index) => (
+          <RuneOptionRow
+            key={`${title}-${index}`}
+            row={row}
+            selectedById={selectedById}
+            resolvedById={resolvedById}
+            onOpenDetail={onOpenDetail}
+          />
         ))}
       </div>
     </div>
@@ -186,25 +310,89 @@ export function BuildRuneSidebar({
   onOpenDetail: (kind: EntityKind, id: number) => void;
 }) {
   const { runes } = build;
-  const shards = [
-    { label: "OFF", pick: runes.shards.offense },
-    { label: "FLEX", pick: runes.shards.flex },
-    { label: "DEF", pick: runes.shards.defense },
-  ];
+  const primaryRows = useMemo(
+    () => runeRowsForTree(runes.primaryTree.id, runes.primary, runes.alts?.primaryByRow, false),
+    [runes],
+  );
+  const secondaryRows = useMemo(
+    () => runeRowsForTree(runes.secondaryTree.id, runes.secondary, undefined, true),
+    [runes],
+  );
+  const shardPicks = useMemo(() => [runes.shards.offense, runes.shards.flex, runes.shards.defense], [runes]);
+  const shardRows = useMemo(() => shardRowsForBuild(shardPicks), [shardPicks]);
+  const selectedById = useMemo(() => {
+    const picks = [runes.keystone, ...runes.primary, ...runes.secondary, ...shardPicks];
+    return new Map(picks.map((pick) => [pick.id, pick]));
+  }, [runes, shardPicks]);
+  const runeOptionIds = useMemo(
+    () => [...new Set([...primaryRows, ...secondaryRows].flatMap((row) => row.ids))],
+    [primaryRows, secondaryRows],
+  );
+  const [resolvedById, setResolvedById] = useState<Map<number, PickType>>(() => new Map());
+
+  useEffect(() => {
+    let cancelled = false;
+    const missing = runeOptionIds.filter((id) => !selectedById.has(id) && !resolvedById.has(id));
+    if (missing.length === 0) return;
+    Promise.all(missing.map((id) => resolveRuneDisplay(id, ver))).then((resolved) => {
+      if (cancelled) return;
+      setResolvedById((previous) => {
+        const next = new Map(previous);
+        resolved.forEach((display) => {
+          next.set(display.id, pickPlaceholder(display.id, display.icon, display.name));
+        });
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [runeOptionIds, resolvedById, selectedById, ver]);
 
   return (
     <aside className="space-y-4">
       <section className={`${CARD_CLASS} p-4`}>
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-3.5 flex items-center justify-between">
           <SectionLabel>Runes</SectionLabel>
           <div className="flex items-center gap-2">
             <span className="text-[10px] tabular-nums text-[#9397ab]/55">{build.tierLabel}</span>
             <ApplyRunesButton build={build} />
           </div>
         </div>
-        <div className="grid grid-cols-1 gap-5 min-[460px]:grid-cols-2">
-          <RuneColumn title={treeName(runes.primaryTree.id)} icon={runes.primaryTree.icon || treeIconUrl(runes.primaryTree.id)} keystone={runes.keystone} picks={runes.primary} onOpenDetail={onOpenDetail} />
-          <RuneColumn title={treeName(runes.secondaryTree.id)} icon={runes.secondaryTree.icon || treeIconUrl(runes.secondaryTree.id)} picks={runes.secondary} onOpenDetail={onOpenDetail} />
+        <div className="grid grid-cols-2 gap-x-3">
+          <RuneColumn
+            title={treeName(runes.primaryTree.id)}
+            icon={runes.primaryTree.icon || treeIconUrl(runes.primaryTree.id)}
+            keystone={runes.keystone}
+            rows={primaryRows}
+            selectedById={selectedById}
+            resolvedById={resolvedById}
+            primary
+            onOpenDetail={onOpenDetail}
+          />
+          <div>
+            <RuneColumn
+              title={treeName(runes.secondaryTree.id)}
+              icon={runes.secondaryTree.icon || treeIconUrl(runes.secondaryTree.id)}
+              rows={secondaryRows}
+              selectedById={selectedById}
+              resolvedById={resolvedById}
+              onOpenDetail={onOpenDetail}
+            />
+            <div className="mt-3 space-y-1.5 border-t border-white/[0.08] pt-3">
+              {shardRows.map((row, index) => (
+                <RuneOptionRow
+                  key={`shard-${index}`}
+                  row={row}
+                  selectedById={selectedById}
+                  resolvedById={resolvedById}
+                  onOpenDetail={onOpenDetail}
+                  size={20}
+                  shard
+                />
+              ))}
+            </div>
+          </div>
         </div>
         {altKeystone && (
           <div className="mt-4 border-t border-white/[0.08] pt-4">
@@ -227,43 +415,21 @@ export function BuildRuneSidebar({
             <p className="mt-2 text-[10px] leading-snug text-[#9397ab]/65">The build above is still the recommendation. Each WPA is measured inside its own rune page, so these are separate readings.</p>
           </div>
         )}
-        <div className="mt-5 border-t border-white/[0.08] pt-4">
-          <div className="mb-2 flex items-center justify-between">
-            <SectionLabel>Shards</SectionLabel>
-            <span className="text-[9px] uppercase tracking-[0.1em] text-[#9397ab]/45">stat runes</span>
-          </div>
-          <div className="flex gap-2.5">
-            {shards.map(({ label, pick }) => (
+        <div className="hr my-3" />
+        <div className="flex items-center justify-between">
+          <SectionLabel>Spells</SectionLabel>
+          <div className="flex gap-2">
+            {build.spells.slice(0, 2).map((spell) => (
               <button
-                key={pick.id}
+                key={spell.id}
                 type="button"
-                onClick={() => onOpenDetail("shard", pick.id)}
-                className="flex min-h-[44px] flex-1 flex-col items-center gap-1 rounded-[6px] py-1 text-center hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] lg:min-h-0"
+                onClick={() => onOpenDetail("spell", spell.id)}
+                aria-label={`View details for ${spellName(spell.id)}`}
+                className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-[6px] bg-white/[0.06] shadow-[inset_0_0_0_1px_rgba(233,233,237,0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] lg:h-8 lg:w-8"
               >
-                <span className="flex h-6 w-6 items-center justify-center overflow-hidden rounded-full bg-white/[0.05] shadow-[inset_0_0_0_1px_rgba(233,233,237,0.12)]">
-                  <IconWithFallback src={pick.icon || shardIconUrl(pick.id)} alt={pick.name} fallbackGlyph={pick.name} className="h-full w-full object-cover" size={24} />
-                </span>
-                <span className="text-[8px] font-semibold uppercase tracking-[0.08em] text-[#9397ab]/60">{label}</span>
+                <IconWithFallback src={spell.icon || spellIconUrl(spell.id, ver)} alt={spellName(spell.id)} fallbackGlyph={spellName(spell.id)} className="h-full w-full object-cover" size={28} />
               </button>
             ))}
-          </div>
-        </div>
-        <div className="mt-4 border-t border-white/[0.08] pt-3">
-          <div className="flex items-center justify-between">
-            <SectionLabel>Spells</SectionLabel>
-            <div className="flex gap-2">
-              {build.spells.slice(0, 2).map((spell) => (
-                <button
-                  key={spell.id}
-                  type="button"
-                  onClick={() => onOpenDetail("spell", spell.id)}
-                  aria-label={`View details for ${spellName(spell.id)}`}
-                  className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-[6px] bg-white/[0.06] shadow-[inset_0_0_0_1px_rgba(233,233,237,0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] lg:h-7 lg:w-7"
-                >
-                  <IconWithFallback src={spell.icon || spellIconUrl(spell.id, ver)} alt={spellName(spell.id)} fallbackGlyph={spellName(spell.id)} className="h-full w-full object-cover" size={28} />
-                </button>
-              ))}
-            </div>
           </div>
         </div>
       </section>

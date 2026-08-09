@@ -1,6 +1,6 @@
 {
   "name": "coachbuild",
-  "version": "0.104.0",
+  "version": "0.104.1",
   "private": true,
   "engines": {
     "node": ">=20.9"
