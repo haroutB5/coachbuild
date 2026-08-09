@@ -18,14 +18,35 @@ export default function CompanionStatusCard() {
     statusFresh: companion.statusFresh,
   });
 
+  const genuinelyConnected = companion.statusFresh && companion.session !== null && companion.clientConnected;
+  const genuinelyLive = genuinelyConnected && (companion.phase === "ChampSelect" || companion.phase === "InProgress");
+
   const body = (
-    <div className="bg-panel2/60 border border-line rounded-lg px-3 py-2.5 transition-colors hover:border-line-gold">
-      <div className="flex items-center gap-1.5 mb-1">
-        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${model.dotClass}`} aria-hidden="true" />
-        <span className="text-[9.5px] tracking-[0.1em] uppercase text-mut font-semibold">{model.header}</span>
+    <div
+      className="rounded-[8px] px-3 py-3 transition-colors duration-[120ms] ease-in"
+      style={
+        genuinelyConnected
+          ? {
+              background: "linear-gradient(150deg, rgba(70,199,155,.1), rgba(35,37,50,.9))",
+              boxShadow: "inset 0 0 0 1px rgba(70,199,155,.24)",
+            }
+          : {
+              background: "var(--panel-glass)",
+              boxShadow: "inset 0 0 0 1px rgba(233,233,237,.07)",
+            }
+      }
+    >
+      <div className="mb-1 flex items-center gap-1.5">
+        <span
+          className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${genuinelyConnected ? "bg-good" : "bg-txt/20"} ${genuinelyLive ? "animate-pulse" : ""}`}
+          aria-hidden="true"
+        />
+        <span className={`text-[9px] font-medium uppercase tracking-[0.14em] ${genuinelyConnected ? "text-good" : "text-txt/[0.38]"}`}>
+          {model.header}
+        </span>
       </div>
-      <p className="text-[12px] font-medium text-txt leading-tight">{model.title}</p>
-      <p className="text-[10.5px] text-mut leading-tight mt-0.5">{model.subtitle}</p>
+      <p className="text-[13px] font-semibold leading-tight text-txt">{model.title}</p>
+      <p className="mt-0.5 text-[11px] leading-tight text-txt/[0.50]">{model.subtitle}</p>
     </div>
   );
 

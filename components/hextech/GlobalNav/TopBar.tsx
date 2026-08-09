@@ -1,39 +1,20 @@
 "use client";
 
-// Global top bar (CoachBuild v0.51 redesign) — sticky chrome rendered above
-// <main> on EVERY route (mounted by AppShell.tsx, outside any page's own
-// content). Three zones: champion search (left), champ-select status chip
-// (center-right), gold "Apply runes" action (right).
-//
-// Mobile parity (v0.63.4): Apply Runes is desktop-only on every route
-// (ApplyRunesButton.tsx — it drives a same-machine League-client bridge that
-// has no meaning on a phone). The champion search is ALSO hidden below `lg`
-// on routes whose page already owns a champion/player search (/history,
-// /draft — see topBarChrome.ts), so mobile never stacks two-to-three search
-// boxes on one screen. Desktop keeps the search everywhere except /draft,
-// whose own control row is the primary champion search. See TopBar()'s
-// own `emptyOnMobile` for how the bar avoids rendering as an empty bordered
-// strip when both zones are hidden on those two routes.
-//
-// Search wiring: this bar owns its OWN champion combobox (same fetch-
-// /api/champions + arrow-key-nav contract as SidebarChampionSearch.tsx's
-// ChampionSearchField / ChampionPicker.tsx — those aren't exported as a
-// reusable headless piece, so this mirrors the same shape rather than
-// reaching into either). On select: if the current route isn't "/", navigate
-// there first, then emit on the next tick so the Builds page's subscriber is
-// mounted before the event fires; if already on "/", emit immediately.
-// app/page.tsx (the ONLY current subscriber) owns actually changing the
-// shown champion — this bar never touches page-level state directly.
+// Global top bar rendered above <main> on every chrome-bearing route. The
+// search keeps the existing champion-search bus and keyboard navigation; the
+// center phase spine and right action are shell-only chrome.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { useRouter, usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { MagnifyingGlass } from "@phosphor-icons/react";
 import type { ChampionRef } from "@/lib/types";
+import { useCompanion } from "@/components/live/CompanionProvider";
 import { emitChampionSearch } from "../championSearchBus";
 import { openSearchFromPointer } from "../../searchOpenState";
 import { computeDropdownPosition, type DropdownCoords } from "../../dropdownPosition";
 import { matchChampions } from "../../championSearch";
-import ChampSelectChip from "./ChampSelectChip";
 import ApplyRunesButton from "./ApplyRunesButton";
+import { phaseSpineModel, PHASE_SPINE_STEPS } from "./phaseSpineModel";
 import { topBarChromeConfig } from "./topBarChrome";
 import { getChampionMap, liveVersionFromChampMap, withLiveIconVersion } from "../heroContracts";
 
@@ -45,13 +26,6 @@ const FALLBACK_CHAMPIONS: ChampionRef[] = [
   { id: 222, key: "Jinx", name: "Jinx", icon: "" },
   { id: 412, key: "Thresh", name: "Thresh", icon: "" },
 ];
-
-const SEARCH_ICON = (
-  <svg aria-hidden="true" viewBox="0 0 20 20" className="absolute left-3 w-3.5 h-3.5 text-mut pointer-events-none" fill="none">
-    <circle cx="8.5" cy="8.5" r="6" stroke="currentColor" strokeWidth="1.5" />
-    <path d="M13.5 13.5L17.5 17.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-  </svg>
-);
 
 const LISTBOX_ID = "topbar-champ-listbox";
 const optId = (i: number) => `topbar-champ-opt-${i}`;
@@ -75,13 +49,8 @@ function TopBarChampionSearch() {
 
   useEffect(() => {
     getChampionMap().then((championMap) => {
-      // The shared map gives this always-mounted search the same live icon
-      // source as the page pickers. The empty-map branch deliberately stays
-      // glyph-only rather than issuing requests to a retired CDN folder.
       const liveVersion = liveVersionFromChampMap(championMap);
-      const liveFallback = FALLBACK_CHAMPIONS.map((champion) =>
-        withLiveIconVersion(champion, liveVersion)
-      );
+      const liveFallback = FALLBACK_CHAMPIONS.map((champion) => withLiveIconVersion(champion, liveVersion));
       setChampions(championMap.size > 0 ? Array.from(championMap.values()) : liveFallback);
     });
   }, []);
@@ -95,6 +64,11 @@ function TopBarChampionSearch() {
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        inputRef.current?.focus();
+        setOpen(true);
+      }
     }
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
@@ -104,15 +78,10 @@ function TopBarChampionSearch() {
     };
   }, []);
 
-  // The list is portaled to document.body so neither the bar's horizontal
-  // overflow clip nor any future containing-block/stacking-context change can
-  // swallow it on Safari. Position it from the input's viewport rect and use
-  // the same resize/scroll behavior as ChampionPicker: resize re-measures,
-  // page/ancestor scroll closes, and scrolling inside the list is ignored.
+  // Portal the list so the top bar's overflow clip and future containing
+  // blocks cannot swallow it. Position follows the existing picker contract.
   useEffect(() => {
     if (!open) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- plain reset-on-close; kept beside this effect's geometry writes so the coords lifecycle stays in one place (deriving open ? coords : null would split it).
-      setCoords(null);
       return;
     }
     function measure() {
@@ -147,12 +116,7 @@ function TopBarChampionSearch() {
   }, [activeIndex, open]);
 
   function select(champ: ChampionRef) {
-    // On any route other than "/", land on Builds first. The bus owns the
-    // asynchronous handoff, so this remains safe while the destination page
-    // is still mounting.
-    if (pathname !== "/") {
-      router.push("/");
-    }
+    if (pathname !== "/") router.push("/");
     emitChampionSearch(champ);
     setQuery("");
     setOpen(false);
@@ -189,7 +153,7 @@ function TopBarChampionSearch() {
   return (
     <div ref={containerRef} className="relative w-full">
       <div className="relative flex items-center">
-        {SEARCH_ICON}
+        <MagnifyingGlass aria-hidden="true" size={15} weight="light" className="pointer-events-none absolute left-3 text-txt/[0.45]" />
         <input
           ref={inputRef}
           id="topbar-champion-search"
@@ -204,31 +168,28 @@ function TopBarChampionSearch() {
           onFocus={onFocus}
           onClick={onPointerOpen}
           onKeyDown={onKeyDown}
-          placeholder="Search champion…"
-          aria-label="Search champion"
+          placeholder="Search champion, item or pro…"
+          aria-label="Search champion, item or pro"
           role="combobox"
           aria-expanded={open}
           aria-controls={LISTBOX_ID}
           aria-autocomplete="list"
           aria-activedescendant={open && filtered[activeIndex] ? optId(activeIndex) : undefined}
-          className="w-full bg-panel2/70 border border-line hover:border-line-gold rounded-lg py-[11px] pl-8 pr-3 text-[12.5px] text-txt placeholder:text-mut outline-none transition-colors focus:border-teal-dim focus-visible:ring-1 focus-visible:ring-teal"
+          className="h-[34px] w-full rounded-[8px] border border-[rgba(233,233,237,0.1)] bg-panel2 pl-8 pr-12 text-[13px] text-txt outline-none transition-colors duration-[120ms] ease-in placeholder:text-txt/40 hover:border-accent/40 focus-visible:border-accent focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
         />
+        <span className="pointer-events-none absolute right-2 flex items-center rounded-[5px] border border-[rgba(233,233,237,0.14)] px-1.5 py-[3px] text-[10px] font-medium leading-none text-txt/[0.45]">
+          ⌘K
+        </span>
       </div>
 
       {open && mounted && coords && createPortal(
         <div
           ref={dropdownRef}
-          style={{
-            position: "fixed",
-            top: coords.top,
-            bottom: coords.bottom,
-            left: coords.left,
-            width: coords.width,
-          }}
-          className="z-50 bg-panel border border-line rounded-lg shadow-[0_12px_32px_rgba(0,0,0,0.7)] overflow-hidden"
+          style={{ position: "fixed", top: coords.top, bottom: coords.bottom, left: coords.left, width: coords.width }}
+          className="z-50 overflow-hidden rounded-[8px] border border-[rgba(233,233,237,0.12)] bg-panel shadow-[0_12px_32px_rgba(0,0,0,0.7)]"
         >
-          <ul ref={listRef} id={LISTBOX_ID} role="listbox" className="max-h-[300px] overflow-y-auto divide-y divide-line/40">
-            {filtered.length === 0 && <li className="px-3 py-2.5 text-[12px] text-mut">No champions found</li>}
+          <ul ref={listRef} id={LISTBOX_ID} role="listbox" className="max-h-[300px] divide-y divide-txt/[0.05] overflow-y-auto">
+            {filtered.length === 0 && <li className="px-3 py-2.5 text-[12px] text-txt/[0.55]">No champions found</li>}
             {filtered.map((champ, i) => {
               const isActive = i === activeIndex;
               return (
@@ -238,9 +199,9 @@ function TopBarChampionSearch() {
                     tabIndex={-1}
                     onClick={() => select(champ)}
                     onMouseEnter={() => setActiveIndex(i)}
-                    className={`w-full flex items-center gap-2.5 px-3 py-3 text-[12.5px] text-left transition-colors text-txt ${isActive ? "bg-teal/12" : ""}`}
+                    className={`flex w-full items-center gap-2.5 px-3 py-3 text-left text-[12.5px] text-txt transition-colors duration-[120ms] ease-in focus-visible:outline-none focus-visible:outline-2 focus-visible:outline-accent ${isActive ? "bg-teal/[0.12]" : "hover:bg-txt/[0.04]"}`}
                   >
-                    <span className="flex-shrink-0 w-5 h-5 rounded overflow-hidden bg-black/30">
+                    <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-black/30">
                       {champ.icon && (
                         /* eslint-disable-next-line @next/next/no-img-element */
                         <img
@@ -250,7 +211,7 @@ function TopBarChampionSearch() {
                           height={20}
                           loading="lazy"
                           decoding="async"
-                          className="w-full h-full object-cover"
+                          className="h-full w-full object-cover"
                           onError={(e) => {
                             (e.currentTarget as HTMLImageElement).style.display = "none";
                           }}
@@ -270,32 +231,78 @@ function TopBarChampionSearch() {
   );
 }
 
+function PhaseSpine() {
+  const companion = useCompanion();
+  const model = phaseSpineModel({
+    phase: companion.phase,
+    clientConnected: companion.clientConnected,
+    statusFresh: companion.statusFresh,
+  });
+
+  return (
+    <div
+      aria-label="Game phase"
+      className="hidden h-[28px] w-[450px] flex-shrink-0 items-center justify-center rounded-[9px] border border-[rgba(233,233,237,0.08)] bg-panel2 px-3 lg:flex"
+      role="list"
+    >
+      {PHASE_SPINE_STEPS.map((label, index) => {
+        const state = model.states[index];
+        const nextState = model.states[index + 1];
+        const connectorStyle =
+          state === "active"
+            ? { background: "linear-gradient(to right, rgba(145,132,217,.5), rgba(233,233,237,.06))" }
+            : nextState === "active"
+              ? { background: "linear-gradient(to right, rgba(233,233,237,.06), rgba(145,132,217,.5))" }
+              : { background: "rgba(233,233,237,.06)" };
+
+        return (
+          <div key={label} className="contents">
+            <div
+              className="flex items-center gap-1.5 whitespace-nowrap"
+              role="listitem"
+              aria-current={state === "active" ? "step" : undefined}
+            >
+              <span
+                aria-hidden="true"
+                className={`block flex-shrink-0 rounded-full ${
+                  state === "active"
+                    ? "h-1.5 w-1.5 bg-accent shadow-[0_0_10px_2px_rgba(145,132,217,0.55)]"
+                    : state === "complete"
+                      ? "h-[5px] w-[5px] bg-neutral-600"
+                      : "h-[5px] w-[5px] bg-neutral-800"
+                }`}
+              />
+              <span
+                className={`text-[9px] font-medium uppercase tracking-[0.12em] ${
+                    state === "active" ? "font-semibold text-accent-400" : state === "complete" ? "text-txt/[0.42]" : "text-txt/[0.30]"
+                }`}
+              >
+                {label}
+              </span>
+            </div>
+            {index < PHASE_SPINE_STEPS.length - 1 && <span aria-hidden="true" className="mx-2 h-px w-[26px] flex-shrink-0" style={connectorStyle} />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function TopBar() {
   const pathname = usePathname();
   const { hideSearchOnMobile } = topBarChromeConfig(pathname);
 
-  // On /history and /draft (hideSearchOnMobile), below `lg` the search box is
-  // hidden (the page already owns its own) and Apply Runes is ALWAYS hidden
-  // below `lg` (ApplyRunesButton.tsx, every route) — so the chip is the ONLY
-  // thing that can still be showing there. Track whether it actually is, so
-  // the bar's own chrome (border/padding/background) can collapse below `lg`
-  // when it would otherwise be a bordered strip with nothing in it. Default
-  // false matches ChampSelectChip's own default-hidden state (no companion
-  // session on first paint), so this never causes a hydration mismatch.
-  const [chipVisible, setChipVisible] = useState(false);
-  const emptyOnMobile = hideSearchOnMobile && !chipVisible;
-  const emptyOnDraft = pathname === "/draft" && !chipVisible;
-  const hideSearchOnDraft = pathname === "/draft";
-
   return (
     <div
-      className={`${emptyOnDraft ? "hidden" : emptyOnMobile ? "hidden lg:flex" : "flex"} sticky top-0 z-30 bg-sidebar/95 backdrop-blur border-b border-line px-3 sm:px-4 lg:px-6 py-2.5 items-center gap-2.5 sm:gap-3 overflow-x-clip`}
+      className={`${hideSearchOnMobile ? "hidden lg:flex" : "flex"} relative z-30 h-14 flex-shrink-0 items-center overflow-x-clip border-b border-[rgba(233,233,237,0.08)] bg-bg px-3 sm:px-4 lg:px-5`}
     >
-      {!hideSearchOnDraft && <div className={hideSearchOnMobile ? "hidden lg:block flex-1 min-w-0 max-w-[420px]" : "flex-1 min-w-0 max-w-[420px]"}>
+      <div className="w-full min-w-0 flex-1 lg:w-[280px] lg:flex-none">
         <TopBarChampionSearch />
-      </div>}
-      <ChampSelectChip onVisibleChange={setChipVisible} />
-      {pathname !== "/draft" && <ApplyRunesButton />}
+      </div>
+      <div className="hidden min-w-0 flex-1 lg:block" />
+      <PhaseSpine />
+      <div className="hidden min-w-0 flex-1 lg:block" />
+      <ApplyRunesButton />
     </div>
   );
 }

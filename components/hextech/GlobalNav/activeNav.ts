@@ -4,6 +4,7 @@
 // route matches itself or a nested path under it (e.g. a future
 // `/history/[id]` sub-route should still light up "Pro Players").
 export function isActiveNav(pathname: string, href: string): boolean {
-  if (href === "/") return pathname === "/";
-  return pathname === href || pathname.startsWith(`${href}/`);
+  const route = href.split("?", 1)[0];
+  if (route === "/") return pathname === "/";
+  return pathname === route || pathname.startsWith(`${route}/`);
 }

@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import { Minus, Square, X } from "@phosphor-icons/react";
 import DesktopRail from "./GlobalNav/DesktopRail";
 import MobileTabBar from "./GlobalNav/MobileTabBar";
 import TopBar from "./GlobalNav/TopBar";
@@ -18,6 +19,37 @@ import TopBar from "./GlobalNav/TopBar";
  *  overlay. It is a normal web route either way — nothing here is desktop-only,
  *  and nothing about the shell leaks into the app. */
 const CHROMELESS_ROUTES = new Set(["/compact"]);
+
+function TitleBar({ patch }: { patch: string | null }) {
+  const version = process.env.NEXT_PUBLIC_APP_VERSION;
+
+  return (
+    <header className="hidden h-[34px] flex-shrink-0 items-center justify-between border-b border-[rgba(233,233,237,0.06)] bg-sidebar px-3 lg:flex">
+      <div className="flex min-w-0 items-center gap-2">
+        <span
+          aria-hidden="true"
+          className="h-3 w-3 flex-shrink-0 rounded-[3px]"
+          style={{ background: "linear-gradient(140deg, var(--color-accent), var(--color-accent-700))" }}
+        />
+        <span className="text-[11px] font-medium text-txt/[0.72]">CoachBuild</span>
+        <span className="text-[10px] text-txt/[0.32]">
+          Patch {patch ?? "—"} · {version ? `v${version}` : "v—"}
+        </span>
+      </div>
+      <div className="flex h-full items-stretch" aria-hidden="true">
+        <span className="flex w-11 items-center justify-center text-txt/35">
+          <Minus size={14} weight="light" />
+        </span>
+        <span className="flex w-11 items-center justify-center text-txt/35">
+          <Square size={12} weight="light" />
+        </span>
+        <span className="flex w-11 items-center justify-center text-txt/50 transition-colors duration-[120ms] ease-in hover:bg-[#9c3b3b] hover:text-txt">
+          <X size={14} weight="light" />
+        </span>
+      </div>
+    </header>
+  );
+}
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -49,21 +81,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="lg:flex min-h-screen">
-      <DesktopRail patch={patch} />
-      {/* v0.51.0 (global top bar): TopBar is chrome on EVERY route — mounted
-          above <main>'s own content, inside the flex-1 column so it never
-          overlaps DesktopRail's fixed-width column. Sticky to the viewport
-          top of this scroll container; z-30 keeps it under any modal/sheet
-          overlay (GameDetailSheet's backdrop is z-[100]) but above normal
-          page content. Never changes which routes are follow-capable — it's
-          pure chrome, the champion-search emit is consumed opportunistically
-          by whichever page is mounted (today, only "/"). */}
-      <div className="flex-1 min-w-0 flex flex-col">
-        <TopBar />
-        <main className="flex-1 min-w-0 pb-16 lg:pb-0">{children}</main>
+    <div className="min-h-screen bg-bg text-txt">
+      <TitleBar patch={patch} />
+      <div className="flex min-h-screen lg:h-[calc(100vh-34px)] lg:min-h-0">
+        <DesktopRail />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <TopBar />
+          <main className="min-h-0 min-w-0 flex-1 overflow-y-auto pb-16 lg:pb-0">{children}</main>
+        </div>
+        <MobileTabBar />
       </div>
-      <MobileTabBar />
     </div>
   );
 }

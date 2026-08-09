@@ -15,6 +15,7 @@
 // per-card Apply buttons on the Builds page (which apply whatever build the
 // user is actively LOOKING at, live or not).
 import { useState, useSyncExternalStore } from "react";
+import { Lightning } from "@phosphor-icons/react";
 import { useCompanion } from "@/components/live/CompanionProvider";
 import { resolveCurrentChampSelectChampionId, resolveChampSelectRoleId } from "@/components/live/champSelectFollow";
 import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/components/live/companionClient";
@@ -104,11 +105,13 @@ export default function ApplyRunesButton() {
       disabled={disabled}
       title={message ?? (liveReady ? "Apply this champion's recommended runes" : "Waiting for champ select…")}
       aria-label="Apply runes for the current champ-select champion"
-      className={`hidden lg:flex flex-shrink-0 items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.05em] rounded-lg px-3 py-[11px] min-h-[44px] transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar ${
-        disabled ? "bg-panel2 text-mut cursor-not-allowed" : "bg-teal text-bg hover:bg-teal-hover"
+      className={`hidden h-[34px] flex-shrink-0 items-center gap-1.5 rounded-[8px] px-3.5 text-[11px] font-semibold uppercase tracking-[0.08em] transition-colors duration-[120ms] ease-in focus-visible:outline-none focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:flex ${
+        disabled
+          ? "cursor-not-allowed text-accent-400/45 shadow-[inset_0_0_0_1px_rgba(145,132,217,0.35)]"
+          : "text-accent-400 shadow-[inset_0_0_0_1px_var(--color-accent)] hover:bg-accent/[0.14] active:bg-accent/[0.22]"
       }`}
     >
-      <span aria-hidden="true">⚡</span>
+      <Lightning aria-hidden="true" size={14} weight="light" />
       <span>{label}</span>
     </button>
   );

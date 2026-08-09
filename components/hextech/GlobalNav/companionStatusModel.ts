@@ -1,13 +1,8 @@
-// Pure model for the rail's companion status card (v0.50.0, plan Decision 3).
-// PLAN DEVIATION: the plan named this file `companionStatusCard.ts`, but
-// Windows' case-insensitive filesystem collides that with the sibling
-// `CompanionStatusCard.tsx` component (tsc TS1149) — renamed to
-// `companionStatusModel.ts` (matches the exported function name) instead.
-// Reads ONLY real useCompanion() fields — never fabricates a state the
-// companion hasn't actually reported. Mirrors /live-setup's own dot-color
-// vocabulary (app/live-setup/page.tsx's INDICATOR_DOT: bg-mut grey / bg-teal
-// gold / bg-win green) rather than inventing a new palette, so "connected"
-// means the same thing in both places.
+// Pure model for the rail's companion status card. It deliberately keeps the
+// provider's five-state vocabulary visible in the copy: unpaired,
+// paired-no-client, client-detected, champ-select, and in-game. `statusFresh`
+// is a hard gate; no cached phase can turn the card green after liveness has
+// expired.
 //
 // IMPROVEMENT over the mockup (which shows the card always-green): the
 // mockup's card doesn't distinguish "paired but nothing detected yet" from
@@ -40,7 +35,7 @@ export function companionStatusModel(input: CompanionStatusInput): CompanionStat
     return {
       tone: "off",
       dotClass: "bg-mut",
-      header: "COMPANION · OFF",
+      header: "COMPANION",
       title: "Not paired",
       subtitle: "Set up →",
       href: "/live-setup",
@@ -51,7 +46,7 @@ export function companionStatusModel(input: CompanionStatusInput): CompanionStat
     return {
       tone: "off",
       dotClass: "bg-mut",
-      header: "COMPANION · OFF",
+      header: "COMPANION",
       title: "Not responding",
       subtitle: "Check it's running →",
       href: "/live-setup",
@@ -61,8 +56,8 @@ export function companionStatusModel(input: CompanionStatusInput): CompanionStat
   if (!clientConnected) {
     return {
       tone: "idle",
-      dotClass: "bg-teal",
-      header: "COMPANION · ON",
+      dotClass: "bg-mut",
+      header: "COMPANION",
       title: "Client not detected",
       subtitle: "Waiting for League client…",
     };
@@ -72,7 +67,7 @@ export function companionStatusModel(input: CompanionStatusInput): CompanionStat
     return {
       tone: "live",
       dotClass: "bg-win",
-      header: "COMPANION · ON",
+      header: "COMPANION LIVE",
       title: "In champ select",
       subtitle: "Locking in…",
     };
@@ -82,7 +77,7 @@ export function companionStatusModel(input: CompanionStatusInput): CompanionStat
     return {
       tone: "live",
       dotClass: "bg-win",
-      header: "COMPANION · ON",
+      header: "COMPANION LIVE",
       title: "In game",
       subtitle: "Live",
     };
@@ -91,7 +86,7 @@ export function companionStatusModel(input: CompanionStatusInput): CompanionStat
   return {
     tone: "idle",
     dotClass: "bg-win",
-    header: "COMPANION · ON",
+    header: "COMPANION READY",
     title: "Client detected",
     subtitle: "Waiting for queue…",
   };

@@ -5,28 +5,29 @@
 // importable from a plain .ts vitest file (same constraint as navLinks.ts /
 // situational.ts before it).
 //
-// Mockup order (plan's Decision/New-files section): PLAY (Builds, Draft,
-// Companion) then DATA (Pro Players, Patch Movers, My Stats). Mobile bottom
-// bar is desktop-play-minus-Companion-and-Draft, per the user's explicit
-// directive ("similar but remove Companion AND Draft AND the companion card
-// — desktop-play-only") — MOBILE_NAV_ITEMS derives from `mobile: true` rather
-// than being hand-duplicated, so the two surfaces can't drift.
+// Nocturne order: PLAY (Draft, Builds, Post-Game), DATA (Pro Players, Patch
+// Movers, My Stats), then SETUP (Companion). The Post-Game surface is still
+// hosted by My Stats until stage 4 gives it a dedicated route; its query
+// intent keeps that hand-off explicit without inventing a new screen here.
+// Mobile bottom bar keeps the existing four-destination pattern — Draft,
+// Post-Game, and Companion remain desktop-only.
 export interface NavItem {
   id: string;
   href: string;
   label: string;
-  group: "play" | "data";
+  group: "play" | "data" | "setup";
   iconKey: string;
   mobile: boolean;
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { id: "builds", href: "/", label: "Builds", group: "play", iconKey: "crossed-swords", mobile: true },
-  { id: "draft", href: "/draft", label: "Draft", group: "play", iconKey: "medal", mobile: false },
-  { id: "companion", href: "/live-setup", label: "Companion", group: "play", iconKey: "broadcast", mobile: false },
+  { id: "draft", href: "/draft", label: "Draft", group: "play", iconKey: "draft", mobile: false },
+  { id: "builds", href: "/", label: "Builds", group: "play", iconKey: "builds", mobile: true },
+  { id: "post-game", href: "/mystats?intent=game-detail", label: "Post-Game", group: "play", iconKey: "post-game", mobile: false },
   { id: "pro-players", href: "/history", label: "Pro Players", group: "data", iconKey: "trophy", mobile: true },
-  { id: "patch-movers", href: "/movers", label: "Patch Movers", group: "data", iconKey: "trending-up", mobile: true },
-  { id: "my-stats", href: "/mystats", label: "My Stats", group: "data", iconKey: "bar-chart", mobile: true },
+  { id: "patch-movers", href: "/movers", label: "Patch Movers", group: "data", iconKey: "patch-movers", mobile: true },
+  { id: "my-stats", href: "/mystats", label: "My Stats", group: "data", iconKey: "my-stats", mobile: true },
+  { id: "companion", href: "/live-setup", label: "Companion", group: "setup", iconKey: "companion", mobile: false },
 ];
 
 export const MOBILE_NAV_ITEMS: NavItem[] = NAV_ITEMS.filter((item) => item.mobile);

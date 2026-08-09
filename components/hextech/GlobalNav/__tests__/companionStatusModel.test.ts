@@ -4,36 +4,17 @@ import { companionStatusModel } from "../companionStatusModel";
 describe("companionStatusModel", () => {
   it("row 1: no session -> off, grey dot, links to /live-setup", () => {
     const model = companionStatusModel({ session: null, phase: null, clientConnected: false, champSelect: null });
-    expect(model).toEqual({
-      tone: "off",
-      dotClass: "bg-mut",
-      header: "COMPANION · OFF",
-      title: "Not paired",
-      subtitle: "Set up →",
-      href: "/live-setup",
-    });
+    expect(model).toEqual({ tone: "off", dotClass: "bg-mut", header: "COMPANION", title: "Not paired", subtitle: "Set up →", href: "/live-setup" });
   });
 
   it("row 2: session set, client not connected -> idle, gold dot", () => {
     const model = companionStatusModel({ session: "tok", phase: null, clientConnected: false, champSelect: null });
-    expect(model).toEqual({
-      tone: "idle",
-      dotClass: "bg-teal",
-      header: "COMPANION · ON",
-      title: "Client not detected",
-      subtitle: "Waiting for League client…",
-    });
+    expect(model).toEqual({ tone: "idle", dotClass: "bg-mut", header: "COMPANION", title: "Client not detected", subtitle: "Waiting for League client…" });
   });
 
   it("row 3: client connected, phase not ChampSelect/InProgress -> idle, green dot", () => {
     const model = companionStatusModel({ session: "tok", phase: "None", clientConnected: true, champSelect: null });
-    expect(model).toEqual({
-      tone: "idle",
-      dotClass: "bg-win",
-      header: "COMPANION · ON",
-      title: "Client detected",
-      subtitle: "Waiting for queue…",
-    });
+    expect(model).toEqual({ tone: "idle", dotClass: "bg-win", header: "COMPANION READY", title: "Client detected", subtitle: "Waiting for queue…" });
   });
 
   it("row 3b: client connected, phase null -> same idle/green as row 3", () => {
@@ -45,24 +26,12 @@ describe("companionStatusModel", () => {
 
   it("row 4: phase ChampSelect -> live, green dot", () => {
     const model = companionStatusModel({ session: "tok", phase: "ChampSelect", clientConnected: true, champSelect: {} });
-    expect(model).toEqual({
-      tone: "live",
-      dotClass: "bg-win",
-      header: "COMPANION · ON",
-      title: "In champ select",
-      subtitle: "Locking in…",
-    });
+    expect(model).toEqual({ tone: "live", dotClass: "bg-win", header: "COMPANION LIVE", title: "In champ select", subtitle: "Locking in…" });
   });
 
   it("row 5: phase InProgress -> live, green dot", () => {
     const model = companionStatusModel({ session: "tok", phase: "InProgress", clientConnected: true, champSelect: null });
-    expect(model).toEqual({
-      tone: "live",
-      dotClass: "bg-win",
-      header: "COMPANION · ON",
-      title: "In game",
-      subtitle: "Live",
-    });
+    expect(model).toEqual({ tone: "live", dotClass: "bg-win", header: "COMPANION LIVE", title: "In game", subtitle: "Live" });
   });
 
   it("never fabricates a live phase when the client isn't connected, even if phase claims ChampSelect", () => {
@@ -71,7 +40,7 @@ describe("companionStatusModel", () => {
     // a companion that's no longer actually attached to a client).
     const model = companionStatusModel({ session: "tok", phase: "ChampSelect", clientConnected: false, champSelect: {} });
     expect(model.tone).toBe("idle");
-    expect(model.dotClass).toBe("bg-teal");
+    expect(model.dotClass).toBe("bg-mut");
     expect(model.title).toBe("Client not detected");
   });
 
@@ -83,13 +52,6 @@ describe("companionStatusModel", () => {
       champSelect: {},
       statusFresh: false,
     });
-    expect(model).toEqual({
-      tone: "off",
-      dotClass: "bg-mut",
-      header: "COMPANION · OFF",
-      title: "Not responding",
-      subtitle: "Check it's running →",
-      href: "/live-setup",
-    });
+    expect(model).toEqual({ tone: "off", dotClass: "bg-mut", header: "COMPANION", title: "Not responding", subtitle: "Check it's running →", href: "/live-setup" });
   });
 });
