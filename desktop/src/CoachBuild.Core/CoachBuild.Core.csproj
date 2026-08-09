@@ -4,6 +4,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <Deterministic>true</Deterministic>
+    <Version>1.0.1</Version>
     <AssemblyName>CoachBuild.Core</AssemblyName>
     <RootNamespace>CoachBuild.Core</RootNamespace>
   </PropertyGroup>

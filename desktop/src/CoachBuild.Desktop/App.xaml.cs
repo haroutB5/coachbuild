@@ -597,10 +597,10 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             throw new ArgumentException("A valid persistent session token is required.", nameof(sessionToken));
 
         _state = new CompanionState();
-        _credentials = new LcuCredentialResolver();
+        _log = new RedactedLog(logDirectory);
+        _credentials = new LcuCredentialResolver(diagnosticSink: message => _log.Info(message));
         _lcu = new LcuHttpClient(_credentials);
         _live = new LiveClientDataClient();
-        _log = new RedactedLog(logDirectory);
         _windowDecisions = new WindowDecisionService(
             sessionToken,
             attachments: _state.FollowAttachments);

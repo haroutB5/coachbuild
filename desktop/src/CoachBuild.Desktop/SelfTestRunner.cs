@@ -66,6 +66,37 @@ public static class SelfTestRunner
         resolver.Invalidate();
         _ = resolver.Resolve();
         Check(process.Calls == 2, "credential cache invalidation", failures);
+
+        var programData = Path.Combine(temporaryDirectory, "ProgramData");
+        var leagueDirectory = Path.Combine(temporaryDirectory, "Moved", "League of Legends");
+        var metadataDirectory = Path.Combine(programData, "Riot Games", "Metadata", "league_of_legends.live");
+        Directory.CreateDirectory(metadataDirectory);
+        Directory.CreateDirectory(leagueDirectory);
+        var leaguePath = leagueDirectory.Replace('\\', '/');
+        File.WriteAllText(
+            Path.Combine(programData, "Riot Games", "RiotClientInstalls.json"),
+            $$"""
+            {
+              "associated_client": ["{{leaguePath}}/LeagueClient.exe", "{{leaguePath}}/../Riot Client/RiotClientServices.exe"],
+              "rc_default": "{{leaguePath}}/../Riot Client/RiotClientServices.exe",
+              "rc_live": "{{leaguePath}}/../Riot Client/RiotClientServices.exe"
+            }
+            """);
+        File.WriteAllText(
+            Path.Combine(metadataDirectory, "league_of_legends.live.product_settings.yaml"),
+            $"product_install_full_path: \"{leaguePath}\"\n");
+        File.WriteAllText(Path.Combine(leagueDirectory, "lockfile"), "LeagueClient:123:5556:metadata-token:https");
+        var metadataResolver = new LcuCredentialResolver(
+            processSource: new FixedProcessSource(),
+            programDataDirectory: programData,
+            metadataReader: LcuCredentialParser.ReadLockfile,
+            fixedDriveLockfilePathsProvider: static () => Array.Empty<string>());
+        var fromMetadata = metadataResolver.Resolve();
+        Check(fromMetadata?.Port == 5556 && fromMetadata.Source == "lockfile", "Riot install metadata credential source", failures);
+        Check(LcuCredentialParser.ParseRiotClientInstallsJson("{\"associated_client\":[}").Count == 0,
+            "malformed Riot install manifest", failures);
+        Check(LcuCredentialParser.ParseProductSettingsYaml("product_install_full_path: \"D:/Riot Games") is null,
+            "malformed product settings", failures);
     }
 
     private static void TestConverters(List<string> failures)

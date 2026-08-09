@@ -1,8 +1,11 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
+using System.Runtime.CompilerServices;
 using System.Windows.Threading;
 using Forms = System.Windows.Forms;
+
+[assembly: InternalsVisibleTo("CoachBuild.Desktop.Tests")]
 
 namespace CoachBuild.Desktop.Tray;
 
@@ -34,9 +37,10 @@ public sealed class TrayCommandEventArgs : EventArgs
 }
 
 /// <summary>
-/// The only NotifyIcon owner in the process. Menu creation and state updates
-/// are marshalled to WPF's dispatcher, while command handlers are events so
-/// network/LCU work can be performed by the application off the UI thread.
+/// The only NotifyIcon owner in the process. It keeps one persistent menu and
+/// populates its items when the menu opens. State updates are marshalled to
+/// WPF's dispatcher, while command handlers are events so network/LCU work can
+/// be performed by the application off the UI thread.
 /// </summary>
 public sealed class TrayController : IDisposable
 {
@@ -45,6 +49,7 @@ public sealed class TrayController : IDisposable
     private readonly Dispatcher _dispatcher;
     private readonly string? _iconPath;
     private readonly Forms.NotifyIcon _icon;
+    private readonly Forms.ContextMenuStrip _menu;
     private bool _disposed;
     private TrayMenuState _state = TrayMenuState.Default;
 
@@ -52,11 +57,18 @@ public sealed class TrayController : IDisposable
     {
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _iconPath = iconPath;
+        _menu = new Forms.ContextMenuStrip
+        {
+            ShowImageMargin = false,
+            AutoClose = true,
+        };
+        _menu.Opening += OnMenuOpening;
         _icon = new Forms.NotifyIcon
         {
             Visible = false,
             Text = "CoachBuild",
             Icon = LoadIcon(iconPath),
+            ContextMenuStrip = _menu,
         };
         _icon.MouseClick += OnMouseClick;
     }
@@ -65,13 +77,14 @@ public sealed class TrayController : IDisposable
 
     public TrayMenuState State => _state;
 
+    internal Forms.ContextMenuStrip ContextMenuForTesting => _menu;
+
     public void Start(TrayMenuState? initialState = null)
     {
         InvokeOnDispatcher(() =>
         {
             ThrowIfDisposed();
             _state = initialState ?? TrayMenuState.Default;
-            RebuildMenu();
             _icon.Visible = true;
         });
     }
@@ -83,7 +96,6 @@ public sealed class TrayController : IDisposable
         {
             if (_disposed) return;
             _state = state;
-            RebuildMenu();
         });
     }
 
@@ -102,21 +114,26 @@ public sealed class TrayController : IDisposable
         if (e.Button == Forms.MouseButtons.Left) RaiseCommand(TrayCommand.Reopen);
     }
 
-    private void RebuildMenu()
+    private void OnMenuOpening(object? sender, CancelEventArgs e)
     {
-        var menu = new Forms.ContextMenuStrip
+        if (_disposed)
         {
-            ShowImageMargin = false,
-            AutoClose = true,
-        };
-        menu.Items.Add(MenuItem("Reopen CoachBuild", (_, _) => RaiseCommand(TrayCommand.Reopen)));
-        menu.Items.Add(MenuItem(
+            e.Cancel = true;
+            return;
+        }
+
+        // Opening is the only rebuild point. The strip itself remains attached
+        // to NotifyIcon for the whole app lifetime, so an already visible menu
+        // is never cleared or disposed by a 750ms state update.
+        _menu.Items.Clear();
+        _menu.Items.Add(MenuItem("Reopen CoachBuild", (_, _) => RaiseCommand(TrayCommand.Reopen)));
+        _menu.Items.Add(MenuItem(
             _state.OverlayVisible ? "Hide overlay" : "Show overlay",
             (_, _) => RaiseCommand(TrayCommand.ToggleOverlay)));
-        menu.Items.Add(MenuItem(
+        _menu.Items.Add(MenuItem(
             _state.Interactive ? "Disable interactive mode" : "Enable interactive mode",
             (_, _) => RaiseCommand(TrayCommand.ToggleInteractive)));
-        menu.Items.Add(MenuItem(
+        _menu.Items.Add(MenuItem(
             _state.ShowSkillTable ? "Hide skill table" : "Show skill table",
             (_, _) => RaiseCommand(TrayCommand.ToggleSkillTable)));
 
@@ -134,35 +151,31 @@ public sealed class TrayController : IDisposable
             item.Click += (_, _) => RaiseCommand(TrayCommand.SetLane, chosenLane);
             lane.DropDownItems.Add(item);
         }
-        menu.Items.Add(lane);
+        _menu.Items.Add(lane);
 
-        menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add(StatusItem($"Phase: {DisplayPhase(_state.Phase)}"));
-        menu.Items.Add(StatusItem(_state.IsCompanionBusy ? "Companion: busy" : "Companion: ready"));
+        _menu.Items.Add(new Forms.ToolStripSeparator());
+        _menu.Items.Add(StatusItem($"Phase: {DisplayPhase(_state.Phase)}"));
+        _menu.Items.Add(StatusItem(_state.IsCompanionBusy ? "Companion: busy" : "Companion: ready"));
         using (var process = Process.GetCurrentProcess())
         {
-            menu.Items.Add(StatusItem(TrayMenuState.FormatWorkingSet(process.WorkingSet64)));
+            _menu.Items.Add(StatusItem(TrayMenuState.FormatWorkingSet(process.WorkingSet64)));
         }
-        if (!string.IsNullOrWhiteSpace(_state.Error)) menu.Items.Add(StatusItem($"Error: {_state.Error}"));
-        menu.Items.Add(StatusItem($"Updates: {_state.Update.ToDisplayString()}"));
+        if (!string.IsNullOrWhiteSpace(_state.Error)) _menu.Items.Add(StatusItem($"Error: {_state.Error}"));
+        _menu.Items.Add(StatusItem($"Updates: {_state.Update.ToDisplayString()}"));
 
         if (!_state.WebView2Available)
         {
-            menu.Items.Add(MenuItem("Repair WebView2 runtime", (_, _) => RaiseCommand(TrayCommand.RepairWebView2)));
+            _menu.Items.Add(MenuItem("Repair WebView2 runtime", (_, _) => RaiseCommand(TrayCommand.RepairWebView2)));
         }
 
-        menu.Items.Add(new Forms.ToolStripSeparator());
+        _menu.Items.Add(new Forms.ToolStripSeparator());
         if (!_state.IsAdjusting)
-            menu.Items.Add(MenuItem("Calibrate overlay", (_, _) => RaiseCommand(TrayCommand.Calibrate)));
-        menu.Items.Add(_state.IsAdjusting
+            _menu.Items.Add(MenuItem("Calibrate overlay", (_, _) => RaiseCommand(TrayCommand.Calibrate)));
+        _menu.Items.Add(_state.IsAdjusting
             ? MenuItem("Cancel adjust", (_, _) => RaiseCommand(TrayCommand.CancelAdjust))
             : MenuItem("Adjust overlay position", (_, _) => RaiseCommand(TrayCommand.Adjust)));
-        menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add(MenuItem("Quit CoachBuild", (_, _) => RaiseCommand(TrayCommand.Quit)));
-
-        var previous = _icon.ContextMenuStrip;
-        _icon.ContextMenuStrip = menu;
-        previous?.Dispose();
+        _menu.Items.Add(new Forms.ToolStripSeparator());
+        _menu.Items.Add(MenuItem("Quit CoachBuild", (_, _) => RaiseCommand(TrayCommand.Quit)));
     }
 
     private static Forms.ToolStripMenuItem MenuItem(string text, EventHandler action)
@@ -244,9 +257,9 @@ public sealed class TrayController : IDisposable
     {
         _icon.Visible = false;
         _icon.MouseClick -= OnMouseClick;
-        var menu = _icon.ContextMenuStrip;
+        _menu.Opening -= OnMenuOpening;
         _icon.ContextMenuStrip = null;
-        menu?.Dispose();
+        _menu.Dispose();
         _icon.Dispose();
     }
 }

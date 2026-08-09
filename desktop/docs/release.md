@@ -18,7 +18,7 @@ machine-wide Program Files install is required.
 From a Windows machine with the .NET 8 SDK and `vpk` available:
 
 ```powershell
-pwsh desktop/scripts/package.ps1 -Version 1.0.0
+pwsh desktop/scripts/package.ps1 -Version 1.0.1
 ```
 
 The script publishes the WPF app, packs delta-capable Velopack artifacts, and
@@ -31,7 +31,7 @@ Use a token with permission to publish the dedicated repository:
 
 ```powershell
 $env:GITHUB_TOKEN = '…'
-pwsh desktop/scripts/publish.ps1 -Version 1.0.0
+pwsh desktop/scripts/publish.ps1 -Version 1.0.1
 ```
 
 Never substitute `coachbuild-overlay-releases`, the old Electron feed. Verify

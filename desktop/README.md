@@ -61,8 +61,8 @@ dotnet run --project desktop/src/CoachBuild.Desktop/CoachBuild.Desktop.csproj --
 Package and publish native artifacts with:
 
 ```powershell
-pwsh desktop/scripts/package.ps1 -Version 1.0.0
-pwsh desktop/scripts/publish.ps1 -Version 1.0.0
+pwsh desktop/scripts/package.ps1 -Version 1.0.1
+pwsh desktop/scripts/publish.ps1 -Version 1.0.1
 ```
 
 The Velopack feed is the dedicated public repository
