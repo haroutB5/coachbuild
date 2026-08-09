@@ -11,6 +11,9 @@ public sealed class OverlaySettings
 
     public bool OverlayVisible { get; set; } = true;
 
+    [JsonPropertyName("autostartConfigured")]
+    public bool AutostartConfigured { get; set; }
+
     public Dictionary<string, PersistedCalibration> Calibrations { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
@@ -93,6 +96,16 @@ public sealed class OverlaySettingsStore
         }
     }
 
+    public void SetAutostartConfigured(bool configured)
+    {
+        lock (_gate)
+        {
+            var settings = ReadCore();
+            settings.AutostartConfigured = configured;
+            WriteCore(settings);
+        }
+    }
+
     public void SaveCalibration(DisplayResolution display, CalibrationGeometry geometry)
     {
         lock (_gate)
@@ -167,6 +180,7 @@ public sealed class OverlaySettingsStore
             LaneOverride = settings.LaneOverride,
             ShowSkillTable = settings.ShowSkillTable,
             OverlayVisible = settings.OverlayVisible,
+            AutostartConfigured = settings.AutostartConfigured,
             Calibrations = (settings.Calibrations ?? new Dictionary<string, PersistedCalibration>())
                 .Where(pair => pair.Value is not null)
                 .ToDictionary(

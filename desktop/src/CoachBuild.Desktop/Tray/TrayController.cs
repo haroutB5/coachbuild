@@ -50,15 +50,20 @@ public sealed class TrayController : IDisposable
 
     private readonly Dispatcher _dispatcher;
     private readonly string? _iconPath;
+    private readonly IStartupManager _startupManager;
     private readonly Forms.NotifyIcon _icon;
     private readonly Forms.ContextMenuStrip _menu;
     private bool _disposed;
     private TrayMenuState _state = TrayMenuState.Default;
 
-    public TrayController(Dispatcher dispatcher, string? iconPath = null)
+    public TrayController(
+        Dispatcher dispatcher,
+        string? iconPath = null,
+        IStartupManager? startupManager = null)
     {
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _iconPath = iconPath;
+        _startupManager = startupManager ?? new StartupManager();
         _menu = new Forms.ContextMenuStrip
         {
             ShowImageMargin = false,
@@ -178,6 +183,17 @@ public sealed class TrayController : IDisposable
             ? MenuItem("Cancel adjust", (_, _) => RaiseCommand(TrayCommand.CancelAdjust))
             : MenuItem("Adjust overlay position", (_, _) => RaiseCommand(TrayCommand.Adjust)));
         _menu.Items.Add(new Forms.ToolStripSeparator());
+        var startWithWindows = new Forms.ToolStripMenuItem("Start with Windows")
+        {
+            Checked = _startupManager.IsEnabled,
+            CheckOnClick = true,
+        };
+        startWithWindows.Click += (_, _) =>
+        {
+            if (startWithWindows.Checked) _startupManager.Enable();
+            else _startupManager.Disable();
+        };
+        _menu.Items.Add(startWithWindows);
         _menu.Items.Add(MenuItem("Quit CoachBuild", (_, _) => RaiseCommand(TrayCommand.Quit)));
     }
 

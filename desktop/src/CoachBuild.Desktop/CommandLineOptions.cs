@@ -6,11 +6,18 @@ public sealed record CommandLineOptions(
     bool NoUi,
     string? Feed = null)
 {
+    public bool Autostart { get; init; }
+
+    public bool StartInTrayOnly => Autostart;
+
+    public bool ShouldOpenWebViewOnLaunch => !StartInTrayOnly;
+
     public static CommandLineOptions Parse(IEnumerable<string>? arguments)
     {
         var selfTest = false;
         var repair = false;
         var noUi = false;
+        var autostart = false;
         string? feed = null;
         var args = arguments ?? [];
         foreach (var raw in args)
@@ -22,9 +29,9 @@ public sealed record CommandLineOptions(
                      arg.Equals("--repair-webview2", StringComparison.OrdinalIgnoreCase)) repair = true;
             else if (arg.Equals("-NoUi", StringComparison.OrdinalIgnoreCase) ||
                      arg.Equals("--no-ui", StringComparison.OrdinalIgnoreCase)) noUi = true;
+            else if (arg.Equals("--autostart", StringComparison.OrdinalIgnoreCase)) autostart = true;
             else if (arg.StartsWith("--feed=", StringComparison.OrdinalIgnoreCase)) feed = arg[7..];
         }
-        return new CommandLineOptions(selfTest, repair, noUi, feed);
+        return new CommandLineOptions(selfTest, repair, noUi, feed) { Autostart = autostart };
     }
 }
-

@@ -167,6 +167,7 @@ public partial class App : WpfApplication
     private Task? _pollTask;
     private TrayMenuState _trayState = TrayMenuState.Default;
     private IDesktopHostServices _services = new NullDesktopHostServices();
+    private IStartupManager? _startupManager;
     private int _snapshotBusy;
     private int _phaseBusy;
     private int _webViewVisible;
@@ -193,6 +194,15 @@ public partial class App : WpfApplication
     }
 
     public bool HasStarted { get; private set; }
+
+    public CommandLineOptions Options { get; private set; } = CommandLineOptions.Parse([]);
+
+    public void ConfigureOptions(CommandLineOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (HasStarted) throw new InvalidOperationException("Options must be configured before App startup.");
+        Options = options;
+    }
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -223,10 +233,17 @@ public partial class App : WpfApplication
             _services = nativeServices;
         }
 
-        _tray = new TrayController(Dispatcher, Path.Combine(AppContext.BaseDirectory, "Assets", "tray-icon.ico"));
+        var settingsStore = new OverlaySettingsStore(Paths.SettingsFile);
+        _startupManager = new StartupManager();
+        AutostartConfiguration.EnsureConfigured(settingsStore, _startupManager);
+
+        _tray = new TrayController(
+            Dispatcher,
+            Path.Combine(AppContext.BaseDirectory, "Assets", "tray-icon.ico"),
+            _startupManager);
         _tray.CommandRequested += OnTrayCommand;
 
-        _overlay = new OverlayWindow(new OverlaySettingsStore(Paths.SettingsFile));
+        _overlay = new OverlayWindow(settingsStore);
         _overlay.AdjustmentStateChanged += OnAdjustmentStateChanged;
         if (_services is ILaneOverrideHostServices laneOverrideServices)
             laneOverrideServices.SetLaneOverride(_overlay.LaneOverrideSetting);
@@ -246,6 +263,8 @@ public partial class App : WpfApplication
         if (_services is IDesktopHostLifecycle lifecycle)
             _ = Task.Run(() => lifecycle.StartAsync(_shutdown.Token));
         _pollTask = PollAsync(_shutdown.Token);
+        if (Options.ShouldOpenWebViewOnLaunch)
+            _ = ReopenAsync();
     }
 
     private bool TryAcquireMutex()

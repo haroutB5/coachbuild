@@ -115,4 +115,67 @@ public sealed class TrayControllerTests
             menu.Close();
         }
     }
+
+    [Fact]
+    public void Start_with_windows_item_is_checkable_and_toggles_the_injected_manager()
+    {
+        var startup = new RecordingStartupManager(enabled: true);
+        using var tray = new TrayController(Dispatcher.CurrentDispatcher, startupManager: startup);
+        tray.Start();
+        var menu = tray.ContextMenuForTesting;
+
+        menu.Show(new Point(0, 0));
+        try
+        {
+            var item = menu.Items.OfType<Forms.ToolStripMenuItem>()
+                .Single(menuItem => menuItem.Text == "Start with Windows");
+            Assert.True(item.CheckOnClick);
+            Assert.True(item.Checked);
+
+            item.PerformClick();
+            Assert.Equal(1, startup.DisableCalls);
+            Assert.False(startup.IsEnabled);
+        }
+        finally
+        {
+            menu.Close();
+        }
+
+        menu.Show(new Point(0, 0));
+        try
+        {
+            var item = menu.Items.OfType<Forms.ToolStripMenuItem>()
+                .Single(menuItem => menuItem.Text == "Start with Windows");
+            Assert.False(item.Checked);
+
+            item.PerformClick();
+            Assert.Equal(1, startup.EnableCalls);
+            Assert.True(startup.IsEnabled);
+        }
+        finally
+        {
+            menu.Close();
+        }
+    }
+
+    private sealed class RecordingStartupManager(bool enabled) : IStartupManager
+    {
+        public bool IsEnabled { get; private set; } = enabled;
+
+        public int EnableCalls { get; private set; }
+
+        public int DisableCalls { get; private set; }
+
+        public void Enable()
+        {
+            EnableCalls++;
+            IsEnabled = true;
+        }
+
+        public void Disable()
+        {
+            DisableCalls++;
+            IsEnabled = false;
+        }
+    }
 }

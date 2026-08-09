@@ -26,6 +26,7 @@ public static class Program
         }
 
         var app = new App();
+        app.ConfigureOptions(options);
         app.InitializeComponent();
         return app.Run();
     }
