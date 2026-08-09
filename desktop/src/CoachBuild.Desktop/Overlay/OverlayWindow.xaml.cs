@@ -18,6 +18,7 @@ public partial class OverlayWindow : Window
     private const int WsExNoActivate = 0x08000000;
     private const int WsExToolWindow = 0x80;
     private const int HWndTopMost = -1;
+    private const int WmDpiChanged = 0x02E0;
     private const uint SwpNoActivate = 0x0010;
     private const uint SwpShowWindow = 0x0040;
     private const uint SwpNoSendChanging = 0x0400;
@@ -29,6 +30,10 @@ public partial class OverlayWindow : Window
     private OverlaySettings _settings;
     private DisplayInfo? _display;
     private CalibrationGeometry? _workingCalibration;
+    private HwndSource? _hwndSource;
+    private NativeBounds? _lastNativeBounds;
+    private bool? _lastClickThrough;
+    private bool _nativeWindowShown;
     private bool _interactive;
     private bool _adjusting;
     private bool _disposed;
@@ -51,6 +56,8 @@ public partial class OverlayWindow : Window
     public bool IsInteractive => _interactive;
 
     public bool IsAdjusting => _adjusting;
+
+    public event Action<bool>? AdjustmentStateChanged;
 
     public bool OverlayVisibleSetting => _settings.OverlayVisible;
 
@@ -137,10 +144,14 @@ public partial class OverlayWindow : Window
             return;
         }
 
-        EnsureDisplay();
+        ShowInactive();
+        if (_display is null) return;
         _workingCalibration = _settingsStore.LoadCalibration(_display!.Resolution);
         _adjusting = true;
+        AdjustmentStateChanged?.Invoke(true);
         SetInteractive(true);
+        Activate();
+        Focus();
         RenderAdjustment();
     }
 
@@ -152,47 +163,79 @@ public partial class OverlayWindow : Window
             return;
         }
 
-        EnsureDisplay();
         if (!IsVisible) Show();
+        if (!EnsureDisplay()) return;
         SetBoundsToDisplay();
         SetNativeClickThrough(!_interactive);
-        if (_interactive) Focus();
+        if (_adjusting)
+        {
+            Activate();
+            Focus();
+        }
+        else
+        {
+            RenderCurrentState();
+        }
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
+        var handle = new WindowInteropHelper(this).Handle;
+        if (handle != 0)
+        {
+            _hwndSource = HwndSource.FromHwnd(handle);
+            _hwndSource?.AddHook(WindowMessageHook);
+        }
+
+        // Do not resolve a display from a null HWND. The first real handle is
+        // the first point at which Windows can report the monitor's DPI.
+        _display = null;
         SetNativeClickThrough(clickThrough: true);
         EnsureDisplay();
         SetBoundsToDisplay();
     }
 
-    private void EnsureDisplay()
+    private bool EnsureDisplay()
     {
-        if (_display is not null) return;
+        if (_display is not null) return true;
         var handle = new WindowInteropHelper(this).Handle;
+        if (handle == 0) return false;
         _display = _displayDpi.GetDisplayForWindow(handle);
+        return true;
     }
 
     private void SetBoundsToDisplay()
     {
-        if (_display is null) return;
+        if (!EnsureDisplay() || _display is null) return;
         var scaleX = Math.Max(0.1d, _display.DpiX / 96d);
         var scaleY = Math.Max(0.1d, _display.DpiY / 96d);
-        Left = _display.Left / scaleX;
-        Top = _display.Top / scaleY;
-        Width = _display.Width / scaleX;
-        Height = _display.Height / scaleY;
+        var left = _display.Left / scaleX;
+        var top = _display.Top / scaleY;
+        var width = _display.Width / scaleX;
+        var height = _display.Height / scaleY;
+        if (Math.Abs(Left - left) > 0.01d) Left = left;
+        if (Math.Abs(Top - top) > 0.01d) Top = top;
+        if (Math.Abs(Width - width) > 0.01d) Width = width;
+        if (Math.Abs(Height - height) > 0.01d) Height = height;
+
         var handle = new WindowInteropHelper(this).Handle;
         if (handle == 0) return;
-        SetWindowPos(handle, HWndTopMost, _display.Left, _display.Top, _display.Width, _display.Height,
-            SwpNoActivate | SwpShowWindow | SwpNoSendChanging);
+        var bounds = new NativeBounds(_display.Left, _display.Top, _display.Width, _display.Height);
+        if (_nativeWindowShown && _lastNativeBounds == bounds) return;
+
+        var flags = SwpNoActivate | SwpNoSendChanging;
+        if (!_nativeWindowShown && IsVisible) flags |= SwpShowWindow;
+        if (SetWindowPos(handle, HWndTopMost, bounds.Left, bounds.Top, bounds.Width, bounds.Height, flags))
+        {
+            _lastNativeBounds = bounds;
+            _nativeWindowShown = IsVisible;
+        }
     }
 
     private void RenderCurrentState()
     {
         EnsureDisplay();
         if (_display is null || _adjusting) return;
-        _settings = _settingsStore.Read();
         var renderState = _state with
         {
             Lane = _settings.LaneOverride ?? _state.Lane,
@@ -209,12 +252,17 @@ public partial class OverlayWindow : Window
         Dispatcher.BeginInvoke(() =>
         {
             if (_disposed) return;
-            var handle = new WindowInteropHelper(this).Handle;
-            _display = _displayDpi.GetDisplayForWindow(handle);
+            _display = null;
+            EnsureDisplay();
             SetBoundsToDisplay();
             if (_adjusting)
             {
-                _workingCalibration = _settingsStore.LoadCalibration(_display.Resolution);
+                if (_display is not { } display)
+                {
+                    return;
+                }
+
+                _workingCalibration = _settingsStore.LoadCalibration(display.Resolution);
                 RenderAdjustment();
             }
             else
@@ -287,15 +335,17 @@ public partial class OverlayWindow : Window
         _settings = _settingsStore.Read();
         _adjusting = false;
         _workingCalibration = null;
+        AdjustmentStateChanged?.Invoke(false);
         SetInteractive(false);
         RenderCurrentState();
     }
 
-    private void CancelAdjustment()
+    public void CancelAdjustment()
     {
         if (!_adjusting) return;
         _adjusting = false;
         _workingCalibration = null;
+        AdjustmentStateChanged?.Invoke(false);
         SetInteractive(false);
         RenderCurrentState();
     }
@@ -354,11 +404,21 @@ public partial class OverlayWindow : Window
     {
         var handle = new WindowInteropHelper(this).Handle;
         if (handle == 0) return;
+        if (_lastClickThrough == clickThrough) return;
+
         var style = GetWindowLongPtr(handle, GwlExStyle).ToInt64();
-        style |= WsExNoActivate | WsExToolWindow;
-        if (clickThrough) style |= WsExTransparent;
-        else style &= ~WsExTransparent;
-        SetWindowLongPtr(handle, GwlExStyle, new nint(style));
+        var nextStyle = style | WsExToolWindow;
+        if (clickThrough)
+        {
+            nextStyle |= WsExNoActivate | WsExTransparent;
+        }
+        else
+        {
+            nextStyle &= ~(WsExNoActivate | WsExTransparent);
+        }
+
+        if (nextStyle != style) SetWindowLongPtr(handle, GwlExStyle, new nint(nextStyle));
+        _lastClickThrough = clickThrough;
     }
 
     private static string? NormalizeLane(string? lane)
@@ -372,9 +432,45 @@ public partial class OverlayWindow : Window
     {
         if (_disposed) return;
         _disposed = true;
+        _hwndSource?.RemoveHook(WindowMessageHook);
+        _hwndSource = null;
         _displayDpi.Dispose();
         GC.SuppressFinalize(this);
     }
+
+    private nint WindowMessageHook(
+        nint hwnd,
+        int message,
+        nint wParam,
+        nint lParam,
+        ref bool handled)
+    {
+        if (message == WmDpiChanged && !_disposed)
+        {
+            _display = null;
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (_disposed) return;
+                EnsureDisplay();
+                SetBoundsToDisplay();
+                if (_adjusting)
+                {
+                    _workingCalibration = _display is null
+                        ? null
+                        : _settingsStore.LoadCalibration(_display.Resolution);
+                    RenderAdjustment();
+                }
+                else
+                {
+                    RenderCurrentState();
+                }
+            });
+        }
+
+        return 0;
+    }
+
+    private readonly record struct NativeBounds(int Left, int Top, int Width, int Height);
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
     private static extern nint GetWindowLongPtr(nint hWnd, int nIndex);

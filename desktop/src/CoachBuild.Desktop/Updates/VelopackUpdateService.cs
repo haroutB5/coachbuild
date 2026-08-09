@@ -28,7 +28,7 @@ public sealed class VelopackUpdateService : IAsyncDisposable
     private AvailableUpdate? _pending;
     private Task? _loop;
     private bool _started;
-    private bool _busy;
+    private int _busy;
     private UpdateTrayModel _model = UpdateTrayModel.None;
 
     public VelopackUpdateService(
@@ -37,7 +37,7 @@ public sealed class VelopackUpdateService : IAsyncDisposable
         TimeSpan? checkInterval = null)
     {
         _client = client ?? new ReflectionVelopackUpdateClient(UpdateBootstrapper.ReleaseFeed);
-        _isCompanionBusy = isCompanionBusy ?? (() => _busy);
+        _isCompanionBusy = isCompanionBusy ?? (() => IsBusy);
         _checkInterval = checkInterval ?? TimeSpan.FromHours(6);
     }
 
@@ -45,7 +45,7 @@ public sealed class VelopackUpdateService : IAsyncDisposable
 
     public UpdateTrayModel Current => _model;
 
-    public bool IsBusy => _busy;
+    public bool IsBusy => Volatile.Read(ref _busy) != 0;
 
     public AvailableUpdate? PendingUpdate => _pending;
 
@@ -76,7 +76,7 @@ public sealed class VelopackUpdateService : IAsyncDisposable
             await _client.DownloadUpdatesAsync(update, cancellationToken).ConfigureAwait(false);
             _pending = update;
             SetModel(UpdateTrayModel.For(UpdateStatus.Ready, update.Version));
-            if (_busy || _isCompanionBusy())
+            if (IsBusy || _isCompanionBusy())
             {
                 SetModel(UpdateTrayModel.For(UpdateStatus.DeferredBusy, update.Version));
                 return;
@@ -105,12 +105,12 @@ public sealed class VelopackUpdateService : IAsyncDisposable
     /// </summary>
     public async Task SetCompanionBusyAsync(bool busy, CancellationToken cancellationToken = default)
     {
-        _busy = busy;
+        Interlocked.Exchange(ref _busy, busy ? 1 : 0);
         if (busy || _pending is null) return;
         await _operation.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (!_busy && !_isCompanionBusy() && _pending is not null)
+            if (!IsBusy && !_isCompanionBusy() && _pending is not null)
             {
                 await ApplyPendingCoreAsync(cancellationToken).ConfigureAwait(false);
             }
@@ -123,7 +123,7 @@ public sealed class VelopackUpdateService : IAsyncDisposable
 
     private async Task ApplyPendingCoreAsync(CancellationToken cancellationToken)
     {
-        if (_pending is null || _busy || _isCompanionBusy()) return;
+        if (_pending is null || IsBusy || _isCompanionBusy()) return;
         var update = _pending;
         SetModel(UpdateTrayModel.For(UpdateStatus.Applying, update.Version));
         await _client.ApplyUpdatesAndRestartAsync(update, cancellationToken).ConfigureAwait(false);

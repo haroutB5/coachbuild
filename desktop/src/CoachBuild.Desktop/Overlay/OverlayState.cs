@@ -29,6 +29,25 @@ public sealed record OverlaySkillOrder(
     string? CompletionBasis = null)
 {
     public static OverlaySkillOrder Empty { get; } = new(Array.Empty<OverlayAbility>(), 0, false);
+
+    public static OverlaySkillOrder FromTokens(
+        System.Collections.IEnumerable? values,
+        int observedLevels,
+        bool completed,
+        string? completionBasis = null)
+    {
+        var order = new List<OverlayAbility>();
+        if (values is not null)
+        {
+            foreach (var value in values)
+            {
+                if (Enum.TryParse<OverlayAbility>(value?.ToString(), ignoreCase: true, out var ability))
+                    order.Add(ability);
+            }
+        }
+
+        return new OverlaySkillOrder(order, observedLevels, completed, completionBasis);
+    }
 }
 
 public sealed record OverlayState(

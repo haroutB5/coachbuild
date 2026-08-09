@@ -106,6 +106,28 @@ public sealed class WireContractReplayTests
     }
 
     [Fact]
+    public async Task Bridge_live_passthrough_preserves_upstream_json_bytes()
+    {
+        const string raw = "{\"activePlayer\":{\"summonerName\":\"must-pass-through\"},\"gameData\":{\"gameTime\":12.5}}";
+        using var live = new LiveClientDataClient(
+            new LiveClientDataOptions(Scheme: "http"),
+            new FixedBodyHandler(raw));
+        await using var server = new CompanionHttpServer(
+            "session-token",
+            new CompanionState(),
+            new MockLcuApi(),
+            live,
+            ports: [FindFreePort()]);
+        await server.StartAsync();
+        using var client = NewClient(server.Port);
+
+        var response = await client.SendAsync(NewRequest(HttpMethod.Get, "/live?session=session-token"));
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+
+        Assert.Equal(Encoding.UTF8.GetBytes(raw), bytes);
+    }
+
+    [Fact]
     public void Wire_records_serialize_nullable_status_fields_and_unions_exactly()
     {
         var status = JsonSerializer.Serialize(new CompanionStatus(
@@ -168,6 +190,24 @@ public sealed class WireContractReplayTests
         Assert.Null(resolver.Cached);
     }
 
+    [Fact]
+    public void Missing_credentials_are_negative_cached_before_repeating_process_enumeration()
+    {
+        var source = new CountingProcessSource();
+        var resolver = new LcuCredentialResolver(
+            source,
+            _ => null,
+            Path.Combine(Path.GetTempPath(), $"coachbuild-missing-{Guid.NewGuid():N}"));
+
+        Assert.Null(resolver.Resolve());
+        Assert.Null(resolver.Resolve());
+        Assert.Equal(1, source.Calls);
+
+        resolver.Invalidate();
+        Assert.Null(resolver.Resolve());
+        Assert.Equal(2, source.Calls);
+    }
+
     private sealed class CountingProcessSource(params LeagueClientProcess[] values) : ILeagueClientProcessSource
     {
         public int Calls { get; private set; }
@@ -182,6 +222,17 @@ public sealed class WireContractReplayTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent("{}") });
+    }
+
+    private sealed class FixedBodyHandler(string body) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(Encoding.UTF8.GetBytes(body))
+            });
     }
 
     private static HttpClient NewClient(int port) => new(new HttpClientHandler())

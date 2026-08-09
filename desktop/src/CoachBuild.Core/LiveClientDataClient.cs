@@ -9,6 +9,33 @@ public sealed record LiveClientDataOptions(
     string Scheme = "https",
     TimeSpan? Timeout = null);
 
+/// <summary>
+/// An open Live Client Data response. The bridge uses this for the /live
+/// passthrough so the upstream bytes are copied directly to the browser rather
+/// than materialized as a JsonElement and serialized a second time.
+/// </summary>
+public sealed class LiveClientDataStream : IDisposable
+{
+    private readonly HttpResponseMessage _response;
+    private bool _disposed;
+
+    internal LiveClientDataStream(HttpResponseMessage response, Stream content)
+    {
+        _response = response;
+        Content = content;
+    }
+
+    public Stream Content { get; }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        Content.Dispose();
+        _response.Dispose();
+    }
+}
+
 /// <summary>Unauthenticated Live Client Data transport, isolated from LCU TLS policy.</summary>
 public sealed class LiveClientDataClient : IDisposable
 {
@@ -35,6 +62,43 @@ public sealed class LiveClientDataClient : IDisposable
     public Task<JsonElement?> GetAllGameDataAsync(CancellationToken cancellationToken = default) =>
         GetJsonAsync("/liveclientdata/allgamedata", cancellationToken);
 
+    public async Task<LiveClientDataStream?> OpenAllGameDataStreamAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(LiveClientDataClient));
+        HttpResponseMessage? response = null;
+        try
+        {
+            response = await _client.GetAsync(
+                new Uri($"{_scheme}://127.0.0.1:{_port}/liveclientdata/allgamedata", UriKind.Absolute),
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                response.Dispose();
+                return null;
+            }
+
+            var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            return new LiveClientDataStream(response, content);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            response?.Dispose();
+            return null;
+        }
+        catch (HttpRequestException)
+        {
+            response?.Dispose();
+            return null;
+        }
+        catch
+        {
+            response?.Dispose();
+            return null;
+        }
+    }
+
     public Task<JsonElement?> GetPlayerListAsync(CancellationToken cancellationToken = default) =>
         GetJsonAsync("/liveclientdata/playerlist", cancellationToken);
 
@@ -56,10 +120,13 @@ public sealed class LiveClientDataClient : IDisposable
         {
             using var response = await _client.GetAsync(
                 new Uri($"{_scheme}://127.0.0.1:{_port}{path}", UriKind.Absolute),
+                HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode) return null;
-            var raw = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            using var document = JsonDocument.Parse(raw);
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            using var document = await JsonDocument.ParseAsync(
+                stream,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
             return document.RootElement.Clone();
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)

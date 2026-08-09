@@ -7,7 +7,7 @@ public sealed class OverlaySettings
 {
     public string? LaneOverride { get; set; }
 
-    public bool ShowSkillTable { get; set; }
+    public bool ShowSkillTable { get; set; } = true;
 
     public bool OverlayVisible { get; set; } = true;
 
@@ -37,6 +37,7 @@ public sealed class OverlaySettingsStore
 
     private readonly object _gate = new();
     private readonly string _path;
+    private OverlaySettings? _cachedSettings;
 
     public OverlaySettingsStore(string path)
     {
@@ -49,7 +50,7 @@ public sealed class OverlaySettingsStore
     {
         lock (_gate)
         {
-            return ReadCore();
+            return CloneSettings(ReadCore());
         }
     }
 
@@ -58,7 +59,7 @@ public sealed class OverlaySettingsStore
         ArgumentNullException.ThrowIfNull(settings);
         lock (_gate)
         {
-            WriteCore(Normalize(settings));
+            WriteCore(Normalize(CloneSettings(settings)));
         }
     }
 
@@ -126,8 +127,10 @@ public sealed class OverlaySettingsStore
 
     private OverlaySettings ReadCore()
     {
+        if (_cachedSettings is not null) return _cachedSettings;
+
         var settings = TryRead(_path);
-        if (settings is not null) return Normalize(settings);
+        if (settings is not null) return _cachedSettings = Normalize(settings);
 
         // Electron's old path/shape. This is read-only migration input; the
         // first native write moves it into the new file.
@@ -137,10 +140,10 @@ public sealed class OverlaySettingsStore
         if (!string.Equals(legacyPath, _path, StringComparison.OrdinalIgnoreCase))
         {
             var legacy = TryReadLegacy(legacyPath);
-            if (legacy is not null) return Normalize(legacy);
+            if (legacy is not null) return _cachedSettings = Normalize(legacy);
         }
 
-        return new OverlaySettings();
+        return _cachedSettings = new OverlaySettings();
     }
 
     private void WriteCore(OverlaySettings settings)
@@ -151,6 +154,30 @@ public sealed class OverlaySettingsStore
         var temporary = _path + ".tmp-" + Guid.NewGuid().ToString("N");
         File.WriteAllText(temporary, JsonSerializer.Serialize(settings, JsonOptions));
         File.Move(temporary, _path, overwrite: true);
+
+        // Writes are the only mutation path. Refresh the in-memory snapshot so
+        // the dispatcher never needs to reread JSON after a setting changes.
+        _cachedSettings = Normalize(settings);
+    }
+
+    private static OverlaySettings CloneSettings(OverlaySettings settings)
+    {
+        return new OverlaySettings
+        {
+            LaneOverride = settings.LaneOverride,
+            ShowSkillTable = settings.ShowSkillTable,
+            OverlayVisible = settings.OverlayVisible,
+            Calibrations = (settings.Calibrations ?? new Dictionary<string, PersistedCalibration>())
+                .Where(pair => pair.Value is not null)
+                .ToDictionary(
+                    pair => pair.Key,
+                    pair => new PersistedCalibration
+                    {
+                        Resolution = pair.Value.Resolution,
+                        Geometry = pair.Value.Geometry.Normalize(),
+                    },
+                    StringComparer.OrdinalIgnoreCase),
+        };
     }
 
     private static OverlaySettings? TryRead(string path)
@@ -176,7 +203,8 @@ public sealed class OverlaySettingsStore
             var settings = new OverlaySettings
             {
                 LaneOverride = root.TryGetProperty("lane", out var lane) ? lane.GetString() : null,
-                ShowSkillTable = root.TryGetProperty("showSkillTable", out var table) && table.ValueKind == JsonValueKind.True,
+                ShowSkillTable = !root.TryGetProperty("showSkillTable", out var table)
+                    || table.ValueKind != JsonValueKind.False,
             };
 
             if (root.TryGetProperty("calibration", out var calibration)

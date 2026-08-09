@@ -32,8 +32,10 @@ public sealed class ChampSelectDecisionTests
     {
         var now = DateTimeOffset.UtcNow;
         var service = new WindowDecisionService("session");
-        var entry = service.OnChampSelectEntry(now);
+        var entry = service.OnChampSelectEntry(Resolution(103, 2), now);
         Assert.Equal(WindowDecisionKind.OpenDraft, entry.Kind);
+        Assert.Equal(103, entry.ChampionId);
+        Assert.Equal(2, entry.RoleId);
         Assert.Contains("/draft?session=session", entry.Url, StringComparison.Ordinal);
 
         var first = service.OnChampSelectPoll(Resolution(103, 2), now.AddSeconds(1));
@@ -48,6 +50,30 @@ public sealed class ChampSelectDecisionTests
         var builds = service.Reopen("InProgress");
         Assert.Equal(WindowDecisionKind.ReopenBuilds, builds.Kind);
         Assert.Contains("championId=22", builds.Url, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Shared_bridge_tracker_suppresses_reopen_after_open_grace_when_follow_is_live()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var state = new CompanionState();
+        await using var bridge = new CompanionHttpServer("session", state, new MockLcuApi());
+        var service = new WindowDecisionService("session", attachments: state.FollowAttachments);
+
+        var entry = service.OnChampSelectEntry(Resolution(103, 2), now);
+        Assert.Equal(WindowDecisionKind.OpenDraft, entry.Kind);
+
+        // This stamp is deliberately past the 25-second open grace. It must
+        // be observed through the same tracker the bridge mutates for /status,
+        // otherwise the one-window decision service can reopen over a live tab.
+        var followAt = now.AddSeconds(CompanionWire.OpenGraceSeconds + 1);
+        state.FollowAttachments.RecordFollow(FollowKind.Builds, followAt);
+        var decision = service.OnChampSelectPoll(
+            Resolution(22, 3),
+            followAt.AddSeconds(1));
+
+        Assert.Equal(WindowDecisionKind.None, decision.Kind);
+        Assert.Equal(22, decision.ChampionId);
     }
 
     [Fact]

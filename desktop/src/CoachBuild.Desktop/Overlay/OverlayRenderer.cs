@@ -34,6 +34,7 @@ public sealed record OverlayRenderModel(
 /// </summary>
 public sealed class OverlayRenderer
 {
+    private static readonly OverlayAbility[] AbilityValues = Enum.GetValues<OverlayAbility>();
     private OverlayRenderSignature? _lastSignature;
 
     public int RenderCount { get; private set; }
@@ -73,10 +74,10 @@ public sealed class OverlayRenderer
             && saved.Resolution.DpiY == display.DpiY
             ? saved.Geometry.Normalize()
             : CalibrationGeometry.ScaledDefault(display));
-        var signature = CreateSignature(normalized, settings, display, resolvedCalibration, interactive);
+        var signature = CreateSignatureNormalized(normalized, settings, display, resolvedCalibration, interactive);
         if (signature == _lastSignature) return false;
 
-        var model = BuildModel(normalized, settings, display, resolvedCalibration);
+        var model = BuildModelNormalized(normalized, settings, resolvedCalibration);
         _lastSignature = signature;
         LastModel = model;
         RenderCount++;
@@ -93,7 +94,17 @@ public sealed class OverlayRenderer
     {
         var normalized = state.Normalize();
         var geometry = (calibration ?? CalibrationGeometry.ScaledDefault(display)).Normalize();
-        var ranks = string.Join(',', Enum.GetValues<OverlayAbility>().Select(normalized.Rank));
+        return CreateSignatureNormalized(normalized, settings, display, geometry, interactive);
+    }
+
+    private static OverlayRenderSignature CreateSignatureNormalized(
+        OverlayState normalized,
+        OverlaySettings settings,
+        DisplayResolution display,
+        CalibrationGeometry geometry,
+        bool interactive)
+    {
+        var ranks = string.Join(',', AbilityValues.Select(normalized.Rank));
         var order = string.Join(',', normalized.SkillOrder.Order);
         return new OverlayRenderSignature(
             normalized.InGame,
@@ -124,8 +135,19 @@ public sealed class OverlayRenderer
     {
         var normalized = state.Normalize();
         var geometry = (calibration ?? CalibrationGeometry.ScaledDefault(display)).Normalize();
-        var spent = Enum.GetValues<OverlayAbility>().Sum(normalized.Rank);
-        var next = normalized.NextAbility();
+        return BuildModelNormalized(normalized, settings, geometry);
+    }
+
+    private static OverlayRenderModel BuildModelNormalized(
+        OverlayState normalized,
+        OverlaySettings settings,
+        CalibrationGeometry geometry)
+    {
+        var spent = AbilityValues.Sum(normalized.Rank);
+        var next = spent >= 0 && spent < normalized.SkillOrder.Order.Count
+            ? normalized.SkillOrder.Order[spent]
+            : (OverlayAbility?)null;
+        if (next is not null && normalized.Rank(next.Value) >= 5) next = null;
         var nextIndex = next is null || spent >= normalized.SkillOrder.Order.Count ? -1 : spent;
         var rows = normalized.SkillOrder.Order
             .Take(18)

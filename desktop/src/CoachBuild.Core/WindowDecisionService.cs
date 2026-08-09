@@ -38,18 +38,32 @@ public sealed class WindowDecisionService
     public WindowDecision OnChampSelectEntry(
         DateTimeOffset? now = null,
         bool browserAlive = true)
+        => OnChampSelectEntry(null, now, browserAlive);
+
+    public WindowDecision OnChampSelectEntry(
+        ChampSelectResolution? resolution,
+        DateTimeOffset? now = null,
+        bool browserAlive = true)
     {
         lock (_gate)
         {
             _wasChampSelect = true;
-            _lastOpenedChampionId = null;
-            _lastOpenedRoleId = null;
+            _lastOpenedChampionId = resolution?.ChampionId is > 0 ? resolution.ChampionId : null;
+            _lastOpenedRoleId = resolution?.ChampionId is > 0 ? resolution.RoleId : null;
         }
         var at = now ?? DateTimeOffset.UtcNow;
-        if (_attachments.IsAnyAttached(at, browserAlive)) return new WindowDecision(WindowDecisionKind.None);
+        if (_attachments.IsAnyAttached(at, browserAlive))
+            return new WindowDecision(
+                WindowDecisionKind.None,
+                ChampionId: resolution?.ChampionId,
+                RoleId: resolution?.RoleId);
         var url = _links.GetDraftDeepLinkUrl(_sessionToken);
         _attachments.RecordOpened(FollowKind.Draft, at);
-        return new WindowDecision(WindowDecisionKind.OpenDraft, url);
+        return new WindowDecision(
+            WindowDecisionKind.OpenDraft,
+            url,
+            resolution?.ChampionId,
+            resolution?.RoleId);
     }
 
     public WindowDecision OnChampSelectPoll(
@@ -112,4 +126,3 @@ public sealed class WindowDecisionService
         return new WindowDecision(kind, url, champion, role);
     }
 }
-

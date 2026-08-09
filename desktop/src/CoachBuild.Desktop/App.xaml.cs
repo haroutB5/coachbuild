@@ -11,6 +11,12 @@ using CoachBuild.Desktop.Overlay;
 using CoachBuild.Desktop.Tray;
 using CoachBuild.Desktop.Updates;
 using CoachBuild.Desktop.Web;
+using CoreSkillOrderProvider = CoachBuild.Core.ISkillOrderProvider;
+using CoreSkillOrderResult = CoachBuild.Core.SkillOrderResult;
+using CoreSkillOrderStatus = CoachBuild.Core.SkillOrderStatus;
+using CoreOverlaySkillOrder = CoachBuild.Core.OverlaySkillOrder;
+using OverlayAbility = CoachBuild.Desktop.Overlay.OverlayAbility;
+using OverlaySkillOrder = CoachBuild.Desktop.Overlay.OverlaySkillOrder;
 using WpfApplication = System.Windows.Application;
 using WpfMessageBox = System.Windows.MessageBox;
 
@@ -154,6 +160,10 @@ public partial class App : WpfApplication
     private Task? _pollTask;
     private TrayMenuState _trayState = TrayMenuState.Default;
     private IDesktopHostServices _services = new NullDesktopHostServices();
+    private int _snapshotBusy;
+    private int _phaseBusy;
+    private int _webViewVisible;
+    private int _updateBusy;
     private bool _isShuttingDown;
 
     public static App? CurrentApp => Current as App;
@@ -208,6 +218,7 @@ public partial class App : WpfApplication
         _tray.CommandRequested += OnTrayCommand;
 
         _overlay = new OverlayWindow(new OverlaySettingsStore(Paths.SettingsFile));
+        _overlay.AdjustmentStateChanged += OnAdjustmentStateChanged;
         _trayState = _trayState with
         {
             OverlayVisible = _overlay.OverlayVisibleSetting,
@@ -217,7 +228,7 @@ public partial class App : WpfApplication
         _overlay.Hide();
         _tray.Start(_trayState);
         _webViewEnvironment = new WebView2EnvironmentService(Paths.WebView2UserDataFolder);
-        _updates = new VelopackUpdateService(isCompanionBusy: () => _services.IsCompanionBusy);
+        _updates = new VelopackUpdateService(isCompanionBusy: IsUpdateBusyForService);
         _updates.StatusChanged += OnUpdateStatusChanged;
         _ = _updates.StartAsync(_shutdown.Token);
         if (_services is IDesktopHostLifecycle lifecycle)
@@ -277,19 +288,19 @@ public partial class App : WpfApplication
     private void ApplySnapshot(DesktopPhaseSnapshot snapshot)
     {
         var phase = TrayMenuState.ParsePhase(snapshot.Phase);
+        Volatile.Write(ref _snapshotBusy, snapshot.IsCompanionBusy ? 1 : 0);
+        Volatile.Write(ref _phaseBusy, IsBusyPhase(phase) ? 1 : 0);
+        var effectiveBusy = IsUpdateBusyContext();
         _trayState = _trayState with
         {
             Phase = phase,
-            IsCompanionBusy = snapshot.IsCompanionBusy,
+            IsCompanionBusy = effectiveBusy,
             LastOpen = snapshot.LastOpen ?? _trayState.LastOpen,
             Error = snapshot.Error,
             Update = _updates?.Current ?? _trayState.Update,
         };
         _tray?.UpdateState(_trayState);
-
-        // Applying a staged update can invoke Velopack process work; keep it
-        // off the dispatcher even though this snapshot was just projected here.
-        if (_updates is not null) _ = Task.Run(() => _updates.SetCompanionBusyAsync(snapshot.IsCompanionBusy));
+        SetUpdateBusy(effectiveBusy);
 
         if (snapshot.Overlay is not null)
         {
@@ -358,6 +369,9 @@ public partial class App : WpfApplication
             case TrayCommand.Adjust:
                 _overlay?.BeginAdjustment();
                 break;
+            case TrayCommand.CancelAdjust:
+                _overlay?.CancelAdjustment();
+                break;
             case TrayCommand.RepairWebView2:
                 _ = RepairWebView2Async();
                 break;
@@ -368,6 +382,58 @@ public partial class App : WpfApplication
                 Shutdown();
                 break;
         }
+    }
+
+    private void OnAdjustmentStateChanged(bool adjusting)
+    {
+        if (_isShuttingDown) return;
+        _trayState = _trayState with { IsAdjusting = adjusting };
+        _tray?.UpdateState(_trayState);
+    }
+
+    private void OnWebViewClosed(object? sender, EventArgs e)
+    {
+        Volatile.Write(ref _webViewVisible, 0);
+        if (sender is WebView2Window closed && ReferenceEquals(_webView, closed))
+        {
+            closed.Closed -= OnWebViewClosed;
+            _webView = null;
+        }
+        if (_isShuttingDown) return;
+        SetUpdateBusy(IsUpdateBusyContext());
+    }
+
+    private bool IsUpdateBusyForService()
+    {
+        return Volatile.Read(ref _updateBusy) != 0 || _services.IsCompanionBusy;
+    }
+
+    private bool IsUpdateBusyContext()
+    {
+        return Volatile.Read(ref _snapshotBusy) != 0
+            || Volatile.Read(ref _phaseBusy) != 0
+            || Volatile.Read(ref _webViewVisible) != 0;
+    }
+
+    private void SetUpdateBusy(bool busy)
+    {
+        var next = busy ? 1 : 0;
+        var previous = Interlocked.Exchange(ref _updateBusy, next);
+        if (previous != next && !_isShuttingDown && Dispatcher.CheckAccess())
+        {
+            _trayState = _trayState with { IsCompanionBusy = busy };
+            _tray?.UpdateState(_trayState);
+        }
+        if (previous == next || _updates is null) return;
+
+        // Applying a staged update can invoke Velopack process work; keep it
+        // off the dispatcher even though this snapshot was just projected here.
+        _ = Task.Run(() => _updates.SetCompanionBusyAsync(busy));
+    }
+
+    private static bool IsBusyPhase(CompanionPhase phase)
+    {
+        return phase is CompanionPhase.Matchmaking or CompanionPhase.ReadyCheck or CompanionPhase.Reconnect;
     }
 
     private async Task ReopenAsync()
@@ -392,6 +458,9 @@ public partial class App : WpfApplication
                 AppOrigin,
                 SessionToken,
                 Paths.WebView2UserDataFolder)).Task.ConfigureAwait(false);
+            _webView!.Closed += OnWebViewClosed;
+            Volatile.Write(ref _webViewVisible, 1);
+            SetUpdateBusy(IsUpdateBusyContext());
 
             if (!runtimeAvailable)
             {
@@ -423,7 +492,7 @@ public partial class App : WpfApplication
         _tray?.ShowBalloon("CoachBuild", "WebView2 is required. Use Repair WebView2 runtime from the tray.", System.Windows.Forms.ToolTipIcon.Warning);
     }
 
-    protected override async void OnExit(ExitEventArgs e)
+    protected override void OnExit(ExitEventArgs e)
     {
         if (_isShuttingDown)
         {
@@ -433,22 +502,42 @@ public partial class App : WpfApplication
 
         _isShuttingDown = true;
         _shutdown.Cancel();
+
+        // Close UI resources synchronously before waiting on background work.
+        // This prevents a canceled dispatcher task from leaving a ghost tray
+        // icon or a topmost overlay behind during process teardown.
+        var webView = _webView;
+        if (webView is not null) webView.Closed -= OnWebViewClosed;
+        _webView = null;
+        webView?.Close();
+        _overlay?.Close();
+        _tray?.Dispose();
+        try { _companionMutex?.ReleaseMutex(); } catch { }
+        _companionMutex?.Dispose();
+
+        var shutdownTasks = new List<Task>();
         try
         {
-            await Services.StopAsync(CancellationToken.None).ConfigureAwait(true);
-            if (_pollTask is not null) await _pollTask.ConfigureAwait(true);
-            if (_updates is not null) await _updates.DisposeAsync().ConfigureAwait(true);
+            shutdownTasks.Add(Services.StopAsync(CancellationToken.None));
+            if (_pollTask is not null) shutdownTasks.Add(_pollTask);
+            if (_updates is not null) shutdownTasks.Add(_updates.DisposeAsync().AsTask());
         }
         catch
         {
-            // Shutdown is best-effort. The tray and mutex are still released.
+            // Shutdown is best-effort. UI resources and the mutex are already
+            // released before this bounded wait.
         }
 
-        _webView?.Close();
-        _overlay?.Close();
-        _tray?.Dispose();
-        _companionMutex?.ReleaseMutex();
-        _companionMutex?.Dispose();
+        try
+        {
+            Task.WhenAll(shutdownTasks).Wait(TimeSpan.FromSeconds(2));
+        }
+        catch
+        {
+            // Do not keep the WPF dispatcher alive indefinitely during quit.
+        }
+
+        if (_overlay is not null) _overlay.AdjustmentStateChanged -= OnAdjustmentStateChanged;
         _shutdown.Dispose();
         base.OnExit(e);
     }
@@ -466,6 +555,7 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     private readonly LcuCredentialResolver _credentials;
     private readonly LcuHttpClient _lcu;
     private readonly LiveClientDataClient _live;
+    private readonly CoreSkillOrderProvider _skillOrders;
     private readonly RedactedLog _log;
     private readonly CompanionHttpServer _bridge;
     private readonly WindowDecisionService _windowDecisions;
@@ -477,9 +567,12 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     private bool _started;
     private bool _stopped;
     private string? _localRiotId;
+    private int? _championId;
     private string? _championName;
     private string? _detectedPosition;
     private LiveSkillState? _skill;
+    private string? _skillOrderKey;
+    private CoreSkillOrderResult? _skillOrder;
     private string? _lastOverlayPhase;
 
     public CoreDesktopHostServices(string sessionToken, string logDirectory)
@@ -500,6 +593,7 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             _live,
             credentials: _credentials,
             log: _log);
+        _skillOrders = _bridge.SkillOrderProvider;
         _gameflow = new GameflowPoller(
             _credentials,
             _lcu,
@@ -629,6 +723,8 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         lock (_gate) localId = _localRiotId;
         if (string.IsNullOrWhiteSpace(localId)) return;
 
+        var championId = LivePlayerListResolver.ResolveOwnChampionId(data, localId);
+
         foreach (var player in data.EnumerateArray())
         {
             if (player.ValueKind != JsonValueKind.Object ||
@@ -648,12 +744,58 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             var position = player.TryGetProperty("position", out var positionValue) && positionValue.ValueKind == JsonValueKind.String
                 ? positionValue.GetString()
                 : null;
+            string? effectivePosition;
             lock (_gate)
             {
+                _championId = championId;
                 _championName = string.IsNullOrWhiteSpace(champion) ? _championName : champion;
                 _detectedPosition = string.IsNullOrWhiteSpace(position) ? _detectedPosition : position;
+                effectivePosition = _detectedPosition;
             }
+
+            if (championId is > 0 && string.Equals(_state.Phase, "InProgress", StringComparison.Ordinal))
+                RequestSkillOrderIfNeeded(championId.Value, effectivePosition);
             break;
+        }
+    }
+
+    private void RequestSkillOrderIfNeeded(int championId, string? role)
+    {
+        var key = $"{championId}:{role?.Trim().ToUpperInvariant() ?? string.Empty}";
+        lock (_gate)
+        {
+            if (string.Equals(_skillOrderKey, key, StringComparison.Ordinal)) return;
+            _skillOrderKey = key;
+            _skillOrder = null;
+        }
+
+        _ = FetchSkillOrderAsync(championId, role, key);
+    }
+
+    private async Task FetchSkillOrderAsync(int championId, string? role, string key)
+    {
+        CoreSkillOrderResult result;
+        try
+        {
+            result = await _skillOrders.GetSkillOrderAsync(championId, role, _stop.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        {
+            return;
+        }
+        catch
+        {
+            result = new CoreSkillOrderResult(
+                CoreSkillOrderStatus.Error,
+                CoreOverlaySkillOrder.Empty,
+                championId);
+        }
+
+        lock (_gate)
+        {
+            if (string.Equals(_skillOrderKey, key, StringComparison.Ordinal))
+                _skillOrder = result;
         }
     }
 
@@ -670,24 +812,33 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             if (!string.Equals(_lastOverlayPhase, phase, StringComparison.Ordinal)
                 && string.Equals(phase, "InProgress", StringComparison.Ordinal))
             {
+                _championId = null;
                 _championName = null;
                 _detectedPosition = null;
                 _skill = null;
+                _skillOrderKey = null;
+                _skillOrder = null;
             }
             _lastOverlayPhase = phase;
         }
         if (!string.Equals(phase, "InProgress", StringComparison.Ordinal)) return null;
 
         LiveSkillState? skill;
+        int? championId;
         string? champion;
         string? position;
+        CoreSkillOrderResult? skillOrderResult;
         lock (_gate)
         {
             skill = _skill;
+            championId = _championId;
             champion = _championName;
             position = _detectedPosition;
+            skillOrderResult = _skillOrder;
         }
         if (skill is null || string.IsNullOrWhiteSpace(champion)) return null;
+        if (championId is > 0)
+            RequestSkillOrderIfNeeded(championId.Value, position);
 
         var ranks = new Dictionary<OverlayAbility, int>
         {
@@ -706,11 +857,21 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             _ => null,
         };
         var snapshot = new LiveClientDataSkillSnapshot(skill.Level, ranks);
+        var skillOrder = skillOrderResult is { Status: CoreSkillOrderStatus.Ok } result
+            ? OverlaySkillOrder.FromTokens(
+                result.Order.Order,
+                result.Order.ObservedLevels,
+                result.Order.Completed,
+                result.Order.CompletionBasis)
+            : OverlaySkillOrder.Empty;
+        var resolvedChampionId = skillOrderResult is { ChampionId: > 0 } resolved
+            ? resolved.ChampionId
+            : championId;
         return OverlayStateAdapter.FromLiveSnapshot(
             snapshot,
             champion,
-            championId: null,
-            skillOrder: OverlaySkillOrder.Empty,
+            championId: resolvedChampionId,
+            skillOrder: skillOrder,
             lane: lane,
             laneIsAuto: true);
     }

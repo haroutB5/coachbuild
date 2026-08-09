@@ -1,5 +1,4 @@
-using System.Diagnostics;
-using System.Runtime.InteropServices;
+using System.Management;
 using System.Text.RegularExpressions;
 
 namespace CoachBuild.Core;
@@ -12,130 +11,36 @@ public interface ILeagueClientProcessSource
 }
 
 /// <summary>
-/// Process discovery is intentionally injectable. On Windows, a normal
-/// Process object does not expose another process's command line without WMI
-/// or native inspection; the optional provider lets the host use its
-/// least-privilege process inspection while tests can supply exact fixtures.
+/// Process discovery is intentionally injectable. Win32_Process exposes the
+/// command line through CIM/WMI without opening the Riot process or walking its
+/// PEB. That keeps credential discovery out of the process-memory access path.
 /// </summary>
 public sealed class WindowsLeagueClientProcessSource : ILeagueClientProcessSource
 {
     public IEnumerable<LeagueClientProcess> GetProcesses()
     {
-        foreach (var process in Process.GetProcessesByName("LeagueClientUx"))
+        var result = new List<LeagueClientProcess>();
+        if (!OperatingSystem.IsWindows()) return result;
+
+        try
         {
-            string? commandLine = null;
-            try
+            using var searcher = new ManagementObjectSearcher(
+                "SELECT Name, CommandLine FROM Win32_Process WHERE Name='LeagueClientUx.exe'");
+            using var processes = searcher.Get();
+            foreach (ManagementObject process in processes)
             {
-                // StartInfo.Arguments is populated for processes started by the
-                // current host and safely remains null/empty otherwise.
-                commandLine = process.StartInfo?.Arguments;
-            }
-            catch
-            {
-                // Access can fail for a protected process; parsing must remain
-                // null-safe and lockfile discovery already ran first.
-            }
-            if (string.IsNullOrWhiteSpace(commandLine))
-                commandLine = NativeProcessCommandLine.TryRead(process.Id);
-            yield return new LeagueClientProcess(process.ProcessName, commandLine);
-            process.Dispose();
-        }
-    }
-
-    private static class NativeProcessCommandLine
-    {
-        private const uint ProcessQueryLimitedInformation = 0x1000;
-        private const uint ProcessVmRead = 0x0010;
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr OpenProcess(uint access, bool inheritHandle, int processId);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool CloseHandle(IntPtr handle);
-
-        [DllImport("ntdll.dll")]
-        private static extern int NtQueryInformationProcess(
-            IntPtr processHandle,
-            int processInformationClass,
-            out ProcessBasicInformation processInformation,
-            int processInformationLength,
-            out int returnLength);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool ReadProcessMemory(
-            IntPtr process,
-            IntPtr address,
-            [Out] byte[] buffer,
-            IntPtr size,
-            out IntPtr bytesRead);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct ProcessBasicInformation
-        {
-            public IntPtr Reserved1;
-            public IntPtr PebBaseAddress;
-            public IntPtr Reserved2_0;
-            public IntPtr Reserved2_1;
-            public IntPtr UniqueProcessId;
-            public IntPtr Reserved3;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct UnicodeString
-        {
-            public ushort Length;
-            public ushort MaximumLength;
-            public IntPtr Buffer;
-        }
-
-        public static string? TryRead(int processId)
-        {
-            if (!OperatingSystem.IsWindows()) return null;
-            var handle = OpenProcess(ProcessQueryLimitedInformation | ProcessVmRead, false, processId);
-            if (handle == IntPtr.Zero) return null;
-            try
-            {
-                if (NtQueryInformationProcess(handle, 0, out var basic, Marshal.SizeOf<ProcessBasicInformation>(), out _) != 0)
-                    return null;
-                var parametersAddress = ReadPointer(handle, IntPtr.Add(basic.PebBaseAddress, IntPtr.Size == 8 ? 0x20 : 0x10));
-                if (parametersAddress == IntPtr.Zero) return null;
-                var commandLineAddress = IntPtr.Add(parametersAddress, IntPtr.Size == 8 ? 0x70 : 0x40);
-                var commandLine = ReadStruct<UnicodeString>(handle, commandLineAddress);
-                if (commandLine.Length == 0 || commandLine.Buffer == IntPtr.Zero) return null;
-                var bytes = new byte[commandLine.Length];
-                return ReadProcessMemory(handle, commandLine.Buffer, bytes, bytes.Length, out var read) &&
-                       read.ToInt64() == bytes.Length
-                    ? System.Text.Encoding.Unicode.GetString(bytes)
-                    : null;
-            }
-            catch
-            {
-                return null;
-            }
-            finally
-            {
-                CloseHandle(handle);
+                var name = process["Name"] as string;
+                var commandLine = process["CommandLine"] as string;
+                if (!string.IsNullOrWhiteSpace(name))
+                    result.Add(new LeagueClientProcess(name, commandLine));
             }
         }
-
-        private static IntPtr ReadPointer(IntPtr process, IntPtr address)
+        catch
         {
-            var bytes = new byte[IntPtr.Size];
-            return ReadProcessMemory(process, address, bytes, bytes.Length, out var read) && read.ToInt64() == bytes.Length
-                ? IntPtr.Size == 8 ? new IntPtr(BitConverter.ToInt64(bytes, 0)) : new IntPtr(BitConverter.ToInt32(bytes, 0))
-                : IntPtr.Zero;
+            // WMI is best effort; no client is the normal idle state and the
+            // resolver must still be null-safe if the provider is unavailable.
         }
-
-        private static T ReadStruct<T>(IntPtr process, IntPtr address) where T : struct
-        {
-            var size = Marshal.SizeOf<T>();
-            var bytes = new byte[size];
-            if (!ReadProcessMemory(process, address, bytes, size, out var read) || read.ToInt64() != size)
-                return default;
-            var handle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
-            try { return Marshal.PtrToStructure<T>(handle.AddrOfPinnedObject()); }
-            finally { handle.Free(); }
-        }
+        return result;
     }
 }
 
@@ -199,15 +104,21 @@ public sealed class LcuCredentialResolver
     private readonly ILeagueClientProcessSource _processSource;
     private readonly Func<string?, string?> _lockfileReader;
     private readonly string[] _lockfilePaths;
+    private readonly TimeSpan _negativeCacheDuration;
     private LcuCredentials? _cached;
+    private DateTimeOffset? _negativeCachedUntil;
 
     public LcuCredentialResolver(
         ILeagueClientProcessSource? processSource = null,
         Func<string?, string?>? lockfileReader = null,
-        string? lockfilePath = null)
+        string? lockfilePath = null,
+        TimeSpan? negativeCacheDuration = null)
     {
         _processSource = processSource ?? new WindowsLeagueClientProcessSource();
         _lockfileReader = lockfileReader ?? LcuCredentialParser.ReadLockfile;
+        _negativeCacheDuration = negativeCacheDuration ?? TimeSpan.FromSeconds(5);
+        if (_negativeCacheDuration < TimeSpan.FromSeconds(5) || _negativeCacheDuration > TimeSpan.FromSeconds(10))
+            throw new ArgumentOutOfRangeException(nameof(negativeCacheDuration), "Negative credential cache must be 5-10 seconds.");
         var defaultPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
             "Riot Games", "League of Legends", "lockfile");
@@ -228,13 +139,19 @@ public sealed class LcuCredentialResolver
         lock (_gate)
         {
             if (_cached is not null) return _cached;
+            if (_negativeCachedUntil is { } negativeUntil && negativeUntil > DateTimeOffset.UtcNow)
+                return null;
 
             // Deliberately lockfile first. It is the stable source and avoids a
             // process command-line read on every cold start.
             foreach (var path in _lockfilePaths.Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 var credentials = LcuCredentialParser.ParseLockfile(_lockfileReader(path));
-                if (credentials is not null) return _cached = credentials;
+                if (credentials is not null)
+                {
+                    _negativeCachedUntil = null;
+                    return _cached = credentials;
+                }
             }
 
             try
@@ -245,13 +162,18 @@ public sealed class LcuCredentialResolver
                         !string.Equals(process.Name, "LeagueClientUx.exe", StringComparison.OrdinalIgnoreCase))
                         continue;
                     var credentials = LcuCredentialParser.ParseProcessArguments(process.CommandLine);
-                    if (credentials is not null) return _cached = credentials;
+                    if (credentials is not null)
+                    {
+                        _negativeCachedUntil = null;
+                        return _cached = credentials;
+                    }
                 }
             }
             catch
             {
                 // Discovery is best effort; no client is the normal idle state.
             }
+            _negativeCachedUntil = DateTimeOffset.UtcNow + _negativeCacheDuration;
             return null;
         }
     }
@@ -260,7 +182,11 @@ public sealed class LcuCredentialResolver
 
     public void Invalidate()
     {
-        lock (_gate) _cached = null;
+        lock (_gate)
+        {
+            _cached = null;
+            _negativeCachedUntil = null;
+        }
     }
 
     public LcuCredentials? Cached

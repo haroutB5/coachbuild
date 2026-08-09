@@ -46,6 +46,41 @@ public static class HttpResponseWriter
         await Task.CompletedTask.ConfigureAwait(false);
     }
 
+    public static async Task WriteStreamAsync(
+        HttpListenerResponse response,
+        int statusCode,
+        string contentType,
+        Func<Stream, Task> copy,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(copy);
+        AddCorsHeaders(response);
+        response.StatusCode = statusCode;
+        response.ContentType = contentType;
+        response.SendChunked = true;
+        try
+        {
+            await copy(response.OutputStream).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The browser may have gone away; closing the response is enough.
+        }
+        catch (HttpRequestException)
+        {
+            // An upstream Live Client Data stream can disappear mid-copy.
+            // The headers are already committed, so close softly.
+        }
+        catch (IOException)
+        {
+            // The downstream browser can also close the socket mid-copy.
+        }
+        finally
+        {
+            response.Close();
+        }
+    }
+
     private static async Task WriteBytesAsync(
         HttpListenerResponse response,
         int statusCode,
@@ -71,4 +106,3 @@ public static class HttpResponseWriter
         }
     }
 }
-

@@ -14,11 +14,13 @@ public sealed class CompanionHttpServer : IAsyncDisposable
     private readonly LiveClientDataClient _live;
     private readonly RuneApplyService _runes;
     private readonly ItemSetApplyService _itemSets;
+    private readonly ISkillOrderProvider _skillOrders;
     private readonly RedactedLog _log;
     private readonly int[] _ports;
     private readonly bool _ownsLcu;
     private readonly bool _ownsLive;
-    private readonly ConcurrentBag<Task> _handlers = new();
+    private readonly bool _ownsSkillOrders;
+    private readonly ConcurrentDictionary<Task, byte> _handlers = new();
     private HttpListener? _listener;
     private CancellationTokenSource? _stop;
     private Task? _listenTask;
@@ -31,6 +33,7 @@ public sealed class CompanionHttpServer : IAsyncDisposable
         LiveClientDataClient? live = null,
         RuneApplyService? runes = null,
         ItemSetApplyService? itemSets = null,
+        ISkillOrderProvider? skillOrders = null,
         LcuCredentialResolver? credentials = null,
         RedactedLog? log = null,
         IEnumerable<int>? ports = null)
@@ -60,7 +63,18 @@ public sealed class CompanionHttpServer : IAsyncDisposable
         }
         _log = log ?? new RedactedLog();
         _runes = runes ?? new RuneApplyService(_lcu, state: _state, log: _log);
+        _state.RegisterRuneApplyService(_runes);
         _itemSets = itemSets ?? new ItemSetApplyService(_lcu, _state, _log);
+        if (skillOrders is null)
+        {
+            _skillOrders = new SkillOrderProvider();
+            _ownsSkillOrders = true;
+        }
+        else
+        {
+            _skillOrders = skillOrders;
+        }
+        _state.RegisterSkillOrderProvider(_skillOrders);
         _ports = (ports ?? CompanionWire.BridgePorts).Distinct().ToArray();
         if (_ports.Length == 0) throw new ArgumentException("At least one bridge port is required", nameof(ports));
     }
@@ -68,6 +82,8 @@ public sealed class CompanionHttpServer : IAsyncDisposable
     public string SessionToken => _sessionToken;
     public int Port { get; private set; }
     public CompanionState State => _state;
+    public RuneApplyService RuneApplyService => _runes;
+    public ISkillOrderProvider SkillOrderProvider => _skillOrders;
     public bool IsRunning => _listener?.IsListening == true;
 
     public Task StartAsync(CancellationToken cancellationToken = default)
@@ -108,7 +124,7 @@ public sealed class CompanionHttpServer : IAsyncDisposable
             try { await _listenTask.ConfigureAwait(false); }
             catch (OperationCanceledException) { }
         }
-        var handlers = _handlers.ToArray();
+        var handlers = _handlers.Keys.ToArray();
         if (handlers.Length > 0)
         {
             try { await Task.WhenAll(handlers).ConfigureAwait(false); }
@@ -128,6 +144,7 @@ public sealed class CompanionHttpServer : IAsyncDisposable
         await StopAsync().ConfigureAwait(false);
         if (_ownsLcu && _lcu is IDisposable lcu) lcu.Dispose();
         if (_ownsLive) _live.Dispose();
+        if (_ownsSkillOrders && _skillOrders is IDisposable skillOrders) skillOrders.Dispose();
     }
 
     private async Task ListenAsync(CancellationToken cancellationToken)
@@ -145,7 +162,12 @@ public sealed class CompanionHttpServer : IAsyncDisposable
             catch (InvalidOperationException) { break; }
             if (context is null) continue;
             var handler = Task.Run(() => HandleAsync(context, cancellationToken), CancellationToken.None);
-            _handlers.Add(handler);
+            _handlers.TryAdd(handler, 0);
+            _ = handler.ContinueWith(
+                completed => _handlers.TryRemove(completed, out _),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         }
     }
 
@@ -191,11 +213,20 @@ public sealed class CompanionHttpServer : IAsyncDisposable
             if (string.Equals(path, CompanionRoutes.Live, StringComparison.Ordinal) &&
                 string.Equals(request.HttpMethod, "GET", StringComparison.Ordinal))
             {
-                var live = await _live.GetAllGameDataAsync(cancellationToken).ConfigureAwait(false);
-                if (live is { } liveValue)
-                    await HttpResponseWriter.WriteJsonElementAsync(response, 200, liveValue, cancellationToken).ConfigureAwait(false);
-                else
+                using var live = await _live.OpenAllGameDataStreamAsync(cancellationToken).ConfigureAwait(false);
+                if (live is null)
+                {
                     await HttpResponseWriter.WriteJsonAsync(response, 200, new CompanionError("no-live"), cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    await HttpResponseWriter.WriteStreamAsync(
+                        response,
+                        200,
+                        "application/json; charset=utf-8",
+                        output => live.Content.CopyToAsync(output, cancellationToken),
+                        cancellationToken).ConfigureAwait(false);
+                }
                 return;
             }
 

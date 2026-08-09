@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Drawing;
 using System.Windows.Threading;
 using Forms = System.Windows.Forms;
@@ -14,6 +15,7 @@ public enum TrayCommand
     SetLane,
     Calibrate,
     Adjust,
+    CancelAdjust,
     RepairWebView2,
     Quit,
 }
@@ -137,6 +139,10 @@ public sealed class TrayController : IDisposable
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(StatusItem($"Phase: {DisplayPhase(_state.Phase)}"));
         menu.Items.Add(StatusItem(_state.IsCompanionBusy ? "Companion: busy" : "Companion: ready"));
+        using (var process = Process.GetCurrentProcess())
+        {
+            menu.Items.Add(StatusItem(TrayMenuState.FormatWorkingSet(process.WorkingSet64)));
+        }
         if (!string.IsNullOrWhiteSpace(_state.Error)) menu.Items.Add(StatusItem($"Error: {_state.Error}"));
         menu.Items.Add(StatusItem($"Updates: {_state.Update.ToDisplayString()}"));
 
@@ -147,7 +153,9 @@ public sealed class TrayController : IDisposable
 
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(MenuItem("Calibrate overlay", (_, _) => RaiseCommand(TrayCommand.Calibrate)));
-        menu.Items.Add(MenuItem("Adjust overlay position", (_, _) => RaiseCommand(TrayCommand.Adjust)));
+        menu.Items.Add(_state.IsAdjusting
+            ? MenuItem("Cancel adjust", (_, _) => RaiseCommand(TrayCommand.CancelAdjust))
+            : MenuItem("Adjust overlay position", (_, _) => RaiseCommand(TrayCommand.Adjust)));
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(MenuItem("Quit CoachBuild", (_, _) => RaiseCommand(TrayCommand.Quit)));
 
@@ -241,4 +249,3 @@ public sealed class TrayController : IDisposable
         _icon.Dispose();
     }
 }
-

@@ -151,10 +151,20 @@ public partial class WebView2Window : Window
 
     private static void OnPermissionRequested(object? sender, CoreWebView2PermissionRequestedEventArgs e)
     {
-        // The unchanged web page reaches the desktop bridge over loopback. Do
-        // not grant arbitrary permissions to remote content; WebView2's own
-        // permission UI remains the authority for anything else.
-        e.State = CoreWebView2PermissionState.Deny;
+        // The unchanged web page reaches the desktop bridge over loopback.
+        // Older WebView2 SDKs do not expose LocalNetworkAccess as an enum
+        // member, so keep the allow-list name-based for forward compatibility.
+        e.State = IsLocalNetworkPermission(e.PermissionKind)
+            ? CoreWebView2PermissionState.Allow
+            : CoreWebView2PermissionState.Deny;
+    }
+
+    private static bool IsLocalNetworkPermission(CoreWebView2PermissionKind permissionKind)
+    {
+        var name = permissionKind.ToString();
+        return string.Equals(name, "LocalNetworkAccess", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "LocalNetwork", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "Loopback", StringComparison.OrdinalIgnoreCase);
     }
 
     private async void OnRepairRequested(object? sender, EventArgs e)

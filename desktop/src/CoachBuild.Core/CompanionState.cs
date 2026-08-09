@@ -18,6 +18,26 @@ public sealed class CompanionState
 
     public FollowAttachmentTracker FollowAttachments { get; } = new();
 
+    /// <summary>
+    /// The bridge registers its write service here so the gameflow poller can
+    /// clear the per-game rune ownership ledger on ChampSelect entry even when
+    /// the WPF host elects to use the parameter-light constructor overloads.
+    /// </summary>
+    public RuneApplyService? RuneApplyService { get; private set; }
+    public ISkillOrderProvider? SkillOrderProvider { get; private set; }
+
+    internal void RegisterRuneApplyService(RuneApplyService service)
+    {
+        ArgumentNullException.ThrowIfNull(service);
+        lock (_gate) RuneApplyService = service;
+    }
+
+    internal void RegisterSkillOrderProvider(ISkillOrderProvider provider)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        lock (_gate) SkillOrderProvider = provider;
+    }
+
     public string Phase { get { lock (_gate) return _phase; } }
 
     public bool ClientConnected
@@ -57,15 +77,22 @@ public sealed class CompanionState
     public bool SetPhase(string phase)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(phase);
+        var enteredInProgress = false;
+        var changed = false;
         lock (_gate)
         {
-            var changed = !string.Equals(_phase, phase, StringComparison.Ordinal);
+            changed = !string.Equals(_phase, phase, StringComparison.Ordinal);
+            enteredInProgress = changed &&
+                string.Equals(phase, "InProgress", StringComparison.Ordinal) &&
+                !string.Equals(_phase, "InProgress", StringComparison.Ordinal);
             if (changed) _lastLoggedPhase = _phase;
             _phase = phase;
             if (!string.Equals(phase, "ChampSelect", StringComparison.Ordinal))
                 _champSelect = null;
-            return changed;
         }
+        if (enteredInProgress && SkillOrderProvider is IPerGameSkillOrderCache cache)
+            cache.ClearSkillOrderCache();
+        return changed;
     }
 
     public string? ConsumePreviousPhaseForLog()
@@ -144,4 +171,3 @@ public sealed class CompanionState
         }
     }
 }
-

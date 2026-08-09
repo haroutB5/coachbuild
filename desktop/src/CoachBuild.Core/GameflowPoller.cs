@@ -13,6 +13,7 @@ public sealed class GameflowPoller
     private readonly RedactedLog? _log;
     private readonly Action? _champSelectEntered;
     private readonly int _pollMilliseconds;
+    private int? _lastChampSelectChampionId;
 
     public GameflowPoller(
         LcuCredentialResolver credentials,
@@ -28,7 +29,10 @@ public sealed class GameflowPoller
         _state = state;
         _windows = windows;
         _log = log;
-        _champSelectEntered = champSelectEntered;
+        _champSelectEntered = champSelectEntered ??
+            (state.RuneApplyService is { } registeredRunes
+                ? new Action(registeredRunes.ClearForChampSelect)
+                : null);
         _pollMilliseconds = Math.Max(100, options?.PollMilliseconds ?? 1500);
     }
 
@@ -61,13 +65,15 @@ public sealed class GameflowPoller
         _windows?.OnPhaseChanged(phase);
 
         if (!string.Equals(phase, "ChampSelect", StringComparison.Ordinal) || credentials is null)
+        {
+            _lastChampSelectChampionId = null;
             return null;
+        }
 
-        WindowDecision? entryDecision = null;
-        if (!string.Equals(previousPhase, "ChampSelect", StringComparison.Ordinal))
+        var enteredChampSelect = !string.Equals(previousPhase, "ChampSelect", StringComparison.Ordinal);
+        if (enteredChampSelect)
         {
             _champSelectEntered?.Invoke();
-            entryDecision = _windows?.OnChampSelectEntry(browserAlive: true);
         }
 
         var sessionResponse = await _lcu.SendAsync(
@@ -81,11 +87,15 @@ public sealed class GameflowPoller
                 _credentials.Invalidate();
                 _state.SetCredentials(null);
             }
-            return entryDecision;
+            return enteredChampSelect ? _windows?.OnChampSelectEntry(browserAlive: true) : null;
         }
 
         var resolution = ChampSelectResolver.Resolve(session);
-        if (resolution is null) return entryDecision;
+        if (resolution is null)
+            return enteredChampSelect ? _windows?.OnChampSelectEntry(browserAlive: true) : null;
+        WindowDecision? entryDecision = enteredChampSelect
+            ? _windows?.OnChampSelectEntry(resolution, browserAlive: true)
+            : null;
         _state.SetChampSelect(new CompanionChampSelectSnapshot(
             resolution.LocalPlayerCellId,
             resolution.CellChampionId,
@@ -97,10 +107,16 @@ public sealed class GameflowPoller
         var decision = _windows?.OnChampSelectPoll(resolution, browserAlive: true);
         if (resolution.ChampionId is > 0)
         {
-            _state.SetLastOpen(resolution.ChampionId.Value, resolution.RoleId);
+            if (_lastChampSelectChampionId != resolution.ChampionId)
+                _state.SetLastOpen(resolution.ChampionId.Value, resolution.RoleId);
+            _lastChampSelectChampionId = resolution.ChampionId;
             if (entryDecision is { Kind: WindowDecisionKind.OpenDraft } ||
                 decision is { Kind: WindowDecisionKind.OpenDraft })
                 _log?.Info($"champ-select champ={resolution.ChampionId.Value} role={(resolution.RoleId?.ToString() ?? "none")}");
+        }
+        else
+        {
+            _lastChampSelectChampionId = null;
         }
         return entryDecision is { Kind: WindowDecisionKind.OpenDraft } ? entryDecision : decision;
     }

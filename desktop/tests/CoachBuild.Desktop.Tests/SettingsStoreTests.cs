@@ -37,6 +37,43 @@ public sealed class SettingsStoreTests
     }
 
     [Fact]
+    public void NewProfilesShowTheSkillTableWithoutASettingsFile()
+    {
+        var root = MakeTempDirectory();
+        try
+        {
+            var store = new OverlaySettingsStore(Path.Combine(root, "desktop-settings.json"));
+            Assert.True(store.Read().ShowSkillTable);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SettingsCacheRefreshesAfterAWriteWithoutRereadingEveryRead()
+    {
+        var root = MakeTempDirectory();
+        try
+        {
+            var path = Path.Combine(root, "desktop-settings.json");
+            var store = new OverlaySettingsStore(path);
+            Assert.True(store.Read().ShowSkillTable);
+
+            File.WriteAllText(path, "{\"showSkillTable\":false}");
+            Assert.True(store.Read().ShowSkillTable);
+
+            store.SetShowSkillTable(false);
+            Assert.False(store.Read().ShowSkillTable);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void LegacyElectronSettingsAreReadAndMigratedOnFirstWrite()
     {
         var root = MakeTempDirectory();

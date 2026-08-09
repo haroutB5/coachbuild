@@ -1,4 +1,5 @@
 using System.Net.Http;
+using System.Text.Json;
 using CoachBuild.Core;
 using Xunit;
 
@@ -6,6 +7,54 @@ namespace CoachBuild.Core.Tests;
 
 public sealed class RuneOwnershipTests
 {
+    [Fact]
+    public async Task Champ_select_entry_clears_ledger_so_the_same_champion_can_export_next_game()
+    {
+        var state = new CompanionState();
+        var api = new MockLcuApi();
+        var ledger = new RuneOwnershipLedger();
+        var runes = new RuneApplyService(api, ledger, state);
+        await using var bridge = new CompanionHttpServer("session", state, api, runes: runes);
+        var resolver = new LcuCredentialResolver(
+            new FixedProcessSource(),
+            _ => null,
+            Path.Combine(Path.GetTempPath(), $"coachbuild-missing-{Guid.NewGuid():N}"));
+        var poller = new GameflowPoller(resolver, api, state);
+
+        ledger.Record("CoachBuild Ahri Mid", "old-game-fingerprint");
+        api.Enqueue(HttpMethod.Get, "/lol-gameflow/v1/gameflow-phase", Phase("ChampSelect"));
+        api.Enqueue(HttpMethod.Get, "/lol-champ-select/v1/session", Session(103));
+        await poller.TickAsync();
+        Assert.Null(ledger.Get("CoachBuild Ahri Mid"));
+        var firstOpenAt = state.ToStatus(0).LastOpen!.At;
+        api.Enqueue(HttpMethod.Get, "/lol-gameflow/v1/gameflow-phase", Phase("ChampSelect"));
+        api.Enqueue(HttpMethod.Get, "/lol-champ-select/v1/session", Session(103));
+        await Task.Delay(10);
+        await poller.TickAsync();
+        Assert.Equal(firstOpenAt, state.ToStatus(0).LastOpen!.At);
+
+        // A second game with the same champion must be a fresh ownership
+        // window, not a continuation of the prior game's user-modification
+        // refusal state.
+        ledger.Record("CoachBuild Ahri Mid", "second-game-fingerprint");
+        api.Enqueue(HttpMethod.Get, "/lol-gameflow/v1/gameflow-phase", Phase("None"));
+        await poller.TickAsync();
+        api.Enqueue(HttpMethod.Get, "/lol-gameflow/v1/gameflow-phase", Phase("ChampSelect"));
+        api.Enqueue(HttpMethod.Get, "/lol-champ-select/v1/session", Session(103));
+        await poller.TickAsync();
+        Assert.Null(ledger.Get("CoachBuild Ahri Mid"));
+
+        // With the ownership record cleared, a same-title page that differs
+        // from the new recommendation is eligible for this game's first
+        // automatic export instead of being misclassified as user-modified.
+        api.Enqueue(HttpMethod.Get, "/lol-perks/v1/pages", Ok("[" + Page(1, "CoachBuild Ahri Mid", 2, 2) + "]"));
+        api.Enqueue(HttpMethod.Put, "/lol-perks/v1/pages/1", Ok("{}"));
+        api.Enqueue(HttpMethod.Put, "/lol-perks/v1/currentpage", Ok("1"));
+        api.Enqueue(HttpMethod.Get, "/lol-perks/v1/currentpage", Ok(Page(1, "CoachBuild Ahri Mid", 1, 1)));
+        var exported = await runes.ApplyAsync(Request("CoachBuild Ahri Mid", "auto"));
+        Assert.True(exported.Ok);
+    }
+
     [Fact]
     public async Task Auto_full_five_foreign_pages_emits_zero_deletes()
     {
@@ -107,5 +156,14 @@ public sealed class RuneOwnershipTests
         $"{{\"id\":{id},\"name\":\"{name}\",\"isDeletable\":true,\"primaryStyleId\":{primary},\"subStyleId\":{sub},\"selectedPerkIds\":[1,2,3,4,5,6,7,8,9],\"current\":false}}";
 
     private static LcuResponse Ok(string raw) => new(true, 200, MockLcuApi.Json(raw), raw);
-}
 
+    private static LcuResponse Phase(string phase) => Ok(JsonSerializer.Serialize(phase));
+
+    private static LcuResponse Session(int championId) => Ok($"{{\"localPlayerCellId\":10,\"myTeam\":[{{\"cellId\":10,\"championId\":{championId},\"championPickIntent\":0,\"assignedPosition\":\"middle\"}}],\"theirTeam\":[],\"actions\":[],\"timer\":{{\"phase\":\"PLANNING\"}}}}");
+
+    private sealed class FixedProcessSource : ILeagueClientProcessSource
+    {
+        public IEnumerable<LeagueClientProcess> GetProcesses() =>
+            [new LeagueClientProcess("LeagueClientUx.exe", "--app-port=51234 --remoting-auth-token=test")];
+    }
+}

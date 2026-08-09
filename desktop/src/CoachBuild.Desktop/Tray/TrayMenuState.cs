@@ -14,6 +14,7 @@ public enum CompanionPhase
     Lobby,
     Matchmaking,
     ReadyCheck,
+    Reconnect,
     ChampSelect,
     InProgress,
     WaitingForStats,
@@ -53,19 +54,21 @@ public sealed record TrayMenuState(
     string? Error,
     UpdateTrayModel Update,
     LastOpenPage? LastOpen,
-    bool WebView2Available = true)
+    bool WebView2Available = true,
+    bool IsAdjusting = false)
 {
     public static TrayMenuState Default { get; } = new(
         CompanionPhase.None,
         OverlayVisible: true,
         Interactive: false,
-        ShowSkillTable: false,
+        ShowSkillTable: true,
         LaneOverride: null,
         IsCompanionBusy: false,
         Error: null,
         UpdateTrayModel.None,
         LastOpen: null,
-        WebView2Available: true);
+        WebView2Available: true,
+        IsAdjusting: false);
 
     public bool IsInGame => Phase is CompanionPhase.InProgress or CompanionPhase.WaitingForStats;
 
@@ -118,5 +121,11 @@ public sealed record TrayMenuState(
         return normalized is "TOP" or "JUNGLE" or "MID" or "BOT" or "SUPPORT"
             ? normalized
             : null;
+    }
+
+    public static string FormatWorkingSet(long bytes)
+    {
+        var megabytes = Math.Max(0, bytes) / (1024d * 1024d);
+        return $"Working set: {megabytes:0} MB";
     }
 }

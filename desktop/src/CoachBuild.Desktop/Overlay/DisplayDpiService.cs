@@ -81,7 +81,7 @@ public sealed class DisplayDpiService : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", EntryPoint = "GetDpiForWindow")]
     private static extern uint GetDpiForWindowNative(nint hwnd);
 
     private static uint NativeGetDpiForWindow(nint hwnd) => GetDpiForWindowNative(hwnd);
