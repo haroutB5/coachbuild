@@ -232,3 +232,10 @@ Verified facts that cost real debugging time. Cite these before touching the rel
   exactly the machines it verifies. SelfTestRunner has end-to-end test coverage now — keep it.
 - Field note: the retired PowerShell companion may still autostart on user machines and writes
   the same log file — interleaved formats in companion.log are two processes, not one.
+
+## Autostart (v1.0.5)
+
+- HKCU Run key `CoachBuild` → quoted VELOPACK STUB path (%LOCALAPPDATA%\CoachBuild\Desktop\CoachBuild.Desktop.exe) + `--autostart`. Never point at current\<version> paths — they die on update.
+- Default-ON exactly once via `autostartConfigured` settings flag; a user toggle OFF is never re-enabled. Tray "Start with Windows" toggle reads the registry in the menu Opening handler.
+- `--autostart` = tray-only launch (no WebView2 window); everything else runs normally.
+- Tests use an injected registry subkey, never the real Run key.
