@@ -175,3 +175,24 @@ Verified facts that cost real debugging time. Cite these before touching the rel
   on companion restart) and timeouts all clear cached phase state. A dead companion must
   LOOK dead — the 2026-08-08 incident had "Live — syncing" showing through a real champ
   select with no bridge listening.
+
+## CoachBuild Desktop (v1.0.0, 2026-08-09 — native replacement for companion.ps1 + overlay-host)
+
+- **desktop/ is the companion now**: .NET 8 WPF tray app, in-process LCU client (lockfile-first,
+  WMI fallback — NEVER ReadProcessMemory, anti-cheat signature), same loopback bridge + wire
+  contract (web app unchanged, PWA untouched), WebView2 windows (one shared environment),
+  layered click-through overlay (redraw-gated, created only in game), Velopack per-user updates
+  (feed: haroutB5/coachbuild-desktop-releases; install root %LOCALAPPDATA%\CoachBuild\Desktop;
+  no UAC, auto-relaunch). Build needs the local SDK: DOTNET_ROOT=%LOCALAPPDATA%\Temp\coachbuild-dotnet-sdk.
+- **Review history that must not be relearned** (4 Opus rounds, 24 findings — see
+  brain/memory in urgot for the full ledger): the follow-tracker MUST be the shared
+  CompanionState instance (a test that injects its own tracker proves nothing — assert IDENTITY
+  through the built host); skill-order lane resolution is THREE tiers (manual override reaches
+  the FETCH, detected position, five-lane max-sampleSize fallback for NONE-position modes);
+  /live validation is single-pass over assembled chunks (incremental Utf8JsonReader without
+  BytesConsumed carry-forward false-rejects every multi-read TLS body — regression tests MUST
+  drip-feed, ByteArrayContent is single-shot theater); VelopackApp.Build().Run() first in Main.
+- **Cutover state**: companion.ps1 stays SERVED (phone-adjacent standalone users + rollback)
+  but is deprecated; overlay-host retired once the user migrates. Real-game overlay behavior,
+  clean-machine install, and update-apply remain unverified until first use on the gaming
+  desktop — the honest-ledger items live in desktop/docs/.
