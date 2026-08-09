@@ -4,17 +4,21 @@ param(
     [string]$Version,
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\artifacts'),
+    [string]$OutputDirectory,
     [string]$Runtime = 'win-x64',
     [string]$Vpk = 'vpk',
     [switch]$SkipWebView2Bootstrapper
 )
 
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    $OutputDirectory = Join-Path $PSScriptRoot '..\artifacts'
+}
 $desktopRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $publishDirectory = Join-Path $OutputDirectory "publish-$Runtime-$Version"
 $packageDirectory = Join-Path $OutputDirectory "velopack-$Version"
 
+$parsedVersion = $null
 if (-not [System.Version]::TryParse($Version, [ref]$parsedVersion)) {
     throw "Version must be a dotted numeric version accepted by Velopack: $Version"
 }
@@ -52,7 +56,7 @@ if (-not (Test-Path $bootstrapper)) {
     --mainExe CoachBuild.Desktop.exe `
     --packTitle CoachBuild `
     --outputDir $packageDirectory `
-    --delta
+    --delta BestSpeed
 
 if ($LASTEXITCODE -ne 0) { throw "Velopack pack failed with exit code $LASTEXITCODE" }
 

@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
-using CoachBuild.Desktop.Updates;
 using CoachBuild.Desktop.Web;
+using Velopack;
 
 namespace CoachBuild.Desktop;
 
@@ -9,8 +9,8 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        VelopackApp.Build().Run();
         EnablePerMonitorDpiAwareness();
-        UpdateBootstrapper.TryRun(args);
         var options = CommandLineOptions.Parse(args);
         if (options.SelfTest)
         {
