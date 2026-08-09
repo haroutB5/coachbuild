@@ -127,13 +127,18 @@ function uniqueCandidates(candidates: DraftAssistantCandidate[]): DraftAssistant
 
 /** Recommended detail rows use the matchup feed unless there is no enemy
  * information yet. In that first-pick state, append the already-filtered
- * blind feed and let the real matchup rows win any champion-level duplicate. */
+ * blind feed, de-duplicate champion rows, then assign one canonical rank
+ * ladder across the merged server order. */
 export function resolveRecommendedDetailCandidates(args: {
   recommended: DraftAssistantCandidate[];
   blind: DraftAssistantCandidate[];
   noEnemies: boolean;
 }): DraftAssistantCandidate[] {
-  return args.noEnemies ? uniqueCandidates([...args.recommended, ...args.blind]) : args.recommended;
+  if (!args.noEnemies) return args.recommended;
+  return uniqueCandidates([...args.recommended, ...args.blind]).map((candidate, index) => ({
+    ...candidate,
+    rank: index + 1,
+  }));
 }
 
 /** Sort detail rows by the selected figure. Matchup-driven recommendations

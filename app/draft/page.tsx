@@ -719,6 +719,10 @@ export default function DraftPage() {
               <EmptyPanel title="Draft data being prepared" body={`Patch ${state.meta?.patch || "the current"} data is still being ingested — check back shortly.`} />
             ) : state.status === "empty" ? (
               <EmptyPanel title="No data yet for this lane" body="Try a different role, or check back after the next data refresh." />
+            ) : assistantView === "counters" && enemyIds.length === 0 ? (
+              <EmptyPanel title="Add an enemy to see counters" body="Counters use favourable shrunk matchup deltas against the entered enemies." />
+            ) : assistantView === "comfort" && !hasAnyMyPoolData ? (
+              <EmptyPanel title="No Comfort Picks yet" body="Link an account and play ranked solo games this season to see your pool." />
             ) : (
               <EmptyPanel title="No recommendations meet the filters" body="Lower the filters or return to Recommended to see the full ranking." />
             )}
@@ -753,9 +757,7 @@ export default function DraftPage() {
 
               <div id="draft-view-panel" role="tabpanel" aria-labelledby={`draft-tab-${assistantView}`} className="mt-2">
                 {assistantView !== "recommended" && <p className="mb-2 text-[10.5px] leading-[1.45] text-txt/[0.45]">{assistantView === "blind" ? "Blind Picks filter the existing pool by first-pick safety; they never re-score the recommendation order." : assistantView === "comfort" ? "Comfort filters the existing ranking to champions you have played; it never re-scores or reorders it." : "Counters keep only candidates with a positive shrunk matchup delta against the entered enemies."}</p>}
-                {assistantView === "counters" && enemyIds.length === 0 && <EmptyPanel title="Add an enemy to see counters" body="Counters use favourable shrunk matchup deltas against the entered enemies." />}
                 {assistantView === "counters" && enemyIds.length > 0 && filteredCounterRows.length === 0 && <EmptyPanel title="No favourable counters in this ranking" body="No candidate has a positive shrunk matchup delta against the entered enemies." />}
-                {assistantView === "comfort" && !hasAnyMyPoolData && <EmptyPanel title="No Comfort Picks yet" body="Link an account and play ranked solo games this season to see your pool." />}
                 {assistantView === "blind" && blindState.status === "loading" && <DraftLoadingCard />}
                 {assistantView === "blind" && blindState.status === "error" && <EmptyPanel title="Couldn&apos;t load blind picks" body="The first-pick feed failed to load." action={<button type="button" onClick={() => setBlindRetry((value) => value + 1)} className="rounded-[7px] px-3 py-1.5 text-[11px] font-medium text-txt hover:bg-txt/[0.07] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2" style={{ boxShadow: "inset 0 0 0 1px rgba(233,233,237,.14)" }}>Try again</button>} />}
                 {assistantView === "blind" && blindState.status === "empty" && <EmptyPanel title="No qualifying blind picks yet" body="There is not enough matchup evidence for an honest first-pick list." />}
@@ -788,6 +790,7 @@ export default function DraftPage() {
               preserveOrder={preserveDetailOrder}
               showNoEnemyBlindHint={assistantView === "recommended" && enemyIds.length === 0}
               showCountersNoEnemies={assistantView === "counters" && enemyIds.length === 0}
+              suppressEmptyState={(assistantView === "counters" && enemyIds.length === 0) || (assistantView === "comfort" && !hasAnyMyPoolData)}
             />
           </div>
 

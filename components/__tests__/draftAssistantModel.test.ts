@@ -179,15 +179,26 @@ describe("Recommended detail ranking source", () => {
         candidate(92, "blind", 1, 0.57, 12000),
         candidate(131, "blind", 1, 0.56, 227014),
         candidate(103, "blind", 2, 0.55, 429501),
+        candidate(104, "blind", 3, 0.54, 420000),
+        candidate(105, "blind", 4, 0.53, 410000),
+        candidate(106, "blind", 5, 0.52, 400000),
+        candidate(107, "blind", 6, 0.51, 390000),
+        candidate(108, "blind", 7, 0.50, 380000),
       ],
     });
     const cards = resolveTopRecommendationCards({ rows: detailCandidates });
     const cardIds = cards.map((card) => card.candidate.champId);
 
     expect(cardIds).toEqual([92, 131, 103]);
-    expect(detailCandidates.map((item) => item.champId)).toEqual(cardIds);
-    expect(new Set(detailCandidates.map((item) => item.champId)).size).toBe(3);
+    expect(detailCandidates.map((item) => item.champId)).toEqual([92, 131, 103, 104, 105, 106, 107, 108]);
+    expect(new Set(detailCandidates.map((item) => item.champId)).size).toBe(8);
     expect(detailCandidates[0].source).toBe("recommended");
+    const tiers = detailCandidates.map((item) => draftTierForCandidate(item));
+    expect(detailCandidates.map((item) => item.rank)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(tiers).toEqual(["S+", "S", "S", "A", "A", "A", "A", "A"]);
+    expect(tiers.filter((tier) => tier === "S+")).toHaveLength(1);
+    expect(tiers.filter((tier) => tier === "S")).toHaveLength(2);
+    expect(tiers.filter((tier) => tier === "A")).toHaveLength(5);
   });
 
   it("keeps matchup-only rows unchanged when enemies are selected", () => {

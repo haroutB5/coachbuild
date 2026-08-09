@@ -25,13 +25,17 @@ interface DraftPicksTableProps {
   preserveOrder: boolean;
   showNoEnemyBlindHint: boolean;
   showCountersNoEnemies: boolean;
+  suppressEmptyState: boolean;
 }
 
-const SORT_OPTIONS: readonly ThemedSelectOption<DraftAssistantDetailSort>[] = [
+type SortOptionValue = DraftAssistantDetailSort | "disabled";
+
+const SORT_OPTIONS: readonly ThemedSelectOption<SortOptionValue>[] = [
   { value: "winRate", label: "Win Rate" },
   { value: "pickRate", label: "Pick Rate" },
   { value: "games", label: "Games" },
 ];
+const DISABLED_SORT_OPTIONS: readonly ThemedSelectOption<SortOptionValue>[] = [{ value: "disabled", label: "—" }];
 
 function entryFor(champIcons: Map<number, ChampionIconEntry>, id: number): ChampionIconEntry {
   return champIcons.get(id) ?? { name: `Champion #${id}`, icon: "" };
@@ -91,6 +95,7 @@ export default function DraftPicksTable({
   preserveOrder,
   showNoEnemyBlindHint,
   showCountersNoEnemies,
+  suppressEmptyState,
 }: DraftPicksTableProps) {
   const rankingRows = resolveVisibleDraftAssistantRanking({
     rows,
@@ -114,11 +119,11 @@ export default function DraftPicksTable({
         <div className="flex items-center gap-2">
           <span className="text-[9px] uppercase tracking-[0.1em] text-txt/[0.35]">Sort</span>
           <ThemedSelect
-            value={sort}
-            options={SORT_OPTIONS}
+            value={preserveOrder ? "disabled" : sort}
+            options={preserveOrder ? DISABLED_SORT_OPTIONS : SORT_OPTIONS}
             disabled={preserveOrder}
             ariaLabel={preserveOrder ? "Sorting disabled for filter-only view" : "Sort detailed rankings"}
-            onChange={onSortChange}
+            onChange={(nextSort) => { if (nextSort !== "disabled") onSortChange(nextSort); }}
             triggerClassName="min-w-[92px] min-h-[44px] rounded-[6px] px-2 py-1.5 text-[10px] lg:min-h-0"
           />
         </div>
@@ -217,7 +222,7 @@ export default function DraftPicksTable({
         </div>
       </div>
 
-      {rows.length === 0 && <p className="border-t border-txt/[0.05] px-4 py-8 text-center text-[11px] text-txt/[0.48]">{showCountersNoEnemies ? "Add an enemy to see counters" : "No rankings meet the active filters."}</p>}
+      {rows.length === 0 && !suppressEmptyState && <p className="border-t border-txt/[0.05] px-4 py-8 text-center text-[11px] text-txt/[0.48]">{showCountersNoEnemies ? "Add an enemy to see counters" : "No rankings meet the active filters."}</p>}
       {rows.length > 0 && (
         <div className="border-t border-txt/[0.06] px-3.5 py-3 text-center">
           <button type="button" onClick={onShowAll} disabled={showAll || rows.length <= 10} className="min-h-[44px] text-[10.5px] font-medium text-accent-300 transition-colors duration-[120ms] ease-in hover:text-accent-200 disabled:cursor-default disabled:text-txt/[0.36] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:min-h-0">
