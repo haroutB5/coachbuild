@@ -175,7 +175,7 @@ function TopBarChampionSearch() {
           aria-controls={LISTBOX_ID}
           aria-autocomplete="list"
           aria-activedescendant={open && filtered[activeIndex] ? optId(activeIndex) : undefined}
-          className="h-[34px] w-full rounded-[8px] border border-[rgba(233,233,237,0.1)] bg-panel2 pl-8 pr-12 text-[13px] text-txt outline-none transition-colors duration-[120ms] ease-in placeholder:text-txt/40 hover:border-accent/40 focus-visible:border-accent focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+          className="h-11 w-full rounded-[8px] border border-[rgba(233,233,237,0.1)] bg-panel2 pl-8 pr-12 text-[13px] text-txt outline-none transition-colors duration-[120ms] ease-in placeholder:text-txt/40 hover:border-accent/40 focus-visible:border-accent focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:h-[34px]"
         />
         <span className="pointer-events-none absolute right-2 flex items-center rounded-[5px] border border-[rgba(233,233,237,0.14)] px-1.5 py-[3px] text-[10px] font-medium leading-none text-txt/[0.45]">
           ⌘K

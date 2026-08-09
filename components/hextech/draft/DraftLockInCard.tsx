@@ -11,11 +11,28 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: () =
       aria-checked={checked}
       aria-label={label}
       onClick={onChange}
-      className="relative h-[22px] w-10 flex-shrink-0 rounded-full transition-colors duration-[120ms] ease-in focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
-      style={{ background: checked ? "#9184d9" : "rgba(233,233,237,.12)" }}
+      className="relative flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full transition-colors duration-[120ms] ease-in focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:h-[22px] lg:w-10"
     >
       <span
-        className="absolute top-[3px] h-4 w-4 rounded-full bg-bg transition-transform duration-[120ms] ease-in motion-reduce:transition-none"
+        className="absolute left-1/2 top-1/2 h-[22px] w-10 -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors duration-[120ms] ease-in lg:inset-0 lg:hidden lg:translate-x-0 lg:translate-y-0"
+        style={{ background: checked ? "#9184d9" : "rgba(233,233,237,.12)" }}
+        aria-hidden="true"
+      />
+      <span
+        className={`absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-bg transition-transform duration-[120ms] ease-in motion-reduce:transition-none lg:hidden ${
+          checked
+            ? "ml-[10px]"
+            : "-ml-[10px]"
+        }`}
+        aria-hidden="true"
+      />
+      <span
+        className="absolute inset-0 hidden rounded-full transition-colors duration-[120ms] ease-in lg:block"
+        style={{ background: checked ? "#9184d9" : "rgba(233,233,237,.12)" }}
+        aria-hidden="true"
+      />
+      <span
+        className="absolute top-[3px] hidden h-4 w-4 rounded-full bg-bg transition-transform duration-[120ms] ease-in motion-reduce:transition-none lg:inline"
         style={{ transform: checked ? "translateX(21px)" : "translateX(3px)" }}
         aria-hidden="true"
       />

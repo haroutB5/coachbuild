@@ -39,7 +39,7 @@ export default function SegmentedControl<T extends string>({
   layout = "inline",
 }: SegmentedControlProps<T>) {
   const trackClass = size === "sm" ? "p-0.5 gap-0.5" : "p-1 gap-1";
-  const btnClass = size === "sm" ? "px-2.5 py-1 text-[11.5px]" : "px-4 py-1.5 text-[13px]";
+  const btnClass = size === "sm" ? "min-h-[44px] min-w-[44px] px-2.5 py-1 text-[11.5px] lg:min-h-0 lg:min-w-0" : "min-h-[44px] min-w-[44px] px-4 py-1.5 text-[13px] lg:min-h-0 lg:min-w-0";
   const scroll = layout === "scroll";
   const trackLayoutClass = scroll
     ? "flex w-full overflow-x-auto snap-x scroll-px-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"

@@ -55,7 +55,7 @@ export default function EnemyTeamPanel({
           const isLaneOpp = effectiveLaneOpponentId === id;
           const inferredOnly = isLaneOpp && laneOpponentId === null && serverInferredLaneOpponentId === id;
           return (
-            <div key={id} className="group relative h-8 w-8 flex-shrink-0 rounded-[7px]" title={entry.name}>
+            <div key={id} className="group relative flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-[7px] lg:h-8 lg:w-8" title={entry.name}>
               <IconWithFallback
                 src={entry.icon}
                 alt={entry.name}
@@ -95,7 +95,7 @@ export default function EnemyTeamPanel({
               aria-label={`Add an enemy champion to slot ${slot + 1}`}
               aria-expanded={addingSlot === slot}
               onClick={() => setAddingSlot(addingSlot === slot ? null : slot)}
-              className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-[7px] text-[17px] font-light text-txt/[0.28] transition-colors duration-[120ms] ease-in hover:bg-txt/[0.05] hover:text-txt/[0.6] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+              className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-[7px] text-[17px] font-light text-txt/[0.28] transition-colors duration-[120ms] ease-in hover:bg-txt/[0.05] hover:text-txt/[0.6] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:h-8 lg:w-8"
               style={{ boxShadow: "inset 0 0 0 1px rgba(233,233,237,.1)" }}
             >
               +
@@ -115,7 +115,7 @@ export default function EnemyTeamPanel({
             type="button"
             onClick={() => setPopoverOpen((open) => !open)}
             aria-expanded={popoverOpen}
-            className="flex-shrink-0 rounded-[5px] px-1.5 py-1 text-[10px] font-medium text-accent-300 transition-colors duration-[120ms] ease-in hover:bg-accent/[0.12] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+            className="min-h-[44px] flex-shrink-0 rounded-[5px] px-1.5 py-1 text-[10px] font-medium text-accent-300 transition-colors duration-[120ms] ease-in hover:bg-accent/[0.12] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:min-h-0"
           >
             {popoverOpen ? "Hide read" : "Read matchup"}
           </button>

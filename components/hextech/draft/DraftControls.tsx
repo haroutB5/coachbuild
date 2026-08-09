@@ -49,22 +49,23 @@ function Slot({
   own?: boolean;
 }) {
   return (
-    <div
-      className={`group relative flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-visible rounded-[7px] ${
-        own
-          ? "bg-accent/[0.1]"
-          : entry
-            ? ""
-            : "bg-txt/[0.03]"
-      }`}
-      style={{
-        boxShadow: own
-          ? "inset 0 0 0 1px rgba(145,132,217,.7)"
-          : entry
-            ? "inset 0 0 0 1px rgba(233,233,237,.12)"
-            : "inset 0 0 0 1px rgba(233,233,237,.1)",
-      }}
-    >
+    <div className="group relative flex h-11 w-11 flex-shrink-0 items-center justify-center overflow-visible lg:h-8 lg:w-8">
+      <div
+        className={`relative flex h-8 w-8 items-center justify-center overflow-visible rounded-[7px] ${
+          own
+            ? "bg-accent/[0.1]"
+            : entry
+              ? ""
+              : "bg-txt/[0.03]"
+        }`}
+        style={{
+          boxShadow: own
+            ? "inset 0 0 0 1px rgba(145,132,217,.7)"
+            : entry
+              ? "inset 0 0 0 1px rgba(233,233,237,.12)"
+              : "inset 0 0 0 1px rgba(233,233,237,.1)",
+        }}
+      >
       {entry ? (
         <>
           <IconWithFallback
@@ -74,14 +75,14 @@ function Slot({
             className="h-8 w-8 rounded-[7px] object-cover"
             size={32}
           />
-          {own && onClick && <button type="button" onClick={onClick} aria-label={label} className="absolute inset-0 rounded-[7px] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2" />}
+          {own && onClick && <button type="button" onClick={onClick} aria-label={label} className="absolute -inset-1.5 rounded-[7px] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:inset-0" />}
         </>
       ) : (
         <button
           type="button"
           onClick={onClick}
           aria-label={label}
-          className="absolute inset-0 flex items-center justify-center rounded-[7px] text-[17px] font-light text-txt/[0.3] transition-colors duration-[120ms] ease-in hover:bg-txt/[0.05] hover:text-txt/[0.65] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+          className="absolute -inset-1.5 flex items-center justify-center rounded-[7px] text-[17px] font-light text-txt/[0.3] transition-colors duration-[120ms] ease-in hover:bg-txt/[0.05] hover:text-txt/[0.65] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:inset-0"
         >
           +
         </button>
@@ -97,6 +98,7 @@ function Slot({
           ×
         </button>
       )}
+      </div>
     </div>
   );
 }
@@ -170,7 +172,7 @@ export default function DraftControls(props: DraftControlsProps) {
           options={props.laneOptions}
           ariaLabel="Your role"
           onChange={props.onLaneChange}
-          triggerClassName="rounded-[7px] px-2.5 py-2 text-[12px] font-semibold"
+          triggerClassName="min-h-[44px] rounded-[7px] px-2.5 py-2 text-[12px] font-semibold lg:min-h-0"
         />
       </label>
 

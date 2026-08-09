@@ -732,7 +732,7 @@ function ConsensusPathCard({ entries, ver, names, onOpenDetail }: {
             {entries.map((entry, index) => {
               const name = names.get(entry.itemId) ?? `Item #${entry.itemId}`;
               return (
-                <span key={`${entry.itemId}-${index}`} className="flex min-w-0 flex-1 items-start">
+                <span key={`${entry.itemId}-${index}`} className="flex min-w-[74px] shrink-0 flex-1 items-start lg:min-w-0 lg:shrink">
                   <span className="flex min-w-0 flex-1 flex-col items-center text-center">
                     <button
                       type="button"
@@ -851,7 +851,7 @@ function ProPlayersCard({ players }: { players: ProPlayerSummary[] }) {
     <section className={`${CARD_CLASS} p-4`}>
       <div className="flex items-center justify-between gap-3">
         <SectionLabel>Who&apos;s playing it</SectionLabel>
-        <a href="/history" className="text-[9px] uppercase tracking-[0.1em] text-[#b5abfc] hover:text-[#e9e9ed] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9]">Pro Players</a>
+        <a href="/history" className="inline-flex min-h-[44px] items-center text-[9px] uppercase tracking-[0.1em] text-[#b5abfc] hover:text-[#e9e9ed] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] lg:min-h-0">Pro Players</a>
       </div>
       {players.length === 0 ? (
         <p className="mt-3 text-[11px] text-[#9397ab]/65">Player identities are not available in this sample.</p>

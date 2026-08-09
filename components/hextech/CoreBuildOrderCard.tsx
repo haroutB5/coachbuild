@@ -11,7 +11,7 @@ interface CoreBuildOrderCardProps {
 }
 function ItemStep({ pick, index, onItemClick }: { pick: PickType; index: number; onItemClick: (id: number) => void }) {
   return (
-    <div className="flex min-w-0 flex-1 items-start gap-2">
+    <div className="flex min-w-[74px] shrink-0 items-start gap-2 lg:min-w-0 lg:shrink lg:flex-1">
       {index > 0 && <BuildPathArrow />}
       <button
         type="button"

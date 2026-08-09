@@ -21,13 +21,17 @@ function SwitchRow({ id, checked, onChange, title, description }: SwitchRowProps
         aria-checked={checked}
         aria-label={title}
         onClick={() => onChange(!checked)}
-        className={`relative mt-0.5 h-[22px] w-[38px] shrink-0 rounded-full transition-colors duration-[120ms] ease-in focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 ${
-          checked ? "bg-accent" : "border border-txt/[0.14] bg-txt/[0.06]"
-        }`}
+        className="relative mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors duration-[120ms] ease-in focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:h-[22px] lg:w-[38px]"
       >
         <span
-          className={`absolute top-[3px] h-4 w-4 rounded-full bg-bg shadow-sm transition-transform duration-[120ms] ease-in ${
-            checked ? "translate-x-[19px]" : "translate-x-[3px]"
+          className={`absolute h-[22px] w-[38px] rounded-full transition-colors duration-[120ms] ease-in lg:inset-0 ${
+            checked ? "bg-accent" : "border border-txt/[0.14] bg-txt/[0.06]"
+          }`}
+          aria-hidden="true"
+        />
+        <span
+          className={`absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-bg shadow-sm transition-transform duration-[120ms] ease-in motion-reduce:transition-none lg:top-[3px] lg:translate-x-0 lg:translate-y-0 ${
+            checked ? "left-[calc(50%+10px)] lg:left-auto lg:right-[3px]" : "left-[calc(50%-10px)] lg:left-[3px]"
           }`}
           aria-hidden="true"
         />

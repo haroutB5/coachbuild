@@ -4,7 +4,7 @@
 // one navigation surface that owns the companion status card; all state shown
 // there comes from the app-wide CompanionProvider poll.
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { NAV_ITEMS, type NavItem } from "./navItems";
 import { isActiveNav } from "./activeNav";
 import NavIcon from "./NavIcon";
@@ -14,17 +14,19 @@ function NavGroup({
   label,
   items,
   pathname,
+  search,
 }: {
   label: string;
   items: NavItem[];
   pathname: string;
+  search: string;
 }) {
   return (
     <div>
       <p className="mb-2 px-2 text-[9px] font-medium uppercase tracking-[0.16em] text-txt/[0.30]">{label}</p>
       <nav aria-label={label} className="flex flex-col gap-0.5">
         {items.map((item) => {
-          const active = isActiveNav(pathname, item.href);
+          const active = isActiveNav(pathname, item.href, search);
           return (
             <Link
               key={item.id}
@@ -49,6 +51,7 @@ function NavGroup({
 
 export default function DesktopRail() {
   const pathname = usePathname();
+  const search = useSearchParams().toString();
   const playItems = NAV_ITEMS.filter((item) => item.group === "play");
   const dataItems = NAV_ITEMS.filter((item) => item.group === "data");
   const setupItems = NAV_ITEMS.filter((item) => item.group === "setup");
@@ -73,12 +76,12 @@ export default function DesktopRail() {
         </span>
       </Link>
 
-      <NavGroup label="Play" items={playItems} pathname={pathname} />
+      <NavGroup label="Play" items={playItems} pathname={pathname} search={search} />
       <div className="mt-5">
-        <NavGroup label="Data" items={dataItems} pathname={pathname} />
+        <NavGroup label="Data" items={dataItems} pathname={pathname} search={search} />
       </div>
       <div className="mt-5">
-        <NavGroup label="Setup" items={setupItems} pathname={pathname} />
+        <NavGroup label="Setup" items={setupItems} pathname={pathname} search={search} />
       </div>
 
       <div className="mt-auto pt-5">

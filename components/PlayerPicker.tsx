@@ -186,7 +186,7 @@ export default function PlayerPicker({ value, onChange }: PlayerPickerProps) {
         aria-controls={LISTBOX_ID}
         aria-autocomplete="list"
         aria-activedescendant={open && results[activeIndex] ? optId(activeIndex) : undefined}
-        className="w-full min-w-[220px] bg-panel2 border border-line hover:border-teal-dim rounded-xl px-4 py-2.5 text-sm text-txt placeholder:text-mut outline-none transition-colors focus:border-teal-dim focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+        className="w-full min-w-[220px] min-h-[44px] bg-panel2 border border-line hover:border-teal-dim rounded-xl px-4 py-2.5 text-sm text-txt placeholder:text-mut outline-none transition-colors focus:border-teal-dim focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg lg:min-h-0"
       />
 
       {/* Nothing renders below the input until there's actually something to

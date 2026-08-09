@@ -203,7 +203,7 @@ export default function DraftRecommendation({
               <button
                 type="button"
                 onClick={() => onSelect(candidate.champId)}
-                className="rounded-[8px] bg-accent px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-bg transition-colors duration-[120ms] ease-in hover:bg-accent-400 focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+                className="min-h-[44px] rounded-[8px] bg-accent px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-bg transition-colors duration-[120ms] ease-in hover:bg-accent-400 focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:min-h-0"
                 title="Sets the draft pick in CoachBuild; it does not lock the League client."
               >
                 Lock in {entry.name}
@@ -211,7 +211,7 @@ export default function DraftRecommendation({
               <button
                 type="button"
                 onClick={() => onViewBuild(candidate.champId)}
-                className="rounded-[8px] px-3.5 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-txt/[0.78] transition-colors duration-[120ms] ease-in hover:bg-txt/[0.07] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+                className="min-h-[44px] rounded-[8px] px-3.5 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-txt/[0.78] transition-colors duration-[120ms] ease-in hover:bg-txt/[0.07] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:min-h-0"
                 style={{ boxShadow: "inset 0 0 0 1px rgba(233,233,237,.16)" }}
               >
                 See full build

@@ -28,7 +28,7 @@ export default function LanePillRow({ value, onChange }: LanePillRowProps) {
             key={lane.id}
             type="button"
             onClick={() => onChange(lane.id)}
-            className={`px-3 py-1 rounded-lg text-[12.5px] font-semibold transition-all border active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
+            className={`min-h-[44px] min-w-[44px] px-3 py-1 rounded-lg text-[12.5px] font-semibold transition-all border active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg lg:min-h-0 lg:min-w-0 ${
               active
                 ? "bg-teal text-bg border-teal shadow-[0_0_8px_rgba(130,219,247,0.4)]"
                 : "bg-panel2 text-mut border-line hover:border-teal-dim hover:text-txt"

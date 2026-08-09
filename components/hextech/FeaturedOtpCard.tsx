@@ -351,7 +351,7 @@ function OtpBuildPath({
         const name = itemName(item.itemId);
         const label = recordOnly ? `${name} — a snowball stack they held, not a recommendation` : name;
         return (
-          <div key={`${item.itemId}-${index}`} className="flex min-w-[70px] items-start gap-1">
+          <div key={`${item.itemId}-${index}`} className="flex min-w-[70px] shrink-0 items-start gap-1 lg:shrink">
             {index > 0 && <BuildPathArrow />}
             <div className="flex min-w-[62px] flex-col items-center text-center">
               <span title={label} className={`flex h-11 w-11 items-center justify-center overflow-hidden rounded-[8px] bg-black/20 ${recordOnly ? "border border-dashed border-[#9397ab]/50 opacity-70" : demoted ? "shadow-[inset_0_0_0_1px_rgba(233,233,237,0.1)] opacity-60" : "shadow-[inset_0_0_0_1px_rgba(145,132,217,0.45)]"}`}>

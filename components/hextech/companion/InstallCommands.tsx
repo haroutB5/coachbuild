@@ -33,7 +33,7 @@ function CopyableCommand({ label, command }: { label: string; command: string })
         <button
           type="button"
           onClick={copy}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-[8px] px-3 text-[10px] font-semibold uppercase tracking-[0.08em] text-accent-400 shadow-[inset_0_0_0_1px_#9184d9] transition-colors duration-[120ms] ease-in hover:bg-accent/[0.14] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+          className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-[8px] px-3 text-[10px] font-semibold uppercase tracking-[0.08em] text-accent-400 shadow-[inset_0_0_0_1px_#9184d9] transition-colors duration-[120ms] ease-in hover:bg-accent/[0.14] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:min-h-0"
         >
           <CopySimple size={13} weight="regular" aria-hidden="true" />
           {copied ? "Copied" : "Copy"}
@@ -55,7 +55,7 @@ export default function InstallCommands() {
 
       <a
         href={DESKTOP_APP_DOWNLOAD_URL}
-        className="inline-flex min-h-[36px] items-center gap-2 rounded-[8px] px-3.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent-400 shadow-[inset_0_0_0_1px_#9184d9] transition-colors duration-[120ms] ease-in hover:bg-accent/[0.14] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+        className="inline-flex min-h-[44px] items-center gap-2 rounded-[8px] px-3.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent-400 shadow-[inset_0_0_0_1px_#9184d9] transition-colors duration-[120ms] ease-in hover:bg-accent/[0.14] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:min-h-0"
       >
         <DownloadSimple size={14} weight="regular" aria-hidden="true" />
         Download for Windows

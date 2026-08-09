@@ -93,7 +93,7 @@ export default function OverlayDownload() {
       <div className="flex flex-col gap-4 border-t border-txt/[0.07] pt-5 sm:flex-row sm:items-center sm:justify-between">
         <a
           href={DESKTOP_APP_DOWNLOAD_URL}
-          className="inline-flex min-h-[36px] items-center justify-center gap-2 self-start rounded-[8px] px-3.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent-400 shadow-[inset_0_0_0_1px_#9184d9] transition-colors duration-[120ms] ease-in hover:bg-accent/[0.14] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+          className="inline-flex min-h-[44px] items-center justify-center gap-2 self-start rounded-[8px] px-3.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent-400 shadow-[inset_0_0_0_1px_#9184d9] transition-colors duration-[120ms] ease-in hover:bg-accent/[0.14] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:min-h-0"
         >
           <DownloadSimple size={14} weight="regular" aria-hidden="true" />
           Download for Windows

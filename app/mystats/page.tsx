@@ -87,7 +87,7 @@ function AccountChip({ summary, onSwitch }: { summary: MyStatsSummary; onSwitch:
           if (Number.isFinite(id)) onSwitch(id);
         }}
         aria-label="Choose My Stats account"
-        className="ml-1 max-w-[22px] cursor-pointer appearance-none bg-transparent text-transparent outline-none focus-visible:ring-2 focus-visible:ring-teal"
+        className="ml-1 min-h-[44px] min-w-[44px] max-w-[44px] cursor-pointer appearance-none bg-transparent text-transparent outline-none focus-visible:ring-2 focus-visible:ring-teal lg:min-h-0 lg:min-w-0 lg:max-w-[22px]"
       >
         {summary.accounts?.map((account) => (
           <option key={account.id} value={account.id} className="bg-panel text-txt">
@@ -138,10 +138,10 @@ function ChampionPool({ rows, recentGames }: { rows: ReturnType<typeof buildMySt
         <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-mut">Champion pool</p>
         <p className="text-[10px] text-mut tabular-nums">{rows.length} rows · {rows.reduce((sum, row) => sum + row.games, 0)} games</p>
       </div>
-      <div className="grid grid-cols-[minmax(150px,1fr)_52px_72px_72px_92px] gap-2 bg-white/[0.025] px-4 py-2 text-[9px] font-semibold uppercase tracking-[0.1em] text-mut sm:grid-cols-[minmax(220px,1fr)_68px_82px_82px_112px] sm:px-5">
+      <div className="hidden grid-cols-[minmax(150px,1fr)_52px_72px_72px_92px] gap-2 bg-white/[0.025] px-4 py-2 text-[9px] font-semibold uppercase tracking-[0.1em] text-mut sm:grid sm:grid-cols-[minmax(220px,1fr)_68px_82px_82px_112px] sm:px-5">
         <span>Champion</span><span className="text-right">Games</span><span className="text-right">Win rate</span><span className="text-right">CS/min</span><span className="text-right">Adherence</span>
       </div>
-      <div className="overflow-x-auto">
+      <div className="hidden overflow-x-auto sm:block">
         {rows.map((row) => {
           const sample = adherence.get(row.championId);
           const samplePct = sample && sample.resolved > 0 ? Math.round((sample.on / sample.resolved) * 100) : null;
@@ -158,6 +158,26 @@ function ChampionPool({ rows, recentGames }: { rows: ReturnType<typeof buildMySt
               <span className="flex items-center justify-end gap-2" title={samplePct === null ? "Champion-specific adherence is not present in the available recent-game sample." : `Recent champion adherence over ${sample?.resolved} resolved games.`}>
                 <span className="h-1.5 w-10 overflow-hidden rounded-full bg-white/[0.07]">{samplePct !== null && <span className="block h-full rounded-full bg-teal" style={{ width: `${samplePct}%` }} />}</span>
                 <span className={`w-8 text-right text-[11px] tabular-nums ${samplePct === null ? "text-mut/50" : "text-mut"}`}>{samplePct === null ? "—" : `${samplePct}%`}</span>
+              </span>
+            </Link>
+          );
+        })}
+      </div>
+      <div className="divide-y divide-white/[0.06] sm:hidden">
+        {rows.map((row) => {
+          const sample = adherence.get(row.championId);
+          const samplePct = sample && sample.resolved > 0 ? Math.round((sample.on / sample.resolved) * 100) : null;
+          const csThin = row.csPerMin !== null && row.csGames < row.games;
+          return (
+            <Link key={`${row.championId}-${row.role}`} href={`/?championId=${row.championId}&role=${row.role}`} className="flex min-h-[72px] items-center gap-2.5 px-4 py-3 transition-colors hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-[7px] bg-black/25 shadow-[inset_0_0_0_1px_rgba(233,233,237,.12)]"><IconWithFallback src={row.icon} alt={row.name} fallbackGlyph={row.name} className="h-full w-full object-cover" size={32} /></span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12px] font-semibold text-txt">{row.name}</span>
+                <span className="mt-0.5 block truncate text-[9px] uppercase tracking-[0.08em] text-mut">{row.roleLabel} · {row.games} games</span>
+              </span>
+              <span className="shrink-0 text-right">
+                <span className={`block text-[12px] font-semibold tabular-nums ${row.lowSample ? "text-mut" : row.winrate >= 0.5 ? "text-good" : "text-bad"}`}>{formatPct(row.winrate)}</span>
+                <span className="mt-0.5 block text-[9px] tabular-nums text-mut/70">CS {row.csPerMin === null ? "—" : row.csPerMin.toFixed(1)}{csThin ? " · thin" : ""} · {samplePct === null ? "—" : `${samplePct}%`} adh</span>
               </span>
             </Link>
           );

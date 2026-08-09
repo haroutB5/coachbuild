@@ -27,7 +27,7 @@ export default function BlindPickTable({ picks, champIcons }: BlindPickTableProp
             and GAMES were cut off at EVERY desktop size with no visible scroll
             hint (2026-08-01 audit P1). Six columns fit 540 comfortably; the
             seventh (RISKY) was dropped in the same pass, see below. */}
-        <table className="w-full min-w-[540px] border-collapse" aria-label="Blind pick champions">
+        <table className="hidden w-full min-w-[540px] border-collapse sm:table" aria-label="Blind pick champions">
           <caption className="sr-only">Top blind picks ranked by matchup safety before seeing the enemy lane pick</caption>
           <thead>
             <tr className="border-b border-line">
@@ -116,6 +116,31 @@ export default function BlindPickTable({ picks, champIcons }: BlindPickTableProp
             })}
           </tbody>
         </table>
+        <div className="divide-y divide-line sm:hidden">
+          {picks.map((pick) => {
+            const champ = champIcons.get(pick.champId);
+            const name = champ?.name ?? `Champion #${pick.champId}`;
+            const worst = pick.worstMatchup;
+            const worstName = worst ? champIcons.get(worst.oppId)?.name ?? `Champion #${worst.oppId}` : "—";
+            return (
+              <article key={pick.champId} className="grid grid-cols-[24px_minmax(0,1fr)_auto] gap-x-2 px-3 py-3">
+                <span className="pt-1 text-[11px] font-bold tabular-nums text-mut">{pick.rank}</span>
+                <div className="flex min-h-[44px] min-w-0 items-center gap-2">
+                  <span className="h-8 w-8 shrink-0 overflow-hidden rounded-lg border border-line bg-black/30">
+                    <IconWithFallback src={champ?.icon ?? ""} alt={name} fallbackGlyph={name} className="h-full w-full object-cover" size={32} />
+                  </span>
+                  <span className="min-w-0 truncate text-[12.5px] font-semibold text-txt">{name}</span>
+                </div>
+                <span className="pt-1 text-right text-[12px] font-bold tabular-nums text-teal">{pct(pick.es10)}</span>
+                <div className="col-start-2 col-span-2 mt-2 grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 border-t border-line pt-2">
+                  <span className="min-w-0 truncate text-[10px] text-mut">Worst: {worstName}{worst ? ` · ${pct(worst.wr)}` : ""}</span>
+                  <span className="text-right text-[10.5px] font-semibold tabular-nums text-txt">{pct(pick.fieldWr)}</span>
+                  <span className="text-right text-[10.5px] tabular-nums text-mut">{pick.totalGames.toLocaleString()}g</span>
+                </div>
+              </article>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

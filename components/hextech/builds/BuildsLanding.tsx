@@ -187,7 +187,7 @@ function LanesCard({ rows, onPick }: { rows: MyStatsChampionRow[]; onPick: (id: 
           const row = byLane.get(lane);
           const width = Math.round(((row?.games ?? 0) / maxGames) * 100);
           return (
-            <button key={lane} type="button" onClick={() => row && onPick(row.championId, lane)} disabled={!row} className="grid w-full grid-cols-[34px_minmax(0,1fr)_38px] items-center gap-2 text-left disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9]">
+            <button key={lane} type="button" onClick={() => row && onPick(row.championId, lane)} disabled={!row} className="grid min-h-[44px] w-full grid-cols-[34px_minmax(0,1fr)_38px] items-center gap-2 text-left disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] lg:min-h-0">
               <span className="text-[9px] font-semibold uppercase tracking-[0.1em] text-[#9397ab]/55">{lane === "jungle" ? "JG" : lane === "support" ? "SUP" : lane.slice(0, 3).toUpperCase()}</span>
               <span className="min-w-0">
                 <span className="flex items-center gap-1.5"><span className="truncate text-[11px] font-medium text-[#e9e9ed]/80">{row?.name ?? "No data"}</span>{row && <span className="shrink-0 text-[10px] tabular-nums text-[#9397ab]/55">{pct(row.winrate * 100)}</span>}</span>
@@ -213,7 +213,7 @@ function TrendingCard({ data, iconMap, onPick }: { data: MoversResponse | null; 
         const positive = mover.deltaPp >= 0;
         return <button key={`${mover.championId}-${mover.role}`} type="button" onClick={() => onPick(mover.championId, lane)} className="flex w-full items-center gap-2.5 py-2.5 text-left hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#9184d9]">{champ ? <Art champion={champ} size={28} /> : <span className="h-7 w-7 rounded-[6px] bg-white/[0.06]" />}<span className="min-w-0 flex-1"><span className="block truncate text-[12px] font-medium text-[#e9e9ed]/85">{mover.championName}</span><span className="block text-[9px] uppercase tracking-[0.08em] text-[#9397ab]/55">{LANE_LABEL[lane]}</span></span><span className={`flex items-center gap-0.5 text-[11px] font-semibold tabular-nums ${positive ? "text-[#46c79b]" : "text-[#e8736e]"}`}>{positive ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}{positive ? "+" : ""}{mover.deltaPp.toFixed(2)}pp</span></button>;
       })}</div> : <div className="text-[11px] leading-relaxed text-[#9397ab]/65">Patch mover data is not available yet.</div>}
-      <Link href="/movers" className="mt-3 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#b5abfc] hover:text-[#d2cefd] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9]"><TrendUp size={13} /> See all patch movers</Link>
+      <Link href="/movers" className="mt-3 inline-flex min-h-[44px] items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#b5abfc] hover:text-[#d2cefd] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] lg:min-h-0"><TrendUp size={13} /> See all patch movers</Link>
     </section>
   );
 }

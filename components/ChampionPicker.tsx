@@ -264,7 +264,7 @@ export default function ChampionPicker({
           aria-activedescendant={
             open && filtered[activeIndex] ? optId(activeIndex) : undefined
           }
-          className={`w-full min-w-0 bg-panel2 border border-line hover:border-teal-dim rounded-xl py-2.5 text-sm text-txt placeholder:text-mut outline-none transition-colors focus:border-teal-dim focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
+          className={`w-full min-w-0 min-h-[44px] bg-panel2 border border-line hover:border-teal-dim rounded-xl py-2.5 text-sm text-txt placeholder:text-mut outline-none transition-colors focus:border-teal-dim focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg lg:min-h-0 ${
             value ? "pl-10 pr-8" : "pl-4 pr-8"
           }`}
         />

@@ -136,7 +136,7 @@ function RuneCircle({ pick, size = 31, keystone = false, onClick }: { pick: Pick
       type="button"
       onClick={onClick}
       aria-label={`View details for ${pick.name}`}
-      className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1d2a]"
+      className={`${size >= 44 ? "h-[54px] w-[54px]" : "h-11 w-11"} relative flex shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1d2a] lg:h-auto lg:w-auto`}
     >
       {inner}
     </button>
@@ -238,7 +238,7 @@ export function BuildRuneSidebar({
                 key={pick.id}
                 type="button"
                 onClick={() => onOpenDetail("shard", pick.id)}
-                className="flex flex-1 flex-col items-center gap-1 rounded-[6px] py-1 text-center hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9]"
+                className="flex min-h-[44px] flex-1 flex-col items-center gap-1 rounded-[6px] py-1 text-center hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] lg:min-h-0"
               >
                 <span className="flex h-6 w-6 items-center justify-center overflow-hidden rounded-full bg-white/[0.05] shadow-[inset_0_0_0_1px_rgba(233,233,237,0.12)]">
                   <IconWithFallback src={pick.icon || shardIconUrl(pick.id)} alt={pick.name} fallbackGlyph={pick.name} className="h-full w-full object-cover" size={24} />
@@ -258,7 +258,7 @@ export function BuildRuneSidebar({
                   type="button"
                   onClick={() => onOpenDetail("spell", spell.id)}
                   aria-label={`View details for ${spellName(spell.id)}`}
-                  className="h-7 w-7 overflow-hidden rounded-[6px] bg-white/[0.06] shadow-[inset_0_0_0_1px_rgba(233,233,237,0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9]"
+                  className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-[6px] bg-white/[0.06] shadow-[inset_0_0_0_1px_rgba(233,233,237,0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] lg:h-7 lg:w-7"
                 >
                   <IconWithFallback src={spell.icon || spellIconUrl(spell.id, ver)} alt={spellName(spell.id)} fallbackGlyph={spellName(spell.id)} className="h-full w-full object-cover" size={28} />
                 </button>
@@ -476,16 +476,16 @@ export function BuildActionButtons() {
     <div className="flex flex-wrap gap-2">
       <button
         type="button"
-        className="inline-flex h-9 items-center gap-2 rounded-[8px] bg-[#9184d9] px-3.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#191a28] transition-colors hover:bg-[#b5abfc] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1d2a]"
-        onClick={() => document.getElementById("build-items")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+        className="inline-flex h-9 min-h-[44px] items-center gap-2 rounded-[8px] bg-[#9184d9] px-3.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#191a28] transition-colors hover:bg-[#b5abfc] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1d2a] lg:min-h-0"
+        onClick={() => document.getElementById("build-items")?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" })}
       >
         <DownloadSimple size={14} weight="bold" aria-hidden="true" />
         Import build
       </button>
       <button
         type="button"
-        className="inline-flex h-9 items-center gap-2 rounded-[8px] px-3.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#b5abfc] shadow-[inset_0_0_0_1px_#9184d9] transition-colors hover:bg-[#9184d9]/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1d2a]"
-        onClick={() => document.getElementById("build-runes")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+        className="inline-flex h-9 min-h-[44px] items-center gap-2 rounded-[8px] px-3.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#b5abfc] shadow-[inset_0_0_0_1px_#9184d9] transition-colors hover:bg-[#9184d9]/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1d2a] lg:min-h-0"
+        onClick={() => document.getElementById("build-runes")?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" })}
       >
         <Lightning size={14} weight="bold" aria-hidden="true" />
         Apply runes

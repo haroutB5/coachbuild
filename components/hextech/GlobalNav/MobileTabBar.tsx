@@ -4,13 +4,14 @@
 // (Builds/Pro Players/Patch Movers/My Stats); Draft, Post-Game, and Companion
 // remain desktop-only shell surfaces.
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { MOBILE_NAV_ITEMS } from "./navItems";
 import { isActiveNav } from "./activeNav";
 import NavIcon from "./NavIcon";
 
 export default function MobileTabBar() {
   const pathname = usePathname();
+  const search = useSearchParams().toString();
 
   return (
     <nav
@@ -19,7 +20,7 @@ export default function MobileTabBar() {
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
       {MOBILE_NAV_ITEMS.map((item) => {
-        const active = isActiveNav(pathname, item.href);
+        const active = isActiveNav(pathname, item.href, search);
         return (
           <Link
             key={item.id}

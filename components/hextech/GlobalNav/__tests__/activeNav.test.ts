@@ -23,4 +23,11 @@ describe("isActiveNav", () => {
     // "/historyfoo" is NOT under "/history" — must not match on bare string prefix.
     expect(isActiveNav("/historyfoo", "/history")).toBe(false);
   });
+
+  it("disambiguates the Post-Game intent from ordinary My Stats", () => {
+    expect(isActiveNav("/mystats", "/mystats?intent=game-detail", "?intent=game-detail")).toBe(true);
+    expect(isActiveNav("/mystats", "/mystats", "?intent=game-detail")).toBe(false);
+    expect(isActiveNav("/mystats", "/mystats", "")).toBe(true);
+    expect(isActiveNav("/mystats", "/mystats?intent=game-detail", "")).toBe(false);
+  });
 });

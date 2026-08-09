@@ -34,7 +34,7 @@ export default function ItemPath({ items }: { items: ItemsBlock }) {
       <SectionLabel>Item path</SectionLabel>
       <p className="mt-1 text-[10px] leading-relaxed text-[#9397ab]/60">The six-slot view keeps starting items, boots, and completed items honest.</p>
       <div className="mt-4 flex items-start gap-1 overflow-x-auto pb-1">
-        {slots.map((slot, index) => <div key={`${slot.pick.id}-${index}`} className="flex items-start gap-1">{index > 0 && <BuildPathArrow />}<ItemNode {...slot} /></div>)}
+        {slots.map((slot, index) => <div key={`${slot.pick.id}-${index}`} className="flex shrink-0 items-start gap-1 lg:shrink">{index > 0 && <BuildPathArrow />}<ItemNode {...slot} /></div>)}
       </div>
     </section>
   );

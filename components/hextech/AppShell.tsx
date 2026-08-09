@@ -5,7 +5,7 @@
 // card can read useCompanion()) in ONE branded left rail (desktop) + bottom
 // tab bar (mobile), replacing the old per-page TabNav + Builds-only hextech
 // Sidebar + MobileNavMenu trio.
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { Minus, Square, X } from "@phosphor-icons/react";
@@ -84,12 +84,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
     <div className="min-h-screen bg-bg text-txt">
       <TitleBar patch={patch} />
       <div className="flex min-h-screen lg:h-[calc(100vh-34px)] lg:min-h-0">
-        <DesktopRail />
+        <Suspense fallback={null}><DesktopRail /></Suspense>
         <div className="flex min-w-0 flex-1 flex-col">
           <TopBar />
           <main className="min-h-0 min-w-0 flex-1 overflow-y-auto pb-16 lg:pb-0">{children}</main>
         </div>
-        <MobileTabBar />
+        <Suspense fallback={null}><MobileTabBar /></Suspense>
       </div>
     </div>
   );

@@ -739,14 +739,14 @@ export default function DraftPage() {
                         tabIndex={assistantView === value ? 0 : -1}
                         onClick={() => handleAssistantViewChange(value)}
                         onKeyDown={(event) => handleAssistantTabKeyDown(event, value)}
-                        className={`rounded-[6px] px-3 py-1.5 text-[10.5px] font-medium transition-colors duration-[120ms] ease-in focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 ${assistantView === value ? "bg-accent/[0.2] text-accent-200" : "text-txt/[0.45] hover:bg-txt/[0.05] hover:text-txt/[0.8]"}`}
+                        className={`min-h-[44px] rounded-[6px] px-3 py-1.5 text-[10.5px] font-medium transition-colors duration-[120ms] ease-in focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:min-h-0 ${assistantView === value ? "bg-accent/[0.2] text-accent-200" : "text-txt/[0.45] hover:bg-txt/[0.05] hover:text-txt/[0.8]"}`}
                       >
                         {ASSISTANT_VIEW_LABELS[value]}
                       </button>
                     ))}
                   </div>
                 </div>
-                <button type="button" aria-expanded={filtersExpanded} onClick={() => setFiltersExpanded((value) => !value)} className="rounded-[7px] px-3 py-2 text-[10px] font-medium text-txt/[0.55] transition-colors duration-[120ms] ease-in hover:bg-txt/[0.06] hover:text-txt focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2" style={{ boxShadow: "inset 0 0 0 1px rgba(233,233,237,.12)" }}>
+                <button type="button" aria-expanded={filtersExpanded} onClick={() => setFiltersExpanded((value) => !value)} className="min-h-[44px] rounded-[7px] px-3 py-2 text-[10px] font-medium text-txt/[0.55] transition-colors duration-[120ms] ease-in hover:bg-txt/[0.06] hover:text-txt focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:min-h-0" style={{ boxShadow: "inset 0 0 0 1px rgba(233,233,237,.12)" }}>
                   {filterSummary} <span className="ml-1 text-txt/[0.35]">{filtersExpanded ? "⌃" : "⌄"}</span>
                 </button>
               </div>
@@ -765,12 +765,12 @@ export default function DraftPage() {
 
             {filtersExpanded && (
               <section className="grid min-w-0 gap-3 rounded-[8px] p-3.5 md:grid-cols-3" style={{ boxShadow: "inset 0 0 0 1px rgba(233,233,237,.08)", background: "#1b1d2a" }}>
-                <label className="min-w-0"><span className="mb-1.5 block text-[9px] font-medium uppercase tracking-[0.12em] text-txt/[0.45]">Min. pick rate</span><ThemedSelect value={minPickRate} options={MIN_PICK_RATE_OPTIONS} onChange={setMinPickRate} ariaLabel="Minimum pick rate" triggerClassName="px-2.5 py-2" /></label>
-                <button type="button" role="switch" aria-checked={includeOffMeta} onClick={() => setIncludeOffMeta((value) => !value)} className="flex items-end justify-between gap-3 rounded-[6px] text-left focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2">
+                <label className="min-w-0"><span className="mb-1.5 block text-[9px] font-medium uppercase tracking-[0.12em] text-txt/[0.45]">Min. pick rate</span><ThemedSelect value={minPickRate} options={MIN_PICK_RATE_OPTIONS} onChange={setMinPickRate} ariaLabel="Minimum pick rate" triggerClassName="min-h-[44px] px-2.5 py-2 lg:min-h-0" /></label>
+                <button type="button" role="switch" aria-checked={includeOffMeta} onClick={() => setIncludeOffMeta((value) => !value)} className="flex min-h-[44px] min-w-[44px] items-end justify-between gap-3 rounded-[6px] text-left focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:min-h-0 lg:min-w-0">
                   <span><span className="block text-[9px] font-medium uppercase tracking-[0.12em] text-txt/[0.45]">Include off-meta</span><span className="mt-1 block text-[11px] text-txt/[0.7]">Show niche picks</span></span>
                   <span className="relative mb-0.5 h-5 w-9 flex-shrink-0 rounded-full" style={{ background: includeOffMeta ? "#9184d9" : "rgba(233,233,237,.12)" }}><span className="absolute left-0 top-1 h-3 w-3 rounded-full bg-bg transition-transform duration-[120ms] motion-reduce:transition-none" style={{ transform: includeOffMeta ? "translateX(20px)" : "translateX(4px)" }} /></span>
                 </button>
-                <label className="min-w-0"><span className="mb-1.5 block text-[9px] font-medium uppercase tracking-[0.12em] text-txt/[0.45]">Minimum games</span><ThemedSelect value={minimumGames} options={MINIMUM_GAMES_OPTIONS} onChange={setMinimumGames} ariaLabel="Minimum games" triggerClassName="px-2.5 py-2" /></label>
+                <label className="min-w-0"><span className="mb-1.5 block text-[9px] font-medium uppercase tracking-[0.12em] text-txt/[0.45]">Minimum games</span><ThemedSelect value={minimumGames} options={MINIMUM_GAMES_OPTIONS} onChange={setMinimumGames} ariaLabel="Minimum games" triggerClassName="min-h-[44px] px-2.5 py-2 lg:min-h-0" /></label>
                 <div className="flex items-end md:col-span-3"><span className="text-[10px] text-txt/[0.38]">Filters apply to the selected view and preserve the server&apos;s order.</span><button type="button" onClick={() => { setMinPickRate(DEFAULT_DRAFT_ASSISTANT_FILTERS.minPickRate); setIncludeOffMeta(DEFAULT_DRAFT_ASSISTANT_FILTERS.includeOffMeta); setMinimumGames(DEFAULT_DRAFT_ASSISTANT_FILTERS.minimumGames); }} className="ml-auto rounded-[6px] px-2 py-1 text-[10px] font-medium text-accent-300 hover:bg-accent/[0.1] focus-visible:outline-2 focus-visible:outline-accent">Reset</button></div>
               </section>
             )}

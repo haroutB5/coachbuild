@@ -178,9 +178,10 @@ function BuildComparison({ game }: BuildComparisonProps) {
 
 function BuildRow({ label, ids, otherIds, tone, ver }: { label: string; ids: number[]; otherIds: number[]; tone: "yours" | "recommended"; ver: string }) {
   return (
-    <div className="flex items-center gap-3">
-      <span className={`w-[58px] shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] ${tone === "recommended" ? "text-teal" : "text-mut"}`}>{label}</span>
-      <div className="flex min-w-0 flex-1 gap-2">
+    <div className="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-3">
+      <span className={`w-[92px] shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] ${tone === "recommended" ? "text-teal" : "text-mut"}`}>{label}</span>
+      <div className="min-w-0 overflow-x-auto">
+        <div className="flex min-w-max gap-2">
         {Array.from({ length: 6 }).map((_, index) => {
           const id = ids[index];
           const different = id !== undefined && otherIds[index] !== undefined && id !== otherIds[index];
@@ -195,6 +196,7 @@ function BuildRow({ label, ids, otherIds, tone, ver }: { label: string; ids: num
             </span>
           );
         })}
+        </div>
       </div>
     </div>
   );

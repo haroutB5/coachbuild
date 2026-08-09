@@ -60,7 +60,7 @@ export default function ChampionHero({ champ, lane, onLaneChange, rankBracket, o
         <button
           type="button"
           onClick={() => window.history.back()}
-          className="mb-3 inline-flex items-center gap-1 text-[11px] text-[#e9e9ed]/45 transition-colors hover:text-[#e9e9ed]/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9]"
+          className="mb-3 inline-flex h-11 -my-2 items-center gap-1 text-[11px] text-[#e9e9ed]/45 transition-colors hover:text-[#e9e9ed]/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] lg:mt-0 lg:mb-3 lg:h-auto"
         >
           <ArrowLeft size={13} />
           All builds
@@ -99,10 +99,12 @@ export default function ChampionHero({ champ, lane, onLaneChange, rankBracket, o
                   onClick={() => onLaneChange(candidate)}
                   aria-pressed={candidate === lane}
                   title={LANE_LABEL[candidate]}
-                  className={`inline-flex h-7 items-center gap-1 rounded-[6px] px-2 text-[9px] font-semibold uppercase tracking-[0.08em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] ${candidate === lane ? "bg-[#9184d9]/20 text-[#d2cefd]" : "text-[#9397ab]/55 hover:bg-white/[0.05] hover:text-[#e9e9ed]/80"}`}
+                  className="inline-flex h-11 min-w-[44px] -my-2 items-center justify-center gap-1 rounded-[6px] px-0 text-[9px] font-semibold uppercase tracking-[0.08em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] lg:my-0 lg:h-7 lg:min-w-0"
                 >
-                  {LANE_SHORT[candidate]}
-                  {candidate === lane && <CaretDown size={10} aria-hidden="true" />}
+                  <span className={`inline-flex h-7 items-center gap-1 rounded-[6px] px-2 ${candidate === lane ? "bg-[#9184d9]/20 text-[#d2cefd]" : "text-[#9397ab]/55 hover:bg-white/[0.05] hover:text-[#e9e9ed]/80"}`}>
+                    {LANE_SHORT[candidate]}
+                    {candidate === lane && <CaretDown size={10} aria-hidden="true" />}
+                  </span>
                 </button>
               ))}
             </div>
@@ -118,9 +120,11 @@ export default function ChampionHero({ champ, lane, onLaneChange, rankBracket, o
                 type="button"
                 onClick={() => onRankChange(option.id)}
                 aria-pressed={rankBracket === option.id}
-                className={`rounded-[6px] px-2.5 py-1.5 text-[9px] font-semibold uppercase tracking-[0.08em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] ${rankBracket === option.id ? "bg-[#9184d9]/20 text-[#d2cefd]" : "text-[#9397ab]/50 hover:bg-white/[0.05] hover:text-[#e9e9ed]/80"}`}
+                className="flex h-11 min-w-[44px] -my-2 items-center justify-center rounded-[6px] px-0 text-[9px] font-semibold uppercase tracking-[0.08em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] lg:my-0 lg:h-auto lg:min-w-0"
               >
-                {option.label}
+                <span className={`rounded-[6px] px-2.5 py-1.5 ${rankBracket === option.id ? "bg-[#9184d9]/20 text-[#d2cefd]" : "text-[#9397ab]/50 hover:bg-white/[0.05] hover:text-[#e9e9ed]/80"}`}>
+                  {option.label}
+                </span>
               </button>
             ))}
           </div>

@@ -218,7 +218,7 @@ export default function LiveSetupPage() {
                   type="button"
                   onClick={() => void runTest()}
                   disabled={!session || probing}
-                  className="rounded-[8px] px-3.5 py-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-accent-400 shadow-[inset_0_0_0_1px_#9184d9] transition-colors duration-[120ms] ease-in hover:bg-accent/[0.14] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+                  className="min-h-[44px] rounded-[8px] px-3.5 py-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-accent-400 shadow-[inset_0_0_0_1px_#9184d9] transition-colors duration-[120ms] ease-in hover:bg-accent/[0.14] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:min-h-0"
                 >
                   {probing ? "Testing…" : "Test connection"}
                 </button>
