@@ -152,7 +152,8 @@ public sealed class TrayController : IDisposable
         }
 
         menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add(MenuItem("Calibrate overlay", (_, _) => RaiseCommand(TrayCommand.Calibrate)));
+        if (!_state.IsAdjusting)
+            menu.Items.Add(MenuItem("Calibrate overlay", (_, _) => RaiseCommand(TrayCommand.Calibrate)));
         menu.Items.Add(_state.IsAdjusting
             ? MenuItem("Cancel adjust", (_, _) => RaiseCommand(TrayCommand.CancelAdjust))
             : MenuItem("Adjust overlay position", (_, _) => RaiseCommand(TrayCommand.Adjust)));

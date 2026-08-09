@@ -382,7 +382,7 @@ public sealed class CompanionHttpServer : IAsyncDisposable
             CancellationToken cancellationToken)
         {
             var chunks = new List<(byte[] Buffer, int Length)>();
-            var validator = new JsonStreamValidator();
+            var totalLength = 0;
             try
             {
                 while (true)
@@ -401,13 +401,17 @@ public sealed class CompanionHttpServer : IAsyncDisposable
                             break;
                         }
 
-                        if (!validator.Append(buffer.AsSpan(0, length), isFinalBlock: false))
+                        // Validation deliberately happens after assembly: a
+                        // fresh reader per chunk cannot preserve a partial
+                        // token unless every unconsumed byte is carried over.
+                        if (length > MaxLivePayloadBytes - totalLength)
                         {
                             ArrayPool<byte>.Shared.Return(buffer);
                             ReturnChunks(chunks);
                             return null;
                         }
 
+                        totalLength += length;
                         chunks.Add((buffer, length));
                     }
                     catch
@@ -417,7 +421,13 @@ public sealed class CompanionHttpServer : IAsyncDisposable
                     }
                 }
 
-                if (!validator.Append(ReadOnlySpan<byte>.Empty, isFinalBlock: true))
+                // /live deliberately departs from direct streaming: the
+                // complete body must be assembled before headers are written
+                // so malformed JSON can still become {"error":"no-live"}.
+                // The upstream is League on loopback and the 4 MB cap keeps
+                // this bounded in practice without a large contiguous LOH
+                // allocation.
+                if (!IsValidJson(chunks))
                 {
                     ReturnChunks(chunks);
                     return null;
@@ -465,34 +475,62 @@ public sealed class CompanionHttpServer : IAsyncDisposable
                 ArrayPool<byte>.Shared.Return(buffer);
             chunks.Clear();
         }
-    }
 
-    private sealed class JsonStreamValidator
-    {
-        private JsonReaderState _state;
-        private bool _sawToken;
-        private bool _rootCompleted;
-
-        public bool Append(ReadOnlySpan<byte> bytes, bool isFinalBlock)
+        private static bool IsValidJson(List<(byte[] Buffer, int Length)> chunks)
         {
             try
             {
-                var reader = new Utf8JsonReader(bytes, isFinalBlock, _state);
+                var sequence = CreateSequence(chunks);
+                var reader = new Utf8JsonReader(
+                    sequence,
+                    isFinalBlock: true,
+                    state: new JsonReaderState());
+                var sawToken = false;
                 while (reader.Read())
-                {
-                    if (_rootCompleted) return false;
-                    _sawToken = true;
-                    if (reader.CurrentDepth == 0 && reader.TokenType is not JsonTokenType.StartObject and not JsonTokenType.StartArray)
-                        _rootCompleted = true;
-                }
-
-                _state = reader.CurrentState;
-                return !isFinalBlock || _sawToken && _rootCompleted;
+                    sawToken = true;
+                return sawToken;
             }
             catch (JsonException)
             {
                 return false;
             }
         }
+
+        private static ReadOnlySequence<byte> CreateSequence(
+            List<(byte[] Buffer, int Length)> chunks)
+        {
+            if (chunks.Count == 0) return ReadOnlySequence<byte>.Empty;
+
+            var first = new PayloadSequenceSegment(
+                chunks[0].Buffer.AsMemory(0, chunks[0].Length));
+            var last = first;
+            for (var index = 1; index < chunks.Count; index++)
+            {
+                last = last.Append(
+                    chunks[index].Buffer.AsMemory(0, chunks[index].Length));
+            }
+
+            return new ReadOnlySequence<byte>(first, 0, last, last.Memory.Length);
+        }
+
+        private sealed class PayloadSequenceSegment : ReadOnlySequenceSegment<byte>
+        {
+            public PayloadSequenceSegment(ReadOnlyMemory<byte> memory)
+            {
+                Memory = memory;
+            }
+
+            public PayloadSequenceSegment Append(ReadOnlyMemory<byte> memory)
+            {
+                var next = new PayloadSequenceSegment(memory)
+                {
+                    RunningIndex = RunningIndex + Memory.Length,
+                };
+                Next = next;
+                return next;
+            }
+        }
+
+        private const int MaxLivePayloadBytes = 4 * 1024 * 1024;
     }
 }

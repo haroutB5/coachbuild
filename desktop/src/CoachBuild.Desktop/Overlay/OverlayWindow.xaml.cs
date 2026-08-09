@@ -151,6 +151,7 @@ public partial class OverlayWindow : Window
             return;
         }
 
+        if (_adjusting) return;
         _wasVisibleBeforeAdjustment = IsVisible;
         ShowInactive();
         if (_display is null)

@@ -127,6 +127,34 @@ public sealed class WireContractReplayTests
         Assert.Equal(Encoding.UTF8.GetBytes(raw), bytes);
     }
 
+    [Theory]
+    [InlineData(1024)]
+    [InlineData(16 * 1024)]
+    public async Task Bridge_live_passthrough_preserves_valid_json_when_upstream_drip_feeds(int maxRead)
+    {
+        var raw = "{\"activePlayer\":{\"summonerName\":\"must-pass-through\"}," +
+            "\"gameData\":{\"gameTime\":12.5},\"padding\":\"" +
+            new string('x', 23 * 1024) + "\"}";
+        var handler = new DripFeedHandler(raw, maxRead);
+        using var live = new LiveClientDataClient(
+            new LiveClientDataOptions(Scheme: "http"),
+            handler);
+        await using var server = new CompanionHttpServer(
+            "session-token",
+            new CompanionState(),
+            new MockLcuApi(),
+            live,
+            ports: [FindFreePort()]);
+        await server.StartAsync();
+        using var client = NewClient(server.Port);
+
+        var response = await client.SendAsync(NewRequest(HttpMethod.Get, "/live?session=session-token"));
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+
+        Assert.Equal(Encoding.UTF8.GetBytes(raw), bytes);
+        Assert.True(handler.ReadCalls > 1);
+    }
+
     [Fact]
     public async Task Bridge_live_returns_no_live_for_a_malformed_upstream_body()
     {
@@ -256,6 +284,100 @@ public sealed class WireContractReplayTests
             {
                 Content = new ByteArrayContent(Encoding.UTF8.GetBytes(body))
             });
+    }
+
+    private sealed class DripFeedHandler(string body, int maxRead) : HttpMessageHandler
+    {
+        private DripFeedStream? _stream;
+
+        public int ReadCalls => _stream?.ReadCalls ?? 0;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            _stream = new DripFeedStream(Encoding.UTF8.GetBytes(body), maxRead);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(_stream),
+            });
+        }
+    }
+
+    private sealed class DripFeedStream : Stream
+    {
+        private readonly MemoryStream _inner;
+        private readonly int _maxRead;
+
+        public DripFeedStream(byte[] bytes, int maxRead)
+        {
+            _inner = new MemoryStream(bytes, writable: false);
+            _maxRead = maxRead;
+        }
+
+        public int ReadCalls { get; private set; }
+
+        public override bool CanRead => _inner.CanRead;
+        public override bool CanSeek => _inner.CanSeek;
+        public override bool CanWrite => false;
+        public override long Length => _inner.Length;
+
+        public override long Position
+        {
+            get => _inner.Position;
+            set => _inner.Position = value;
+        }
+
+        public override void Flush() => _inner.Flush();
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            ReadCalls++;
+            return _inner.Read(buffer, offset, Math.Min(count, _maxRead));
+        }
+
+        public override int Read(Span<byte> buffer)
+        {
+            ReadCalls++;
+            return _inner.Read(buffer[..Math.Min(buffer.Length, _maxRead)]);
+        }
+
+        public override Task<int> ReadAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken)
+        {
+            ReadCalls++;
+            return _inner.ReadAsync(
+                buffer,
+                offset,
+                Math.Min(count, _maxRead),
+                cancellationToken);
+        }
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            ReadCalls++;
+            return _inner.ReadAsync(
+                buffer[..Math.Min(buffer.Length, _maxRead)],
+                cancellationToken);
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => _inner.Seek(offset, origin);
+
+        public override void SetLength(long value) => _inner.SetLength(value);
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) _inner.Dispose();
+            base.Dispose(disposing);
+        }
     }
 
     private static HttpClient NewClient(int port) => new(new HttpClientHandler())
