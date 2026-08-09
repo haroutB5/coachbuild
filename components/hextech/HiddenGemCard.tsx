@@ -8,6 +8,7 @@ import { itemIconUrl } from "@/components/proAssets";
 import { getItemDetailMap, type ItemDetail } from "@/components/itemDetail";
 import { selectHiddenGemPicks } from "./itemSetBody";
 import { flattenSituational } from "./situational";
+import { ACCENT_CARD_CLASS, SectionLabel } from "./builds/BuildVisuals";
 
 /**
  * HIDDEN GEM — the fourth build category, on the page.
@@ -79,20 +80,15 @@ export default function HiddenGemCard({ items, ver, onItemClick }: HiddenGemCard
   if (gems.length === 0) return null;
 
   return (
-    <div className="py-4 first:pt-0 last:pb-0">
-      <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold mb-1">
-        Hidden Gem{" "}
-        <span className="text-mut/60 normal-case tracking-normal font-normal">
-          — high win rate, rarely built
-        </span>
+    <section className={`${ACCENT_CARD_CLASS} p-4`}>
+      <div className="flex items-baseline justify-between gap-2">
+        <SectionLabel>Hidden gem</SectionLabel>
+        <span className="text-[9px] uppercase tracking-[0.1em] text-[#b5abfc]/65">High WR · rarely built</span>
+      </div>
+      <p className="mt-2 text-[11px] leading-relaxed text-[#9397ab]/70">
+        A real high-win-rate option outside the standard path. Treat the sample as a signal, not a default.
       </p>
-      {/* States the actual claim, so the card can be judged rather than
-          trusted. The numbers under each item are the evidence for it. */}
-      <p className="text-[10.5px] text-mut/70 normal-case mb-4 leading-relaxed">
-        Not in your build above, but winning well above average for this champion while almost nobody
-        buys it.
-      </p>
-      <div className="grid grid-cols-1 min-[420px]:grid-cols-2 gap-2.5">
+      <div className="mt-4 grid grid-cols-1 gap-2.5 min-[420px]:grid-cols-2">
         {gems.map((pick) => (
           <button
             key={pick.id}
@@ -101,7 +97,7 @@ export default function HiddenGemCard({ items, ver, onItemClick }: HiddenGemCard
             aria-label={`View details for ${pick.name} — ${
               pick.winrate != null ? `${pick.winrate.toFixed(1)}% win rate` : "win rate unavailable"
             } across ${pick.occurrence.toLocaleString()} games`}
-            className="flex items-center gap-2.5 rounded-lg bg-panel2/60 border border-line/60 px-2.5 py-2 text-left hover:border-line-gold transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
+            className="flex items-center gap-2.5 rounded-[7px] bg-white/[0.04] px-2.5 py-2 text-left transition-colors hover:bg-white/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9]"
           >
             <span className="w-8 h-8 rounded-md bg-black/30 overflow-hidden flex-shrink-0 flex items-center justify-center">
               <IconWithFallback
@@ -113,8 +109,8 @@ export default function HiddenGemCard({ items, ver, onItemClick }: HiddenGemCard
               />
             </span>
             <span className="min-w-0">
-              <span className="block text-[11.5px] text-txt leading-tight truncate">{pick.name}</span>
-              <span className="block text-[10px] text-mut/70 tabular-nums leading-tight">
+              <span className="block truncate text-[11.5px] leading-tight text-[#e9e9ed]/85">{pick.name}</span>
+              <span className="block text-[10px] leading-tight tabular-nums text-[#9397ab]/65">
                 {/* Win rate is the claim; games is what makes it credible. Both
                     are shown because either alone is misleading. */}
                 {pick.winrate != null ? `${pick.winrate.toFixed(1)}% win` : "—"}
@@ -127,6 +123,6 @@ export default function HiddenGemCard({ items, ver, onItemClick }: HiddenGemCard
           </button>
         ))}
       </div>
-    </div>
+    </section>
   );
 }

@@ -1,26 +1,17 @@
 "use client";
 
+import { ArrowLeft, CaretDown } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import type { ChampionRef } from "@/lib/types";
-import { getHeroStats, getSplashUrl, LANE_ORDER, LANE_LABEL, type LaneId, type HeroStats } from "./heroContracts";
+import { IconWithFallback } from "@/components/IconWithFallback";
+import { getHeroStats, LANE_LABEL, LANE_ORDER, type LaneId, type HeroStats } from "./heroContracts";
 import { confidenceBand } from "./confidence";
+import { BuildActionButtons, Scanline, StatValue, TierBadge } from "./builds/BuildVisuals";
+import HextechTabs from "./HextechTabs";
+import type { BuildTab } from "./buildTabLayout";
 
-// v0.51.0 (Builds redesign, mockup 4/5): lane + rank-bracket selection moved
-// INTO the hero (top-right, two stacked pill rows) — replaces the old
-// BuildsSearchBar's own full-width "Lanes" grid, now retired from the page
-// body entirely. Abbreviated to match the mockup exactly (TOP/JG/MID/BOT/SUP)
-// — LANE_LABEL's full words are kept for aria-label/title (accessibility),
-// this is a display-only shorthand local to this component.
 const LANE_SHORT: Record<LaneId, string> = { top: "TOP", jungle: "JG", mid: "MID", bot: "BOT", support: "SUP" };
 
-// v0.51.0 — the elo row shows a CURATED 4-item subset of lib/rankBrackets.ts's
-// full 7-bracket list (all/challenger/grandmaster/master/diamond/emerald/
-// platinum), matching mockup 4/5 exactly ("High Elo / Diamond / Emerald /
-// Platinum"). Challenger/Grandmaster/Master remain valid, fully-supported
-// ids in the data layer (BuildTabContent's fetch still accepts any
-// RANK_BRACKETS id) — they're just not surfaced in this compact hero row.
-// Documented as a deliberate fidelity choice in HANDOFF-fronty.md, not a
-// capability regression.
 const HERO_ELO_OPTIONS: { id: string; label: string }[] = [
   { id: "all", label: "High Elo" },
   { id: "diamond", label: "Diamond" },
@@ -28,16 +19,12 @@ const HERO_ELO_OPTIONS: { id: string; label: string }[] = [
   { id: "platinum", label: "Platinum" },
 ];
 
-const CONFIDENCE_CLASS: Record<"HIGH" | "MEDIUM" | "LOW", string> = {
-  HIGH: "border-good/50 text-good",
-  MEDIUM: "border-line-gold text-mut",
-  LOW: "border-bad/40 text-bad",
-};
-const CONFIDENCE_LABEL: Record<"HIGH" | "MEDIUM" | "LOW", string> = {
-  HIGH: "High confidence",
-  MEDIUM: "Medium confidence",
-  LOW: "Low confidence",
-};
+const CONFIDENCE_LABEL = { HIGH: "High confidence", MEDIUM: "Medium confidence", LOW: "Low confidence" } as const;
+const BUILD_VIEW_OPTIONS = [
+  { value: "build", label: "WPA build" },
+  { value: "pro", label: "Pro consensus" },
+  { value: "otp", label: "One-trick" },
+] as const;
 
 interface ChampionHeroProps {
   champ: ChampionRef;
@@ -45,163 +32,100 @@ interface ChampionHeroProps {
   onLaneChange: (lane: LaneId) => void;
   rankBracket: string;
   onRankChange: (id: string) => void;
+  buildTab: BuildTab;
+  onBuildTabChange: (tab: BuildTab) => void;
 }
-
-export default function ChampionHero({ champ, lane, onLaneChange, rankBracket, onRankChange }: ChampionHeroProps) {
+export default function ChampionHero({ champ, lane, onLaneChange, rankBracket, onRankChange, buildTab, onBuildTabChange }: ChampionHeroProps) {
   const [stats, setStats] = useState<HeroStats>({ winRatePct: null, gamesCount: null });
 
-  // P1-1 fix (2026-07-25 audit): `rankBracket` MUST be in this effect's deps
-  // and threaded into getHeroStats — this row renders the elo pill row right
-  // above the build panel, but until this fix the stats effect was keyed
-  // `[champ.id, lane]` only, so tapping "Platinum" changed the build panel
-  // (BuildTabContent DOES append `&rank=`) while this line kept showing the
-  // un-bracketed High-Elo WIN%/GAMES (verified live: 329,099 High-Elo games
-  // vs. Platinum's 194,981 — see lib/rankBrackets.ts) beside a visibly-active
-  // Platinum pill, and could flip the confidence chip to HIGH off that
-  // inflated count while the shown build rested on a MEDIUM-band sample.
   useEffect(() => {
     let cancelled = false;
-    getHeroStats(champ.id, lane, rankBracket).then((s) => {
-      if (!cancelled) setStats(s);
+    getHeroStats(champ.id, lane, rankBracket).then((next) => {
+      if (!cancelled) setStats(next);
     });
     return () => {
       cancelled = true;
     };
   }, [champ.id, lane, rankBracket]);
 
-  const splash = getSplashUrl(champ.key);
-  const band = confidenceBand(stats.gamesCount);
+  const confidence = confidenceBand(stats.gamesCount);
 
   return (
-    <div className="relative rounded-xl overflow-hidden border border-line mb-6">
-      {/* Splash background */}
-      <div className="absolute inset-0">
-        {splash && (
-          // eslint-disable-next-line @next/next/no-img-element -- Splash art uses a runtime CDN URL and intentionally degrades by hiding a failed background image.
-          <img
-            src={splash}
-            alt=""
-            aria-hidden="true"
-            className="w-full h-full object-cover object-[50%_20%]"
-            onError={(e) => {
-              (e.currentTarget as HTMLImageElement).style.display = "none";
-            }}
-          />
-        )}
-        <div
-          className="absolute inset-0"
-          style={{
-            background:
-              "linear-gradient(90deg, rgba(10,13,11,0.97) 0%, rgba(10,13,11,0.82) 38%, rgba(10,13,11,0.35) 75%, rgba(10,13,11,0.55) 100%)",
-          }}
-        />
-        <div
-          className="absolute inset-0"
-          style={{
-            background: "linear-gradient(180deg, rgba(10,13,11,0.15) 0%, rgba(10,13,11,0.65) 100%)",
-          }}
-        />
-      </div>
+    <section
+      data-build-hero
+      className="relative mb-3 overflow-hidden rounded-[10px] bg-[radial-gradient(90%_200%_at_12%_0%,#2c2949,#1c1e2b_60%,#191b27)] px-5 pt-4 shadow-[0_0_0_1px_rgba(145,132,217,0.3),0_14px_40px_rgba(0,0,0,0.32)] sm:px-6"
+    >
+      <Scanline />
+      <div className="relative z-10">
+        <button
+          type="button"
+          onClick={() => window.history.back()}
+          className="mb-3 inline-flex items-center gap-1 text-[11px] text-[#e9e9ed]/45 transition-colors hover:text-[#e9e9ed]/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9]"
+        >
+          <ArrowLeft size={13} />
+          All builds
+        </button>
 
-      {/* Content */}
-      <div className="relative flex flex-col lg:flex-row lg:items-center gap-4 px-5 py-6 min-h-[128px]">
-        <div className="flex items-center gap-4 min-w-0 flex-1">
-          <div className="flex-shrink-0 w-[76px] h-[76px] rounded-lg overflow-hidden border-2 border-teal shadow-[0_0_22px_rgba(200,170,110,0.3)] bg-black/40">
-            {/* eslint-disable-next-line @next/next/no-img-element -- The champion icon URL is runtime data and this fixed-size tile owns its error fallback. */}
-            <img
-              src={champ.icon}
-              alt={champ.name}
-              width={76}
-              height={76}
-              loading="eager"
-              decoding="async"
-              className="w-full h-full object-cover"
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).style.display = "none";
-              }}
-            />
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 items-center gap-4">
+            <div className="relative shrink-0">
+              <span className="flex h-[88px] w-[88px] items-center justify-center overflow-hidden rounded-[11px] bg-[linear-gradient(150deg,#3a3663,#20223a)] shadow-[inset_0_0_0_1px_rgba(145,132,217,0.45),0_0_26px_rgba(145,132,217,0.2)]">
+                <IconWithFallback src={champ.icon} alt={champ.name} fallbackGlyph={champ.name} className="h-full w-full object-cover" size={88} />
+              </span>
+              <span className="absolute -bottom-1.5 -left-1.5"><TierBadge /></span>
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+                <h1 className="truncate text-[33px] font-semibold leading-none tracking-[-0.025em] text-[#e9e9ed]">{champ.name}</h1>
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#e9e9ed]/45">{LANE_LABEL[lane]} lane</span>
+                <span className="rounded-[5px] bg-[#46c79b]/15 px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.08em] text-[#46c79b]">{CONFIDENCE_LABEL[confidence]}</span>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-4">
+                <StatValue label="Win rate" value={stats.winRatePct === null ? "—" : `${stats.winRatePct.toFixed(1)}%`} tone={stats.winRatePct === null ? "normal" : "good"} />
+                <StatValue label="Pick rate" value="—" sub="not in build feed" />
+                <StatValue label="Ban rate" value="—" sub="not in build feed" />
+                <StatValue label="Games" value={stats.gamesCount === null ? "—" : stats.gamesCount.toLocaleString()} />
+              </div>
+            </div>
           </div>
 
-          <div className="min-w-0">
-            <h2 className="font-display text-teal text-[30px] sm:text-[36px] font-semibold uppercase tracking-[0.02em] leading-none truncate">
-              {champ.name}
-            </h2>
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-[12.5px] tabular-nums">
-              <span className="text-mut font-semibold uppercase tracking-[0.05em]">{LANE_LABEL[lane]}</span>
-              <span className="text-mut/50" aria-hidden="true">
-                &middot;
-              </span>
-              {stats.winRatePct !== null ? (
-                <span className="text-good font-bold">{stats.winRatePct.toFixed(1)}% WIN</span>
-              ) : (
-                <span className="text-mut">— WIN</span>
-              )}
-              <span className="text-mut/50" aria-hidden="true">
-                &middot;
-              </span>
-              {stats.gamesCount !== null ? (
-                <span className="text-mut">{stats.gamesCount.toLocaleString()} GAMES</span>
-              ) : (
-                <span className="text-mut">— GAMES</span>
-              )}
-              <span
-                className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[9.5px] font-bold uppercase tracking-[0.05em] ${CONFIDENCE_CLASS[band]}`}
-              >
-                {CONFIDENCE_LABEL[band]}
-              </span>
+          <div className="flex shrink-0 flex-col items-start gap-3 lg:items-end">
+            <BuildActionButtons />
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Lane">
+              {LANE_ORDER.map((candidate) => (
+                <button
+                  key={candidate}
+                  type="button"
+                  onClick={() => onLaneChange(candidate)}
+                  aria-pressed={candidate === lane}
+                  title={LANE_LABEL[candidate]}
+                  className={`inline-flex h-7 items-center gap-1 rounded-[6px] px-2 text-[9px] font-semibold uppercase tracking-[0.08em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] ${candidate === lane ? "bg-[#9184d9]/20 text-[#d2cefd]" : "text-[#9397ab]/55 hover:bg-white/[0.05] hover:text-[#e9e9ed]/80"}`}
+                >
+                  {LANE_SHORT[candidate]}
+                  {candidate === lane && <CaretDown size={10} aria-hidden="true" />}
+                </button>
+              ))}
             </div>
           </div>
         </div>
 
-        {/* v0.51.0: lane + elo pill rows (mockup 4/5's top-right stacked
-            controls). Backed by a translucent dark chip so the gold-outlined
-            active pill reads clearly over the splash art regardless of the
-            champion's own palette. */}
-        <div className="flex-shrink-0 flex flex-col items-stretch lg:items-end gap-2 bg-black/35 lg:bg-transparent rounded-lg p-2 lg:p-0 -mx-1 lg:mx-0">
-          <div role="group" aria-label="Lane" className="grid grid-cols-5 gap-1">
-            {LANE_ORDER.map((l) => {
-              const active = l === lane;
-              return (
-                <button
-                  key={l}
-                  type="button"
-                  onClick={() => onLaneChange(l)}
-                  aria-pressed={active}
-                  aria-label={LANE_LABEL[l]}
-                  title={LANE_LABEL[l]}
-                  className={`px-2.5 py-1.5 rounded-md border text-[11px] font-bold uppercase tracking-[0.04em] transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-teal ${
-                    active
-                      ? "bg-panel2 border-line-gold text-teal"
-                      : "border-line/70 bg-black/20 text-mut hover:text-txt hover:border-line-gold/60"
-                  }`}
-                >
-                  {LANE_SHORT[l]}
-                </button>
-              );
-            })}
-          </div>
-          <div role="group" aria-label="Rank bracket" className="flex flex-wrap justify-end gap-1">
-            {HERO_ELO_OPTIONS.map((opt) => {
-              const active = opt.id === rankBracket;
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => onRankChange(opt.id)}
-                  aria-pressed={active}
-                  className={`px-2.5 py-1 rounded-md border text-[10.5px] font-semibold whitespace-nowrap transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-teal ${
-                    active
-                      ? "bg-panel2 border-line-gold text-txt"
-                      : "border-line/70 bg-black/20 text-mut hover:text-txt hover:border-line-gold/60"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
+        <div className="mt-5 flex flex-col border-t border-white/[0.08] lg:flex-row lg:items-end lg:justify-between">
+          <HextechTabs options={BUILD_VIEW_OPTIONS} value={buildTab} onChange={onBuildTabChange} ariaLabel="Build view" className="min-w-0 flex-1 border-transparent px-0" />
+          <div className="flex flex-wrap gap-1 self-end rounded-[8px] bg-[#1c1e2c] p-1 shadow-[inset_0_0_0_1px_rgba(233,233,237,0.08)] lg:mb-1" role="group" aria-label="Rank bracket">
+            {HERO_ELO_OPTIONS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => onRankChange(option.id)}
+                aria-pressed={rankBracket === option.id}
+                className={`rounded-[6px] px-2.5 py-1.5 text-[9px] font-semibold uppercase tracking-[0.08em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] ${rankBracket === option.id ? "bg-[#9184d9]/20 text-[#d2cefd]" : "text-[#9397ab]/50 hover:bg-white/[0.05] hover:text-[#e9e9ed]/80"}`}
+              >
+                {option.label}
+              </button>
+            ))}
           </div>
         </div>
       </div>
-    </div>
+    </section>
   );
 }

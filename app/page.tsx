@@ -5,7 +5,8 @@ import type { ChampionRef } from "@/lib/types";
 import ChampionHero from "@/components/hextech/ChampionHero";
 import type { HextechTab } from "@/components/hextech/HextechTabs";
 import BuildTabContent from "@/components/hextech/BuildTabContent";
-import ChampionPickPrompt from "@/components/hextech/ChampionPickPrompt";
+import BuildsLanding from "@/components/hextech/builds/BuildsLanding";
+import { DEFAULT_BUILD_TAB, type BuildTab } from "@/components/hextech/buildTabLayout";
 import dynamic from "next/dynamic";
 // Round-B P3 fix (companion CIM cost section, item 5c): code-split via
 // next/dynamic — LivePanel only ever mounts for a session with a paired
@@ -61,6 +62,7 @@ const FIXED_TAB: HextechTab = "build";
 
 export default function HomePage() {
   const [activeLane, setActiveLane] = useState<LaneId>(INITIAL_LANE);
+  const [buildTab, setBuildTab] = useState<BuildTab>(DEFAULT_BUILD_TAB);
   // v0.26.0 (issue 2): lanes are LANE SELECTORS for the champion being
   // viewed, not independent per-lane champion slots — one `champ` for the
   // whole page, not a Record<LaneId, ChampionRef>. Seeded with the mockup's
@@ -428,6 +430,7 @@ export default function HomePage() {
   const handleChampionSelect = useCallback(
     (selected: ChampionRef) => {
       if (sheetNav.isRestoring()) return;
+      setBuildTab(DEFAULT_BUILD_TAB);
       setChamp(selected);
       setChampChosen(true);
       // Land on the CURRENT lane first — an instant, non-flashing
@@ -467,6 +470,7 @@ export default function HomePage() {
           const found = Array.isArray(champs) ? champs.find((c) => c.id === championId) : undefined;
           if (!found) return; // unresolvable id — no-op, the prompt stays as-is
           mostPlayedLaneRequestRef.current++; // cancel any in-flight lane correction
+          setBuildTab(DEFAULT_BUILD_TAB);
           setChamp(found);
           setChampChosen(true);
           setActiveLane(lane);
@@ -489,7 +493,7 @@ export default function HomePage() {
   useEffect(() => subscribeChampionSearch((ref) => handleChampionSelect(ref)), [handleChampionSelect]);
 
   return (
-    <div className="px-4 sm:px-6 lg:px-8 py-6">
+    <div className="px-4 py-5 sm:px-6 lg:px-6">
       {/* v0.44.0 (Builds responsive plan §3a/§2e): frees desktop width; adds a
           defensive overflow-x-clip against any future horizontal-overflow
           regression on THIS wrapper only.
@@ -498,12 +502,12 @@ export default function HomePage() {
           champion search, ChampionHero owns lane + rank-bracket selection
           (mockup 4/5), and the BUILD/PRO BUILDS tab strip + PROS search mode
           are retired (D1) in favor of one unified build view. */}
-      <div className="max-w-[900px] lg:max-w-none xl:max-w-[1440px] lg:mx-0 xl:mx-auto overflow-x-clip">
+      <div className="max-w-[1440px] overflow-x-clip lg:mx-0 xl:mx-auto">
         {/* Nothing picked yet (fresh install / cleared storage) — prompt rather
             than assert a champion. Gated on lastChampHydrated so the restored
             selection isn't flashed past on the way in. */}
         {lastChampHydrated && !champChosen ? (
-          <ChampionPickPrompt onQuickPick={handleQuickPick} />
+          <BuildsLanding onQuickPick={handleQuickPick} />
         ) : (
           <>
             <ChampionHero
@@ -512,6 +516,8 @@ export default function HomePage() {
               onLaneChange={handleLaneChange}
               rankBracket={rankBracket}
               onRankChange={handleRankChange}
+              buildTab={buildTab}
+              onBuildTabChange={setBuildTab}
             />
 
             <BuildTabContent
@@ -520,6 +526,7 @@ export default function HomePage() {
               rankBracket={rankBracket}
               rankHydrated={rankHydrated}
               onPatchResolved={setPatch}
+              buildTab={buildTab}
             />
           </>
         )}

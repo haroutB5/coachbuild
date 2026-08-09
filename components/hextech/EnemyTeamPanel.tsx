@@ -1,20 +1,5 @@
 "use client";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// EnemyTeamPanel — "ENEMY TEAM" panel (draft redesign v0.51.0, mockup 3).
-// v0.51.0: rethemed from the retired cyan `.draft-tactical`/`.dt-*` HUD to the
-// app-wide navy/gold tokens — vertical stack of up to MAX_DRAFT_ENEMIES
-// portraits + the existing ChampionPicker add-flow. Handlers (onAddEnemy/
-// onRemoveEnemy/onToggleLaneOpponent) are unchanged wiring straight through
-// to app/draft/page.tsx's preserved state machine — only className/token
-// usage changed here.
-//
-// Honesty note (unchanged from the pre-reskin version): this app has no
-// per-enemy role/lane data (only a single "lane opponent" tag), so a
-// per-portrait role icon is deliberately NOT reproduced — only the
-// lane-opponent slot gets a distinguishing ring + label.
-// ─────────────────────────────────────────────────────────────────────────────
-
 import { useState } from "react";
 import type { ChampionRef } from "@/lib/types";
 import { IconWithFallback } from "@/components/IconWithFallback";
@@ -33,9 +18,12 @@ interface EnemyTeamPanelProps {
   onAddEnemy: (champ: ChampionRef) => void;
   onRemoveEnemy: (id: number) => void;
   onToggleLaneOpponent: (id: number) => void;
-  /** Passed straight through to MatchupAnalysisPopover. */
   enemyAnalysis: EnemyAnalysis[] | undefined | null;
   hoverSelected: boolean;
+}
+
+function entryFor(champIcons: Map<number, ChampionIconEntry>, id: number): ChampionIconEntry {
+  return champIcons.get(id) ?? { name: `Champion #${id}`, icon: "" };
 }
 
 export default function EnemyTeamPanel({
@@ -50,93 +38,103 @@ export default function EnemyTeamPanel({
   enemyAnalysis,
   hoverSelected,
 }: EnemyTeamPanelProps) {
+  const [addingSlot, setAddingSlot] = useState<number | null>(null);
   const [popoverOpen, setPopoverOpen] = useState(false);
+  const laneOppEntry = effectiveLaneOpponentId === null ? undefined : champIcons.get(effectiveLaneOpponentId);
   const emptySlots = Math.max(0, MAX_DRAFT_ENEMIES - enemyIds.length);
-  const laneOppEntry = effectiveLaneOpponentId !== null ? champIcons.get(effectiveLaneOpponentId) : undefined;
 
   return (
-    <div className="bg-panel border border-line rounded-xl p-4">
-      <p className="text-[10px] tracking-[0.14em] uppercase text-teal font-semibold mb-3">
-        Enemy Team ({enemyIds.length}/{MAX_DRAFT_ENEMIES})
-      </p>
-
-      <div className="space-y-1.5 mb-3">
+    <div className="min-w-0">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-bad/[0.8]">Enemy team</p>
+        <span className="text-[9px] tabular-nums text-txt/[0.32]">{enemyIds.length}/{MAX_DRAFT_ENEMIES}</span>
+      </div>
+      <div className="mt-2 flex min-w-0 items-center gap-2">
         {enemyIds.map((id) => {
-          const entry = champIcons.get(id);
+          const entry = entryFor(champIcons, id);
           const isLaneOpp = effectiveLaneOpponentId === id;
-          const isServerInferredOnly = laneOpponentId === null && serverInferredLaneOpponentId === id;
+          const inferredOnly = isLaneOpp && laneOpponentId === null && serverInferredLaneOpponentId === id;
           return (
-            <div
-              key={id}
-              className={`flex items-center gap-2.5 pl-2 pr-1.5 py-1.5 rounded-md border transition-colors ${
-                isLaneOpp ? "border-line-gold bg-teal/8" : "border-line"
-              }`}
-            >
-              <span
-                className={`w-9 h-9 rounded-md overflow-hidden bg-black/30 flex-shrink-0 border ${
-                  isLaneOpp ? "border-teal" : "border-transparent"
-                }`}
-              >
-                <IconWithFallback src={entry?.icon ?? ""} alt={entry?.name ?? `Champion #${id}`} fallbackGlyph={entry?.name} className="w-full h-full object-cover" size={36} />
-              </span>
-              <span className="flex-1 min-w-0 text-[12.5px] font-medium text-txt truncate">
-                {entry?.name ?? `#${id}`}
-              </span>
+            <div key={id} className="group relative h-8 w-8 flex-shrink-0 rounded-[7px]" title={entry.name}>
+              <IconWithFallback
+                src={entry.icon}
+                alt={entry.name}
+                fallbackGlyph={entry.name}
+                className="h-8 w-8 rounded-[7px] object-cover"
+                size={32}
+              />
               <button
                 type="button"
                 onClick={() => onToggleLaneOpponent(id)}
                 aria-pressed={isLaneOpp}
-                aria-label={isLaneOpp ? `${entry?.name ?? "Champion"} set as your lane opponent — tap to unset` : `Mark ${entry?.name ?? "champion"} as your lane opponent`}
-                title={isServerInferredOnly ? "Auto-detected as your lane opponent — tap to confirm or pick a different chip" : isLaneOpp ? "Your lane opponent (weighted heaviest) — tap to unset" : "Mark as your lane opponent"}
-                className={`px-1.5 py-0.5 rounded text-[8.5px] font-bold uppercase tracking-[0.04em] border transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-teal flex-shrink-0 ${
-                  isLaneOpp
-                    ? isServerInferredOnly
-                      ? "bg-panel2 text-txt border-teal border-dashed"
-                      : "bg-teal text-bg border-teal"
-                    : "bg-transparent text-mut border-line hover:border-line-gold hover:text-txt"
+                aria-label={isLaneOpp ? `${entry.name} is your lane opponent` : `Mark ${entry.name} as your lane opponent`}
+                title={inferredOnly ? "Inferred lane opponent — tap to confirm or change" : "Toggle lane opponent"}
+                className={`absolute inset-0 rounded-[7px] transition-colors duration-[120ms] ease-in focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 ${
+                  isLaneOpp ? "ring-2 ring-bad/[0.7] ring-offset-1 ring-offset-panel" : "group-hover:bg-bad/[0.15]"
                 }`}
               >
-                {isLaneOpp ? "Lane opp" : "+ Lane"}
-                {isServerInferredOnly ? " (inferred)" : ""}
+                <span className="sr-only">{isLaneOpp ? "Lane opponent" : "Set lane opponent"}</span>
               </button>
-              {isLaneOpp && (
-                <button
-                  type="button"
-                  onClick={() => setPopoverOpen((v) => !v)}
-                  aria-expanded={popoverOpen}
-                  aria-label={`${popoverOpen ? "Hide" : "Show"} matchup analysis for ${entry?.name ?? "your lane opponent"}`}
-                  className="w-6 h-6 flex items-center justify-center rounded text-teal hover:bg-teal/12 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-teal flex-shrink-0"
-                >
-                  <span aria-hidden="true" className="text-[13px] leading-none">
-                    {popoverOpen ? "▴" : "▾"}
-                  </span>
-                </button>
-              )}
               <button
                 type="button"
                 onClick={() => onRemoveEnemy(id)}
-                aria-label={`Remove ${entry?.name ?? "champion"}`}
-                className="w-6 h-6 flex items-center justify-center rounded text-mut hover:text-bad hover:bg-bad/10 transition-colors flex-shrink-0"
+                aria-label={`Remove ${entry.name}`}
+                className="absolute -right-1.5 -top-1.5 z-10 hidden h-4 w-4 items-center justify-center rounded-full bg-panel text-[11px] leading-none text-txt/[0.55] group-hover:flex hover:text-bad focus-visible:flex focus-visible:outline-2 focus-visible:outline-accent"
               >
                 ×
               </button>
             </div>
           );
         })}
-
-        {Array.from({ length: emptySlots }).map((_, i) => (
-          <div
-            key={`empty-${i}`}
-            aria-hidden="true"
-            className="flex items-center gap-2.5 pl-2 pr-1.5 py-1.5 rounded-md border border-dashed border-line"
-          >
-            <span className="w-9 h-9 rounded-md border border-dashed border-line flex-shrink-0" />
-            <span className="text-[11.5px] text-mut/60">Open slot</span>
-          </div>
-        ))}
+        {Array.from({ length: emptySlots }, (_, index) => {
+          const slot = enemyIds.length + index;
+          return (
+            <button
+              key={`enemy-empty-${slot}`}
+              type="button"
+              aria-label={`Add an enemy champion to slot ${slot + 1}`}
+              aria-expanded={addingSlot === slot}
+              onClick={() => setAddingSlot(addingSlot === slot ? null : slot)}
+              className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-[7px] text-[17px] font-light text-txt/[0.28] transition-colors duration-[120ms] ease-in hover:bg-txt/[0.05] hover:text-txt/[0.6] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+              style={{ boxShadow: "inset 0 0 0 1px rgba(233,233,237,.1)" }}
+            >
+              +
+            </button>
+          );
+        })}
       </div>
 
-      {enemyIds.length < MAX_DRAFT_ENEMIES && <ChampionPicker value={null} onChange={onAddEnemy} placeholder="Add an enemy champion…" />}
+      <div className="mt-2 flex min-w-0 items-center justify-between gap-2">
+        <p className="min-w-0 truncate text-[10px] text-txt/[0.42]">
+          <span className="mr-1 uppercase tracking-[0.1em]">Lane opponent</span>
+          <span className="text-txt/[0.7]">{laneOppEntry?.name ?? "Not inferred"}</span>
+          {laneOppEntry && <span className="text-txt/[0.34]"> · {laneOpponentId === null ? "inferred" : "selected"}</span>}
+        </p>
+        {effectiveLaneOpponentId !== null && (
+          <button
+            type="button"
+            onClick={() => setPopoverOpen((open) => !open)}
+            aria-expanded={popoverOpen}
+            className="flex-shrink-0 rounded-[5px] px-1.5 py-1 text-[10px] font-medium text-accent-300 transition-colors duration-[120ms] ease-in hover:bg-accent/[0.12] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+          >
+            {popoverOpen ? "Hide read" : "Read matchup"}
+          </button>
+        )}
+      </div>
+
+      {addingSlot !== null && (
+        <div className="mt-2 min-w-0 [&>div]:min-w-0">
+          <ChampionPicker
+            value={null}
+            autoFocus
+            placeholder="Add an enemy…"
+            onChange={(champ) => {
+              onAddEnemy(champ);
+              setAddingSlot(null);
+            }}
+          />
+        </div>
+      )}
 
       {popoverOpen && effectiveLaneOpponentId !== null && (
         <MatchupAnalysisPopover

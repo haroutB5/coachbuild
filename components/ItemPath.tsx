@@ -1,170 +1,41 @@
 "use client";
 
 import type { ItemsBlock, Pick as PickType } from "@/lib/types";
-import { wpaClass, wpaText, fmtSample } from "./StatBadge";
-import AnimatedWpa from "./AnimatedWpa";
+import { IconWithFallback } from "@/components/IconWithFallback";
+import { fmtSample, wpaClass, wpaText } from "@/components/StatBadge";
+import { BuildPathArrow, CARD_CLASS, SectionLabel } from "@/components/hextech/builds/BuildVisuals";
 
-// Quiet, dim caution glyph for a low-sample pick — a hint to hover, not an alarm.
-function LowSampleFlag({ className = "" }: { className?: string }) {
+function ItemNode({ label, pick, isBoots = false, alts = [] }: { label: string; pick: PickType; isBoots?: boolean; alts?: PickType[] }) {
   return (
-    <span
-      title="Low sample size — treat this pick with caution"
-      aria-label="low sample size"
-      className={`text-gold/70 ${className}`}
-    >
-      ⚠
-    </span>
-  );
-}
-
-function ImgWithFallback({
-  src,
-  alt,
-  className,
-  size,
-}: {
-  src: string;
-  alt: string;
-  className?: string;
-  size?: number;
-}) {
-  return (
-    /* eslint-disable-next-line @next/next/no-img-element -- Item icons are runtime CDN URLs and this local wrapper preserves its intentional failure behavior. */
-    <img
-      src={src}
-      alt={alt}
-      className={className}
-      width={size}
-      height={size}
-      loading="lazy"
-      decoding="async"
-      onError={(e) => {
-        (e.currentTarget as HTMLImageElement).style.display = "none";
-      }}
-    />
-  );
-}
-
-interface ItemSlotProps {
-  label: string;
-  pick: PickType;
-  isBoots?: boolean;
-  alts?: PickType[];
-}
-
-function ItemSlot({ label, pick, isBoots, alts }: ItemSlotProps) {
-  return (
-    <div className="w-[84px] flex flex-col items-center text-center cursor-default group">
-      <div
-        className="text-[9.5px] tracking-[0.5px] uppercase font-bold min-h-[14px] mb-1.5 text-gold"
-      >
-        {label}
-      </div>
-      <div
-        title={`${pick.name} | WPA: ${wpaText(pick.wpa)} | ${fmtSample(pick.occurrence)} picks`}
-        className={`w-[52px] h-[52px] rounded-xl bg-black/30 overflow-hidden flex items-center justify-center transition-transform group-hover:scale-105 ${
-          isBoots ? "border border-teal-dim" : "border border-line"
-        }`}
-      >
-        <ImgWithFallback
-          src={pick.icon}
-          alt={pick.name}
-          className="w-full h-full object-contain"
-          size={52}
-        />
-      </div>
-      <div className="text-[10.5px] text-txt mt-1.5 leading-tight min-h-[28px] flex items-center justify-center">
-        {pick.name}
-      </div>
-      <AnimatedWpa wpa={pick.wpa} className="font-extrabold text-[12px]" />
-      <div className="text-[9.5px] text-mut tabular-nums flex items-center justify-center gap-0.5">
-        {fmtSample(pick.occurrence)}
-        {pick.lowSample && <LowSampleFlag />}
-      </div>
-
-      {alts && alts.length > 0 && (
-        <div className="mt-2 pt-1.5 border-t border-line/60 w-full">
-          <div className="text-[8px] uppercase tracking-[0.5px] text-mut mb-1">
-            or
-          </div>
-          <div className="flex justify-center gap-1">
-            {alts.map((a, ai) => (
-              <div
-                key={`${a.id}-${ai}`}
-                title={`${a.name} | WPA: ${wpaText(a.wpa)} | ${fmtSample(a.occurrence)} picks`}
-                className="flex flex-col items-center"
-              >
-                <div className="w-[26px] h-[26px] rounded-md bg-black/30 border border-line overflow-hidden opacity-75 hover:opacity-100 transition-opacity">
-                  <ImgWithFallback
-                    src={a.icon}
-                    alt={a.name}
-                    className="w-full h-full object-contain"
-                    size={26}
-                  />
-                </div>
-                <div className={`text-[8px] font-bold leading-tight tabular-nums ${wpaClass(a.wpa)}`}>
-                  {wpaText(a.wpa)}
-                </div>
-                <div className="text-[7px] text-mut tabular-nums flex items-center justify-center gap-0.5">
-                  {fmtSample(a.occurrence)}
-                  {a.lowSample && <LowSampleFlag className="text-[7px]" />}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+    <div className="flex min-w-[70px] flex-col items-center text-center">
+      <span className="mb-1 text-[8px] font-semibold uppercase tracking-[0.1em] text-[#9397ab]/55">{label}</span>
+      <span className={`flex h-[46px] w-[46px] items-center justify-center overflow-hidden rounded-[8px] ${isBoots ? "shadow-[inset_0_0_0_1px_rgba(70,199,155,0.55)]" : "shadow-[inset_0_0_0_1px_rgba(233,233,237,0.12)]"} bg-[linear-gradient(150deg,#2b2e42,#1c1e2c)]`}>
+        <IconWithFallback src={pick.icon} alt={pick.name} fallbackGlyph={pick.name} className="h-full w-full object-cover" size={46} />
+      </span>
+      <span className="mt-1.5 line-clamp-2 min-h-[24px] max-w-[76px] text-[9px] leading-tight text-[#e9e9ed]/75">{pick.name}</span>
+      <span className={`mt-0.5 text-[9px] font-semibold tabular-nums ${wpaClass(pick.wpa)}`}>{wpaText(pick.wpa)}</span>
+      <span className="text-[8px] tabular-nums text-[#9397ab]/55">{fmtSample(pick.occurrence)}</span>
+      {alts.length > 0 && <span className="mt-1 text-[8px] uppercase tracking-[0.08em] tabular-nums text-[#9397ab]/55">+{alts.length} alt</span>}
     </div>
   );
 }
-
-function Arrow() {
-  return (
-    <div className="text-mut text-lg px-0.5 self-start mt-[30px] select-none">›</div>
-  );
-}
-
 export default function ItemPath({ items }: { items: ItemsBlock }) {
-  const { starter, boots, first, second, third, fourthPlus, alts } = items;
-
-  const slots: {
-    label: string;
-    pick: PickType;
-    isBoots?: boolean;
-    alts?: PickType[];
-  }[] = [
-    { label: "Start", pick: starter },
-    { label: "1st", pick: first, alts: alts?.first },
-    { label: "Boots", pick: boots, isBoots: true, alts: alts?.boots },
-    { label: "2nd", pick: second, alts: alts?.second },
-    { label: "3rd", pick: third, alts: alts?.third },
-    ...fourthPlus.map((p, i) => ({
-      label: i === 0 ? "4th" : `${i + 4}th`,
-      pick: p,
-    })),
-  ];
+  const slots: { label: string; pick: PickType; isBoots?: boolean; alts?: PickType[] }[] = [
+    { label: "Start", pick: items.starter },
+    { label: "Boots", pick: items.boots, isBoots: true, alts: items.alts?.boots },
+    { label: "1st", pick: items.first, alts: items.alts?.first },
+    { label: "2nd", pick: items.second, alts: items.alts?.second },
+    { label: "3rd", pick: items.third, alts: items.alts?.third },
+    ...items.fourthPlus.map((pick, index) => ({ label: `${index + 4}th`, pick })),
+  ].slice(0, 6);
 
   return (
-    <div>
-      <p className="text-[11px] tracking-[1.5px] uppercase text-teal font-bold mb-1">
-        Item Path
-      </p>
-      <p className="text-[11px] text-mut mb-4">
-        Core path with situational swaps (the <span className="text-txt">or</span> row) per slot.
-      </p>
-      <div className="flex items-start flex-wrap gap-1">
-        {slots.map((slot, i) => (
-          <div key={`${slot.label}-${slot.pick.id}-${i}`} className="flex items-start gap-1">
-            {i > 0 && <Arrow />}
-            <ItemSlot
-              label={slot.label}
-              pick={slot.pick}
-              isBoots={slot.isBoots}
-              alts={slot.alts}
-            />
-          </div>
-        ))}
+    <section className={`${CARD_CLASS} p-4`}>
+      <SectionLabel>Item path</SectionLabel>
+      <p className="mt-1 text-[10px] leading-relaxed text-[#9397ab]/60">The six-slot view keeps starting items, boots, and completed items honest.</p>
+      <div className="mt-4 flex items-start gap-1 overflow-x-auto pb-1">
+        {slots.map((slot, index) => <div key={`${slot.pick.id}-${index}`} className="flex items-start gap-1">{index > 0 && <BuildPathArrow />}<ItemNode {...slot} /></div>)}
       </div>
-    </div>
+    </section>
   );
 }

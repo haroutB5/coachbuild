@@ -83,6 +83,24 @@ export interface DraftAssistantCandidate {
   isPotential: boolean;
   personalOverall: PersonalRecord;
   source: "recommended" | "blind";
+  /** Display-only matchup swing carried through when the row comes from the
+   *  recommend feed. Older/unit-test fixtures may omit it, which is treated
+   *  as an even swing rather than changing ranking behavior. */
+  synergyDelta?: number;
+}
+
+export type DraftTier = "S+" | "S" | "A" | "B";
+
+/**
+ * The draft feed does not ship a separate tier-list field. These badges are a
+ * compact presentation of the already-ranked window, so they are derived
+ * from the server order only and never feed back into scoring or filtering.
+ */
+export function draftTierForRank(rank: number): DraftTier {
+  if (rank <= 1) return "S+";
+  if (rank <= 3) return "S";
+  if (rank <= 8) return "A";
+  return "B";
 }
 
 export type DraftAssistantDetailSort = "winRate" | "pickRate" | "games";

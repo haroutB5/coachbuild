@@ -4,15 +4,10 @@ import { useEffect, useState, useCallback } from "react";
 import type { BuildResponse, ChampionRef } from "@/lib/types";
 import type { LaneId } from "./heroContracts";
 import { LANE_TO_ROLE_ID, LANE_LABEL } from "./heroContracts";
-import RunesSummonersCard from "./RunesSummonersCard";
 import ItemBuildCard from "./ItemBuildCard";
 import ProConsensusCard from "./ProConsensusCard";
 import FeaturedOtpCard from "./FeaturedOtpCard";
-import SkillOrderCard from "./SkillOrderCard";
-import HextechTabs from "./HextechTabs";
 import {
-  BUILD_TAB_OPTIONS,
-  DEFAULT_BUILD_TAB,
   buildTabId,
   buildTabPanelId,
   type BuildTab,
@@ -23,6 +18,7 @@ import ItemDetailPopover from "@/components/ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "@/components/EntityDetailPopover";
 import { useBodyScrollLock } from "@/components/useBodyScrollLock";
 import { DEFAULT_RANK_BRACKET } from "@/lib/rankBrackets";
+import { BuildRuneSidebar, BuildSkillOrderPanel } from "./builds/BuildVisuals";
 
 /** Which tap-for-detail popover is open — items share the "item" kind,
  *  runes/shards/summoner spells route through EntityDetailPopover's own
@@ -48,6 +44,8 @@ interface BuildTabContentProps {
   /** Fires once a build response resolves, so the sidebar footer can show
    *  the resolved data patch without a second fetch. */
   onPatchResolved?: (patch: string) => void;
+  /** Controlled by the hero so the tabs stay inside the persistent hero band. */
+  buildTab: BuildTab;
 }
 
 type FetchState =
@@ -178,9 +176,6 @@ function CardSkeleton({ className = "" }: { className?: string }) {
 // `space-y` parent, which contributes no line and no gap. The row-template
 // reasoning is kept anyway — it is still what governs THIS grid's own three
 // cards, all of which are visible together on the BUILD tab at every width.
-const BUILD_GRID_CLASS =
-  "flex flex-col gap-5 lg:grid lg:grid-cols-[5fr_7fr] lg:gap-x-5 lg:gap-y-5 lg:[grid-template-areas:'runes_itembuild'_'skillorder_skillorder']";
-
 // THE BUILD|PRO|OTP TAB SET NOW LIVES IN buildTabLayout.ts.
 //
 // It used to be declared here as `MobileBuildTab` / `MOBILE_TAB_OPTIONS`, and
@@ -217,7 +212,7 @@ function BuildLoadingSkeleton({ tab }: { tab: BuildTab }) {
   // Pro and OTP are a single full-width card each — no grid to mirror.
   if (tab !== "build") return <CardSkeleton className="min-h-[280px]" />;
   return (
-    <div className={BUILD_GRID_CLASS}>
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_372px]">
       <CardSkeleton className="[grid-area:runes]" />
       <CardSkeleton className="[grid-area:itembuild] min-h-[280px]" />
       <CardSkeleton className="[grid-area:skillorder]" />
@@ -225,7 +220,7 @@ function BuildLoadingSkeleton({ tab }: { tab: BuildTab }) {
   );
 }
 
-export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated, onPatchResolved }: BuildTabContentProps) {
+export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated, onPatchResolved, buildTab }: BuildTabContentProps) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
   const requestKey = `${champ.id}:${champ.key}:${lane}:${rankBracket}`;
   const [previousRequestKey, setPreviousRequestKey] = useState(requestKey);
@@ -241,8 +236,6 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
   // so switching tabs never re-triggers ProConsensusCard's /api/pros fetch or
   // FeaturedOtpCard's /api/otp/featured fetch, and never loses
   // RunesSummonersCard/ItemBuildCard/SkillOrderCard state.
-  const [buildTab, setBuildTab] = useState<BuildTab>(DEFAULT_BUILD_TAB);
-
   function openDetail(kind: "item" | EntityKind, id: number) {
     setLastDetail({ kind, id });
     setActiveDetail({ kind, id });
@@ -384,22 +377,8 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
   // (RunesSummonersCard's own click handlers) are untouched and still live.
 
   if (state.status === "loading") {
-    // The tab strip renders DURING loading now. It used to appear only once the
-    // build resolved, so the whole page below it jumped down by the strip's
-    // height (44px + border) on every champion change — a self-inflicted layout
-    // shift on the app's hottest path. It also means a user who lands mid-fetch
-    // can already choose the tab they want.
     return (
-      <div className="mt-5 space-y-5">
-        <HextechTabs
-          options={BUILD_TAB_OPTIONS}
-          value={buildTab}
-          onChange={setBuildTab}
-          ariaLabel="Build view"
-          className="mb-1"
-        />
-        <BuildLoadingSkeleton tab={buildTab} />
-      </div>
+      <div className="mt-3"><BuildLoadingSkeleton tab={buildTab} /></div>
     );
   }
 
@@ -456,21 +435,13 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
   const ver = versionFromPatch(build.patch);
 
   return (
-    <div className="mt-5 space-y-5">
+    <div className="mt-3 space-y-4">
       {/* THE NAVIGATION, AT EVERY WIDTH (2026-07-29). This wrapper used to be
           `lg:hidden`; the panels below used to escape their own gate through
           `lg:block`, so at `lg`+ everything rendered at once. Both are gone.
           Real tab semantics (role=tablist/tab/aria-selected, roving tabindex,
           Left/Right/Home/End) come from HextechTabs — see that file's header
           for the keyboard contract this change made load-bearing. */}
-      <HextechTabs
-        options={BUILD_TAB_OPTIONS}
-        value={buildTab}
-        onChange={setBuildTab}
-        ariaLabel="Build view"
-        className="mb-1"
-      />
-
       {/* ── ONE PANEL PER TAB ────────────────────────────────────────────────
           Previously each of the FIVE cards carried its own `role="tabpanel"`,
           three of them pointing at the same `hextech-tab-build` with only one
@@ -503,32 +474,13 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
         tabIndex={0}
         className={buildTab === "build" ? "" : "hidden"}
       >
-        <div className={BUILD_GRID_CLASS}>
-          <div className="[grid-area:runes]">
-            <RunesSummonersCard
-              runes={build.runes}
-              spells={build.spells}
-              onOpenDetail={openDetail}
-              championName={build.champion.name}
-              roleLabel={build.roleLabel}
-              build={build}
-              lane={lane}
-              altKeystone={altKeystone}
-            />
-          </div>
-          <div className="[grid-area:itembuild]">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_372px]">
+          <div className="min-w-0 space-y-4">
             <ItemBuildCard champ={champ} lane={lane} build={build} ver={ver} onItemClick={openItemPopover} />
+            <BuildSkillOrderPanel champId={champ.id} lane={lane} />
           </div>
-          {/* 2026-07-27 (recommended skill order feature) — a RECOMMENDATION
-              card (max-priority string + per-ability path), grouped with
-              RunesSummonersCard/ItemBuildCard under the "Build" tab rather than
-              "Pro": like ItemBuildCard, it's a build recommendation this page
-              produces, not a community/pro-play data view the way
-              ProConsensusCard is. Own fetch/loading/hidden states
-              (components/hextech/SkillOrderCard.tsx) — a null API payload
-              renders no card, collapsing this grid cell to zero height. */}
-          <div className="[grid-area:skillorder]">
-            <SkillOrderCard champ={champ} lane={lane} />
+          <div id="build-runes" className="min-w-0">
+            <BuildRuneSidebar build={build} ver={ver} altKeystone={altKeystone} onOpenDetail={openDetail} />
           </div>
         </div>
       </div>
@@ -550,6 +502,9 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
         tabIndex={0}
         className={buildTab === "pro" ? "" : "hidden"}
       >
+        <div className="mb-3 rounded-[8px] bg-white/[0.03] px-3 py-2.5 text-[11px] leading-relaxed text-[#9397ab]/70">
+          Pick frequency, not WPA — what pros and high-elo players actually built, in the order they bought it. No score is applied here.
+        </div>
         {/* v0.27.0 (user request: "pro players seem to build Rocketbelt on
             Viktor — create another builds and runes space based on what pro
             players are often building"). A plain pick-rate count over the

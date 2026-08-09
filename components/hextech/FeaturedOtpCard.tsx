@@ -97,10 +97,9 @@ import { IconWithFallback } from "@/components/IconWithFallback";
 import { buildFeaturedView } from "@/lib/otp/featuredBuild";
 import type { FeaturedGame } from "@/lib/otp/featured";
 import type { BuildSlot } from "@/lib/buildSlots";
+import type { FeaturedBuildView, FeaturedFullBuild } from "@/lib/otp/featuredBuild";
 import BuildSlotList from "./BuildSlotList";
 import { isContested } from "./buildSlotView";
-import HeroBand, { Pill } from "./HeroBand";
-import KpiStrip, { type KpiItem } from "./KpiStrip";
 import PanelHeading from "./PanelHeading";
 import { sortPerkIdsByRow } from "./perkSlots";
 import { opggProfileUrl } from "./opggProfile";
@@ -110,6 +109,7 @@ import type { SkillOrderModel } from "./skillOrder";
 import type { ProConsensusItemsInput } from "./itemSetBody";
 import type { LaneId } from "./heroContracts";
 import { featuredOtpRequestInputs } from "./featuredOtpRequest";
+import { ACCENT_CARD_CLASS, BuildPathArrow, CARD_CLASS, Scanline, SectionLabel, StatValue } from "./builds/BuildVisuals";
 
 interface FeaturedPlayer {
   gameName: string;
@@ -195,7 +195,7 @@ function isSkillOrderModel(value: unknown): value is SkillOrderModel {
 // `items-start` matters — without it the two columns stretch to equal height and
 // the shorter one's sections space out to fill, which is the sprawl this split
 // exists to remove, reintroduced one level down.
-const OTP_BODY_GRID_CLASS = "lg:grid lg:grid-cols-[5fr_7fr] lg:gap-x-8 lg:items-start";
+const OTP_BODY_GRID_CLASS = "grid gap-4 lg:grid-cols-[minmax(0,1fr)_372px] lg:items-start";
 
 /** Items below this build rate are noise on a 30-60 game sample: one or two
  *  games, usually a situational pickup or a game that ended early. Showing them
@@ -335,32 +335,36 @@ function SlotTag({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** One slot of the full build. Not a button: this card has no detail-popover
- *  plumbing (BuildTabContent passes `onOpenDetail` to ProConsensusCard, not to
- *  this one), and a tile that looks tappable and does nothing is worse than a
- *  tile that doesn't. The icon is therefore the only carrier of the item's
- *  identity, so it gets a REAL alt — not `alt=""` — unlike the rates list
- *  below, where the name is written out beside the icon and a duplicate alt
- *  would just make a screen reader say it twice.
- *
- *  `snowball` marks a stack item (Mejai's) that is in the strip because the
- *  player HELD it, not because this app suggests it. The tile goes dashed and
- *  muted, and both the tooltip and the alt say so — an alt of just "Mejai's
- *  Soulstealer" would read to a screen reader exactly like the five real build
- *  items beside it, which is the one thing this marker exists to prevent. It is
- *  one of three carriers; the other two (ordered last, named in the caption)
- *  live in lib/otp/featuredBuild.ts's `order` and in the caption below. */
-function BuildSlot({ name, icon, snowball = false }: { name: string; icon: string; snowball?: boolean }) {
-  const label = snowball ? `${name} — a snowball stack they held, not a recommendation` : name;
+function OtpBuildPath({
+  items,
+  ver,
+  itemName,
+}: {
+  items: FeaturedFullBuild["items"];
+  ver: string;
+  itemName: (id: number) => string;
+}) {
   return (
-    <span
-      title={label}
-      className={`w-11 h-11 rounded-lg bg-black/30 overflow-hidden flex items-center justify-center flex-shrink-0 ${
-        snowball ? "border border-dashed border-mut/50 opacity-70" : "border border-line"
-      }`}
-    >
-      <IconWithFallback src={icon} alt={label} fallbackGlyph={name} className="w-full h-full object-contain" size={44} />
-    </span>
+    <div className="mt-3 flex items-start gap-1 overflow-x-auto pb-1">
+      {items.map((item, index) => {
+        const demoted = item.pct < MIN_DISPLAY_PCT;
+        const recordOnly = item.isSnowball;
+        const name = itemName(item.itemId);
+        const label = recordOnly ? `${name} — a snowball stack they held, not a recommendation` : name;
+        return (
+          <div key={`${item.itemId}-${index}`} className="flex min-w-[70px] items-start gap-1">
+            {index > 0 && <BuildPathArrow />}
+            <div className="flex min-w-[62px] flex-col items-center text-center">
+              <span title={label} className={`flex h-11 w-11 items-center justify-center overflow-hidden rounded-[8px] bg-black/20 ${recordOnly ? "border border-dashed border-[#9397ab]/50 opacity-70" : demoted ? "shadow-[inset_0_0_0_1px_rgba(233,233,237,0.1)] opacity-60" : "shadow-[inset_0_0_0_1px_rgba(145,132,217,0.45)]"}`}>
+                <IconWithFallback src={itemIconUrl(item.itemId, ver)} alt={label} fallbackGlyph={name} className="h-full w-full object-contain" size={44} />
+              </span>
+              <span className={`mt-1.5 line-clamp-2 min-h-[24px] max-w-[74px] text-[9px] leading-tight ${recordOnly || demoted ? "text-[#e9e9ed]/42" : "text-[#e9e9ed]/80"}`}>{name}</span>
+              <span className={`mt-0.5 text-[9px] font-semibold tabular-nums ${recordOnly || demoted ? "text-[#e9e9ed]/42" : "text-[#b5abfc]"}`}>{item.pct}%</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -401,6 +405,84 @@ function TreeLabel({ treeId }: { treeId: number }) {
       </span>
       <span className="text-[11.5px] text-txt font-semibold">{name}</span>
     </div>
+  );
+}
+
+function OtpDivergenceCard({
+  build,
+  view,
+  fullBuild,
+  itemName,
+}: {
+  build: BuildResponse;
+  view: FeaturedBuildView;
+  fullBuild: FeaturedFullBuild | null;
+  itemName: (id: number) => string;
+}) {
+  const differences: string[] = [];
+  const starter = view.starters[0];
+  if (starter && starter.itemId !== build.items.starter.id) {
+    differences.push(`They open with ${itemName(starter.itemId)} rather than ${build.items.starter.name}.`);
+  }
+
+  const boots = view.boots[0];
+  if (boots && boots.itemId !== build.items.boots.id) {
+    differences.push(`They finish on ${itemName(boots.itemId)} over ${build.items.boots.name}.`);
+  }
+
+  const wpaCompleted = new Set([
+    build.items.first.id,
+    build.items.second.id,
+    build.items.third.id,
+    ...build.items.fourthPlus.map((pick) => pick.id),
+  ]);
+  const otpOnly = fullBuild?.items.find((item) => !item.isBoots && !item.isSnowball && !wpaCompleted.has(item.itemId));
+  if (otpOnly) {
+    differences.push(`Their recorded finished set includes ${itemName(otpOnly.itemId)}, outside the WPA path above.`);
+  }
+
+  const backfilled = view.items.find((item) => item.pct < MIN_DISPLAY_PCT);
+  if (backfilled && !differences.some((difference) => difference.includes(itemName(backfilled.itemId)))) {
+    differences.push(`${itemName(backfilled.itemId)} is backfilled below the 15% usage floor because it still appears in their stored games.`);
+  }
+
+  const lines = differences.length > 0 ? differences.slice(0, 3) : ["Their stored sample does not diverge from the WPA path on starting item, boots, or completed-item membership."];
+
+  return (
+    <section className={`${CARD_CLASS} p-4 lg:col-start-2 lg:row-start-1`}>
+      <div className="flex items-baseline justify-between gap-2">
+        <SectionLabel>Where they diverge</SectionLabel>
+        <span className="text-[9px] uppercase tracking-[0.1em] text-[#9397ab]/45">stored sample</span>
+      </div>
+      <ul className="mt-3 space-y-3">
+        {lines.map((line) => (
+          <li key={line} className="flex gap-2 border-t border-white/[0.07] pt-3 text-[11px] leading-relaxed text-[#e9e9ed]/75 first:border-t-0 first:pt-0">
+            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#9184d9]" aria-hidden="true" />
+            <span>{line}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function OtpLastGamesCard({ gameLog }: { gameLog: FeaturedGame[] }) {
+  if (gameLog.length === 0) return null;
+  return (
+    <section className={`${CARD_CLASS} p-4 lg:col-start-2 lg:row-start-4`}>
+      <div className="flex items-baseline justify-between gap-2">
+        <SectionLabel>Their last games</SectionLabel>
+        <span className="text-[9px] uppercase tracking-[0.1em] text-[#9397ab]/45">newest stored</span>
+      </div>
+      <div className="mt-3 divide-y divide-white/[0.07]">
+        {gameLog.slice(0, 3).map((game, index) => (
+          <div key={index} className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0">
+            <span className="text-[10px] tabular-nums text-[#9397ab]/65">{index === 0 ? "Most recent" : `${index + 1} games ago`}</span>
+            <span className={`text-[10px] font-semibold ${game.win === true ? "text-[#46c79b]" : game.win === false ? "text-[#e8736e]" : "text-[#9397ab]/65"}`}>{game.win === true ? "Victory" : game.win === false ? "Defeat" : "Result unavailable"}</span>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -682,71 +764,32 @@ export default function FeaturedOtpCard({
   const itemName = (id: number) => meta.get(id)?.name ?? `Item ${id}`;
   const runeOf = (id: number) => runeArt.get(id) ?? { name: `Rune #${id}`, icon: "" };
 
-  // CAREER numbers, from the source's own account totals — a different, LARGER
-  // denominator than `sample.games` below. The labels say "career" for exactly
-  // that reason; see this file's header. A cell is omitted, never zeroed, when
-  // the source didn't give us the field.
-  const kpis: KpiItem[] = [];
-  if (player.sourceGames != null) {
-    kpis.push({
-      key: "career-games",
-      label: "Career games",
-      value: player.sourceGames,
-      format: (n) => Math.round(n).toLocaleString("en-US"),
-      countUp: true,
-    });
-  }
-  if (player.winratePct != null) {
-    kpis.push({
-      key: "career-wr",
-      label: "Career win rate",
-      value: player.winratePct,
-      format: (n) => `${Math.round(n)}%`,
-      valueClassName: player.winratePct >= 50 ? "text-good" : "text-bad",
-      countUp: true,
-    });
-  }
-  if (player.championSharePct != null) {
-    kpis.push({
-      // The old label was the champion's own NAME ("AHRI 60%"), which never
-      // said what the number measured. It is the share of this account's games
-      // played on this champion, so the label now says that outright.
-      key: "champ-share",
-      label: `${champ.name}, of their games`,
-      value: player.championSharePct,
-      format: (n) => `${Math.round(n)}%`,
-      countUp: true,
-    });
-  }
-
   const sampleMeta = `${sample.games} stored games · ${winPct}% won`;
 
   return (
-    <div className="bg-panel border border-line rounded-xl overflow-hidden">
-      <HeroBand
-        flush
-        headingLevel={3}
-        splashKey={champ.key}
-        avatarSrc={champ.icon}
-        avatarAlt={champ.name}
-        eyebrow="Best one-trick"
-        title={
-          <PlayerIdentity
-            gameName={player.gameName}
-            tagLine={player.tagLine}
-            href={opggProfileUrl(player.server, player.gameName, player.tagLine)}
-          />
-        }
-        pills={
-          <>
-            {player.tier && <Pill tone="accent">{player.tier}</Pill>}
-            {player.lp != null && <Pill>{player.lp} LP</Pill>}
-            {player.server && <Pill>{player.server}</Pill>}
-          </>
-        }
-      />
-
-      {kpis.length > 0 && <KpiStrip flush columns={3} items={kpis} />}
+    <div className="space-y-4">
+      <section className={`${ACCENT_CARD_CLASS} relative overflow-hidden p-4 sm:p-5`}>
+        <Scanline />
+        <div className="relative flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 items-center gap-4">
+            <span className="flex h-[66px] w-[66px] shrink-0 items-center justify-center overflow-hidden rounded-[10px] bg-[linear-gradient(150deg,#3a3663,#20223a)] shadow-[inset_0_0_0_1px_rgba(145,132,217,0.55),0_0_22px_rgba(145,132,217,0.18)]">
+              <IconWithFallback src={champ.icon} alt={champ.name} fallbackGlyph={champ.name} className="h-full w-full object-cover" size={66} />
+            </span>
+            <div className="min-w-0">
+              <SectionLabel>The best {champ.name} we can find</SectionLabel>
+              <h3 className="mt-1 text-[23px] font-semibold leading-tight tracking-[-0.02em] text-[#e9e9ed]">
+                <PlayerIdentity gameName={player.gameName} tagLine={player.tagLine} href={opggProfileUrl(player.server, player.gameName, player.tagLine)} />
+              </h3>
+              <p className="mt-1 text-[10px] uppercase tracking-[0.1em] text-[#9397ab]/65">{player.server ?? "Region unavailable"} · {player.tier ?? "Rank unavailable"}{player.lp != null && <span className="tabular-nums"> · {player.lp} LP</span>}</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-5 border-l border-white/[0.1] pl-5 lg:min-w-[300px]">
+            <StatValue label="Win rate" value={player.winratePct == null ? "—" : `${player.winratePct.toFixed(1)}%`} tone={player.winratePct == null ? "normal" : player.winratePct >= 50 ? "good" : "bad"} />
+            <StatValue label="Games" value={sample.games.toLocaleString("en-US")} />
+            <StatValue label="KDA" value={player.kda == null ? "—" : player.kda.toFixed(1)} />
+          </div>
+        </div>
+      </section>
 
       <div className="p-4 sm:p-5">
         <div className="flex items-start justify-between gap-3 mb-3.5">
@@ -797,7 +840,8 @@ export default function FeaturedOtpCard({
                 rune page leads with Summoners, and hardcoding the reset onto
                 Runes would leave this column starting 20px lower than the
                 build column beside it. */}
-            <div className="min-w-0 lg:[&>*:first-child]:mt-0">
+            <div className="min-w-0 lg:contents">
+            <OtpDivergenceCard build={build} view={view} fullBuild={fullBuild} itemName={itemName} />
             {/* The FULL rune page, not a keystone and three shard icons (user
                 report 2026-07-29). Every part of it is already stored per game
                 and already modelled — `runes.page` carries primaryTree,
@@ -806,7 +850,7 @@ export default function FeaturedOtpCard({
                 RunesSummonersCard's: primary column, secondary column,
                 shards under the secondary tree they sit beside in client. */}
             {runePage && (
-              <section className="mt-5">
+              <section className={`${CARD_CLASS} mt-0 p-4 lg:col-start-2 lg:row-start-2`}>
                 <PanelHeading meta={`${runes!.pct}% of ${sample.games} games`}>Runes</PanelHeading>
                 {/* `grid-cols-2` at mobile packs the two trees side by side,
                     the same thing RunesSummonersCard does at 390px. At `sm`+
@@ -827,7 +871,7 @@ export default function FeaturedOtpCard({
                     primary row fits its keystone + 3 minors, and the shards fit
                     on one line. From `xl` the rail is ~493px and the side-by-side
                     pair fits again, so it comes back. */}
-                <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-[auto_auto] sm:justify-start sm:gap-x-12 lg:grid-cols-1 lg:gap-x-0 xl:grid-cols-[auto_auto] xl:gap-x-10">
+                <div className="mt-3 grid grid-cols-1 gap-x-4 gap-y-4 min-[460px]:grid-cols-2 sm:grid-cols-[auto_auto] sm:justify-start sm:gap-x-12 lg:grid-cols-1 lg:gap-x-0 xl:grid-cols-[auto_auto] xl:gap-x-10">
                   <div>
                     {runePage.primaryTree != null ? (
                       <TreeLabel treeId={runePage.primaryTree} />
@@ -891,7 +935,7 @@ export default function FeaturedOtpCard({
             )}
 
             {data!.spells && (
-              <section className="mt-5">
+              <section className={`${CARD_CLASS} mt-0 p-4 lg:col-start-2 lg:row-start-3`}>
                 <PanelHeading rule={false} meta={`${data!.spells.pct}% of ${sample.games} games`}>
                   Summoners
                 </PanelHeading>
@@ -915,8 +959,10 @@ export default function FeaturedOtpCard({
               </section>
             )}
 
+            <OtpLastGamesCard gameLog={gameLog} />
+
             {measuredSkillOrder ? (
-              <section className="mt-5">
+              <section className={`${CARD_CLASS} mt-0 p-4 lg:col-start-1 lg:row-start-2`}>
                 <PanelHeading rule={false}>Skill order</PanelHeading>
                 <SkillOrderGrid
                   model={measuredSkillOrder}
@@ -925,7 +971,7 @@ export default function FeaturedOtpCard({
                 />
               </section>
             ) : skillPriority ? (
-              <div className="mt-5">
+              <div className={`${CARD_CLASS} mt-0 p-4 lg:col-start-1 lg:row-start-2`}>
                 <PanelHeading rule={false}>Skill order</PanelHeading>
                 <div className="mt-2 flex items-center gap-1.5">
                   {skillPriority.map((s, i) => (
@@ -952,14 +998,14 @@ export default function FeaturedOtpCard({
                 The wider (7fr) RIGHT track at `lg`+, and the tail of the stack
                 on mobile. Still the headline content of this card — it just no
                 longer leads, by user directive; see OTP_BODY_GRID_CLASS. */}
-            <div className="min-w-0">
+            <div className="min-w-0 lg:contents">
             {/* Gated on EITHER, not on `fullBuild` alone. The opener is a fact
                 about how they play the lane and does not depend on any game
                 having reached a finished build — before this, a player whose
                 games all ended early lost their "Opens Dark Seal 70%" row as
                 collateral. */}
             {(fullBuild || starter) && (
-              <section>
+              <section className={`${CARD_CLASS} p-4 lg:col-start-1 lg:row-start-1`}>
                 <PanelHeading meta={sampleMeta}>Their build</PanelHeading>
 
                 {starter && (
@@ -1022,16 +1068,7 @@ export default function FeaturedOtpCard({
                         purchase order is not stored. Left-to-right here is
                         build rate. Do not add a step number, an arrow, or a
                         "first/then" affordance. */}
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      {fullBuild.items.map((slot) => (
-                        <BuildSlot
-                          key={slot.itemId}
-                          name={itemName(slot.itemId)}
-                          icon={itemIconUrl(slot.itemId, ver)}
-                          snowball={slot.isSnowball}
-                        />
-                      ))}
-                    </div>
+                    <OtpBuildPath items={fullBuild.items} ver={ver} itemName={itemName} />
 
                     {/* THE CAPTION MUST MATCH THE METHOD — see this file's
                         header and featuredBuild.ts's. Both branches describe
@@ -1109,6 +1146,9 @@ export default function FeaturedOtpCard({
                         </>
                       )}
                     </p>
+                    {view.items.some((item) => item.pct < MIN_DISPLAY_PCT) && (
+                      <p className="mt-2 text-[10px] leading-relaxed text-[#9397ab]/65">Items under the 15% usage floor are backfilled into the five-item recommendation and shown at their real rate, not dropped.</p>
+                    )}
                   </>
                 )}
               </section>
@@ -1133,13 +1173,13 @@ export default function FeaturedOtpCard({
                 "or Sorcerer's Shoes" with no explanation. Above the first
                 section that can indent, gated on ALL the slots on the card. */}
             {hasContestedSlot && (
-              <p className="mt-5 text-[10.5px] text-mut/80">
+              <p className="mt-0 text-[10.5px] text-mut/80 lg:col-start-1 lg:row-start-3">
                 <span className="text-txt font-semibold">or</span> = instead of, not as well
               </p>
             )}
 
             {bootsSlot && (
-              <section className="mt-4">
+              <section className={`${CARD_CLASS} mt-0 p-4 lg:col-start-1 lg:row-start-4`}>
                 <PanelHeading meta={sampleMeta}>Boots</PanelHeading>
                 {/* ONE slot, not a list — screenshot-caught at 390px. This
                     rendered "Crimson Lucidity 84%" and "Chainlaced Crushers
@@ -1159,7 +1199,7 @@ export default function FeaturedOtpCard({
             )}
 
             {itemSlots.length > 0 && (
-              <section className="mt-5">
+              <section className={`${CARD_CLASS} mt-0 p-4 lg:col-start-1 lg:row-start-5`}>
                 {/* "Build rates" was the old name, when this was a flat list of
                     items with a percentage each. It is now a list of DECISIONS,
                     and the heading has to say so — a reader who still reads it
