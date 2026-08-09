@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Reflection;
 using Forms = System.Windows.Forms;
 using System.Windows.Threading;
 using CoachBuild.Desktop.Tray;
@@ -8,6 +9,37 @@ namespace CoachBuild.Desktop.Tests;
 
 public sealed class TrayControllerTests
 {
+    [Fact]
+    public void Status_block_starts_with_disabled_assembly_version_line()
+    {
+        using var tray = new TrayController(Dispatcher.CurrentDispatcher);
+        tray.Start();
+        var menu = tray.ContextMenuForTesting;
+
+        menu.Show(new Point(0, 0));
+        try
+        {
+            var phaseItem = menu.Items.OfType<Forms.ToolStripMenuItem>()
+                .Single(item => (item.Text ?? string.Empty).StartsWith("Phase: ", StringComparison.Ordinal));
+            var phaseIndex = menu.Items.IndexOf(phaseItem);
+            var versionItem = Assert.IsType<Forms.ToolStripMenuItem>(menu.Items[phaseIndex - 1]);
+
+            var informationalVersion = Assembly.GetEntryAssembly()?
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+                .InformationalVersion;
+            var expectedVersion = string.IsNullOrWhiteSpace(informationalVersion)
+                ? "unknown"
+                : informationalVersion.Split('+', 2)[0];
+
+            Assert.Equal($"CoachBuild v{expectedVersion}", versionItem.Text);
+            Assert.False(versionItem.Enabled);
+        }
+        finally
+        {
+            menu.Close();
+        }
+    }
+
     [Theory]
     [InlineData(WebView2Availability.Unknown, false)]
     [InlineData(WebView2Availability.Available, false)]

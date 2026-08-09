@@ -3,6 +3,7 @@ global using System.Net.Http;
 
 using System.Security.Cryptography;
 using System.Text;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Threading;
 using System.Text.Json;
@@ -161,6 +162,7 @@ public partial class App : WpfApplication
     private OverlayWindow? _overlay;
     private WebView2Window? _webView;
     private WebView2EnvironmentService? _webViewEnvironment;
+    private RedactedLog? _log;
     private VelopackUpdateService? _updates;
     private Task? _pollTask;
     private TrayMenuState _trayState = TrayMenuState.Default;
@@ -169,6 +171,7 @@ public partial class App : WpfApplication
     private int _phaseBusy;
     private int _webViewVisible;
     private int _updateBusy;
+    private int _lastWebView2ProbeState = -1;
     private bool _isShuttingDown;
 
     public static App? CurrentApp => Current as App;
@@ -199,6 +202,7 @@ public partial class App : WpfApplication
 
         Paths = DesktopPaths.Create();
         Paths.EnsureCreated();
+        _log = new RedactedLog(Paths.Root);
         SessionToken = SessionTokenStore.ReadOrCreate(Paths.SessionTokenFile);
 
         if (!TryAcquireMutex())
@@ -214,7 +218,7 @@ public partial class App : WpfApplication
 
         if (_services is NullDesktopHostServices)
         {
-            var nativeServices = new CoreDesktopHostServices(SessionToken, Paths.Root);
+            var nativeServices = new CoreDesktopHostServices(SessionToken, Paths.Root, log: _log);
             nativeServices.PageRequested += OnNativePageRequested;
             _services = nativeServices;
         }
@@ -467,7 +471,8 @@ public partial class App : WpfApplication
                 _webViewEnvironment,
                 AppOrigin,
                 SessionToken,
-                Paths.WebView2UserDataFolder)).Task.ConfigureAwait(false);
+                Paths.WebView2UserDataFolder,
+                OnWebViewRepairCompleted)).Task.ConfigureAwait(false);
             _webView!.Closed += OnWebViewClosed;
             Volatile.Write(ref _webViewVisible, 1);
             SetUpdateBusy(IsUpdateBusyContext());
@@ -486,18 +491,37 @@ public partial class App : WpfApplication
 
     private async Task RepairWebView2Async()
     {
-        var repaired = _webViewEnvironment is not null
-            && await _webViewEnvironment.RepairAsync(_shutdown.Token).ConfigureAwait(false);
-        await Dispatcher.InvokeAsync(() =>
+        var result = _webViewEnvironment is { } environment
+            ? await environment.RepairAsync(_shutdown.Token).ConfigureAwait(false)
+            : new RepairResult(false, null, false, TimeSpan.Zero);
+        OnWebViewRepairCompleted(result);
+    }
+
+    private void OnWebViewRepairCompleted(RepairResult result)
+    {
+        LogWebView2Repair(result);
+        if (_isShuttingDown) return;
+
+        if (Dispatcher.CheckAccess())
         {
-            _trayState = _trayState with
-            {
-                WebView2Available = repaired
-                    ? WebView2Availability.Available
-                    : WebView2Availability.Missing,
-            };
-            _tray?.UpdateState(_trayState);
-        });
+            ApplyWebView2RepairResult(result);
+            return;
+        }
+
+        Dispatcher.BeginInvoke(
+            () => ApplyWebView2RepairResult(result),
+            DispatcherPriority.Background);
+    }
+
+    private void ApplyWebView2RepairResult(RepairResult result)
+    {
+        _trayState = _trayState with
+        {
+            WebView2Available = result.IsSuccess
+                ? WebView2Availability.Available
+                : WebView2Availability.Missing,
+        };
+        _tray?.UpdateState(_trayState);
     }
 
     private async Task ProbeWebView2AvailabilityAsync(CancellationToken cancellationToken)
@@ -506,9 +530,9 @@ public partial class App : WpfApplication
 
         try
         {
-            var available = await _webViewEnvironment
-                .IsRuntimeAvailableAsync(cancellationToken)
-                .ConfigureAwait(false);
+            var version = _webViewEnvironment.AvailableVersion;
+            var available = !string.IsNullOrWhiteSpace(version);
+            LogWebView2Probe(_webViewEnvironment, version);
             await Dispatcher.InvokeAsync(() =>
             {
                 if (_isShuttingDown) return;
@@ -529,6 +553,44 @@ public partial class App : WpfApplication
             // A failed probe is not proof that the runtime is missing. Keep
             // the tray in Unknown so Repair cannot flash before a verdict.
         }
+    }
+
+    private void LogWebView2Probe(WebView2EnvironmentService environment, string? version)
+    {
+        var available = !string.IsNullOrWhiteSpace(version);
+        var state = available ? 1 : 0;
+        if (Interlocked.Exchange(ref _lastWebView2ProbeState, state) == state) return;
+
+        if (available)
+        {
+            _log?.Info($"webview2 probe: available {version}");
+            return;
+        }
+
+        var message = $"webview2 probe: missing ({environment.LastProbeFailure ?? "unknown"})";
+        if (environment.LastProbeFailure is not null && !environment.LastProbeFailureWasRuntimeNotFound)
+            _log?.Error("webview2-probe", message, throttle: TimeSpan.Zero);
+        else
+            _log?.Info(message);
+    }
+
+    private void LogWebView2Repair(RepairResult result)
+    {
+        if (result.IsSuccess)
+        {
+            var exit = result.ExitCode?.ToString(CultureInfo.InvariantCulture) ?? "none";
+            _log?.Info($"webview2 repair: ok in {FormatElapsed(result.Elapsed)}s (exit={exit})");
+            return;
+        }
+
+        var failureExit = RepairResult.FormatExitCode(result.ExitCode);
+        var probe = _webViewEnvironment?.LastProbeFailure ?? "none";
+        _log?.Info($"webview2 repair: FAILED exit={failureExit} bootstrapperFound={result.BootstrapperFound} elapsed={FormatElapsed(result.Elapsed)}s probe={probe}");
+    }
+
+    private static string FormatElapsed(TimeSpan elapsed)
+    {
+        return elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture);
     }
 
     private void SetWebViewUnavailable()
@@ -628,13 +690,14 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         string sessionToken,
         string logDirectory,
         CoreSkillOrderProvider? skillOrders = null,
-        IEnumerable<int>? bridgePorts = null)
+        IEnumerable<int>? bridgePorts = null,
+        RedactedLog? log = null)
     {
         if (!SessionTokenStore.IsValid(sessionToken))
             throw new ArgumentException("A valid persistent session token is required.", nameof(sessionToken));
 
         _state = new CompanionState();
-        _log = new RedactedLog(logDirectory);
+        _log = log ?? new RedactedLog(logDirectory);
         _credentials = new LcuCredentialResolver(diagnosticSink: message => _log.Info(message));
         _lcu = new LcuHttpClient(_credentials);
         _live = new LiveClientDataClient();

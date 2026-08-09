@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Windows.Threading;
 using Forms = System.Windows.Forms;
@@ -44,6 +45,7 @@ public sealed class TrayCommandEventArgs : EventArgs
 /// </summary>
 public sealed class TrayController : IDisposable
 {
+    private static readonly string AppVersion = ResolveAppVersion();
     private static readonly string[] Lanes = ["TOP", "JUNGLE", "MID", "BOT", "SUPPORT"];
 
     private readonly Dispatcher _dispatcher;
@@ -154,6 +156,7 @@ public sealed class TrayController : IDisposable
         _menu.Items.Add(lane);
 
         _menu.Items.Add(new Forms.ToolStripSeparator());
+        _menu.Items.Add(StatusItem($"CoachBuild v{AppVersion}"));
         _menu.Items.Add(StatusItem($"Phase: {DisplayPhase(_state.Phase)}"));
         _menu.Items.Add(StatusItem(_state.IsCompanionBusy ? "Companion: busy" : "Companion: ready"));
         using (var process = Process.GetCurrentProcess())
@@ -188,6 +191,19 @@ public sealed class TrayController : IDisposable
     private static Forms.ToolStripMenuItem StatusItem(string text)
     {
         return new Forms.ToolStripMenuItem(text) { Enabled = false };
+    }
+
+    private static string ResolveAppVersion()
+    {
+        var informationalVersion = Assembly.GetEntryAssembly()?
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion;
+        if (string.IsNullOrWhiteSpace(informationalVersion)) return "unknown";
+
+        var metadataStart = informationalVersion.IndexOf('+');
+        return metadataStart >= 0
+            ? informationalVersion[..metadataStart]
+            : informationalVersion;
     }
 
     private void RaiseCommand(TrayCommand command, string? lane = null)

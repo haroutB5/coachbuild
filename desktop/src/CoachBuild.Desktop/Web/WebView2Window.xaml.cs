@@ -15,6 +15,7 @@ public partial class WebView2Window : Window
     private readonly HostedPagePolicy _policy;
     private readonly string _sessionToken;
     private readonly string _userDataFolder;
+    private readonly Action<RepairResult>? _repairCompleted;
     private ReopenTarget _lastTarget = new(ReopenDestination.Home);
     private bool _initialized;
     private bool _disposed;
@@ -23,13 +24,15 @@ public partial class WebView2Window : Window
         WebView2EnvironmentService environmentService,
         string appOrigin,
         string sessionToken,
-        string userDataFolder)
+        string userDataFolder,
+        Action<RepairResult>? repairCompleted = null)
     {
         _environmentService = environmentService ?? throw new ArgumentNullException(nameof(environmentService));
         _policy = new HostedPagePolicy(appOrigin);
         if (!SessionTokenStore.IsValid(sessionToken)) throw new ArgumentException("Invalid session token.", nameof(sessionToken));
         _sessionToken = sessionToken;
         _userDataFolder = userDataFolder ?? throw new ArgumentNullException(nameof(userDataFolder));
+        _repairCompleted = repairCompleted;
 
         InitializeComponent();
         Fallback.RepairRequested += OnRepairRequested;
@@ -174,10 +177,14 @@ public partial class WebView2Window : Window
         Fallback.Message = "Repairing WebView2 for this Windows user…";
         try
         {
-            var repaired = await _environmentService.RepairAsync().ConfigureAwait(true);
-            if (!repaired)
+            var result = await _environmentService.RepairAsync().ConfigureAwait(true);
+            _repairCompleted?.Invoke(result);
+            if (!result.IsSuccess)
             {
-                ShowFallback("WebView2 repair did not complete. Use the installer repair action and retry.");
+                ShowFallback(RepairFailureMessage(
+                    result,
+                    _environmentService.LastProbeFailure,
+                    _environmentService.LastProbeFailureWasRuntimeNotFound));
                 return;
             }
 
@@ -192,6 +199,26 @@ public partial class WebView2Window : Window
         {
             Fallback.IsRepairEnabled = true;
         }
+    }
+
+    internal static string RepairFailureMessage(
+        RepairResult result,
+        string? lastProbeFailure,
+        bool lastProbeFailureWasRuntimeNotFound)
+    {
+        if (!result.BootstrapperFound)
+            return "The repair helper is missing from this installation. Reinstall CoachBuild with the latest Setup.exe.";
+
+        if (RepairResult.IsNetworkExitCode(result.ExitCode))
+            return "The WebView2 download failed — check your internet connection or firewall, then retry.";
+
+        if (lastProbeFailure is not null && !lastProbeFailureWasRuntimeNotFound)
+            return "CoachBuild hit an app-side WebView2 loader problem. Installing the runtime will not help; see %LOCALAPPDATA%\\CoachBuild\\companion.log for details.";
+
+        if (result.ExitCode is 0)
+            return "The WebView2 installer finished, but Windows has not registered the runtime yet. Wait a minute and retry.";
+
+        return $"WebView2 install did not finish (installer code {RepairResult.FormatExitCode(result.ExitCode)}). Retry, or install the runtime from Microsoft and relaunch CoachBuild.";
     }
 
     private void ShowFallback(string message)

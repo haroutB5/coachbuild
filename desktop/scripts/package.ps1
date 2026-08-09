@@ -49,7 +49,7 @@ if (-not (Test-Path $bootstrapper)) {
                 -UseBasicParsing
         }
         catch {
-            Write-Warning "Could not download the Evergreen WebView2 bootstrapper: $($_.Exception.Message)"
+            throw "Could not download the Evergreen WebView2 bootstrapper: $($_.Exception.Message)"
         }
     }
 }
