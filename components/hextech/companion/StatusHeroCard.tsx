@@ -1,46 +1,25 @@
-"use client";
-
-// ─────────────────────────────────────────────────────────────────────────────
-// StatusHeroCard — /live-setup's gold-bordered hero (mockup 2.png): status
-// dot + honest current-phase headline, SCRIPT/LAST POLL metadata top-right,
-// and a 4-node "Client -> Lobby -> Champ Select -> In Game" progress rail.
-//
-// Deliberately takes already-resolved primitives (phase/clientConnected/
-// version/lastPollAt/champion name+role), not a raw ProbeState/CompanionStatus
-// object — keeps this component decoupled from companionClient.ts's wire
-// shape so it renders the exact same way whether fed from the page's own
-// passive poll or (if that ever changes) a different source.
-// ─────────────────────────────────────────────────────────────────────────────
-
 export interface StatusHeroCardProps {
   clientConnected: boolean;
-  /** Raw LCU gameflow phase string ("None" | "Lobby" | "Matchmaking" |
-   *  "ReadyCheck" | "ChampSelect" | "GameStart" | "InProgress" |
-   *  "WaitingForStats" | "EndOfGame"), or null when nothing has been
-   *  reported yet. */
+  /** Raw LCU gameflow phase, or null when the companion has no fresh read. */
   phase: string | null;
-  /** Already-resolved champion display name for a live champ-select, or null
-   *  when in ChampSelect but nothing has resolved yet (an honest "picking"
-   *  state, never a fabricated name). */
   champSelectChampionName?: string | null;
   champSelectRoleLabel?: string | null;
-  /** Companion script version (CompanionStatus.version), or null before the
-   *  first successful poll. */
   scriptVersion: string | null;
-  /** ISO timestamp of the most recent successful poll, or null before the
-   *  first one. */
   lastPollAt: string | null;
-  /** False once the browser has not heard a successful /status recently. */
+  /** Hard freshness gate: stale status cannot keep the hero green. */
   statusFresh?: boolean;
 }
 
 const LOBBY_PHASES = new Set(["Lobby", "Matchmaking", "ReadyCheck"]);
 const IN_GAME_PHASES = new Set(["GameStart", "InProgress", "WaitingForStats", "EndOfGame"]);
 
-/** 0 = not even connected, 1 = client only, 2 = lobby, 3 = champ select,
- *  4 = in game. An unrecognized phase string (future LCU phase this app
- *  doesn't know about yet) conservatively stays at 1 rather than guessing
- *  it means "further along." */
+const RAIL_NODES = [
+  { rank: 1, label: "Client" },
+  { rank: 2, label: "Lobby" },
+  { rank: 3, label: "Champ Select" },
+  { rank: 4, label: "In Game" },
+] as const;
+
 function phaseRank(phase: string | null, clientConnected: boolean): number {
   if (!clientConnected) return 0;
   if (!phase || phase === "None") return 1;
@@ -52,18 +31,8 @@ function phaseRank(phase: string | null, clientConnected: boolean): number {
 
 function formatClock(iso: string | null): string {
   if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleTimeString(undefined, { hour12: false });
-}
-
-interface Headline {
-  title: string;
-  sub: string;
-  /** Reuses the same off/partial/connected dot vocabulary /live-setup's
-   *  pre-redesign indicator already used (bg-mut/bg-teal/bg-win) — not the
-   *  good/bad tokens, which are reserved for WPA/winrate signal only. */
-  dot: "off" | "live" | "connected";
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleTimeString(undefined, { hour12: false });
 }
 
 function headlineFor(
@@ -73,69 +42,43 @@ function headlineFor(
   role: string | null | undefined,
   statusFresh: boolean,
   hasPollEvidence: boolean
-): Headline {
+) {
   if (!statusFresh && hasPollEvidence) {
     return {
       title: "Companion not responding",
       sub: "Check that it is running, then test the connection again.",
-      dot: "off",
     };
   }
-  if (!clientConnected) {
+  if (!statusFresh || !clientConnected) {
     return {
       title: "Not connected yet",
-      sub: "Run the install command below, then open your League client.",
-      dot: "off",
+      sub: "Install the desktop app below, then open your League client.",
     };
   }
   if (phase === "ChampSelect") {
-    if (championName) {
-      const suffix = role ? `, ${role}` : "";
-      return {
-        title: `Champ select detected — ${championName}${suffix}`,
-        sub: "Runes and item sets are staged. They apply the moment you lock in.",
-        dot: "live",
-      };
-    }
+    const selection = championName ? ` · ${championName}${role ? `, ${role}` : ""}` : "";
     return {
-      title: "Champ select detected — picking…",
-      sub: "Runes and item sets will stage the moment a champion resolves.",
-      dot: "live",
+      title: `Connected · following champ select${selection}`,
+      sub: "Runes and item sets stage for your pick and apply only when you ask them to.",
     };
   }
   if (phase && IN_GAME_PHASES.has(phase)) {
     return {
-      title: "In game",
-      sub: "The companion is tracking this match — check Builds for a live enemy read.",
-      dot: "connected",
+      title: "Connected · in game",
+      sub: "The overlay is focused on the next legal ability point from your own live read.",
     };
   }
   if (phase && LOBBY_PHASES.has(phase)) {
     return {
-      title: "In lobby",
-      sub: "Connected and waiting for champ select to start.",
-      dot: "connected",
+      title: "Connected · in lobby",
+      sub: "Waiting for champ select to start.",
     };
   }
   return {
-    title: "League client detected",
+    title: "Connected · League client detected",
     sub: "Waiting for a lobby or champ select to begin.",
-    dot: "connected",
   };
 }
-
-const DOT_CLASS: Record<Headline["dot"], string> = {
-  off: "bg-mut",
-  live: "bg-teal animate-pulse",
-  connected: "bg-win",
-};
-
-const RAIL_NODES: { rank: number; label: string }[] = [
-  { rank: 1, label: "Client" },
-  { rank: 2, label: "Lobby" },
-  { rank: 3, label: "Champ Select" },
-  { rank: 4, label: "In Game" },
-];
 
 export default function StatusHeroCard({
   clientConnected,
@@ -146,64 +89,99 @@ export default function StatusHeroCard({
   lastPollAt,
   statusFresh = true,
 }: StatusHeroCardProps) {
+  const genuinelyConnected = statusFresh && clientConnected;
   const headline = headlineFor(
-    clientConnected,
-    phase,
+    genuinelyConnected,
+    statusFresh ? phase : null,
     champSelectChampionName,
     champSelectRoleLabel,
     statusFresh,
     Boolean(scriptVersion || lastPollAt)
   );
-  const currentRank = phaseRank(statusFresh ? phase : null, statusFresh && clientConnected);
+  const currentRank = phaseRank(statusFresh ? phase : null, genuinelyConnected);
+  const hasMetadata = Boolean(scriptVersion || lastPollAt);
 
   return (
-    <section className="bg-panel border border-line-gold rounded-xl p-5 sm:p-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="flex items-start gap-3 min-w-0">
-          <span className={`mt-1.5 w-2.5 h-2.5 rounded-full flex-shrink-0 ${DOT_CLASS[headline.dot]}`} aria-hidden="true" />
+    <section
+      className="rounded-[10px] p-5 sm:p-6"
+      style={
+        genuinelyConnected
+          ? {
+              background: "linear-gradient(150deg, rgba(70,199,155,.10), rgba(35,37,50,.90))",
+              boxShadow: "inset 0 0 0 1px rgba(70,199,155,.24)",
+            }
+          : {
+              background: "linear-gradient(150deg, rgba(233,233,237,.04), rgba(27,29,42,.96))",
+              boxShadow: "inset 0 0 0 1px rgba(233,233,237,.08)",
+            }
+      }
+    >
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex min-w-0 items-start gap-3">
+          <span
+            className={`mt-[7px] h-2.5 w-2.5 shrink-0 rounded-full ${
+              genuinelyConnected ? "animate-pulse bg-good" : "bg-txt/[0.20]"
+            }`}
+            aria-hidden="true"
+          />
           <div className="min-w-0">
-            <h2 className="text-[16px] sm:text-[17px] font-bold text-txt tracking-[-0.01em]">{headline.title}</h2>
-            <p className="text-[12.5px] text-mut mt-1 leading-relaxed max-w-[48ch]">{headline.sub}</p>
+            <h2 className="text-[17px] font-semibold tracking-[-0.01em] text-txt">{headline.title}</h2>
+            <p className="mt-1 max-w-[54ch] text-[12.5px] leading-relaxed text-mut">{headline.sub}</p>
           </div>
         </div>
-        {/* Before anything has ever connected, both of these are "—". On mobile
-            the block wraps under the headline and left-aligns, so it rendered as
-            a bare "SCRIPT —" / "LAST POLL —" pair that reads as broken markup
-            rather than as absent data. A label with nothing to label is worth
-            less than the space it costs: show the pair only once there is at
-            least one real value to put in it. */}
-        {(scriptVersion || lastPollAt) && (
-          <div className="text-right flex-shrink-0 text-[10.5px] text-mut uppercase tracking-[0.06em] leading-relaxed tabular-nums">
-            <p>Script {scriptVersion ? `v${scriptVersion}` : "—"}</p>
-            <p>Last poll {formatClock(lastPollAt)}</p>
-          </div>
+        {hasMetadata && (
+          <dl className="shrink-0 text-right text-[10px] font-medium uppercase leading-relaxed tracking-[0.06em] text-mut tabular-nums">
+            <div>
+              <dt className="sr-only">Script version</dt>
+              <dd>Script {scriptVersion ? `v${scriptVersion}` : "—"}</dd>
+            </div>
+            <div>
+              <dt className="sr-only">Last poll</dt>
+              <dd>Last poll {formatClock(lastPollAt)}</dd>
+            </div>
+          </dl>
         )}
       </div>
 
-      <div className="flex items-start w-full mt-5 pt-4 border-t border-line/60">
-        {RAIL_NODES.map((node, i) => {
-          const state = node.rank < currentRank ? "done" : node.rank === currentRank ? "current" : "future";
-          const dotCls =
-            state === "done" ? "bg-win" : state === "current" ? "bg-teal" : "bg-panel2 border border-line";
-          const labelCls =
-            state === "future" ? "text-mut/60" : state === "current" ? "text-teal font-semibold" : "text-txt/80";
-          return (
-            <div key={node.label} className={`flex items-center ${i < RAIL_NODES.length - 1 ? "flex-1" : "flex-shrink-0"}`}>
-              <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
-                <span className={`w-2.5 h-2.5 rounded-full ${dotCls}`} aria-hidden="true" />
-                <span className={`text-[9.5px] sm:text-[10px] uppercase tracking-[0.05em] whitespace-nowrap ${labelCls}`}>
-                  {node.label}
-                </span>
+      <div className="mt-5 border-t border-txt/[0.08] pt-4">
+        <div className="flex w-full items-start">
+          {RAIL_NODES.map((node, index) => {
+            const state = node.rank < currentRank ? "complete" : node.rank === currentRank ? "active" : "pending";
+            const complete = state === "complete";
+            const active = state === "active";
+            return (
+              <div key={node.label} className={`flex items-start ${index < RAIL_NODES.length - 1 ? "min-w-0 flex-1" : "shrink-0"}`}>
+                <div className="flex shrink-0 flex-col items-center gap-2">
+                  <span
+                    className={`h-[15px] w-[15px] rounded-full ${
+                      complete
+                        ? "border-2 border-good bg-good/20"
+                        : active
+                          ? "border-2 border-accent bg-accent/20 shadow-[0_0_10px_2px_rgba(145,132,217,.55)]"
+                          : "border border-txt/[0.18] bg-transparent"
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <span
+                    className={`whitespace-nowrap text-[9px] font-medium uppercase tracking-[0.10em] ${
+                      complete ? "text-good" : active ? "font-semibold text-accent-400" : "text-txt/[0.32]"
+                    }`}
+                  >
+                    {node.label}
+                  </span>
+                </div>
+                {index < RAIL_NODES.length - 1 && (
+                  <span
+                    className={`mx-2 mt-[7px] h-px min-w-3 flex-1 ${
+                      complete ? "bg-good/[0.48]" : active ? "bg-gradient-to-r from-accent/[0.50] to-txt/[0.08]" : "bg-txt/[0.08]"
+                    }`}
+                    aria-hidden="true"
+                  />
+                )}
               </div>
-              {i < RAIL_NODES.length - 1 && (
-                <span
-                  className={`h-px flex-1 mx-2 mb-4 ${node.rank < currentRank ? "bg-win/50" : "bg-line"}`}
-                  aria-hidden="true"
-                />
-              )}
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     </section>
   );

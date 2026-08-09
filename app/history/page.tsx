@@ -20,7 +20,6 @@ import {
   type WirePlayerSubject,
   type WireSelection,
 } from "@/components/historyRestore";
-import PageHeader from "@/components/hextech/PageHeader";
 import ProPlayersSpotlight from "@/components/ProPlayersSpotlight";
 
 // Module-level (stable references) so FavoriteStarButton's subscribe effect
@@ -244,15 +243,21 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="min-h-screen pb-16">
-      <div className="max-w-[1100px] mx-auto px-4 sm:px-6">
+    <main className="mx-auto max-w-[1180px] px-4 pb-16 pt-8 sm:px-6">
+      <div>
         {/* ── Top bar (v0.51 wave B; recent-games table removed per user
             directive v0.51.2 — search is the page's primary view again) ── */}
-        <PageHeader title="Pro Players" />
+        <div className="flex items-end justify-between gap-5">
+          <div>
+            <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-teal">SOLO QUEUE + OFFICIAL PRO PLAY · 90-DAY WINDOW</p>
+            <h1 className="mt-1.5 text-[34px] font-semibold leading-none tracking-[-0.025em] text-txt">Pro Players</h1>
+          </div>
+          <div className="hidden rounded-[8px] bg-panel-glass px-3 py-2 text-right text-[10px] text-mut shadow-[inset_0_0_0_1px_rgba(233,233,237,.08)] sm:block">Source filters and favorite players<br /><span className="text-txt">use the real tracked match feed</span></div>
+        </div>
 
         {/* ── Search ── */}
-        <section className="pt-2 pb-5 border-b border-line mb-6">
-          <p className="text-[11px] tracking-[0.12em] uppercase text-mut font-semibold mb-4">Search</p>
+        <section className="mt-5 rounded-[9px] bg-panel-glass px-4 py-4 shadow-[inset_0_0_0_1px_rgba(233,233,237,.08)] sm:px-5">
+          <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-mut">Find a player or champion</p>
 
           {/* Mode toggle */}
           <div className="flex justify-center mb-4">
@@ -283,7 +288,7 @@ export default function HistoryPage() {
               again. Each is scoped to its own mode, and only while nothing
               is selected yet (once something's picked, the summary line
               below carries its own favorite star). */}
-          {mode === "player" && player === null && <FavoritePlayerChips onSelect={choosePlayer} />}
+          {mode === "player" && player === null && <FavoritePlayerChips label="Favorites" onSelect={choosePlayer} />}
           {mode === "champion" && champ === null && <FavoriteChampionChips onSelect={chooseChampion} />}
         </section>
 
@@ -396,6 +401,6 @@ export default function HistoryPage() {
           )}
         </footer>
       </div>
-    </div>
+    </main>
   );
 }

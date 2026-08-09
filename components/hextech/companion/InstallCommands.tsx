@@ -1,21 +1,13 @@
 "use client";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// InstallCommands — /live-setup's "INSTALL — ONE LINE, NOTHING WRITTEN TO
-// DISK" section (mockup 2.png). Lifted verbatim from the pre-redesign
-// app/live-setup/page.tsx (same CopyableCommand behavior + the same two
-// command strings) — only the layout/copy changed to match the mockup's
-// "RUN NOW (THIS SESSION)" / "RUN NOW + AUTO-START ON LOGIN" row labels.
-//
-// Command strings are unchanged from the shipped page (verified against the
-// live source before this rewrite) — per the companion's documented flag
-// contract (live-companion-plan.md §1), the persistent variant uses `-Install`.
-// ─────────────────────────────────────────────────────────────────────────────
-
 import { useState } from "react";
+import { CopySimple, DownloadSimple } from "@phosphor-icons/react";
 
-const INSTALL_ONE_LINER = "irm https://coachbuild.vercel.app/companion.ps1 | iex";
-const INSTALL_PERSISTENT =
+export const DESKTOP_APP_DOWNLOAD_URL =
+  "https://github.com/haroutB5/coachbuild-desktop-releases/releases/latest/download/CoachBuild.Desktop-win-Setup.exe";
+
+const LEGACY_INSTALL_ONE_LINER = "irm https://coachbuild.vercel.app/companion.ps1 | iex";
+const LEGACY_INSTALL_PERSISTENT =
   '& ([scriptblock]::Create((irm https://coachbuild.vercel.app/companion.ps1))) -Install';
 
 function CopyableCommand({ label, command }: { label: string; command: string }) {
@@ -25,26 +17,25 @@ function CopyableCommand({ label, command }: { label: string; command: string })
     try {
       await navigator.clipboard.writeText(command);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
+      window.setTimeout(() => setCopied(false), 1800);
     } catch {
-      /* Clipboard API unavailable/denied (insecure context, permission) —
-         the code block below is still selectable/copyable by hand. */
+      /* The code field remains selectable when clipboard access is unavailable. */
     }
   }
 
   return (
     <div className="space-y-1.5">
-      <p className="text-[10px] tracking-[0.1em] uppercase text-mut font-semibold">{label}</p>
+      <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-mut">{label}</p>
       <div className="flex items-stretch gap-2">
-        <code className="flex-1 min-w-0 overflow-x-auto whitespace-pre bg-black/40 border border-line rounded-lg px-3 py-2.5 text-[12px] text-txt">
+        <code className="min-w-0 flex-1 overflow-x-auto whitespace-pre rounded-[8px] bg-[#12141f] px-3 py-2.5 font-mono text-[11px] text-accent-300 shadow-[inset_0_0_0_1px_rgba(233,233,237,.08)]">
           {command}
         </code>
         <button
           type="button"
           onClick={copy}
-          className="flex-shrink-0 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.06em] text-bg bg-teal hover:bg-teal-hover rounded-lg px-3.5 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-[8px] px-3 text-[10px] font-semibold uppercase tracking-[0.08em] text-accent-400 shadow-[inset_0_0_0_1px_#9184d9] transition-colors duration-[120ms] ease-in hover:bg-accent/[0.14] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
         >
-          <span aria-hidden="true">⧉</span>
+          <CopySimple size={13} weight="regular" aria-hidden="true" />
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
@@ -54,16 +45,30 @@ function CopyableCommand({ label, command }: { label: string; command: string })
 
 export default function InstallCommands() {
   return (
-    <section className="bg-panel border border-line rounded-xl p-5 sm:p-6 space-y-5">
-      <p className="text-[11px] tracking-[0.12em] uppercase text-mut font-semibold">
-        Install — one line, nothing written to disk
-      </p>
-      <CopyableCommand label="Run now (this session)" command={INSTALL_ONE_LINER} />
-      <CopyableCommand label="Run now + auto-start on login" command={INSTALL_PERSISTENT} />
-      <p className="text-[11px] text-mut leading-relaxed">
-        Paste into PowerShell (Win+X &rarr; Terminal). Runs in memory; the auto-start variant only
-        adds a Startup shortcut — no admin rights.
-      </p>
+    <section className="space-y-5 rounded-[9px] bg-panel-glass p-5 shadow-[inset_0_0_0_1px_rgba(233,233,237,.08)] sm:p-6">
+      <div className="space-y-1.5">
+        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-txt/[0.48]">Install</p>
+        <p className="max-w-[70ch] text-[12px] leading-relaxed text-mut">
+          The native desktop companion is the recommended path. Setup.exe keeps the bridge on this PC and adds no browser or PowerShell dependency.
+        </p>
+      </div>
+
+      <a
+        href={DESKTOP_APP_DOWNLOAD_URL}
+        className="inline-flex min-h-[36px] items-center gap-2 rounded-[8px] px-3.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent-400 shadow-[inset_0_0_0_1px_#9184d9] transition-colors duration-[120ms] ease-in hover:bg-accent/[0.14] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+      >
+        <DownloadSimple size={14} weight="regular" aria-hidden="true" />
+        Download for Windows
+      </a>
+
+      <div className="space-y-4 border-t border-txt/[0.06] pt-4">
+        <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-txt/[0.40]">Legacy / fallback PowerShell</p>
+        <CopyableCommand label="Run now · this session" command={LEGACY_INSTALL_ONE_LINER} />
+        <CopyableCommand label="Run now · auto-start on login" command={LEGACY_INSTALL_PERSISTENT} />
+        <p className="text-[11px] leading-relaxed text-mut">
+          Paste into PowerShell (Win+X → Terminal). These older commands run in memory; the auto-start variant only adds a Startup shortcut and needs no admin rights.
+        </p>
+      </div>
     </section>
   );
 }

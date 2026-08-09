@@ -1,106 +1,105 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// OverlayDownload — /live-setup's "CoachBuild Overlay" section. A SECOND,
-// independent desktop app (Electron, not the PowerShell companion above): it
-// draws a highlight over the player's real Q/W/E/R ability icons in-game,
-// marking which ability to level next, by reading League's local Live Client
-// Data API (127.0.0.1:2999) directly. It does not require companion.ps1 to be
-// running, and companion.ps1 does not require it — they solve different
-// problems (champ-select automation vs. an in-game skill-order prompt) and
-// this section exists specifically so a user does not mistake one for a
-// replacement of the other.
-//
-// No server component needed — this is a static link + copy, so it's a plain
-// (non-"use client") module; the page around it happens to be a client
-// component but that's incidental.
-//
-// Download target: the overlay's own GitHub Releases "latest" page, not a
-// hardcoded versioned .exe — the installer filename changes every release
-// and a hardcoded link would rot on the very next version bump. No version
-// number is shown here for the same reason (repo hard rule: never present an
-// unmeasured/unfetched value as fact — see CLAUDE.md "No fabricated data").
-// ─────────────────────────────────────────────────────────────────────────────
+import { DownloadSimple } from "@phosphor-icons/react";
+import CompanionOverlayWidget from "./CompanionOverlayWidget";
 
-import type { ReactNode } from "react";
+const DESKTOP_APP_DOWNLOAD_URL =
+  "https://github.com/haroutB5/coachbuild-desktop-releases/releases/latest/download/CoachBuild.Desktop-win-Setup.exe";
 
-/** Starts the download immediately rather than opening GitHub's releases page.
- *  The route resolves whichever installer is current and 302s to it — a direct
- *  link cannot be used because the asset filename carries the version and would
- *  404 on the next release. See app/api/download/overlay/route.ts. */
-const OVERLAY_DOWNLOAD_URL = "/api/download/overlay";
+const COMPLIANCE_LINE =
+  "Reads only your own champion, level and ability ranks from the live game API. Nothing about enemies, no cooldowns, no input.";
 
-const FACTS: { key: string; body: ReactNode }[] = [
-  {
-    key: "smartscreen",
-    body: (
-      <>
-        <strong className="text-txt font-semibold">Windows only.</strong> The installer is
-        unsigned, so Windows SmartScreen will warn on first run — click{" "}
-        <strong className="text-txt">More info</strong> &rarr;{" "}
-        <strong className="text-txt">Run anyway</strong>. That warning is expected, not a sign
-        anything is wrong.
-      </>
-    ),
-  },
-  {
-    key: "same-pc",
-    body: (
-      <>
-        Install it on the <strong className="text-txt">same PC that runs League</strong> — it
-        reads a localhost-only API, so nothing about it works over a network or a second machine.
-      </>
-    ),
-  },
-  {
-    key: "auto-update",
-    body: <>Updates itself automatically after the first install — no need to redownload.</>,
-  },
-  {
-    key: "display-mode",
-    body: (
-      <>
-        League&apos;s display mode must be <strong className="text-txt">Borderless</strong> or{" "}
-        <strong className="text-txt">Windowed</strong> — an always-on-top overlay can&apos;t draw
-        over exclusive Fullscreen.
-      </>
-    ),
-  },
-];
+interface StateSampleProps {
+  ability: "W" | "R" | null;
+  title: string;
+  description: string;
+  refusal?: boolean;
+}
+
+function StateSample({ ability, title, description, refusal = false }: StateSampleProps) {
+  return (
+    <li className="flex items-start gap-3 border-t border-txt/[0.07] py-4 first:border-t-0 first:pt-0 last:pb-0">
+      <span
+        className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-[10px] text-[25px] font-semibold leading-none ${
+          refusal
+            ? "border border-txt/[0.14] bg-txt/[0.04] text-txt/[0.50]"
+            : ability === "R"
+              ? "bg-accent text-[#191a28]"
+              : "border border-accent/[0.55] bg-accent/[0.18] text-accent-200"
+        }`}
+        aria-hidden="true"
+      >
+        {refusal ? "—" : ability}
+      </span>
+      <div className="min-w-0">
+        <p className="text-[15px] font-semibold text-txt">{title}</p>
+        <p className="mt-1 max-w-[58ch] text-[12px] leading-relaxed text-mut">{description}</p>
+      </div>
+    </li>
+  );
+}
 
 export default function OverlayDownload() {
   return (
-    <section className="bg-panel border border-line rounded-xl p-5 sm:p-6 space-y-5">
+    <section className="space-y-5 rounded-[9px] bg-panel-glass p-5 shadow-[inset_0_0_0_1px_rgba(233,233,237,.08)] sm:p-6">
       <div className="space-y-1.5">
-        <p className="text-[11px] tracking-[0.12em] uppercase text-mut font-semibold">
-          CoachBuild Overlay — a separate app
-        </p>
-        <p className="text-[12px] text-mut leading-relaxed max-w-[60ch]">
-          Highlights your Q/W/E/R ability icons in-game so you always know which one to level
-          next. It&apos;s independent of the companion above — you can install one, both, or
-          neither.
+        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-txt/[0.48]">In-game overlay</p>
+        <p className="max-w-[72ch] text-[12px] leading-relaxed text-mut">
+          A small second-monitor surface that names the next ability to level. It never becomes an in-app live game screen.
         </p>
       </div>
 
-      {/* No `target="_blank"`: this navigates to a redirect that returns a
-          file, so a new tab would open, download, and sit there empty. Same
-          reason there is no "opens in new tab" arrow glyph any more — it would
-          now be describing behaviour that does not happen. */}
-      <a
-        href={OVERLAY_DOWNLOAD_URL}
-        className="inline-flex items-center gap-2 text-[12px] font-bold uppercase tracking-[0.06em] text-bg bg-teal hover:bg-teal-hover rounded-lg px-4 py-2.5 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
-      >
-        Download for Windows
-      </a>
+      <div className="grid gap-6 lg:grid-cols-[minmax(250px,0.72fr)_minmax(0,1fr)] lg:gap-8">
+        <div className="space-y-3">
+          <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-txt/[0.40]">Shown at real size, over your game</p>
+          <div
+            className="flex min-h-[218px] items-center justify-center rounded-[10px] p-4"
+            style={{ background: "radial-gradient(120% 140% at 20% 0%, #1d2530, #0f1319 70%)" }}
+          >
+            <CompanionOverlayWidget
+              championName="Galio"
+              level={11}
+              state="next"
+              ability="W"
+              abilityName="Shield of Durand"
+              fromRank={3}
+              toRank={4}
+              liveSignal={false}
+            />
+          </div>
+        </div>
 
-      <ul className="space-y-2 text-[11px] text-mut leading-relaxed">
-        {FACTS.map((fact) => (
-          <li key={fact.key} className="flex gap-2">
-            <span className="text-teal flex-shrink-0" aria-hidden="true">
-              &bull;
-            </span>
-            <span>{fact.body}</span>
-          </li>
-        ))}
-      </ul>
+        <div className="space-y-3">
+          <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-txt/[0.40]">Every state it can be in</p>
+          <ul>
+            <StateSample
+              ability="W"
+              title="Next ability"
+              description="The normal state — ability, name and the rank transition it is about to make."
+            />
+            <StateSample
+              ability="R"
+              title="Ultimate available"
+              description="Takes priority the moment the game will legally allow the rank — seven champions publish R at 12, so the level gate is checked, not assumed."
+            />
+            <StateSample
+              ability={null}
+              refusal
+              title="Refuses past level 15"
+              description="The source publishes 1–15. Past that the overlay shows a dash rather than a guess — the same refusal the Builds skill grid makes."
+            />
+          </ul>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-4 border-t border-txt/[0.07] pt-5 sm:flex-row sm:items-center sm:justify-between">
+        <a
+          href={DESKTOP_APP_DOWNLOAD_URL}
+          className="inline-flex min-h-[36px] items-center justify-center gap-2 self-start rounded-[8px] px-3.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent-400 shadow-[inset_0_0_0_1px_#9184d9] transition-colors duration-[120ms] ease-in hover:bg-accent/[0.14] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+        >
+          <DownloadSimple size={14} weight="regular" aria-hidden="true" />
+          Download for Windows
+        </a>
+        <p className="max-w-[64ch] text-[11px] leading-relaxed text-mut sm:text-right">{COMPLIANCE_LINE}</p>
+      </div>
     </section>
   );
 }

@@ -1,46 +1,41 @@
 "use client";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// AutomationToggles — /live-setup's "AUTOMATION" section (mockup 2.png): two
-// real SWITCH controls (role="switch", not styled checkboxes) wired to the
-// SAME state/handlers the pre-redesign page's `<input type="checkbox">` pair
-// used (getAutoItemSetsEnabled/setAutoItemSetsEnabled,
-// getAutoRunesEnabled/setAutoRunesEnabled in companionClient.ts) — this
-// component owns no storage logic itself, only the toggle UI.
-// ─────────────────────────────────────────────────────────────────────────────
+import type { ReactNode } from "react";
+import { ShieldCheck } from "@phosphor-icons/react";
 
 interface SwitchRowProps {
   id: string;
   checked: boolean;
   onChange: (next: boolean) => void;
   title: string;
-  description: React.ReactNode;
+  description: ReactNode;
 }
 
 function SwitchRow({ id, checked, onChange, title, description }: SwitchRowProps) {
   return (
-    <div className="flex items-start gap-3.5">
+    <div className="flex items-start gap-3.5 border-t border-txt/[0.06] pt-4 first:border-t-0 first:pt-0">
       <button
         id={id}
         type="button"
         role="switch"
         aria-checked={checked}
+        aria-label={title}
         onClick={() => onChange(!checked)}
-        className={`relative mt-0.5 flex-shrink-0 w-10 h-[22px] rounded-full transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel ${
-          checked ? "bg-teal" : "bg-panel2 border border-line"
+        className={`relative mt-0.5 h-[22px] w-[38px] shrink-0 rounded-full transition-colors duration-[120ms] ease-in focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 ${
+          checked ? "bg-accent" : "border border-txt/[0.14] bg-txt/[0.06]"
         }`}
       >
         <span
-          className={`absolute top-[3px] w-4 h-4 rounded-full bg-bg shadow-sm transition-transform duration-150 ${
-            checked ? "translate-x-[21px]" : "translate-x-[3px]"
+          className={`absolute top-[3px] h-4 w-4 rounded-full bg-bg shadow-sm transition-transform duration-[120ms] ease-in ${
+            checked ? "translate-x-[19px]" : "translate-x-[3px]"
           }`}
           aria-hidden="true"
         />
       </button>
-      <label htmlFor={id} className="cursor-pointer select-none">
-        <span className="block text-[12.5px] text-txt font-semibold">{title}</span>
-        <span className="block text-[11px] text-mut leading-relaxed mt-0.5 max-w-[62ch]">{description}</span>
-      </label>
+      <div className="min-w-0">
+        <p className="text-[12.5px] font-semibold text-txt">{title}</p>
+        <p className="mt-0.5 max-w-[66ch] text-[11px] leading-relaxed text-mut">{description}</p>
+      </div>
     </div>
   );
 }
@@ -48,9 +43,6 @@ function SwitchRow({ id, checked, onChange, title, description }: SwitchRowProps
 export interface AutomationTogglesProps {
   autoItemSets: boolean;
   autoRunes: boolean;
-  /** Hydrated-after-mount gate (localStorage read) so SSR/first-paint never
-   *  shows a stale/mismatched toggle state — same posture the pre-redesign
-   *  page already used for its checkboxes. */
   hydrated: boolean;
   onToggleItemSets: (next: boolean) => void;
   onToggleRunes: (next: boolean) => void;
@@ -64,8 +56,8 @@ export default function AutomationToggles({
   onToggleRunes,
 }: AutomationTogglesProps) {
   return (
-    <section className="bg-panel border border-line rounded-xl p-5 sm:p-6 space-y-5">
-      <p className="text-[11px] tracking-[0.12em] uppercase text-mut font-semibold">Automation</p>
+    <section className="space-y-4 rounded-[9px] bg-panel-glass p-5 shadow-[inset_0_0_0_1px_rgba(233,233,237,.08)] sm:p-6">
+      <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-txt/[0.48]">Automation</p>
 
       <SwitchRow
         id="auto-item-sets-toggle"
@@ -74,9 +66,7 @@ export default function AutomationToggles({
         title="Auto-add item builds on champ select"
         description={
           <>
-            One item set for your champion and role appears in your in-client shop, holding four
-            build lines side by side — WPA build, Pro build, OTP build and Hidden gem — plus your
-            starting items. A passive suggestion, same as Blitz/u.gg import.
+            One item set for your champion and role appears in the in-client shop, holding four build lines side by side — WPA build, Pro build, OTP build and Hidden gem — plus your starting items.
           </>
         }
       />
@@ -86,22 +76,12 @@ export default function AutomationToggles({
         checked={hydrated && autoRunes}
         onChange={onToggleRunes}
         title="Auto-apply runes on champ select"
-        description={
-          <>
-            Applies the recommended page using CoachBuild&apos;s own slot — your personal rune pages
-            are never touched.
-          </>
-        }
+        description={<>Applies the recommended page using CoachBuild&apos;s own slot — your personal rune pages are never touched.</>}
       />
 
-      <div className="flex items-start gap-2 text-[11px] text-mut leading-relaxed pt-1 border-t border-line/50">
-        <span className="text-good flex-shrink-0" aria-hidden="true">
-          🛡
-        </span>
-        <p>
-          Only reads champion picks, roles and item builds — never summoner names, cooldowns, or
-          ability timers. Never acts in-game for you.
-        </p>
+      <div className="flex items-start gap-2 border-t border-txt/[0.06] pt-4 text-[11px] leading-relaxed text-mut">
+        <ShieldCheck size={14} weight="regular" className="mt-0.5 shrink-0 text-accent-400" aria-hidden="true" />
+        <p>Rune and item writes go to CoachBuild&apos;s own page and set — your personal pages are never touched or deleted.</p>
       </div>
     </section>
   );
