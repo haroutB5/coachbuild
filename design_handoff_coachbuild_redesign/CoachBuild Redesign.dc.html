@@ -1,0 +1,1456 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="stylesheet" href="_ds/nocturne-a08fd65a-3c35-4ab5-ba99-6342d16361e7/styles.css">
+<script src="_ds/nocturne-a08fd65a-3c35-4ab5-ba99-6342d16361e7/_ds_bundle.js"></script>
+<style>
+@keyframes cbPulse{0%,100%{opacity:.35;transform:scale(1)}50%{opacity:1;transform:scale(1.35)}}
+@keyframes cbSweep{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}
+body{margin:0;background:#0e101a}
+a{color:var(--color-accent);text-decoration:none}
+a:hover{color:var(--color-accent-400)}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:var(--color-neutral-800);border-radius:8px}
+::-webkit-scrollbar-track{background:transparent}
+</style>
+</helmet>
+
+<div style="padding:32px 34px 60px;font-family:var(--font-body);color:var(--color-text);background:#0e101a;min-height:100vh">
+
+<sc-if value="{{ showNotes }}" hint-placeholder-val="{{ true }}">
+<div style="max-width:1440px;margin:0 auto 22px">
+<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.16em;color:var(--color-accent)">COACHBUILD · REDESIGN v2</div>
+<div style="height:1px;flex:1;background:linear-gradient(to right,rgba(233,233,237,.16),transparent)"></div>
+<div style="font:400 10px/1 var(--font-body);letter-spacing:.1em;color:rgba(233,233,237,.4)">NOCTURNE · 1440×900 DESKTOP</div>
+</div>
+<h2 style="margin:0 0 10px;font-size:27px;letter-spacing:-.02em">A companion that follows the match, not a website in a window.</h2>
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:16px">
+<div style="border-top:1px solid rgba(233,233,237,.14);padding-top:9px"><div style="font:600 10px/1 var(--font-body);letter-spacing:.1em;color:var(--color-accent);margin-bottom:5px">THE SPINE</div><div style="font-size:12px;line-height:1.5;color:rgba(233,233,237,.62)">A live phase rail — Lobby → Champ Select → In Game → Post Game — sits in the top bar on every screen and drives what the app shows you. The app's state is the game's state.</div></div>
+<div style="border-top:1px solid rgba(233,233,237,.14);padding-top:9px"><div style="font:600 10px/1 var(--font-body);letter-spacing:.1em;color:var(--color-accent);margin-bottom:5px">VERDICT FIRST</div><div style="font-size:12px;line-height:1.5;color:rgba(233,233,237,.62)">Every screen opens with one prescriptive answer at display size — pick this, build this, level this — with the table underneath for people who want to argue with it.</div></div>
+<div style="border-top:1px solid rgba(233,233,237,.14);padding-top:9px"><div style="font:600 10px/1 var(--font-body);letter-spacing:.1em;color:var(--color-accent);margin-bottom:5px">HONESTY KEPT</div><div style="font-size:12px;line-height:1.5;color:rgba(233,233,237,.62)">Sample size, low-data and "suggested" labels survive the redesign — they're rendered as quiet meta rather than removed, since they're the product's posture.</div></div>
+<div style="border-top:1px solid rgba(233,233,237,.14);padding-top:9px"><div style="font:600 10px/1 var(--font-body);letter-spacing:.1em;color:var(--color-accent);margin-bottom:5px">ASSUMPTIONS</div><div style="font-size:12px;line-height:1.5;color:rgba(233,233,237,.62)">Champion / item / rune art is a monogram placeholder — drop real assets in and they slot straight into the same tiles. Win/loss green + red are the only colors added outside Nocturne; stats need a signal hue.</div></div>
+</div>
+</div>
+</sc-if>
+
+<div data-shot="app" style="width:1440px;height:900px;border-radius:10px;overflow:hidden;background:var(--color-bg);box-shadow:0 0 0 1px var(--color-neutral-800),0 30px 80px rgba(0,0,0,.6);display:flex;flex-direction:column">
+
+<div style="height:34px;flex:none;display:flex;align-items:center;padding:0 0 0 12px;background:#12141f;border-bottom:1px solid rgba(233,233,237,.08)">
+<div style="width:12px;height:12px;border-radius:3px;background:linear-gradient(140deg,var(--color-accent),#5d5294);margin-right:9px"></div>
+<div style="font:500 11px/1 var(--font-body);letter-spacing:.04em;color:rgba(233,233,237,.72)">CoachBuild</div>
+<div style="margin-left:14px;font:400 10px/1 var(--font-body);color:rgba(233,233,237,.32)">Patch 16.14 · v0.103.2</div>
+<div style="flex:1"></div>
+<div style="display:flex;height:34px">
+<div style="width:44px;display:grid;place-items:center;color:rgba(233,233,237,.55)" style-hover="background:rgba(233,233,237,.07)"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" stroke-width="1"/></svg></div>
+<div style="width:44px;display:grid;place-items:center;color:rgba(233,233,237,.55)" style-hover="background:rgba(233,233,237,.07)"><svg width="10" height="10" viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg></div>
+<div style="width:44px;display:grid;place-items:center;color:rgba(233,233,237,.55)" style-hover="background:#9c3b3b;color:#fff"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1"/></svg></div>
+</div>
+</div>
+
+<div style="flex:1;display:flex;min-height:0">
+
+<div style="width:216px;flex:none;background:#12141f;border-right:1px solid rgba(233,233,237,.08);display:flex;flex-direction:column;padding:16px 12px 12px">
+<div style="display:flex;align-items:center;gap:10px;padding:0 6px 16px">
+<div style="width:30px;height:30px;border-radius:7px;background:radial-gradient(120% 120% at 30% 20%,#5d5294,#2b2741);display:grid;place-items:center;box-shadow:0 0 0 1px rgba(145,132,217,.4),0 0 18px rgba(145,132,217,.22)">
+<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 1.5l5 2v4.2C13 11 10.9 13.4 8 14.5 5.1 13.4 3 11 3 7.7V3.5l5-2z" stroke="#b5abfc" stroke-width="1.2" stroke-linejoin="round"/><path d="M5.9 8.1l1.5 1.6 2.8-3.3" stroke="#b5abfc" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</div>
+<div><div style="font:600 13px/1.05 var(--font-body);letter-spacing:.02em">CoachBuild</div><div style="font:400 9px/1.4 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.38);margin-top:2px">WPA INTELLIGENCE</div></div>
+</div>
+
+<div style="font:500 9px/1 var(--font-body);letter-spacing:.16em;color:rgba(233,233,237,.32);padding:10px 8px 8px">PLAY</div>
+<div style="display:flex;flex-direction:column;gap:2px">
+<div onClick="{{ goDraft }}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;cursor:pointer;font:500 13px/1 var(--font-body);position:relative;background:{{ nav.draft.bg }};color:{{ nav.draft.fg }}" style-hover="background:rgba(233,233,237,.05)">
+<div style="position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:2px;background:var(--color-accent);opacity:{{ nav.draft.bar }}"></div>
+<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="4.2" stroke="currentColor" stroke-width="1.2"/><path d="M8 1v2.2M8 12.8V15M1 8h2.2M12.8 8H15" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>Draft</div>
+<div onClick="{{ goBuilds }}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;cursor:pointer;font:500 13px/1 var(--font-body);position:relative;background:{{ nav.builds.bg }};color:{{ nav.builds.fg }}" style-hover="background:rgba(233,233,237,.05)">
+<div style="position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:2px;background:var(--color-accent);opacity:{{ nav.builds.bar }}"></div>
+<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="1.6" y="1.6" width="5.2" height="5.2" rx="1.4" stroke="currentColor" stroke-width="1.2"/><rect x="9.2" y="1.6" width="5.2" height="5.2" rx="1.4" stroke="currentColor" stroke-width="1.2"/><rect x="1.6" y="9.2" width="5.2" height="5.2" rx="1.4" stroke="currentColor" stroke-width="1.2"/><rect x="9.2" y="9.2" width="5.2" height="5.2" rx="1.4" stroke="currentColor" stroke-width="1.2"/></svg>Builds</div>
+<div onClick="{{ goPostgame }}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;cursor:pointer;font:500 13px/1 var(--font-body);position:relative;background:{{ nav.postgame.bg }};color:{{ nav.postgame.fg }}" style-hover="background:rgba(233,233,237,.05)">
+<div style="position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:2px;background:var(--color-accent);opacity:{{ nav.postgame.bar }}"></div>
+<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 12.5l3.6-4.2 2.8 2.4L14 3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.4 3.5H14v3.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>Post-Game</div>
+</div>
+
+<div style="font:500 9px/1 var(--font-body);letter-spacing:.16em;color:rgba(233,233,237,.32);padding:18px 8px 8px">DATA</div>
+<div style="display:flex;flex-direction:column;gap:2px">
+<div onClick="{{ goPro }}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;cursor:pointer;font:500 13px/1 var(--font-body);position:relative;background:{{ nav.pro.bg }};color:{{ nav.pro.fg }}" style-hover="background:rgba(233,233,237,.05)">
+<div style="position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:2px;background:var(--color-accent);opacity:{{ nav.pro.bar }}"></div>
+<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M4 2h8v4a4 4 0 01-8 0V2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M4 3H2v1.4A2.6 2.6 0 004.4 7M12 3h2v1.4A2.6 2.6 0 0111.6 7M8 10v2.4M5.4 14h5.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>Pro Players</div>
+<div onClick="{{ goMovers }}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;cursor:pointer;font:500 13px/1 var(--font-body);position:relative;background:{{ nav.movers.bg }};color:{{ nav.movers.fg }}" style-hover="background:rgba(233,233,237,.05)">
+<div style="position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:2px;background:var(--color-accent);opacity:{{ nav.movers.bar }}"></div>
+<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M1.5 11l3.4-3.6 2.6 2.2L14.5 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.6 3h3.9v3.9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M1.5 14.5h13" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity=".4"/></svg>Patch Movers</div>
+<div onClick="{{ goMystats }}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;cursor:pointer;font:500 13px/1 var(--font-body);position:relative;background:{{ nav.mystats.bg }};color:{{ nav.mystats.fg }}" style-hover="background:rgba(233,233,237,.05)">
+<div style="position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:2px;background:var(--color-accent);opacity:{{ nav.mystats.bar }}"></div>
+<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="1.8" y="8.4" width="3" height="5.8" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="6.5" y="4.6" width="3" height="9.6" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="11.2" y="1.8" width="3" height="12.4" rx="1" stroke="currentColor" stroke-width="1.2"/></svg>My Stats</div>
+</div>
+
+<div style="font:500 9px/1 var(--font-body);letter-spacing:.16em;color:rgba(233,233,237,.32);padding:18px 8px 8px">SETUP</div>
+<div onClick="{{ goCompanion }}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;cursor:pointer;font:500 13px/1 var(--font-body);position:relative;background:{{ nav.companion.bg }};color:{{ nav.companion.fg }}" style-hover="background:rgba(233,233,237,.05)">
+<div style="position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:2px;background:var(--color-accent);opacity:{{ nav.companion.bar }}"></div>
+<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="1.8" y="3.2" width="12.4" height="8.2" rx="1.6" stroke="currentColor" stroke-width="1.2"/><path d="M5.2 14h5.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="8" cy="7.3" r="1.5" stroke="currentColor" stroke-width="1.2"/></svg>Companion</div>
+
+<div style="flex:1"></div>
+
+<div style="border-radius:8px;padding:11px 12px;background:linear-gradient(150deg,rgba(70,199,155,.1),rgba(35,37,50,.9));box-shadow:0 0 0 1px rgba(70,199,155,.24)">
+<div style="display:flex;align-items:center;gap:7px;margin-bottom:7px"><div style="width:6px;height:6px;border-radius:50%;background:#46c79b;animation:cbPulse 2s ease-in-out infinite"></div><div style="font:500 9px/1 var(--font-body);letter-spacing:.14em;color:#46c79b">COMPANION LIVE</div></div>
+<div style="font:600 13px/1.15 var(--font-body);margin-bottom:3px">In champ select</div>
+<div style="font:400 11px/1.4 var(--font-body);color:rgba(233,233,237,.5)">Following your pick · 8s ago</div>
+</div>
+</div>
+
+<div style="flex:1;min-width:0;display:flex;flex-direction:column">
+
+<div style="height:56px;flex:none;display:flex;align-items:center;gap:14px;padding:0 20px;border-bottom:1px solid rgba(233,233,237,.08);background:var(--color-bg)">
+<div style="display:flex;align-items:center;gap:8px;width:280px;height:34px;padding:0 12px;border-radius:8px;background:#1c1e2c;box-shadow:inset 0 0 0 1px rgba(233,233,237,.1)">
+<svg width="14" height="14" viewBox="0 0 16 16" fill="none" style="opacity:.45"><circle cx="7" cy="7" r="4.6" stroke="currentColor" stroke-width="1.3"/><path d="M10.4 10.4L14 14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+<div style="font:400 13px/1 var(--font-body);color:rgba(233,233,237,.4)">Search champion, item or pro…</div>
+<div style="margin-left:auto;font:500 10px/1 var(--font-body);color:rgba(233,233,237,.3);padding:3px 5px;border-radius:4px;box-shadow:inset 0 0 0 1px rgba(233,233,237,.14)">⌘K</div>
+</div>
+
+<div style="flex:1"></div>
+
+<div style="display:flex;align-items:center;gap:0;padding:5px 12px;border-radius:9px;background:#1c1e2c;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="display:flex;align-items:center;gap:7px;padding-right:12px"><div style="width:5px;height:5px;border-radius:50%;background:var(--color-neutral-600)"></div><div style="font:500 9px/1 var(--font-body);letter-spacing:.12em;white-space:nowrap;color:rgba(233,233,237,.42)">LOBBY</div></div>
+<div style="width:26px;height:1px;background:linear-gradient(to right,rgba(233,233,237,.06),rgba(145,132,217,.5))"></div>
+<div style="display:flex;align-items:center;gap:7px;padding:0 12px"><div style="width:6px;height:6px;border-radius:50%;background:var(--color-accent);box-shadow:0 0 10px 2px rgba(145,132,217,.55)"></div><div style="font:600 9px/1 var(--font-body);letter-spacing:.12em;color:var(--color-accent-400)">CHAMP SELECT</div></div>
+<div style="width:26px;height:1px;background:linear-gradient(to right,rgba(145,132,217,.5),rgba(233,233,237,.06))"></div>
+<div style="display:flex;align-items:center;gap:7px;padding:0 12px"><div style="width:5px;height:5px;border-radius:50%;background:var(--color-neutral-800)"></div><div style="font:500 9px/1 var(--font-body);letter-spacing:.12em;white-space:nowrap;color:rgba(233,233,237,.3)">IN GAME</div></div>
+<div style="width:26px;height:1px;background:rgba(233,233,237,.06)"></div>
+<div style="display:flex;align-items:center;gap:7px;padding-left:12px"><div style="width:5px;height:5px;border-radius:50%;background:var(--color-neutral-800)"></div><div style="font:500 9px/1 var(--font-body);letter-spacing:.12em;white-space:nowrap;color:rgba(233,233,237,.3)">POST GAME</div></div>
+</div>
+
+<div style="flex:1"></div>
+
+<div style="display:flex;align-items:center;gap:8px;height:34px;padding:0 14px;border-radius:8px;cursor:pointer;color:var(--color-accent-400);box-shadow:inset 0 0 0 1px var(--color-accent);font:600 11px/1 var(--font-body);letter-spacing:.08em" style-hover="background:rgba(145,132,217,.14)">
+<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M9.2 1.5L3 9h4l-.4 5.5L13 7H9l.2-5.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>APPLY RUNES</div>
+</div>
+
+<div style="flex:1;overflow:auto;min-height:0">
+
+<sc-if value="{{ isDraft }}" hint-placeholder-val="{{ true }}">
+<div style="padding:22px 24px 34px">
+
+<div style="display:flex;align-items:flex-end;gap:14px;margin-bottom:16px">
+<div>
+<div style="font:500 10px/1 var(--font-body);letter-spacing:.16em;color:var(--color-accent);margin-bottom:7px">CHAMP SELECT · MID LANE · PICK 4</div>
+<h1 style="margin:0;font-size:34px;letter-spacing:-.025em;line-height:1">Draft Assistant</h1>
+</div>
+<div style="flex:1"></div>
+<div style="display:flex;gap:8px;align-items:center;font:400 11px/1 var(--font-body);color:rgba(233,233,237,.42)">
+<svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.4" stroke="currentColor" stroke-width="1.2"/><path d="M8 4.6v4.2M8 11.2v.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+u.gg matchup matrix · patch 16.14 · refreshed 4m ago</div>
+</div>
+
+<div style="display:flex;gap:10px;margin-bottom:16px;align-items:stretch">
+<div style="flex:none;width:150px;padding:11px 13px;border-radius:8px;background:var(--color-surface);box-shadow:inset 0 0 0 1px rgba(233,233,237,.09)">
+<div style="font:500 9px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.42);margin-bottom:8px">YOUR ROLE</div>
+<div style="display:flex;align-items:center;gap:8px;font:600 15px/1 var(--font-body)">Mid<svg width="11" height="11" viewBox="0 0 16 16" fill="none" style="margin-left:auto;opacity:.5"><path d="M3.5 6l4.5 4.5L12.5 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+</div>
+<div style="flex:1;padding:11px 13px;border-radius:8px;background:var(--color-surface);box-shadow:inset 0 0 0 1px rgba(233,233,237,.09);display:flex;align-items:center;gap:16px">
+<div>
+<div style="font:500 9px/1 var(--font-body);letter-spacing:.14em;color:rgba(70,199,155,.75);margin-bottom:8px">YOUR TEAM</div>
+<div style="display:flex;gap:6px">
+<div style="width:32px;height:32px;border-radius:7px;background:linear-gradient(145deg,#2b2e42,#1c1e2c);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.035) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.12);display:grid;place-items:center;font:600 11px/1 var(--font-body);color:var(--color-neutral-300)">KS</div>
+<div style="width:32px;height:32px;border-radius:7px;background:linear-gradient(145deg,#2b2e42,#1c1e2c);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.035) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.12);display:grid;place-items:center;font:600 11px/1 var(--font-body);color:var(--color-neutral-300)">VI</div>
+<div style="width:32px;height:32px;border-radius:7px;box-shadow:inset 0 0 0 1.5px rgba(145,132,217,.7);display:grid;place-items:center;font:600 9px/1 var(--font-body);letter-spacing:.06em;color:var(--color-accent-400);background:rgba(145,132,217,.1)">YOU</div>
+<div style="width:32px;height:32px;border-radius:7px;box-shadow:inset 0 0 0 1px rgba(233,233,237,.1);display:grid;place-items:center;color:rgba(233,233,237,.25)"><svg width="11" height="11" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></div>
+<div style="width:32px;height:32px;border-radius:7px;box-shadow:inset 0 0 0 1px rgba(233,233,237,.1);display:grid;place-items:center;color:rgba(233,233,237,.25)"><svg width="11" height="11" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></div>
+</div>
+</div>
+<div style="width:1px;align-self:stretch;background:linear-gradient(to bottom,transparent,rgba(233,233,237,.14),transparent)"></div>
+<div>
+<div style="font:500 9px/1 var(--font-body);letter-spacing:.14em;color:rgba(232,115,110,.8);margin-bottom:8px">ENEMY TEAM</div>
+<div style="display:flex;gap:6px">
+<div style="width:32px;height:32px;border-radius:7px;background:linear-gradient(145deg,#3a2733,#231a22);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.035) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(232,115,110,.28);display:grid;place-items:center;font:600 11px/1 var(--font-body);color:#e4c6c4">ZE</div>
+<div style="width:32px;height:32px;border-radius:7px;background:linear-gradient(145deg,#3a2733,#231a22);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.035) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(232,115,110,.28);display:grid;place-items:center;font:600 11px/1 var(--font-body);color:#e4c6c4">XZ</div>
+<div style="width:32px;height:32px;border-radius:7px;background:linear-gradient(145deg,#3a2733,#231a22);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.035) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(232,115,110,.28);display:grid;place-items:center;font:600 11px/1 var(--font-body);color:#e4c6c4">JI</div>
+<div style="width:32px;height:32px;border-radius:7px;box-shadow:inset 0 0 0 1px rgba(233,233,237,.1);display:grid;place-items:center;color:rgba(233,233,237,.25)"><svg width="11" height="11" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></div>
+<div style="width:32px;height:32px;border-radius:7px;box-shadow:inset 0 0 0 1px rgba(233,233,237,.1);display:grid;place-items:center;color:rgba(233,233,237,.25)"><svg width="11" height="11" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></div>
+</div>
+</div>
+<div style="flex:1"></div>
+<div style="text-align:right"><div style="font:500 9px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.42);margin-bottom:6px">LANE OPPONENT</div><div style="font:600 13px/1 var(--font-body)">Zed <span style="font-weight:400;font-size:11px;color:rgba(233,233,237,.42)">· inferred</span></div></div>
+</div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 372px;gap:16px;align-items:start">
+
+<div>
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.16em;color:rgba(233,233,237,.5)">THE CALL</div>
+<div style="flex:1;height:1px;background:linear-gradient(to right,rgba(233,233,237,.14),transparent)"></div>
+</div>
+
+<div style="position:relative;border-radius:10px;padding:18px 20px;margin-bottom:10px;overflow:hidden;background:radial-gradient(130% 160% at 0% 0%,#2c2949 0%,#20222f 46%,#1b1d2a 100%);box-shadow:0 0 0 1px rgba(145,132,217,.32),0 14px 40px rgba(0,0,0,.4)">
+<div style="position:absolute;inset:0;background:repeating-linear-gradient(115deg,rgba(145,132,217,.05) 0 1px,transparent 1px 9px);pointer-events:none"></div>
+<div style="position:relative;display:flex;gap:18px;align-items:center">
+<div style="position:relative;flex:none">
+<div style="width:82px;height:82px;border-radius:10px;background:linear-gradient(150deg,#3a3663,#20223a);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.04) 0 4px,transparent 4px 8px);box-shadow:inset 0 0 0 1px rgba(145,132,217,.45),0 0 26px rgba(145,132,217,.2);display:grid;place-items:center;font:600 24px/1 var(--font-body);color:var(--color-accent-300);letter-spacing:.02em">GA</div>
+<div style="position:absolute;left:-6px;bottom:-6px;padding:4px 8px;background:var(--color-accent);color:#191a28;font:700 12px/1 var(--font-body);letter-spacing:.02em;border-radius:5px;clip-path:polygon(0 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%)">S+</div>
+</div>
+<div style="flex:1;min-width:0">
+<div style="display:flex;align-items:baseline;gap:9px;margin-bottom:5px">
+<div style="font:600 26px/1 var(--font-body);letter-spacing:-.02em">Galio</div>
+<div style="font:500 11px/1 var(--font-body);letter-spacing:.1em;color:rgba(233,233,237,.42)">MID</div>
+<div style="padding:3px 8px;border-radius:5px;background:rgba(70,199,155,.14);color:#46c79b;font:600 10px/1 var(--font-body);letter-spacing:.04em">HARD COUNTERS ZED</div>
+</div>
+<div style="font-size:13px;line-height:1.5;color:rgba(233,233,237,.68);max-width:430px;margin-bottom:11px">Beats three of the four enemies already locked, and his taunt answers the dive comp they're building. Safe into a blind pick — his floor is the highest on this board.</div>
+<div style="display:flex;gap:8px">
+<div style="display:flex;align-items:center;gap:7px;height:34px;padding:0 15px;border-radius:8px;background:var(--color-accent);color:#171826;font:600 11px/1 var(--font-body);letter-spacing:.08em;cursor:pointer" style-hover="background:var(--color-accent-400)"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M3 8.4l3.4 3.4L13 4.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>LOCK IN GALIO</div>
+<div onClick="{{ goChampion }}" style="display:flex;align-items:center;gap:7px;height:34px;padding:0 15px;border-radius:8px;color:var(--color-text);box-shadow:inset 0 0 0 1px rgba(233,233,237,.16);font:600 11px/1 var(--font-body);letter-spacing:.08em;cursor:pointer" style-hover="background:rgba(233,233,237,.07)">SEE FULL BUILD</div>
+</div>
+</div>
+<div style="flex:none;display:flex;gap:22px;padding-left:20px;border-left:1px solid rgba(233,233,237,.1)">
+<div><div style="font:500 9px/1 var(--font-body);letter-spacing:.13em;color:rgba(233,233,237,.4);margin-bottom:7px">WIN RATE</div><div style="font:600 32px/1 var(--font-body);letter-spacing:-.03em;font-variant-numeric:tabular-nums">53.8<span style="font-size:16px;opacity:.5">%</span></div><div style="font:600 10px/1 var(--font-body);color:#46c79b;margin-top:5px;font-variant-numeric:tabular-nums">+6.1pp vs comp</div></div>
+<div><div style="font:500 9px/1 var(--font-body);letter-spacing:.13em;color:rgba(233,233,237,.4);margin-bottom:7px">FLOOR</div><div style="font:600 32px/1 var(--font-body);letter-spacing:-.03em;font-variant-numeric:tabular-nums">49.2<span style="font-size:16px;opacity:.5">%</span></div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.4);margin-top:5px">worst 10%</div></div>
+<div><div style="font:500 9px/1 var(--font-body);letter-spacing:.13em;color:rgba(233,233,237,.4);margin-bottom:7px">SAMPLE</div><div style="font:600 32px/1 var(--font-body);letter-spacing:-.03em;font-variant-numeric:tabular-nums">41k</div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.4);margin-top:5px">high confidence</div></div>
+</div>
+</div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px">
+<sc-for list="{{ altPicks }}" as="p" hint-placeholder-count="2">
+<div style="display:flex;gap:12px;align-items:center;padding:13px 14px;border-radius:9px;background:#20222f;box-shadow:inset 0 0 0 1px rgba(233,233,237,.09);cursor:pointer" style-hover="box-shadow:inset 0 0 0 1px rgba(145,132,217,.42)">
+<div style="position:relative;flex:none">
+<div style="width:46px;height:46px;border-radius:8px;background:linear-gradient(150deg,#2b2e42,#1c1e2c);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.035) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.12);display:grid;place-items:center;font:600 15px/1 var(--font-body);color:var(--color-neutral-300)">{{ p.mono }}</div>
+<div style="position:absolute;left:-4px;bottom:-4px;padding:2px 6px;font:700 10px/1 var(--font-body);border-radius:4px;clip-path:polygon(0 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%);background:{{ p.tierBg }};color:{{ p.tierFg }}">{{ p.tier }}</div>
+</div>
+<div style="min-width:0;flex:1">
+<div style="display:flex;align-items:baseline;gap:7px"><div style="font:600 15px/1 var(--font-body)">{{ p.name }}</div><div style="font:500 9px/1 var(--font-body);letter-spacing:.1em;color:var(--color-accent)">{{ p.tag }}</div></div>
+<div style="font-size:11.5px;line-height:1.4;color:rgba(233,233,237,.52);margin-top:4px">{{ p.why }}</div>
+</div>
+<div style="text-align:right;flex:none"><div style="font:600 19px/1 var(--font-body);font-variant-numeric:tabular-nums;letter-spacing:-.02em">{{ p.wr }}</div><div style="font:600 10px/1 var(--font-body);margin-top:5px;font-variant-numeric:tabular-nums;color:{{ p.deltaColor }}">{{ p.delta }}</div></div>
+</div>
+</sc-for>
+</div>
+
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:11px">
+<div style="display:flex;gap:2px;padding:3px;border-radius:9px;background:#1c1e2c;box-shadow:inset 0 0 0 1px rgba(233,233,237,.07)">
+<div onClick="{{ setTabRec }}" style="padding:7px 13px;border-radius:6px;font:600 11px/1 var(--font-body);letter-spacing:.03em;cursor:pointer;white-space:nowrap;background:{{ dtab.rec.bg }};color:{{ dtab.rec.fg }}">Recommended</div>
+<div onClick="{{ setTabBlind }}" style="padding:7px 13px;border-radius:6px;font:600 11px/1 var(--font-body);letter-spacing:.03em;cursor:pointer;white-space:nowrap;background:{{ dtab.blind.bg }};color:{{ dtab.blind.fg }}">Blind Picks</div>
+<div onClick="{{ setTabCounter }}" style="padding:7px 13px;border-radius:6px;font:600 11px/1 var(--font-body);letter-spacing:.03em;cursor:pointer;white-space:nowrap;background:{{ dtab.counter.bg }};color:{{ dtab.counter.fg }}">Counters</div>
+<div onClick="{{ setTabComfort }}" style="padding:7px 13px;border-radius:6px;font:600 11px/1 var(--font-body);letter-spacing:.03em;cursor:pointer;white-space:nowrap;background:{{ dtab.comfort.bg }};color:{{ dtab.comfort.fg }}">Comfort</div>
+</div>
+<div style="flex:1"></div>
+<div style="display:flex;align-items:center;gap:6px;height:30px;padding:0 11px;border-radius:7px;font:500 11px/1 var(--font-body);color:rgba(233,233,237,.6);box-shadow:inset 0 0 0 1px rgba(233,233,237,.1);cursor:pointer" style-hover="background:rgba(233,233,237,.05)">
+<svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M4.4 8h7.2M6.6 12h2.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>Min 1,000 games · off-meta on</div>
+</div>
+
+<div style="border-radius:9px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08);overflow:hidden">
+<div style="display:grid;grid-template-columns:30px 1fr 60px 74px 66px 78px 70px;gap:10px;padding:9px 14px;font:500 9px/1 var(--font-body);letter-spacing:.12em;color:rgba(233,233,237,.4);background:rgba(233,233,237,.03)">
+<div>#</div><div>CHAMPION</div><div>TIER</div><div style="text-align:right">WIN RATE</div><div style="text-align:right">PICK</div><div style="text-align:right">Δ VS COMP</div><div style="text-align:right">GAMES</div>
+</div>
+<sc-for list="{{ rankRows }}" as="r" hint-placeholder-count="7">
+<div style="display:grid;grid-template-columns:30px 1fr 60px 74px 66px 78px 70px;gap:10px;align-items:center;padding:8px 14px;cursor:pointer;border-top:1px solid rgba(233,233,237,.05)" style-hover="background:rgba(233,233,237,.04)">
+<div style="font:500 12px/1 var(--font-body);color:rgba(233,233,237,.35);font-variant-numeric:tabular-nums">{{ r.n }}</div>
+<div style="display:flex;align-items:center;gap:10px;min-width:0">
+<div style="width:28px;height:28px;flex:none;border-radius:6px;background:linear-gradient(150deg,#2b2e42,#1c1e2c);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.035) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.1);display:grid;place-items:center;font:600 10px/1 var(--font-body);color:var(--color-neutral-300)">{{ r.mono }}</div>
+<div style="font:500 13px/1 var(--font-body)">{{ r.name }}</div>
+<div style="font:500 9px/1 var(--font-body);letter-spacing:.08em;padding:2px 5px;border-radius:3px;color:{{ r.tagFg }};background:{{ r.tagBg }}">{{ r.tagText }}</div>
+</div>
+<div><div style="display:inline-block;padding:2px 7px;font:700 10px/1.3 var(--font-body);border-radius:4px;clip-path:polygon(0 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%);background:{{ r.tierBg }};color:{{ r.tierFg }}">{{ r.tier }}</div></div>
+<div style="text-align:right;font:600 13px/1 var(--font-body);font-variant-numeric:tabular-nums">{{ r.wr }}</div>
+<div style="text-align:right;font:400 12px/1 var(--font-body);color:rgba(233,233,237,.55);font-variant-numeric:tabular-nums">{{ r.pr }}</div>
+<div style="text-align:right;font:600 12px/1 var(--font-body);font-variant-numeric:tabular-nums;color:{{ r.deltaColor }}">{{ r.delta }}</div>
+<div style="text-align:right;font:400 12px/1 var(--font-body);color:rgba(233,233,237,.42);font-variant-numeric:tabular-nums">{{ r.games }}</div>
+</div>
+</sc-for>
+<div style="padding:10px 14px;border-top:1px solid rgba(233,233,237,.05);font:400 11px/1 var(--font-body);color:rgba(233,233,237,.4)">Ranked on this lane's matchup matrix against the four enemies entered. Off-meta rows are tagged, never hidden.</div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:12px">
+
+<div style="border-radius:9px;padding:15px 16px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:13px">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5)">ENEMY COMP PROFILE</div>
+<div style="font:500 9px/1 var(--font-body);letter-spacing:.08em;padding:2px 6px;border-radius:4px;background:rgba(232,115,110,.14);color:#e8736e;white-space:nowrap">DIVE · AD-HEAVY</div>
+</div>
+<sc-for list="{{ compBars }}" as="b" hint-placeholder-count="6">
+<div style="margin-bottom:9px">
+<div style="display:flex;justify-content:space-between;margin-bottom:4px"><div style="font:500 11px/1 var(--font-body);color:rgba(233,233,237,.72)">{{ b.label }}</div><div style="font:600 11px/1 var(--font-body);font-variant-numeric:tabular-nums;color:{{ b.color }}">{{ b.val }}</div></div>
+<div style="height:5px;border-radius:3px;background:rgba(233,233,237,.07);overflow:hidden"><div style="height:100%;border-radius:3px;width:{{ b.pct }};background:{{ b.color }}"></div></div>
+</div>
+</sc-for>
+<div style="height:1px;margin:13px 0 11px;background:linear-gradient(to right,transparent,rgba(233,233,237,.14) 20px,rgba(233,233,237,.14) calc(100% - 20px),transparent)"></div>
+<div style="display:flex;flex-wrap:wrap;gap:6px">
+<div style="padding:4px 9px;border-radius:5px;font:500 10.5px/1 var(--font-body);background:rgba(145,132,217,.14);color:var(--color-accent-400)">Build early MR</div>
+<div style="padding:4px 9px;border-radius:5px;font:500 10.5px/1 var(--font-body);background:rgba(145,132,217,.14);color:var(--color-accent-400)">They spike at 2 items</div>
+<div style="padding:4px 9px;border-radius:5px;font:500 10.5px/1 var(--font-body);white-space:nowrap;background:rgba(233,233,237,.07);color:rgba(233,233,237,.6)">High ban priority</div>
+</div>
+</div>
+
+<div style="border-radius:9px;padding:15px 16px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5);margin-bottom:4px">MATCHUP GRID</div>
+<div style="font:400 11px/1.4 var(--font-body);color:rgba(233,233,237,.42);margin-bottom:12px">Your top five candidates against every enemy locked so far.</div>
+<div style="display:grid;grid-template-columns:64px repeat(3,1fr);gap:4px;align-items:center">
+<div></div>
+<div style="text-align:center;font:600 9px/1 var(--font-body);letter-spacing:.06em;color:rgba(233,233,237,.45)">ZED</div>
+<div style="text-align:center;font:600 9px/1 var(--font-body);letter-spacing:.06em;color:rgba(233,233,237,.45)">XIN</div>
+<div style="text-align:center;font:600 9px/1 var(--font-body);letter-spacing:.06em;color:rgba(233,233,237,.45)">JINX</div>
+<sc-for list="{{ grid }}" as="g" hint-placeholder-count="5">
+<div style="font:500 11px/1 var(--font-body);color:rgba(233,233,237,.72);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ g.name }}</div>
+<div style="height:30px;border-radius:5px;display:grid;place-items:center;font:600 11px/1 var(--font-body);font-variant-numeric:tabular-nums;background:{{ g.a.bg }};color:{{ g.a.fg }}">{{ g.a.v }}</div>
+<div style="height:30px;border-radius:5px;display:grid;place-items:center;font:600 11px/1 var(--font-body);font-variant-numeric:tabular-nums;background:{{ g.b.bg }};color:{{ g.b.fg }}">{{ g.b.v }}</div>
+<div style="height:30px;border-radius:5px;display:grid;place-items:center;font:600 11px/1 var(--font-body);font-variant-numeric:tabular-nums;background:{{ g.c.bg }};color:{{ g.c.fg }}">{{ g.c.v }}</div>
+</sc-for>
+</div>
+</div>
+
+<div style="border-radius:9px;padding:14px 16px;background:linear-gradient(150deg,rgba(145,132,217,.1),#1b1d2a);box-shadow:inset 0 0 0 1px rgba(145,132,217,.22)">
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="color:var(--color-accent-400)"><path d="M9.2 1.5L3 9h4l-.4 5.5L13 7H9l.2-5.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg><div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:var(--color-accent-400)">ON LOCK-IN</div></div>
+<div style="font-size:12px;line-height:1.5;color:rgba(233,233,237,.62);margin-bottom:11px">Runes and the full item set are pushed to your client the moment you lock. Nothing is overwritten — CoachBuild writes to its own page.</div>
+<div style="display:flex;gap:14px">
+<div style="display:flex;align-items:center;gap:7px;font:500 11.5px/1 var(--font-body)"><div style="width:26px;height:15px;border-radius:8px;background:var(--color-accent);position:relative"><div style="position:absolute;top:2px;right:2px;width:11px;height:11px;border-radius:50%;background:#171826"></div></div>Runes</div>
+<div style="display:flex;align-items:center;gap:7px;font:500 11.5px/1 var(--font-body)"><div style="width:26px;height:15px;border-radius:8px;background:var(--color-accent);position:relative"><div style="position:absolute;top:2px;right:2px;width:11px;height:11px;border-radius:50%;background:#171826"></div></div>Item set</div>
+</div>
+</div>
+
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isBuilds }}" hint-placeholder-val="{{ false }}">
+<div style="padding:22px 24px 34px">
+<div style="position:relative;border-radius:10px;padding:26px 26px 24px;margin-bottom:18px;overflow:hidden;background:radial-gradient(120% 180% at 8% 0%,#2a2748,#1d1f2c 55%,#1a1c28)">
+<div style="position:absolute;inset:0;background:repeating-linear-gradient(115deg,rgba(145,132,217,.05) 0 1px,transparent 1px 10px)"></div>
+<div style="position:relative;max-width:640px">
+<div style="font:500 10px/1 var(--font-body);letter-spacing:.16em;color:var(--color-accent);margin-bottom:9px">BUILDS</div>
+<h1 style="margin:0 0 8px;font-size:31px;letter-spacing:-.025em;line-height:1.05">What are we playing?</h1>
+<div style="font-size:13.5px;line-height:1.55;color:rgba(233,233,237,.6);margin-bottom:16px">Search any champion for the WPA-ranked build, the pro consensus, and what the best one-trick in your region actually does. In champ select the companion opens this for you automatically.</div>
+<div style="display:flex;align-items:center;gap:10px;height:44px;padding:0 15px;border-radius:9px;background:rgba(20,22,34,.72);box-shadow:inset 0 0 0 1px rgba(145,132,217,.35);max-width:420px">
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="color:var(--color-accent)"><circle cx="7" cy="7" r="4.6" stroke="currentColor" stroke-width="1.3"/><path d="M10.4 10.4L14 14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+<div style="font:400 14px/1 var(--font-body);color:rgba(233,233,237,.42)">Search a champion…</div>
+</div>
+</div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 372px;gap:16px;align-items:start">
+<div>
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:11px"><div style="font:600 10px/1 var(--font-body);letter-spacing:.16em;color:rgba(233,233,237,.5)">PICK UP WHERE YOU LEFT OFF</div><div style="flex:1;height:1px;background:linear-gradient(to right,rgba(233,233,237,.14),transparent)"></div></div>
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:22px">
+<sc-for list="{{ recentChamps }}" as="c" hint-placeholder-count="4">
+<div onClick="{{ goChampion }}" style="border-radius:9px;padding:13px;background:#20222f;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08);cursor:pointer" style-hover="box-shadow:inset 0 0 0 1px rgba(145,132,217,.4)">
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:11px">
+<div style="width:38px;height:38px;border-radius:8px;background:linear-gradient(150deg,#2b2e42,#1c1e2c);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.035) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.12);display:grid;place-items:center;font:600 13px/1 var(--font-body);color:var(--color-neutral-300)">{{ c.mono }}</div>
+<div><div style="font:600 14px/1 var(--font-body)">{{ c.name }}</div><div style="font:500 9px/1 var(--font-body);letter-spacing:.1em;color:rgba(233,233,237,.4);margin-top:5px">{{ c.lane }}</div></div>
+</div>
+<div style="display:flex;align-items:baseline;gap:6px"><div style="font:600 20px/1 var(--font-body);font-variant-numeric:tabular-nums;letter-spacing:-.02em">{{ c.wr }}</div><div style="font:400 10.5px/1 var(--font-body);color:rgba(233,233,237,.4)">{{ c.games }}</div></div>
+<div style="height:4px;border-radius:2px;background:rgba(233,233,237,.07);margin-top:9px;overflow:hidden"><div style="height:100%;width:{{ c.pct }};border-radius:2px;background:{{ c.color }}"></div></div>
+</div>
+</sc-for>
+</div>
+
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:11px"><div style="font:600 10px/1 var(--font-body);letter-spacing:.16em;color:rgba(233,233,237,.5)">MID LANE TIER LIST</div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.35)">PATCH 16.14</div><div style="flex:1;height:1px;background:linear-gradient(to right,rgba(233,233,237,.14),transparent)"></div></div>
+<div style="border-radius:9px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08);overflow:hidden">
+<sc-for list="{{ tierRows }}" as="t" hint-placeholder-count="6">
+<div onClick="{{ goChampion }}" style="display:grid;grid-template-columns:34px 1fr 90px 74px 76px;gap:10px;align-items:center;padding:10px 14px;border-top:1px solid rgba(233,233,237,.05);cursor:pointer" style-hover="background:rgba(233,233,237,.04)">
+<div style="display:inline-block;padding:3px 0;text-align:center;font:700 11px/1 var(--font-body);border-radius:4px;clip-path:polygon(0 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%);background:{{ t.tierBg }};color:{{ t.tierFg }}">{{ t.tier }}</div>
+<div style="display:flex;align-items:center;gap:10px">
+<div style="width:30px;height:30px;border-radius:7px;background:linear-gradient(150deg,#2b2e42,#1c1e2c);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.035) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.1);display:grid;place-items:center;font:600 10px/1 var(--font-body);color:var(--color-neutral-300)">{{ t.mono }}</div>
+<div><div style="font:500 13.5px/1 var(--font-body)">{{ t.name }}</div><div style="font:400 10.5px/1 var(--font-body);color:rgba(233,233,237,.42);margin-top:4px">{{ t.note }}</div></div>
+</div>
+<div><div style="height:5px;border-radius:3px;background:rgba(233,233,237,.07);overflow:hidden"><div style="height:100%;width:{{ t.pct }};border-radius:3px;background:var(--color-accent)"></div></div></div>
+<div style="text-align:right;font:600 13px/1 var(--font-body);font-variant-numeric:tabular-nums">{{ t.wr }}</div>
+<div style="text-align:right;font:600 12px/1 var(--font-body);font-variant-numeric:tabular-nums;color:{{ t.deltaColor }}">{{ t.delta }}</div>
+</div>
+</sc-for>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:12px">
+<div style="border-radius:9px;padding:15px 16px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5);margin-bottom:12px">YOUR LANES · THIS SEASON</div>
+<sc-for list="{{ lanes }}" as="l" hint-placeholder-count="5">
+<div style="display:flex;align-items:center;gap:11px;margin-bottom:10px">
+<div style="width:34px;font:600 9px/1 var(--font-body);letter-spacing:.1em;color:rgba(233,233,237,.45)">{{ l.lane }}</div>
+<div style="flex:1;height:6px;border-radius:3px;background:rgba(233,233,237,.07);overflow:hidden"><div style="height:100%;width:{{ l.pct }};border-radius:3px;background:{{ l.color }}"></div></div>
+<div style="width:42px;text-align:right;font:600 12px/1 var(--font-body);font-variant-numeric:tabular-nums">{{ l.wr }}</div>
+<div style="width:46px;text-align:right;font:400 10.5px/1 var(--font-body);color:rgba(233,233,237,.4)">{{ l.games }}</div>
+</div>
+</sc-for>
+</div>
+
+<div style="border-radius:9px;padding:15px 16px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5)">TRENDING THIS PATCH</div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.35);font-variant-numeric:tabular-nums">16.13 → 16.14</div></div>
+<sc-for list="{{ trending }}" as="m" hint-placeholder-count="5">
+<div onClick="{{ goMovers }}" style="display:flex;align-items:center;gap:10px;padding:7px 0;cursor:pointer;border-top:1px solid rgba(233,233,237,.05)">
+<div style="width:28px;height:28px;border-radius:6px;background:linear-gradient(150deg,#2b2e42,#1c1e2c);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.035) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.1);display:grid;place-items:center;font:600 10px/1 var(--font-body);color:var(--color-neutral-300)">{{ m.mono }}</div>
+<div style="flex:1;min-width:0"><div style="font:500 12.5px/1 var(--font-body)">{{ m.name }}</div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.38);margin-top:4px">{{ m.lane }} · {{ m.note }}</div></div>
+<div style="font:600 12px/1 var(--font-body);font-variant-numeric:tabular-nums;color:{{ m.color }}">{{ m.delta }}</div>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isChampion }}" hint-placeholder-val="{{ false }}">
+<div style="padding:0 0 34px">
+
+<div style="position:relative;padding:20px 24px 0;overflow:hidden;background:radial-gradient(90% 200% at 12% 0%,#2c2949,#1c1e2b 60%,#191b27)">
+<div style="position:absolute;inset:0;background:repeating-linear-gradient(115deg,rgba(145,132,217,.05) 0 1px,transparent 1px 10px)"></div>
+<div style="position:relative">
+<div onClick="{{ goBuildsHome }}" style="display:inline-flex;align-items:center;gap:6px;font:500 11px/1 var(--font-body);color:rgba(233,233,237,.45);cursor:pointer;margin-bottom:14px" style-hover="color:rgba(233,233,237,.8)"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M9.5 3.5L5 8l4.5 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>All builds</div>
+<div style="display:flex;align-items:flex-end;gap:18px">
+<div style="position:relative;flex:none">
+<div style="width:88px;height:88px;border-radius:11px;background:linear-gradient(150deg,#3a3663,#20223a);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.04) 0 4px,transparent 4px 8px);box-shadow:inset 0 0 0 1px rgba(145,132,217,.45),0 0 26px rgba(145,132,217,.18);display:grid;place-items:center;font:600 26px/1 var(--font-body);color:var(--color-accent-300)">GA</div>
+<div style="position:absolute;left:-6px;bottom:-6px;padding:4px 9px;background:var(--color-accent);color:#191a28;font:700 13px/1 var(--font-body);border-radius:5px;clip-path:polygon(0 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%)">S+</div>
+</div>
+<div style="flex:1;padding-bottom:4px">
+<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px">
+<h1 style="margin:0;font-size:33px;letter-spacing:-.025em;line-height:1">Galio</h1>
+<div style="font:500 11px/1 var(--font-body);letter-spacing:.12em;color:rgba(233,233,237,.45)">MID LANE</div>
+<div style="padding:3px 8px;border-radius:5px;background:rgba(70,199,155,.14);color:#46c79b;font:600 10px/1 var(--font-body);letter-spacing:.05em">HIGH CONFIDENCE</div>
+</div>
+<div style="display:flex;gap:26px">
+<div><div style="font:500 9px/1 var(--font-body);letter-spacing:.12em;color:rgba(233,233,237,.4);margin-bottom:6px">WIN RATE</div><div style="font:600 21px/1 var(--font-body);font-variant-numeric:tabular-nums;letter-spacing:-.02em">53.8%</div></div>
+<div><div style="font:500 9px/1 var(--font-body);letter-spacing:.12em;color:rgba(233,233,237,.4);margin-bottom:6px">PICK RATE</div><div style="font:600 21px/1 var(--font-body);font-variant-numeric:tabular-nums;letter-spacing:-.02em">4.2%</div></div>
+<div><div style="font:500 9px/1 var(--font-body);letter-spacing:.12em;color:rgba(233,233,237,.4);margin-bottom:6px">BAN RATE</div><div style="font:600 21px/1 var(--font-body);font-variant-numeric:tabular-nums;letter-spacing:-.02em">2.1%</div></div>
+<div><div style="font:500 9px/1 var(--font-body);letter-spacing:.12em;color:rgba(233,233,237,.4);margin-bottom:6px">GAMES</div><div style="font:600 21px/1 var(--font-body);font-variant-numeric:tabular-nums;letter-spacing:-.02em">41,206</div></div>
+</div>
+</div>
+<div style="flex:none;display:flex;gap:8px;padding-bottom:6px">
+<div style="display:flex;align-items:center;gap:7px;height:36px;padding:0 15px;border-radius:8px;background:var(--color-accent);color:#171826;font:600 11px/1 var(--font-body);letter-spacing:.07em;cursor:pointer" style-hover="background:var(--color-accent-400)"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M8 2v8.4M4.6 7.2L8 10.6l3.4-3.4M2.6 13.4h10.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>IMPORT BUILD</div>
+<div style="display:flex;align-items:center;gap:7px;height:36px;padding:0 15px;border-radius:8px;color:var(--color-accent-400);box-shadow:inset 0 0 0 1px var(--color-accent);font:600 11px/1 var(--font-body);letter-spacing:.07em;cursor:pointer" style-hover="background:rgba(145,132,217,.14)">APPLY RUNES</div>
+</div>
+</div>
+
+<div style="display:flex;gap:22px;margin-top:20px">
+<div onClick="{{ setTabWpa }}" style="padding:0 2px 12px;font:600 12px/1 var(--font-body);letter-spacing:.1em;cursor:pointer;color:{{ btab.wpa.fg }};box-shadow:{{ btab.wpa.bar }}" style-hover="color:rgba(233,233,237,.85)">WPA BUILD</div>
+<div onClick="{{ setTabPro }}" style="padding:0 2px 12px;font:600 12px/1 var(--font-body);letter-spacing:.1em;cursor:pointer;color:{{ btab.pro.fg }};box-shadow:{{ btab.pro.bar }}" style-hover="color:rgba(233,233,237,.85)">PRO CONSENSUS</div>
+<div onClick="{{ setTabOtp }}" style="padding:0 2px 12px;font:600 12px/1 var(--font-body);letter-spacing:.1em;cursor:pointer;color:{{ btab.otp.fg }};box-shadow:{{ btab.otp.bar }}" style-hover="color:rgba(233,233,237,.85)">ONE-TRICK</div>
+<div style="flex:1"></div>
+<div style="display:flex;gap:2px;padding:3px;border-radius:8px;background:rgba(20,22,34,.6);margin-bottom:8px;height:30px">
+<div style="padding:0 11px;display:grid;place-items:center;border-radius:5px;font:600 10.5px/1 var(--font-body);background:rgba(145,132,217,.2);color:var(--color-accent-400)">HIGH ELO</div>
+<div style="padding:0 11px;display:grid;place-items:center;border-radius:5px;font:600 10.5px/1 var(--font-body);color:rgba(233,233,237,.45);cursor:pointer">DIAMOND</div>
+<div style="padding:0 11px;display:grid;place-items:center;border-radius:5px;font:600 10.5px/1 var(--font-body);color:rgba(233,233,237,.45);cursor:pointer">EMERALD</div>
+</div>
+</div>
+</div>
+</div>
+
+<sc-if value="{{ isWpa }}" hint-placeholder-val="{{ true }}">
+<div style="padding:20px 24px 0;display:grid;grid-template-columns:1fr 372px;gap:16px;align-items:start">
+<div>
+
+<div style="border-radius:9px;padding:16px 18px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08);margin-bottom:12px">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:15px">
+<div><div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5)">BUY ORDER</div><div style="font:400 11px/1 var(--font-body);color:rgba(233,233,237,.4);margin-top:5px">Each step conditioned on owning the one before it · 12,480 games</div></div>
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.06em;padding:3px 8px;border-radius:5px;background:rgba(70,199,155,.14);color:#46c79b">+4.1 WPA</div>
+</div>
+<div style="display:flex;align-items:center;gap:0;flex-wrap:wrap">
+<sc-for list="{{ itemPath }}" as="i" hint-placeholder-count="7">
+<div style="display:flex;align-items:center">
+<div style="text-align:center;width:74px">
+<div style="width:50px;height:50px;margin:0 auto 7px;border-radius:9px;background:linear-gradient(150deg,{{ i.c1 }},{{ i.c2 }});background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.05) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.14);display:grid;place-items:center;font:600 15px/1 var(--font-body);color:var(--color-neutral-200)">{{ i.mono }}</div>
+<div style="font:500 10px/1.3 var(--font-body);color:rgba(233,233,237,.72);height:26px">{{ i.name }}</div>
+<div style="font:500 9.5px/1 var(--font-body);color:rgba(233,233,237,.38);margin-top:2px;font-variant-numeric:tabular-nums">{{ i.meta }}</div>
+</div>
+<div style="width:14px;color:rgba(145,132,217,.55);display:{{ i.arrow }}"><svg width="14" height="10" viewBox="0 0 14 10" fill="none"><path d="M1 5h11M8.6 1.6L12 5l-3.4 3.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+</div>
+</sc-for>
+</div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+<div style="border-radius:9px;padding:15px 16px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5);margin-bottom:12px">SITUATIONAL</div>
+<sc-for list="{{ situational }}" as="s" hint-placeholder-count="3">
+<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid rgba(233,233,237,.05)">
+<div style="width:32px;height:32px;border-radius:7px;background:linear-gradient(150deg,#2b2e42,#1c1e2c);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.04) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.1);display:grid;place-items:center;font:600 10px/1 var(--font-body);color:var(--color-neutral-300)">{{ s.mono }}</div>
+<div style="flex:1;min-width:0"><div style="font:500 12.5px/1 var(--font-body)">{{ s.name }}</div><div style="font:400 10.5px/1 var(--font-body);color:rgba(233,233,237,.4);margin-top:4px">{{ s.when }}</div></div>
+<div style="font:600 12px/1 var(--font-body);font-variant-numeric:tabular-nums;color:rgba(233,233,237,.65)">{{ s.wr }}</div>
+</div>
+</sc-for>
+</div>
+<div style="border-radius:9px;padding:15px 16px;background:linear-gradient(150deg,rgba(145,132,217,.09),#1b1d2a);box-shadow:inset 0 0 0 1px rgba(145,132,217,.22)">
+<div style="display:flex;align-items:center;gap:7px;margin-bottom:11px"><div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:var(--color-accent-400)">HIDDEN GEM</div><div style="font:400 9.5px/1 var(--font-body);color:rgba(233,233,237,.35)">HIGH WR · RARELY BUILT</div></div>
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:11px">
+<div style="width:44px;height:44px;border-radius:9px;background:linear-gradient(150deg,#3a3663,#20223a);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.05) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(145,132,217,.4);display:grid;place-items:center;font:600 14px/1 var(--font-body);color:var(--color-accent-300)">AB</div>
+<div><div style="font:600 15px/1 var(--font-body)">Abyssal Mask</div><div style="font:400 11px/1 var(--font-body);color:rgba(233,233,237,.45);margin-top:5px">Built in 6.4% of games</div></div>
+<div style="margin-left:auto;text-align:right"><div style="font:600 19px/1 var(--font-body);font-variant-numeric:tabular-nums;color:#46c79b">57.1%</div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.4);margin-top:4px">2,614 games</div></div>
+</div>
+<div style="font-size:11.5px;line-height:1.5;color:rgba(233,233,237,.55)">Their whole team is AD — but the Zed spikes hardest, and this shreds his MR shred window. Swap it for the third item.</div>
+</div>
+</div>
+
+<div style="border-radius:9px;padding:16px 18px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:14px">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5)">SKILL ORDER</div>
+<div style="font:600 14px/1 var(--font-body);letter-spacing:.08em;color:var(--color-accent-400)">W › E › Q</div>
+<div style="flex:1"></div>
+<div style="font:400 10.5px/1 var(--font-body);color:rgba(233,233,237,.38)">Levels 16–18 derived from the published max order</div>
+</div>
+<div style="display:grid;grid-template-columns:22px repeat(18,1fr);gap:3px;align-items:center">
+<div></div>
+<sc-for list="{{ levelNums }}" as="n" hint-placeholder-count="18">
+<div style="text-align:center;font:500 8.5px/1 var(--font-body);color:rgba(233,233,237,.3);font-variant-numeric:tabular-nums">{{ n.v }}</div>
+</sc-for>
+<sc-for list="{{ skillGrid }}" as="row" hint-placeholder-count="4">
+<div style="font:600 11px/1 var(--font-body);color:rgba(233,233,237,.6)">{{ row.k }}</div>
+<sc-for list="{{ row.cells }}" as="c" hint-placeholder-count="18">
+<div style="height:20px;border-radius:4px;background:{{ c.bg }};box-shadow:{{ c.ring }};display:grid;place-items:center;font:600 9px/1 var(--font-body);color:{{ c.fg }}">{{ c.t }}</div>
+</sc-for>
+</sc-for>
+</div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:12px">
+<div style="border-radius:9px;padding:16px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px"><div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5)">RUNES</div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.38);font-variant-numeric:tabular-nums">54.1% · 9,206 games</div></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+<div>
+<div style="display:flex;align-items:center;gap:7px;margin-bottom:11px"><div style="width:16px;height:16px;border-radius:50%;background:rgba(145,132,217,.25);box-shadow:inset 0 0 0 1px rgba(145,132,217,.6)"></div><div style="font:600 10px/1 var(--font-body);letter-spacing:.1em;color:var(--color-accent-400)">RESOLVE</div></div>
+<div style="display:flex;justify-content:center;margin-bottom:12px">
+<div style="width:54px;height:54px;border-radius:50%;background:radial-gradient(circle at 40% 35%,#4a4380,#25243c);box-shadow:0 0 0 2px rgba(145,132,217,.75),0 0 22px rgba(145,132,217,.3);display:grid;place-items:center;font:600 11px/1 var(--font-body);color:var(--color-accent-300)">AS</div>
+</div>
+<sc-for list="{{ runesPrimary }}" as="r" hint-placeholder-count="3">
+<div style="display:flex;gap:7px;justify-content:center;margin-bottom:8px">
+<sc-for list="{{ r.opts }}" as="o" hint-placeholder-count="3">
+<div style="width:28px;height:28px;border-radius:50%;background:{{ o.bg }};box-shadow:{{ o.ring }};display:grid;place-items:center;font:600 8.5px/1 var(--font-body);color:{{ o.fg }}">{{ o.t }}</div>
+</sc-for>
+</div>
+</sc-for>
+</div>
+<div>
+<div style="display:flex;align-items:center;gap:7px;margin-bottom:11px"><div style="width:16px;height:16px;border-radius:50%;background:rgba(233,233,237,.1);box-shadow:inset 0 0 0 1px rgba(233,233,237,.28)"></div><div style="font:600 10px/1 var(--font-body);letter-spacing:.1em;color:rgba(233,233,237,.6)">SORCERY</div></div>
+<sc-for list="{{ runesSecondary }}" as="r" hint-placeholder-count="2">
+<div style="display:flex;gap:7px;justify-content:center;margin-bottom:8px">
+<sc-for list="{{ r.opts }}" as="o" hint-placeholder-count="3">
+<div style="width:28px;height:28px;border-radius:50%;background:{{ o.bg }};box-shadow:{{ o.ring }};display:grid;place-items:center;font:600 8.5px/1 var(--font-body);color:{{ o.fg }}">{{ o.t }}</div>
+</sc-for>
+</div>
+</sc-for>
+<div style="height:1px;margin:12px 0 10px;background:linear-gradient(to right,transparent,rgba(233,233,237,.14),transparent)"></div>
+<sc-for list="{{ shards }}" as="r" hint-placeholder-count="3">
+<div style="display:flex;gap:6px;justify-content:center;margin-bottom:6px">
+<sc-for list="{{ r.opts }}" as="o" hint-placeholder-count="3">
+<div style="width:20px;height:20px;border-radius:50%;background:{{ o.bg }};box-shadow:{{ o.ring }}"></div>
+</sc-for>
+</div>
+</sc-for>
+</div>
+</div>
+<div style="height:1px;margin:14px 0 12px;background:linear-gradient(to right,transparent,rgba(233,233,237,.14) 20px,rgba(233,233,237,.14) calc(100% - 20px),transparent)"></div>
+<div style="display:flex;align-items:center;gap:10px">
+<div style="font:500 9px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.42)">SPELLS</div>
+<div style="display:flex;gap:7px;margin-left:auto">
+<div style="width:32px;height:32px;border-radius:7px;background:linear-gradient(150deg,#2b2e42,#1c1e2c);box-shadow:inset 0 0 0 1px rgba(233,233,237,.14);display:grid;place-items:center;font:600 9px/1 var(--font-body);color:var(--color-neutral-300)">FL</div>
+<div style="width:32px;height:32px;border-radius:7px;background:linear-gradient(150deg,#2b2e42,#1c1e2c);box-shadow:inset 0 0 0 1px rgba(233,233,237,.14);display:grid;place-items:center;font:600 9px/1 var(--font-body);color:var(--color-neutral-300)">TP</div>
+</div>
+</div>
+</div>
+
+<div style="border-radius:9px;padding:15px 16px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5);margin-bottom:12px">MATCHUPS THIS LANE</div>
+<sc-for list="{{ matchups }}" as="m" hint-placeholder-count="5">
+<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid rgba(233,233,237,.05)">
+<div style="width:26px;height:26px;border-radius:6px;background:linear-gradient(150deg,#2b2e42,#1c1e2c);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.04) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.1);display:grid;place-items:center;font:600 9px/1 var(--font-body);color:var(--color-neutral-300)">{{ m.mono }}</div>
+<div style="flex:1;font:500 12.5px/1 var(--font-body)">{{ m.name }}</div>
+<div style="width:70px;height:5px;border-radius:3px;background:rgba(233,233,237,.07);overflow:hidden;position:relative"><div style="position:absolute;top:0;bottom:0;left:{{ m.barLeft }};width:{{ m.barW }};border-radius:3px;background:{{ m.color }}"></div></div>
+<div style="width:44px;text-align:right;font:600 12px/1 var(--font-body);font-variant-numeric:tabular-nums;color:{{ m.color }}">{{ m.wr }}</div>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isProTab }}" hint-placeholder-val="{{ false }}">
+<div style="padding:20px 24px 0;display:grid;grid-template-columns:1fr 372px;gap:16px;align-items:start">
+<div>
+
+<div style="display:flex;align-items:center;gap:10px;padding:11px 14px;border-radius:8px;background:rgba(233,233,237,.03);box-shadow:inset 0 0 0 1px rgba(233,233,237,.07);margin-bottom:12px">
+<svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="color:#b5abfc;flex:none"><circle cx="8" cy="8" r="6.4" stroke="currentColor" stroke-width="1.2"/><path d="M8 4.6v4.2M8 11.2v.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+<div style="font:400 11.5px/1.5 var(--font-body);color:rgba(233,233,237,.6)">Pick frequency, not WPA — what pros and high-elo players actually built, in the order they bought it. No score is applied here.</div>
+<div style="margin-left:auto;font:500 10.5px/1 var(--font-body);color:rgba(233,233,237,.4);white-space:nowrap;font-variant-numeric:tabular-nums">2,140 games · 90 days</div>
+</div>
+
+<div style="border-radius:9px;padding:16px 18px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08);margin-bottom:12px">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:15px">
+<div><div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5)">MOST-BUILT PATH</div><div style="font:400 11px/1 var(--font-body);color:rgba(233,233,237,.4);margin-top:5px">Ranked by how often each item appears at that position</div></div>
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.06em;padding:3px 8px;border-radius:5px;background:rgba(145,132,217,.16);color:var(--color-accent-400)">CONSENSUS</div>
+</div>
+<div style="display:flex;align-items:center;flex-wrap:wrap">
+<sc-for list="{{ proPath }}" as="i" hint-placeholder-count="6">
+<div style="display:flex;align-items:center">
+<div style="text-align:center;width:78px">
+<div style="width:50px;height:50px;margin:0 auto 7px;border-radius:9px;background:linear-gradient(150deg,{{ i.c1 }},{{ i.c2 }});background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.05) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.14);display:grid;place-items:center;font:600 15px/1 var(--font-body);color:var(--color-neutral-200)">{{ i.mono }}</div>
+<div style="font:500 10px/1.3 var(--font-body);color:rgba(233,233,237,.72);height:26px">{{ i.name }}</div>
+<div style="font:600 10px/1 var(--font-body);color:#b5abfc;margin-top:2px;font-variant-numeric:tabular-nums">{{ i.pick }}</div>
+</div>
+<div style="width:14px;color:rgba(145,132,217,.55);display:{{ i.arrow }}"><svg width="14" height="10" viewBox="0 0 14 10" fill="none"><path d="M1 5h11M8.6 1.6L12 5l-3.4 3.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+</div>
+</sc-for>
+</div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+<sc-for list="{{ proPartitions }}" as="p" hint-placeholder-count="2">
+<div style="border-radius:9px;padding:15px 16px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5);margin-bottom:12px">{{ p.title }}</div>
+<sc-for list="{{ p.rows }}" as="r" hint-placeholder-count="3">
+<div style="display:flex;align-items:center;gap:11px;padding:7px 0;border-top:1px solid rgba(233,233,237,.05)">
+<div style="width:32px;height:32px;border-radius:7px;background:linear-gradient(150deg,{{ r.c1 }},{{ r.c2 }});background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.04) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.1);display:grid;place-items:center;font:600 10px/1 var(--font-body);color:var(--color-neutral-300)">{{ r.mono }}</div>
+<div style="flex:1;font:500 12.5px/1 var(--font-body)">{{ r.name }}</div>
+<div style="width:58px;height:5px;border-radius:3px;background:rgba(233,233,237,.07);overflow:hidden"><div style="height:100%;width:{{ r.pct }};border-radius:3px;background:var(--color-accent)"></div></div>
+<div style="width:42px;text-align:right;font:600 12px/1 var(--font-body);font-variant-numeric:tabular-nums;color:rgba(233,233,237,.7)">{{ r.pick }}</div>
+</div>
+</sc-for>
+</div>
+</sc-for>
+</div>
+
+<div style="border-radius:9px;padding:16px 18px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:14px">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5)">SKILL ORDER</div>
+<div style="font:600 14px/1 var(--font-body);letter-spacing:.08em;color:#b5abfc">W › E › Q</div>
+<div style="flex:1"></div>
+<div style="font:400 10.5px/1 var(--font-body);color:rgba(233,233,237,.38)">From recorded timelines · 214 of 2,140 games</div>
+</div>
+<div style="display:grid;grid-template-columns:22px repeat(18,1fr);gap:3px;align-items:center">
+<div></div>
+<sc-for list="{{ levelNums }}" as="n" hint-placeholder-count="18">
+<div style="text-align:center;font:500 8.5px/1 var(--font-body);color:rgba(233,233,237,.3);font-variant-numeric:tabular-nums">{{ n.v }}</div>
+</sc-for>
+<sc-for list="{{ proSkill }}" as="row" hint-placeholder-count="4">
+<div style="font:600 11px/1 var(--font-body);color:rgba(233,233,237,.6)">{{ row.k }}</div>
+<sc-for list="{{ row.cells }}" as="c" hint-placeholder-count="18">
+<div style="height:20px;border-radius:4px;background:{{ c.bg }};box-shadow:{{ c.ring }};display:grid;place-items:center;font:600 9px/1 var(--font-body);color:{{ c.fg }}">{{ c.t }}</div>
+</sc-for>
+</sc-for>
+</div>
+<div style="font:400 11px/1.4 var(--font-body);color:rgba(233,233,237,.38);margin-top:11px">Levels 16–18 stay blank: nobody in this sample reached them on record, and this tab never fills a level in by rule.</div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:12px">
+<div style="border-radius:9px;padding:16px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5)">KEYSTONE SPLIT</div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.38)">PICK FREQUENCY</div></div>
+<sc-for list="{{ proKeystones }}" as="k" hint-placeholder-count="3">
+<div style="display:flex;align-items:center;gap:11px;padding:8px 0;border-top:1px solid rgba(233,233,237,.05)">
+<div style="width:34px;height:34px;border-radius:50%;background:{{ k.bg }};box-shadow:{{ k.ring }};display:grid;place-items:center;font:600 10px/1 var(--font-body);color:{{ k.fg }}">{{ k.mono }}</div>
+<div style="flex:1;min-width:0"><div style="font:500 12.5px/1 var(--font-body)">{{ k.name }}</div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.38);margin-top:5px">{{ k.tree }}</div></div>
+<div style="text-align:right"><div style="font:600 14px/1 var(--font-body);font-variant-numeric:tabular-nums">{{ k.pick }}</div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.38);margin-top:5px;font-variant-numeric:tabular-nums">{{ k.games }}</div></div>
+</div>
+</sc-for>
+</div>
+
+<div style="border-radius:9px;padding:15px 16px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5);margin-bottom:10px">WHO'S PLAYING IT</div>
+<sc-for list="{{ proWho }}" as="w" hint-placeholder-count="5">
+<div onClick="{{ goPro }}" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid rgba(233,233,237,.05);cursor:pointer" style-hover="background:rgba(233,233,237,.03)">
+<div style="width:28px;height:28px;border-radius:6px;background:linear-gradient(150deg,#2b2e42,#1c1e2c);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.04) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.1);display:grid;place-items:center;font:600 9px/1 var(--font-body);color:var(--color-neutral-300)">{{ w.mono }}</div>
+<div style="flex:1;min-width:0"><div style="font:500 12.5px/1 var(--font-body)">{{ w.name }}</div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.38);margin-top:4px">{{ w.team }} · {{ w.games }}</div></div>
+<div style="font:600 12px/1 var(--font-body);font-variant-numeric:tabular-nums;color:{{ w.color }}">{{ w.wr }}</div>
+</div>
+</sc-for>
+</div>
+
+<div style="border-radius:9px;padding:14px 16px;background:rgba(233,233,237,.03);box-shadow:inset 0 0 0 1px rgba(233,233,237,.07)">
+<div style="font:400 11.5px/1.55 var(--font-body);color:rgba(233,233,237,.5)">Pro consensus and the WPA build disagree on the second item. One is a popularity count over a small expert sample; the other is a win-probability model over a large one. Neither is the other's tiebreak.</div>
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isOtp }}" hint-placeholder-val="{{ false }}">
+<div style="padding:20px 24px 0;display:grid;grid-template-columns:1fr 372px;gap:16px;align-items:start">
+<div>
+
+<div style="position:relative;border-radius:10px;padding:18px 20px;margin-bottom:12px;overflow:hidden;background:radial-gradient(130% 160% at 0% 0%,#2c2949 0%,#20222f 46%,#1b1d2a 100%);box-shadow:0 0 0 1px rgba(145,132,217,.3)">
+<div style="position:absolute;inset:0;background:repeating-linear-gradient(115deg,rgba(145,132,217,.05) 0 1px,transparent 1px 9px)"></div>
+<div style="position:relative;display:flex;align-items:center;gap:18px">
+<div style="width:66px;height:66px;flex:none;border-radius:10px;background:linear-gradient(150deg,#3a3663,#20223a);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.04) 0 4px,transparent 4px 8px);box-shadow:inset 0 0 0 1px rgba(145,132,217,.45),0 0 22px rgba(145,132,217,.18);display:grid;place-items:center;font:600 19px/1 var(--font-body);color:var(--color-accent-300)">SV</div>
+<div style="flex:1;min-width:0">
+<div style="font:500 10px/1 var(--font-body);letter-spacing:.16em;color:var(--color-accent);margin-bottom:8px">THE BEST GALIO WE CAN FIND</div>
+<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:7px"><div style="font:600 23px/1 var(--font-body);letter-spacing:-.02em">Sävage</div><div style="font:500 11px/1 var(--font-body);letter-spacing:.09em;color:rgba(233,233,237,.45)">EUW · CHALLENGER</div></div>
+<div style="font:400 12.5px/1.5 var(--font-body);color:rgba(233,233,237,.6);max-width:390px">386 Galio games this season — 71% of everything they play. Their build isn't the popular one, and it wins more for them than the popular one does.</div>
+</div>
+<div style="flex:none;display:flex;gap:24px;padding-left:20px;border-left:1px solid rgba(233,233,237,.1)">
+<div><div style="font:500 9px/1 var(--font-body);letter-spacing:.13em;color:rgba(233,233,237,.4);margin-bottom:7px">WIN RATE</div><div style="font:600 28px/1 var(--font-body);letter-spacing:-.03em;font-variant-numeric:tabular-nums">64.2<span style="font-size:15px;opacity:.5">%</span></div></div>
+<div><div style="font:500 9px/1 var(--font-body);letter-spacing:.13em;color:rgba(233,233,237,.4);margin-bottom:7px">GAMES</div><div style="font:600 28px/1 var(--font-body);letter-spacing:-.03em;font-variant-numeric:tabular-nums">386</div></div>
+<div><div style="font:500 9px/1 var(--font-body);letter-spacing:.13em;color:rgba(233,233,237,.4);margin-bottom:7px">KDA</div><div style="font:600 28px/1 var(--font-body);letter-spacing:-.03em;font-variant-numeric:tabular-nums">4.1</div></div>
+</div>
+</div>
+</div>
+
+<div style="border-radius:9px;padding:16px 18px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08);margin-bottom:12px">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:15px">
+<div><div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5)">THEIR BUILD</div><div style="font:400 11px/1 var(--font-body);color:rgba(233,233,237,.4);margin-top:5px">Usage across their own 386 games — real rates, never rounded up to look decisive</div></div>
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.06em;padding:3px 8px;border-radius:5px;background:rgba(70,199,155,.14);color:#46c79b">+10.4pp VS. LADDER</div>
+</div>
+<div style="display:flex;align-items:center;flex-wrap:wrap">
+<sc-for list="{{ otpPath }}" as="i" hint-placeholder-count="6">
+<div style="display:flex;align-items:center">
+<div style="text-align:center;width:78px">
+<div style="width:50px;height:50px;margin:0 auto 7px;border-radius:9px;background:linear-gradient(150deg,{{ i.c1 }},{{ i.c2 }});background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.05) 0 3px,transparent 3px 6px);box-shadow:{{ i.ring }};display:grid;place-items:center;font:600 15px/1 var(--font-body);color:var(--color-neutral-200)">{{ i.mono }}</div>
+<div style="font:500 10px/1.3 var(--font-body);color:rgba(233,233,237,.72);height:26px">{{ i.name }}</div>
+<div style="font:600 10px/1 var(--font-body);color:{{ i.pickColor }};margin-top:2px;font-variant-numeric:tabular-nums">{{ i.pick }}</div>
+</div>
+<div style="width:14px;color:rgba(145,132,217,.55);display:{{ i.arrow }}"><svg width="14" height="10" viewBox="0 0 14 10" fill="none"><path d="M1 5h11M8.6 1.6L12 5l-3.4 3.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+</div>
+</sc-for>
+</div>
+<div style="font:400 11px/1.4 var(--font-body);color:rgba(233,233,237,.38);margin-top:13px;padding-top:12px;border-top:1px solid rgba(233,233,237,.05)">The last two sit under the 15% usage floor. They're shown at their real rate rather than dropped, so the build is still five items and a boot.</div>
+</div>
+
+<div style="border-radius:9px;padding:16px 18px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:14px">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5)">THEIR SKILL ORDER</div>
+<div style="font:600 14px/1 var(--font-body);letter-spacing:.08em;color:#b5abfc">E › W › Q</div>
+<div style="flex:1"></div>
+<div style="font:400 10.5px/1 var(--font-body);color:rgba(233,233,237,.38)">Their own timelines · 19 of 386 games pulled so far</div>
+</div>
+<div style="display:grid;grid-template-columns:22px repeat(18,1fr);gap:3px;align-items:center">
+<div></div>
+<sc-for list="{{ levelNums }}" as="n" hint-placeholder-count="18">
+<div style="text-align:center;font:500 8.5px/1 var(--font-body);color:rgba(233,233,237,.3);font-variant-numeric:tabular-nums">{{ n.v }}</div>
+</sc-for>
+<sc-for list="{{ otpSkill }}" as="row" hint-placeholder-count="4">
+<div style="font:600 11px/1 var(--font-body);color:rgba(233,233,237,.6)">{{ row.k }}</div>
+<sc-for list="{{ row.cells }}" as="c" hint-placeholder-count="18">
+<div style="height:20px;border-radius:4px;background:{{ c.bg }};box-shadow:{{ c.ring }};display:grid;place-items:center;font:600 9px/1 var(--font-body);color:{{ c.fg }}">{{ c.t }}</div>
+</sc-for>
+</sc-for>
+</div>
+<div style="font:400 11px/1.4 var(--font-body);color:rgba(233,233,237,.38);margin-top:11px">They take E first where the ladder takes W — the flank-engage pattern, and the reason their early game looks nothing like the WPA build's.</div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:12px">
+<div style="border-radius:9px;padding:15px 16px;background:linear-gradient(150deg,rgba(145,132,217,.09),#1b1d2a);box-shadow:inset 0 0 0 1px rgba(145,132,217,.22)">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:#b5abfc;margin-bottom:8px">WHERE THEY DIVERGE</div>
+<sc-for list="{{ otpDiff }}" as="d" hint-placeholder-count="3">
+<div style="display:flex;gap:11px;align-items:flex-start;padding:9px 0;border-top:1px solid rgba(233,233,237,.06)">
+<div style="width:5px;height:5px;border-radius:50%;background:var(--color-accent);margin-top:6px;flex:none"></div>
+<div><div style="font:600 12.5px/1 var(--font-body);margin-bottom:5px">{{ d.title }}</div><div style="font:400 11.5px/1.5 var(--font-body);color:rgba(233,233,237,.55)">{{ d.body }}</div></div>
+</div>
+</sc-for>
+</div>
+
+<div style="border-radius:9px;padding:16px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:13px"><div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5)">THEIR RUNES</div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.38);font-variant-numeric:tabular-nums">92% of games</div></div>
+<div style="display:flex;justify-content:center;margin-bottom:13px">
+<div style="width:50px;height:50px;border-radius:50%;background:radial-gradient(circle at 40% 35%,#4a4380,#25243c);box-shadow:0 0 0 2px rgba(145,132,217,.75),0 0 20px rgba(145,132,217,.28);display:grid;place-items:center;font:600 11px/1 var(--font-body);color:var(--color-accent-300)">AS</div>
+</div>
+<sc-for list="{{ otpRunes }}" as="r" hint-placeholder-count="4">
+<div style="display:flex;gap:7px;justify-content:center;margin-bottom:8px">
+<sc-for list="{{ r.opts }}" as="o" hint-placeholder-count="3">
+<div style="width:28px;height:28px;border-radius:50%;background:{{ o.bg }};box-shadow:{{ o.ring }};display:grid;place-items:center;font:600 8.5px/1 var(--font-body);color:{{ o.fg }}">{{ o.t }}</div>
+</sc-for>
+</div>
+</sc-for>
+</div>
+
+<div style="border-radius:9px;padding:15px 16px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5);margin-bottom:10px">THEIR LAST GAMES</div>
+<sc-for list="{{ otpGames }}" as="g" hint-placeholder-count="5">
+<div onClick="{{ goPro }}" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid rgba(233,233,237,.05);cursor:pointer" style-hover="background:rgba(233,233,237,.03)">
+<div style="width:3px;height:24px;border-radius:2px;background:{{ g.color }}"></div>
+<div style="flex:1;min-width:0"><div style="font:500 12.5px/1 var(--font-body);font-variant-numeric:tabular-nums">{{ g.kda }}</div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.38);margin-top:4px">vs {{ g.vs }} · {{ g.len }}</div></div>
+<div style="font:500 10px/1 var(--font-body);color:rgba(233,233,237,.45);font-variant-numeric:tabular-nums">{{ g.cs }} cs/m</div>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</sc-if>
+
+</div>
+</sc-if>
+<sc-if value="{{ isPostgame }}" hint-placeholder-val="{{ false }}">
+<div style="padding:22px 24px 34px">
+<div style="position:relative;border-radius:10px;padding:24px 26px;margin-bottom:16px;overflow:hidden;background:radial-gradient(120% 200% at 6% 0%,rgba(70,199,155,.16),#1c1e2b 55%,#191b27);box-shadow:0 0 0 1px rgba(70,199,155,.26)">
+<div style="position:absolute;inset:0;background:repeating-linear-gradient(115deg,rgba(70,199,155,.05) 0 1px,transparent 1px 10px)"></div>
+<div style="position:relative;display:flex;align-items:center;gap:26px">
+<div>
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.18em;color:#46c79b;margin-bottom:9px">VICTORY · RANKED SOLO · 34:12</div>
+<div style="display:flex;align-items:center;gap:14px">
+<div style="width:60px;height:60px;border-radius:10px;background:linear-gradient(150deg,#3a3663,#20223a);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.04) 0 4px,transparent 4px 8px);box-shadow:inset 0 0 0 1px rgba(145,132,217,.4);display:grid;place-items:center;font:600 18px/1 var(--font-body);color:var(--color-accent-300)">GA</div>
+<div><h1 style="margin:0 0 6px;font-size:28px;letter-spacing:-.025em;line-height:1">Galio · Mid</h1><div style="font:400 12px/1 var(--font-body);color:rgba(233,233,237,.5)">Patch 16.14 · 22 minutes ago</div></div>
+</div>
+</div>
+<div style="flex:1"></div>
+<div style="display:flex;gap:30px">
+<div><div style="font:500 9px/1 var(--font-body);letter-spacing:.13em;color:rgba(233,233,237,.4);margin-bottom:7px">KDA</div><div style="font:600 26px/1 var(--font-body);letter-spacing:-.02em;font-variant-numeric:tabular-nums">6 / 3 / 14</div></div>
+<div><div style="font:500 9px/1 var(--font-body);letter-spacing:.13em;color:rgba(233,233,237,.4);margin-bottom:7px">CS / MIN</div><div style="font:600 26px/1 var(--font-body);letter-spacing:-.02em;font-variant-numeric:tabular-nums">6.4</div></div>
+<div><div style="font:500 9px/1 var(--font-body);letter-spacing:.13em;color:rgba(233,233,237,.4);margin-bottom:7px">DAMAGE SHARE</div><div style="font:600 26px/1 var(--font-body);letter-spacing:-.02em;font-variant-numeric:tabular-nums">21%</div></div>
+</div>
+</div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 372px;gap:16px;align-items:start">
+<div>
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:11px"><div style="font:600 10px/1 var(--font-body);letter-spacing:.16em;color:rgba(233,233,237,.5)">THREE THINGS TO FIX</div><div style="flex:1;height:1px;background:linear-gradient(to right,rgba(233,233,237,.14),transparent)"></div></div>
+<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+<sc-for list="{{ fixes }}" as="f" hint-placeholder-count="3">
+<div style="display:flex;gap:14px;align-items:flex-start;border-radius:9px;padding:15px 16px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="width:34px;height:34px;flex:none;border-radius:8px;background:{{ f.badgeBg }};display:grid;place-items:center;font:600 13px/1 var(--font-body);color:{{ f.badgeFg }}">{{ f.n }}</div>
+<div style="flex:1">
+<div style="display:flex;align-items:baseline;gap:9px;margin-bottom:6px"><div style="font:600 15px/1 var(--font-body)">{{ f.title }}</div><div style="font:500 10px/1 var(--font-body);letter-spacing:.08em;padding:2px 7px;border-radius:4px;background:{{ f.tagBg }};color:{{ f.tagFg }}">{{ f.tag }}</div></div>
+<div style="font-size:12.5px;line-height:1.55;color:rgba(233,233,237,.6)">{{ f.body }}</div>
+</div>
+<div style="text-align:right;flex:none"><div style="font:600 17px/1 var(--font-body);font-variant-numeric:tabular-nums;color:{{ f.statColor }}">{{ f.stat }}</div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.38);margin-top:5px">{{ f.statLabel }}</div></div>
+</div>
+</sc-for>
+</div>
+
+<div style="border-radius:9px;padding:16px 18px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:15px"><div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5)">WHAT YOU BUILT VS. WHAT WE'D BUILD</div><div style="font:400 10.5px/1 var(--font-body);color:rgba(233,233,237,.38)">Order matters more than the items here</div></div>
+<div style="display:flex;flex-direction:column;gap:12px">
+<div style="display:flex;align-items:center;gap:10px">
+<div style="width:64px;font:500 9px/1 var(--font-body);letter-spacing:.1em;color:rgba(233,233,237,.4)">YOURS</div>
+<sc-for list="{{ builtYours }}" as="i" hint-placeholder-count="6">
+<div style="width:40px;height:40px;border-radius:8px;background:{{ i.bg }};box-shadow:{{ i.ring }};display:grid;place-items:center;font:600 11px/1 var(--font-body);color:{{ i.fg }}">{{ i.mono }}</div>
+</sc-for>
+</div>
+<div style="display:flex;align-items:center;gap:10px">
+<div style="width:64px;font:500 9px/1 var(--font-body);letter-spacing:.1em;color:var(--color-accent-400)">CoachBuild</div>
+<sc-for list="{{ builtOurs }}" as="i" hint-placeholder-count="6">
+<div style="width:40px;height:40px;border-radius:8px;background:{{ i.bg }};box-shadow:{{ i.ring }};display:grid;place-items:center;font:600 11px/1 var(--font-body);color:{{ i.fg }}">{{ i.mono }}</div>
+</sc-for>
+</div>
+</div>
+<div style="font:400 11.5px/1.5 var(--font-body);color:rgba(233,233,237,.55);margin-top:14px">You had the right five items in a different order — Rylai's third instead of second cost you roughly four minutes of the slow that keeps Zed off your ADC.</div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:12px">
+<div style="border-radius:9px;padding:18px 16px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08);text-align:center">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5);margin-bottom:16px">BUILD ADHERENCE</div>
+<div style="position:relative;width:132px;height:132px;margin:0 auto 14px">
+<svg width="132" height="132" viewBox="0 0 132 132" style="transform:rotate(-90deg)"><circle cx="66" cy="66" r="56" fill="none" stroke="rgba(233,233,237,.07)" stroke-width="10"/><circle cx="66" cy="66" r="56" fill="none" stroke="#9184d9" stroke-width="10" stroke-linecap="round" stroke-dasharray="352" stroke-dashoffset="63"/></svg>
+<div style="position:absolute;inset:0;display:grid;place-items:center"><div><div style="font:600 34px/1 var(--font-body);letter-spacing:-.03em;font-variant-numeric:tabular-nums">82<span style="font-size:17px;opacity:.5">%</span></div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.4);margin-top:6px">this game</div></div></div>
+</div>
+<div style="font:400 11.5px/1.5 var(--font-body);color:rgba(233,233,237,.5)">Your season average is 74%. Games above 80% adherence win 8pp more often for you.</div>
+</div>
+
+<div style="border-radius:9px;padding:15px 16px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5);margin-bottom:12px">RECENT GAMES</div>
+<sc-for list="{{ recentGames }}" as="g" hint-placeholder-count="5">
+<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid rgba(233,233,237,.05);cursor:pointer" style-hover="background:rgba(233,233,237,.03)">
+<div style="width:3px;height:26px;border-radius:2px;background:{{ g.color }}"></div>
+<div style="width:28px;height:28px;border-radius:6px;background:linear-gradient(150deg,#2b2e42,#1c1e2c);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.04) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.1);display:grid;place-items:center;font:600 9px/1 var(--font-body);color:var(--color-neutral-300)">{{ g.mono }}</div>
+<div style="flex:1;min-width:0"><div style="font:500 12.5px/1 var(--font-body)">{{ g.name }}</div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.38);margin-top:4px">{{ g.kda }}</div></div>
+<div style="font:500 10px/1 var(--font-body);padding:3px 7px;border-radius:4px;background:{{ g.chipBg }};color:{{ g.chipFg }}">{{ g.chip }}</div>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isPro }}" hint-placeholder-val="{{ false }}">
+<div style="padding:22px 24px 34px">
+<div style="display:flex;align-items:flex-end;gap:14px;margin-bottom:18px">
+<div><div style="font:500 10px/1 var(--font-body);letter-spacing:.16em;color:var(--color-accent);margin-bottom:7px">SOLO QUEUE + OFFICIAL PRO PLAY · 90-DAY WINDOW</div><h1 style="margin:0;font-size:34px;letter-spacing:-.025em;line-height:1">Pro Players</h1></div>
+<div style="flex:1"></div>
+<div style="display:flex;gap:2px;padding:3px;border-radius:9px;background:#1c1e2c;box-shadow:inset 0 0 0 1px rgba(233,233,237,.07)">
+<div style="padding:7px 13px;border-radius:6px;font:600 11px/1 var(--font-body);background:rgba(145,132,217,.2);color:var(--color-accent-300)">All</div>
+<div style="padding:7px 13px;border-radius:6px;font:600 11px/1 var(--font-body);color:rgba(233,233,237,.5);cursor:pointer">Solo Queue</div>
+<div style="padding:7px 13px;border-radius:6px;font:600 11px/1 var(--font-body);color:rgba(233,233,237,.5);cursor:pointer">Pro Play</div>
+</div>
+</div>
+
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px">
+<sc-for list="{{ proChips }}" as="c" hint-placeholder-count="6">
+<div style="display:flex;align-items:center;gap:8px;padding:7px 12px 7px 8px;border-radius:8px;background:{{ c.bg }};box-shadow:{{ c.ring }};cursor:pointer">
+<div style="width:22px;height:22px;border-radius:5px;background:linear-gradient(150deg,#2b2e42,#1c1e2c);box-shadow:inset 0 0 0 1px rgba(233,233,237,.12);display:grid;place-items:center;font:600 8px/1 var(--font-body);color:var(--color-neutral-300)">{{ c.mono }}</div>
+<div style="font:600 12px/1 var(--font-body);color:{{ c.fg }}">{{ c.name }}</div>
+<div style="font:500 9px/1 var(--font-body);letter-spacing:.08em;color:rgba(233,233,237,.35)">{{ c.team }}</div>
+</div>
+</sc-for>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+<sc-for list="{{ proGames }}" as="g" hint-placeholder-count="4">
+<div style="border-radius:9px;overflow:hidden;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08);cursor:pointer" style-hover="box-shadow:inset 0 0 0 1px rgba(145,132,217,.35)">
+<div style="display:flex;align-items:center;gap:12px;padding:14px 16px;background:{{ g.headBg }}">
+<div style="width:44px;height:44px;border-radius:9px;background:linear-gradient(150deg,#2b2e42,#1c1e2c);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.04) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.12);display:grid;place-items:center;font:600 13px/1 var(--font-body);color:var(--color-neutral-300)">{{ g.mono }}</div>
+<div style="flex:1;min-width:0">
+<div style="display:flex;align-items:baseline;gap:8px"><div style="font:600 15px/1 var(--font-body)">{{ g.player }}</div><div style="font:500 10px/1 var(--font-body);letter-spacing:.09em;color:rgba(233,233,237,.42)">{{ g.team }}</div></div>
+<div style="font:400 11px/1 var(--font-body);color:rgba(233,233,237,.42);margin-top:6px">{{ g.champ }} · {{ g.source }} · patch 16.14</div>
+</div>
+<div style="text-align:right"><div style="display:inline-block;padding:3px 9px;border-radius:5px;font:700 11px/1 var(--font-body);background:{{ g.resBg }};color:{{ g.resFg }}">{{ g.res }}</div><div style="font:500 12px/1 var(--font-body);font-variant-numeric:tabular-nums;margin-top:7px;color:rgba(233,233,237,.7)">{{ g.kda }}</div></div>
+</div>
+<div style="padding:12px 16px 14px">
+<div style="display:flex;align-items:center;gap:5px;margin-bottom:11px">
+<sc-for list="{{ g.allies }}" as="a" hint-placeholder-count="5">
+<div style="width:26px;height:26px;border-radius:6px;background:linear-gradient(150deg,#2b2e42,#1c1e2c);box-shadow:inset 0 0 0 1px rgba(70,199,155,.22);display:grid;place-items:center;font:600 8.5px/1 var(--font-body);color:var(--color-neutral-300)">{{ a.m }}</div>
+</sc-for>
+<div style="font:500 9px/1 var(--font-body);letter-spacing:.1em;color:rgba(233,233,237,.3);padding:0 5px">VS</div>
+<sc-for list="{{ g.enemies }}" as="e" hint-placeholder-count="5">
+<div style="width:26px;height:26px;border-radius:6px;background:linear-gradient(150deg,#3a2733,#231a22);box-shadow:inset 0 0 0 1px rgba(232,115,110,.22);display:grid;place-items:center;font:600 8.5px/1 var(--font-body);color:#e4c6c4">{{ e.m }}</div>
+</sc-for>
+</div>
+<div style="display:flex;align-items:center;gap:8px;font:400 11px/1 var(--font-body);color:rgba(233,233,237,.42)"><span>{{ g.keystone }}</span><span style="opacity:.4">·</span><span>{{ g.items }}</span></div>
+</div>
+</div>
+</sc-for>
+</div>
+<div style="font:400 11px/1.5 var(--font-body);color:rgba(233,233,237,.35);margin-top:16px">Pro-play match data from Leaguepedia (CC BY-SA). Solo-queue data via the Riot match-v5 API.</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isMovers }}" hint-placeholder-val="{{ false }}">
+<div style="padding:22px 24px 34px">
+<div style="display:flex;align-items:flex-end;gap:14px;margin-bottom:18px">
+<div><div style="font:500 10px/1 var(--font-body);letter-spacing:.16em;color:var(--color-accent);margin-bottom:7px">16.13 → 16.14 · EVERY LANE</div><h1 style="margin:0;font-size:34px;letter-spacing:-.025em;line-height:1">Patch Movers</h1></div>
+<div style="flex:1"></div>
+<div style="font:400 11.5px/1.5 var(--font-body);color:rgba(233,233,237,.45);max-width:340px;text-align:right">The biggest win-rate shifts since the patch landed. A note appears only where one genuinely exists.</div>
+</div>
+
+<div style="border-radius:9px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08);overflow:hidden">
+<div style="display:grid;grid-template-columns:1fr 78px 88px 210px 88px;gap:12px;padding:10px 18px;font:500 9px/1 var(--font-body);letter-spacing:.12em;color:rgba(233,233,237,.4);background:rgba(233,233,237,.03)">
+<div>CHAMPION</div><div style="text-align:right">16.13</div><div style="text-align:right">16.14</div><div>SHIFT</div><div style="text-align:right">GAMES</div>
+</div>
+<sc-for list="{{ movers }}" as="m" hint-placeholder-count="8">
+<div style="border-top:1px solid rgba(233,233,237,.05);padding:11px 18px" style-hover="background:rgba(233,233,237,.03)">
+<div style="display:grid;grid-template-columns:1fr 78px 88px 210px 88px;gap:12px;align-items:center">
+<div style="display:flex;align-items:center;gap:11px">
+<div style="width:32px;height:32px;border-radius:7px;background:linear-gradient(150deg,#2b2e42,#1c1e2c);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.035) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.1);display:grid;place-items:center;font:600 11px/1 var(--font-body);color:var(--color-neutral-300)">{{ m.mono }}</div>
+<div><div style="font:500 13.5px/1 var(--font-body)">{{ m.name }}</div><div style="font:500 9px/1 var(--font-body);letter-spacing:.1em;color:rgba(233,233,237,.35);margin-top:5px">{{ m.lane }}</div></div>
+</div>
+<div style="text-align:right;font:400 12.5px/1 var(--font-body);color:rgba(233,233,237,.5);font-variant-numeric:tabular-nums">{{ m.prev }}</div>
+<div style="text-align:right;font:600 14px/1 var(--font-body);font-variant-numeric:tabular-nums">{{ m.cur }}</div>
+<div style="display:flex;align-items:center;gap:10px">
+<div style="flex:1;height:6px;border-radius:3px;background:rgba(233,233,237,.06);position:relative;overflow:hidden"><div style="position:absolute;top:0;bottom:0;left:0;right:0;left:{{ m.barLeft }};width:{{ m.barW }};border-radius:3px;background:{{ m.color }}"></div><div style="position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:rgba(233,233,237,.18)"></div></div>
+<div style="width:56px;text-align:right;font:600 13px/1 var(--font-body);font-variant-numeric:tabular-nums;color:{{ m.color }}">{{ m.delta }}</div>
+</div>
+<div style="text-align:right;font:400 12px/1 var(--font-body);color:rgba(233,233,237,.4);font-variant-numeric:tabular-nums">{{ m.games }}</div>
+</div>
+<div style="font:400 11.5px/1.4 var(--font-body);color:rgba(233,233,237,.42);margin-top:7px;padding-left:43px">{{ m.note }}</div>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isMystats }}" hint-placeholder-val="{{ false }}">
+<div style="padding:22px 24px 34px">
+<div style="display:flex;align-items:flex-end;gap:14px;margin-bottom:18px">
+<div><div style="font:500 10px/1 var(--font-body);letter-spacing:.16em;color:var(--color-accent);margin-bottom:7px">RANKED SOLO · FULL SEASON · DISPLAY ONLY</div><h1 style="margin:0;font-size:34px;letter-spacing:-.025em;line-height:1">My Stats</h1></div>
+<div style="flex:1"></div>
+<div style="display:flex;align-items:center;gap:10px;padding:8px 13px;border-radius:8px;background:#1c1e2c;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="width:26px;height:26px;border-radius:6px;background:linear-gradient(150deg,#3a3663,#20223a);display:grid;place-items:center;font:600 9px/1 var(--font-body);color:var(--color-accent-300)">E4</div>
+<div><div style="font:600 12px/1 var(--font-body)">Emerald IV · 42 LP</div><div style="font:400 10px/1 var(--font-body);color:rgba(233,233,237,.4);margin-top:4px">Synced 3 minutes ago</div></div>
+</div>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
+<sc-for list="{{ statTiles }}" as="t" hint-placeholder-count="4">
+<div style="border-radius:9px;padding:16px 17px;background:{{ t.bg }};box-shadow:{{ t.ring }}">
+<div style="font:500 9px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.45);margin-bottom:12px">{{ t.label }}</div>
+<div style="display:flex;align-items:baseline;gap:8px"><div style="font:600 30px/1 var(--font-body);letter-spacing:-.03em;font-variant-numeric:tabular-nums;color:{{ t.color }}">{{ t.value }}</div><div style="font:400 11px/1 var(--font-body);color:rgba(233,233,237,.4)">{{ t.sub }}</div></div>
+<div style="height:4px;border-radius:2px;background:rgba(233,233,237,.06);margin-top:13px;overflow:hidden"><div style="height:100%;width:{{ t.pct }};border-radius:2px;background:{{ t.color }}"></div></div>
+</div>
+</sc-for>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 372px;gap:16px;align-items:start">
+<div style="border-radius:9px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08);overflow:hidden">
+<div style="padding:14px 18px 12px"><div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5)">CHAMPION POOL</div></div>
+<div style="display:grid;grid-template-columns:1fr 64px 78px 74px 88px;gap:12px;padding:8px 18px;font:500 9px/1 var(--font-body);letter-spacing:.12em;color:rgba(233,233,237,.4);background:rgba(233,233,237,.03)">
+<div>CHAMPION</div><div style="text-align:right">GAMES</div><div style="text-align:right">WIN RATE</div><div style="text-align:right">CS/MIN</div><div style="text-align:right">ADHERENCE</div>
+</div>
+<sc-for list="{{ pool }}" as="p" hint-placeholder-count="6">
+<div style="display:grid;grid-template-columns:1fr 64px 78px 74px 88px;gap:12px;align-items:center;padding:10px 18px;border-top:1px solid rgba(233,233,237,.05)" style-hover="background:rgba(233,233,237,.03)">
+<div style="display:flex;align-items:center;gap:11px">
+<div style="width:30px;height:30px;border-radius:7px;background:linear-gradient(150deg,#2b2e42,#1c1e2c);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.035) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px rgba(233,233,237,.1);display:grid;place-items:center;font:600 10px/1 var(--font-body);color:var(--color-neutral-300)">{{ p.mono }}</div>
+<div><div style="font:500 13px/1 var(--font-body)">{{ p.name }}</div><div style="font:500 9px/1 var(--font-body);letter-spacing:.1em;color:rgba(233,233,237,.35);margin-top:5px">{{ p.lane }}</div></div>
+</div>
+<div style="text-align:right;font:400 12px/1 var(--font-body);color:rgba(233,233,237,.5);font-variant-numeric:tabular-nums">{{ p.games }}</div>
+<div style="text-align:right;font:600 13px/1 var(--font-body);font-variant-numeric:tabular-nums;color:{{ p.wrColor }}">{{ p.wr }}</div>
+<div style="text-align:right;font:400 12px/1 var(--font-body);color:{{ p.csColor }};font-variant-numeric:tabular-nums">{{ p.cs }}</div>
+<div style="display:flex;align-items:center;gap:8px;justify-content:flex-end"><div style="width:34px;height:5px;border-radius:3px;background:rgba(233,233,237,.07);overflow:hidden"><div style="height:100%;width:{{ p.adPct }};border-radius:3px;background:var(--color-accent)"></div></div><div style="width:32px;text-align:right;font:500 11.5px/1 var(--font-body);font-variant-numeric:tabular-nums;color:rgba(233,233,237,.6)">{{ p.ad }}</div></div>
+</div>
+</sc-for>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:12px">
+<div style="border-radius:9px;padding:15px 16px;background:linear-gradient(150deg,rgba(145,132,217,.09),#1b1d2a);box-shadow:inset 0 0 0 1px rgba(145,132,217,.22)">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:var(--color-accent-400);margin-bottom:10px">THE PATTERN</div>
+<div style="font-size:13px;line-height:1.6;color:rgba(233,233,237,.68)">You win 72% on Mid and 44% on the games where you build off-path. The two facts are the same fact — your off-path games are almost all Viktor, where you skip Rylai's for damage and die to dives.</div>
+</div>
+<div style="border-radius:9px;padding:15px 16px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5);margin-bottom:13px">LAST 20 GAMES</div>
+<div style="display:flex;gap:4px;flex-wrap:wrap">
+<sc-for list="{{ last20 }}" as="g" hint-placeholder-count="20">
+<div style="width:26px;height:30px;border-radius:5px;background:{{ g.bg }};box-shadow:{{ g.ring }}"></div>
+</sc-for>
+</div>
+<div style="display:flex;gap:16px;margin-top:14px;font:400 11px/1 var(--font-body);color:rgba(233,233,237,.45)"><span style="color:#46c79b">12 wins</span><span>8 losses</span><span style="margin-left:auto">60% · +4 LP avg</span></div>
+</div>
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isCompanion }}" hint-placeholder-val="{{ false }}">
+<div style="padding:22px 24px 34px;max-width:900px">
+<div style="margin-bottom:18px"><div style="font:500 10px/1 var(--font-body);letter-spacing:.16em;color:var(--color-accent);margin-bottom:7px">RUNS ON YOUR PC · NO INSTALL, NO LOGIN</div><h1 style="margin:0 0 8px;font-size:34px;letter-spacing:-.025em;line-height:1">Companion</h1><div style="font-size:13.5px;line-height:1.55;color:rgba(233,233,237,.55);max-width:560px">A small script that watches your League client and hands CoachBuild the state of your game. It reads picks, roles and item builds — never names, never cooldowns, and never acts in-game for you.</div></div>
+
+<div style="border-radius:10px;padding:20px 22px;margin-bottom:14px;background:linear-gradient(150deg,rgba(70,199,155,.1),#1b1d2a);box-shadow:0 0 0 1px rgba(70,199,155,.26)">
+<div style="display:flex;align-items:center;gap:11px;margin-bottom:18px">
+<div style="width:9px;height:9px;border-radius:50%;background:#46c79b;animation:cbPulse 2s ease-in-out infinite"></div>
+<div style="font:600 19px/1 var(--font-body);letter-spacing:-.01em">Connected · following champ select</div>
+<div style="flex:1"></div>
+<div style="text-align:right;font:400 10.5px/1.6 var(--font-body);color:rgba(233,233,237,.4)">SCRIPT V1.13.0<br>LAST POLL 13:18:16</div>
+</div>
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;align-items:center">
+<sc-for list="{{ steps }}" as="s" hint-placeholder-count="4">
+<div style="position:relative;display:flex;flex-direction:column;align-items:center;gap:10px">
+<div style="position:absolute;top:7px;left:50%;right:-50%;height:1px;background:{{ s.line }}"></div>
+<div style="position:relative;width:15px;height:15px;border-radius:50%;background:{{ s.dotBg }};box-shadow:{{ s.dotRing }};display:grid;place-items:center"><div style="width:5px;height:5px;border-radius:50%;background:{{ s.inner }}"></div></div>
+<div style="font:600 9.5px/1 var(--font-body);letter-spacing:.12em;color:{{ s.fg }}">{{ s.label }}</div>
+</div>
+</sc-for>
+</div>
+</div>
+
+<div style="border-radius:9px;padding:17px 18px;margin-bottom:14px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5);margin-bottom:5px">INSTALL — ONE LINE, NOTHING WRITTEN TO DISK</div>
+<div style="font:400 11.5px/1.5 var(--font-body);color:rgba(233,233,237,.42);margin-bottom:14px">Paste into PowerShell (Win+X → Terminal). Runs in memory; the auto-start variant adds a Startup shortcut, no admin rights.</div>
+<sc-for list="{{ installs }}" as="i" hint-placeholder-count="2">
+<div style="margin-bottom:11px">
+<div style="font:500 9px/1 var(--font-body);letter-spacing:.12em;color:rgba(233,233,237,.38);margin-bottom:7px">{{ i.label }}</div>
+<div style="display:flex;gap:8px">
+<div style="flex:1;min-width:0;padding:11px 13px;border-radius:8px;background:#12141f;box-shadow:inset 0 0 0 1px rgba(233,233,237,.09);font:400 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--color-accent-300);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ i.cmd }}</div>
+<div style="display:flex;align-items:center;gap:7px;padding:0 14px;border-radius:8px;color:var(--color-accent-400);box-shadow:inset 0 0 0 1px rgba(145,132,217,.55);font:600 10.5px/1 var(--font-body);letter-spacing:.08em;cursor:pointer" style-hover="background:rgba(145,132,217,.14)"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="9" height="9" rx="1.6" stroke="currentColor" stroke-width="1.2"/><path d="M11 5V3.4A1.4 1.4 0 009.6 2H3.4A1.4 1.4 0 002 3.4v6.2A1.4 1.4 0 003.4 11H5" stroke="currentColor" stroke-width="1.2"/></svg>COPY</div>
+</div>
+</div>
+</sc-for>
+</div>
+
+<div style="border-radius:9px;padding:17px 18px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5);margin-bottom:15px">AUTOMATION</div>
+<sc-for list="{{ toggles }}" as="t" hint-placeholder-count="2">
+<div style="display:flex;gap:14px;align-items:flex-start;padding:13px 0;border-top:1px solid rgba(233,233,237,.05)">
+<div style="width:38px;height:21px;flex:none;border-radius:11px;background:{{ t.trackBg }};box-shadow:{{ t.trackRing }};position:relative;cursor:pointer;margin-top:2px"><div style="position:absolute;top:3px;left:{{ t.knobLeft }};width:15px;height:15px;border-radius:50%;background:{{ t.knob }}"></div></div>
+<div><div style="font:600 14px/1 var(--font-body);margin-bottom:6px">{{ t.title }}</div><div style="font-size:12px;line-height:1.55;color:rgba(233,233,237,.55);max-width:600px">{{ t.body }}</div></div>
+</div>
+</sc-for>
+<div style="display:flex;align-items:center;gap:9px;margin-top:14px;padding-top:13px;border-top:1px solid rgba(233,233,237,.05);font:400 11.5px/1.5 var(--font-body);color:rgba(233,233,237,.45)"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="flex:none;color:var(--color-accent)"><path d="M8 1.8l5 2v4.4c0 3.2-2 5.6-5 6.6-3-1-5-3.4-5-6.6V3.8l5-2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>Rune and item writes go to CoachBuild's own page and set — your personal pages are never touched or deleted.</div>
+</div>
+
+<div style="border-radius:9px;padding:17px 18px;margin-top:14px;background:#1b1d2a;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)">
+<div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:16px">
+<div><div style="font:600 10px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.5);margin-bottom:6px">IN-GAME OVERLAY — A SEPARATE APP</div><div style="font:400 11.5px/1.5 var(--font-body);color:rgba(233,233,237,.5);max-width:520px">One job: it names the ability to level next, and nothing else. It draws <em>over</em> the game — nothing is written inside it — and needs Borderless or Windowed display mode.</div></div>
+<div style="flex:1"></div>
+<div style="display:flex;align-items:center;gap:7px;height:32px;padding:0 14px;border-radius:8px;color:#b5abfc;box-shadow:inset 0 0 0 1px var(--color-accent);font:600 10.5px/1 var(--font-body);letter-spacing:.08em;cursor:pointer;white-space:nowrap" style-hover="background:rgba(145,132,217,.14)"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M8 2v8.4M4.6 7.2L8 10.6l3.4-3.4M2.6 13.4h10.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>DOWNLOAD FOR WINDOWS</div>
+</div>
+
+<div data-shot="overlay" style="border-radius:10px;padding:26px 24px;background:radial-gradient(120% 140% at 20% 0%,#1d2530,#0f1319 70%);box-shadow:inset 0 0 0 1px rgba(233,233,237,.06);display:flex;align-items:flex-start;gap:22px;flex-wrap:wrap">
+<div>
+<div style="font:500 9px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.3);margin-bottom:11px">SHOWN AT REAL SIZE, OVER YOUR GAME</div>
+<div style="width:250px;border-radius:10px;padding:12px 13px;background:rgba(18,20,31,.88);box-shadow:0 0 0 1px rgba(145,132,217,.3),0 10px 30px rgba(0,0,0,.55)">
+<div style="display:flex;align-items:center;gap:7px;margin-bottom:11px"><div style="width:5px;height:5px;border-radius:50%;background:#46c79b;animation:cbPulse 2s ease-in-out infinite"></div><div style="font:600 8.5px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.4)">COACHBUILD · GALIO</div><div style="margin-left:auto;font:500 8.5px/1 var(--font-body);color:rgba(233,233,237,.3);font-variant-numeric:tabular-nums">LV 11</div></div>
+<div style="display:flex;align-items:center;gap:12px">
+<div style="width:46px;height:46px;flex:none;border-radius:9px;background:linear-gradient(150deg,#4a4380,#25243c);box-shadow:inset 0 0 0 1px rgba(145,132,217,.55),0 0 20px rgba(145,132,217,.3);display:grid;place-items:center;font:600 20px/1 var(--font-body);color:var(--color-accent-200)">W</div>
+<div><div style="font:600 13px/1 var(--font-body);margin-bottom:6px">Shield of Durand</div><div style="display:flex;align-items:center;gap:7px;font:600 12px/1 var(--font-body);font-variant-numeric:tabular-nums;color:#b5abfc">3<svg width="12" height="9" viewBox="0 0 14 10" fill="none"><path d="M1 5h11M8.6 1.6L12 5l-3.4 3.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>4</div></div>
+</div>
+<div style="display:flex;gap:5px;margin-top:12px">
+<sc-for list="{{ overlayKeys }}" as="k" hint-placeholder-count="4">
+<div style="flex:1;height:22px;border-radius:5px;background:{{ k.bg }};box-shadow:{{ k.ring }};display:grid;place-items:center;font:600 10px/1 var(--font-body);color:{{ k.fg }}">{{ k.t }}</div>
+</sc-for>
+</div>
+</div>
+</div>
+
+<div style="flex:1;min-width:280px">
+<div style="font:500 9px/1 var(--font-body);letter-spacing:.14em;color:rgba(233,233,237,.3);margin-bottom:11px">EVERY STATE IT CAN BE IN</div>
+<sc-for list="{{ overlayStates }}" as="o" hint-placeholder-count="3">
+<div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-top:1px solid rgba(233,233,237,.06)">
+<div style="width:32px;height:32px;flex:none;border-radius:7px;background:{{ o.bg }};box-shadow:{{ o.ring }};display:grid;place-items:center;font:600 13px/1 var(--font-body);color:{{ o.fg }}">{{ o.glyph }}</div>
+<div style="flex:1;min-width:0"><div style="font:500 12.5px/1 var(--font-body);margin-bottom:5px">{{ o.title }}</div><div style="font:400 11px/1.45 var(--font-body);color:rgba(233,233,237,.45)">{{ o.body }}</div></div>
+</div>
+</sc-for>
+</div>
+</div>
+<div style="font:400 11px/1.5 var(--font-body);color:rgba(233,233,237,.38);margin-top:13px">Reads only your own champion, level and ability ranks from the live game API. Nothing about enemies, no cooldowns, no input.</div>
+</div>
+</div>
+</sc-if>
+
+</div>
+</div>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;startScreen&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;draft&quot;,&quot;builds&quot;,&quot;champion&quot;,&quot;live&quot;,&quot;postgame&quot;,&quot;pro&quot;,&quot;movers&quot;,&quot;mystats&quot;,&quot;companion&quot;],&quot;default&quot;:&quot;draft&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Prototype&quot;},&quot;showDesignNotes&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Prototype&quot;}}">
+const GOOD = '#46c79b', BAD = '#e8736e', MUT = 'rgba(233,233,237,.55)';
+const tier = (t) => t === 'S+' ? { tierBg: 'var(--color-accent)', tierFg: '#191a28' }
+  : t === 'S' ? { tierBg: 'rgba(145,132,217,.32)', tierFg: 'var(--color-accent-300)' }
+  : t === 'A' ? { tierBg: 'rgba(145,132,217,.16)', tierFg: 'var(--color-accent-400)' }
+  : { tierBg: 'rgba(233,233,237,.08)', tierFg: 'rgba(233,233,237,.6)' };
+const cell = (v) => {
+  const n = parseFloat(v);
+  if (n >= 53) return { v, bg: 'rgba(70,199,155,.22)', fg: '#7fe0c0' };
+  if (n >= 51) return { v, bg: 'rgba(70,199,155,.11)', fg: '#46c79b' };
+  if (n >= 49) return { v, bg: 'rgba(233,233,237,.06)', fg: 'rgba(233,233,237,.6)' };
+  return { v, bg: 'rgba(232,115,110,.14)', fg: '#e8736e' };
+};
+
+class Component extends DCLogic {
+  state = { screen: null, dtab: 'rec', btab: 'wpa' };
+
+  get screen() { return this.state.screen || this.props.startScreen || 'draft'; }
+
+  go(s) { return () => this.setState({ screen: s }); }
+
+  navFor(id) {
+    const on = this.screen === id || (id === 'builds' && this.screen === 'champion');
+    return { bg: on ? 'rgba(145,132,217,.14)' : 'transparent', fg: on ? 'var(--color-text)' : 'rgba(233,233,237,.6)', bar: on ? '1' : '0' };
+  }
+
+  tabFor(id) {
+    const on = this.state.dtab === id;
+    return { bg: on ? 'rgba(145,132,217,.2)' : 'transparent', fg: on ? 'var(--color-accent-300)' : 'rgba(233,233,237,.5)' };
+  }
+
+  renderVals() {
+    const s = this.screen;
+    const bt = this.state.btab;
+    const nav = {}; ['draft', 'builds', 'live', 'postgame', 'pro', 'movers', 'mystats', 'companion'].forEach(i => nav[i] = this.navFor(i));
+
+    const skill = 'WEQWWRWQWQRQQEERER'.split('');
+    const counts = { Q: 0, W: 0, E: 0, R: 0 };
+    const skillGrid = ['Q', 'W', 'E', 'R'].map(k => ({
+      k,
+      cells: skill.map((a, i) => {
+        if (a !== k) return { bg: 'rgba(233,233,237,.045)', ring: 'none', fg: 'transparent', t: '' };
+        counts[k] += 1;
+        const derived = i >= 15;
+        return {
+          bg: derived ? 'rgba(145,132,217,.18)' : (k === 'R' ? 'var(--color-accent)' : 'rgba(145,132,217,.55)'),
+          ring: derived ? 'inset 0 0 0 1px rgba(145,132,217,.5)' : 'none',
+          fg: derived ? 'var(--color-accent-400)' : '#191a28',
+          t: String(counts[k])
+        };
+      })
+    }));
+
+    const rune = (t, on) => ({ t, bg: on ? 'rgba(145,132,217,.28)' : 'rgba(233,233,237,.05)', ring: on ? 'inset 0 0 0 1.5px var(--color-accent)' : 'inset 0 0 0 1px rgba(233,233,237,.12)', fg: on ? 'var(--color-accent-300)' : 'rgba(233,233,237,.35)' });
+
+    return {
+      isDraft: s === 'draft', isBuilds: s === 'builds', isChampion: s === 'champion',
+      isPostgame: s === 'postgame', isPro: s === 'pro',
+      isMovers: s === 'movers', isMystats: s === 'mystats', isCompanion: s === 'companion',
+      showNotes: this.props.showDesignNotes !== false,
+      nav,
+      goDraft: this.go('draft'), goBuilds: this.go('champion'), goChampion: this.go('champion'),
+      goBuildsHome: this.go('builds'),
+      goPostgame: this.go('postgame'), goPro: this.go('pro'),
+      goMovers: this.go('movers'), goMystats: this.go('mystats'), goCompanion: this.go('companion'),
+      dtab: { rec: this.tabFor('rec'), blind: this.tabFor('blind'), counter: this.tabFor('counter'), comfort: this.tabFor('comfort') },
+      setTabRec: () => this.setState({ dtab: 'rec' }), setTabBlind: () => this.setState({ dtab: 'blind' }),
+      setTabCounter: () => this.setState({ dtab: 'counter' }), setTabComfort: () => this.setState({ dtab: 'comfort' }),
+      isWpa: bt === 'wpa', isProTab: bt === 'pro', isOtp: bt === 'otp',
+      btab: {
+        wpa: { fg: bt === 'wpa' ? 'var(--color-text)' : 'rgba(233,233,237,.4)', bar: bt === 'wpa' ? 'inset 0 -2px 0 var(--color-accent)' : 'none' },
+        pro: { fg: bt === 'pro' ? 'var(--color-text)' : 'rgba(233,233,237,.4)', bar: bt === 'pro' ? 'inset 0 -2px 0 var(--color-accent)' : 'none' },
+        otp: { fg: bt === 'otp' ? 'var(--color-text)' : 'rgba(233,233,237,.4)', bar: bt === 'otp' ? 'inset 0 -2px 0 var(--color-accent)' : 'none' }
+      },
+      setTabWpa: () => this.setState({ btab: 'wpa' }),
+      setTabPro: () => this.setState({ btab: 'pro' }),
+      setTabOtp: () => this.setState({ btab: 'otp' }),
+
+      proPath: [
+        { mono: 'DS', name: 'Doran\u2019s Shield', pick: '74%', c1: '#3a3145', c2: '#221d2c', arrow: 'block' },
+        { mono: 'PL', name: 'Plated Steelcaps', pick: '58%', c1: '#2f3450', c2: '#1c2032', arrow: 'block' },
+        { mono: 'RY', name: 'Rylai\u2019s Sceptre', pick: '81%', c1: '#453048', c2: '#2a1e2e', arrow: 'block' },
+        { mono: 'AB', name: 'Abyssal Mask', pick: '52%', c1: '#2e3a4e', c2: '#1c2230', arrow: 'block' },
+        { mono: 'LI', name: 'Liandry\u2019s Torment', pick: '44%', c1: '#4a3436', c2: '#2c2022', arrow: 'block' },
+        { mono: 'ZH', name: 'Zhonya\u2019s Hourglass', pick: '31%', c1: '#4a4230', c2: '#2b271e', arrow: 'none' }
+      ],
+      proPartitions: [
+        { title: 'STARTING ITEMS', rows: [
+          { mono: 'DS', name: 'Doran\u2019s Shield', pick: '74%', pct: '74%', c1: '#3a3145', c2: '#221d2c' },
+          { mono: 'DR', name: 'Doran\u2019s Ring', pick: '19%', pct: '19%', c1: '#3a3145', c2: '#221d2c' },
+          { mono: 'CO', name: 'Corrupting Potion', pick: '7%', pct: '7%', c1: '#4a3436', c2: '#2c2022' }
+        ] },
+        { title: 'BOOTS', rows: [
+          { mono: 'PL', name: 'Plated Steelcaps', pick: '58%', pct: '58%', c1: '#2f3450', c2: '#1c2032' },
+          { mono: 'MB', name: 'Mercury\u2019s Treads', pick: '34%', pct: '34%', c1: '#2f3450', c2: '#1c2032' },
+          { mono: 'SO', name: 'Sorcerer\u2019s Shoes', pick: '8%', pct: '8%', c1: '#2f3450', c2: '#1c2032' }
+        ] }
+      ],
+      proSkill: ['Q', 'W', 'E', 'R'].map(k => {
+        let c = 0;
+        return { k, cells: 'WEQWWRWQWQRQQEE'.split('').concat(['', '', '']).map(a => a === k
+          ? (c += 1, { bg: k === 'R' ? 'var(--color-accent)' : 'rgba(145,132,217,.55)', ring: 'none', fg: '#191a28', t: String(c) })
+          : { bg: 'rgba(233,233,237,.045)', ring: 'none', fg: 'transparent', t: '' }) };
+      }),
+      proKeystones: [
+        { mono: 'AS', name: 'Aftershock', tree: 'Resolve · Precision secondary', pick: '78%', games: '1,669g', bg: 'rgba(145,132,217,.28)', ring: 'inset 0 0 0 1.5px var(--color-accent)', fg: 'var(--color-accent-300)' },
+        { mono: 'GR', name: 'Grasp of the Undying', tree: 'Resolve · Inspiration secondary', pick: '14%', games: '300g', bg: 'rgba(233,233,237,.05)', ring: 'inset 0 0 0 1px rgba(233,233,237,.14)', fg: 'rgba(233,233,237,.55)' },
+        { mono: 'EL', name: 'Electrocute', tree: 'Domination · low sample', pick: '8%', games: '171g', bg: 'rgba(233,233,237,.05)', ring: 'inset 0 0 0 1px rgba(233,233,237,.14)', fg: 'rgba(233,233,237,.55)' }
+      ],
+      proWho: [
+        { mono: 'FA', name: 'Faker', team: 'T1', games: '24g', wr: '67%', color: GOOD },
+        { mono: 'KN', name: 'Knight', team: 'BLG', games: '19g', wr: '63%', color: GOOD },
+        { mono: 'CH', name: 'Chovy', team: 'GEN', games: '17g', wr: '71%', color: GOOD },
+        { mono: 'CA', name: 'Caps', team: 'G2', games: '11g', wr: '45%', color: BAD },
+        { mono: 'AB', name: 'Abbedagge', team: 'KC', games: '9g', wr: '56%', color: GOOD }
+      ],
+
+      otpPath: [
+        { mono: 'DS', name: 'Doran\u2019s Shield', pick: '88%', pickColor: '#b5abfc', c1: '#3a3145', c2: '#221d2c', ring: 'inset 0 0 0 1px rgba(233,233,237,.14)', arrow: 'block' },
+        { mono: 'MB', name: 'Mercury\u2019s Treads', pick: '71%', pickColor: '#b5abfc', c1: '#2f3450', c2: '#1c2032', ring: 'inset 0 0 0 1px rgba(233,233,237,.14)', arrow: 'block' },
+        { mono: 'RY', name: 'Rylai\u2019s Sceptre', pick: '84%', pickColor: '#b5abfc', c1: '#453048', c2: '#2a1e2e', ring: 'inset 0 0 0 1px rgba(145,132,217,.5)', arrow: 'block' },
+        { mono: 'AB', name: 'Abyssal Mask', pick: '69%', pickColor: '#b5abfc', c1: '#2e3a4e', c2: '#1c2230', ring: 'inset 0 0 0 1px rgba(145,132,217,.5)', arrow: 'block' },
+        { mono: 'FO', name: 'Force of Nature', pick: '12%', pickColor: 'rgba(233,233,237,.42)', c1: '#3a3145', c2: '#221d2c', ring: 'inset 0 0 0 1px rgba(233,233,237,.1)', arrow: 'block' },
+        { mono: 'ZH', name: 'Zhonya\u2019s Hourglass', pick: '9%', pickColor: 'rgba(233,233,237,.42)', c1: '#4a4230', c2: '#2b271e', ring: 'inset 0 0 0 1px rgba(233,233,237,.1)', arrow: 'none' }
+      ],
+      otpSkill: ['Q', 'W', 'E', 'R'].map(k => {
+        let c = 0;
+        return { k, cells: 'EWQEERWEWERWWQQ'.split('').concat(['', '', '']).map(a => a === k
+          ? (c += 1, { bg: k === 'R' ? 'var(--color-accent)' : 'rgba(145,132,217,.55)', ring: 'none', fg: '#191a28', t: String(c) })
+          : { bg: 'rgba(233,233,237,.045)', ring: 'none', fg: 'transparent', t: '' }) };
+      }),
+      otpDiff: [
+        { title: 'E before W, every game', body: 'The ladder maxes W for the damage reduction. They max E for the range on the flank — it changes which fights they can start.' },
+        { title: 'Mercury\u2019s over Steelcaps', body: 'Even into AD comps. The tenacity is what makes the flank survivable when it goes wrong.' },
+        { title: 'Abyssal Mask second, not fifth', body: 'Their whole game is standing in the middle of five people. The aura pays from the moment it exists.' }
+      ],
+      otpRunes: [
+        { opts: [rune('FO', false), rune('SH', true), rune('CO', false)] },
+        { opts: [rune('CN', true), rune('SE', false), rune('BP', false)] },
+        { opts: [rune('OT', false), rune('RE', false), rune('UN', true)] },
+        { opts: [rune('MC', false), rune('NP', true), rune('TR', false)] }
+      ],
+      otpGames: [
+        { kda: '3 / 2 / 21', vs: 'Sylas', len: '31:04', cs: '6.1', color: GOOD },
+        { kda: '5 / 1 / 14', vs: 'Ahri', len: '26:47', cs: '6.8', color: GOOD },
+        { kda: '1 / 6 / 9', vs: 'Akali', len: '38:12', cs: '5.4', color: BAD },
+        { kda: '4 / 3 / 18', vs: 'Zed', len: '29:33', cs: '6.5', color: GOOD },
+        { kda: '2 / 2 / 24', vs: 'Orianna', len: '34:58', cs: '6.0', color: GOOD }
+      ],
+
+
+      altPicks: [
+        { mono: 'MA', name: 'Malzahar', tier: 'S', ...tier('S'), tag: 'SAFEST', why: 'Point-and-click ultimate answers the assassin. Zero-skill floor.', wr: '53.1%', delta: '+4.4pp', deltaColor: GOOD },
+        { mono: 'OR', name: 'Orianna', tier: 'A', ...tier('A'), tag: 'YOUR COMFORT', why: "You're 12–4 on her this season, 8pp above your average.", wr: '51.4%', delta: '+1.9pp', deltaColor: GOOD }
+      ],
+
+      rankRows: [
+        { n: 1, mono: 'GA', name: 'Galio', tier: 'S+', ...tier('S+'), tagText: 'META', tagBg: 'rgba(145,132,217,.16)', tagFg: 'var(--color-accent-400)', wr: '53.8%', pr: '4.2%', delta: '+6.1', deltaColor: GOOD, games: '41,206' },
+        { n: 2, mono: 'MA', name: 'Malzahar', tier: 'S', ...tier('S'), tagText: 'META', tagBg: 'rgba(145,132,217,.16)', tagFg: 'var(--color-accent-400)', wr: '53.1%', pr: '6.8%', delta: '+4.4', deltaColor: GOOD, games: '66,014' },
+        { n: 3, mono: 'LI', name: 'Lissandra', tier: 'S', ...tier('S'), tagText: 'META', tagBg: 'rgba(145,132,217,.16)', tagFg: 'var(--color-accent-400)', wr: '52.6%', pr: '3.1%', delta: '+3.8', deltaColor: GOOD, games: '28,900' },
+        { n: 4, mono: 'AN', name: 'Annie', tier: 'A', ...tier('A'), tagText: 'OFF-META', tagBg: 'rgba(233,233,237,.07)', tagFg: 'rgba(233,233,237,.55)', wr: '52.0%', pr: '1.4%', delta: '+2.9', deltaColor: GOOD, games: '12,441' },
+        { n: 5, mono: 'OR', name: 'Orianna', tier: 'A', ...tier('A'), tagText: 'COMFORT', tagBg: 'rgba(70,199,155,.14)', tagFg: GOOD, wr: '51.4%', pr: '5.9%', delta: '+1.9', deltaColor: GOOD, games: '58,730' },
+        { n: 6, mono: 'SY', name: 'Syndra', tier: 'B', ...tier('B'), tagText: '', tagBg: 'transparent', tagFg: 'transparent', wr: '50.2%', pr: '7.2%', delta: '+0.3', deltaColor: MUT, games: '71,558' },
+        { n: 7, mono: 'YO', name: 'Yone', tier: 'B', ...tier('B'), tagText: '', tagBg: 'transparent', tagFg: 'transparent', wr: '48.6%', pr: '9.1%', delta: '−1.8', deltaColor: BAD, games: '88,204' }
+      ],
+
+      compBars: [
+        { label: 'Physical damage', val: '82', pct: '82%', color: '#e8736e' },
+        { label: 'Magic damage', val: '24', pct: '24%', color: 'var(--color-accent)' },
+        { label: 'Dive / engage', val: '76', pct: '76%', color: '#e8736e' },
+        { label: 'Crowd control', val: '48', pct: '48%', color: 'var(--color-accent)' },
+        { label: 'Frontline', val: '31', pct: '31%', color: 'var(--color-accent)' },
+        { label: 'Poke / range', val: '19', pct: '19%', color: 'rgba(233,233,237,.4)' }
+      ],
+
+      grid: [
+        { name: 'Galio', a: cell('56.2'), b: cell('52.1'), c: cell('51.0') },
+        { name: 'Malzahar', a: cell('57.8'), b: cell('50.4'), c: cell('49.6') },
+        { name: 'Lissandra', a: cell('54.1'), b: cell('53.2'), c: cell('50.2') },
+        { name: 'Annie', a: cell('53.0'), b: cell('49.1'), c: cell('52.4') },
+        { name: 'Orianna', a: cell('49.8'), b: cell('51.6'), c: cell('50.9') }
+      ],
+
+      recentChamps: [
+        { mono: 'GA', name: 'Galio', lane: 'MID', wr: '61%', games: '18g', pct: '61%', color: GOOD },
+        { mono: 'OR', name: 'Orianna', lane: 'MID', wr: '75%', games: '16g', pct: '75%', color: GOOD },
+        { mono: 'VI', name: 'Viktor', lane: 'MID', wr: '44%', games: '9g', pct: '44%', color: BAD },
+        { mono: 'KS', name: "K'Sante", lane: 'TOP', wr: '52%', games: '25g', pct: '52%', color: GOOD }
+      ],
+
+      tierRows: [
+        { tier: 'S+', ...tier('S+'), mono: 'GA', name: 'Galio', note: 'Best into dive comps', pct: '84%', wr: '53.8%', delta: '+1.2', deltaColor: GOOD },
+        { tier: 'S', ...tier('S'), mono: 'MA', name: 'Malzahar', note: 'Safest blind pick in the lane', pct: '78%', wr: '53.1%', delta: '+0.4', deltaColor: GOOD },
+        { tier: 'S', ...tier('S'), mono: 'LI', name: 'Lissandra', note: 'Rose after the R cooldown buff', pct: '74%', wr: '52.6%', delta: '+2.1', deltaColor: GOOD },
+        { tier: 'A', ...tier('A'), mono: 'OR', name: 'Orianna', note: 'Scales, punished early', pct: '62%', wr: '51.4%', delta: '−0.3', deltaColor: BAD },
+        { tier: 'B', ...tier('B'), mono: 'SY', name: 'Syndra', note: 'Highest skill ceiling on the board', pct: '48%', wr: '50.2%', delta: '+0.1', deltaColor: MUT },
+        { tier: 'B', ...tier('B'), mono: 'YO', name: 'Yone', note: 'Overpicked for the win rate', pct: '32%', wr: '48.6%', delta: '−1.4', deltaColor: BAD }
+      ],
+
+      lanes: [
+        { lane: 'TOP', pct: '63%', wr: '63%', games: '25g', color: GOOD },
+        { lane: 'JG', pct: '4%', wr: '—', games: '0g', color: 'rgba(233,233,237,.2)' },
+        { lane: 'MID', pct: '72%', wr: '72%', games: '43g', color: GOOD },
+        { lane: 'BOT', pct: '100%', wr: '100%', games: '2g', color: GOOD },
+        { lane: 'SUP', pct: '4%', wr: '—', games: '0g', color: 'rgba(233,233,237,.2)' }
+      ],
+
+      trending: [
+        { mono: 'MO', name: 'Mordekaiser', lane: 'TOP', note: 'E cooldown reduced', delta: '+3.40pp', color: GOOD },
+        { mono: 'NA', name: 'Nami', lane: 'SUP', note: 'W base heal up', delta: '+1.10pp', color: GOOD },
+        { mono: 'RA', name: 'Rammus', lane: 'JG', note: '—', delta: '−1.00pp', color: BAD },
+        { mono: 'GA', name: 'Garen', lane: 'TOP', note: 'Q damage reduced', delta: '−1.00pp', color: BAD },
+        { mono: 'LI', name: 'Lissandra', lane: 'MID', note: 'R cooldown buff', delta: '+2.10pp', color: GOOD }
+      ],
+
+      itemPath: [
+        { mono: 'DR', name: 'Doran\u2019s Ring', meta: '68%', c1: '#3a3145', c2: '#221d2c', arrow: 'block' },
+        { mono: 'SO', name: 'Sorcerer\u2019s Shoes', meta: '61%', c1: '#2f3450', c2: '#1c2032', arrow: 'block' },
+        { mono: 'RY', name: 'Rylai\u2019s Sceptre', meta: '54% · 12.4k', c1: '#453048', c2: '#2a1e2e', arrow: 'block' },
+        { mono: 'LI', name: 'Liandry\u2019s Torment', meta: '49% · 9.1k', c1: '#4a3436', c2: '#2c2022', arrow: 'block' },
+        { mono: 'CO', name: 'Cosmic Drive', meta: '41% · 6.7k', c1: '#2e3a4e', c2: '#1c2230', arrow: 'block' },
+        { mono: 'ZH', name: 'Zhonya\u2019s Hourglass', meta: '38% · 5.2k', c1: '#4a4230', c2: '#2b271e', arrow: 'block' },
+        { mono: 'RA', name: 'Rabadon\u2019s Deathcap', meta: '22% · 2.9k', c1: '#3a3663', c2: '#22203a', arrow: 'none' }
+      ],
+
+      situational: [
+        { mono: 'AB', name: 'Abyssal Mask', when: 'Vs. 3+ magic damage', wr: '57.1%' },
+        { mono: 'BA', name: 'Banshee\u2019s Veil', when: 'Vs. burst mages', wr: '54.2%' },
+        { mono: 'FO', name: 'Force of Nature', when: 'Vs. heavy AP frontline', wr: '52.8%' }
+      ],
+
+      levelNums: Array.from({ length: 18 }, (_, i) => ({ v: i + 1 })),
+      skillGrid,
+
+      runesPrimary: [
+        { opts: [rune('FO', false), rune('SH', true), rune('CO', false)] },
+        { opts: [rune('CN', false), rune('SE', true), rune('BP', false)] },
+        { opts: [rune('OT', true), rune('RE', false), rune('UN', false)] }
+      ],
+      runesSecondary: [
+        { opts: [rune('MC', false), rune('NP', true), rune('TR', false)] },
+        { opts: [rune('SC', true), rune('GS', false), rune('WA', false)] }
+      ],
+      shards: [
+        { opts: [rune('', false), rune('', true), rune('', false)] },
+        { opts: [rune('', false), rune('', true), rune('', false)] },
+        { opts: [rune('', true), rune('', false), rune('', false)] }
+      ],
+
+      overlayKeys: [
+        { t: 'Q', bg: 'rgba(233,233,237,.05)', ring: 'inset 0 0 0 1px rgba(233,233,237,.1)', fg: 'rgba(233,233,237,.4)' },
+        { t: 'W', bg: 'rgba(145,132,217,.3)', ring: 'inset 0 0 0 1px var(--color-accent)', fg: 'var(--color-accent-200)' },
+        { t: 'E', bg: 'rgba(233,233,237,.05)', ring: 'inset 0 0 0 1px rgba(233,233,237,.1)', fg: 'rgba(233,233,237,.4)' },
+        { t: 'R', bg: 'rgba(233,233,237,.05)', ring: 'inset 0 0 0 1px rgba(233,233,237,.1)', fg: 'rgba(233,233,237,.4)' }
+      ],
+      overlayStates: [
+        { glyph: 'W', bg: 'rgba(145,132,217,.28)', ring: 'inset 0 0 0 1px var(--color-accent)', fg: 'var(--color-accent-200)', title: 'Next ability', body: 'The normal state — ability, name and the rank transition it is about to make.' },
+        { glyph: 'R', bg: 'rgba(145,132,217,.5)', ring: 'inset 0 0 0 1px var(--color-accent)', fg: '#191a28', title: 'Ultimate available', body: 'Takes priority the moment the game will legally allow the rank — seven champions publish R at 12, so the level gate is checked, not assumed.' },
+        { glyph: '—', bg: 'rgba(233,233,237,.05)', ring: 'inset 0 0 0 1px rgba(233,233,237,.12)', fg: 'rgba(233,233,237,.45)', title: 'Refuses past level 15', body: 'The source publishes 1–15. Past that the overlay shows a dash rather than a guess — the same refusal the Builds skill grid makes.' }
+      ],
+
+      fixes: [
+        { n: '1', badgeBg: 'rgba(232,115,110,.16)', badgeFg: '#e8736e', title: 'Rylai\u2019s came four minutes late', tag: 'BUILD', tagBg: 'rgba(232,115,110,.14)', tagFg: '#e8736e', body: 'You bought Liandry\u2019s second. In games where you finish Rylai\u2019s before 18:00 you win 63% \u2014 the slow is the whole reason this build works into dive.', stat: '−4:10', statColor: BAD, statLabel: 'vs. recommended' },
+        { n: '2', badgeBg: 'rgba(145,132,217,.16)', badgeFg: 'var(--color-accent-400)', title: 'You held your ultimate too long', tag: 'JUDGMENT', tagBg: 'rgba(145,132,217,.14)', tagFg: 'var(--color-accent-400)', body: 'Three fights started and ended before your R landed. This one is our reading of the timeline, not a measured stat \u2014 treat it as a prompt, not a verdict.', stat: '3', statColor: 'rgba(233,233,237,.7)', statLabel: 'late engages' },
+        { n: '3', badgeBg: 'rgba(70,199,155,.16)', badgeFg: '#46c79b', title: 'Your laning was the best part', tag: 'KEEP', tagBg: 'rgba(70,199,155,.14)', tagFg: '#46c79b', body: 'Even CS at 10 against a Zed, and you never gave a solo kill. That is the matchup working exactly as the draft screen said it would.', stat: '+8', statColor: GOOD, statLabel: 'CS at 10' }
+      ],
+      builtYours: [
+        { mono: 'SO', bg: 'linear-gradient(150deg,#2f3450,#1c2032)', ring: 'inset 0 0 0 1px rgba(233,233,237,.12)', fg: 'var(--color-neutral-200)' },
+        { mono: 'LI', bg: 'linear-gradient(150deg,#4a3436,#2c2022)', ring: 'inset 0 0 0 1px rgba(232,115,110,.4)', fg: 'var(--color-neutral-200)' },
+        { mono: 'RY', bg: 'linear-gradient(150deg,#453048,#2a1e2e)', ring: 'inset 0 0 0 1px rgba(232,115,110,.4)', fg: 'var(--color-neutral-200)' },
+        { mono: 'CO', bg: 'linear-gradient(150deg,#2e3a4e,#1c2230)', ring: 'inset 0 0 0 1px rgba(233,233,237,.12)', fg: 'var(--color-neutral-200)' },
+        { mono: 'ZH', bg: 'linear-gradient(150deg,#4a4230,#2b271e)', ring: 'inset 0 0 0 1px rgba(233,233,237,.12)', fg: 'var(--color-neutral-200)' },
+        { mono: 'RA', bg: 'linear-gradient(150deg,#3a3663,#22203a)', ring: 'inset 0 0 0 1px rgba(233,233,237,.12)', fg: 'var(--color-neutral-200)' }
+      ],
+      builtOurs: [
+        { mono: 'SO', bg: 'linear-gradient(150deg,#2f3450,#1c2032)', ring: 'inset 0 0 0 1px rgba(233,233,237,.12)', fg: 'var(--color-neutral-200)' },
+        { mono: 'RY', bg: 'linear-gradient(150deg,#453048,#2a1e2e)', ring: 'inset 0 0 0 1px rgba(145,132,217,.6)', fg: 'var(--color-neutral-200)' },
+        { mono: 'LI', bg: 'linear-gradient(150deg,#4a3436,#2c2022)', ring: 'inset 0 0 0 1px rgba(145,132,217,.6)', fg: 'var(--color-neutral-200)' },
+        { mono: 'CO', bg: 'linear-gradient(150deg,#2e3a4e,#1c2230)', ring: 'inset 0 0 0 1px rgba(233,233,237,.12)', fg: 'var(--color-neutral-200)' },
+        { mono: 'ZH', bg: 'linear-gradient(150deg,#4a4230,#2b271e)', ring: 'inset 0 0 0 1px rgba(233,233,237,.12)', fg: 'var(--color-neutral-200)' },
+        { mono: 'RA', bg: 'linear-gradient(150deg,#3a3663,#22203a)', ring: 'inset 0 0 0 1px rgba(233,233,237,.12)', fg: 'var(--color-neutral-200)' }
+      ],
+      recentGames: [
+        { mono: 'GA', name: 'Galio · Mid', kda: '6/3/14 · 34:12', color: GOOD, chip: 'ON BUILD', chipBg: 'rgba(70,199,155,.14)', chipFg: GOOD },
+        { mono: 'OR', name: 'Orianna · Mid', kda: '9/2/11 · 28:40', color: GOOD, chip: 'ON BUILD', chipBg: 'rgba(70,199,155,.14)', chipFg: GOOD },
+        { mono: 'VI', name: 'Viktor · Mid', kda: '4/7/6 · 31:05', color: BAD, chip: 'OFF BUILD', chipBg: 'rgba(232,115,110,.14)', chipFg: BAD },
+        { mono: 'KS', name: "K'Sante · Top", kda: '2/4/12 · 39:51', color: BAD, chip: 'ON BUILD', chipBg: 'rgba(70,199,155,.14)', chipFg: GOOD },
+        { mono: 'GA', name: 'Galio · Mid', kda: '5/5/9 · 26:18', color: GOOD, chip: 'NO PATCH DATA', chipBg: 'rgba(233,233,237,.07)', chipFg: 'rgba(233,233,237,.5)' }
+      ],
+
+      proChips: [
+        { mono: 'FA', name: 'Faker', team: 'T1', bg: 'rgba(145,132,217,.16)', ring: 'inset 0 0 0 1px rgba(145,132,217,.45)', fg: 'var(--color-accent-300)' },
+        { mono: 'CH', name: 'Chovy', team: 'GEN', bg: '#1c1e2c', ring: 'inset 0 0 0 1px rgba(233,233,237,.09)', fg: 'var(--color-text)' },
+        { mono: 'CA', name: 'Caps', team: 'G2', bg: '#1c1e2c', ring: 'inset 0 0 0 1px rgba(233,233,237,.09)', fg: 'var(--color-text)' },
+        { mono: 'KN', name: 'Knight', team: 'BLG', bg: '#1c1e2c', ring: 'inset 0 0 0 1px rgba(233,233,237,.09)', fg: 'var(--color-text)' },
+        { mono: 'ZE', name: 'Zeus', team: 'HLE', bg: '#1c1e2c', ring: 'inset 0 0 0 1px rgba(233,233,237,.09)', fg: 'var(--color-text)' },
+        { mono: 'GA', name: 'Galio', team: 'CHAMPION', bg: '#1c1e2c', ring: 'inset 0 0 0 1px rgba(233,233,237,.09)', fg: 'var(--color-text)' }
+      ],
+      proGames: [
+        { mono: 'FA', player: 'Faker', team: 'T1', champ: 'Galio', source: 'Solo queue', headBg: 'rgba(70,199,155,.06)', res: 'W', resBg: 'rgba(47,158,134,.3)', resFg: '#7fe0c0', kda: '8/1/15', keystone: 'Aftershock', items: 'Rylai\u2019s → Liandry\u2019s → Cosmic Drive', allies: [{ m: 'KS' }, { m: 'VI' }, { m: 'GA' }, { m: 'JH' }, { m: 'NA' }], enemies: [{ m: 'JX' }, { m: 'LE' }, { m: 'AK' }, { m: 'KA' }, { m: 'RA' }] },
+        { mono: 'CH', player: 'Chovy', team: 'GEN', champ: 'Galio', source: 'LCK Summer', headBg: 'rgba(70,199,155,.06)', res: 'W', resBg: 'rgba(47,158,134,.3)', resFg: '#7fe0c0', kda: '3/0/12', keystone: 'Aftershock', items: 'Rylai\u2019s → Abyssal Mask → Zhonya\u2019s', allies: [{ m: 'RE' }, { m: 'MA' }, { m: 'GA' }, { m: 'AS' }, { m: 'RA' }], enemies: [{ m: 'GN' }, { m: 'XZ' }, { m: 'AZ' }, { m: 'VA' }, { m: 'TH' }] },
+        { mono: 'CA', player: 'Caps', team: 'G2', champ: 'Syndra', source: 'Solo queue', headBg: 'rgba(232,115,110,.05)', res: 'L', resBg: 'rgba(156,59,59,.34)', resFg: '#f0b3b0', kda: '5/6/4', keystone: 'Electrocute', items: 'Ludens → Shadowflame → Zhonya\u2019s', allies: [{ m: 'AA' }, { m: 'VG' }, { m: 'SY' }, { m: 'ZE' }, { m: 'LU' }], enemies: [{ m: 'MO' }, { m: 'KH' }, { m: 'GA' }, { m: 'JI' }, { m: 'BR' }] },
+        { mono: 'KN', player: 'Knight', team: 'BLG', champ: 'Galio', source: 'LPL Summer', headBg: 'rgba(70,199,155,.06)', res: 'W', resBg: 'rgba(47,158,134,.3)', resFg: '#7fe0c0', kda: '2/2/19', keystone: 'Aftershock', items: 'Rylai\u2019s → Liandry\u2019s → Force of Nature', allies: [{ m: 'KS' }, { m: 'WU' }, { m: 'GA' }, { m: 'AP' }, { m: 'LX' }], enemies: [{ m: 'JA' }, { m: 'VI' }, { m: 'OR' }, { m: 'ZR' }, { m: 'RK' }] }
+      ],
+
+      movers: [
+        { mono: 'MO', name: 'Mordekaiser', lane: 'TOP', prev: '49.8%', cur: '53.2%', delta: '+3.40', barLeft: '50%', barW: '34%', color: GOOD, games: '84,102', note: 'E cooldown reduced at all ranks; passive burn scaling up 4%.' },
+        { mono: 'LI', name: 'Lissandra', lane: 'MID', prev: '50.5%', cur: '52.6%', delta: '+2.10', barLeft: '50%', barW: '21%', color: GOOD, games: '28,900', note: 'R cooldown buff at rank 1.' },
+        { mono: 'NA', name: 'Nami', lane: 'SUP', prev: '51.9%', cur: '53.0%', delta: '+1.10', barLeft: '50%', barW: '11%', color: GOOD, games: '61,447', note: 'W base heal increased.' },
+        { mono: 'GA', name: 'Galio', lane: 'MID', prev: '53.0%', cur: '53.8%', delta: '+0.80', barLeft: '50%', barW: '8%', color: GOOD, games: '41,206', note: '—' },
+        { mono: 'RA', name: 'Rammus', lane: 'JG', prev: '52.4%', cur: '51.4%', delta: '−1.00', barLeft: '40%', barW: '10%', color: BAD, games: '19,880', note: '—' },
+        { mono: 'GN', name: 'Garen', lane: 'TOP', prev: '51.6%', cur: '50.6%', delta: '−1.00', barLeft: '40%', barW: '10%', color: BAD, games: '73,215', note: 'Q bonus damage reduced at early ranks.' },
+        { mono: 'YO', name: 'Yone', lane: 'MID', prev: '50.0%', cur: '48.6%', delta: '−1.40', barLeft: '36%', barW: '14%', color: BAD, games: '88,204', note: 'Attack speed per level reduced.' },
+        { mono: 'AK', name: 'Akali', lane: 'MID', prev: '49.4%', cur: '47.2%', delta: '−2.20', barLeft: '28%', barW: '22%', color: BAD, games: '54,631', note: 'Shroud duration cut by 0.5s.' }
+      ],
+
+      statTiles: [
+        { label: 'GAMES', value: '142', sub: 'this season', color: 'var(--color-text)', pct: '100%', bg: '#1b1d2a', ring: 'inset 0 0 0 1px rgba(233,233,237,.08)' },
+        { label: 'WIN RATE', value: '60.6%', sub: '86W · 56L', color: GOOD, pct: '61%', bg: '#1b1d2a', ring: 'inset 0 0 0 1px rgba(233,233,237,.08)' },
+        { label: 'MAIN', value: 'Galio', sub: '43 games', color: 'var(--color-accent-400)', pct: '30%', bg: '#1b1d2a', ring: 'inset 0 0 0 1px rgba(233,233,237,.08)' },
+        { label: 'BUILD ADHERENCE', value: '74%', sub: 'season avg', color: 'var(--color-accent)', pct: '74%', bg: 'linear-gradient(150deg,rgba(145,132,217,.1),#1b1d2a)', ring: 'inset 0 0 0 1px rgba(145,132,217,.24)' }
+      ],
+      pool: [
+        { mono: 'GA', name: 'Galio', lane: 'MID', games: '43', wr: '72%', wrColor: GOOD, cs: '6.4', csColor: 'rgba(233,233,237,.6)', ad: '86%', adPct: '86%' },
+        { mono: 'OR', name: 'Orianna', lane: 'MID', games: '16', wr: '75%', wrColor: GOOD, cs: '7.1', csColor: 'rgba(233,233,237,.6)', ad: '81%', adPct: '81%' },
+        { mono: 'KS', name: "K'Sante", lane: 'TOP', games: '25', wr: '52%', wrColor: 'rgba(233,233,237,.7)', cs: '5.8', csColor: 'rgba(233,233,237,.6)', ad: '77%', adPct: '77%' },
+        { mono: 'VI', name: 'Viktor', lane: 'MID', games: '19', wr: '44%', wrColor: BAD, cs: '6.9', csColor: 'rgba(233,233,237,.6)', ad: '41%', adPct: '41%' },
+        { mono: 'SY', name: 'Syndra', lane: 'MID', games: '9', wr: '56%', wrColor: GOOD, cs: '6.2', csColor: 'rgba(233,233,237,.38)', ad: '68%', adPct: '68%' },
+        { mono: 'JH', name: 'Jhin', lane: 'BOT', games: '2', wr: '100%', wrColor: GOOD, cs: '8.0', csColor: 'rgba(233,233,237,.38)', ad: '—', adPct: '0%' }
+      ],
+      last20: 'WWLWWWLLWWLWWLWLWWLW'.split('').map(c => c === 'W'
+        ? { bg: 'rgba(70,199,155,.28)', ring: 'inset 0 0 0 1px rgba(70,199,155,.4)' }
+        : { bg: 'rgba(232,115,110,.16)', ring: 'inset 0 0 0 1px rgba(232,115,110,.28)' }),
+
+      steps: [
+        { label: 'CLIENT', line: 'rgba(145,132,217,.5)', dotBg: 'rgba(70,199,155,.25)', dotRing: 'inset 0 0 0 1.5px #46c79b', inner: '#46c79b', fg: '#46c79b' },
+        { label: 'LOBBY', line: 'rgba(145,132,217,.5)', dotBg: 'rgba(70,199,155,.25)', dotRing: 'inset 0 0 0 1.5px #46c79b', inner: '#46c79b', fg: '#46c79b' },
+        { label: 'CHAMP SELECT', line: 'rgba(233,233,237,.08)', dotBg: 'rgba(145,132,217,.25)', dotRing: 'inset 0 0 0 1.5px var(--color-accent), 0 0 14px rgba(145,132,217,.5)', inner: 'var(--color-accent-400)', fg: 'var(--color-accent-400)' },
+        { label: 'IN GAME', line: 'transparent', dotBg: 'transparent', dotRing: 'inset 0 0 0 1.5px rgba(233,233,237,.18)', inner: 'transparent', fg: 'rgba(233,233,237,.3)' }
+      ],
+      installs: [
+        { label: 'RUN NOW (THIS SESSION)', cmd: 'irm https://coachbuild.vercel.app/companion.ps1 | iex' },
+        { label: 'RUN NOW + AUTO-START ON LOGIN', cmd: '& ([scriptblock]::Create((irm https://coachbuild.vercel.app/companion.ps1))) -Install' }
+      ],
+      toggles: [
+        { title: 'Auto-add item builds on champ select', trackBg: 'var(--color-accent)', trackRing: 'none', knobLeft: '20px', knob: '#171826', body: 'One item set for your champion and role appears in the in-client shop, holding four build lines side by side — WPA build, Pro build, OTP build and Hidden gem — plus your starting items. A passive suggestion, same as any import.' },
+        { title: 'Auto-apply runes on champ select', trackBg: 'var(--color-accent)', trackRing: 'none', knobLeft: '20px', knob: '#171826', body: "Applies the recommended page using CoachBuild's own slot — your personal rune pages are never touched." }
+      ],
+
+      matchups: [
+        { mono: 'ZE', name: 'Zed', wr: '56.2%', barLeft: '50%', barW: '31%', color: GOOD },
+        { mono: 'YA', name: 'Yasuo', wr: '55.0%', barLeft: '50%', barW: '25%', color: GOOD },
+        { mono: 'SY', name: 'Syndra', wr: '51.1%', barLeft: '50%', barW: '6%', color: GOOD },
+        { mono: 'VI', name: 'Viktor', wr: '47.4%', barLeft: '37%', barW: '13%', color: BAD },
+        { mono: 'AK', name: 'Akali', wr: '45.9%', barLeft: '30%', barW: '20%', color: BAD }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>
