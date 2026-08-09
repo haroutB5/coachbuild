@@ -196,3 +196,39 @@ Verified facts that cost real debugging time. Cite these before touching the rel
   but is deprecated; overlay-host retired once the user migrates. Real-game overlay behavior,
   clean-machine install, and update-apply remain unverified until first use on the gaming
   desktop — the honest-ledger items live in desktop/docs/.
+
+## WebView2 repair (v1.0.3, 2026-08-09 — field-reported dead repair on the gaming desktop)
+
+- **The Evergreen bootstrapper exits BEFORE the child install completes** (WebView2Feedback
+  #1349): exit code 0 + immediate probe = false "repair did not complete". RepairAsync polls
+  the version probe up to 120s after exit; success is "probe returns a version", NEVER the
+  exit code alone (nonzero wrapper + completed child install is still success). Network exit
+  codes (0x80072EE7/EFE/F8F) cap the poll short so no-network answers in seconds.
+- **Per-user unelevated install is the supported path** — the current bootstrapper installs
+  per-user when unelevated (per-machine when elevated). Do NOT add a runas/elevation path.
+- **Edge installed ≠ WebView2 installed** (separate products; debloat scripts strip WebView2).
+  Probe failures are classified: WebView2RuntimeNotFoundException = genuinely missing;
+  anything else = app-side loader fault where installing the runtime will NOT help (fallback
+  message says so and points at companion.log). Probe verdicts + repair results log
+  edge-triggered to companion.log.
+- **package.ps1 now FAILS if the bootstrapper download fails** (was a warning that silently
+  shipped builds with a dead Repair button). -SkipWebView2Bootstrapper keeps the old opt-out.
+- Velopack `vpk upload github` creates a DRAFT release — publish it via the API (PATCH
+  draft:false, make_latest) or /releases/latest/download keeps serving the previous version.
+
+## LCU lockfile reads (v1.0.4, 2026-08-09 — P0: the app NEVER attached to a running client)
+
+- **The League client holds the lockfile open for writing. Any read MUST open with
+  FileShare.ReadWrite | FileShare.Delete** (FileStream + StreamReader). File.ReadAllText
+  (FileShare.Read) throws a sharing violation on every read while the client runs — swallowed,
+  it reported "missing-or-unreadable" across all four discovery layers, so v1.0.0–1.0.3 could
+  only attach when League was NOT running. Proven live both directions during the audit.
+- Empty lockfile → one bounded 100ms retry (client writes it non-atomically at start).
+- Discovery reasons distinguish `missing` (File.Exists false) from `unreadable:<ExceptionType>`
+  (type NAME only — messages can embed newlines/paths; the structured line must stay one line).
+- **SelfTest credential fixtures MUST isolate live ProgramData AND fixed-drive discovery**
+  (programDataDirectory: temp path + fixedDriveLockfilePathsProvider: empty). Once lockfile
+  reads succeed, an unisolated fixture resolves the REAL host client and SelfTest fails on
+  exactly the machines it verifies. SelfTestRunner has end-to-end test coverage now — keep it.
+- Field note: the retired PowerShell companion may still autostart on user machines and writes
+  the same log file — interleaved formats in companion.log are two processes, not one.
