@@ -1,0 +1,742 @@
+global using System.IO;
+global using System.Net.Http;
+
+using System.Security.Cryptography;
+using System.Text;
+using System.Windows;
+using System.Windows.Threading;
+using System.Text.Json;
+using CoachBuild.Core;
+using CoachBuild.Desktop.Overlay;
+using CoachBuild.Desktop.Tray;
+using CoachBuild.Desktop.Updates;
+using CoachBuild.Desktop.Web;
+using WpfApplication = System.Windows.Application;
+using WpfMessageBox = System.Windows.MessageBox;
+
+namespace CoachBuild.Desktop;
+
+/// <summary>
+/// The native services lane-a supplies to the WPF lifetime. The default
+/// implementation is intentionally inert so the tray/overlay can still start
+/// when League is closed; production wiring replaces it before startup.
+/// </summary>
+public interface IDesktopHostServices
+{
+    Task<DesktopPhaseSnapshot> ReadSnapshotAsync(CancellationToken cancellationToken);
+
+    Task<bool> RepairWebView2Async(CancellationToken cancellationToken);
+
+    bool IsCompanionBusy { get; }
+
+    Task StopAsync(CancellationToken cancellationToken);
+}
+
+public interface IDesktopHostLifecycle
+{
+    Task StartAsync(CancellationToken cancellationToken);
+}
+
+public sealed record DesktopPhaseSnapshot(
+    string? Phase,
+    LastOpenPage? LastOpen = null,
+    bool IsCompanionBusy = false,
+    string? Error = null,
+    OverlayState? Overlay = null);
+
+public sealed class NullDesktopHostServices : IDesktopHostServices
+{
+    public bool IsCompanionBusy => false;
+
+    public Task<DesktopPhaseSnapshot> ReadSnapshotAsync(CancellationToken cancellationToken)
+    {
+        return Task.FromResult(new DesktopPhaseSnapshot("None"));
+    }
+
+    public Task<bool> RepairWebView2Async(CancellationToken cancellationToken)
+    {
+        return Task.FromResult(false);
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+public sealed record DesktopPaths(
+    string Root,
+    string SettingsFile,
+    string SessionTokenFile,
+    string LogFile,
+    string WebView2UserDataFolder)
+{
+    public static DesktopPaths Create(string? localAppData = null)
+    {
+        var basePath = localAppData
+            ?? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var root = Path.Combine(basePath, "CoachBuild");
+        return new DesktopPaths(
+            root,
+            Path.Combine(root, "desktop-settings.json"),
+            // Keep the existing companion path so a browser/PWA pairing is
+            // durable across native migration.
+            Path.Combine(root, CompanionWire.SessionFileName),
+            Path.Combine(root, "companion.log"),
+            Path.Combine(root, "WebView2"));
+    }
+
+    public void EnsureCreated()
+    {
+        Directory.CreateDirectory(Root);
+        Directory.CreateDirectory(WebView2UserDataFolder);
+    }
+}
+
+public sealed class SessionTokenStore
+{
+    public SessionTokenStore(string? baseDirectory = null)
+    {
+        var root = baseDirectory
+            ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "CoachBuild");
+        FilePath = Path.Combine(root, CompanionWire.SessionFileName);
+    }
+
+    public string FilePath { get; }
+
+    public string GetOrCreate() => ReadOrCreate(FilePath);
+
+    public static string ReadOrCreate(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                var existing = File.ReadAllText(path, Encoding.UTF8).Trim();
+                if (IsValid(existing)) return existing;
+            }
+
+            var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
+            var temporary = path + ".tmp-" + Guid.NewGuid().ToString("N");
+            File.WriteAllText(temporary, token, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            File.Move(temporary, path, overwrite: true);
+            return token;
+        }
+        catch
+        {
+            // A read-only profile should not prevent the app from running. The
+            // in-memory fallback is session-scoped; the next launch retries.
+            return Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+        }
+    }
+
+    public static bool IsValid(string? token)
+    {
+        return !string.IsNullOrWhiteSpace(token)
+            && token.Length >= 32
+            && token.All(static c => c is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F');
+    }
+}
+
+public partial class App : WpfApplication
+{
+    public const string CompanionMutexName = "Local\\CoachBuildCompanion";
+    public const string AppOrigin = "https://coachbuild.vercel.app";
+
+    private readonly CancellationTokenSource _shutdown = new();
+    private Mutex? _companionMutex;
+    private TrayController? _tray;
+    private OverlayWindow? _overlay;
+    private WebView2Window? _webView;
+    private WebView2EnvironmentService? _webViewEnvironment;
+    private VelopackUpdateService? _updates;
+    private Task? _pollTask;
+    private TrayMenuState _trayState = TrayMenuState.Default;
+    private IDesktopHostServices _services = new NullDesktopHostServices();
+    private bool _isShuttingDown;
+
+    public static App? CurrentApp => Current as App;
+
+    public DesktopPaths Paths { get; private set; } = DesktopPaths.Create();
+
+    public string SessionToken { get; private set; } = string.Empty;
+
+    public IDesktopHostServices Services
+    {
+        get => _services;
+        set => _services = value ?? new NullDesktopHostServices();
+    }
+
+    public void ConfigureServices(IDesktopHostServices services)
+    {
+        if (HasStarted) throw new InvalidOperationException("Services must be configured before App startup.");
+        Services = services;
+    }
+
+    public bool HasStarted { get; private set; }
+
+    protected override void OnStartup(StartupEventArgs e)
+    {
+        base.OnStartup(e);
+        HasStarted = true;
+        ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
+        Paths = DesktopPaths.Create();
+        Paths.EnsureCreated();
+        SessionToken = SessionTokenStore.ReadOrCreate(Paths.SessionTokenFile);
+
+        if (!TryAcquireMutex())
+        {
+            WpfMessageBox.Show(
+                "CoachBuild is already running (or the legacy companion is still active). Close the existing tray app and try again.",
+                "CoachBuild already running",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            Shutdown(2);
+            return;
+        }
+
+        if (_services is NullDesktopHostServices)
+        {
+            var nativeServices = new CoreDesktopHostServices(SessionToken, Paths.Root);
+            nativeServices.PageRequested += OnNativePageRequested;
+            _services = nativeServices;
+        }
+
+        _tray = new TrayController(Dispatcher, Path.Combine(AppContext.BaseDirectory, "Assets", "tray-icon.ico"));
+        _tray.CommandRequested += OnTrayCommand;
+
+        _overlay = new OverlayWindow(new OverlaySettingsStore(Paths.SettingsFile));
+        _trayState = _trayState with
+        {
+            OverlayVisible = _overlay.OverlayVisibleSetting,
+            ShowSkillTable = _overlay.ShowSkillTableSetting,
+            LaneOverride = _overlay.LaneOverrideSetting,
+        };
+        _overlay.Hide();
+        _tray.Start(_trayState);
+        _webViewEnvironment = new WebView2EnvironmentService(Paths.WebView2UserDataFolder);
+        _updates = new VelopackUpdateService(isCompanionBusy: () => _services.IsCompanionBusy);
+        _updates.StatusChanged += OnUpdateStatusChanged;
+        _ = _updates.StartAsync(_shutdown.Token);
+        if (_services is IDesktopHostLifecycle lifecycle)
+            _ = Task.Run(() => lifecycle.StartAsync(_shutdown.Token));
+        _pollTask = PollAsync(_shutdown.Token);
+    }
+
+    private bool TryAcquireMutex()
+    {
+        try
+        {
+            _companionMutex = new Mutex(true, CompanionMutexName, out var createdNew);
+            if (createdNew) return true;
+            _companionMutex.Dispose();
+            _companionMutex = null;
+            return false;
+        }
+        catch
+        {
+            _companionMutex?.Dispose();
+            _companionMutex = null;
+            return false;
+        }
+    }
+
+    private async Task PollAsync(CancellationToken cancellationToken)
+    {
+        // This loop is deliberately not a DispatcherTimer: LCU/bridge work
+        // must never block the WPF dispatcher or tray menu interaction.
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                var snapshot = await Services.ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+                await Dispatcher.InvokeAsync(() => ApplySnapshot(snapshot), DispatcherPriority.Background, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                await Dispatcher.InvokeAsync(() => SetError(ex.Message), DispatcherPriority.Background);
+            }
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(750), cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+    }
+
+    private void ApplySnapshot(DesktopPhaseSnapshot snapshot)
+    {
+        var phase = TrayMenuState.ParsePhase(snapshot.Phase);
+        _trayState = _trayState with
+        {
+            Phase = phase,
+            IsCompanionBusy = snapshot.IsCompanionBusy,
+            LastOpen = snapshot.LastOpen ?? _trayState.LastOpen,
+            Error = snapshot.Error,
+            Update = _updates?.Current ?? _trayState.Update,
+        };
+        _tray?.UpdateState(_trayState);
+
+        // Applying a staged update can invoke Velopack process work; keep it
+        // off the dispatcher even though this snapshot was just projected here.
+        if (_updates is not null) _ = Task.Run(() => _updates.SetCompanionBusyAsync(snapshot.IsCompanionBusy));
+
+        if (snapshot.Overlay is not null)
+        {
+            _overlay?.ApplyState(snapshot.Overlay);
+            if (_trayState.OverlayVisible) _overlay?.ShowInactive();
+        }
+        else if (phase is not CompanionPhase.InProgress)
+        {
+            _overlay?.Hide();
+        }
+    }
+
+    private void SetError(string message)
+    {
+        _trayState = _trayState with { Error = message };
+        _tray?.UpdateState(_trayState);
+    }
+
+    private void OnUpdateStatusChanged(object? sender, UpdateTrayModel model)
+    {
+        if (_isShuttingDown) return;
+        Dispatcher.BeginInvoke(() =>
+        {
+            _trayState = _trayState with { Update = model };
+            _tray?.UpdateState(_trayState);
+        }, DispatcherPriority.Background);
+    }
+
+    private void OnNativePageRequested(ReopenTarget target)
+    {
+        if (_isShuttingDown) return;
+        Dispatcher.BeginInvoke(() => _ = OpenTargetAsync(target), DispatcherPriority.Background);
+    }
+
+    private void OnTrayCommand(object? sender, TrayCommandEventArgs e)
+    {
+        if (_isShuttingDown) return;
+
+        switch (e.Command)
+        {
+            case TrayCommand.ToggleOverlay:
+                _trayState = _trayState with { OverlayVisible = !_trayState.OverlayVisible };
+                _overlay?.SetOverlayVisible(_trayState.OverlayVisible);
+                if (_trayState.OverlayVisible) _overlay?.ShowInactive();
+                else _overlay?.Hide();
+                _tray?.UpdateState(_trayState);
+                break;
+            case TrayCommand.ToggleInteractive:
+                _trayState = _trayState with { Interactive = !_trayState.Interactive };
+                _overlay?.SetInteractive(_trayState.Interactive);
+                _tray?.UpdateState(_trayState);
+                break;
+            case TrayCommand.ToggleSkillTable:
+                _trayState = _trayState with { ShowSkillTable = !_trayState.ShowSkillTable };
+                _overlay?.SetShowSkillTable(_trayState.ShowSkillTable);
+                _tray?.UpdateState(_trayState);
+                break;
+            case TrayCommand.SetLane:
+                _trayState = _trayState with { LaneOverride = TrayMenuState.NormalizeLane(e.Lane) };
+                _overlay?.SetLaneOverride(_trayState.LaneOverride);
+                _tray?.UpdateState(_trayState);
+                break;
+            case TrayCommand.Calibrate:
+                _overlay?.BeginCalibration();
+                break;
+            case TrayCommand.Adjust:
+                _overlay?.BeginAdjustment();
+                break;
+            case TrayCommand.RepairWebView2:
+                _ = RepairWebView2Async();
+                break;
+            case TrayCommand.Reopen:
+                _ = ReopenAsync();
+                break;
+            case TrayCommand.Quit:
+                Shutdown();
+                break;
+        }
+    }
+
+    private async Task ReopenAsync()
+    {
+        await OpenTargetAsync(_trayState.GetReopenTarget()).ConfigureAwait(true);
+    }
+
+    private async Task OpenTargetAsync(ReopenTarget target)
+    {
+        if (_webView is null)
+        {
+            var runtimeAvailable = _webViewEnvironment is not null
+                && await _webViewEnvironment.IsRuntimeAvailableAsync(_shutdown.Token).ConfigureAwait(false);
+            if (_webViewEnvironment is null)
+            {
+                await Dispatcher.InvokeAsync(SetWebViewUnavailable).Task.ConfigureAwait(false);
+                return;
+            }
+
+            await Dispatcher.InvokeAsync(() => _webView = new WebView2Window(
+                _webViewEnvironment,
+                AppOrigin,
+                SessionToken,
+                Paths.WebView2UserDataFolder)).Task.ConfigureAwait(false);
+
+            if (!runtimeAvailable)
+            {
+                await Dispatcher.InvokeAsync(() => _webView!.ShowRuntimeFallback(target)).Task.ConfigureAwait(false);
+                SetWebViewUnavailable();
+                return;
+            }
+        }
+
+        var openOperation = Dispatcher.InvokeAsync(new Func<Task>(() => _webView!.OpenAsync(target)));
+        await openOperation.Task.Unwrap().ConfigureAwait(false);
+    }
+
+    private async Task RepairWebView2Async()
+    {
+        var repaired = _webViewEnvironment is not null
+            && await _webViewEnvironment.RepairAsync(_shutdown.Token).ConfigureAwait(false);
+        await Dispatcher.InvokeAsync(() =>
+        {
+            _trayState = _trayState with { WebView2Available = repaired };
+            _tray?.UpdateState(_trayState);
+        });
+    }
+
+    private void SetWebViewUnavailable()
+    {
+        _trayState = _trayState with { WebView2Available = false };
+        _tray?.UpdateState(_trayState);
+        _tray?.ShowBalloon("CoachBuild", "WebView2 is required. Use Repair WebView2 runtime from the tray.", System.Windows.Forms.ToolTipIcon.Warning);
+    }
+
+    protected override async void OnExit(ExitEventArgs e)
+    {
+        if (_isShuttingDown)
+        {
+            base.OnExit(e);
+            return;
+        }
+
+        _isShuttingDown = true;
+        _shutdown.Cancel();
+        try
+        {
+            await Services.StopAsync(CancellationToken.None).ConfigureAwait(true);
+            if (_pollTask is not null) await _pollTask.ConfigureAwait(true);
+            if (_updates is not null) await _updates.DisposeAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            // Shutdown is best-effort. The tray and mutex are still released.
+        }
+
+        _webView?.Close();
+        _overlay?.Close();
+        _tray?.Dispose();
+        _companionMutex?.ReleaseMutex();
+        _companionMutex?.Dispose();
+        _shutdown.Dispose();
+        base.OnExit(e);
+    }
+}
+
+/// <summary>
+/// Production adapter for the lane-a Core services. It keeps the loopback
+/// bridge, LCU/gameflow poller, and Live Client Data workers off WPF's
+/// dispatcher while exposing only immutable UI snapshots to App.
+/// </summary>
+public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHostLifecycle, IAsyncDisposable
+{
+    private readonly object _gate = new();
+    private readonly CompanionState _state;
+    private readonly LcuCredentialResolver _credentials;
+    private readonly LcuHttpClient _lcu;
+    private readonly LiveClientDataClient _live;
+    private readonly RedactedLog _log;
+    private readonly CompanionHttpServer _bridge;
+    private readonly WindowDecisionService _windowDecisions;
+    private readonly GameflowPoller _gameflow;
+    private readonly LivePollingCoordinator _livePolling;
+    private readonly CancellationTokenSource _stop = new();
+    private Task? _gameflowTask;
+    private Task? _liveTask;
+    private bool _started;
+    private bool _stopped;
+    private string? _localRiotId;
+    private string? _championName;
+    private string? _detectedPosition;
+    private LiveSkillState? _skill;
+    private string? _lastOverlayPhase;
+
+    public CoreDesktopHostServices(string sessionToken, string logDirectory)
+    {
+        if (!SessionTokenStore.IsValid(sessionToken))
+            throw new ArgumentException("A valid persistent session token is required.", nameof(sessionToken));
+
+        _state = new CompanionState();
+        _credentials = new LcuCredentialResolver();
+        _lcu = new LcuHttpClient(_credentials);
+        _live = new LiveClientDataClient();
+        _log = new RedactedLog(logDirectory);
+        _windowDecisions = new WindowDecisionService(sessionToken);
+        _bridge = new CompanionHttpServer(
+            sessionToken,
+            _state,
+            _lcu,
+            _live,
+            credentials: _credentials,
+            log: _log);
+        _gameflow = new GameflowPoller(
+            _credentials,
+            _lcu,
+            _state,
+            _windowDecisions,
+            _log);
+        _livePolling = new LivePollingCoordinator(
+            _live,
+            _state,
+            allGameData: CaptureAllGameData,
+            playerList: CapturePlayerList,
+            skills: CaptureSkills);
+    }
+
+    public event Action<ReopenTarget>? PageRequested;
+
+    public int BridgePort => _bridge.Port;
+
+    public bool IsCompanionBusy => _state.IsCompanionBusy;
+
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            if (_started) return;
+            _started = true;
+        }
+
+        await _bridge.StartAsync(cancellationToken).ConfigureAwait(false);
+        _gameflowTask = RunGameflowAsync(_stop.Token);
+        _liveTask = RunLivePollingAsync(_stop.Token);
+    }
+
+    public Task<DesktopPhaseSnapshot> ReadSnapshotAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        CompanionStatus status = _state.ToStatus(_bridge.Port);
+        LastOpenPage? lastOpen = null;
+        if (status.LastOpen is { } open)
+        {
+            _ = DateTimeOffset.TryParse(open.At, out var openedAt);
+            lastOpen = new LastOpenPage(open.ChampionId, open.RoleId, openedAt, ReopenDestination.Builds);
+        }
+
+        return Task.FromResult(new DesktopPhaseSnapshot(
+            status.Phase,
+            lastOpen,
+            _state.IsCompanionBusy,
+            status.LastError,
+            BuildOverlayState()));
+    }
+
+    public Task<bool> RepairWebView2Async(CancellationToken cancellationToken)
+    {
+        // App owns the WebView2 environment/bootstrapper. The host service
+        // keeps this method for injectable test hosts and returns false by
+        // default rather than launching anything off-policy.
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(false);
+    }
+
+    private async Task RunGameflowAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(LivePollingCoordinator.GameflowPollMs));
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                var decision = await _gameflow.TickAsync(cancellationToken).ConfigureAwait(false);
+                if (decision is { Kind: WindowDecisionKind.OpenDraft })
+                {
+                    PageRequested?.Invoke(new ReopenTarget(
+                        ReopenDestination.Draft,
+                        decision.ChampionId,
+                        decision.RoleId));
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception error)
+            {
+                _state.SetLastError(error.Message);
+            }
+
+            try
+            {
+                if (!await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false)) break;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+    }
+
+    private async Task RunLivePollingAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _livePolling.RunAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            _state.SetLastError($"live polling failed: {error.GetType().Name}");
+        }
+    }
+
+    private void CaptureAllGameData(JsonElement data)
+    {
+        if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("activePlayer", out var active)) return;
+        if (active.ValueKind != JsonValueKind.Object || !active.TryGetProperty("riotId", out var riotId)) return;
+        if (riotId.ValueKind != JsonValueKind.String) return;
+        var value = riotId.GetString()?.Trim();
+        if (string.IsNullOrWhiteSpace(value)) return;
+        lock (_gate) _localRiotId = value;
+    }
+
+    private void CapturePlayerList(JsonElement data)
+    {
+        if (data.ValueKind != JsonValueKind.Array) return;
+        string? localId;
+        lock (_gate) localId = _localRiotId;
+        if (string.IsNullOrWhiteSpace(localId)) return;
+
+        foreach (var player in data.EnumerateArray())
+        {
+            if (player.ValueKind != JsonValueKind.Object ||
+                !player.TryGetProperty("riotId", out var riotId) ||
+                !string.Equals(riotId.GetString(), localId, StringComparison.Ordinal)) continue;
+
+            string? champion = null;
+            if (player.TryGetProperty("rawChampionName", out var raw) && raw.ValueKind == JsonValueKind.String)
+            {
+                champion = raw.GetString();
+                const string prefix = "game_character_displayname_";
+                if (champion?.StartsWith(prefix, StringComparison.Ordinal) == true)
+                    champion = champion[prefix.Length..];
+            }
+            if (string.IsNullOrWhiteSpace(champion) && player.TryGetProperty("championName", out var name))
+                champion = name.ValueKind == JsonValueKind.String ? name.GetString() : null;
+            var position = player.TryGetProperty("position", out var positionValue) && positionValue.ValueKind == JsonValueKind.String
+                ? positionValue.GetString()
+                : null;
+            lock (_gate)
+            {
+                _championName = string.IsNullOrWhiteSpace(champion) ? _championName : champion;
+                _detectedPosition = string.IsNullOrWhiteSpace(position) ? _detectedPosition : position;
+            }
+            break;
+        }
+    }
+
+    private void CaptureSkills(LiveSkillState skill)
+    {
+        lock (_gate) _skill = skill;
+    }
+
+    private OverlayState? BuildOverlayState()
+    {
+        var phase = _state.Phase;
+        lock (_gate)
+        {
+            if (!string.Equals(_lastOverlayPhase, phase, StringComparison.Ordinal)
+                && string.Equals(phase, "InProgress", StringComparison.Ordinal))
+            {
+                _championName = null;
+                _detectedPosition = null;
+                _skill = null;
+            }
+            _lastOverlayPhase = phase;
+        }
+        if (!string.Equals(phase, "InProgress", StringComparison.Ordinal)) return null;
+
+        LiveSkillState? skill;
+        string? champion;
+        string? position;
+        lock (_gate)
+        {
+            skill = _skill;
+            champion = _championName;
+            position = _detectedPosition;
+        }
+        if (skill is null || string.IsNullOrWhiteSpace(champion)) return null;
+
+        var ranks = new Dictionary<OverlayAbility, int>
+        {
+            [OverlayAbility.Q] = skill.Abilities.Q,
+            [OverlayAbility.W] = skill.Abilities.W,
+            [OverlayAbility.E] = skill.Abilities.E,
+            [OverlayAbility.R] = skill.Abilities.R,
+        };
+        var lane = position?.Trim().ToUpperInvariant() switch
+        {
+            "TOP" => "TOP",
+            "JUNGLE" => "JUNGLE",
+            "MIDDLE" => "MID",
+            "BOTTOM" => "BOT",
+            "UTILITY" => "SUPPORT",
+            _ => null,
+        };
+        var snapshot = new LiveClientDataSkillSnapshot(skill.Level, ranks);
+        return OverlayStateAdapter.FromLiveSnapshot(
+            snapshot,
+            champion,
+            championId: null,
+            skillOrder: OverlaySkillOrder.Empty,
+            lane: lane,
+            laneIsAuto: true);
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            if (_stopped) return;
+            _stopped = true;
+        }
+        _stop.Cancel();
+        try
+        {
+            if (_gameflowTask is not null) await _gameflowTask.ConfigureAwait(false);
+            if (_liveTask is not null) await _liveTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        await _bridge.StopAsync().ConfigureAwait(false);
+        _live.Dispose();
+        _lcu.Dispose();
+        _stop.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await StopAsync(CancellationToken.None).ConfigureAwait(false);
+    }
+}
