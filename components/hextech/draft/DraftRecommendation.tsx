@@ -3,7 +3,7 @@
 import { IconWithFallback } from "@/components/IconWithFallback";
 import type { ChampionIconEntry } from "@/components/proAssets";
 import {
-  draftTierForRank,
+  draftTierForCandidate,
   isOffMetaLaneShare,
   type DraftAssistantCandidate,
   type DraftAssistantCard,
@@ -55,15 +55,15 @@ function sampleGames(value: number | null): string {
   return Math.round(value).toLocaleString();
 }
 
-function tierClass(tier: ReturnType<typeof draftTierForRank>): string {
+function tierClass(tier: ReturnType<typeof draftTierForCandidate>): string {
   if (tier === "S+") return "bg-accent text-bg";
   if (tier === "S") return "bg-accent/[0.32] text-accent-300";
   if (tier === "A") return "bg-accent/[0.16] text-accent-400";
   return "bg-txt/[0.08] text-txt/[0.6]";
 }
 
-function TierBadge({ rank }: { rank: number }) {
-  const tier = draftTierForRank(rank);
+function TierBadge({ candidate }: { candidate: Pick<DraftAssistantCandidate, "rank"> }) {
+  const tier = draftTierForCandidate(candidate);
   return (
     <span
       className={`inline-flex min-w-[24px] items-center justify-center rounded-[4px] px-1.5 py-1 text-[10px] font-semibold leading-none ${tierClass(tier)}`}
@@ -184,7 +184,7 @@ export default function DraftRecommendation({
           <div className="relative self-start">
             <Tile entry={entry} size={82} featured />
             <span className="absolute -bottom-1.5 -left-1.5">
-              <TierBadge rank={candidate.rank} />
+              <TierBadge candidate={candidate} />
             </span>
           </div>
 

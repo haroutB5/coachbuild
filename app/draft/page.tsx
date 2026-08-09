@@ -618,7 +618,7 @@ export default function DraftPage() {
             ? resolveRecommendedDetailCandidates({ recommended: matchupDetailCandidates, blind: filteredBlindCandidates, noEnemies: enemyIds.length === 0 })
             : matchupDetailCandidates;
   const preserveDetailOrder = assistantView === "comfort" || assistantView === "counters";
-  const topCards = resolveTopRecommendationCards({ rows: currentViewRows, sort: detailSort, preserveOrder: preserveDetailOrder });
+  const topCards = resolveTopRecommendationCards({ rows: currentViewRows });
   const topCandidate = topCards[0]?.candidate ?? null;
   const detailAverage = laneAverage(laneStats);
   const matchupRows = resolveVisibleDraftAssistantRanking({ rows: currentViewRows, sort: detailSort, limit: 5, preserveOrder: preserveDetailOrder }).map((row) => row.candidate);
@@ -780,7 +780,7 @@ export default function DraftPage() {
               champIcons={champIcons}
               laneAverageValue={detailAverage}
               sort={detailSort}
-              onSortChange={(nextSort) => { setDetailSort(nextSort); setShowFullTable(false); }}
+              onSortChange={(nextSort) => { if (!preserveDetailOrder) { setDetailSort(nextSort); setShowFullTable(false); } }}
               selectedChampionId={selectedDetailChampionId}
               onSelect={setSelectedDetailChampionId}
               showAll={showFullTable}

@@ -91,16 +91,17 @@ export interface DraftAssistantCandidate {
 
 export type DraftTier = "S+" | "S" | "A" | "B";
 
-/**
- * The draft feed does not ship a separate tier-list field. These badges are a
- * compact presentation of the already-ranked window, so they are derived
- * from the server order only and never feed back into scoring or filtering.
- */
+/** The feed's server rank is the one canonical input for a champion's tier. */
 export function draftTierForRank(rank: number): DraftTier {
   if (rank <= 1) return "S+";
   if (rank <= 3) return "S";
   if (rank <= 8) return "A";
   return "B";
+}
+
+/** Resolve a champion tier without consulting the current display position. */
+export function draftTierForCandidate(candidate: Pick<DraftAssistantCandidate, "rank">): DraftTier {
+  return draftTierForRank(candidate.rank);
 }
 
 export type DraftAssistantDetailSort = "winRate" | "pickRate" | "games";
@@ -172,21 +173,13 @@ export function resolveVisibleDraftAssistantRanking(args: {
   }));
 }
 
-/** Resolve the hero cards from the same displayed ranking window as the table.
- * `rows` must already contain the active tab and filter selection; sorting and
- * Comfort Picks' preserved order mirror `resolveVisibleDraftAssistantRanking`.
- * The slots are visual positions only and carry no role-selection meaning. */
+/** Resolve THE CALL from the first three candidates in server order.
+ * Display sorting is intentionally not an input: the verdict and alternates
+ * are pinned to the server order shown by the active tab/filter. */
 export function resolveTopRecommendationCards(args: {
   rows: DraftAssistantCandidate[];
-  sort: DraftAssistantDetailSort;
-  preserveOrder?: boolean;
 }): DraftAssistantCard[] {
-  const displayedRows = resolveVisibleDraftAssistantRanking({
-    rows: args.rows,
-    sort: args.sort,
-    limit: 3,
-    preserveOrder: args.preserveOrder,
-  });
+  const displayedRows = args.rows.slice(0, 3).map((candidate, index) => ({ candidate, rank: index + 1 }));
   const slots = ["best", "blind", "reliable"] as const;
   return displayedRows.map(({ candidate }, index) => ({ slot: slots[index], candidate }));
 }

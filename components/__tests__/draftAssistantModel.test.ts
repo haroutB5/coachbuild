@@ -3,6 +3,7 @@ import { POOL_MIN_PICKRATE } from "@/lib/draft/score";
 import {
   DEFAULT_DRAFT_ASSISTANT_FILTERS,
   compareDraftAssistantCandidates,
+  draftTierForCandidate,
   filterCounterCandidates,
   filterComfortCandidates,
   filterDraftAssistantCandidates,
@@ -61,7 +62,7 @@ describe("Draft Assistant recommendation cards", () => {
     ];
 
     for (const view of views) {
-      const cards = resolveTopRecommendationCards({ rows: view.rows, sort: "winRate", preserveOrder: view.preserveOrder });
+      const cards = resolveTopRecommendationCards({ rows: view.rows });
       expect(cards.map((card) => card.candidate.champId), view.name).toEqual(view.expected);
     }
   });
@@ -69,7 +70,6 @@ describe("Draft Assistant recommendation cards", () => {
   it("returns fewer cards when the displayed ranking has fewer than three rows", () => {
     const cards = resolveTopRecommendationCards({
       rows: [candidate(1, "recommended", 1, 0.58, 12000), candidate(2, "recommended", 2, 0.56, 9000)],
-      sort: "winRate",
     });
 
     expect(cards.map((card) => card.candidate.champId)).toEqual([1, 2]);
@@ -81,19 +81,17 @@ describe("Draft Assistant recommendation cards", () => {
       { ...candidate(2, "recommended", 2, 0.56, 9000), synergyDelta: -0.01 },
     ]);
 
-    expect(resolveTopRecommendationCards({ rows: counterRows, sort: "winRate" })).toEqual([]);
+    expect(resolveTopRecommendationCards({ rows: counterRows })).toEqual([]);
   });
 
-  it("reorders cards with the table sort and preserves Comfort Picks order", () => {
+  it("keeps THE CALL in server order when the table sort changes", () => {
     const rows = [
       candidate(1, "recommended", 1, 0.52, 3000, 0.08),
       candidate(2, "recommended", 2, 0.58, 1000, 0.01),
       candidate(3, "recommended", 3, 0.55, 5000, 0.04),
     ];
 
-    expect(resolveTopRecommendationCards({ rows, sort: "winRate" }).map((card) => card.candidate.champId)).toEqual([2, 3, 1]);
-    expect(resolveTopRecommendationCards({ rows, sort: "games" }).map((card) => card.candidate.champId)).toEqual([3, 1, 2]);
-    expect(resolveTopRecommendationCards({ rows, sort: "winRate", preserveOrder: true }).map((card) => card.candidate.champId)).toEqual([1, 2, 3]);
+    expect(resolveTopRecommendationCards({ rows }).map((card) => card.candidate.champId)).toEqual([1, 2, 3]);
   });
 
   it("reads the off-meta threshold from POOL_MIN_PICKRATE", () => {
@@ -102,15 +100,16 @@ describe("Draft Assistant recommendation cards", () => {
     expect(isOffMetaLaneShare(POOL_MIN_PICKRATE + 0.0001)).toBe(false);
   });
 
-  it("keeps a high-win-rate potential row aligned with the table and tags it", () => {
+  it("keeps a potential row in server order and tags it in the alternates", () => {
     const potential = candidate(2, "recommended", 2, 0.56, 500);
     potential.isPotential = true;
     const cards = resolveTopRecommendationCards({
       rows: [candidate(1, "recommended", 1, 0.52, 12000), potential],
-      sort: "winRate",
     });
-    expect(cards[0].candidate.champId).toBe(2);
-    expect(cards[0].candidate.isPotential).toBe(true);
+    expect(cards[0].candidate.champId).toBe(1);
+    expect(cards[0].candidate.isPotential).toBe(false);
+    expect(cards[1].candidate.champId).toBe(2);
+    expect(cards[1].candidate.isPotential).toBe(true);
   });
 });
 
@@ -182,7 +181,7 @@ describe("Recommended detail ranking source", () => {
         candidate(103, "blind", 2, 0.55, 429501),
       ],
     });
-    const cards = resolveTopRecommendationCards({ rows: detailCandidates, sort: "winRate" });
+    const cards = resolveTopRecommendationCards({ rows: detailCandidates });
     const cardIds = cards.map((card) => card.candidate.champId);
 
     expect(cardIds).toEqual([92, 131, 103]);
@@ -248,12 +247,39 @@ describe("Visible ranking window", () => {
     expect(visible.map((row) => row.rank)).toEqual(Array.from({ length: 10 }, (_, index) => index + 1));
   });
 
-  it("uses the same first-three window for cards and the table after a sort change", () => {
+  it("keeps THE CALL in server order while the table responds to a sort change", () => {
     const rows = fixture();
-    const cards = resolveTopRecommendationCards({ rows, sort: "games" });
+    const cards = resolveTopRecommendationCards({ rows });
     const visible = resolveVisibleDraftAssistantRanking({ rows, sort: "games" });
 
-    expect(cards.map((card) => card.candidate.champId)).toEqual(visible.slice(0, 3).map((row) => row.candidate.champId));
+    expect(cards.map((card) => card.candidate.champId)).toEqual([200, 201, 202]);
+    expect(visible.slice(0, 3).map((row) => row.candidate.champId)).toEqual([210, 209, 208]);
+  });
+
+  it("keeps a champion tier tied to its original rank after display sorting", () => {
+    const rows = [
+      candidate(301, "recommended", 9, 0.509, 10000, 0.08),
+      candidate(302, "recommended", 2, 0.519, 9000, 0.01),
+    ];
+    const beforeSortTier = draftTierForCandidate(rows[0]);
+    const sortedRow = resolveVisibleDraftAssistantRanking({ rows, sort: "pickRate" }).find((row) => row.candidate.champId === 301);
+
+    expect(sortedRow?.rank).toBe(1);
+    expect(draftTierForCandidate(sortedRow!.candidate)).toBe(beforeSortTier);
+    expect(beforeSortTier).toBe("B");
+    expect(draftTierForCandidate(rows[1])).toBe("S");
+  });
+
+  it("uses the same canonical tier for THE CALL and its table row", () => {
+    const singed = candidate(401, "recommended", 1, 0.52, 10000, 0.08);
+    const rows = [singed, candidate(402, "recommended", 2, 0.55, 9000, 0.01)];
+    const call = resolveTopRecommendationCards({ rows })[0].candidate;
+    const tableRow = resolveVisibleDraftAssistantRanking({ rows, sort: "pickRate" }).find((row) => row.candidate.champId === singed.champId)?.candidate;
+
+    expect(call.champId).toBe(singed.champId);
+    expect(tableRow).toBeDefined();
+    expect(draftTierForCandidate(call)).toBe(draftTierForCandidate(tableRow!));
+    expect(draftTierForCandidate(call)).toBe("S+");
   });
 });
 

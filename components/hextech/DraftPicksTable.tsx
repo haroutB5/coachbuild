@@ -4,7 +4,7 @@ import { IconWithFallback } from "@/components/IconWithFallback";
 import type { ChampionIconEntry } from "@/components/proAssets";
 import ThemedSelect, { type ThemedSelectOption } from "@/components/ThemedSelect";
 import {
-  draftTierForRank,
+  draftTierForCandidate,
   isOffMetaLaneShare,
   resolveVisibleDraftAssistantRanking,
   type DraftAssistantCandidate,
@@ -45,8 +45,7 @@ function games(value: number | null): string {
   return value === null || !Number.isFinite(value) ? "—" : Math.round(value).toLocaleString();
 }
 
-function tierClass(rank: number): string {
-  const tier = draftTierForRank(rank);
+function tierClass(tier: ReturnType<typeof draftTierForCandidate>): string {
   if (tier === "S+") return "bg-accent text-bg";
   if (tier === "S") return "bg-accent/[0.32] text-accent-300";
   if (tier === "A") return "bg-accent/[0.16] text-accent-400";
@@ -57,18 +56,21 @@ function SortButton({
   label,
   value,
   sort,
+  disabled,
   onChange,
 }: {
   label: string;
   value: DraftAssistantDetailSort;
   sort: DraftAssistantDetailSort;
+  disabled: boolean;
   onChange: (sort: DraftAssistantDetailSort) => void;
 }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={() => onChange(value)}
-      className={`text-[9px] font-medium uppercase tracking-[0.12em] transition-colors duration-[120ms] ease-in focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 ${sort === value ? "text-accent-300" : "text-txt/[0.38] hover:text-txt/[0.7]"}`}
+      className={`text-[9px] font-medium uppercase tracking-[0.12em] transition-colors duration-[120ms] ease-in focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 disabled:cursor-default disabled:text-txt/[0.28] ${sort === value ? "text-accent-300" : "text-txt/[0.38] hover:text-txt/[0.7]"}`}
       aria-label={`Sort rankings by ${label}`}
     >
       {label}
@@ -130,10 +132,10 @@ export default function DraftPicksTable({
               <th scope="col" className="w-8 px-3 py-2.5 font-medium">#</th>
               <th scope="col" className="px-2 py-2.5 font-medium">Champion</th>
               <th scope="col" className="px-2 py-2.5 text-right font-medium">Tier</th>
-              <th scope="col" className="px-2 py-2.5 text-right font-medium"><SortButton label="Win rate" value="winRate" sort={sort} onChange={onSortChange} /></th>
-              <th scope="col" className="px-2 py-2.5 text-right font-medium"><SortButton label="Pick" value="pickRate" sort={sort} onChange={onSortChange} /></th>
+              <th scope="col" className="px-2 py-2.5 text-right font-medium"><SortButton label="Win rate" value="winRate" sort={sort} disabled={preserveOrder} onChange={onSortChange} /></th>
+              <th scope="col" className="px-2 py-2.5 text-right font-medium"><SortButton label="Pick" value="pickRate" sort={sort} disabled={preserveOrder} onChange={onSortChange} /></th>
               <th scope="col" className="px-2 py-2.5 text-right font-medium">Delta vs lane avg</th>
-              <th scope="col" className="px-3 py-2.5 text-right font-medium"><SortButton label="Games" value="games" sort={sort} onChange={onSortChange} /></th>
+              <th scope="col" className="px-3 py-2.5 text-right font-medium"><SortButton label="Games" value="games" sort={sort} disabled={preserveOrder} onChange={onSortChange} /></th>
             </tr>
           </thead>
           <tbody>
@@ -143,6 +145,7 @@ export default function DraftPicksTable({
               const offMeta = isOffMetaLaneShare(candidate.laneShare);
               const comfort = candidate.personalOverall.games > 0;
               const displayRank = preserveOrder ? candidate.rank : rank;
+              const tier = draftTierForCandidate(candidate);
               return (
                 <tr
                   key={candidate.champId}
@@ -164,7 +167,7 @@ export default function DraftPicksTable({
                     </button>
                   </td>
                   <td className="px-2 py-2.5 text-right">
-                    <span className={`inline-flex min-w-[24px] justify-center rounded-[4px] px-1.5 py-1 text-[10px] font-semibold leading-none ${tierClass(displayRank)}`} style={{ clipPath: "polygon(0 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%)" }}>{draftTierForRank(displayRank)}</span>
+                    <span className={`inline-flex min-w-[24px] justify-center rounded-[4px] px-1.5 py-1 text-[10px] font-semibold leading-none ${tierClass(tier)}`} style={{ clipPath: "polygon(0 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%)" }}>{tier}</span>
                   </td>
                   <td className="px-2 py-2.5 text-right text-[12px] font-semibold tabular-nums text-txt">{percent(candidate.winRate)}</td>
                   <td className="px-2 py-2.5 text-right text-[11px] tabular-nums text-txt/[0.62]">{percent(candidate.laneShare)}</td>
@@ -182,6 +185,7 @@ export default function DraftPicksTable({
             const offMeta = isOffMetaLaneShare(candidate.laneShare);
             const comfort = candidate.personalOverall.games > 0;
             const displayRank = preserveOrder ? candidate.rank : rank;
+            const tier = draftTierForCandidate(candidate);
             return (
               <article
                 key={candidate.champId}
@@ -200,7 +204,7 @@ export default function DraftPicksTable({
                     </span>
                   </span>
                 </button>
-                <span className={`mt-1 inline-flex h-fit min-w-[30px] justify-center rounded-[4px] px-1.5 py-1 text-[10px] font-semibold leading-none ${tierClass(displayRank)}`} style={{ clipPath: "polygon(0 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%)" }}>{draftTierForRank(displayRank)}</span>
+                <span className={`mt-1 inline-flex h-fit min-w-[30px] justify-center rounded-[4px] px-1.5 py-1 text-[10px] font-semibold leading-none ${tierClass(tier)}`} style={{ clipPath: "polygon(0 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%)" }}>{tier}</span>
                 <div className="col-start-2 col-span-2 mt-2 grid grid-cols-4 gap-2 border-t border-txt/[0.06] pt-2 text-right">
                   <div><span className="block text-[8px] uppercase tracking-[0.1em] text-txt/[0.35]">Win</span><span className="mt-0.5 block text-[11px] font-semibold tabular-nums text-txt">{percent(candidate.winRate)}</span></div>
                   <div><span className="block text-[8px] uppercase tracking-[0.1em] text-txt/[0.35]">Pick</span><span className="mt-0.5 block text-[11px] tabular-nums text-txt/[0.62]">{percent(candidate.laneShare)}</span></div>
@@ -214,12 +218,14 @@ export default function DraftPicksTable({
       </div>
 
       {rows.length === 0 && <p className="border-t border-txt/[0.05] px-4 py-8 text-center text-[11px] text-txt/[0.48]">{showCountersNoEnemies ? "Add an enemy to see counters" : "No rankings meet the active filters."}</p>}
-      <div className="border-t border-txt/[0.06] px-3.5 py-3 text-center">
-        <button type="button" onClick={onShowAll} disabled={showAll || rows.length <= 10} className="min-h-[44px] text-[10.5px] font-medium text-accent-300 transition-colors duration-[120ms] ease-in hover:text-accent-200 disabled:cursor-default disabled:text-txt/[0.36] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:min-h-0">
-          {showAll ? "Showing full table" : "View full table →"}
-        </button>
-        <span className="mt-1 block text-[10px] text-txt/[0.35]">Figures are estimated from this lane&apos;s matchup data.</span>
-      </div>
+      {rows.length > 0 && (
+        <div className="border-t border-txt/[0.06] px-3.5 py-3 text-center">
+          <button type="button" onClick={onShowAll} disabled={showAll || rows.length <= 10} className="min-h-[44px] text-[10.5px] font-medium text-accent-300 transition-colors duration-[120ms] ease-in hover:text-accent-200 disabled:cursor-default disabled:text-txt/[0.36] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:min-h-0">
+            {showAll ? "Showing full table" : "View full table →"}
+          </button>
+          <span className="mt-1 block text-[10px] text-txt/[0.35]">Figures are estimated from this lane&apos;s matchup data.</span>
+        </div>
+      )}
     </section>
   );
 }

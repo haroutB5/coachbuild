@@ -61,12 +61,19 @@ describe("preserveOriginalDraftRanks", () => {
     ];
 
     const comfortRows = preserveOriginalDraftRanks([mainFeed, potentialFeed], true);
+    const recommendedRows = preserveOriginalDraftRanks([mainFeed, potentialFeed], false);
+    const counterRows = recommendedRows.filter(({ play }) => play.id === 1 || play.id === 3);
 
     expect(comfortRows.map(({ play, rank }) => ({ id: play.id, rank }))).toEqual([
       { id: 1, rank: 1 },
       { id: 3, rank: 3 },
     ]);
     expect(new Set(comfortRows.map(({ rank }) => rank)).size).toBe(comfortRows.length);
+    expect(counterRows.map(({ play, rank }) => ({ id: play.id, rank }))).toEqual([
+      { id: 1, rank: 1 },
+      { id: 3, rank: 3 },
+    ]);
+    expect(new Set(counterRows.map(({ rank }) => rank)).size).toBe(counterRows.length);
     expect(draftTierForRank(comfortRows[1].rank)).toBe("S");
   });
 });
