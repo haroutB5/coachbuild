@@ -1,4 +1,16 @@
 # Changelog
+## 0.104.0 — 2026-08-09
+
+Nocturne redesign — full visual + UX redesign of every surface (design handoff in `design_handoff_coachbuild_redesign/`).
+
+- New shell: 216px rail (PLAY / DATA / SETUP), title bar, top bar with ⌘K search and the phase spine (LOBBY → CHAMP SELECT → IN GAME → POST GAME) driven honestly from real companion polls
+- Builds: verdict-first champion view, WPA / Pro Consensus / One-Trick tabs rebuilt to spec; landing with tier list, lanes, trending
+- Draft Assistant: THE CALL verdict card, alternates, full matchup grid (every locked-enemy cell), honest lane-average deltas, filter tabs that never re-score, canonical tier ladder
+- Post-Game surface (JUDGMENT-tagged inference cards, build comparison, adherence donut), My Stats, Patch Movers (centered shift bars), Pro Players (named keystones)
+- Companion page: native desktop app is the primary install; in-game overlay preview + /compact keep the real overlay's pink treatment (user directive)
+- Mobile: every screen adapted at 390px, internal scrolling for grids/paths, 44px targets
+- Honesty treatments preserved throughout: derived-vs-blank skill levels, sample sizes, no-data dashes, neutral unproven states
+- 4 adversarial audit rounds + scoped final verification; 2,851 tests
 
 All notable changes to CoachBuild are documented here.
 
