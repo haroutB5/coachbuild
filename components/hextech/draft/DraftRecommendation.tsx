@@ -43,6 +43,15 @@ function games(value: number | null): string {
   return value === null || !Number.isFinite(value) ? "—" : Math.round(value).toLocaleString();
 }
 
+function sampleGames(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "—";
+  if (value >= 1000) {
+    const compact = value >= 10000 ? Math.round(value / 1000) : (value / 1000).toFixed(1);
+    return `${compact}k`;
+  }
+  return Math.round(value).toLocaleString();
+}
+
 function points(value: number): string {
   return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(1)}pp`;
 }
@@ -171,7 +180,7 @@ export default function DraftRecommendation({
           aria-hidden="true"
           style={{ background: "repeating-linear-gradient(115deg, rgba(145,132,217,.05) 0 1px, transparent 1px 9px)" }}
         />
-        <div className="relative grid min-w-0 gap-5 lg:grid-cols-[82px_minmax(0,1fr)_minmax(210px,0.9fr)]">
+        <div className="relative grid min-w-0 gap-5 lg:grid-cols-[82px_minmax(0,0.85fr)_minmax(250px,1fr)]">
           <div className="relative self-start">
             <Tile entry={entry} size={82} featured />
             <span className="absolute -bottom-1.5 -left-1.5">
@@ -210,21 +219,23 @@ export default function DraftRecommendation({
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-4 border-t border-txt/[0.1] pt-4 tabular-nums lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
-            <div>
-              <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-txt/[0.42]">Win rate</p>
-              <p className="mt-1 text-[32px] font-semibold leading-none tracking-[-0.03em] text-txt">{percent(candidate.winRate)}</p>
-              <p className={`mt-1 text-[10px] font-semibold ${delta >= 0 ? "text-good" : "text-bad"}`}>{points(delta)} vs comp</p>
+          <div className="flex min-w-0 max-w-full flex-wrap items-start gap-x-3 gap-y-4 border-t border-txt/[0.1] pt-4 tabular-nums lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
+            <div className="min-w-[96px] flex-[1_1_96px]">
+              <p className="whitespace-nowrap text-[9px] font-semibold uppercase tracking-[0.12em] text-txt/[0.42]">Win rate</p>
+              <p className="mt-1 whitespace-nowrap text-[32px] font-semibold leading-none tracking-[-0.03em] text-txt">{percent(candidate.winRate)}</p>
+              <p className={`mt-1 whitespace-nowrap text-[10px] font-semibold ${delta >= 0 ? "text-good" : "text-bad"}`}>{points(delta)} vs comp</p>
             </div>
-            <div>
-              <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-txt/[0.42]">Floor</p>
-              <p className="mt-1 text-[32px] font-semibold leading-none tracking-[-0.03em] text-txt">{percent(floor)}</p>
-              <p className="mt-1 text-[10px] text-txt/[0.42]">worst 10%</p>
+            <div className="min-w-[96px] flex-[1_1_96px]">
+              <p className="whitespace-nowrap text-[9px] font-semibold uppercase tracking-[0.12em] text-txt/[0.42]">Floor</p>
+              <p className={`mt-1 whitespace-nowrap text-[32px] font-semibold leading-none tracking-[-0.03em] ${floor !== null && Number.isFinite(floor) ? "text-txt" : "text-txt/[0.55]"}`}>
+                {floor !== null && Number.isFinite(floor) ? percent(floor) : "—"}
+              </p>
+              <p className="mt-1 whitespace-nowrap text-[10px] text-txt/[0.42]">{floor !== null && Number.isFinite(floor) ? "worst 10%" : "no data"}</p>
             </div>
-            <div>
-              <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-txt/[0.42]">Sample</p>
-              <p className="mt-1 text-[32px] font-semibold leading-none tracking-[-0.03em] text-txt">{games(candidate.totalGames)}</p>
-              <p className="mt-1 text-[10px] text-txt/[0.42]">{candidate.isPotential ? "low confidence" : "high confidence"}</p>
+            <div className="min-w-[96px] flex-[1_1_96px]">
+              <p className="whitespace-nowrap text-[9px] font-semibold uppercase tracking-[0.12em] text-txt/[0.42]">Sample</p>
+              <p className="mt-1 whitespace-nowrap text-[32px] font-semibold leading-none tracking-[-0.03em] text-txt">{sampleGames(candidate.totalGames)}</p>
+              <p className="mt-1 whitespace-nowrap text-[10px] text-txt/[0.42]">{candidate.isPotential ? "low confidence" : "high confidence"}</p>
             </div>
           </div>
         </div>

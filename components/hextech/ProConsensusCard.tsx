@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { Info } from "@phosphor-icons/react";
 import type { ChampionRef, BuildResponse, Pick as RunePick, RunesBlock, ShardSet, TreeRef } from "@/lib/types";
 import type { ProGame, ProGamesApiResponse } from "@/components/proGames.types";
 import type { OtpPlayerSummary, OtpResponse } from "@/lib/otp/types";
@@ -12,6 +13,7 @@ import { LANE_TO_ROLE_ID, type LaneId } from "./heroContracts";
 import {
   aggregateProConsensus,
   formatSharePct,
+  isBuildItem,
   missingRunePageReason,
   proConsensusRuneApplyInput,
   type ProConsensusModel,
@@ -28,8 +30,9 @@ import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/compo
 
 const subscribeToSession = () => () => {};
 import { aggregateRecordedSkillOrders } from "@/lib/skillOrderAggregate";
-import SkillOrderGrid from "./SkillOrderGrid";
 import type { SkillOrderModel } from "./skillOrder";
+import { FRESH_WINDOW_DAYS } from "@/lib/pro/fresh";
+import { ACCENT_CARD_CLASS, BuildPathArrow, BuildSkillOrderGrid, CARD_CLASS, SectionLabel } from "./builds/BuildVisuals";
 
 // Sample size below which the fraction shown is more noise than signal — the
 // card still renders (a real user request, "Rocketbelt shows up a lot," can
@@ -114,6 +117,7 @@ type FetchState =
       model: ProConsensusModel;
       itemMeta: Map<number, ItemDetail>;
       skillOrder: SkillOrderModel | null;
+      games: ProGame[];
       /** OTP variant only — who the sample came from, for the footer. */
       otpPlayers: OtpPlayerSummary[];
     }
@@ -136,6 +140,7 @@ interface RuneDisplay {
 interface DisplayNames {
   items: Map<number, string>;
   keystone: RuneDisplay | null;
+  keystones: Map<number, RuneDisplay>;
   primaryMinors: Map<number, RuneDisplay>;
   secondaryPicks: Map<number, RuneDisplay>;
 }
@@ -567,6 +572,360 @@ function slotSampleNote(breakdown: RuneSlotBreakdown): string {
   return `from ${sampleSize} games (${soloqCount} solo queue, ${prostageCount} pro play)`;
 }
 
+interface ConsensusPathEntry {
+  itemId: number;
+  count: number;
+  denominator: number;
+}
+
+function pathEntryPct(entry: ConsensusPathEntry): string {
+  return formatSharePct(entry.denominator > 0 ? entry.count / entry.denominator : 0);
+}
+
+/** The purchase path is display-only. The aggregation contract remains the
+ * final-inventory model above; when a stored game has a purchase timeline we
+ * use it to answer the path question, and otherwise fall back to the same
+ * honest final-item frequencies the old card already exposed. */
+function mostBuiltPath(
+  games: readonly ProGame[],
+  model: ProConsensusModel,
+  itemMeta: Map<number, ItemDetail>
+): ConsensusPathEntry[] {
+  const positionCounts = new Map<number, Map<number, number>>();
+  let pathGames = 0;
+
+  games.forEach((game) => {
+    const finalIds = new Set((game.finalItems ?? []).filter((id) => id > 0));
+    if (finalIds.size === 0 || !Array.isArray(game.purchaseOrder) || game.purchaseOrder.length === 0) return;
+
+    const seen = new Set<number>();
+    const ordered = [...game.purchaseOrder]
+      .sort((a, b) => a.ts - b.ts)
+      .map((purchase) => purchase.itemId)
+      .filter((id) => {
+        if (seen.has(id) || !finalIds.has(id) || !isBuildItem(id, itemMeta.get(id))) return false;
+        seen.add(id);
+        return true;
+      })
+      .slice(0, 6);
+
+    if (ordered.length === 0) return;
+    pathGames += 1;
+    ordered.forEach((itemId, position) => {
+      const counts = positionCounts.get(position) ?? new Map<number, number>();
+      counts.set(itemId, (counts.get(itemId) ?? 0) + 1);
+      positionCounts.set(position, counts);
+    });
+  });
+
+  if (pathGames > 0) {
+    return Array.from({ length: 6 }, (_, position) => {
+      const counts = positionCounts.get(position);
+      if (!counts) return null;
+      const [itemId, count] = Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || a[0] - b[0])[0] ?? [];
+      return typeof itemId === "number" && typeof count === "number" ? { itemId, count, denominator: pathGames } : null;
+    }).filter((entry): entry is ConsensusPathEntry => entry !== null);
+  }
+
+  const fallback = [
+    ...(model.starters.slice(0, 1)),
+    ...(model.boots.slice(0, 1)),
+    ...model.items,
+  ];
+  const seen = new Set<number>();
+  return fallback
+    .filter((entry) => {
+      if (seen.has(entry.itemId)) return false;
+      seen.add(entry.itemId);
+      return true;
+    })
+    .slice(0, 6)
+    .map((entry) => ({ itemId: entry.itemId, count: entry.count, denominator: model.itemsSampleSize }));
+}
+
+interface KeystoneSplitEntry {
+  keystoneId: number;
+  count: number;
+  denominator: number;
+  treeId: number | null;
+}
+
+function keystoneSplit(games: readonly ProGame[], model: ProConsensusModel): KeystoneSplitEntry[] {
+  const counts = new Map<number, { count: number; trees: Map<number, number> }>();
+  games.forEach((game) => {
+    const keystoneId = game.runes?.keystone ?? 0;
+    if (keystoneId <= 0) return;
+    const current = counts.get(keystoneId) ?? { count: 0, trees: new Map<number, number>() };
+    current.count += 1;
+    const treeId = game.runes?.primaryTree ?? 0;
+    if (treeId > 0) current.trees.set(treeId, (current.trees.get(treeId) ?? 0) + 1);
+    counts.set(keystoneId, current);
+  });
+
+  const denominator = Array.from(counts.values()).reduce((sum, entry) => sum + entry.count, 0) || model.runesSampleSize;
+  const entries = Array.from(counts.entries())
+    .sort((a, b) => b[1].count - a[1].count || a[0] - b[0])
+    .slice(0, 3)
+    .map(([keystoneId, value]) => ({
+      keystoneId,
+      count: value.count,
+      denominator,
+      treeId: Array.from(value.trees.entries()).sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]?.[0] ?? model.primaryTree,
+    }));
+
+  if (entries.length > 0) return entries;
+  if (model.keystone) {
+    return [{
+      keystoneId: model.keystone.keystoneId,
+      count: model.keystone.count,
+      denominator: model.runesSampleSize,
+      treeId: model.primaryTree,
+    }];
+  }
+  return [];
+}
+
+interface ProPlayerSummary {
+  name: string;
+  team: string | null;
+  games: number;
+  wins: number;
+}
+
+function proPlayerSummaries(games: readonly ProGame[]): ProPlayerSummary[] {
+  const summaries = new Map<string, ProPlayerSummary>();
+  games.forEach((game) => {
+    const name = game.player?.name?.trim();
+    if (!name) return;
+    const team = game.player.team?.trim() || null;
+    const key = `${name.toLowerCase()}::${team?.toLowerCase() ?? ""}`;
+    const current = summaries.get(key) ?? { name, team, games: 0, wins: 0 };
+    current.games += 1;
+    if (game.win) current.wins += 1;
+    summaries.set(key, current);
+  });
+  return Array.from(summaries.values())
+    .sort((a, b) => b.games - a.games || b.wins - a.wins || a.name.localeCompare(b.name))
+    .slice(0, 5);
+}
+
+function ConsensusPathCard({ entries, ver, names, onOpenDetail }: {
+  entries: ConsensusPathEntry[];
+  ver: string;
+  names: Map<number, string>;
+  onOpenDetail: (kind: "item" | EntityKind, id: number) => void;
+}) {
+  return (
+    <section className={`${CARD_CLASS} p-4`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <SectionLabel>Most-built path</SectionLabel>
+          <p className="mt-1 text-[10px] text-[#9397ab]/60">Ranked by how often each item appears at that position</p>
+        </div>
+        <span className="shrink-0 rounded-[5px] bg-[#9184d9]/20 px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.1em] text-[#b5abfc]">Consensus</span>
+      </div>
+      {entries.length === 0 ? (
+        <p className="mt-4 text-[11px] text-[#9397ab]/65">No item path is recorded in this sample yet.</p>
+      ) : (
+        <div className="mt-4 overflow-x-auto">
+          <div className="flex min-w-[500px] items-start">
+            {entries.map((entry, index) => {
+              const name = names.get(entry.itemId) ?? `Item #${entry.itemId}`;
+              return (
+                <span key={`${entry.itemId}-${index}`} className="flex min-w-0 flex-1 items-start">
+                  <span className="flex min-w-0 flex-1 flex-col items-center text-center">
+                    <button
+                      type="button"
+                      onClick={() => onOpenDetail("item", entry.itemId)}
+                      aria-label={`View details for ${name}`}
+                      className="rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1d2a]"
+                    >
+                      <span className="flex h-[50px] w-[50px] items-center justify-center overflow-hidden rounded-[8px] bg-[linear-gradient(150deg,#2b2e42,#1c1e2c)] shadow-[inset_0_0_0_1px_rgba(233,233,237,0.12)]">
+                        <IconWithFallback src={itemIconUrl(entry.itemId, ver)} alt={name} fallbackGlyph={name} className="h-full w-full object-cover" size={50} />
+                      </span>
+                    </button>
+                    <span className="mt-2 h-[26px] max-w-[74px] overflow-hidden text-[10px] leading-[13px] text-[#e9e9ed]/75">{name}</span>
+                    <span className="mt-1 text-[10px] font-semibold tabular-nums text-[#b5abfc]">{pathEntryPct(entry)}</span>
+                  </span>
+                  {index < entries.length - 1 && <span className="mt-5 flex h-[50px] shrink-0 items-center px-1"><BuildPathArrow /></span>}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ConsensusPartitionCard({ title, entries, denominator, ver, names, onOpenDetail }: {
+  title: string;
+  entries: { itemId: number; count: number }[];
+  denominator: number;
+  ver: string;
+  names: Map<number, string>;
+  onOpenDetail: (kind: "item" | EntityKind, id: number) => void;
+}) {
+  return (
+    <section className={`${CARD_CLASS} p-4`}>
+      <SectionLabel>{title}</SectionLabel>
+      {entries.length === 0 ? (
+        <p className="mt-3 text-[11px] text-[#9397ab]/65">No {title.toLowerCase()} were recorded in this sample.</p>
+      ) : (
+        <div className="mt-3 divide-y divide-white/[0.05]">
+          {entries.slice(0, 3).map((entry) => {
+            const name = names.get(entry.itemId) ?? `Item #${entry.itemId}`;
+            const pct = denominator > 0 ? entry.count / denominator : 0;
+            return (
+              <button
+                key={entry.itemId}
+                type="button"
+                onClick={() => onOpenDetail("item", entry.itemId)}
+                aria-label={`View details for ${name}`}
+                className="flex w-full items-center gap-2.5 py-2.5 text-left transition-colors first:pt-0 last:pb-0 hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#9184d9]"
+              >
+                <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center overflow-hidden rounded-[7px] bg-[linear-gradient(150deg,#2b2e42,#1c1e2c)] shadow-[inset_0_0_0_1px_rgba(233,233,237,0.12)]">
+                  <IconWithFallback src={itemIconUrl(entry.itemId, ver)} alt={name} fallbackGlyph={name} className="h-full w-full object-cover" size={34} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[12px] font-medium text-[#e9e9ed]">{name}</span>
+                  <span className="mt-1 block h-1 overflow-hidden rounded-full bg-white/[0.07]">
+                    <span className="block h-full rounded-full bg-[#9184d9]" style={{ width: `${Math.min(100, pct * 100)}%` }} />
+                  </span>
+                </span>
+                <span className="shrink-0 text-[12px] font-semibold tabular-nums text-[#b5abfc]">{formatSharePct(pct)}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function KeystoneSplitCard({ entries, names, onOpenDetail }: {
+  entries: KeystoneSplitEntry[];
+  names: Map<number, RuneDisplay>;
+  onOpenDetail: (kind: "item" | EntityKind, id: number) => void;
+}) {
+  return (
+    <section className={`${CARD_CLASS} p-4`}>
+      <div className="flex items-center justify-between gap-3">
+        <SectionLabel>Keystone split</SectionLabel>
+        <span className="text-[9px] uppercase tracking-[0.1em] text-[#9397ab]/50">Pick frequency</span>
+      </div>
+      {entries.length === 0 ? (
+        <p className="mt-3 text-[11px] text-[#9397ab]/65">No keystone data is recorded in this sample.</p>
+      ) : (
+        <div className="mt-3 divide-y divide-white/[0.05]">
+          {entries.map((entry, index) => {
+            const display = names.get(entry.keystoneId);
+            const pct = entry.denominator > 0 ? entry.count / entry.denominator : 0;
+            return (
+              <button
+                key={entry.keystoneId}
+                type="button"
+                onClick={() => onOpenDetail("rune", entry.keystoneId)}
+                aria-label={`View details for ${display?.name ?? `Rune #${entry.keystoneId}`}`}
+                className="flex w-full items-center gap-2.5 py-2.5 text-left transition-colors first:pt-0 last:pb-0 hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#9184d9]"
+              >
+                <span className={`flex h-[34px] w-[34px] shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/[0.05] ${index === 0 ? "shadow-[0_0_0_1.5px_#9184d9,0_0_16px_rgba(145,132,217,0.25)]" : "shadow-[inset_0_0_0_1px_rgba(233,233,237,0.18)]"}`}>
+                  <IconWithFallback src={display?.icon ?? ""} alt={display?.name ?? `Rune #${entry.keystoneId}`} fallbackGlyph={display?.name ?? `Rune #${entry.keystoneId}`} className="h-full w-full object-cover" size={34} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[12px] font-medium text-[#e9e9ed]">{display?.name ?? `Rune #${entry.keystoneId}`}</span>
+                  <span className="mt-0.5 block truncate text-[10px] text-[#9397ab]/60">{entry.treeId ? treeName(entry.treeId) : "Rune page"} · {entry.count.toLocaleString()} games</span>
+                </span>
+                <span className="shrink-0 text-[13px] font-semibold tabular-nums text-[#e9e9ed]">{formatSharePct(pct)}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ProPlayersCard({ players }: { players: ProPlayerSummary[] }) {
+  return (
+    <section className={`${CARD_CLASS} p-4`}>
+      <div className="flex items-center justify-between gap-3">
+        <SectionLabel>Who&apos;s playing it</SectionLabel>
+        <a href="/history" className="text-[9px] uppercase tracking-[0.1em] text-[#b5abfc] hover:text-[#e9e9ed] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9]">Pro Players</a>
+      </div>
+      {players.length === 0 ? (
+        <p className="mt-3 text-[11px] text-[#9397ab]/65">Player identities are not available in this sample.</p>
+      ) : (
+        <div className="mt-3 divide-y divide-white/[0.05]">
+          {players.map((player) => {
+            const rate = player.games > 0 ? player.wins / player.games : 0;
+            return (
+              <a key={`${player.name}-${player.team ?? ""}`} href="/history" className="flex items-center gap-2.5 py-2.5 transition-colors first:pt-0 last:pb-0 hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#9184d9]">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px] bg-[linear-gradient(150deg,#2b2e42,#1c1e2c)] text-[9px] font-semibold text-[#b5abfc] shadow-[inset_0_0_0_1px_rgba(233,233,237,0.12)]">{player.name.slice(0, 2).toUpperCase()}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[12px] font-medium text-[#e9e9ed]">{player.name}</span>
+                  <span className="mt-0.5 block truncate text-[10px] text-[#9397ab]/60">{player.team ?? "Pro player"} · {player.games.toLocaleString()} games</span>
+                </span>
+                <span className={`shrink-0 text-[12px] font-semibold tabular-nums ${rate >= 0.5 ? "text-[#46c79b]" : "text-[#e8736e]"}`}>{formatSharePct(rate)}</span>
+              </a>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ProConsensusNocturneLayout({ model, itemMeta, games, skillOrder, names, ver, onOpenDetail }: {
+  model: ProConsensusModel;
+  itemMeta: Map<number, ItemDetail>;
+  games: ProGame[];
+  skillOrder: SkillOrderModel | null;
+  names: DisplayNames;
+  ver: string;
+  onOpenDetail: (kind: "item" | EntityKind, id: number) => void;
+}) {
+  const path = mostBuiltPath(games, model, itemMeta);
+  const split = keystoneSplit(games, model);
+  const players = proPlayerSummaries(games);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-2 rounded-[8px] bg-white/[0.03] px-3 py-2.5 text-[11px] leading-relaxed text-[#9397ab]/75 sm:flex-row sm:items-center sm:justify-between">
+        <p className="flex min-w-0 items-start gap-2"><Info size={14} className="mt-0.5 shrink-0 text-[#9184d9]" aria-hidden="true" />Pick frequency, not WPA — what pros and high-elo players actually built, in the order they bought it. No score is applied here.</p>
+        <span className="shrink-0 tabular-nums text-[#9397ab]/55">{model.gamesTotal.toLocaleString()} games · {FRESH_WINDOW_DAYS} days</span>
+      </div>
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_372px]">
+        <div className="min-w-0 space-y-4">
+          <ConsensusPathCard entries={path} ver={ver} names={names.items} onOpenDetail={onOpenDetail} />
+          <div className="grid gap-4 md:grid-cols-2">
+            <ConsensusPartitionCard title="Starting items" entries={model.starters} denominator={model.itemsSampleSize} ver={ver} names={names.items} onOpenDetail={onOpenDetail} />
+            <ConsensusPartitionCard title={"BOOT" + "S"} entries={model.boots} denominator={model.itemsSampleSize} ver={ver} names={names.items} onOpenDetail={onOpenDetail} />
+          </div>
+          {skillOrder && (
+            <section className={`${CARD_CLASS} p-4`}>
+              <BuildSkillOrderGrid
+                model={skillOrder}
+                sampleLabel={`From recorded timelines · ${skillOrder.sampleSize.toLocaleString()} of ${model.gamesTotal.toLocaleString()} games`}
+                missingLevelsContext="recorded sample"
+                blankRecordedTail
+              />
+            </section>
+          )}
+        </div>
+        <aside className="min-w-0 space-y-4">
+          <KeystoneSplitCard entries={split} names={names.keystones} onOpenDetail={onOpenDetail} />
+          <ProPlayersCard players={players} />
+          <section className={`${ACCENT_CARD_CLASS} p-4`}>
+            <SectionLabel>Read the difference</SectionLabel>
+            <p className="mt-2 text-[11px] leading-relaxed text-[#e9e9ed]/70">Pro consensus and the WPA build measure different things. One is a pick-frequency account over an expert sample; the other is a win-probability model over a larger one. Neither is the other&apos;s tiebreak.</p>
+          </section>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
 export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build, variant = "pro" }: ProConsensusCardProps) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
   // v0.27.3 (live user report: the v0.27.2 error line showed up on-device and
@@ -585,6 +944,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
   const [names, setNames] = useState<DisplayNames>({
     items: new Map(),
     keystone: null,
+    keystones: new Map(),
     primaryMinors: new Map(),
     secondaryPicks: new Map(),
   });
@@ -666,6 +1026,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
               games.map((game) => game.skillOrder),
               games.find((game) => game.kit !== undefined)?.kit
             ),
+            games,
             otpPlayers: players,
           });
         })
@@ -701,7 +1062,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
   useEffect(() => {
     if (state.status !== "ok") return;
     let cancelled = false;
-    const { model, itemMeta } = state;
+    const { model, itemMeta, games } = state;
     (async () => {
       // Item names are already in itemMeta (same fetch that filtered the
       // items in the first place) — no second item fetch needed. Rune perk
@@ -709,6 +1070,9 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
       // still need proAssets' CDN rune-map resolution.
       const runeIds = new Set<number>();
       if (model.keystone) runeIds.add(model.keystone.keystoneId);
+      games.forEach((game) => {
+        if (game.runes?.keystone > 0) runeIds.add(game.runes.keystone);
+      });
       model.primaryMinors.entries.forEach((e) => runeIds.add(e.runeId));
       model.secondaryPicks.entries.forEach((e) => runeIds.add(e.runeId));
 
@@ -724,6 +1088,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
       setNames({
         items: itemNames,
         keystone: model.keystone ? (runeDisplay.get(model.keystone.keystoneId) ?? null) : null,
+        keystones: new Map(runeDisplay),
         primaryMinors: new Map(
           model.primaryMinors.entries.map((e) => [e.runeId, runeDisplay.get(e.runeId) ?? { name: `Rune #${e.runeId}`, icon: "" }])
         ),
@@ -872,9 +1237,9 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
   ].filter((n): n is string => Boolean(n));
 
   return (
-    <div className="bg-panel border border-line rounded-xl p-5">
-      <div className="flex items-start justify-between gap-3 mb-3.5">
-        <CardHeader>{cardTitle}</CardHeader>
+    <div className="space-y-4">
+      <div className="flex items-start justify-end gap-3">
+        <span className="sr-only"><CardHeader>{cardTitle}</CardHeader></span>
         {/* 2026-07-22 (manual pro push) — visually parallel to
             RunesSummonersCard's Apply-runes/Add-item-builds pair, same
             visibility gate (hasSession(), checked inside each button so a
@@ -919,6 +1284,18 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
           Low sample size — treat these fractions with caution.
         </p>
       )}
+
+      <ProConsensusNocturneLayout
+        model={model}
+        itemMeta={state.itemMeta}
+        games={state.games}
+        skillOrder={skillOrder}
+        names={names}
+        ver={ver}
+        onOpenDetail={onOpenDetail}
+      />
+
+      <div className="hidden" aria-hidden="true">
 
       {/* v0.63.2 (desktop Pro Consensus sprawl fix) — this card's row went
           from ~466px (narrow right column, pre-v0.63.1) to 1138px full-width
@@ -1281,11 +1658,11 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
 
       {skillOrder && (
         <section className="mt-5">
-          <CardHeader>Skill order</CardHeader>
-          <SkillOrderGrid
+          <BuildSkillOrderGrid
             model={skillOrder}
-            sampleLabel={`${skillOrder.sampleSize} of ${model.gamesTotal} pro games`}
+            sampleLabel={`From recorded timelines · ${skillOrder.sampleSize} of ${model.gamesTotal} games`}
             missingLevelsContext="recorded sample"
+            blankRecordedTail
           />
         </section>
       )}
@@ -1295,6 +1672,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
       )}
 
       <p className="text-[10px] text-mut/70 mt-3.5 pt-3 border-t border-line">{sampleLine}</p>
+      </div>
     </div>
   );
 }

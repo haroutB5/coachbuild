@@ -329,12 +329,12 @@ function ApplyRunesButton({ build }: { build: BuildResponse }) {
 
 const subscribeToSession = () => () => {};
 
-function cellClass(cell: SkillGridCell | null): string {
-  if (!cell) return "bg-white/[0.045] text-transparent";
+function cellClass(cell: SkillGridCell | null, row: string): string {
+  if (!cell) return "bg-[rgba(233,233,237,0.045)] text-transparent";
   if (cell.provenance === "derived") return "bg-[#9184d9]/20 text-[#b5abfc] shadow-[inset_0_0_0_1px_rgba(145,132,217,0.55)]";
   if (cell.provenance === "inferred") return "bg-[#9184d9]/10 text-[#b5abfc] shadow-[inset_0_0_0_1px_rgba(145,132,217,0.35)] outline outline-1 outline-dashed outline-[#9184d9]/60";
   if (cell.provenance === "auto") return "bg-white/[0.08] text-[#9397ab] shadow-[inset_0_0_0_1px_rgba(233,233,237,0.2)]";
-  return "bg-[#9184d9]/60 text-[#191a28]";
+  return row === "R" ? "bg-[#9184d9] text-[#191a28]" : "bg-[rgba(145,132,217,0.55)] text-[#191a28]";
 }
 
 function SkillGrid({ model }: { model: SkillOrderModel }) {
@@ -351,7 +351,7 @@ function SkillGrid({ model }: { model: SkillOrderModel }) {
               {Array.from({ length: 18 }, (_, colIndex) => {
                 const cell = grid[rowIndex]?.[colIndex] ?? null;
                 return (
-                  <span key={`${row}-${colIndex}`} className={`flex aspect-square items-center justify-center rounded-[4px] text-[8px] font-semibold tabular-nums ${cellClass(cell)}`}>
+                    <span key={`${row}-${colIndex}`} className={`flex aspect-square items-center justify-center rounded-[4px] text-[8px] font-semibold tabular-nums ${cellClass(cell, row)}`}>
                     {cell?.level ?? ""}
                   </span>
                 );
@@ -361,6 +361,60 @@ function SkillGrid({ model }: { model: SkillOrderModel }) {
         </div>
       </div>
     </div>
+  );
+}
+
+export function BuildSkillOrderGrid({
+  model,
+  sampleLabel,
+  missingLevelsContext = "champion",
+  blankRecordedTail = false,
+}: {
+  model: SkillOrderModel;
+  /** Copy shown at the right edge of the section heading. */
+  sampleLabel?: string;
+  /** Recorded samples must disclose an unobserved tail instead of filling it. */
+  missingLevelsContext?: "champion" | "recorded sample";
+  /** Pro and OTP display only the recorded 1–15 prefix; they never derive a tail. */
+  blankRecordedTail?: boolean;
+}) {
+  const displayModel = blankRecordedTail && missingLevelsContext === "recorded sample"
+    ? { ...model, order: model.order.slice(0, 15), observedLevels: Math.min(model.observedLevels ?? model.order.length, 15), inferredTail: [], completed: false }
+    : model;
+  const derived = hasDerivedTail(displayModel);
+  const inferred = inferredTailRange(displayModel);
+  const knownLevels = displayModel.order.length + (displayModel.inferredTail?.length ?? 0);
+
+  return (
+    <>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="flex items-baseline gap-3">
+          <SectionLabel>Skill order</SectionLabel>
+          <span className="text-[14px] font-semibold text-[#b5abfc]">{formatPriorityString(model.priority)}</span>
+        </div>
+        {sampleLabel && <span className="text-[10px] tabular-nums text-[#9397ab]/55">{sampleLabel}</span>}
+      </div>
+      <div className="mt-4"><SkillGrid model={displayModel} /></div>
+      {inferred && (
+        <p className="mt-3 text-[10px] leading-relaxed text-[#d2cefd]/75">
+          The source publishes levels 1–{displayModel.order.length} only, and this champion&apos;s last points can&apos;t be worked out from them. Levels {inferred.from}–{inferred.to} are inferred from {displayModel.inferredBasis === "published" ? "the champion&apos;s published max order" : "the levelling path above"} (dashed) — a best guess, not recorded data.
+        </p>
+      )}
+      {knownLevels < 18 && (
+        <p className="mt-3 text-[10px] leading-relaxed tabular-nums text-[#d2cefd]/75">
+          {blankRecordedTail
+            ? "Levels 16–18 stay blank: nobody in this sample reached them on record, and this tab never fills a level in by rule."
+            : missingLevelsContext === "recorded sample"
+            ? `Levels ${knownLevels + 1}–18 stay blank: nobody in this sample reached them on record, and this tab never fills a level in by rule.`
+            : `Levels ${knownLevels + 1}–18 are unknown for this champion and left blank.`}
+        </p>
+      )}
+      {derived && (
+        <p className="mt-3 text-[10px] leading-relaxed text-[#9397ab]/65">
+          {displayModel.completionBasis === "published" ? "Outlined levels are derived from this champion's published max order, not recorded" : displayModel.completionBasis === "derived" ? "Outlined levels are derived from this champion's levelling path, not recorded" : "Outlined levels are derived, not recorded"} — the source publishes levels 1–15 only.
+        </p>
+      )}
+    </>
   );
 }
 
@@ -410,29 +464,9 @@ export function BuildSkillOrderPanel({ champId, lane }: { champId: number; lane:
     );
   }
 
-  const derived = hasDerivedTail(model);
-  const inferred = inferredTailRange(model);
-  const knownLevels = model.order.length + (model.inferredTail?.length ?? 0);
-
   return (
     <section className={`${CARD_CLASS} p-4`}>
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div className="flex items-baseline gap-3">
-          <SectionLabel>Skill order</SectionLabel>
-          <span className="text-[14px] font-semibold text-[#b5abfc]">{formatPriorityString(model.priority)}</span>
-        </div>
-        <span className="text-[10px] text-[#9397ab]/55 tabular-nums">{model.sampleSize.toLocaleString()} games</span>
-      </div>
-      <div className="mt-4"><SkillGrid model={model} /></div>
-      {inferred && (
-        <p className="mt-3 text-[10px] leading-relaxed text-[#d2cefd]/75">The source publishes levels 1–{model.order.length} only, and this champion&apos;s last points can&apos;t be worked out from them. Levels {inferred.from}–{inferred.to} are inferred from {model.inferredBasis === "published" ? "the champion's published max order" : "the levelling path above"} (dashed) — a best guess, not recorded data.</p>
-      )}
-      {knownLevels < 18 && (
-        <p className="mt-3 text-[10px] leading-relaxed tabular-nums text-[#d2cefd]/75">Levels {knownLevels + 1}–18 are unknown for this champion and left blank.</p>
-      )}
-      {derived && (
-        <p className="mt-3 text-[10px] leading-relaxed text-[#9397ab]/65">{model.completionBasis === "published" ? "Outlined levels are derived from this champion's published max order, not recorded" : model.completionBasis === "derived" ? "Outlined levels are derived from this champion's levelling path, not recorded" : "Outlined levels are derived, not recorded"} — the source publishes levels 1–15 only.</p>
-      )}
+      <BuildSkillOrderGrid model={model} sampleLabel={`${model.sampleSize.toLocaleString()} games`} />
     </section>
   );
 }

@@ -104,12 +104,11 @@ import PanelHeading from "./PanelHeading";
 import { sortPerkIdsByRow } from "./perkSlots";
 import { opggProfileUrl } from "./opggProfile";
 import { AddProItemBuildButton, ApplyProRunesButton, type OtpRunePageForApply } from "./ProConsensusCard";
-import SkillOrderGrid from "./SkillOrderGrid";
 import type { SkillOrderModel } from "./skillOrder";
 import type { ProConsensusItemsInput } from "./itemSetBody";
 import type { LaneId } from "./heroContracts";
 import { featuredOtpRequestInputs } from "./featuredOtpRequest";
-import { ACCENT_CARD_CLASS, BuildPathArrow, CARD_CLASS, Scanline, SectionLabel, StatValue } from "./builds/BuildVisuals";
+import { ACCENT_CARD_CLASS, BuildPathArrow, BuildSkillOrderGrid, CARD_CLASS, Scanline, SectionLabel, StatValue } from "./builds/BuildVisuals";
 
 interface FeaturedPlayer {
   gameName: string;
@@ -963,11 +962,11 @@ export default function FeaturedOtpCard({
 
             {measuredSkillOrder ? (
               <section className={`${CARD_CLASS} mt-0 p-4 lg:col-start-1 lg:row-start-2`}>
-                <PanelHeading rule={false}>Skill order</PanelHeading>
-                <SkillOrderGrid
+                <BuildSkillOrderGrid
                   model={measuredSkillOrder}
-                  sampleLabel={`${measuredSkillOrder.sampleSize} of ${sample.games} games`}
+                  sampleLabel={`Their own timelines · ${measuredSkillOrder.sampleSize} of ${sample.games} games`}
                   missingLevelsContext="recorded sample"
+                  blankRecordedTail
                 />
               </section>
             ) : skillPriority ? (

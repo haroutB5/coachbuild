@@ -502,9 +502,6 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
         tabIndex={0}
         className={buildTab === "pro" ? "" : "hidden"}
       >
-        <div className="mb-3 rounded-[8px] bg-white/[0.03] px-3 py-2.5 text-[11px] leading-relaxed text-[#9397ab]/70">
-          Pick frequency, not WPA — what pros and high-elo players actually built, in the order they bought it. No score is applied here.
-        </div>
         {/* v0.27.0 (user request: "pro players seem to build Rocketbelt on
             Viktor — create another builds and runes space based on what pro
             players are often building"). A plain pick-rate count over the
