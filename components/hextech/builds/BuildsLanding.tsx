@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { MagnifyingGlass, TrendUp, ArrowUpRight, ArrowDownRight } from "@phosphor-icons/react";
 import type { ChampionRef } from "@/lib/types";
@@ -52,6 +52,8 @@ interface TierRow {
 }
 
 const ROLE_TO_LANE: LaneId[] = ["top", "jungle", "mid", "bot", "support"];
+const BUILD_SEARCH_LISTBOX_ID = "builds-champion-listbox";
+const buildSearchOptionId = (index: number) => `builds-champion-opt-${index}`;
 
 function pct(value: number | null): string {
   return value === null ? "—" : `${value.toFixed(1)}%`;
@@ -76,39 +78,54 @@ function Art({ champion, size = 34 }: { champion: ChampionRef; size?: number }) 
 }
 
 function SearchResults({
-  value,
-  champions,
+  matches,
+  open,
+  activeIndex,
+  onActiveIndexChange,
   onPick,
 }: {
-  value: string;
-  champions: ChampionRef[];
+  matches: ChampionRef[];
+  open: boolean;
+  activeIndex: number;
+  onActiveIndexChange: (index: number) => void;
   onPick: (champion: ChampionRef) => void;
 }) {
-  const matches = useMemo(() => {
-    const needle = value.trim().toLowerCase();
-    if (!needle) return [];
-    return champions.filter((champion) => champion.name.toLowerCase().includes(needle)).slice(0, 6);
-  }, [champions, value]);
-  if (!matches.length) return null;
+  const listRef = useRef<HTMLUListElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    listRef.current?.querySelector(`[data-idx="${activeIndex}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, open]);
+
+  if (!open || !matches.length) return null;
   return (
     <div className="absolute left-0 right-0 top-[50px] z-20 overflow-hidden rounded-[8px] bg-[#232532] p-1 shadow-[0_14px_30px_rgba(0,0,0,0.45),inset_0_0_0_1px_rgba(233,233,237,0.12)]">
-      {matches.map((champion) => (
-        <button
-          key={champion.id}
-          type="button"
-          onClick={() => onPick(champion)}
-          className="flex w-full items-center gap-2 rounded-[6px] px-2 py-2 text-left text-[12px] text-[#e9e9ed] transition-colors hover:bg-white/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9]"
-        >
-          <Art champion={champion} size={28} />
-          <span>{champion.name}</span>
-        </button>
-      ))}
+      <ul ref={listRef} id={BUILD_SEARCH_LISTBOX_ID} role="listbox" className="max-h-[240px] overflow-y-auto">
+        {matches.map((champion, index) => {
+          const isActive = index === activeIndex;
+          return (
+            <li key={champion.id} id={buildSearchOptionId(index)} data-idx={index} role="option" aria-selected={isActive}>
+              <button
+                type="button"
+                tabIndex={-1}
+                onClick={() => onPick(champion)}
+                onMouseEnter={() => onActiveIndexChange(index)}
+                className={`flex w-full items-center gap-2 rounded-[6px] px-2 py-2 text-left text-[12px] text-[#e9e9ed] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] ${isActive ? "bg-[#9184d9]/15" : "hover:bg-white/[0.05]"}`}
+              >
+                <Art champion={champion} size={28} />
+                <span>{champion.name}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
 
 function RecentCard({ champion, lane, winRate, gamesCount, onPick }: { champion: ChampionRef; lane: LaneId; winRate: number | null; gamesCount: number | null; onPick: () => void }) {
   const share = winRate === null ? 0 : Math.max(0, Math.min(100, winRate));
+  const barTone = winRate === null ? "bg-accent" : winRate >= 50 ? "bg-good" : "bg-bad";
   return (
     <button
       type="button"
@@ -127,7 +144,7 @@ function RecentCard({ champion, lane, winRate, gamesCount, onPick }: { champion:
         <span className="text-[10px] tabular-nums text-[#9397ab]/60">{games(gamesCount)}g</span>
       </div>
       <div className="mt-2 h-1 rounded-full bg-white/[0.06]">
-        <span className="block h-full rounded-full bg-[#46c79b]" style={{ width: `${share}%` }} />
+        <span className={`block h-full rounded-full ${barTone}`} style={{ width: `${share}%` }} />
       </div>
     </button>
   );
@@ -143,6 +160,7 @@ function TierList({ rows, onPick }: { rows: TierRow[]; onPick: (champion: Champi
       <div className={`${CARD_CLASS} overflow-hidden`}>
         {rows.length ? rows.map((row, index) => {
           const deltaTone = row.delta === null ? "text-[#9397ab]/60" : row.delta >= 0 ? "text-[#46c79b]" : "text-[#e8736e]";
+          const barTone = row.winRate === null ? "bg-accent" : row.winRate >= 50 ? "bg-good" : "bg-bad";
           return (
             <button
               key={row.champion.id}
@@ -159,7 +177,7 @@ function TierList({ rows, onPick }: { rows: TierRow[]; onPick: (champion: Champi
                   <span className="block truncate text-[9px] text-[#9397ab]/60">{row.games === null ? "data pending" : `${games(row.games)} games`}</span>
                 </span>
               </span>
-              <span className="h-1 rounded-full bg-white/[0.06]"><span className="block h-full rounded-full bg-[#9184d9]" style={{ width: `${Math.max(4, Math.min(100, row.winRate ?? 0))}%` }} /></span>
+              <span className="h-1 rounded-full bg-white/[0.06]"><span className={`block h-full rounded-full ${barTone}`} style={{ width: `${Math.max(4, Math.min(100, row.winRate ?? 0))}%` }} /></span>
               <span className="text-right text-[12px] font-semibold tabular-nums text-[#e9e9ed]">{pct(row.winRate)} <span className={`block text-[10px] ${deltaTone}`}>{row.delta === null ? "—" : `${row.delta >= 0 ? "+" : ""}${row.delta.toFixed(1)}`}</span></span>
             </button>
           );
@@ -183,15 +201,17 @@ function LanesCard({ rows, onPick }: { rows: MyStatsChampionRow[]; onPick: (id: 
     <section className={`${CARD_CLASS} p-4`}>
       <div className="mb-3 flex items-baseline justify-between"><SectionLabel>Your lanes · this season</SectionLabel><span className="text-[9px] uppercase tracking-[0.1em] text-[#9397ab]/50">My Stats</span></div>
       <div className="space-y-3">
-        {LANE_ORDER.map((lane, index) => {
+        {LANE_ORDER.map((lane) => {
           const row = byLane.get(lane);
+          // This width is a share of games played relative to the user's
+          // busiest lane, not a win-rate signal; keep its fill neutral.
           const width = Math.round(((row?.games ?? 0) / maxGames) * 100);
           return (
             <button key={lane} type="button" onClick={() => row && onPick(row.championId, lane)} disabled={!row} className="grid min-h-[44px] w-full grid-cols-[34px_minmax(0,1fr)_38px] items-center gap-2 text-left disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] lg:min-h-0">
               <span className="text-[9px] font-semibold uppercase tracking-[0.1em] text-[#9397ab]/55">{lane === "jungle" ? "JG" : lane === "support" ? "SUP" : lane.slice(0, 3).toUpperCase()}</span>
               <span className="min-w-0">
                 <span className="flex items-center gap-1.5"><span className="truncate text-[11px] font-medium text-[#e9e9ed]/80">{row?.name ?? "No data"}</span>{row && <span className="shrink-0 text-[10px] tabular-nums text-[#9397ab]/55">{pct(row.winrate * 100)}</span>}</span>
-                <span className="mt-1 block h-1 rounded-full bg-white/[0.06]"><span className={`block h-full rounded-full ${row ? "bg-[#46c79b]" : "bg-white/[0.12]"}`} style={{ width: `${row ? Math.max(3, width) : 4}%` }} /></span>
+                <span className="mt-1 block h-1 rounded-full bg-white/[0.06]"><span className={`block h-full rounded-full ${row ? "bg-accent" : "bg-white/[0.12]"}`} style={{ width: `${row ? Math.max(3, width) : 4}%` }} /></span>
               </span>
               <span className="text-right text-[10px] tabular-nums text-[#9397ab]/55">{row ? `${row.games}g` : "—"}</span>
             </button>
@@ -223,9 +243,17 @@ export default function BuildsLanding({ onQuickPick }: { onQuickPick: (championI
   const [iconMap, setIconMap] = useState<Map<number, ChampionIconEntry>>(new Map());
   const recent = useSyncExternalStore(subscribeToRecentChampions, getRecentChampionsSnapshot, () => EMPTY_RECENT_CHAMPIONS);
   const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchActiveIndex, setSearchActiveIndex] = useState(0);
   const [myRows, setMyRows] = useState<MyStatsChampionRow[]>([]);
   const [movers, setMovers] = useState<MoversResponse | null>(null);
   const [tierRows, setTierRows] = useState<TierRow[]>([]);
+
+  const searchMatches = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return [];
+    return champions.filter((champion) => champion.name.toLowerCase().includes(needle)).slice(0, 6);
+  }, [champions, query]);
 
   useEffect(() => {
     let cancelled = false;
@@ -272,7 +300,32 @@ export default function BuildsLanding({ onQuickPick }: { onQuickPick: (championI
 
   function pickChampion(champion: ChampionRef) {
     setQuery("");
+    setSearchOpen(false);
+    setSearchActiveIndex(0);
     emitChampionSearch(champion);
+  }
+
+  function onSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (!searchOpen) setSearchOpen(true);
+      setSearchActiveIndex((index) => Math.min(index + 1, Math.max(searchMatches.length - 1, 0)));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setSearchActiveIndex((index) => Math.max(index - 1, 0));
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setSearchActiveIndex(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      setSearchActiveIndex(Math.max(searchMatches.length - 1, 0));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const champion = searchMatches[searchActiveIndex];
+      if (champion) pickChampion(champion);
+    } else if (event.key === "Escape") {
+      setSearchOpen(false);
+    }
   }
 
   const recentCards = recent.slice(0, 4).map((entry) => {
@@ -290,11 +343,40 @@ export default function BuildsLanding({ onQuickPick }: { onQuickPick: (championI
           <p className="mt-3 max-w-[690px] text-[13px] leading-relaxed text-[#e9e9ed]/60">Search any champion for the WPA-ranked build, the pro consensus, and what the best one-trick in your region actually does. In champ select the companion opens this for you automatically.</p>
           <div className="relative mt-4 max-w-[420px]">
             <MagnifyingGlass size={17} className="pointer-events-none absolute left-3.5 top-3.5 text-[#9184d9]" aria-hidden="true" />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search a champion…" aria-label="Search a champion" className="h-11 w-full rounded-[8px] bg-[#1c1e2c] pl-10 pr-3 text-[13px] text-[#e9e9ed] shadow-[inset_0_0_0_1px_rgba(145,132,217,0.35)] outline-none placeholder:text-[#9397ab]/65 focus-visible:ring-2 focus-visible:ring-[#9184d9]" />
-            <SearchResults value={query} champions={champions} onPick={pickChampion} />
+            <input
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setSearchActiveIndex(0);
+                setSearchOpen(true);
+              }}
+              onFocus={() => {
+                setSearchOpen(true);
+                setSearchActiveIndex(0);
+              }}
+              onClick={() => setSearchOpen(true)}
+              onKeyDown={onSearchKeyDown}
+              placeholder="Search a champion…"
+              aria-label="Search a champion"
+              role="combobox"
+              aria-expanded={searchOpen}
+              aria-controls={BUILD_SEARCH_LISTBOX_ID}
+              aria-autocomplete="list"
+              aria-activedescendant={searchOpen && searchMatches[searchActiveIndex] ? buildSearchOptionId(searchActiveIndex) : undefined}
+              className="h-11 w-full rounded-[8px] bg-[#1c1e2c] pl-10 pr-3 text-[13px] text-[#e9e9ed] shadow-[inset_0_0_0_1px_rgba(145,132,217,0.35)] outline-none placeholder:text-[#9397ab]/65 focus-visible:ring-2 focus-visible:ring-[#9184d9]"
+            />
+            <SearchResults
+              matches={searchMatches}
+              open={searchOpen}
+              activeIndex={searchActiveIndex}
+              onActiveIndexChange={setSearchActiveIndex}
+              onPick={pickChampion}
+            />
           </div>
         </div>
       </section>
+
+      <div aria-hidden="true" className="hr" />
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_372px]">
         <main className="min-w-0 space-y-5">
@@ -315,5 +397,5 @@ export default function BuildsLanding({ onQuickPick }: { onQuickPick: (championI
 }
 
 function SparkleIcon() {
-  return <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[#46c79b]" />;
+  return <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-accent" />;
 }

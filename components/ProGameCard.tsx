@@ -44,7 +44,7 @@ export function kdaRatioText(kills: number, deaths: number, assists: number): st
   return `${((kills + assists) / deaths).toFixed(1)} KDA`;
 }
 
-export function RunePerkIcon({ runeId, ver, size }: { runeId: number; ver: string; size: "lg" | "sm" | "xs" }) {
+function useRuneDisplay(runeId: number, ver: string): ResolvedRuneDisplay | null {
   const [rune, setRune] = useState<ResolvedRuneDisplay | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -55,10 +55,23 @@ export function RunePerkIcon({ runeId, ver, size }: { runeId: number; ver: strin
       cancelled = true;
     };
   }, [runeId, ver]);
+  return rune;
+}
 
+function keystoneLabel(rune: ResolvedRuneDisplay | null): string {
+  return rune && rune.name.trim() !== "" && !/^Rune #\d+$/.test(rune.name) ? rune.name : "Keystone —";
+}
+
+export function RunePerkIcon({ runeId, ver, size }: { runeId: number; ver: string; size: "lg" | "sm" | "xs" }) {
+  const rune = useRuneDisplay(runeId, ver);
+  const label = keystoneLabel(rune);
   const dim = size === "lg" ? "h-11 w-11" : size === "sm" ? "h-6 w-6" : "h-5 w-5";
   const px = size === "lg" ? 44 : size === "sm" ? 24 : 20;
-  return <span className={`flex ${dim} shrink-0 items-center justify-center overflow-hidden rounded-full bg-black/25 shadow-[inset_0_0_0_1px_rgba(233,233,237,.12)] ${size === "lg" ? "ring-2 ring-teal" : ""}`} title={rune?.name ?? `Rune #${runeId}`}><ImgWithFallback src={rune?.icon ?? ""} alt={rune?.name ?? `Rune #${runeId}`} className="h-full w-full object-contain" size={px} /></span>;
+  return <span className={`flex ${dim} shrink-0 items-center justify-center overflow-hidden rounded-full bg-black/25 shadow-[inset_0_0_0_1px_rgba(233,233,237,.12)] ${size === "lg" ? "ring-2 ring-teal" : ""}`} title={label}><ImgWithFallback src={rune?.icon ?? ""} alt={label} className="h-full w-full object-contain" size={px} /></span>;
+}
+
+function RunePerkName({ runeId, ver }: { runeId: number; ver: string }) {
+  return <>{keystoneLabel(useRuneDisplay(runeId, ver))}</>;
 }
 
 export function WinLossPill({ win }: { win: boolean }) {
@@ -107,7 +120,7 @@ function ItemSummary({ game, ver }: { game: ProGame; ver: string }) {
   return (
     <div className="flex min-w-0 items-center gap-2 border-t border-white/[0.06] px-4 py-2.5">
       {game.runes.keystone > 0 ? <RunePerkIcon runeId={game.runes.keystone} ver={ver} size="xs" /> : <span className="h-5 w-5 shrink-0 rounded-full bg-white/[0.05]" title="Rune not recorded" />}
-      <span className="truncate text-[10.5px] text-mut">{game.runes.keystone > 0 ? `Keystone #${game.runes.keystone}` : "Rune data not recorded"}</span>
+      <span className="truncate text-[10.5px] text-mut">{game.runes.keystone > 0 ? <RunePerkName runeId={game.runes.keystone} ver={ver} /> : "Rune data not recorded"}</span>
       <span className="text-[10px] text-mut/50">·</span>
       <div className="flex shrink-0 items-center gap-1">
         {items.map((itemId, index) => <span key={`${itemId}-${index}`} className="flex h-5 w-5 items-center justify-center overflow-hidden rounded-[4px] bg-black/25 shadow-[inset_0_0_0_1px_rgba(233,233,237,.1)]"><ImgWithFallback src={itemIconUrl(itemId, ver)} alt={`Item ${itemId}`} className="h-full w-full object-cover" size={20} /></span>)}

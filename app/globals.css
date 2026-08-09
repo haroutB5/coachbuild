@@ -120,6 +120,20 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Freestanding rules fade at both ends, per the Nocturne visual spec. */
+.hr {
+  height: 1px;
+  border: 0;
+  margin: var(--space-4) 0;
+  background: linear-gradient(
+    to right,
+    transparent,
+    rgba(233, 233, 237, 0.14) 48px,
+    rgba(233, 233, 237, 0.14) calc(100% - 48px),
+    transparent
+  );
+}
+
 /* Glassy panel — the dpm.lol card language. Applied via `panel-glass`
    utility class (see tailwind.config.ts) on cards that sit over the page
    background; opaque `bg-panel` stays for chrome that must occlude content

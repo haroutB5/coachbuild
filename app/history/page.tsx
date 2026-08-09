@@ -243,7 +243,7 @@ export default function HistoryPage() {
   }
 
   return (
-    <main className="mx-auto max-w-[1180px] px-4 pb-16 pt-8 sm:px-6">
+    <main className="mx-auto max-w-[1180px] px-4 pb-16 pt-8 sm:px-6 [&_span.text-gold]:font-semibold">
       <div>
         {/* ── Top bar (v0.51 wave B; recent-games table removed per user
             directive v0.51.2 — search is the page's primary view again) ── */}

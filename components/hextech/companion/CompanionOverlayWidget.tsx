@@ -4,6 +4,16 @@ export type OverlayAbility = "Q" | "W" | "E" | "R";
 export type OverlayState = "next" | "ultimate" | "refusal";
 export type OverlayScale = "base" | "compact";
 
+/** The web depiction follows the native overlay palette, not the Nocturne UI accent. */
+export const REAL_OVERLAY_COLORS = {
+  pink: "#FF2F9E",
+  pinkFill: "rgba(255, 47, 158, 0.20)",
+  panel: "rgba(8, 13, 28, 0.878)",
+  panelBorder: "rgba(82, 92, 130, 0.824)",
+  muted: "rgba(220, 220, 235, 0.804)",
+  gold: "#FFCD5A",
+} as const;
+
 export interface CompanionOverlayWidgetProps {
   championName: string;
   level: number | null;
@@ -30,7 +40,6 @@ function StateTile({
   state: OverlayState;
   compact: boolean;
 }) {
-  const isUltimate = state === "ultimate";
   const isRefusal = state === "refusal";
   const radius = compact ? "rounded-[10px]" : "rounded-[9px]";
 
@@ -40,17 +49,16 @@ function StateTile({
       className={`flex shrink-0 items-center justify-center ${radius} font-semibold leading-none ${
         compact ? "h-16 w-16 text-[28px]" : "h-[46px] w-[46px] text-[20px]"
       } ${
-        isUltimate
-          ? "bg-accent text-[#191a28]"
-          : isRefusal
-            ? "border border-txt/[0.14] bg-txt/[0.04] text-txt/[0.50]"
-            : "border border-accent/[0.55] text-accent-200"
+        isRefusal
+          ? "border border-txt/[0.14] bg-txt/[0.04] text-txt/[0.50]"
+          : "border text-white"
       }`}
       style={
-        !isUltimate && !isRefusal
+        !isRefusal
           ? {
-              background: "linear-gradient(150deg, #4a4380, #25243c)",
-              boxShadow: "0 0 20px rgba(145,132,217,.3)",
+              backgroundColor: REAL_OVERLAY_COLORS.pinkFill,
+              borderColor: REAL_OVERLAY_COLORS.pink,
+              color: "#FFFFFF",
             }
           : undefined
       }
@@ -72,16 +80,16 @@ function RankTransition({
   compact: boolean;
 }) {
   if (state === "refusal") {
-    return <span className="text-txt/[0.48]">No safe recommendation</span>;
+    return <span style={{ color: REAL_OVERLAY_COLORS.muted }}>No safe recommendation</span>;
   }
 
   if (fromRank == null || toRank == null) {
-    return <span className="text-accent-400">Awaiting rank read</span>;
+    return <span style={{ color: REAL_OVERLAY_COLORS.muted }}>Awaiting rank read</span>;
   }
 
   return (
-    <span className={`tabular-nums text-accent-400 ${compact ? "text-[17px]" : "text-[12px]"}`}>
-      {fromRank} <span className="mx-1 text-accent-400/[0.75]" aria-hidden="true">→</span> {toRank}
+    <span className={`tabular-nums ${compact ? "text-[17px]" : "text-[12px]"}`} style={{ color: REAL_OVERLAY_COLORS.muted }}>
+      {fromRank} <span className="mx-1" aria-hidden="true" style={{ color: REAL_OVERLAY_COLORS.muted }}>→</span> {toRank}
     </span>
   );
 }
@@ -100,19 +108,25 @@ function WidgetFooter({
     <div className={`grid grid-cols-4 ${compact ? "gap-2" : "gap-1.5"}`} aria-hidden="true">
       {ABILITIES.map((entry) => {
         const active = state !== "refusal" && entry === ability;
-        const ultimate = active && state === "ultimate";
         return (
           <span
             key={entry}
             className={`flex items-center justify-center ${radius} font-semibold ${
               compact ? "h-9 text-[15px]" : "h-[22px] text-[11px]"
             } ${
-              ultimate
-                ? "bg-accent text-[#191a28]"
-                : active
-                  ? "border border-accent bg-accent/[0.30] text-accent-200"
-                  : "border border-txt/[0.06] bg-txt/[0.05] text-txt/[0.45]"
+              active
+                ? "border text-white"
+                : "border border-txt/[0.06] bg-txt/[0.05] text-txt/[0.45]"
             }`}
+            style={
+              active
+                ? {
+                    backgroundColor: REAL_OVERLAY_COLORS.pinkFill,
+                    borderColor: REAL_OVERLAY_COLORS.pink,
+                    color: REAL_OVERLAY_COLORS.pink,
+                  }
+                : undefined
+            }
           >
             {entry}
           </span>
@@ -145,8 +159,9 @@ export default function CompanionOverlayWidget({
       aria-label={label}
       className={`text-txt ${compact ? "w-full max-w-[420px] rounded-[14px] p-5" : "w-[250px] rounded-[10px] p-3"} ${className}`}
       style={{
-        background: "rgba(18,20,31,.88)",
-        boxShadow: "0 0 0 1px rgba(145,132,217,.3), 0 10px 30px rgba(0,0,0,.55)",
+        background: REAL_OVERLAY_COLORS.panel,
+        border: `1px solid ${REAL_OVERLAY_COLORS.panelBorder}`,
+        boxShadow: "0 10px 30px rgba(0,0,0,.55)",
       }}
     >
       <header className={`flex items-center justify-between gap-3 ${compact ? "mb-5" : "mb-3"}`}>
@@ -157,12 +172,12 @@ export default function CompanionOverlayWidget({
             }`}
             aria-hidden="true"
           />
-          <span className={`truncate font-medium uppercase tracking-[0.14em] text-txt/[0.44] ${compact ? "text-[11px]" : "text-[8.5px]"}`}>
+          <span className={`truncate font-medium uppercase tracking-[0.14em] ${compact ? "text-[11px]" : "text-[8.5px]"}`} style={{ color: REAL_OVERLAY_COLORS.muted }}>
             CoachBuild · {championName}
           </span>
         </div>
-        <span className={`shrink-0 tabular-nums font-medium text-txt/[0.44] ${compact ? "text-[12px]" : "text-[10px]"}`}>
-          LV {level ?? "—"}
+        <span className={`shrink-0 tabular-nums font-medium ${compact ? "text-[12px]" : "text-[10px]"}`} style={{ color: REAL_OVERLAY_COLORS.muted }}>
+          LV <span style={{ color: REAL_OVERLAY_COLORS.gold }}>{level ?? "—"}</span>
         </span>
       </header>
 
@@ -188,15 +203,16 @@ export function OverlayWaiting({ message, scale = "compact" }: { message: ReactN
       role="status"
       className={`text-txt ${compact ? "w-full max-w-[420px] rounded-[14px] p-5" : "w-[250px] rounded-[10px] p-3"}`}
       style={{
-        background: "rgba(18,20,31,.88)",
-        boxShadow: "0 0 0 1px rgba(233,233,237,.10), 0 10px 30px rgba(0,0,0,.55)",
+        background: REAL_OVERLAY_COLORS.panel,
+        border: `1px solid ${REAL_OVERLAY_COLORS.panelBorder}`,
+        boxShadow: "0 10px 30px rgba(0,0,0,.55)",
       }}
     >
-      <div className={`flex items-center gap-2 uppercase tracking-[0.14em] text-txt/[0.44] ${compact ? "text-[11px]" : "text-[8.5px]"}`}>
+      <div className={`flex items-center gap-2 uppercase tracking-[0.14em] ${compact ? "text-[11px]" : "text-[8.5px]"}`} style={{ color: REAL_OVERLAY_COLORS.muted }}>
         <span className={`shrink-0 rounded-full bg-txt/[0.24] ${compact ? "h-2 w-2" : "h-[5px] w-[5px]"}`} aria-hidden="true" />
         CoachBuild overlay
       </div>
-      <p className={`mt-4 font-medium text-txt/[0.72] ${compact ? "text-[16px]" : "text-[12px]"}`}>{message}</p>
+      <p className={`mt-4 font-medium ${compact ? "text-[16px]" : "text-[12px]"}`} style={{ color: REAL_OVERLAY_COLORS.muted }}>{message}</p>
     </section>
   );
 }

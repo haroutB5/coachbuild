@@ -8,10 +8,12 @@ import {
   type DraftAssistantCandidate,
   type DraftAssistantCard,
 } from "../draftAssistantModel";
+import { deltaVsLaneAverage, formatDeltaPoints } from "./draftDelta";
 
 interface DraftRecommendationProps {
   candidate: DraftAssistantCandidate;
   floor: number | null;
+  laneAverageValue: number | null;
   laneOpponentName: string | null;
   verdictChip: string | null;
   reason: string | null;
@@ -27,6 +29,7 @@ interface CompactPickProps {
   index: number;
   champIcons: Map<number, ChampionIconEntry>;
   laneOpponentName: string | null;
+  laneAverageValue: number | null;
   floor: number | null;
   onSelect: (championId: number) => void;
 }
@@ -50,10 +53,6 @@ function sampleGames(value: number | null): string {
     return `${compact}k`;
   }
   return Math.round(value).toLocaleString();
-}
-
-function points(value: number): string {
-  return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(1)}pp`;
 }
 
 function tierClass(tier: ReturnType<typeof draftTierForRank>): string {
@@ -109,16 +108,16 @@ function tagFor(candidate: DraftAssistantCandidate): string {
 }
 
 function whyFor(candidate: DraftAssistantCandidate, laneOpponentName: string | null): string {
-  if (laneOpponentName && (candidate.synergyDelta ?? 0) > 0) return `Answers ${laneOpponentName} cleanly.`;
+  if (laneOpponentName && typeof candidate.synergyDelta === "number" && candidate.synergyDelta > 0) return `Answers ${laneOpponentName} cleanly.`;
   if (candidate.floor !== null) return "Keeps a stable first-pick floor.";
   if (candidate.personalOverall.games > 0) return "Already in your played pool.";
   return "Strongest available matchup evidence.";
 }
 
-function CompactPick({ candidate, index, champIcons, laneOpponentName, floor, onSelect }: CompactPickProps) {
+function CompactPick({ candidate, index, champIcons, laneOpponentName, laneAverageValue, floor, onSelect }: CompactPickProps) {
   const entry = entryFor(champIcons, candidate.champId);
   const tag = tagFor(candidate);
-  const delta = candidate.synergyDelta ?? 0;
+  const delta = deltaVsLaneAverage(candidate.winRate, laneAverageValue);
   return (
     <button
       type="button"
@@ -137,7 +136,7 @@ function CompactPick({ candidate, index, champIcons, laneOpponentName, floor, on
       </div>
       <div className="flex-shrink-0 text-right tabular-nums">
         <p className="text-[17px] font-semibold leading-none text-txt">{percent(candidate.winRate)}</p>
-        <p className={`mt-1 text-[10px] font-semibold ${delta >= 0 ? "text-good" : "text-bad"}`}>{points(delta)}</p>
+        <p className={`mt-1 text-[10px] font-semibold ${delta === null ? "text-txt/[0.38]" : delta >= 0 ? "text-good" : "text-bad"}`}>{formatDeltaPoints(delta)} vs lane avg</p>
         {index === 0 && floor !== null && <span className="sr-only">First-pick floor {percent(floor)}</span>}
       </div>
     </button>
@@ -147,6 +146,7 @@ function CompactPick({ candidate, index, champIcons, laneOpponentName, floor, on
 export default function DraftRecommendation({
   candidate,
   floor,
+  laneAverageValue,
   laneOpponentName,
   verdictChip,
   reason,
@@ -157,7 +157,7 @@ export default function DraftRecommendation({
   onViewBuild,
 }: DraftRecommendationProps) {
   const entry = entryFor(champIcons, candidate.champId);
-  const delta = candidate.synergyDelta ?? 0;
+  const delta = deltaVsLaneAverage(candidate.winRate, laneAverageValue);
 
   return (
     <section className="space-y-2.5" aria-labelledby="the-call-heading">
@@ -223,7 +223,7 @@ export default function DraftRecommendation({
             <div className="min-w-[96px] flex-[1_1_96px]">
               <p className="whitespace-nowrap text-[9px] font-semibold uppercase tracking-[0.12em] text-txt/[0.42]">Win rate</p>
               <p className="mt-1 whitespace-nowrap text-[32px] font-semibold leading-none tracking-[-0.03em] text-txt">{percent(candidate.winRate)}</p>
-              <p className={`mt-1 whitespace-nowrap text-[10px] font-semibold ${delta >= 0 ? "text-good" : "text-bad"}`}>{points(delta)} vs comp</p>
+              <p className={`mt-1 whitespace-nowrap text-[10px] font-semibold ${delta === null ? "text-txt/[0.38]" : delta >= 0 ? "text-good" : "text-bad"}`}>{formatDeltaPoints(delta)} vs lane avg</p>
             </div>
             <div className="min-w-[96px] flex-[1_1_96px]">
               <p className="whitespace-nowrap text-[9px] font-semibold uppercase tracking-[0.12em] text-txt/[0.42]">Floor</p>
@@ -250,6 +250,7 @@ export default function DraftRecommendation({
               index={index}
               champIcons={champIcons}
               laneOpponentName={laneOpponentName}
+              laneAverageValue={laneAverageValue}
               floor={card.candidate.floor}
               onSelect={onSelect}
             />

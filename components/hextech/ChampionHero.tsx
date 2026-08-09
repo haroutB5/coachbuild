@@ -81,7 +81,11 @@ export default function ChampionHero({ champ, lane, onLaneChange, rankBracket, o
                 <span className="rounded-[5px] bg-[#46c79b]/15 px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.08em] text-[#46c79b]">{CONFIDENCE_LABEL[confidence]}</span>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-4">
-                <StatValue label="Win rate" value={stats.winRatePct === null ? "—" : `${stats.winRatePct.toFixed(1)}%`} tone={stats.winRatePct === null ? "normal" : "good"} />
+                <StatValue
+                  label="Win rate"
+                  value={stats.winRatePct === null ? "—" : `${stats.winRatePct.toFixed(1)}%`}
+                  tone={stats.winRatePct === null ? "normal" : stats.winRatePct >= 50 ? "good" : "bad"}
+                />
                 <StatValue label="Pick rate" value="—" sub="not in build feed" />
                 <StatValue label="Ban rate" value="—" sub="not in build feed" />
                 <StatValue label="Games" value={stats.gamesCount === null ? "—" : stats.gamesCount.toLocaleString()} />

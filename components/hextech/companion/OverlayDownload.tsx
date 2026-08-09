@@ -1,5 +1,5 @@
 import { DownloadSimple } from "@phosphor-icons/react";
-import CompanionOverlayWidget from "./CompanionOverlayWidget";
+import CompanionOverlayWidget, { REAL_OVERLAY_COLORS } from "./CompanionOverlayWidget";
 
 const DESKTOP_APP_DOWNLOAD_URL =
   "https://github.com/haroutB5/coachbuild-desktop-releases/releases/latest/download/CoachBuild.Desktop-win-Setup.exe";
@@ -21,10 +21,17 @@ function StateSample({ ability, title, description, refusal = false }: StateSamp
         className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-[10px] text-[25px] font-semibold leading-none ${
           refusal
             ? "border border-txt/[0.14] bg-txt/[0.04] text-txt/[0.50]"
-            : ability === "R"
-              ? "bg-accent text-[#191a28]"
-              : "border border-accent/[0.55] bg-accent/[0.18] text-accent-200"
+            : "border text-white"
         }`}
+        style={
+          refusal
+            ? undefined
+            : {
+                backgroundColor: REAL_OVERLAY_COLORS.pinkFill,
+                borderColor: REAL_OVERLAY_COLORS.pink,
+                color: REAL_OVERLAY_COLORS.pink,
+              }
+        }
         aria-hidden="true"
       >
         {refusal ? "—" : ability}

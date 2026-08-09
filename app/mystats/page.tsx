@@ -8,7 +8,6 @@ import MyStatsRefresher from "@/components/hextech/MyStatsRefresher";
 import AccountPicker from "@/components/hextech/mystats/AccountPicker";
 import PostGameReview from "@/components/hextech/postgame/PostGameReview";
 import { getChampionIconMap, type ChampionIconEntry } from "@/components/proAssets";
-import { selectAccount } from "@/components/live/mystatsAccount";
 import {
   buildMyStatsRows,
   computeHistoryCoverage,
@@ -27,6 +26,10 @@ type SummaryState =
   | { status: "error" }
   | { status: "ok"; summary: MyStatsSummary };
 
+function formatPct(fraction: number): string {
+  return `${(fraction * 100).toFixed(1)}%`;
+}
+
 function relativeAge(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const timestamp = Date.parse(iso);
@@ -39,63 +42,12 @@ function relativeAge(iso: string | null | undefined): string | null {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-function formatPct(fraction: number): string {
-  return `${(fraction * 100).toFixed(1)}%`;
-}
-
 function EmptyState({ title, body }: { title: string; body: string }) {
   return (
     <div className="rounded-[9px] bg-panel-glass px-5 py-10 text-center shadow-[inset_0_0_0_1px_rgba(233,233,237,.08)]">
       <p className="text-[13px] font-semibold text-txt">{title}</p>
       <p className="mt-1.5 text-[12px] leading-relaxed text-mut">{body}</p>
     </div>
-  );
-}
-
-function AccountChip({ summary, onSwitch }: { summary: MyStatsSummary; onSwitch: (id: number) => void }) {
-  const activeId = summary.accountId ?? summary.accounts?.find((a) => a.active)?.id ?? null;
-  const active = summary.accounts?.find((account) => account.id === activeId) ?? null;
-  const riotId = summary.riotId ?? active?.riotId ?? "No account active";
-  const latest = summary.records.reduce<string | null>((best, row) => {
-    if (!best) return row.lastPlayed;
-    return Date.parse(row.lastPlayed) > Date.parse(best) ? row.lastPlayed : best;
-  }, null);
-  const age = relativeAge(latest);
-
-  if ((summary.accounts?.length ?? 0) <= 1) {
-    return (
-      <div className="rounded-[8px] bg-panel-glass px-3 py-2 shadow-[inset_0_0_0_1px_rgba(233,233,237,.08)]">
-        <p className="text-[11px] font-semibold text-txt">{riotId}</p>
-        <p className="mt-0.5 text-[10px] text-mut">{age ? `Latest stored game ${age}` : "Account synced when data is available"}</p>
-      </div>
-    );
-  }
-
-  return (
-    <label className="flex items-center gap-2 rounded-[8px] bg-panel-glass px-2.5 py-2 shadow-[inset_0_0_0_1px_rgba(233,233,237,.08)]">
-      <span className="flex h-6 w-6 items-center justify-center rounded-[6px] bg-teal/15 text-[10px] font-semibold text-teal">
-        {active?.region?.slice(0, 2).toUpperCase() ?? "ID"}
-      </span>
-      <span className="min-w-0">
-        <span className="block text-[11px] font-semibold text-txt">{riotId}</span>
-        <span className="block text-[10px] text-mut">{age ? `Latest stored game ${age}` : "Account synced when data is available"}</span>
-      </span>
-      <select
-        value={activeId ?? ""}
-        onChange={(event) => {
-          const id = Number(event.target.value);
-          if (Number.isFinite(id)) onSwitch(id);
-        }}
-        aria-label="Choose My Stats account"
-        className="ml-1 min-h-[44px] min-w-[44px] max-w-[44px] cursor-pointer appearance-none bg-transparent text-transparent outline-none focus-visible:ring-2 focus-visible:ring-teal lg:min-h-0 lg:min-w-0 lg:max-w-[22px]"
-      >
-        {summary.accounts?.map((account) => (
-          <option key={account.id} value={account.id} className="bg-panel text-txt">
-            {account.riotId}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }
 
@@ -224,7 +176,7 @@ function LastTwenty({ games, iconOf }: { games: MyStatsRecentGame[]; iconOf: (id
   );
 }
 
-function MyStatsSurface({ summary, icons, onSwitch }: { summary: MyStatsSummary; icons: Map<number, ChampionIconEntry>; onSwitch: (id: number) => void }) {
+function MyStatsSurface({ summary, icons, onSwitched }: { summary: MyStatsSummary; icons: Map<number, ChampionIconEntry>; onSwitched: () => void }) {
   const rows = buildMyStatsRows(summary.records, (id) => icons.get(id));
   const overall = computeMyStatsOverall(summary.records);
   const main = computeMainChampion(summary.records, (id) => icons.get(id));
@@ -246,7 +198,17 @@ function MyStatsSurface({ summary, icons, onSwitch }: { summary: MyStatsSummary;
           <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-teal">RANKED SOLO · {coverage.seasonClaimSafe ? "FULL SEASON" : "RECORDED SO FAR"} · DISPLAY ONLY</p>
           <h1 className="mt-1.5 text-[34px] font-semibold leading-none tracking-[-0.025em] text-txt">My Stats</h1>
         </div>
-        <AccountChip summary={summary} onSwitch={onSwitch} />
+        {(summary.accounts?.length ?? 0) > 0 && (
+          <div className="min-w-0 max-w-[420px]">
+            <AccountPicker
+              accounts={summary.accounts ?? []}
+              activeRiotId={summary.riotId}
+              activeId={summary.accountId ?? null}
+              onSwitched={onSwitched}
+              collapsed={false}
+            />
+          </div>
+        )}
       </div>
 
       {coverage.pill && <p className="mt-3 text-[11px] text-mut" title={coverage.pill.title}>{coverage.pill.text} · {coverage.games} games stored so far</p>}
@@ -292,7 +254,6 @@ function MyStatsContent() {
   const [state, setState] = useState<SummaryState>({ status: "loading" });
   const [icons, setIcons] = useState<Map<number, ChampionIconEntry>>(new Map());
   const [refreshKey, setRefreshKey] = useState(0);
-  const [switchError, setSwitchError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -327,18 +288,10 @@ function MyStatsContent() {
     };
   }, [refreshKey]);
 
-  async function handleSwitch(id: number) {
-    setSwitchError(null);
-    const result = await selectAccount(id);
-    if (!result.ok) {
-      setSwitchError("Account switch was not completed. The current stats remain selected.");
-      return;
-    }
-    if (result.result.switched) {
-      setState({ status: "loading" });
-      setRefreshKey((key) => key + 1);
+  function handleAccountSwitched() {
+    setState({ status: "loading" });
+    setRefreshKey((key) => key + 1);
   }
-}
 
   if (state.status === "loading") {
     return <main className="mx-auto max-w-[1180px] px-4 pb-16 pt-8 sm:px-6"><Skeleton /></main>;
@@ -353,9 +306,8 @@ function MyStatsContent() {
   return (
     <main className="mx-auto max-w-[1180px] px-4 pb-16 pt-8 sm:px-6">
       <MyStatsRefresher onRefreshed={() => setRefreshKey((key) => key + 1)} />
-      {isPostGame ? <PostGameReview summary={state.summary} iconOf={iconOf} /> : <MyStatsSurface summary={state.summary} icons={icons} onSwitch={handleSwitch} />}
-      {showAccountLinking && <AccountPicker accounts={state.summary.accounts ?? []} activeRiotId={state.summary.riotId} activeId={state.summary.accountId ?? null} onSwitched={() => { setState({ status: "loading" }); setRefreshKey((key) => key + 1); }} collapsed={false} />}
-      {switchError && <p className="mt-3 text-[11px] text-bad" role="status">{switchError}</p>}
+      {isPostGame ? <PostGameReview summary={state.summary} iconOf={iconOf} /> : <MyStatsSurface summary={state.summary} icons={icons} onSwitched={handleAccountSwitched} />}
+      {showAccountLinking && <AccountPicker accounts={state.summary.accounts ?? []} activeRiotId={state.summary.riotId} activeId={state.summary.accountId ?? null} onSwitched={handleAccountSwitched} collapsed={false} />}
       <footer className="mt-10 border-t border-white/[0.06] pt-4 text-[11px] text-mut">Your own match history · shown for context only, never blended into any recommendation or ranking.</footer>
     </main>
   );

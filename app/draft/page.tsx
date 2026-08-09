@@ -31,7 +31,6 @@ import { aggregateEnemyComp } from "@/lib/draft/compRatings";
 import { deriveTakeaways } from "@/lib/draft/compTakeaways";
 import {
   DEFAULT_DRAFT_ASSISTANT_FILTERS,
-  filterComfortCandidates,
   filterDraftAssistantCandidates,
   filterCounterCandidates as filterPositiveCounters,
   resolveVisibleDraftAssistantRanking,
@@ -48,6 +47,7 @@ import DraftControls from "@/components/hextech/draft/DraftControls";
 import DraftLockInCard from "@/components/hextech/draft/DraftLockInCard";
 import DraftMatchupGrid from "@/components/hextech/draft/DraftMatchupGrid";
 import DraftRecommendation from "@/components/hextech/draft/DraftRecommendation";
+import { preserveOriginalDraftRanks } from "@/components/hextech/draft/draftRanking";
 
 const RECOMMEND_DEBOUNCE_MS = 300;
 const MAX_ALLIED_ADDITIONAL = 4;
@@ -292,13 +292,13 @@ function reasonForCandidate(args: {
 }): { chip: string | null; reason: string | null } {
   const parts: string[] = [];
   let chip: string | null = null;
-  if (args.laneOpponentName && (args.candidate.synergyDelta ?? 0) > 0) {
+  if (args.laneOpponentName && typeof args.candidate.synergyDelta === "number" && args.candidate.synergyDelta > 0) {
     chip = `Favored into ${args.laneOpponentName}`;
     parts.push(`It answers ${args.laneOpponentName} with the strongest available matchup evidence.`);
   }
   const bestMatchup = args.preview?.best[0];
   if (bestMatchup) {
-    parts.push(`It also holds up well into ${bestMatchup.oppId === args.candidate.champId ? "the current enemy field" : "popular enemy picks"}.`);
+    parts.push(`It holds up well into ${bestMatchup.oppId === args.candidate.champId ? "the current enemy field" : "popular enemy picks"}.`);
   }
   if (args.floor !== null) {
     chip = chip ?? "Blind-safe";
@@ -541,8 +541,6 @@ export default function DraftPage() {
 
   const basePlays: DraftPlayResult[] = state.status === "ok" ? state.data.plays : [];
   const basePotentialPlays: DraftPlayResult[] = state.status === "ok" ? state.data.potentialPlays : [];
-  const displayedPlays = myPoolOnly ? filterComfortCandidates(basePlays) : basePlays;
-  const displayedPotentialPlays = myPoolOnly ? filterComfortCandidates(basePotentialPlays) : basePotentialPlays;
   const hasAnyMyPoolData = basePlays.some((play) => play.personalOverall.games >= 1) || basePotentialPlays.some((play) => play.personalOverall.games >= 1);
   const blindMeta = blindState.status === "ok" || blindState.status === "empty" ? blindState.data.meta : null;
   const blindPoolAfterShare = blindMeta ? Math.max(0, blindMeta.poolCandidates - blindMeta.excludedByLaneShare) : 0;
@@ -558,13 +556,13 @@ export default function DraftPage() {
   const laneStatMap = new Map<number, DraftLaneStat>(laneStats.map((stat) => [stat.champId, stat]));
   const matchupPreviewMap = new Map<number, DraftMatchupPreview>(state.status === "ok" ? (state.data.matchupPreviews ?? []).map((preview) => [preview.champId, preview]) : []);
   const activeFilters = { minPickRate, includeOffMeta, minimumGames };
-  const recommendedFilterRows = displayedPlays.map((play, index) => {
+  const recommendedFilterRows = preserveOriginalDraftRanks(basePlays, myPoolOnly).map(({ play, rank }) => {
     const stat = laneStatMap.get(play.champId);
-    return { play, rank: index + 1, synergyDelta: play.synergyDelta, champId: play.champId, laneShare: stat?.laneShare ?? null, totalGames: stat?.totalGames ?? null };
+    return { play, rank, synergyDelta: play.synergyDelta, champId: play.champId, laneShare: stat?.laneShare ?? null, totalGames: stat?.totalGames ?? null };
   });
-  const potentialFilterRows = displayedPotentialPlays.map((play, index) => {
+  const potentialFilterRows = preserveOriginalDraftRanks(basePotentialPlays, myPoolOnly).map(({ play, rank }) => {
     const stat = laneStatMap.get(play.champId);
-    return { play, rank: index + 1, synergyDelta: play.synergyDelta, champId: play.champId, laneShare: stat?.laneShare ?? null, totalGames: stat?.totalGames ?? null };
+    return { play, rank, synergyDelta: play.synergyDelta, champId: play.champId, laneShare: stat?.laneShare ?? null, totalGames: stat?.totalGames ?? null };
   });
   const filteredRecommendedRows = filterDraftAssistantCandidates(recommendedFilterRows, activeFilters);
   const filteredPotentialRows = filterDraftAssistantCandidates(potentialFilterRows, activeFilters);
@@ -614,7 +612,7 @@ export default function DraftPage() {
       : assistantView === "counters" && enemyIds.length === 0
         ? []
         : assistantView === "counters"
-          ? filteredCounterRows.map((row) => toRecommendedCandidate(row, displayedPotentialPlays.includes(row.play)))
+          ? filteredCounterRows.map((row) => toRecommendedCandidate(row, basePotentialPlays.includes(row.play)))
           : assistantView === "recommended"
             ? resolveRecommendedDetailCandidates({ recommended: matchupDetailCandidates, blind: filteredBlindCandidates, noEnemies: enemyIds.length === 0 })
             : matchupDetailCandidates;
@@ -702,6 +700,7 @@ export default function DraftPage() {
               <DraftRecommendation
                 candidate={topCandidate}
                 floor={topFloor}
+                laneAverageValue={detailAverage}
                 laneOpponentName={laneOpponentName}
                 verdictChip={topReason.chip}
                 reason={topReason.reason}
@@ -792,7 +791,9 @@ export default function DraftPage() {
           </div>
 
           <aside className="min-w-0 space-y-3 lg:sticky lg:top-4">
-            <DraftCompBars enemyIds={enemyIds} />
+            <div className="[&_span.truncate]:w-[110px]">
+              <DraftCompBars enemyIds={enemyIds} />
+            </div>
             <DraftMatchupGrid candidates={matchupRows} enemyIds={enemyIds} champIcons={champIcons} previews={matchupPreviewMap} />
             <DraftLockInCard />
           </aside>

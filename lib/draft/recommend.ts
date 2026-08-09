@@ -280,6 +280,8 @@ export interface DraftMatchupPreviewRow {
 
 export interface DraftMatchupPreview {
   champId: number;
+  /** Compact preview rows first; locked-enemy rows are appended so the grid
+   *  can render every pair present in the loaded matrix. */
   worst: DraftMatchupPreviewRow[];
   best: DraftMatchupPreviewRow[];
 }
@@ -350,11 +352,12 @@ function buildLaneStats(fullPool: ChampBaseline[], rows: MatchupDbRow[]): DraftL
   });
 }
 
-function buildMatchupPreviews(
+export function buildMatchupPreviews(
   fullPool: ChampBaseline[],
   rows: MatchupDbRow[],
   laneStats: DraftLaneStat[],
-  previewChampIds: ReadonlySet<number>
+  previewChampIds: ReadonlySet<number>,
+  lockedEnemyIds: ReadonlySet<number> = new Set()
 ): DraftMatchupPreview[] {
   if (rows.length === 0) return [];
   if (laneStats.some((stat) => stat.totalGames === null)) return [];
@@ -387,12 +390,22 @@ function buildMatchupPreviews(
     .filter((candidate) => previewChampIds.has(candidate.champId))
     .map((candidate) => {
       const rowsForChampion = previewRows.get(candidate.champId) ?? [];
-      const worst = [...rowsForChampion]
+      const worstPreview = [...rowsForChampion]
         .sort((a, b) => (a.winRate !== b.winRate ? a.winRate - b.winRate : a.oppId - b.oppId))
         .slice(0, 3);
-      const best = [...rowsForChampion]
+      const bestPreview = [...rowsForChampion]
         .sort((a, b) => (a.winRate !== b.winRate ? b.winRate - a.winRate : a.oppId - b.oppId))
         .slice(0, 3);
+      // Keep the compact best/worst slices used by the cards, then append the
+      // already-loaded values for locked enemies so the grid can read every
+      // candidate x locked-enemy pair without changing score/rank behavior.
+      const lockedRows = rowsForChampion.filter((row) => lockedEnemyIds.has(row.oppId));
+      const appendLockedRows = (previewRows: DraftMatchupPreviewRow[]): DraftMatchupPreviewRow[] => {
+        const seen = new Set(previewRows.map((row) => row.oppId));
+        return [...previewRows, ...lockedRows.filter((row) => !seen.has(row.oppId))];
+      };
+      const worst = appendLockedRows(worstPreview);
+      const best = appendLockedRows(bestPreview);
       return { champId: candidate.champId, worst, best };
     })
     .filter((preview) => preview.worst.length > 0 || preview.best.length > 0);
@@ -753,9 +766,10 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
   // pick feed. Build previews for the complete lane pool so a champion that
   // only appears in SAFEST BLIND (for example Diana) still receives the same
   // popular-opponent rows as the play cards. This remains a compact derived
-  // payload: only three worst and three best rows survive per champion.
+  // payload: only three worst and three best rows survive per champion, plus
+  // the locked-enemy rows needed to render the matchup grid completely.
   const previewChampIds = new Set(fullPool.map((candidate) => candidate.champId));
-  const matchupPreviews = buildMatchupPreviews(fullPool, allMatchupRows, laneStats, previewChampIds);
+  const matchupPreviews = buildMatchupPreviews(fullPool, allMatchupRows, laneStats, previewChampIds, new Set(params.enemies));
 
   let bans: BanResult[] | null = null;
   if (params.hover !== null) {

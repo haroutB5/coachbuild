@@ -233,10 +233,36 @@ function TopBarChampionSearch() {
 
 function PhaseSpine() {
   const companion = useCompanion();
+  const [phaseHistory, setPhaseHistory] = useState<{ session: string | null; phases: string[] }>({
+    session: null,
+    phases: [],
+  });
+
+  // The model is pure, so this small effect owns the companion-session
+  // history that the provider intentionally exposes only as its current
+  // snapshot. A fresh client-backed poll is the only thing allowed to enter
+  // the history; a stale/no-client response cannot manufacture a completed
+  // step. The model counts the current phase immediately, so the first poll
+  // paints its active node without waiting for this effect's follow-up render.
+  useEffect(() => {
+    const { session, phase, clientConnected, statusFresh } = companion;
+    const observedPhase = statusFresh && clientConnected ? phase : null;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- phase history is a deliberate session-scoped projection of the companion poll stream.
+    setPhaseHistory((previous) => {
+      if (observedPhase === null) {
+        return previous.session === session ? previous : { session, phases: [] };
+      }
+      if (previous.session !== session) return { session, phases: [observedPhase] };
+      if (previous.phases.includes(observedPhase)) return previous;
+      return { session, phases: [...previous.phases, observedPhase] };
+    });
+  }, [companion]);
+
   const model = phaseSpineModel({
     phase: companion.phase,
     clientConnected: companion.clientConnected,
     statusFresh: companion.statusFresh,
+    observedPhases: phaseHistory.session === companion.session ? phaseHistory.phases : [],
   });
 
   return (

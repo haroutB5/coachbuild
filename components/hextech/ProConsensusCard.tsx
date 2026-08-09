@@ -466,7 +466,7 @@ function FractionPct({ count, denom, className = "" }: { count: number; denom: n
   const pct = denom > 0 ? formatSharePct(count / denom) : "0%";
   return (
     <span className={`tabular-nums ${className}`}>
-      <span className="font-bold text-teal">{pct}</span>
+      <span className="font-semibold text-teal">{pct}</span>
       <span className="text-mut/70"> · {count}/{denom}</span>
     </span>
   );
@@ -532,7 +532,7 @@ function ConsensusRuneTile({
         <IconWithFallback src={icon} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={pxSize} />
       </span>
       <span className="text-[10px] text-txt leading-tight line-clamp-2 min-h-[24px]">{name}</span>
-      <span className="text-[10.5px] font-bold tabular-nums text-teal">{pct}</span>
+      <span className="text-[10.5px] font-semibold tabular-nums text-teal">{pct}</span>
       <span className="text-[9px] text-mut/60 tabular-nums">{count}/{denom}</span>
     </button>
   );
@@ -1671,7 +1671,8 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
         <p className="text-[9.5px] text-mut/50 mt-1 mb-1">{additionalRuneNotes.join(" · ")}</p>
       )}
 
-      <p className="text-[10px] text-mut/70 mt-3.5 pt-3 border-t border-line">{sampleLine}</p>
+      <div aria-hidden="true" className="hr" />
+      <p className="text-[10px] text-mut/70">{sampleLine}</p>
       </div>
     </div>
   );
