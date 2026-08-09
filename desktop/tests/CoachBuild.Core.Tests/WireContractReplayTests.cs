@@ -205,7 +205,12 @@ public sealed class WireContractReplayTests
         {
             var source = new CountingProcessSource(new LeagueClientProcess(
                 "LeagueClientUx.exe", "--app-port=51235 --remoting-auth-token=process-token"));
-            var resolver = new LcuCredentialResolver(source, LcuCredentialParser.ReadLockfile, temp);
+            var resolver = new LcuCredentialResolver(
+                source,
+                LcuCredentialParser.ReadLockfile,
+                temp,
+                programDataDirectory: Path.Combine(Path.GetTempPath(), $"coachbuild-programdata-{Guid.NewGuid():N}"),
+                fixedDriveLockfilePathsProvider: static () => Array.Empty<string>());
             Assert.Equal("lockfile", resolver.Resolve()!.Source);
             Assert.Equal(0, source.Calls);
 

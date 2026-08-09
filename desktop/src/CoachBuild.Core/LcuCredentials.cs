@@ -189,8 +189,25 @@ public static partial class LcuCredentialParser
     public static string? ReadLockfile(string? path)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
-        try { return File.ReadAllText(path); }
-        catch { return null; }
+        var raw = ReadLockfileOnce(path);
+        if (!string.IsNullOrWhiteSpace(raw)) return raw;
+
+        // The client writes the lockfile in place during startup. Give that
+        // non-atomic write one short chance to finish before reporting an
+        // empty lockfile to the resolver.
+        Thread.Sleep(TimeSpan.FromMilliseconds(100));
+        return ReadLockfileOnce(path);
+    }
+
+    private static string ReadLockfileOnce(string path)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     private static bool IsRiotInstallProperty(string name) =>
@@ -435,6 +452,12 @@ public sealed class LcuCredentialResolver
 
         foreach (var path in candidates)
         {
+            if (!File.Exists(path))
+            {
+                details.Add($"{FormatPath(path)}=missing");
+                continue;
+            }
+
             string? raw;
             try
             {
@@ -452,7 +475,7 @@ public sealed class LcuCredentialResolver
                 reason = $"{FormatPath(path)}=found";
                 return credentials;
             }
-            details.Add($"{FormatPath(path)}={(raw is null ? "missing-or-unreadable" : "invalid")}");
+            details.Add($"{FormatPath(path)}=invalid");
         }
 
         reason = string.Join(',', details);
@@ -539,7 +562,9 @@ public sealed class LcuCredentialResolver
         try
         {
             var raw = _metadataReader(path);
-            reason = raw is null ? "missing-or-unreadable" : "available";
+            reason = raw is null
+                ? (File.Exists(path) ? "invalid" : "missing")
+                : "available";
             return raw;
         }
         catch (Exception error)

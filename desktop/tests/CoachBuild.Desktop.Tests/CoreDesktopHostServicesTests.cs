@@ -9,6 +9,14 @@ namespace CoachBuild.Desktop.Tests;
 public sealed class CoreDesktopHostServicesTests
 {
     [Fact]
+    public async Task Self_test_runner_passes_end_to_end()
+    {
+        var exitCode = await SelfTestRunner.RunAsync();
+
+        Assert.Equal(0, exitCode);
+    }
+
+    [Fact]
     public async Task Built_host_shares_follow_tracker_between_decider_and_http_state_past_open_grace()
     {
         var root = Path.Combine(Path.GetTempPath(), "CoachBuild-HostTests", Guid.NewGuid().ToString("N"));

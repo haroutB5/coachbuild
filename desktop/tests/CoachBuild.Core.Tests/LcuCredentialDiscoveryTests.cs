@@ -44,6 +44,128 @@ public sealed class LcuCredentialDiscoveryTests
     }
 
     [Fact]
+    public void Lockfile_reader_can_read_while_lcu_holds_file_open_for_writing()
+    {
+        var root = MakeTempDirectory();
+        try
+        {
+            var path = Path.Combine(root, "lockfile");
+            const string contents = "LeagueClient:1:54443:shared-token:https";
+            File.WriteAllText(path, contents);
+
+            using (var lcuHold = new FileStream(
+                       path,
+                       FileMode.Open,
+                       FileAccess.ReadWrite,
+                       FileShare.ReadWrite | FileShare.Delete))
+            {
+                Assert.Equal(contents, LcuCredentialParser.ReadLockfile(path));
+            }
+        }
+        finally
+        {
+            DeleteTempDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task Lockfile_reader_retries_once_when_initial_content_is_empty()
+    {
+        var root = MakeTempDirectory();
+        try
+        {
+            var path = Path.Combine(root, "lockfile");
+            const string contents = "LeagueClient:1:54444:retry-token:https";
+            using (var lcuHold = new FileStream(
+                       path,
+                       FileMode.Create,
+                       FileAccess.ReadWrite,
+                       FileShare.ReadWrite | FileShare.Delete))
+            {
+                lcuHold.Flush();
+
+                var writerStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var writer = Task.Run(
+                    async () =>
+                    {
+                        writerStarted.SetResult(true);
+                        await Task.Delay(40);
+                        var bytes = System.Text.Encoding.UTF8.GetBytes(contents);
+                        lcuHold.Position = 0;
+                        lcuHold.Write(bytes);
+                        lcuHold.SetLength(bytes.Length);
+                        lcuHold.Flush();
+                    });
+                await writerStarted.Task;
+
+                Assert.Equal(contents, LcuCredentialParser.ReadLockfile(path));
+                await writer;
+            }
+        }
+        finally
+        {
+            DeleteTempDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void Lockfile_reason_reports_unreadable_exception_for_exclusive_file()
+    {
+        var root = MakeTempDirectory();
+        try
+        {
+            var path = Path.Combine(root, "lockfile");
+            File.WriteAllText(path, "LeagueClient:1:54445:exclusive-token:https");
+            using (var exclusiveHold = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                var diagnostics = new List<string>();
+                var resolver = new LcuCredentialResolver(
+                    processSource: new FixedProcessSource(),
+                    lockfilePath: path,
+                    programDataDirectory: Path.Combine(root, "ProgramData"),
+                    fixedDriveLockfilePathsProvider: static () => Array.Empty<string>(),
+                    diagnosticSink: diagnostics.Add);
+
+                Assert.Null(resolver.Resolve());
+                using var line = JsonDocument.Parse(diagnostics.Single());
+                var reason = line.RootElement.GetProperty("layers")[1].GetProperty("reason").GetString();
+                Assert.Contains("unreadable:IOException", reason, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            DeleteTempDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void Lockfile_reason_reports_missing_for_absent_file()
+    {
+        var root = MakeTempDirectory();
+        try
+        {
+            var path = Path.Combine(root, "missing-lockfile");
+            var diagnostics = new List<string>();
+            var resolver = new LcuCredentialResolver(
+                processSource: new FixedProcessSource(),
+                lockfilePath: path,
+                programDataDirectory: Path.Combine(root, "ProgramData"),
+                fixedDriveLockfilePathsProvider: static () => Array.Empty<string>(),
+                diagnosticSink: diagnostics.Add);
+
+            Assert.Null(resolver.Resolve());
+            using var line = JsonDocument.Parse(diagnostics.Single());
+            var reason = line.RootElement.GetProperty("layers")[1].GetProperty("reason").GetString();
+            Assert.Contains("=missing", reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("missing-or-unreadable", reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTempDirectory(root);
+        }
+    }
+
+    [Fact]
     public void Riot_metadata_layer_finds_lockfile_on_a_non_default_path()
     {
         var root = MakeTempDirectory();

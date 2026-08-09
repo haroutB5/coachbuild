@@ -54,7 +54,12 @@ public static class SelfTestRunner
         var lockfile = Path.Combine(temporaryDirectory, "lockfile");
         File.WriteAllText(lockfile, "LeagueClient:123:5555:lock-token:https");
         var process = new FixedProcessSource(new LeagueClientProcess("LeagueClientUx", "--app-port=6666 --remoting-auth-token=process-token"));
-        var resolver = new LcuCredentialResolver(process, LcuCredentialParser.ReadLockfile, lockfile);
+        var resolver = new LcuCredentialResolver(
+            process,
+            LcuCredentialParser.ReadLockfile,
+            lockfile,
+            programDataDirectory: Path.Combine(temporaryDirectory, "UnusedProgramData"),
+            fixedDriveLockfilePathsProvider: static () => Array.Empty<string>());
         var fromLockfile = resolver.Resolve();
         Check(fromLockfile?.Port == 5555 && fromLockfile.Source == "lockfile", "lockfile credential source", failures);
 
