@@ -24,3 +24,23 @@
 - **2026-08-04 — Paced batch jobs run detached by the orchestrator**, never inside an agent's
   tool-mediated shell (timeout ceiling). Agents write + smoke-test the script and hand back the
   command. Rule also lives in AGENTS.md house rules.
+
+## Nocturne redesign (v0.104.0, 2026-08-09)
+
+Full-surface redesign from the user's design handoff (`design_handoff_coachbuild_redesign/` — spec,
+tokens, prototype, 11 acceptance screenshots). Token swap kept LEGACY NAMES (cyan→gold→blurple
+trick) so untouched call sites reskin free. Staged: tokens → shell → Builds∥Draft → Companion∥data
+screens → mobile → 4 adversarial audit rounds + scoped final verify. Load-bearing decisions:
+- Phase spine + companion card: a step is active/complete ONLY when genuinely polled (honesty rule
+  extended to session-observed history; phaseSpineModel has tests now).
+- Draft rank model: TIER is a champion property from canonical server rank (single 1..N ladder even
+  on the 0-enemy merged recommended+blind list); # column is display position; THE CALL pins to
+  server order; filter tabs never re-rank. Sort-invariance is test-locked. KNOWN P2: Blind tab's own
+  ladder can disagree with the merged Recommended badge for the same champion — deliberate trade,
+  revisit as product question.
+- Delta basis is lane average, LABELED as such everywhere; unmeasured renders "—", never ?? 0.
+- IN-GAME OVERLAY IS EXEMPT from Nocturne (user directive): native pink #FF2F9E boxes stay; /compact
+  + /live-setup preview mirror the real pink; target screenshot 11 (blurple) is overridden. Do not
+  "fix" back.
+- lib/ stayed logic-untouched except one read-side exposure (matchup matrix full rows for locked
+  enemies) with a matrix-equality test; ranking slices untouched.
