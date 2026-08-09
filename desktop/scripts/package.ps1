@@ -30,6 +30,11 @@ New-Item -ItemType Directory -Force -Path $packageDirectory | Out-Null
 $project = Join-Path $desktopRoot 'src\CoachBuild.Desktop\CoachBuild.Desktop.csproj'
 dotnet publish $project --configuration $Configuration --runtime $Runtime --self-contained false --output $publishDirectory
 
+$iconPath = Join-Path $publishDirectory 'Assets\tray-icon.ico'
+if (-not (Test-Path $iconPath)) {
+    throw "Application icon was not included in publish output: $iconPath"
+}
+
 $bootstrapper = Join-Path $publishDirectory 'WebView2\MicrosoftEdgeWebview2Setup.exe'
 if (-not (Test-Path $bootstrapper)) {
     if ($SkipWebView2Bootstrapper) {
@@ -56,10 +61,11 @@ if (-not (Test-Path $bootstrapper)) {
     --mainExe CoachBuild.Desktop.exe `
     --packTitle CoachBuild `
     --outputDir $packageDirectory `
+    --icon $iconPath `
     --delta BestSpeed
 
 if ($LASTEXITCODE -ne 0) { throw "Velopack pack failed with exit code $LASTEXITCODE" }
 
 Write-Host "Created per-user Velopack artifacts in $packageDirectory"
 Write-Host 'Install root: %LOCALAPPDATA%\CoachBuild\Desktop'
-Write-Host 'Feed: https://github.com/haroutB5/coachbuild-desktop-releases'
+Write-Host 'Feed: https://github.com/haroutB5/coachbuild-desktop-releases/releases/latest/download'

@@ -11,6 +11,7 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Deterministic>true</Deterministic>
     <Version>1.0.1</Version>
+    <ApplicationIcon>Assets\tray-icon.ico</ApplicationIcon>
     <AssemblyName>CoachBuild.Desktop</AssemblyName>
     <RootNamespace>CoachBuild.Desktop</RootNamespace>
   </PropertyGroup>
@@ -20,6 +21,8 @@
     <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
   </PropertyGroup>
   <ItemGroup>
+    <Resource Include="Assets\tray-icon.ico" />
+    <Content Include="Assets\tray-icon.ico" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\CoachBuild.Core\CoachBuild.Core.csproj" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
     <PackageReference Include="Velopack" Version="0.0.1297" />

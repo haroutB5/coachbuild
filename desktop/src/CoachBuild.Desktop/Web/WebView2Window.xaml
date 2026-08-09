@@ -4,6 +4,7 @@
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         xmlns:local="clr-namespace:CoachBuild.Desktop.Web"
         Title="CoachBuild"
+        Icon="pack://application:,,,/Assets/tray-icon.ico"
         Width="1280"
         Height="860"
         MinWidth="940"

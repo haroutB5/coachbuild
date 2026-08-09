@@ -235,6 +235,7 @@ public partial class App : WpfApplication
         _overlay.Hide();
         _tray.Start(_trayState);
         _webViewEnvironment = new WebView2EnvironmentService(Paths.WebView2UserDataFolder);
+        _ = ProbeWebView2AvailabilityAsync(_shutdown.Token);
         _updates = new VelopackUpdateService(isCompanionBusy: IsUpdateBusyForService);
         _updates.StatusChanged += OnUpdateStatusChanged;
         _ = _updates.StartAsync(_shutdown.Token);
@@ -489,14 +490,50 @@ public partial class App : WpfApplication
             && await _webViewEnvironment.RepairAsync(_shutdown.Token).ConfigureAwait(false);
         await Dispatcher.InvokeAsync(() =>
         {
-            _trayState = _trayState with { WebView2Available = repaired };
+            _trayState = _trayState with
+            {
+                WebView2Available = repaired
+                    ? WebView2Availability.Available
+                    : WebView2Availability.Missing,
+            };
             _tray?.UpdateState(_trayState);
         });
     }
 
+    private async Task ProbeWebView2AvailabilityAsync(CancellationToken cancellationToken)
+    {
+        if (_webViewEnvironment is null) return;
+
+        try
+        {
+            var available = await _webViewEnvironment
+                .IsRuntimeAvailableAsync(cancellationToken)
+                .ConfigureAwait(false);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (_isShuttingDown) return;
+                _trayState = _trayState with
+                {
+                    WebView2Available = available
+                        ? WebView2Availability.Available
+                        : WebView2Availability.Missing,
+                };
+                _tray?.UpdateState(_trayState);
+            });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch
+        {
+            // A failed probe is not proof that the runtime is missing. Keep
+            // the tray in Unknown so Repair cannot flash before a verdict.
+        }
+    }
+
     private void SetWebViewUnavailable()
     {
-        _trayState = _trayState with { WebView2Available = false };
+        _trayState = _trayState with { WebView2Available = WebView2Availability.Missing };
         _tray?.UpdateState(_trayState);
         _tray?.ShowBalloon("CoachBuild", "WebView2 is required. Use Repair WebView2 runtime from the tray.", System.Windows.Forms.ToolTipIcon.Warning);
     }

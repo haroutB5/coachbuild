@@ -8,6 +8,31 @@ namespace CoachBuild.Desktop.Tests;
 
 public sealed class TrayControllerTests
 {
+    [Theory]
+    [InlineData(WebView2Availability.Unknown, false)]
+    [InlineData(WebView2Availability.Available, false)]
+    [InlineData(WebView2Availability.Missing, true)]
+    public void Repair_item_requires_a_proven_missing_runtime(
+        WebView2Availability availability,
+        bool expectedVisible)
+    {
+        using var tray = new TrayController(Dispatcher.CurrentDispatcher);
+        tray.Start(TrayMenuState.Default with { WebView2Available = availability });
+        var menu = tray.ContextMenuForTesting;
+
+        menu.Show(new Point(0, 0));
+        try
+        {
+            var repairVisible = menu.Items.OfType<Forms.ToolStripMenuItem>()
+                .Any(item => item.Text == "Repair WebView2 runtime");
+            Assert.Equal(expectedVisible, repairVisible);
+        }
+        finally
+        {
+            menu.Close();
+        }
+    }
+
     [Fact]
     public void Opening_populates_one_persistent_menu_and_updates_refresh_on_next_open()
     {

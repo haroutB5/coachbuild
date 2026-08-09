@@ -29,6 +29,13 @@ public enum ReopenDestination
     Builds,
 }
 
+public enum WebView2Availability
+{
+    Unknown,
+    Available,
+    Missing,
+}
+
 public sealed record ReopenTarget(
     ReopenDestination Destination,
     int? ChampionId = null,
@@ -54,7 +61,7 @@ public sealed record TrayMenuState(
     string? Error,
     UpdateTrayModel Update,
     LastOpenPage? LastOpen,
-    bool WebView2Available = true,
+    WebView2Availability WebView2Available = WebView2Availability.Unknown,
     bool IsAdjusting = false)
 {
     public static TrayMenuState Default { get; } = new(
@@ -67,7 +74,7 @@ public sealed record TrayMenuState(
         Error: null,
         UpdateTrayModel.None,
         LastOpen: null,
-        WebView2Available: true,
+        WebView2Available: WebView2Availability.Unknown,
         IsAdjusting: false);
 
     public bool IsInGame => Phase is CompanionPhase.InProgress or CompanionPhase.WaitingForStats;

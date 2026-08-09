@@ -163,7 +163,7 @@ public sealed class TrayController : IDisposable
         if (!string.IsNullOrWhiteSpace(_state.Error)) _menu.Items.Add(StatusItem($"Error: {_state.Error}"));
         _menu.Items.Add(StatusItem($"Updates: {_state.Update.ToDisplayString()}"));
 
-        if (!_state.WebView2Available)
+        if (_state.WebView2Available == WebView2Availability.Missing)
         {
             _menu.Items.Add(MenuItem("Repair WebView2 runtime", (_, _) => RaiseCommand(TrayCommand.RepairWebView2)));
         }

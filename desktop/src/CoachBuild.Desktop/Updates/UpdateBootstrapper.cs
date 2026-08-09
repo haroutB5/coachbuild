@@ -35,7 +35,7 @@ public static class UpdateBootstrapper
         }
     }
 
-    public static string ReleaseFeed => "https://github.com/haroutB5/coachbuild-desktop-releases";
+    public const string ReleaseFeed = "https://github.com/haroutB5/coachbuild-desktop-releases/releases/latest/download";
 
     public static string InstallRoot => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
