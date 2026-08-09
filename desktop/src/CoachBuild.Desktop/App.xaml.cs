@@ -43,6 +43,11 @@ public interface IDesktopHostLifecycle
     Task StartAsync(CancellationToken cancellationToken);
 }
 
+public interface ILaneOverrideHostServices
+{
+    void SetLaneOverride(string? lane);
+}
+
 public sealed record DesktopPhaseSnapshot(
     string? Phase,
     LastOpenPage? LastOpen = null,
@@ -219,6 +224,8 @@ public partial class App : WpfApplication
 
         _overlay = new OverlayWindow(new OverlaySettingsStore(Paths.SettingsFile));
         _overlay.AdjustmentStateChanged += OnAdjustmentStateChanged;
+        if (_services is ILaneOverrideHostServices laneOverrideServices)
+            laneOverrideServices.SetLaneOverride(_overlay.LaneOverrideSetting);
         _trayState = _trayState with
         {
             OverlayVisible = _overlay.OverlayVisibleSetting,
@@ -360,6 +367,8 @@ public partial class App : WpfApplication
                 break;
             case TrayCommand.SetLane:
                 _trayState = _trayState with { LaneOverride = TrayMenuState.NormalizeLane(e.Lane) };
+                if (_services is ILaneOverrideHostServices laneOverrideServices)
+                    laneOverrideServices.SetLaneOverride(_trayState.LaneOverride);
                 _overlay?.SetLaneOverride(_trayState.LaneOverride);
                 _tray?.UpdateState(_trayState);
                 break;
@@ -548,7 +557,7 @@ public partial class App : WpfApplication
 /// bridge, LCU/gameflow poller, and Live Client Data workers off WPF's
 /// dispatcher while exposing only immutable UI snapshots to App.
 /// </summary>
-public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHostLifecycle, IAsyncDisposable
+public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHostLifecycle, ILaneOverrideHostServices, IAsyncDisposable
 {
     private readonly object _gate = new();
     private readonly CompanionState _state;
@@ -570,12 +579,19 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     private int? _championId;
     private string? _championName;
     private string? _detectedPosition;
+    private string? _laneOverride;
     private LiveSkillState? _skill;
     private string? _skillOrderKey;
     private CoreSkillOrderResult? _skillOrder;
+    private string? _skillOrderLane;
+    private bool _skillOrderLaneIsAuto = true;
     private string? _lastOverlayPhase;
 
-    public CoreDesktopHostServices(string sessionToken, string logDirectory)
+    public CoreDesktopHostServices(
+        string sessionToken,
+        string logDirectory,
+        CoreSkillOrderProvider? skillOrders = null,
+        IEnumerable<int>? bridgePorts = null)
     {
         if (!SessionTokenStore.IsValid(sessionToken))
             throw new ArgumentException("A valid persistent session token is required.", nameof(sessionToken));
@@ -585,14 +601,18 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         _lcu = new LcuHttpClient(_credentials);
         _live = new LiveClientDataClient();
         _log = new RedactedLog(logDirectory);
-        _windowDecisions = new WindowDecisionService(sessionToken);
+        _windowDecisions = new WindowDecisionService(
+            sessionToken,
+            attachments: _state.FollowAttachments);
         _bridge = new CompanionHttpServer(
             sessionToken,
             _state,
             _lcu,
             _live,
+            skillOrders: skillOrders,
             credentials: _credentials,
-            log: _log);
+            log: _log,
+            ports: bridgePorts);
         _skillOrders = _bridge.SkillOrderProvider;
         _gameflow = new GameflowPoller(
             _credentials,
@@ -612,7 +632,37 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
 
     public int BridgePort => _bridge.Port;
 
+    public CompanionState State => _state;
+
+    public WindowDecisionService WindowDecisions => _windowDecisions;
+
+    public string? LaneOverride
+    {
+        get { lock (_gate) return _laneOverride; }
+    }
+
     public bool IsCompanionBusy => _state.IsCompanionBusy;
+
+    public void SetLaneOverride(string? lane)
+    {
+        var normalized = SkillOrderLaneResolver.NormalizeLane(lane);
+        int? championId;
+        string? detectedPosition;
+        lock (_gate)
+        {
+            if (string.Equals(_laneOverride, normalized, StringComparison.Ordinal)) return;
+            _laneOverride = normalized;
+            _skillOrderKey = null;
+            _skillOrder = null;
+            _skillOrderLane = null;
+            _skillOrderLaneIsAuto = normalized is null;
+            championId = _championId;
+            detectedPosition = _detectedPosition;
+        }
+
+        if (championId is > 0 && string.Equals(_state.Phase, "InProgress", StringComparison.Ordinal))
+            RequestSkillOrderIfNeeded(championId.Value, detectedPosition);
+    }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -759,26 +809,54 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         }
     }
 
-    private void RequestSkillOrderIfNeeded(int championId, string? role)
+    private void RequestSkillOrderIfNeeded(int championId, string? detectedPosition)
     {
-        var key = $"{championId}:{role?.Trim().ToUpperInvariant() ?? string.Empty}";
+        string? laneOverride;
+        string? key;
         lock (_gate)
         {
+            laneOverride = _laneOverride;
+            var detectedLane = SkillOrderLaneResolver.MapPositionToLane(detectedPosition);
+            key = laneOverride is not null
+                ? $"{championId}:manual:{laneOverride}"
+                : detectedLane is not null
+                    ? $"{championId}:auto:{detectedLane}"
+                    : $"{championId}:auto-fallback";
             if (string.Equals(_skillOrderKey, key, StringComparison.Ordinal)) return;
             _skillOrderKey = key;
             _skillOrder = null;
+            _skillOrderLane = laneOverride ?? detectedLane;
+            _skillOrderLaneIsAuto = laneOverride is null;
         }
 
-        _ = FetchSkillOrderAsync(championId, role, key);
+        _ = FetchSkillOrderAsync(championId, laneOverride, detectedPosition, key);
     }
 
-    private async Task FetchSkillOrderAsync(int championId, string? role, string key)
+    private async Task FetchSkillOrderAsync(
+        int championId,
+        string? laneOverride,
+        string? detectedPosition,
+        string key)
     {
-        CoreSkillOrderResult result;
         try
         {
-            result = await _skillOrders.GetSkillOrderAsync(championId, role, _stop.Token)
+            var selection = await SkillOrderLaneResolver.ResolveAsync(
+                    _skillOrders,
+                    championId,
+                    laneOverride,
+                    detectedPosition,
+                    _stop.Token)
                 .ConfigureAwait(false);
+
+            lock (_gate)
+            {
+                if (string.Equals(_skillOrderKey, key, StringComparison.Ordinal))
+                {
+                    _skillOrder = selection.Result;
+                    _skillOrderLane = selection.Lane;
+                    _skillOrderLaneIsAuto = selection.IsLaneAuto;
+                }
+            }
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
         {
@@ -786,16 +864,18 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         }
         catch
         {
-            result = new CoreSkillOrderResult(
-                CoreSkillOrderStatus.Error,
-                CoreOverlaySkillOrder.Empty,
-                championId);
-        }
-
-        lock (_gate)
-        {
-            if (string.Equals(_skillOrderKey, key, StringComparison.Ordinal))
-                _skillOrder = result;
+            lock (_gate)
+            {
+                if (string.Equals(_skillOrderKey, key, StringComparison.Ordinal))
+                {
+                    _skillOrder = new CoreSkillOrderResult(
+                        CoreSkillOrderStatus.Error,
+                        CoreOverlaySkillOrder.Empty,
+                        championId);
+                    _skillOrderLane = null;
+                    _skillOrderLaneIsAuto = laneOverride is null;
+                }
+            }
         }
     }
 
@@ -818,6 +898,8 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
                 _skill = null;
                 _skillOrderKey = null;
                 _skillOrder = null;
+                _skillOrderLane = null;
+                _skillOrderLaneIsAuto = true;
             }
             _lastOverlayPhase = phase;
         }
@@ -828,6 +910,8 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         string? champion;
         string? position;
         CoreSkillOrderResult? skillOrderResult;
+        string? skillOrderLane;
+        bool skillOrderLaneIsAuto;
         lock (_gate)
         {
             skill = _skill;
@@ -835,10 +919,19 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             champion = _championName;
             position = _detectedPosition;
             skillOrderResult = _skillOrder;
+            skillOrderLane = _skillOrderLane;
+            skillOrderLaneIsAuto = _skillOrderLaneIsAuto;
         }
         if (skill is null || string.IsNullOrWhiteSpace(champion)) return null;
         if (championId is > 0)
             RequestSkillOrderIfNeeded(championId.Value, position);
+
+        lock (_gate)
+        {
+            skillOrderResult = _skillOrder;
+            skillOrderLane = _skillOrderLane;
+            skillOrderLaneIsAuto = _skillOrderLaneIsAuto;
+        }
 
         var ranks = new Dictionary<OverlayAbility, int>
         {
@@ -846,15 +939,6 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             [OverlayAbility.W] = skill.Abilities.W,
             [OverlayAbility.E] = skill.Abilities.E,
             [OverlayAbility.R] = skill.Abilities.R,
-        };
-        var lane = position?.Trim().ToUpperInvariant() switch
-        {
-            "TOP" => "TOP",
-            "JUNGLE" => "JUNGLE",
-            "MIDDLE" => "MID",
-            "BOTTOM" => "BOT",
-            "UTILITY" => "SUPPORT",
-            _ => null,
         };
         var snapshot = new LiveClientDataSkillSnapshot(skill.Level, ranks);
         var skillOrder = skillOrderResult is { Status: CoreSkillOrderStatus.Ok } result
@@ -872,8 +956,8 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             champion,
             championId: resolvedChampionId,
             skillOrder: skillOrder,
-            lane: lane,
-            laneIsAuto: true);
+            lane: skillOrderLane,
+            laneIsAuto: skillOrderLaneIsAuto);
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
@@ -890,7 +974,7 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             if (_liveTask is not null) await _liveTask.ConfigureAwait(false);
         }
         catch (OperationCanceledException) { }
-        await _bridge.StopAsync().ConfigureAwait(false);
+        await _bridge.DisposeAsync().ConfigureAwait(false);
         _live.Dispose();
         _lcu.Dispose();
         _stop.Dispose();

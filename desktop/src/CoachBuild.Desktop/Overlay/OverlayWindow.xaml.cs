@@ -36,7 +36,14 @@ public partial class OverlayWindow : Window
     private bool _nativeWindowShown;
     private bool _interactive;
     private bool _adjusting;
+    private bool _wasVisibleBeforeAdjustment;
+    private int _topmostReassertTicks;
     private bool _disposed;
+
+    // App projects snapshots every 750 ms. Reassert topmost only occasionally
+    // so ordinary overlay ticks stay cheap while still recovering if another
+    // window (notably exclusive fullscreen) pushes this HWND down the stack.
+    private const int TopmostReassertEveryTicks = 10;
 
     public OverlayWindow(OverlaySettingsStore settingsStore)
     {
@@ -144,8 +151,14 @@ public partial class OverlayWindow : Window
             return;
         }
 
+        _wasVisibleBeforeAdjustment = IsVisible;
         ShowInactive();
-        if (_display is null) return;
+        if (_display is null)
+        {
+            if (!_wasVisibleBeforeAdjustment) Hide();
+            _wasVisibleBeforeAdjustment = false;
+            return;
+        }
         _workingCalibration = _settingsStore.LoadCalibration(_display!.Resolution);
         _adjusting = true;
         AdjustmentStateChanged?.Invoke(true);
@@ -221,7 +234,10 @@ public partial class OverlayWindow : Window
         var handle = new WindowInteropHelper(this).Handle;
         if (handle == 0) return;
         var bounds = new NativeBounds(_display.Left, _display.Top, _display.Width, _display.Height);
-        if (_nativeWindowShown && _lastNativeBounds == bounds) return;
+        var sameBounds = _nativeWindowShown && _lastNativeBounds == bounds;
+        var reassertTopmost = sameBounds && ++_topmostReassertTicks >= TopmostReassertEveryTicks;
+        if (sameBounds && !reassertTopmost) return;
+        if (reassertTopmost) _topmostReassertTicks = 0;
 
         var flags = SwpNoActivate | SwpNoSendChanging;
         if (!_nativeWindowShown && IsVisible) flags |= SwpShowWindow;
@@ -229,6 +245,7 @@ public partial class OverlayWindow : Window
         {
             _lastNativeBounds = bounds;
             _nativeWindowShown = IsVisible;
+            _topmostReassertTicks = 0;
         }
     }
 
@@ -337,7 +354,7 @@ public partial class OverlayWindow : Window
         _workingCalibration = null;
         AdjustmentStateChanged?.Invoke(false);
         SetInteractive(false);
-        RenderCurrentState();
+        RestoreVisibilityAfterAdjustment();
     }
 
     public void CancelAdjustment()
@@ -347,7 +364,21 @@ public partial class OverlayWindow : Window
         _workingCalibration = null;
         AdjustmentStateChanged?.Invoke(false);
         SetInteractive(false);
-        RenderCurrentState();
+        RestoreVisibilityAfterAdjustment();
+    }
+
+    private void RestoreVisibilityAfterAdjustment()
+    {
+        var wasVisible = _wasVisibleBeforeAdjustment;
+        _wasVisibleBeforeAdjustment = false;
+        if (!wasVisible)
+        {
+            Hide();
+            return;
+        }
+
+        if (!IsVisible) ShowInactive();
+        else RenderCurrentState();
     }
 
     private void RenderAdjustment()

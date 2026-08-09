@@ -40,6 +40,7 @@ public sealed class SkillOrderProviderTests
         Assert.Equal(4, first.Order.ObservedLevels);
         Assert.False(first.Order.Completed);
         Assert.Equal("derived", first.Order.CompletionBasis);
+        Assert.Equal(123, first.SampleSize);
         Assert.Equal(first, second);
         Assert.Equal(1, handler.Calls);
         Assert.Contains("champ=103", handler.Requests.Single(), StringComparison.Ordinal);
@@ -100,6 +101,54 @@ public sealed class SkillOrderProviderTests
     }
 
     [Fact]
+    public async Task Manual_override_changes_the_lane_fetch_and_wins_over_detected_position()
+    {
+        var provider = new RecordingSkillOrderProvider(lane => OkResult(103, lane, 10));
+
+        var selection = await SkillOrderLaneResolver.ResolveAsync(
+            provider,
+            103,
+            laneOverride: "MID",
+            detectedPosition: "TOP",
+            CancellationToken.None);
+
+        Assert.Equal("MID", selection.Lane);
+        Assert.False(selection.IsLaneAuto);
+        Assert.Equal(10, selection.Result.SampleSize);
+        Assert.Equal(["MID"], provider.Requests);
+    }
+
+    [Fact]
+    public async Task Unresolved_position_fetches_all_lanes_and_picks_the_largest_sample()
+    {
+        var samples = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["TOP"] = 20,
+            ["JUNGLE"] = 30,
+            ["MID"] = 200,
+            ["BOT"] = 100,
+            ["SUPPORT"] = 40,
+        };
+        var provider = new RecordingSkillOrderProvider(lane => OkResult(103, lane, samples[lane]));
+
+        var selection = await SkillOrderLaneResolver.ResolveAsync(
+            provider,
+            103,
+            laneOverride: null,
+            detectedPosition: "NONE",
+            CancellationToken.None);
+
+        Assert.Equal(5, provider.Requests.Count);
+        Assert.Equal(SkillOrderLaneResolver.Lanes.OrderBy(lane => lane), provider.Requests.OrderBy(lane => lane));
+        Assert.Equal("MID", selection.Lane);
+        Assert.True(selection.IsLaneAuto);
+        Assert.Equal(200, selection.Result.SampleSize);
+        // The selected lane is the same lane whose response supplies the
+        // displayed recommendation; it cannot drift to a label-only guess.
+        Assert.Equal("MID", provider.Requests.Single(lane => lane == selection.Lane));
+    }
+
+    [Fact]
     public void Own_champion_resolution_reads_only_the_matching_player()
     {
         using var document = JsonDocument.Parse("""
@@ -134,4 +183,25 @@ public sealed class SkillOrderProviderTests
             return Task.FromResult(response);
         }
     }
+
+    private sealed class RecordingSkillOrderProvider(Func<string, SkillOrderResult> resultFactory) : ISkillOrderProvider
+    {
+        public List<string> Requests { get; } = [];
+
+        public Task<SkillOrderResult> GetSkillOrderAsync(
+            int championId,
+            string? role,
+            CancellationToken ct)
+        {
+            Requests.Add(role ?? string.Empty);
+            return Task.FromResult(resultFactory(role ?? string.Empty));
+        }
+    }
+
+    private static SkillOrderResult OkResult(int championId, string lane, int sampleSize) =>
+        new(
+            SkillOrderStatus.Ok,
+            new OverlaySkillOrder([OverlayAbility.Q], 1, Completed: false),
+            championId,
+            sampleSize);
 }

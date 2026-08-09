@@ -128,6 +128,29 @@ public sealed class WireContractReplayTests
     }
 
     [Fact]
+    public async Task Bridge_live_returns_no_live_for_a_malformed_upstream_body()
+    {
+        const string malformed = "{\"activePlayer\":{";
+        using var live = new LiveClientDataClient(
+            new LiveClientDataOptions(Scheme: "http"),
+            new FixedBodyHandler(malformed));
+        await using var server = new CompanionHttpServer(
+            "session-token",
+            new CompanionState(),
+            new MockLcuApi(),
+            live,
+            ports: [FindFreePort()]);
+        await server.StartAsync();
+        using var client = NewClient(server.Port);
+
+        var response = await client.SendAsync(NewRequest(HttpMethod.Get, "/live?session=session-token"));
+        var body = await ReadJsonAsync(response);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("no-live", body.GetProperty("error").GetString());
+    }
+
+    [Fact]
     public void Wire_records_serialize_nullable_status_fields_and_unions_exactly()
     {
         var status = JsonSerializer.Serialize(new CompanionStatus(

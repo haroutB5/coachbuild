@@ -35,7 +35,8 @@ public sealed record OverlaySkillOrder(
 public sealed record SkillOrderResult(
     SkillOrderStatus Status,
     OverlaySkillOrder Order,
-    int ChampionId);
+    int ChampionId,
+    int SampleSize = 0);
 
 public interface ISkillOrderProvider
 {
@@ -231,7 +232,8 @@ public sealed class SkillOrderProvider : ISkillOrderProvider, IPerGameSkillOrder
         return new SkillOrderResult(
             SkillOrderStatus.Ok,
             new OverlaySkillOrder(parsedOrder, observedLevels, completed.GetBoolean(), completionBasis),
-            championId);
+            championId,
+            sampleSize.GetInt32());
     }
 
     private static bool TryParseAbility(string? value, out OverlayAbility ability)

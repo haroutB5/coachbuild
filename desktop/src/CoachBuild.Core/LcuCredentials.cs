@@ -29,10 +29,13 @@ public sealed class WindowsLeagueClientProcessSource : ILeagueClientProcessSourc
             using var processes = searcher.Get();
             foreach (ManagementObject process in processes)
             {
-                var name = process["Name"] as string;
-                var commandLine = process["CommandLine"] as string;
-                if (!string.IsNullOrWhiteSpace(name))
-                    result.Add(new LeagueClientProcess(name, commandLine));
+                using (process)
+                {
+                    var name = process["Name"] as string;
+                    var commandLine = process["CommandLine"] as string;
+                    if (!string.IsNullOrWhiteSpace(name))
+                        result.Add(new LeagueClientProcess(name, commandLine));
+                }
             }
         }
         catch

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
@@ -220,12 +221,8 @@ public sealed class CompanionHttpServer : IAsyncDisposable
                 }
                 else
                 {
-                    await HttpResponseWriter.WriteStreamAsync(
-                        response,
-                        200,
-                        "application/json; charset=utf-8",
-                        output => live.Content.CopyToAsync(output, cancellationToken),
-                        cancellationToken).ConfigureAwait(false);
+                    await WriteValidatedLiveAsync(response, live.Content, cancellationToken)
+                        .ConfigureAwait(false);
                 }
                 return;
             }
@@ -326,6 +323,33 @@ public sealed class CompanionHttpServer : IAsyncDisposable
             : null;
     }
 
+    private static async Task WriteValidatedLiveAsync(
+        HttpListenerResponse response,
+        Stream upstream,
+        CancellationToken cancellationToken)
+    {
+        using var payload = await PooledJsonPayload.ReadAndValidateAsync(upstream, cancellationToken)
+            .ConfigureAwait(false);
+        if (payload is null)
+        {
+            await HttpResponseWriter.WriteJsonAsync(
+                    response,
+                    200,
+                    new CompanionError("no-live"),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        await HttpResponseWriter.WriteStreamAsync(
+                response,
+                200,
+                "application/json; charset=utf-8",
+                output => payload.CopyToAsync(output, cancellationToken),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     private static async Task<T?> ReadJsonAsync<T>(HttpListenerRequest request, CancellationToken cancellationToken)
     {
         if (request.ContentLength64 > 1024 * 1024) return default;
@@ -334,5 +358,141 @@ public sealed class CompanionHttpServer : IAsyncDisposable
         if (string.IsNullOrWhiteSpace(raw)) return default;
         try { return JsonSerializer.Deserialize<T>(raw, JsonOptions.Wire); }
         catch (JsonException) { return default; }
+    }
+
+    /// <summary>
+    /// Keeps validation off the LOH by retaining the upstream body in pooled
+    /// sub-LOH chunks while Utf8JsonReader validates it incrementally. The
+    /// bridge cannot replace a malformed body after response headers commit,
+    /// so the body is replayed only after validation succeeds.
+    /// </summary>
+    private sealed class PooledJsonPayload : IDisposable
+    {
+        private const int ChunkSize = 64 * 1024;
+        private readonly List<(byte[] Buffer, int Length)> _chunks;
+        private bool _disposed;
+
+        private PooledJsonPayload(List<(byte[] Buffer, int Length)> chunks)
+        {
+            _chunks = chunks;
+        }
+
+        public static async Task<PooledJsonPayload?> ReadAndValidateAsync(
+            Stream upstream,
+            CancellationToken cancellationToken)
+        {
+            var chunks = new List<(byte[] Buffer, int Length)>();
+            var validator = new JsonStreamValidator();
+            try
+            {
+                while (true)
+                {
+                    var buffer = ArrayPool<byte>.Shared.Rent(ChunkSize);
+                    var length = 0;
+                    try
+                    {
+                        length = await upstream.ReadAsync(
+                                buffer.AsMemory(0, ChunkSize),
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        if (length == 0)
+                        {
+                            ArrayPool<byte>.Shared.Return(buffer);
+                            break;
+                        }
+
+                        if (!validator.Append(buffer.AsSpan(0, length), isFinalBlock: false))
+                        {
+                            ArrayPool<byte>.Shared.Return(buffer);
+                            ReturnChunks(chunks);
+                            return null;
+                        }
+
+                        chunks.Add((buffer, length));
+                    }
+                    catch
+                    {
+                        ArrayPool<byte>.Shared.Return(buffer);
+                        throw;
+                    }
+                }
+
+                if (!validator.Append(ReadOnlySpan<byte>.Empty, isFinalBlock: true))
+                {
+                    ReturnChunks(chunks);
+                    return null;
+                }
+
+                return new PooledJsonPayload(chunks);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                ReturnChunks(chunks);
+                return null;
+            }
+            catch (HttpRequestException)
+            {
+                ReturnChunks(chunks);
+                return null;
+            }
+            catch (IOException)
+            {
+                ReturnChunks(chunks);
+                return null;
+            }
+        }
+
+        public async Task CopyToAsync(Stream output, CancellationToken cancellationToken)
+        {
+            foreach (var (buffer, length) in _chunks)
+            {
+                await output.WriteAsync(buffer.AsMemory(0, length), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            ReturnChunks(_chunks);
+            _chunks.Clear();
+        }
+
+        private static void ReturnChunks(List<(byte[] Buffer, int Length)> chunks)
+        {
+            foreach (var (buffer, _) in chunks)
+                ArrayPool<byte>.Shared.Return(buffer);
+            chunks.Clear();
+        }
+    }
+
+    private sealed class JsonStreamValidator
+    {
+        private JsonReaderState _state;
+        private bool _sawToken;
+        private bool _rootCompleted;
+
+        public bool Append(ReadOnlySpan<byte> bytes, bool isFinalBlock)
+        {
+            try
+            {
+                var reader = new Utf8JsonReader(bytes, isFinalBlock, _state);
+                while (reader.Read())
+                {
+                    if (_rootCompleted) return false;
+                    _sawToken = true;
+                    if (reader.CurrentDepth == 0 && reader.TokenType is not JsonTokenType.StartObject and not JsonTokenType.StartArray)
+                        _rootCompleted = true;
+                }
+
+                _state = reader.CurrentState;
+                return !isFinalBlock || _sawToken && _rootCompleted;
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+        }
     }
 }
