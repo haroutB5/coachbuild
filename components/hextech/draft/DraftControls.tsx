@@ -190,7 +190,7 @@ export default function DraftControls(props: DraftControlsProps) {
             onAddAlly={props.onAddAlly}
             onRemoveAlly={props.onRemoveAlly}
           />
-          <span className="hidden h-10 self-center fading-rule lg:block" style={{ background: "linear-gradient(to bottom, transparent, rgba(233,233,237,.14), transparent)" }} aria-hidden="true" />
+          <span className="hidden h-10 self-center hr lg:block" aria-hidden="true" />
           <EnemyTeamPanel
             enemyIds={props.enemyIds}
             champIcons={props.champIcons}

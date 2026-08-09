@@ -115,7 +115,7 @@ export default function DraftPicksTable({
             value={sort}
             options={SORT_OPTIONS}
             disabled={preserveOrder}
-            ariaLabel={preserveOrder ? "Sorting disabled for Comfort Picks" : "Sort detailed rankings"}
+            ariaLabel={preserveOrder ? "Sorting disabled for filter-only view" : "Sort detailed rankings"}
             onChange={onSortChange}
             triggerClassName="min-w-[92px] min-h-[44px] rounded-[6px] px-2 py-1.5 text-[10px] lg:min-h-0"
           />
@@ -137,17 +137,18 @@ export default function DraftPicksTable({
             </tr>
           </thead>
           <tbody>
-            {rankingRows.map(({ candidate }) => {
+            {rankingRows.map(({ candidate, rank }) => {
               const entry = entryFor(champIcons, candidate.champId);
               const delta = deltaVsLaneAverage(candidate.winRate, laneAverageValue);
               const offMeta = isOffMetaLaneShare(candidate.laneShare);
               const comfort = candidate.personalOverall.games > 0;
+              const displayRank = preserveOrder ? candidate.rank : rank;
               return (
                 <tr
                   key={candidate.champId}
                   className={`border-t border-txt/[0.05] transition-colors duration-[120ms] ease-in hover:bg-txt/[0.04] ${selectedChampionId === candidate.champId ? "bg-accent/[0.1]" : ""}`}
                 >
-                  <td className="px-3 py-2.5 text-[11px] tabular-nums text-txt/[0.38]">{candidate.rank}</td>
+                  <td className="px-3 py-2.5 text-[11px] tabular-nums text-txt/[0.38]">{displayRank}</td>
                   <td className="px-2 py-2.5">
                     <button type="button" onClick={() => onSelect(candidate.champId)} className="flex min-w-0 items-center gap-2 text-left focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2">
                       <span className="h-7 w-7 flex-shrink-0 overflow-hidden rounded-[6px]" style={{ boxShadow: "inset 0 0 0 1px rgba(233,233,237,.12)" }}>
@@ -163,7 +164,7 @@ export default function DraftPicksTable({
                     </button>
                   </td>
                   <td className="px-2 py-2.5 text-right">
-                    <span className={`inline-flex min-w-[24px] justify-center rounded-[4px] px-1.5 py-1 text-[10px] font-semibold leading-none ${tierClass(candidate.rank)}`} style={{ clipPath: "polygon(0 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%)" }}>{draftTierForRank(candidate.rank)}</span>
+                    <span className={`inline-flex min-w-[24px] justify-center rounded-[4px] px-1.5 py-1 text-[10px] font-semibold leading-none ${tierClass(displayRank)}`} style={{ clipPath: "polygon(0 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%)" }}>{draftTierForRank(displayRank)}</span>
                   </td>
                   <td className="px-2 py-2.5 text-right text-[12px] font-semibold tabular-nums text-txt">{percent(candidate.winRate)}</td>
                   <td className="px-2 py-2.5 text-right text-[11px] tabular-nums text-txt/[0.62]">{percent(candidate.laneShare)}</td>
@@ -175,17 +176,18 @@ export default function DraftPicksTable({
           </tbody>
         </table>
         <div className="divide-y divide-txt/[0.05] sm:hidden">
-          {rankingRows.map(({ candidate }) => {
+          {rankingRows.map(({ candidate, rank }) => {
             const entry = entryFor(champIcons, candidate.champId);
             const delta = deltaVsLaneAverage(candidate.winRate, laneAverageValue);
             const offMeta = isOffMetaLaneShare(candidate.laneShare);
             const comfort = candidate.personalOverall.games > 0;
+            const displayRank = preserveOrder ? candidate.rank : rank;
             return (
               <article
                 key={candidate.champId}
                 className={`grid grid-cols-[24px_minmax(0,1fr)_auto] gap-x-2 px-3 py-3 transition-colors duration-[120ms] ease-in ${selectedChampionId === candidate.champId ? "bg-accent/[0.1]" : "hover:bg-txt/[0.04]"}`}
               >
-                <span className="pt-1 text-[11px] tabular-nums text-txt/[0.38]">{candidate.rank}</span>
+                <span className="pt-1 text-[11px] tabular-nums text-txt/[0.38]">{displayRank}</span>
                 <button type="button" onClick={() => onSelect(candidate.champId)} className="flex min-h-[44px] min-w-0 items-center gap-2 text-left focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2">
                   <span className="h-8 w-8 flex-shrink-0 overflow-hidden rounded-[6px]" style={{ boxShadow: "inset 0 0 0 1px rgba(233,233,237,.12)" }}>
                     <IconWithFallback src={entry.icon} alt={entry.name} fallbackGlyph={entry.name} className="h-full w-full object-cover" size={32} />
@@ -198,7 +200,7 @@ export default function DraftPicksTable({
                     </span>
                   </span>
                 </button>
-                <span className={`mt-1 inline-flex h-fit min-w-[30px] justify-center rounded-[4px] px-1.5 py-1 text-[10px] font-semibold leading-none ${tierClass(candidate.rank)}`} style={{ clipPath: "polygon(0 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%)" }}>{draftTierForRank(candidate.rank)}</span>
+                <span className={`mt-1 inline-flex h-fit min-w-[30px] justify-center rounded-[4px] px-1.5 py-1 text-[10px] font-semibold leading-none ${tierClass(displayRank)}`} style={{ clipPath: "polygon(0 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%)" }}>{draftTierForRank(displayRank)}</span>
                 <div className="col-start-2 col-span-2 mt-2 grid grid-cols-4 gap-2 border-t border-txt/[0.06] pt-2 text-right">
                   <div><span className="block text-[8px] uppercase tracking-[0.1em] text-txt/[0.35]">Win</span><span className="mt-0.5 block text-[11px] font-semibold tabular-nums text-txt">{percent(candidate.winRate)}</span></div>
                   <div><span className="block text-[8px] uppercase tracking-[0.1em] text-txt/[0.35]">Pick</span><span className="mt-0.5 block text-[11px] tabular-nums text-txt/[0.62]">{percent(candidate.laneShare)}</span></div>

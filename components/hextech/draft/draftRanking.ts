@@ -3,12 +3,13 @@ export interface OriginalDraftRankedRow<T> {
   rank: number;
 }
 
-/** Filter a recommendation feed without changing its server-assigned rank. */
+/** Flatten recommendation feeds, then filter without changing merged order. */
 export function preserveOriginalDraftRanks<T extends { personalOverall: { games: number } }>(
-  plays: T[],
+  feeds: readonly (readonly T[])[],
   comfortOnly: boolean
 ): OriginalDraftRankedRow<T>[] {
-  return plays
+  const mergedPlays = feeds.reduce<T[]>((merged, feed) => merged.concat(feed), []);
+  return mergedPlays
     .map((play, index) => ({ play, rank: index + 1 }))
     .filter((row) => !comfortOnly || row.play.personalOverall.games > 0);
 }

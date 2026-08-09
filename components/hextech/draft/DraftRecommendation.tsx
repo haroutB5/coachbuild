@@ -132,7 +132,7 @@ function CompactPick({ candidate, index, champIcons, laneOpponentName, laneAvera
           <span className="truncate text-[13px] font-semibold text-txt">{entry.name}</span>
           <span className="truncate text-[9px] font-medium uppercase tracking-[0.12em] text-accent-400">{tag}</span>
         </div>
-        <p className="mt-1 truncate text-[11.5px] leading-[1.35] text-txt/[0.52]">{whyFor(candidate, laneOpponentName)}</p>
+        <p className="mt-1 text-[11.5px] leading-[1.35] text-txt/[0.52]">{whyFor(candidate, laneOpponentName)}</p>
       </div>
       <div className="flex-shrink-0 text-right tabular-nums">
         <p className="text-[17px] font-semibold leading-none text-txt">{percent(candidate.winRate)}</p>

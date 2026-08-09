@@ -83,7 +83,8 @@ export default function DraftLockInCard() {
       </div>
       <p className="mt-2 text-[11.5px] leading-[1.45] text-txt/[0.58]">Runes and the full item set are pushed to your client the moment you lock. Nothing is overwritten.</p>
 
-      <div className="mt-4 space-y-3 fading-rule pt-3" style={{ background: "linear-gradient(to right, transparent, rgba(233,233,237,.14) 18%, rgba(233,233,237,.14) 82%, transparent)", backgroundSize: "100% 1px", backgroundRepeat: "no-repeat", backgroundPosition: "top" }}>
+      <div aria-hidden="true" className="hr" />
+      <div className="space-y-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold text-txt">Auto-add item builds</p>

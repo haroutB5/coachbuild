@@ -556,11 +556,12 @@ export default function DraftPage() {
   const laneStatMap = new Map<number, DraftLaneStat>(laneStats.map((stat) => [stat.champId, stat]));
   const matchupPreviewMap = new Map<number, DraftMatchupPreview>(state.status === "ok" ? (state.data.matchupPreviews ?? []).map((preview) => [preview.champId, preview]) : []);
   const activeFilters = { minPickRate, includeOffMeta, minimumGames };
-  const recommendedFilterRows = preserveOriginalDraftRanks(basePlays, myPoolOnly).map(({ play, rank }) => {
+  const rankedRecommendedRows = preserveOriginalDraftRanks([basePlays, basePotentialPlays], myPoolOnly);
+  const recommendedFilterRows = rankedRecommendedRows.filter(({ play }) => !basePotentialPlays.includes(play)).map(({ play, rank }) => {
     const stat = laneStatMap.get(play.champId);
     return { play, rank, synergyDelta: play.synergyDelta, champId: play.champId, laneShare: stat?.laneShare ?? null, totalGames: stat?.totalGames ?? null };
   });
-  const potentialFilterRows = preserveOriginalDraftRanks(basePotentialPlays, myPoolOnly).map(({ play, rank }) => {
+  const potentialFilterRows = rankedRecommendedRows.filter(({ play }) => basePotentialPlays.includes(play)).map(({ play, rank }) => {
     const stat = laneStatMap.get(play.champId);
     return { play, rank, synergyDelta: play.synergyDelta, champId: play.champId, laneShare: stat?.laneShare ?? null, totalGames: stat?.totalGames ?? null };
   });
@@ -616,7 +617,7 @@ export default function DraftPage() {
           : assistantView === "recommended"
             ? resolveRecommendedDetailCandidates({ recommended: matchupDetailCandidates, blind: filteredBlindCandidates, noEnemies: enemyIds.length === 0 })
             : matchupDetailCandidates;
-  const preserveDetailOrder = assistantView === "comfort";
+  const preserveDetailOrder = assistantView === "comfort" || assistantView === "counters";
   const topCards = resolveTopRecommendationCards({ rows: currentViewRows, sort: detailSort, preserveOrder: preserveDetailOrder });
   const topCandidate = topCards[0]?.candidate ?? null;
   const detailAverage = laneAverage(laneStats);
