@@ -19,13 +19,11 @@ public sealed class SettingsStoreTests
             var geometry = new CalibrationGeometry(910, 940, 52, 73);
 
             store.SetLaneOverride("mid");
-            store.SetShowSkillTable(true);
             store.SetOverlayVisible(false);
             store.SaveCalibration(display, geometry);
 
             var settings = store.Read();
             Assert.Equal("MID", settings.LaneOverride);
-            Assert.True(settings.ShowSkillTable);
             Assert.False(settings.OverlayVisible);
             Assert.Equal(geometry, store.LoadCalibration(display));
             Assert.NotEqual(geometry, store.LoadCalibration(display with { DpiX = 144, DpiY = 144 }));
@@ -37,13 +35,13 @@ public sealed class SettingsStoreTests
     }
 
     [Fact]
-    public void NewProfilesShowTheSkillTableWithoutASettingsFile()
+    public void NewProfilesShowTheOverlayByDefaultWithoutASettingsFile()
     {
         var root = MakeTempDirectory();
         try
         {
             var store = new OverlaySettingsStore(Path.Combine(root, "desktop-settings.json"));
-            Assert.True(store.Read().ShowSkillTable);
+            Assert.True(store.Read().OverlayVisible);
         }
         finally
         {
@@ -59,13 +57,13 @@ public sealed class SettingsStoreTests
         {
             var path = Path.Combine(root, "desktop-settings.json");
             var store = new OverlaySettingsStore(path);
-            Assert.True(store.Read().ShowSkillTable);
+            Assert.True(store.Read().OverlayVisible);
 
-            File.WriteAllText(path, "{\"showSkillTable\":false}");
-            Assert.True(store.Read().ShowSkillTable);
+            File.WriteAllText(path, "{\"overlayVisible\":false}");
+            Assert.True(store.Read().OverlayVisible);
 
-            store.SetShowSkillTable(false);
-            Assert.False(store.Read().ShowSkillTable);
+            store.SetOverlayVisible(false);
+            Assert.False(store.Read().OverlayVisible);
         }
         finally
         {
@@ -83,7 +81,6 @@ public sealed class SettingsStoreTests
             File.WriteAllText(legacyPath, JsonSerializer.Serialize(new
             {
                 lane = "BOT",
-                showSkillTable = true,
                 calibration = new
                 {
                     geometry = new { firstBoxCenterX = 700, centerY = 900, boxSize = 48, spacing = 68 },
@@ -96,9 +93,10 @@ public sealed class SettingsStoreTests
             Assert.Equal("BOT", store.Read().LaneOverride);
             Assert.Equal(700, store.LoadCalibration(new DisplayResolution(1920, 1080)).FirstBoxCenterX);
 
-            store.SetShowSkillTable(false);
+            store.SetOverlayVisible(false);
             Assert.True(File.Exists(store.Path));
             Assert.Equal("BOT", store.Read().LaneOverride);
+            Assert.False(store.Read().OverlayVisible);
         }
         finally
         {

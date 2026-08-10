@@ -13,14 +13,13 @@ import { LANE_TO_ROLE_ID, type LaneId } from "./heroContracts";
 import {
   aggregateProConsensus,
   formatSharePct,
-  isBuildItem,
   missingRunePageReason,
   proConsensusRuneApplyInput,
   type ProConsensusModel,
   type ProConsensusRuneApplyResult,
   type RuneSlotBreakdown,
 } from "./proConsensus";
-import { sortPerksByRow } from "./perkSlots";
+import { PERK_TREES, sortPerksByRow } from "./perkSlots";
 import BuildSlotList from "./BuildSlotList";
 import { isContested, slotFromFrequencies, type SlotView } from "./buildSlotView";
 import { buildRuneApplyBody } from "./runeApplyBody";
@@ -32,7 +31,22 @@ const subscribeToSession = () => () => {};
 import { aggregateRecordedSkillOrders } from "@/lib/skillOrderAggregate";
 import type { SkillOrderModel } from "./skillOrder";
 import { FRESH_WINDOW_DAYS } from "@/lib/pro/fresh";
-import { ACCENT_CARD_CLASS, BuildPathArrow, BuildSkillOrderGrid, CARD_CLASS, SectionLabel } from "./builds/BuildVisuals";
+import {
+  ACCENT_CARD_CLASS,
+  BuildPathArrow,
+  BuildSkillOrderGrid,
+  CARD_CLASS,
+  RuneCircle,
+  RunePageGrid,
+  RunePageModal,
+  SHARD_ROWS,
+  type RuneGridSample,
+  type RunePageGridPage,
+  type RunePageGridRow,
+  type RunePageModalSpell,
+  SectionLabel,
+} from "./builds/BuildVisuals";
+import { mostBuiltPath, pathEntryPct, type ConsensusPathEntry } from "./mostBuiltPath";
 
 // Sample size below which the fraction shown is more noise than signal — the
 // card still renders (a real user request, "Rocketbelt shows up a lot," can
@@ -143,6 +157,111 @@ interface DisplayNames {
   keystones: Map<number, RuneDisplay>;
   primaryMinors: Map<number, RuneDisplay>;
   secondaryPicks: Map<number, RuneDisplay>;
+}
+
+function proRunePick(id: number, names: Map<number, RuneDisplay>, occurrence = 0): RunePick {
+  const display = names.get(id);
+  return {
+    id,
+    name: display?.name ?? `Rune #${id}`,
+    icon: display?.icon ?? "",
+    wpa: 0,
+    winrate: null,
+    occurrence,
+  };
+}
+
+function proStaticRuneRow(
+  optionIds: readonly number[],
+  selectedId: number | null,
+  names: Map<number, RuneDisplay>,
+  sample: RuneGridSample | null = null,
+): RunePageGridRow {
+  const ids = [...new Set([...optionIds, ...(selectedId == null ? [] : [selectedId])])];
+  return {
+    options: ids.map((id) => proRunePick(id, names, id === selectedId && sample ? sample.count : 0)),
+    selectedIds: selectedId == null ? new Set<number>() : new Set([selectedId]),
+    sample,
+    empty: selectedId == null,
+  };
+}
+
+function proStaticShardRow(
+  optionIds: readonly number[],
+  slot: { runeId: number; count: number; sampleSize: number } | null,
+): RunePageGridRow {
+  const selectedId = slot?.runeId ?? null;
+  const ids = [...new Set([...optionIds, ...(selectedId == null ? [] : [selectedId])])];
+  return {
+    options: ids.map((id) => ({
+      id,
+      name: shardName(id),
+      icon: shardIconUrl(id),
+      wpa: 0,
+      winrate: null,
+      occurrence: id === selectedId && slot ? slot.count : 0,
+    } satisfies RunePick)),
+    selectedIds: selectedId == null ? new Set<number>() : new Set([selectedId]),
+    sample: slot ? { count: slot.count, denominator: slot.sampleSize } : null,
+    empty: selectedId == null,
+  };
+}
+
+function proRunePage(model: ProConsensusModel, names: DisplayNames): RunePageGridPage {
+  const page = model.runePage;
+  const primaryTreeId = model.primaryTree ?? page.primaryTreeId;
+  const primarySlots = primaryTreeId == null ? null : PERK_TREES[primaryTreeId] ?? null;
+  const secondaryTreeId = page.secondaryTreeId ?? model.secondaryTree?.treeId ?? null;
+  const secondarySlots = secondaryTreeId == null ? null : PERK_TREES[secondaryTreeId] ?? null;
+  const primaryRows = Array.from({ length: 3 }, (_, index) => {
+    const slot = page.primaryRows[index] ?? null;
+    return proStaticRuneRow(
+      primarySlots?.minorRows[index] ?? [],
+      slot?.runeId ?? null,
+      names.keystones,
+      slot ? { count: slot.count, denominator: slot.sampleSize } : null,
+    );
+  });
+  const secondaryRows = Array.from({ length: 3 }, (_, index) => {
+    const slot = page.secondaryRows[index] ?? null;
+    return proStaticRuneRow(
+      secondarySlots?.minorRows[index] ?? [],
+      slot?.runeId ?? null,
+      names.keystones,
+      slot ? { count: slot.count, denominator: slot.sampleSize } : null,
+    );
+  });
+  const shardRows = [model.shardPage.offense, model.shardPage.flex, model.shardPage.defense].map((slot, index) => (
+    proStaticShardRow(SHARD_ROWS[index] ?? [], slot)
+  ));
+  const keystoneSample = page.keystoneId != null && model.keystone?.keystoneId === page.keystoneId
+    ? { count: model.keystone.count, denominator: model.runesSampleSize }
+    : null;
+  const keystone = proStaticRuneRow(primarySlots?.keystones ?? [], page.keystoneId, names.keystones, keystoneSample);
+  return {
+    primaryTree: primaryTreeId == null ? null : { id: primaryTreeId, name: treeName(primaryTreeId), icon: treeIconUrl(primaryTreeId) },
+    keystone,
+    primaryRows,
+    secondaryTree: secondaryTreeId == null ? null : {
+      id: secondaryTreeId,
+      name: treeName(secondaryTreeId),
+      icon: treeIconUrl(secondaryTreeId),
+    },
+    secondaryRows,
+    shards: shardRows,
+  };
+}
+
+function proSpellSlots(model: ProConsensusModel, ver: string): RunePageModalSpell[] {
+  const sample: RuneGridSample | null = model.spellPair
+    ? { count: model.spellPair.count, denominator: model.spellSampleSize }
+    : null;
+  return [0, 1].map((index) => {
+    const id = model.spellPair?.spells[index] ?? null;
+    return id == null
+      ? { id: null, name: "No data", icon: "" }
+      : { id, name: spellName(id), icon: spellIconUrl(id, ver), sample };
+  });
 }
 
 function CardHeader({ children }: { children: React.ReactNode }) {
@@ -499,6 +618,7 @@ function FractionPct({ count, denom, className = "" }: { count: number; denom: n
  *  controls the keystone's extra prominence (large + gold ring) vs. the
  *  smaller minor/pick/shard tiles. */
 function ConsensusRuneTile({
+  id,
   count,
   denom,
   name,
@@ -506,6 +626,7 @@ function ConsensusRuneTile({
   size = "sm",
   onClick,
 }: {
+  id: number;
   count: number;
   denom: number;
   name: string;
@@ -514,13 +635,8 @@ function ConsensusRuneTile({
   onClick: () => void;
 }) {
   const pct = formatSharePct(denom > 0 ? count / denom : 0);
-  const dim =
-    size === "lg"
-      ? "w-14 h-14 border-2 border-line-gold shadow-[0_0_14px_rgba(200,170,110,0.3)]"
-      : size === "sm"
-        ? "w-10 h-10 border border-line"
-        : "w-8 h-8 border border-line";
   const pxSize = size === "lg" ? 56 : size === "sm" ? 40 : 32;
+  const pick: RunePick = { id, name, icon, wpa: 0, winrate: null, occurrence: count };
   return (
     <button
       type="button"
@@ -528,9 +644,7 @@ function ConsensusRuneTile({
       aria-label={`View details for ${name} — picked in ${count} of ${denom} games (${pct})`}
       className="group flex flex-col items-center text-center w-[64px] gap-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel active:scale-95 transition-transform"
     >
-      <span className={`${dim} rounded-full bg-black/30 overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform group-hover:scale-105`}>
-        <IconWithFallback src={icon} alt={name} fallbackGlyph={name} className="w-full h-full object-contain" size={pxSize} />
-      </span>
+      <RuneCircle pick={pick} size={pxSize} keystone={size === "lg"} />
       <span className="text-[10px] text-txt leading-tight line-clamp-2 min-h-[24px]">{name}</span>
       <span className="text-[10.5px] font-semibold tabular-nums text-teal">{pct}</span>
       <span className="text-[9px] text-mut/60 tabular-nums">{count}/{denom}</span>
@@ -570,77 +684,6 @@ function slotSampleNote(breakdown: RuneSlotBreakdown): string {
   if (prostageCount === 0 && soloqCount > 0) return `from ${soloqCount} solo-queue game${soloqCount === 1 ? "" : "s"}`;
   if (soloqCount === 0 && prostageCount > 0) return `from ${prostageCount} pro-play game${prostageCount === 1 ? "" : "s"}`;
   return `from ${sampleSize} games (${soloqCount} solo queue, ${prostageCount} pro play)`;
-}
-
-interface ConsensusPathEntry {
-  itemId: number;
-  count: number;
-  denominator: number;
-}
-
-function pathEntryPct(entry: ConsensusPathEntry): string {
-  return formatSharePct(entry.denominator > 0 ? entry.count / entry.denominator : 0);
-}
-
-/** The purchase path is display-only. The aggregation contract remains the
- * final-inventory model above; when a stored game has a purchase timeline we
- * use it to answer the path question, and otherwise fall back to the same
- * honest final-item frequencies the old card already exposed. */
-function mostBuiltPath(
-  games: readonly ProGame[],
-  model: ProConsensusModel,
-  itemMeta: Map<number, ItemDetail>
-): ConsensusPathEntry[] {
-  const positionCounts = new Map<number, Map<number, number>>();
-  let pathGames = 0;
-
-  games.forEach((game) => {
-    const finalIds = new Set((game.finalItems ?? []).filter((id) => id > 0));
-    if (finalIds.size === 0 || !Array.isArray(game.purchaseOrder) || game.purchaseOrder.length === 0) return;
-
-    const seen = new Set<number>();
-    const ordered = [...game.purchaseOrder]
-      .sort((a, b) => a.ts - b.ts)
-      .map((purchase) => purchase.itemId)
-      .filter((id) => {
-        if (seen.has(id) || !finalIds.has(id) || !isBuildItem(id, itemMeta.get(id))) return false;
-        seen.add(id);
-        return true;
-      })
-      .slice(0, 6);
-
-    if (ordered.length === 0) return;
-    pathGames += 1;
-    ordered.forEach((itemId, position) => {
-      const counts = positionCounts.get(position) ?? new Map<number, number>();
-      counts.set(itemId, (counts.get(itemId) ?? 0) + 1);
-      positionCounts.set(position, counts);
-    });
-  });
-
-  if (pathGames > 0) {
-    return Array.from({ length: 6 }, (_, position) => {
-      const counts = positionCounts.get(position);
-      if (!counts) return null;
-      const [itemId, count] = Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || a[0] - b[0])[0] ?? [];
-      return typeof itemId === "number" && typeof count === "number" ? { itemId, count, denominator: pathGames } : null;
-    }).filter((entry): entry is ConsensusPathEntry => entry !== null);
-  }
-
-  const fallback = [
-    ...(model.starters.slice(0, 1)),
-    ...(model.boots.slice(0, 1)),
-    ...model.items,
-  ];
-  const seen = new Set<number>();
-  return fallback
-    .filter((entry) => {
-      if (seen.has(entry.itemId)) return false;
-      seen.add(entry.itemId);
-      return true;
-    })
-    .slice(0, 6)
-    .map((entry) => ({ itemId: entry.itemId, count: entry.count, denominator: model.itemsSampleSize }));
 }
 
 interface KeystoneSplitEntry {
@@ -829,9 +872,11 @@ function KeystoneSplitCard({ entries, names, onOpenDetail }: {
                 aria-label={`View details for ${display?.name ?? `Rune #${entry.keystoneId}`}`}
                 className="flex w-full items-center gap-2.5 py-2.5 text-left transition-colors first:pt-0 last:pb-0 hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#9184d9]"
               >
-                <span className={`flex h-[34px] w-[34px] shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/[0.05] ${index === 0 ? "shadow-[0_0_0_1.5px_#9184d9,0_0_16px_rgba(145,132,217,0.25)]" : "shadow-[inset_0_0_0_1px_rgba(233,233,237,0.18)]"}`}>
-                  <IconWithFallback src={display?.icon ?? ""} alt={display?.name ?? `Rune #${entry.keystoneId}`} fallbackGlyph={display?.name ?? `Rune #${entry.keystoneId}`} className="h-full w-full object-cover" size={34} />
-                </span>
+                <RuneCircle
+                  pick={proRunePick(entry.keystoneId, names, entry.count)}
+                  size={34}
+                  selected={index === 0}
+                />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[12px] font-medium text-[#e9e9ed]">{display?.name ?? `Rune #${entry.keystoneId}`}</span>
                   <span className="mt-0.5 block truncate text-[10px] text-[#9397ab]/60">{entry.treeId ? treeName(entry.treeId) : "Rune page"} · {entry.count.toLocaleString()} games</span>
@@ -876,7 +921,7 @@ function ProPlayersCard({ players }: { players: ProPlayerSummary[] }) {
   );
 }
 
-function ProConsensusNocturneLayout({ model, itemMeta, games, skillOrder, names, ver, onOpenDetail }: {
+function ProConsensusNocturneLayout({ model, itemMeta, games, skillOrder, names, ver, onOpenDetail, onOpenRunePage }: {
   model: ProConsensusModel;
   itemMeta: Map<number, ItemDetail>;
   games: ProGame[];
@@ -884,10 +929,12 @@ function ProConsensusNocturneLayout({ model, itemMeta, games, skillOrder, names,
   names: DisplayNames;
   ver: string;
   onOpenDetail: (kind: "item" | EntityKind, id: number) => void;
+  onOpenRunePage: () => void;
 }) {
   const path = mostBuiltPath(games, model, itemMeta);
   const split = keystoneSplit(games, model);
   const players = proPlayerSummaries(games);
+  const runePage = proRunePage(model, names);
 
   return (
     <div className="space-y-4">
@@ -914,6 +961,23 @@ function ProConsensusNocturneLayout({ model, itemMeta, games, skillOrder, names,
           )}
         </div>
         <aside className="min-w-0 space-y-4">
+          <section className={`${CARD_CLASS} p-4`}>
+            <div className="flex items-center justify-between gap-3">
+              <SectionLabel>Rune page</SectionLabel>
+              <span className="text-[9px] uppercase tracking-[0.1em] text-[#9397ab]/50">slot-coherent</span>
+            </div>
+            <div className="mt-3">
+              <RunePageGrid
+                page={runePage}
+                onRuneClick={() => onOpenRunePage()}
+                runeSize={22}
+                keystoneSize={34}
+                shardSize={16}
+                optionGap={4}
+              />
+            </div>
+            <p className="mt-3 text-[10px] leading-relaxed text-[#9397ab]/65">Click a rune to inspect the complete page, including row samples, shards, and spells.</p>
+          </section>
           <KeystoneSplitCard entries={split} names={names.keystones} onOpenDetail={onOpenDetail} />
           <ProPlayersCard players={players} />
           <section className={`${ACCENT_CARD_CLASS} p-4`}>
@@ -928,6 +992,7 @@ function ProConsensusNocturneLayout({ model, itemMeta, games, skillOrder, names,
 
 export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build, variant = "pro" }: ProConsensusCardProps) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
+  const [runePageOpen, setRunePageOpen] = useState(false);
   // v0.27.3 (live user report: the v0.27.2 error line showed up on-device and
   // then STUCK — the fetch only ever re-fired on champion/lane change, so one
   // transient blip parked the error until a full navigation): bumping this
@@ -1075,6 +1140,21 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
       });
       model.primaryMinors.entries.forEach((e) => runeIds.add(e.runeId));
       model.secondaryPicks.entries.forEach((e) => runeIds.add(e.runeId));
+      if (model.runePage.keystoneId != null) runeIds.add(model.runePage.keystoneId);
+      model.runePage.primaryRows.forEach((slot) => {
+        if (slot) runeIds.add(slot.runeId);
+      });
+      model.runePage.secondaryRows.forEach((slot) => {
+        if (slot) runeIds.add(slot.runeId);
+      });
+      const primaryTreeId = model.primaryTree ?? model.runePage.primaryTreeId;
+      const secondaryTreeId = model.runePage.secondaryTreeId ?? model.secondaryTree?.treeId ?? null;
+      [primaryTreeId, secondaryTreeId].forEach((treeId) => {
+        const tree = treeId == null ? null : PERK_TREES[treeId];
+        if (!tree) return;
+        tree.keystones.forEach((id) => runeIds.add(id));
+        tree.minorRows.flat().forEach((id) => runeIds.add(id));
+      });
 
       const resolved = await Promise.all(Array.from(runeIds).map((id) => resolveRuneDisplay(id, ver)));
       if (cancelled) return;
@@ -1293,6 +1373,17 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
         names={names}
         ver={ver}
         onOpenDetail={onOpenDetail}
+        onOpenRunePage={() => setRunePageOpen(true)}
+      />
+
+      <RunePageModal
+        open={runePageOpen}
+        onClose={() => setRunePageOpen(false)}
+        title={isOtp ? "OTP rune setup" : "Pro Consensus rune setup"}
+        subtitle={`${model.gamesTotal.toLocaleString()} games · click outside or press Escape to close`}
+        page={proRunePage(model, names)}
+        spells={proSpellSlots(model, ver)}
+        compact
       />
 
       <div className="hidden" aria-hidden="true">
@@ -1444,6 +1535,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
               <div className="flex flex-wrap items-end gap-2.5">
                 {keystone && (
                   <ConsensusRuneTile
+                    id={keystone.keystoneId}
                     size="lg"
                     count={keystone.count}
                     denom={model.runesSampleSize}
@@ -1455,6 +1547,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
                 {/* Tree-row order, not pick-rate order — see the note above. */}
                 {sortPerksByRow(model.primaryTree, model.primaryMinors.entries, (e) => e.runeId).map((e) => (
                   <ConsensusRuneTile
+                    id={e.runeId}
                     key={e.runeId}
                     count={e.count}
                     denom={model.primaryMinors.sampleSize}
@@ -1498,6 +1591,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
                       guaranteed non-null inside this branch. */}
                   {sortPerksByRow(secondaryTree?.treeId ?? null, model.secondaryPicks.entries, (e) => e.runeId).map((e) => (
                     <ConsensusRuneTile
+                      id={e.runeId}
                       key={e.runeId}
                       count={e.count}
                       denom={model.secondaryPicks.sampleSize}
@@ -1513,6 +1607,7 @@ export default function ProConsensusCard({ champ, lane, ver, onOpenDetail, build
                 <div className="flex flex-wrap gap-2.5">
                   {model.shards.entries.map((e) => (
                     <ConsensusRuneTile
+                      id={e.runeId}
                       key={e.runeId}
                       size="xs"
                       count={e.count}

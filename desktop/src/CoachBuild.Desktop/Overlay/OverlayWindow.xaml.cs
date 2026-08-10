@@ -68,8 +68,6 @@ public partial class OverlayWindow : Window
 
     public bool OverlayVisibleSetting => _settings.OverlayVisible;
 
-    public bool ShowSkillTableSetting => _settings.ShowSkillTable;
-
     public string? LaneOverrideSetting => _settings.LaneOverride;
 
     public void ApplyState(OverlayState state)
@@ -100,19 +98,6 @@ public partial class OverlayWindow : Window
         IsHitTestVisible = interactive;
         Focusable = interactive;
         if (interactive) Focus();
-        RenderCurrentState();
-    }
-
-    public void SetShowSkillTable(bool visible)
-    {
-        if (!Dispatcher.CheckAccess())
-        {
-            Dispatcher.BeginInvoke(() => SetShowSkillTable(visible));
-            return;
-        }
-
-        _settings.ShowSkillTable = visible;
-        _settingsStore.SetShowSkillTable(visible);
         RenderCurrentState();
     }
 
@@ -261,7 +246,7 @@ public partial class OverlayWindow : Window
         };
         var physicalCalibration = _settingsStore.LoadCalibration(_display.Resolution);
         var dipCalibration = CalibrationGeometry.ForDpi(physicalCalibration, _display.DpiX, 96);
-        _renderer.Render(RootCanvas, renderState, _settings, _display.Resolution, _interactive, dipCalibration);
+        _renderer.Render(RootCanvas, renderState, _settings, _display.Resolution, dipCalibration);
     }
 
     private void OnDisplayChanged(object? sender, EventArgs e)

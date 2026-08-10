@@ -90,15 +90,20 @@ export default function DetailPopover({ open, onClose, ariaLabel, header, childr
             : "opacity-0 duration-100 ease-[cubic-bezier(0.3,0,0.8,0.15)]"
         }`}
       />
-      {/* Centering layer: pointer-events-none so its padding "gutter" lets
-          clicks fall through to the backdrop above for tap-outside-closes;
-          the card re-enables pointer-events on itself. */}
-      <div className="absolute inset-0 flex items-center justify-center p-4 pointer-events-none">
+      {/* The dialog is a direct sibling of the backdrop. Its full-screen
+          pointer-events-none gutter lets outside clicks land on the backdrop;
+          only the centred card re-enables pointer events. Keeping the two as
+          siblings is important: an aria-hidden backdrop must never be an
+          ancestor of the accessible dialog. */}
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={ariaLabel}
+        className="absolute inset-0 flex items-center justify-center p-4 pointer-events-none"
+      >
         <div
-          ref={panelRef}
-          role="dialog"
-          aria-modal="true"
-          aria-label={ariaLabel}
+          onClick={(event) => event.stopPropagation()}
           className={`w-full max-w-sm max-h-[75vh] flex flex-col rounded-2xl bg-panel border border-line shadow-[0_20px_60px_rgba(0,0,0,0.6)] pointer-events-auto transition-[opacity,transform] motion-reduce:transition-none ${
             visible
               ? "opacity-100 scale-100 duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]"

@@ -11,6 +11,7 @@ import type { AltKeystone } from "./altKeystone";
 import { buildRuneApplyBody } from "./runeApplyBody";
 import { applyItemSetsForBuild } from "./itemSetsApply";
 import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/components/live/companionClient";
+import { RuneCircle } from "./builds/BuildVisuals";
 
 const subscribeToSession = () => () => {};
 
@@ -241,11 +242,6 @@ interface RuneTileProps {
 }
 
 function RuneTile({ pick, isKeystone, onOpenDetail }: RuneTileProps) {
-  const dim = isKeystone
-    ? "w-14 h-14 border-2 border-teal shadow-[0_0_14px_rgba(130,219,247,0.3)]"
-    : "w-10 h-10 border border-line";
-  const pxSize = isKeystone ? 56 : 40;
-
   return (
     <button
       type="button"
@@ -253,17 +249,7 @@ function RuneTile({ pick, isKeystone, onOpenDetail }: RuneTileProps) {
       aria-label={`View details for rune ${pick.name}`}
       className={`group flex flex-col items-center text-center w-[64px] gap-1 rounded-md ${TAP_RING}`}
     >
-      <span
-        className={`${dim} rounded-full bg-black/30 overflow-hidden flex items-center justify-center flex-shrink-0 transition-transform group-hover:scale-105`}
-      >
-        <IconWithFallback
-          src={pick.icon}
-          alt={pick.name}
-          fallbackGlyph={pick.name}
-          className="w-full h-full object-contain"
-          size={pxSize}
-        />
-      </span>
+      <RuneCircle pick={pick} size={isKeystone ? 56 : 40} keystone={Boolean(isKeystone)} />
       {/* v0.44.0 (Builds responsive plan §2d): uniform tile width (w-[64px],
           was w-[68px]) so two tiles fit a 390px half-column, and a taller
           min-h (24px -> 28px) + break-words for the now-narrower name
@@ -292,15 +278,7 @@ function ShardTile({ label, pick, onOpenDetail }: ShardTileProps) {
       aria-label={`View details for stat shard ${pick.name}`}
       className={`flex flex-col items-center text-center w-14 gap-1 rounded-md ${TAP_RING}`}
     >
-      <span className="w-8 h-8 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
-        <IconWithFallback
-          src={pick.icon}
-          alt={pick.name}
-          fallbackGlyph={pick.name}
-          className="w-full h-full object-contain p-1"
-          size={32}
-        />
-      </span>
+      <RuneCircle pick={pick} size={32} />
       <span className="text-[9px] text-mut leading-tight">{label}</span>
     </button>
   );

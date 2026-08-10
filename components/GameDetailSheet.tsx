@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import type { ProGame, ProGamePurchase } from "./proGames.types";
+import type { Pick as RunePick } from "@/lib/types";
 import { cleanPlayerName } from "./playerName";
 import { matchupLabel } from "./teamCompDisplay";
 import { stashPendingPlayerSelect, type PendingPlayerSelect } from "./playerSelectHandoff";
@@ -29,6 +30,7 @@ import {
   GAME_LANE_LABEL,
 } from "./ProGameCard";
 import { IconWithFallback } from "./IconWithFallback";
+import { RuneCircle } from "./hextech/builds/BuildVisuals";
 import { SheetTeamsSection } from "./TeamComp";
 import ItemDetailPopover from "./ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "./EntityDetailPopover";
@@ -98,13 +100,16 @@ function RunePerkTile({
     };
   }, [runeId, ver]);
 
-  const dim = size === "lg" ? "w-14 h-14" : "w-9 h-9";
   const pxSize = size === "lg" ? 56 : 36;
-  const ring =
-    size === "lg"
-      ? "border-2 border-teal shadow-[0_0_12px_rgba(130,219,247,0.35)]"
-      : "border border-line";
   const label = rune ? rune.name : `Rune #${runeId}`;
+  const pick: RunePick = {
+    id: runeId,
+    name: label,
+    icon: rune?.icon ?? "",
+    wpa: 0,
+    winrate: null,
+    occurrence: 0,
+  };
 
   return (
     <button
@@ -113,11 +118,7 @@ function RunePerkTile({
       aria-label={`View details for rune ${label}`}
       className="flex flex-col items-center gap-1 w-16 flex-shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel rounded-md active:scale-95 transition-transform"
     >
-      <div
-        className={`${dim} ${ring} rounded-full bg-black/30 overflow-hidden flex items-center justify-center flex-shrink-0`}
-      >
-        <IconWithFallback src={rune?.icon ?? ""} alt={label} fallbackGlyph={label} className="w-full h-full object-contain" size={pxSize} />
-      </div>
+      <RuneCircle pick={pick} size={pxSize} keystone={size === "lg"} />
       <span className="text-[9.5px] text-mut text-center leading-tight line-clamp-2">{label}</span>
     </button>
   );
@@ -747,15 +748,10 @@ export default function GameDetailSheet({
                         aria-label={`View details for stat shard ${shardName(id)}`}
                         className="flex flex-col items-center gap-1 w-16 flex-shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-panel rounded-md active:scale-95 transition-transform"
                       >
-                        <div className="w-7 h-7 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
-                          <IconWithFallback
-                            src={shardIconUrl(id)}
-                            alt={shardName(id)}
-                            fallbackGlyph={shardName(id)}
-                            className="w-full h-full object-contain p-1"
-                            size={28}
-                          />
-                        </div>
+                        <RuneCircle
+                          pick={{ id, name: shardName(id), icon: shardIconUrl(id), wpa: 0, winrate: null, occurrence: 0 }}
+                          size={28}
+                        />
                         <span className="text-[9.5px] text-mut text-center leading-tight">{shardName(id)}</span>
                       </button>
                     ))}

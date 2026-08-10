@@ -14,6 +14,8 @@ import GameDetailSheet from "./GameDetailSheet";
 import { IconWithFallback } from "./IconWithFallback";
 import { cleanPlayerName } from "./playerName";
 import type { PendingPlayerSelect } from "./playerSelectHandoff";
+import type { Pick as RunePick } from "@/lib/types";
+import { RuneCircle } from "./hextech/builds/BuildVisuals";
 
 export function ImgWithFallback({ src, alt, className, size }: { src: string; alt: string; className?: string; size?: number }) {
   return <IconWithFallback src={src} alt={alt} className={className} size={size} />;
@@ -65,9 +67,9 @@ function keystoneLabel(rune: ResolvedRuneDisplay | null): string {
 export function RunePerkIcon({ runeId, ver, size }: { runeId: number; ver: string; size: "lg" | "sm" | "xs" }) {
   const rune = useRuneDisplay(runeId, ver);
   const label = keystoneLabel(rune);
-  const dim = size === "lg" ? "h-11 w-11" : size === "sm" ? "h-6 w-6" : "h-5 w-5";
   const px = size === "lg" ? 44 : size === "sm" ? 24 : 20;
-  return <span className={`flex ${dim} shrink-0 items-center justify-center overflow-hidden rounded-full bg-black/25 shadow-[inset_0_0_0_1px_rgba(233,233,237,.12)] ${size === "lg" ? "ring-2 ring-teal" : ""}`} title={label}><ImgWithFallback src={rune?.icon ?? ""} alt={label} className="h-full w-full object-contain" size={px} /></span>;
+  const pick: RunePick = { id: runeId, name: label, icon: rune?.icon ?? "", wpa: 0, winrate: null, occurrence: 0 };
+  return <RuneCircle pick={pick} size={px} keystone={size === "lg"} />;
 }
 
 function RunePerkName({ runeId, ver }: { runeId: number; ver: string }) {

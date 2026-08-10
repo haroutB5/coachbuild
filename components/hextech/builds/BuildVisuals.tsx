@@ -11,6 +11,7 @@ import {
 import type { BuildResponse, Pick as PickType } from "@/lib/types";
 import type { EntityKind } from "@/components/EntityDetailPopover";
 import { IconWithFallback } from "@/components/IconWithFallback";
+import DetailPopover from "@/components/DetailPopover";
 import type { AltKeystone } from "@/components/hextech/altKeystone";
 import { resolveRuneDisplay, shardIconUrl, shardName, spellIconUrl, spellName, treeIconUrl, treeName } from "@/components/proAssets";
 import { PERK_TREES, primaryMinorRow } from "../perkSlots";
@@ -118,27 +119,29 @@ export function StatValue({ label, value, tone = "normal", sub }: { label: strin
   );
 }
 
-function RuneCircle({
+export function RuneCircle({
   pick,
   size = 28,
   keystone = false,
   selected = true,
   onClick,
+  ariaLabel,
 }: {
   pick: PickType;
   size?: number;
   keystone?: boolean;
   selected?: boolean;
   onClick?: () => void;
+  ariaLabel?: string;
 }) {
   const inner = (
     <span
       className={`flex shrink-0 items-center justify-center overflow-hidden rounded-full ${
-        keystone
+        keystone && selected
           ? "bg-[radial-gradient(circle_at_40%_35%,#4a4380,#25243c)] shadow-[0_0_0_2px_rgba(145,132,217,0.75),0_0_22px_rgba(145,132,217,0.3)]"
           : selected
-            ? "bg-[#9184d9]/[0.28] shadow-[inset_0_0_0_1.5px_#9184d9]"
-            : "bg-white/[0.05] opacity-50 shadow-[inset_0_0_0_1px_rgba(233,233,237,0.14)]"
+            ? "bg-[#9184d9]/[0.28] shadow-[0_0_0_2px_#9184d9,0_0_10px_rgba(145,132,217,0.38),inset_0_0_0_1px_#d2cefd]"
+            : "bg-white/[0.04] opacity-[.35] grayscale shadow-[inset_0_0_0_1px_rgba(233,233,237,0.16)]"
       }`}
       style={{ width: size, height: size }}
       title={pick.name}
@@ -151,8 +154,8 @@ function RuneCircle({
     <button
       type="button"
       onClick={onClick}
-      aria-label={`View details for ${pick.name}`}
-      className="relative flex shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1d2a]"
+      aria-label={ariaLabel ?? `View details for ${pick.name}`}
+      className="relative flex shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1d2a] motion-reduce:transition-none"
       style={{ width: size, height: size }}
     >
       {inner}
@@ -162,7 +165,42 @@ function RuneCircle({
 
 type RuneRow = { ids: number[]; selectedIds: Set<number> };
 
-const SHARD_ROWS: number[][] = [
+export interface RuneGridTree {
+  id: number | null;
+  name: string;
+  icon: string;
+}
+
+export interface RuneGridSample {
+  count: number;
+  denominator: number;
+}
+
+export interface RunePageGridRow {
+  /** Every static option in this row, with the source pick(s) listed in
+   * `selectedIds`. Unknown source ids are appended by the page adapter so a
+   * real pick is never silently dropped. */
+  options: readonly PickType[];
+  selectedIds: ReadonlySet<number>;
+  sample?: RuneGridSample | null;
+  /** A source row/slot had no pick. The static options may still be rendered
+   * for context, but the explicit dash keeps the absence honest. */
+  empty?: boolean;
+}
+
+export interface RunePageGridPage {
+  primaryTree: RuneGridTree | null;
+  keystone: RunePageGridRow | null;
+  primaryRows: readonly RunePageGridRow[];
+  secondaryTree: RuneGridTree | null;
+  secondaryRows: readonly RunePageGridRow[];
+  shards: readonly RunePageGridRow[];
+  /** Recorded ids whose source payload could not be assigned to a known row.
+   * They remain visible instead of being silently dropped. */
+  unmapped?: readonly PickType[];
+}
+
+export const SHARD_ROWS: number[][] = [
   [5005, 5008, 5007],
   [5008, 5010, 5001],
   [5002, 5003, 5011],
@@ -220,81 +258,250 @@ function optionPick(
 
 function RuneOptionRow({
   row,
-  selectedById,
-  resolvedById,
   onOpenDetail,
   size = 28,
   shard = false,
+  keystone = false,
+  showLabels = false,
+  showSamples = false,
+  labelWidth = 68,
+  optionGap,
 }: {
-  row: RuneRow;
-  selectedById: Map<number, PickType>;
-  resolvedById: Map<number, PickType>;
-  onOpenDetail: (kind: EntityKind, id: number) => void;
+  row: RunePageGridRow;
+  onOpenDetail?: (kind: EntityKind, id: number) => void;
   size?: number;
   shard?: boolean;
+  keystone?: boolean;
+  showLabels?: boolean;
+  showSamples?: boolean;
+  labelWidth?: number;
+  optionGap?: number;
 }) {
+  const hasNoData = row.empty || row.options.length === 0;
+  const emptySlot = (
+    <span className={showLabels ? "flex w-[68px] min-w-0 flex-col items-center text-center" : "flex shrink-0 items-center justify-center"} style={showLabels ? { width: labelWidth } : undefined}>
+      <span
+        className="flex shrink-0 items-center justify-center rounded-full bg-white/[0.025] text-[10px] font-semibold text-[#9397ab]/70 shadow-[inset_0_0_0_1px_rgba(233,233,237,0.16)]"
+        style={{ width: size, height: size }}
+        role="img"
+        aria-label={shard ? "No data for this stat shard slot" : "No data for this rune slot"}
+        title={shard ? "No data for this stat shard slot" : "No data for this rune slot"}
+      >
+        —
+      </span>
+      {showLabels && <span className="mt-1 line-clamp-2 min-h-[22px] text-[9px] leading-tight text-[#9397ab]/65">No data</span>}
+    </span>
+  );
+
   return (
-    <div className="flex justify-center gap-[7px]">
-      {row.ids.map((id) => {
-        const pick = optionPick(id, selectedById, resolvedById, shard);
-        return (
+    <div className="flex justify-center" style={{ gap: optionGap ?? (showLabels ? 8 : 7) }}>
+      {hasNoData && emptySlot}
+      {row.options.map((pick) => {
+        const selected = row.selectedIds.has(pick.id);
+        const circle = (
           <RuneCircle
-            key={id}
+            key={pick.id}
             pick={pick}
             size={size}
-            selected={row.selectedIds.has(id)}
-            onClick={() => onOpenDetail(shard ? "shard" : "rune", id)}
+            keystone={keystone}
+            selected={selected}
+            onClick={onOpenDetail ? () => onOpenDetail(shard ? "shard" : "rune", pick.id) : undefined}
+            ariaLabel={`View details for ${pick.name}`}
           />
+        );
+        if (!showLabels && !showSamples) return circle;
+        return (
+          <span key={pick.id} className="flex min-w-0 flex-col items-center text-center" style={{ width: labelWidth }}>
+            {circle}
+            {showLabels && <span className="mt-1 line-clamp-2 min-h-[22px] text-[9px] leading-tight text-[#e9e9ed]/75">{pick.name}</span>}
+            {showSamples && selected && row.sample && (
+              <span className="mt-0.5 text-[9px] tabular-nums text-[#b5abfc]">
+                {row.sample.count}/{row.sample.denominator}
+              </span>
+            )}
+          </span>
         );
       })}
     </div>
   );
 }
 
-function RuneColumn({
-  title,
-  icon,
-  keystone,
-  rows,
-  selectedById,
-  resolvedById,
-  primary = false,
-  onOpenDetail,
-}: {
-  title: string;
-  icon: string;
-  keystone?: PickType;
-  rows: RuneRow[];
-  selectedById: Map<number, PickType>;
-  resolvedById: Map<number, PickType>;
-  primary?: boolean;
-  onOpenDetail: (kind: EntityKind, id: number) => void;
-}) {
+function RuneTreeHeading({ tree, primary }: { tree: RuneGridTree | null; primary: boolean }) {
+  const title = tree?.name ?? (primary ? "Primary" : "Secondary");
   return (
-    <div className="min-w-0">
-      <div className="mb-3 flex items-center gap-2">
-        <span className={`h-4 w-4 overflow-hidden rounded-full ${primary ? "bg-[#9184d9]/[0.25] shadow-[inset_0_0_0_1px_rgba(145,132,217,0.6)]" : "bg-white/[0.1] shadow-[inset_0_0_0_1px_rgba(233,233,237,0.28)]"}`}>
-          <IconWithFallback src={icon} alt={title} fallbackGlyph={title} className="h-full w-full object-cover" size={20} />
-        </span>
-        <span className={`text-[10px] font-semibold uppercase tracking-[0.1em] ${primary ? "text-[#b5abfc]" : "text-[#e9e9ed]/60"}`}>{title}</span>
+    <div className="mb-3 flex items-center gap-2">
+      <span className={`h-4 w-4 overflow-hidden rounded-full ${primary ? "bg-[#9184d9]/[0.25] shadow-[inset_0_0_0_1px_rgba(145,132,217,0.6)]" : "bg-white/[0.1] shadow-[inset_0_0_0_1px_rgba(233,233,237,0.28)]"}`}>
+        <IconWithFallback src={tree?.icon ?? ""} alt={title} fallbackGlyph={title} className="h-full w-full object-cover" size={20} />
+      </span>
+      <span className={`text-[10px] font-semibold uppercase tracking-[0.1em] ${primary ? "text-[#b5abfc]" : "text-[#e9e9ed]/60"}`}>{title}</span>
+    </div>
+  );
+}
+
+export function RunePageGrid({
+  page,
+  onOpenDetail,
+  onRuneClick,
+  showLabels = false,
+  showSamples = false,
+  runeSize = 28,
+  keystoneSize = 54,
+  shardSize = 20,
+  labelWidth = 68,
+  optionGap,
+}: {
+  page: RunePageGridPage;
+  onOpenDetail?: (kind: EntityKind, id: number) => void;
+  onRuneClick?: (kind: EntityKind, id: number) => void;
+  showLabels?: boolean;
+  showSamples?: boolean;
+  runeSize?: number;
+  keystoneSize?: number;
+  shardSize?: number;
+  labelWidth?: number;
+  optionGap?: number;
+}) {
+  const handleRuneClick = onRuneClick ?? onOpenDetail;
+  const renderRows = (rows: readonly RunePageGridRow[], shard = false, rowSpacing = "space-y-2") => (
+    <div className={rowSpacing}>
+      {rows.map((row, index) => (
+        <RuneOptionRow
+          key={`${shard ? "shard" : "rune"}-${index}`}
+          row={row}
+          onOpenDetail={handleRuneClick}
+          size={shard ? shardSize : runeSize}
+          shard={shard}
+          showLabels={showLabels}
+          showSamples={showSamples}
+          labelWidth={labelWidth}
+          optionGap={optionGap}
+        />
+      ))}
+    </div>
+  );
+
+  return (
+    <div className="grid grid-cols-2 gap-x-3">
+      <div className="min-w-0">
+        <RuneTreeHeading tree={page.primaryTree} primary />
+        {page.keystone ? (
+          <div className="mb-3 flex justify-center">
+            <RuneOptionRow row={page.keystone} onOpenDetail={handleRuneClick} size={keystoneSize} keystone showLabels={showLabels} showSamples={showSamples} labelWidth={labelWidth} optionGap={optionGap} />
+          </div>
+        ) : (
+          <div className="mb-3 flex justify-center">
+            <RuneOptionRow row={{ options: [], selectedIds: new Set(), empty: true }} size={keystoneSize} showLabels={showLabels} showSamples={showSamples} labelWidth={labelWidth} optionGap={optionGap} />
+          </div>
+        )}
+        {renderRows(page.primaryRows)}
       </div>
-      {primary && keystone && (
-        <div className="mb-3 flex justify-center">
-          <RuneCircle pick={keystone} size={54} keystone onClick={() => onOpenDetail("rune", keystone.id)} />
+      <div className="min-w-0">
+        <RuneTreeHeading tree={page.secondaryTree} primary={false} />
+        {renderRows(page.secondaryRows)}
+        <div className="mt-3 border-t border-white/[0.08] pt-3">
+          {renderRows(page.shards, true, "space-y-1.5")}
         </div>
-      )}
-      <div className="space-y-2">
-        {rows.map((row, index) => (
-          <RuneOptionRow
-            key={`${title}-${index}`}
-            row={row}
-            selectedById={selectedById}
-            resolvedById={resolvedById}
-            onOpenDetail={onOpenDetail}
-          />
-        ))}
+        {page.unmapped && page.unmapped.length > 0 && (
+          <div className="mt-3 border-t border-white/[0.08] pt-3">
+            <p className="mb-2 text-[9px] uppercase tracking-[0.1em] text-[#9397ab]/60">Recorded, row unavailable</p>
+            <div className="flex flex-wrap justify-center gap-2">
+              {page.unmapped.map((pick) => (
+                <RuneCircle
+                  key={pick.id}
+                  pick={pick}
+                  size={runeSize}
+                  onClick={handleRuneClick ? () => handleRuneClick("rune", pick.id) : undefined}
+                />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+export interface RunePageModalSpell {
+  id: number | null;
+  name: string;
+  icon: string;
+  sample?: RuneGridSample | null;
+}
+
+export function RunePageModal({
+  open,
+  onClose,
+  title,
+  subtitle,
+  page,
+  spells,
+  compact = false,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  subtitle?: string;
+  page: RunePageGridPage;
+  spells: readonly RunePageModalSpell[];
+  /** The modal is used inside a narrow card on desktop as well as on mobile;
+   * compact keeps every static option in a row visible without changing the
+   * shared WPA grid's established sizing. */
+  compact?: boolean;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose, open]);
+
+  return (
+    <DetailPopover
+      open={open}
+      onClose={onClose}
+      ariaLabel={title}
+      header={
+        <div className="min-w-0 flex-1 pt-0.5">
+          <h2 className="text-[14px] font-bold leading-tight text-[#e9e9ed]">{title}</h2>
+          {subtitle && <p className="mt-1 text-[10px] leading-relaxed text-[#9397ab]/70">{subtitle}</p>}
+        </div>
+      }
+    >
+      <RunePageGrid
+        page={page}
+        showLabels
+        showSamples
+        runeSize={compact ? 24 : 28}
+        keystoneSize={compact ? 34 : 54}
+        shardSize={compact ? 18 : 20}
+        labelWidth={compact ? 38 : 68}
+        optionGap={compact ? 4 : undefined}
+      />
+      <section className="mt-4 border-t border-white/[0.08] pt-3">
+        <SectionLabel>Summoner spells</SectionLabel>
+        <div className="mt-2 flex flex-wrap gap-3">
+          {spells.length === 0 ? (
+            <span className="text-[10px] text-[#9397ab]/65">No spell data for this page.</span>
+          ) : spells.map((spell, index) => (
+            <div key={`${spell.id ?? "empty"}-${index}`} className="flex min-w-[68px] flex-col items-center text-center">
+              {spell.id != null ? (
+                <span className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-[6px] bg-white/[0.06] shadow-[inset_0_0_0_1px_rgba(233,233,237,0.16)]">
+                  <IconWithFallback src={spell.icon} alt={spell.name} fallbackGlyph={spell.name} className="h-full w-full object-cover" size={32} />
+                </span>
+              ) : (
+                <span className="flex h-8 w-8 items-center justify-center rounded-[6px] bg-white/[0.025] text-[10px] font-semibold text-[#9397ab]/70 shadow-[inset_0_0_0_1px_rgba(233,233,237,0.16)]" role="img" aria-label="No data for this summoner spell slot">—</span>
+              )}
+              <span className="mt-1 line-clamp-2 min-h-[22px] text-[9px] leading-tight text-[#e9e9ed]/75">{spell.id != null ? spell.name : "No data"}</span>
+              {spell.id != null && spell.sample && (
+                <span className="mt-0.5 text-[9px] tabular-nums text-[#b5abfc]">{spell.sample.count}/{spell.sample.denominator}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+    </DetailPopover>
   );
 }
 
@@ -349,6 +556,28 @@ export function BuildRuneSidebar({
     };
   }, [runeOptionIds, resolvedById, selectedById, ver]);
 
+  const primaryGridRows = useMemo(
+    () => primaryRows.map((row) => ({
+      options: row.ids.map((id) => optionPick(id, selectedById, resolvedById)),
+      selectedIds: row.selectedIds,
+    })),
+    [primaryRows, resolvedById, selectedById],
+  );
+  const secondaryGridRows = useMemo(
+    () => secondaryRows.map((row) => ({
+      options: row.ids.map((id) => optionPick(id, selectedById, resolvedById)),
+      selectedIds: row.selectedIds,
+    })),
+    [resolvedById, secondaryRows, selectedById],
+  );
+  const shardGridRows = useMemo(
+    () => shardRows.map((row) => ({
+      options: row.ids.map((id) => optionPick(id, selectedById, resolvedById, true)),
+      selectedIds: row.selectedIds,
+    })),
+    [resolvedById, selectedById, shardRows],
+  );
+
   return (
     <aside className="space-y-4">
       <section className={`${CARD_CLASS} p-4`}>
@@ -359,41 +588,25 @@ export function BuildRuneSidebar({
             <ApplyRunesButton build={build} />
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-x-3">
-          <RuneColumn
-            title={treeName(runes.primaryTree.id)}
-            icon={runes.primaryTree.icon || treeIconUrl(runes.primaryTree.id)}
-            keystone={runes.keystone}
-            rows={primaryRows}
-            selectedById={selectedById}
-            resolvedById={resolvedById}
-            primary
-            onOpenDetail={onOpenDetail}
-          />
-          <div>
-            <RuneColumn
-              title={treeName(runes.secondaryTree.id)}
-              icon={runes.secondaryTree.icon || treeIconUrl(runes.secondaryTree.id)}
-              rows={secondaryRows}
-              selectedById={selectedById}
-              resolvedById={resolvedById}
-              onOpenDetail={onOpenDetail}
-            />
-            <div className="mt-3 space-y-1.5 border-t border-white/[0.08] pt-3">
-              {shardRows.map((row, index) => (
-                <RuneOptionRow
-                  key={`shard-${index}`}
-                  row={row}
-                  selectedById={selectedById}
-                  resolvedById={resolvedById}
-                  onOpenDetail={onOpenDetail}
-                  size={20}
-                  shard
-                />
-              ))}
-            </div>
-          </div>
-        </div>
+        <RunePageGrid
+          page={{
+            primaryTree: {
+              id: runes.primaryTree.id,
+              name: treeName(runes.primaryTree.id),
+              icon: runes.primaryTree.icon || treeIconUrl(runes.primaryTree.id),
+            },
+            keystone: { options: [runes.keystone], selectedIds: new Set([runes.keystone.id]) },
+            primaryRows: primaryGridRows,
+            secondaryTree: {
+              id: runes.secondaryTree.id,
+              name: treeName(runes.secondaryTree.id),
+              icon: runes.secondaryTree.icon || treeIconUrl(runes.secondaryTree.id),
+            },
+            secondaryRows: secondaryGridRows,
+            shards: shardGridRows,
+          }}
+          onOpenDetail={onOpenDetail}
+        />
         {altKeystone && (
           <div className="mt-4 border-t border-white/[0.08] pt-4">
             <SectionLabel>Not picked — scored higher</SectionLabel>
@@ -403,9 +616,7 @@ export function BuildRuneSidebar({
               aria-label={`View details for ${altKeystone.keystone.name}, an alternative keystone in the ${altKeystone.tree.name} tree. Not the recommended pick.`}
               className="group mt-2 flex w-full items-center gap-3 rounded-[7px] border border-dashed border-[#9184d9]/60 bg-white/[0.03] p-2.5 text-left transition-colors hover:border-[#9184d9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9]"
             >
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/[0.04] shadow-[inset_0_0_0_1px_rgba(145,132,217,0.55)]">
-                <IconWithFallback src={altKeystone.keystone.icon} alt={altKeystone.keystone.name} fallbackGlyph={altKeystone.keystone.name} className="h-full w-full object-cover transition-transform group-hover:scale-105" size={40} />
-              </span>
+              <RuneCircle pick={altKeystone.keystone} size={40} selected={false} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[11px] font-semibold text-[#e9e9ed]">{altKeystone.keystone.name}</span>
                 <span className="mt-0.5 block truncate text-[9px] tabular-nums text-[#9397ab]/65">{altKeystone.tree.name} · {altKeystone.keystone.occurrence.toLocaleString("en-US")} games</span>

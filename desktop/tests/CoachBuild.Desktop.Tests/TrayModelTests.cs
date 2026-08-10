@@ -56,9 +56,8 @@ public sealed class TrayModelTests
     }
 
     [Fact]
-    public void SkillTableIsEnabledByDefaultAndWorkingSetLabelIsBounded()
+    public void WorkingSetLabelIsBounded()
     {
-        Assert.True(TrayMenuState.Default.ShowSkillTable);
         Assert.Equal("Working set: 64 MB", TrayMenuState.FormatWorkingSet(64L * 1024 * 1024));
         Assert.Equal("Working set: 0 MB", TrayMenuState.FormatWorkingSet(-1));
     }

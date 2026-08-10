@@ -250,7 +250,6 @@ public partial class App : WpfApplication
         _trayState = _trayState with
         {
             OverlayVisible = _overlay.OverlayVisibleSetting,
-            ShowSkillTable = _overlay.ShowSkillTableSetting,
             LaneOverride = _overlay.LaneOverrideSetting,
         };
         _overlay.Hide();
@@ -382,11 +381,6 @@ public partial class App : WpfApplication
             case TrayCommand.ToggleInteractive:
                 _trayState = _trayState with { Interactive = !_trayState.Interactive };
                 _overlay?.SetInteractive(_trayState.Interactive);
-                _tray?.UpdateState(_trayState);
-                break;
-            case TrayCommand.ToggleSkillTable:
-                _trayState = _trayState with { ShowSkillTable = !_trayState.ShowSkillTable };
-                _overlay?.SetShowSkillTable(_trayState.ShowSkillTable);
                 _tray?.UpdateState(_trayState);
                 break;
             case TrayCommand.SetLane:

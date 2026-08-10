@@ -7,8 +7,6 @@ public sealed class OverlaySettings
 {
     public string? LaneOverride { get; set; }
 
-    public bool ShowSkillTable { get; set; } = true;
-
     public bool OverlayVisible { get; set; } = true;
 
     [JsonPropertyName("autostartConfigured")]
@@ -25,7 +23,7 @@ public sealed class PersistedCalibration
 }
 
 /// <summary>
-/// Merge-safe settings persistence for lane, table visibility, and
+/// Merge-safe settings persistence for lane, overlay visibility, and
 /// resolution/DPI-tagged calibration. It also reads the Electron settings
 /// shape once, so an upgrade does not silently discard a user's alignment.
 /// </summary>
@@ -72,16 +70,6 @@ public sealed class OverlaySettingsStore
         {
             var settings = ReadCore();
             settings.LaneOverride = NormalizeLane(lane);
-            WriteCore(settings);
-        }
-    }
-
-    public void SetShowSkillTable(bool visible)
-    {
-        lock (_gate)
-        {
-            var settings = ReadCore();
-            settings.ShowSkillTable = visible;
             WriteCore(settings);
         }
     }
@@ -178,7 +166,6 @@ public sealed class OverlaySettingsStore
         return new OverlaySettings
         {
             LaneOverride = settings.LaneOverride,
-            ShowSkillTable = settings.ShowSkillTable,
             OverlayVisible = settings.OverlayVisible,
             AutostartConfigured = settings.AutostartConfigured,
             Calibrations = (settings.Calibrations ?? new Dictionary<string, PersistedCalibration>())
@@ -217,8 +204,6 @@ public sealed class OverlaySettingsStore
             var settings = new OverlaySettings
             {
                 LaneOverride = root.TryGetProperty("lane", out var lane) ? lane.GetString() : null,
-                ShowSkillTable = !root.TryGetProperty("showSkillTable", out var table)
-                    || table.ValueKind != JsonValueKind.False,
             };
 
             if (root.TryGetProperty("calibration", out var calibration)

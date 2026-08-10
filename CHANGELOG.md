@@ -1,4 +1,22 @@
 # Changelog
+## 0.105.1 — 2026-08-10
+
+- Pro Consensus and One-Trick rune pages now show every static option in every tree row, with honest empty slots, while keeping the picked treatment and centred setup popups.
+- In-game overlay now keeps only the pink next-ability highlight; the skill table and disclaimer are removed.
+
+## 0.105.0 — 2026-08-10
+
+- Made picked runes unmistakable across the build surfaces, with full-colour picked icons, grayscale unpicked icons, and a stronger purple ring/glow while keeping keystones brightest.
+- Added complete slot-coherent rune pages and centred detail popups to Pro Consensus and One-Trick, including honest empty slots, shards, summoner spells, and available sample fractions.
+
+### Fixed
+- Empty in-game overlays no longer render a panel when no skill-order rows are available.
+
+## 0.104.2 — 2026-08-10
+
+- Fixed duplicate items in the Pro Consensus most-built path by resolving purchase positions left to right and excluding items already placed.
+- Extracted the path resolver for direct test coverage, and passed the item catalog to `isBuildItem` so recipe ancestry classifies items consistently.
+
 ## 0.104.1 — 2026-08-09
 
 - RUNES card rebuilt as vertical tree columns (Blitz-style: keystone atop the primary tree, rune rows descending, secondary tree beside, shards + spells below) — user report; layout only, data wiring untouched

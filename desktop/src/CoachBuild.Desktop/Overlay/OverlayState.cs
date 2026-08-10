@@ -58,8 +58,7 @@ public sealed record OverlayState(
     IReadOnlyDictionary<OverlayAbility, int> AbilityRanks,
     OverlaySkillOrder SkillOrder,
     string? Lane,
-    bool IsLaneAuto,
-    bool ShowDisclaimer = true)
+    bool IsLaneAuto)
 {
     public static OverlayState Empty { get; } = new(
         InGame: false,
@@ -71,7 +70,10 @@ public sealed record OverlayState(
         Lane: null,
         IsLaneAuto: true);
 
-    public bool HasRenderableData => InGame && !string.IsNullOrWhiteSpace(ChampionName);
+    public bool HasRenderableData =>
+        InGame
+        && !string.IsNullOrWhiteSpace(ChampionName)
+        && SkillOrder.Order.Count > 0;
 
     public int Rank(OverlayAbility ability) => AbilityRanks.TryGetValue(ability, out var rank) ? Math.Max(0, rank) : 0;
 

@@ -15,7 +15,6 @@ public enum TrayCommand
     Reopen,
     ToggleOverlay,
     ToggleInteractive,
-    ToggleSkillTable,
     SetLane,
     Calibrate,
     Adjust,
@@ -140,10 +139,6 @@ public sealed class TrayController : IDisposable
         _menu.Items.Add(MenuItem(
             _state.Interactive ? "Disable interactive mode" : "Enable interactive mode",
             (_, _) => RaiseCommand(TrayCommand.ToggleInteractive)));
-        _menu.Items.Add(MenuItem(
-            _state.ShowSkillTable ? "Hide skill table" : "Show skill table",
-            (_, _) => RaiseCommand(TrayCommand.ToggleSkillTable)));
-
         var lane = new Forms.ToolStripMenuItem(
             _state.LaneOverride is null ? "Lane: Auto" : $"Lane: {DisplayLane(_state.LaneOverride)}");
         foreach (var option in Lanes.Append(string.Empty))

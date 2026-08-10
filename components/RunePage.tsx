@@ -3,14 +3,13 @@
 import type { RunesBlock, Pick as PickType } from "@/lib/types";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import { fmtSample, wpaClass, wpaText } from "@/components/StatBadge";
+import { RuneCircle } from "@/components/hextech/builds/BuildVisuals";
 
 function RuneTile({ pick, keystone = false, small = false }: { pick: PickType; keystone?: boolean; small?: boolean }) {
   const size = keystone ? 54 : small ? 24 : 34;
   return (
     <div className={`flex flex-col items-center text-center ${keystone ? "w-[64px]" : small ? "w-[40px]" : "w-[54px]"}`} title={`${pick.name} · WPA ${wpaText(pick.wpa)} · ${fmtSample(pick.occurrence)} picks`}>
-      <span className={`flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/[0.05] ${keystone ? "shadow-[0_0_0_2px_rgba(145,132,217,0.75),0_0_20px_rgba(145,132,217,0.28)]" : "shadow-[inset_0_0_0_1px_rgba(233,233,237,0.16)]"}`} style={{ width: size, height: size }}>
-        <IconWithFallback src={pick.icon} alt={pick.name} fallbackGlyph={pick.name} className="h-full w-full object-cover" size={size} />
-      </span>
+      <RuneCircle pick={pick} size={size} keystone={keystone} />
       {!small && <span className="mt-1.5 line-clamp-2 min-h-[22px] text-[9px] leading-tight text-[#e9e9ed]/75">{pick.name}</span>}
       <span className={`mt-1 text-[9px] font-semibold tabular-nums ${wpaClass(pick.wpa)}`}>{wpaText(pick.wpa)}</span>
     </div>

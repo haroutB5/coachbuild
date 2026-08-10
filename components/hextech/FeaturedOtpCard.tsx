@@ -81,7 +81,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useMemo, useState } from "react";
-import type { BuildResponse, ChampionRef } from "@/lib/types";
+import type { BuildResponse, ChampionRef, Pick as RunePick } from "@/lib/types";
 import {
   itemIconUrl,
   spellIconUrl,
@@ -101,14 +101,29 @@ import type { FeaturedBuildView, FeaturedFullBuild } from "@/lib/otp/featuredBui
 import BuildSlotList from "./BuildSlotList";
 import { isContested } from "./buildSlotView";
 import PanelHeading from "./PanelHeading";
-import { sortPerkIdsByRow } from "./perkSlots";
+import { PERK_TREES, primaryMinorRow } from "./perkSlots";
 import { opggProfileUrl } from "./opggProfile";
 import { AddProItemBuildButton, ApplyProRunesButton, type OtpRunePageForApply } from "./ProConsensusCard";
 import type { SkillOrderModel } from "./skillOrder";
 import type { ProConsensusItemsInput } from "./itemSetBody";
 import type { LaneId } from "./heroContracts";
 import { featuredOtpRequestInputs } from "./featuredOtpRequest";
-import { ACCENT_CARD_CLASS, BuildPathArrow, BuildSkillOrderGrid, CARD_CLASS, Scanline, SectionLabel, StatValue } from "./builds/BuildVisuals";
+import {
+  ACCENT_CARD_CLASS,
+  BuildPathArrow,
+  BuildSkillOrderGrid,
+  CARD_CLASS,
+  RunePageGrid,
+  RunePageModal,
+  SHARD_ROWS,
+  type RuneGridSample,
+  type RunePageGridPage,
+  type RunePageGridRow,
+  type RunePageModalSpell,
+  Scanline,
+  SectionLabel,
+  StatValue,
+} from "./builds/BuildVisuals";
 
 interface FeaturedPlayer {
   gameName: string;
@@ -367,46 +382,6 @@ function OtpBuildPath({
   );
 }
 
-/** A rune tile in the full page — icon above its name, the vocabulary
- *  RunesSummonersCard and ProConsensusCard both already use. Non-interactive
- *  for the same reason BuildSlot is. */
-function RuneTile({ name, icon, keystone = false }: { name: string; icon: string; keystone?: boolean }) {
-  const box = keystone ? "w-12 h-12 border-2 border-line-gold" : "w-9 h-9 border border-line";
-  return (
-    <span className="flex flex-col items-center text-center w-[58px] gap-1">
-      <span className={`${box} rounded-full bg-black/30 overflow-hidden flex items-center justify-center flex-shrink-0`}>
-        <IconWithFallback
-          src={icon}
-          alt={name}
-          fallbackGlyph={name}
-          className="w-full h-full object-contain"
-          size={keystone ? 48 : 36}
-        />
-      </span>
-      <span className="text-[9.5px] text-mut leading-tight line-clamp-2 min-h-[22px]">{name}</span>
-    </span>
-  );
-}
-
-/** Tree name + icon, matching RunesSummonersCard's own TreeLabel. */
-function TreeLabel({ treeId }: { treeId: number }) {
-  const name = treeName(treeId);
-  return (
-    <div className="flex items-center gap-2 mb-2">
-      <span className="w-5 h-5 rounded-full bg-black/20 overflow-hidden flex items-center justify-center flex-shrink-0">
-        <IconWithFallback
-          src={treeIconUrl(treeId)}
-          alt={name}
-          fallbackGlyph={name}
-          className="w-full h-full object-contain"
-          size={20}
-        />
-      </span>
-      <span className="text-[11.5px] text-txt font-semibold">{name}</span>
-    </div>
-  );
-}
-
 function OtpDivergenceCard({
   build,
   view,
@@ -485,20 +460,108 @@ function OtpLastGamesCard({ gameLog }: { gameLog: FeaturedGame[] }) {
   );
 }
 
-/** Stat-shard row labels, by position. `runes.page.shards` is positional —
- *  `[offense, flex, defense]`, straight from Riot's `perks.statPerks` via
- *  lib/pro/extract.ts — so the label comes from the INDEX and is a fact about
- *  the payload, not a guess about the id. */
-const SHARD_ROW_LABELS = ["Offense", "Flex", "Defense"] as const;
+/* The featured model stores one modal page, not row-level frequencies. Primary
+ * selections are preserved in Riot row order; secondary selections are mapped
+ * to their known tree rows. Unknown/duplicate secondary rows stay visible in
+ * `unmapped` rather than being assigned to a guessed slot. */
+function otpRunePick(id: number, runeOf: (id: number) => { name: string; icon: string }): RunePick {
+  const display = runeOf(id);
+  return { id, name: display.name, icon: display.icon, wpa: 0, winrate: null, occurrence: 0 };
+}
 
-/* Rune display order is the TREE ROW here too, via the same shared resolver
- * ProConsensusCard uses (`perkSlots.ts`, a pure static lookup with no fetch).
- *
- * Riot already returns a soloq page's primary selections in row order
- * (lib/pro/extract.ts splits `selections` into keystone + the rest), so on this
- * card it is usually a no-op — it is applied anyway so the order is GUARANTEED
- * by the render rather than inherited from an upstream detail that could change
- * without this card noticing. */
+function otpStaticRuneRow(
+  optionIds: readonly number[],
+  selectedId: number | null,
+  runeOf: (id: number) => { name: string; icon: string },
+  sample: RuneGridSample | null = null,
+): RunePageGridRow {
+  const ids = [...new Set([...optionIds, ...(selectedId == null ? [] : [selectedId])])];
+  return {
+    options: ids.map((id) => ({ ...otpRunePick(id, runeOf), occurrence: id === selectedId && sample ? sample.count : 0 })),
+    selectedIds: selectedId == null ? new Set<number>() : new Set([selectedId]),
+    sample,
+    empty: selectedId == null,
+  };
+}
+
+function otpStaticShardRow(
+  optionIds: readonly number[],
+  selectedId: number | null,
+  sample: RuneGridSample | null,
+): RunePageGridRow {
+  const ids = [...new Set([...optionIds, ...(selectedId == null ? [] : [selectedId])])];
+  return {
+    options: ids.map((id) => ({
+      id,
+      name: shardName(id),
+      icon: shardIconUrl(id),
+      wpa: 0,
+      winrate: null,
+      occurrence: id === selectedId && sample ? sample.count : 0,
+    } satisfies RunePick)),
+    selectedIds: selectedId == null ? new Set<number>() : new Set([selectedId]),
+    sample,
+    empty: selectedId == null,
+  };
+}
+
+function otpRunePage(
+  page: OtpRunePageForApply,
+  runeOf: (id: number) => { name: string; icon: string },
+  pageSample: RuneGridSample,
+): RunePageGridPage {
+  const primarySlots = page.primaryTree == null ? null : PERK_TREES[page.primaryTree] ?? null;
+  const primaryRows = Array.from({ length: 3 }, (_, index) => {
+    const id = page.primary[index] ?? null;
+    return otpStaticRuneRow(primarySlots?.minorRows[index] ?? [], id, runeOf, id != null ? pageSample : null);
+  });
+  const unmapped: RunePick[] = [];
+  page.primary.slice(3).forEach((id) => unmapped.push(otpRunePick(id, runeOf)));
+  const secondarySelected: (RunePick | null)[] = [null, null, null];
+  if (page.secondaryTree != null) {
+    for (const id of page.secondary) {
+      const row = primaryMinorRow(page.secondaryTree, id);
+      const pick = otpRunePick(id, runeOf);
+      if (row == null || secondarySelected[row] !== null) {
+        unmapped.push(pick);
+      } else {
+        secondarySelected[row] = pick;
+      }
+    }
+  } else {
+    page.secondary.forEach((id) => unmapped.push(otpRunePick(id, runeOf)));
+  }
+  const secondarySlots = page.secondaryTree == null ? null : PERK_TREES[page.secondaryTree] ?? null;
+  const secondaryRows = secondarySelected.map((pick, index) => otpStaticRuneRow(
+    secondarySlots?.minorRows[index] ?? [],
+    pick?.id ?? null,
+    runeOf,
+    pick ? pageSample : null,
+  ));
+  return {
+    primaryTree: page.primaryTree == null ? null : { id: page.primaryTree, name: treeName(page.primaryTree), icon: treeIconUrl(page.primaryTree) },
+    keystone: otpStaticRuneRow(primarySlots?.keystones ?? [], page.keystone ?? null, runeOf, page.keystone != null ? pageSample : null),
+    primaryRows,
+    secondaryTree: page.secondaryTree == null ? null : { id: page.secondaryTree, name: treeName(page.secondaryTree), icon: treeIconUrl(page.secondaryTree) },
+    secondaryRows,
+    shards: Array.from({ length: 3 }, (_, index) => otpStaticShardRow(
+      SHARD_ROWS[index] ?? [],
+      page.shards[index] ?? null,
+      page.shards[index] != null ? pageSample : null,
+    )),
+    unmapped,
+  };
+}
+
+function otpSpellSlots(spells: { spells: number[]; games: number; pct: number } | null, sampleGames: number, ver: string): RunePageModalSpell[] {
+  const sample = spells ? { count: spells.games, denominator: sampleGames } : null;
+  return [0, 1].map((index) => {
+    const id = spells?.spells[index] ?? null;
+    return id == null
+      ? { id: null, name: "No data", icon: "" }
+      : { id, name: spellName(id), icon: spellIconUrl(id, ver), sample };
+  });
+}
 
 export default function FeaturedOtpCard({
   champ,
@@ -518,6 +581,7 @@ export default function FeaturedOtpCard({
   const [runeArt, setRuneArt] = useState<ReadonlyMap<number, { name: string; icon: string }>>(new Map());
   const [skillPriority, setSkillPriority] = useState<string[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [runePageOpen, setRunePageOpen] = useState(false);
   const requestKey = `${champ.id}:${champ.key}:${ver}`;
   const [previousRequestKey, setPreviousRequestKey] = useState(requestKey);
   if (requestKey !== previousRequestKey) {
@@ -598,9 +662,15 @@ export default function FeaturedOtpCard({
       const ids = [page.keystone, ...(page.primary ?? []), ...(page.secondary ?? [])].filter(
         (x): x is number => typeof x === "number" && x > 0
       );
-      if (ids.length === 0) return;
+      [page.primaryTree, page.secondaryTree].forEach((treeId) => {
+        const tree = treeId == null ? null : PERK_TREES[treeId];
+        if (!tree) return;
+        ids.push(...tree.keystones, ...tree.minorRows.flat());
+      });
+      const uniqueIds = [...new Set(ids)];
+      if (uniqueIds.length === 0) return;
       const resolved = await Promise.all(
-        ids.map((id) => resolveRuneDisplay(id, request.ver).catch(() => null))
+        uniqueIds.map((id) => resolveRuneDisplay(id, request.ver).catch(() => null))
       );
       if (cancelled) return;
       const next = new Map<number, { name: string; icon: string }>();
@@ -762,6 +832,9 @@ export default function FeaturedOtpCard({
   const runePage = runes?.page ?? null;
   const itemName = (id: number) => meta.get(id)?.name ?? `Item ${id}`;
   const runeOf = (id: number) => runeArt.get(id) ?? { name: `Rune #${id}`, icon: "" };
+  const otpRuneGridPage = runePage
+    ? otpRunePage(runePage, runeOf, { count: runes!.games, denominator: sample.games })
+    : null;
 
   const sampleMeta = `${sample.games} stored games · ${winPct}% won`;
 
@@ -841,95 +914,24 @@ export default function FeaturedOtpCard({
                 build column beside it. */}
             <div className="min-w-0 lg:contents">
             <OtpDivergenceCard build={build} view={view} fullBuild={fullBuild} itemName={itemName} />
-            {/* The FULL rune page, not a keystone and three shard icons (user
-                report 2026-07-29). Every part of it is already stored per game
-                and already modelled — `runes.page` carries primaryTree,
-                keystone, the three primary minors, secondaryTree, the two
-                secondary picks and the three positional shards. The layout is
-                RunesSummonersCard's: primary column, secondary column,
-                shards under the secondary tree they sit beside in client. */}
-            {runePage && (
+            {/* The shared grid combines the complete static tree with the one
+                slot-coherent page this model actually carries. Every static
+                alternative stays visible and every absent source slot remains
+                an explicit empty marker. */}
+            {otpRuneGridPage && (
               <section className={`${CARD_CLASS} mt-0 p-4 lg:col-start-2 lg:row-start-2`}>
                 <PanelHeading meta={`${runes!.pct}% of ${sample.games} games`}>Runes</PanelHeading>
-                {/* `grid-cols-2` at mobile packs the two trees side by side,
-                    the same thing RunesSummonersCard does at 390px. At `sm`+
-                    the tracks become CONTENT-SIZED and left-packed: two equal
-                    `fr` tracks in a wide card pushed the secondary tree's 2
-                    tiles out to x=840 with ~450px of dead space in between
-                    (measured at 1440x900), which `auto` + justify-start fixes
-                    by letting the row end where the content ends.
-
-                    `lg:grid-cols-1 xl:grid-cols-[auto_auto]` is new with the
-                    desktop tabs (2026-07-29) and is about the RAIL this section
-                    now lives in, not about the viewport. Measured on Ahri at
-                    1024x900: the rail is 273px there, which leaves the secondary
-                    tree a 102px track — narrow enough that the three stat shards
-                    wrapped to one per row, a 3-high vertical column where every
-                    other surface in the app draws them as a row. Stacking the
-                    two trees instead gives each the rail's full 273px: the
-                    primary row fits its keystone + 3 minors, and the shards fit
-                    on one line. From `xl` the rail is ~493px and the side-by-side
-                    pair fits again, so it comes back. */}
-                <div className="mt-3 grid grid-cols-1 gap-x-4 gap-y-4 min-[460px]:grid-cols-2 sm:grid-cols-[auto_auto] sm:justify-start sm:gap-x-12 lg:grid-cols-1 lg:gap-x-0 xl:grid-cols-[auto_auto] xl:gap-x-10">
-                  <div>
-                    {runePage.primaryTree != null ? (
-                      <TreeLabel treeId={runePage.primaryTree} />
-                    ) : (
-                      <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">
-                        Primary
-                      </p>
-                    )}
-                    <div className="flex flex-wrap items-start gap-1.5">
-                      {runePage.keystone != null && runePage.keystone > 0 && (
-                        <RuneTile keystone {...runeOf(runePage.keystone)} />
-                      )}
-                      {sortPerkIdsByRow(runePage.primaryTree, runePage.primary ?? []).map((id) => (
-                        <RuneTile key={id} {...runeOf(id)} />
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    {runePage.secondaryTree != null ? (
-                      <TreeLabel treeId={runePage.secondaryTree} />
-                    ) : (
-                      <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">
-                        Secondary
-                      </p>
-                    )}
-                    <div className="flex flex-wrap items-start gap-1.5">
-                      {sortPerkIdsByRow(runePage.secondaryTree, runePage.secondary ?? []).map((id) => (
-                        <RuneTile key={id} {...runeOf(id)} />
-                      ))}
-                    </div>
-
-                    {runePage.shards.length > 0 && (
-                      <div className="mt-3 pt-3 border-t border-line/60">
-                        <p className="text-[10px] tracking-[0.1em] uppercase text-mut/80 font-semibold mb-2">
-                          Shards
-                        </p>
-                        <div className="flex flex-wrap gap-1.5">
-                          {runePage.shards.map((s, i) => (
-                            <span key={`${s}-${i}`} className="flex flex-col items-center text-center w-[52px] gap-1">
-                              <span className="w-7 h-7 rounded-full bg-black/30 border border-line overflow-hidden flex items-center justify-center flex-shrink-0">
-                                <IconWithFallback
-                                  src={shardIconUrl(s)}
-                                  alt={shardName(s)}
-                                  fallbackGlyph={shardName(s)}
-                                  className="w-full h-full object-contain p-0.5"
-                                  size={28}
-                                />
-                              </span>
-                              <span className="text-[9px] text-mut leading-tight">
-                                {SHARD_ROW_LABELS[i] ?? shardName(s)}
-                              </span>
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                <div className="mt-3">
+                  <RunePageGrid
+                    page={otpRuneGridPage}
+                    onRuneClick={() => setRunePageOpen(true)}
+                    runeSize={22}
+                    keystoneSize={34}
+                    shardSize={16}
+                    optionGap={4}
+                  />
                 </div>
+                <p className="mt-3 text-[10px] leading-relaxed text-mut/65">Click a rune to inspect the complete stored setup, including empty slots, shards, and spells.</p>
               </section>
             )}
 
@@ -1222,6 +1224,17 @@ export default function FeaturedOtpCard({
           </div>
         )}
       </div>
+      {otpRuneGridPage && (
+        <RunePageModal
+          open={runePageOpen}
+          onClose={() => setRunePageOpen(false)}
+          title="One-trick rune setup"
+          subtitle={`${runes!.games} of ${sample.games} stored games use this exact page · row-level rune counts are not recorded`}
+          page={otpRuneGridPage}
+          spells={otpSpellSlots(data!.spells, sample.games, ver)}
+          compact
+        />
+      )}
     </div>
   );
 }
