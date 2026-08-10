@@ -239,3 +239,24 @@ Verified facts that cost real debugging time. Cite these before touching the rel
 - Default-ON exactly once via `autostartConfigured` settings flag; a user toggle OFF is never re-enabled. Tray "Start with Windows" toggle reads the registry in the menu Opening handler.
 - `--autostart` = tray-only launch (no WebView2 window); everything else runs normally.
 - Tests use an injected registry subkey, never the real Run key.
+
+## Web redesign / build-verification traps (v0.104.x, 2026-08-09)
+
+- **`pkill -f "next start"` does NOT free port 3000 on this machine** — the process survives and
+  serves a STALE build, so screenshots photograph old code and "verified" means nothing. Kill by
+  port owner: `Get-NetTCPConnection -LocalPort 3000 -State Listen | Select -Expand OwningProcess
+  -Unique | % { Stop-Process -Id $_ -Force }`. Then confirm a marker from the new build in the HTML
+  before trusting any shot. Cost two false eyeballs during the redesign.
+- **Parallel UI lanes must not share `.next`** — concurrent builds corrupt it, which is why lanes
+  were barred from building/serving and every visual defect round-tripped through the orchestrator.
+  Next multi-lane UI job: worktree per lane, own port, lane self-verifies in a browser.
+- **Search-param consumers need a `<Suspense>` boundary or `npm run build` fails at prerender**
+  (`missing-suspense-with-csr-bailout`, hit on /mystats). Lane-level typecheck+lint+test cannot see
+  it — only a real build can.
+- **Puppeteer needs a FRESH `userDataDir` per verification run** (PWA service worker serves the
+  pre-change shell otherwise) — and a stored champion in a reused profile makes `/` render the build
+  view instead of the landing, which reads as a missing landing page.
+- **`vercel --prod --archive=tgz` can die on "fetch failed" mid-upload** (1.3GB archive) with auth
+  and API perfectly fine. It is transient: retry. Two failures then a clean third happened on
+  v0.104.1. Always parse `readyState` + smoke the SERVED version afterwards — a failed deploy leaves
+  the previous deployment aliased and returning 200.
