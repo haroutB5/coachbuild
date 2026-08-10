@@ -54,13 +54,22 @@ export interface BuildTabOption {
 }
 
 /**
- * Tab order and labels — identical to what mobile has shipped since 2026-07-28,
- * because desktop is adopting mobile's navigation rather than inventing a
- * parallel one ("just like in mobile").
+ * Tab order and labels — THE ONLY tab table in the app. `ChampionHero.tsx`
+ * imports this and hands it straight to `HextechTabs`; there is exactly one tab
+ * strip and it renders at every width.
  *
- * "Build" rather than "WPA": the labels are pinned to the mobile set on purpose.
- * See HANDOFF-fronty.md — whether this first tab should read "WPA" is an open
- * question left for the user, not a unilateral rename.
+ * ── 2026-08-10: this used to be the SECOND table ────────────────────────────
+ * ChampionHero carried its own local `BUILD_VIEW_OPTIONS` (`"WPA build"` /
+ * `"Pro consensus"` / `"One-trick"`), and THAT is what the page rendered. This
+ * export had no consumer for its labels — only its own test — so the two drifted
+ * for ~12 days and the label test here certified strings nobody ever saw. Same
+ * rot the header of this file describes, one export over. The local table is
+ * deleted; do not reintroduce one.
+ *
+ * Labels: user directive 2026-08-10 — "call it OTP and Pro for the tabs". The
+ * first tab keeps the wording that was actually on screen (`"WPA build"`, not
+ * this file's old dead `"Build"`), because the user did not ask for it to
+ * change and collapsing the tables must not smuggle in a rename.
  *
  * OTP keeps its own tab rather than sharing "pro": pros and one-tricks answer
  * different questions ("what does the meta's best execution look like" vs "what
@@ -68,7 +77,7 @@ export interface BuildTabOption {
  * one tab rebuilds the ~3,000px champ-select scroll these tabs exist to kill.
  */
 export const BUILD_TAB_OPTIONS: readonly BuildTabOption[] = [
-  { value: "build", label: "Build" },
+  { value: "build", label: "WPA build" },
   { value: "pro", label: "Pro" },
   { value: "otp", label: "OTP" },
 ];

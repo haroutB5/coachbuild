@@ -281,8 +281,16 @@ Verified facts that cost real debugging time. Cite these before touching the rel
 - **Feed a rune page from `model.runePage`, never from `primaryMinors`/`secondaryPicks`.** Those are
   flat frequency rankings with no row structure and can put two runes in one slot; `runePage` is the
   slot-coherent one (see the long header in `components/hextech/proConsensus.ts`).
-- **OTP has page-level sample coverage but NO row-level rune counts.** The modal states that
-  explicitly and shows the exact-page fraction. Do not synthesise per-row counts for OTP.
+- **OTP DOES have per-slot rune counts** (added 2026-08-10; the earlier "page-level only, do not
+  synthesise per-row counts" note here was true for about a day and is now wrong). The per-game page
+  was always in `otp_matches.runes` — `lib/otp/featured.ts` was collapsing it to one group count and
+  discarding the rest. `buildRunePageSamples` aggregates it: keystone and primary minors conditioned
+  on the page's primary tree, secondary rows conditioned on BOTH trees, shards over the whole sample
+  (they belong to no tree). Each slot therefore has its OWN denominator and they legitimately differ
+  across one page. The exact-page figure survives separately and is labelled apart. `slotGridSample`
+  refuses to draw a fraction whose `runeId` does not match the icon above it, so aggregation/adapter
+  drift shows up as a MISSING number rather than a wrong one. Still never synthesise: a slot nothing
+  filled renders the empty dash.
 - **Most-built path positions must exclude items already placed.** `mostBuiltPath` resolved each
   position's modal independently, so an item that was modal at two positions rendered twice
   (user-reported: Blackfire Torch twice on Viktor and Malzahar). It now walks positions left to
@@ -304,3 +312,70 @@ Verified facts that cost real debugging time. Cite these before touching the rel
   no published path draws nothing at all rather than an empty box.
 - Confirmed working in a real match by the user on 2026-08-10 — the first live confirmation of the
   native overlay since the desktop cutover.
+
+## Tier badges and the absence of a tier (v0.106.0, 2026-08-11)
+
+- **There is NO genuine per-champion-per-lane tier in this app, and `TierBadge` must never render
+  without an explicit value.** The champion hero rendered `<TierBadge />` with no prop and fell
+  through to a hardcoded `"S+"` default, so every champion in every lane claimed top tier — Yuumi at
+  48.6% WR, Viktor on JUNGLE with no data at all, Aatrox on MID while the app's own landing list put
+  him last. All three candidate sources were traced and none can answer the question:
+  `BuildsLanding`'s tier list is POSITIONAL inside an arbitrary ≤8-champion mid-lane sample sorted by
+  win rate; `/api/draft/recommend` and `/api/draft/blind-pick` are real per-lane ladders but capped
+  at `meta.topN: 10` of ~173 and `blindScore` ranks blind-pick SAFETY, not strength; `/api/hero-stats`
+  carries win rate and games only. The badge is therefore REMOVED from the hero. No badge is honest;
+  a defaulted one was not. If a real ladder endpoint ever lands, render it in the hero and nowhere
+  else.
+
+## Mobile navigation is the bar PLUS the More sheet (v0.106.0, 2026-08-11)
+
+- **`NAV_ITEMS.mobile` means "in the bottom bar", NOT "reachable on mobile".** `MOBILE_NAV_ITEMS` and
+  `MOBILE_OVERFLOW_NAV_ITEMS` are exact complements and a test pins the partition, so an item cannot
+  land in neither — which is how `/draft`, `/mystats?intent=game-detail` and `/live-setup` were
+  unreachable at 390px for weeks, `/live-setup` being the companion PAIRING page (a phone user could
+  not pair at all).
+- Five cells at 390px is 78px each, so a label over ~52px wraps and spills its 56px cell.
+  `NavItem.shortLabel` exists for that ("Pro Players"→"Players", "Patch Movers"→"Movers"). It must be
+  a SUBSTRING of `label` (WCAG 3.2.4) and must never be paired with an `aria-label` carrying the full
+  form (WCAG 2.5.3). The desktop rail still shows full labels.
+- The sheet's backdrop is a SIBLING of the dialog — same rule as `DetailPopover`, same P1 behind it.
+
+## The OTP feed is champion-scoped, and the UI must say so (v0.106.0, 2026-08-11)
+
+- `app/api/otp/featured` reads only `championId`, and `featuredOtpRequestInputs` deliberately omits
+  lane — one row per champion. **Do not make it lane-scoped.** The lane and rank pills therefore
+  cannot move the OTP tab; `OtpLaneScopeNote` in `FeaturedOtpCard.tsx` is what stops that reading as
+  a broken control. The payload carries no role or lane for the featured player, so the caption must
+  not name one.
+- Corollary: a lane-scoped empty state (`/api/build` 404, e.g. Viktor Support) must NOT blank the OTP
+  tab. `FeaturedOtpCard`'s `build` prop is nullable precisely so it renders there, with only the WPA
+  comparison and the two apply buttons withheld. Before this, all three tabs on a dataless lane
+  flipped `aria-selected` and rendered no tabpanel at all — three live controls doing nothing, while
+  the OTP tab's 230 games sat available the whole time.
+
+## Rune labels and the shard icon table (v0.106.0, 2026-08-11)
+
+- **A labelled rune row is a CSS grid, never a flex row of fixed-width boxes.** `align-items: center`
+  on a fixed-width flex column sizes the label to its CONTENT, so the label's own `overflow`/clamp
+  never fires and a name wider than the box paints over its neighbour. Measured before the fix:
+  "Transcendence" 66.0px inside a 38px column, 7.7px neighbour overlap, in EVERY rune modal at both
+  390px and 1260px. Rows now share the tree column across equal `1fr` tracks; `runeLabelColumns` puts
+  a four-keystone row (Precision, Sorcery) in 2x2 because four tracks in the ~166px column leave
+  ~38px. The modal shell is `max-w-sm`, so widening is not available without changing `DetailPopover`.
+- **The Magic Resist stat-shard icon is `mr.png`, not `magicresist.png`** — the long name 403s on the
+  CDN; `mr` matches the short-name convention the siblings already use. The shard table is DUPLICATED
+  in `lib/staticData.ts` (server data layer) and `components/proAssets.ts` (client bundle) and neither
+  can import the other, so both must move together; `proAssets.test.ts` now pins them to each other.
+  A wrong filename here renders a bare fallback glyph, and the inline OTP rune card draws shards with
+  NO labels, so the user just sees an unexplained letter.
+
+## Building while a dev server is up (v0.106.0, 2026-08-11)
+
+- `npm run build` cannot share `.next` with a running dev server and there is no `distDir` override in
+  `next.config.mjs`. Kill the server by PORT OWNER first
+  (`Get-NetTCPConnection -LocalPort 3000 -State Listen | Select -Expand OwningProcess -Unique |
+  % { Stop-Process -Id $_ -Force }`) — `pkill -f "next start"` does not free it.
+- An isolated `git worktree` is a workable substitute BUT only with `next build --webpack`: Turbopack
+  rejects a junctioned/symlinked `node_modules` outright (`Symlink [project]/node_modules is invalid,
+  it points out of the filesystem root`). A webpack build in a worktree does NOT prove the default
+  Turbopack build passes — run the real one on the real tree before shipping.

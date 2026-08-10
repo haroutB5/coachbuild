@@ -220,7 +220,14 @@ const SHARD_ICON: Record<number, string> = {
   5007: "ah.png",
   5010: "ms.png",
   5002: "armor.png",
-  5003: "magicresist.png",
+  // "mr.png", NOT "magicresist.png" — the long name 403s on the CDN (verified
+  // 2026-08-10: magicresist.png → 403 application/xml, mr.png → 200 image/png
+  // 518 bytes), and the short form matches the siblings already here (as/ah/ms).
+  // The wrong filename rendered a bare fallback glyph "M" wherever a Magic
+  // Resist shard is drawn — worst on the inline OTP rune card, which draws
+  // shards with no labels at all. lib/staticData.ts's SHARD_ICON is the same
+  // table and must stay in step; see the note there.
+  5003: "mr.png",
   5001: "healthscaling.png",
   5011: "health.png",
   5013: "tenacity.png",

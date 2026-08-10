@@ -14,7 +14,12 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
-import { buildFeaturedModel, type FeaturedGame, type FeaturedMatchRow } from "@/lib/otp/featured";
+import {
+  buildFeaturedModel,
+  type FeaturedGame,
+  type FeaturedMatchRow,
+  type OtpRunePageSamples,
+} from "@/lib/otp/featured";
 import { getChampionById, resolveChampionKit } from "@/lib/staticData";
 import type { ChampionKit, SkillOrderModel } from "@/lib/types";
 
@@ -52,7 +57,11 @@ export interface FeaturedOtpResponse {
    *  truthfully label, a game they WON when it has to fall back to a single
    *  game; the ORDER is what makes its recency tiebreak deterministic. */
   gameLog: FeaturedGame[];
-  runes: { page: unknown; games: number; pct: number } | null;
+  /** `games`/`pct` are the EXACT-PAGE figure (how often all slots matched at
+   *  once). `slots` is the per-rune breakdown, each entry over its own
+   *  denominator — see `buildRunePageSamples`. The two answer different
+   *  questions and the card must never present one as the other. */
+  runes: { page: unknown; games: number; pct: number; slots: OtpRunePageSamples } | null;
   spells: { spells: number[]; games: number; pct: number } | null;
   skillOrder: SkillOrderModel | null;
 }
@@ -140,7 +149,14 @@ export async function GET(req: NextRequest) {
       sample: { games: model.games, wins: model.wins },
       items: model.items,
       gameLog: model.gameLog,
-      runes: model.runes ? { page: model.runes.page, games: model.runes.games, pct: model.runes.pct } : null,
+      runes: model.runes
+        ? {
+            page: model.runes.page,
+            games: model.runes.games,
+            pct: model.runes.pct,
+            slots: model.runes.slots,
+          }
+        : null,
       spells: model.spells
         ? { spells: model.spells.spells, games: model.spells.games, pct: model.spells.pct }
         : null,

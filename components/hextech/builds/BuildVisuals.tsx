@@ -256,6 +256,27 @@ function optionPick(
   return shard ? pickPlaceholder(id, shardIconUrl(id), shardName(id)) : pickPlaceholder(id);
 }
 
+/** How many label columns a LABELLED rune row is laid out in.
+ *
+ * A labelled row is a real CSS grid of equal `1fr` tracks rather than a flex
+ * row of fixed-width boxes, because `align-items: center` on a fixed-width
+ * flex column sizes the label to its own CONTENT — the label's `overflow`
+ * never fires and a long name paints straight over its neighbours (measured
+ * on Viktor: "Transcendence" rendered 66.0px inside a 38px column and
+ * overlapped "Celerity" by 7.5px).
+ *
+ * Four options (Precision's and Sorcery's keystone rows) go 2x2 instead of
+ * 4-across: inside the modal's ~166px tree column, four tracks leave ~38px
+ * each, which cannot render "Stormraider's Surge" in any number of lines a
+ * clamp allows. Two tracks give ~80px and the name reads. Three or fewer
+ * options keep one row. */
+export function runeLabelColumns(optionCount: number): number {
+  if (optionCount <= 1) return 1;
+  if (optionCount <= 3) return optionCount;
+  if (optionCount === 4) return 2;
+  return 3;
+}
+
 function RuneOptionRow({
   row,
   onOpenDetail,
@@ -274,12 +295,33 @@ function RuneOptionRow({
   keystone?: boolean;
   showLabels?: boolean;
   showSamples?: boolean;
+  /** Fixed slot width for the UNLABELLED sample layout (the inline OTP card's
+   *  fraction column). A LABELLED row ignores it and shares the row's real
+   *  width out across `runeLabelColumns` equal tracks instead — a fixed box
+   *  narrower than the longest word is exactly what produced the overlapping
+   *  modal labels. */
   labelWidth?: number;
   optionGap?: number;
 }) {
   const hasNoData = row.empty || row.options.length === 0;
+  const gap = optionGap ?? (showLabels ? 8 : 7);
+  const slotCount = row.options.length + (hasNoData ? 1 : 0);
+  // A labelled slot fills its own grid track and can never be wider than it;
+  // `min-w-0` lets the track shrink below the label's max-content width so
+  // the wrapping below is what absorbs a long name.
+  const slotClass = showLabels
+    ? "flex w-full min-w-0 flex-col items-center text-center"
+    : "flex min-w-0 flex-col items-center text-center";
+  const slotStyle = showLabels ? undefined : { width: labelWidth };
+  // `break-words` + `hyphens-auto` handle the hard case the fixed box could
+  // not: a single word longer than the column ("Transcendence") breaks inside
+  // itself instead of spilling. The 3-line clamp is the last-resort ceiling —
+  // at the widths this grid produces no live rune name reaches it.
+  const labelClass =
+    "mt-1 line-clamp-3 min-h-[22px] hyphens-auto break-words text-[9px] leading-tight" +
+    (showLabels ? " w-full" : "");
   const emptySlot = (
-    <span className={showLabels ? "flex w-[68px] min-w-0 flex-col items-center text-center" : "flex shrink-0 items-center justify-center"} style={showLabels ? { width: labelWidth } : undefined}>
+    <span className={showLabels ? slotClass : "flex shrink-0 items-center justify-center"} style={showLabels ? undefined : slotStyle}>
       <span
         className="flex shrink-0 items-center justify-center rounded-full bg-white/[0.025] text-[10px] font-semibold text-[#9397ab]/70 shadow-[inset_0_0_0_1px_rgba(233,233,237,0.16)]"
         style={{ width: size, height: size }}
@@ -289,12 +331,19 @@ function RuneOptionRow({
       >
         —
       </span>
-      {showLabels && <span className="mt-1 line-clamp-2 min-h-[22px] text-[9px] leading-tight text-[#9397ab]/65">No data</span>}
+      {showLabels && <span className={`${labelClass} text-[#9397ab]/65`}>No data</span>}
     </span>
   );
 
   return (
-    <div className="flex justify-center" style={{ gap: optionGap ?? (showLabels ? 8 : 7) }}>
+    <div
+      className={showLabels ? "grid w-full items-start" : "flex justify-center"}
+      style={
+        showLabels
+          ? { gap, gridTemplateColumns: `repeat(${runeLabelColumns(slotCount)}, minmax(0, 1fr))` }
+          : { gap }
+      }
+    >
       {hasNoData && emptySlot}
       {row.options.map((pick) => {
         const selected = row.selectedIds.has(pick.id);
@@ -311,9 +360,9 @@ function RuneOptionRow({
         );
         if (!showLabels && !showSamples) return circle;
         return (
-          <span key={pick.id} className="flex min-w-0 flex-col items-center text-center" style={{ width: labelWidth }}>
+          <span key={pick.id} className={slotClass} style={slotStyle}>
             {circle}
-            {showLabels && <span className="mt-1 line-clamp-2 min-h-[22px] text-[9px] leading-tight text-[#e9e9ed]/75">{pick.name}</span>}
+            {showLabels && <span className={`${labelClass} text-[#e9e9ed]/75`} title={pick.name}>{pick.name}</span>}
             {showSamples && selected && row.sample && (
               <span className="mt-0.5 text-[9px] tabular-nums text-[#b5abfc]">
                 {row.sample.count}/{row.sample.denominator}
@@ -848,9 +897,16 @@ export function BuildSkillOrderPanel({ champId, lane }: { champId: number; lane:
   );
 }
 
+// DESKTOP ONLY, by user directive 2026-08-10 ("in mobile version remove the
+// apply runes and items import"). Both buttons only scroll the page to a section
+// the reader can already reach by scrolling, and on a phone they ate a whole
+// block above the fold. Hidden in CSS rather than behind a JS width check on
+// purpose: a width check renders the wrong thing on the first paint and then
+// swaps it. `hidden` removes the box entirely, so the hero's flex column drops
+// its gap too and the lane row sits directly under the champion header.
 export function BuildActionButtons() {
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="hidden flex-wrap gap-2 lg:flex">
       <button
         type="button"
         className="inline-flex h-9 min-h-[44px] items-center gap-2 rounded-[8px] bg-[#9184d9] px-3.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#191a28] transition-colors hover:bg-[#b5abfc] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1d2a] lg:min-h-0"

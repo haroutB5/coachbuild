@@ -187,3 +187,182 @@ describe("buildFeaturedModel", () => {
     expect(m.gameLog.map((g) => g.items)).toEqual([[3100]]);
   });
 });
+
+// ── Per-slot rune counts ─────────────────────────────────────────────────────
+// The property under test is that each slot gets its OWN denominator. Every
+// fixture below therefore has UNEVEN slot coverage on purpose: if the code
+// regressed to one page-level figure repeated per slot, the fractions would
+// collapse to a single pair and these assertions would fail.
+
+/** A page with independently controllable slots. Anything passed as `null` is
+ *  ABSENT from that game — the case a slot denominator must not count. */
+function runes(over: {
+  primaryTree?: number;
+  keystone?: number | null;
+  primary?: (number | null)[];
+  secondaryTree?: number | null;
+  secondary?: number[];
+  shards?: (number | null)[];
+} = {}) {
+  const strip = (xs: (number | null)[]) => xs.filter((x): x is number => x != null);
+  return {
+    primaryTree: over.primaryTree ?? 8200,
+    keystone: over.keystone === undefined ? 8214 : over.keystone,
+    primary: strip(over.primary ?? [8226, 8234, 8237]),
+    secondaryTree: over.secondaryTree === undefined ? 8000 : over.secondaryTree,
+    secondary: over.secondary ?? [9105, 8017],
+    shards: strip(over.shards ?? [5008, 5008, 5011]),
+  };
+}
+
+describe("buildFeaturedModel per-slot rune counts", () => {
+  it("gives each slot its own denominator when coverage is uneven", () => {
+    // 5 games. Row 1 is missing from one, row 2 from two — so the three primary
+    // rows must report three DIFFERENT denominators, none of them 5.
+    const m = buildFeaturedModel([
+      game({ runes: runes({ primary: [8226, 8234, 8237] }) }),
+      game({ runes: runes({ primary: [8226, 8234, 8237] }) }),
+      game({ runes: runes({ primary: [8226, 8234, 8232] }) }),
+      game({ runes: runes({ primary: [8226, 8210, null] }) }),
+      game({ runes: runes({ primary: [8275, null, null] }) }),
+    ]);
+    const slots = m.runes!.slots;
+    expect(m.games).toBe(5);
+    expect(slots.primaryTreeGames).toBe(5);
+    // Row 0: every game filled it; 4 of the 5 ran the displayed rune.
+    expect(slots.primaryRows[0]).toEqual({ runeId: 8226, count: 4, sampleSize: 5 });
+    // Row 1: four games filled it, three ran the displayed rune. NOT /5.
+    expect(slots.primaryRows[1]).toEqual({ runeId: 8234, count: 3, sampleSize: 4 });
+    // Row 2: three games filled it, two ran the displayed rune. NOT /5 either.
+    expect(slots.primaryRows[2]).toEqual({ runeId: 8237, count: 2, sampleSize: 3 });
+    // Three rows, three denominators, and none of them is the exact-page
+    // figure the card used to print under every rune.
+    expect(m.runes!.games).toBe(2);
+    expect(new Set(slots.primaryRows.map((r) => r!.sampleSize)).size).toBe(3);
+  });
+
+  it("leaves a slot no game filled empty instead of defaulting it", () => {
+    // No game records a third primary minor or a defense shard. Those slots
+    // must come back null — an absent slot is not a zero and not a borrowed
+    // page-level count.
+    const m = buildFeaturedModel([
+      game({ runes: runes({ primary: [8226, 8234, null], shards: [5008, 5008, null] }) }),
+      game({ runes: runes({ primary: [8226, 8234, null], shards: [5008, 5008, null] }) }),
+    ]);
+    const slots = m.runes!.slots;
+    expect(slots.primaryRows[2]).toBeNull();
+    expect(slots.shards[2]).toBeNull();
+    expect(slots.primaryRows[0]).toEqual({ runeId: 8226, count: 2, sampleSize: 2 });
+  });
+
+  it("counts a keystone only against games that ran its tree", () => {
+    // Two games on Sorcery, two on Domination. The displayed Sorcery keystone
+    // must read 2/2, never 2/4 — a Domination game could not have run it.
+    const m = buildFeaturedModel([
+      game({ runes: runes({ primaryTree: 8200, keystone: 8214 }) }),
+      game({ runes: runes({ primaryTree: 8200, keystone: 8214 }) }),
+      game({ runes: runes({ primaryTree: 8100, keystone: 8112, primary: [8126, 8139, 8135] }) }),
+      game({ runes: runes({ primaryTree: 8100, keystone: 8128, primary: [8126, 8139, 8135] }) }),
+    ]);
+    const slots = m.runes!.slots;
+    expect(m.games).toBe(4);
+    expect(slots.primaryTreeGames).toBe(2);
+    expect(slots.keystone).toEqual({ runeId: 8214, count: 2, sampleSize: 2 });
+    // The off-tree games are excluded from the primary ROWS too, for the same
+    // reason: their row-0 rune is a Domination rune and was never a candidate.
+    expect(slots.primaryRows[0]).toEqual({ runeId: 8226, count: 2, sampleSize: 2 });
+  });
+
+  it("counts a keystone the player also ran under a losing page", () => {
+    // The exact page repeats twice; a third game keeps the keystone but swaps a
+    // minor. The keystone is 3/3 while the exact page is 2/3 — the whole point
+    // of counting slots separately.
+    const m = buildFeaturedModel([
+      game({ runes: runes({ primary: [8226, 8234, 8237] }) }),
+      game({ runes: runes({ primary: [8226, 8234, 8237] }) }),
+      game({ runes: runes({ primary: [8226, 8234, 8232] }) }),
+    ]);
+    expect(m.runes!.games).toBe(2);
+    expect(m.runes!.slots.keystone).toEqual({ runeId: 8214, count: 3, sampleSize: 3 });
+    expect(m.runes!.slots.primaryRows[2]).toEqual({ runeId: 8237, count: 2, sampleSize: 3 });
+  });
+
+  it("places secondary picks by tree row, not by array position", () => {
+    // 9105 is a Precision row-1 rune and 8017 a row-2 rune, listed here in one
+    // order and reversed in the next game. Both games ran the SAME two runes,
+    // so each row must read 2/2 — an array-position mapping would score 0/2.
+    const m = buildFeaturedModel([
+      game({ runes: runes({ secondary: [9105, 8017] }) }),
+      game({ runes: runes({ secondary: [8017, 9105] }) }),
+    ]);
+    const slots = m.runes!.slots;
+    expect(slots.secondaryRows[0]).toBeNull();
+    expect(slots.secondaryRows[1]).toEqual({ runeId: 9105, count: 2, sampleSize: 2 });
+    expect(slots.secondaryRows[2]).toEqual({ runeId: 8017, count: 2, sampleSize: 2 });
+  });
+
+  it("counts secondary rows only over games running that secondary tree", () => {
+    const m = buildFeaturedModel([
+      game({ runes: runes({ secondaryTree: 8000, secondary: [9105, 8017] }) }),
+      game({ runes: runes({ secondaryTree: 8000, secondary: [9105, 8017] }) }),
+      game({ runes: runes({ secondaryTree: 8000, secondary: [9105, 8014] }) }),
+      game({ runes: runes({ secondaryTree: 8400, secondary: [8429, 8451] }) }),
+    ]);
+    const slots = m.runes!.slots;
+    // The Resolve game ran the same PRIMARY tree, so it counts on that side —
+    // but it could not have run a Precision secondary rune, so it is excluded
+    // from both secondary rows.
+    expect(slots.primaryTreeGames).toBe(4);
+    expect(slots.secondaryTreeGames).toBe(3);
+    expect(slots.secondaryRows[1]).toEqual({ runeId: 9105, count: 3, sampleSize: 3 });
+    expect(slots.secondaryRows[2]).toEqual({ runeId: 8017, count: 2, sampleSize: 3 });
+  });
+
+  it("counts shards across every game, tree or not", () => {
+    // Shards belong to no tree, so the off-tree game still counts toward them —
+    // a denominator of 4 here against a primary-side denominator of 3.
+    const m = buildFeaturedModel([
+      game({ runes: runes({ primaryTree: 8200, shards: [5008, 5008, 5011] }) }),
+      game({ runes: runes({ primaryTree: 8200, shards: [5008, 5008, 5011] }) }),
+      game({ runes: runes({ primaryTree: 8200, shards: [5008, 5010, 5011] }) }),
+      game({ runes: runes({ primaryTree: 8100, primary: [8126, 8139, 8135], shards: [5005, 5008, 5011] }) }),
+    ]);
+    const slots = m.runes!.slots;
+    expect(slots.primaryTreeGames).toBe(3);
+    expect(slots.shards[0]).toEqual({ runeId: 5008, count: 3, sampleSize: 4 });
+    expect(slots.shards[1]).toEqual({ runeId: 5008, count: 3, sampleSize: 4 });
+    expect(slots.shards[2]).toEqual({ runeId: 5011, count: 4, sampleSize: 4 });
+  });
+
+  it("excludes games with no usable rune payload from every denominator", () => {
+    // A row that stored nothing had no opinion about any slot. Counting it
+    // would understate every rune on the page.
+    const m = buildFeaturedModel([
+      game({ runes: runes() }),
+      game({ runes: runes() }),
+      game({ runes: null }),
+      game({ runes: { primary: [], secondary: [], shards: [] } }),
+    ]);
+    const slots = m.runes!.slots;
+    expect(m.games).toBe(4);
+    expect(slots.primaryTreeGames).toBe(2);
+    expect(slots.keystone).toEqual({ runeId: 8214, count: 2, sampleSize: 2 });
+  });
+
+  it("never reports a count larger than its own denominator", () => {
+    const m = buildFeaturedModel([
+      game({ runes: runes({ primary: [8226, 8234, 8237] }) }),
+      game({ runes: runes({ primary: [8275, 8210, null] }) }),
+      game({ runes: runes({ primaryTree: 8100, primary: [8126, 8139, 8135] }) }),
+    ]);
+    const slots = m.runes!.slots;
+    const every = [slots.keystone, ...slots.primaryRows, ...slots.secondaryRows, ...slots.shards];
+    for (const slot of every) {
+      if (!slot) continue;
+      expect(slot.count).toBeGreaterThanOrEqual(0);
+      expect(slot.count).toBeLessThanOrEqual(slot.sampleSize);
+      expect(slot.sampleSize).toBeGreaterThan(0);
+      expect(slot.sampleSize).toBeLessThanOrEqual(m.games);
+    }
+  });
+});

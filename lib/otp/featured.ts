@@ -23,6 +23,7 @@
 
 import { getAccountByRiotId, getMatchIdsByPuuid } from "../pro/riot";
 import { aggregateRecordedSkillOrders } from "../skillOrderAggregate";
+import { primaryMinorRow } from "@/components/hextech/perkSlots";
 import type { ChampionKit, SkillOrderModel } from "../types";
 
 /** Riot regional routings, in the order worth trying. */
@@ -165,9 +166,15 @@ export interface FeaturedBuildModel {
    *  an empty `items` array rather than vanishing, so the entry count still
    *  equals `games` and that stays the denominator for everything. */
   gameLog: FeaturedGame[];
-  /** The rune page they run most often, with how often. Null when their pages
-   *  are too scattered to have a modal one. */
-  runes: { page: RunePage; games: number; pct: number } | null;
+  /** The rune page they run most often, with how often, plus a per-slot count
+   *  for every rune ON that page. Null when their pages are too scattered to
+   *  have a modal one.
+   *
+   *  `games`/`pct` describe the EXACT page (all slots identical); `slots`
+   *  describes each rune INDIVIDUALLY over its own denominator, so the two
+   *  numbers legitimately differ and neither can be read off the other. See
+   *  `buildRunePageSamples` for the denominator rule. */
+  runes: { page: RunePage; games: number; pct: number; slots: OtpRunePageSamples } | null;
   /** Summoner spell pair they run most often. */
   spells: { spells: [number, number]; games: number; pct: number } | null;
   /** Per-level modal skill order over the games whose stored timeline actually
@@ -194,6 +201,182 @@ export interface FeaturedMatchRow {
   /** Nullable in coachbuild.otp_matches. `[]` means a timeline was fetched but
    *  carried no usable level-up events; null means no timeline was recorded. */
   skill_order: unknown;
+}
+
+// ── Per-slot rune counts (v0.105.2) ──────────────────────────────────────────
+//
+// The card used to show ONE figure for the whole page — "12 of 40 stored games
+// use this exact page" — repeated under every rune, which reads as a per-rune
+// count and is not one. This adds the real thing, on the same honesty terms
+// `components/hextech/proConsensus.ts` already holds the PRO side to: every
+// slot gets its OWN denominator, and a slot the data cannot speak to renders
+// empty rather than borrowing a number from somewhere else.
+//
+// ── THE RULE, in one line per slot ──────────────────────────────────────────
+// Every count below describes the rune the card ACTUALLY DRAWS in that slot —
+// the modal exact page's rune. It is never a re-derived per-slot modal, so the
+// icon and the number under it can never disagree (each sample carries its
+// `runeId` back so the renderer can refuse to print a fraction that belongs to
+// a different rune; see components/hextech/otpRunePage.ts).
+//
+//   keystone      numerator: games on the page's PRIMARY TREE that ran this
+//                 keystone. denominator: games on that tree carrying ANY
+//                 keystone. (Tree-conditioned because a game on another tree
+//                 could not have run this keystone — counting it would inflate
+//                 the denominator with games that never had the choice.)
+//   primary row r numerator: tree-conditioned games whose minor at POSITION r
+//                 is this rune. denominator: tree-conditioned games carrying
+//                 any minor at position r. Riot serialises the three primary
+//                 selections in row order (lib/pro/extract.ts's extractRunes
+//                 keeps that order, and otp_matches rows are all soloq), and
+//                 position r is exactly what the card draws in row r — so
+//                 counting positionally is what makes the number describe the
+//                 icon above it.
+//   secondary row conditioned on the page's primary tree AND its secondary
+//                 tree. Secondary picks are NOT positional (2 of 3 rows, which
+//                 2 varies), so each id is resolved to its row through
+//                 perkSlots — the same first-claim-wins mapping the card uses
+//                 to place them.
+//   shard row r   tree-INDEPENDENT (shards belong to no tree), so the whole
+//                 sample is the population: games carrying any shard at
+//                 position r.
+//
+// Games whose stored payload carried no usable rune page at all are in NO
+// denominator — they had nothing to say about any slot. A slot no game filled
+// yields `null`, which the card renders as its existing explicit empty state.
+// Nothing here is ever estimated, completed, or filled in from the page-level
+// figure: a slot with no sample shows no number.
+
+/** One rune slot on the featured page and the count behind it. */
+export interface OtpRuneSlotSample {
+  /** The rune this count is ABOUT — the id the card draws in this slot. The
+   *  renderer re-checks it before printing the fraction, so an adapter that
+   *  drifts out of step with this aggregation degrades to no number rather
+   *  than to a wrong one. */
+  runeId: number;
+  /** Games in this slot's conditioned sample that ran THIS rune here. */
+  count: number;
+  /** Games in this slot's conditioned sample that ran ANY rune here — this
+   *  slot's own denominator. A game that carried no rune in this slot does not
+   *  dilute it. */
+  sampleSize: number;
+}
+
+/** Per-slot counts for the displayed page. Every field is `null` where the
+ *  page has no rune for that slot, or where no sampled game carried one. */
+export interface OtpRunePageSamples {
+  keystone: OtpRuneSlotSample | null;
+  /** Length 3, index = primary minor row. */
+  primaryRows: (OtpRuneSlotSample | null)[];
+  /** Length 3, index = secondary tree row (a real page fills 2 of the 3). */
+  secondaryRows: (OtpRuneSlotSample | null)[];
+  /** Length 3, index = shard position (0 offense, 1 flex, 2 defense). */
+  shards: (OtpRuneSlotSample | null)[];
+  /** Games running the displayed page's primary tree — the population every
+   *  primary-side slot is a subset of. Context for the reader, never a
+   *  substitute for a slot's own denominator. */
+  primaryTreeGames: number;
+  /** Of those, the games also running the displayed secondary tree. */
+  secondaryTreeGames: number;
+}
+
+/** A slot with nothing behind it is `null`, never `0/0`. */
+function slotSample(runeId: number | null, count: number, sampleSize: number): OtpRuneSlotSample | null {
+  if (runeId == null || sampleSize <= 0) return null;
+  return { runeId, count, sampleSize };
+}
+
+/** row -> runeId for one page's SECONDARY picks. First id to claim a row wins,
+ *  ids of unknown row are dropped — byte-for-byte the placement rule the card's
+ *  grid adapter applies, so a count can only ever land under the icon it
+ *  describes. */
+function secondaryRowMap(page: RunePage): Map<number, number> {
+  const out = new Map<number, number>();
+  if (page.secondaryTree == null) return out;
+  for (const id of page.secondary) {
+    const row = primaryMinorRow(page.secondaryTree, id);
+    if (row === null || out.has(row)) continue;
+    out.set(row, id);
+  }
+  return out;
+}
+
+/** Count each rune of `displayed` across `pages` under the rule documented
+ *  above. `pages` is one entry per game that carried a usable rune payload. */
+export function buildRunePageSamples(
+  pages: readonly RunePage[],
+  displayed: RunePage
+): OtpRunePageSamples {
+  // A page with no resolved primary tree cannot be tree-conditioned. Rather
+  // than invent a population, the whole sample is used and the primary-side
+  // numbers say "of every game with a rune page" — still each slot's own
+  // honest denominator, just a wider one. Real Riot payloads always carry the
+  // tree, so this is a degradation path, not the normal one.
+  const primarySample =
+    displayed.primaryTree == null ? [...pages] : pages.filter((p) => p.primaryTree === displayed.primaryTree);
+  const secondarySample =
+    displayed.secondaryTree == null ? [] : primarySample.filter((p) => p.secondaryTree === displayed.secondaryTree);
+
+  let keystoneCount = 0;
+  let keystoneSample = 0;
+  for (const p of primarySample) {
+    if (p.keystone == null) continue;
+    keystoneSample += 1;
+    if (p.keystone === displayed.keystone) keystoneCount += 1;
+  }
+
+  const primaryRows = [0, 1, 2].map((row) => {
+    const shown = displayed.primary[row] ?? null;
+    if (shown == null) return null;
+    let count = 0;
+    let sampleSize = 0;
+    for (const p of primarySample) {
+      const id = p.primary[row];
+      if (id == null) continue;
+      sampleSize += 1;
+      if (id === shown) count += 1;
+    }
+    return slotSample(shown, count, sampleSize);
+  });
+
+  const shownSecondary = secondaryRowMap(displayed);
+  const secondaryMaps = secondarySample.map(secondaryRowMap);
+  const secondaryRows = [0, 1, 2].map((row) => {
+    const shown = shownSecondary.get(row) ?? null;
+    if (shown == null) return null;
+    let count = 0;
+    let sampleSize = 0;
+    for (const map of secondaryMaps) {
+      const id = map.get(row);
+      if (id == null) continue;
+      sampleSize += 1;
+      if (id === shown) count += 1;
+    }
+    return slotSample(shown, count, sampleSize);
+  });
+
+  const shards = [0, 1, 2].map((row) => {
+    const shown = displayed.shards[row] ?? null;
+    if (shown == null) return null;
+    let count = 0;
+    let sampleSize = 0;
+    for (const p of pages) {
+      const id = p.shards[row];
+      if (id == null) continue;
+      sampleSize += 1;
+      if (id === shown) count += 1;
+    }
+    return slotSample(shown, count, sampleSize);
+  });
+
+  return {
+    keystone: slotSample(displayed.keystone, keystoneCount, keystoneSample),
+    primaryRows,
+    secondaryRows,
+    shards,
+    primaryTreeGames: primarySample.length,
+    secondaryTreeGames: secondarySample.length,
+  };
 }
 
 function asNumberArray(v: unknown): number[] {
@@ -246,6 +429,11 @@ export function buildFeaturedModel(
   const itemGames = new Map<number, number>();
   const gameLog: FeaturedGame[] = [];
   const runeGroups = new Map<string, { page: RunePage; n: number }>();
+  /** One entry per game that carried a usable rune payload — the population
+   *  the per-slot counts run over. Parsed by the SAME `toRunePage` the modal
+   *  page comes from, so a count and the icon it sits under can never be
+   *  reading two different views of the same row. */
+  const runePages: RunePage[] = [];
   const spellGroups = new Map<string, { spells: [number, number]; n: number }>();
   let wins = 0;
 
@@ -265,6 +453,7 @@ export function buildFeaturedModel(
 
     const page = toRunePage(row.runes);
     if (page) {
+      runePages.push(page);
       const k = runeKey(page);
       const g = runeGroups.get(k);
       if (g) g.n += 1;
@@ -298,7 +487,14 @@ export function buildFeaturedModel(
     wins,
     items,
     gameLog,
-    runes: topRunes ? { page: topRunes.page, games: topRunes.n, pct: pct(topRunes.n) } : null,
+    runes: topRunes
+      ? {
+          page: topRunes.page,
+          games: topRunes.n,
+          pct: pct(topRunes.n),
+          slots: buildRunePageSamples(runePages, topRunes.page),
+        }
+      : null,
     spells: topSpells ? { spells: topSpells.spells, games: topSpells.n, pct: pct(topSpells.n) } : null,
     skillOrder,
   };

@@ -60,7 +60,12 @@ export const SHARD_ICON: Record<number, string> = {
   5007: "ah.png", // ability haste
   5010: "ms.png",
   5002: "armor.png",
-  5003: "magicresist.png",
+  // "mr.png", NOT "magicresist.png" — the long name 403s on the CDN (verified
+  // 2026-08-10), the short form matches as/ah/ms above. Duplicated verbatim in
+  // components/proAssets.ts's own SHARD_ICON: that module is deliberately
+  // standalone from this one (client bundle vs server data layer), so the two
+  // tables must be edited together. Both were wrong for this id.
+  5003: "mr.png",
   5001: "healthscaling.png",
   5011: "health.png",
   5013: "tenacity.png",

@@ -19,13 +19,14 @@ describe("BUILD_TAB_OPTIONS", () => {
     expect(BUILD_TAB_OPTIONS.map((o) => o.value)).toEqual(["build", "pro", "otp"]);
   });
 
-  // Pinned to mobile's labels on purpose — desktop adopts mobile's navigation
-  // rather than inventing a parallel one. The user typed "WPA" for the first
-  // tab; that question is open in HANDOFF-fronty.md and is theirs to settle, so
-  // this test is the thing that has to change if they decide it, rather than the
-  // label drifting quietly.
-  it("labels match the mobile tab strip exactly", () => {
-    expect(BUILD_TAB_OPTIONS.map((o) => o.label)).toEqual(["Build", "Pro", "OTP"]);
+  // These are the labels ON SCREEN — ChampionHero.tsx feeds this exact array to
+  // HextechTabs. Until 2026-08-10 it did not: it had a local table reading
+  // "WPA build" / "Pro consensus" / "One-trick", so this assertion pinned three
+  // strings that rendered nowhere. Tables collapsed; user directive set "Pro"
+  // and "OTP", and the first tab deliberately kept the wording that was already
+  // visible rather than picking up this file's old dead "Build".
+  it("are the labels the tab strip actually renders", () => {
+    expect(BUILD_TAB_OPTIONS.map((o) => o.label)).toEqual(["WPA build", "Pro", "OTP"]);
   });
 
   it("has no duplicate values", () => {

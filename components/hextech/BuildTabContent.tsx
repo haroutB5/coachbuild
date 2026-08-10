@@ -382,50 +382,115 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
     );
   }
 
-  if (state.status === "empty") {
+  // ── NO BUILD FOR THIS LANE (empty), AND THE UPSTREAM FAILURE (error) ──────
+  //
+  // 2026-08-10, user-reported on Viktor SUPPORT. Both branches used to `return`
+  // one centred message and NO TABPANELS AT ALL, while ChampionHero kept
+  // rendering the tablist above (it is a sibling under app/page.tsx and cannot
+  // see this component's fetch state). So all three tabs stayed enabled,
+  // clicking each correctly flipped `aria-selected`, and nothing rendered:
+  // three controls that respond to clicks and do nothing.
+  //
+  // WHICH OPTION WAS TAKEN, AND WHY. Not "disable the tabs with a reason" —
+  // that would need the fetch state lifted through app/page.tsx into
+  // ChampionHero, and, worse, it would disable a tab whose content is fine.
+  // `/api/build?champ=112&role=4` 404s for Viktor Support, but
+  // `/api/otp/featured?championId=112` returns the full 230-game payload for
+  // every lane, because the OTP feed is CHAMPION-scoped (the route reads only
+  // `championId`; the table is one row per champion). A lane-scoped empty state
+  // was suppressing a tab whose content does not depend on lane. So every tab
+  // now renders its own real tabpanel: OTP renders its genuine content with
+  // `build={null}`, and BUILD and PRO render the honest reason there is nothing
+  // in them. No tab is inert, and no tab is disabled while holding real data.
+  //
+  // PRO is legitimately empty here, checked rather than assumed:
+  // `/api/pros?championId=112&role=4` returns `{"games":[]}` for Viktor Support.
+  // ProConsensusCard also requires a non-null `build` and lives outside this
+  // change's scope, so this branch states the lane-scoping instead of rendering
+  // it.
+  //
+  // The ERROR branch gets the same treatment on purpose: it is the identical
+  // defect one branch over, and an /api/build outage says nothing about the OTP
+  // feed, which is a separate endpoint with its own fetch inside the card.
+  if (state.status === "empty" || state.status === "error") {
+    const headline =
+      state.status === "empty"
+        ? `Not enough data for ${champ.name} ${LANE_LABEL[lane]}`
+        : state.reason === "upstream"
+          ? "Build data is unavailable right now"
+          : "Couldn't load — try again";
+
+    // `build.patch` is what normally resolves the CDN asset version, and there
+    // is no build here. `versionFromPatch(undefined)` is documented to fall
+    // back to the live-resolved icon version (and only then to its own
+    // constant), so the OTP card's item/rune/spell art still loads.
+    const fallbackVer = versionFromPatch(undefined);
+
     return (
-      <div className="mt-5 space-y-5">
-        <div className="bg-panel border border-line rounded-xl p-10 text-center">
-          <div className="text-txt font-semibold mb-1">
-            Not enough data for {champ.name} {LANE_LABEL[lane]}
-          </div>
-          <div className="text-mut text-sm">
-            Try a different lane or rank bracket, or check{" "}
-            <a
-              href="https://coachless.gg"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-teal hover:underline"
-            >
-              coachless.gg
-            </a>{" "}
-            directly.
+      <div className="mt-3 space-y-4">
+        <div
+          role="tabpanel"
+          id={buildTabPanelId("build")}
+          aria-labelledby={buildTabId("build")}
+          tabIndex={0}
+          className={buildTab === "build" ? "" : "hidden"}
+        >
+          <div className="bg-panel border border-line rounded-xl p-10 text-center">
+            <div className="text-txt font-semibold mb-1">{headline}</div>
+            <div className="text-mut text-sm">
+              {state.status === "empty" ? (
+                <>
+                  Try a different lane or rank bracket, or check{" "}
+                  <a
+                    href="https://coachless.gg"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-teal hover:underline"
+                  >
+                    coachless.gg
+                  </a>{" "}
+                  directly. The OTP tab still has data — it is not scoped to this lane.
+                </>
+              ) : state.reason === "upstream" ? (
+                <>
+                  The stats source this app reads ({champ.name} {LANE_LABEL[lane]}) isn&apos;t responding.
+                  That&apos;s upstream of CoachBuild, so refreshing may not help until it recovers.
+                </>
+              ) : (
+                <>
+                  Couldn&apos;t reach CoachBuild while fetching {champ.name} {LANE_LABEL[lane]}. Check your
+                  connection and refresh.
+                </>
+              )}
+            </div>
           </div>
         </div>
-      </div>
-    );
-  }
 
-  if (state.status === "error") {
-    return (
-      <div className="mt-5 space-y-5">
-        <div className="bg-panel border border-line rounded-xl p-10 text-center">
-          <div className="text-txt font-semibold mb-1">
-            {state.reason === "upstream" ? "Build data is unavailable right now" : "Couldn't load — try again"}
+        <div
+          role="tabpanel"
+          id={buildTabPanelId("pro")}
+          aria-labelledby={buildTabId("pro")}
+          tabIndex={0}
+          className={buildTab === "pro" ? "" : "hidden"}
+        >
+          <div className="bg-panel border border-line rounded-xl p-10 text-center">
+            <div className="text-txt font-semibold mb-1">{headline}</div>
+            <div className="text-mut text-sm">
+              Pro consensus is scoped to one lane, so it fills in for {champ.name}{" "}
+              {LANE_LABEL[lane]} once games are recorded there. The OTP tab is not scoped to a lane
+              and still has data.
+            </div>
           </div>
-          <div className="text-mut text-sm">
-            {state.reason === "upstream" ? (
-              <>
-                The stats source this app reads ({champ.name} {LANE_LABEL[lane]}) isn&apos;t responding.
-                That&apos;s upstream of CoachBuild, so refreshing may not help until it recovers.
-              </>
-            ) : (
-              <>
-                Couldn&apos;t reach CoachBuild while fetching {champ.name} {LANE_LABEL[lane]}. Check your
-                connection and refresh.
-              </>
-            )}
-          </div>
+        </div>
+
+        <div
+          role="tabpanel"
+          id={buildTabPanelId("otp")}
+          aria-labelledby={buildTabId("otp")}
+          tabIndex={0}
+          className={buildTab === "otp" ? "" : "hidden"}
+        >
+          <FeaturedOtpCard champ={champ} ver={fallbackVer} lane={lane} build={null} />
         </div>
       </div>
     );

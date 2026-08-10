@@ -78,35 +78,50 @@
 // on this card is quoted against `sample.games` — the games WE hold — including
 // the exact-set count, which is "3 of 37", never "3 of the 20 that qualified".
 // A second denominator is the bug, not a clarification.
+//
+// ── THE ONE EXCEPTION, AND WHY IT IS NOT THAT BUG (v0.105.2) ─────────────────
+// The RUNE GRID now shows a per-slot fraction, and those denominators are NOT
+// `sample.games`. That is deliberate and it is the opposite of the drift above.
+//
+// The rule guards against a number quoted over a SILENTLY NARROWED population —
+// "3 of the 20 that qualified" flatters the 3 by hiding the filter. A rune slot
+// is not a narrowed population, it is a DIFFERENT question. A game where the
+// player ran Domination could never have run a Sorcery keystone; putting it in
+// that keystone's denominator does not make the number more honest, it makes it
+// wrong in the other direction — it charges a rune for games in which it was
+// not on the ballot. `components/hextech/proConsensus.ts` has held the PRO side
+// to per-slot denominators since v0.29.0 for exactly this reason, and the OTP
+// side showing one page-level figure under every rune was the actual defect
+// here: six identical numbers presented as six per-rune counts.
+//
+// What keeps this from reopening v0.73.1 is that the two figures are LABELLED
+// where they appear, never mixed in one sentence: the Runes heading still reads
+// "<pct>% of <sample.games> games" (the exact page, one denominator, unchanged),
+// and both the grid note and the modal subtitle say in words that each fraction
+// counts only the games that filled that slot. If you ever find yourself
+// wanting to compare a slot fraction with the page fraction, that is the tell
+// that a label has gone missing — restore the label, do not unify the maths.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useMemo, useState } from "react";
-import type { BuildResponse, ChampionRef, Pick as RunePick } from "@/lib/types";
-import {
-  itemIconUrl,
-  spellIconUrl,
-  spellName,
-  treeIconUrl,
-  treeName,
-  resolveRuneDisplay,
-  shardIconUrl,
-  shardName,
-} from "@/components/proAssets";
+import type { BuildResponse, ChampionRef } from "@/lib/types";
+import { itemIconUrl, spellIconUrl, spellName, resolveRuneDisplay } from "@/components/proAssets";
 import { getItemDetailMap, type ItemDetail } from "@/components/itemDetail";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import { buildFeaturedView } from "@/lib/otp/featuredBuild";
-import type { FeaturedGame } from "@/lib/otp/featured";
+import type { FeaturedGame, OtpRunePageSamples } from "@/lib/otp/featured";
 import type { BuildSlot } from "@/lib/buildSlots";
 import type { FeaturedBuildView, FeaturedFullBuild } from "@/lib/otp/featuredBuild";
 import BuildSlotList from "./BuildSlotList";
 import { isContested } from "./buildSlotView";
 import PanelHeading from "./PanelHeading";
-import { PERK_TREES, primaryMinorRow } from "./perkSlots";
+import { PERK_TREES } from "./perkSlots";
+import { otpRunePage } from "./otpRunePage";
 import { opggProfileUrl } from "./opggProfile";
 import { AddProItemBuildButton, ApplyProRunesButton, type OtpRunePageForApply } from "./ProConsensusCard";
 import type { SkillOrderModel } from "./skillOrder";
 import type { ProConsensusItemsInput } from "./itemSetBody";
-import type { LaneId } from "./heroContracts";
+import { LANE_LABEL, type LaneId } from "./heroContracts";
 import { featuredOtpRequestInputs } from "./featuredOtpRequest";
 import {
   ACCENT_CARD_CLASS,
@@ -116,9 +131,6 @@ import {
   RunePageGrid,
   RunePageModal,
   SHARD_ROWS,
-  type RuneGridSample,
-  type RunePageGridPage,
-  type RunePageGridRow,
   type RunePageModalSpell,
   Scanline,
   SectionLabel,
@@ -150,7 +162,12 @@ interface FeaturedResponse {
    *  rename still renders its item slots. Inventories only, no outcomes, so a
    *  build derived from it can never claim a win — see the mapping below. */
   gameItems?: number[][];
-  runes: { page: OtpRunePageForApply; games: number; pct: number } | null;
+  /** `games`/`pct` count the EXACT page; `slots` counts each rune on its own.
+   *  `slots` is OPTIONAL on purpose: an offline service-worker body cached
+   *  before v0.105.2 has no such field, and the grid must then draw the runes
+   *  with NO fractions rather than fall back to the page-level figure it used
+   *  to repeat under every slot. */
+  runes: { page: OtpRunePageForApply; games: number; pct: number; slots?: OtpRunePageSamples | null } | null;
   spells: { spells: number[]; games: number; pct: number } | null;
   skillOrder?: SkillOrderModel | null;
 }
@@ -440,6 +457,35 @@ function OtpDivergenceCard({
   );
 }
 
+/** THE LANE CAPTION (2026-08-10) — the fix for a screen that lied by omission.
+ *
+ *  With TOP selected the hero header reads "Viktor TOP LANE" while this card
+ *  showed a mid-lane one-trick, and nothing on the card named a lane. Clicking
+ *  TOP / MID / BOT or High Elo / Platinum left the panel byte-identical, so the
+ *  pills looked broken on this tab while they visibly moved the sibling tabs.
+ *
+ *  That inertness is BY DESIGN, not a broken fetch: `app/api/otp/featured` reads
+ *  only `championId`, `featuredOtpRequestInputs` deliberately omits lane, and
+ *  the table is one row per champion. The defect was never the architecture; it
+ *  was that the screen did not say so. So this is a caption, not a re-fetch —
+ *  do NOT "fix" this by making the OTP feed lane-scoped.
+ *
+ *  WHAT IT DOES NOT SAY, AND WHY. It does not name the lane the featured player
+ *  actually plays. Checked the whole payload: `player` carries gameName,
+ *  tagLine, server, tier, lp, championSharePct, sourceGames, winratePct, kda,
+ *  refreshedAt — no role or lane — and `gameLog` entries carry `items` and `win`
+ *  only. There is no lane in the data, so none is claimed. */
+function OtpLaneScopeNote({ championName }: { championName: string }) {
+  return (
+    <p className="rounded-[8px] bg-panel2 px-3.5 py-3 text-[11px] leading-relaxed text-txt/70 shadow-[inset_0_0_0_1px_rgba(233,233,237,0.08)]">
+      <span className="font-semibold text-txt">Picked across all lanes.</span> This is the best{" "}
+      {championName} account we track on the champion overall, so it does not follow the lane or rank
+      selection above, and their stored games are counted wherever they played them. Which lane they
+      main is not recorded, so this card does not claim one.
+    </p>
+  );
+}
+
 function OtpLastGamesCard({ gameLog }: { gameLog: FeaturedGame[] }) {
   if (gameLog.length === 0) return null;
   return (
@@ -458,99 +504,6 @@ function OtpLastGamesCard({ gameLog }: { gameLog: FeaturedGame[] }) {
       </div>
     </section>
   );
-}
-
-/* The featured model stores one modal page, not row-level frequencies. Primary
- * selections are preserved in Riot row order; secondary selections are mapped
- * to their known tree rows. Unknown/duplicate secondary rows stay visible in
- * `unmapped` rather than being assigned to a guessed slot. */
-function otpRunePick(id: number, runeOf: (id: number) => { name: string; icon: string }): RunePick {
-  const display = runeOf(id);
-  return { id, name: display.name, icon: display.icon, wpa: 0, winrate: null, occurrence: 0 };
-}
-
-function otpStaticRuneRow(
-  optionIds: readonly number[],
-  selectedId: number | null,
-  runeOf: (id: number) => { name: string; icon: string },
-  sample: RuneGridSample | null = null,
-): RunePageGridRow {
-  const ids = [...new Set([...optionIds, ...(selectedId == null ? [] : [selectedId])])];
-  return {
-    options: ids.map((id) => ({ ...otpRunePick(id, runeOf), occurrence: id === selectedId && sample ? sample.count : 0 })),
-    selectedIds: selectedId == null ? new Set<number>() : new Set([selectedId]),
-    sample,
-    empty: selectedId == null,
-  };
-}
-
-function otpStaticShardRow(
-  optionIds: readonly number[],
-  selectedId: number | null,
-  sample: RuneGridSample | null,
-): RunePageGridRow {
-  const ids = [...new Set([...optionIds, ...(selectedId == null ? [] : [selectedId])])];
-  return {
-    options: ids.map((id) => ({
-      id,
-      name: shardName(id),
-      icon: shardIconUrl(id),
-      wpa: 0,
-      winrate: null,
-      occurrence: id === selectedId && sample ? sample.count : 0,
-    } satisfies RunePick)),
-    selectedIds: selectedId == null ? new Set<number>() : new Set([selectedId]),
-    sample,
-    empty: selectedId == null,
-  };
-}
-
-function otpRunePage(
-  page: OtpRunePageForApply,
-  runeOf: (id: number) => { name: string; icon: string },
-  pageSample: RuneGridSample,
-): RunePageGridPage {
-  const primarySlots = page.primaryTree == null ? null : PERK_TREES[page.primaryTree] ?? null;
-  const primaryRows = Array.from({ length: 3 }, (_, index) => {
-    const id = page.primary[index] ?? null;
-    return otpStaticRuneRow(primarySlots?.minorRows[index] ?? [], id, runeOf, id != null ? pageSample : null);
-  });
-  const unmapped: RunePick[] = [];
-  page.primary.slice(3).forEach((id) => unmapped.push(otpRunePick(id, runeOf)));
-  const secondarySelected: (RunePick | null)[] = [null, null, null];
-  if (page.secondaryTree != null) {
-    for (const id of page.secondary) {
-      const row = primaryMinorRow(page.secondaryTree, id);
-      const pick = otpRunePick(id, runeOf);
-      if (row == null || secondarySelected[row] !== null) {
-        unmapped.push(pick);
-      } else {
-        secondarySelected[row] = pick;
-      }
-    }
-  } else {
-    page.secondary.forEach((id) => unmapped.push(otpRunePick(id, runeOf)));
-  }
-  const secondarySlots = page.secondaryTree == null ? null : PERK_TREES[page.secondaryTree] ?? null;
-  const secondaryRows = secondarySelected.map((pick, index) => otpStaticRuneRow(
-    secondarySlots?.minorRows[index] ?? [],
-    pick?.id ?? null,
-    runeOf,
-    pick ? pageSample : null,
-  ));
-  return {
-    primaryTree: page.primaryTree == null ? null : { id: page.primaryTree, name: treeName(page.primaryTree), icon: treeIconUrl(page.primaryTree) },
-    keystone: otpStaticRuneRow(primarySlots?.keystones ?? [], page.keystone ?? null, runeOf, page.keystone != null ? pageSample : null),
-    primaryRows,
-    secondaryTree: page.secondaryTree == null ? null : { id: page.secondaryTree, name: treeName(page.secondaryTree), icon: treeIconUrl(page.secondaryTree) },
-    secondaryRows,
-    shards: Array.from({ length: 3 }, (_, index) => otpStaticShardRow(
-      SHARD_ROWS[index] ?? [],
-      page.shards[index] ?? null,
-      page.shards[index] != null ? pageSample : null,
-    )),
-    unmapped,
-  };
 }
 
 function otpSpellSlots(spells: { spells: number[]; games: number; pct: number } | null, sampleGames: number, ver: string): RunePageModalSpell[] {
@@ -572,7 +525,23 @@ export default function FeaturedOtpCard({
   champ: ChampionRef;
   ver: string;
   lane: LaneId;
-  build: BuildResponse;
+  /** NULLABLE as of 2026-08-10, and that is what makes this card reachable on
+   *  a lane with no WPA build.
+   *
+   *  `/api/build?champ=112&role=4` 404s for Viktor Support, so BuildTabContent
+   *  fell into its `empty` branch and rendered NO tabpanels at all — while
+   *  `/api/otp/featured?championId=112` was returning the full 230-game
+   *  payload, because it is lane-independent. A lane-scoped empty state was
+   *  suppressing a tab whose content is not lane-scoped.
+   *
+   *  Everything on this card that needs `build` is a COMPARISON WITH, or an
+   *  EXPORT ALONGSIDE, the WPA recommendation — the two apply buttons and the
+   *  "Where they diverge" panel. Those three are the only things hidden when it
+   *  is null; the player, the KPI strip, their build, runes, summoners, skill
+   *  order and last games are all sourced from the OTP feed alone and render
+   *  exactly as before. Absence beats invention: there is no WPA path to
+   *  diverge from, so no divergence is claimed. */
+  build: BuildResponse | null;
 }) {
   const [data, setData] = useState<FeaturedResponse | null>(null);
   const [meta, setMeta] = useState<ReadonlyMap<number, ItemDetail>>(new Map());
@@ -728,6 +697,12 @@ export default function FeaturedOtpCard({
           <span className="text-txt">150+ games</span> on the champion, so this fills in as the
           ingest works through the roster.
         </p>
+        {/* The caption belongs on the empty state too: without it a reader on
+            TOP reasonably concludes the gap is TOP-specific and tries another
+            lane, which cannot change this answer. */}
+        <p className="mt-2 text-[11px] text-mut/80 leading-relaxed">
+          Searched across all lanes, so switching the lane or rank above will not change this.
+        </p>
       </div>
     );
   }
@@ -832,9 +807,12 @@ export default function FeaturedOtpCard({
   const runePage = runes?.page ?? null;
   const itemName = (id: number) => meta.get(id)?.name ?? `Item ${id}`;
   const runeOf = (id: number) => runeArt.get(id) ?? { name: `Rune #${id}`, icon: "" };
-  const otpRuneGridPage = runePage
-    ? otpRunePage(runePage, runeOf, { count: runes!.games, denominator: sample.games })
-    : null;
+  // Per-slot counts, NOT the page-level figure repeated six times: each rune
+  // carries how many of the games that filled ITS slot ran it. A slot with no
+  // count (older cached body, or a rune no game placed there) simply gets no
+  // number — see otpRunePage.ts's slotGridSample.
+  const otpRuneGridPage = runePage ? otpRunePage(runePage, runeOf, runes!.slots, SHARD_ROWS) : null;
+  const runeSlots = runes?.slots ?? null;
 
   const sampleMeta = `${sample.games} stored games · ${winPct}% won`;
 
@@ -863,26 +841,40 @@ export default function FeaturedOtpCard({
         </div>
       </section>
 
+      {/* Above the setup block, not buried under it: this is the first thing
+          that has to be true about the card. */}
+      <div className="px-4 sm:px-5">
+        <OtpLaneScopeNote championName={champ.name} />
+      </div>
+
       <div className="p-4 sm:p-5">
         <div className="flex items-start justify-between gap-3 mb-3.5">
           <p className="text-[10.5px] tracking-[0.14em] uppercase text-mut font-semibold">OTP setup</p>
-          <div className="flex items-start gap-2.5">
-            <ApplyProRunesButton
-              champ={champ}
-              roleLabel={build.roleLabel}
-              fallbackShards={build.runes.shards}
-              runePage={runePage}
-              variant="otp"
-            />
-            <AddProItemBuildButton
-              champ={champ}
-              lane={lane}
-              roleLabel={build.roleLabel}
-              build={build}
-              otpItems={otpItems}
-              variant="otp"
-            />
-          </div>
+          {/* Both buttons write the OTP setup into the game's own client
+              ALONGSIDE the WPA build (roleLabel names the page, fallbackShards
+              and `build` fill what the OTP sample does not carry). With no
+              build for this lane there is nothing to name the page after and
+              nothing to fall back to, so they are not rendered rather than
+              rendered against invented inputs. */}
+          {build && (
+            <div className="flex items-start gap-2.5">
+              <ApplyProRunesButton
+                champ={champ}
+                roleLabel={build.roleLabel}
+                fallbackShards={build.runes.shards}
+                runePage={runePage}
+                variant="otp"
+              />
+              <AddProItemBuildButton
+                champ={champ}
+                lane={lane}
+                roleLabel={build.roleLabel}
+                build={build}
+                otpItems={otpItems}
+                variant="otp"
+              />
+            </div>
+          )}
         </div>
         {thinSample ? (
           <p className="text-[12px] text-mut leading-relaxed">
@@ -913,7 +905,29 @@ export default function FeaturedOtpCard({
                 Runes would leave this column starting 20px lower than the
                 build column beside it. */}
             <div className="min-w-0 lg:contents">
-            <OtpDivergenceCard build={build} view={view} fullBuild={fullBuild} itemName={itemName} />
+            {/* "Where they diverge" is a diff against the WPA path. On a lane
+                with no WPA build there is no path to diff against, so the panel
+                says that instead of diffing against nothing. It is REPLACED
+                rather than omitted because its grid cell is explicitly placed
+                (`lg:col-start-2 lg:row-start-1`) — dropping it leaves the right
+                column's first row empty against a tall "Their build" beside it,
+                and the honest sentence is better content for that space than a
+                hole anyway. */}
+            {build ? (
+              <OtpDivergenceCard build={build} view={view} fullBuild={fullBuild} itemName={itemName} />
+            ) : (
+              <section className={`${CARD_CLASS} p-4 lg:col-start-2 lg:row-start-1`}>
+                <div className="flex items-baseline justify-between gap-2">
+                  <SectionLabel>Where they diverge</SectionLabel>
+                  <span className="text-[9px] uppercase tracking-[0.1em] text-[#9397ab]/45">no lane build</span>
+                </div>
+                <p className="mt-3 text-[11px] leading-relaxed text-[#e9e9ed]/75">
+                  There is no WPA build for {champ.name} {LANE_LABEL[lane]} to compare against — that
+                  lane has no recorded sample yet. Everything shown on this card is still theirs; only
+                  the comparison is missing.
+                </p>
+              </section>
+            )}
             {/* The shared grid combines the complete static tree with the one
                 slot-coherent page this model actually carries. Every static
                 alternative stays visible and every absent source slot remains
@@ -922,16 +936,27 @@ export default function FeaturedOtpCard({
               <section className={`${CARD_CLASS} mt-0 p-4 lg:col-start-2 lg:row-start-2`}>
                 <PanelHeading meta={`${runes!.pct}% of ${sample.games} games`}>Runes</PanelHeading>
                 <div className="mt-3">
+                  {/* showSamples renders the fraction under the PICKED rune of
+                      each row only. labelWidth is tightened to 30 because the
+                      sample text puts every option in a fixed-width column —
+                      the grid's 68px default is sized for the labelled modal
+                      and would blow this narrow card's width out. */}
                   <RunePageGrid
                     page={otpRuneGridPage}
                     onRuneClick={() => setRunePageOpen(true)}
+                    showSamples
                     runeSize={22}
                     keystoneSize={34}
                     shardSize={16}
+                    labelWidth={30}
                     optionGap={4}
                   />
                 </div>
-                <p className="mt-3 text-[10px] leading-relaxed text-mut/65">Click a rune to inspect the complete stored setup, including empty slots, shards, and spells.</p>
+                <p className="mt-3 text-[10px] leading-relaxed text-mut/65">
+                  {runeSlots
+                    ? "Each fraction counts that rune alone, over the games that filled its slot — not the whole page. Click a rune for the complete stored setup."
+                    : "Click a rune to inspect the complete stored setup, including empty slots, shards, and spells."}
+                </p>
               </section>
             )}
 
@@ -1229,7 +1254,11 @@ export default function FeaturedOtpCard({
           open={runePageOpen}
           onClose={() => setRunePageOpen(false)}
           title="One-trick rune setup"
-          subtitle={`${runes!.games} of ${sample.games} stored games use this exact page · row-level rune counts are not recorded`}
+          subtitle={
+            runeSlots
+              ? `${runes!.games} of ${sample.games} stored games use this exact page · each rune's own fraction counts only the games that filled that slot, so the denominators differ by row`
+              : `${runes!.games} of ${sample.games} stored games use this exact page · per-rune counts unavailable from this cached response`
+          }
           page={otpRuneGridPage}
           spells={otpSpellSlots(data!.spells, sample.games, ver)}
           compact

@@ -8,13 +8,14 @@ import {
   ChartBar,
   ChartLineUp,
   CrosshairSimple,
+  DotsThree,
   ShieldCheck,
   SquaresFour,
   TrendUp,
   Trophy,
 } from "@phosphor-icons/react";
 
-type IconKey = "draft" | "builds" | "post-game" | "companion" | "trophy" | "patch-movers" | "my-stats" | "cb-tile";
+type IconKey = "draft" | "builds" | "post-game" | "companion" | "trophy" | "patch-movers" | "my-stats" | "cb-tile" | "more";
 
 interface NavIconProps {
   iconKey: string;
@@ -30,6 +31,9 @@ const ICONS: Record<IconKey, React.ComponentType<IconProps>> = {
   "patch-movers": ChartLineUp,
   "my-stats": ChartBar,
   "cb-tile": ShieldCheck,
+  // Bottom-bar overflow affordance only — not a destination, so it has no
+  // NAV_ITEMS entry and MobileTabBar names it directly.
+  more: DotsThree,
 };
 
 export default function NavIcon({ iconKey, className }: NavIconProps) {

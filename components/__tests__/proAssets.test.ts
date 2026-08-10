@@ -200,3 +200,30 @@ describe("getChampionIconMap — difficulty/tags surface (draft redesign plan §
     });
   });
 });
+
+/**
+ * Stat-shard icon filenames. The id -> filename table is DUPLICATED in
+ * lib/staticData.ts (that module is the server-side data layer and this one is
+ * deliberately standalone from it, so neither can import the other without
+ * dragging the wrong half into the wrong bundle). Magic Resist (5003) was
+ * "magicresist.png" in BOTH copies and 403s on the CDN — it rendered as a bare
+ * fallback glyph "M", worst on the inline OTP rune card which draws shards with
+ * no labels. The equality test below turns any future drift between the two
+ * copies into a failing test rather than a broken image.
+ */
+describe("shardIconUrl", () => {
+  it("maps Magic Resist (5003) to the CDN's short filename, not the 403ing long one", async () => {
+    const { shardIconUrl } = await import("../proAssets");
+    expect(shardIconUrl(5003)).toBe("https://cdn.coachless.gg/stat-icons/mr.png");
+  });
+
+  it("agrees with lib/staticData.ts's copy of the shard table for every id", async () => {
+    const { shardIconUrl } = await import("../proAssets");
+    const { SHARD_ICON } = await import("@/lib/staticData");
+    const ids = Object.keys(SHARD_ICON).map(Number);
+    expect(ids.length).toBe(9);
+    for (const id of ids) {
+      expect(shardIconUrl(id)).toBe(`https://cdn.coachless.gg/stat-icons/${SHARD_ICON[id]}`);
+    }
+  });
+});
