@@ -1,0 +1,24 @@
+# The Vercel deploy is the Next.js web app only. Everything below is a sibling
+# product that ships through its own pipeline and has no part in the web build —
+# without this file the CLI archived ~3.5GB (1.3GB compressed) and the upload
+# failed with a bare "fetch failed" (2026-08-10).
+#
+# overlay-host — Electron in-game overlay, carries its own node_modules (~1.9GB)
+# desktop      — C# WPF desktop app + build artifacts (~191MB)
+# _research    — scratch research notes, never served
+overlay-host
+desktop
+_research
+
+# Local API scratch dumps committed at the repo root.
+acct.json
+acct2.json
+chal.json
+cm.json
+gm.json
+ids.json
+ids2.json
+lv.json
+m.json
+ma.json
+t.json
