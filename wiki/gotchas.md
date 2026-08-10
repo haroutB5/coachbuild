@@ -256,7 +256,51 @@ Verified facts that cost real debugging time. Cite these before touching the rel
 - **Puppeteer needs a FRESH `userDataDir` per verification run** (PWA service worker serves the
   pre-change shell otherwise) — and a stored champion in a reused profile makes `/` render the build
   view instead of the landing, which reads as a missing landing page.
-- **`vercel --prod --archive=tgz` can die on "fetch failed" mid-upload** (1.3GB archive) with auth
-  and API perfectly fine. It is transient: retry. Two failures then a clean third happened on
-  v0.104.1. Always parse `readyState` + smoke the SERVED version afterwards — a failed deploy leaves
-  the previous deployment aliased and returning 200.
+- **`vercel --prod --archive=tgz` dying on "fetch failed" mid-upload was NOT transient — the archive
+  was 1.3GB** (CORRECTED 2026-08-10; the earlier "retry, it's flaky" reading was wrong, and a retry
+  happening to succeed once is what hid it). There was no `.vercelignore`, so the CLI archived
+  `overlay-host/` (~1.9GB, carries its own `node_modules`) and `desktop/` (~191MB) alongside the
+  Next app. Neither is part of the web build. `.vercelignore` now excludes both plus `_research/`
+  and the root API scratch dumps; the archive is back to seconds. If a deploy ever slows down
+  again, check the upload SIZE in the CLI output first — that number is the diagnosis. Always parse
+  `readyState` + smoke the SERVED version afterwards regardless — a failed deploy leaves the
+  previous deployment aliased and returning 200.
+
+## Runes + the Pro/OTP path strip (v0.105.x, 2026-08-10)
+
+- **`RuneCircle` (`components/hextech/builds/BuildVisuals.tsx`) is THE picked/unpicked rune
+  primitive for the whole app.** Every surface routes through it — BuildVisuals, ProConsensusCard,
+  FeaturedOtpCard, RunesSummonersCard, GameDetailSheet, RunePage, ProGameCard. Unpicked = grayscale
+  + dimmed, picked = full colour + purple ring/glow, keystone brightest. The pre-v0.105.0 version
+  distinguished the states with a tint and an opacity step only, leaving the ICON ART full colour in
+  both — user-reported as "i cant tell which runes are highlighted". Desaturation is what does the
+  work; do not reintroduce a colour-only distinction, and do not draw a rune circle anywhere else.
+- **Pro/OTP rune pages render the FULL static tree** (all options per row from `perkSlots.ts`'s
+  `PERK_TREES`), not just the picked column. A picked-only column was the first attempt and was
+  rejected — "like the runes in WPA build" means the whole grid.
+- **Feed a rune page from `model.runePage`, never from `primaryMinors`/`secondaryPicks`.** Those are
+  flat frequency rankings with no row structure and can put two runes in one slot; `runePage` is the
+  slot-coherent one (see the long header in `components/hextech/proConsensus.ts`).
+- **OTP has page-level sample coverage but NO row-level rune counts.** The modal states that
+  explicitly and shows the exact-page fraction. Do not synthesise per-row counts for OTP.
+- **Most-built path positions must exclude items already placed.** `mostBuiltPath` resolved each
+  position's modal independently, so an item that was modal at two positions rendered twice
+  (user-reported: Blackfire Torch twice on Viktor and Malzahar). It now walks positions left to
+  right carrying a `used` set. Raw counts and the `pathGames` denominator are unchanged, so a later
+  position can legitimately show a HIGHER percentage than an earlier one — that is honest, not a bug.
+  Lives in `components/hextech/mostBuiltPath.ts`: it was extracted out of the `.tsx` precisely so
+  vitest can import it, since this repo cannot import JSX-bearing modules from a plain `.ts` test.
+- **`DetailPopover`'s backdrop is a SIBLING of the dialog, never an ancestor.** An `aria-hidden`
+  ancestor removes the whole dialog subtree from the accessibility tree — this codebase has already
+  shipped that P1 once.
+
+## Desktop overlay is the pink highlight and nothing else (desktop 1.0.6, 2026-08-10)
+
+- The in-game overlay draws ONLY the pink next-ability highlight over the skill bar. The skill
+  table, the header/lane/message lines, the disclaimer text, the `ShowSkillTable` setting and its
+  tray toggle were all removed by user directive ("remove the whole overlay just keep the pink skill
+  order"). Do not reintroduce an on-screen panel without being asked.
+- `OverlayState.HasRenderableData` additionally requires a non-empty skill order, so a champion with
+  no published path draws nothing at all rather than an empty box.
+- Confirmed working in a real match by the user on 2026-08-10 — the first live confirmation of the
+  native overlay since the desktop cutover.
