@@ -55,7 +55,7 @@ import {
   type PlayResult,
 } from "@/lib/draft/score";
 import { matchupEstimate } from "@/lib/draft/blindPick";
-import { EMERALD_TIER } from "@/lib/draft/ugg";
+import { DIAMOND_2_PLUS_TIER } from "@/lib/draft/ugg";
 import { resolveDraftPatchLabel } from "@/lib/draft/patch";
 import type { DifficultyBand } from "@/lib/draft/difficulty";
 import { suggestedDefense, type SuggestedDefense } from "@/lib/draft/damageProfile";
@@ -453,7 +453,7 @@ async function resolveLaneOpponent(
 
   const rows = (await sql`
     SELECT champ_id, pickrate, total_games FROM coachbuild.draft_champ_stats
-    WHERE patch = ${patch} AND tier = ${EMERALD_TIER} AND role = ${lane} AND champ_id = ANY(${enemies}::int[])
+    WHERE patch = ${patch} AND tier = ${DIAMOND_2_PLUS_TIER} AND role = ${lane} AND champ_id = ANY(${enemies}::int[])
   `) as unknown as { champ_id: number; pickrate: number | null; total_games: number | null }[];
 
   // Measure every enemy on ONE axis: real pickrate if ANY enemy has a
@@ -601,7 +601,7 @@ async function computeEnemyAnalysis(
     if (laneOppInferred !== null && hover !== null) {
       const rows = (await sql`
         SELECT wins, games FROM coachbuild.draft_matchup
-        WHERE patch = ${patch} AND tier = ${EMERALD_TIER} AND role = ${lane}
+        WHERE patch = ${patch} AND tier = ${DIAMOND_2_PLUS_TIER} AND role = ${lane}
           AND champ_id = ${laneOppInferred} AND opp_id = ${hover}
       `) as unknown as { wins: number; games: number }[];
       const row = rows[0];
@@ -662,7 +662,7 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
     plays: [],
     potentialPlays: [],
     bans: null,
-    meta: { patch, tier: EMERALD_TIER, fetchedAt, laneOppInferred: null, currentPatch, ingestHealthy, ingestLastError },
+    meta: { patch, tier: DIAMOND_2_PLUS_TIER, fetchedAt, laneOppInferred: null, currentPatch, ingestHealthy, ingestLastError },
     pending: true,
     enemyAnalysis: [],
   });
@@ -674,7 +674,7 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
     SELECT champ_id, winrate, pickrate, banrate, total_games,
            MAX(ingested_at) OVER () AS latest_ingested_at
     FROM coachbuild.draft_champ_stats
-    WHERE patch = ${patch} AND tier = ${EMERALD_TIER} AND role = ${params.lane}
+    WHERE patch = ${patch} AND tier = ${DIAMOND_2_PLUS_TIER} AND role = ${params.lane}
   `) as unknown as ChampStatsRow[];
   // A missing baseline is not a neutral 50% baseline: it is absent evidence.
   // The scorer requires a real baseline for every candidate, so leave such a
@@ -705,7 +705,7 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
     allMatchupRows = (await sql`
       SELECT champ_id, opp_id, wins, games
       FROM coachbuild.draft_matchup
-      WHERE patch = ${patch} AND tier = ${EMERALD_TIER} AND role = ${params.lane}
+      WHERE patch = ${patch} AND tier = ${DIAMOND_2_PLUS_TIER} AND role = ${params.lane}
     `) as unknown as MatchupDbRow[];
   } catch {
     // Lane facts are additive. A matrix read failure must not turn a valid
@@ -745,7 +745,7 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
       const rows = (await sql`
         SELECT champ_id, opp_id, wins, games
         FROM coachbuild.draft_matchup
-        WHERE patch = ${patch} AND tier = ${EMERALD_TIER} AND role = ${params.lane}
+        WHERE patch = ${patch} AND tier = ${DIAMOND_2_PLUS_TIER} AND role = ${params.lane}
           AND opp_id = ANY(${params.enemies}::int[])
       `) as unknown as MatchupDbRow[];
       for (const row of rows) {
@@ -778,7 +778,7 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
       const poolIds = pool.map((c) => c.champId);
       const hoverRows = (await sql`
         SELECT opp_id, wins, games FROM coachbuild.draft_matchup
-        WHERE patch = ${patch} AND tier = ${EMERALD_TIER} AND role = ${params.lane}
+        WHERE patch = ${patch} AND tier = ${DIAMOND_2_PLUS_TIER} AND role = ${params.lane}
           AND champ_id = ${params.hover} AND opp_id = ANY(${poolIds}::int[])
       `) as unknown as { opp_id: number; wins: number; games: number }[];
       const matchupsForHover = new Map<number, MatchupRow>();
@@ -811,7 +811,7 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
     plays: personalMain,
     potentialPlays: personalPotential,
     bans,
-    meta: { patch, tier: EMERALD_TIER, fetchedAt: dataFetchedAt, laneOppInferred, currentPatch, ingestHealthy, ingestLastError },
+    meta: { patch, tier: DIAMOND_2_PLUS_TIER, fetchedAt: dataFetchedAt, laneOppInferred, currentPatch, ingestHealthy, ingestLastError },
     enemyAnalysis,
     laneStats,
     matchupPreviews,

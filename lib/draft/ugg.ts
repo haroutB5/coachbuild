@@ -54,9 +54,50 @@ const STATS_BASE = "https://stats2.u.gg/lol";
 
 /** World region (empirically anchored per counterpick-research.md). */
 export const WORLD_REGION = 12;
-/** Emerald+ aggregate tier bucket — the ONLY tier this v1 ships (see plan
- *  §9's v1 scope: "one tier (10/Emerald+, world)"). */
-export const EMERALD_TIER = 10;
+
+/**
+ * u.gg's OWN tier enum, read verbatim out of their production bundle
+ * (`https://static.bigbrain.gg/lol/static/js/main.0b1ef45712f1b0d3f4e3.js`,
+ * which ships it as a numeric-enum literal — search the bundle for
+ * `e[e.CHALLENGER=1]`). Re-read 2026-08-11:
+ *
+ *   UNRANKED 0 · CHALLENGER 1 · MASTER 2 · DIAMOND 3 · PLATINUM 4 · GOLD 5 ·
+ *   SILVER 6 · BRONZE 7 · OVERALL 8 · UNKNOWN 9 · PLATINUM_PLUS 10 ·
+ *   DIAMOND_PLUS 11 · IRON 12 · GRANDMASTER 13 · MASTER_PLUS 14 ·
+ *   DIAMOND_2_PLUS 15 · EMERALD 16 · EMERALD_PLUS 17
+ *
+ * Tiers 1-7, 12, 13, 16 are single ranks; 8 is the everything bucket; 10, 11,
+ * 14, 15, 17 are "and above" aggregates. The aggregates NEST exactly, which is
+ * how the naming was cross-checked without trusting the bundle alone — on the
+ * live matchups file (region 12, patch 16_15) the per-tier `games` totals
+ * satisfy, to the game:
+ *   tier 10 = tier 4 (PLATINUM) + tier 17 (EMERALD_PLUS)
+ *   tier 17 = tier 16 (EMERALD)  + tier 11 (DIAMOND_PLUS)
+ *   tier 11 = tier 3 (DIAMOND)   + tier 14 (MASTER_PLUS)
+ *   tier  8 = the sum of all ten single-rank tiers
+ * and tier 15 sits strictly between 14 and 11 (MASTER_PLUS ⊂ DIAMOND_2_PLUS ⊂
+ * DIAMOND_PLUS), which is exactly what "Diamond II and above" must look like.
+ *
+ * WAS WRONG UNTIL v0.108.0: this file exported `EMERALD_TIER = 10` and every
+ * caller believed the draft data was Emerald+. Tier 10 is PLATINUM_PLUS, so
+ * `/draft` was silently serving Platinum+ numbers while the rest of the app
+ * ran on Diamond+. Never name a tier constant from a guess again — the enum
+ * is one HTTP request away.
+ */
+
+/**
+ * Diamond II and above — the ONLY tier `/draft` ingests and reads. This is the
+ * user's standing rank scope, and unlike coachless (which filters by tier with
+ * no division axis, so `lib/rankBrackets.ts` has to ship Diamond+ as the
+ * closest superset) u.gg can express it exactly.
+ *
+ * `tier` is a PARTITION KEY on `coachbuild.draft_matchup` and
+ * `coachbuild.draft_champ_stats` — every write carries it and every read is
+ * `WHERE tier = ...`. Changing this constant migrates nothing; it orphans the
+ * old partition and points every query at an empty one. A change here REQUIRES
+ * a full re-ingest (`npm run ingest:draft`) before the draft page has data.
+ */
+export const DIAMOND_2_PLUS_TIER = 15;
 
 /** u.gg's own per-endpoint role id -> this app's RoleId convention
  *  (0=TOP 1=JUNGLE 2=MID 3=BOT 4=SUPPORT). MUST be applied at ingest time —
@@ -183,7 +224,7 @@ export interface DecodeMatchupsResult {
  * check as before, just applied to the raw value before flipping — a
  * validated raw value can never flip to something negative/out-of-range).
  * Violations are dropped and counted in `skippedRows`, never included.
- * Scoped to WORLD_REGION/EMERALD_TIER only (v1 scope — see this file's
+ * Scoped to WORLD_REGION/DIAMOND_2_PLUS_TIER only (see this file's
  * header). Never throws on a missing/malformed region-tier-role node — an
  * absent bucket just contributes zero rows for that role, since coachless-
  * style CDN backfill gaps are expected for very new/niche champions.
@@ -191,7 +232,7 @@ export interface DecodeMatchupsResult {
 export function decodeMatchupsJson(
   raw: unknown,
   region: number = WORLD_REGION,
-  tier: number = EMERALD_TIER
+  tier: number = DIAMOND_2_PLUS_TIER
 ): DecodeMatchupsResult {
   const result: DecodeMatchupsResult = { byRole: {}, skippedRows: 0 };
   if (!raw || typeof raw !== "object") return result;

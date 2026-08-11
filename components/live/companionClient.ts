@@ -157,13 +157,15 @@ export interface CompanionChampSelectSnapshot {
    *  live-sync (draftLiveSync.ts) already treats an empty array as "nothing
    *  to auto-fill," so this degrades safely without a separate sentinel.
    *  NOT lane-tagged in the wire contract (the LCU champ-select session
-   *  doesn't expose the enemy team's assigned positions) — draftLiveSync.ts
-   *  infers the direct-lane-opponent as the entry at the SAME index as the
-   *  local player's own roleId, the standard convention community overlays
-   *  (porofessor/op.gg-style) rely on for ranked/draft queues where both
-   *  teams' cell order matches display position; flagged as an off-device
-   *  assumption in HANDOFF-fronty.md pending a real-LCU shape check (plan
-   *  §8's "real LCU theirTeam shape" verification). */
+   *  doesn't expose the enemy team's assigned positions). The old index-based
+   *  inference described here (direct lane opponent = the entry at the same
+   *  index as the local player's roleId) is RETIRED and no longer accurate:
+   *  draftLiveSync.ts's resolveDraftLiveTarget passes the whole array through
+   *  as `enemies` with no positional meaning, and the direct lane opponent is
+   *  resolved server-side by LANE PRESENCE among those enemies (see
+   *  lib/draft/recommend.ts's resolveLaneOpponent — pickrate, else the
+   *  total_games playrate proxy, with a dominance guard that leaves a
+   *  genuinely ambiguous lane null). Slot order here carries no information. */
   theirTeam: number[];
   /** v1.4.0 — champ-select's session timer phase (e.g. "PLANNING", "BAN_PICK",
    *  "FINALIZATION") straight off the LCU session, null outside ChampSelect

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { ApiError, RoleId } from "@/lib/types";
 import { DbUnavailableError } from "@/lib/pro/errors";
 import { getSql } from "@/lib/pro/db";
-import { EMERALD_TIER } from "@/lib/draft/ugg";
+import { DIAMOND_2_PLUS_TIER } from "@/lib/draft/ugg";
 import {
   deriveBlindPickCandidates,
   rankBlindPicks,
@@ -81,7 +81,7 @@ function emptyResponse(lane: RoleId, patch: string | null, pending = false): Bli
     picks: [],
     meta: {
       patch,
-      tier: EMERALD_TIER,
+      tier: DIAMOND_2_PLUS_TIER,
       lane,
       fetchedAt: null,
       poolCandidates: 0,
@@ -110,7 +110,7 @@ async function computeBlindPick(lane: RoleId): Promise<BlindPickResponse> {
     SELECT champ_id, opp_id, wins, games,
            MAX(ingested_at) OVER () AS latest_ingested_at
     FROM coachbuild.draft_matchup
-    WHERE patch = ${patch} AND tier = ${EMERALD_TIER} AND role = ${lane}
+    WHERE patch = ${patch} AND tier = ${DIAMOND_2_PLUS_TIER} AND role = ${lane}
   `) as unknown as MatchupDbRow[];
   if (dbRows.length === 0) return emptyResponse(lane, patch, true);
 
@@ -128,7 +128,7 @@ async function computeBlindPick(lane: RoleId): Promise<BlindPickResponse> {
     picks: ranking.picks,
     meta: {
       patch,
-      tier: EMERALD_TIER,
+      tier: DIAMOND_2_PLUS_TIER,
       lane,
       fetchedAt,
       poolCandidates: ranking.poolCandidates,

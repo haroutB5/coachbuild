@@ -20,7 +20,7 @@ import { DbUnavailableError } from "@/lib/pro/errors";
 import { getAllChampions, MAX_REAL_CHAMPION_ID } from "@/lib/staticData";
 import type { RoleId } from "@/lib/types";
 import {
-  EMERALD_TIER,
+  DIAMOND_2_PLUS_TIER,
   WORLD_REGION,
   defaultUggTransport,
   fetchMatchups,
@@ -242,7 +242,7 @@ export async function runDraftIngest(opts: DraftIngestOptions = {}): Promise<Dra
           try {
             await sql`
               INSERT INTO coachbuild.draft_matchup (patch, tier, role, champ_id, opp_id, wins, games, ingested_at)
-              VALUES (${patchLabel}, ${EMERALD_TIER}, ${role}, ${champId}, ${row.oppId}, ${row.wins}, ${row.games}, now())
+              VALUES (${patchLabel}, ${DIAMOND_2_PLUS_TIER}, ${role}, ${champId}, ${row.oppId}, ${row.wins}, ${row.games}, now())
               ON CONFLICT (patch, tier, role, champ_id, opp_id)
               DO UPDATE SET wins = EXCLUDED.wins, games = EXCLUDED.games, ingested_at = now()
             `;
@@ -264,7 +264,7 @@ export async function runDraftIngest(opts: DraftIngestOptions = {}): Promise<Dra
         try {
           await sql`
             INSERT INTO coachbuild.draft_champ_stats (patch, tier, role, champ_id, winrate, pickrate, banrate, total_games, ingested_at)
-            VALUES (${patchLabel}, ${EMERALD_TIER}, ${role}, ${champId}, ${winrate}, ${stats.pickrate}, ${stats.banrate}, ${totalGames}, now())
+            VALUES (${patchLabel}, ${DIAMOND_2_PLUS_TIER}, ${role}, ${champId}, ${winrate}, ${stats.pickrate}, ${stats.banrate}, ${totalGames}, now())
             ON CONFLICT (patch, tier, role, champ_id)
             DO UPDATE SET winrate = EXCLUDED.winrate, pickrate = EXCLUDED.pickrate, banrate = EXCLUDED.banrate,
               total_games = EXCLUDED.total_games, ingested_at = now()
@@ -370,4 +370,4 @@ export async function runDraftIngest(opts: DraftIngestOptions = {}): Promise<Dra
 
 // Re-exported so callers (route/script) can reference these without a
 // second import path.
-export { WORLD_REGION, EMERALD_TIER };
+export { WORLD_REGION, DIAMOND_2_PLUS_TIER };

@@ -439,3 +439,31 @@ Verified facts that cost real debugging time. Cite these before touching the rel
   500 at runtime. Typecheck and lint are not encoding checks — a green pair of those two does not mean
   a file is valid UTF-8. Prefer Write/Edit over stream editors on source files, and never treat
   tsc+lint as a substitute for a real build.
+
+## u.gg's tier enum is a DIFFERENT enum, and the draft side has its own bracket (v0.108.0, 2026-08-11)
+
+- **Two providers, two unrelated tier numberings. Never carry one across.** coachless is
+  Iron 0 … Challenger 9 (see the section above). u.gg, read out of
+  `static.bigbrain.gg/lol/static/js/main.0b1ef45712f1b0d3f4e3.js`, is:
+  `UNRANKED 0 · CHALLENGER 1 · MASTER 2 · DIAMOND 3 · PLATINUM 4 · GOLD 5 · SILVER 6 · BRONZE 7 ·
+  OVERALL 8 · UNKNOWN 9 · PLATINUM_PLUS 10 · DIAMOND_PLUS 11 · IRON 12 · GRANDMASTER 13 ·
+  MASTER_PLUS 14 · DIAMOND_2_PLUS 15 · EMERALD 16 · EMERALD_PLUS 17`.
+- `EMERALD_TIER = 10` was a GUESSED name and was wrong for months: tier 10 is `PLATINUM_PLUS`, so
+  `/draft` served Platinum+ data while Builds served Diamond+. Nothing on screen said "Emerald", so
+  there was no visible contradiction — the wrongness was the population, not a label. This is the
+  second time in one day a guessed provider enum turned out wrong; **check the provider's bundle.**
+- **Any naming claim here is checkable by arithmetic on ONE live file.** The aggregates nest exactly:
+  tier 10 = tier 4 + tier 17; tier 17 = tier 16 + tier 11; tier 11 = tier 3 + tier 14; tier 8 is the
+  sum of all ten single ranks. No rounding. If a claimed name breaks the nesting, it is wrong.
+- **`tier` is a PARTITION KEY** on `draft_matchup` and `draft_champ_stats`. Changing the constant
+  orphans the old partition and the draft page reads empty — it requires a full re-ingest
+  (`scripts/ingest-draft.mjs`, ~42 minutes for 173 champions), not a rename. The old `16.14/tier10`
+  partition is left in place, orphaned and harmless.
+- **Second-order effect to expect on ANY narrowing:** the fixed thresholds bite harder on a smaller
+  bucket. `BAN_MIN_MATCHUP_GAMES = 1000` and the K=200 confidence floor in `lib/draft/score.ts` are
+  unchanged, so ban-producing champions per lane fell from 47-67 to 26-30, and the share of matchup
+  rows over 200 games fell from ~20% to ~9%. That is correct behaviour on less data, not a
+  regression. Do not lower a threshold to make a list look full without deciding it on merit.
+- Tier 15 is NOT sparse: after ingest, champion-lanes clearing the 30-game floor are top 168/173,
+  jungle 110/169, mid 164/173, bot 156/173, support 159/173. The four champion-lanes present at tier
+  10 but absent at 15 are all off-role noise (Senna jungle, Yuumi jungle, two at 5-6 games).

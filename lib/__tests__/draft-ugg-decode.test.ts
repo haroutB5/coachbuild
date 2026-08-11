@@ -18,7 +18,7 @@ import {
   decodeRankingsJson,
   UGG_ROLE_TO_APP_ROLE,
   WORLD_REGION,
-  EMERALD_TIER,
+  DIAMOND_2_PLUS_TIER,
 } from "@/lib/draft/ugg";
 
 function buildFixture(rowsByUggRole: Record<number, unknown[][]>): unknown {
@@ -26,7 +26,7 @@ function buildFixture(rowsByUggRole: Record<number, unknown[][]>): unknown {
   for (const [role, rows] of Object.entries(rowsByUggRole)) {
     roleNode[role] = [rows, { totalGames: 12345 }];
   }
-  return { [String(WORLD_REGION)]: { [String(EMERALD_TIER)]: roleNode } };
+  return { [String(WORLD_REGION)]: { [String(DIAMOND_2_PLUS_TIER)]: roleNode } };
 }
 
 describe("decodeMatchupsJson", () => {
@@ -94,19 +94,19 @@ describe("decodeMatchupsJson", () => {
     expect(decodeMatchupsJson(null)).toEqual({ byRole: {}, skippedRows: 0 });
     expect(decodeMatchupsJson({})).toEqual({ byRole: {}, skippedRows: 0 });
     expect(decodeMatchupsJson({ [String(WORLD_REGION)]: {} })).toEqual({ byRole: {}, skippedRows: 0 });
-    expect(decodeMatchupsJson({ [String(WORLD_REGION)]: { [String(EMERALD_TIER)]: {} } })).toEqual({
+    expect(decodeMatchupsJson({ [String(WORLD_REGION)]: { [String(DIAMOND_2_PLUS_TIER)]: {} } })).toEqual({
       byRole: {},
       skippedRows: 0,
     });
   });
 
-  it("only reads WORLD_REGION/EMERALD_TIER, ignoring other regions/tiers present in the payload", () => {
+  it("only reads WORLD_REGION/DIAMOND_2_PLUS_TIER, ignoring other regions/tiers present in the payload", () => {
     const fixture = {
       [String(WORLD_REGION)]: {
-        [String(EMERALD_TIER)]: { 4: [[[82, 12, 20]], {}] }, // rawWins=12 -> flipped wins=8
+        [String(DIAMOND_2_PLUS_TIER)]: { 4: [[[82, 12, 20]], {}] }, // rawWins=12 -> flipped wins=8
         99: { 4: [[[999, 1, 2]], {}] }, // different tier -- must be ignored
       },
-      55: { [String(EMERALD_TIER)]: { 4: [[[888, 1, 2]], {}] } }, // different region -- must be ignored
+      55: { [String(DIAMOND_2_PLUS_TIER)]: { 4: [[[888, 1, 2]], {}] } }, // different region -- must be ignored
     };
     const result = decodeMatchupsJson(fixture);
     expect(result.byRole[0]).toEqual([{ oppId: 82, wins: 8, games: 20 }]);

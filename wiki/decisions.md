@@ -66,3 +66,10 @@ Both were available once the real enum was known. Relabelling keeps every existi
 and only corrects what the user reads; renumbering would have changed the data under every cached
 build. The subsequent Diamond-and-above change DID renumber, deliberately and visibly, with the cache
 key fixed in the same change.
+
+## 2026-08-11 — "Diamond II and above" IS expressible on the draft side, and is shipped there exactly
+
+The decision above (Diamond+ as the closest superset) stands for **Builds**, because coachless has no
+division axis. u.gg does: `DIAMOND_2_PLUS = 15`. So the two halves of the app deliberately run on
+different brackets — **Builds Diamond+, Draft Diamond II+** — each labelled by what it actually is
+rather than forcing a false match between two providers. Revisit only if coachless adds divisions.

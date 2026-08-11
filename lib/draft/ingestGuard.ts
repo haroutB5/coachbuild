@@ -24,7 +24,7 @@
 import { getSql } from "@/lib/pro/db";
 import { getHeroStats, type LaneKey } from "@/lib/heroStats";
 import type { RoleId } from "@/lib/types";
-import { EMERALD_TIER } from "@/lib/draft/ugg";
+import { DIAMOND_2_PLUS_TIER } from "@/lib/draft/ugg";
 
 export interface GuardPanelEntry {
   champId: number;
@@ -112,7 +112,7 @@ export interface GuardResult {
 }
 
 export interface GuardDeps {
-  /** Draft's own baseline winrate (0..1) for (patch, EMERALD_TIER, role,
+  /** Draft's own baseline winrate (0..1) for (patch, DIAMOND_2_PLUS_TIER, role,
    *  champId), or null if that champion+role has no row yet. */
   getDraftBaseline: (champId: number, role: RoleId) => Promise<number | null>;
   /** Independent ground truth — winRatePct is 0..100 (coachless's own
@@ -175,7 +175,7 @@ export function makeRealGuardDeps(
     getDraftBaseline: async (champId, role) => {
       const rows = (await sql`
         SELECT winrate FROM coachbuild.draft_champ_stats
-        WHERE patch = ${patch} AND tier = ${EMERALD_TIER} AND role = ${role} AND champ_id = ${champId}
+        WHERE patch = ${patch} AND tier = ${DIAMOND_2_PLUS_TIER} AND role = ${role} AND champ_id = ${champId}
       `) as unknown as { winrate: number | null }[];
       return rows[0]?.winrate ?? null;
     },
@@ -297,7 +297,7 @@ export async function runSymmetryCheck(
     JOIN coachbuild.draft_matchup m2
       ON m1.opp_id = m2.champ_id AND m1.champ_id = m2.opp_id
      AND m1.role = m2.role AND m1.patch = m2.patch AND m1.tier = m2.tier
-    WHERE m1.patch = ${patch} AND m1.tier = ${EMERALD_TIER}
+    WHERE m1.patch = ${patch} AND m1.tier = ${DIAMOND_2_PLUS_TIER}
       AND m1.champ_id < m1.opp_id
       AND m1.games >= ${SYMMETRY_MIN_GAMES} AND m2.games >= ${SYMMETRY_MIN_GAMES}
     LIMIT ${SYMMETRY_SAMPLE_SIZE}

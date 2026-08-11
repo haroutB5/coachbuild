@@ -35,7 +35,7 @@
 
 import { getSql } from "@/lib/pro/db";
 import type { RoleId } from "@/lib/types";
-import { EMERALD_TIER } from "@/lib/draft/ugg";
+import { DIAMOND_2_PLUS_TIER } from "@/lib/draft/ugg";
 
 export type LolalyticsLane = "top" | "jungle" | "middle" | "bottom" | "support";
 
@@ -443,7 +443,7 @@ export function makeRealLolalyticsCheckDeps(
     getOurMatchup: async (champId, oppId, role) => {
       const rows = (await sql`
         SELECT wins, games FROM coachbuild.draft_matchup
-        WHERE patch = ${patch} AND tier = ${EMERALD_TIER} AND role = ${role} AND champ_id = ${champId} AND opp_id = ${oppId}
+        WHERE patch = ${patch} AND tier = ${DIAMOND_2_PLUS_TIER} AND role = ${role} AND champ_id = ${champId} AND opp_id = ${oppId}
       `) as unknown as { wins: number; games: number }[];
       const row = rows[0];
       if (!row || row.games <= 0) return null;
