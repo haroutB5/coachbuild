@@ -18,9 +18,9 @@ import { getSql } from "@/lib/pro/db";
 import { computeDraftRecommend } from "@/lib/draft/recommend";
 import { resolveDraftPatchLabel } from "@/lib/draft/patch";
 import { getChampionMeta } from "@/lib/staticData";
-import { N_FLOOR, POOL_MIN_TOTAL_GAMES } from "@/lib/draft/score";
+import { N_FLOOR } from "@/lib/draft/score";
 
-const ABOVE_FLOOR = POOL_MIN_TOTAL_GAMES + 1000;
+const ABOVE_FLOOR = 6000;
 
 function sqlText(strings: TemplateStringsArray): string {
   return strings.join("|");

@@ -15,9 +15,9 @@ import {
 import {
   K,
   POOL_MIN_PICKRATE,
-  POOL_MIN_TOTAL_GAMES,
   filterPoolByLaneShare,
   laneShare,
+  poolMinTotalGames,
   realLaneGames,
 } from "@/lib/draft/score";
 
@@ -88,8 +88,11 @@ describe("blind-pick metrics", () => {
 
   it("excludes and reports candidates below the mass coverage gate", () => {
     const rows: BlindPickMatchupRow[] = [
-      // Candidate 1 has a 29-game cell in an opponent field that carries half
-      // the mass, so it cannot pass the 90% gate despite 5,029 total games.
+      // Candidate 1 has a 29-game cell in an opponent field carrying a third of
+      // the mass, leaving ~67% coverage -- below the gate even after v0.109.0
+      // lowered it to 0.75, because this is the PATHOLOGY the gate is for (a
+      // third of the field genuinely unmeasured), not the ordinary 0.88-0.95
+      // tail that the old 0.9 bar had started trimming on live tier-15 data.
       { champId: 1, oppId: 10, wins: 14, games: 29 },
       { champId: 1, oppId: 20, wins: 2500, games: 5000 },
       { champId: 2, oppId: 10, wins: 2500, games: 5000 },
@@ -101,16 +104,23 @@ describe("blind-pick metrics", () => {
     expect(result.qualifiedCandidates).toBe(1);
     expect(result.excludedByMassGate).toBe(1);
     expect(result.picks.map((pick) => pick.champId)).toEqual([2]);
-    expect(POOL_MIN_TOTAL_GAMES).toBe(5000);
+    expect(MASS_COVERAGE_GATE).toBe(0.75);
   });
 
-  it("reuses the 5,000-game pool floor before applying the mass gate", () => {
+  it("reuses the shared lane-share pool floor before applying the mass gate", () => {
+    // v0.109.0: this used to assert a flat 5,000-game floor (4,999 out, 5,000
+    // in). That floor is gone — it was calibrated against a bucket 8x larger
+    // than the one /draft serves and deleted half of every lane. The floor is
+    // now 0.1% of the lane's own games, so the same relationship has to be
+    // expressed as a share: champion 1 holds ~0.05% of this lane and is
+    // dropped, champion 2 holds the rest and is kept.
     const rows: BlindPickMatchupRow[] = [
-      { champId: 1, oppId: 10, wins: 2499, games: 4999 },
-      { champId: 2, oppId: 10, wins: 2500, games: 5000 },
+      { champId: 1, oppId: 10, wins: 150, games: 300 },
+      { champId: 2, oppId: 10, wins: 500000, games: 1000000 },
     ];
     const result = rankBlindPicks(deriveBlindPickCandidates(rows), rows);
 
+    expect(poolMinTotalGames(realLaneGames(1_000_300))).toBe(500);
     expect(result.poolCandidates).toBe(1);
     expect(result.excludedByMassGate).toBe(0);
     expect(result.picks.map((pick) => pick.champId)).toEqual([2]);

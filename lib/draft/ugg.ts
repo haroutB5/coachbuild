@@ -193,6 +193,26 @@ export interface DecodeMatchupsResult {
   /** Rows dropped for failing the wins<=games / non-negative / malformed
    *  shape check — counted, never silently included. */
   skippedRows: number;
+  /** v0.109.0 — TRUE when the payload was well-formed and the REGION node was
+   *  present, but the requested TIER partition was not in it.
+   *
+   *  Why this needed a field of its own: `{byRole:{}, skippedRows:0}` is what
+   *  an absent tier used to decode to — zero rows written, zero rows skipped,
+   *  no error — which is byte-identical to a clean run against a champion
+   *  u.gg simply has no data for. A retired or renumbered u.gg tier id would
+   *  therefore report a SUCCESSFUL ingest that wrote nothing, for every
+   *  champion, forever. This app exists in its current form because a guessed
+   *  u.gg tier id (`EMERALD_TIER = 10`) was quietly wrong for months; the
+   *  cheapest insurance against the next renumber is that a missing partition
+   *  is loud rather than empty (see lib/draft/ingest.ts, which turns this into
+   *  a per-champion ingest error).
+   *
+   *  Deliberately narrow. It is false when the whole payload is missing or
+   *  malformed, or when the REGION node is absent — those are different
+   *  failures (a fetch/shape problem, already visible) and conflating them
+   *  would make this flag noise. It says exactly one thing: we reached this
+   *  champion's data and the tier we asked for was not in it. */
+  tierMissing: boolean;
 }
 
 /**
@@ -234,13 +254,19 @@ export function decodeMatchupsJson(
   region: number = WORLD_REGION,
   tier: number = DIAMOND_2_PLUS_TIER
 ): DecodeMatchupsResult {
-  const result: DecodeMatchupsResult = { byRole: {}, skippedRows: 0 };
+  const result: DecodeMatchupsResult = { byRole: {}, skippedRows: 0, tierMissing: false };
   if (!raw || typeof raw !== "object") return result;
 
   const regionNode = (raw as Record<string, unknown>)[String(region)];
   if (!regionNode || typeof regionNode !== "object") return result;
   const tierNode = (regionNode as Record<string, unknown>)[String(tier)];
-  if (!tierNode || typeof tierNode !== "object") return result;
+  if (!tierNode || typeof tierNode !== "object") {
+    // The region is there and the tier is not — see tierMissing's doc comment.
+    // This is the renumbered/retired-tier signature and it must never decode
+    // as a clean empty run.
+    result.tierMissing = true;
+    return result;
+  }
 
   for (const [uggRoleStr, appRole] of Object.entries(UGG_ROLE_TO_APP_ROLE)) {
     const node = (tierNode as Record<string, unknown>)[uggRoleStr];

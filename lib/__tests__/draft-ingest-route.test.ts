@@ -36,6 +36,7 @@ function batchResult(overrides: Partial<Awaited<ReturnType<typeof runDraftIngest
     rowsUpserted: 100,
     statsUpserted: 40,
     skippedRows: 0,
+    tierMissingChamps: 0,
     nextCursor: null,
     errors: [],
     retentionRan: false,

@@ -38,15 +38,58 @@ export const POOL_MIN_PICKRATE = 0.01;
  *  no-op — nothing was gating the pool at all, so a champion with a
  *  128-game sample (a one-trick off-role artifact, e.g. Yuumi/Bard/Braum
  *  showing up in a Top pool) could out-rank real lane staples on baseline
- *  winrate alone. Live-verified against Neon: a 5000-total-games floor
- *  (summed across every opponent row for that champ+role — the SAME
- *  aggregate lib/draft/ingest.ts already derives baselineWr from) trims
- *  role 0's pool 173->111 and role 3's 173->53, removing exactly this class
- *  of artifact while keeping every real lane-viable champion. This is a
- *  PROXY for pickrate (more games this patch ~ more picked), not a
- *  replacement — filterPoolByPickrate stays in place and becomes load-
- *  bearing again the moment the rankings decoder is filled in. */
-export const POOL_MIN_TOTAL_GAMES = 5000;
+ *  winrate alone. This is a PROXY for pickrate (more games this patch ~
+ *  more picked), not a replacement — filterPoolByPickrate stays in place
+ *  and becomes load-bearing again the moment the rankings decoder is
+ *  filled in.
+ *
+ *  ── v0.109.0: EXPRESSED AS A SHARE, NOT A GAME COUNT ──────────────────
+ *  This was `POOL_MIN_TOTAL_GAMES = 5000`, a flat count, and that is the
+ *  single defect v0.109.0 exists to fix. 5000 was live-verified in JULY
+ *  against u.gg tier 10 (PLATINUM_PLUS) — a 4.86M-game-per-lane bucket.
+ *  v0.108.0 moved /draft to tier 15 (DIAMOND_2_PLUS), a bucket ~8.1x
+ *  smaller, and nobody re-derived this number: the same 5000 games then
+ *  meant ~8x the popularity it was chosen to mean, and champion-lanes were
+ *  deleted from the pool BEFORE scoring — no low-sample badge, no dash,
+ *  simply absent.
+ *
+ *  MEASURED on patch 16.14, live Neon, 2026-08-11 (champions surviving the
+ *  floor, per lane — top/jungle/mid/bot/support):
+ *    tier 10, lane total 4,859,727 games, flat 5000  ->  111 / 75 / 99 / 60 / 83
+ *    tier 15, lane total   601,375 games, flat 5000  ->   56 / 51 / 47 / 44 / 43
+ *    tier 15, lane total   601,375 games, 0.1% share -> 113 / 73 / 101 / 70 / 81
+ *  i.e. the flat floor silently halved every lane and cost bot lane 26 of
+ *  its 70 real champions, while the SHARE form reproduces July's verified
+ *  pool sizes to within ~1% — including the two numbers July's own doc
+ *  comment cited (role 0: 111, role 3: 53 at the then-current patch).
+ *  5000/4,859,727 = 0.1029%; 0.1% is that same bar, written so it cannot
+ *  rot the next time the bucket moves.
+ *
+ *  This is deliberately NOT the same kind of number as N_FLOOR (30) or K
+ *  (200). Those are EVIDENCE floors — how much data before a claim is
+ *  trustworthy — and evidence does not get cheaper because the bucket got
+ *  smaller, so they are absolute and stay absolute. This one is a
+ *  POPULARITY floor, and popularity is only ever meaningful relative to
+ *  the field it is measured in. */
+export const POOL_MIN_LANE_SHARE = 0.001;
+
+/** Absolute backstop under the share floor above, for a degenerate bucket
+ *  (a brand-new patch mid-ingest, or a future rank cut small enough that
+ *  0.1% of it is a handful of games). NOT a popularity bar — it is the
+ *  point below which a champion's own aggregate is too thin to derive a
+ *  baseline winrate worth ranking at all, so it matches N_FLOOR's value
+ *  and reasoning rather than the share floor's. On today's tier-15 data
+ *  the share floor (601 games) is 20x this, so this never binds. */
+export const POOL_MIN_TOTAL_GAMES_FLOOR = 30;
+
+/** The effective pool floor in GAMES for a lane of `laneGames` total games.
+ *  Exported so callers can report the number they actually applied (see
+ *  RecommendMeta.poolFloorGames) — a floor the user cannot see is exactly
+ *  how the flat 5000 stayed wrong for a release. */
+export function poolMinTotalGames(laneGames: number): number {
+  if (!Number.isFinite(laneGames) || laneGames <= 0) return POOL_MIN_TOTAL_GAMES_FLOOR;
+  return Math.max(POOL_MIN_TOTAL_GAMES_FLOOR, Math.round(laneGames * POOL_MIN_LANE_SHARE));
+}
 /** How much banrate contributes to a ban target's "presence" relative to
  *  pickrate — plan says "pickrate + SMALL banrate term"; 0.25 is this file's
  *  chosen weight for that "small" (tunable without touching the shape of the
@@ -70,7 +113,7 @@ export interface ChampBaseline {
   banrate: number | null;
   /** Sum of `games` across every opponent row for this champ+role (the same
    *  aggregate baselineWr is derived from) — the playrate-proxy pool floor
-   *  (POOL_MIN_TOTAL_GAMES) gates on this, and it also seeds a play's
+   *  (POOL_MIN_LANE_SHARE) gates on this, and it also seeds a play's
    *  baseline confidence/minGames (see rankPlays) so an empty-enemies
    *  baseline ranking reports an honest sample size instead of a blank. */
   totalGames: number;
@@ -115,8 +158,13 @@ export interface PlayResult {
    *  main-list row badged "LOW SAMPLE" despite huge direct-opponent
    *  samples (e.g. Sylas n=24030 vs lane opp) purely because of a thin
    *  0.2-weight off-lane term (e.g. Udyr-mid, barely played in that lane).
-   *  Main-tier rows (direct-opp n >= PLAY_MAIN_SAMPLE_FLOOR=1000, always
-   *  >= K) now correctly read normal confidence. Potential-tier rows
+   *  Main-tier rows (direct-opp n >= PLAY_MAIN_SAMPLE_FLOOR) now correctly
+   *  read normal confidence WHEN that sample also clears K — which was
+   *  automatic while the split floor was 1000 and is no longer, since
+   *  v0.109.0 recalibrated it to 125 for the tier-15 bucket. A main-list row
+   *  backed by 125-199 games therefore reads "low", deliberately: the row
+   *  earns its place in the main list on sample size relative to the field,
+   *  and still tells the truth about its own absolute sample. Potential-tier rows
    *  (direct-opp n in [N_FLOOR, PLAY_MAIN_SAMPLE_FLOOR)) still show "low"
    *  whenever that thin direct-opp sample is itself below K — that's the
    *  badge's honest job, since the direct-opp term IS the dominant
@@ -192,11 +240,22 @@ export function filterPoolByPickrate(candidates: ChampBaseline[]): ChampBaseline
   return candidates.filter((c) => c.pickrate === null || c.pickrate > POOL_MIN_PICKRATE);
 }
 
-/** Playrate-PROXY pool floor (audit P1-1) — see POOL_MIN_TOTAL_GAMES's doc
+/** Playrate-PROXY pool floor (audit P1-1) — see POOL_MIN_LANE_SHARE's doc
  *  comment. Unlike filterPoolByPickrate, totalGames is NEVER null (always
- *  derived at ingest time), so this is a real, unconditional gate. */
-export function filterPoolByTotalGames(candidates: ChampBaseline[]): ChampBaseline[] {
-  return candidates.filter((c) => c.totalGames >= POOL_MIN_TOTAL_GAMES);
+ *  derived at ingest time), so this is a real, unconditional gate.
+ *
+ *  `laneGames` is the lane's REAL total (the matchup matrix is symmetric, so
+ *  Σ totalGames counts every game twice — realLaneGames applies the /2).
+ *  It defaults to that sum over `candidates`, which is correct ONLY when
+ *  `candidates` is the COMPLETE lane pool. Both production call sites pass
+ *  the complete pool; anything narrower must pass its own `laneGames`, or
+ *  the denominator shrinks with the input and the floor quietly relaxes. */
+export function filterPoolByTotalGames(
+  candidates: ChampBaseline[],
+  laneGames: number = realLaneGames(candidates.reduce((sum, c) => sum + c.totalGames, 0))
+): ChampBaseline[] {
+  const floor = poolMinTotalGames(laneGames);
+  return candidates.filter((c) => c.totalGames >= floor);
 }
 
 /** Return real lane games from the raw matchup-matrix total. The matrix is
@@ -251,12 +310,37 @@ export const PLAY_POTENTIAL_TOP_N = 5;
 /** v0.37.4 sample-split floor: a candidate's matchup row vs the resolved
  *  direct lane opponent needs at least this many games to land in the
  *  "main" (top-counters) list rather than "potential" (still-scored, but
- *  under 1,000 games — a lead, not a conclusion). Independent of N_FLOOR
- *  (30, the hard floor below which the matchup term is dropped from
- *  scoring entirely) and of POOL_MIN_TOTAL_GAMES (5000, the champion's own
- *  aggregate-across-every-opponent sample) — this is specifically about
- *  ONE matchup's own sample size. */
-export const PLAY_MAIN_SAMPLE_FLOOR = 1000;
+ *  thinner on that one matchup — a lead, not a conclusion). Independent of
+ *  N_FLOOR (30, the hard floor below which the matchup term is dropped from
+ *  scoring entirely) and of the pool floor (POOL_MIN_LANE_SHARE, the
+ *  champion's own aggregate-across-every-opponent sample) — this is
+ *  specifically about ONE matchup's own sample size.
+ *
+ *  v0.109.0: WAS 1000, and was not revisited when v0.108.0 moved /draft
+ *  from u.gg tier 10 to tier 15. Same defect class as the pool floor above,
+ *  one level down: individual matchup CELLS fell with the bucket, so the
+ *  same flat 1000 stopped meaning "well-sampled" and started meaning
+ *  "played by almost nobody else". MEASURED on patch 16.14 (candidates in
+ *  the pool holding >= floor games against each lane's three most-played
+ *  champions, i.e. how wide a field the top-10 main list is actually
+ *  chosen FROM):
+ *    tier 10 @1000: top 55-64 · jungle 63-66 · mid 55-61 · bot 44-45 · support 53
+ *    tier 15 @1000: top 12-19 · jungle 20-29 · mid 19-21 · bot 25-26 · support 24-25
+ *    tier 15 @ 125: top 57-60 · jungle 62-64 · mid 58-62 · bot 45-48 · support 49-51
+ *  The main list never went EMPTY (12 candidates still fill 10 slots), which
+ *  is why this never surfaced as a bug — it degenerated instead: a top-10
+ *  drawn from 12 eligible champions is "the most-played twelve, ranked",
+ *  not "the ten best answers". 125 is the same bar as July's 1000 scaled by
+ *  the measured 8.08x population drop (601,375 vs 4,859,727 lane games), and
+ *  it restores the tier-10 selection breadth almost exactly.
+ *
+ *  Deliberately kept as a FLAT number rather than a share like the pool
+ *  floor: this gates one CELL, and a cell has no natural denominator of its
+ *  own. Re-derive it (population ratio) whenever the rank bucket moves —
+ *  and note the honesty consequence, which is a feature: 125 < K (200), so
+ *  main-list rows backed by 125-199 games now correctly badge themselves
+ *  "low sample" instead of being hidden in `potentialPlays`. */
+export const PLAY_MAIN_SAMPLE_FLOOR = 125;
 
 /** Shared scoring core for both `rankPlays` and `splitPlaysBySampleSize` —
  *  computes every pool candidate's full PlayResult (unsorted, unsliced).
@@ -419,13 +503,25 @@ export function splitPlaysBySampleSize(
 }
 
 /** Ban-candidate matchup floor (v0.40.0 — hard user directive, verbatim:
- *  "dont put champs with less than 1000 games in Suggested bans"). Same
- *  threshold CLASS as PLAY_MAIN_SAMPLE_FLOOR (1000, the main play-list's
+ *  "dont put champs with less than 1000 games in Suggested bans").
+ *
+ *  UNCHANGED at 1000 by v0.109.0, deliberately, and this is the one
+ *  threshold in this file that a shrinking bucket does NOT make wrong: the
+ *  number came from a USER DIRECTIVE naming that exact figure, not from a
+ *  measurement of the tier-10 population, so re-deriving it against tier 15
+ *  would be overriding an instruction rather than fixing a calibration. It
+ *  was also the only draft threshold consciously revisited when v0.108.0
+ *  narrowed the bucket, and the resulting thinning (ban-producing champions
+ *  per lane 47-67 -> 26-30) was disclosed in that release. Measured again on
+ *  patch 16.14 tier 15, 2026-08-11: a hovered champion still finds 19-29 ban
+ *  targets clearing 1000 games, so the top-5 list continues to fill.
+ *
+ *  Same threshold CLASS as PLAY_MAIN_SAMPLE_FLOOR (the main play-list's
  *  sample-size split) but a separate named constant — this gates a
  *  DIFFERENT axis: the hover-vs-ban-target matchup's own game count, not
  *  the direct-lane-opponent matchup PLAY_MAIN_SAMPLE_FLOOR gates. Ban
- *  candidates are drawn from `pool` (already floored at POOL_MIN_TOTAL_GAMES
- *  = 5000 games *aggregated across every opponent*), which says nothing
+ *  candidates are drawn from `pool` (already floored at the lane-share pool
+ *  floor, POOL_MIN_LANE_SHARE, *aggregated across every opponent*), which says nothing
  *  about any ONE opponent's specific sample — live-reproduced: a hovered
  *  Viktor's ban list surfaced Singed (n=463 vs Viktor specifically) ranked
  *  above Xerath (n=16547), because a genuine-but-tiny-sample disadvantage

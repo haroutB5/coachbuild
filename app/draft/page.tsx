@@ -26,6 +26,7 @@ import {
 import { IconWithFallback } from "@/components/IconWithFallback";
 import ThemedSelect, { type ThemedSelectOption } from "@/components/ThemedSelect";
 import { POOL_MIN_PICKRATE } from "@/lib/draft/score";
+import { DRAFT_BRACKET } from "@/lib/rankBrackets";
 import type { BlindPickResult } from "@/lib/draft/blindPick";
 import { aggregateEnemyComp } from "@/lib/draft/compRatings";
 import { deriveTakeaways } from "@/lib/draft/compTakeaways";
@@ -76,6 +77,10 @@ interface BlindPickResponse {
     excludedUncomputable: number;
     returnedCandidates: number;
     topN: number;
+    /** v0.109.0 — see the route's BlindPickMeta.emptyReason. Absent on an
+     *  older cached response degrades to null, which the panel treats as "we
+     *  do not know why", not as "no data". */
+    emptyReason: "no-data" | "all-withheld" | "no-candidates" | null;
   };
   pending?: boolean;
 }
@@ -183,6 +188,10 @@ function normalizeBlindPickResponse(raw: unknown): BlindPickResponse | null {
       excludedUncomputable: meta.excludedUncomputable,
       returnedCandidates: meta.returnedCandidates,
       topN: meta.topN,
+      emptyReason:
+        meta.emptyReason === "no-data" || meta.emptyReason === "all-withheld" || meta.emptyReason === "no-candidates"
+          ? meta.emptyReason
+          : null,
     },
     pending: body.pending === true,
   };
@@ -201,11 +210,26 @@ const MIN_PICK_RATE_OPTIONS: readonly ThemedSelectOption<number>[] = [
   { value: 0.05, label: "5.0%" },
 ];
 
+/** v0.109.0: was 0 / 1,000 / 5,000 / 10,000, chosen against u.gg tier 10 where
+ *  a lane carries ~4.86M games. /draft has served tier 15 (~601k per lane)
+ *  since v0.108.0, where the top two options stop being a filter and start
+ *  being a wall. MEASURED, patch 16.14 tier 15, champions surviving each value
+ *  (top/jungle/mid/bot/support), against 114/73/101/71/81 actually served:
+ *      250 -> 136/82/128/95/110 (above the served pool: no-op, as intended for a low rung)
+ *      500 -> 120/76/110/75/85
+ *    1,000 ->  98/70/ 87/59/70
+ *    2,500 ->  73/64/ 71/47/51
+ *    5,000 ->  56/51/ 47/44/43   (the old second rung — cuts the list roughly in half)
+ *   10,000 ->  fewer still
+ *  The rungs below are spaced so each one is a real, distinguishable narrowing
+ *  on the bucket the page actually serves. Re-derive them if the rank bucket
+ *  moves again — that is the mistake this release exists to undo. */
 const MINIMUM_GAMES_OPTIONS: readonly ThemedSelectOption<number>[] = [
   { value: 0, label: "Any games" },
+  { value: 250, label: "250" },
+  { value: 500, label: "500" },
   { value: 1000, label: "1,000" },
-  { value: 5000, label: "5,000" },
-  { value: 10000, label: "10,000" },
+  { value: 2500, label: "2,500" },
 ];
 
 const ASSISTANT_VIEW_LABELS: Record<AssistantView, string> = {
@@ -535,6 +559,20 @@ export default function DraftPage() {
     state.data.meta.patch !== null &&
     state.data.meta.currentPatch !== state.data.meta.patch;
   const isIngestUnhealthy = state.status === "ok" && state.data.meta.ingestHealthy === false;
+  const isDirectionCheckStale = state.status === "ok" && state.data.meta.directionCheckOk === false;
+  // v0.109.0 — champions dropped by the pre-scoring pool floor. Rendered only
+  // when we actually know both numbers AND something was withheld: a note
+  // saying "0 excluded" is noise, and a note computed from a missing field
+  // would be an invention. See RecommendMeta.poolTotal.
+  const poolMeta = state.status === "ok" ? state.data.meta : null;
+  const poolWithheld =
+    poolMeta && poolMeta.poolTotal !== null && poolMeta.poolIncluded !== null
+      ? Math.max(0, poolMeta.poolTotal - poolMeta.poolIncluded)
+      : null;
+  const poolNote =
+    poolWithheld !== null && poolWithheld > 0 && poolMeta?.poolFloorGames != null
+      ? `Ranking ${poolMeta.poolIncluded} of ${poolMeta.poolTotal} champions in this lane — ${poolWithheld} held back below the ${formatGames(poolMeta.poolFloorGames)}-game lane floor (0.1% of lane games).`
+      : null;
   const serverInferredLaneOpponentId = state.status === "ok" ? state.data.meta.laneOppInferred : null;
   const effectiveLaneOpponentId = laneOpponentId ?? serverInferredLaneOpponentId;
   const laneOpponentName = effectiveLaneOpponentId === null ? null : championEntry(champIcons, effectiveLaneOpponentId).name;
@@ -648,9 +686,35 @@ export default function DraftPage() {
             <h1 className="mt-1 text-[34px] font-semibold leading-none tracking-[-0.025em] text-txt">Draft Assistant</h1>
           </div>
           <div className="text-right text-[11px] leading-[1.5] text-txt/[0.42] tabular-nums">
-            <p>u.gg matchup matrix · patch {state.status === "ok" ? state.data.meta.patch || "—" : "—"} · refreshed {state.status === "ok" ? formatRelativeTime(state.data.meta.fetchedAt) : "—"}</p>
+            {/* RANK SCOPE (v0.109.0). /draft rendered win rates with no rank
+                label at all: `meta.tier` came down the wire as a bare number
+                and stopped there, so a reader could not tell which population
+                a draft win rate described — nor that it is a DIFFERENT one
+                from the Builds page, which has carried its own scope note
+                since v0.107.0. The two brackets differ deliberately (u.gg has
+                a Diamond II+ cut, coachless has no division axis at all), and
+                a deliberate difference nobody can see is indistinguishable
+                from an inconsistency. Full-alpha `text-mut` for the second
+                line, NOT a dimmed alpha — same contrast reasoning as
+                ChampionHero's scope note. */}
+            <p className="font-semibold uppercase tracking-[0.08em] text-mut">
+              All data from <span className="text-[#d2cefd]">{DRAFT_BRACKET.label}</span>
+            </p>
+            <p className="normal-case tracking-normal text-mut">{DRAFT_BRACKET.description} — Builds uses a wider Diamond+ sample</p>
+            <p className="mt-1">u.gg matchup matrix · patch {state.status === "ok" ? state.data.meta.patch || "—" : "—"} · refreshed {state.status === "ok" ? formatRelativeTime(state.data.meta.fetchedAt) : "—"}</p>
             {isStalePatchData && state.status === "ok" && <p>Patch {state.data.meta.currentPatch} data is not ready yet — showing patch {state.data.meta.patch}.</p>}
             {isIngestUnhealthy && state.status === "ok" && <p className="text-bad" title={state.data.meta.ingestLastError ?? undefined}>Last data refresh reported an error.</p>}
+            {/* An explicit `false` only — `null` means the tripwire has never
+                recorded a verdict, and "unknown" must never be rendered as
+                either reassurance or alarm. `mut`, not `bad`: nothing has
+                FAILED here — the external check simply is not currently
+                vouching, and colouring that like an error would be its own
+                kind of lie. */}
+            {isDirectionCheckStale && state.status === "ok" && (
+              <p className="text-mut" title={state.data.meta.directionCheckNote ?? undefined}>
+                External matchup cross-check has not verified this data.
+              </p>
+            )}
           </div>
         </header>
 
@@ -756,11 +820,36 @@ export default function DraftPage() {
               </div>
 
               <div id="draft-view-panel" role="tabpanel" aria-labelledby={`draft-tab-${assistantView}`} className="mt-2">
+                {/* The pool floor runs BEFORE scoring, so the champions it
+                    drops have no row, no badge and no dash anywhere on this
+                    page — they are simply not here. That was invisible for a
+                    release while the floor was 8x too strict. State it. */}
+                {poolNote && <p className="mb-2 text-[10.5px] leading-[1.45] text-txt/[0.45]">{poolNote}</p>}
                 {assistantView !== "recommended" && <p className="mb-2 text-[10.5px] leading-[1.45] text-txt/[0.45]">{assistantView === "blind" ? "Blind Picks filter the existing pool by first-pick safety; they never re-score the recommendation order." : assistantView === "comfort" ? "Comfort filters the existing ranking to champions you have played; it never re-scores or reorders it." : "Counters keep only candidates with a positive shrunk matchup delta against the entered enemies."}</p>}
                 {assistantView === "counters" && enemyIds.length > 0 && filteredCounterRows.length === 0 && <EmptyPanel title="No favourable counters in this ranking" body="No candidate has a positive shrunk matchup delta against the entered enemies." />}
                 {assistantView === "blind" && blindState.status === "loading" && <DraftLoadingCard />}
                 {assistantView === "blind" && blindState.status === "error" && <EmptyPanel title="Couldn&apos;t load blind picks" body="The first-pick feed failed to load." action={<button type="button" onClick={() => setBlindRetry((value) => value + 1)} className="rounded-[7px] px-3 py-1.5 text-[11px] font-medium text-txt hover:bg-txt/[0.07] focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2" style={{ boxShadow: "inset 0 0 0 1px rgba(233,233,237,.14)" }}>Try again</button>} />}
-                {assistantView === "blind" && blindState.status === "empty" && <EmptyPanel title="No qualifying blind picks yet" body="There is not enough matchup evidence for an honest first-pick list." />}
+                {/* PENDING RENDERED NOTHING AT ALL before v0.109.0 — the blind
+                    tab simply came up blank when no data existed for the lane,
+                    which is the one state that most needs saying. The two
+                    empty shapes are now distinct: "nothing has been ingested"
+                    vs "candidates existed and every one was held back". */}
+                {assistantView === "blind" && blindState.status === "pending" && (
+                  <EmptyPanel
+                    title="Blind-pick data being prepared"
+                    body={`Patch ${blindState.data.meta.patch || "the current"} first-pick data has not been ingested for this lane yet — check back shortly.`}
+                  />
+                )}
+                {assistantView === "blind" && blindState.status === "empty" && (
+                  <EmptyPanel
+                    title={blindState.data.meta.emptyReason === "all-withheld" ? "Every candidate was held back" : "No qualifying blind picks yet"}
+                    body={
+                      blindState.data.meta.emptyReason === "all-withheld"
+                        ? "This lane has real candidates, but each one fell short of a publication gate — the counts below say which. Nothing is missing from the data; it was withheld deliberately."
+                        : "There is not enough matchup evidence for an honest first-pick list."
+                    }
+                  />
+                )}
                 {blindExclusionNote && assistantView === "blind" && <p className="mb-2 text-[10px] text-txt/[0.4]">{blindExclusionNote}.</p>}
               </div>
             </section>

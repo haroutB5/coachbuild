@@ -73,3 +73,23 @@ The decision above (Diamond+ as the closest superset) stands for **Builds**, bec
 division axis. u.gg does: `DIAMOND_2_PLUS = 15`. So the two halves of the app deliberately run on
 different brackets — **Builds Diamond+, Draft Diamond II+** — each labelled by what it actually is
 rather than forcing a false match between two providers. Revisit only if coachless adds divisions.
+
+## 2026-08-11 — BAN_MIN_MATCHUP_GAMES stays at 1000 because it is a directive, not a calibration
+
+The user named that figure. Every other draft threshold in the v0.109.0 pass was re-derived from the
+live tier-15 distribution; this one was deliberately not, because re-deriving it would override an
+instruction. Same-class thresholds are no longer pinned equal to each other — that coupling is how a
+single July measurement silently propagated into five constants.
+
+## 2026-08-11 — Popularity floors are shares; evidence floors are absolute
+
+A popularity floor answers "is this champion played enough to rank" and must scale with the
+population, so it is now expressed as a share of lane games and cannot rot when the bucket moves. An
+evidence floor answers "is this number real" and must not scale — scaling `MASS_GATE_MIN_GAMES` by the
+8.08x population ratio would have accepted 4-game cells as evidence.
+
+## 2026-08-11 — A gate that withholds data must say so
+
+The pool floor now reports how many champions it held back and at what threshold, and the blind-pick
+route distinguishes no-data from all-withheld from no-candidates. A short list and an empty source
+must never look identical to the user.

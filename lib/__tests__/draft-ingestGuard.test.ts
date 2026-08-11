@@ -152,7 +152,36 @@ describe("checkSymmetry (purely internal invariant)", () => {
   it("fails as inconclusive when too few symmetric pairs are found", () => {
     const result = checkSymmetry([pair()], SYMMETRY_TOLERANCE_PCT, SYMMETRY_MIN_CHECKABLE);
     expect(result.ok).toBe(false);
-    expect(result.failures.some((f) => f.includes("inconclusive"))).toBe(true);
+    expect(result.failures.some((f) => f.toLowerCase().includes("inconclusive"))).toBe(true);
+  });
+
+  // v0.109.0: "could not check" and "checked and found a problem" both set
+  // ok=false (skipping retention on unvouched data is correct in both cases)
+  // and were previously indistinguishable — /draft rendered the same "Last
+  // data refresh reported an error" for a first-day-of-patch run with nothing
+  // whatsoever wrong with it. The flag separates them; `ok` deliberately does
+  // not change.
+  it("distinguishes INCONCLUSIVE from a detected asymmetry", () => {
+    const tooFew = checkSymmetry([pair()], SYMMETRY_TOLERANCE_PCT, SYMMETRY_MIN_CHECKABLE);
+    expect(tooFew.inconclusive).toBe(true);
+    expect(tooFew.ok).toBe(false); // still blocks retention -- unchanged behaviour
+    expect(tooFew.failures.join(" ")).toContain("not a detected asymmetry");
+
+    // A real asymmetry: both directions claim 70%, summing to 140%.
+    const broken = checkSymmetry(
+      [pair({ winsA: 700, gamesA: 1000, winsB: 700, gamesB: 1000 })],
+      SYMMETRY_TOLERANCE_PCT,
+      1
+    );
+    expect(broken.ok).toBe(false);
+    expect(broken.inconclusive).toBe(false);
+    expect(broken.failures.join(" ")).not.toContain("not a detected asymmetry");
+  });
+
+  it("a clean, sufficiently-sampled run is neither failed nor inconclusive", () => {
+    const result = checkSymmetry([pair(), pair({ champB: 3 })], SYMMETRY_TOLERANCE_PCT, 2);
+    expect(result.ok).toBe(true);
+    expect(result.inconclusive).toBe(false);
   });
 
   it("skips (doesn't count) a pair with a zero-games side", () => {

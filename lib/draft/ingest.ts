@@ -31,7 +31,12 @@ import {
 } from "@/lib/draft/ugg";
 import { patchSegment, resolveDraftPatchLabel } from "@/lib/draft/patch";
 import { runDefaultIngestGuard, runSymmetryCheck } from "@/lib/draft/ingestGuard";
-import { runDefaultLolalyticsCheck, type LolalyticsTransport } from "@/lib/draft/lolalyticsCheck";
+import { recordIngestRun } from "@/lib/ingestHealth";
+import {
+  DIRECTION_CHECK_INGEST_KEY,
+  runDefaultLolalyticsCheck,
+  type LolalyticsTransport,
+} from "@/lib/draft/lolalyticsCheck";
 
 /** Champions per invocation. ~170 champs / 9 per batch ≈ 19 batches; at
  *  ~1.5s pacing and 2 requests (matchups+rankings) per champ, one batch is
@@ -117,6 +122,12 @@ export interface DraftIngestResult {
   /** Sum of decodeMatchupsJson's per-champion skippedRows — the empirical
    *  wins<=games assertion the plan's ship-sequence calls for. */
   skippedRows: number;
+  /** v0.109.0 — champions in this batch whose payload arrived intact but did
+   *  not contain the tier partition we serve (see DecodeMatchupsResult's
+   *  `tierMissing`). Each one also pushes an entry into `errors`, so a u.gg
+   *  tier renumber fails the run's health instead of reporting a successful
+   *  ingest that wrote nothing. */
+  tierMissingChamps: number;
   nextCursor: number | null;
   errors: string[];
   /** True only on the batch where nextCursor became null AND retention
@@ -168,6 +179,49 @@ export async function setPersistedCursor(sql: NonNullable<ReturnType<typeof getS
   `;
 }
 
+/** v0.109.0 — MAKE A SILENT RETIREMENT IMPOSSIBLE.
+ *
+ * The lolalytics direction tripwire is the ONLY check in this codebase that
+ * verifies matchup DIRECTION against a source that publishes per-matchup
+ * winrates (the cross-source panel compares baselines; symmetry is internal —
+ * see each module's header). It has, by design, a verdict that is not a
+ * failure: "indeterminate" means it could not run — the scrape shape broke, or
+ * too few high-sample matchups were comparable. That verdict correctly does not
+ * block retention. It also, until now, went nowhere a human would ever look: the
+ * run recorded `ok: true` with `last_error: null`, so the app's only external
+ * direction guard could stop guarding permanently and every surface would keep
+ * reporting healthy.
+ *
+ * A run's OWN health row is the wrong place for it (the ingest genuinely did
+ * succeed, and flipping it to `ok: false` would raise a false data-integrity
+ * warning on /draft). So the CHECK gets its own health row, under its own key.
+ * `ok` there means "the tripwire actually ran and vouched for the data" —
+ * anything else stamps `last_error` with the reason and a timestamp, and
+ * `last_success_at` keeps answering "when did this last really guard us".
+ * No migration: coachbuild.ingest_health is keyed by pipeline NAME.
+ *
+ * Best-effort like every other health write — losing the status must never be
+ * confused with the ingest failing.
+ *
+ * The KEY itself lives in lib/draft/lolalyticsCheck.ts, next to the check it
+ * describes: /draft's read path needs it too, and importing this module (which
+ * pulls the whole u.gg fetch + champion-list layer) into a request handler to
+ * borrow one string would be a real cost for no reason. */
+async function recordDirectionCheckHealth(
+  sql: NonNullable<ReturnType<typeof getSql>>,
+  verdict: "pass" | "fail" | "indeterminate",
+  reason: string
+): Promise<void> {
+  try {
+    await recordIngestRun(sql, DIRECTION_CHECK_INGEST_KEY, {
+      ok: verdict === "pass",
+      error: verdict === "pass" ? null : `${verdict}: ${reason}`,
+    });
+  } catch {
+    // Deliberately swallowed: see this function's doc comment.
+  }
+}
+
 async function pruneOldPatches(sql: NonNullable<ReturnType<typeof getSql>>): Promise<void> {
   // Keep only the 2 most-recently-ingested distinct patch labels (by
   // MAX(ingested_at), NOT by lexical label sort — "16.9" < "16.14" as plain
@@ -205,6 +259,7 @@ export async function runDraftIngest(opts: DraftIngestOptions = {}): Promise<Dra
     rowsUpserted: 0,
     statsUpserted: 0,
     skippedRows: 0,
+    tierMissingChamps: 0,
     nextCursor: null,
     errors: [],
     retentionRan: false,
@@ -231,6 +286,21 @@ export async function runDraftIngest(opts: DraftIngestOptions = {}): Promise<Dra
     try {
       const matchups = await pacedUggCall(() => fetchMatchups(champId, seg, schema, transport));
       result.skippedRows += matchups.skippedRows;
+
+      // A retired/renumbered u.gg tier decodes to zero rows and zero skips —
+      // indistinguishable from a clean run — unless it says so. It says so.
+      // This app shipped Platinum+ data under an "Emerald+" belief for months
+      // because a guessed tier id was wrong; the next renumber gets to be an
+      // error on the first run instead of a silent no-op (see
+      // DecodeMatchupsResult.tierMissing).
+      if (matchups.tierMissing) {
+        result.tierMissingChamps += 1;
+        result.errors.push(
+          `champ ${champId}: u.gg tier ${DIAMOND_2_PLUS_TIER} partition ABSENT from an otherwise valid matchups payload ` +
+            `(region ${WORLD_REGION} present) -- tier retired or renumbered? Re-read u.gg's bundle before ingesting again.`
+        );
+        log(`champ ${champId}: TIER ${DIAMOND_2_PLUS_TIER} MISSING from payload`);
+      }
 
       const rankings = await pacedUggCall(() => fetchRankings(champId, seg, schema, transport));
 
@@ -311,7 +381,14 @@ export async function runDraftIngest(opts: DraftIngestOptions = {}): Promise<Dra
         result.errors.push(`ingest guard (cross-source panel) FAILED: ${panelResult.failures.join("; ")}`);
       }
       if (!symmetryResult.ok) {
-        result.errors.push(`ingest guard (symmetry check) FAILED: ${symmetryResult.failures.join("; ")}`);
+        // "could not check" vs "checked and found a problem" — see
+        // SymmetryResult.inconclusive. Both skip retention; only one is a
+        // reason to go looking at the data.
+        result.errors.push(
+          symmetryResult.inconclusive
+            ? `ingest guard (symmetry check) INCONCLUSIVE: ${symmetryResult.failures.join("; ")}`
+            : `ingest guard (symmetry check) FAILED: ${symmetryResult.failures.join("; ")}`
+        );
       }
     } catch (err) {
       result.guardOk = false;
@@ -342,12 +419,14 @@ export async function runDraftIngest(opts: DraftIngestOptions = {}): Promise<Dra
       } else if (lolalyticsResult.verdict === "indeterminate") {
         log(`lolalytics matchup-direction tripwire: indeterminate (${lolalyticsResult.reason}) -- not blocking retention`);
       }
+      await recordDirectionCheckHealth(sql, lolalyticsResult.verdict, lolalyticsResult.reason);
     } catch (err) {
       // A thrown check (vs. an in-band "indeterminate" verdict) is treated
       // the SAME as indeterminate, not as a failure -- this is a tripwire
       // against a third party's page, never a hard ingest dependency.
       result.lolalyticsVerdict = "indeterminate";
       log(`lolalytics matchup-direction tripwire threw unexpectedly (treated as indeterminate, non-blocking): ${(err as Error).message}`);
+      await recordDirectionCheckHealth(sql, "indeterminate", `check threw: ${(err as Error).message}`);
     }
 
     const retentionSafe = result.guardOk && result.lolalyticsVerdict !== "fail";

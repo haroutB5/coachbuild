@@ -29,6 +29,7 @@ import {
   filterPoolByLaneShare,
   filterPoolByTotalGames,
   laneShare,
+  realLaneGames,
   type ChampBaseline,
 } from "@/lib/draft/score";
 
@@ -40,11 +41,54 @@ export const ES_TAIL_MASS = 0.1;
 export const BAD_MATCHUP_WR = 0.48;
 
 /** The mass-coverage evidence gate uses the existing 30-game boundary, but
- *  does not drop those cells from any score calculation. */
+ *  does not drop those cells from any score calculation.
+ *
+ *  UNCHANGED at 30 by v0.109.0, on purpose, and this is the deliberate half
+ *  of that release's recalibration. Individual matchup cells DID collapse
+ *  with the tier-15 bucket — measured on patch 16.14, cells holding >= 30
+ *  games fell from 11,930 to 5,006 in top lane and from 6,008 to 2,676 in
+ *  bot — so the mechanical move would have been to scale this down by the
+ *  same ~8x, to 4. That would be wrong. This number answers "is this cell
+ *  real evidence about this matchup", and 4 games is not evidence of
+ *  anything in either bucket. Evidence floors are absolute (same reasoning as
+ *  N_FLOOR); popularity floors are relative (see score.ts's
+ *  POOL_MIN_LANE_SHARE). The gate below is what absorbs the population
+ *  change, because coverage is a fraction and fractions travel. */
 export const MASS_GATE_MIN_GAMES = 30;
-/** Engineering default, not a measured optimum: minimum opponent mass covered
- *  by cells meeting MASS_GATE_MIN_GAMES before a champion is published. */
-export const MASS_COVERAGE_GATE = 0.9;
+
+/** Minimum share of the opponent prior that must be covered by cells meeting
+ *  MASS_GATE_MIN_GAMES before a champion is published.
+ *
+ *  v0.109.0: 0.9 -> 0.75, and the reason is what the measurement showed this
+ *  gate to BE rather than what it was assumed to be. It was written as an
+ *  "engineering default", and against tier-10 data it never fired once: the
+ *  WORST coverage of any qualifying candidate in any lane was 0.981, so 0.9
+ *  sat nine points clear of the entire distribution and excluded 0 champions
+ *  in all five lanes. It was a pathology guard — the thing it catches is a
+ *  champion whose field is mostly UNMEASURED, so its safety score would be an
+ *  average over data that mostly does not exist.
+ *
+ *  MEASURED, patch 16.14, coverage over the lane-share-qualified pool:
+ *    tier 10: worst 0.981 · median 0.995-0.997 · excluded at 0.9 = 0 of 220
+ *    tier 15: worst 0.880 · median 0.948-0.985 · excluded at 0.9 = 4 of 229
+ *  All four exclusions are top-lane champions sitting at 0.88-0.90 — i.e.
+ *  88-90% of the field measured, which is an ordinary tail on a smaller
+ *  bucket, not a champion nobody has played into. Holding the bar at 0.9
+ *  turns a guard that never fires into a routine trimmer, and it does it
+ *  silently: the candidate lands in `excludedByMassGate` and the API returns
+ *  200 with a shorter (or empty) ladder.
+ *
+ *  0.75 restores the ORIGINAL relationship — comfortably below every real
+ *  observed value in both buckets (0.88 worst), comfortably above a field
+ *  that is genuinely unobserved. It excludes 0 of 229 today, which is the
+ *  same thing it did at tier 10 and is the correct behaviour for a guard
+ *  against a condition that is not currently happening. Thin cells are not
+ *  ignored meanwhile: they stay in the distribution and matchupEstimate
+ *  shrinks each one toward baseline by n/(n+K), so a six-game cell cannot
+ *  fabricate a scary tail. Whatever this gate DOES exclude is reported —
+ *  `excludedByMassGate` reaches the page, and an all-withheld ladder is
+ *  labelled as such (see the route's `emptyReason`). */
+export const MASS_COVERAGE_GATE = 0.75;
 export const BLIND_PICK_TOP_N = 10;
 
 /** One decoded row from coachbuild.draft_matchup. Perspective is champId. */
@@ -91,8 +135,8 @@ export interface BlindPickResult {
 
 export interface BlindPickRanking {
   picks: BlindPickResult[];
-  /** Count after the existing POOL_MIN_TOTAL_GAMES filter and before the
-   *  Blind-Pick lane-share floor. */
+  /** Count after the shared pool floor (score.ts's filterPoolByTotalGames,
+   *  now lane-share-derived) and before the Blind-Pick lane-share floor. */
   poolCandidates: number;
   qualifiedCandidates: number;
   /** Candidates in the total-game pool that failed the lane-share floor. */
@@ -268,7 +312,7 @@ export function computeBlindPickCandidate(
   };
 }
 
-/** Apply the existing 5,000-game pool floor, then the mass-based publication
+/** Apply the shared lane-share pool floor, then the mass-based publication
  * gate, and return the ranked top-N plus explicit counts for every deliberate
  * exclusion. Ties are deterministic by champion id. */
 export function rankBlindPicks(
@@ -284,7 +328,11 @@ export function rankBlindPicks(
   // candidate therefore gives the lane-wide denominator Σ_c Σ_o games(c,o).
   const totalLaneGames = candidates.reduce((sum, candidate) => sum + candidate.totalGames, 0);
   const shares = new Map(candidates.map((candidate) => [candidate.champId, laneShare(candidate, totalLaneGames)]));
-  const totalGamePool = filterPoolByTotalGames(candidates);
+  // `candidates` is the complete lane pool here (deriveBlindPickCandidates
+  // builds it from every champion with rows), so the floor's denominator is
+  // passed explicitly from the same symmetric-matrix correction laneShare
+  // uses above rather than left to the filter's own default.
+  const totalGamePool = filterPoolByTotalGames(candidates, realLaneGames(totalLaneGames));
   const pool = filterPoolByLaneShare(totalGamePool, shares);
   const qualified: BlindPickResult[] = [];
   const excludedByLaneShare = totalGamePool.length - pool.length;

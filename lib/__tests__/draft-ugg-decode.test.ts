@@ -91,12 +91,45 @@ describe("decodeMatchupsJson", () => {
   });
 
   it("missing region/tier/role node -> empty result, never throws", () => {
-    expect(decodeMatchupsJson(null)).toEqual({ byRole: {}, skippedRows: 0 });
-    expect(decodeMatchupsJson({})).toEqual({ byRole: {}, skippedRows: 0 });
-    expect(decodeMatchupsJson({ [String(WORLD_REGION)]: {} })).toEqual({ byRole: {}, skippedRows: 0 });
+    expect(decodeMatchupsJson(null)).toEqual({ byRole: {}, skippedRows: 0, tierMissing: false });
+    expect(decodeMatchupsJson({})).toEqual({ byRole: {}, skippedRows: 0, tierMissing: false });
+    // Region present, tier absent -> the ONE case that is flagged. See below.
+    expect(decodeMatchupsJson({ [String(WORLD_REGION)]: {} })).toEqual({ byRole: {}, skippedRows: 0, tierMissing: true });
     expect(decodeMatchupsJson({ [String(WORLD_REGION)]: { [String(DIAMOND_2_PLUS_TIER)]: {} } })).toEqual({
       byRole: {},
       skippedRows: 0,
+      tierMissing: false,
+    });
+  });
+
+  // v0.109.0. A retired or renumbered u.gg tier used to decode to
+  // `{byRole:{}, skippedRows:0}` — zero written, zero skipped, no error — so a
+  // renumber would report a clean, successful ingest that wrote nothing, for
+  // every champion, indefinitely. This app already lost months to a guessed
+  // u.gg tier id being wrong (EMERALD_TIER = 10 was really PLATINUM_PLUS); the
+  // absent-tier decode is now loud. lib/draft/ingest.ts turns the flag into a
+  // per-champion error, which fails the run's health.
+  describe("absent tier partition is LOUD, not a clean empty run", () => {
+    it("flags tierMissing when the region node is present but the tier is not", () => {
+      const payload = { [String(WORLD_REGION)]: { "999": { "4": [[[85, 5, 20]]] } } };
+      const result = decodeMatchupsJson(payload);
+      expect(result.tierMissing).toBe(true);
+      expect(result.byRole).toEqual({});
+      expect(result.skippedRows).toBe(0);
+    });
+
+    it("does NOT flag it for a missing/garbage payload or a missing REGION -- those are different failures", () => {
+      // Conflating these would make the flag noise: a fetch/shape problem is
+      // already visible as an error, and only "we reached this champion's data
+      // and our tier was not in it" is the renumber signature.
+      expect(decodeMatchupsJson(undefined).tierMissing).toBe(false);
+      expect(decodeMatchupsJson("not json at all").tierMissing).toBe(false);
+      expect(decodeMatchupsJson({ "999": { [String(DIAMOND_2_PLUS_TIER)]: {} } }).tierMissing).toBe(false);
+    });
+
+    it("stays false on a normal, populated decode", () => {
+      const payload = { [String(WORLD_REGION)]: { [String(DIAMOND_2_PLUS_TIER)]: { "4": [[[85, 5, 20]]] } } };
+      expect(decodeMatchupsJson(payload).tierMissing).toBe(false);
     });
   });
 

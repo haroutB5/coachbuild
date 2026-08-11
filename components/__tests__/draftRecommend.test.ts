@@ -110,6 +110,14 @@ describe("normalizeDraftRecommendResponse", () => {
         // 2026-07-31 audit P2 (#2) -- absent on this input, defaults to null/null.
         ingestHealthy: null,
         ingestLastError: null,
+        // v0.109.0 pool-disclosure + direction-check fields -- absent on this
+        // input. They must degrade to null, NEVER to 0: "0 champions were
+        // withheld" is a claim, and an older cached response cannot make it.
+        poolTotal: null,
+        poolIncluded: null,
+        poolFloorGames: null,
+        directionCheckOk: null,
+        directionCheckNote: null,
       },
       pending: false,
       enemyAnalysis: [
@@ -286,6 +294,11 @@ describe("normalizeDraftRecommendResponse", () => {
         currentPatch: null,
         ingestHealthy: null,
         ingestLastError: null,
+        poolTotal: null,
+        poolIncluded: null,
+        poolFloorGames: null,
+        directionCheckOk: null,
+        directionCheckNote: null,
       },
       pending: false,
       enemyAnalysis: [],

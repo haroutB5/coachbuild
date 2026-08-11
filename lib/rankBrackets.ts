@@ -71,6 +71,36 @@ export const DIAMOND_PLUS_BRACKET: RankBracket = {
   apiValue: [6, 7, 8, 9],
 };
 
+/** The DRAFT side's bracket — a different provider, a different population,
+ *  and deliberately so (wiki/decisions.md, 2026-08-11).
+ *
+ *  Builds run on coachless, which has no division axis, so "Diamond II and
+ *  above" is not expressible there and DIAMOND_PLUS_BRACKET above is the
+ *  closest superset. u.gg DOES have it (`DIAMOND_2_PLUS = 15`), so /draft
+ *  serves exactly what was asked for. The two halves of the app therefore run
+ *  on different brackets on purpose — which is only honest if each SAYS which
+ *  one it is. Builds has said so since v0.107.0 (ChampionHero's scope note);
+ *  /draft threaded `meta.tier` through as a bare NUMBER and rendered no label
+ *  at all, so a draft win rate on screen described a population the reader had
+ *  no way to identify, and no way to know differed from the Builds page's.
+ *  v0.109.0 renders this.
+ *
+ *  `apiValue` carries the u.gg tier id, NOT a coachless leagueTiers array —
+ *  the two enums are unrelated and must never be carried across (see
+ *  lib/draft/ugg.ts). It is pinned to DIAMOND_2_PLUS_TIER by a test, the same
+ *  way DIAMOND_PLUS_BRACKET is pinned to DIAMOND_PLUS_TIERS. */
+export const DRAFT_BRACKET: RankBracket = {
+  id: "diamond-2-plus",
+  label: "Diamond II+",
+  description: "Diamond II and above, from u.gg",
+  apiValue: [15],
+};
+
+/** BUILDS-side selectable brackets only. DRAFT_BRACKET is deliberately NOT a
+ *  member: this list drives RANK_FILTERING_SUPPORTED and resolveRankBracket,
+ *  i.e. what a user may pick for /api/build and /api/hero-stats. Adding the
+ *  draft bracket here would offer a coachless query a u.gg tier id and turn the
+ *  selector back on with a value it cannot serve. */
 export const RANK_BRACKETS: RankBracket[] = [DIAMOND_PLUS_BRACKET];
 
 export const DEFAULT_RANK_BRACKET = DIAMOND_PLUS_BRACKET;

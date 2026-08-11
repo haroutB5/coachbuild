@@ -30,11 +30,43 @@ export interface DraftAssistantFilters {
   minimumGames: number;
 }
 
-/** Opt-in filters: the first paint must remain populated for every lane. */
+/** Opt-in filters: the first paint must remain populated for every lane.
+ *
+ *  v0.109.0 — `minimumGames` DEFAULTED TO 1000 and therefore was not opt-in at
+ *  all, which the line above already claimed it was. That contradiction was
+ *  harmless while /draft served u.gg tier 10, where 1,000 games is ~0.02% of a
+ *  4.86M-game lane and the filter passed essentially everything. v0.108.0 moved
+ *  /draft to tier 15 (~601k games per lane) and this number came along
+ *  unexamined, at which point the DEFAULT client filter became STRICTER than
+ *  the server's own pool floor (601 games) — it silently removed champions the
+ *  engine had deliberately included and scored.
+ *
+ *  MEASURED two ways, patch 16.14 tier 15, because the two numbers are
+ *  different and only one of them is what a user sees:
+ *  - POOL: champions served by the engine vs. champions this default would
+ *    admit, per lane (top/jungle/mid/bot/support) —
+ *      served       : 114 / 73 / 101 / 71 / 81
+ *      at min 1,000 :  98 / 70 /  87 / 59 / 70
+ *    so the filter contradicted the engine on 16/3/14/12/11 champions.
+ *  - ACTUALLY RENDERED, which is the smaller and more honest figure: of the
+ *    10 rows the engine returns for an empty enemy set, this default removed
+ *    2 in mid (869 and 642 lane games) and 2 in bot (700 and 924), and 0 in
+ *    top/jungle/support. The ranked lists are top-N of the most-played, so
+ *    most rows clear 1,000 anyway; the filter bites hardest exactly where the
+ *    page is trying to surface a thinner, more interesting candidate.
+ *  Either way it is a control the user never touched removing rows the server
+ *  deliberately scored, which is the behaviour being fixed — not the size of
+ *  the count.
+ *
+ *  Default is now 0: the server-side lane-share floor is the principled gate
+ *  and it reports what it removed (RecommendMeta.poolTotal/poolIncluded); this
+ *  control is for a user who wants to narrow further, which is what "opt-in"
+ *  means. See MINIMUM_GAMES_OPTIONS in app/draft/page.tsx for the option values,
+ *  which were rescaled in the same change. */
 export const DEFAULT_DRAFT_ASSISTANT_FILTERS: DraftAssistantFilters = {
   minPickRate: 0,
   includeOffMeta: true,
-  minimumGames: 1000,
+  minimumGames: 0,
 };
 
 export interface FilterableDraftCandidate {

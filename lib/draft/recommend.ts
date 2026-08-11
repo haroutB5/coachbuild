@@ -21,7 +21,7 @@
 //     pickrate takes over transparently) and otherwise by `total_games` —
 //     the enemy's own aggregate game count in this role, ALWAYS populated at
 //     ingest (lib/draft/ingest.ts) and the SAME playrate proxy the pool
-//     floor already trusts (POOL_MIN_TOTAL_GAMES). This is what makes a
+//     floor already trusts (POOL_MIN_LANE_SHARE). This is what makes a
 //     partial enemy set with one clear lane-mate (e.g. Ahri among
 //     [Aatrox, Ahri, Udyr, Jinx] for mid) infer correctly TODAY, despite
 //     pickrate being null. Honesty guard: when two or more enemies genuinely
@@ -43,6 +43,7 @@ import {
   filterPoolByPickrate,
   filterPoolByTotalGames,
   laneShare,
+  poolMinTotalGames,
   POOL_MIN_PICKRATE,
   realLaneGames,
   rankBans,
@@ -56,6 +57,7 @@ import {
 } from "@/lib/draft/score";
 import { matchupEstimate } from "@/lib/draft/blindPick";
 import { DIAMOND_2_PLUS_TIER } from "@/lib/draft/ugg";
+import { resolveServingPatch } from "@/lib/draft/servingPatch";
 import { resolveDraftPatchLabel } from "@/lib/draft/patch";
 import type { DifficultyBand } from "@/lib/draft/difficulty";
 import { suggestedDefense, type SuggestedDefense } from "@/lib/draft/damageProfile";
@@ -63,16 +65,7 @@ import { getChampionMeta } from "@/lib/staticData";
 import { getActiveAccount } from "@/lib/mystats/account";
 import { COUNTED_QUEUE_IDS } from "@/lib/mystats/queues";
 import { getIngestHealth } from "@/lib/ingestHealth";
-
-/** P3-1 (audit, 2026-07-21): a patch needs at least this many distinct
- *  champions present in draft_champ_stats before resolveServingPatch will
- *  treat it as "ready to serve" over an older, more complete patch — a
- *  brand-new patch mid-ingest (the cron processes ~40 champs/tick, see
- *  app/api/ingest/draft/route.ts) would otherwise take over serving
- *  immediately at ~9-40 champions and show a near-empty pool for most
- *  lanes. ~170 total champions exist; 120 is comfortably past the
- *  first-few-cron-ticks partial state without waiting for a full 173/173. */
-const SERVING_PATCH_MIN_CHAMPS = 120;
+import { DIRECTION_CHECK_INGEST_KEY } from "@/lib/draft/lolalyticsCheck";
 
 /** Lane-opponent inference dominance guard (2026-07-21): when 2+ enemies
  *  have real presence in the user's lane, the leader must out-present the
@@ -179,6 +172,37 @@ export interface RecommendMeta {
    *  the full per-champion error list, just enough for a human to know
    *  where to look (the local ingest log has the rest). */
   ingestLastError: string | null;
+  /** v0.109.0 — THE POOL FLOOR, MADE VISIBLE. `filterPoolByTotalGames` runs
+   *  BEFORE scoring, so a champion it drops is not a low-confidence row or a
+   *  dash; it is simply absent, and nothing on screen said so for a release
+   *  while the floor was mis-calibrated 8x too high (see
+   *  POOL_MIN_LANE_SHARE's doc comment). These three fields exist so the
+   *  page can state the exclusion as a fact instead of the user inferring a
+   *  missing champion from its absence:
+   *    poolTotal        — champions with a usable baseline in this lane
+   *    poolIncluded     — how many survived the floor and were scored
+   *    poolFloorGames   — the floor actually applied, in games
+   *  poolTotal - poolIncluded is the withheld count. All three are null on
+   *  the pending path (no pool exists to describe). */
+  poolTotal: number | null;
+  poolIncluded: number | null;
+  poolFloorGames: number | null;
+  /** v0.109.0 — the EXTERNAL matchup-direction tripwire's own state (see
+   *  lib/draft/ingest.ts's recordDirectionCheckHealth). `true` = it ran on the
+   *  last ingest and vouched for the data; `false` = it did not vouch, which
+   *  includes the case where it could not RUN at all; `null` = it has never
+   *  recorded a verdict, or this read failed — unknown, which the client must
+   *  never render as either healthy or broken.
+   *
+   *  Deliberately separate from `ingestHealthy`. An ingest can succeed
+   *  completely while its only external direction check quietly stops running,
+   *  and that combination is exactly the one worth showing: the numbers on
+   *  screen are then unverified against any outside source, without anything
+   *  having failed. */
+  directionCheckOk: boolean | null;
+  /** Why the tripwire is not vouching, plus when it last did — null when it is
+   *  vouching or when its state is unknown. */
+  directionCheckNote: string | null;
 }
 
 /** Draft redesign plan §2.3 — additive, per-enemy analysis backing the
@@ -411,30 +435,6 @@ export function buildMatchupPreviews(
     .filter((preview) => preview.worst.length > 0 || preview.best.length > 0);
 }
 
-/** The patch currently being served (plan §4: "meta from max(ingested_at) +
- *  latest patch present"; audit P3-1 refinement, 2026-07-21): prefers the
- *  most-recently-ingested patch that has ALREADY reached
- *  SERVING_PATCH_MIN_CHAMPS distinct champions, so a brand-new patch mid-
- *  ingest never takes over serving from a genuinely complete older one.
- *  Ordering: patches clearing the completeness bar sort first (as a group,
- *  by MAX(ingested_at) DESC among themselves); if NONE clear it yet (e.g. a
- *  fresh bootstrap with only one patch, still filling in), falls back to
- *  the newest patch present regardless of completeness — this is still a
- *  plain DB read, no network/patch-resolution call needed, and it can never
- *  point at a patch the ingest hasn't touched AT ALL (unlike calling
- *  lib/draft/patch.ts's resolver directly, which reflects ddragon's newest
- *  release regardless of ingest progress). */
-async function resolveServingPatch(sql: NonNullable<ReturnType<typeof getSql>>): Promise<string | null> {
-  const rows = (await sql`
-    SELECT patch, count(DISTINCT champ_id)::int AS champs, MAX(ingested_at) AS latest
-    FROM coachbuild.draft_champ_stats
-    GROUP BY patch
-    ORDER BY (count(DISTINCT champ_id) >= ${SERVING_PATCH_MIN_CHAMPS}) DESC, MAX(ingested_at) DESC
-    LIMIT 1
-  `) as unknown as { patch: string; champs: number; latest: string }[];
-  return rows[0]?.patch ?? null;
-}
-
 /** Resolves the direct-lane-opponent champId per this file's header
  *  contract: explicit `laneOpp` (if it's actually among `enemies`) wins;
  *  otherwise inferred by LANE PRESENCE among the enemies — pickrate when
@@ -658,11 +658,33 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
   const ingestHealth = await getIngestHealth(sql, "draft").catch(() => null);
   const ingestHealthy = ingestHealth?.ok ?? null;
   const ingestLastError = ingestHealth?.ok === false ? ingestHealth.lastError : null;
+  // Same soft-fail posture: an unreadable row is "unknown", never "fine".
+  const directionHealth = await getIngestHealth(sql, DIRECTION_CHECK_INGEST_KEY).catch(() => null);
+  const directionCheckOk = directionHealth?.ok ?? null;
+  const directionCheckNote =
+    directionHealth && directionHealth.ok === false
+      ? `${directionHealth.lastError ?? "did not vouch for this data"}${
+          directionHealth.lastSuccessAt ? ` (last verified ${directionHealth.lastSuccessAt})` : " (never verified)"
+        }`
+      : null;
   const pendingMeta = (patch: string | null): RecommendResult => ({
     plays: [],
     potentialPlays: [],
     bans: null,
-    meta: { patch, tier: DIAMOND_2_PLUS_TIER, fetchedAt, laneOppInferred: null, currentPatch, ingestHealthy, ingestLastError },
+    meta: {
+      patch,
+      tier: DIAMOND_2_PLUS_TIER,
+      fetchedAt,
+      laneOppInferred: null,
+      currentPatch,
+      ingestHealthy,
+      ingestLastError,
+      poolTotal: null,
+      poolIncluded: null,
+      poolFloorGames: null,
+      directionCheckOk,
+      directionCheckNote,
+    },
     pending: true,
     enemyAnalysis: [],
   });
@@ -723,7 +745,16 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
   // unconditional gate right now; filterPoolByPickrate stays in the chain
   // so it becomes load-bearing again the moment the rankings decoder is
   // filled in, with no call-site change needed then.
-  const pool = filterPoolByTotalGames(filterPoolByPickrate(fullPool));
+  //
+  // v0.109.0: the lane total is derived from `fullPool` — the COMPLETE lane
+  // pool — and passed explicitly, NOT left to the filter's default. The two
+  // are the same value today because filterPoolByPickrate is a no-op with
+  // pickrate null; the moment the rankings decoder lands and that filter
+  // starts removing rows, the default would compute the floor's denominator
+  // from an already-narrowed set and quietly relax the floor. Pin it here.
+  const laneGamesForFloor = realLaneGames(fullPool.reduce((sum, c) => sum + c.totalGames, 0));
+  const poolFloorGames = poolMinTotalGames(laneGamesForFloor);
+  const pool = filterPoolByTotalGames(filterPoolByPickrate(fullPool), laneGamesForFloor);
 
   const laneOppInferred = await resolveLaneOpponent(sql, patch, params.lane, params.enemies, params.laneOpp);
   const enemyInputs: EnemyInput[] = params.enemies.map((champId) => ({
@@ -811,7 +842,20 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
     plays: personalMain,
     potentialPlays: personalPotential,
     bans,
-    meta: { patch, tier: DIAMOND_2_PLUS_TIER, fetchedAt: dataFetchedAt, laneOppInferred, currentPatch, ingestHealthy, ingestLastError },
+    meta: {
+      patch,
+      tier: DIAMOND_2_PLUS_TIER,
+      fetchedAt: dataFetchedAt,
+      laneOppInferred,
+      currentPatch,
+      ingestHealthy,
+      ingestLastError,
+      poolTotal: fullPool.length,
+      poolIncluded: pool.length,
+      poolFloorGames,
+      directionCheckOk,
+      directionCheckNote,
+    },
     enemyAnalysis,
     laneStats,
     matchupPreviews,

@@ -3,6 +3,7 @@ import type { ApiError, RoleId } from "@/lib/types";
 import { DbUnavailableError } from "@/lib/pro/errors";
 import { getSql } from "@/lib/pro/db";
 import { DIAMOND_2_PLUS_TIER } from "@/lib/draft/ugg";
+import { resolveServingPatch } from "@/lib/draft/servingPatch";
 import {
   deriveBlindPickCandidates,
   rankBlindPicks,
@@ -13,9 +14,12 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Keep patch selection byte-for-byte aligned with /api/draft/recommend:
- *  a partially ingested patch must not replace a complete older snapshot. */
-const SERVING_PATCH_MIN_CHAMPS = 120;
+// Patch selection is IMPORTED from lib/draft/servingPatch.ts, not restated
+// here. This route used to carry its own copy under a comment reading "keep
+// patch selection byte-for-byte aligned with /api/draft/recommend" — and it
+// had drifted in the way that mattered anyway: both copies counted champions
+// with no `tier` predicate, so the orphaned tier-10 partition could vouch for
+// a patch whose tier-15 data was half-ingested. See that module's header.
 const CACHE_CONTROL = "s-maxage=300, stale-while-revalidate=600";
 
 export interface BlindPickMeta {
@@ -32,18 +36,30 @@ export interface BlindPickMeta {
   excludedUncomputable: number;
   returnedCandidates: number;
   topN: number;
+  /** v0.109.0 — WHY the ladder is empty, stated rather than inferred.
+   *
+   *  This route answers HTTP 200 with `picks: []` for two situations that
+   *  mean opposite things to a reader, and until now they were byte-identical
+   *  on the wire apart from counters the client had to re-derive:
+   *    "no-data"        — nothing ingested for this patch/tier/lane at all.
+   *                       Always accompanied by top-level `pending: true`.
+   *    "all-withheld"   — real candidates existed and every one was held back
+   *                       by a deliberate gate (lane share, matchup mass, or
+   *                       missing rows). The exclusion counters say which.
+   *    "no-candidates"  — the lane produced no candidate to gate in the first
+   *                       place, without being outright empty (defensive; not
+   *                       reachable on today's data).
+   *  Null whenever `picks` is non-empty. The distinction is load-bearing: an
+   *  empty ladder caused by thin data must not render the same as one caused
+   *  by no data, and the v0.108.0 rank narrowing made the thin case reachable
+   *  for the first time. */
+  emptyReason: "no-data" | "all-withheld" | "no-candidates" | null;
 }
 
 export interface BlindPickResponse {
   picks: ReturnType<typeof rankBlindPicks>["picks"];
   meta: BlindPickMeta;
   pending?: boolean;
-}
-
-interface PatchRow {
-  patch: string;
-  champs: number;
-  latest: string | Date | null;
 }
 
 interface MatchupDbRow {
@@ -65,17 +81,6 @@ function timestampToIso(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-async function resolveServingPatch(sql: NonNullable<ReturnType<typeof getSql>>): Promise<string | null> {
-  const rows = (await sql`
-    SELECT patch, count(DISTINCT champ_id)::int AS champs, MAX(ingested_at) AS latest
-    FROM coachbuild.draft_champ_stats
-    GROUP BY patch
-    ORDER BY (count(DISTINCT champ_id) >= ${SERVING_PATCH_MIN_CHAMPS}) DESC, MAX(ingested_at) DESC
-    LIMIT 1
-  `) as unknown as PatchRow[];
-  return rows[0]?.patch ?? null;
-}
-
 function emptyResponse(lane: RoleId, patch: string | null, pending = false): BlindPickResponse {
   return {
     picks: [],
@@ -91,9 +96,18 @@ function emptyResponse(lane: RoleId, patch: string | null, pending = false): Bli
       excludedUncomputable: 0,
       returnedCandidates: 0,
       topN: 10,
+      emptyReason: pending ? "no-data" : "no-candidates",
     },
     ...(pending ? { pending: true } : {}),
   };
+}
+
+/** Single place the empty-ladder classification is decided, so the route and
+ *  its tests cannot disagree about what an empty `picks` array means. */
+function resolveEmptyReason(ranking: BlindPickRanking): BlindPickMeta["emptyReason"] {
+  if (ranking.picks.length > 0) return null;
+  const withheld = ranking.excludedByLaneShare + ranking.excludedByMassGate + ranking.excludedUncomputable;
+  return withheld > 0 ? "all-withheld" : "no-candidates";
 }
 
 async function computeBlindPick(lane: RoleId): Promise<BlindPickResponse> {
@@ -138,6 +152,7 @@ async function computeBlindPick(lane: RoleId): Promise<BlindPickResponse> {
       excludedUncomputable: ranking.excludedUncomputable,
       returnedCandidates: ranking.picks.length,
       topN: 10,
+      emptyReason: resolveEmptyReason(ranking),
     },
   };
 }

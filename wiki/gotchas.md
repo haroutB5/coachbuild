@@ -467,3 +467,38 @@ Verified facts that cost real debugging time. Cite these before touching the rel
 - Tier 15 is NOT sparse: after ingest, champion-lanes clearing the 30-game floor are top 168/173,
   jungle 110/169, mid 164/173, bot 156/173, support 159/173. The four champion-lanes present at tier
   10 but absent at 15 are all off-role noise (Senna jungle, Yuumi jungle, two at 5-6 games).
+
+## Thresholds and the rank bucket (v0.109.0, 2026-08-11)
+
+- **Draft thresholds split into two kinds, and they behave OPPOSITELY when the bucket moves.**
+  **Popularity floors are RELATIVE** — `POOL_MIN_LANE_SHARE` is 0.1% of lane games, which is exactly
+  July's live-verified 5,000-of-4,859,727 bar rewritten so it cannot rot. **Evidence floors are
+  ABSOLUTE** — `N_FLOOR` 30, `K` 200, `MASS_GATE_MIN_GAMES` 30, `SYMMETRY_MIN_GAMES` 200 stay put,
+  because evidence does not get cheaper just because there is less data. Mechanically scaling
+  `MASS_GATE_MIN_GAMES` by the population ratio would have given 4 games, which is not evidence in
+  any bucket.
+- **The measured tier-10 to tier-15 population ratio is 8.08x** (4,859,727 to 601,375 lane games,
+  patch 16.14). **Any flat game-count threshold carried across that boundary is wrong by that
+  factor.** v0.108.0 moved the bucket and revisited only `BAN_MIN_MATCHUP_GAMES`; five other
+  thresholds were left mis-calibrated and silently trimmed real data.
+- **`MASS_COVERAGE_GATE` is a pathology guard, not a trimmer.** Set clear of the whole observed
+  distribution (0.75 against a 0.88 worst case); excluding 0 candidates is the correct resting state.
+  At 0.9 it was excluding 4 real top-lane candidates.
+- **`BAN_MIN_MATCHUP_GAMES` stays 1000 because it is a USER DIRECTIVE naming that figure, not a
+  calibration.** Do not re-derive it from data, and do not pin same-class thresholds equal to each
+  other — that is how one measurement silently became five.
+- **`tier` is a partition key and the OLD partition is still there**, so any "is this patch complete"
+  count must carry a tier predicate. One shared resolver now: `lib/draft/servingPatch.ts`. There were
+  three copies of that query and the predicate was missing from all three.
+- **lolalytics accepts `&tier=d2_plus`** (the page echoes "D2+"; unknown slugs 404 rather than
+  silently defaulting). Both sides of the cross-check must be pinned to the same bracket AND the same
+  patch. Measured: unpinned rank gave 9.1% disagreement against a 10% fail bar — one matchup from a
+  false alarm — and 21.0% at the lower sample floor. Pinned, 0%.
+- **A missing u.gg tier partition is now LOUD** (`DecodeMatchupsResult.tierMissing`). It used to
+  decode as `{byRole:{}, skippedRows:0}` — a clean, successful, empty run.
+- **A client-side default filter must never subtract from what the server chose to serve.** The
+  draft page's `minimumGames` default of 1000 was stricter than the server's own floor and was
+  hiding rows the server had deliberately included (Olaf mid, 869 games, now visible at rank 2).
+- **`pruneOldPatches` remains tier-blind** — it keeps the 2 most recent patch labels across all
+  tiers, so the orphaned tier-10 partition keeps 16.14 looking "recent". Harmless (it only ever
+  refuses to delete) but it is a known gap, not an oversight.

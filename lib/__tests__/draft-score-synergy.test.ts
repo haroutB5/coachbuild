@@ -153,9 +153,12 @@ describe("regression pin — pre-existing rankPlays fields untouched by synergyD
   it("splitPlaysBySampleSize main/potential partition is unaffected (byte-identical bucketing)", () => {
     const pool = [baseline(1, 0.55), baseline(2, 0.6)];
     const enemies: EnemyInput[] = [{ champId: 7, isDirectLaneOpp: true }];
+    // v0.109.0: n=500 used to be a potential-tier sample (floor 1000) and is
+    // now a MAIN one (floor 125). The bucketing rule is unchanged — the
+    // threshold moved — so the fixture moves with it rather than the assertion.
     const matchups = matchupMap([
-      [1, new Map([[7, { wins: 550, games: 1000 }]])], // n=1000 -> main
-      [2, new Map([[7, { wins: 300, games: 500 }]])], // n=500 -> potential
+      [1, new Map([[7, { wins: 550, games: 1000 }]])], // well over the main floor
+      [2, new Map([[7, { wins: 60, games: 100 }]])], // clears N_FLOOR, under the main floor -> potential
     ]);
     const { main, potential } = splitPlaysBySampleSize(pool, matchups, enemies);
     expect(main.map((p) => p.champId)).toEqual([1]);

@@ -31,6 +31,16 @@
 // check applies with GUARD_MIN_CHECKABLE) is treated as the direction/keying
 // error signature this module exists to catch, and only that verdict blocks
 // retention -- see lib/draft/ingest.ts's final-cursor wiring.
+//
+// v0.109.0 -- A CHECK THAT CANNOT RUN MUST SAY SO. "indeterminate" is not a
+// failure and must not block retention; it is also, in a check that is the
+// app's ONLY external verification of matchup direction, the most dangerous
+// state available, because it looks exactly like a healthy run from every
+// surface. Every verdict this module produces is now written to
+// coachbuild.ingest_health under DIRECTION_CHECK_INGEST_KEY -- pass stamps a
+// success, anything else stamps the reason -- and /draft reads it
+// (RecommendMeta.directionCheckOk). The tripwire can still stop guarding; it
+// can no longer stop guarding SILENTLY.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getSql } from "@/lib/pro/db";
@@ -38,6 +48,43 @@ import type { RoleId } from "@/lib/types";
 import { DIAMOND_2_PLUS_TIER } from "@/lib/draft/ugg";
 
 export type LolalyticsLane = "top" | "jungle" | "middle" | "bottom" | "support";
+
+/** coachbuild.ingest_health key for THIS check's own state — see
+ *  lib/draft/ingest.ts's recordDirectionCheckHealth for why the tripwire needs
+ *  a health row separate from the ingest's. Lives here, beside the check it
+ *  describes, so /draft's read path can import it without pulling in the whole
+ *  ingest module. */
+export const DIRECTION_CHECK_INGEST_KEY = "draft-direction-check";
+
+/** lolalytics's own rank-filter slug for OUR bucket.
+ *
+ * v0.109.0, verified live 2026-08-11 against three counters pages. lolalytics
+ * accepts `&tier=<slug>` on the counters URL, and the page echoes the bracket
+ * it rendered: `d2_plus` renders "D2+", `diamond_plus` renders "Diamond+",
+ * `platinum_plus` renders "Platinum+", and NO tier param renders "Emerald+".
+ * An unrecognised slug (`diamond2_plus`, `nonsense_zzz`) answers HTTP 404
+ * rather than silently falling back — which is what makes pinning safe: a
+ * future rename breaks loudly into a fetch error and an indeterminate verdict,
+ * it cannot quietly compare us against the wrong population.
+ *
+ * WHY IT IS NOW PINNED. This check compared OUR bucket against lolalytics'
+ * UNPINNED default for its whole life. That was survivable while /draft served
+ * u.gg tier 10 (Platinum+) — close enough to lolalytics' Emerald+ default that
+ * the residual rank-cut noise was, measured, 0/131 disagreements. v0.108.0
+ * moved /draft to Diamond II+, which excludes every Emerald, every Platinum and
+ * Diamond IV/III player still inside lolalytics' default, so the two sides
+ * started measuring genuinely different populations. Measured on patch 16.14,
+ * same panel, same 4pt tolerance:
+ *   our tier 10 vs their Emerald+ default : 131 comparisons,  0 disagree ( 0.0%)
+ *   our tier 15 vs their Emerald+ default :  33 comparisons,  3 disagree ( 9.1%)
+ *   our tier 15 vs their d2_plus pinned   :  33 comparisons,  0 disagree ( 0.0%)
+ * 9.1% is one disagreement short of LOLALYTICS_FAIL_RATE_PCT: the tripwire was
+ * a single noisy matchup away from a FALSE FAIL, which blocks retention and
+ * looks exactly like the P0 inversion it exists to catch. The effect is also
+ * directional, not random — at a lower sample floor (250 games) the same
+ * unpinned comparison produces 22/105 = 21.0%, a hard fail, against 2/105 =
+ * 1.9% pinned. Pin both sides to the same bracket; compare like with like. */
+export const LOLALYTICS_RANK_SLUG = "d2_plus";
 
 export interface LolalyticsPanelEntry {
   champId: number;
@@ -85,9 +132,16 @@ export const LOLALYTICS_PANEL: LolalyticsPanelEntry[] = [
  * HANDOFF-engo.md for the full before/after comparison). Omitting `patch`
  * falls back to lolalytics' own current-patch default -- only used by
  * fixture-driven unit tests that don't hit the network at all.
+ *
+ * v0.109.0 pins RANK the same way and for the same reason. Patch was pinned in
+ * July after an unpinned patch gap manufactured 18 false disagreements; rank
+ * was left unpinned and manufactured 3 more the moment /draft's own bucket
+ * moved (see LOLALYTICS_RANK_SLUG). `tier` is emitted unconditionally — there
+ * is no "their default is close enough" case left to preserve, and an
+ * always-present param cannot be forgotten at one call site.
  */
 export function lolalyticsCountersUrl(entry: Pick<LolalyticsPanelEntry, "slug" | "lane">, patch?: string): string {
-  const base = `https://lolalytics.com/lol/${entry.slug}/counters/?lane=${entry.lane}`;
+  const base = `https://lolalytics.com/lol/${entry.slug}/counters/?lane=${entry.lane}&tier=${LOLALYTICS_RANK_SLUG}`;
   return patch ? `${base}&patch=${patch}` : base;
 }
 
@@ -110,8 +164,30 @@ export const LOLALYTICS_MIN_PARSEABLE = 5;
  *  sample" per the task spec, same floor class as ingestGuard's symmetry
  *  check (SYMMETRY_MIN_GAMES=200) but stricter since lolalytics' own sample
  *  composition (region/rank mix) isn't identical to ours and a low-sample
- *  comparison would just be noise on both sides. */
-export const LOLALYTICS_MIN_SAMPLE_GAMES = 1000;
+ *  comparison would just be noise on both sides.
+ *
+ *  v0.109.0: 1000 -> 250. This floor sat on OUR matchup cells, and those fell
+ *  ~8x with the tier-15 bucket, so the same number stopped selecting
+ *  "well-sampled matchups" and started selecting "almost nothing". MEASURED on
+ *  patch 16.14, per panel page, rows clearing the floor:
+ *    tier 10 @1000: Viktor 54 · Garen 56 · Jinx 42   (whole panel: 131 comparisons)
+ *    tier 15 @1000: Viktor 19 · Garen  3 · Jinx 15   (whole panel:  33 comparisons)
+ *    tier 15 @ 250: Viktor 44 · Garen 40 · Jinx 37   (whole panel: 105 comparisons)
+ *  Garen's page fell to THREE usable rows. The panel total (33) still clears
+ *  LOLALYTICS_MIN_COMPARABLE (5), so the verdict was not yet indeterminate —
+ *  but a check whose statistical power dropped 4x is most of the way to
+ *  retiring itself, and one thin page away from an indeterminate verdict on
+ *  the first days of a new patch, when this check matters most.
+ *
+ *  250 restores roughly July's comparison count. It is only safe BECAUSE rank
+ *  is now pinned (LOLALYTICS_RANK_SLUG): measured at this exact floor, the
+ *  pinned comparison produces 2/105 = 1.9% disagreement — the same ordinary
+ *  noise floor July measured (3/157 = 1.9%) and far below
+ *  LOLALYTICS_FAIL_RATE_PCT — while the UNPINNED comparison at the same floor
+ *  produces 22/105 = 21.0%, a hard fail. Lowering this number without pinning
+ *  rank would have broken the tripwire outright. The two changes are one
+ *  change; do not undo half of it. */
+export const LOLALYTICS_MIN_SAMPLE_GAMES = 250;
 
 /** Below this many ACTUAL high-sample comparisons across the whole panel
  *  (after page-shape + name-resolution + sample-size filtering), the check
@@ -134,7 +210,11 @@ export const LOLALYTICS_FAIL_THRESHOLD = 2;
  *  pages return 100+ opponents each, not the small handful the task's "2-3
  *  champion pages" framing implicitly assumed), and even after fixing an
  *  unrelated patch-pin bug, ordinary cross-source noise (different tier/
- *  rank-cut composition between lolalytics and our own Emerald+ bucket)
+ *  rank-cut composition between lolalytics and our own bucket -- which that
+ *  July run called "Emerald+" and which was really u.gg PLATINUM_PLUS, and
+ *  is now DIAMOND_2_PLUS with lolalytics pinned to match; the 1.9% figure
+ *  below was measured on that older, WIDER population and is quoted as the
+ *  historical noise floor it was, not as a claim about today's bucket)
  *  alone produced 3 matchups over the 4pt tolerance at the sample-size
  *  floor's edge -- 3 >= LOLALYTICS_FAIL_THRESHOLD would have FAILED every
  *  single real run despite zero direction/keying issues. 3/157 = 1.9% is

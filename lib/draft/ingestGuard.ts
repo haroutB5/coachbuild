@@ -237,16 +237,49 @@ export interface SymmetryPairRow {
 }
 
 export const SYMMETRY_TOLERANCE_PCT = 4;
+
+/** Both directions of a pairing need this many games before the pair is worth
+ *  checking. UNCHANGED at 200 by v0.109.0 — measured, not assumed.
+ *
+ *  The concern this was reviewed against: after v0.108.0's ~8x narrowing,
+ *  would a real ingest still find SYMMETRY_MIN_CHECKABLE qualifying pairs, or
+ *  would the check start returning "inconclusive" (which checkSymmetry treats
+ *  as FAILED, blocking pruneOldPatches and showing a data-integrity banner on
+ *  /draft with nothing actually wrong)? MEASURED on patch 16.14, pairs with
+ *  BOTH directions >= 200 games:
+ *    tier 10: 9,992 total  (per role 2543 / 2078 / 2300 / 1223 / 1848)
+ *    tier 15: 3,548 total  (per role  830 /  755 /  729 /  635 /  599)
+ *  The bar is 20 and the query samples 100. Even the thinnest role clears the
+ *  bar by 30x, so this floor is nowhere near binding and lowering it would buy
+ *  nothing but weaker pairs. It is also an EVIDENCE floor, not a popularity
+ *  one — the same reasoning that keeps N_FLOOR and MASS_GATE_MIN_GAMES fixed
+ *  while the pool floor became a share. Left exactly where it was. */
 export const SYMMETRY_MIN_GAMES = 200;
 export const SYMMETRY_SAMPLE_SIZE = 100;
 /** Same "can't vouch for anything on too few samples" posture as the
- *  cross-source guard's GUARD_MIN_CHECKABLE. */
+ *  cross-source guard's GUARD_MIN_CHECKABLE. Measured clearance above. */
 export const SYMMETRY_MIN_CHECKABLE = 20;
 
 export interface SymmetryResult {
+  /** False for BOTH "a pair disagreed" and "not enough pairs to judge" — the
+   *  retention decision treats them identically on purpose (never prune on
+   *  data nothing vouched for). `inconclusive` below is what tells them
+   *  apart for a human. */
   ok: boolean;
   checked: number;
   failures: string[];
+  /** v0.109.0 — TRUE when the check could not reach a verdict (fewer than
+   *  minCheckable qualifying pairs) rather than finding a real asymmetry.
+   *
+   *  These are different facts and were reported as one: an inconclusive run
+   *  pushed a `failures` entry, `ok` went false, retention was skipped, and
+   *  /draft showed "Last data refresh reported an error" — the same wording a
+   *  genuine decode/keying corruption produces. One means "something is wrong
+   *  with the data"; the other means "there is not enough data yet to say",
+   *  which on the first hours of a new patch is the expected state and not an
+   *  error at all. `ok` deliberately stays false in both cases (the cautious
+   *  retention behaviour is correct); only the description changes. */
+  inconclusive: boolean;
 }
 
 /** Pure check over already-fetched pair rows — see
@@ -274,11 +307,19 @@ export function checkSymmetry(
     }
   }
 
-  if (checked < minCheckable) {
-    failures.push(`only ${checked} symmetric pairs found with both sides >= ${SYMMETRY_MIN_GAMES} games -- symmetry check inconclusive, treated as failed`);
+  const inconclusive = checked < minCheckable;
+  if (inconclusive) {
+    // Worded as what it is. It still blocks retention (see SymmetryResult's
+    // `inconclusive`), but "we could not check" must not read as "the check
+    // found something", or every early-patch run looks like a data incident.
+    failures.push(
+      `INCONCLUSIVE (not a detected asymmetry): only ${checked} of the ${minCheckable} required symmetric pairs had ` +
+        `both sides >= ${SYMMETRY_MIN_GAMES} games. Nothing is known to be wrong with the data; there is not yet enough ` +
+        `of it to vouch for. Retention is skipped until a later run can check.`
+    );
   }
 
-  return { ok: failures.length === 0, checked, failures };
+  return { ok: failures.length === 0, checked, failures, inconclusive };
 }
 
 /** Fetches up to SYMMETRY_SAMPLE_SIZE (A,B) pairs (each direction's row

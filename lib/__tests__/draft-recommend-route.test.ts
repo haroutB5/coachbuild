@@ -11,18 +11,28 @@ vi.mock("@/lib/draft/recommend", () => ({ computeDraftRecommend: vi.fn() }));
 import { GET } from "@/app/api/draft/recommend/route";
 import { computeDraftRecommend } from "@/lib/draft/recommend";
 import { DbUnavailableError } from "@/lib/pro/errors";
+import { DIAMOND_2_PLUS_TIER } from "@/lib/draft/ugg";
 
 const req = (qs: string) =>
   ({ url: `http://localhost/api/draft/recommend${qs}` }) as unknown as Parameters<typeof GET>[0];
 
+// `tier` was 10 here, left behind by v0.108.0's move to DIAMOND_2_PLUS (15).
+// It is a fixture, so nothing failed — but a fixture that disagrees with the
+// tier the app actually serves is a small lie that a future reader has to
+// disprove. Pinned to the real constant instead of a literal.
 const baseMeta = {
   patch: "16.14",
-  tier: 10,
+  tier: DIAMOND_2_PLUS_TIER,
   fetchedAt: "2026-07-21T00:00:00.000Z",
   laneOppInferred: null,
   currentPatch: "16.14",
   ingestHealthy: null,
   ingestLastError: null,
+  poolTotal: 173,
+  poolIncluded: 101,
+  poolFloorGames: 601,
+  directionCheckOk: true,
+  directionCheckNote: null,
 };
 
 describe("GET /api/draft/recommend", () => {

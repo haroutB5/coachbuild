@@ -15,10 +15,42 @@ import {
   RANK_BRACKETS,
   DEFAULT_RANK_BRACKET,
   DIAMOND_PLUS_BRACKET,
+  DRAFT_BRACKET,
   resolveRankBracket,
   rankQueryParam,
   RANK_FILTERING_SUPPORTED,
 } from "../rankBrackets";
+import { DIAMOND_2_PLUS_TIER } from "../draft/ugg";
+
+// v0.109.0 — the DRAFT side's bracket, added so /draft can finally LABEL the
+// population its win rates describe (it rendered no rank at all, while Builds
+// has carried a scope note since v0.107.0). Two things need pinning, and both
+// are failures this codebase has actually shipped:
+//   1. the label must track the tier id it claims to describe, and
+//   2. it must NOT leak into the Builds selector, whose provider uses a
+//      completely unrelated tier enum.
+describe("DRAFT_BRACKET (u.gg side)", () => {
+  it("is pinned to the u.gg tier the draft engine actually queries", () => {
+    expect(DRAFT_BRACKET.apiValue).toEqual([DIAMOND_2_PLUS_TIER]);
+    expect(DIAMOND_2_PLUS_TIER).toBe(15);
+  });
+
+  it("says Diamond II, which is exactly what tier 15 is — no rounding to 'Diamond+'", () => {
+    expect(DRAFT_BRACKET.label).toBe("Diamond II+");
+    expect(DRAFT_BRACKET.description).toContain("Diamond II and above");
+    // The two halves of the app run on different brackets deliberately; the
+    // labels must not be interchangeable, or the difference reads as a bug.
+    expect(DRAFT_BRACKET.label).not.toBe(DIAMOND_PLUS_BRACKET.label);
+  });
+
+  it("is NOT selectable on the Builds side — its tier id belongs to a different provider's enum", () => {
+    expect(RANK_BRACKETS).not.toContain(DRAFT_BRACKET);
+    expect(resolveRankBracket(DRAFT_BRACKET.id)).toBeNull();
+    // Guard the specific confusion: 15 is DIAMOND_2_PLUS in u.gg's enum and
+    // means nothing at all in coachless's (which stops at Challenger = 9).
+    expect(DIAMOND_PLUS_BRACKET.apiValue).not.toContain(DIAMOND_2_PLUS_TIER);
+  });
+});
 
 describe("RANK_BRACKETS", () => {
   it("contains exactly one bracket, and it is the default", () => {

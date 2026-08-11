@@ -32,6 +32,7 @@ import {
   LOLALYTICS_MIN_COMPARABLE,
   LOLALYTICS_FAIL_THRESHOLD,
   LOLALYTICS_FAIL_RATE_PCT,
+  LOLALYTICS_RANK_SLUG,
   type LolalyticsCheckDeps,
   type LolalyticsPanelEntry,
 } from "@/lib/draft/lolalyticsCheck";
@@ -51,14 +52,32 @@ describe("LOLALYTICS_PANEL", () => {
     expect(new Set(LOLALYTICS_PANEL.map((e) => e.role)).size).toBe(3);
   });
 
+  // v0.109.0 — RANK is pinned as hard as patch already was, and for the same
+  // reason. Verified live 2026-08-11: lolalytics' unpinned counters page is
+  // Emerald+, which stopped resembling /draft's own bucket the moment v0.108.0
+  // moved it to Diamond II+. Measured, same panel, same tolerance: unpinned
+  // 3/33 = 9.1% disagreement (one matchup short of a false FAIL that blocks
+  // retention), pinned 0/33 = 0.0%. `d2_plus` is lolalytics' own slug for our
+  // bracket and its page echoes "D2+"; an unrecognised slug 404s rather than
+  // silently defaulting, so a future rename breaks loudly.
+  it("pins RANK on every counters URL, not just patch", () => {
+    expect(LOLALYTICS_RANK_SLUG).toBe("d2_plus");
+    for (const entry of LOLALYTICS_PANEL) {
+      expect(lolalyticsCountersUrl(entry)).toContain(`&tier=${LOLALYTICS_RANK_SLUG}`);
+      expect(lolalyticsCountersUrl(entry, "16.14")).toContain(`&tier=${LOLALYTICS_RANK_SLUG}`);
+    }
+  });
+
   it("lolalyticsCountersUrl builds the verified URL shape", () => {
     const viktor = LOLALYTICS_PANEL.find((e) => e.slug === "viktor")!;
-    expect(lolalyticsCountersUrl(viktor)).toBe("https://lolalytics.com/lol/viktor/counters/?lane=middle");
+    expect(lolalyticsCountersUrl(viktor)).toBe(`https://lolalytics.com/lol/viktor/counters/?lane=middle&tier=${LOLALYTICS_RANK_SLUG}`);
   });
 
   it("lolalyticsCountersUrl PINS the patch when given -- load-bearing, not cosmetic (see this function's doc comment: an unpinned fetch compared against a patch-behind DB produced 18 false disagreements live, 2026-07-21)", () => {
     const viktor = LOLALYTICS_PANEL.find((e) => e.slug === "viktor")!;
-    expect(lolalyticsCountersUrl(viktor, "16.13")).toBe("https://lolalytics.com/lol/viktor/counters/?lane=middle&patch=16.13");
+    expect(lolalyticsCountersUrl(viktor, "16.13")).toBe(
+      `https://lolalytics.com/lol/viktor/counters/?lane=middle&tier=${LOLALYTICS_RANK_SLUG}&patch=16.13`
+    );
   });
 });
 
@@ -204,8 +223,9 @@ describe("runLolalyticsCheck", () => {
       },
     });
     const result = await runLolalyticsCheck(deps, onePagePanel, "16.13");
-    expect(seenUrls).toEqual(["https://lolalytics.com/lol/garen/counters/?lane=top&patch=16.13"]);
-    expect(result.pages[0].url).toBe("https://lolalytics.com/lol/garen/counters/?lane=top&patch=16.13");
+    const expectedUrl = `https://lolalytics.com/lol/garen/counters/?lane=top&tier=${LOLALYTICS_RANK_SLUG}&patch=16.13`;
+    expect(seenUrls).toEqual([expectedUrl]);
+    expect(result.pages[0].url).toBe(expectedUrl);
   });
 
   it("a single disagreeing matchup stays a PASS (one mismatch is cross-source noise, not the failure signature)", async () => {

@@ -117,6 +117,22 @@ export interface DraftRecommendMeta {
   /** Best-effort summary of the last failure; null when healthy/unknown or
    *  absent on the wire. */
   ingestLastError: string | null;
+  /** v0.109.0 — the pool floor made visible; mirrors lib/draft/recommend.ts's
+   *  RecommendMeta fields of the same names. `poolTotal - poolIncluded` is how
+   *  many champion-lanes were dropped BEFORE scoring (so they appear nowhere,
+   *  not even as a low-sample row), and `poolFloorGames` is the bar they
+   *  missed. All null on the pending path or an older cached response — the
+   *  page must then render no note at all rather than a zero, since "0
+   *  excluded" and "we do not know" are different claims. */
+  poolTotal: number | null;
+  poolIncluded: number | null;
+  poolFloorGames: number | null;
+  /** v0.109.0 — did the external matchup-direction tripwire actually run and
+   *  vouch for this data? `null` = unknown (never recorded, older response),
+   *  and unknown must render as nothing. See lib/draft/recommend.ts's
+   *  RecommendMeta.directionCheckOk. */
+  directionCheckOk: boolean | null;
+  directionCheckNote: string | null;
 }
 
 /** Lane-share facts derived from the matchup matrix. These are additive
@@ -204,9 +220,23 @@ export interface DraftRecommendParams {
   /** CONTRACT RECONCILED 2026-07-21 (was a position-0-in-`enemies`-csv
    *  guess pending a check against engy's route — see git history for the
    *  old orderEnemiesForQuery approach this replaced): explicit champId of
-   *  the enemy occupying the user's own lane slot — companion mode:
-   *  theirTeam's same-index entry as the local player's roleId; manual
-   *  mode: whichever chip the user flagged isDirectLaneOpp. Omitted from
+   *  the enemy occupying the user's own lane slot.
+   *
+   *  CORRECTED v0.109.0 — this used to read "companion mode: theirTeam's
+   *  same-index entry as the local player's roleId", describing a mechanism
+   *  that has been DELETED. `resolveDraftLiveTarget` (draftLiveSync.ts)
+   *  returns `{lane, enemies, hover}` and no laneOpp at all, precisely
+   *  because `normalizeTheirTeam` (companionClient.ts) COMPACTS the array —
+   *  it drops non-positive/garbage slots, so index N in `theirTeam` is not
+   *  role N and reading it positionally picks the wrong champion. The same
+   *  note in companionClient.ts was corrected when the mechanism went; this
+   *  copy was missed, and anyone trusting it would reintroduce the exact
+   *  positional bug the compaction caused.
+   *
+   *  What is true today: in companion mode this stays NULL and the ROUTE
+   *  infers the lane opponent statistically by lane presence (see
+   *  lib/draft/recommend.ts's header contract); in manual mode it is
+   *  whichever chip the user flagged as the direct lane opponent. Omitted from
    *  the query when null OR absent from `enemies` (the route's own
    *  contract: an invalid laneOpp falls back to server-side statistical
    *  inference, never a client-side guess). Optional so existing call
@@ -225,6 +255,12 @@ export function buildDraftRecommendQuery(params: DraftRecommendParams): string {
   if (params.hover !== null) qs.set("hover", String(params.hover));
   if (params.laneOpp !== null && params.laneOpp !== undefined) qs.set("laneOpp", String(params.laneOpp));
   return qs.toString();
+}
+
+/** A count field is only a count when it is a real, finite, non-negative
+ *  number. Anything else is absent — see the pool fields' doc comment. */
+function nonNegativeIntOrNull(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
 }
 
 function isConfidence(v: unknown): v is DraftConfidence {
@@ -377,6 +413,15 @@ export function normalizeDraftRecommendResponse(raw: unknown): DraftRecommendRes
     currentPatch: typeof r.meta?.currentPatch === "string" ? r.meta.currentPatch : null,
     ingestHealthy: typeof r.meta?.ingestHealthy === "boolean" ? r.meta.ingestHealthy : null,
     ingestLastError: typeof r.meta?.ingestLastError === "string" ? r.meta.ingestLastError : null,
+    // A non-finite or negative count is treated as absent, not coerced to 0 —
+    // rendering "0 champions excluded" off a malformed field would be a
+    // fabricated reassurance, which is the failure mode this whole release is
+    // about.
+    poolTotal: nonNegativeIntOrNull(r.meta?.poolTotal),
+    poolIncluded: nonNegativeIntOrNull(r.meta?.poolIncluded),
+    poolFloorGames: nonNegativeIntOrNull(r.meta?.poolFloorGames),
+    directionCheckOk: typeof r.meta?.directionCheckOk === "boolean" ? r.meta.directionCheckOk : null,
+    directionCheckNote: typeof r.meta?.directionCheckNote === "string" ? r.meta.directionCheckNote : null,
   };
   // Draft redesign plan §2.3: absent/malformed (older cached response, or
   // Stage 0 not landed yet) degrades to [] -- never crashes, never treated

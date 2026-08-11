@@ -13,7 +13,9 @@ import {
   W_DIRECT,
   W_OFFLANE,
   POOL_MIN_PICKRATE,
-  POOL_MIN_TOTAL_GAMES,
+  POOL_MIN_LANE_SHARE,
+  POOL_MIN_TOTAL_GAMES_FLOOR,
+  poolMinTotalGames,
   PLAY_MAIN_TOP_N,
   PLAY_POTENTIAL_TOP_N,
   PLAY_MAIN_SAMPLE_FLOOR,
@@ -30,9 +32,11 @@ import {
   type EnemyInput,
 } from "@/lib/draft/score";
 
-/** Default totalGames is well above BOTH K (200) and POOL_MIN_TOTAL_GAMES
- *  (5000) so existing tests that don't care about baseline-sample behavior
- *  keep getting confidence:"normal" unless they explicitly override it. */
+/** Default totalGames is well above BOTH K (200) and any pool floor these
+ *  fixtures can derive (the floor is now 0.1% of the lane's own games — see
+ *  POOL_MIN_LANE_SHARE) so existing tests that don't care about
+ *  baseline-sample behavior keep getting confidence:"normal" unless they
+ *  explicitly override it. */
 function baseline(
   champId: number,
   baselineWr: number,
@@ -216,9 +220,10 @@ describe("rankPlays", () => {
   it("potential-tier row: thin direct-opp sample (n<K) -> confidence low, that's the badge's honest job (v0.39.1)", () => {
     const pool = [baseline(1, 0.5)]; // baseline totalGames=10000, well above K
     const enemies: EnemyInput[] = [{ champId: 999, isDirectLaneOpp: true }];
-    // n=150 clears N_FLOOR (30) so it's a real potential-tier row (< PLAY_MAIN_SAMPLE_FLOOR=1000),
+    // n=100 clears N_FLOOR (30) so it is a real potential-tier row (< PLAY_MAIN_SAMPLE_FLOOR),
     // but is itself below K=200 -- the direct-opp term IS this row's dominant (1.0-weight) evidence.
-    const matchups = matchupMap([[1, new Map([[999, { wins: 80, games: 150 }]])]]);
+    // v0.109.0: the old fixture used n=150, which now lands in MAIN (floor 125).
+    const matchups = matchupMap([[1, new Map([[999, { wins: 55, games: 100 }]])]]);
     const { potential } = splitPlaysBySampleSize(pool, matchups, enemies);
     expect(potential.map((p) => p.champId)).toEqual([1]);
     expect(potential[0].confidence).toBe("low");
@@ -261,11 +266,11 @@ describe("splitPlaysBySampleSize (v0.37.4 sample-size split)", () => {
     return { wins: Math.round(n * wr), games: n };
   }
 
-  it("partition boundary: n=999 -> potential, n=1000 -> main", () => {
+  it("partition boundary: one game under the floor -> potential, exactly at it -> main", () => {
     const pool = [baseline(1, 0.5), baseline(2, 0.5)];
     const matchups = matchupMap([
-      [1, new Map([[999, row(999)]])],
-      [2, new Map([[999, row(1000)]])],
+      [1, new Map([[999, row(PLAY_MAIN_SAMPLE_FLOOR - 1)]])],
+      [2, new Map([[999, row(PLAY_MAIN_SAMPLE_FLOOR)]])],
     ]);
     const { main, potential } = splitPlaysBySampleSize(pool, matchups, directOnly());
     expect(main.map((p) => p.champId)).toEqual([2]);
@@ -294,8 +299,8 @@ describe("splitPlaysBySampleSize (v0.37.4 sample-size split)", () => {
       // champ 1: no row at all vs 999.
       // champ 2: row exists but below N_FLOOR (30).
       [2, new Map([[999, row(29)]])],
-      // champ 3: clears N_FLOOR -> included (potential, since n<1000).
-      [3, new Map([[999, row(500)]])],
+      // champ 3: clears N_FLOOR -> included (potential, since n < the main floor).
+      [3, new Map([[999, row(PLAY_MAIN_SAMPLE_FLOOR - 5)]])],
     ]);
     const { main, potential } = splitPlaysBySampleSize(pool, matchups, directOnly());
     const allListed = [...main, ...potential].map((p) => p.champId);
@@ -322,21 +327,39 @@ describe("splitPlaysBySampleSize (v0.37.4 sample-size split)", () => {
     expect(main).toHaveLength(PLAY_MAIN_TOP_N);
 
     const potentialPool = Array.from({ length: 8 }, (_, i) => baseline(i + 1, 0.5 + i * 0.001));
-    const potentialMatchups = matchupMap(potentialPool.map((c) => [c.champId, new Map([[999, row(500)]])] as const));
+    const potentialMatchups = matchupMap(potentialPool.map((c) => [c.champId, new Map([[999, row(PLAY_MAIN_SAMPLE_FLOOR - 5)]])] as const));
     const { potential } = splitPlaysBySampleSize(potentialPool, potentialMatchups, directOnly());
     expect(potential).toHaveLength(PLAY_POTENTIAL_TOP_N);
   });
 
   it("same score formula in both buckets -- a potential-bucket score is computed identically to a main-bucket one", () => {
     const pool = [baseline(1, 0.5, null, null, 10000)];
-    const matchups = matchupMap([[1, new Map([[999, row(500, 0.6)]])]]);
+    const matchups = matchupMap([[1, new Map([[999, row(PLAY_MAIN_SAMPLE_FLOOR - 5, 0.6)]])]]);
     const { potential } = splitPlaysBySampleSize(pool, matchups, directOnly());
     const rankPlaysEquivalent = rankPlays(pool, matchups, [{ champId: 999, isDirectLaneOpp: true }]);
     expect(potential[0].score).toBeCloseTo(rankPlaysEquivalent[0].score, 10);
   });
 
-  it("PLAY_MAIN_SAMPLE_FLOOR is 1000 (pinned -- the exact threshold the feature spec calls out)", () => {
-    expect(PLAY_MAIN_SAMPLE_FLOOR).toBe(1000);
+  // v0.109.0: this pinned 1000, "the exact threshold the feature spec calls
+  // out". 1000 was the right number for u.gg tier 10 and was carried onto the
+  // ~8x smaller tier-15 bucket unexamined by v0.108.0, where it stopped
+  // selecting well-sampled matchups and started selecting almost none: the
+  // field the top-10 main list is chosen FROM collapsed from 44-66 candidates
+  // per lane to 12-29. The list never emptied, it just stopped being a ranking.
+  // 125 is the same bar scaled by the measured population drop.
+  it("PLAY_MAIN_SAMPLE_FLOOR is 125 (recalibrated for the tier-15 bucket)", () => {
+    expect(PLAY_MAIN_SAMPLE_FLOOR).toBe(125);
+  });
+
+  it("a main-list row under K still badges itself low sample -- the split floor does not launder confidence", () => {
+    // The consequence of 125 < K (200): a row can now earn a MAIN slot on a
+    // sample that is still thin in absolute terms. It must keep saying so.
+    const pool = [baseline(1, 0.5)];
+    const matchups = matchupMap([[1, new Map([[999, row(130)]])]]);
+    const { main } = splitPlaysBySampleSize(pool, matchups, directOnly());
+    expect(main.map((p) => p.champId)).toEqual([1]);
+    expect(main[0].confidence).toBe("low");
+    expect(main[0].winVsLaneOppGames).toBe(130);
   });
 });
 
@@ -353,15 +376,18 @@ describe("filterPoolByPickrate (pool cutoff)", () => {
   });
 });
 
-describe("filterPoolByTotalGames (audit P1-1 playrate-proxy pool floor)", () => {
+describe("filterPoolByTotalGames (playrate-proxy pool floor, share-based since v0.109.0)", () => {
   it("drops below the floor, keeps at/above it -- unconditional, never null-exempted", () => {
+    // laneGames passed explicitly so the floor is a stated number, not one
+    // derived from the fixture: 1,000,000 lane games -> 0.1% -> 1000.
     const candidates = [
-      baseline(1, 0.5, null, null, 4999), // just under -- dropped
-      baseline(2, 0.5, null, null, POOL_MIN_TOTAL_GAMES), // exactly at floor -- kept (>=)
+      baseline(1, 0.5, null, null, 999), // just under -- dropped
+      baseline(2, 0.5, null, null, 1000), // exactly at floor -- kept (>=)
       baseline(3, 0.5, null, null, 50000), // well above -- kept
       baseline(4, 0.5, null, null, 0), // no data at all -- dropped
     ];
-    const kept = filterPoolByTotalGames(candidates).map((c) => c.champId);
+    expect(poolMinTotalGames(1_000_000)).toBe(1000);
+    const kept = filterPoolByTotalGames(candidates, 1_000_000).map((c) => c.champId);
     expect(kept).toEqual([2, 3]);
   });
 
@@ -370,8 +396,61 @@ describe("filterPoolByTotalGames (audit P1-1 playrate-proxy pool floor)", () => 
     // the exact class of artifact the audit's live repro found.
     const offRoleArtifact = baseline(350, 0.813, null, null, 128); // Yuumi-shaped
     const realLaneStaple = baseline(86, 0.5, null, null, 137678); // Garen-shaped
-    const kept = filterPoolByTotalGames([offRoleArtifact, realLaneStaple]).map((c) => c.champId);
+    const kept = filterPoolByTotalGames([offRoleArtifact, realLaneStaple], 4_859_727).map((c) => c.champId);
     expect(kept).toEqual([86]);
+  });
+
+  // ── v0.109.0: the recalibration itself, pinned to the live measurement ──
+  //
+  // THE DEFECT THIS LOCKS OUT: a flat 5000-game floor, verified against u.gg
+  // tier 10 in July, was carried unchanged onto the ~8.1x smaller tier-15
+  // bucket by v0.108.0 and silently deleted roughly half of every lane's real
+  // champions BEFORE scoring. The floor must scale with the bucket.
+  it("holds the same bar across an 8x population change (the v0.108.0 regression)", () => {
+    // Measured lane totals, patch 16.14, live Neon 2026-08-11.
+    const TIER_10_LANE_GAMES = 4_859_727;
+    const TIER_15_LANE_GAMES = 601_375;
+
+    // July's live-verified floor is reproduced at the bucket it was verified
+    // against, to within rounding.
+    expect(poolMinTotalGames(TIER_10_LANE_GAMES)).toBe(4860);
+    // ...and the SAME rule on the narrower bucket asks for ~8x fewer games,
+    // which is the whole point.
+    expect(poolMinTotalGames(TIER_15_LANE_GAMES)).toBe(601);
+
+    // A champion holding 0.15% of its lane is a real, played pick in either
+    // bucket and survives in both. Under the old flat 5000 it survived at
+    // tier 10 (7,290 games) and was deleted at tier 15 (902 games).
+    const atTier10 = baseline(1, 0.5, null, null, Math.round(TIER_10_LANE_GAMES * 0.0015));
+    const atTier15 = baseline(1, 0.5, null, null, Math.round(TIER_15_LANE_GAMES * 0.0015));
+    expect(filterPoolByTotalGames([atTier10], TIER_10_LANE_GAMES)).toHaveLength(1);
+    expect(filterPoolByTotalGames([atTier15], TIER_15_LANE_GAMES)).toHaveLength(1);
+    expect(atTier15.totalGames).toBeLessThan(5000); // the old flat floor would have dropped it
+  });
+
+  it("never lets the absolute backstop be the binding constraint on a real bucket", () => {
+    // The backstop exists for a degenerate bucket only. On anything the size
+    // of a real lane it must be dominated by the share floor, or it becomes a
+    // second flat threshold quietly waiting to rot.
+    expect(poolMinTotalGames(601_375)).toBeGreaterThan(POOL_MIN_TOTAL_GAMES_FLOOR);
+    // A bucket so small that 0.1% is under the backstop falls back to it
+    // rather than to a floor of ~2 games.
+    expect(poolMinTotalGames(1000)).toBe(POOL_MIN_TOTAL_GAMES_FLOOR);
+    expect(poolMinTotalGames(0)).toBe(POOL_MIN_TOTAL_GAMES_FLOOR);
+    expect(poolMinTotalGames(Number.NaN)).toBe(POOL_MIN_TOTAL_GAMES_FLOOR);
+  });
+
+  it("defaults laneGames from the candidates' own symmetric-matrix total", () => {
+    // Σ totalGames counts every lane game twice (mirror rows), so the default
+    // must apply realLaneGames' /2 -- otherwise the derived floor is double
+    // what it should be.
+    const candidates = [
+      baseline(1, 0.5, null, null, 1_000_000),
+      baseline(2, 0.5, null, null, 1_000_000),
+    ];
+    // Σ = 2,000,000 -> lane games 1,000,000 -> floor 1000.
+    const marginal = baseline(3, 0.5, null, null, 999);
+    expect(filterPoolByTotalGames([...candidates, marginal]).map((c) => c.champId)).toEqual([1, 2]);
   });
 });
 
@@ -448,9 +527,18 @@ describe("rankBans", () => {
   });
 
   describe("ban candidate floor (v0.40.0 -- user directive: no sub-1000-game ban candidates)", () => {
-    it("BAN_MIN_MATCHUP_GAMES is 1000, same threshold class as PLAY_MAIN_SAMPLE_FLOOR", () => {
+    // These two used to be pinned EQUAL, which read as "same class, therefore
+    // same number". v0.109.0 separates them deliberately and the test now says
+    // why, because the next person to narrow the rank bucket will face this
+    // choice again: PLAY_MAIN_SAMPLE_FLOOR is a calibration against the
+    // population and was re-derived (1000 -> 125); BAN_MIN_MATCHUP_GAMES is a
+    // USER DIRECTIVE naming that exact figure ("dont put champs with less than
+    // 1000 games in Suggested bans") and re-deriving it would be overriding an
+    // instruction, not fixing a mis-calibration. Same class, different kind of
+    // number.
+    it("BAN_MIN_MATCHUP_GAMES stays at the user-directed 1000, deliberately no longer equal to PLAY_MAIN_SAMPLE_FLOOR", () => {
       expect(BAN_MIN_MATCHUP_GAMES).toBe(1000);
-      expect(BAN_MIN_MATCHUP_GAMES).toBe(PLAY_MAIN_SAMPLE_FLOOR);
+      expect(BAN_MIN_MATCHUP_GAMES).not.toBe(PLAY_MAIN_SAMPLE_FLOOR);
     });
 
     it("floor applied: a matchup at exactly the floor is included", () => {

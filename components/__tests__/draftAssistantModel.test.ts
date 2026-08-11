@@ -155,7 +155,29 @@ describe("Draft Assistant filters", () => {
     for (const fixture of laneFixtures) {
       expect(filterDraftAssistantCandidates(fixture, DEFAULT_DRAFT_ASSISTANT_FILTERS)).not.toHaveLength(0);
     }
-    expect(DEFAULT_DRAFT_ASSISTANT_FILTERS).toEqual({ minPickRate: 0, includeOffMeta: true, minimumGames: 1000 });
+    // v0.109.0: minimumGames defaulted to 1000, which made the "opt-in"
+    // filters not opt-in — and once /draft moved to the ~8x smaller tier-15
+    // bucket, that default was STRICTER than the server's own pool floor (601
+    // games): measured live, it removed 2 of the 10 served rows in mid and 2
+    // in bot with no enemies entered, and contradicted the engine on 3-16
+    // pool champions per lane. A default filter must not subtract from the
+    // answer the server just gave.
+    expect(DEFAULT_DRAFT_ASSISTANT_FILTERS).toEqual({ minPickRate: 0, includeOffMeta: true, minimumGames: 0 });
+  });
+
+  it("the default filters never remove a champion the engine chose to serve", () => {
+    // Anything with a real lane share and a real game count survives the
+    // defaults. The only exclusions left are the honest ones: a null figure,
+    // which a filter cannot pass without inventing a denominator.
+    const served = [
+      { champId: 1, laneShare: 0.0011, totalGames: 610 }, // just over the tier-15 pool floor
+      { champId: 2, laneShare: 0.08, totalGames: 46529 },
+      { champId: 3, laneShare: 0.0009, totalGames: 540 }, // below the server floor, but the client must not be the one to judge
+    ];
+    expect(filterDraftAssistantCandidates(served, DEFAULT_DRAFT_ASSISTANT_FILTERS).map((c) => c.champId)).toEqual([1, 2, 3]);
+    expect(
+      filterDraftAssistantCandidates([{ champId: 4, laneShare: null, totalGames: 5000 }], DEFAULT_DRAFT_ASSISTANT_FILTERS)
+    ).toEqual([]);
   });
 
   it("keeps only positive shrunk matchup deltas for Counters", () => {

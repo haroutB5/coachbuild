@@ -32,7 +32,7 @@ vi.mock("@/lib/draft/ugg", async (importOriginal) => {
 // flips these to failing to prove retention actually gets gated on them.
 vi.mock("@/lib/draft/ingestGuard", () => ({
   runDefaultIngestGuard: vi.fn(async () => ({ ok: true, checked: 20, failures: [], details: [] })),
-  runSymmetryCheck: vi.fn(async () => ({ ok: true, checked: 100, failures: [] })),
+  runSymmetryCheck: vi.fn(async () => ({ ok: true, checked: 100, failures: [], inconclusive: false })),
 }));
 
 // EXTERNAL matchup-direction tripwire (2026-07-21): mocked to a passing
@@ -42,6 +42,11 @@ vi.mock("@/lib/draft/ingestGuard", () => ({
 // retention gate reacts correctly to each verdict.
 vi.mock("@/lib/draft/lolalyticsCheck", () => ({
   runDefaultLolalyticsCheck: vi.fn(async () => ({ verdict: "pass", reason: "", pages: [], comparisons: [], disagreements: [] })),
+  // v0.109.0: the real key must be re-exported by the mock. Omitting it made
+  // the health write run with `undefined` as its pipeline name — silently, in
+  // a passing suite, which is precisely the failure shape this whole release
+  // is about.
+  DIRECTION_CHECK_INGEST_KEY: "draft-direction-check",
 }));
 
 import { getSql } from "@/lib/pro/db";
@@ -70,7 +75,7 @@ describe("runDraftIngest", () => {
     vi.mocked(fetchMatchups).mockReset();
     vi.mocked(fetchRankings).mockReset().mockResolvedValue({ byRole: {} });
     vi.mocked(runDefaultIngestGuard).mockReset().mockResolvedValue({ ok: true, checked: 20, failures: [], details: [] });
-    vi.mocked(runSymmetryCheck).mockReset().mockResolvedValue({ ok: true, checked: 100, failures: [] });
+    vi.mocked(runSymmetryCheck).mockReset().mockResolvedValue({ ok: true, checked: 100, failures: [], inconclusive: false });
     vi.mocked(runDefaultLolalyticsCheck).mockReset().mockResolvedValue({
       verdict: "pass",
       reason: "",
@@ -94,7 +99,7 @@ describe("runDraftIngest", () => {
 
   it("advances the cursor by BATCH_SIZE and reports champCount", async () => {
     const champions = Array.from({ length: 20 }, (_, i) => ({ id: i + 1 }));
-    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0 });
+    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0, tierMissing: false });
 
     const first = await runDraftIngest({ cursor: 0, champions });
     expect(first.champStart).toBe(1);
@@ -107,7 +112,7 @@ describe("runDraftIngest", () => {
   });
 
   it("does not request upstream data for skin/alternate-art champion IDs", async () => {
-    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0 });
+    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0, tierMissing: false });
 
     const result = await runDraftIngest({
       cursor: 0,
@@ -134,6 +139,7 @@ describe("runDraftIngest", () => {
     vi.mocked(fetchMatchups).mockResolvedValue({
       byRole: { 0: [{ oppId: 99, wins: 60, games: 100 }] },
       skippedRows: 0,
+      tierMissing: false,
     });
     // rankings deliberately returns a DIFFERENT (wrong, if trusted) winrate-
     // shaped value to prove ingest never reads it for winrate.
@@ -154,21 +160,21 @@ describe("runDraftIngest", () => {
   });
 
   it("champion with zero total games in a role contributes no champ_stats row for that role", async () => {
-    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: { 0: [] }, skippedRows: 0 });
+    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: { 0: [] }, skippedRows: 0, tierMissing: false });
     const result = await runDraftIngest({ cursor: 0, champions: [{ id: 1 }] });
     expect(result.statsUpserted).toBe(0);
   });
 
   it("sums skippedRows across the batch", async () => {
     vi.mocked(fetchMatchups)
-      .mockResolvedValueOnce({ byRole: {}, skippedRows: 2 })
-      .mockResolvedValueOnce({ byRole: {}, skippedRows: 3 });
+      .mockResolvedValueOnce({ byRole: {}, skippedRows: 2, tierMissing: false })
+      .mockResolvedValueOnce({ byRole: {}, skippedRows: 3, tierMissing: false });
     const result = await runDraftIngest({ cursor: 0, champions: [{ id: 1 }, { id: 2 }] });
     expect(result.skippedRows).toBe(5);
   });
 
   it("retention prunes only on the FINAL batch (nextCursor === null), gated on a passing guard", async () => {
-    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0 });
+    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0, tierMissing: false });
     const champions = Array.from({ length: 12 }, (_, i) => ({ id: i + 1 }));
 
     const mid = await runDraftIngest({ cursor: 0, champions }); // not final (12 champs, batch 9 -> nextCursor=9)
@@ -203,7 +209,7 @@ describe("runDraftIngest", () => {
   });
 
   it("EXTERNAL tripwire: a FAILING lolalytics verdict skips retention even when the other two guards pass", async () => {
-    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0 });
+    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0, tierMissing: false });
     vi.mocked(runDefaultLolalyticsCheck).mockResolvedValue({
       verdict: "fail",
       reason: "2 high-sample matchups disagree",
@@ -225,7 +231,7 @@ describe("runDraftIngest", () => {
   });
 
   it("EXTERNAL tripwire: an INDETERMINATE lolalytics verdict does NOT block retention (scrape break, not an ingest failure)", async () => {
-    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0 });
+    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0, tierMissing: false });
     vi.mocked(runDefaultLolalyticsCheck).mockResolvedValue({
       verdict: "indeterminate",
       reason: "only 2/5 high-sample matchups were comparable",
@@ -241,7 +247,7 @@ describe("runDraftIngest", () => {
   });
 
   it("EXTERNAL tripwire: a thrown lolalytics check is treated as indeterminate (non-blocking), never an uncaught failure", async () => {
-    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0 });
+    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0, tierMissing: false });
     vi.mocked(runDefaultLolalyticsCheck).mockRejectedValue(new Error("lolalytics HTTP 500"));
 
     const result = await runDraftIngest({ cursor: 0, champions: [{ id: 1 }] });
@@ -250,7 +256,7 @@ describe("runDraftIngest", () => {
   });
 
   it("P0 guard: a FAILING cross-source panel skips retention and surfaces the failure (never silently trusted)", async () => {
-    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0 });
+    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0, tierMissing: false });
     vi.mocked(runDefaultIngestGuard).mockResolvedValue({
       ok: false,
       checked: 15,
@@ -270,10 +276,11 @@ describe("runDraftIngest", () => {
   });
 
   it("P0 guard: a FAILING symmetry check also skips retention, independent of the panel result", async () => {
-    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0 });
+    vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0, tierMissing: false });
     vi.mocked(runSymmetryCheck).mockResolvedValue({
       ok: false,
       checked: 50,
+      inconclusive: false, // a REAL detected asymmetry, not "too few pairs to judge"
       failures: ["champ 1 vs 2 (role 0): wr(A,B)=70.0% + wr(B,A)=70.0% = 140.0% (expected ~100%, delta 40.0 > tolerance 4)"],
     });
 
@@ -281,6 +288,54 @@ describe("runDraftIngest", () => {
     expect(result.guardOk).toBe(false);
     expect(result.retentionRan).toBe(false);
     expect(result.errors.some((e) => e.includes("symmetry check"))).toBe(true);
+  });
+
+  // ── v0.109.0: the direction tripwire cannot retire silently ──────────────
+  //
+  // "indeterminate" means the ONLY external check on our matchup direction did
+  // not run. It correctly does not block retention, and it correctly does not
+  // fail the ingest — so before this it left no trace anywhere: the run
+  // recorded a clean bill of health and the check could stop guarding forever
+  // with nothing to show for it. Every verdict now writes a health row under
+  // the check's OWN pipeline key, which /draft reads.
+  describe("direction-tripwire health is recorded on every verdict", () => {
+    function healthWrite(key: string) {
+      const call = mockSql.mock.calls.find(
+        ([strings, ...values]) =>
+          (strings as TemplateStringsArray).join("|").includes("INSERT INTO coachbuild.ingest_health") && values[0] === key
+      );
+      // Tagged-template call shape: (strings, ingest, lastSuccessAt, ok, error, ...)
+      return call ? { key: call[1], ok: call[3], error: call[4] } : null;
+    }
+
+    it("a PASS stamps the check as vouching", async () => {
+      vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0, tierMissing: false });
+      const result = await runDraftIngest({ cursor: 0, champions: [{ id: 1 }] });
+      expect(result.lolalyticsVerdict).toBe("pass");
+      const row = healthWrite("draft-direction-check");
+      expect(row).not.toBeNull();
+      expect(row!.ok).toBe(true);
+      expect(row!.error).toBeNull();
+    });
+
+    it("an INDETERMINATE verdict is recorded as NOT vouching, with its reason -- while still not failing the ingest", async () => {
+      vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 0, tierMissing: false });
+      vi.mocked(runDefaultLolalyticsCheck).mockResolvedValueOnce({
+        verdict: "indeterminate",
+        reason: "only 2/5 high-sample matchups were comparable",
+        pages: [],
+        comparisons: [],
+        disagreements: [],
+      });
+      const result = await runDraftIngest({ cursor: 0, champions: [{ id: 1 }] });
+      expect(result.lolalyticsVerdict).toBe("indeterminate");
+      expect(result.retentionRan).toBe(true); // unchanged: indeterminate never blocks
+      expect(result.errors).toEqual([]); // unchanged: indeterminate is not an ingest failure
+      const row = healthWrite("draft-direction-check");
+      expect(row!.ok).toBe(false); // ...but the CHECK is on record as not vouching
+      expect(String(row!.error)).toContain("indeterminate");
+      expect(String(row!.error)).toContain("only 2/5 high-sample matchups");
+    });
   });
 
   it("fastFailOnRatelimit aborts the rest of the batch on a 403/429-shaped error", async () => {
@@ -293,7 +348,7 @@ describe("runDraftIngest", () => {
     }
     vi.mocked(fetchMatchups)
       .mockRejectedValueOnce(new FakeUggError(403))
-      .mockResolvedValueOnce({ byRole: {}, skippedRows: 0 });
+      .mockResolvedValueOnce({ byRole: {}, skippedRows: 0, tierMissing: false });
 
     const result = await runDraftIngest({
       cursor: 0,
@@ -307,7 +362,7 @@ describe("runDraftIngest", () => {
   it("without fastFailOnRatelimit, a per-champion failure is logged and the batch continues", async () => {
     vi.mocked(fetchMatchups)
       .mockRejectedValueOnce(new Error("transient"))
-      .mockResolvedValueOnce({ byRole: {}, skippedRows: 0 });
+      .mockResolvedValueOnce({ byRole: {}, skippedRows: 0, tierMissing: false });
 
     const result = await runDraftIngest({ cursor: 0, champions: [{ id: 1 }, { id: 2 }] });
     expect(fetchMatchups).toHaveBeenCalledTimes(2); // both champs attempted

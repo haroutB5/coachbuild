@@ -26,7 +26,6 @@ import { getSql } from "@/lib/pro/db";
 import { computeDraftRecommend } from "@/lib/draft/recommend";
 import { resolveDraftPatchLabel } from "@/lib/draft/patch";
 import { getChampionMeta } from "@/lib/staticData";
-import { POOL_MIN_TOTAL_GAMES } from "@/lib/draft/score";
 
 function sqlText(strings: TemplateStringsArray): string {
   return strings.join("|");
@@ -41,11 +40,17 @@ function isMyAccountQuery(text: string): boolean {
   return text.includes("FROM coachbuild.my_account");
 }
 
-/** Every fixture below defaults total_games comfortably above
- *  POOL_MIN_TOTAL_GAMES unless a test is specifically exercising the floor —
- *  otherwise every one of these pre-existing fixtures would get filtered
- *  out of the pool entirely by the audit P1-1 fix. */
-const ABOVE_FLOOR = POOL_MIN_TOTAL_GAMES + 1000;
+/** Every fixture below defaults total_games comfortably above the pool floor
+ *  unless a test is specifically exercising it — otherwise every one of these
+ *  pre-existing fixtures would get filtered out of the pool entirely by the
+ *  audit P1-1 fix.
+ *
+ *  v0.109.0: the floor is 0.1% of the LANE's own games (score.ts's
+ *  POOL_MIN_LANE_SHARE), so on these small fixture pools it collapses to the
+ *  absolute backstop, 30. A literal 6000 clears it by a wide margin at any
+ *  fixture size and no longer has to be derived from a constant whose meaning
+ *  has changed. */
+const ABOVE_FLOOR = 6000;
 
 function champStatsRow(overrides: Partial<{
   champ_id: number;
@@ -123,23 +128,53 @@ describe("computeDraftRecommend", () => {
     expect(result.laneStats?.map((stat) => stat.champId)).toEqual([1, 2]);
   });
 
-  describe("pool total-games floor (audit P1-1)", () => {
+  describe("pool lane-share floor (audit P1-1; recalibrated v0.109.0)", () => {
     it("a low-sample off-role artifact never reaches the ranked output", async () => {
       mockSql.mockImplementation((strings: TemplateStringsArray) => {
         const text = sqlText(strings);
         if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
         if (text.includes("FROM coachbuild.draft_champ_stats") && text.includes("role = ")) {
+          // v0.109.0: the floor is now a SHARE of the lane, so this fixture
+          // has to describe a lane rather than two rows — with only Garen
+          // present, 0.1% of the lane is 69 games and a 128-game artifact is
+          // legitimately a big slice of it. Totals below are shaped like the
+          // real measured tier-15 top lane (~601k lane games -> a 601-game
+          // floor), which is the population this gate actually runs against.
           return Promise.resolve([
             // Yuumi-shaped: sky-high winrate off a tiny off-role sample.
             champStatsRow({ champ_id: 350, winrate: 0.813, total_games: 128 }),
             champStatsRow({ champ_id: 86, winrate: 0.5, total_games: 137678 }),
+            champStatsRow({ champ_id: 122, winrate: 0.51, total_games: 420000 }),
+            champStatsRow({ champ_id: 266, winrate: 0.49, total_games: 350000 }),
+            champStatsRow({ champ_id: 24, winrate: 0.5, total_games: 295000 }),
           ]);
         }
         return Promise.resolve([]);
       });
       const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
-      expect(result.plays.map((p) => p.champId)).toEqual([86]);
       expect(result.plays.some((p) => p.champId === 350)).toBe(false);
+      expect(result.plays.map((p) => p.champId).sort((a, b) => a - b)).toEqual([24, 86, 122, 266]);
+      // The exclusion is now REPORTED rather than silent — the whole point of
+      // the release. Before this, a champion the floor removed simply was not
+      // on the page and nothing said so.
+      expect(result.meta.poolTotal).toBe(5);
+      expect(result.meta.poolIncluded).toBe(4);
+      expect(result.meta.poolFloorGames).toBe(601);
+    });
+
+    it("reports poolTotal/poolIncluded/poolFloorGames even when nothing is withheld", async () => {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.draft_champ_stats") && text.includes("role = ")) {
+          return Promise.resolve([champStatsRow({ champ_id: 1 }), champStatsRow({ champ_id: 2 })]);
+        }
+        return Promise.resolve([]);
+      });
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.meta.poolTotal).toBe(2);
+      expect(result.meta.poolIncluded).toBe(2);
+      expect(result.meta.poolFloorGames).toBeGreaterThan(0);
     });
 
     it("pending when every candidate in the lane is below the floor (pool empties out)", async () => {
@@ -591,13 +626,14 @@ describe("computeDraftRecommend", () => {
         if (text.includes("FROM coachbuild.draft_champ_stats")) {
           return Promise.resolve([
             champStatsRow({ champ_id: 1, winrate: 0.55 }), // will have n=1000 vs opp -> main
-            champStatsRow({ champ_id: 2, winrate: 0.6 }), // will have n=500 vs opp -> potential
+            champStatsRow({ champ_id: 2, winrate: 0.6 }), // will have n=100 vs opp -> potential
           ]);
         }
         if (text.includes("FROM coachbuild.draft_matchup")) {
           return Promise.resolve([
             { champ_id: 1, opp_id: 7, wins: 550, games: 1000 },
-            { champ_id: 2, opp_id: 7, wins: 300, games: 500 },
+            // v0.109.0: n=500 is now a MAIN sample (floor 125, was 1000).
+            { champ_id: 2, opp_id: 7, wins: 60, games: 100 },
           ]);
         }
         return Promise.resolve([]);
@@ -634,7 +670,7 @@ describe("computeDraftRecommend", () => {
         if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
         if (text.includes("FROM coachbuild.draft_champ_stats")) return Promise.resolve([champStatsRow({ champ_id: 1 })]);
         if (text.includes("FROM coachbuild.draft_matchup")) {
-          return Promise.resolve([{ champ_id: 1, opp_id: 7, wins: 300, games: 500 }]); // n=500 -> potential
+          return Promise.resolve([{ champ_id: 1, opp_id: 7, wins: 60, games: 100 }]); // n=100 -> potential (floor is 125)
         }
         if (isMyAccountQuery(text)) return Promise.resolve([MY_ACCOUNT_ROW]);
         if (text.includes("FROM coachbuild.my_matches")) {
