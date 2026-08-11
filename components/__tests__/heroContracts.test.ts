@@ -142,28 +142,42 @@ describe("getHeroStats — rank-bracket query param threading", () => {
     vi.unstubAllGlobals();
   });
 
-  it("omits &rank= when no bracket is passed (getMostPlayedLane's contract — widest, un-bracketed sample)", async () => {
+  // 2026-08-11: these three used to assert the param was OMITTED for the
+  // default bracket, to keep the URL byte-identical to the pre-rank-feature
+  // request and reuse its cache entry. That goal inverted when the default's
+  // TIERS changed from [5,6,7] to [6,7,8,9]: this route is CDN-cached for 6h
+  // on the query string alone, so an unchanged URL is now a way to serve the
+  // OLD sample under the new label. The param is always sent.
+  it("appends &rank= when no bracket is passed — defaults to the single Diamond+ bracket", async () => {
     const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ winRatePct: 50, gamesCount: 100 }) }));
     vi.stubGlobal("fetch", fetchMock);
 
     await getHeroStats(112, "mid");
-    expect(fetchMock).toHaveBeenCalledWith("/api/hero-stats?champ=112&lane=mid");
+    expect(fetchMock).toHaveBeenCalledWith("/api/hero-stats?champ=112&lane=mid&rank=diamond-plus");
   });
 
-  it("omits &rank= when the DEFAULT ('all'/High Elo) bracket is passed explicitly — byte-identical request", async () => {
+  it("appends &rank= when the default bracket is passed explicitly — same URL either way", async () => {
     const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ winRatePct: 50, gamesCount: 100 }) }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await getHeroStats(112, "mid", "all");
-    expect(fetchMock).toHaveBeenCalledWith("/api/hero-stats?champ=112&lane=mid");
+    await getHeroStats(112, "mid", "diamond-plus");
+    expect(fetchMock).toHaveBeenCalledWith("/api/hero-stats?champ=112&lane=mid&rank=diamond-plus");
   });
 
-  it("appends &rank= for a non-default bracket", async () => {
+  it("a stale stored id is normalised to the default, never forwarded as-is (the route would 400 it)", async () => {
     const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ winRatePct: 50, gamesCount: 100 }) }));
     vi.stubGlobal("fetch", fetchMock);
 
     await getHeroStats(112, "mid", "platinum");
-    expect(fetchMock).toHaveBeenCalledWith("/api/hero-stats?champ=112&lane=mid&rank=platinum");
+    expect(fetchMock).toHaveBeenCalledWith("/api/hero-stats?champ=112&lane=mid&rank=diamond-plus");
+  });
+
+  it("the request URL differs from the pre-2026-08-11 one, so a warm CDN entry cannot be reused", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ winRatePct: 50, gamesCount: 100 }) }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getHeroStats(112, "mid");
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/hero-stats?champ=112&lane=mid");
   });
 });
 

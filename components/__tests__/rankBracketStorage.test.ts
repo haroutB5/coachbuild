@@ -37,6 +37,10 @@ function makeLocalStorageShim() {
 function stubWindow(localStorage: {
   getItem: (k: string) => string | null;
   setItem: (k: string, v: string) => void;
+  /** Optional so the existing throwing-storage stubs stay valid literals.
+   *  The module calls it only on the stale-id purge path (2026-08-11). */
+  removeItem?: (k: string) => void;
+  clear?: () => void;
 }): void {
   (globalThis as unknown as { window: { localStorage: typeof localStorage } }).window = { localStorage };
 }
@@ -52,7 +56,7 @@ describe("rankBracketStorage — SSR (no window)", () => {
   });
 
   it("writeStoredRankBracketId is a no-op (never throws) when window is undefined", () => {
-    expect(() => writeStoredRankBracketId("challenger")).not.toThrow();
+    expect(() => writeStoredRankBracketId(DEFAULT_RANK_BRACKET.id)).not.toThrow();
   });
 });
 
@@ -68,15 +72,60 @@ describe("rankBracketStorage — browser env (stubbed localStorage)", () => {
 
   it("round-trips a valid stored bracket id", () => {
     stubWindow(makeLocalStorageShim());
-    writeStoredRankBracketId("challenger");
-    expect(readStoredRankBracketId()).toBe("challenger");
-    expect(window.localStorage.getItem(RANK_BRACKET_STORAGE_KEY)).toBe("challenger");
+    writeStoredRankBracketId(DEFAULT_RANK_BRACKET.id);
+    expect(readStoredRankBracketId()).toBe(DEFAULT_RANK_BRACKET.id);
+    expect(window.localStorage.getItem(RANK_BRACKET_STORAGE_KEY)).toBe(DEFAULT_RANK_BRACKET.id);
   });
 
   it("falls back to the default when the stored id no longer names a real bracket", () => {
     const shim = makeLocalStorageShim();
     shim.setItem(RANK_BRACKET_STORAGE_KEY, "totally-unknown-bracket");
     stubWindow(shim);
+    expect(readStoredRankBracketId()).toBe(DEFAULT_RANK_BRACKET.id);
+  });
+
+  // ── 2026-08-11 single-bracket migration ────────────────────────────────────
+  // The app collapsed to one Diamond+ bracket, so EVERY id a returning user can
+  // be holding is now retired. This is the whole migration: no mapping table,
+  // just validate-or-default, plus a purge so the dead value does not linger.
+  // A stale id must never produce an error, a blank read, or a query for the
+  // tiers the app no longer offers.
+  const RETIRED_IDS = ["all", "challenger", "grandmaster", "master", "diamond", "emerald", "platinum"];
+
+  it("every RETIRED bracket id migrates to the single Diamond+ bracket", () => {
+    for (const old of RETIRED_IDS) {
+      const shim = makeLocalStorageShim();
+      shim.setItem(RANK_BRACKET_STORAGE_KEY, old);
+      stubWindow(shim);
+      expect(readStoredRankBracketId()).toBe(DEFAULT_RANK_BRACKET.id);
+      unstubWindow();
+    }
+  });
+
+  it("PURGES a stale stored id as it reads it, so it is not re-migrated forever", () => {
+    const shim = makeLocalStorageShim();
+    shim.setItem(RANK_BRACKET_STORAGE_KEY, "emerald");
+    stubWindow(shim);
+    readStoredRankBracketId();
+    expect(shim.getItem(RANK_BRACKET_STORAGE_KEY)).toBeNull();
+  });
+
+  it("does NOT purge a valid stored id", () => {
+    const shim = makeLocalStorageShim();
+    shim.setItem(RANK_BRACKET_STORAGE_KEY, DEFAULT_RANK_BRACKET.id);
+    stubWindow(shim);
+    readStoredRankBracketId();
+    expect(shim.getItem(RANK_BRACKET_STORAGE_KEY)).toBe(DEFAULT_RANK_BRACKET.id);
+  });
+
+  it("still returns the default when the purge write itself throws (read-only storage)", () => {
+    stubWindow({
+      getItem: () => "emerald",
+      setItem: () => {},
+      removeItem: () => {
+        throw new Error("quota exceeded");
+      },
+    });
     expect(readStoredRankBracketId()).toBe(DEFAULT_RANK_BRACKET.id);
   });
 
@@ -97,7 +146,7 @@ describe("rankBracketStorage — browser env (stubbed localStorage)", () => {
         throw new Error("quota exceeded");
       },
     });
-    expect(() => writeStoredRankBracketId("master")).not.toThrow();
+    expect(() => writeStoredRankBracketId(DEFAULT_RANK_BRACKET.id)).not.toThrow();
   });
 
   it("every RANK_BRACKETS id round-trips", () => {

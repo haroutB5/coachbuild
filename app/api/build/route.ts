@@ -43,8 +43,11 @@ export async function GET(req: NextRequest) {
     enemyChampionId = parseInt(enemyParam, 10);
   }
 
-  // Feature 3: optional rank bracket. Absent/'' → default (High Elo). An
-  // unknown id is a client error (400) rather than a silent fallback.
+  // Optional rank bracket. Absent/'' → the single Diamond+ bracket. An
+  // unknown id — which since 2026-08-11 includes every RETIRED id (all,
+  // emerald, platinum, ...) — is a client error (400) rather than a silent
+  // fallback, so a stale client can never be served a tier set it asked for
+  // by a name that no longer means what it did.
   const bracket = resolveRankBracket(rankParam);
   if (bracket === null) {
     const body: ApiError = { error: "Invalid rank bracket" };

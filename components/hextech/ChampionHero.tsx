@@ -9,15 +9,17 @@ import { confidenceBand } from "./confidence";
 import { BuildActionButtons, Scanline, StatValue } from "./builds/BuildVisuals";
 import HextechTabs from "./HextechTabs";
 import { BUILD_TAB_OPTIONS, type BuildTab } from "./buildTabLayout";
+import { DIAMOND_PLUS_BRACKET } from "@/lib/rankBrackets";
 
 const LANE_SHORT: Record<LaneId, string> = { top: "TOP", jungle: "JG", mid: "MID", bot: "BOT", support: "SUP" };
 
-const HERO_ELO_OPTIONS: { id: string; label: string }[] = [
-  { id: "all", label: "High Elo" },
-  { id: "diamond", label: "Diamond" },
-  { id: "emerald", label: "Emerald" },
-  { id: "platinum", label: "Platinum" },
-];
+// The elo PILL ROW that used to live here is gone (2026-08-11), along with its
+// `HERO_ELO_OPTIONS` list. That list was a SECOND hardcoded set of rank labels
+// competing with lib/rankBrackets.ts — and it inherited the same off-by-one:
+// its "Diamond" pill sent tier [5], which the confirmed coachless enum says is
+// EMERALD. The app now has exactly one bracket (Diamond+), so there is nothing
+// to pick and a pill row would be a control that cannot change anything. The
+// row's slot is now a static scope note stating what the data actually is.
 
 const CONFIDENCE_LABEL = { HIGH: "High confidence", MEDIUM: "Medium confidence", LOW: "Low confidence" } as const;
 
@@ -29,12 +31,15 @@ interface ChampionHeroProps {
   champ: ChampionRef;
   lane: LaneId;
   onLaneChange: (lane: LaneId) => void;
+  /** The active bracket id. Single-valued today (there is only one bracket),
+   *  but still threaded through rather than read from the module directly so
+   *  the hero's stats query stays keyed off the SAME value BuildTabContent
+   *  fetches with — see app/page.tsx, which owns it. */
   rankBracket: string;
-  onRankChange: (id: string) => void;
   buildTab: BuildTab;
   onBuildTabChange: (tab: BuildTab) => void;
 }
-export default function ChampionHero({ champ, lane, onLaneChange, rankBracket, onRankChange, buildTab, onBuildTabChange }: ChampionHeroProps) {
+export default function ChampionHero({ champ, lane, onLaneChange, rankBracket, buildTab, onBuildTabChange }: ChampionHeroProps) {
   const [stats, setStats] = useState<HeroStats>({ winRatePct: null, gamesCount: null });
 
   useEffect(() => {
@@ -121,7 +126,13 @@ export default function ChampionHero({ champ, lane, onLaneChange, rankBracket, o
           </div>
 
           <div className="flex shrink-0 flex-col items-start gap-3 lg:items-end">
-            <BuildActionButtons />
+            {/* Real actions as of 2026-08-11 — they write an item set and a
+                rune page into the League client through the same code
+                ItemBuildCard's "Add to client" and the Runes card's "Apply
+                runes" run. They read the build out of currentBuildStore, keyed
+                on exactly these three values, so they can never act on a lane
+                the hero is no longer showing. See BuildActionButtons. */}
+            <BuildActionButtons champ={champ} lane={lane} rankBracket={rankBracket} />
             <div className="flex flex-wrap gap-1.5" role="group" aria-label="Lane">
               {LANE_ORDER.map((candidate) => (
                 <button
@@ -154,24 +165,28 @@ export default function ChampionHero({ champ, lane, onLaneChange, rankBracket, o
 
         <div className="mt-5 flex flex-col border-t border-white/[0.08] lg:flex-row lg:items-end lg:justify-between">
           <HextechTabs options={BUILD_TAB_OPTIONS} value={buildTab} onChange={onBuildTabChange} ariaLabel="Build view" className="min-w-0 flex-1 border-transparent px-0" />
-          <div className="flex flex-wrap gap-1 self-end rounded-[8px] bg-[#1c1e2c] p-1 shadow-[inset_0_0_0_1px_rgba(233,233,237,0.08)] lg:mb-1" role="group" aria-label="Rank bracket">
-            {HERO_ELO_OPTIONS.map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                onClick={() => onRankChange(option.id)}
-                aria-pressed={rankBracket === option.id}
-                className="flex h-11 min-w-[44px] -my-2 items-center justify-center rounded-[6px] px-0 text-[9px] font-semibold uppercase tracking-[0.08em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] lg:my-0 lg:h-auto lg:min-w-0"
-              >
-                {/* Same fix as the lane pills above. Inactive rank bracket was
-                    `text-[#9397ab]/50` = 2.44:1 at 9px on this row's own
-                    #1c1e2c panel; full-alpha `mut` measures 5.71:1 there. */}
-                <span className={`rounded-[6px] px-2.5 py-1.5 ${rankBracket === option.id ? "bg-[#9184d9]/20 text-[#d2cefd]" : "text-mut hover:bg-white/[0.05] hover:text-[#e9e9ed]"}`}>
-                  {option.label}
-                </span>
-              </button>
-            ))}
-          </div>
+          {/* Scope note, in the slot the elo pills used to occupy. It is text,
+              not a control: with one bracket there is nothing to choose, and a
+              disabled-looking pill would read as a broken filter.
+
+              The second line is not decoration. coachless filters by TIER only
+              — no division axis exists on their API or in their own UI — so the
+              requested "Diamond II and above" is not expressible and this
+              sample necessarily includes Diamond III and IV. Saying that is
+              cheaper than letting a reader assume a precision the data has not
+              got. Do not shorten it away. */}
+          <p className="mt-3 self-start text-[9px] font-semibold uppercase leading-[1.5] tracking-[0.08em] text-mut lg:mt-0 lg:mb-2 lg:self-end lg:text-right">
+            All data from <span className="text-[#d2cefd]">{DIAMOND_PLUS_BRACKET.label}</span>
+            {/* Full-alpha `text-mut`, NOT a dimmed `text-[#9397ab]/70`. This is
+                9px body text, so WCAG AA wants 4.5:1; at 70% alpha over the
+                hero gradient's darkest-for-contrast stop (#2c2949) it measures
+                3.11:1. The lane pills on this same hero already had to be
+                un-dimmed for exactly this reason — do not re-dim it to push
+                the line back visually. */}
+            <span className="block font-medium normal-case tracking-normal text-mut">
+              {DIAMOND_PLUS_BRACKET.description} — tiers only, not divisions
+            </span>
+          </p>
         </div>
       </div>
     </section>

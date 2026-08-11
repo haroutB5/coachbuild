@@ -32,10 +32,10 @@ export async function GET(req: NextRequest) {
 
   // P1-1 fix (2026-07-25 audit): thread the rank bracket through, same
   // contract as /api/build's own `rank` param. Absent/'' resolves to the
-  // DEFAULT bracket (High Elo, [5,6,7]) via resolveRankBracket — byte-
-  // identical to this route's pre-fix behavior, so getMostPlayedLane's
-  // no-rank-arg calls (heroContracts.ts) are unaffected. An unknown id is a
-  // client error (400), matching /api/build's posture.
+  // DEFAULT bracket (Diamond+, [6,7,8,9]) via resolveRankBracket, so
+  // getMostPlayedLane's no-rank-arg calls (heroContracts.ts) get the same
+  // sample as everything else. An unknown or RETIRED id is a client error
+  // (400), matching /api/build's posture.
   const rankParam = searchParams.get("rank");
   const bracket = resolveRankBracket(rankParam);
   if (bracket === null) {

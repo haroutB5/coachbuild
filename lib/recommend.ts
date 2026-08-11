@@ -258,9 +258,8 @@ export interface BuildOptions {
    *  degrades to the standard build per-slot when data is missing/insufficient
    *  (today ALWAYS — the coachless matchup path 403s; see HANDOFF). */
   enemyChampionId?: number | null;
-  /** Feature 3: resolved rank bracket. Defaults to High Elo ([5,6,7]) — the
-   *  app's historical behaviour — when omitted, keeping request bytes (and the
-   *  Next fetch-cache key) identical to pre-feature builds. */
+  /** Resolved rank bracket. Defaults to Diamond+ ([6,7,8,9]) — the app's only
+   *  bracket — when omitted. */
   rankBracket?: RankBracket | null;
 }
 
@@ -270,11 +269,16 @@ export async function buildRecommendations(
   options: BuildOptions = {}
 ): Promise<BuildResponse[]> {
   const bracket = options.rankBracket ?? DEFAULT_RANK_BRACKET;
-  // Only pin leagueTiers when a NON-default bracket is chosen — the default
-  // 'all' bracket ([5,6,7]) is exactly buildFilters' own default, so leaving
-  // leagueTiers undefined keeps the request byte-identical to legacy builds.
-  const filterOpts: FilterOpts =
-    bracket.id === DEFAULT_RANK_BRACKET.id ? {} : { leagueTiers: bracket.apiValue };
+  // ALWAYS pin leagueTiers explicitly, including for the default bracket.
+  // This used to send `{}` for the default and lean on buildFilters' own
+  // fallback constant being the same value. That coupling is exactly what made
+  // the 2026-08-11 tier renumber dangerous: had this stayed, changing the
+  // bracket to [6,7,8,9] while coachless.ts's fallback still read [5,6,7]
+  // would have left every default request querying the OLD tiers, with the new
+  // label rendered over it and nothing failing. The request body is also the
+  // Next fetch-cache key, so pinning it is what guarantees the renumber
+  // actually misses the warm cache instead of reusing it.
+  const filterOpts: FilterOpts = { leagueTiers: bracket.apiValue };
   const enemyId =
     options.enemyChampionId != null && Number.isFinite(options.enemyChampionId)
       ? options.enemyChampionId

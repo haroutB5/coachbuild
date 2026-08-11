@@ -21,7 +21,7 @@ import { resolveCurrentChampSelectChampionId, resolveChampSelectRoleId } from "@
 import { hasSession, getStoredSession, getStoredPort, applyRunes } from "@/components/live/companionClient";
 import { buildRuneApplyBody } from "../runeApplyBody";
 import { readStoredRankBracketId } from "@/components/hextech/rankBracketStorage";
-import { DEFAULT_RANK_BRACKET } from "@/lib/rankBrackets";
+import { rankQueryParam } from "@/lib/rankBrackets";
 import type { BuildResponse } from "@/lib/types";
 
 type UiState = "idle" | "applying" | "success" | "error";
@@ -63,7 +63,8 @@ export default function ApplyRunesButton() {
       // Two lines, copied verbatim from AutoExporter.fetchBuildFor so both
       // call sites can never drift apart again.
       const rank = readStoredRankBracketId();
-      const rankParam = rank && rank !== DEFAULT_RANK_BRACKET.id ? `&rank=${rank}` : "";
+      // Always appended — see rankQueryParam in lib/rankBrackets.ts (CDN cache key).
+      const rankParam = rankQueryParam(rank);
       const res = await fetch(`/api/build?champ=${championId}&role=${roleId}${rankParam}`);
       if (!res.ok) throw new Error(`build ${res.status}`);
       const data: BuildResponse[] = await res.json();

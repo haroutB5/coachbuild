@@ -379,3 +379,63 @@ Verified facts that cost real debugging time. Cite these before touching the rel
   rejects a junctioned/symlinked `node_modules` outright (`Symlink [project]/node_modules is invalid,
   it points out of the filesystem root`). A webpack build in a worktree does NOT prove the default
   Turbopack build passes — run the real one on the real tree before shipping.
+
+## Rank tiers are coachless's enum, and the app has exactly ONE bracket (v0.107.0, 2026-08-11)
+
+- **The confirmed enum**, read out of coachless's own production bundle
+  (`https://coachless.gg/chunk-4QOXHN7Z.js`, which ships it as a literal) and cross-checked by
+  watching their live filter UI's `GetKeystoneData` payloads:
+  `Iron 0 · Bronze 1 · Silver 2 · Gold 3 · Platinum 4 · Emerald 5 · Diamond 6 · Master 7 ·
+  Grandmaster 8 · Challenger 9`. Tiers 3–7 are confirmed BOTH ways; 8 and 9 from the bundle only
+  (their free UI has no checkbox for those two).
+- **Every label in the old `rankBrackets.ts` was off by one**, because it was inferred from
+  ladder-population shape and never checked. `[5,6,7]`, shown everywhere as "High Elo", was really
+  **Emerald + Diamond + Master** — it silently excluded Grandmaster AND Challenger. The DATA was
+  always right; only the names lied. Never infer a label from a distribution curve again when the
+  provider ships the enum.
+- **Tier 9 is populated** (693 occurrences, Viktor mid, patch 16.14). The older "tier 9 is empty"
+  note is dead and the app had simply never queried that far.
+- One bracket now: `diamond-plus` = `[6,7,8,9]`. `DIAMOND_PLUS_TIERS` in `lib/coachless.ts` and
+  `DIAMOND_PLUS_BRACKET.apiValue` in `lib/rankBrackets.ts` are two literals pinned to each other by a
+  test — they must move together.
+- **Division-level filtering does not exist.** coachless filters by tier with no division axis, so
+  "Diamond II and above" is not expressible; the shipped bracket is the closest superset and the UI
+  says so in a second line rather than implying exactness.
+- Old bracket ids (`all`, `diamond`, `emerald`, …) are PURGED from localStorage on read rather than
+  mapped, because stored `diamond` meant tier `[5]` — mapping it would reintroduce the off-by-one.
+
+## Rank scope must be in the URL, always (v0.107.0, 2026-08-11)
+
+- `/api/build` and `/api/hero-stats` send `Cache-Control: s-maxage=21600` keyed on the QUERY STRING.
+  Every call site used to omit `&rank=` for the default bracket, so changing what a bracket MEANS
+  would have served six hours of old-tier data under the new label from a shared cache. `rankQueryParam()`
+  in `lib/rankBrackets.ts` now ALWAYS emits the param and every call site uses it. The
+  omit-when-default rule is retired and must not come back. Same reasoning killed `recommend.ts`'s
+  "send `{}` for the default bracket" shortcut.
+
+## Hero actions and the build the hero cannot see (v0.107.0, 2026-08-11)
+
+- `ChampionHero` and `BuildTabContent` are SIBLINGS under `app/page.tsx`, so the hero cannot see the
+  fetch state. Two features have now had to work around this. The hero reads the build from
+  `builds/currentBuildStore.ts`, which `BuildTabContent` publishes from an effect. **`BuildTabContent`
+  stays the only `/api/build` call site** — giving the hero its own fetch reopens the duplicated
+  `rank=` problem `rankQueryParam` exists to close.
+- Every snapshot carries `buildRequestKey(champ, lane, rankBracket)` and consumers pass the key they
+  expect; a mismatch reads as `loading`. Without it the hero can arm a button with the PREVIOUS lane's
+  build mid-change.
+- **One action, one implementation:** `builds/applyActions.ts` owns both companion writes and three
+  buttons call it. Do not copy the read-session / build-body / POST / map-result sequence again.
+- IMPORT BUILD and APPLY RUNES were pure `scrollIntoView` wearing action labels for a long time, and
+  on a lane with no build data both anchors were absent so they did nothing at all. They now perform
+  the real actions, and when they cannot act they are DISABLED WITH A VISIBLE REASON — never live and
+  inert. The scroll is gone: both anchors sit inside `display:none` tabpanels on two of the three tabs.
+- Disabled hero controls drop their FILL; they do not dim their text. Dimming measured 1.74:1 and
+  2.55:1. The current treatment measures 5.30:1.
+
+## A corrupt byte passes tsc AND eslint (v0.107.0, 2026-08-11)
+
+- A `perl` in-place edit wrote a raw `0x97` byte into a `.ts` route file. **`npx tsc --noEmit` and
+  `eslint .` both passed on it**; only the swc loader inside `next build` rejected it, surfacing as a
+  500 at runtime. Typecheck and lint are not encoding checks — a green pair of those two does not mean
+  a file is valid UTF-8. Prefer Write/Edit over stream editors on source files, and never treat
+  tsc+lint as a substitute for a real build.

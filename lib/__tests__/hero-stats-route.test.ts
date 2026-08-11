@@ -74,14 +74,26 @@ describe("GET /api/hero-stats rank-bracket threading", () => {
     vi.mocked(getHeroStats).mockResolvedValue({ winRatePct: 50, gamesCount: 1000 });
   });
 
-  it("no rank param resolves to the DEFAULT bracket's apiValue (High Elo, [5,6,7]) — byte-identical to pre-fix behavior", async () => {
+  it("no rank param resolves to the DEFAULT bracket's apiValue (Diamond+, [6,7,8,9])", async () => {
     await GET(req("?champ=112&lane=mid"));
-    expect(getHeroStats).toHaveBeenCalledWith(112, "mid", { leagueTiers: [5, 6, 7] });
+    expect(getHeroStats).toHaveBeenCalledWith(112, "mid", { leagueTiers: [6, 7, 8, 9] });
   });
 
-  it("rank=platinum threads that bracket's apiValue ([3]) through to getHeroStats", async () => {
-    await GET(req("?champ=112&lane=mid&rank=platinum"));
-    expect(getHeroStats).toHaveBeenCalledWith(112, "mid", { leagueTiers: [3] });
+  it("rank=diamond-plus threads the same apiValue through to getHeroStats", async () => {
+    await GET(req("?champ=112&lane=mid&rank=diamond-plus"));
+    expect(getHeroStats).toHaveBeenCalledWith(112, "mid", { leagueTiers: [6, 7, 8, 9] });
+  });
+
+  it("never queries tier 5 (EMERALD in the confirmed enum) under the Diamond+ label", async () => {
+    await GET(req("?champ=112&lane=mid"));
+    const [, , opts] = vi.mocked(getHeroStats).mock.calls[0];
+    expect(opts?.leagueTiers).not.toContain(5);
+  });
+
+  it("400 on a retired bracket id rather than serving the old tiers", async () => {
+    expect((await GET(req("?champ=112&lane=mid&rank=platinum"))).status).toBe(400);
+    expect((await GET(req("?champ=112&lane=mid&rank=all"))).status).toBe(400);
+    expect(getHeroStats).not.toHaveBeenCalled();
   });
 
   it("an unknown rank id is a 400, matching /api/build's posture", async () => {

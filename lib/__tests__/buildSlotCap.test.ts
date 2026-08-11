@@ -2,7 +2,9 @@
  * Unit tests for buildSlotCap.ts — the 6-slot game-reality cap enforced at
  * ItemsBlock assembly (recommend.ts) for CORE ORDER / OPTIMIZED ORDER.
  *
- * Regression fixture: Galio (championId 3) MID, High Elo — the live bug that
+ * Regression fixture: Galio (championId 3) MID, captured against what the app
+ * then called "High Elo" (coachless tiers [5,6,7], really Emerald+Diamond+
+ * Master — the label was off by one; see lib/rankBrackets.ts) — the live bug that
  * prompted this rule. Uncapped, the engine's core-order line rendered 7
  * tiles: Hextech Rocketbelt -> Imperial Mandate -> Riftmaker (the confirmed
  * 3-slot core) -> Plated Steelcaps (boots) -> Kaenic Rookern -> Force of

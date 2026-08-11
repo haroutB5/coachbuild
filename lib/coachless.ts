@@ -7,7 +7,19 @@ import type { RoleId } from "./types";
 import { fetchWithTimeout } from "./fetchTimeout";
 
 const BASE = "https://api.coachless.gg/api/";
-const HIGH_ELO_TIERS = [5, 6, 7];
+
+/** The app's ONLY rank sample: Diamond + Master + Grandmaster + Challenger.
+ *
+ *  Mirrors `DIAMOND_PLUS_BRACKET.apiValue` in lib/rankBrackets.ts, which owns
+ *  the confirmed tier→rank enum and the evidence for it. Kept as a literal
+ *  rather than an import so this module stays a leaf with no dependency on the
+ *  UI-facing bracket list; `lib/__tests__/coachless-filters.test.ts` pins the
+ *  two to each other so they cannot drift.
+ *
+ *  This replaces `HIGH_ELO_TIERS = [5,6,7]`, which was mislabelled: tier 5 is
+ *  EMERALD, not Diamond, so the old "High Elo" default was really
+ *  Emerald+Diamond+Master and excluded Grandmaster and Challenger entirely. */
+const DIAMOND_PLUS_TIERS = [6, 7, 8, 9];
 
 // ── Shared filter shape ──────────────────────────────────────────────────────
 
@@ -28,10 +40,13 @@ export interface CommonFilters {
 
 /**
  * Cross-cutting filter overrides layered onto the default commonFilters.
- *  - `leagueTiers`  — rank-bracket tier set (Feature 3). Omitted → HIGH_ELO_TIERS
- *     (the app's historical default; preserves every existing request byte-for-byte
- *     and therefore the Next fetch-cache keys). Verified live: tiers 3-8 populated,
- *     0-2 / 9-10 empty (see HANDOFF probe evidence).
+ *  - `leagueTiers`  — rank tier set. Omitted → DIAMOND_PLUS_TIERS, the app's only
+ *     sample. Callers that resolve a bracket should pass it EXPLICITLY anyway
+ *     (see recommend.ts) so the request body — which is the Next fetch-cache key
+ *     — never depends on this module's default staying in sync with the bracket.
+ *     Live tier populations (Viktor mid, patch 16.14): 3=104,022 · 4=115,460 ·
+ *     5=112,884 · 6=53,886 · 7=9,683 · 8=2,784 · 9=693. Tier 9 (Challenger) is
+ *     NOT empty — an older note in this repo claiming it was is stale.
  *  - `matchupChampionIds` — lane-opponent conditioning (Feature 1). Omitted/null →
  *     unconditioned. VERIFIED LIVE: any non-empty value currently 403s on EVERY
  *     coachless endpoint (matchup conditioning is not exposed on the public API),
@@ -53,13 +68,13 @@ function buildFilters(
     patch,
     championIds: [champId],
     matchupChampionIds: opts.matchupChampionIds ?? null,
-    leagueTiers: opts.leagueTiers ?? HIGH_ELO_TIERS,
+    leagueTiers: opts.leagueTiers ?? DIAMOND_PLUS_TIERS,
     regions: null,
     role,
   };
 }
 
-export { HIGH_ELO_TIERS };
+export { DIAMOND_PLUS_TIERS };
 
 // ── Low-level fetch ──────────────────────────────────────────────────────────
 

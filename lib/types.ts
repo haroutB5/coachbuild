@@ -121,7 +121,7 @@ export interface BuildResponse {
   role: RoleId;
   roleLabel: string; // "Mid"
   patch: string; // "16.11"
-  tierLabel: string; // "High Elo"
+  tierLabel: string; // "Diamond+" — mirrors the resolved bracket's own label
   runes: RunesBlock;
   spells: Pick[]; // length 2
   items: ItemsBlock;
@@ -131,9 +131,13 @@ export interface BuildResponse {
   rank?: number; // 1 = top recommendation
   label?: string; // e.g. "Top pick", "Alternative"
   subtitle?: string; // e.g. "Precision secondary"
-  /** Feature 3 (rank brackets): the resolved rank-bracket id this build was
-   *  computed for (e.g. "all", "challenger"). Absent → historical default
-   *  ("all" / High Elo). `tierLabel` mirrors the bracket's display label. */
+  /** The resolved rank-bracket id this build was computed for. Since
+   *  2026-08-11 there is exactly one: "diamond-plus" (coachless tiers
+   *  [6,7,8,9]). Absent → that same default. `tierLabel` mirrors the
+   *  bracket's display label. A build persisted or cached before that date
+   *  may still carry a retired id ("all", "emerald", ...) — treat any
+   *  unrecognised value as stale data computed from the OLD tier numbers,
+   *  not as a bracket to honour. */
   rankBracket?: string;
   /** Feature 1 (matchup): present ONLY when an `enemyChampionId` was requested.
    *  `supported: false` means coachless returned no usable matchup-conditioned

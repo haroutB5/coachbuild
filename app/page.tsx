@@ -43,7 +43,7 @@ import {
 } from "@/components/hextech/homeSearch";
 import { subscribeChampionSearch } from "@/components/hextech/championSearchBus";
 import { DEFAULT_RANK_BRACKET } from "@/lib/rankBrackets";
-import { readStoredRankBracketId, writeStoredRankBracketId } from "@/components/hextech/rankBracketStorage";
+import { readStoredRankBracketId } from "@/components/hextech/rankBracketStorage";
 
 const INITIAL_LANE: LaneId = "mid";
 const subscribeToHydration = () => () => {};
@@ -137,15 +137,21 @@ export default function HomePage() {
   }, [champ, activeLane, lastChampHydrated, champChosen]);
   const [patch, setPatch] = useState<string | null>(null);
 
-  // Feature 3 (rank brackets) — LIFTED from BuildTabContent (v0.51.0) so
-  // ChampionHero's own elo pill row (mockup 4/5) can render/drive the SAME
-  // selector BuildTabContent's fetch keys off — single source of truth,
-  // ChampionHero and BuildTabContent are siblings under this page. Same
-  // hydrate-after-mount + gate-the-first-fetch contract BuildTabContent used
-  // to own directly (see rankHydrated's original doc comment, preserved
-  // here): initialize to the default bracket (matches SSR), correct from
-  // localStorage after hydration, and don't let BuildTabContent fire
-  // its fetch before that correction lands.
+  // Rank bracket. There is only ONE bracket now (Diamond+), so this value is
+  // constant in practice and the hero's elo pill row is gone — nothing can
+  // call a change handler, so there is no longer one here.
+  //
+  // The read-from-storage plumbing is deliberately KEPT rather than replaced
+  // with the constant: readStoredRankBracketId is what MIGRATES a returning
+  // user off a stale id (`all`, `emerald`, `platinum`, ...) and purges it,
+  // and running it here is what makes that happen on the page every such user
+  // lands on. It resolves to the default bracket in every case today; if a
+  // second bracket is ever reintroduced, the state and the hydration gate are
+  // already correct and only a selector needs adding back.
+  //
+  // rankHydrated still gates BuildTabContent's first fetch. That gate is a
+  // no-op while one bracket exists (the post-hydration value cannot differ
+  // from the SSR value) and is kept for the same reason.
   const [rankBracket, setRankBracket] = useState<string>(DEFAULT_RANK_BRACKET.id);
   const storedRankBracket = useSyncExternalStore(
     subscribeToHydration,
@@ -158,10 +164,6 @@ export default function HomePage() {
     setRankBracket(storedRankBracket);
   }
   const rankHydrated = useSyncExternalStore(subscribeToHydration, getHydratedSnapshot, getServerHydratedSnapshot);
-  function handleRankChange(id: string) {
-    setRankBracket(id);
-    writeStoredRankBracketId(id);
-  }
 
   // v0.26.0: invalidates an in-flight getMostPlayedLane() correction (see
   // handleChampionSelect) the moment ANY other lane/champion action happens
@@ -515,7 +517,6 @@ export default function HomePage() {
               lane={activeLane}
               onLaneChange={handleLaneChange}
               rankBracket={rankBracket}
-              onRankChange={handleRankChange}
               buildTab={buildTab}
               onBuildTabChange={setBuildTab}
             />

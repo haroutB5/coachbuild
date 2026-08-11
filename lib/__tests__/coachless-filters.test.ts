@@ -10,8 +10,9 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   getKeystoneData,
   getGlobalItemStatistics,
-  HIGH_ELO_TIERS,
+  DIAMOND_PLUS_TIERS,
 } from "../coachless";
+import { DIAMOND_PLUS_BRACKET } from "../rankBrackets";
 
 const PATCH = { major: 16, patch: 13, patchAdditions: 0 };
 
@@ -33,13 +34,24 @@ function lastBody(fn: ReturnType<typeof vi.fn>): any {
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("commonFilters defaults (byte-compat with legacy requests)", () => {
-  it("no opts → matchupChampionIds:null, leagueTiers:HIGH_ELO", async () => {
+describe("commonFilters defaults", () => {
+  // The fallback constant in coachless.ts and the bracket the UI resolves are
+  // two separate literals. They MUST agree: recommend.ts now pins leagueTiers
+  // explicitly on every call, but heroStats.ts still has callers that pass no
+  // opts at all and land on this fallback. A drift between them would query one
+  // tier set while labelling it as the other — exactly the off-by-one this
+  // change removed.
+  it("DIAMOND_PLUS_TIERS equals the Diamond+ bracket apiValue — no second source of truth", () => {
+    expect(DIAMOND_PLUS_TIERS).toEqual(DIAMOND_PLUS_BRACKET.apiValue);
+    expect(DIAMOND_PLUS_TIERS).toEqual([6, 7, 8, 9]);
+  });
+
+  it("no opts → matchupChampionIds:null, leagueTiers:DIAMOND_PLUS", async () => {
     const fn = mockFetchOnce();
     await getKeystoneData(112, 2, PATCH);
     const cf = lastBody(fn).commonFilters;
     expect(cf.matchupChampionIds).toBeNull();
-    expect(cf.leagueTiers).toEqual(HIGH_ELO_TIERS);
+    expect(cf.leagueTiers).toEqual(DIAMOND_PLUS_TIERS);
     expect(cf.championIds).toEqual([112]);
     expect(cf.role).toBe(2);
   });

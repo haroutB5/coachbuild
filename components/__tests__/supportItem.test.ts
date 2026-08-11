@@ -34,7 +34,7 @@ function buildFor(champ: ChampionRef, items: ItemsBlock, roleOverrides: Partial<
     role: 4,
     roleLabel: "Support",
     patch: "16.13",
-    tierLabel: "High Elo",
+    tierLabel: "Diamond+",
     runes: baseRunes(),
     spells: [pick(4), pick(7)],
     items,

@@ -1,62 +1,110 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// rankBrackets.ts — VERIFIED rank-bracket → coachless `leagueTiers` map (Feature 3)
+// rankBrackets.ts — coachless `leagueTiers` mapping. ONE bracket: Diamond+.
 //
-// PROBE EVIDENCE (live api.coachless.gg, patch 16.13, Viktor mid, 2026-07-18):
-//   GetKeystoneData with leagueTiers = [N] returned:
-//     [3] → total occ 194,981   [4] → 217,139   [5] → 210,171
-//     [6] → 101,057             [7] → 17,871     [8] → 5,116
-//     [0] [1] [2] [10] → 0 rows (empty)
-//   So the coachless model exposes tiers 3-8 and does NOT track 0-2 / 9-10.
+// ── THE ENUM, CONFIRMED (2026-08-11) ─────────────────────────────────────────
+// Read verbatim out of coachless's own production JS bundle
+// (https://coachless.gg/chunk-4QOXHN7Z.js), which ships the enum as a literal:
 //
-// TIER → RANK MAPPING: coachless publishes no tier-name endpoint (all
-// champion-list / tier-list endpoint probes 404'd). The mapping below is
-// INFERRED from (a) the ladder-population shape above — Emerald is the game's
-// modal rank, tapering monotonically up to a tiny Challenger bucket — and
-// (b) the app's pre-existing HIGH_ELO_TIERS = [5,6,7] already labelled
-// "High Elo" in BuildResponse.tierLabel, which lines up exactly with
-// Diamond/Master/Grandmaster. It is self-consistent but UNCONFIRMED against a
-// coachless UI label; the fronty UI wave should sanity-check the display names.
-// The apiValue tier-sets themselves ARE verified — only the human labels are
-// inferred, so a wrong label never produces wrong DATA.
+//   e[e.Iron=0]="Iron", e[e.Bronze=1]="Bronze", e[e.Silver=2]="Silver",
+//   e[e.Gold=3]="Gold", e[e.Platinum=4]="Platinum", e[e.Emerald=5]="Emerald",
+//   e[e.Diamond=6]="Diamond", e[e.Master=7]="Master",
+//   e[e.Grandmaster=8]="Grandmaster", e[e.Challenger=9]="Challenger"
 //
-// DEFAULT: the 'all' bracket is [5,6,7] — byte-identical to the app's historical
-// default — so a request WITHOUT a rank param, or with rank='all', hits the
-// exact same coachless query (and Next fetch-cache key) as before this feature.
-// It is deliberately NOT the full 3-8 span: this app has always been a High-Elo
-// tool, and widening the default would silently change every existing build.
+//   Iron 0 · Bronze 1 · Silver 2 · Gold 3 · Platinum 4 · Emerald 5
+//   Diamond 6 · Master 7 · Grandmaster 8 · Challenger 9
+//
+// Cross-checked against their live filter UI's network payloads (checkboxes
+// clicked on https://coachless.gg/builds/viktor?role=mid) for tiers 3-7. Tiers
+// 8 and 9 come from the bundle enum ONLY — their free UI exposes no checkbox
+// for Grandmaster or Challenger, so those two are confirmed one way, not two.
+//
+// ── WHAT THIS FILE USED TO SAY, AND WHY IT WAS WRONG ─────────────────────────
+// Every label here was previously INFERRED from ladder-population shape, and
+// every one of them was wrong BY EXACTLY ONE RANK (it called tier 5 "Diamond";
+// tier 5 is Emerald). The old default `[5,6,7]`, shipped under the label
+// "High Elo", was really Emerald + Diamond + Master — it EXCLUDED Grandmaster
+// and Challenger, which no comment or label in the app ever admitted.
+//
+// The old header also claimed tier 9 was empty. That is stale: a live probe on
+// Viktor mid, patch 16.14, returned 693 occurrences at tier 9. Full live
+// histogram at the time of this change:
+//   3 = 104,022 · 4 = 115,460 · 5 = 112,884 · 6 = 53,886
+//   7 = 9,683 · 8 = 2,784 · 9 = 693
+//
+// ── WHY THERE IS ONLY ONE BRACKET NOW ────────────────────────────────────────
+// User directive: show data from Diamond II and above only. coachless's
+// `leagueTiers` is TIER-level and has no division axis — their own UI has one
+// checkbox per tier and no division control — so "Diamond II+" cannot be
+// expressed against this API at all. `[6,7,8,9]` is the closest available
+// superset and is therefore the ONLY bracket the app offers. It is slightly
+// LOOSER than asked (it includes Diamond III and IV) and there is no stricter
+// option; the UI says so in words rather than implying an exactness the data
+// does not have (see ChampionHero.tsx's scope note).
+//
+// With one bracket there is nothing to select, so the rank selector UI is gone.
+// Do not re-add a bracket here without also restoring a selector — several call
+// sites treat "the stored id" as a constant in practice.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface RankBracket {
   id: string;
+  /** Short display label. */
   label: string;
-  /** coachless `leagueTiers` value. Verified to return populated data. */
+  /** Longer, honest description of the sample this bracket actually covers. */
+  description: string;
+  /** coachless `leagueTiers` value. */
   apiValue: number[];
 }
 
-/** The 'all' default MUST be first (UI renders it as the selected default). */
-export const RANK_BRACKETS: RankBracket[] = [
-  { id: "all", label: "High Elo", apiValue: [5, 6, 7] },
-  { id: "challenger", label: "Challenger", apiValue: [8] },
-  { id: "grandmaster", label: "Grandmaster", apiValue: [7] },
-  { id: "master", label: "Master", apiValue: [6] },
-  { id: "diamond", label: "Diamond", apiValue: [5] },
-  { id: "emerald", label: "Emerald", apiValue: [4] },
-  { id: "platinum", label: "Platinum", apiValue: [3] },
-];
+/** Diamond (all divisions) + Master + Grandmaster + Challenger.
+ *
+ *  The id is deliberately NOT the old `"all"`: every previously-stored id
+ *  (`all`, `challenger`, `grandmaster`, `master`, `diamond`, `emerald`,
+ *  `platinum`) must fail validation in rankBracketStorage.ts so a returning
+ *  user is migrated onto this bracket instead of silently keeping an id whose
+ *  MEANING changed underneath them. `"all"` in particular used to mean
+ *  `[5,6,7]`; reusing the string would have made a stale value look valid. */
+export const DIAMOND_PLUS_BRACKET: RankBracket = {
+  id: "diamond-plus",
+  label: "Diamond+",
+  description: "Diamond, Master, Grandmaster and Challenger",
+  apiValue: [6, 7, 8, 9],
+};
 
-export const DEFAULT_RANK_BRACKET = RANK_BRACKETS[0];
+export const RANK_BRACKETS: RankBracket[] = [DIAMOND_PLUS_BRACKET];
 
-/** Resolve a rank id (case-sensitive, as sent by the UI) to its bracket, or
- *  null if unknown. `null`/`undefined`/'' resolve to the default bracket —
- *  an absent param is the historical (High Elo) behaviour, never an error. */
+export const DEFAULT_RANK_BRACKET = DIAMOND_PLUS_BRACKET;
+
+/** Resolve a rank id to its bracket, or null if unknown. `null`/`undefined`/''
+ *  resolve to the default bracket — an absent param is never an error. Unknown
+ *  ids still return null so the API routes keep answering 400 on garbage
+ *  rather than quietly serving something the caller did not ask for. */
 export function resolveRankBracket(id: string | null | undefined): RankBracket | null {
   if (id == null || id === "") return DEFAULT_RANK_BRACKET;
   return RANK_BRACKETS.find((b) => b.id === id) ?? null;
 }
 
-/** True when more than one bracket exists — i.e. the API supports rank
- *  filtering and the UI should render the selector. (If a future probe ever
- *  disproves tier filtering, collapse RANK_BRACKETS to just 'all' and this
- *  flips false, telling the UI to hide the selector — see the module's own
- *  contract in the HANDOFF.) */
+/** True when more than one bracket exists — i.e. the UI should render a
+ *  selector. False today, and ChampionHero renders a static scope note
+ *  instead of a pill row. */
 export const RANK_FILTERING_SUPPORTED = RANK_BRACKETS.length > 1;
+
+/** The `&rank=` query fragment for a bracket id, for `/api/build` and
+ *  `/api/hero-stats`.
+ *
+ *  THIS ALWAYS EMITS THE PARAM, and that inversion is the point. Every call
+ *  site used to OMIT `&rank=` for the default bracket, deliberately, to keep
+ *  the request byte-identical to the pre-rank-feature URL and therefore reuse
+ *  its cache entry. That goal is now exactly backwards: both routes send
+ *  `Cache-Control: s-maxage=21600, stale-while-revalidate=86400`, so an
+ *  unchanged URL would let a shared cache keep serving builds computed from
+ *  the OLD `[5,6,7]` tiers for hours after this change — same URL, same key,
+ *  different intended meaning. Emitting `rank=diamond-plus` moves the key.
+ *
+ *  Centralised here rather than repeated as a ternary at each call site: the
+ *  old duplicated `rank !== DEFAULT.id ? ... : ""` expression existed in five
+ *  files and all five had to agree for the cache key to be right. */
+export function rankQueryParam(id: string | null | undefined): string {
+  const bracket = resolveRankBracket(id) ?? DEFAULT_RANK_BRACKET;
+  return `&rank=${encodeURIComponent(bracket.id)}`;
+}

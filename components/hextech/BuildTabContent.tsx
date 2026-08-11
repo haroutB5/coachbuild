@@ -17,8 +17,9 @@ import { versionFromPatch } from "@/components/proAssets";
 import ItemDetailPopover from "@/components/ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "@/components/EntityDetailPopover";
 import { useBodyScrollLock } from "@/components/useBodyScrollLock";
-import { DEFAULT_RANK_BRACKET } from "@/lib/rankBrackets";
+import { rankQueryParam } from "@/lib/rankBrackets";
 import { BuildRuneSidebar, BuildSkillOrderPanel } from "./builds/BuildVisuals";
+import { buildRequestKey, publishCurrentBuild, resetCurrentBuild } from "./builds/currentBuildStore";
 
 /** Which tap-for-detail popover is open — items share the "item" kind,
  *  runes/shards/summoner spells route through EntityDetailPopover's own
@@ -222,7 +223,10 @@ function BuildLoadingSkeleton({ tab }: { tab: BuildTab }) {
 
 export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated, onPatchResolved, buildTab }: BuildTabContentProps) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
-  const requestKey = `${champ.id}:${champ.key}:${lane}:${rankBracket}`;
+  // Built by the shared helper, not inline: ChampionHero's action buttons read
+  // this component's result out of currentBuildStore and match on this exact
+  // key, so the two must never drift. See that file's header.
+  const requestKey = buildRequestKey(champ, lane, rankBracket);
   const [previousRequestKey, setPreviousRequestKey] = useState(requestKey);
   if (requestKey !== previousRequestKey) {
     setPreviousRequestKey(requestKey);
@@ -304,12 +308,13 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
     async (c: ChampionRef, l: LaneId, rank: string, isCancelled: () => boolean) => {
       try {
         const roleId = LANE_TO_ROLE_ID[l];
-        // Feature 3: `rank` is only appended when non-default — keeps the
-        // historical default request byte-identical to before this feature
-        // (same CDN/Next fetch-cache key), per the engine handoff's contract
-        // note ("the 'all' default MUST be first... byte-identical to the
-        // app's historical default").
-        const rankParam = rank && rank !== DEFAULT_RANK_BRACKET.id ? `&rank=${rank}` : "";
+        // `rank` is ALWAYS appended now (2026-08-11). It used to be omitted
+        // for the default bracket to reuse the pre-rank-feature cache entry;
+        // that inverted the moment the default's TIERS changed, because this
+        // route is CDN-cached for 6h on the query string alone and an
+        // unchanged URL would keep serving builds computed from [5,6,7].
+        // See rankQueryParam's own comment in lib/rankBrackets.ts.
+        const rankParam = rankQueryParam(rank);
         const res = await fetch(`/api/build?champ=${c.id}&role=${roleId}${rankParam}`);
         if (isCancelled()) return;
         if (res.status === 404) {
@@ -364,6 +369,33 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
       cancelled = true;
     };
   }, [champ, lane, rankBracket, rankHydrated, load]);
+
+  // Publish the resolved build for ChampionHero's IMPORT BUILD / APPLY RUNES
+  // buttons (2026-08-11). The hero is a SIBLING under app/page.tsx and cannot
+  // see this component's fetch state — the same structural fact the empty/error
+  // branch below already had to work around. This component stays the single
+  // owner of the /api/build request (and therefore of the `rank=` query param);
+  // it only hands the OUTCOME to the one component that needs to act on it.
+  // Published from an effect, never during render, so a hero re-render is never
+  // triggered from inside this component's own render pass.
+  useEffect(() => {
+    if (state.status === "ok") {
+      publishCurrentBuild({ key: requestKey, status: "ready", champ, lane, build: state.build });
+    } else if (state.status === "loading") {
+      publishCurrentBuild({ key: requestKey, status: "loading" });
+    } else {
+      // `empty` (this lane has no build — Viktor SUPPORT) and `error` collapse
+      // to one state: from a button's point of view the only question is
+      // whether there is something to apply, and the reason is already spelled
+      // out in the panel below.
+      publishCurrentBuild({ key: requestKey, status: "unavailable" });
+    }
+  }, [state, requestKey, champ, lane]);
+
+  // Unmount only — deliberately NOT folded into the effect above, where it
+  // would fire on every champion change and briefly blank a build that is
+  // simply being replaced.
+  useEffect(() => resetCurrentBuild, []);
 
   // NOTE (v0.41.0): champ-select AUTO-EXPORT was LIFTED OUT of this component
   // to the app-wide companion layer (components/live/AutoExporter.tsx, mounted

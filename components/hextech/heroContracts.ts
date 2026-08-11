@@ -21,7 +21,7 @@
 
 import type { ChampionRef } from "@/lib/types";
 import { getSplashUrl as getSplashUrlPure } from "@/lib/splash";
-import { DEFAULT_RANK_BRACKET } from "@/lib/rankBrackets";
+import { rankQueryParam } from "@/lib/rankBrackets";
 
 export type LaneId = "top" | "jungle" | "mid" | "bot" | "support";
 
@@ -89,19 +89,21 @@ export interface HeroStats {
  *  nulls, same posture as the route/lib themselves, so ChampionHero never
  *  needs a try/catch of its own.
  *
- *  `rankBracket` (P1-1 fix, 2026-07-25 audit): OPTIONAL, and only appended
- *  when non-default — same "byte-identical historical request" rule
- *  BuildTabContent's load()/AutoExporter's fetchBuildFor already apply to
- *  `/api/build?rank=`, so this stays the SAME cache key as before whenever
- *  the caller doesn't pass one. `getMostPlayedLane` below deliberately calls
- *  this with no third argument at all (needs the widest un-bracketed sample
- *  to compare lanes fairly) — passing `undefined` here would produce the
- *  exact same request, but omitting it entirely keeps that caller's intent
- *  obvious at the call site. */
+ *  `rankBracket` (P1-1 fix, 2026-07-25 audit): OPTIONAL. The param is now
+ *  ALWAYS appended, defaulting to the single Diamond+ bracket when the caller
+ *  passes nothing — see rankQueryParam in lib/rankBrackets.ts for why the old
+ *  "omit it to keep the historical cache key" rule had to be inverted.
+ *
+ *  `getMostPlayedLane` below calls this with no third argument. That used to
+ *  mean "widest un-bracketed sample, to compare lanes fairly"; it now means
+ *  the same Diamond+ sample as everything else, because the app no longer has
+ *  a wider one. Lane comparison stays fair — every lane is measured against
+ *  the identical tier set — but it is a NARROWER basis than before, so a
+ *  champion whose lanes only diverge below Diamond will resolve differently
+ *  than it did pre-2026-08-11. */
 export async function getHeroStats(championId: number, lane: LaneId, rankBracket?: string): Promise<HeroStats> {
   try {
-    const rankParam =
-      rankBracket && rankBracket !== DEFAULT_RANK_BRACKET.id ? `&rank=${rankBracket}` : "";
+    const rankParam = rankQueryParam(rankBracket);
     const res = await fetch(`/api/hero-stats?champ=${championId}&lane=${lane}${rankParam}`);
     if (!res.ok) return { winRatePct: null, gamesCount: null };
     const data = (await res.json()) as HeroStats;

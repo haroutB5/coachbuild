@@ -45,7 +45,7 @@ function variant(keystone: Pick, primaryTree: TreeRef): BuildResponse {
     role: 3,
     roleLabel: "Bot",
     patch: "16.13",
-    tierLabel: "High Elo",
+    tierLabel: "Diamond+",
     runes,
     spells: [],
     items: {} as BuildResponse["items"],

@@ -375,7 +375,7 @@ function baseBuild(items: ItemsBlock = baseItemsBlock()): BuildResponse {
     role: 2,
     roleLabel: "Mid",
     patch: "16.15",
-    tierLabel: "High Elo",
+    tierLabel: "Diamond+",
     runes: baseRunes(),
     spells: [pick(4), pick(14)],
     items,

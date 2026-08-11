@@ -83,16 +83,20 @@ function round1(n: number): number {
  * `opts` (P1-1 fix, 2026-07-25 audit): OPTIONAL rank-bracket passthrough —
  * `opts.leagueTiers` rides straight into both coachless calls' `buildFilters`
  * exactly like BuildTabContent's `/api/build?rank=` already does. Before this
- * fix, this function always queried HIGH_ELO_TIERS regardless of which elo
- * pill was active on the hero, so the WIN%/GAMES/CONFIDENCE line one row
- * above the build panel silently described a different (always High-Elo)
- * sample than the build shown beneath it — live probe caught 329,099 games
- * (High Elo) rendered beside an active "Platinum" pill whose own build panel
- * was built from 194,981 games (see lib/rankBrackets.ts's header comment).
- * Kept OPTIONAL and defaulted through to coachless's own `buildFilters`
- * (`opts.leagueTiers ?? HIGH_ELO_TIERS`) so `getMostPlayedLane` — which needs
- * the WIDEST sample to compare lanes fairly, not one bracket's slice of it —
- * can keep calling this with no third argument at all and stay unbracketed.
+ * fix, this function always queried the module default regardless of which
+ * elo pill was active on the hero, so the WIN%/GAMES/CONFIDENCE line one row
+ * above the build panel silently described a different sample than the build
+ * shown beneath it — a live probe caught 329,099 games rendered beside an
+ * active "Platinum" pill whose own build panel was built from 194,981.
+ *
+ * 2026-08-11: the elo pills are gone and there is one bracket (Diamond+,
+ * tiers [6,7,8,9]). `opts` stays OPTIONAL and still defaults through to
+ * coachless's own `buildFilters` (`opts.leagueTiers ?? DIAMOND_PLUS_TIERS`),
+ * so `getMostPlayedLane` can keep calling with no third argument. That call
+ * used to mean "the WIDEST sample, to compare lanes fairly"; it now means the
+ * same Diamond+ sample as everything else, because no wider one is offered.
+ * Lane comparison is still internally consistent — every lane gets the
+ * identical tier set — but it rests on a narrower base than it used to.
  */
 export async function getHeroStats(
   championId: number,

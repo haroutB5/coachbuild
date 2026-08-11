@@ -44,3 +44,25 @@ screens → mobile → 4 adversarial audit rounds + scoped final verify. Load-be
   "fix" back.
 - lib/ stayed logic-untouched except one read-side exposure (matchup matrix full rows for locked
   enemies) with a matrix-equality test; ranking slices untouched.
+
+## 2026-08-11 — "Diamond II and above" was requested; only "Diamond and above" is expressible
+
+The user asked for data from Diamond 2+. coachless filters by TIER with no division axis, so the
+request cannot be met exactly. Decision: ship the closest superset (`[6,7,8,9]` — Diamond, Master,
+Grandmaster, Challenger) and state the imprecision in the UI ("tiers only, not divisions") rather
+than imply an exactness the data cannot support. Revisit only if the provider adds a division filter.
+
+## 2026-08-11 — The hero action buttons perform actions or say why they cannot; they never scroll
+
+IMPORT BUILD and APPLY RUNES were `scrollIntoView` shortcuts wearing action labels. The scroll was
+dropped rather than kept alongside the real action: both anchors are inside `display:none` tabpanels
+on two of three tabs, and the buttons now report their own state in the hero, which a scroll would
+carry off-screen. A blocked action is disabled with a VISIBLE reason — never hidden, never silently
+inert.
+
+## 2026-08-11 — The rank tier labels were relabelled, not renumbered
+
+Both were available once the real enum was known. Relabelling keeps every existing query identical
+and only corrects what the user reads; renumbering would have changed the data under every cached
+build. The subsequent Diamond-and-above change DID renumber, deliberately and visibly, with the cache
+key fixed in the same change.

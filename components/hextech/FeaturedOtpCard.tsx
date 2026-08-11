@@ -461,8 +461,9 @@ function OtpDivergenceCard({
  *
  *  With TOP selected the hero header reads "Viktor TOP LANE" while this card
  *  showed a mid-lane one-trick, and nothing on the card named a lane. Clicking
- *  TOP / MID / BOT or High Elo / Platinum left the panel byte-identical, so the
- *  pills looked broken on this tab while they visibly moved the sibling tabs.
+ *  TOP / MID / BOT (or, before the 2026-08-11 single-bracket collapse removed
+ *  them, the elo pills) left the panel byte-identical, so the pills looked
+ *  broken on this tab while they visibly moved the sibling tabs.
  *
  *  That inertness is BY DESIGN, not a broken fetch: `app/api/otp/featured` reads
  *  only `championId`, `featuredOtpRequestInputs` deliberately omits lane, and

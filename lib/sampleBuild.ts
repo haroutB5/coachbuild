@@ -16,7 +16,7 @@ export const sampleBuild: BuildResponse = {
   role: 2,
   roleLabel: "Mid",
   patch: "16.11",
-  tierLabel: "High Elo",
+  tierLabel: "Diamond+",
   runes: {
     primaryTree: { id: 8200, name: "Sorcery", icon: `${TREE}/sorcery.png` },
     secondaryTree: { id: 8000, name: "Precision", icon: `${TREE}/precision.png` },

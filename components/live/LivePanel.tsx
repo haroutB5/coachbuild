@@ -28,7 +28,7 @@ import { getStoredSession, getStoredPort, getLive, isLiveError, LIVE_POLL_MS } f
 import { buildLivePanelModel, indexChampionsByKey, sameLivePanelModel, type LivePanelModel } from "./livePanelModel";
 import { selectCompAwareHighlights } from "./compHighlight";
 import { readStoredRankBracketId } from "@/components/hextech/rankBracketStorage";
-import { DEFAULT_RANK_BRACKET } from "@/lib/rankBrackets";
+import { rankQueryParam } from "@/lib/rankBrackets";
 
 interface LivePanelProps {
   champ: ChampionRef;
@@ -59,7 +59,8 @@ export default function LivePanel({ champ, lane }: LivePanelProps) {
     // same champion+lane." Two lines, copied verbatim from
     // AutoExporter.fetchBuildFor.
     const rank = readStoredRankBracketId();
-    const rankParam = rank && rank !== DEFAULT_RANK_BRACKET.id ? `&rank=${rank}` : "";
+    // Always appended — see rankQueryParam in lib/rankBrackets.ts (CDN cache key).
+    const rankParam = rankQueryParam(rank);
     fetch(`/api/build?champ=${champ.id}&role=${roleId}${rankParam}`)
       .then((r) => (r.ok ? (r.json() as Promise<BuildResponse[]>) : null))
       .then((data) => {

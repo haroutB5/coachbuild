@@ -35,7 +35,7 @@ import {
   type LaneId,
 } from "@/components/hextech/heroContracts";
 import { readStoredRankBracketId } from "@/components/hextech/rankBracketStorage";
-import { DEFAULT_RANK_BRACKET } from "@/lib/rankBrackets";
+import { rankQueryParam } from "@/lib/rankBrackets";
 import {
   getChampSelectPhaseEpoch,
   getCurrentChampSelectChampionId,
@@ -64,7 +64,8 @@ async function fetchBuildFor(championId: number, laneId: LaneId): Promise<BuildR
   try {
     const roleId = LANE_TO_ROLE_ID[laneId];
     const rank = readStoredRankBracketId();
-    const rankParam = rank && rank !== DEFAULT_RANK_BRACKET.id ? `&rank=${rank}` : "";
+    // Always appended — see rankQueryParam in lib/rankBrackets.ts (CDN cache key).
+    const rankParam = rankQueryParam(rank);
     const res = await fetch(`/api/build?champ=${championId}&role=${roleId}${rankParam}`);
     if (!res.ok) return null; // 404 (no data) or any non-2xx
     const data = (await res.json()) as BuildResponse[];

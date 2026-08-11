@@ -61,7 +61,7 @@ function buildFor(championId: number, name = "Viktor"): BuildResponse {
     role: 2, // mid
     roleLabel: "Mid",
     patch: "16.12",
-    tierLabel: "High Elo",
+    tierLabel: "Diamond+",
     runes: runes(),
     spells: [],
     items: { starter: [], core: [], situational: [], boots: [] } as unknown as BuildResponse["items"],

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { Fragment, useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
 import {
   CaretRight,
   DownloadSimple,
@@ -8,7 +8,7 @@ import {
   Lightning,
   Sparkle,
 } from "@phosphor-icons/react";
-import type { BuildResponse, Pick as PickType } from "@/lib/types";
+import type { BuildResponse, ChampionRef, Pick as PickType } from "@/lib/types";
 import type { EntityKind } from "@/components/EntityDetailPopover";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import DetailPopover from "@/components/DetailPopover";
@@ -25,9 +25,23 @@ import {
 } from "@/components/hextech/skillOrder";
 import { SKILL_ROWS, type SkillGridCell } from "@/components/skillOrderGrid";
 import type { LaneId } from "@/components/hextech/heroContracts";
-import { LANE_TO_ROLE_ID } from "@/components/hextech/heroContracts";
-import { buildRuneApplyBody } from "@/components/hextech/runeApplyBody";
-import { applyRunes, getStoredPort, getStoredSession, hasSession } from "@/components/live/companionClient";
+import { LANE_LABEL, LANE_TO_ROLE_ID } from "@/components/hextech/heroContracts";
+import { hasSession } from "@/components/live/companionClient";
+import {
+  applyBlockReason,
+  applyLabel,
+  applyRunesForBuild,
+  importItemBuild,
+  useApplyAction,
+  type ApplyPhase,
+} from "./applyActions";
+import {
+  buildRequestKey,
+  getCurrentBuildSnapshot,
+  getServerCurrentBuildSnapshot,
+  snapshotForKey,
+  subscribeCurrentBuild,
+} from "./currentBuildStore";
 
 export const CARD_CLASS =
   "rounded-[9px] bg-[#1b1d2a] shadow-[inset_0_0_0_1px_rgba(233,233,237,0.08)]";
@@ -710,45 +724,31 @@ export function BuildRuneSidebar({
   );
 }
 
-type ApplyUiState =
-  | { status: "idle" }
-  | { status: "applying" }
-  | { status: "success"; message: string }
-  | { status: "error"; message: string };
-
+/** The Runes card's own apply. Its click sequence — read the stored session,
+ *  build the LCU body, POST it, map the three success shapes — now lives in
+ *  builds/applyActions.ts, shared with ItemBuildCard's "Add to client" and the
+ *  hero's IMPORT BUILD / APPLY RUNES pair. This component is the button and
+ *  nothing else.
+ *
+ *  It still HIDES rather than disables when no companion is paired, and that is
+ *  unchanged on purpose: it is a small secondary control inside a card header
+ *  where there is no room to explain itself, and the hero pair above it now
+ *  carries the visible "pair the companion" reason for the whole page. */
 function ApplyRunesButton({ build }: { build: BuildResponse }) {
   const ready = useSyncExternalStore(subscribeToSession, hasSession, () => false);
-  const [state, setState] = useState<ApplyUiState>({ status: "idle" });
-
-  async function handleClick() {
-    const session = getStoredSession();
-    const port = getStoredPort();
-    if (!session || !port) {
-      setState({ status: "error", message: "Companion not connected." });
-      window.setTimeout(() => setState({ status: "idle" }), 3000);
-      return;
-    }
-    setState({ status: "applying" });
-    try {
-      const body = buildRuneApplyBody(build.champion.name, build.roleLabel, build.runes);
-      const result = await applyRunes(port, session, body, "manual");
-      setState(result.ok ? { status: "success", message: result.selected && result.verified ? "Applied in-client." : "Saved as a rune page." } : { status: "error", message: result.hint ?? "Apply failed." });
-    } catch {
-      setState({ status: "error", message: "Couldn't build a rune page." });
-    }
-    window.setTimeout(() => setState({ status: "idle" }), 3500);
-  }
+  const { phase, run } = useApplyAction();
 
   if (!ready) return null;
+  const message = phase.status === "success" || phase.status === "error" ? phase.message : null;
   return (
     <button
       type="button"
-      onClick={handleClick}
-      disabled={state.status === "applying"}
-      title={state.status === "success" || state.status === "error" ? state.message : "Apply this rune page in-client"}
+      onClick={() => run(() => applyRunesForBuild(build))}
+      disabled={phase.status === "applying"}
+      title={message ?? "Apply this rune page in-client"}
       className="rounded-[6px] px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.08em] text-[#b5abfc] shadow-[inset_0_0_0_1px_#9184d9] transition-colors hover:bg-[#9184d9]/15 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9]"
     >
-      {state.status === "applying" ? "Applying…" : state.status === "success" ? "Applied" : state.status === "error" ? "Retry" : "Apply runes"}
+      {applyLabel(phase, { idle: "Apply runes", busy: "Applying…", done: "Applied" })}
     </button>
   );
 }
@@ -904,25 +904,139 @@ export function BuildSkillOrderPanel({ champId, lane }: { champId: number; lane:
 // purpose: a width check renders the wrong thing on the first paint and then
 // swaps it. `hidden` removes the box entirely, so the hero's flex column drops
 // its gap too and the lane row sits directly under the champion header.
-export function BuildActionButtons() {
+/** The disabled treatment shared by both hero actions.
+ *
+ *  IT REMOVES THE FILL AND KEEPS THE LABEL LEGIBLE, in that order of intent.
+ *  The first attempt dimmed each button in place — `bg-[#9184d9]/35` with
+ *  `text-[#191a28]/70` on the primary, `text-[#b5abfc]/45` on the secondary —
+ *  and measured 1.74:1 and 2.55:1 against the hero gradient in the browser.
+ *  WCAG exempts disabled controls from contrast, but a button whose LABEL
+ *  cannot be read is a worse answer than the dead control this whole change
+ *  exists to remove: the user cannot even tell what is unavailable. Dropping
+ *  the primary's solid fill is a far louder "not available" signal than dimming
+ *  it, and it lets the text sit at `/85` — measured 5.29:1 — so both labels stay
+ *  readable while neither reads as pressable. Do not re-dim the text to make
+ *  the disabled state read more strongly; take contrast out of the FILL. */
+const HERO_ACTION_DISABLED =
+  "disabled:cursor-not-allowed disabled:bg-transparent disabled:text-[#b5abfc]/85 disabled:shadow-[inset_0_0_0_1px_rgba(145,132,217,0.3)] disabled:hover:bg-transparent";
+
+/** The hero's IMPORT BUILD / APPLY RUNES pair.
+ *
+ *  WHAT THESE USED TO BE (2026-08-11 fix). Both were `scrollIntoView` calls:
+ *  IMPORT BUILD scrolled to `#build-items`, APPLY RUNES to `#build-runes`.
+ *  Neither imported or applied anything, and on a lane with no build data
+ *  (Viktor SUPPORT) neither anchor is rendered, so both did nothing at all.
+ *  They now run the SAME two actions the page's own working controls run —
+ *  ItemBuildCard's "Add to client" and the Runes card's "Apply runes" — through
+ *  builds/applyActions.ts, which is where that logic moved so there is one copy
+ *  of it rather than three.
+ *
+ *  THE SCROLL IS GONE, DELIBERATELY. Three reasons, in order of weight:
+ *   1. Both anchors live inside `display:none` tabpanels whenever the PRO or
+ *      OTP tab is selected, so the scroll was already a silent no-op there —
+ *      the same class of defect as the labels.
+ *   2. Each button now reports applying / applied / error IN THE HERO, right
+ *      under itself. Scrolling the hero off-screen on click would carry that
+ *      report away at the exact moment it appears.
+ *   3. The result of both actions is in the League client, not further down
+ *      this page, so there is nothing down there to go and look at.
+ *  The `#build-items` / `#build-runes` ids are left in place — they are still
+ *  valid in-page anchors, they are just no longer what these buttons do.
+ *
+ *  Still `hidden … lg:flex`: desktop only, unchanged (user directive
+ *  2026-08-11, "In mobile not required"). It is also the honest breakpoint —
+ *  the companion bridge is 127.0.0.1 on the same machine as the League client,
+ *  which a phone can never be, exactly as GlobalNav/ApplyRunesButton documents. */
+export function BuildActionButtons({
+  champ,
+  lane,
+  rankBracket,
+}: {
+  champ: ChampionRef;
+  lane: LaneId;
+  rankBracket: string;
+}) {
+  const paired = useSyncExternalStore(subscribeToSession, hasSession, () => false);
+  const published = useSyncExternalStore(subscribeCurrentBuild, getCurrentBuildSnapshot, getServerCurrentBuildSnapshot);
+  // Anything published for a DIFFERENT champion/lane/bracket reads as
+  // not-yet-resolved, so a click can never fire the previous lane's build.
+  const current = snapshotForKey(published, buildRequestKey(champ, lane, rankBracket));
+  const importAction = useApplyAction();
+  const runesAction = useApplyAction();
+  const reasonId = useId();
+
+  const blockReason = applyBlockReason({
+    companionPaired: paired,
+    build: current.status,
+    championName: champ.name,
+    laneLabel: LANE_LABEL[lane],
+  });
+  const build = current.status === "ready" ? current : null;
+
+  function messageFor(phase: ApplyPhase): string | null {
+    return phase.status === "success" || phase.status === "error" ? phase.message : null;
+  }
+  const importMessage = messageFor(importAction.phase);
+  const runesMessage = messageFor(runesAction.phase);
+  // One line under the pair. A result from a click outranks the blocked
+  // reason: if the user just pressed something, what it DID is the news.
+  const resultPhase =
+    importMessage !== null ? importAction.phase : runesMessage !== null ? runesAction.phase : null;
+  const note = importMessage ?? runesMessage ?? blockReason;
+  // Three tones, not two. A blocked reason is INFORMATION, not a failure —
+  // painting "pair the companion" in the failure colour would read as
+  // something having gone wrong on a page where nothing has.
+  const noteTone =
+    resultPhase === null ? "text-mut" : resultPhase.status === "error" ? "text-bad" : "text-good";
+
   return (
-    <div className="hidden flex-wrap gap-2 lg:flex">
-      <button
-        type="button"
-        className="inline-flex h-9 min-h-[44px] items-center gap-2 rounded-[8px] bg-[#9184d9] px-3.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#191a28] transition-colors hover:bg-[#b5abfc] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1d2a] lg:min-h-0"
-        onClick={() => document.getElementById("build-items")?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" })}
-      >
-        <DownloadSimple size={14} weight="bold" aria-hidden="true" />
-        Import build
-      </button>
-      <button
-        type="button"
-        className="inline-flex h-9 min-h-[44px] items-center gap-2 rounded-[8px] px-3.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#b5abfc] shadow-[inset_0_0_0_1px_#9184d9] transition-colors hover:bg-[#9184d9]/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1d2a] lg:min-h-0"
-        onClick={() => document.getElementById("build-runes")?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" })}
-      >
-        <Lightning size={14} weight="bold" aria-hidden="true" />
-        Apply runes
-      </button>
+    <div className="hidden flex-col items-end gap-1.5 lg:flex">
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={blockReason !== null || importAction.phase.status === "applying"}
+          aria-describedby={note ? reasonId : undefined}
+          title={blockReason ?? importMessage ?? "Write this build into the League client as an item set"}
+          className={`inline-flex h-9 min-h-[44px] items-center gap-2 rounded-[8px] bg-[#9184d9] px-3.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#191a28] transition-colors hover:bg-[#b5abfc] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1d2a] lg:min-h-0 ${HERO_ACTION_DISABLED}`}
+          onClick={() => {
+            if (!build) return;
+            importAction.run(() => importItemBuild({ champ: build.champ, lane: build.lane, build: build.build }));
+          }}
+        >
+          <DownloadSimple size={14} weight="bold" aria-hidden="true" />
+          {applyLabel(importAction.phase, { idle: "Import build", busy: "Importing…", done: "Imported" })}
+        </button>
+        <button
+          type="button"
+          disabled={blockReason !== null || runesAction.phase.status === "applying"}
+          aria-describedby={note ? reasonId : undefined}
+          title={blockReason ?? runesMessage ?? "Apply this rune page in the League client"}
+          className={`inline-flex h-9 min-h-[44px] items-center gap-2 rounded-[8px] px-3.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#b5abfc] shadow-[inset_0_0_0_1px_#9184d9] transition-colors hover:bg-[#9184d9]/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1d2a] lg:min-h-0 ${HERO_ACTION_DISABLED}`}
+          onClick={() => {
+            if (!build) return;
+            runesAction.run(() => applyRunesForBuild(build.build));
+          }}
+        >
+          <Lightning size={14} weight="bold" aria-hidden="true" />
+          {applyLabel(runesAction.phase, { idle: "Apply runes", busy: "Applying…", done: "Applied" })}
+        </button>
+      </div>
+      {/* VISIBLE, not a tooltip. A disabled button does not reliably fire the
+          hover that shows a `title`, so a tooltip-only reason is the same
+          silence the old buttons had. `role="status"` because the common case
+          is a result announced after a click.
+          Full-alpha `text-mut`, never a dimmed variant — same WCAG reason the
+          lane pills and the scope note on this hero already carry (see
+          ChampionHero.tsx). */}
+      {note && (
+        <p
+          id={reasonId}
+          role="status"
+          className={`max-w-[300px] text-right text-[10px] leading-snug ${noteTone}`}
+        >
+          {note}
+        </p>
+      )}
     </div>
   );
 }
