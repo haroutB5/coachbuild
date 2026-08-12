@@ -1,4 +1,50 @@
 # Changelog
+## 0.110.0 — 2026-08-12
+
+An adversarial edge-test of the whole app — desktop, phone, and the PowerShell
+companion — followed by the fixes it found. The companion carried a data-loss
+bug; the web app carried several honesty bugs where a control lied about what it
+was showing.
+
+- **The companion could wipe every item set you had made, and tell you it
+  worked.** Its promise was "never write on a failed read", but it only checked
+  whether the HTTP call failed, not whether the response could be understood. A
+  200 response the script could not parse — which happens when any other tool
+  (Blitz, u.gg, Mobalytics) writes a duplicate key into the shared item-set
+  document, a thing PowerShell 5.1 refuses to parse — was treated as a
+  successful empty read, and the merge then wrote our one set over your ~62 and
+  reported success. The same held for a response whose item-set list was nested,
+  absent, or null. The read now has to actually be the shape we expect or the
+  write is refused and logged — it fails closed. Independently re-audited.
+  (companion 1.13.0 → 1.14.1)
+- **The companion could overwrite a rune page or item set you made yourself** if
+  its title differed from ours only in capitalisation. The ownership check was
+  case-sensitive but the match was not, so `coachbuild zed mid` looked foreign
+  to the guard and identical to the writer. All ownership decisions are now
+  case-exact.
+- **A rune apply that did not take was recorded as success, then blamed you.**
+  The next tick saw your unchanged page and reported "you changed this" — 11
+  times in three days of one user's logs. It now only records a write it has
+  verified landed, and retries otherwise. A failed apply that had already
+  deleted stale pages now says so instead of "nothing was changed".
+- **Comfort Picks on the Draft page was empty for everyone.** The filter was
+  correct but the rows it filtered carried no personal data — that data only
+  rode on a different set of rows. Your played champions now carry their record
+  onto every row, so Comfort shows them.
+- **Searching in a non-Latin script returned the entire roster.** An emoji, or
+  Cyrillic, or "!!!", normalised to an empty query and was treated as no query
+  at all. It now returns no matches, like any other query that finds nothing.
+- **A low-confidence build looked exactly as trustworthy as a high-confidence
+  one** — the confidence chip was the same success-green for all three bands.
+  High is green, medium amber, low red.
+- **The tier list said "no data is available" while it was still loading it.** A
+  definitive absence used as a loading state. It now shows a skeleton and only
+  claims absence once loading has genuinely settled empty.
+- The lane tabs are now legible to screen readers (they exposed no selected
+  state), an alternate-art champion id returns a clean 404 instead of a 500, the
+  DETAILED RANKINGS count no longer overstates how many champions it shows, and
+  the favicon 404 on every page load is gone.
+
 ## 0.109.0 — 2026-08-11
 
 0.108.0 moved the Draft page to Diamond II and above, which made the data roughly eight times
