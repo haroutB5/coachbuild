@@ -327,7 +327,7 @@ param(
 
 #region Config
 $script:Config = @{
-    Version     = '1.13.0'
+    Version     = '1.14.1'
     AppOrigin   = 'https://coachbuild.vercel.app'
     BridgePorts = @(48291, 48292, 48293)
     PollMs      = 1500
@@ -359,7 +359,14 @@ function Get-OrCreateSessionToken {
         if (-not (Test-Path $BaseDir)) { New-Item -ItemType Directory -Path $BaseDir -Force | Out-Null }
         if (Test-Path $path) {
             $existing = (Get-Content -Path $path -Raw -ErrorAction Stop).Trim()
-            if ($existing) { return $existing }
+            # F9: strict format gate. The token is spliced into a browser command
+            # line (Open-CompanionUrl -> --app=<AppOrigin>/...&session=<token>).
+            # A token carrying whitespace/quotes/switches would be a
+            # Chromium-arg-injection shape (e.g. " --gpu-launcher=..."). Our
+            # tokens are ALWAYS 32 hex chars (GUID 'N'); anything else on disk
+            # (tampered, corrupt, truncated) is discarded for a fresh one below
+            # rather than trusted.
+            if ($existing -match '^[0-9a-fA-F]{32}$') { return $existing }
         }
         $token = [guid]::NewGuid().ToString('N')
         Set-Content -Path $path -Value $token -NoNewline -Encoding ASCII -ErrorAction Stop
@@ -545,6 +552,12 @@ function Clear-LcuFailureLogState {
     if (-not $script:LcuUnreachableKeys) { return }
     if (-not $script:LcuUnreachableKeys.ContainsKey($Key)) { return }
     $script:LcuUnreachableKeys.Remove($Key)
+    # F6: clear the user-visible LastError too. It was set once (Write-CompanionLog
+    # -IsError) and never reset, so /live-setup's rolling log showed a stale
+    # failure FOREVER after the LCU recovered. This is the recovery edge (the
+    # same key transitioning unreachable -> reachable), so clearing here scopes
+    # it to a genuine recovery rather than wiping a still-live error.
+    try { $sync = Get-CompanionSyncRef; if ($sync) { $sync.LastError = $null } } catch {}
     Write-CompanionLog "lcu reachable again: $Key"
 }
 
@@ -587,11 +600,29 @@ function Invoke-LcuRaw {
     try {
         $res = Invoke-WebRequest @params
         $content = $null
+        $parsed = $true
         if ($res.Content) {
-            try { $content = $res.Content | ConvertFrom-Json } catch { $content = $res.Content }
+            try {
+                $content = $res.Content | ConvertFrom-Json
+            } catch {
+                # A non-empty body that does NOT parse as JSON is a FAILED read,
+                # never a success. The old `catch { $content = $res.Content }`
+                # laundered the raw string through .Content with Ok=$true, so a
+                # merge/verify caller then read `.itemSets`/`.id` off a bare
+                # string (-> $null) and PUT a document with the user's data
+                # silently dropped -- all while reporting ok:true. Surface it as
+                # a failure instead (Content stays $null, Ok=$false below).
+                $parsed = $false
+            }
+        }
+        if (-not $parsed) {
+            $rawBody = [string]$res.Content
+            $snippet = if ($rawBody.Length -gt 200) { $rawBody.Substring(0, 200) } else { $rawBody }
+            Write-CompanionLog "Invoke-LcuRaw unparseable 2xx body (treated as read-failed): $Method $Path -- len=$($rawBody.Length) status=$([int]$res.StatusCode)" -IsError
+            return [pscustomobject]@{ Ok = $false; StatusCode = [int]$res.StatusCode; Content = $null; Body = $snippet; Parsed = $false; Reason = 'unparseable' }
         }
         Clear-LcuFailureLogState -Key "lcu:$Method $Path"
-        return [pscustomobject]@{ Ok = $true; StatusCode = [int]$res.StatusCode; Content = $content; Body = $null }
+        return [pscustomobject]@{ Ok = $true; StatusCode = [int]$res.StatusCode; Content = $content; Body = $null; Parsed = $true }
     } catch {
         $status = 0
         try { if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode } } catch {}
@@ -622,7 +653,7 @@ function Invoke-LcuRaw {
         $logMsg = "Invoke-LcuRaw failed: $Method $Path -- $($_.Exception.GetType().Name): $($_.Exception.Message) (status=$status)"
         if ($bodySnippet) { $logMsg += " | body: $bodySnippet" }
         Write-LcuFailureLog -Key "lcu:$Method $Path" -Message $logMsg -StatusCode $status
-        return [pscustomobject]@{ Ok = $false; StatusCode = $status; Content = $null; Body = $bodySnippet }
+        return [pscustomobject]@{ Ok = $false; StatusCode = $status; Content = $null; Body = $bodySnippet; Parsed = $false }
     }
 }
 
@@ -646,6 +677,17 @@ function Get-LcuFailureHint {
         return 'companion lost the client connection -- it re-detects automatically, try again in a few seconds'
     }
     return "League client rejected the $Action (HTTP $StatusCode) -- make sure you're logged in and not mid-game"
+}
+
+function Add-StaleDeletedNote {
+    # F5: STEP 1's champ-scoped cleanup runs (and can DELETE stale CoachBuild
+    # pages) BEFORE the write can fail. When it does, a failure hint that talks
+    # only about login state -- or worse, says "nothing was changed" -- is a lie:
+    # pages were removed. Append an honest note so the user knows their rune-page
+    # slots were touched even though the apply did not complete.
+    param([string]$Hint, [bool]$AnyDeleted)
+    if (-not $AnyDeleted) { return $Hint }
+    return "$Hint (note: stale CoachBuild rune page(s) were already removed before this failed -- they will be recreated on the next successful apply)"
 }
 
 function Get-LiveClientData {
@@ -1016,8 +1058,12 @@ function Invoke-ApplyRunes {
     # Title gate FIRST, before a single LCU call: an unownable title must never
     # reach STEP 2's exact-title PUT. See Test-RunePayload for why this was
     # missing and why SelfTest could not see it.
-    if (-not (Test-RunePayload -Body $Body)) {
-        return @{ ok = $false; reason = 'invalid-page' }
+    $rejection = Get-RunePayloadRejection -Body $Body
+    if ($rejection) {
+        # F7: honest, cause-specific reason + hint instead of one opaque
+        # 'invalid-page'. The web client surfaces .hint verbatim and only
+        # branches on 'slots-full'/'user-modified', so this stays wire-safe.
+        return @{ ok = $false; reason = $rejection; hint = (Get-RunePayloadHint -Reason $rejection) }
     }
 
     # What this call would leave on the page, in the one comparable form the
@@ -1071,18 +1117,26 @@ function Invoke-ApplyRunes {
     # $null replacePrefix (older web build) -> skip cleanup entirely and rely on
     # exact-title matching alone (no accumulation guarantee, but never a wrong
     # deletion).
+    # F5: hoisted to function scope so a LATER failure return (STEP 2/3) can be
+    # honest about the fact that pages were already removed. We deliberately do
+    # NOT defer this cleanup until after the write lands: STEP 1 exists to FREE
+    # SLOTS before STEP 3's create, and deferring it would make a genuinely
+    # replaceable account spuriously report slots-full. Disclosing in the hint
+    # is the correct fix; deferring would break the slot-count logic.
+    $anyStaleDeleted = $false
     $prefix = if ($Body.replacePrefix) { [string]$Body.replacePrefix } else { $null }
-    if ($prefix -and $prefix.StartsWith('CoachBuild')) {
+    # F3: ORDINAL comparisons throughout -- a soft-hyphen (U+00AD) lookalike must
+    # not fold into "CoachBuild" and let a foreign page be treated as ours.
+    if ($prefix -and $prefix.StartsWith('CoachBuild', [System.StringComparison]::Ordinal)) {
         $stalePages = @($editablePages | Where-Object {
-            $_.name -and ([string]$_.name).StartsWith('CoachBuild') -and -not ([string]$_.name).StartsWith($prefix)
+            $_.name -and ([string]$_.name).StartsWith('CoachBuild', [System.StringComparison]::Ordinal) -and -not ([string]$_.name).StartsWith($prefix, [System.StringComparison]::Ordinal)
         })
-        $anyDeleted = $false
         foreach ($stale in $stalePages) {
             $del = Invoke-LcuRaw -Method DELETE -Path "/lol-perks/v1/pages/$($stale.id)" -Port $LcuPort -Token $LcuToken -Scheme $Scheme
-            if ($del.Ok) { $anyDeleted = $true }
+            if ($del.Ok) { $anyStaleDeleted = $true }
             # fail-soft: ignore a failed delete (LCU refuses a selected page)
         }
-        if ($anyDeleted) {
+        if ($anyStaleDeleted) {
             # Re-read so the slot math + exact-title match below reflect the
             # freed slots. A failed re-read leaves $editablePages as-is (still
             # correct enough -- worst case a spurious slots-full, never a wrong
@@ -1099,7 +1153,11 @@ function Invoke-ApplyRunes {
     # page "CoachBuild <champ> <role>" or the Pro page "... Pro" -- never the
     # sibling, whose title differs). Match by exact equality, NOT StartsWith, so
     # "CoachBuild Teemo Top" can never target "CoachBuild Teemo Top Pro".
-    $exactMatches = @($editablePages | Where-Object { $_.name -and ([string]$_.name -eq [string]$Body.name) })
+    # F3: ORDINAL (case-sensitive) equality. The default `-eq` folds case, so a
+    # user's own page titled "coachbuild zed mid" matched "CoachBuild Zed Mid"
+    # and got PUT-overwritten in place -- exactly the never-touch-a-foreign-page
+    # invariant, violated. Ordinal match targets only our own exact-cased page.
+    $exactMatches = @($editablePages | Where-Object { $_.name -and [String]::Equals([string]$_.name, [string]$Body.name, [System.StringComparison]::Ordinal) })
     if ($exactMatches.Count -gt 0) {
         # v1.6.2 ROOT-CAUSE FIX: EDIT IN PLACE (never delete), oldest by id if
         # somehow duplicated. Overwriting OUR OWN page's contents is exactly as
@@ -1173,14 +1231,19 @@ function Invoke-ApplyRunes {
         }
         $put = Invoke-LcuRaw -Method PUT -Path "/lol-perks/v1/pages/$($target.id)" -Body $editBody -Port $LcuPort -Token $LcuToken -Scheme $Scheme
         if (-not $put.Ok) {
-            return [pscustomobject]@{ ok = $false; reason = 'edit-failed'; hint = (Get-LcuFailureHint -StatusCode $put.StatusCode -Action 'rune page edit') }
+            return [pscustomobject]@{ ok = $false; reason = 'edit-failed'; hint = (Add-StaleDeletedNote -Hint (Get-LcuFailureHint -StatusCode $put.StatusCode -Action 'rune page edit') -AnyDeleted $anyStaleDeleted) }
         }
-        # The page now holds exactly what we sent -- remember it so a later
-        # auto-export can tell "untouched since we wrote it" from "the user
-        # edited it" (the ownership guard above).
-        Set-RuneWriteRecord -Name $Body.name -Fingerprint $desiredFingerprint
         # Select (reaffirm) + readback-verify against the page we just edited.
-        return Complete-RuneApply -PageId $target.id -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
+        $applied = Complete-RuneApply -PageId $target.id -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
+        # F4: record the ledger fingerprint ONLY when the readback verified the
+        # page actually holds what we sent. A 2xx PUT that did NOT stick
+        # (verified:$false) must not be remembered as our write -- otherwise the
+        # next auto tick sees the user's unchanged page, compares it to a
+        # fingerprint we never really landed, and FALSELY reports 'user-modified'
+        # (11 such lines in a real companion.log). Leaving the ledger empty makes
+        # the next tick retry the write instead of blaming the user.
+        if ($applied.verified) { Set-RuneWriteRecord -Name $Body.name -Fingerprint $desiredFingerprint }
+        return $applied
     }
 
     # -- STEP 3: no exact-title page yet -- is there a free slot? Prefer the
@@ -1196,8 +1259,9 @@ function Invoke-ApplyRunes {
     if ($hasFreeSlot -ne $false) {
         $post = Invoke-LcuRaw -Method POST -Path '/lol-perks/v1/pages' -Body $Body -Port $LcuPort -Token $LcuToken -Scheme $Scheme
         if ($post.Ok) {
-            Set-RuneWriteRecord -Name $Body.name -Fingerprint $desiredFingerprint
-            return Complete-RuneApply -PageId $post.Content.id -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
+            $applied = Complete-RuneApply -PageId $post.Content.id -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
+            if ($applied.verified) { Set-RuneWriteRecord -Name $Body.name -Fingerprint $desiredFingerprint }  # F4: record only when it stuck
+            return $applied
         }
         # POST failed -- the LCU's own rejection is authoritative regardless
         # of what the inventory guess said; fall through to the full path.
@@ -1210,15 +1274,16 @@ function Invoke-ApplyRunes {
         if ($current.Ok -and $current.Content -and $current.Content.id) {
             $del = Invoke-LcuRaw -Method DELETE -Path "/lol-perks/v1/pages/$($current.Content.id)" -Port $LcuPort -Token $LcuToken -Scheme $Scheme
             if (-not $del.Ok) {
-                return [pscustomobject]@{ ok = $false; reason = 'delete-failed'; hint = 'delete a rune page manually and retry' }
+                return [pscustomobject]@{ ok = $false; reason = 'delete-failed'; hint = (Add-StaleDeletedNote -Hint 'delete a rune page manually and retry' -AnyDeleted $anyStaleDeleted) }
             }
         }
         $post2 = Invoke-LcuRaw -Method POST -Path '/lol-perks/v1/pages' -Body $Body -Port $LcuPort -Token $LcuToken -Scheme $Scheme
         if (-not $post2.Ok) {
-            return [pscustomobject]@{ ok = $false; reason = 'create-failed'; hint = (Get-LcuFailureHint -StatusCode $post2.StatusCode -Action 'new rune page') }
+            return [pscustomobject]@{ ok = $false; reason = 'create-failed'; hint = (Add-StaleDeletedNote -Hint (Get-LcuFailureHint -StatusCode $post2.StatusCode -Action 'new rune page') -AnyDeleted $anyStaleDeleted) }
         }
-        Set-RuneWriteRecord -Name $Body.name -Fingerprint $desiredFingerprint
-        return Complete-RuneApply -PageId $post2.Content.id -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
+        $applied = Complete-RuneApply -PageId $post2.Content.id -Body $Body -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
+        if ($applied.verified) { Set-RuneWriteRecord -Name $Body.name -Fingerprint $desiredFingerprint }  # F4: record only when it stuck
+        return $applied
     }
 
     # Auto mode, genuinely full, nothing of ours to replace: touch NOTHING.
@@ -1289,14 +1354,48 @@ function Test-RunePayload {
     # "CoachBuild <champ> <role>" title), so this closes a defense-in-depth hole
     # rather than a live exploit -- it costs 3 lines and removes the asymmetry.
     param($Body)
-    if (-not $Body) { return $false }
-    if (-not $Body.name) { return $false }
-    if (-not ([string]$Body.name).StartsWith('CoachBuild')) { return $false }
-    # Same treatment as the item-set path: an explicit stale-removal prefix can
-    # touch arbitrary existing pages, so a PRESENT-but-wrong prefix is rejected
-    # while an absent one ($null, older web build) passes.
-    if ($Body.replacePrefix -and -not ([string]$Body.replacePrefix).StartsWith('CoachBuild')) { return $false }
-    return $true
+    return (-not (Get-RunePayloadRejection -Body $Body))
+}
+
+function Get-RunePayloadRejection {
+    # Returns $null when $Body is a valid CoachBuild rune write, else a SPECIFIC
+    # reason string ('bad-body' | 'bad-title' | 'bad-runes'). F7: the old gate
+    # returned one opaque 'invalid-page' with no hint, which fired 83x in 3 days
+    # with no way to tell parse-failure from a wrong title from a malformed perk
+    # array. Each cause now gets its own reason + hint (Get-RunePayloadHint).
+    param($Body)
+    if (-not $Body) { return 'bad-body' }
+    # F3: ORDINAL StartsWith. The default culture-aware comparison folds a soft
+    # hyphen (U+00AD) and other zero-width lookalikes into "CoachBuild", letting
+    # a title that isn't really ours slip through the write gate.
+    if (-not $Body.name -or -not ([string]$Body.name).StartsWith('CoachBuild', [System.StringComparison]::Ordinal)) { return 'bad-title' }
+    # A PRESENT-but-wrong stale-removal prefix can touch arbitrary pages, so it
+    # is rejected; an absent one ($null, older web build) passes. Ordinal, same
+    # reason as the title gate.
+    if ($Body.replacePrefix -and -not ([string]$Body.replacePrefix).StartsWith('CoachBuild', [System.StringComparison]::Ordinal)) { return 'bad-title' }
+    # F6: selectedPerkIds MUST be exactly 9 integer ids (mirrors the mock
+    # fixture's non-array / length!=9 rejection). Without this, a garbage perks
+    # payload cleared the title gate and then threw inside
+    # ConvertTo-RuneFingerprint ([int]"x"), escaping Invoke-ApplyRunes as an
+    # unhandled exception that the bridge turned into a 500 the browser
+    # mislabels "League client refused the write".
+    $perks = @($Body.selectedPerkIds)
+    if ($perks.Count -ne 9) { return 'bad-runes' }
+    foreach ($p in $perks) {
+        $n = 0
+        if ($null -eq $p -or -not [int]::TryParse([string]$p, [ref]$n)) { return 'bad-runes' }
+    }
+    return $null
+}
+
+function Get-RunePayloadHint {
+    param([string]$Reason)
+    switch ($Reason) {
+        'bad-body'  { return 'the rune request could not be read -- reload the page and try again' }
+        'bad-title' { return 'that is not a CoachBuild rune page -- CoachBuild only ever writes its own pages' }
+        'bad-runes' { return 'the rune selection was incomplete or malformed (need 9 rune ids) -- reopen the build and try again' }
+        default     { return 'the rune request was rejected' }
+    }
 }
 
 function Test-ItemSetsPayload {
@@ -1317,9 +1416,11 @@ function Test-ItemSetsPayload {
     if ($arr.Count -lt 1 -or $arr.Count -gt 3) { return $false }
     foreach ($s in $arr) {
         if (-not $s -or -not $s.title) { return $false }
-        if (-not ([string]$s.title).StartsWith('CoachBuild')) { return $false }
+        # F3: ORDINAL, so a soft-hyphen (U+00AD) lookalike cannot fold into
+        # "CoachBuild" and smuggle a foreign-looking title past this gate.
+        if (-not ([string]$s.title).StartsWith('CoachBuild', [System.StringComparison]::Ordinal)) { return $false }
     }
-    if ($ReplacePrefix -and -not ([string]$ReplacePrefix).StartsWith('CoachBuild')) { return $false }
+    if ($ReplacePrefix -and -not ([string]$ReplacePrefix).StartsWith('CoachBuild', [System.StringComparison]::Ordinal)) { return $false }
     return $true
 }
 
@@ -1366,6 +1467,29 @@ function Merge-ItemSets {
     # strict superset of what any champ-scoped prefix would, which is exactly
     # the payload-bounding we now want.
     param($ExistingSetsObject, $NewSets, $ReplacePrefix = $null)
+    # F2: REFUSE any document that is not a parsed object carrying a TOP-LEVEL
+    # itemSets member. Absence of the key is NOT an empty array -- it means we
+    # could not read the real document (a schema shift that nests itemSets one
+    # level deeper, a wrong-summoner read, or a body that parsed to a string /
+    # array). The old code read `$ExistingSetsObject.itemSets` off such a value,
+    # got $null, treated it as "zero existing sets", kept nothing, and PUT the
+    # user's 62 real sets away while reporting success.
+    #
+    # F2b: probing only the property NODE is not enough -- "itemSets":null has a
+    # present node with a $null value and used to pass, so the merge again read
+    # zero existing sets and PUT our set over the user's real ones. A null value,
+    # a JSON primitive/string, or a nested object are all "we could not cleanly
+    # read the list we are about to iterate". Only a genuine collection (INCLUDING
+    # an empty one) is a clean read. PS 5.1's [] -> $null coercion happens on
+    # MEMBER access ($o.itemSets), NOT on the property node's .Value, so we read
+    # .Value directly and keep a legitimately-empty "itemSets":[] (a summoner with
+    # no sets -> valid, must still merge) distinct from null/absent/wrong-shape
+    # (read-failed). Caller converts this throw into an honest read-failed
+    # envelope (never a PUT).
+    $isetNode = if ($ExistingSetsObject -and $ExistingSetsObject.PSObject) { $ExistingSetsObject.PSObject.Properties['itemSets'] } else { $null }
+    if (-not $isetNode -or $null -eq $isetNode.Value -or $isetNode.Value -isnot [System.Collections.IEnumerable] -or $isetNode.Value -is [string]) {
+        throw 'Merge-ItemSets: existing item-set document has no usable top-level itemSets array -- refusing to merge (read-failed)'
+    }
     $newArr = @($NewSets)
     $rawExisting = $ExistingSetsObject.itemSets
     $existingArr = if ($rawExisting) { @($rawExisting) } else { @() }
@@ -1374,7 +1498,9 @@ function Merge-ItemSets {
     # $newArr or are stale accumulation). A null/empty title is treated as
     # NOT-ours and kept -- we only ever prune something we can positively
     # identify as a CoachBuild set.
-    $kept = @($existingArr | Where-Object { -not ($_.title -and ([string]$_.title).StartsWith('CoachBuild')) })
+    # F3: ORDINAL StartsWith -- a soft-hyphen (U+00AD) lookalike title must not
+    # fold into "CoachBuild" and get a user's own set pruned as if it were ours.
+    $kept = @($existingArr | Where-Object { -not ($_.title -and ([string]$_.title).StartsWith('CoachBuild', [System.StringComparison]::Ordinal)) })
     $merged = $kept + $newArr
     $result = $ExistingSetsObject.PSObject.Copy()
     $result | Add-Member -NotePropertyName itemSets -NotePropertyValue $merged -Force
@@ -1403,7 +1529,38 @@ function Invoke-ApplyItemSets {
         # unambiguous about which GET actually failed.
         return [pscustomobject]@{ ok = $false; reason = 'read-failed'; hint = "couldn't read your existing item sets -- nothing was changed" }
     }
-    $merged = Merge-ItemSets -ExistingSetsObject $existing.Content -NewSets $Sets -ReplacePrefix $ReplacePrefix
+    # F2/F2b: even a SUCCESSFUL 200 must carry a top-level itemSets that is a
+    # USABLE list, or we could not really read the document (a nested-schema shift
+    # parses fine yet has no top-level key; "itemSets":null has the key but no
+    # list). Refuse rather than treat "no usable itemSets" as "no user sets" and
+    # PUT their data away. present-and-empty ([]) is a valid read and proceeds;
+    # absent/null/wrong-shape is read-failed. Read the property node's .Value (not
+    # member access, which PS 5.1 coerces [] -> $null). Belt-and-braces with
+    # Merge-ItemSets's own throw below.
+    $isetNode = if ($existing.Content -and $existing.Content.PSObject) { $existing.Content.PSObject.Properties['itemSets'] } else { $null }
+    if (-not $isetNode -or $null -eq $isetNode.Value -or $isetNode.Value -isnot [System.Collections.IEnumerable] -or $isetNode.Value -is [string]) {
+        Write-CompanionLog "apply-itemsets refused (read-failed): existing item sets had no usable top-level itemSets list -- no PUT issued" -IsError
+        return [pscustomobject]@{ ok = $false; reason = 'read-failed'; hint = "your item sets weren't in the expected shape -- nothing was changed" }
+    }
+    try {
+        $merged = Merge-ItemSets -ExistingSetsObject $existing.Content -NewSets $Sets -ReplacePrefix $ReplacePrefix
+    } catch {
+        # Merge-ItemSets refused a malformed document (F2). Surface it as an
+        # honest read-failed and issue NO PUT, never a 500.
+        Write-CompanionLog "apply-itemsets merge refused (read-failed): $($_.Exception.Message)" -IsError
+        return [pscustomobject]@{ ok = $false; reason = 'read-failed'; hint = "your item sets weren't in the expected shape -- nothing was changed" }
+    }
+    # F8: idempotence guard, the item-set twin of the rune path's v1.11.0
+    # "already holds our content -> skip" check. AutoExporter re-pushes every
+    # champ-select tick; if the on-disk document is already byte-identical to
+    # what we would PUT, re-sending the whole ~61KB object is pure risk (another
+    # roll of the merge/413 dice) for zero change. Same Depth as Invoke-LcuRaw's
+    # own PUT so the comparison matches what would actually be sent.
+    $mergedJson = ConvertTo-Json -InputObject $merged -Depth 10 -Compress
+    $existingJson = ConvertTo-Json -InputObject $existing.Content -Depth 10 -Compress
+    if ($mergedJson -eq $existingJson) {
+        return [pscustomobject]@{ ok = $true; count = @($Sets).Count; unchanged = $true }
+    }
     $put = Invoke-LcuRaw -Method PUT -Path "/lol-item-sets/v1/item-sets/$summonerId/sets" -Body $merged -Port $LcuPort -Token $LcuToken -Scheme $Scheme
     if (-not $put.Ok) {
         return [pscustomobject]@{ ok = $false; reason = 'write-failed'; hint = (Get-LcuFailureHint -StatusCode $put.StatusCode -Action 'item-set write') }
@@ -1444,7 +1601,17 @@ function Get-LcuCredentials {
         }
     }
 
-    # Fallback: lockfile format is LeagueClient:PID:PORT:PASSWORD:https
+    # Fallback: lockfile format is LeagueClient:PID:PORT:PASSWORD:https.
+    # NOTE (F9): the CIM path above reads LeagueClientUx.exe's command line and
+    # is drive-agnostic -- it discovers a client installed on ANY drive (D:, E:,
+    # a custom path), so this hardcoded C:\ lockfile is only a secondary net for
+    # the case where CIM itself is blocked/failing. We do NOT error-log its mere
+    # absence: that is the normal state whenever League is closed and, on a
+    # non-C: install where CIM already works, it would be a permanent false
+    # alarm that also floods /status.lastError. We DO log a lockfile that exists
+    # but fails to parse -- that is a real, silent-until-now failure (the old
+    # empty catch turned a malformed/locked lockfile into "client not detected"
+    # forever with zero trace).
     $lockfilePath = 'C:\Riot Games\League of Legends\lockfile'
     if (Test-Path $lockfilePath) {
         try {
@@ -1456,7 +1623,10 @@ function Get-LcuCredentials {
                     Source = 'lockfile'
                 }
             }
-        } catch {}
+            Write-ThrottledErrorLog -Key 'lockfile-parse' -Message "Get-LcuCredentials: lockfile at $lockfilePath has $($fields.Count) fields (<5) -- cannot extract port/token"
+        } catch {
+            Write-ThrottledErrorLog -Key 'lockfile-parse' -Message "Get-LcuCredentials: lockfile read/parse failed at $lockfilePath -- $($_.Exception.GetType().Name): $($_.Exception.Message)"
+        }
     }
 
     return $null
@@ -2256,7 +2426,10 @@ while ($Sync.Running) {
             $bodyRaw = $reader.ReadToEnd()
             $reader.Close()
             $bodyObj = $null
-            try { $bodyObj = $bodyRaw | ConvertFrom-Json } catch {}
+            # F7: never swallow the parse failure -- an empty catch here destroyed
+            # the evidence for an 'invalid-page'/'bad-body' that fired 83x in 3
+            # days. Log the body length + exception so the cause is diagnosable.
+            try { $bodyObj = $bodyRaw | ConvertFrom-Json } catch { Write-CompanionLog "apply-runes bad-body: len=$($bodyRaw.Length) err=$($_.Exception.Message)" }
             if (-not $Sync.LcuPort) {
                 Write-JsonResponse -Response $res -StatusCode 200 -Obj @{ ok = $false; reason = 'no-client'; hint = 'League client not detected -- open the client and try again' }
             } else {
@@ -2277,7 +2450,9 @@ while ($Sync.Running) {
             $bodyRaw = $reader.ReadToEnd()
             $reader.Close()
             $bodyObj = $null
-            try { $bodyObj = $bodyRaw | ConvertFrom-Json } catch {}
+            # F7: log parse failures instead of swallowing (same rationale as
+            # the apply-runes handler above).
+            try { $bodyObj = $bodyRaw | ConvertFrom-Json } catch { Write-CompanionLog "apply-itemsets bad-body: len=$($bodyRaw.Length) err=$($_.Exception.Message)" }
             if (-not $Sync.LcuPort) {
                 Write-JsonResponse -Response $res -StatusCode 200 -Obj @{ ok = $false; reason = 'no-client'; hint = 'League client not detected -- open the client and try again' }
             } else {
@@ -2295,7 +2470,7 @@ while ($Sync.Running) {
             Write-JsonResponse -Response $res -StatusCode 404 -Obj @{ error = 'not-found' }
         }
     } catch {
-        Write-CompanionLog "bridge error: $($_.Exception.Message)"
+        Write-CompanionLog "bridge error: $($_.Exception.Message)" -IsError  # F6: surface to /status.lastError
         try { Write-JsonResponse -Response $res -StatusCode 500 -Obj @{ error = 'internal' } } catch {}
     }
 }
@@ -2445,13 +2620,13 @@ function Start-Companion {
 
     $pollSw = [System.Diagnostics.Stopwatch]::StartNew()
     $runSw = [System.Diagnostics.Stopwatch]::StartNew()
-    try { Invoke-GameflowTick } catch { Write-CompanionLog "gameflow tick error: $($_.Exception.Message)" }
+    try { Invoke-GameflowTick } catch { Write-CompanionLog "gameflow tick error: $($_.Exception.Message)" -IsError }  # F6: surface to /status.lastError
 
     while ($script:CompanionRunning) {
         if (-not $SuppressTray) { [System.Windows.Forms.Application]::DoEvents() }
         if ($RunSeconds -gt 0 -and $runSw.Elapsed.TotalSeconds -ge $RunSeconds) { break }
         if ($pollSw.ElapsedMilliseconds -ge $script:Config.PollMs) {
-            try { Invoke-GameflowTick } catch { Write-CompanionLog "gameflow tick error: $($_.Exception.Message)" }
+            try { Invoke-GameflowTick } catch { Write-CompanionLog "gameflow tick error: $($_.Exception.Message)" -IsError }  # F6: surface to /status.lastError
             $pollSw.Restart()
         }
         Start-Sleep -Milliseconds 50
@@ -3256,8 +3431,10 @@ function Invoke-SelfTest {
     try {
         $r = Invoke-WebRequest -Uri "$base/apply-runes?session=$session" -Method POST -Headers @{ Origin = $appOrigin } -Body ([Text.Encoding]::UTF8.GetBytes(($foreignBody | ConvertTo-Json -Depth 10))) -ContentType 'application/json' -UseBasicParsing
         $obj = $r.Content | ConvertFrom-Json
-        if ($obj.ok -ne $false -or $obj.reason -ne 'invalid-page') {
-            $failures.Add("apply-runes foreign-title expected ok:false/invalid-page, got $($r.Content)")
+        # F7: the single opaque 'invalid-page' was split into cause-specific
+        # reasons; a non-CoachBuild title is now 'bad-title' (with a hint).
+        if ($obj.ok -ne $false -or $obj.reason -ne 'bad-title' -or -not $obj.hint) {
+            $failures.Add("apply-runes foreign-title expected ok:false/bad-title/hint, got $($r.Content)")
         }
         if (@($mockLcu.Sync.Calls) -contains 'PUT') {
             $failures.Add('apply-runes foreign-title issued a PUT -- overwrote a non-CoachBuild page in place, compliance violation')

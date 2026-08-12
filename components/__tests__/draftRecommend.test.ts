@@ -130,6 +130,7 @@ describe("normalizeDraftRecommendResponse", () => {
           suggestedDefense: { label: "Armor / Plated Steelcaps", reason: "their kit leans physical damage" },
         },
       ],
+      personalPool: [],
     });
   });
 
@@ -302,6 +303,7 @@ describe("normalizeDraftRecommendResponse", () => {
       },
       pending: false,
       enemyAnalysis: [],
+      personalPool: [],
     });
   });
 
@@ -339,6 +341,31 @@ describe("normalizeDraftRecommendResponse", () => {
   it("passes through pending:true", () => {
     const result = normalizeDraftRecommendResponse({ pending: true, meta: { patch: "16.14", tier: 10, fetchedAt: "x" } });
     expect(result?.pending).toBe(true);
+  });
+
+  describe("personalPool (Comfort fix — display-only played pool for the lane)", () => {
+    it("normalizes valid entries and drops malformed ones", () => {
+      const result = normalizeDraftRecommendResponse({
+        plays: [],
+        meta: {},
+        personalPool: [
+          { champId: 4, games: 12, wins: 7 },
+          { champId: "nope", games: 1, wins: 0 }, // bad champId
+          { champId: 5, games: -1, wins: 0 }, // negative games
+          { champId: 6, games: 3 }, // missing wins
+          { champId: 61, games: 2, wins: 2 },
+        ],
+      });
+      expect(result?.personalPool).toEqual([
+        { champId: 4, games: 12, wins: 7 },
+        { champId: 61, games: 2, wins: 2 },
+      ]);
+    });
+
+    it("absent/malformed personalPool degrades to [] (never crashes, never fabricated)", () => {
+      expect(normalizeDraftRecommendResponse({ plays: [], meta: {} })?.personalPool).toEqual([]);
+      expect(normalizeDraftRecommendResponse({ plays: [], meta: {}, personalPool: "nope" })?.personalPool).toEqual([]);
+    });
   });
 });
 

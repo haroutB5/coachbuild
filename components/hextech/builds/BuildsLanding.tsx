@@ -150,15 +150,43 @@ function RecentCard({ champion, lane, winRate, gamesCount, onPick }: { champion:
   );
 }
 
-function TierList({ rows, onPick }: { rows: TierRow[]; onPick: (champion: ChampionRef) => void }) {
+// Placeholder rows shown WHILE the tier list is loading, so the card never
+// asserts "No mid-lane tier data is available yet." before the data has had
+// its chance to arrive (hard rule 4 — a definitive negative used as a loading
+// state is a dishonest signal). The pulse is disabled under prefers-reduced-
+// motion; the grid template matches a real row so the layout does not jump
+// when the data lands.
+function TierListSkeleton() {
+  return (
+    <div aria-hidden="true">
+      {Array.from({ length: 6 }).map((_, index) => (
+        <div
+          key={index}
+          className="grid w-full grid-cols-[28px_30px_minmax(0,1fr)_70px_52px] items-center gap-2 border-t border-white/[0.05] px-3 py-2.5 first:border-t-0"
+        >
+          <span className="mx-auto h-3 w-3 rounded bg-white/[0.06] motion-safe:animate-pulse" />
+          <span className="h-4 w-6 rounded bg-white/[0.06] motion-safe:animate-pulse" />
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="h-7 w-7 shrink-0 rounded bg-white/[0.06] motion-safe:animate-pulse" />
+            <span className="h-3 w-20 rounded bg-white/[0.06] motion-safe:animate-pulse" />
+          </span>
+          <span className="h-1 rounded-full bg-white/[0.06]" />
+          <span className="ml-auto h-3 w-10 rounded bg-white/[0.06] motion-safe:animate-pulse" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TierList({ rows, status, onPick }: { rows: TierRow[]; status: "loading" | "ready"; onPick: (champion: ChampionRef) => void }) {
   return (
     <section>
       <div className="mb-2 flex items-baseline justify-between">
         <SectionLabel>Mid lane tier list</SectionLabel>
-        <span className="text-[9px] uppercase tracking-[0.1em] text-[#9397ab]/50">current sample</span>
+        <span className="text-[9px] uppercase tracking-[0.1em] text-[#9397ab]/50" aria-live="polite">{status === "loading" ? "loading…" : "current sample"}</span>
       </div>
       <div className={`${CARD_CLASS} overflow-hidden`}>
-        {rows.length ? rows.map((row, index) => {
+        {status === "loading" && !rows.length ? <TierListSkeleton /> : rows.length ? rows.map((row, index) => {
           const deltaTone = row.delta === null ? "text-[#9397ab]/60" : row.delta >= 0 ? "text-[#46c79b]" : "text-[#e8736e]";
           const barTone = row.winRate === null ? "bg-accent" : row.winRate >= 50 ? "bg-good" : "bg-bad";
           return (
@@ -248,6 +276,17 @@ export default function BuildsLanding({ onQuickPick }: { onQuickPick: (championI
   const [myRows, setMyRows] = useState<MyStatsChampionRow[]>([]);
   const [movers, setMovers] = useState<MoversResponse | null>(null);
   const [tierRows, setTierRows] = useState<TierRow[]>([]);
+  // The tier list loads in two chained hops (champions → per-champion
+  // hero-stats), so for up to a second — longer on a slow link — `tierRows` is
+  // legitimately empty while requests are still in flight. Rendering the
+  // "No mid-lane tier data is available yet." absence claim during that window
+  // is a dishonest negative (hard rule 4): it asserts data is ABSENT while it
+  // is merely LOADING. `tierStatus` distinguishes the two so the absence text
+  // only shows once loading has genuinely settled empty. `baseLoaded` marks
+  // the first data hop as done (success OR failure) so a total fetch failure
+  // still settles to a real empty state instead of a permanent skeleton.
+  const [tierStatus, setTierStatus] = useState<"loading" | "ready">("loading");
+  const [baseLoaded, setBaseLoaded] = useState(false);
 
   const searchMatches = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -270,6 +309,11 @@ export default function BuildsLanding({ onQuickPick }: { onQuickPick: (championI
       setMovers(moverData && Array.isArray(moverData.movers) ? moverData : null);
     }).catch(() => {
       // Landing is a navigation surface; each card owns its honest empty state.
+    }).finally(() => {
+      // First data hop is done regardless of outcome — lets the tier-list
+      // effect below settle a genuinely-empty result out of "loading" even
+      // when /api/champions failed and `champions` never populated.
+      if (!cancelled) setBaseLoaded(true);
     });
     return () => { cancelled = true; };
   }, []);
@@ -287,16 +331,22 @@ export default function BuildsLanding({ onQuickPick }: { onQuickPick: (championI
       if (champion) candidates.set(champion.id, champion);
     }
     const midCandidates = Array.from(candidates.values()).slice(0, 8);
-    if (!midCandidates.length) return;
+    if (!midCandidates.length) {
+      // Nothing to fetch. Only call that EMPTY once the first data hop has
+      // settled — before then it is still loading, not absent.
+      if (baseLoaded) setTierStatus("ready");
+      return;
+    }
     Promise.all(midCandidates.map(async (champion) => ({ champion, stats: await getHeroStats(champion.id, "mid") }))).then((entries) => {
       if (cancelled) return;
       const valid = entries.filter((entry) => entry.stats.winRatePct !== null || entry.stats.gamesCount !== null);
       const sorted = valid.sort((a, b) => (b.stats.winRatePct ?? -1) - (a.stats.winRatePct ?? -1));
       const baseline = sorted.length ? (sorted.reduce((sum, entry) => sum + (entry.stats.winRatePct ?? 0), 0) / sorted.length) : null;
       setTierRows(sorted.slice(0, 6).map(({ champion, stats }) => ({ champion, winRate: stats.winRatePct, games: stats.gamesCount, delta: baseline === null || stats.winRatePct === null ? null : stats.winRatePct - baseline })));
+      setTierStatus("ready");
     });
     return () => { cancelled = true; };
-  }, [champions, iconMap, myRows, recent]);
+  }, [champions, iconMap, myRows, recent, baseLoaded]);
 
   function pickChampion(champion: ChampionRef) {
     setQuery("");
@@ -384,7 +434,7 @@ export default function BuildsLanding({ onQuickPick }: { onQuickPick: (championI
             <div className="mb-2 flex items-baseline justify-between"><SectionLabel>Pick up where you left off</SectionLabel><span className="text-[9px] uppercase tracking-[0.1em] text-[#9397ab]/45">recent on this device</span></div>
             {recentCards.length ? <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">{recentCards.map(({ entry, champion }) => <RecentCard key={`${entry.championId}-${entry.lane}`} champion={champion} lane={entry.lane} winRate={myRows.find((row) => row.championId === entry.championId && ROLE_TO_LANE[row.role] === entry.lane)?.winrate ? (myRows.find((row) => row.championId === entry.championId && ROLE_TO_LANE[row.role] === entry.lane)?.winrate ?? 0) * 100 : null} gamesCount={myRows.find((row) => row.championId === entry.championId && ROLE_TO_LANE[row.role] === entry.lane)?.games ?? null} onPick={() => onQuickPick(entry.championId, entry.lane)} />)}</div> : <div className={`${CARD_CLASS} px-4 py-4 text-[11px] text-[#9397ab]/65`}>Your recent champions will appear here after your first build view.</div>}
           </section>
-          <TierList rows={tierRows} onPick={pickChampion} />
+          <TierList rows={tierRows} status={tierStatus} onPick={pickChampion} />
         </main>
         <aside className="min-w-0 space-y-5">
           <LanesCard rows={myRows} onPick={onQuickPick} />

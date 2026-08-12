@@ -37,6 +37,7 @@ import {
   resolveVisibleDraftAssistantRanking,
   resolveTopRecommendationCards,
   resolveRecommendedDetailCandidates,
+  filterComfortCandidates,
   type DraftAssistantCandidate,
   type DraftAssistantDetailSort,
   type DraftLaneStat,
@@ -355,7 +356,6 @@ export default function DraftPage() {
   const [hover, setHover] = useState<number | null>(null);
   const [dirty, setDirty] = useState(false);
   const [dismissedLockedPickId, setDismissedLockedPickId] = useState<number | null>(null);
-  const [myPoolOnly, setMyPoolOnly] = useState(false);
   const [allyIds, setAllyIds] = useState<number[]>([]);
   const [assistantView, setAssistantView] = useState<AssistantView>("recommended");
   const [minPickRate, setMinPickRate] = useState(DEFAULT_DRAFT_ASSISTANT_FILTERS.minPickRate);
@@ -495,7 +495,6 @@ export default function DraftPage() {
 
   function handleAssistantViewChange(view: AssistantView) {
     setAssistantView(view);
-    setMyPoolOnly(view === "comfort");
     setShowFullTable(false);
   }
 
@@ -569,17 +568,21 @@ export default function DraftPage() {
     poolMeta && poolMeta.poolTotal !== null && poolMeta.poolIncluded !== null
       ? Math.max(0, poolMeta.poolTotal - poolMeta.poolIncluded)
       : null;
-  const poolNote =
-    poolWithheld !== null && poolWithheld > 0 && poolMeta?.poolFloorGames != null
-      ? `Ranking ${poolMeta.poolIncluded} of ${poolMeta.poolTotal} champions in this lane — ${poolWithheld} held back below the ${formatGames(poolMeta.poolFloorGames)}-game lane floor (0.1% of lane games).`
-      : null;
   const serverInferredLaneOpponentId = state.status === "ok" ? state.data.meta.laneOppInferred : null;
   const effectiveLaneOpponentId = laneOpponentId ?? serverInferredLaneOpponentId;
   const laneOpponentName = effectiveLaneOpponentId === null ? null : championEntry(champIcons, effectiveLaneOpponentId).name;
 
   const basePlays: DraftPlayResult[] = state.status === "ok" ? state.data.plays : [];
   const basePotentialPlays: DraftPlayResult[] = state.status === "ok" ? state.data.potentialPlays : [];
-  const hasAnyMyPoolData = basePlays.some((play) => play.personalOverall.games >= 1) || basePotentialPlays.some((play) => play.personalOverall.games >= 1);
+  // The account's WHOLE played pool for this lane (every champId, not just the
+  // scored plays). This is what lets a played champion that only appears in the
+  // blind-pick feed still carry a real personalOverall and show under Comfort —
+  // display-only, keyed by champId, never fed to a score. See the recommend
+  // route's `personalPool`.
+  const personalPoolMap = new Map<number, { games: number; wins: number }>(
+    state.status === "ok" ? state.data.personalPool.map((entry) => [entry.champId, { games: entry.games, wins: entry.wins }]) : []
+  );
+  const hasAnyMyPoolData = personalPoolMap.size > 0;
   const blindMeta = blindState.status === "ok" || blindState.status === "empty" ? blindState.data.meta : null;
   const blindPoolAfterShare = blindMeta ? Math.max(0, blindMeta.poolCandidates - blindMeta.excludedByLaneShare) : 0;
   const blindExclusionNote = blindMeta
@@ -594,7 +597,12 @@ export default function DraftPage() {
   const laneStatMap = new Map<number, DraftLaneStat>(laneStats.map((stat) => [stat.champId, stat]));
   const matchupPreviewMap = new Map<number, DraftMatchupPreview>(state.status === "ok" ? (state.data.matchupPreviews ?? []).map((preview) => [preview.champId, preview]) : []);
   const activeFilters = { minPickRate, includeOffMeta, minimumGames };
-  const rankedRecommendedRows = preserveOriginalDraftRanks([basePlays, basePotentialPlays], myPoolOnly);
+  // Comfort filtering is no longer applied here (it used to narrow the recommend
+  // feed via a `myPoolOnly` flag). Comfort now filters the FULL merged
+  // recommend+blind set in the view resolver below, so a played champion that
+  // only appears in the blind feed is included and every row keeps the same rank
+  // it has in the Recommended view. `false` keeps this the plain merged ranking.
+  const rankedRecommendedRows = preserveOriginalDraftRanks([basePlays, basePotentialPlays], false);
   const recommendedFilterRows = rankedRecommendedRows.filter(({ play }) => !basePotentialPlays.includes(play)).map(({ play, rank }) => {
     const stat = laneStatMap.get(play.champId);
     return { play, rank, synergyDelta: play.synergyDelta, champId: play.champId, laneShare: stat?.laneShare ?? null, totalGames: stat?.totalGames ?? null };
@@ -621,7 +629,11 @@ export default function DraftPage() {
       laneShare: stat?.laneShare ?? null,
       rank: pick.rank,
       isPotential: false,
-      personalOverall: { games: 0, wins: 0 },
+      // Real personal record for this blind pick, keyed by champId — the whole
+      // reason Comfort could populate from the blind feed. {games:0,wins:0}
+      // (unplayed) is the honest default, NOT a hardcode. Display-only; the
+      // blind score/rank above are untouched (hard rule 3).
+      personalOverall: personalPoolMap.get(pick.champId) ?? { games: 0, wins: 0 },
       source: "blind" as const,
     };
   });
@@ -652,10 +664,33 @@ export default function DraftPage() {
         ? []
         : assistantView === "counters"
           ? filteredCounterRows.map((row) => toRecommendedCandidate(row, basePotentialPlays.includes(row.play)))
-          : assistantView === "recommended"
-            ? resolveRecommendedDetailCandidates({ recommended: matchupDetailCandidates, blind: filteredBlindCandidates, noEnemies: enemyIds.length === 0 })
-            : matchupDetailCandidates;
+          : assistantView === "comfort"
+            ? // Comfort is a PURE FILTER over the SAME merged recommend+blind
+              // ranking the Recommended view shows (blind always merged so a
+              // played first-pick surfaces), keeping only champions the account
+              // has played. filterComfortCandidates uses Array.filter — order
+              // and rank are preserved, nothing is re-scored (hard rule 3).
+              filterComfortCandidates(
+                resolveRecommendedDetailCandidates({ recommended: matchupDetailCandidates, blind: filteredBlindCandidates, noEnemies: true })
+              )
+            : assistantView === "recommended"
+              ? resolveRecommendedDetailCandidates({ recommended: matchupDetailCandidates, blind: filteredBlindCandidates, noEnemies: enemyIds.length === 0 })
+              : matchupDetailCandidates;
   const preserveDetailOrder = assistantView === "comfort" || assistantView === "counters";
+  // v0.109.0 said "Ranking 101 of 173 champions in this lane" — but the engine
+  // SCORES those 101 and only SERVES the strongest ~10-25 (recommend plays ∪
+  // blind picks); the other ~83 never reach the client, so "Ranking 101"
+  // overstated what the table can actually show. State three honest, distinct
+  // numbers instead: how many rows this view can reach (`renderedCount`, what
+  // "View full table" expands to), how many the engine scored, and how many the
+  // pre-scoring floor withheld. Suppressed on the Blind view, whose rows come
+  // from a different pool than these recommend-pool counters (its own exclusion
+  // note covers it), and whenever nothing was withheld.
+  const renderedCount = currentViewRows.length;
+  const poolNote =
+    assistantView !== "blind" && poolWithheld !== null && poolWithheld > 0 && poolMeta?.poolFloorGames != null && poolMeta.poolIncluded !== null && poolMeta.poolTotal !== null
+      ? `Showing ${renderedCount} of ${poolMeta.poolIncluded} ranked champions — the engine surfaces the strongest here. ${poolWithheld} of ${poolMeta.poolTotal} in this lane are held back below the ${formatGames(poolMeta.poolFloorGames)}-game lane floor (0.1% of lane games).`
+      : null;
   const topCards = resolveTopRecommendationCards({ rows: currentViewRows });
   const topCandidate = topCards[0]?.candidate ?? null;
   const detailAverage = laneAverage(laneStats);

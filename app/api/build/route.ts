@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { ApiError, RoleId } from "@/lib/types";
 import { buildRecommendations, NotPlayedInRoleError } from "@/lib/recommend";
 import { resolveRankBracket } from "@/lib/rankBrackets";
+import { MAX_REAL_CHAMPION_ID } from "@/lib/staticData";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,6 +28,20 @@ export async function GET(req: NextRequest) {
   }
   const champId = parseInt(champParam, 10);
   const roleId = parseInt(roleParam, 10) as RoleId;
+
+  // Alternate-art / skin entries live in the 60000+ id range (real champions
+  // top out in the 900s; MAX_REAL_CHAMPION_ID = 10000). Coachless's own roster
+  // KNOWS these ids, so the downstream existence check passes and then the
+  // stats POST throws on a champion that has no gameplay rows — surfacing as a
+  // 500 (e.g. GET /api/build?champ=60001&role=2). The draft ingest path already
+  // filters this range before any upstream request (lib/draft/ingest.ts); do
+  // the same here so an alt-art id gets the clean "not played" 404, not a 500.
+  // Filtered BEFORE the upstream call, and reusing the shared constant rather
+  // than a fresh magic number.
+  if (champId >= MAX_REAL_CHAMPION_ID) {
+    const body: ApiError = { error: "Champion not played in this role" };
+    return NextResponse.json(body, { status: 404 });
+  }
 
   if (roleId < 0 || roleId > 5) {
     const body: ApiError = { error: "Invalid role (must be 0-5)" };

@@ -87,8 +87,14 @@ export function matchChampions(query: string, champions: ChampionRef[]): Champio
   const trimmed = query.trim();
   if (!trimmed) return champions.slice();
 
+  // The user typed SOMETHING (trimmed is non-empty) but it normalised away to
+  // nothing — an emoji, CJK/Cyrillic text, or pure punctuation like `!!!` or
+  // `-`. That is a real, unmatchable query, NOT "no query": returning the full
+  // 173-champion roster here treated a failed search as a blank one and was
+  // worst for non-Latin typers. An empty/whitespace query is the only thing
+  // that legitimately means "show everything" and it already returned above.
   const queryForm = searchForm(trimmed);
-  if (!queryForm.compact) return champions.slice();
+  if (!queryForm.compact) return [];
 
   const aliasTarget = CHAMPION_ALIASES[queryForm.compact as keyof typeof CHAMPION_ALIASES];
   const candidates: ChampionCandidate[] = champions.map((champion) => ({

@@ -36,3 +36,36 @@ export function confidenceBand(games: number | null, adoption?: number): Confide
   if (games >= MEDIUM_FLOOR) return "MEDIUM";
   return "LOW";
 }
+
+// ─── Chip colour, as a function of the band (2026-08-12) ─────────────────────
+// Until now the confidence chip was hard-coded to the success green
+// (`bg-[#46c79b]/15 text-[#46c79b]`) at EVERY band, so a LOW-confidence build
+// wore the exact same green pill as a HIGH one — the word was the only signal,
+// and a green pill glanced at reads "good". That inverts this badge's whole
+// purpose (hard rule 4: no dishonest signals). Colour is now a function of the
+// band, and the three bands are visibly distinct:
+//   HIGH   → `good` green (#46c79b)  — positive, well past the noise floor.
+//   MEDIUM → amber (#e0a244)         — cautionary; a thinner sample that a
+//                                       patch shift can still swing.
+//   LOW    → `bad` red (#e8736e)     — warning; treat this build with care.
+// The hue is never the ONLY cue — the label itself ("High/Medium/Low
+// confidence") carries the meaning for anyone who can't distinguish the
+// colours. There is no amber token in the navy/lavender palette, so MEDIUM
+// uses a literal warm amber chosen to sit between the existing `good`/`bad`
+// signals; `good` and `bad` reuse the app's canonical data-signal tokens.
+// Contrast note: all three text colours clear 4.5:1 against the hero
+// gradient's dark ground at this 9px size (green ~7:1, amber ~6.7:1, red
+// ~4.7:1). Keep this the single source of the chip's colour — see the three
+// surfaces referenced in the redesign notes.
+const CONFIDENCE_CHIP_CLASS: Record<ConfidenceBand, string> = {
+  HIGH: "bg-[#46c79b]/15 text-[#46c79b]",
+  MEDIUM: "bg-[#e0a244]/15 text-[#e0a244]",
+  LOW: "bg-[#e8736e]/15 text-[#e8736e]",
+};
+
+/** Tailwind bg+text classes for the confidence chip at a given band. Pure —
+ *  returns a class string, no JSX — so every surface that renders the chip
+ *  stays in lockstep on colour. */
+export function confidenceChipClass(band: ConfidenceBand): string {
+  return CONFIDENCE_CHIP_CLASS[band];
+}

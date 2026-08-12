@@ -105,4 +105,22 @@ describe("matchChampions", () => {
   it("returns the original ordering for an empty query", () => {
     expect(matchChampions("  ", CHAMPIONS)).toEqual(CHAMPIONS);
   });
+
+  it("returns NO matches for a non-empty query that normalises to empty (not the whole roster)", () => {
+    // The user typed something real that folds to no alphanumerics: emoji,
+    // non-Latin scripts, or pure punctuation. This is a failed search, not a
+    // blank one. Before the fix each of these returned all 173 champions, which
+    // was worst for non-Latin typers (the search looked broken/ignored).
+    // NB: a plain tab/space is real whitespace and trims to empty (→ full
+    // roster, tested above); these are non-whitespace inputs that fold away.
+    for (const query of ["🔥", "日本語", "Виктор", "!!!", "-", "'", "​" /* zero-width space */]) {
+      expect(matchChampions(query, CHAMPIONS)).toEqual([]);
+    }
+  });
+
+  it("still folds Latin diacritics rather than dropping the query", () => {
+    // Guardrail: the empty-result path must only fire for queries with NO
+    // alphanumerics after folding — an accented Latin query still matches.
+    expect(matchChampions("akshàn", CHAMPIONS).map((entry) => entry.name)).toEqual(["Akshan"]);
+  });
 });

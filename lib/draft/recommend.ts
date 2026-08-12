@@ -87,6 +87,21 @@ export interface PersonalRecord {
   wins: number;
 }
 
+/** One champion the active account has played in THIS lane this season (ranked
+ *  solo, COUNTED_QUEUE_IDS), keyed by champId. Additive, DISPLAY-ONLY, same
+ *  hard-rule-3 posture as `personal`/`personalOverall` (see PersonalPlayResult):
+ *  it exists so a row the recommend feed never scored (e.g. a champion that
+ *  only appears in the separate blind-pick feed) can still be BADGED and
+ *  FILTERED as a comfort pick client-side. It never feeds a score or reorders
+ *  anything — the client uses it only to decorate and to pure-filter. Without
+ *  it, blind-pick rows carried a hardcoded {games:0,wins:0} and Comfort Picks
+ *  rendered empty even for a champion the account has clearly played. */
+export interface PersonalPoolEntry {
+  champId: number;
+  games: number;
+  wins: number;
+}
+
 /** PlayResult + two ADDITIVE, DISPLAY-ONLY personal fields (My Stats
  *  backend, 2026-07-21). HARD USER DIRECTIVE, ratified 2026-07-21 ("Don't
  *  mix my data with the sample size"): personal record data must NEVER
@@ -286,6 +301,12 @@ export interface RecommendResult {
   laneStats?: DraftLaneStat[];
   /** Shrunk matchup estimates against popular lane opponents. */
   matchupPreviews?: DraftMatchupPreview[];
+  /** Every champion the active account has played in this lane this season
+   *  (ranked solo). Additive, display-only (see PersonalPoolEntry). Always []
+   *  on the pending path or with no active account; NOT gated to the scored
+   *  pool, so the client can decorate/filter blind-pick rows the recommend feed
+   *  never returned. */
+  personalPool: PersonalPoolEntry[];
 }
 
 export interface DraftLaneStat {
@@ -493,6 +514,16 @@ function decorateEmpty(plays: PlayResult[]): PersonalPlayResult[] {
   return plays.map((p) => ({ ...p, personalOverall: { games: 0, wins: 0 }, personal: null }));
 }
 
+interface PersonalDecoration {
+  main: PersonalPlayResult[];
+  potential: PersonalPlayResult[];
+  /** The active account's whole played-pool for this lane (every champId with
+   *  >=1 counted game), NOT just the champions in `main`/`potential`. Display-
+   *  only, used client-side to badge/filter rows the recommend feed never
+   *  scored. Empty on the no-account / unavailable paths. */
+  pool: PersonalPoolEntry[];
+}
+
 /** Decorates already-ranked plays with personal-record fields, in ONE extra
  *  indexed query (coachbuild.my_matches has an index on (champion_id, role,
  *  opp_champion_id) for exactly this — migration 0012). Runs strictly AFTER
@@ -513,9 +544,9 @@ async function attachPersonalRecords(
   potentialPlays: PlayResult[],
   lane: RoleId,
   laneOppInferred: number | null
-): Promise<{ main: PersonalPlayResult[]; potential: PersonalPlayResult[] }> {
+): Promise<PersonalDecoration> {
   const allPlays = mainPlays.length === 0 && potentialPlays.length === 0 ? [] : [...mainPlays, ...potentialPlays];
-  if (allPlays.length === 0) return { main: [], potential: [] };
+  if (allPlays.length === 0) return { main: [], potential: [], pool: [] };
 
   // ACCOUNT SCOPING (migration 0020) — this was a REAL cross-account bleed
   // site, not a hypothetical one, and it is not on the My Stats page: these
@@ -530,7 +561,7 @@ async function attachPersonalRecords(
   // honest answer; falling back to an unscoped read to "have something to
   // show" is exactly the bug.
   const account = await getActiveAccount(sql).catch(() => null);
-  if (!account) return { main: decorateEmpty(mainPlays), potential: decorateEmpty(potentialPlays) };
+  if (!account) return { main: decorateEmpty(mainPlays), potential: decorateEmpty(potentialPlays), pool: [] };
 
   // SOLO QUEUE ONLY (2026-07-30, lib/mystats/queues.ts). These badges read
   // "you: 7-3 on this champion" on the Draft page, and the user is drafting a
@@ -538,12 +569,18 @@ async function attachPersonalRecords(
   // draft and quickplay games is a different claim than the one on screen.
   // Same constant, same predicate, as every /api/mystats read; the two must not
   // be able to disagree about what counts as a game.
-  const champIds = allPlays.map((p) => p.champId);
+  //
+  // NO champion_id filter: this reads the account's WHOLE played pool for the
+  // lane (one account's ranked-solo games this season — small, indexed), so the
+  // same rows both decorate the scored plays AND build `pool` for every OTHER
+  // champion the account has played (e.g. one that only surfaces in the blind-
+  // pick feed). Scoping to `allPlays`' champIds is what left Comfort Picks empty
+  // for played champions outside the recommend feed.
   const rows = await sql`
     SELECT champion_id, opp_champion_id, win FROM coachbuild.my_matches
     WHERE puuid = ${account.puuid}
       AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
-      AND role = ${lane} AND champion_id = ANY(${champIds}::int[])
+      AND role = ${lane}
   `.catch(() => []) as unknown as MyMatchDbRow[];
 
   const overall = new Map<number, PersonalRecord>();
@@ -569,7 +606,16 @@ async function attachPersonalRecords(
       personal: laneOppInferred !== null ? vsLaneOpp.get(p.champId) ?? { games: 0, wins: 0 } : null,
     }));
 
-  return { main: decorate(mainPlays), potential: decorate(potentialPlays) };
+  // The whole played pool for the lane — the SAME per-champion aggregate the
+  // badges use, exposed for every champId the account has played (not just the
+  // scored ones). Order is not meaningful; the client keys by champId.
+  const pool: PersonalPoolEntry[] = Array.from(overall.entries()).map(([champId, record]) => ({
+    champId,
+    games: record.games,
+    wins: record.wins,
+  }));
+
+  return { main: decorate(mainPlays), potential: decorate(potentialPlays), pool };
 }
 
 /** Draft redesign plan §2.3 — additive per-enemy analysis (see
@@ -687,6 +733,7 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
     },
     pending: true,
     enemyAnalysis: [],
+    personalPool: [],
   });
 
   const patch = await resolveServingPatch(sql);
@@ -820,7 +867,7 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
     }
   }
 
-  const { main: personalMain, potential: personalPotential } = await attachPersonalRecords(
+  const { main: personalMain, potential: personalPotential, pool: personalPool } = await attachPersonalRecords(
     sql,
     rankedMain,
     rankedPotential,
@@ -859,5 +906,6 @@ export async function computeDraftRecommend(params: RecommendParams): Promise<Re
     enemyAnalysis,
     laneStats,
     matchupPreviews,
+    personalPool,
   };
 }

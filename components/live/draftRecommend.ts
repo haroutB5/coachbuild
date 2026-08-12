@@ -27,6 +27,17 @@ export interface PersonalRecord {
   wins: number;
 }
 
+/** One champion the active account has played in this lane this season — the
+ *  wire mirror of lib/draft/recommend.ts's PersonalPoolEntry. DISPLAY-ONLY
+ *  (see PersonalRecord above): the page uses it to badge/comfort-filter rows
+ *  the recommend feed never scored (notably blind-pick rows), never to score
+ *  or reorder. */
+export interface PersonalPoolEntry {
+  champId: number;
+  games: number;
+  wins: number;
+}
+
 /** One PLAY candidate — lib/draft/score.ts's rankPlays()/splitPlaysBySampleSize()
  *  output shape (plan §3). `winVsLaneOpp` is null when there's no direct
  *  lane opponent (empty enemies, or none tagged as the lane slot) or the
@@ -205,6 +216,12 @@ export interface DraftRecommendResponse {
   laneStats?: DraftLaneStat[];
   /** Shrunk popular-opponent preview rows for the current lane. */
   matchupPreviews?: DraftMatchupPreview[];
+  /** The active account's whole played pool for this lane this season (every
+   *  champId with >=1 counted game). Additive, display-only. Absent/malformed
+   *  on the wire (older cached response) degrades to [] — the page then simply
+   *  cannot decorate a played champion outside the recommend feed, never a
+   *  fabricated record. */
+  personalPool: PersonalPoolEntry[];
 }
 
 export interface DraftRecommendParams {
@@ -372,6 +389,24 @@ function normalizeLaneStat(raw: unknown): DraftLaneStat | null {
   return { champId: r.champId, baselineWr, totalGames, laneShare };
 }
 
+/** A pool entry needs a real champId and a real {games, wins}; a malformed
+ *  entry is dropped rather than coerced (same posture as normalizePlay). */
+function normalizePersonalPoolEntry(raw: unknown): PersonalPoolEntry | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<PersonalPoolEntry>;
+  if (
+    typeof r.champId !== "number" ||
+    typeof r.games !== "number" ||
+    typeof r.wins !== "number" ||
+    ![r.champId, r.games, r.wins].every((v) => Number.isFinite(v)) ||
+    r.games < 0 ||
+    r.wins < 0
+  ) {
+    return null;
+  }
+  return { champId: r.champId, games: r.games, wins: r.wins };
+}
+
 function normalizeBan(raw: unknown): DraftBanResult | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Partial<DraftBanResult>;
@@ -436,6 +471,9 @@ export function normalizeDraftRecommendResponse(raw: unknown): DraftRecommendRes
   const matchupPreviews = Array.isArray(r.matchupPreviews)
     ? r.matchupPreviews.map(normalizeMatchupPreview).filter((entry): entry is DraftMatchupPreview => entry !== null)
     : undefined;
+  const personalPool = Array.isArray(r.personalPool)
+    ? r.personalPool.map(normalizePersonalPoolEntry).filter((entry): entry is PersonalPoolEntry => entry !== null)
+    : [];
 
   return {
     plays,
@@ -444,6 +482,7 @@ export function normalizeDraftRecommendResponse(raw: unknown): DraftRecommendRes
     meta,
     pending: r.pending === true,
     enemyAnalysis,
+    personalPool,
     ...(laneStats ? { laneStats } : {}),
     ...(matchupPreviews ? { matchupPreviews } : {}),
   };

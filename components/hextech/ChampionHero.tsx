@@ -1,11 +1,12 @@
 "use client";
 
 import { ArrowLeft, CaretDown } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChampionRef } from "@/lib/types";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import { getHeroStats, LANE_LABEL, LANE_ORDER, type LaneId, type HeroStats } from "./heroContracts";
-import { confidenceBand } from "./confidence";
+import { confidenceBand, confidenceChipClass } from "./confidence";
+import { resolveTabKeydown, isTabNavigationKey } from "./tabKeyboard";
 import { BuildActionButtons, Scanline, StatValue } from "./builds/BuildVisuals";
 import HextechTabs from "./HextechTabs";
 import { BUILD_TAB_OPTIONS, type BuildTab } from "./buildTabLayout";
@@ -53,6 +54,27 @@ export default function ChampionHero({ champ, lane, onLaneChange, rankBracket, b
   }, [champ.id, lane, rankBracket]);
 
   const confidence = confidenceBand(stats.gamesCount);
+
+  // One ref per lane tab so an arrow-key move can focus its destination. The
+  // lane strip is a real `role="tablist"` (2026-08-12): it used to be plain
+  // toggle buttons in a `role="group"`, so a screen reader could not announce
+  // which lane was active — no `aria-selected`/`aria-current`, only a visual
+  // accent chip. It now mirrors the BUILD/PRO/OTP tablist's contract (see
+  // HextechTabs): `role="tab"` + `aria-selected`, roving tabindex so the strip
+  // is ONE stop in the page tab order, and Left/Right/Home/End navigation via
+  // the same pure `tabKeyboard` resolver — matching the sibling pattern rather
+  // than inventing a second one. Selection follows focus, which is safe here
+  // because switching lanes only refetches this hero's own stats.
+  const laneTabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  function handleLaneKeyDown(e: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (!isTabNavigationKey(e.key)) return;
+    const next = resolveTabKeydown(e.key, index, LANE_ORDER.length);
+    if (next === null) return;
+    e.preventDefault();
+    laneTabRefs.current[next]?.focus();
+    onLaneChange(LANE_ORDER[next]);
+  }
 
   return (
     <section
@@ -110,7 +132,7 @@ export default function ChampionHero({ champ, lane, onLaneChange, rankBracket, b
               <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
                 <h1 className="truncate text-[33px] font-semibold leading-none tracking-[-0.025em] text-[#e9e9ed]">{champ.name}</h1>
                 <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#e9e9ed]/45">{LANE_LABEL[lane]} lane</span>
-                <span className="rounded-[5px] bg-[#46c79b]/15 px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.08em] text-[#46c79b]">{CONFIDENCE_LABEL[confidence]}</span>
+                <span className={`rounded-[5px] px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.08em] ${confidenceChipClass(confidence)}`}>{CONFIDENCE_LABEL[confidence]}</span>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-4">
                 <StatValue
@@ -133,13 +155,22 @@ export default function ChampionHero({ champ, lane, onLaneChange, rankBracket, b
                 on exactly these three values, so they can never act on a lane
                 the hero is no longer showing. See BuildActionButtons. */}
             <BuildActionButtons champ={champ} lane={lane} rankBracket={rankBracket} />
-            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Lane">
-              {LANE_ORDER.map((candidate) => (
+            <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Lane">
+              {LANE_ORDER.map((candidate, index) => (
                 <button
                   key={candidate}
                   type="button"
+                  role="tab"
+                  ref={(el) => {
+                    laneTabRefs.current[index] = el;
+                  }}
                   onClick={() => onLaneChange(candidate)}
-                  aria-pressed={candidate === lane}
+                  onKeyDown={(e) => handleLaneKeyDown(e, index)}
+                  aria-selected={candidate === lane}
+                  // Roving tab stop — only the active lane is in the page tab
+                  // order; the rest are reached with Left/Right. Matches
+                  // HextechTabs so the two tablists on this hero behave alike.
+                  tabIndex={candidate === lane ? 0 : -1}
                   title={LANE_LABEL[candidate]}
                   className="inline-flex h-11 min-w-[44px] -my-2 items-center justify-center gap-1 rounded-[6px] px-0 text-[9px] font-semibold uppercase tracking-[0.08em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] lg:my-0 lg:h-7 lg:min-w-0"
                 >

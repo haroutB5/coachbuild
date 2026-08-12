@@ -602,6 +602,49 @@ describe("computeDraftRecommend", () => {
       const myMatchesCall = mockSql.mock.calls.find(([s]) => sqlText(s as TemplateStringsArray).includes("FROM coachbuild.my_matches"));
       expect(myMatchesCall).toBeUndefined();
     });
+
+    it("personalPool covers the WHOLE played pool for the lane, not just the scored plays (Comfort fix)", async () => {
+      // Champion 1 is the only scored candidate; the account has ALSO played
+      // champion 500 in this lane (a champ that only surfaces via the separate
+      // blind-pick feed, so it never appears in `plays`). Before the fix the
+      // my_matches read was scoped to the scored champIds, so champ 500's
+      // record was never fetched and Comfort could not badge/filter it.
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (isMyAccountQuery(text)) return Promise.resolve([MY_ACCOUNT_ROW]);
+        if (text.includes("FROM coachbuild.my_matches")) {
+          return Promise.resolve([
+            { champion_id: 1, opp_champion_id: 55, win: true },
+            { champion_id: 500, opp_champion_id: 77, win: true },
+            { champion_id: 500, opp_champion_id: 88, win: false },
+          ]);
+        }
+        if (text.includes("FROM coachbuild.draft_champ_stats")) return Promise.resolve([champStatsRow({ champ_id: 1 })]);
+        return Promise.resolve([]);
+      });
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      // champ 500 is NOT among the scored plays...
+      expect(result.plays.map((p) => p.champId)).toEqual([1]);
+      // ...but IS in the personal pool the client uses to decorate/filter it.
+      const pool = new Map(result.personalPool.map((entry) => [entry.champId, entry]));
+      expect(pool.get(500)).toEqual({ champId: 500, games: 2, wins: 1 });
+      expect(pool.get(1)).toEqual({ champId: 1, games: 1, wins: 1 });
+      // The my_matches read must NOT be scoped to the scored champIds anymore.
+      const myMatchesCall = mockSql.mock.calls.find(([s]) => sqlText(s as TemplateStringsArray).includes("FROM coachbuild.my_matches"));
+      expect(sqlText(myMatchesCall![0] as TemplateStringsArray)).not.toContain("champion_id = ANY");
+    });
+
+    it("no active account -> personalPool is [] (never a fabricated pool)", async () => {
+      mockSql.mockImplementation((strings: TemplateStringsArray) => {
+        const text = sqlText(strings);
+        if (text.includes("GROUP BY patch")) return Promise.resolve([{ patch: "16.14", champs: 150 }]);
+        if (text.includes("FROM coachbuild.draft_champ_stats")) return Promise.resolve([champStatsRow({ champ_id: 1 })]);
+        return Promise.resolve([]); // no my_account row -> no active account
+      });
+      const result = await computeDraftRecommend({ lane: 0, enemies: [], laneOpp: null, hover: null });
+      expect(result.personalPool).toEqual([]);
+    });
   });
 
   describe("v0.37.4 sample-size split (plays = main, potentialPlays = new)", () => {
