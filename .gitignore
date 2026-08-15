@@ -59,3 +59,10 @@ HANDOFF.md
 HANDOFF-*.md
 AUDIT-*.md
 INVESTIGATION-*.md
+
+# Throwaway diagnostic probes from the 2026-08-15 overlay investigation.
+# _tmp-probe/ holds a self-signed cert + PRIVATE KEY for the fake Live Client
+# Data server used to drive the overlay without League — never commit these.
+# Kept on disk (the safety gate blocks recursive deletion) but out of git.
+/_tmp-probe/
+/overlay-host/_tmp-*.mjs
