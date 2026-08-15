@@ -34,8 +34,31 @@ $env:GITHUB_TOKEN = '…'
 pwsh desktop/scripts/publish.ps1 -Version 1.0.1
 ```
 
-Never substitute `coachbuild-overlay-releases`, the old Electron feed. Verify
-the generated release metadata before making it public.
+Never substitute `coachbuild-overlay-releases`, the old Electron feed.
+
+The script passes `--publish true` to `vpk upload github`, so the release is
+live on the feed as soon as it uploads. This is deliberate: `vpk`'s default is a
+**draft** release, GitHub never serves a draft as `latest`, and the in-app
+Velopack updater therefore never sees it — the 1.0.7 release had to be published
+by hand for exactly this reason.
+
+To stage a release without exposing it to the updater, pass `-Draft`:
+
+```powershell
+pwsh desktop/scripts/publish.ps1 -Version 1.0.1 -Draft
+```
+
+You must then publish it manually (GitHub UI, or
+`gh release edit <tag> --draft=false`) before any client will update.
+
+After publishing, verify against the feed:
+
+```powershell
+gh release view --repo haroutB5/coachbuild-desktop-releases --json tagName,isDraft,isPrerelease
+```
+
+`latest/download/releases.win.json` and `latest/download/RELEASES` must both
+return HTTP 200 and advertise the new version.
 
 ## Update behavior
 
