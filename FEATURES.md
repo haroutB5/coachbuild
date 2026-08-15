@@ -71,11 +71,12 @@ Your own recorded League history across every linked personal Riot account — *
 
 **Splits are not a display scope (v0.88.0).** Every figure covers the full season. The page used to filter to the current split, which meant an account that played January to April, stopped, then played two games in July showed "2 games" under every panel while the account card directly above it read "142g · 60.6%". Two denominators, stacked, nothing saying they differed. Ranked solo/duo only, always.
 
-- **4 stat tiles:** Games, Win Rate, Main (most-played champion), Build Adherence.
+- **4 stat tiles:** Games, Win Rate, Main (most-played champion), Build Adherence. Since v0.110.1 a tile only draws a bar when it encodes a real ratio (Win Rate; Main's share of recorded games, sublabeled "82 of 157 games") — raw counts get no bar, and an unmeasured tile reads "Not measured yet" instead of a dash with an orphan bar stub. Bars carry aria-labels.
 - **Recent games list**, season-scoped like everything else — per-game KDA and a WPA-build / off-build chip, shown only when a real comparison was possible (the match's patch must match the live recommend pipeline's current patch). When it isn't possible, the chip now distinguishes *why* (v0.87.0): a match on a patch newer than what the build data covers reads "waiting for patch data" (upstream lag, not your history); a genuinely unresolved build still reads "build not recorded."
 - **Champion-pool card** with an on-build insight line. **CS/min shows for every champion (v0.88.1)** — a rate over few games renders muted rather than hidden, with its own games count beside it. A dash now means one thing only: nothing was measured. Previously a "fewer than 10 games" rule blanked 34 of 35 rows that all held real, time-weighted figures.
 - **On-demand refresh** — the page triggers an incremental sync on every view (cooldown-gated server-side so it can't be spammed), so "today's games" show up without waiting for the nightly cron.
 - **Account-not-linked / zero-games / fetch-error states** are all distinct, never a bare spinner.
+- **Missing data is never a dash-plus-unit (v0.110.1).** No `—g`, no `— adh`: absent segments are omitted entirely, thin samples read as a labelled "Thin sample" badge with a tooltip, adherence is spelled out ("62% build adherence") or absent. The mobile header stacks (no side-by-side squeeze), the account picker's meta line wraps by whole segment instead of chopping mid-word, and the search bar's shortcut badge hides on touch devices and reads `Ctrl K` off-Mac.
 
 ## Patch Movers (`/movers`)
 
