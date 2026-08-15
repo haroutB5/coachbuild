@@ -51,17 +51,38 @@ function EmptyState({ title, body }: { title: string; body: string }) {
   );
 }
 
-function StatTile({ label, value, sublabel, width, accent = false }: { label: string; value: React.ReactNode; sublabel: string; width: number; accent?: boolean }) {
+/**
+ * One headline figure.
+ *
+ * Two things this tile deliberately refuses to do, both fixed after a phone
+ * screenshot showed them side by side:
+ *
+ * - **A bar that encodes nothing.** `width` is the 0-100 SHARE the bar draws.
+ *   `null` means this figure has no ratio (a raw count of games is not a
+ *   percentage of anything), and the tile then draws no track at all. It used
+ *   to pass `width={100}` for GAMES, producing a full solid bar that looked
+ *   like a maxed-out meter.
+ * - **A missing figure rendered as a 30px dash.** `value: null` means the
+ *   figure genuinely is not measured; the tile says so in words. An em-dash at
+ *   headline size reads as a stub bar, not as an absence.
+ */
+function StatTile({ label, value, sublabel, width = null, barLabel, accent = false }: { label: string; value: React.ReactNode | null; sublabel?: string; width?: number | null; barLabel?: string; accent?: boolean }) {
   return (
     <section className={`rounded-[9px] px-4 py-4 shadow-[inset_0_0_0_1px_rgba(233,233,237,.08)] ${accent ? "bg-teal/[0.06] shadow-[inset_0_0_0_1px_rgba(145,132,217,.22)]" : "bg-panel-glass"}`}>
       <p className="text-[9px] font-semibold uppercase tracking-[0.13em] text-mut">{label}</p>
-      <div className="mt-2 flex items-baseline gap-2">
-        <p className={`min-w-0 truncate text-[30px] font-semibold leading-none tracking-[-0.03em] tabular-nums ${accent ? "text-teal" : "text-txt"}`}>{value}</p>
-        <p className="truncate text-[10px] text-mut">{sublabel}</p>
-      </div>
-      <div className="mt-3 h-1 rounded-full bg-white/[0.06]">
-        <div className={`h-full rounded-full ${accent ? "bg-teal" : "bg-white/85"}`} style={{ width: `${Math.max(0, Math.min(100, width))}%` }} />
-      </div>
+      {value === null ? (
+        <p className="mt-2.5 text-[13px] leading-none text-mut">Not measured yet</p>
+      ) : (
+        <div className="mt-2 flex flex-wrap items-baseline gap-x-2">
+          <p className={`min-w-0 truncate text-[30px] font-semibold leading-none tracking-[-0.03em] tabular-nums ${accent ? "text-teal" : "text-txt"}`}>{value}</p>
+          {sublabel && <p className="truncate text-[10px] text-mut">{sublabel}</p>}
+        </div>
+      )}
+      {width !== null && (
+        <div className="mt-3 h-1 rounded-full bg-white/[0.06]" role="img" aria-label={barLabel ?? `${label}: ${Math.round(width)} percent`}>
+          <div className={`h-full rounded-full ${accent ? "bg-teal" : "bg-white/85"}`} style={{ width: `${Math.max(0, Math.min(100, width))}%` }} />
+        </div>
+      )}
     </section>
   );
 }
@@ -107,8 +128,10 @@ function ChampionPool({ rows, recentGames }: { rows: ReturnType<typeof buildMySt
               <span className="text-right text-[12px] text-mut tabular-nums">{row.games}</span>
               <span className={`text-right text-[12px] font-semibold tabular-nums ${row.lowSample ? "text-mut" : row.winrate >= 0.5 ? "text-good" : "text-bad"}`}>{formatPct(row.winrate)}</span>
               <span className={`text-right text-[12px] tabular-nums ${csThin ? "text-mut/60" : "text-mut"}`} title={row.csPerMin === null ? "CS/min was not measured for this row." : `${row.csGames} games behind this CS/min value.`}>{row.csPerMin === null ? "—" : row.csPerMin.toFixed(1)}</span>
+              {/* The empty track that used to sit beside an unmeasured "—" is
+                  gone: a bar with nothing to encode reads as a zero reading. */}
               <span className="flex items-center justify-end gap-2" title={samplePct === null ? "Champion-specific adherence is not present in the available recent-game sample." : `Recent champion adherence over ${sample?.resolved} resolved games.`}>
-                <span className="h-1.5 w-10 overflow-hidden rounded-full bg-white/[0.07]">{samplePct !== null && <span className="block h-full rounded-full bg-teal" style={{ width: `${samplePct}%` }} />}</span>
+                {samplePct !== null && <span className="h-1.5 w-10 overflow-hidden rounded-full bg-white/[0.07]"><span className="block h-full rounded-full bg-teal" style={{ width: `${samplePct}%` }} /></span>}
                 <span className={`w-8 text-right text-[11px] tabular-nums ${samplePct === null ? "text-mut/50" : "text-mut"}`}>{samplePct === null ? "—" : `${samplePct}%`}</span>
               </span>
             </Link>
@@ -126,10 +149,20 @@ function ChampionPool({ rows, recentGames }: { rows: ReturnType<typeof buildMySt
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[12px] font-semibold text-txt">{row.name}</span>
                 <span className="mt-0.5 block truncate text-[9px] uppercase tracking-[0.08em] text-mut">{row.roleLabel} · {row.games} games</span>
+                {/* Segments, not a fixed template. The old line read
+                    "CS 6.6 · thin · — adh": an abbreviation nobody can expand
+                    and a dash standing in for an unmeasured value. Each segment
+                    now spells itself out and is simply absent when it has no
+                    reading, so no dash ever carries a unit. */}
+                <span className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[9px] tabular-nums text-mut/70">
+                  {row.csPerMin !== null && <span className="whitespace-nowrap">CS {row.csPerMin.toFixed(1)}/min</span>}
+                  {csThin && <span className="whitespace-nowrap rounded-[3px] bg-white/[0.07] px-1 py-px text-[8px] font-semibold uppercase tracking-[0.06em] text-mut/80" title={`CS/min covers ${row.csGames} of ${row.games} games.`}>Thin sample</span>}
+                  {row.csPerMin !== null && samplePct !== null && <span aria-hidden="true" className="text-mut/40">·</span>}
+                  {samplePct !== null && <span className="whitespace-nowrap">{samplePct}% build adherence</span>}
+                </span>
               </span>
               <span className="shrink-0 text-right">
                 <span className={`block text-[12px] font-semibold tabular-nums ${row.lowSample ? "text-mut" : row.winrate >= 0.5 ? "text-good" : "text-bad"}`}>{formatPct(row.winrate)}</span>
-                <span className="mt-0.5 block text-[9px] tabular-nums text-mut/70">CS {row.csPerMin === null ? "—" : row.csPerMin.toFixed(1)}{csThin ? " · thin" : ""} · {samplePct === null ? "—" : `${samplePct}%`} adh</span>
               </span>
             </Link>
           );
@@ -193,13 +226,17 @@ function MyStatsSurface({ summary, icons, onSwitched }: { summary: MyStatsSummar
 
   return (
     <>
-      <div className="flex items-end justify-between gap-4">
-        <div>
+      {/* Stacked below lg: side by side, the title column was squeezed to a
+          third of a 390px viewport and both the eyebrow and the H1 wrapped
+          mid-phrase while the accounts card floated beside them. The
+          side-by-side arrangement is kept only at the width it actually fits. */}
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div className="min-w-0">
           <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-teal">RANKED SOLO · {coverage.seasonClaimSafe ? "FULL SEASON" : "RECORDED SO FAR"} · DISPLAY ONLY</p>
           <h1 className="mt-1.5 text-[34px] font-semibold leading-none tracking-[-0.025em] text-txt">My Stats</h1>
         </div>
         {(summary.accounts?.length ?? 0) > 0 && (
-          <div className="min-w-0 max-w-[420px]">
+          <div className="min-w-0 lg:max-w-[420px] lg:flex-shrink-0">
             <AccountPicker
               accounts={summary.accounts ?? []}
               activeRiotId={summary.riotId}
@@ -217,10 +254,24 @@ function MyStatsSurface({ summary, icons, onSwitched }: { summary: MyStatsSummar
       ) : (
         <>
           <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <StatTile label="Games" value={overall.games} sublabel={coverage.seasonClaimSafe ? "this season" : "recorded"} width={100} />
-            <StatTile label="Win rate" value={formatPct(overall.winrate)} sublabel={`${overall.wins}W · ${overall.losses}L`} width={overall.winrate * 100} />
-            <StatTile label="Main" value={main?.name ?? "—"} sublabel={main ? `${main.games} games` : "not measured"} width={main && overall.games > 0 ? (main.games / overall.games) * 100 : 0} />
-            <StatTile label="Build adherence" value={adherence === null || adherence === undefined ? "—" : `${Math.round(adherence)}%`} sublabel={adherence === null || adherence === undefined ? "not measured" : "season avg"} width={adherence ?? 0} accent />
+            {/* A raw game count is not a share of anything, so no bar. */}
+            <StatTile label="Games" value={overall.games} sublabel={coverage.seasonClaimSafe ? "this season" : "recorded"} />
+            <StatTile label="Win rate" value={formatPct(overall.winrate)} sublabel={`${overall.wins}W · ${overall.losses}L`} width={overall.winrate * 100} barLabel={`Win rate ${formatPct(overall.winrate)} of ${overall.games} recorded games`} />
+            <StatTile
+              label="Main"
+              value={main?.name ?? null}
+              sublabel={main ? `${main.games} of ${overall.games} games` : undefined}
+              width={main && overall.games > 0 ? (main.games / overall.games) * 100 : null}
+              barLabel={main ? `${main.name} is ${Math.round((main.games / overall.games) * 100)} percent of your recorded games` : undefined}
+            />
+            <StatTile
+              label="Build adherence"
+              value={adherence === null || adherence === undefined ? null : `${Math.round(adherence)}%`}
+              sublabel={adherence === null || adherence === undefined ? undefined : "season avg"}
+              width={adherence ?? null}
+              barLabel={adherence === null || adherence === undefined ? undefined : `Build adherence ${Math.round(adherence)} percent across the comparable season sample`}
+              accent
+            />
           </div>
 
           <div className="mt-4 grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_372px]">

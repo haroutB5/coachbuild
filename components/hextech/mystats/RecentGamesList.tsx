@@ -159,8 +159,12 @@ export default function RecentGamesList({ games, iconOf, showChart = true }: Rec
               <p className="text-[10px] text-mut uppercase tracking-[0.05em]">{myStatsRoleLabel(g.role)}</p>
             </div>
 
+            {/* All three or none. A partial "12 / — / 4" invites the reader to
+                treat the dash as a zero; an unrecorded game says so instead. */}
             <span className="text-[12px] text-txt tabular-nums flex-shrink-0">
-              {g.kills ?? "—"} / {g.deaths ?? "—"} / {g.assists ?? "—"}
+              {g.kills !== null && g.deaths !== null && g.assists !== null
+                ? `${g.kills} / ${g.deaths} / ${g.assists}`
+                : <span className="text-[10px] text-mut">not recorded</span>}
             </span>
 
             <BuildChip onWpaBuild={g.onWpaBuild} patchDataPending={g.patchDataPending} />

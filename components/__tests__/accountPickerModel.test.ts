@@ -236,7 +236,18 @@ describe("buildAccountRow", () => {
 
   it("carries no puuid field into the view model", () => {
     const row = buildAccountRow(account(), NOW) as unknown as Record<string, unknown>;
-    expect(Object.keys(row)).toEqual(["id", "riotId", "active", "meta", "srLabel"]);
+    expect(Object.keys(row)).toEqual(["id", "riotId", "active", "meta", "metaSegments", "srLabel"]);
+  });
+
+  it("exposes the meta line as unjoined segments so a narrow row wraps between them", () => {
+    const row = buildAccountRow(account({ region: "EUW", games: 156, lastSeenAt: "2026-07-29T11:00:00.000Z" }), NOW);
+    expect(row.metaSegments).toEqual(["EUW", "156 games", "seen 1h ago"]);
+    expect(row.metaSegments.join(" · ")).toBe(row.meta);
+  });
+
+  it("omits an absent segment from metaSegments rather than padding it", () => {
+    const row = buildAccountRow(account({ region: "NA1", games: 1, lastSeenAt: null }), NOW);
+    expect(row.metaSegments).toEqual(["NA1", "1 game"]);
   });
 });
 

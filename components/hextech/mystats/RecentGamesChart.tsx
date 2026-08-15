@@ -165,7 +165,12 @@ export default function RecentGamesChart({ games, iconOf }: RecentGamesChartProp
               <BuildMark onWpaBuild={g.onWpaBuild} />
 
               <span className="sr-only">
-                {name} {myStatsRoleLabel(g.role)}, {g.win ? "win" : "loss"}, {g.kills ?? "—"}/{g.deaths ?? "—"}/{g.assists ?? "—"},
+                {/* The K/D/A clause is omitted when unrecorded rather than
+                    padded with dashes: a screen reader announcing "dash slash
+                    dash slash dash" is noise, and the KDA clause right after
+                    already states that the game was not recorded. */}
+                {name} {myStatsRoleLabel(g.role)}, {g.win ? "win" : "loss"},{" "}
+                {g.kills !== null && g.deaths !== null && g.assists !== null && `${g.kills}/${g.deaths}/${g.assists}, `}
                 {bar.kda === null ? "KDA not recorded" : `KDA ${bar.kda.toFixed(1)}${bar.perfect ? " (perfect, no deaths)" : ""}`}, {buildText}.
               </span>
             </li>

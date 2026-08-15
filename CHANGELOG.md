@@ -1,4 +1,47 @@
 # Changelog
+## 0.110.1 — 2026-08-15
+
+Phone-screenshot pass over the Builds home tab and My Stats. Every fix here is
+one of two families: a missing value rendered as a dash with a unit stuck to
+it, or a progress bar drawn under a number that is not a share of anything.
+
+- **A champion you have never played ranked said "—g" instead of saying so.**
+  The "Pick up where you left off" cards show your own record on that champion,
+  which very often does not exist. The absence rendered as a 22px dash, a "—g",
+  and an empty grey track, three shapes that each read like a value that failed
+  to load. A card with no record now says "No ranked games recorded this
+  season" and draws no bar; a card with one says "73 games", not "73g".
+- **A genuine 0% win rate was displayed as "no data".** The same cards tested
+  the win rate for truthiness, so a real 0.0% over 2 games fell through to the
+  missing-data branch. Urgot on top lane showed a dash beside "2g".
+- **The search box advertised ⌘K on a phone and on Windows.** It is hidden
+  entirely on touch devices, which cannot perform it, and reads "Ctrl K" off a
+  Mac. The handler always accepted both modifiers; only the label was wrong.
+- **"Pick up where you left off" and "recent on this device" collided** at
+  phone width. The meta label wraps to its own line now.
+- **My Stats' header was unusable on a phone.** The linked-accounts card
+  floated to the right while the eyebrow and the "My Stats" title were squeezed
+  into a narrow left column and wrapped mid-phrase. Below desktop width the two
+  now stack, title first. The side-by-side layout is kept where it fits.
+- **The linked-account line was chopped mid-token** ("EUW · 156 games · seen
+  1..."), which is worse than dropping the segment: "seen 1" could be a minute
+  or a year. The segments wrap between themselves instead of being cut.
+- **GAMES showed a full solid bar under a raw count of 157.** A count is not a
+  percentage of anything, so that bar always looked maxed out. It is gone.
+  MAIN's bar does encode a real share and now says what it is ("82 of 157
+  games"). BUILD ADHERENCE with nothing measured showed a purple dash the size
+  of a headline plus an empty track; it says "Not measured yet" and draws
+  nothing.
+- **Champion pool rows read "CS 6.6 · thin · — adh".** The abbreviation is
+  spelled out, "thin" is a labelled badge, and an unmeasured adherence is left
+  out rather than standing in as a dash with a unit.
+- **A game with no recorded KDA announced "dash slash dash slash dash"** to a
+  screen reader, and printed the same to the eye in the recent-games list.
+
+Also: the Builds landing's tier-list loading flag is derived rather than set
+inside an effect, which clears the one lint error that was already failing on
+`main`.
+
 ## 0.110.0 — 2026-08-12
 
 An adversarial edge-test of the whole app — desktop, phone, and the PowerShell

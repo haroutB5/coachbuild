@@ -132,6 +132,16 @@ export interface AccountRowView {
   active: boolean;
   /** Region · N games · seen Xh ago — only the segments that say something. */
   meta: string;
+  /**
+   * The same segments, unjoined, so the renderer can wrap between them.
+   *
+   * `meta` was rendered as one `truncate`d line, which at 390px chopped it
+   * mid-token ("EUW · 156 games · seen 1…"). A truncated number is worse than
+   * a missing one — "seen 1…" could be 1 minute or 1 year. The renderer lays
+   * these out as individually unbreakable chunks so a narrow viewport drops a
+   * whole segment onto the next line instead of cutting one in half.
+   */
+  metaSegments: string[];
   /** Screen-reader sentence for the row. The visual meta line is a middot-
    *  separated fragment, which a screen reader reads as one run-on string. */
   srLabel: string;
@@ -159,6 +169,7 @@ export function buildAccountRow(a: AccountSummary, nowMs: number): AccountRowVie
     riotId: a.riotId,
     active: a.active,
     meta: parts.join(" · "),
+    metaSegments: parts,
     srLabel: `${a.riotId}, ${srParts.join(", ")}${a.active ? ", currently active" : ""}`,
   };
 }

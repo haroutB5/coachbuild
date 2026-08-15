@@ -2,7 +2,7 @@
 
 **Describes v0.92.1, 2026-08-01.** `package.json`'s `version` is the single source of truth for the app version — if it's moved on since this date, treat anything below with more skepticism the further it's fallen behind (check `CHANGELOG.md` for what shipped after this doc's version).
 
-League of Legends coaching companion. Next.js 14 (App Router) + TypeScript + Tailwind, Vercel (prod: `coachbuild.vercel.app`, personal account). Serverless throughout — no server processes besides Vercel functions + three daily crons, plus a user-run PowerShell companion (`public/companion.ps1`) that bridges the app to the local League client. `NEXT_PUBLIC_APP_VERSION` is injected by `next.config.mjs` from `package.json` and shown in the global nav's rail/tab-bar footer; the SW cache name is version-tied. Read this file before exploring source; it's the map, not a substitute for reading the actual code before changing it.
+League of Legends coaching companion. Next.js 16.3 (App Router) + TypeScript + Tailwind, Vercel (prod: `coachbuild.vercel.app`, personal account). Serverless throughout — no server processes besides Vercel functions + three daily crons, plus a user-run PowerShell companion (`public/companion.ps1`) that bridges the app to the local League client. `NEXT_PUBLIC_APP_VERSION` is injected by `next.config.mjs` from `package.json` and shown in the global nav's rail/tab-bar footer; the SW cache name is version-tied. Read this file before exploring source; it's the map, not a substitute for reading the actual code before changing it.
 
 ## Six surfaces, one shell
 

@@ -33,6 +33,39 @@ const subscribeToHydration = () => () => {};
 const getHydratedSnapshot = () => true;
 const getServerHydratedSnapshot = () => false;
 
+/**
+ * The keyboard-shortcut hint for the search box, or null when there is no
+ * honest hint to give.
+ *
+ * Two things were wrong with the hardcoded "⌘K": on a phone it advertised a
+ * shortcut the device cannot perform, and on Windows/Linux it named the wrong
+ * modifier (the handler has always accepted Ctrl as well as Cmd). Resolved
+ * after mount — the server cannot know either fact, and rendering a guess then
+ * correcting it is a hydration mismatch. Null on any coarse-pointer / no-hover
+ * device, which is the touch case.
+ */
+function useSearchShortcutHint(): string | null {
+  const [hint, setHint] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia("(hover: hover) and (pointer: fine)");
+    const apply = () => {
+      if (!query.matches) {
+        setHint(null);
+        return;
+      }
+      const platform = navigator.platform || navigator.userAgent || "";
+      setHint(/Mac|iPhone|iPad|iPod/i.test(platform) ? "⌘K" : "Ctrl K");
+    };
+    apply();
+    query.addEventListener("change", apply);
+    return () => query.removeEventListener("change", apply);
+  }, []);
+
+  return hint;
+}
+
 function TopBarChampionSearch() {
   const router = useRouter();
   const pathname = usePathname();
@@ -46,6 +79,7 @@ function TopBarChampionSearch() {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const mounted = useSyncExternalStore(subscribeToHydration, getHydratedSnapshot, getServerHydratedSnapshot);
   const [coords, setCoords] = useState<DropdownCoords | null>(null);
+  const shortcutHint = useSearchShortcutHint();
 
   useEffect(() => {
     getChampionMap().then((championMap) => {
@@ -175,11 +209,16 @@ function TopBarChampionSearch() {
           aria-controls={LISTBOX_ID}
           aria-autocomplete="list"
           aria-activedescendant={open && filtered[activeIndex] ? optId(activeIndex) : undefined}
-          className="h-11 w-full rounded-[8px] border border-[rgba(233,233,237,0.1)] bg-panel2 pl-8 pr-12 text-[13px] text-txt outline-none transition-colors duration-[120ms] ease-in placeholder:text-txt/40 hover:border-accent/40 focus-visible:border-accent focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:h-[34px]"
+          className={`h-11 w-full rounded-[8px] border border-[rgba(233,233,237,0.1)] bg-panel2 pl-8 text-[13px] text-txt outline-none transition-colors duration-[120ms] ease-in placeholder:text-txt/40 hover:border-accent/40 focus-visible:border-accent focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 lg:h-[34px] ${shortcutHint ? "pr-14" : "pr-3"}`}
         />
-        <span className="pointer-events-none absolute right-2 flex items-center rounded-[5px] border border-[rgba(233,233,237,0.14)] px-1.5 py-[3px] text-[10px] font-medium leading-none text-txt/[0.45]">
-          ⌘K
-        </span>
+        {shortcutHint && (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute right-2 flex items-center whitespace-nowrap rounded-[5px] border border-[rgba(233,233,237,0.14)] px-1.5 py-[3px] text-[10px] font-medium leading-none text-txt/[0.45]"
+          >
+            {shortcutHint}
+          </span>
+        )}
       </div>
 
       {open && mounted && coords && createPortal(

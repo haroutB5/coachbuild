@@ -61,6 +61,7 @@ import {
   switchAccount,
   type AccountMutationDeps,
   type AccountMutationResult,
+  type AccountRowView,
   type DetectPrompt,
 } from "./accountPickerModel";
 
@@ -145,6 +146,27 @@ export function __resetDetectionForTests(): void {
 }
 
 type SecretState = "unknown" | "missing" | "present" | "rejected";
+
+/**
+ * The `Region · N games · seen Xh ago` line under a Riot ID.
+ *
+ * Each segment is unbreakable and the row wraps between them, so a narrow
+ * viewport pushes a whole segment down rather than chopping one mid-token —
+ * see `AccountRowView.metaSegments`. `title` still carries the joined line for
+ * a pointer user.
+ */
+function MetaLine({ view, className }: { view: AccountRowView; className?: string }) {
+  return (
+    <span className={`flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 ${className ?? ""}`} title={view.meta}>
+      {view.metaSegments.map((segment, index) => (
+        <span key={segment} className="whitespace-nowrap">
+          {index > 0 && <span aria-hidden="true" className="mr-1.5 text-mut/45">·</span>}
+          {segment}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 export default function AccountPicker({
   accounts,
@@ -578,10 +600,8 @@ export default function AccountPicker({
       {/* ONE account: a labelled line, not a menu. See pickerModeFor. */}
       {mode === "single" && views[0] && (
         <div className="mt-1.5">
-          <p className="text-[14px] font-semibold text-txt tracking-[-0.01em]">{views[0].riotId}</p>
-          <p className="text-[11px] text-mut tabular-nums mt-0.5" title="Games stored for this account">
-            {views[0].meta}
-          </p>
+          <p className="text-[14px] font-semibold text-txt tracking-[-0.01em] break-words">{views[0].riotId}</p>
+          <MetaLine view={views[0]} className="text-[11px] text-mut tabular-nums mt-0.5" />
         </div>
       )}
 
@@ -619,7 +639,7 @@ export default function AccountPicker({
               <span className="block text-[13.5px] font-semibold text-txt truncate tracking-[-0.01em]">
                 {activeView?.riotId ?? activeRiotId ?? "No account active"}
               </span>
-              {activeView && <span className="block text-[10.5px] text-mut tabular-nums truncate">{activeView.meta}</span>}
+              {activeView && <MetaLine view={activeView} className="text-[10.5px] text-mut tabular-nums" />}
             </span>
             {/* An SVG, not the `&#9662;` glyph the older rows use: in this app's
                 display font that character falls back to a 3px dash, which reads
@@ -691,7 +711,7 @@ export default function AccountPicker({
                   />
                   <span className="min-w-0 flex-1">
                     <span className="block text-[13px] font-semibold text-txt truncate tracking-[-0.01em]">{v.riotId}</span>
-                    <span className="block text-[10.5px] text-mut tabular-nums truncate">{v.meta}</span>
+                    <MetaLine view={v} className="text-[10.5px] text-mut tabular-nums" />
                   </span>
                   {v.active && (
                     <span className="text-[9px] tracking-[0.06em] uppercase font-bold px-1.5 py-0.5 rounded bg-panel2 text-teal border border-line-gold flex-shrink-0">

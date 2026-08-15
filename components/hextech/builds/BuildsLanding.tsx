@@ -63,6 +63,10 @@ function games(value: number | null): string {
   return value === null ? "—" : value.toLocaleString();
 }
 
+function gamesLabel(value: number): string {
+  return `${value.toLocaleString()} ${value === 1 ? "game" : "games"}`;
+}
+
 function championRefFromIcon(id: number, entry: ChampionIconEntry | undefined): ChampionRef | null {
   if (!entry) return null;
   const key = entry.icon.match(/\/champion\/([^/.]+)\./)?.[1] ?? entry.name.replace(/\s+/g, "");
@@ -123,9 +127,22 @@ function SearchResults({
   );
 }
 
+/**
+ * One "pick up where you left off" card.
+ *
+ * The win rate / games / bar block is the user's OWN ranked-solo record on this
+ * champion+lane, which very often does not exist — a champion viewed in champ
+ * select is not a champion played. It used to render that absence as a 22px
+ * "—" beside a "—g" and a 0%-filled track, i.e. three placeholder shapes that
+ * each read as a broken value (hard rule 4's spirit: an absence must look like
+ * an absence, not like a figure that failed to load). The whole block is now
+ * conditional — when there is no record the card says so in one quiet line and
+ * draws no bar, because a bar with nothing to encode is noise.
+ */
 function RecentCard({ champion, lane, winRate, gamesCount, onPick }: { champion: ChampionRef; lane: LaneId; winRate: number | null; gamesCount: number | null; onPick: () => void }) {
+  const measured = winRate !== null && gamesCount !== null;
   const share = winRate === null ? 0 : Math.max(0, Math.min(100, winRate));
-  const barTone = winRate === null ? "bg-accent" : winRate >= 50 ? "bg-good" : "bg-bad";
+  const barTone = winRate !== null && winRate >= 50 ? "bg-good" : "bg-bad";
   return (
     <button
       type="button"
@@ -139,13 +156,19 @@ function RecentCard({ champion, lane, winRate, gamesCount, onPick }: { champion:
           <span className="mt-0.5 block text-[9px] uppercase tracking-[0.1em] text-[#9397ab]/60">{LANE_LABEL[lane]}</span>
         </span>
       </div>
-      <div className="mt-3 flex items-end justify-between gap-2">
-        <span className="text-[22px] font-semibold leading-none tabular-nums text-[#e9e9ed]">{pct(winRate)}</span>
-        <span className="text-[10px] tabular-nums text-[#9397ab]/60">{games(gamesCount)}g</span>
-      </div>
-      <div className="mt-2 h-1 rounded-full bg-white/[0.06]">
-        <span className={`block h-full rounded-full ${barTone}`} style={{ width: `${share}%` }} />
-      </div>
+      {measured ? (
+        <>
+          <div className="mt-3 flex flex-wrap items-end justify-between gap-x-2 gap-y-1">
+            <span className="text-[22px] font-semibold leading-none tabular-nums text-[#e9e9ed]">{pct(winRate)}</span>
+            <span className="text-[10px] tabular-nums text-[#9397ab]/60">{gamesLabel(gamesCount)}</span>
+          </div>
+          <div className="mt-2 h-1 rounded-full bg-white/[0.06]" role="img" aria-label={`Your win rate on ${champion.name} ${LANE_LABEL[lane]}: ${pct(winRate)} over ${gamesLabel(gamesCount)}`}>
+            <span className={`block h-full rounded-full ${barTone}`} style={{ width: `${share}%` }} />
+          </div>
+        </>
+      ) : (
+        <p className="mt-3 text-[10px] leading-relaxed text-[#9397ab]/55">No ranked games recorded this season</p>
+      )}
     </button>
   );
 }
@@ -181,7 +204,7 @@ function TierListSkeleton() {
 function TierList({ rows, status, onPick }: { rows: TierRow[]; status: "loading" | "ready"; onPick: (champion: ChampionRef) => void }) {
   return (
     <section>
-      <div className="mb-2 flex items-baseline justify-between">
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
         <SectionLabel>Mid lane tier list</SectionLabel>
         <span className="text-[9px] uppercase tracking-[0.1em] text-[#9397ab]/50" aria-live="polite">{status === "loading" ? "loading…" : "current sample"}</span>
       </div>
@@ -238,10 +261,12 @@ function LanesCard({ rows, onPick }: { rows: MyStatsChampionRow[]; onPick: (id: 
             <button key={lane} type="button" onClick={() => row && onPick(row.championId, lane)} disabled={!row} className="grid min-h-[44px] w-full grid-cols-[34px_minmax(0,1fr)_38px] items-center gap-2 text-left disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9184d9] lg:min-h-0">
               <span className="text-[9px] font-semibold uppercase tracking-[0.1em] text-[#9397ab]/55">{lane === "jungle" ? "JG" : lane === "support" ? "SUP" : lane.slice(0, 3).toUpperCase()}</span>
               <span className="min-w-0">
-                <span className="flex items-center gap-1.5"><span className="truncate text-[11px] font-medium text-[#e9e9ed]/80">{row?.name ?? "No data"}</span>{row && <span className="shrink-0 text-[10px] tabular-nums text-[#9397ab]/55">{pct(row.winrate * 100)}</span>}</span>
-                <span className="mt-1 block h-1 rounded-full bg-white/[0.06]"><span className={`block h-full rounded-full ${row ? "bg-accent" : "bg-white/[0.12]"}`} style={{ width: `${row ? Math.max(3, width) : 4}%` }} /></span>
+                <span className="flex items-center gap-1.5"><span className="truncate text-[11px] font-medium text-[#e9e9ed]/80">{row?.name ?? "No games"}</span>{row && <span className="shrink-0 text-[10px] tabular-nums text-[#9397ab]/55">{pct(row.winrate * 100)}</span>}</span>
+                {/* No row means no share to draw. A 4%-wide stub bar under
+                    "No games" reads as a real (tiny) value, so draw nothing. */}
+                {row && <span className="mt-1 block h-1 rounded-full bg-white/[0.06]"><span className="block h-full rounded-full bg-accent" style={{ width: `${Math.max(3, width)}%` }} /></span>}
               </span>
-              <span className="text-right text-[10px] tabular-nums text-[#9397ab]/55">{row ? `${row.games}g` : "—"}</span>
+              <span className="text-right text-[10px] tabular-nums text-[#9397ab]/55">{row ? `${row.games}g` : ""}</span>
             </button>
           );
         })}
@@ -285,7 +310,12 @@ export default function BuildsLanding({ onQuickPick }: { onQuickPick: (championI
   // only shows once loading has genuinely settled empty. `baseLoaded` marks
   // the first data hop as done (success OR failure) so a total fetch failure
   // still settles to a real empty state instead of a permanent skeleton.
-  const [tierStatus, setTierStatus] = useState<"loading" | "ready">("loading");
+  //
+  // `tierStatus` is DERIVED, not stored: the "nothing to fetch" settle used to
+  // be a setState in the effect body (a cascading render, and a lint error),
+  // and it is really just a fact about state we already hold — the first hop
+  // finished and produced no candidates.
+  const [tierFetchSettled, setTierFetchSettled] = useState(false);
   const [baseLoaded, setBaseLoaded] = useState(false);
 
   const searchMatches = useMemo(() => {
@@ -318,8 +348,7 @@ export default function BuildsLanding({ onQuickPick }: { onQuickPick: (championI
     return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
+  const midCandidates = useMemo(() => {
     const candidates = new Map<number, ChampionRef>();
     for (const champion of champions) if (!candidates.has(champion.id)) candidates.set(champion.id, champion);
     for (const entry of recent) {
@@ -330,23 +359,26 @@ export default function BuildsLanding({ onQuickPick }: { onQuickPick: (championI
       const champion = candidates.get(row.championId) ?? championRefFromIcon(row.championId, iconMap.get(row.championId));
       if (champion) candidates.set(champion.id, champion);
     }
-    const midCandidates = Array.from(candidates.values()).slice(0, 8);
-    if (!midCandidates.length) {
-      // Nothing to fetch. Only call that EMPTY once the first data hop has
-      // settled — before then it is still loading, not absent.
-      if (baseLoaded) setTierStatus("ready");
-      return;
-    }
+    return Array.from(candidates.values()).slice(0, 8);
+  }, [champions, iconMap, myRows, recent]);
+
+  // Ready once the fetch has landed, or once the first hop has settled with
+  // nothing to fetch. Before either, it is loading, not absent.
+  const tierStatus: "loading" | "ready" = tierFetchSettled || (baseLoaded && midCandidates.length === 0) ? "ready" : "loading";
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!midCandidates.length) return;
     Promise.all(midCandidates.map(async (champion) => ({ champion, stats: await getHeroStats(champion.id, "mid") }))).then((entries) => {
       if (cancelled) return;
       const valid = entries.filter((entry) => entry.stats.winRatePct !== null || entry.stats.gamesCount !== null);
       const sorted = valid.sort((a, b) => (b.stats.winRatePct ?? -1) - (a.stats.winRatePct ?? -1));
       const baseline = sorted.length ? (sorted.reduce((sum, entry) => sum + (entry.stats.winRatePct ?? 0), 0) / sorted.length) : null;
       setTierRows(sorted.slice(0, 6).map(({ champion, stats }) => ({ champion, winRate: stats.winRatePct, games: stats.gamesCount, delta: baseline === null || stats.winRatePct === null ? null : stats.winRatePct - baseline })));
-      setTierStatus("ready");
+      setTierFetchSettled(true);
     });
     return () => { cancelled = true; };
-  }, [champions, iconMap, myRows, recent, baseLoaded]);
+  }, [midCandidates]);
 
   function pickChampion(champion: ChampionRef) {
     setQuery("");
@@ -380,8 +412,12 @@ export default function BuildsLanding({ onQuickPick }: { onQuickPick: (championI
 
   const recentCards = recent.slice(0, 4).map((entry) => {
     const champion = champions.find((item) => item.id === entry.championId) ?? championRefFromIcon(entry.championId, iconMap.get(entry.championId));
-    return champion ? { entry, champion } : null;
-  }).filter((entry): entry is { entry: RecentChampionEntry; champion: ChampionRef } => entry !== null);
+    // Resolve the personal row ONCE. The old inline version read `?.winrate`
+    // as a truthiness test, so a genuine 0% win rate (a real, common figure on
+    // a 1-game champion) fell through to null and rendered as "no data".
+    const record = myRows.find((row) => row.championId === entry.championId && ROLE_TO_LANE[row.role] === entry.lane) ?? null;
+    return champion ? { entry, champion, record } : null;
+  }).filter((entry): entry is { entry: RecentChampionEntry; champion: ChampionRef; record: MyStatsChampionRow | null } => entry !== null);
 
   return (
     <div className="space-y-5">
@@ -431,8 +467,11 @@ export default function BuildsLanding({ onQuickPick }: { onQuickPick: (championI
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_372px]">
         <main className="min-w-0 space-y-5">
           <section>
-            <div className="mb-2 flex items-baseline justify-between"><SectionLabel>Pick up where you left off</SectionLabel><span className="text-[9px] uppercase tracking-[0.1em] text-[#9397ab]/45">recent on this device</span></div>
-            {recentCards.length ? <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">{recentCards.map(({ entry, champion }) => <RecentCard key={`${entry.championId}-${entry.lane}`} champion={champion} lane={entry.lane} winRate={myRows.find((row) => row.championId === entry.championId && ROLE_TO_LANE[row.role] === entry.lane)?.winrate ? (myRows.find((row) => row.championId === entry.championId && ROLE_TO_LANE[row.role] === entry.lane)?.winrate ?? 0) * 100 : null} gamesCount={myRows.find((row) => row.championId === entry.championId && ROLE_TO_LANE[row.role] === entry.lane)?.games ?? null} onPick={() => onQuickPick(entry.championId, entry.lane)} />)}</div> : <div className={`${CARD_CLASS} px-4 py-4 text-[11px] text-[#9397ab]/65`}>Your recent champions will appear here after your first build view.</div>}
+            {/* flex-wrap + gap: at 390px the label and the right-aligned meta
+                used to butt into each other. The meta now drops to its own
+                line instead of colliding. */}
+            <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"><SectionLabel>Pick up where you left off</SectionLabel><span className="text-[9px] uppercase tracking-[0.1em] text-[#9397ab]/45">recent on this device</span></div>
+            {recentCards.length ? <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">{recentCards.map(({ entry, champion, record }) => <RecentCard key={`${entry.championId}-${entry.lane}`} champion={champion} lane={entry.lane} winRate={record ? record.winrate * 100 : null} gamesCount={record?.games ?? null} onPick={() => onQuickPick(entry.championId, entry.lane)} />)}</div> : <div className={`${CARD_CLASS} px-4 py-4 text-[11px] text-[#9397ab]/65`}>Your recent champions will appear here after your first build view.</div>}
           </section>
           <TierList rows={tierRows} status={tierStatus} onPick={pickChampion} />
         </main>
