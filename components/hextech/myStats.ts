@@ -74,10 +74,10 @@ export interface MyStatsMatchupRecord {
  *  `onWpaBuild` mirrors the server's own null/false distinction (see
  *  lib/mystats/adherence.ts's computeAdherence doc comment): null = no
  *  recommendation was available to compare against at ingest time, never
- *  coerced to false. Structurally identical to
- *  components/hextech/mystats/RecentGamesList.tsx's `RecentGameRow` (that
- *  file's own consumer type) on purpose — keeps the two interfaces mutually
- *  assignable regardless of which extends which. */
+ *  coerced to false. This used to be kept structurally identical to a
+ *  `RecentGameRow` in the retired My Stats design so the two were mutually
+ *  assignable; that design was deleted in v0.110.2 and this is now the only
+ *  shape. */
 export interface MyStatsRecentGame {
   championId: number;
   role: number;
@@ -647,10 +647,10 @@ export function buildMyStatsMatchupRows(matchups: MyStatsMatchupRecord[], iconOf
 // redesign (fronty). Pure, JSX-free, same posture as everything above: total
 // functions (empty input / all-zero / single-game are real inputs, not edge
 // cases), never fabricate a confident number where the data doesn't support
-// one. Operate on the KILLS/DEATHS/ASSISTS/WIN shape shared by both
-// MyStatsRecentGame (this file) and RecentGamesList.tsx's RecentGameRow (that
-// file's own consumer type, structurally identical on purpose — see
-// MyStatsRecentGame's doc comment above), so either can be passed in as-is.
+// one. Operate on the KILLS/DEATHS/ASSISTS/WIN shape of MyStatsRecentGame
+// (this file). They are typed against that shape via Pick rather than the
+// whole interface, so any structurally compatible row can still be passed in
+// as-is — which is what the now-deleted RecentGameRow relied on.
 // ─────────────────────────────────────────────────────────────────────────────
 
 type KdaInput = Pick<MyStatsRecentGame, "kills" | "deaths" | "assists">;

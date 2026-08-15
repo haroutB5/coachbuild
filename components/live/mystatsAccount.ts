@@ -86,17 +86,20 @@ export interface AccountSummary {
   games: number;
 
   // ── Per-account record (2026-07-30) ───────────────────────────────────────
-  // The account CARD prints a win rate beside the LP, so the denominator has to
-  // be per-account, not the active account's season total.
+  // The server sends a per-account win rate so a card can print one beside the
+  // LP without borrowing the active account's season denominator.
   //
-  // OPTIONAL, and read through `resolveAccountWinrate`
-  // (components/hextech/mystats/profileModel.ts) rather than here, for one
-  // reason: the server side of this landed in a parallel lane, so the FIELD NAME
-  // is the one thing this file must not assume. The resolver accepts `wins` (a
-  // count — preferred, because a count has no unit ambiguity and yields the W-L
-  // for the tooltip) and `winrate`/`winRate` (a 0-1 FRACTION, same convention as
-  // `records[].winrate`). Anything else, including a percentage in a field named
-  // like a fraction, resolves to null and the card renders an em dash. A card
+  // CURRENTLY UNREAD (v0.110.2). The account-card grid that consumed these, and
+  // the `resolveAccountWinrate` that read them, went with the retired My Stats
+  // design; the live page shows one account line, no per-account win rate. The
+  // fields stay because the server still sends them and they cost nothing.
+  //
+  // If you wire them up again, do NOT assume the field name: the server side
+  // landed in a parallel lane, which is why there are three spellings. `wins`
+  // is a COUNT (preferred — no unit ambiguity, and it yields the W-L for a
+  // tooltip); `winrate`/`winRate` are a 0-1 FRACTION, the same convention as
+  // `records[].winrate`. Anything else, including a percentage in a field named
+  // like a fraction, must resolve to "no reading" and render nothing. A card
   // that prints "0.5%" because a 0-1 fraction was read as a percentage is worse
   // than a card that prints nothing.
   /** Wins among `games`. */

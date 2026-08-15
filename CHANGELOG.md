@@ -1,4 +1,26 @@
 # Changelog
+## 0.110.2 — 2026-08-15
+
+Housekeeping, no user-visible change. Deletes the retired My Stats design at
+the user's request.
+
+- **Removed nine components and their shared model** that no route rendered.
+  They were the 2026-07/08 profile design; `app/mystats/page.tsx` moved to its
+  own inline champion pool and stat tiles and left them orphaned. They kept
+  compiling and kept passing 77 tests, which is exactly what makes dead code
+  dangerous to read: nothing about them looked retired. Gone:
+  `ProfileHero`, `AccountCardGrid`, `ChampionPoolCard`,
+  `ChampionPerformancePanel`, `MatchPerformancePanel`, `RecentGamesChart`,
+  `RecentGamesList`, `MostPlayedStrip`, `BuildAdherenceNote`, and
+  `profileModel.ts`, plus their two test files. 2,986 lines.
+- `AccountPicker` and `accountPickerModel` are live and were kept. Reachability
+  was re-checked with an import-graph walk from all 38 app entry points, not by
+  grep alone.
+- Three comments in live files pointed into the deleted code and now say what
+  is actually true, including the one on `AccountSummary.wins`/`winrate`, whose
+  reader is gone. Those wire fields are now unread, and the comment says so
+  along with the field-name warning that used to live in the resolver.
+
 ## 0.110.1 — 2026-08-15
 
 Phone-screenshot pass over the Builds home tab and My Stats. Every fix here is

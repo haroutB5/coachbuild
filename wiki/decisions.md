@@ -93,3 +93,26 @@ evidence floor answers "is this number real" and must not scale — scaling `MAS
 The pool floor now reports how many champions it held back and at what threshold, and the blind-pick
 route distinguishes no-data from all-withheld from no-candidates. A short list and an empty source
 must never look identical to the user.
+
+## 2026-08-15 — The retired My Stats design was deleted, at user request (v0.110.2)
+
+Nine components plus their shared `profileModel.ts` under `components/hextech/mystats/` were the
+2026-07/08 profile design that `app/mystats/page.tsx` stopped rendering when it moved to its own
+inline `ChampionPool`/`StatTile`. They stayed compiled, covered by 77 tests, and reachable by no
+route. Deleted after an import-graph walk from all 38 app entry points confirmed nothing live
+imported them: `ProfileHero`, `AccountCardGrid`, `ChampionPoolCard`, `ChampionPerformancePanel`,
+`MatchPerformancePanel`, `RecentGamesChart`, `RecentGamesList`, `MostPlayedStrip`,
+`BuildAdherenceNote`, `profileModel.ts`, and `components/__tests__/{profileModel,csAlwaysVisible}.test.ts`.
+
+`AccountPicker.tsx` and `accountPickerModel.ts` are LIVE and stayed.
+
+This is the deliberate, approved version of the failure gotcha (cc) describes. Gotcha (cc) is about
+capability that vanishes SILENTLY when a tab swaps what it renders — nothing errors, tests still
+pass, the feature just stops existing. That is what happened here originally, in 2026-08: the page
+was rewritten and nine components were orphaned without anyone noticing for a week. The deletion is
+not the mistake; leaving them there to be mistaken for live code was. Two things were consciously
+given up rather than lost: `csRateIsQuotable`/`formatCsNote` (a stricter "is this CS/min sample
+quotable" guard than the live page's simpler `csGames < games` check) and `resolveAccountWinrate`
+(the three-spelling reader for `AccountSummary.wins`/`winrate`/`winRate`). Both are recoverable from
+git history, and `mystatsAccount.ts` now carries the field-name warning inline so a future reader
+does not have to find it.
