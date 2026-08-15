@@ -29,6 +29,20 @@ public sealed class OverlayRenderer
 
     public OverlayRenderModel? LastModel { get; private set; }
 
+    /// <summary>
+    /// Drops the memoised signature so the next <see cref="Render"/> repaints
+    /// unconditionally.
+    ///
+    /// Required because adjust mode paints the canvas directly (four alignment
+    /// boxes plus a legend) WITHOUT going through Render, so the memoised
+    /// signature still describes the pre-adjust picture. Leaving adjust mode
+    /// with an unchanged state therefore hit `signature == _lastSignature`,
+    /// returned early, and left the adjust boxes and legend stranded on screen
+    /// over the game — the memo was reporting "nothing to repaint" about a
+    /// canvas it had not painted.
+    /// </summary>
+    public void Invalidate() => _lastSignature = null;
+
     public bool ShouldRender(
         OverlayState state,
         DisplayResolution display,

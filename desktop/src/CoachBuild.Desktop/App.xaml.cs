@@ -244,6 +244,7 @@ public partial class App : WpfApplication
         _tray.CommandRequested += OnTrayCommand;
 
         _overlay = new OverlayWindow(settingsStore);
+        _overlay.Diagnostics = message => _log?.Info(message);
         _overlay.AdjustmentStateChanged += OnAdjustmentStateChanged;
         if (_services is ILaneOverrideHostServices laneOverrideServices)
             laneOverrideServices.SetLaneOverride(_overlay.LaneOverrideSetting);
@@ -339,7 +340,11 @@ public partial class App : WpfApplication
         }
         else if (phase is not CompanionPhase.InProgress)
         {
-            _overlay?.Hide();
+            // HideOverlay(), never Hide(): out of a game this branch runs on
+            // EVERY 750 ms tick, and the raw Hide() used to close the
+            // calibrate/adjust boxes the user had just opened. See
+            // OverlayWindow.HideOverlay.
+            _overlay?.HideOverlay();
         }
     }
 
@@ -697,6 +702,20 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     private CoreSkillOrderResult? _skillOrder;
     private string? _skillOrderLane;
     private bool _skillOrderLaneIsAuto = true;
+    // Retry bookkeeping for a FAILED skill-order fetch. Without it, one
+    // transient network failure at load-in latched the overlay blank for the
+    // whole match: the key was already stored, so every later tick
+    // short-circuited and nothing ever asked again. Since v1.0.6 removed the
+    // message panel, that failure is also completely silent on screen.
+    private DateTimeOffset? _skillOrderRetryAt;
+    private int _skillOrderAttempts;
+    private static readonly TimeSpan[] SkillOrderRetryBackoff =
+    [
+        TimeSpan.FromSeconds(3),
+        TimeSpan.FromSeconds(8),
+        TimeSpan.FromSeconds(20),
+        TimeSpan.FromSeconds(45),
+    ];
     private string? _lastOverlayPhase;
 
     public CoreDesktopHostServices(
@@ -935,11 +954,28 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
                 : detectedLane is not null
                     ? $"{championId}:auto:{detectedLane}"
                     : $"{championId}:auto-fallback";
-            if (string.Equals(_skillOrderKey, key, StringComparison.Ordinal)) return;
-            _skillOrderKey = key;
-            _skillOrder = null;
-            _skillOrderLane = laneOverride ?? detectedLane;
-            _skillOrderLaneIsAuto = laneOverride is null;
+            if (string.Equals(_skillOrderKey, key, StringComparison.Ordinal))
+            {
+                // Same key: normally nothing to do. The ONE exception is a
+                // previous attempt that failed and whose backoff has elapsed —
+                // otherwise a single blip at load-in blanks the overlay for the
+                // rest of the game with no way for the user to recover short of
+                // switching lane.
+                var retryDue = _skillOrder is { Status: CoreSkillOrderStatus.Error }
+                    && _skillOrderRetryAt is { } due
+                    && DateTimeOffset.UtcNow >= due;
+                if (!retryDue) return;
+                _skillOrderRetryAt = null;
+            }
+            else
+            {
+                _skillOrderKey = key;
+                _skillOrder = null;
+                _skillOrderAttempts = 0;
+                _skillOrderRetryAt = null;
+                _skillOrderLane = laneOverride ?? detectedLane;
+                _skillOrderLaneIsAuto = laneOverride is null;
+            }
         }
 
         _ = FetchSkillOrderAsync(championId, laneOverride, detectedPosition, key);
@@ -968,27 +1004,40 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
                     _skillOrder = selection.Result;
                     _skillOrderLane = selection.Lane;
                     _skillOrderLaneIsAuto = selection.IsLaneAuto;
+                    _skillOrderRetryAt = null;
+                    _skillOrderAttempts = 0;
                 }
             }
+
+            if (selection.Result is { Status: not CoreSkillOrderStatus.Ok } bad)
+                _log?.Info($"skill-order: champion {championId} returned {bad.Status}");
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
         {
             return;
         }
-        catch
+        catch (Exception error)
         {
+            TimeSpan backoff;
+            int attempt;
             lock (_gate)
             {
-                if (string.Equals(_skillOrderKey, key, StringComparison.Ordinal))
-                {
-                    _skillOrder = new CoreSkillOrderResult(
-                        CoreSkillOrderStatus.Error,
-                        CoreOverlaySkillOrder.Empty,
-                        championId);
-                    _skillOrderLane = null;
-                    _skillOrderLaneIsAuto = laneOverride is null;
-                }
+                if (!string.Equals(_skillOrderKey, key, StringComparison.Ordinal)) return;
+                _skillOrder = new CoreSkillOrderResult(
+                    CoreSkillOrderStatus.Error,
+                    CoreOverlaySkillOrder.Empty,
+                    championId);
+                _skillOrderLane = null;
+                _skillOrderLaneIsAuto = laneOverride is null;
+                attempt = _skillOrderAttempts;
+                backoff = SkillOrderRetryBackoff[Math.Min(attempt, SkillOrderRetryBackoff.Length - 1)];
+                _skillOrderAttempts = attempt + 1;
+                _skillOrderRetryAt = DateTimeOffset.UtcNow + backoff;
             }
+
+            _log?.Error(
+                "skill-order-fetch",
+                $"skill-order: champion {championId} fetch failed ({error.GetType().Name}); retry in {backoff.TotalSeconds:0}s (attempt {attempt + 1})");
         }
     }
 

@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Runtime.ExceptionServices;
@@ -179,6 +181,84 @@ public sealed class OverlayRenderTests
             new CalibrationGeometry(830, 1010, 49, 68));
 
         Assert.NotEqual(defaultSignature, adjustedSignature);
+    }
+
+    /// <summary>
+    /// Adjust mode paints the canvas directly, bypassing Render, so the
+    /// memoised signature describes a picture that is no longer on screen.
+    /// Leaving adjust mode with unchanged state therefore short-circuited and
+    /// stranded the four alignment boxes over the game. Invalidate() is what
+    /// makes the next render unconditional.
+    /// </summary>
+    [Fact]
+    public void InvalidateForcesARepaintAfterTheCanvasWasPaintedBehindTheRenderersBack()
+    {
+        RunOnSta(() =>
+        {
+            var canvas = new Canvas();
+            var renderer = new OverlayRenderer();
+            var state = State(level: 1);
+            var display = new DisplayResolution(1920, 1080);
+
+            Assert.True(renderer.Render(canvas, state, new OverlaySettings(), display));
+            Assert.Single(canvas.Children);
+
+            // Same state again: correctly memoised away.
+            Assert.False(renderer.Render(canvas, state, new OverlaySettings(), display));
+
+            // Adjust mode repaints the canvas itself. The renderer has no idea.
+            canvas.Children.Clear();
+            canvas.Children.Add(new Border());
+            canvas.Children.Add(new Border());
+
+            // Without Invalidate the renderer still believes the canvas is
+            // correct and refuses to repaint, leaving the adjust boxes stranded.
+            Assert.False(renderer.Render(canvas, state, new OverlaySettings(), display));
+            Assert.Equal(2, canvas.Children.Count);
+
+            renderer.Invalidate();
+            Assert.True(renderer.Render(canvas, state, new OverlaySettings(), display));
+            var highlight = Assert.IsType<Border>(Assert.Single(canvas.Children));
+            Assert.Equal("Q", Assert.IsType<TextBlock>(highlight.Child).Text);
+        });
+    }
+
+    /// <summary>
+    /// ROOT CAUSE regression: the 750 ms snapshot poll hid the overlay on every
+    /// tick where the phase was not InProgress. Out of a game that is every
+    /// tick, so calibrate/adjust boxes vanished within 750 ms of opening and
+    /// the user could never align the overlay. HideOverlay must no-op while
+    /// adjusting; plain Hide() must remain available for teardown.
+    /// </summary>
+    [Fact]
+    public void HideOverlayIsIgnoredWhileAdjustingButHidesOtherwise()
+    {
+        RunOnSta(() =>
+        {
+            var settingsPath = Path.Combine(Path.GetTempPath(), $"coachbuild-test-{Guid.NewGuid():N}.json");
+            var window = new OverlayWindow(new OverlaySettingsStore(settingsPath));
+            try
+            {
+                var adjusting = typeof(OverlayWindow).GetField(
+                    "_adjusting",
+                    BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+                adjusting.SetValue(window, true);
+                var before = window.Visibility;
+                window.HideOverlay();
+                Assert.True(window.IsAdjusting);
+                Assert.Equal(before, window.Visibility);
+
+                adjusting.SetValue(window, false);
+                window.HideOverlay();
+                Assert.Equal(Visibility.Hidden, window.Visibility);
+            }
+            finally
+            {
+                window.Close();
+                if (File.Exists(settingsPath)) File.Delete(settingsPath);
+            }
+        });
     }
 
     private static void RunOnSta(Action action)

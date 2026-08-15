@@ -1,4 +1,47 @@
 # Changelog
+## Desktop 1.0.7 — 2026-08-15
+
+Desktop app only; the web app is untouched and not redeployed. Fixes the
+field-reported "overlay pink boxes not showing at all, in game or out".
+
+- **The 750 ms snapshot poll was hiding the calibration boxes the user had just
+  opened.** `App.ApplySnapshot` called the raw `Window.Hide()` on every tick
+  where the LCU phase was not `InProgress` — which, out of a game, is *every*
+  tick. Opening tray → "Calibrate overlay" / "Adjust overlay position" showed
+  the four pink alignment boxes for at most 750 ms and then hid them, leaving
+  the app in `IsAdjusting = true` behind an invisible window: arrow keys did
+  nothing visible and the menu offered only "Cancel adjust". Since calibration
+  is the only pink surface that exists outside a game, this read exactly as
+  "the overlay does not work". `_adjusting` was already honoured by
+  `ApplyState`, `RenderCurrentState`, `OnDisplayChanged` and the DPI hook; the
+  hide path was the one place that ignored it. The poll now calls
+  `OverlayWindow.HideOverlay()`, which owns the guard next to the flag it
+  depends on rather than re-deriving it at the call site. Measured on the
+  bench: pre-fix the boxes went 1396 pink pixels → 0 on the first poll tick;
+  post-fix they hold at 1396.
+- **Cancelling an adjustment stranded the alignment boxes on screen.** Adjust
+  mode paints the canvas directly, bypassing `OverlayRenderer.Render`, so the
+  memoised render signature still described the pre-adjust picture. Leaving
+  adjust mode without changing any state hit `signature == _lastSignature` and
+  returned early, so the four boxes and the legend stayed over the game.
+  `OverlayRenderer.Invalidate()` now drops the memo whenever the canvas is
+  painted behind the renderer's back.
+- **A failed skill-order fetch blanked the overlay for the whole match.** The
+  key was stored before the request, so after an error every later tick
+  short-circuited and nothing ever asked again — one blip at load-in and the
+  highlight never appeared for the rest of the game. Failures now retry on a
+  3s/8s/20s/45s backoff. This matters more since 1.0.6: that release removed
+  the table, the disclaimer and every message surface, so a skill-order miss
+  went from "a panel explaining there is no data" to drawing nothing at all.
+- **The overlay's render decision is now logged.** One deduped line per
+  transition to `%LOCALAPPDATA%\CoachBuild\companion.log` —
+  `not-in-game` / `no-champion` / `no-skill-order` / `no-next-ability` /
+  `no-display`, or `highlight Q at 645x879 size 39 visible=True`. Before this,
+  an overlay that decided to draw nothing was indistinguishable from a broken
+  one and left no trace, so the only possible field report was "it does not
+  work". Carries no player-identifying data.
+- Two regression tests, each verified to fail without its fix.
+
 ## 0.110.2 — 2026-08-15
 
 Housekeeping, no user-visible change. Deletes the retired My Stats design at

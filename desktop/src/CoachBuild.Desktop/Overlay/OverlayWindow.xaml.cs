@@ -39,6 +39,14 @@ public partial class OverlayWindow : Window
     private bool _wasVisibleBeforeAdjustment;
     private int _topmostReassertTicks;
     private bool _disposed;
+    private string? _lastOverlayReason;
+
+    /// <summary>
+    /// Optional sink for one-line overlay render diagnostics (wired to the
+    /// app's redacted log). Carries no player-identifying data — only the
+    /// render decision, the ability letter and the on-screen rectangle.
+    /// </summary>
+    public Action<string>? Diagnostics { get; set; }
 
     // App projects snapshots every 750 ms. Reassert topmost only occasionally
     // so ordinary overlay ticks stay cheap while still recovering if another
@@ -111,6 +119,35 @@ public partial class OverlayWindow : Window
 
         _settings.OverlayVisible = visible;
         _settingsStore.SetOverlayVisible(visible);
+    }
+
+    /// <summary>
+    /// The ONLY hide path the 750 ms snapshot poll may use.
+    ///
+    /// ROOT CAUSE of "the pink boxes never show out of a game" (fixed here):
+    /// adjust/calibrate mode shows this window and paints four pink alignment
+    /// boxes, but the poll in App.ApplySnapshot called the raw
+    /// <see cref="Window.Hide"/> on every tick where the phase was not
+    /// InProgress. Out of a game that is EVERY tick, so the boxes the user had
+    /// just opened were hidden again within at most 750 ms — reliably reading
+    /// as "calibration does nothing". `_adjusting` was already honoured by
+    /// ApplyState, RenderCurrentState, OnDisplayChanged and the DPI hook; the
+    /// hide path was the single place that ignored it.
+    ///
+    /// The guard lives HERE, next to the `_adjusting` flag that owns it, rather
+    /// than at the call site, so a future caller cannot reintroduce the bug by
+    /// forgetting to re-derive the precondition.
+    /// </summary>
+    public void HideOverlay()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(HideOverlay);
+            return;
+        }
+
+        if (_adjusting) return;
+        Hide();
     }
 
     public void SetLaneOverride(string? lane)
@@ -238,7 +275,12 @@ public partial class OverlayWindow : Window
     private void RenderCurrentState()
     {
         EnsureDisplay();
-        if (_display is null || _adjusting) return;
+        if (_display is null)
+        {
+            ReportOverlayReason("no-display");
+            return;
+        }
+        if (_adjusting) return;
         var renderState = _state with
         {
             Lane = _settings.LaneOverride ?? _state.Lane,
@@ -247,6 +289,34 @@ public partial class OverlayWindow : Window
         var physicalCalibration = _settingsStore.LoadCalibration(_display.Resolution);
         var dipCalibration = CalibrationGeometry.ForDpi(physicalCalibration, _display.DpiX, 96);
         _renderer.Render(RootCanvas, renderState, _settings, _display.Resolution, dipCalibration);
+        ReportOverlayReason(DescribeRenderOutcome(renderState, dipCalibration));
+    }
+
+    /// <summary>
+    /// Why the highlight is or is not on screen, in one short token.
+    ///
+    /// Since v1.0.6 stripped the table, the disclaimer and every message
+    /// surface, an overlay that decides to draw nothing is visually identical
+    /// to an overlay that is broken — and it left no trace anywhere, so the
+    /// only field report possible was "it does not work". This is the whole
+    /// diagnostic surface for that decision; keep it cheap and keep it honest.
+    /// </summary>
+    private string DescribeRenderOutcome(OverlayState state, CalibrationGeometry geometry)
+    {
+        if (!state.InGame) return "not-in-game";
+        if (string.IsNullOrWhiteSpace(state.ChampionName)) return "no-champion";
+        if (state.SkillOrder.Order.Count == 0) return "no-skill-order";
+        if (state.NextAbility() is not { } next) return "no-next-ability";
+        var rect = geometry.GetAbilityRects()[(int)next];
+        return $"highlight {next} at {rect.Left:0}x{rect.Top:0} size {rect.Width:0} visible={IsVisible}";
+    }
+
+    /// <summary>Deduped to one line per transition — this runs every 750 ms.</summary>
+    private void ReportOverlayReason(string reason)
+    {
+        if (string.Equals(reason, _lastOverlayReason, StringComparison.Ordinal)) return;
+        _lastOverlayReason = reason;
+        Diagnostics?.Invoke($"overlay: {reason}");
     }
 
     private void OnDisplayChanged(object? sender, EventArgs e)
@@ -357,6 +427,12 @@ public partial class OverlayWindow : Window
     {
         var wasVisible = _wasVisibleBeforeAdjustment;
         _wasVisibleBeforeAdjustment = false;
+        // Adjust mode painted the canvas behind the renderer's back, so its
+        // memoised signature no longer describes what is on screen. Without
+        // this, cancelling an adjustment (which changes no state and no
+        // calibration) left the four alignment boxes and the legend stranded
+        // over the game. See OverlayRenderer.Invalidate.
+        _renderer.Invalidate();
         if (!wasVisible)
         {
             Hide();
