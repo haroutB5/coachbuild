@@ -75,10 +75,13 @@ without UAC and verify:
    locally built package, does not exercise this and will pass while the
    shipped app cannot update.
 8. **Quit and relaunch applies a staged release.** Stage an update as above,
-   quit from the tray without closing the window, relaunch. The new process
-   must log `update: <next> was already downloaded by an earlier run` and come
-   back on the new version. Before 1.0.9 nothing read
-   `UpdateManager.UpdatePendingRestart` and the package sat there forever.
+   quit from the tray without closing the window, relaunch. The app must come
+   back on the new version. Velopack's own startup auto-apply normally does
+   this (`velopack.log`: `Launching app is out-dated` … `Auto apply is true`);
+   if it does not, the app's own startup pass logs
+   `update: <next> was already downloaded by an earlier run`. Read
+   `velopack.log` as well as `companion.log` for this row — the auto-apply
+   happens before the app writes anything.
 
 ## Performance and release verification
 

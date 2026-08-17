@@ -22,13 +22,16 @@ was live, and 1.0.7 sat there while 1.0.8 was live. Both were installed by hand.
   with the package already local, won the race and updated.
   The window is now a separate, softer gate that offers the restart rather than
   swallowing it, and it is no longer part of the write-sensitive gate.
-- **Nothing applied a staged release at startup, so "quit and relaunch" was
-  advice that did nothing.** `VelopackApp.Build().Run()` only dispatches
-  install/update hooks; nothing read `UpdateManager.UpdatePendingRestart`. A
-  package downloaded by one run survived every subsequent launch untouched.
-  The service now applies a staged release before anything else in its loop,
-  guarded by a version comparison so an equal or older staged asset can never
-  produce a restart loop.
+- **The app now also applies a staged release itself at startup**, before
+  anything else in its loop, guarded by a version comparison so an equal or
+  older staged asset can never produce a restart loop. This is belt-and-braces:
+  `VelopackApp.Build().Run()` was measured doing this already (`Launching app is
+  out-dated. Current: 1.0.9-pre.1, Newest Local Available: 1.0.9` … `Auto apply
+  is true, so restarting to apply update`), so quitting and relaunching *does*
+  pick up a package a previous run downloaded. That is worth stating plainly
+  because it means a restart was never the missing step — the missing step was
+  the download ever being followed by anything at all while the app kept
+  running.
 - **A staged update is now retried on a 60 s tick**, not only on a busy edge.
   Quitting from the tray detached the `Closed` handler that would have raised
   that edge, so a tray quit stranded the update permanently.

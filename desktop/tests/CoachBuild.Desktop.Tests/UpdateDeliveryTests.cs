@@ -142,9 +142,9 @@ public sealed class UpdateDeliveryTests
     [Fact]
     public async Task A_release_a_previous_run_left_staged_is_applied_at_startup()
     {
-        // "Quit from the tray and relaunch" was advice that did nothing:
-        // VelopackApp.Run only dispatches install hooks and nothing read
-        // UpdateManager.UpdatePendingRestart, so the package sat there.
+        // Belt-and-braces for the case VelopackApp's own startup auto-apply
+        // does not cover, and the only version of it that says so in
+        // companion.log.
         var client = new FakeUpdateClient("1.0.8", nextVersion: null) { PendingOnDisk = "1.0.9" };
         var log = new List<string>();
         await using var service = new VelopackUpdateService(

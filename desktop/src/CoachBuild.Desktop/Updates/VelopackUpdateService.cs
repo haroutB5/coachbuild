@@ -110,10 +110,13 @@ public sealed class VelopackUpdateService : IAsyncDisposable
     }
 
     /// <summary>
-    /// Applies a release that a previous run already downloaded. Velopack does
-    /// not do this for us: VelopackApp.Run only dispatches install/update hooks,
-    /// so without this call a staged package survives every restart untouched
-    /// and "quit and relaunch" fixes nothing.
+    /// Applies a release that a previous run already downloaded. Belt-and-braces:
+    /// VelopackApp.Run was measured auto-applying a newer local package at
+    /// startup ("Auto apply is true, so restarting to apply update"), so this
+    /// normally never fires. It covers the cases that path does not — an asset
+    /// that is not the newest local one, or an install where the startup
+    /// auto-apply is disabled — and unlike that path it leaves a line in
+    /// companion.log saying so.
     /// </summary>
     public async Task ApplyStagedFromDiskAsync(CancellationToken cancellationToken = default)
     {

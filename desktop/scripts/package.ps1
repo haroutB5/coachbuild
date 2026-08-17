@@ -67,5 +67,6 @@ if (-not (Test-Path $bootstrapper)) {
 if ($LASTEXITCODE -ne 0) { throw "Velopack pack failed with exit code $LASTEXITCODE" }
 
 Write-Host "Created per-user Velopack artifacts in $packageDirectory"
-Write-Host 'Install root: %LOCALAPPDATA%\CoachBuild\Desktop'
+Write-Host 'Install root: %LOCALAPPDATA%\CoachBuild.Desktop (Velopack per-user root: Update.exe, current\, packages\)'
+Write-Host 'Data root:    %LOCALAPPDATA%\CoachBuild (companion.log, settings)'
 Write-Host 'Feed: https://github.com/haroutB5/coachbuild-desktop-releases/releases/latest/download'
