@@ -246,6 +246,143 @@ public sealed class UpdateDeliveryTests
         Assert.Equal(1, client.ApplyCount);
     }
 
+    // ------------------------------------------- 1.0.10: the game-start teardown
+
+    /// <summary>
+    /// 1.0.10 closes the champ-select window when the game starts, which removes
+    /// the "window open" reason to hold a restart back. This is the test that the
+    /// remaining reason is enough on its own — 1.0.9 proved the app refuses to
+    /// restart into a game, and that must stay true now that the teardown is
+    /// what raises the close.
+    /// </summary>
+    [Fact]
+    public async Task Closing_the_window_for_the_game_still_cannot_apply_a_staged_update()
+    {
+        var client = new FakeUpdateClient("1.0.9", "1.0.10");
+        var log = new List<string>();
+        var windowOpen = true;
+        var inGame = false;
+        await using var service = new VelopackUpdateService(
+            client,
+            isCompanionBusy: () => inGame,
+            checkInterval: TimeSpan.FromDays(1),
+            isRestartDisruptive: () => windowOpen,
+            diagnostics: log.Add);
+
+        // Champ select: staged behind the open window, exactly as 1.0.9 ships.
+        await service.CheckNowAsync();
+        Assert.Equal(UpdateStatus.Staged, service.Current.Status);
+        Assert.Equal(0, client.ApplyCount);
+
+        // Load-in. The busy gate goes up BEFORE the window comes down; App
+        // orders these the same way, which is the whole reason the ordering is
+        // called out at the call site.
+        inGame = true;
+        windowOpen = false;
+        await service.RetryPendingApplyAsync();
+
+        Assert.Equal(0, client.ApplyCount);
+        Assert.Equal(UpdateStatus.DeferredBusy, service.Current.Status);
+        Assert.Contains(log, line => line.Contains("holding the restart while the companion is mid-write", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The teardown must not behave like the user clicking "Restart to update".
+    /// That latch is the one thing allowed to override the window gate, so a
+    /// teardown that set it would make the next idle moment restart the app
+    /// under a window the user had since reopened.
+    /// </summary>
+    [Fact]
+    public async Task The_teardown_never_latches_a_restart_the_user_did_not_ask_for()
+    {
+        var client = new FakeUpdateClient("1.0.9", "1.0.10");
+        var windowOpen = true;
+        var inGame = false;
+        await using var service = new VelopackUpdateService(
+            client,
+            isCompanionBusy: () => inGame,
+            checkInterval: TimeSpan.FromDays(1),
+            isRestartDisruptive: () => windowOpen);
+
+        await service.CheckNowAsync();
+
+        // Game starts: the teardown closes the window and kicks a retry.
+        inGame = true;
+        windowOpen = false;
+        await service.RetryPendingApplyAsync();
+        Assert.Equal(0, client.ApplyCount);
+
+        // The user reopens the window from the tray mid-game, then the game
+        // ends. If the teardown had latched a request, this would restart the
+        // app out from under the window they are looking at.
+        windowOpen = true;
+        inGame = false;
+        await service.SetCompanionBusyAsync(false);
+        await service.RetryPendingApplyAsync();
+
+        Assert.Equal(0, client.ApplyCount);
+        Assert.Equal(UpdateStatus.Staged, service.Current.Status);
+        Assert.True(service.Current.CanRestartToUpdate);
+    }
+
+    /// <summary>
+    /// The payoff. With the window gone for the whole match, the end of the game
+    /// is a busy-to-idle edge with nothing else in the way — so the update the
+    /// user never had to think about applies on its own.
+    /// </summary>
+    [Fact]
+    public async Task With_the_window_torn_down_the_update_applies_when_the_game_ends()
+    {
+        var client = new FakeUpdateClient("1.0.9", "1.0.10");
+        var log = new List<string>();
+        var windowOpen = true;
+        var inGame = false;
+        await using var service = new VelopackUpdateService(
+            client,
+            isCompanionBusy: () => inGame,
+            checkInterval: TimeSpan.FromDays(1),
+            isRestartDisruptive: () => windowOpen,
+            diagnostics: log.Add);
+
+        await service.CheckNowAsync();
+        inGame = true;
+        windowOpen = false;
+        await service.RetryPendingApplyAsync();
+        Assert.Equal(0, client.ApplyCount);
+
+        inGame = false;
+        await service.SetCompanionBusyAsync(false);
+
+        Assert.Equal(1, client.ApplyCount);
+        Assert.Contains(log, line => line.Contains("applying 1.0.10 and restarting", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The teardown must not make the app restart the moment the window shuts,
+    /// while the player is still on the load screen. Same inputs as above with
+    /// the busy gate NOT yet published — the failure this ordering exists to
+    /// prevent.
+    /// </summary>
+    [Fact]
+    public async Task A_teardown_that_ran_before_the_busy_gate_was_published_would_restart_into_the_game()
+    {
+        var client = new FakeUpdateClient("1.0.9", "1.0.10");
+        var windowOpen = true;
+        await using var service = new VelopackUpdateService(
+            client,
+            isCompanionBusy: () => false,
+            checkInterval: TimeSpan.FromDays(1),
+            isRestartDisruptive: () => windowOpen);
+
+        await service.CheckNowAsync();
+        windowOpen = false;
+        await service.RetryPendingApplyAsync();
+
+        // Not a wish: this is what the wrong ordering produces, which is why
+        // App calls SetUpdateBusy before CompanionWindowPolicy.Decide.
+        Assert.Equal(1, client.ApplyCount);
+    }
+
     // ------------------------------------------------------------ diagnostics
 
     [Theory]

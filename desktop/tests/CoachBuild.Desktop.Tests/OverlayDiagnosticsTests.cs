@@ -154,6 +154,229 @@ public sealed class OverlayDiagnosticsTests
         public nint FindGameWindow() => throw new UnauthorizedAccessException();
     }
 
+    // ------------------------------------------- the scan, off the render tick
+
+    /// <summary>
+    /// 1.0.10 moves the process-table walk off the WPF dispatcher. Measured
+    /// interleaved over 20 calls at the production 3 s cadence: <b>8.924 ms mean
+    /// / 9.107 ms median / 197.3 ms of UI-thread time per minute</b> before,
+    /// <b>0.272 ms / 0.002 ms / 15.0 ms</b> after.
+    /// </summary>
+    [Fact]
+    public void The_first_resolve_is_synchronous_so_the_overlay_lands_on_leagues_monitor_at_once()
+    {
+        // This is 1.0.8's whole fix. At first Show() there is no previous answer
+        // to serve, and serving 0 would put the overlay on the primary monitor
+        // until a background scan landed — which is exactly the 1.0.7 defect.
+        var locator = new DeferredGameWindowLocator(
+            mainWindows: _ => new nint[] { 42 },
+            isWindow: _ => true,
+            schedule: NeverScheduled);
+
+        Assert.Equal(42, locator.FindGameWindow());
+        Assert.Equal(0, locator.BackgroundScans);
+    }
+
+    [Fact]
+    public async Task Every_later_resolve_scans_off_the_calling_thread()
+    {
+        var clock = new FakeClock();
+        var scanThreads = new List<int>();
+        var locator = new DeferredGameWindowLocator(
+            mainWindows: _ =>
+            {
+                lock (scanThreads) scanThreads.Add(Environment.CurrentManagedThreadId);
+                return new nint[] { 42 };
+            },
+            isWindow: _ => true,
+            timeProvider: clock,
+            rescanAfter: TimeSpan.FromSeconds(5));
+
+        var caller = Environment.CurrentManagedThreadId;
+        locator.FindGameWindow();
+        clock.Advance(TimeSpan.FromSeconds(6));
+        locator.FindGameWindow();
+        await locator.PendingRefresh;
+
+        Assert.Equal(2, scanThreads.Count);
+        Assert.Equal(caller, scanThreads[0]);
+        // The measured 197.3 ms/min was all of it on the dispatcher. A locator
+        // that quietly scanned inline would still return the right handle, so
+        // the thread is the only thing that proves the fix.
+        Assert.NotEqual(caller, scanThreads[1]);
+        Assert.Equal(1, locator.BackgroundScans);
+    }
+
+    /// <summary>
+    /// Equivalence with the synchronous reference implementation: for the same
+    /// process table both locators return the same handle. The fix moves WHEN
+    /// the answer is computed, never WHAT it is.
+    /// </summary>
+    [Theory]
+    [InlineData(new int[0], 0)]
+    [InlineData(new[] { 42 }, 42)]
+    [InlineData(new[] { 0, 77 }, 77)]
+    [InlineData(new[] { 42, 77 }, 42)]
+    public async Task Both_locators_agree_on_the_same_process_table(int[] handles, int expectedHandle)
+    {
+        var table = Array.ConvertAll(handles, static h => (nint)h);
+        var expected = (nint)expectedHandle;
+        var clock = new FakeClock();
+        var reference = new LeagueGameWindowLocator(
+            mainWindows: _ => table, isWindow: h => h != 0, timeProvider: clock);
+        var deferred = new DeferredGameWindowLocator(
+            mainWindows: _ => table, isWindow: h => h != 0, timeProvider: clock);
+
+        Assert.Equal(expected, reference.FindGameWindow());
+        Assert.Equal(expected, deferred.FindGameWindow());
+
+        clock.Advance(TimeSpan.FromSeconds(6));
+        deferred.FindGameWindow();
+        await deferred.PendingRefresh;
+
+        Assert.Equal(reference.FindGameWindow(), deferred.FindGameWindow());
+    }
+
+    /// <summary>
+    /// The one behaviour that is genuinely different, stated rather than hidden:
+    /// a game window that moves is served one call late. Worst case that is one
+    /// extra <c>DisplayRecheckMs</c> (3 s) on top of the 5 s scan cache the
+    /// overlay already tolerated, for an event that happens at most once a match.
+    /// </summary>
+    [Fact]
+    public async Task A_changed_process_table_is_served_one_call_late_and_never_wrong()
+    {
+        var clock = new FakeClock();
+        var table = new nint[] { 42 };
+        var locator = new DeferredGameWindowLocator(
+            mainWindows: _ => table,
+            isWindow: _ => true,
+            timeProvider: clock,
+            rescanAfter: TimeSpan.FromSeconds(5));
+
+        Assert.Equal(42, locator.FindGameWindow());
+
+        table = [77];
+        clock.Advance(TimeSpan.FromSeconds(6));
+
+        // Still the last known handle: stale, but a real window, never garbage.
+        Assert.Equal(42, locator.FindGameWindow());
+        await locator.PendingRefresh;
+        Assert.Equal(77, locator.FindGameWindow());
+    }
+
+    [Fact]
+    public void A_closed_game_window_is_dropped_synchronously_without_waiting_for_a_scan()
+    {
+        // Unchanged from 1.0.8, and deliberately still on the caller's thread:
+        // IsWindow/IsWindowVisible are cheap, and a stale handle would pin the
+        // overlay to the monitor of a game that has already exited.
+        var clock = new FakeClock();
+        var alive = true;
+        var locator = new DeferredGameWindowLocator(
+            mainWindows: _ => new nint[] { 42 },
+            isWindow: _ => alive,
+            timeProvider: clock,
+            schedule: NeverScheduled);
+
+        Assert.Equal(42, locator.FindGameWindow());
+
+        alive = false;
+        Assert.Equal(0, locator.FindGameWindow());
+    }
+
+    [Fact]
+    public async Task A_scan_slower_than_the_render_tick_queues_one_walk_not_one_per_tick()
+    {
+        var clock = new FakeClock();
+        var release = new TaskCompletionSource();
+        var scans = 0;
+        var locator = new DeferredGameWindowLocator(
+            mainWindows: _ =>
+            {
+                if (Interlocked.Increment(ref scans) > 1) release.Task.Wait();
+                return new nint[] { 42 };
+            },
+            isWindow: _ => true,
+            timeProvider: clock,
+            rescanAfter: TimeSpan.FromSeconds(5));
+
+        locator.FindGameWindow();
+        clock.Advance(TimeSpan.FromSeconds(6));
+
+        // 40 render ticks against one in-flight scan. Without single-flighting,
+        // a scan slower than the tick stacks one process-table walk per tick.
+        for (var i = 0; i < 40; i++) locator.FindGameWindow();
+        release.SetResult();
+        await locator.PendingRefresh;
+
+        Assert.Equal(2, Volatile.Read(ref scans));
+    }
+
+    [Fact]
+    public async Task A_scan_that_always_fails_does_not_queue_a_walk_every_render_tick()
+    {
+        var clock = new FakeClock();
+        var scans = 0;
+        var locator = new DeferredGameWindowLocator(
+            mainWindows: _ =>
+            {
+                Interlocked.Increment(ref scans);
+                throw new UnauthorizedAccessException();
+            },
+            isWindow: _ => true,
+            timeProvider: clock,
+            rescanAfter: TimeSpan.FromSeconds(5));
+
+        locator.FindGameWindow();
+        await locator.PendingRefresh;
+
+        // The refresh timestamp is stamped even for a failed scan. Without that
+        // a denied process query hot-loops one queued walk per 750 ms tick — a
+        // worse version of the cost being fixed.
+        for (var i = 0; i < 20; i++) locator.FindGameWindow();
+        await locator.PendingRefresh;
+
+        Assert.Equal(1, Volatile.Read(ref scans));
+        Assert.Equal(0, locator.FindGameWindow());
+    }
+
+    [Fact]
+    public void The_overlay_degrades_to_its_own_handle_when_the_background_scan_finds_nothing()
+    {
+        RunOnSta(() =>
+        {
+            var settingsPath = Path.Combine(Path.GetTempPath(), $"coachbuild-test-{Guid.NewGuid():N}.json");
+            var window = new OverlayWindow(
+                new OverlaySettingsStore(settingsPath),
+                new DeferredGameWindowLocator(
+                    mainWindows: _ => Array.Empty<nint>(),
+                    isWindow: _ => true,
+                    schedule: NeverScheduled));
+            try
+            {
+                window.SetOverlayVisible(true);
+                window.ShowInactive();
+                window.ApplyState(InGameState());
+
+                Assert.Equal(OverlayDisplayResolver.SelfSource, window.DisplaySource);
+                Assert.NotNull(window.CurrentDisplay);
+                Assert.True(window.IsDrawingHighlight);
+            }
+            finally
+            {
+                window.Close();
+                if (File.Exists(settingsPath)) File.Delete(settingsPath);
+            }
+        });
+    }
+
+    /// <summary>
+    /// A scheduler that drops the work item, so a test can assert what the
+    /// caller's thread does on its own without racing a background scan.
+    /// </summary>
+    private static Task NeverScheduled(Action work) => Task.CompletedTask;
+
     // ------------------------------------------------------------ fullscreen
 
     [Fact]

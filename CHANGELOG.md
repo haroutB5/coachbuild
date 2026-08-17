@@ -1,4 +1,74 @@
 # Changelog
+## Desktop 1.0.10 — 2026-08-18
+
+Desktop app only; the web app is untouched and not redeployed. Two measured
+performance fixes, on the user's decision: *"I don't use it during game. I only
+need the skill order live in game."*
+
+- **The build page CoachBuild opens during champ select is now closed when the
+  game starts.** Nothing closed it before, so a Chromium instance ran beside
+  League for the whole match. Measured PID-scoped to the app's own process tree,
+  in game, over a fake champ-select → in-game flow on the real shipped binary:
+
+  | | 1.0.9 | 1.0.10 |
+  |---|---|---|
+  | processes | 7 | **1** |
+  | working set | 727.5 MB | **260.9 MB** |
+  | private bytes | 424.8 MB | **156.7 MB** |
+  | CPU (of one core) | 15.95% | **1.21%** |
+  | threads / handles | 204 / 3962 | **50 / 882** |
+  | GPU | 4.58% | **0.00%** |
+
+  Closing the WPF window is not what does it: WebView2 hosts Chromium out of
+  process, and the control has to be disposed or the window disappears while six
+  `msedgewebview2.exe` processes stay resident. That is why the number above is a
+  **PID count** and not a visibility check — the visibility check passes either
+  way.
+
+  The window comes back on its own at the next champ select, and the tray Reopen
+  item brings it back at any time, including mid-game. **A window you asked for
+  is never taken away** — only the one champ select opened on your behalf.
+  Bringing it forward from the tray during champ select adopts it, and it then
+  survives load-in.
+
+- **The overlay no longer walks the whole process table on the UI thread.**
+  `EnsureDisplay` reached `Process.GetProcessesByName` — an
+  `NtQuerySystemInformation` walk of every process on the box — inside the 750 ms
+  render tick, every 3-6 s, to recompute a window handle that changes at most
+  once per match. Interleaved A/B over 20 calls at the production cadence:
+
+  | | mean | median | UI-thread time per minute |
+  |---|---|---|---|
+  | 1.0.9 | 8.924 ms | 9.107 ms | 197.3 ms |
+  | 1.0.10 | 0.272 ms | **0.002 ms** | **15.0 ms** |
+
+  The answer is unchanged; only when it is computed moves. The **first** resolve
+  stays synchronous, so 1.0.8's "the overlay lands on League's monitor straight
+  away" is untouched at the one moment it matters, and a game window that has
+  closed is still dropped synchronously. The one accepted cost is that a game
+  window which *moves* to another monitor is picked up one render tick later —
+  worst case 3 s on top of the 5 s scan cache that already existed.
+
+- **Interplay with 1.0.9's updater, deliberately.** Closing the window at load-in
+  removes the "window open" reason to hold a restart back, so the write-sensitive
+  busy gate is the only thing left refusing one — and it holds twice over in
+  game. The teardown never latches a restart the user did not ask for. The net
+  effect is that a staged update now applies at the end of the game instead of
+  waiting for the user to close a window they had forgotten was open.
+
+- 38 new tests (185 to **223 total**, Debug and Release). Five guards were mutated
+  at once — window ownership ignored, the post-game scoreboard counted as
+  in-game, the first locator resolve made asynchronous, a failed scan left
+  unstamped, the synchronous stale-handle drop removed — and 13 tests went red.
+
+**Known, measured, not fixed here:** the app is still ~240 MB in game against
+`desktop/perf/README.md`'s 120 MB target. That is no longer the browser. An arm
+that never creates a browser at all measures the same 241.9 MB, and switching the
+overlay off drops it to **112.9 MB** — so **129 MB of it is the full-screen
+layered overlay surface** (3072x1920 at 192 DPI on the bench box, to draw one
+39 px box). Bounding that surface is proposal P3 in `HANDOFF-core-perf.md`, which
+had no measured *frame* benefit; it now has a measured *memory* one.
+
 ## Desktop 1.0.9 — 2026-08-17
 
 Desktop app only; the web app is untouched and not redeployed. Fixes the

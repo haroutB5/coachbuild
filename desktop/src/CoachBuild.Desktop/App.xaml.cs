@@ -171,6 +171,10 @@ public partial class App : WpfApplication
     private int _snapshotBusy;
     private int _phaseBusy;
     private int _webViewVisible;
+    // Whether the window that is open is one the USER asked for. Champ select
+    // opens one on the player's behalf and that one is torn down at load-in;
+    // tray Reopen and a hand-launched app are not. See CompanionWindowPolicy.
+    private int _webViewUserOpened;
     private int _updateBusy;
     private int _lastWebView2ProbeState = -1;
     private string? _announcedUpdateVersion;
@@ -349,6 +353,18 @@ public partial class App : WpfApplication
         _tray?.UpdateState(_trayState);
         SetUpdateBusy(effectiveBusy);
 
+        // AFTER SetUpdateBusy, never before. Closing the window clears the
+        // restart-is-disruptive gate and kicks a staged-apply retry, and the
+        // only thing that then keeps the app from restarting into the game is
+        // the busy state this line has just published.
+        if (CompanionWindowPolicy.Decide(
+                phase,
+                _webView is not null,
+                Volatile.Read(ref _webViewUserOpened) != 0) == CompanionWindowAction.CloseForGame)
+        {
+            CloseCompanionWindowForGame();
+        }
+
         if (snapshot.Overlay is not null)
         {
             _overlay?.ApplyState(snapshot.Overlay);
@@ -431,10 +447,16 @@ public partial class App : WpfApplication
             "Right-click the tray icon and choose “Restart to update”, or close this window and it will apply on its own.");
     }
 
+    /// <summary>
+    /// The automatic champ-select open. Not user-initiated: this window is
+    /// opened on the player's behalf and is the one torn down at load-in.
+    /// </summary>
     private void OnNativePageRequested(ReopenTarget target)
     {
         if (_isShuttingDown) return;
-        Dispatcher.BeginInvoke(() => _ = OpenTargetAsync(target), DispatcherPriority.Background);
+        Dispatcher.BeginInvoke(
+            () => _ = OpenTargetAsync(target, userInitiated: false),
+            DispatcherPriority.Background);
     }
 
     private void OnTrayCommand(object? sender, TrayCommandEventArgs e)
@@ -495,9 +517,31 @@ public partial class App : WpfApplication
         _tray?.UpdateState(_trayState);
     }
 
+    /// <summary>
+    /// Ends the browser that champ select opened, now that the player is in the
+    /// game and only the skill-order overlay matters.
+    ///
+    /// <para>The teardown deliberately does <b>not</b> touch the updater beyond
+    /// letting <see cref="OnWebViewClosed"/> run its normal course. That handler
+    /// kicks a staged-apply retry, and in game that retry <b>must</b> be refused
+    /// — by the write-sensitive busy gate, which is true twice over here
+    /// (<c>_updateBusy</c> from this tick's <c>SetUpdateBusy</c>, and
+    /// <c>CompanionState.IsCompanionBusy</c> from the InProgress phase). It
+    /// never sets <c>_restartRequested</c>: only the user clicking the tray item
+    /// may do that, because that latch is what overrides the window gate.</para>
+    /// </summary>
+    private void CloseCompanionWindowForGame()
+    {
+        var webView = _webView;
+        if (webView is null) return;
+        _log?.Info("window: closing the CoachBuild window for the game (WebView2 teardown)");
+        webView.Close();
+    }
+
     private void OnWebViewClosed(object? sender, EventArgs e)
     {
         Volatile.Write(ref _webViewVisible, 0);
+        Volatile.Write(ref _webViewUserOpened, 0);
         if (sender is WebView2Window closed && ReferenceEquals(_webView, closed))
         {
             closed.Closed -= OnWebViewClosed;
@@ -558,18 +602,48 @@ public partial class App : WpfApplication
         _ = Task.Run(() => _updates.SetCompanionBusyAsync(busy));
     }
 
-    private static bool IsBusyPhase(CompanionPhase phase)
+    /// <summary>
+    /// The phases this app treats as write-sensitive on top of the ones
+    /// <c>ComplianceRules.IsCompanionBusy</c> already covers (ChampSelect,
+    /// InProgress, an in-flight LCU write).
+    ///
+    /// <para>Public because it is half of an invariant that has to be assertable:
+    /// every phase <see cref="CompanionWindowPolicy.IsInGame"/> tears the window
+    /// down in must still be busy in one of the two tables, or the teardown
+    /// would hand the updater a restart mid-match. See
+    /// <c>CompanionWindowPolicyTests</c>.</para>
+    /// </summary>
+    public static bool IsBusyPhase(CompanionPhase phase)
     {
         return phase is CompanionPhase.Matchmaking or CompanionPhase.ReadyCheck or CompanionPhase.Reconnect;
     }
 
+    /// <summary>
+    /// Every caller of this is the user: the tray Reopen item, and the launch
+    /// path (<c>ShouldOpenWebViewOnLaunch</c> is false only for the Windows
+    /// autostart run, so a window from here means someone started the app by
+    /// hand). Windows opened this way survive load-in.
+    /// </summary>
     private async Task ReopenAsync()
     {
-        await OpenTargetAsync(_trayState.GetReopenTarget()).ConfigureAwait(true);
+        await OpenTargetAsync(_trayState.GetReopenTarget(), userInitiated: true).ConfigureAwait(true);
     }
 
-    private async Task OpenTargetAsync(ReopenTarget target)
+    private async Task OpenTargetAsync(ReopenTarget target, bool userInitiated)
     {
+        // The LATEST open decides ownership, and it is written on every open —
+        // not only when a window is created. Both directions matter:
+        //
+        //   * champ select navigating an existing window to the draft page makes
+        //     it champ select's window, so a hand-launch an hour earlier is not
+        //     treated as a standing request to keep a browser running through the
+        //     game that follows (this is the common case: the app is launched
+        //     once and left alone, so a create-only write would tear nothing down
+        //     for exactly the user this fix is for);
+        //   * bringing it forward from the tray adopts it, so a window the user
+        //     has since asked for is not taken away at load-in.
+        Volatile.Write(ref _webViewUserOpened, userInitiated ? 1 : 0);
+
         if (_webView is null)
         {
             var runtimeAvailable = _webViewEnvironment is not null

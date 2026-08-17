@@ -19,6 +19,7 @@ public partial class WebView2Window : Window
     private ReopenTarget _lastTarget = new(ReopenDestination.Home);
     private bool _initialized;
     private bool _disposed;
+    private bool _browserDisposed;
 
     public WebView2Window(
         WebView2EnvironmentService environmentService,
@@ -241,5 +242,38 @@ public partial class WebView2Window : Window
             webView.PermissionRequested -= OnPermissionRequested;
         }
         Fallback.RepairRequested -= OnRepairRequested;
+        DisposeBrowser();
+    }
+
+    /// <summary>
+    /// Ends the Chromium process tree this window is hosting.
+    ///
+    /// <para><b>Closing the WPF window is not enough, and that is the whole
+    /// point of this method.</b> WebView2 runs the browser out of process; the
+    /// control is an <c>HwndHost</c> whose <c>Dispose</c> is what closes the
+    /// underlying <c>CoreWebView2Controller</c> and releases the last reference
+    /// to the environment. Without it the window disappears from the screen
+    /// while the msedgewebview2.exe tree measured in 1.0.9 — <b>6 processes,
+    /// ~440 MB, ~15% of one core</b> — stays resident. A visibility check would
+    /// have reported this fixed; only a PID count proves it.</para>
+    ///
+    /// <para>Best-effort by design: this runs on the shutdown path and during
+    /// the game-start teardown, and a failure to dispose must never take the app
+    /// down with it. It is also idempotent, because <see cref="OnClosed"/> and
+    /// an explicit caller can both reach it.</para>
+    /// </summary>
+    internal void DisposeBrowser()
+    {
+        if (_browserDisposed) return;
+        _browserDisposed = true;
+        try
+        {
+            Browser.Dispose();
+        }
+        catch
+        {
+            // A controller torn down mid-initialisation, or a dispatcher already
+            // gone at process exit. Neither is actionable here.
+        }
     }
 }
