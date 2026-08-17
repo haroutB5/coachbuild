@@ -1,4 +1,52 @@
 # Changelog
+## Desktop 1.0.9 — 2026-08-17
+
+Desktop app only; the web app is untouched and not redeployed. Fixes the
+field-reported "the tray app never updates itself" — 1.0.6 sat there while 1.0.7
+was live, and 1.0.7 sat there while 1.0.8 was live. Both were installed by hand.
+
+- **The app's own window made it permanently ineligible to apply its own
+  update.** `IsUpdateBusyContext()` counted a visible WebView window as
+  "companion busy", and every non-autostart launch opens that window. So the
+  startup check downloaded the new release, staged it, and then reported
+  `DeferredBusy` — and `ApplyPendingCoreAsync` was only ever re-entered on a
+  busy-to-idle *edge*, which nothing raised while the window stayed open.
+  Reproduced on the real released 1.0.7 installer against the live feed: two
+  cold installs, same binary, same 75 s, the only difference being the window.
+  Launched normally it downloaded `CoachBuild.Desktop-1.0.8-full.nupkg` and
+  stayed on **1.0.7**; launched `--autostart` (tray only, no window) it applied
+  and came back as **1.0.8**. With the window open, closing it was the only
+  thing on the machine that could apply the update, and it applied within
+  seconds of the close. Whether an update landed at all was a race between the
+  4.6 MB download and WebView2's window creation: the same install, relaunched
+  with the package already local, won the race and updated.
+  The window is now a separate, softer gate that offers the restart rather than
+  swallowing it, and it is no longer part of the write-sensitive gate.
+- **Nothing applied a staged release at startup, so "quit and relaunch" was
+  advice that did nothing.** `VelopackApp.Build().Run()` only dispatches
+  install/update hooks; nothing read `UpdateManager.UpdatePendingRestart`. A
+  package downloaded by one run survived every subsequent launch untouched.
+  The service now applies a staged release before anything else in its loop,
+  guarded by a version comparison so an equal or older staged asset can never
+  produce a restart loop.
+- **A staged update is now retried on a 60 s tick**, not only on a busy edge.
+  Quitting from the tray detached the `Closed` handler that would have raised
+  that edge, so a tray quit stranded the update permanently.
+- **The tray offers the restart.** `Restart to update to X` is a real menu item
+  (the only previous trace was a disabled `Updates:` status row), plus a
+  one-per-version balloon. An explicit request is latched, so a request made
+  during an LCU write applies as soon as the write clears rather than being
+  dropped.
+- **Every update transition and failure is now written to `companion.log` with
+  an `update:` prefix.** The whole subsystem was silent: the user's log
+  contained zero occurrences of the string, which is why two missed releases
+  produced no evidence at all. A client that cannot reach Velopack now reports
+  why instead of returning null, which the tray had been rendering as
+  "up to date".
+- The update check interval drops from 6 h to 2 h, and the feed/channel
+  (`releases.win.json` on the static release-asset endpoint, never the
+  rate-limited GitHub API) is pinned by tests.
+
 ## Desktop 1.0.8 — 2026-08-17
 
 Desktop app only; the web app is untouched and not redeployed. Fixes the

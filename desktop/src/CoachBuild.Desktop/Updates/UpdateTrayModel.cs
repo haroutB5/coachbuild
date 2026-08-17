@@ -6,6 +6,13 @@ public enum UpdateStatus
     Checking,
     Downloading,
     Ready,
+
+    /// <summary>
+    /// Downloaded and waiting for a restart the user has to consent to,
+    /// because the CoachBuild window is on screen. Distinct from
+    /// <see cref="DeferredBusy"/>, which resolves on its own.
+    /// </summary>
+    Staged,
     DeferredBusy,
     Applying,
     Error,
@@ -35,7 +42,14 @@ public sealed class UpdateTrayModel : EventArgs
 
     public static UpdateTrayModel None { get; } = new(UpdateStatus.None, null, null);
 
-    public bool IsReady => Status is UpdateStatus.Ready or UpdateStatus.DeferredBusy;
+    public bool IsReady => Status is UpdateStatus.Ready or UpdateStatus.Staged or UpdateStatus.DeferredBusy;
+
+    /// <summary>
+    /// True when a downloaded release is sitting there and only a restart is
+    /// missing, so the tray can offer the restart as an action rather than as
+    /// a disabled status line.
+    /// </summary>
+    public bool CanRestartToUpdate => IsReady && !string.IsNullOrWhiteSpace(Version);
 
     public bool IsError => Status == UpdateStatus.Error;
 
@@ -47,6 +61,7 @@ public sealed class UpdateTrayModel : EventArgs
             UpdateStatus.Checking => "checking…",
             UpdateStatus.Downloading => Version is null ? "downloading…" : $"downloading {Version}…",
             UpdateStatus.Ready => Version is null ? "ready" : $"{Version} ready",
+            UpdateStatus.Staged => Version is null ? "ready · restart to update" : $"{Version} ready · restart to update",
             UpdateStatus.DeferredBusy => Version is null ? "ready · waiting for game" : $"{Version} ready · waiting for game",
             UpdateStatus.Applying => "applying…",
             UpdateStatus.Error => Detail is null ? "error" : $"error · {Detail}",

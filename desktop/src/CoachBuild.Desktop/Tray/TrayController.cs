@@ -20,6 +20,7 @@ public enum TrayCommand
     Adjust,
     CancelAdjust,
     RepairWebView2,
+    ApplyUpdate,
     Quit,
 }
 
@@ -165,6 +166,16 @@ public sealed class TrayController : IDisposable
         }
         if (!string.IsNullOrWhiteSpace(_state.Error)) _menu.Items.Add(StatusItem($"Error: {_state.Error}"));
         _menu.Items.Add(StatusItem($"Updates: {_state.Update.ToDisplayString()}"));
+
+        // A downloaded release must be actionable from here. Before 1.0.9 the
+        // only trace of a staged update was the disabled status line above,
+        // and the restart it was waiting for had no trigger the user could reach.
+        if (_state.Update.CanRestartToUpdate)
+        {
+            _menu.Items.Add(MenuItem(
+                $"Restart to update to {_state.Update.Version}",
+                (_, _) => RaiseCommand(TrayCommand.ApplyUpdate)));
+        }
 
         if (_state.WebView2Available == WebView2Availability.Missing)
         {

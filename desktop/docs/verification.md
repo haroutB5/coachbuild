@@ -46,7 +46,9 @@ assert:
 
 ## Clean-profile install/update matrix
 
-On a clean Windows user profile, install under `%LOCALAPPDATA%\CoachBuild\Desktop`
+On a clean Windows user profile, install under `%LOCALAPPDATA%\CoachBuild.Desktop`
+(Velopack's per-user root: `Update.exe`, `current\`, `packages\`, `velopack.log`;
+the separate `%LOCALAPPDATA%\CoachBuild` holds `companion.log` and settings)
 without UAC and verify:
 
 1. One tray instance owns `Local\CoachBuildCompanion`; the legacy companion is
@@ -60,6 +62,23 @@ without UAC and verify:
 6. A downloaded update remains deferred through ChampSelect/InProgress and is
    applied automatically as soon as the busy gate clears; Velopack's own
    pending state is the source of truth.
+7. **Self-update, from the released installer, with the window open.** This
+   row exists because 1.0.6, 1.0.7 and 1.0.8 all shipped unable to update
+   themselves, and every earlier run of this matrix passed. Install the
+   *previously released* Setup.exe (not a local build), launch it the way a
+   user does — by double-clicking, so the CoachBuild window opens — and leave
+   it alone. Within a minute `companion.log` must show `update: <next> available`
+   and `update: <next> downloaded and staged`, `%LOCALAPPDATA%\CoachBuild.Desktop\packages`
+   must contain the new `.nupkg`, and the tray must offer `Restart to update to
+   <next>`. Then close the window: the app must relaunch on the new version.
+   A run that only ever launches with `--autostart`, or only ever uses a
+   locally built package, does not exercise this and will pass while the
+   shipped app cannot update.
+8. **Quit and relaunch applies a staged release.** Stage an update as above,
+   quit from the tray without closing the window, relaunch. The new process
+   must log `update: <next> was already downloaded by an earlier run` and come
+   back on the new version. Before 1.0.9 nothing read
+   `UpdateManager.UpdatePendingRestart` and the package sat there forever.
 
 ## Performance and release verification
 
@@ -68,6 +87,26 @@ both borderless and windowed League at at least two display scales. Publish two
 test releases to the dedicated feed, download the newer release during a busy
 phase, and verify silent apply plus relaunch after the phase ends. Never use the
 Electron release repository for this test.
+
+## Reading `companion.log` when the app is not updating itself
+
+Every update transition and every failure is one line prefixed `update:`.
+Before 1.0.9 there were none at all — the string did not appear once in a log
+covering two missed releases — so the first thing to establish is that any
+`update:` line exists. If none do, the running build is 1.0.8 or older and
+cannot report anything; install the current release by hand.
+
+| line | meaning |
+|---|---|
+| `update: checking …/releases.win.json (installed 1.0.9)` | the check ran, and against which version. One per check (launch, then every 2 h). |
+| `update: no newer release on the feed (installed X)` | genuinely up to date. |
+| `update: X available; downloading` → `X downloaded and staged` | the package is on disk in `%LOCALAPPDATA%\CoachBuild.Desktop\packages`. |
+| `update: applying X and restarting` | last line of the old process; the next start logs `installed X`. |
+| `update: X is staged; not restarting under the open CoachBuild window` | waiting on the user. Tray → `Restart to update to X`, or close the window. |
+| `update: X is staged; holding the restart while the companion is mid-write` | champ select / ready check / an in-flight LCU write. Clears on its own. |
+| `update: X was already downloaded by an earlier run; applying it now` | a previous process staged it and exited. |
+| `update: cannot check for updates: …` | the updater itself is unavailable — a portable/unpacked run, or `UpdateManager` failed to construct. Never rendered as "up to date". |
+| `update: FAILED …` | anything thrown by check, download or apply, with the exception type and message. |
 
 ## Reading `companion.log` when the in-game overlay shows nothing
 

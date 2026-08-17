@@ -173,6 +173,7 @@ public partial class App : WpfApplication
     private int _webViewVisible;
     private int _updateBusy;
     private int _lastWebView2ProbeState = -1;
+    private string? _announcedUpdateVersion;
     private bool _isShuttingDown;
     private readonly FullscreenAdvisor _fullscreen = new();
     private string? _lastPolledPhase;
@@ -259,7 +260,11 @@ public partial class App : WpfApplication
         _tray.Start(_trayState);
         _webViewEnvironment = new WebView2EnvironmentService(Paths.WebView2UserDataFolder);
         _ = ProbeWebView2AvailabilityAsync(_shutdown.Token);
-        _updates = new VelopackUpdateService(isCompanionBusy: IsUpdateBusyForService);
+        _updates = new VelopackUpdateService(
+            isCompanionBusy: IsUpdateBusyForService,
+            isRestartDisruptive: IsRestartDisruptive,
+            diagnostics: message => _log?.Info(message),
+            feedUrl: Options.Feed);
         _updates.StatusChanged += OnUpdateStatusChanged;
         _ = _updates.StartAsync(_shutdown.Token);
         if (_services is IDesktopHostLifecycle lifecycle)
@@ -407,7 +412,23 @@ public partial class App : WpfApplication
         {
             _trayState = _trayState with { Update = model };
             _tray?.UpdateState(_trayState);
+            AnnounceUpdate(model);
         }, DispatcherPriority.Background);
+    }
+
+    /// <summary>
+    /// One balloon per version, only for a release that is downloaded and
+    /// waiting on the user. An update that applies on its own is never
+    /// announced — the app just restarts into it.
+    /// </summary>
+    private void AnnounceUpdate(UpdateTrayModel model)
+    {
+        if (model.Status != UpdateStatus.Staged || model.Version is null) return;
+        if (string.Equals(_announcedUpdateVersion, model.Version, StringComparison.Ordinal)) return;
+        _announcedUpdateVersion = model.Version;
+        _tray?.ShowBalloon(
+            $"CoachBuild {model.Version} is ready",
+            "Right-click the tray icon and choose “Restart to update”, or close this window and it will apply on its own.");
     }
 
     private void OnNativePageRequested(ReopenTarget target)
@@ -453,6 +474,11 @@ public partial class App : WpfApplication
             case TrayCommand.RepairWebView2:
                 _ = RepairWebView2Async();
                 break;
+            case TrayCommand.ApplyUpdate:
+                _log?.Info("update: restart requested from the tray");
+                var updates = _updates;
+                if (updates is not null) _ = Task.Run(() => updates.ApplyPendingNowAsync());
+                break;
             case TrayCommand.Reopen:
                 _ = ReopenAsync();
                 break;
@@ -479,6 +505,11 @@ public partial class App : WpfApplication
         }
         if (_isShuttingDown) return;
         SetUpdateBusy(IsUpdateBusyContext());
+        // The window closing is the moment a restart stops being disruptive.
+        // It is no longer part of the busy context, so nothing else would
+        // notice; ask explicitly rather than wait for the next loop tick.
+        var updates = _updates;
+        if (updates is not null) _ = Task.Run(() => updates.RetryPendingApplyAsync());
     }
 
     private bool IsUpdateBusyForService()
@@ -486,11 +517,29 @@ public partial class App : WpfApplication
         return Volatile.Read(ref _updateBusy) != 0 || _services.IsCompanionBusy;
     }
 
+    /// <summary>
+    /// Write-sensitive only: a restart here could tear an in-flight LCU write.
+    /// The open CoachBuild window used to be part of this and must not be: the
+    /// window is opened on every non-autostart launch, so including it made the
+    /// app permanently ineligible to apply its own update, and whether an
+    /// update landed came down to a race between the download and WebView2's
+    /// window creation. It is now a separate, softer gate
+    /// (<see cref="IsRestartDisruptive"/>) that offers the restart instead of
+    /// silently swallowing it.
+    /// </summary>
     private bool IsUpdateBusyContext()
     {
         return Volatile.Read(ref _snapshotBusy) != 0
-            || Volatile.Read(ref _phaseBusy) != 0
-            || Volatile.Read(ref _webViewVisible) != 0;
+            || Volatile.Read(ref _phaseBusy) != 0;
+    }
+
+    /// <summary>
+    /// The user is looking at the CoachBuild window. Not a reason to refuse an
+    /// update forever, only a reason not to yank the window away unasked.
+    /// </summary>
+    private bool IsRestartDisruptive()
+    {
+        return Volatile.Read(ref _webViewVisible) != 0;
     }
 
     private void SetUpdateBusy(bool busy)

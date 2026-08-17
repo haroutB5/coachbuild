@@ -37,7 +37,45 @@ public static class UpdateBootstrapper
 
     public const string ReleaseFeed = "https://github.com/haroutB5/coachbuild-desktop-releases/releases/latest/download";
 
+    /// <summary>
+    /// Velopack's channel for a Windows pack, which is what publish.ps1 writes
+    /// into sq.version and what names the metadata file on the feed. Pinned
+    /// here so the release-asset names the app depends on are asserted in a
+    /// test rather than assumed.
+    /// </summary>
+    public const string ReleaseChannel = "win";
+
+    /// <summary>The exact metadata document a Velopack client requests.</summary>
+    public static string ReleaseMetadataUrl => $"{ReleaseFeed}/releases.{ReleaseChannel}.json";
+
+    /// <summary>The legacy metadata document older clients request.</summary>
+    public static string LegacyReleaseMetadataUrl => $"{ReleaseFeed}/RELEASES";
+
+    /// <summary>
+    /// True when the feed is served as static release assets. GitHub's REST API
+    /// rate-limits unauthenticated callers to 60 requests/hour/IP, which would
+    /// make update checks fail intermittently and invisibly; the static
+    /// /releases/latest/download endpoints have no such limit.
+    /// </summary>
+    public static bool UsesRateLimitedApi(string feed)
+    {
+        return feed.Contains("api.github.com", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Where Velopack actually installs a per-user package: %LOCALAPPDATA% plus
+    /// the pack id, holding Update.exe, current\ and packages\. This used to
+    /// read "CoachBuild\Desktop", which is a directory that does not exist and
+    /// which the docs repeated; the app's *data* directory (companion.log,
+    /// settings) is the separate %LOCALAPPDATA%\CoachBuild. Confirmed against a
+    /// real install of the released 1.0.7 Setup.exe.
+    /// </summary>
+    public const string PackId = "CoachBuild.Desktop";
+
     public static string InstallRoot => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "CoachBuild", "Desktop");
+        PackId);
+
+    /// <summary>Where a downloaded-but-unapplied release sits.</summary>
+    public static string StagedPackageDirectory => Path.Combine(InstallRoot, "packages");
 }
