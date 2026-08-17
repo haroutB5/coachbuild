@@ -1,4 +1,82 @@
 # Changelog
+## Desktop 1.0.8 — 2026-08-17
+
+Desktop app only; the web app is untouched and not redeployed. Fixes the
+field-reported "the skill-order highlight still does not appear in game" after
+1.0.7 fixed adjust mode.
+
+- **The skill-order retry 1.0.7 shipped was dead code, and this is the defect
+  that produced the reported symptom.** `FetchSkillOrderAsync` armed the
+  backoff only from a `catch` around `SkillOrderLaneResolver.ResolveAsync`.
+  Nothing on that path throws: `SkillOrderProvider.FetchAsync` ends in a bare
+  catch and `GetSafelyAsync` wraps a second one on top of it, so every failure
+  — network down, HTTP 500, HTTP 429, a 200 of garbage, a 200 of `null`, a
+  client timeout, an unexpected exception — arrives as a *value*. The success
+  branch then ran and set `_skillOrderRetryAt = null`, actively disarming the
+  retry it was supposed to arm. One blip at load-in, the noisiest moment on the
+  network, blanked the overlay for the whole match with no on-screen trace,
+  because 1.0.6 had removed every message surface. Measured on a socket-level
+  bench driving the real `ReadSnapshotAsync` for 30 in-game ticks against a
+  provider that fails once and is healthy afterwards: **1 API request, order
+  length 0, first good tick NEVER**. After the fix, the same bench recovers at
+  **tick 28, t=21.4 s, order length 18**. The retry now arms from the returned
+  status, and the predicate widened from `Error` to "anything that is not
+  `Ok`" — `NoData` latched identically, and a `NoData` produced by the
+  all-lanes fallback before Live Client Data reported a position could never be
+  revisited.
+- **The backoff values were unusable even once armed.** `SkillOrderProvider`
+  caches an `Error` for 15 s and a `NoData` for 60 s, so 1.0.7's 3 s and 8 s
+  retries were served the cached failure and burned two of four attempts
+  without touching the network. Measured: with the arming fixed but the old
+  values, recovery slipped to **t=33.0 s** — outside any realistic load-in
+  window — and the API was still only reached twice. `Error` now retries at
+  20 s / 45 s / 90 s. `NoData` is a verdict rather than a failure, so it gets a
+  single confirmation at 75 s and then stops, instead of hammering a healthy
+  endpoint for an answer it already gave.
+- **The overlay now asks where League is instead of assuming.** The monitor was
+  resolved from the overlay's *own* HWND, which Windows places on the primary
+  display at first show, and then latched. On a multi-monitor desk with League
+  on the secondary, the overlay drew a correct highlight on the wrong screen
+  and logged `highlight Q at … visible=True` while doing it — the failure whose
+  log looks healthiest. It now locates `League of Legends.exe`'s main window
+  and follows it, re-deriving at most every 3 s behind a cached process scan,
+  falling back to 1.0.7 behaviour when the game is not running and never moving
+  the ground under an in-progress adjustment.
+- **Exclusive fullscreen is detected and named.** The overlay window is
+  `WS_EX_LAYERED` (measured ex-style `0x080800A8`) because WPF requires it for
+  per-pixel transparency, so it is composited by DWM and cannot draw over a
+  true exclusive-fullscreen swapchain. That state is now read from the shell
+  (`SHQueryUserNotificationState`) and logged on transition, with a one-off
+  tray hint pointing at Video → Window Mode = Borderless. The hint is
+  deliberately gated on the overlay believing it is *currently drawing a
+  highlight*, and worded conditionally, because Windows 10 1709+ Fullscreen
+  Optimizations silently converts most exclusive-fullscreen D3D apps to
+  borderless-flip — where the overlay works fine, and where a confident warning
+  would be wrong.
+- **The three failures that were indistinguishable in the log are now
+  separable.** "No `overlay:` lines at all" used to collapse "the LCU phase
+  never reached InProgress", "127.0.0.1:2999 never answered" and "2999 answered
+  but the local player was never identified" into one report nobody could act
+  on. 1.0.8 adds, all deduped to one line per transition: loopback reachability
+  (`live: 2999 ok` / `live: 2999 unreachable (…)`, where a 404 counts as
+  reachable because mid-game 404s are routine), identity resolution
+  (`live: champion=103 position=MIDDLE`), a named reason when the overlay input
+  is missing (`overlay: waiting-live-skill` / `overlay: waiting-champion`),
+  phase transitions observed by the 750 ms snapshot poll itself
+  (`poll: phase … -> InProgress`, which proves the render loop is alive and not
+  merely the gameflow poller), and the monitor identity appended to every
+  highlight line.
+- **`no-display` was two different things.** It meant both "the tray has the
+  overlay switched off" and "the monitor could not be resolved" — a switched-off
+  overlay is never shown, so it has no HWND, so it reported a display failure.
+  The switched-off case now says `overlay-hidden (tray: Show overlay)`.
+- 43 new regression tests, and the 12 that cover the retry were run against the
+  1.0.7 logic first: every one reports `first good tick: -1` and
+  `provider calls: 1`, reproducing the bench measurement exactly. The seven
+  injected failure modes are driven through the real `SkillOrderProvider` and
+  the real `SkillOrderLaneResolver`, not stubs of them, on an injectable clock
+  that also pins the 15 s / 60 s provider cooldowns the backoff has to clear.
+
 ## Desktop 1.0.7 — 2026-08-15
 
 Desktop app only; the web app is untouched and not redeployed. Fixes the

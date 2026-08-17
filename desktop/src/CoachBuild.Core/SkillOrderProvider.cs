@@ -65,6 +65,7 @@ public sealed class SkillOrderProvider : ISkillOrderProvider, IPerGameSkillOrder
     private readonly HttpClient _client;
     private readonly bool _ownsClient;
     private readonly Uri _endpoint;
+    private readonly TimeProvider _time;
     private readonly object _gate = new();
     private readonly Dictionary<string, CacheEntry> _cache = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Task<SkillOrderResult>> _loading = new(StringComparer.Ordinal);
@@ -72,11 +73,17 @@ public sealed class SkillOrderProvider : ISkillOrderProvider, IPerGameSkillOrder
 
     public SkillOrderProvider(
         HttpClient? client = null,
-        Uri? endpoint = null)
+        Uri? endpoint = null,
+        TimeProvider? timeProvider = null)
     {
         _client = client ?? new HttpClient();
         _ownsClient = client is null;
         _endpoint = endpoint ?? DefaultEndpoint;
+        // The 15 s / 60 s failure cooldowns below are the reason the caller's
+        // retry backoff has to be longer than they are. They were untestable
+        // while they read the ambient clock, so nothing pinned that
+        // relationship; an injectable clock makes both halves assertable.
+        _time = timeProvider ?? TimeProvider.System;
         if (!_endpoint.IsAbsoluteUri ||
             !string.Equals(_endpoint.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(_endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
@@ -174,7 +181,7 @@ public sealed class SkillOrderProvider : ISkillOrderProvider, IPerGameSkillOrder
 
         lock (_gate)
         {
-            _cache[key] = new CacheEntry(result, DateTimeOffset.UtcNow);
+            _cache[key] = new CacheEntry(result, _time.GetUtcNow());
             _loading.Remove(key);
         }
         return result;
@@ -186,7 +193,7 @@ public sealed class SkillOrderProvider : ISkillOrderProvider, IPerGameSkillOrder
         var cooldown = entry.Result.Status == SkillOrderStatus.NoData
             ? TimeSpan.FromMilliseconds(NoDataRetryMilliseconds)
             : TimeSpan.FromMilliseconds(ErrorRetryMilliseconds);
-        return DateTimeOffset.UtcNow - entry.CachedAt <= cooldown;
+        return _time.GetUtcNow() - entry.CachedAt <= cooldown;
     }
 
     private Uri BuildUri(int championId, int roleId)

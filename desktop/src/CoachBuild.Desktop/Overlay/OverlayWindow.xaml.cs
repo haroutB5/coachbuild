@@ -26,9 +26,12 @@ public partial class OverlayWindow : Window
     private readonly OverlaySettingsStore _settingsStore;
     private readonly OverlayRenderer _renderer = new();
     private readonly DisplayDpiService _displayDpi = new();
+    private readonly IGameWindowLocator _gameWindows;
     private OverlayState _state = OverlayState.Empty;
     private OverlaySettings _settings;
     private DisplayInfo? _display;
+    private string _displaySource = OverlayDisplayResolver.SelfSource;
+    private long _nextDisplayRecheckTicks;
     private CalibrationGeometry? _workingCalibration;
     private HwndSource? _hwndSource;
     private NativeBounds? _lastNativeBounds;
@@ -53,9 +56,15 @@ public partial class OverlayWindow : Window
     // window (notably exclusive fullscreen) pushes this HWND down the stack.
     private const int TopmostReassertEveryTicks = 10;
 
-    public OverlayWindow(OverlaySettingsStore settingsStore)
+    // League can be alt-tabbed to another monitor mid-game, so the display has
+    // to be re-derived periodically rather than latched at first Show(). This
+    // is a process-table scan behind a cache, not a per-tick cost.
+    private const long DisplayRecheckMs = 3000;
+
+    public OverlayWindow(OverlaySettingsStore settingsStore, IGameWindowLocator? gameWindows = null)
     {
         _settingsStore = settingsStore ?? throw new ArgumentNullException(nameof(settingsStore));
+        _gameWindows = gameWindows ?? new LeagueGameWindowLocator();
         _settings = _settingsStore.Read();
         InitializeComponent();
         SourceInitialized += OnSourceInitialized;
@@ -65,6 +74,19 @@ public partial class OverlayWindow : Window
     }
 
     public OverlayRenderer Renderer => _renderer;
+
+    /// <summary>
+    /// True when the last render decision was to draw a highlight. Read by the
+    /// fullscreen advisor: a "you cannot see this" hint is only honest when
+    /// there is something the user should be seeing.
+    /// </summary>
+    public bool IsDrawingHighlight { get; private set; }
+
+    /// <summary>The monitor the overlay last resolved, for diagnostics.</summary>
+    public DisplayInfo? CurrentDisplay => _display;
+
+    /// <summary><c>league</c> when the monitor came from the game window, else <c>self</c>.</summary>
+    public string DisplaySource => _displaySource;
 
     public OverlayState State => _state;
 
@@ -119,6 +141,7 @@ public partial class OverlayWindow : Window
 
         _settings.OverlayVisible = visible;
         _settingsStore.SetOverlayVisible(visible);
+        RenderCurrentState();
     }
 
     /// <summary>
@@ -231,12 +254,55 @@ public partial class OverlayWindow : Window
         SetBoundsToDisplay();
     }
 
+    /// <summary>
+    /// Resolves the monitor the overlay must cover.
+    ///
+    /// <para>1.0.7 resolved it from the overlay's OWN handle and latched it
+    /// forever. Windows puts a first-shown tool window on the primary monitor,
+    /// so on a two-monitor desk with League on the secondary the overlay drew
+    /// a correct highlight on the wrong screen and logged
+    /// <c>highlight Q at … visible=True</c> while it did — the most
+    /// deceptively healthy-looking failure in the whole matrix. Nothing ever
+    /// asked where League was.</para>
+    ///
+    /// <para>The HWND requirement is unchanged: with no handle there is no
+    /// monitor and no DPI, and the honest answer stays <c>no-display</c>.</para>
+    /// </summary>
     private bool EnsureDisplay()
     {
-        if (_display is not null) return true;
         var handle = new WindowInteropHelper(this).Handle;
         if (handle == 0) return false;
-        _display = _displayDpi.GetDisplayForWindow(handle);
+
+        // Never move the ground out from under an in-progress adjustment: the
+        // working calibration is keyed to the display it was opened against.
+        if (_adjusting && _display is not null) return true;
+
+        var now = Environment.TickCount64;
+        if (_display is not null && now < _nextDisplayRecheckTicks) return true;
+        _nextDisplayRecheckTicks = now + DisplayRecheckMs;
+
+        nint gameHandle;
+        try
+        {
+            gameHandle = _gameWindows.FindGameWindow();
+        }
+        catch
+        {
+            gameHandle = 0;
+        }
+
+        var (target, source) = OverlayDisplayResolver.ChooseHandle(handle, gameHandle);
+        var resolved = _displayDpi.GetDisplayForWindow(target);
+        var changed = OverlayDisplayResolver.DescribeChange(_display, resolved, source);
+        var sourceChanged = !string.Equals(_displaySource, source, StringComparison.Ordinal);
+        if (changed is not null || sourceChanged)
+        {
+            Diagnostics?.Invoke(
+                $"overlay: {changed ?? $"display {OverlayDisplayResolver.Describe(resolved, source)}"}");
+        }
+
+        _display = resolved;
+        _displaySource = source;
         return true;
     }
 
@@ -275,8 +341,20 @@ public partial class OverlayWindow : Window
     private void RenderCurrentState()
     {
         EnsureDisplay();
+        if (!_settings.OverlayVisible)
+        {
+            // Split out of `no-display`, which used to mean BOTH "the tray has
+            // the overlay switched off" and "the monitor could not be
+            // resolved". The window is never shown when it is switched off, so
+            // it has no HWND, so it reported a monitor failure — and the user
+            // reading the log was hunting a display bug that did not exist.
+            IsDrawingHighlight = false;
+            ReportOverlayReason("overlay-hidden (tray: Show overlay)");
+            return;
+        }
         if (_display is null)
         {
+            IsDrawingHighlight = false;
             ReportOverlayReason("no-display");
             return;
         }
@@ -289,7 +367,9 @@ public partial class OverlayWindow : Window
         var physicalCalibration = _settingsStore.LoadCalibration(_display.Resolution);
         var dipCalibration = CalibrationGeometry.ForDpi(physicalCalibration, _display.DpiX, 96);
         _renderer.Render(RootCanvas, renderState, _settings, _display.Resolution, dipCalibration);
-        ReportOverlayReason(DescribeRenderOutcome(renderState, dipCalibration));
+        var outcome = DescribeRenderOutcome(renderState, dipCalibration, _display);
+        IsDrawingHighlight = outcome.StartsWith("highlight ", StringComparison.Ordinal);
+        ReportOverlayReason(outcome);
     }
 
     /// <summary>
@@ -301,14 +381,21 @@ public partial class OverlayWindow : Window
     /// only field report possible was "it does not work". This is the whole
     /// diagnostic surface for that decision; keep it cheap and keep it honest.
     /// </summary>
-    private string DescribeRenderOutcome(OverlayState state, CalibrationGeometry geometry)
+    private string DescribeRenderOutcome(
+        OverlayState state,
+        CalibrationGeometry geometry,
+        DisplayInfo display)
     {
         if (!state.InGame) return "not-in-game";
         if (string.IsNullOrWhiteSpace(state.ChampionName)) return "no-champion";
         if (state.SkillOrder.Order.Count == 0) return "no-skill-order";
         if (state.NextAbility() is not { } next) return "no-next-ability";
         var rect = geometry.GetAbilityRects()[(int)next];
-        return $"highlight {next} at {rect.Left:0}x{rect.Top:0} size {rect.Width:0} visible={IsVisible}";
+        // The monitor identity is on this line because without it a healthy
+        // render, a wrong-monitor render and an exclusive-fullscreen render are
+        // character-for-character identical in the log.
+        return $"highlight {next} at {rect.Left:0}x{rect.Top:0} size {rect.Width:0} visible={IsVisible}"
+            + $" on {OverlayDisplayResolver.Describe(display, _displaySource)}";
     }
 
     /// <summary>Deduped to one line per transition — this runs every 750 ms.</summary>

@@ -174,6 +174,8 @@ public partial class App : WpfApplication
     private int _updateBusy;
     private int _lastWebView2ProbeState = -1;
     private bool _isShuttingDown;
+    private readonly FullscreenAdvisor _fullscreen = new();
+    private string? _lastPolledPhase;
 
     public static App? CurrentApp => Current as App;
 
@@ -294,7 +296,13 @@ public partial class App : WpfApplication
             try
             {
                 var snapshot = await Services.ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
-                await Dispatcher.InvokeAsync(() => ApplySnapshot(snapshot), DispatcherPriority.Background, cancellationToken);
+                // Queried off the dispatcher: SHQueryUserNotificationState is
+                // an RPC to the shell and must never sit in front of a WPF
+                // render pass. Only asked in game, where the answer matters.
+                var shellState = string.Equals(snapshot.Phase, "InProgress", StringComparison.Ordinal)
+                    ? ShellNotificationState.Query()
+                    : null;
+                await Dispatcher.InvokeAsync(() => ApplySnapshot(snapshot, shellState), DispatcherPriority.Background, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -316,9 +324,12 @@ public partial class App : WpfApplication
         }
     }
 
-    private void ApplySnapshot(DesktopPhaseSnapshot snapshot)
+    private void ApplySnapshot(
+        DesktopPhaseSnapshot snapshot,
+        UserNotificationState? shellState = null)
     {
         var phase = TrayMenuState.ParsePhase(snapshot.Phase);
+        LogPollLiveness(snapshot.Phase);
         Volatile.Write(ref _snapshotBusy, snapshot.IsCompanionBusy ? 1 : 0);
         Volatile.Write(ref _phaseBusy, IsBusyPhase(phase) ? 1 : 0);
         var effectiveBusy = IsUpdateBusyContext();
@@ -345,6 +356,41 @@ public partial class App : WpfApplication
             // calibrate/adjust boxes the user had just opened. See
             // OverlayWindow.HideOverlay.
             _overlay?.HideOverlay();
+        }
+
+        ApplyFullscreenAdvice(phase is CompanionPhase.InProgress, shellState);
+    }
+
+    /// <summary>
+    /// One line per phase transition observed by the 750 ms SNAPSHOT poll,
+    /// which is a different instrument from GameflowPoller's own `phase:` line.
+    ///
+    /// Without it, "no overlay: lines at all" could still mean the poll loop
+    /// itself had died — GameflowPoller runs on its own task and would keep
+    /// logging phases from a process whose render path was no longer ticking.
+    /// </summary>
+    private void LogPollLiveness(string? phase)
+    {
+        var value = string.IsNullOrWhiteSpace(phase) ? "None" : phase;
+        if (string.Equals(_lastPolledPhase, value, StringComparison.Ordinal)) return;
+        var previous = _lastPolledPhase ?? "start";
+        _lastPolledPhase = value;
+        _log?.Info($"poll: phase {previous} -> {value}");
+    }
+
+    private void ApplyFullscreenAdvice(bool inGame, UserNotificationState? shellState)
+    {
+        var advice = _fullscreen.Observe(
+            inGame,
+            shellState,
+            _overlay?.IsDrawingHighlight ?? false);
+        if (advice.LogLine is { } line) _log?.Info(line);
+        if (advice.ShowHint)
+        {
+            _tray?.ShowBalloon(
+                FullscreenAdvisor.HintTitle,
+                FullscreenAdvisor.HintMessage,
+                System.Windows.Forms.ToolTipIcon.Info);
         }
     }
 
@@ -709,30 +755,59 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     // message panel, that failure is also completely silent on screen.
     private DateTimeOffset? _skillOrderRetryAt;
     private int _skillOrderAttempts;
-    private static readonly TimeSpan[] SkillOrderRetryBackoff =
+    private Task? _skillOrderFetch;
+
+    // 1.0.8: both schedules must clear SkillOrderProvider's OWN failure
+    // cooldown, or the retry is served the cached failure and burns an attempt
+    // without touching the network. 1.0.7 retried at 3 s and 8 s against a 15 s
+    // error cooldown, so the first two attempts were guaranteed no-ops even
+    // once the retry armed at all.
+    private static readonly TimeSpan[] SkillOrderErrorBackoff =
     [
-        TimeSpan.FromSeconds(3),
-        TimeSpan.FromSeconds(8),
         TimeSpan.FromSeconds(20),
         TimeSpan.FromSeconds(45),
+        TimeSpan.FromSeconds(90),
     ];
+
+    // NoData is a verdict, not a failure: the endpoint answered and said this
+    // champion+lane has no published order. One confirmation past the 60 s
+    // no-data cooldown is enough — anything more is hammering a healthy
+    // endpoint for an answer it already gave.
+    private static readonly TimeSpan[] SkillOrderNoDataBackoff =
+    [
+        TimeSpan.FromSeconds(75),
+    ];
+
     private string? _lastOverlayPhase;
+    private readonly TimeProvider _time;
+    private readonly LiveReachabilityReporter _reachability;
+    private string? _lastIdentityLine;
+    private string? _lastOverlayInputReason;
 
     public CoreDesktopHostServices(
         string sessionToken,
         string logDirectory,
         CoreSkillOrderProvider? skillOrders = null,
         IEnumerable<int>? bridgePorts = null,
-        RedactedLog? log = null)
+        RedactedLog? log = null,
+        HttpMessageHandler? liveHandler = null,
+        TimeProvider? timeProvider = null,
+        LiveClientDataOptions? liveOptions = null)
     {
         if (!SessionTokenStore.IsValid(sessionToken))
             throw new ArgumentException("A valid persistent session token is required.", nameof(sessionToken));
 
         _state = new CompanionState();
         _log = log ?? new RedactedLog(logDirectory);
+        _time = timeProvider ?? TimeProvider.System;
         _credentials = new LcuCredentialResolver(diagnosticSink: message => _log.Info(message));
         _lcu = new LcuHttpClient(_credentials);
-        _live = new LiveClientDataClient();
+        _live = new LiveClientDataClient(liveOptions, liveHandler);
+        _reachability = new LiveReachabilityReporter(_live.Port);
+        _live.ProbeObserved = probe =>
+        {
+            if (_reachability.Observe(probe) is { } line) _log.Info(line);
+        };
         _windowDecisions = new WindowDecisionService(
             sessionToken,
             attachments: _state.FollowAttachments);
@@ -767,6 +842,21 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     public CompanionState State => _state;
 
     public WindowDecisionService WindowDecisions => _windowDecisions;
+
+    /// <summary>
+    /// The Live Client Data workers. Exposed so a test can drive one tick
+    /// deterministically instead of waiting on the 1 s/3 s/4 s production
+    /// timers; production always goes through <see cref="StartAsync"/>.
+    /// </summary>
+    public LivePollingCoordinator LivePolling => _livePolling;
+
+    /// <summary>
+    /// The most recent skill-order fetch. Exposed so a test can settle the
+    /// pipeline deterministically rather than sleeping; production never reads
+    /// it. Before 1.0.8 this task was discarded outright, which is part of why
+    /// a failed fetch left no handle and no trace anywhere.
+    /// </summary>
+    public Task? PendingSkillOrderFetch { get { lock (_gate) return _skillOrderFetch; } }
 
     public string? LaneOverride
     {
@@ -927,13 +1017,27 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
                 ? positionValue.GetString()
                 : null;
             string? effectivePosition;
+            string? identityLine = null;
             lock (_gate)
             {
                 _championId = championId;
                 _championName = string.IsNullOrWhiteSpace(champion) ? _championName : champion;
                 _detectedPosition = string.IsNullOrWhiteSpace(position) ? _detectedPosition : position;
                 effectivePosition = _detectedPosition;
+
+                // Separates matrix row 7 ("2999 answered but the local player's
+                // identity never resolved") from row 6 ("2999 never answered").
+                // Both were silent, and both present as "no overlay: lines at
+                // all", so a field report could not distinguish them.
+                var line = $"live: champion={championId?.ToString(CultureInfo.InvariantCulture) ?? "none"} position={effectivePosition ?? "none"}";
+                if (!string.Equals(_lastIdentityLine, line, StringComparison.Ordinal))
+                {
+                    _lastIdentityLine = line;
+                    identityLine = line;
+                }
             }
+
+            if (identityLine is not null) _log?.Info(identityLine);
 
             if (championId is > 0 && string.Equals(_state.Phase, "InProgress", StringComparison.Ordinal))
                 RequestSkillOrderIfNeeded(championId.Value, effectivePosition);
@@ -957,15 +1061,20 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             if (string.Equals(_skillOrderKey, key, StringComparison.Ordinal))
             {
                 // Same key: normally nothing to do. The ONE exception is a
-                // previous attempt that failed and whose backoff has elapsed —
-                // otherwise a single blip at load-in blanks the overlay for the
-                // rest of the game with no way for the user to recover short of
-                // switching lane.
-                var retryDue = _skillOrder is { Status: CoreSkillOrderStatus.Error }
+                // previous attempt that did not return Ok and whose backoff has
+                // elapsed — otherwise a single blip at load-in blanks the
+                // overlay for the rest of the game with no way for the user to
+                // recover short of switching lane.
+                //
+                // `not Ok`, not `Error`: NoData latched exactly the same way,
+                // and a NoData produced by the auto-fallback path before the
+                // Live Client Data position arrived could never be revisited.
+                var retryDue = _skillOrder is { Status: not CoreSkillOrderStatus.Ok }
                     && _skillOrderRetryAt is { } due
-                    && DateTimeOffset.UtcNow >= due;
+                    && _time.GetUtcNow() >= due;
                 if (!retryDue) return;
                 _skillOrderRetryAt = null;
+                _log?.Info($"skill-order: champion {championId} retrying (attempt {_skillOrderAttempts + 1})");
             }
             else
             {
@@ -978,7 +1087,8 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             }
         }
 
-        _ = FetchSkillOrderAsync(championId, laneOverride, detectedPosition, key);
+        var fetch = FetchSkillOrderAsync(championId, laneOverride, detectedPosition, key);
+        lock (_gate) _skillOrderFetch = fetch;
     }
 
     private async Task FetchSkillOrderAsync(
@@ -997,20 +1107,52 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
                     _stop.Token)
                 .ConfigureAwait(false);
 
+            TimeSpan? scheduled = null;
+            int attempt;
+            var recoveredAfter = 0;
             lock (_gate)
             {
-                if (string.Equals(_skillOrderKey, key, StringComparison.Ordinal))
+                if (!string.Equals(_skillOrderKey, key, StringComparison.Ordinal)) return;
+
+                _skillOrder = selection.Result;
+                _skillOrderLane = selection.Lane;
+                _skillOrderLaneIsAuto = selection.IsLaneAuto;
+                attempt = _skillOrderAttempts;
+
+                if (selection.Result.Status == CoreSkillOrderStatus.Ok)
                 {
-                    _skillOrder = selection.Result;
-                    _skillOrderLane = selection.Lane;
-                    _skillOrderLaneIsAuto = selection.IsLaneAuto;
+                    recoveredAfter = _skillOrderAttempts;
                     _skillOrderRetryAt = null;
                     _skillOrderAttempts = 0;
+                }
+                else
+                {
+                    // THE 1.0.7 BUG. Every realistic failure on this path
+                    // arrives as a VALUE, never an exception:
+                    // SkillOrderProvider.FetchAsync ends in a bare catch and
+                    // SkillOrderLaneResolver.GetSafelyAsync wraps a second one
+                    // on top of it. 1.0.7 armed the backoff only from the
+                    // `catch` below, so it never armed, so the retry it shipped
+                    // never fired once — measured across seven injected failure
+                    // modes, zero throws. The success branch then actively
+                    // DISARMED the retry it was supposed to arm.
+                    //
+                    // Arm from the returned status. The exception path stays as
+                    // belt and braces; nothing depends on it any more.
+                    scheduled = ScheduleSkillOrderRetry(selection.Result.Status);
                 }
             }
 
             if (selection.Result is { Status: not CoreSkillOrderStatus.Ok } bad)
-                _log?.Info($"skill-order: champion {championId} returned {bad.Status}");
+            {
+                _log?.Info(scheduled is { } backoff
+                    ? $"skill-order: champion {championId} returned {bad.Status}; retry in {backoff.TotalSeconds:0}s (attempt {attempt + 1})"
+                    : $"skill-order: champion {championId} returned {bad.Status}; no further retry");
+            }
+            else if (recoveredAfter > 0)
+            {
+                _log?.Info($"skill-order: champion {championId} recovered after {recoveredAfter} failed attempt(s)");
+            }
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
         {
@@ -1018,7 +1160,7 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         }
         catch (Exception error)
         {
-            TimeSpan backoff;
+            TimeSpan? backoff;
             int attempt;
             lock (_gate)
             {
@@ -1030,15 +1172,38 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
                 _skillOrderLane = null;
                 _skillOrderLaneIsAuto = laneOverride is null;
                 attempt = _skillOrderAttempts;
-                backoff = SkillOrderRetryBackoff[Math.Min(attempt, SkillOrderRetryBackoff.Length - 1)];
-                _skillOrderAttempts = attempt + 1;
-                _skillOrderRetryAt = DateTimeOffset.UtcNow + backoff;
+                backoff = ScheduleSkillOrderRetry(CoreSkillOrderStatus.Error);
             }
 
             _log?.Error(
                 "skill-order-fetch",
-                $"skill-order: champion {championId} fetch failed ({error.GetType().Name}); retry in {backoff.TotalSeconds:0}s (attempt {attempt + 1})");
+                backoff is { } delay
+                    ? $"skill-order: champion {championId} fetch failed ({error.GetType().Name}); retry in {delay.TotalSeconds:0}s (attempt {attempt + 1})"
+                    : $"skill-order: champion {championId} fetch failed ({error.GetType().Name}); no further retry");
         }
+    }
+
+    /// <summary>
+    /// Arms the next retry for a non-Ok result and returns the delay, or null
+    /// when the schedule for that status is exhausted. Caller must hold
+    /// <c>_gate</c>.
+    /// </summary>
+    private TimeSpan? ScheduleSkillOrderRetry(CoreSkillOrderStatus status)
+    {
+        var schedule = status == CoreSkillOrderStatus.NoData
+            ? SkillOrderNoDataBackoff
+            : SkillOrderErrorBackoff;
+        var attempt = _skillOrderAttempts;
+        if (attempt >= schedule.Length)
+        {
+            _skillOrderRetryAt = null;
+            return null;
+        }
+
+        var backoff = schedule[attempt];
+        _skillOrderAttempts = attempt + 1;
+        _skillOrderRetryAt = _time.GetUtcNow() + backoff;
+        return backoff;
     }
 
     private void CaptureSkills(LiveSkillState skill)
@@ -1062,6 +1227,8 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
                 _skillOrder = null;
                 _skillOrderLane = null;
                 _skillOrderLaneIsAuto = true;
+                _lastIdentityLine = null;
+                _lastOverlayInputReason = null;
             }
             _lastOverlayPhase = phase;
         }
@@ -1084,7 +1251,23 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             skillOrderLane = _skillOrderLane;
             skillOrderLaneIsAuto = _skillOrderLaneIsAuto;
         }
-        if (skill is null || string.IsNullOrWhiteSpace(champion)) return null;
+        // Heartbeat the null path. In 1.0.7 an InProgress game whose live
+        // inputs never arrived produced NO overlay: line at all, which is the
+        // same evidence as "the snapshot poll is dead" and "2999 is
+        // unreachable". Naming the missing input collapses that three-way
+        // ambiguity to one answer.
+        if (skill is null)
+        {
+            ReportOverlayInput("waiting-live-skill (activeplayer has not produced level+QWER)");
+            return null;
+        }
+        if (string.IsNullOrWhiteSpace(champion))
+        {
+            ReportOverlayInput("waiting-champion (playerlist has not matched the local riotId)");
+            return null;
+        }
+        ReportOverlayInput("live inputs ready");
+
         if (championId is > 0)
             RequestSkillOrderIfNeeded(championId.Value, position);
 
@@ -1120,6 +1303,21 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             skillOrder: skillOrder,
             lane: skillOrderLane,
             laneIsAuto: skillOrderLaneIsAuto);
+    }
+
+    /// <summary>
+    /// One deduped line per transition, sharing the `overlay:` prefix the
+    /// window's own render decision uses so a single grep tells the whole
+    /// story of why nothing is on screen.
+    /// </summary>
+    private void ReportOverlayInput(string reason)
+    {
+        lock (_gate)
+        {
+            if (string.Equals(_lastOverlayInputReason, reason, StringComparison.Ordinal)) return;
+            _lastOverlayInputReason = reason;
+        }
+        _log?.Info($"overlay: {reason}");
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
