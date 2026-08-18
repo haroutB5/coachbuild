@@ -128,14 +128,37 @@ first question that answers "no" is the answer.
    (…)` means a third-party firewall is blocking loopback, or the game process
    is not up yet. A mid-game 404 is routine and does **not** count as
    unreachable.
-4. **`live: champion=<id> position=<lane>`** — the local player was identified
-   from the player list. Its absence with `live: 2999 ok` present is the
-   spectating / unmatched-`riotId` case.
-5. **`overlay: …`** — the render decision:
+4. **`live: identity matched by <rung>`** — the local player's own player-list
+   entry was found. `<rung>` is the key that actually matched: `RiotId`,
+   `GameNameAndTagLine`, `GameName`, `SummonerName`, or `SoleEntry` (Practice
+   Tool). If instead you see `live: identity unmatched (me … ; tried … ;
+   playerlist n=… riotId=… gameName=… tag=… summonerName=…)`, read the counts:
+   all-zero counts mean the payload shape moved, non-zero counts with no match
+   mean the two endpoints spell the identity differently. Own-identity values
+   are masked to a prefix plus a length because the log redacts anything
+   Riot-ID shaped; no other player's name is ever written.
+   `live: identity unknown (…)` means `allgamedata` published nothing
+   identifying and the `/liveclientdata/activeplayername` fallback is being
+   polled.
+5. **`live: champion roster loaded (N entries)`** — `GET /api/champions`
+   answered. `champion roster unavailable (…); will retry` is not fatal: it is
+   re-asked every 20 s, and champ select's own champion id covers the gap.
+   Live Client Data publishes the champion by **name** only; this roster is what
+   turns that name into the numeric id `/api/skill-order` is keyed by. (Through
+   1.0.10 the app read a `championId` field off the player list instead, which
+   Riot has never sent, so the in-game skill order could not appear at all.)
+6. **`live: champion=<name> id=<id> via=<source> position=<lane>`** — the
+   champion was resolved. `via=RawChampionName` is the locale-independent key
+   and is the normal case; `via=ChampionName` matched the localised display
+   name; `via=ChampSelect` means the roster was unreachable and the id came from
+   the champion the LCU watched you lock in.
+7. **`overlay: …`** — the render decision:
    - `overlay-hidden (tray: Show overlay)` — the overlay is switched off in the
      tray. Click it.
    - `waiting-live-skill` / `waiting-champion` — the pipeline is running but an
      input has not arrived.
+   - `waiting-champion-id` — the champion is known by name and has no numeric id
+     yet. Pair it with the `live: champion roster …` line above.
    - `no-skill-order` — no order for this champion+lane. Since 1.0.8 this
      retries on its own; if it persists, that champion+lane genuinely has none.
      Tray → Lane → pick the lane explicitly to force a different key.
@@ -146,12 +169,12 @@ first question that answers "no" is the answer.
      overlay's own monitor was used. If the box is still not on screen, check
      the device name against the monitor League is on, then check for the
      `fullscreen:` line below.
-6. **`fullscreen: exclusive D3D fullscreen reported by the shell`** — a layered
+8. **`fullscreen: exclusive D3D fullscreen reported by the shell`** — a layered
    overlay cannot composite over a true exclusive swapchain. Set League:
    Settings → Video → Window Mode = **Borderless**. Note this line can appear
    on a machine where the overlay works anyway: Fullscreen Optimizations
    converts most exclusive-fullscreen D3D apps to borderless-flip.
-7. **`skill-order: champion <id> returned <status>; retry in <n>s`** — a failed
+9. **`skill-order: champion <id> returned <status>; retry in <n>s`** — a failed
    or empty fetch, with the retry that follows it. `recovered after N failed
    attempt(s)` closes the loop. `no further retry` means the schedule is
    exhausted (Error: 20 s / 45 s / 90 s; NoData: one attempt at 75 s).

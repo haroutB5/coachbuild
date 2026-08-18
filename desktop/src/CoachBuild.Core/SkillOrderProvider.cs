@@ -282,25 +282,22 @@ public sealed class SkillOrderProvider : ISkillOrderProvider, IPerGameSkillOrder
     private sealed record CacheEntry(SkillOrderResult Result, DateTimeOffset CachedAt);
 }
 
-/// <summary>
-/// Resolves only the local player's champion id from a Live Client Data
-/// player-list snapshot. It never returns or stores another player's identity.
-/// </summary>
-public static class LivePlayerListResolver
-{
-    public static int? ResolveOwnChampionId(JsonElement playerList, string? ownRiotId)
-    {
-        if (playerList.ValueKind != JsonValueKind.Array || string.IsNullOrWhiteSpace(ownRiotId))
-            return null;
-        foreach (var player in playerList.EnumerateArray())
-        {
-            if (player.ValueKind != JsonValueKind.Object ||
-                !player.TryGetProperty("riotId", out var riotId) ||
-                riotId.ValueKind != JsonValueKind.String ||
-                !string.Equals(riotId.GetString(), ownRiotId, StringComparison.Ordinal))
-                continue;
-            return ComplianceRules.PositiveInt(player, "championId");
-        }
-        return null;
-    }
-}
+// ---------------------------------------------------------------------------
+// HISTORICAL NOTE - kept because the defect it names shipped for four releases.
+//
+// This file used to expose a `LivePlayerListResolver` that read the local
+// player's champion id out of a `championId` property on a Live Client Data
+// player-list entry.
+//
+// Riot has never published that property. The documented entry carries
+// `championName` and `rawChampionName` and no numeric id, so the resolver
+// returned null for every champion in every game, and
+// `RequestSkillOrderIfNeeded` - gated on `championId is > 0` - was never
+// reached. The in-game skill order could not appear for anyone, on any
+// champion, ever. The one test covering it fed a hand-written fixture that
+// invented the field, so a green suite proved nothing about the wire.
+//
+// Champion identity now goes name-first through
+// `LiveLocalPlayerResolver.ReadChampion` and `ChampionIdLookup`.
+// Do not reintroduce a player-list champion-id read.
+// ---------------------------------------------------------------------------

@@ -264,7 +264,8 @@ public sealed class SkillOrderRetryTests
                 skillOrders: provider,
                 bridgePorts: [FindFreePort()],
                 liveHandler: live,
-                timeProvider: clock);
+                timeProvider: clock,
+                championDirectory: new FakeChampionDirectory());
 
             host.State.SetPhase("InProgress");
             // BuildOverlayState clears the per-game state on the first tick it
@@ -353,13 +354,21 @@ public sealed class SkillOrderRetryTests
     /// </summary>
     internal sealed class FakeLiveClientHandler : HttpMessageHandler
     {
+        // Riot's real shape. Through 1.0.10 the PlayerList fixture below
+        // carried "championId":103 - a field Live Client Data has never sent -
+        // so every test in this file passed while the pipeline it exercises
+        // could not resolve a champion in a real game at all. Removing it turns
+        // all 14 of these red against 1.0.10's production code.
         private const string AllGameData = """
-        {"activePlayer":{"riotId":"Bench#EUW"}}
+        {"activePlayer":{"riotId":"Bench#EUW","riotIdGameName":"Bench",
+                         "riotIdTagLine":"EUW","summonerName":""}}
         """;
 
         private const string PlayerList = """
-        [{"riotId":"Bench#EUW","championId":103,
-          "rawChampionName":"game_character_displayname_Ahri","position":"MIDDLE"}]
+        [{"riotId":"Bench#EUW","riotIdGameName":"Bench","riotIdTagLine":"EUW",
+          "summonerName":"","championName":"Ahri",
+          "rawChampionName":"game_character_displayname_Ahri","position":"MIDDLE",
+          "team":"ORDER","isBot":false,"level":1}]
         """;
 
         private const string ActivePlayer = """

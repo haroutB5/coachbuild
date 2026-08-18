@@ -8,6 +8,12 @@
     <Deterministic>true</Deterministic>
   </PropertyGroup>
   <ItemGroup>
+    <!-- The real 173-entry GET /api/champions body, captured 2026-08-18. Held-out
+         data: it was not written to suit the resolver, so a normalisation rule
+         that only works on hand-picked champions fails against it. -->
+    <None Include="Fixtures\champions.live.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\src\CoachBuild.Core\CoachBuild.Core.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="xunit" Version="2.9.2" />

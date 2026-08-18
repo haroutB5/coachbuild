@@ -10,25 +10,32 @@ public sealed class LivePollingCoordinator
     public const int PlayerListPollMs = 4000;
     public const int SkillsPollMs = 1000;
     public const int AllGameDataPollMs = 3000;
+    public const int IdentityFallbackPollMs = 2000;
 
     private readonly LiveClientDataClient _live;
     private readonly CompanionState _state;
     private readonly Action<JsonElement>? _allGameData;
     private readonly Action<JsonElement>? _playerList;
     private readonly Action<LiveSkillState>? _skills;
+    private readonly Action<JsonElement>? _activePlayerName;
+    private readonly Func<bool>? _identityMissing;
 
     public LivePollingCoordinator(
         LiveClientDataClient live,
         CompanionState state,
         Action<JsonElement>? allGameData = null,
         Action<JsonElement>? playerList = null,
-        Action<LiveSkillState>? skills = null)
+        Action<LiveSkillState>? skills = null,
+        Action<JsonElement>? activePlayerName = null,
+        Func<bool>? identityMissing = null)
     {
         _live = live;
         _state = state;
         _allGameData = allGameData;
         _playerList = playerList;
         _skills = skills;
+        _activePlayerName = activePlayerName;
+        _identityMissing = identityMissing;
     }
 
     public async Task TickAllGameDataAsync(CancellationToken cancellationToken = default)
@@ -53,6 +60,21 @@ public sealed class LivePollingCoordinator
     }
 
     /// <summary>
+    /// Polls the bare-string identity endpoint, but only while the caller
+    /// says it still has no usable identity. A healthy client answers on
+    /// allgamedata, so this normally makes zero requests for a whole game;
+    /// without the predicate it would be a standing extra request aimed at a
+    /// question that was already answered.
+    /// </summary>
+    public async Task TickActivePlayerNameAsync(CancellationToken cancellationToken = default)
+    {
+        if (!IsInProgress()) return;
+        if (_activePlayerName is null || _identityMissing is null || !_identityMissing()) return;
+        var data = await _live.GetActivePlayerNameAsync(cancellationToken).ConfigureAwait(false);
+        if (data is { } value) _activePlayerName(value);
+    }
+
+    /// <summary>
     /// Starts independent, fail-soft workers. Raw live payloads are passed to
     /// the caller and are not retained by the coordinator.
     /// </summary>
@@ -63,6 +85,7 @@ public sealed class LivePollingCoordinator
             RunPeriodicAsync(TickAllGameDataAsync, AllGameDataPollMs, cancellationToken),
             RunPeriodicAsync(TickPlayerListAsync, PlayerListPollMs, cancellationToken),
             RunPeriodicAsync(TickSkillsAsync, SkillsPollMs, cancellationToken),
+            RunPeriodicAsync(TickActivePlayerNameAsync, IdentityFallbackPollMs, cancellationToken),
             RunActivePlayerCadenceAsync(cancellationToken)
         };
         await Task.WhenAll(workers).ConfigureAwait(false);

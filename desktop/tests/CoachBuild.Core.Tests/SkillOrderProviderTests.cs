@@ -148,18 +148,38 @@ public sealed class SkillOrderProviderTests
         Assert.Equal("MID", provider.Requests.Single(lane => lane == selection.Lane));
     }
 
+    /// <summary>
+    /// The replacement for <c>Own_champion_resolution_reads_only_the_matching_player</c>,
+    /// which asserted against <c>LivePlayerListResolver.ResolveOwnChampionId</c>
+    /// using a fixture that invented a <c>championId</c> field Riot has never
+    /// sent. That test passed for four releases while the feature it covered
+    /// could not work at all. The resolver is gone; the compliance property it
+    /// was really protecting is asserted here against the real wire shape, and
+    /// the id resolution itself lives in <c>ChampionIdentityTests</c>.
+    /// </summary>
     [Fact]
     public void Own_champion_resolution_reads_only_the_matching_player()
     {
         using var document = JsonDocument.Parse("""
         [
-          {"riotId":"Other#EUW","championId":999,"summonerId":"do-not-retain"},
-          {"riotId":"Own#EUW","championId":103,"summonerId":"also-do-not-retain"}
+          {"riotId":"Other#EUW","rawChampionName":"game_character_displayname_Ahri",
+           "championName":"Ahri","position":"MIDDLE","summonerName":""},
+          {"riotId":"Own#EUW","rawChampionName":"game_character_displayname_Volibear",
+           "championName":"Volibear","position":"TOP","summonerName":""}
         ]
         """);
+        var me = new LiveLocalIdentity("Own#EUW", "Own", "EUW", null);
 
-        Assert.Equal(103, LivePlayerListResolver.ResolveOwnChampionId(document.RootElement, "Own#EUW"));
-        Assert.Null(LivePlayerListResolver.ResolveOwnChampionId(document.RootElement, "Missing#EUW"));
+        var match = LiveLocalPlayerResolver.Match(document.RootElement, me);
+        Assert.NotNull(match);
+        var champion = LiveLocalPlayerResolver.ReadChampion(match!.Player);
+
+        // Only the local player's own entry is ever read.
+        Assert.Equal("Volibear", champion.RawKey);
+        Assert.Equal("TOP", champion.Position);
+
+        var stranger = new LiveLocalIdentity("Missing#EUW", "Missing", "EUW", null);
+        Assert.Null(LiveLocalPlayerResolver.Match(document.RootElement, stranger));
     }
 
     private sealed class FixtureHandler(Func<Uri, string> payloadFactory) : HttpMessageHandler

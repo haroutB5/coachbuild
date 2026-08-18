@@ -851,6 +851,8 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     private readonly LcuHttpClient _lcu;
     private readonly LiveClientDataClient _live;
     private readonly CoreSkillOrderProvider _skillOrders;
+    private readonly IChampionDirectory _champions;
+    private readonly bool _ownsChampions;
     private readonly RedactedLog _log;
     private readonly CompanionHttpServer _bridge;
     private readonly WindowDecisionService _windowDecisions;
@@ -861,9 +863,17 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     private Task? _liveTask;
     private bool _started;
     private bool _stopped;
-    private string? _localRiotId;
+    private LiveLocalIdentity? _localIdentity;
     private int? _championId;
+    private ChampionIdSource _championIdSource = ChampionIdSource.None;
     private string? _championName;
+    private string? _championRawKey;
+    private string? _championDisplayName;
+    // The champion the LCU watched us lock in, captured ONLY on a
+    // ChampSelect -> InProgress transition this instance actually saw.
+    // Exact and network-free, but it says what was picked rather than what
+    // is on screen, so it is a fallback behind the roster lookup.
+    private int? _champSelectChampionId;
     private string? _detectedPosition;
     private string? _laneOverride;
     private LiveSkillState? _skill;
@@ -905,7 +915,10 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     private readonly TimeProvider _time;
     private readonly LiveReachabilityReporter _reachability;
     private string? _lastIdentityLine;
+    private string? _lastChampionLine;
     private string? _lastOverlayInputReason;
+    private Task? _championDirectoryFetch;
+    private bool _championDirectoryLoading;
 
     public CoreDesktopHostServices(
         string sessionToken,
@@ -915,7 +928,8 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         RedactedLog? log = null,
         HttpMessageHandler? liveHandler = null,
         TimeProvider? timeProvider = null,
-        LiveClientDataOptions? liveOptions = null)
+        LiveClientDataOptions? liveOptions = null,
+        IChampionDirectory? championDirectory = null)
     {
         if (!SessionTokenStore.IsValid(sessionToken))
             throw new ArgumentException("A valid persistent session token is required.", nameof(sessionToken));
@@ -950,12 +964,18 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             _state,
             _windowDecisions,
             _log);
+        // Live Client Data names the local player's champion; /api/skill-order
+        // is keyed by numeric id. Nothing bridged that gap before 1.0.11.
+        _ownsChampions = championDirectory is null;
+        _champions = championDirectory ?? new ChampionDirectory(timeProvider: _time);
         _livePolling = new LivePollingCoordinator(
             _live,
             _state,
             allGameData: CaptureAllGameData,
             playerList: CapturePlayerList,
-            skills: CaptureSkills);
+            skills: CaptureSkills,
+            activePlayerName: CaptureActivePlayerName,
+            identityMissing: () => { lock (_gate) return _localIdentity is null; });
     }
 
     public event Action<ReopenTarget>? PageRequested;
@@ -980,6 +1000,19 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     /// a failed fetch left no handle and no trace anywhere.
     /// </summary>
     public Task? PendingSkillOrderFetch { get { lock (_gate) return _skillOrderFetch; } }
+
+    /// <summary>
+    /// The most recent champion-roster fetch. Exposed for the same reason as
+    /// <see cref="PendingSkillOrderFetch"/>: a test settles the pipeline
+    /// instead of sleeping. Production never reads it.
+    /// </summary>
+    public Task? PendingChampionDirectoryFetch { get { lock (_gate) return _championDirectoryFetch; } }
+
+    /// <summary>The champion id the overlay is currently using, and where it came from.</summary>
+    public (int? Id, ChampionIdSource Source) ResolvedChampion
+    {
+        get { lock (_gate) return (_championId, _championIdSource); }
+    }
 
     public string? LaneOverride
     {
@@ -1104,68 +1137,197 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     private void CaptureAllGameData(JsonElement data)
     {
         if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("activePlayer", out var active)) return;
-        if (active.ValueKind != JsonValueKind.Object || !active.TryGetProperty("riotId", out var riotId)) return;
-        if (riotId.ValueKind != JsonValueKind.String) return;
-        var value = riotId.GetString()?.Trim();
-        if (string.IsNullOrWhiteSpace(value)) return;
-        lock (_gate) _localRiotId = value;
+        // Through 1.0.10 this read activePlayer.riotId and nothing else, so a
+        // client build that publishes the parts (riotIdGameName +
+        // riotIdTagLine) but not the whole string left the pipeline with no
+        // identity at all and no way to say so.
+        var identity = LiveLocalPlayerResolver.ReadActivePlayer(active);
+        if (identity is null) return;
+        lock (_gate) _localIdentity = LiveLocalPlayerResolver.Merge(_localIdentity, identity);
+    }
+
+    /// <summary>
+    /// Last-resort identity, polled only while allgamedata has produced none.
+    /// </summary>
+    private void CaptureActivePlayerName(JsonElement value)
+    {
+        var identity = LiveLocalPlayerResolver.ReadActivePlayerName(value);
+        if (identity is null) return;
+        lock (_gate)
+        {
+            if (_localIdentity is not null) return;
+            _localIdentity = identity;
+        }
+        _log?.Info("live: identity taken from activeplayername (allgamedata published none)");
     }
 
     private void CapturePlayerList(JsonElement data)
     {
         if (data.ValueKind != JsonValueKind.Array) return;
-        string? localId;
-        lock (_gate) localId = _localRiotId;
-        if (string.IsNullOrWhiteSpace(localId)) return;
+        LiveLocalIdentity? identity;
+        lock (_gate) identity = _localIdentity;
 
-        var championId = LivePlayerListResolver.ResolveOwnChampionId(data, localId);
-
-        foreach (var player in data.EnumerateArray())
+        var match = LiveLocalPlayerResolver.Match(data, identity);
+        if (match is null)
         {
-            if (player.ValueKind != JsonValueKind.Object ||
-                !player.TryGetProperty("riotId", out var riotId) ||
-                !string.Equals(riotId.GetString(), localId, StringComparison.Ordinal)) continue;
-
-            string? champion = null;
-            if (player.TryGetProperty("rawChampionName", out var raw) && raw.ValueKind == JsonValueKind.String)
-            {
-                champion = raw.GetString();
-                const string prefix = "game_character_displayname_";
-                if (champion?.StartsWith(prefix, StringComparison.Ordinal) == true)
-                    champion = champion[prefix.Length..];
-            }
-            if (string.IsNullOrWhiteSpace(champion) && player.TryGetProperty("championName", out var name))
-                champion = name.ValueKind == JsonValueKind.String ? name.GetString() : null;
-            var position = player.TryGetProperty("position", out var positionValue) && positionValue.ValueKind == JsonValueKind.String
-                ? positionValue.GetString()
-                : null;
-            string? effectivePosition;
-            string? identityLine = null;
-            lock (_gate)
-            {
-                _championId = championId;
-                _championName = string.IsNullOrWhiteSpace(champion) ? _championName : champion;
-                _detectedPosition = string.IsNullOrWhiteSpace(position) ? _detectedPosition : position;
-                effectivePosition = _detectedPosition;
-
-                // Separates matrix row 7 ("2999 answered but the local player's
-                // identity never resolved") from row 6 ("2999 never answered").
-                // Both were silent, and both present as "no overlay: lines at
-                // all", so a field report could not distinguish them.
-                var line = $"live: champion={championId?.ToString(CultureInfo.InvariantCulture) ?? "none"} position={effectivePosition ?? "none"}";
-                if (!string.Equals(_lastIdentityLine, line, StringComparison.Ordinal))
-                {
-                    _lastIdentityLine = line;
-                    identityLine = line;
-                }
-            }
-
-            if (identityLine is not null) _log?.Info(identityLine);
-
-            if (championId is > 0 && string.Equals(_state.Phase, "InProgress", StringComparison.Ordinal))
-                RequestSkillOrderIfNeeded(championId.Value, effectivePosition);
-            break;
+            // Name what was compared. 1.0.10 logged only that the match failed,
+            // which cannot separate "activeplayer published no identity" from
+            // "the two endpoints spell it differently" from "the schema moved".
+            // The values are masked because RedactedLog rewrites anything
+            // Riot-ID shaped anyway - see LiveLocalIdentity.Describe.
+            ReportIdentity(identity is null
+                ? $"live: identity unknown (activeplayer published no riotId/gameName/summonerName); playerlist {LiveLocalPlayerResolver.Describe(data)}"
+                : $"live: identity unmatched (me {identity.Describe()}; tried riotId,gameName+tag,gameName,summonerName,sole-entry; playerlist {LiveLocalPlayerResolver.Describe(data)})");
+            return;
         }
+
+        var champion = LiveLocalPlayerResolver.ReadChampion(match.Player);
+        lock (_gate)
+        {
+            if (champion.PreferredName is { } preferred) _championName = preferred;
+            if (champion.RawKey is not null) _championRawKey = champion.RawKey;
+            if (champion.DisplayName is not null) _championDisplayName = champion.DisplayName;
+            if (!string.IsNullOrWhiteSpace(champion.Position)) _detectedPosition = champion.Position;
+        }
+
+        ReportIdentity($"live: identity matched by {match.MatchedBy}");
+        ResolveChampionIdIfNeeded();
+    }
+
+    /// <summary>
+    /// Turns the champion NAME Live Client Data publishes into the numeric id
+    /// /api/skill-order is keyed by.
+    ///
+    /// <para>This is the step 1.0.10 did not have. It read a
+    /// <c>championId</c> property straight off the player-list entry - a field
+    /// Riot has never published - so the id was null for every champion in
+    /// every game and the skill order was never requested at all.</para>
+    ///
+    /// <para>Rungs, strongest first: the locale-independent
+    /// <c>rawChampionName</c> against the roster key, the localised
+    /// <c>championName</c> against the roster display name, then the champion
+    /// the LCU saw locked in during the champ select this game came out of.
+    /// The roster wins over champ select when both answer, because the player
+    /// list states what is actually on screen.</para>
+    /// </summary>
+    private void ResolveChampionIdIfNeeded()
+    {
+        string? rawKey;
+        string? displayName;
+        string? name;
+        int? current;
+        int? lockedIn;
+        ChampionIdSource source;
+        lock (_gate)
+        {
+            rawKey = _championRawKey;
+            displayName = _championDisplayName;
+            name = _championName;
+            current = _championId;
+            source = _championIdSource;
+            lockedIn = _champSelectChampionId;
+        }
+        if (rawKey is null && displayName is null) return;
+        // A name-resolved id is ground truth for this game. Stop asking.
+        if (current is > 0 && source is ChampionIdSource.RawChampionName or ChampionIdSource.ChampionName)
+            return;
+
+        var roster = _champions.Cached;
+        if (roster is not null)
+        {
+            var (resolved, resolvedSource) = ChampionIdLookup.Resolve(roster, rawKey, displayName);
+            if (resolved is > 0)
+            {
+                PublishChampionId(resolved.Value, resolvedSource);
+                return;
+            }
+            ReportChampion(
+                $"live: champion \"{name ?? "?"}\" is not in the roster ({roster.Count.ToString(CultureInfo.InvariantCulture)} entries)");
+        }
+        else
+        {
+            KickChampionDirectory();
+        }
+
+        // Nothing from the roster yet. Champ select's id gets the overlay
+        // drawing on the first tick; if the roster later disagrees, the key
+        // changes and the skill order is refetched for the right champion.
+        if (current is not > 0 && lockedIn is > 0)
+            PublishChampionId(lockedIn.Value, ChampionIdSource.ChampSelect);
+    }
+
+    private void PublishChampionId(int championId, ChampionIdSource source)
+    {
+        string? name;
+        string? position;
+        lock (_gate)
+        {
+            _championId = championId;
+            _championIdSource = source;
+            name = _championName;
+            position = _detectedPosition;
+        }
+
+        // Separates matrix row 7 ("2999 answered but the local player's identity
+        // never resolved") from row 6 ("2999 never answered"), and now also says
+        // WHICH rung produced the id - so a wrong overlay is traceable to a rung
+        // rather than to the whole pipeline.
+        ReportChampion(
+            $"live: champion={name ?? "none"} id={championId.ToString(CultureInfo.InvariantCulture)} via={source} position={position ?? "none"}");
+
+        if (string.Equals(_state.Phase, "InProgress", StringComparison.Ordinal))
+            RequestSkillOrderIfNeeded(championId, position);
+    }
+
+    /// <summary>
+    /// Starts at most one roster fetch. The task is started OUTSIDE the state
+    /// lock: in production the first await is the socket, so the continuation
+    /// never runs under the lock, and a test double that completes
+    /// synchronously must not be the one path that does.
+    /// </summary>
+    private void KickChampionDirectory()
+    {
+        lock (_gate)
+        {
+            if (_championDirectoryLoading) return;
+            _championDirectoryLoading = true;
+        }
+        var fetch = LoadChampionDirectoryAsync();
+        lock (_gate) _championDirectoryFetch = fetch;
+    }
+
+    private async Task LoadChampionDirectoryAsync()
+    {
+        var loaded = false;
+        try
+        {
+            var roster = await _champions.LoadAsync(_stop.Token).ConfigureAwait(false);
+            if (roster is null)
+            {
+                // Deliberately not latched: ChampionDirectory backs off, and the
+                // 4 s player-list tick and the 750 ms snapshot tick both re-enter
+                // here, so a blip at load-in cannot blank the match.
+                ReportChampion($"live: champion roster unavailable ({_champions.LastFailure ?? "unknown"}); will retry");
+            }
+            else
+            {
+                ReportChampion($"live: champion roster loaded ({roster.Count.ToString(CultureInfo.InvariantCulture)} entries)");
+                loaded = true;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception error)
+        {
+            ReportChampion($"live: champion roster failed ({error.GetType().Name}); will retry");
+        }
+        finally
+        {
+            lock (_gate) _championDirectoryLoading = false;
+        }
+
+        if (loaded) ResolveChampionIdIfNeeded();
     }
 
     private void RequestSkillOrderIfNeeded(int championId, string? detectedPosition)
@@ -1337,13 +1499,29 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     private OverlayState? BuildOverlayState()
     {
         var phase = _state.Phase;
+        var lockedInChampionId = _windowDecisions.LastOpenedChampionId;
         lock (_gate)
         {
             if (!string.Equals(_lastOverlayPhase, phase, StringComparison.Ordinal)
                 && string.Equals(phase, "InProgress", StringComparison.Ordinal))
             {
+                // Adopt champ select's champion ONLY when this instance saw
+                // the champ select that produced this game.
+                // LastOpenedChampionId is not cleared when a match ends, so
+                // on any other entry into InProgress (app started mid-game,
+                // custom game, reconnect) it is a stale champion from an
+                // earlier queue, and confidently wrong beats blank only for
+                // whoever wrote the code.
+                _champSelectChampionId =
+                    string.Equals(_lastOverlayPhase, "ChampSelect", StringComparison.Ordinal)
+                    && lockedInChampionId is > 0
+                        ? lockedInChampionId
+                        : null;
                 _championId = null;
+                _championIdSource = ChampionIdSource.None;
                 _championName = null;
+                _championRawKey = null;
+                _championDisplayName = null;
                 _detectedPosition = null;
                 _skill = null;
                 _skillOrderKey = null;
@@ -1351,6 +1529,7 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
                 _skillOrderLane = null;
                 _skillOrderLaneIsAuto = true;
                 _lastIdentityLine = null;
+                _lastChampionLine = null;
                 _lastOverlayInputReason = null;
             }
             _lastOverlayPhase = phase;
@@ -1386,13 +1565,24 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         }
         if (string.IsNullOrWhiteSpace(champion))
         {
-            ReportOverlayInput("waiting-champion (playerlist has not matched the local riotId)");
+            ReportOverlayInput("waiting-champion (playerlist has not matched the local player; see the live: identity line)");
             return null;
         }
-        ReportOverlayInput("live inputs ready");
 
         if (championId is > 0)
+        {
+            ReportOverlayInput("live inputs ready");
             RequestSkillOrderIfNeeded(championId.Value, position);
+        }
+        else
+        {
+            // The champion is known by NAME and still has no id. That was
+            // permanently true before 1.0.11 and logged as nothing at all;
+            // now it is a named state, and this tick is one of the two things
+            // that keeps retrying it for the whole early-game window.
+            ReportOverlayInput("waiting-champion-id (champion name known, numeric id not resolved yet)");
+            ResolveChampionIdIfNeeded();
+        }
 
         lock (_gate)
         {
@@ -1433,6 +1623,33 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     /// window's own render decision uses so a single grep tells the whole
     /// story of why nothing is on screen.
     /// </summary>
+    /// <summary>One deduped line per change of identity-resolution outcome.</summary>
+    private void ReportIdentity(string line)
+    {
+        lock (_gate)
+        {
+            if (string.Equals(_lastIdentityLine, line, StringComparison.Ordinal)) return;
+            _lastIdentityLine = line;
+        }
+        _log?.Info(line);
+    }
+
+    /// <summary>
+    /// One deduped line per change of champion-id outcome. Kept on its own
+    /// slot rather than sharing the identity slot, or two alternating states
+    /// would each re-log every 4 s poll and drown the file they exist to
+    /// make readable.
+    /// </summary>
+    private void ReportChampion(string line)
+    {
+        lock (_gate)
+        {
+            if (string.Equals(_lastChampionLine, line, StringComparison.Ordinal)) return;
+            _lastChampionLine = line;
+        }
+        _log?.Info(line);
+    }
+
     private void ReportOverlayInput(string reason)
     {
         lock (_gate)
@@ -1458,6 +1675,8 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         }
         catch (OperationCanceledException) { }
         await _bridge.DisposeAsync().ConfigureAwait(false);
+        if (_ownsChampions && _champions is IDisposable disposableChampions)
+            disposableChampions.Dispose();
         _live.Dispose();
         _lcu.Dispose();
         _stop.Dispose();

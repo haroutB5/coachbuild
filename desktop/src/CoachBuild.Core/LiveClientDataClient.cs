@@ -161,6 +161,15 @@ public sealed class LiveClientDataClient : IDisposable
     public Task<JsonElement?> GetPlayerListAsync(CancellationToken cancellationToken = default) =>
         GetJsonAsync("/liveclientdata/playerlist", cancellationToken);
 
+    /// <summary>
+    /// The last-resort identity source: a bare JSON string, whose format has
+    /// changed across patches (sometimes <c>Name#TAG</c>, sometimes the game
+    /// name alone). Only polled when <c>allgamedata.activePlayer</c> produced no
+    /// usable identity at all, so it costs nothing on a healthy client.
+    /// </summary>
+    public Task<JsonElement?> GetActivePlayerNameAsync(CancellationToken cancellationToken = default) =>
+        GetJsonAsync("/liveclientdata/activeplayername", cancellationToken);
+
     public async Task<LiveSkillState?> GetSkillsAsync(CancellationToken cancellationToken = default)
     {
         var active = await GetJsonAsync("/liveclientdata/activeplayer", cancellationToken).ConfigureAwait(false);

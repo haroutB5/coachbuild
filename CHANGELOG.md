@@ -1,4 +1,105 @@
 # Changelog
+## Desktop 1.0.11 — 2026-08-18 — the in-game skill order asked for a champion id Riot never sent
+
+Desktop app only; the web app is untouched and not redeployed.
+
+**The in-game skill order has never worked, for anyone, on any champion.** Not
+intermittently, not on one machine — the code path that requests it could not be
+reached. Runes and item sets were unaffected, which is why the app otherwise
+looked healthy.
+
+### The defect
+
+`LivePlayerListResolver.ResolveOwnChampionId` read the local player's champion id
+from a `championId` property on a Live Client Data player-list entry. **Riot has
+never published that property.** The documented entry carries `championName` and
+`rawChampionName` and no numeric id — confirmed against Riot's API reference,
+against this repo's own 2026-07-27 capture of a real game (quoted in
+`overlay-host/lib/gameState.js`), and against the independent fake live server in
+`_tmp-probe/`. So the id was always null, and `RequestSkillOrderIfNeeded`, gated
+on `championId is > 0`, was never called. The overlay reached
+`overlay: no-skill-order` and stopped.
+
+The Electron overlay this app replaced resolved the champion by **name**, through
+`GET /api/champions`, and worked. The .NET port dropped that step and substituted
+a field that does not exist. The single test covering it passed a hand-written
+fixture that invented the field, so a green suite proved nothing about the wire.
+
+The user's own log is unambiguous once read carefully: `live: champion=none
+position=NONE` is only emitted **after** an exact riotId match, and
+`overlay: live inputs ready` requires a resolved champion **name**. Identity and
+name both resolved. Only the id was missing.
+
+### Fixed
+
+- **Champion id now comes from the champion name.** `ChampionDirectory` fetches
+  the app's own public roster once per run and `ChampionIdLookup` matches the
+  locale-independent `rawChampionName` against the roster key first, then the
+  localised `championName` against the display name. Punctuation and case are
+  folded, so `Kaisa`/`Kai'Sa`, `MonkeyKing`/`Wukong` and `DrMundo`/`Dr. Mundo`
+  all meet. Verified against all 173 entries the live endpoint returns: every
+  one resolves by both names, with zero collisions.
+- **A failed roster fetch is retried, never latched.** Success is cached for the
+  process; a failure is cached for 20 s, and an empty roster body counts as a
+  failure rather than an answer. The same discipline 1.0.8 had to add to the
+  skill-order fetch, applied to the new dependency before it could repeat the
+  mistake.
+- **Champ select is a fallback id source.** When the roster cannot be reached,
+  the champion the LCU watched you lock in is exact and needs no network, so the
+  overlay still draws. It is only adopted when this app instance actually
+  observed the ChampSelect → InProgress transition that produced the game — the
+  LCU's last-opened champion is never cleared when a match ends, so adopting it
+  blindly would draw a confident skill order for an earlier queue's champion. If
+  the roster later disagrees, the roster wins and the order is refetched.
+- **The local player is found by a chain, not by one key.** Exact `riotId`
+  (whitespace around `#` tolerated) → `riotIdGameName` + `riotIdTagLine` →
+  game name alone → legacy `summonerName` → a sole player-list entry (Practice
+  Tool). Every rung is case-insensitive and trims, and an ambiguous name is
+  refused rather than guessed. `summonerName` is empty on recent patches, which
+  is exactly why it cannot be the only rung.
+- **A last-resort identity endpoint.** When `allgamedata` publishes nothing
+  identifying, `/liveclientdata/activeplayername` is polled — and only then, so a
+  healthy client makes zero extra requests.
+- **Position is not a gate.** `position=NONE`, which is what the user's client
+  reported, fans out across all five lanes and takes the highest-sampled order.
+  It always did; there is now a test that says so.
+
+### Diagnostics
+
+The log now names what was compared and which rung answered:
+
+```
+live: identity matched by RiotId
+live: champion roster loaded (173 entries)
+live: champion=Volibear id=106 via=RawChampionName position=NONE
+```
+
+…and on failure:
+
+```
+live: identity unmatched (me gameName=Mu~(13) tag=EUW riotId=Mu~(17) summonerName=null;
+  tried riotId,gameName+tag,gameName,summonerName,sole-entry;
+  playerlist n=10 riotId=10 gameName=10 tag=10 summonerName=0)
+overlay: waiting-champion-id (champion name known, numeric id not resolved yet)
+```
+
+Own-identity values are masked to a prefix and a length because the log redacts
+anything Riot-ID shaped; the player list is described by counts only and never
+carries another player's name. That is enough to separate a schema move from a
+value mismatch in one paste, which the previous single line could not do.
+
+### Tests
+
+**276 green, Debug and Release** (190 Desktop + 86 Core), up from 223. 53 new.
+
+Removing the invented `championId` from the existing in-game fixture turned
+**14 of the pre-existing tests red** against 1.0.10's production code — the
+regression suite for the 1.0.7 blank-overlay bug had been passing on an input
+Live Client Data does not send.
+
+**18 mutations applied one at a time, 18 killed.** Deleting the whole
+name-to-id step — which is precisely 1.0.10 — turns 38 tests red.
+
 ## Desktop 1.0.10 — 2026-08-18
 
 Desktop app only; the web app is untouched and not redeployed. Two measured
