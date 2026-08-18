@@ -1,4 +1,110 @@
 # Changelog
+## Web 0.111.0 — 2026-08-18 — champ select picked Volibear and the Builds page kept showing Wukong
+
+Web app only; the desktop app is untouched and not re-released.
+
+Reported live with a screenshot: League showing a **Volibear TOP** pick, the
+companion pill reading **COMPANION LIVE / In champ select**, the companion having
+already posted `CoachBuild Volibear Top` into League chat — and the app's Builds
+page still on **Wukong**, a champion viewed in an earlier session. Second ask,
+same area: *"make it faster and snappy — when I switch between champs in champ
+select I want to see it instantly in the app."*
+
+### Why the follow was lost
+
+`app/page.tsx`'s live-follow effect called `markFollowedChampSelectChampion()`
+**before** awaiting `/api/champions`, and discarded the result through an effect
+cleanup `cancelled` flag.
+
+Effect cleanup runs on every **dependency change**, not only unmount, and
+`activeLane` was a dependency. The restored "last champion you looked at" sets
+`activeLane` in the very first commit after mount — so that restore cancelled the
+in-flight follow while leaving the champion **permanently marked as already
+followed**. `shouldFollowChampSelectChange()` then refused to retry it for the
+rest of champ select, and the page sat on the previous champion.
+
+It only fires when the restored lane **differs** from the page's initial `mid`,
+which is why nothing caught it. Same build, same bench, only that lane changed:
+
+- restored on `top` — the follow never happened (20s timeout, wrong champion on screen)
+- restored on `mid` — the follow happened in 109ms
+
+A deep link (`/?championId=…`) applies the champion through a different effect
+that has no such gate, so the companion's own auto-open always looked fine. Only
+walking to Builds yourself hit it.
+
+### Measured, not reasoned
+
+`scripts/bench-champselect.mjs` drives the real app in a real Chrome against a
+fake companion bridge speaking the real `/status` wire contract, and timestamps
+the DOM. The baseline was built and run from a separate `git worktree` at the
+parent commit, so before and after are the same harness on the same machine.
+
+| 8 champion switches | baseline | after |
+| --- | --- | --- |
+| champion on screen | median 2131ms, max 2907ms | median 735–782ms, max 1014–1047ms |
+| build data rendered | median 2172ms, max 3437ms | median 735–782ms, max 1087ms |
+| open Builds mid-draft | **never** (20s timeout) | 74–117ms |
+| repeat champion | 2980ms / 3033ms | 122–179ms |
+
+The last row is the whole point of the cache: before, coming back to a champion
+you had looked at ten seconds earlier cost exactly as much as seeing it for the
+first time.
+
+Re-run against the **deployed production** site after release: open Builds
+mid-draft 117ms, 8 switches median 772ms / max 1057ms, zero timeouts.
+
+The bench's `t0` is "the bridge's `/status` now reports champion X". The desktop
+`GameflowPoller` adds its own 1500ms on top before that is true; this work did not
+touch it, and it is not folded into the numbers above.
+
+### Fixed
+
+- **The follow gate is now begin / commit / abandon.** An attempt that does not
+  apply is released and retried on the next poll tick; only a real application is
+  recorded as followed. The in-flight leg still prevents a poll from stacking
+  duplicate fetches, which is the only thing the premature mark was ever for.
+- **Staleness is decided by the target, not the effect lifecycle.** An attempt
+  applies only while it is still what champ select says *right now*, so an
+  out-of-order response can only lose to a genuinely newer champion — and a
+  re-render can no longer discard anything.
+- Both are pinned by regression tests that were **confirmed to fail** against a
+  mutant restoring the old mark-before-apply gate, plus a sequence test that
+  replays rapid switching, out-of-order responses, manual override, and a fresh
+  champ select.
+
+### Faster
+
+- **The champion list is resolved through the shared `getChampionMap()`** — module
+  cached and in-flight deduped — instead of a fresh `fetch("/api/champions")` on
+  every follow, deep link and quick pick.
+- **`/status` polls at 1s during champ select**, 3s otherwise
+  (`statusPollIntervalMs`), self-scheduling so a phase change never drops a tick.
+  It is a loopback request to a local process, and everything behind it is
+  deduped, so the faster cadence cannot become more upstream traffic.
+- **`lib/buildCache.ts` is now the single owner of `/api/build`**: in-flight
+  dedupe, a 10-minute TTL cache bounded at 32 entries, failures never cached.
+  `BuildTabContent` and `AutoExporter` previously fired the same URL at the same
+  instant for the same champion — that is now one request, shared.
+- **`BuildPrewarmer` warms the champ-select champion's build the moment it
+  resolves**, debounced 300ms so scanning across the champion grid costs one
+  request rather than one per champion passed over. Role-less lobbies (custom /
+  ARAM / blind pick) are deliberately not prewarmed: guessing a lane would warm
+  the wrong build.
+
+### Also
+
+- The TopBar champ-select chip is a **button** when a champion has resolved. The
+  Builds page deliberately stands down after a manual browse until the pick
+  changes; until now there was no way back to your own pick except searching for
+  it by name.
+
+Honesty is unchanged. A genuine cache miss still renders a skeleton, and the
+previous champion's numbers are never shown under the new champion's name — which
+is exactly the failure being fixed, and would have been a worse version of it.
+
+Tests: 2904 passing (was 2878).
+
 ## Desktop 1.0.11 — 2026-08-18 — the in-game skill order asked for a champion id Riot never sent
 
 Desktop app only; the web app is untouched and not redeployed.
