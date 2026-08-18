@@ -162,7 +162,23 @@ first question that answers "no" is the answer.
    - `no-skill-order` — no order for this champion+lane. Since 1.0.8 this
      retries on its own; if it persists, that champion+lane genuinely has none.
      Tray → Lane → pick the lane explicitly to force a different key.
-   - `no-next-ability` — all 18 points spent. Correct at level 18.
+   - `waiting-level-up (level 7, 7 spent, 0 banked)` — **the normal state for
+     most of a game since 1.0.12.** The highlight is a prompt to spend a point,
+     so it exists only between a level-up and the moment you spend it. Nothing
+     is wrong. If the two numbers ever disagree with the game, that is the bug.
+   - `no-next-ability (level N, M banked, order exhausted or capped)` — a point
+     is banked but the order has nothing left that can take a rank.
+   - `highlight hidden (<reason>)` — the highlight left the screen, and why.
+     Every hide is logged since 1.0.12; before that the log had show events
+     only, which is how a highlight that outlived its game by two minutes left
+     no trace at all.
+   - `not-in-game (phase None)` / `not-in-game (live feed produced no state)` —
+     the state was cleared because the match ended, or because Live Client Data
+     stopped answering for 5 s. Nothing can re-render a highlight after this.
+   - `point arithmetic incoherent for <champion>` — that champion holds a rank
+     the game granted for free and `ChampionKit` does not list it. The highlight
+     falls back to always-on for it. **Send this line in** — it is the only
+     symptom, and the fix is one table entry.
    - `highlight E at 754x879 size 39 visible=True on \.\DISPLAY1 1920x1080@96
      source=league` — the overlay drew. `source=league` means the monitor came
      from the game window; `source=self` means League was not found and the
@@ -174,7 +190,19 @@ first question that answers "no" is the answer.
    Settings → Video → Window Mode = **Borderless**. Note this line can appear
    on a machine where the overlay works anyway: Fullscreen Optimizations
    converts most exclusive-fullscreen D3D apps to borderless-flip.
-9. **`skill-order: champion <id> returned <status>; retry in <n>s`** — a failed
+9. **`live: skill feed silent for 20 polls; dropping the retained snapshot`**
+   — `/liveclientdata/activeplayer` stopped answering for 5 s, so the last
+   reading was discarded rather than repeated. Expected as a game shuts down.
+   Mid-game it means the loopback endpoint went away under a live match.
+10. **`hotkey: registered Ctrl+Shift+S (adjust overlay position)`** — the
+   global adjust shortcut is bound. Both `Ctrl+Shift+S` and the legacy
+   `Ctrl+Shift+A` are registered independently, so one being taken by another
+   app still leaves a working key. `hotkey: registration FAILED for … —
+   already registered by another application [win32 1409]` names the collision;
+   the tray item "Adjust overlay position" always works regardless. Press the
+   key again to leave adjust mode — in a borderless game, reaching the tray to
+   cancel means alt-tabbing out of the thing being aligned.
+11. **`skill-order: champion <id> returned <status>; retry in <n>s`** — a failed
    or empty fetch, with the retry that follows it. `recovered after N failed
    attempt(s)` closes the loop. `no further retry` means the schedule is
    exhausted (Error: 20 s / 45 s / 90 s; NoData: one attempt at 75 s).

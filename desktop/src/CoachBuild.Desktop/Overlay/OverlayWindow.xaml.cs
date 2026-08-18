@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using CoachBuild.Core;
 using WpfBrushes = System.Windows.Media.Brushes;
 using WpfColor = System.Windows.Media.Color;
 using WpfKeyEventArgs = System.Windows.Input.KeyEventArgs;
@@ -43,6 +44,10 @@ public partial class OverlayWindow : Window
     private int _topmostReassertTicks;
     private bool _disposed;
     private string? _lastOverlayReason;
+    private string? _lastKitAnomaly;
+    // Why the last clear happened, so `not-in-game` says whether the game
+    // ended or the live feed died instead of being the same word for both.
+    private string? _clearReason;
 
     /// <summary>
     /// Optional sink for one-line overlay render diagnostics (wired to the
@@ -86,6 +91,23 @@ public partial class OverlayWindow : Window
     /// </summary>
     public bool IsDrawingHighlight { get; private set; }
 
+    /// <summary>
+    /// True when everything needed to draw a highlight is present for this
+    /// game — in game, champion known, an order fetched, a monitor resolved and
+    /// the overlay switched on — whether or not a point happens to be banked at
+    /// this instant.
+    ///
+    /// <para>Split from <see cref="IsDrawingHighlight"/> in 1.0.12 because the
+    /// two answer different questions and only one of them changed. The
+    /// exclusive-fullscreen hint asks "should this user be seeing pixels from us
+    /// at some point in this game"; the renderer asks "are there pixels on
+    /// screen right now". Once the highlight became a brief per-level-up event,
+    /// keeping the hint on the second question would have made it fire
+    /// essentially never — the user would lose the one line that explains a
+    /// permanently invisible overlay.</para>
+    /// </summary>
+    public bool HasRenderableSkillOrder { get; private set; }
+
     /// <summary>The monitor the overlay last resolved, for diagnostics.</summary>
     public DisplayInfo? CurrentDisplay => _display;
 
@@ -114,8 +136,43 @@ public partial class OverlayWindow : Window
         }
 
         _state = state.Normalize();
+        _clearReason = null;
         if (_adjusting) return;
         RenderCurrentState();
+    }
+
+    /// <summary>
+    /// Drops the retained in-game state and hides. The ONLY correct response to
+    /// "there is no live game any more", and stronger than
+    /// <see cref="HideOverlay"/> on purpose.
+    ///
+    /// <para>ROOT CAUSE of the 1.0.11 field report "the pink box came back two
+    /// minutes after the game ended". Hiding the window left <c>_state</c>
+    /// holding the last in-game snapshot, and several paths re-render it
+    /// later — a monitor change, and above all leaving adjust mode, which
+    /// restored the pre-adjust visibility and repainted the stale highlight
+    /// against a League that was no longer running (the user's log shows the
+    /// give-away <c>source=self</c> on that line). Clearing the state means
+    /// there is nothing left to resurrect no matter which path runs.</para>
+    ///
+    /// <para>Safe during adjustment: the state is cleared but the canvas is not
+    /// touched, so the four alignment boxes the user is working with stay put.
+    /// See <see cref="HideOverlay"/> for why that matters.</para>
+    /// </summary>
+    public void ClearForNoGame(string reason)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(() => ClearForNoGame(reason));
+            return;
+        }
+
+        _state = OverlayState.Empty;
+        _clearReason = string.IsNullOrWhiteSpace(reason) ? "no-game" : reason;
+        _lastKitAnomaly = null;
+        if (_adjusting) return;
+        RenderCurrentState();
+        Hide();
     }
 
     public void SetInteractive(bool interactive)
@@ -353,12 +410,14 @@ public partial class OverlayWindow : Window
             // it has no HWND, so it reported a monitor failure — and the user
             // reading the log was hunting a display bug that did not exist.
             IsDrawingHighlight = false;
+            HasRenderableSkillOrder = false;
             ReportOverlayReason("overlay-hidden (tray: Show overlay)");
             return;
         }
         if (_display is null)
         {
             IsDrawingHighlight = false;
+            HasRenderableSkillOrder = false;
             ReportOverlayReason("no-display");
             return;
         }
@@ -373,7 +432,36 @@ public partial class OverlayWindow : Window
         _renderer.Render(RootCanvas, renderState, _settings, _display.Resolution, dipCalibration);
         var outcome = DescribeRenderOutcome(renderState, dipCalibration, _display);
         IsDrawingHighlight = outcome.StartsWith("highlight ", StringComparison.Ordinal);
+        HasRenderableSkillOrder = renderState.HasRenderableData;
+        ReportKitAnomaly(renderState);
         ReportOverlayReason(outcome);
+    }
+
+    /// <summary>
+    /// Names a champion whose ranks do not add up against its level, once.
+    ///
+    /// <para>That reading means this champion holds a rank the game granted for
+    /// free and <see cref="ChampionKit"/> does not know about it. The highlight
+    /// deliberately keeps drawing in that case (see
+    /// <c>OverlayState.HasPointToSpend</c>), so nothing on screen would ever
+    /// reveal the gap — this line is the only way the table gets corrected.</para>
+    /// </summary>
+    private void ReportKitAnomaly(OverlayState state)
+    {
+        if (!state.InGame || state.Points.Coherent)
+        {
+            _lastKitAnomaly = null;
+            return;
+        }
+
+        var line = $"overlay: point arithmetic incoherent for {state.ChampionName ?? "?"}"
+            + $" (id {state.ChampionId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"}):"
+            + $" level {state.Points.Level}, {state.Points.Purchased} purchased."
+            + " This champion grants a free rank ChampionKit does not list;"
+            + " the highlight stays always-on for it rather than never showing.";
+        if (string.Equals(_lastKitAnomaly, line, StringComparison.Ordinal)) return;
+        _lastKitAnomaly = line;
+        Diagnostics?.Invoke(line);
     }
 
     /// <summary>
@@ -390,10 +478,18 @@ public partial class OverlayWindow : Window
         CalibrationGeometry geometry,
         DisplayInfo display)
     {
-        if (!state.InGame) return "not-in-game";
+        if (!state.InGame) return _clearReason is { } why ? $"not-in-game ({why})" : "not-in-game";
         if (string.IsNullOrWhiteSpace(state.ChampionName)) return "no-champion";
         if (state.SkillOrder.Order.Count == 0) return "no-skill-order";
-        if (state.NextAbility() is not { } next) return "no-next-ability";
+        // 1.0.12: the highlight is a prompt to spend a point, so it exists only
+        // while there is one to spend. Levels and points spent are both on the
+        // line because "waiting" with level 7 and 7 spent is normal, while
+        // "waiting" with level 7 and 9 spent is a kit this build cannot count.
+        var points = state.Points;
+        if (!state.HasPointToSpend)
+            return $"waiting-level-up (level {points.Level}, {points.Purchased} spent, 0 banked)";
+        if (state.NextAbility() is not { } next)
+            return $"no-next-ability (level {points.Level}, {points.Unspent} banked, order exhausted or capped)";
         var rect = geometry.GetAbilityRects()[(int)next];
         // The monitor identity is on this line because without it a healthy
         // render, a wrong-monitor render and an exclusive-fullscreen render are
@@ -402,12 +498,23 @@ public partial class OverlayWindow : Window
             + $" on {OverlayDisplayResolver.Describe(display, _displaySource)}";
     }
 
-    /// <summary>Deduped to one line per transition — this runs every 750 ms.</summary>
+    /// <summary>
+    /// Deduped to one line per transition.
+    ///
+    /// <para>Every hide is now an explicit <c>highlight hidden (…)</c> line.
+    /// Through 1.0.11 the log had show events and no hide events at all, which
+    /// is precisely why a highlight that outlived its game by two minutes left
+    /// no trace: the last thing the file ever said was that it was on screen.</para>
+    /// </summary>
     private void ReportOverlayReason(string reason)
     {
         if (string.Equals(reason, _lastOverlayReason, StringComparison.Ordinal)) return;
+        var wasHighlighting = _lastOverlayReason?.StartsWith("highlight ", StringComparison.Ordinal) == true;
+        var isHighlighting = reason.StartsWith("highlight ", StringComparison.Ordinal);
         _lastOverlayReason = reason;
-        Diagnostics?.Invoke($"overlay: {reason}");
+        Diagnostics?.Invoke(wasHighlighting && !isHighlighting
+            ? $"overlay: highlight hidden ({reason})"
+            : $"overlay: {reason}");
     }
 
     private void OnDisplayChanged(object? sender, EventArgs e)
@@ -516,7 +623,13 @@ public partial class OverlayWindow : Window
 
     private void RestoreVisibilityAfterAdjustment()
     {
-        var wasVisible = _wasVisibleBeforeAdjustment;
+        // `_wasVisibleBeforeAdjustment` is a fact about the PAST. Adjust mode
+        // has no time limit, and the user's 1.0.11 log has an adjust session
+        // that outlived the game by two minutes: restoring on that flag alone
+        // re-showed a highlight for a match that had already ended, on a
+        // monitor League no longer occupied. Re-derive from the state as it is
+        // NOW — App clears it the moment the game stops.
+        var wasVisible = _wasVisibleBeforeAdjustment && _state.InGame;
         _wasVisibleBeforeAdjustment = false;
         // Adjust mode painted the canvas behind the renderer's back, so its
         // memoised signature no longer describes what is on screen. Without

@@ -56,8 +56,14 @@ public sealed class FullscreenAdvisor
 
     /// <param name="inGame">The LCU phase is InProgress.</param>
     /// <param name="state">The shell's current state, or null if unavailable.</param>
-    /// <param name="isDrawingHighlight">The overlay's last render decision was a highlight.</param>
-    public FullscreenAdvice Observe(bool inGame, UserNotificationState? state, bool isDrawingHighlight)
+    /// <param name="canDrawHighlight">
+    /// The overlay has everything it needs to draw a highlight for this game.
+    /// NOT "is drawing one right now": since 1.0.12 the highlight only appears
+    /// while a skill point is unspent, so gating the hint on the instantaneous
+    /// render decision would make it fire for a fraction of a second per
+    /// level-up, if ever. See OverlayWindow.HasRenderableSkillOrder.
+    /// </param>
+    public FullscreenAdvice Observe(bool inGame, UserNotificationState? state, bool canDrawHighlight)
     {
         var exclusive = inGame && state == UserNotificationState.RunningD3dFullScreen;
         string? line = null;
@@ -69,7 +75,7 @@ public sealed class FullscreenAdvisor
                 : "fullscreen: exclusive D3D fullscreen state cleared";
         }
 
-        var hint = exclusive && isDrawingHighlight && !_hinted;
+        var hint = exclusive && canDrawHighlight && !_hinted;
         if (hint) _hinted = true;
         return line is null && !hint ? FullscreenAdvice.None : new FullscreenAdvice(line, hint);
     }

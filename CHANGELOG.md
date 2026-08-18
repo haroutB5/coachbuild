@@ -1,4 +1,156 @@
 # Changelog
+
+## Desktop 1.0.12 — 2026-08-18 — the pink box is a prompt again, and it stops when the game does
+
+1.0.11 finally got the in-game skill order on screen. Three things about it were
+wrong, all reported the same evening.
+
+### Fixed — the highlight only appears while you actually have a point to spend
+
+> *"it should only appear when skill level up happens"*
+
+1.0.11 drew the box for the whole game. It sat on the next recommended ability
+permanently, whether or not there was a point to spend, so it was decoration
+rather than a prompt. It now appears the moment you level up and disappears the
+moment you put the point in.
+
+**This is the second attempt at that behaviour and the first one that can
+work.** v1.0.6 shipped the same gate and it was reverted, because the sampler
+behind it ran at 750 ms–1.5 s while the real unspent window is frequently
+shorter than that — users effectively never saw the box. So the gate is only
+half the change:
+
+- **`/liveclientdata/activeplayer` is now read every 250 ms**, down from 1000 ms,
+  and the second worker that was reading the same endpoint again at 1500 ms is
+  gone. One worker, four times the resolution, fewer moving parts.
+- **A skill change is pushed straight to the overlay** instead of waiting to be
+  collected by the 750 ms snapshot poll. Worst case from level-up to pixels goes
+  from **1750 ms to 250 ms — 7x**. The push fires only when the level or the
+  ranks actually move, so a game where nothing happens costs nothing: measured
+  **zero pushes across 40 consecutive polls** of an idle game.
+- Measured cost of the faster poll, driving the real client over a real TLS
+  loopback socket: **100 → 240 requests/min, 0.083% → 0.198% of one core**, and
+  that figure charges the in-process fake server's TLS work to us as well.
+
+**Champions that get a rank for free are handled, because otherwise this change
+would have hidden the box from them forever.** Karma, Elise and Nidalee hold R
+rank 1 from level 1 without paying for it, and Jayce's Transform is a free rank
+he never buys. On the naive `level − (Q+W+E+R)` all four read as permanently
+overdrawn, and an unspent gate built on it would never draw for them in any
+game. `ChampionKit` carries the measured ddragon caps and free ranks (the same
+table the web app uses in `lib/championKit.ts`), and the recommendation is
+indexed by points **purchased**, not by level and not by raw rank sum.
+
+And when the arithmetic does not add up — an unknown champion, a rework — the
+overlay **degrades to the old always-on box and writes a line naming the
+champion**, rather than silently vanishing for it. A feature that disappears for
+one champion with no symptom is exactly the failure 1.0.11 spent a day finding.
+
+Two smaller correctness fixes fell out of the same work: the ultimate's cap is
+now the champion's own (3, or 1 for Jayce, or 6 for Udyr) rather than a
+hardcoded 5, and an ability you have already maxed by deviating from the
+recommendation is stepped over instead of blanking the box.
+
+### Fixed — the highlight no longer outlives the game
+
+The user's log, verbatim:
+
+```
+20:32:02 phase: InProgress -> None
+20:32:02 live: 2999 unreachable (HttpRequestException/ConnectionError)
+20:34:06 overlay: display \.\DISPLAY1 2560x1440@96 source=self
+20:34:06 overlay: highlight E at 1194x1321 size 54 visible=True on \.\DISPLAY1 source=self
+```
+
+Two minutes after the match ended, with the game process gone, the overlay
+re-asserted a recommendation for it — and `source=self` gives away why it could:
+League was no longer running, so the overlay had fallen back to its own monitor.
+
+The end of a game hid the window and left the state loaded, and several paths
+re-render that state later. The one that fired here is adjust mode: the user was
+trying to move the overlay (see below), adjust mode suppresses every render,
+the match ended underneath it, and leaving adjust mode restored the visibility
+the window had *before* adjustment and repainted the retained in-game snapshot.
+
+- Leaving a game now **clears** the overlay state rather than hiding the window
+  over it, so there is nothing left to resurrect down any path.
+- The same clear covers a live feed that dies while the phase is still
+  InProgress — 1.0.11 only handled the other case, and answered this one by
+  leaving the stale highlight on screen indefinitely.
+- An unanswered `activeplayer` read is no longer dropped silently. **20
+  consecutive silent polls (5 s) discards the retained snapshot**, because
+  "2999 stopped answering" and "the player did not level up" used to be the
+  same thing downstream.
+- Leaving adjust mode re-derives whether to be visible from the state as it is
+  **now**, instead of from a flag recorded when adjustment began.
+
+### Fixed — Ctrl+Shift+S actually exists now
+
+> *"ctrl shift s to move it isnt working"*
+
+**It was never registered.** Not a failed `RegisterHotKey`, not a torn-down
+window, not focus. The WPF app has never contained a single `RegisterHotKey`
+call: the shortcut lived in the Electron overlay this app replaced
+(`Control+Shift+A`) and was dropped in the rewrite. Since then the only way into
+adjust mode has been the tray menu — which, in a borderless game, means
+alt-tabbing out of the thing you are trying to align against.
+
+- **`Ctrl+Shift+S` and `Ctrl+Shift+A` are both bound**, independently. Windows
+  hands a hotkey to whichever process asks first and returns a flat failure to
+  everyone after, so one squatting app is enough to lose an accelerator; two
+  unrelated combinations both being taken is a far less likely accident.
+- The hotkey lives on a **message-only window created at startup and never
+  destroyed**. A hotkey dies with the window that owns it, and this app tears
+  down its browser window at game start (1.0.10) while its overlay window has no
+  handle at all until first shown — either would have been a shortcut that stops
+  working exactly when it is needed.
+- It **toggles**: the same key gets you back out, without reaching for the tray.
+- Every registration outcome is logged: `hotkey: registered Ctrl+Shift+S
+  (adjust overlay position)`, or `hotkey: registration FAILED for … — already
+  registered by another application [win32 1409]`. If nothing can be bound, a
+  balloon points at the tray item, which always works.
+- F12 in any accelerator is refused before Windows gets the chance: it is
+  reserved for the debugger at all times, which cost the predecessor overlay a
+  week.
+
+### Faster — champion switches in champ select reach the app in a third of the time
+
+Web 0.111.0 took the champ-select follow down to ~0.1–0.8 s and named the
+desktop's own **1500 ms** gameflow poll as the remaining floor. That poll now
+runs at **350 ms while picking** and is unchanged everywhere else — champ select
+is the one phase where the user changes something several times a second and
+then looks at the app for the answer.
+
+Measured: **80 → 343 LCU requests/min during champ select, 0.066% → 0.283% of
+one core.** Both cadence changes together add about **0.33 percentage points of
+one core**, which on the bench box is 0.017% of the machine.
+
+### Diagnostics
+
+- Every hide is logged (`overlay: highlight hidden (…)`). Through 1.0.11 the log
+  had show events and no hide events at all, which is why a highlight that
+  outlived its game by two minutes left no trace.
+- `waiting-level-up (level 7, 7 spent, 0 banked)` is the new normal state for
+  most of a game, and it carries the two numbers the gate is made of.
+- `live: skill feed silent for 20 polls; dropping the retained snapshot`.
+- `overlay: point arithmetic incoherent for <champion> (id N)` — one line, one
+  table entry to fix it.
+- `desktop/docs/verification.md` §"Reading `companion.log` when the in-game
+  overlay shows nothing" is updated for all of the above.
+
+### Internal
+
+- `OverlayRenderer` no longer keeps its own copy of the next-ability
+  arithmetic; the pixels and the log line are now one answer to one question.
+- `Level` and the banked-point flag joined the render memo signature. A
+  level-up changes nothing else about the render inputs — the ranks are
+  identical, that is what a banked point *is* — so without them the memo would
+  report "nothing to repaint" about the one frame the user is waiting for.
+- Tests **276 → 338** (235 Desktop + 103 Core), green in Debug and Release.
+  **15 mutations applied one at a time, 15 killed, zero survivors** — including
+  reverting the unspent gate, the champion kits, the push seam, the state clear
+  and the hotkey registration to exactly what 1.0.11 did.
+
 ## Web 0.111.0 — 2026-08-18 — champ select picked Volibear and the Builds page kept showing Wukong
 
 Web app only; the desktop app is untouched and not re-released.

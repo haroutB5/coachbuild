@@ -407,7 +407,7 @@ public sealed class OverlayDiagnosticsTests
         var advice = advisor.Observe(
             inGame: true,
             UserNotificationState.RunningD3dFullScreen,
-            isDrawingHighlight: false);
+            canDrawHighlight: false);
 
         Assert.False(advice.ShowHint);
     }
@@ -438,7 +438,7 @@ public sealed class OverlayDiagnosticsTests
     {
         var advisor = new FullscreenAdvisor();
 
-        var advice = advisor.Observe(inGame: true, state, isDrawingHighlight: true);
+        var advice = advisor.Observe(inGame: true, state, canDrawHighlight: true);
 
         Assert.Null(advice.LogLine);
         Assert.False(advice.ShowHint);

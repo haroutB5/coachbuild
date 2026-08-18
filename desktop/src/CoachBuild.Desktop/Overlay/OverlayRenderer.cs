@@ -107,7 +107,14 @@ public sealed class OverlayRenderer
             geometry.FirstBoxCenterX,
             geometry.CenterY,
             geometry.BoxSize,
-            geometry.Spacing);
+            geometry.Spacing,
+            // 1.0.12: LEVEL is a visual input now. The highlight only draws
+            // while a point is unspent, and the moment a level-up creates one
+            // NOTHING ELSE in this signature moves — the ranks are unchanged,
+            // that is the whole point. Without this the memo would report
+            // "nothing to repaint" about the one frame the user is waiting for.
+            normalized.Level,
+            normalized.HasPointToSpend);
     }
 
     public OverlayRenderModel BuildModel(
@@ -124,16 +131,15 @@ public sealed class OverlayRenderer
         OverlayState normalized,
         CalibrationGeometry geometry)
     {
-        var spent = AbilityValues.Sum(normalized.Rank);
-        var next = spent >= 0 && spent < normalized.SkillOrder.Order.Count
-            ? normalized.SkillOrder.Order[spent]
-            : (OverlayAbility?)null;
-        if (next is not null && normalized.Rank(next.Value) >= 5) next = null;
-
+        // ONE implementation of "which ability", shared with
+        // OverlayWindow.DescribeRenderOutcome. Through 1.0.11 this method kept
+        // its own copy of the arithmetic, so the pixels and the log line were
+        // two independent answers to the same question — and the unspent gate
+        // would have had to be added to both.
         return new OverlayRenderModel(
             normalized.HasRenderableData,
             geometry.GetAbilityRects(),
-            next,
+            normalized.NextAbility(),
             geometry);
     }
 
@@ -179,4 +185,6 @@ public sealed record OverlayRenderSignature(
     double FirstBoxCenterX,
     double CenterY,
     double BoxSize,
-    double Spacing);
+    double Spacing,
+    int Level = 0,
+    bool HasPointToSpend = false);

@@ -49,6 +49,22 @@ public interface ILaneOverrideHostServices
     void SetLaneOverride(string? lane);
 }
 
+/// <summary>
+/// A host that can hand the overlay a new state the moment the live game
+/// produces one, instead of waiting to be asked.
+///
+/// <para>The 750 ms snapshot poll is a fine cadence for a phase or a champion
+/// name. It is not one for a skill point: added to the live poll in front of
+/// it, the worst case from "the user levelled up" to "the box is on screen"
+/// was 1.75 s in 1.0.11, against an unspent window that is frequently shorter
+/// than that. This seam removes the second half of that number.</para>
+/// </summary>
+public interface ILiveOverlayPushSource
+{
+    /// <summary>Raised off the UI thread; the payload is null when there is nothing to show.</summary>
+    event Action<OverlayState?>? OverlayStateChanged;
+}
+
 public sealed record DesktopPhaseSnapshot(
     string? Phase,
     LastOpenPage? LastOpen = null,
@@ -163,6 +179,7 @@ public partial class App : WpfApplication
     private WebView2Window? _webView;
     private WebView2EnvironmentService? _webViewEnvironment;
     private RedactedLog? _log;
+    private GlobalHotkeyService? _hotkeys;
     private VelopackUpdateService? _updates;
     private Task? _pollTask;
     private TrayMenuState _trayState = TrayMenuState.Default;
@@ -253,6 +270,7 @@ public partial class App : WpfApplication
         _overlay = new OverlayWindow(settingsStore);
         _overlay.Diagnostics = message => _log?.Info(message);
         _overlay.AdjustmentStateChanged += OnAdjustmentStateChanged;
+        if (_services is ILiveOverlayPushSource push) push.OverlayStateChanged += OnLiveOverlayPush;
         if (_services is ILaneOverrideHostServices laneOverrideServices)
             laneOverrideServices.SetLaneOverride(_overlay.LaneOverrideSetting);
         _trayState = _trayState with
@@ -262,6 +280,7 @@ public partial class App : WpfApplication
         };
         _overlay.Hide();
         _tray.Start(_trayState);
+        StartHotkeys();
         _webViewEnvironment = new WebView2EnvironmentService(Paths.WebView2UserDataFolder);
         _ = ProbeWebView2AvailabilityAsync(_shutdown.Token);
         _updates = new VelopackUpdateService(
@@ -276,6 +295,48 @@ public partial class App : WpfApplication
         _pollTask = PollAsync(_shutdown.Token);
         if (Options.ShouldOpenWebViewOnLaunch)
             _ = ReopenAsync();
+    }
+
+    /// <summary>
+    /// Binds the adjust hotkeys and writes one line per attempt.
+    ///
+    /// <para>Through 1.0.11 this app registered no global hotkey at all — the
+    /// feature was lost in the Electron→WPF rewrite, and because nothing was
+    /// ever attempted, nothing was ever logged either. The outcome lines are
+    /// therefore as much of the fix as the registration is: the next report of
+    /// "the hotkey does nothing" is answerable from companion.log.</para>
+    /// </summary>
+    private void StartHotkeys()
+    {
+        _hotkeys = new GlobalHotkeyService();
+        _hotkeys.Pressed += OnHotkeyPressed;
+        foreach (var outcome in _hotkeys.Start()) _log?.Info(outcome.ToLogLine());
+        if (_hotkeys.FallbackAdviceOrNull() is { } advice)
+        {
+            _log?.Info(advice);
+            // The tray item is always present, but a user who only knows the
+            // hotkey has no way to discover that. Say so once, out loud.
+            _tray?.ShowBalloon(
+                "CoachBuild overlay",
+                "The overlay adjust shortcut could not be registered (another app owns it). "
+                + "Right-click the CoachBuild tray icon and choose “Adjust overlay position” instead.",
+                System.Windows.Forms.ToolTipIcon.Warning);
+        }
+    }
+
+    /// <summary>
+    /// Toggles adjust mode. Deliberately a toggle rather than an enter: in a
+    /// borderless game the same key has to get the user back out, and reaching
+    /// the tray to cancel means alt-tabbing out of the game they are aligning
+    /// the overlay against.
+    /// </summary>
+    private void OnHotkeyPressed(HotkeyBinding binding)
+    {
+        if (_isShuttingDown || _overlay is null) return;
+        var adjusting = _overlay.IsAdjusting;
+        _log?.Info($"hotkey: {binding.Accelerator} pressed; {(adjusting ? "leaving" : "entering")} adjust mode");
+        if (adjusting) _overlay.CancelAdjustment();
+        else _overlay.BeginAdjustment();
     }
 
     private bool TryAcquireMutex()
@@ -333,6 +394,35 @@ public partial class App : WpfApplication
         }
     }
 
+    /// <summary>
+    /// A live skill change, applied without waiting for the next snapshot tick.
+    ///
+    /// <para>This is the second half of the appearance latency. The live poll
+    /// samples the game every 250 ms; before 1.0.12 its result then sat until
+    /// the 750 ms projection collected it, so the worst case from level-up to
+    /// pixels was the sum of the two. It carries no phase bookkeeping - the
+    /// snapshot poll still owns that - so the two cannot race over a
+    /// transition.</para>
+    /// </summary>
+    private void OnLiveOverlayPush(OverlayState? state)
+    {
+        if (_isShuttingDown) return;
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                if (_isShuttingDown || _overlay is null) return;
+                if (state is null)
+                {
+                    _overlay.ClearForNoGame("live feed produced no state");
+                    return;
+                }
+
+                _overlay.ApplyState(state);
+                if (_trayState.OverlayVisible) _overlay.ShowInactive();
+            },
+            DispatcherPriority.Normal);
+    }
+
     private void ApplySnapshot(
         DesktopPhaseSnapshot snapshot,
         UserNotificationState? shellState = null)
@@ -370,13 +460,22 @@ public partial class App : WpfApplication
             _overlay?.ApplyState(snapshot.Overlay);
             if (_trayState.OverlayVisible) _overlay?.ShowInactive();
         }
-        else if (phase is not CompanionPhase.InProgress)
+        else
         {
-            // HideOverlay(), never Hide(): out of a game this branch runs on
-            // EVERY 750 ms tick, and the raw Hide() used to close the
-            // calibrate/adjust boxes the user had just opened. See
-            // OverlayWindow.HideOverlay.
-            _overlay?.HideOverlay();
+            // ClearForNoGame, not HideOverlay: hiding leaves the last in-game
+            // state loaded, and several paths re-render it later - the user's
+            // 1.0.11 log has the highlight re-asserted TWO MINUTES after the
+            // match ended, on the overlay's own monitor because League was
+            // gone. It also drops the `is not InProgress` condition: a live
+            // feed that dies mid-game produces a null overlay while the phase
+            // is still InProgress, and 1.0.11 answered that by leaving the
+            // stale highlight on screen indefinitely. Same hole, twice.
+            //
+            // Still never a raw Hide(): ClearForNoGame honours adjust mode for
+            // the same reason HideOverlay does.
+            _overlay?.ClearForNoGame(phase is CompanionPhase.InProgress
+                ? "live feed produced no state"
+                : $"phase {phase}");
         }
 
         ApplyFullscreenAdvice(phase is CompanionPhase.InProgress, shellState);
@@ -404,7 +503,12 @@ public partial class App : WpfApplication
         var advice = _fullscreen.Observe(
             inGame,
             shellState,
-            _overlay?.IsDrawingHighlight ?? false);
+            // HasRenderableSkillOrder, not IsDrawingHighlight: since 1.0.12 the
+            // highlight is on screen only while a point is unspent, so the
+            // instantaneous render decision is almost always false and the
+            // hint would essentially never fire. The question this asks is
+            // "should this user be seeing our pixels during this game".
+            _overlay?.HasRenderableSkillOrder ?? false);
         if (advice.LogLine is { } line) _log?.Info(line);
         if (advice.ShowHint)
         {
@@ -806,6 +910,8 @@ public partial class App : WpfApplication
         _webView = null;
         webView?.Close();
         _overlay?.Close();
+        _hotkeys?.Dispose();
+        _hotkeys = null;
         _tray?.Dispose();
         try { _companionMutex?.ReleaseMutex(); } catch { }
         _companionMutex?.Dispose();
@@ -833,6 +939,7 @@ public partial class App : WpfApplication
         }
 
         if (_overlay is not null) _overlay.AdjustmentStateChanged -= OnAdjustmentStateChanged;
+        if (_services is ILiveOverlayPushSource push) push.OverlayStateChanged -= OnLiveOverlayPush;
         _shutdown.Dispose();
         base.OnExit(e);
     }
@@ -843,7 +950,7 @@ public partial class App : WpfApplication
 /// bridge, LCU/gameflow poller, and Live Client Data workers off WPF's
 /// dispatcher while exposing only immutable UI snapshots to App.
 /// </summary>
-public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHostLifecycle, ILaneOverrideHostServices, IAsyncDisposable
+public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHostLifecycle, ILaneOverrideHostServices, ILiveOverlayPushSource, IAsyncDisposable
 {
     private readonly object _gate = new();
     private readonly CompanionState _state;
@@ -877,6 +984,9 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     private string? _detectedPosition;
     private string? _laneOverride;
     private LiveSkillState? _skill;
+    // Consecutive unanswered activeplayer polls. The only thing that
+    // distinguishes "the player has not levelled" from "2999 is gone".
+    private int _skillMisses;
     private string? _skillOrderKey;
     private CoreSkillOrderResult? _skillOrder;
     private string? _skillOrderLane;
@@ -979,6 +1089,9 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     }
 
     public event Action<ReopenTarget>? PageRequested;
+
+    /// <inheritdoc />
+    public event Action<OverlayState?>? OverlayStateChanged;
 
     public int BridgePort => _bridge.Port;
 
@@ -1083,9 +1196,22 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         return Task.FromResult(false);
     }
 
+    /// <summary>
+    /// The LCU gameflow loop, at a cadence that follows the phase.
+    ///
+    /// <para>Champ select gets <see cref="LivePollingCoordinator.ChampSelectGameflowPollMs"/>
+    /// because that is the one phase where the user changes something several
+    /// times a second and then looks at the app for the answer; Lane B measured
+    /// this 1500 ms tick as the remaining floor under an otherwise ~0.1-0.8 s
+    /// web path. Every other phase keeps 1500 ms - the LCU is shared with the
+    /// client itself and there is nothing outside champ select that moves
+    /// faster than a person can notice.</para>
+    ///
+    /// <para>Not a <c>PeriodicTimer</c> any more: its interval is fixed at
+    /// construction, so it cannot express "faster while picking".</para>
+    /// </summary>
     private async Task RunGameflowAsync(CancellationToken cancellationToken)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(LivePollingCoordinator.GameflowPollMs));
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -1110,7 +1236,7 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
 
             try
             {
-                if (!await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false)) break;
+                await Task.Delay(GameflowDelayForPhase(_state.Phase), cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -1118,6 +1244,12 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             }
         }
     }
+
+    /// <summary>The delay after a tick that observed <paramref name="phase"/>.</summary>
+    internal static TimeSpan GameflowDelayForPhase(string? phase) => TimeSpan.FromMilliseconds(
+        string.Equals(phase, "ChampSelect", StringComparison.Ordinal)
+            ? LivePollingCoordinator.ChampSelectGameflowPollMs
+            : LivePollingCoordinator.GameflowPollMs);
 
     private async Task RunLivePollingAsync(CancellationToken cancellationToken)
     {
@@ -1491,19 +1623,102 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         return backoff;
     }
 
-    private void CaptureSkills(LiveSkillState skill)
+    /// <summary>
+    /// Records one activeplayer read - including one that did not answer - and,
+    /// when the live skill state actually moved, pushes a fresh overlay state
+    /// immediately rather than waiting for the next 750 ms snapshot.
+    ///
+    /// <para>The push is gated on a real change, so a healthy game produces
+    /// about 36 of them (one per level-up and one per point spent) rather than
+    /// four a second. Cost at rest is unchanged; latency at the only moments
+    /// that matter drops by the whole snapshot interval.</para>
+    /// </summary>
+    private void CaptureSkills(LiveSkillState? skill)
     {
-        lock (_gate) _skill = skill;
+        var changed = false;
+        var dropped = false;
+        lock (_gate)
+        {
+            if (skill is null)
+            {
+                _skillMisses++;
+                // Silence is a verdict once it lasts. Holding the last snapshot
+                // for the rest of time is what let a finished game keep an
+                // overlay on screen; dropping it turns that into a hide with a
+                // reason attached.
+                if (_skillMisses >= LivePollingCoordinator.SkillMissesBeforeDrop && _skill is not null)
+                {
+                    _skill = null;
+                    dropped = true;
+                }
+            }
+            else
+            {
+                _skillMisses = 0;
+                changed = _skill is null
+                    || _skill.Level != skill.Level
+                    || !_skill.Abilities.Equals(skill.Abilities);
+                _skill = skill;
+            }
+        }
+
+        if (dropped)
+        {
+            _log?.Info(
+                $"live: skill feed silent for {LivePollingCoordinator.SkillMissesBeforeDrop} polls; dropping the retained snapshot");
+        }
+
+        if (!changed && !dropped) return;
+        if (!string.Equals(_state.Phase, "InProgress", StringComparison.Ordinal)) return;
+        PublishOverlayState();
     }
 
+    /// <summary>
+    /// Projects and raises the current overlay state on the push seam. Never
+    /// throws into the poll loop that called it.
+    /// </summary>
+    private void PublishOverlayState()
+    {
+        var sink = OverlayStateChanged;
+        if (sink is null) return;
+        try { sink(ProjectOverlayState()); }
+        catch { /* A diagnostic push must never break the poll it rides on. */ }
+    }
+
+    /// <summary>
+    /// The 750 ms snapshot projection: phase bookkeeping first, then the same
+    /// projection the fast push path uses.
+    /// </summary>
     private OverlayState? BuildOverlayState()
+    {
+        ObservePhaseForOverlay();
+        return ProjectOverlayState();
+    }
+
+    /// <summary>
+    /// Resets the per-game state on ENTERING and on LEAVING a live game.
+    ///
+    /// <para>1.0.11 reset only on entry, which is enough for correctness of the
+    /// NEXT game and not enough for the end of THIS one: every champion, skill
+    /// order and skill snapshot from the finished match stayed loaded until the
+    /// next one started. Combined with a window that was hidden rather than
+    /// cleared, that is exactly how the user's log shows a highlight being
+    /// re-asserted two minutes after the game ended.</para>
+    ///
+    /// <para>Only called by the snapshot poll, which is the one caller that
+    /// owns phase transitions; the push path must never race it here.</para>
+    /// </summary>
+    private void ObservePhaseForOverlay()
     {
         var phase = _state.Phase;
         var lockedInChampionId = _windowDecisions.LastOpenedChampionId;
         lock (_gate)
         {
-            if (!string.Equals(_lastOverlayPhase, phase, StringComparison.Ordinal)
-                && string.Equals(phase, "InProgress", StringComparison.Ordinal))
+            var entering = !string.Equals(_lastOverlayPhase, phase, StringComparison.Ordinal)
+                && string.Equals(phase, "InProgress", StringComparison.Ordinal);
+            var leaving = !string.Equals(_lastOverlayPhase, phase, StringComparison.Ordinal)
+                && string.Equals(_lastOverlayPhase, "InProgress", StringComparison.Ordinal);
+            if (entering || leaving)
             {
                 // Adopt champ select's champion ONLY when this instance saw
                 // the champ select that produced this game.
@@ -1512,8 +1727,8 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
                 // custom game, reconnect) it is a stale champion from an
                 // earlier queue, and confidently wrong beats blank only for
                 // whoever wrote the code.
-                _champSelectChampionId =
-                    string.Equals(_lastOverlayPhase, "ChampSelect", StringComparison.Ordinal)
+                _champSelectChampionId = entering
+                    && string.Equals(_lastOverlayPhase, "ChampSelect", StringComparison.Ordinal)
                     && lockedInChampionId is > 0
                         ? lockedInChampionId
                         : null;
@@ -1524,6 +1739,7 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
                 _championDisplayName = null;
                 _detectedPosition = null;
                 _skill = null;
+                _skillMisses = 0;
                 _skillOrderKey = null;
                 _skillOrder = null;
                 _skillOrderLane = null;
@@ -1534,6 +1750,15 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             }
             _lastOverlayPhase = phase;
         }
+    }
+
+    /// <summary>
+    /// The overlay state as it is right now, with no phase-transition side
+    /// effects. Safe to call from the live poll as well as the snapshot poll.
+    /// </summary>
+    private OverlayState? ProjectOverlayState()
+    {
+        var phase = _state.Phase;
         if (!string.Equals(phase, "InProgress", StringComparison.Ordinal)) return null;
 
         LiveSkillState? skill;
