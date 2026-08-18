@@ -66,3 +66,6 @@ INVESTIGATION-*.md
 # Kept on disk (the safety gate blocks recursive deletion) but out of git.
 /_tmp-probe/
 /overlay-host/_tmp-*.mjs
+
+# Local bench artefacts (scripts/bench-champselect.mjs screenshots)
+scripts/.bench-*.png

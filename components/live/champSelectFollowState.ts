@@ -66,6 +66,11 @@ let companionDrivenChampionIds = new Set<number>();
 let lastPhase: string | null = null;
 let currentChampSelectChampionId: number | null = null;
 let lastFollowedChampSelectChampionId: number | null = null;
+/** The champion an in-progress follow attempt is resolving right now (see
+ *  beginFollowAttempt). Distinct from lastFollowedChampSelectChampionId so a
+ *  failed/superseded attempt can be retried instead of being permanently
+ *  recorded as done. */
+let followAttemptInFlightChampionId: number | null = null;
 
 /** Call on every companion /status poll. Bumps the epoch (and clears
  *  per-epoch state) exactly once per ChampSelect ENTRY — i.e. transitioning
@@ -80,6 +85,7 @@ export function noteCompanionPhase(phase: string): void {
     lastApplied = { items: null, runes: null };
     companionDrivenChampionIds = new Set();
     lastFollowedChampSelectChampionId = null;
+    followAttemptInFlightChampionId = null;
   }
   lastPhase = phase;
   if (phase !== "ChampSelect") currentChampSelectChampionId = null;
@@ -130,11 +136,69 @@ export function getCurrentChampSelectChampionId(): number | null {
  *  champ-select pick changes, at which point the follow fires exactly once
  *  for the new champion (matching the pre-fix "first assert" behavior). */
 export function shouldFollowChampSelectChange(championId: number): boolean {
-  return championId !== lastFollowedChampSelectChampionId;
+  return championId !== lastFollowedChampSelectChampionId && championId !== followAttemptInFlightChampionId;
 }
 
-export function markFollowedChampSelectChampion(championId: number): void {
+/** v0.111.0 — DO NOT reintroduce "mark, then apply."
+ *
+ *  The bug (reproduced on 2026-08-18 in scripts/bench-champselect.mjs, and
+ *  reported live the same day as "I picked Volibear and the Builds page still
+ *  showed Wukong"): app/page.tsx's follow effect used to call
+ *  markFollowedChampSelectChampion() BEFORE its `/api/champions` fetch, and the
+ *  effect's own cleanup cancelled that fetch on EVERY dependency change — which
+ *  includes the very first re-render after mount, because the restored
+ *  "last champion you looked at" sets `activeLane` in the same commit. So the
+ *  application was thrown away while the champion stayed marked as already
+ *  followed, and shouldFollowChampSelectChange() then refused to ever retry it.
+ *  The page sat on the previous champion for the rest of champ select.
+ *
+ *  It was invisible in the common case: the defect only fires when the restored
+ *  lane DIFFERS from the page's initial lane. Bench, same build, only that lane
+ *  changed — restored on "top": never followed (20s timeout); restored on "mid":
+ *  followed in 109ms.
+ *
+ *  The gate is now three-valued: not-yet-attempted, in flight, applied. An
+ *  attempt that is superseded or fails ABANDONS (back to not-yet-attempted, so
+ *  the next poll tick retries); only a real application COMMITS. The "in flight"
+ *  leg is what still stops a 3s (now 1s) poll from stacking a duplicate fetch
+ *  every tick, which is the whole reason the mark existed before the fetch. */
+export function beginFollowAttempt(championId: number): boolean {
+  if (!shouldFollowChampSelectChange(championId)) return false;
+  followAttemptInFlightChampionId = championId;
+  return true;
+}
+
+/** The attempt actually applied the champion to the page. From here a manual
+ *  browse away is respected until the champ-select champion genuinely changes
+ *  (the Round-B P2 contract above, unchanged). */
+export function commitFollowAttempt(championId: number): void {
+  if (followAttemptInFlightChampionId === championId) followAttemptInFlightChampionId = null;
   lastFollowedChampSelectChampionId = championId;
+}
+
+/** The attempt did NOT apply — superseded by a newer champ-select champion, an
+ *  unresolvable id, a network failure, or an unmount. Clears only the in-flight
+ *  leg, deliberately leaving the champion eligible again: the alternative is the
+ *  exact silent-permanent-loss this whole gate was rewritten to remove. */
+export function abandonFollowAttempt(championId: number): void {
+  if (followAttemptInFlightChampionId === championId) followAttemptInFlightChampionId = null;
+}
+
+/** Forgets that the current champ-select champion was ever followed, so the
+ *  next poll tick re-applies it. Backs the "jump back to my champ-select pick"
+ *  affordance on the TopBar chip: after a manual browse the follow deliberately
+ *  stands down until the pick changes, and this is the user's way to ask for it
+ *  back without waiting for that. */
+export function resumeChampSelectFollow(): void {
+  lastFollowedChampSelectChampionId = null;
+  followAttemptInFlightChampionId = null;
+}
+
+/** Whether the page has already applied this champ-select champion — the read
+ *  side of the same flag, for UI that wants to show "following" vs "jump back".
+ *  Never mutates. */
+export function hasFollowedChampSelectChampion(championId: number): boolean {
+  return championId === lastFollowedChampSelectChampionId;
 }
 
 /** v0.35.0 — the auto-export dedup decision. Replaces the old
@@ -196,6 +260,7 @@ export function resetChampSelectFollowState(): void {
   lastPhase = null;
   currentChampSelectChampionId = null;
   lastFollowedChampSelectChampionId = null;
+  followAttemptInFlightChampionId = null;
 }
 
 const AUTO_EXPORT_LOCK_TTL_MS = 30000;

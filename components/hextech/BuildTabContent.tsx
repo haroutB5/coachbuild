@@ -17,7 +17,7 @@ import { versionFromPatch } from "@/components/proAssets";
 import ItemDetailPopover from "@/components/ItemDetailPopover";
 import EntityDetailPopover, { type EntityKind } from "@/components/EntityDetailPopover";
 import { useBodyScrollLock } from "@/components/useBodyScrollLock";
-import { rankQueryParam } from "@/lib/rankBrackets";
+import { loadBuild, peekBuild } from "@/lib/buildCache";
 import { BuildRuneSidebar, BuildSkillOrderPanel } from "./builds/BuildVisuals";
 import { buildRequestKey, publishCurrentBuild, resetCurrentBuild } from "./builds/currentBuildStore";
 
@@ -222,15 +222,32 @@ function BuildLoadingSkeleton({ tab }: { tab: BuildTab }) {
 }
 
 export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated, onPatchResolved, buildTab }: BuildTabContentProps) {
-  const [state, setState] = useState<FetchState>({ status: "loading" });
+  // v0.111.0 — a champion+lane+rank already fetched this session renders from
+  // lib/buildCache.ts immediately instead of flashing the skeleton and waiting
+  // for a round trip. `rankHydrated` is part of the probe key and NOT optional:
+  // before the stored rank bracket has been read, `rankBracket` is the default,
+  // and seeding from the cache under a bracket the user did not choose would
+  // put real numbers on screen under the wrong label. The honest states are
+  // unchanged — a genuine miss is still a skeleton, never the previous
+  // champion's numbers under the new champion's name.
+  const cachedState = (): FetchState | null => {
+    if (!rankHydrated) return null;
+    const hit = peekBuild(champ.id, LANE_TO_ROLE_ID[lane], rankBracket);
+    if (!hit) return null;
+    if (hit.status === "empty") return { status: "empty" };
+    if (hit.status === "error") return null;
+    return { status: "ok", build: hit.builds[0], altKeystone: resolveAltKeystone(hit.builds) };
+  };
+  const [state, setState] = useState<FetchState>(() => cachedState() ?? { status: "loading" });
   // Built by the shared helper, not inline: ChampionHero's action buttons read
   // this component's result out of currentBuildStore and match on this exact
   // key, so the two must never drift. See that file's header.
   const requestKey = buildRequestKey(champ, lane, rankBracket);
-  const [previousRequestKey, setPreviousRequestKey] = useState(requestKey);
-  if (requestKey !== previousRequestKey) {
-    setPreviousRequestKey(requestKey);
-    setState({ status: "loading" });
+  const probeKey = `${requestKey}|${rankHydrated}`;
+  const [previousProbeKey, setPreviousProbeKey] = useState(probeKey);
+  if (probeKey !== previousProbeKey) {
+    setPreviousProbeKey(probeKey);
+    setState(cachedState() ?? { status: "loading" });
   }
   const [activeDetail, setActiveDetail] = useState<DetailRef | null>(null);
   const [lastDetail, setLastDetail] = useState<DetailRef | null>(null);
@@ -285,6 +302,13 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
     return () => document.removeEventListener("keydown", onKey);
   }, [activeDetail]);
 
+  // v0.111.0: the request itself now lives in lib/buildCache.ts — shared with
+  // AutoExporter and BuildPrewarmer, deduped in flight, and cached for the
+  // session, so a champion the user already looked at renders with no request
+  // at all. The `isCancelled` stale-response guard below is UNCHANGED and
+  // still load-bearing: a cache HIT resolves in a microtask while a MISS takes
+  // a round trip, which is exactly the out-of-order pair described next.
+  //
   // v0.27.2 (bugfix — see HANDOFF-fronty.md's v0.27.2 entry): this fetch had
   // NO stale-response guard, unlike ProConsensusCard's own effect below
   // (which has always had a `cancelled` flag). A champ/lane change fires a
@@ -306,53 +330,31 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
   // inert no matter which order the two requests actually resolve in.
   const load = useCallback(
     async (c: ChampionRef, l: LaneId, rank: string, isCancelled: () => boolean) => {
-      try {
-        const roleId = LANE_TO_ROLE_ID[l];
-        // `rank` is ALWAYS appended now (2026-08-11). It used to be omitted
-        // for the default bracket to reuse the pre-rank-feature cache entry;
-        // that inverted the moment the default's TIERS changed, because this
-        // route is CDN-cached for 6h on the query string alone and an
-        // unchanged URL would keep serving builds computed from [5,6,7].
-        // See rankQueryParam's own comment in lib/rankBrackets.ts.
-        const rankParam = rankQueryParam(rank);
-        const res = await fetch(`/api/build?champ=${c.id}&role=${roleId}${rankParam}`);
-        if (isCancelled()) return;
-        if (res.status === 404) {
-          setState({ status: "empty" });
-          return;
-        }
-        if (!res.ok) {
-          // The request REACHED us and the server answered badly — not a
-          // client-side connectivity problem. Do not blame the user's network.
-          setState({ status: "error", reason: "upstream" });
-          return;
-        }
-        const data: BuildResponse[] = await res.json();
-        if (isCancelled()) return;
-        if (!Array.isArray(data) || data.length === 0) {
-          setState({ status: "empty" });
-          return;
-        }
-        // Spec shows a single primary build, not the top-3 variant switcher
-        // the legacy Builds page rendered — the #1 ranked setup only.
-        //
-        // 2026-07-29: variants 2 and 3 are no longer discarded WHOLESALE. The
-        // engine's header states its contract — "Variants prefer different
-        // primary trees" — and its entire design for "a genuinely different
-        // keystone exists" is to put that keystone in a later variant. Dropping
-        // the array here deleted that escape hatch while the engine kept
-        // relying on it, which is why 16.6% of populated champion/role pairs
-        // displayed a negative-WPA keystone with a positive, adoption-cleared
-        // one unrendered. One fact is now salvaged from the tail — the
-        // keystone, its WPA, its sample and its tree — and nothing else: the
-        // pick, the ranking and every other slot on the card are untouched.
-        setState({ status: "ok", build: data[0], altKeystone: resolveAltKeystone(data) });
-        onPatchResolved?.(data[0].patch);
-      } catch {
-        // fetch() itself threw, so the request never completed — this is the
-        // only case where the user's connection is a plausible cause.
-        if (!isCancelled()) setState({ status: "error", reason: "network" });
+      const outcome = await loadBuild(c.id, LANE_TO_ROLE_ID[l], rank);
+      if (isCancelled()) return;
+      if (outcome.status === "empty") {
+        setState({ status: "empty" });
+        return;
       }
+      if (outcome.status === "error") {
+        setState({ status: "error", reason: outcome.reason });
+        return;
+      }
+      // Spec shows a single primary build, not the top-3 variant switcher
+      // the legacy Builds page rendered — the #1 ranked setup only.
+      //
+      // 2026-07-29: variants 2 and 3 are no longer discarded WHOLESALE. The
+      // engine's header states its contract — "Variants prefer different
+      // primary trees" — and its entire design for "a genuinely different
+      // keystone exists" is to put that keystone in a later variant. Dropping
+      // the array here deleted that escape hatch while the engine kept
+      // relying on it, which is why 16.6% of populated champion/role pairs
+      // displayed a negative-WPA keystone with a positive, adoption-cleared
+      // one unrendered. One fact is now salvaged from the tail — the
+      // keystone, its WPA, its sample and its tree — and nothing else: the
+      // pick, the ranking and every other slot on the card are untouched.
+      setState({ status: "ok", build: outcome.builds[0], altKeystone: resolveAltKeystone(outcome.builds) });
+      onPatchResolved?.(outcome.builds[0].patch);
     },
     [onPatchResolved]
   );

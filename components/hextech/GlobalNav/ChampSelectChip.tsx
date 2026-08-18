@@ -11,11 +11,13 @@
 // established: pure decision logic stays id-based, display resolution is the
 // caller's job).
 import { useEffect, useState } from "react";
+import { useRouter, usePathname } from "next/navigation";
 import type { ChampionRef } from "@/lib/types";
 import { useCompanion } from "@/components/live/CompanionProvider";
 import { resolveCurrentChampSelectChampionId, resolveChampSelectRoleId } from "@/components/live/champSelectFollow";
 import { roleIdToLane } from "@/components/live/deepLink";
 import { LANE_LABEL } from "@/components/hextech/heroContracts";
+import { resumeChampSelectFollow } from "@/components/live/champSelectFollowState";
 import { champSelectChipModel } from "./champSelectChipModel";
 
 interface ChampSelectChipProps {
@@ -29,6 +31,8 @@ interface ChampSelectChipProps {
 
 export default function ChampSelectChip({ onVisibleChange }: ChampSelectChipProps = {}) {
   const companion = useCompanion();
+  const router = useRouter();
+  const pathname = usePathname();
   const [champions, setChampions] = useState<ChampionRef[]>([]);
 
   const championId = companion.statusFresh ? resolveCurrentChampSelectChampionId(companion.champSelect) : null;
@@ -69,19 +73,45 @@ export default function ChampSelectChip({ onVisibleChange }: ChampSelectChipProp
   const isLive = model.tone === "live";
   const dotClass = isLive ? "bg-teal animate-pulse" : "bg-mut";
 
+  // Tapping the chip re-arms the follow (champSelectFollowState) and, if the
+  // user is somewhere else in the app, takes them to Builds. It does NOT apply
+  // the champion itself: that is app/page.tsx's follow effect's job, and it
+  // fires on the very next status poll (1s during champ select) through the
+  // same code path a real champion change uses. One owner for "what champion is
+  // the page showing", not two.
+  const jumpToChampion = () => {
+    resumeChampSelectFollow();
+    if (pathname !== "/") router.push("/");
+  };
+
+  const pillClass = `flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[10.5px] font-bold uppercase tracking-[0.05em] whitespace-nowrap ${
+    isLive ? "border-line-gold bg-teal/10 text-teal" : "border-line text-mut"
+  }`;
+
   return (
     <div className="flex-shrink-0 flex items-center">
       {/* Mobile: dot only */}
       <span className={`sm:hidden w-2 h-2 rounded-full ${dotClass}`} role="img" aria-label={model.label} title={model.label} />
-      {/* sm+: full pill */}
-      <div
-        className={`hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[10.5px] font-bold uppercase tracking-[0.05em] whitespace-nowrap ${
-          isLive ? "border-line-gold bg-teal/10 text-teal" : "border-line text-mut"
-        }`}
-      >
-        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotClass}`} aria-hidden="true" />
-        {model.label}
-      </div>
+      {/* sm+: full pill. A button ONLY when there is a champion to jump to —
+          a "PICKING" chip that looks pressable and does nothing is worse than
+          a label. */}
+      {model.canJumpToChampion ? (
+        <button
+          type="button"
+          onClick={jumpToChampion}
+          title="Show this champion's build"
+          aria-label={`${model.label}. Show this champion's build`}
+          className={`hidden sm:flex ${pillClass} cursor-pointer transition-colors hover:bg-teal/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal`}
+        >
+          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotClass}`} aria-hidden="true" />
+          {model.label}
+        </button>
+      ) : (
+        <div className={`hidden sm:flex ${pillClass}`}>
+          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotClass}`} aria-hidden="true" />
+          {model.label}
+        </div>
+      )}
     </div>
   );
 }

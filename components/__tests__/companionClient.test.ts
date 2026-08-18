@@ -26,6 +26,9 @@ import {
   setAutoItemSetsEnabled,
   isFollowCapableRoute,
   followKindForRoute,
+  statusPollIntervalMs,
+  COMPANION_STATUS_POLL_MS,
+  CHAMP_SELECT_STATUS_POLL_MS,
   detachFollow,
   recordCompanionError,
   getCompanionErrorLog,
@@ -979,5 +982,36 @@ describe("companionClient — recordCompanionError / getCompanionErrorLog (v0.43
     const log = getCompanionErrorLog();
     expect(log).toHaveLength(1);
     expect(log[0].kind).toBe("network-error");
+  });
+});
+
+// v0.111.0 — the /status poll cadence is phase-dependent. Measured baseline
+// (scripts/bench-champselect.mjs, 2026-08-18): a champion change took ~2.0-3.0s
+// to reach the page, of which up to 3s was this poll simply not having asked
+// yet. Champ select is the only phase where that matters, and it is the only
+// phase that speeds up.
+describe("companionClient — statusPollIntervalMs (champ-select cadence)", () => {
+  it("polls faster during champ select", () => {
+    expect(statusPollIntervalMs("ChampSelect")).toBe(CHAMP_SELECT_STATUS_POLL_MS);
+    expect(CHAMP_SELECT_STATUS_POLL_MS).toBeLessThan(COMPANION_STATUS_POLL_MS);
+  });
+
+  it("every other phase keeps the idle cadence — including unknown ones", () => {
+    for (const phase of ["InProgress", "None", "Lobby", "Matchmaking", "WaitingForStats", "SomethingNew"]) {
+      expect(statusPollIntervalMs(phase)).toBe(COMPANION_STATUS_POLL_MS);
+    }
+  });
+
+  it("no phase yet (null/undefined) is idle, never fast", () => {
+    expect(statusPollIntervalMs(null)).toBe(COMPANION_STATUS_POLL_MS);
+    expect(statusPollIntervalMs(undefined)).toBe(COMPANION_STATUS_POLL_MS);
+  });
+
+  it("the fast cadence still leaves room for the request timeout", () => {
+    // A cadence at or under the request timeout would let a slow bridge stack
+    // overlapping requests. The provider also awaits each poll before scheduling
+    // the next, so this is belt and braces — but the constant should not be
+    // lowered past it without changing that.
+    expect(CHAMP_SELECT_STATUS_POLL_MS).toBeGreaterThanOrEqual(500);
   });
 });

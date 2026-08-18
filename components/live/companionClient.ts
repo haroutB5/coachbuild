@@ -96,6 +96,28 @@ export type CompanionPort = (typeof COMPANION_PORTS)[number];
  *  to catch a ChampSelect->InProgress transition, not track anything
  *  frame-accurate. */
 export const COMPANION_STATUS_POLL_MS = 3000;
+/** Champ-select cadence for the SAME poll. 3000ms is the right idle number —
+ *  outside champ select this poll only has to notice a phase transition — but
+ *  during champ select it is the dominant term in "I switched champion and the
+ *  app took a moment to catch up": the bridge already refreshes its own
+ *  champ-select snapshot every 1500ms (desktop GameflowPoller), so a 3000ms
+ *  reader adds up to another full 3s on top of that, for a measured
+ *  ~2.0-3.0s app-side lag per champion change (scripts/bench-champselect.mjs,
+ *  2026-08-18 baseline).
+ *
+ *  This is a LOOPBACK request to a local process — not the backend, not the
+ *  CDN. Tripling its rate for the ~40s a champ select lasts costs the user's
+ *  own machine a few dozen sub-millisecond requests and nothing else. The
+ *  build data behind it is separately cached and deduped (lib/buildCache.ts),
+ *  so a faster poll cannot turn into more upstream traffic. */
+export const CHAMP_SELECT_STATUS_POLL_MS = 1000;
+
+/** The delay before the NEXT /status poll, given the phase the last one
+ *  reported. Pure and exported so the cadence rule is unit-testable without
+ *  mounting the provider (same convention as followKindForRoute). */
+export function statusPollIntervalMs(phase: string | null | undefined): number {
+  return phase === "ChampSelect" ? CHAMP_SELECT_STATUS_POLL_MS : COMPANION_STATUS_POLL_MS;
+}
 /** A hung loopback request must not hold the last phase forever. */
 export const COMPANION_STATUS_REQUEST_TIMEOUT_MS = 2000;
 /** In-game live-client-data poll cadence. Originally 1000ms (the plan's spec

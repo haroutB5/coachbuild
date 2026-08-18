@@ -35,7 +35,7 @@ import {
   type LaneId,
 } from "@/components/hextech/heroContracts";
 import { readStoredRankBracketId } from "@/components/hextech/rankBracketStorage";
-import { rankQueryParam } from "@/lib/rankBrackets";
+import { loadBuild } from "@/lib/buildCache";
 import {
   getChampSelectPhaseEpoch,
   getCurrentChampSelectChampionId,
@@ -54,26 +54,18 @@ import { autoApplyItemSetsIfEligible } from "@/components/hextech/itemSetsApply"
 import { autoApplyRunesIfEligible } from "@/components/hextech/runeAutoApply";
 import type { BuildResponse } from "@/lib/types";
 
-/** The exporter's OWN /api/build fetch — the reference is BuildTabContent's
- *  load(): same endpoint/params, same "rank only appended when non-default so
- *  the historical default request stays byte-identical" rule, honoring the
- *  user's persisted rank-bracket preference so the exported build matches what
- *  they'd see on the Builds page. Returns the #1 build ([0]) or null on
- *  404/empty/any failure (never throws). */
+/** The build for the champion being exported.
+ *
+ *  v0.111.0: this used to be the exporter's OWN /api/build fetch, byte-identical
+ *  in URL to the one BuildTabContent fired at the same moment for the same
+ *  champion — two requests, one answer. Both now go through lib/buildCache.ts,
+ *  which dedupes them in flight and caches the result, so the exporter and the
+ *  Builds page share a single round trip and a repeat champion costs none.
+ *  Returns the #1 build ([0]) or null on 404/empty/any failure (never throws) —
+ *  the exact contract executeAutoExport already depends on. */
 async function fetchBuildFor(championId: number, laneId: LaneId): Promise<BuildResponse | null> {
-  try {
-    const roleId = LANE_TO_ROLE_ID[laneId];
-    const rank = readStoredRankBracketId();
-    // Always appended — see rankQueryParam in lib/rankBrackets.ts (CDN cache key).
-    const rankParam = rankQueryParam(rank);
-    const res = await fetch(`/api/build?champ=${championId}&role=${roleId}${rankParam}`);
-    if (!res.ok) return null; // 404 (no data) or any non-2xx
-    const data = (await res.json()) as BuildResponse[];
-    if (!Array.isArray(data) || data.length === 0) return null;
-    return data[0];
-  } catch {
-    return null;
-  }
+  const outcome = await loadBuild(championId, LANE_TO_ROLE_ID[laneId], readStoredRankBracketId());
+  return outcome.status === "ok" ? outcome.builds[0] : null;
 }
 
 export default function AutoExporter() {

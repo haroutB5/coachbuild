@@ -27,6 +27,18 @@ export interface ChampSelectChip {
   show: boolean;
   label: string;
   tone: "live" | "idle";
+  /** v0.111.0 — whether tapping the chip has anywhere to go: champ select is
+   *  live AND a champion has actually resolved.
+   *
+   *  This is the affordance for the deliberate gap in auto-follow. The Builds
+   *  page follows champ select until the user manually browses somewhere else,
+   *  at which point it stands down and stays down until the pick CHANGES
+   *  (Round-B P2 — re-asserting every tick made manual browsing unusable). That
+   *  is the right default and the wrong dead end: until this existed, a user who
+   *  looked something up mid-draft had no way back to their own pick except
+   *  searching for it by name. False while champ select is live but nothing has
+   *  resolved yet ("PICKING") — there is no champion to jump to. */
+  canJumpToChampion: boolean;
 }
 
 export interface ChampSelectChipInput {
@@ -51,7 +63,7 @@ export interface ChampSelectChipInput {
 
 /** Not connected, or no champSelect snapshot at all -> hidden. */
 function hidden(): ChampSelectChip {
-  return { show: false, label: "", tone: "idle" };
+  return { show: false, label: "", tone: "idle", canJumpToChampion: false };
 }
 
 export function champSelectChipModel(i: ChampSelectChipInput): ChampSelectChip {
@@ -71,10 +83,15 @@ export function champSelectChipModel(i: ChampSelectChipInput): ChampSelectChip {
     // cellChampionId/actionChampionId per champSelectFollow.ts's 3-way
     // priority) -- an honest "still picking" state, not a blank/hidden chip,
     // since the user IS live in champ select right now.
-    return { show: true, label: "CHAMP SELECT — PICKING", tone: "live" };
+    return { show: true, label: "CHAMP SELECT — PICKING", tone: "live", canJumpToChampion: false };
   }
 
   const role = i.champSelect.role;
   const suffix = role ? ` · ${role.toUpperCase()}` : "";
-  return { show: true, label: `CHAMP SELECT — ${name.toUpperCase()}${suffix}`, tone: "live" };
+  return {
+    show: true,
+    label: `CHAMP SELECT — ${name.toUpperCase()}${suffix}`,
+    tone: "live",
+    canJumpToChampion: true,
+  };
 }

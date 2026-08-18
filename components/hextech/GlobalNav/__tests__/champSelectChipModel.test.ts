@@ -32,7 +32,7 @@ describe("champSelectChipModel", () => {
       champSelect: { championName: null, role: null },
       clientConnected: true,
     });
-    expect(model).toEqual({ show: true, label: "CHAMP SELECT — PICKING", tone: "live" });
+    expect(model).toEqual({ show: true, label: "CHAMP SELECT — PICKING", tone: "live", canJumpToChampion: false });
   });
 
   it("ChampSelect with champion + role resolved -> uppercased 'NAME · ROLE'", () => {
@@ -41,7 +41,7 @@ describe("champSelectChipModel", () => {
       champSelect: { championName: "Swain", role: "Top" },
       clientConnected: true,
     });
-    expect(model).toEqual({ show: true, label: "CHAMP SELECT — SWAIN · TOP", tone: "live" });
+    expect(model).toEqual({ show: true, label: "CHAMP SELECT — SWAIN · TOP", tone: "live", canJumpToChampion: true });
   });
 
   it("stale status hides a cached ChampSelect chip", () => {
@@ -60,7 +60,7 @@ describe("champSelectChipModel", () => {
       champSelect: { championName: "Swain", role: null },
       clientConnected: true,
     });
-    expect(model).toEqual({ show: true, label: "CHAMP SELECT — SWAIN", tone: "live" });
+    expect(model).toEqual({ show: true, label: "CHAMP SELECT — SWAIN", tone: "live", canJumpToChampion: true });
   });
 
   it("champion name is uppercased even if the caller passes mixed case", () => {

@@ -4,6 +4,7 @@ import "./globals.css";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 import CompanionProvider from "@/components/live/CompanionProvider";
 import AutoExporter from "@/components/live/AutoExporter";
+import BuildPrewarmer from "@/components/live/BuildPrewarmer";
 import AppShell from "@/components/hextech/AppShell";
 
 const inter = Inter({
@@ -71,6 +72,10 @@ export default function RootLayout({
         <CompanionProvider>
           <AppShell>{children}</AppShell>
           <AutoExporter />
+          {/* v0.111.0: warms the champ-select champion's build into
+              lib/buildCache.ts before the user opens the Builds page. Renders
+              nothing and never touches page state — see its own header. */}
+          <BuildPrewarmer />
         </CompanionProvider>
         <ServiceWorkerRegister />
       </body>

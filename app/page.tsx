@@ -23,14 +23,17 @@ import { resolveVisitSession, shouldPersistLastChampion } from "@/lib/lastChampi
 import { resolveCurrentChampSelectChampionId, resolveChampSelectRoleId } from "@/components/live/champSelectFollow";
 import {
   markCompanionDriven,
-  shouldFollowChampSelectChange,
-  markFollowedChampSelectChampion,
+  beginFollowAttempt,
+  commitFollowAttempt,
+  abandonFollowAttempt,
+  getCurrentChampSelectChampionId,
 } from "@/components/live/champSelectFollowState";
 import { useCompanion } from "@/components/live/CompanionProvider";
 import { useSheetBackNav, isNavSheetState, HOME_NAV_NAMESPACE } from "@/components/useSheetBackNav";
 import {
   STATIC_FALLBACK_LANE_CHAMPIONS,
   getMostPlayedLane,
+  getChampionMap,
   type LaneId,
 } from "@/components/hextech/heroContracts";
 import {
@@ -62,6 +65,16 @@ const FIXED_TAB: HextechTab = "build";
 
 export default function HomePage() {
   const [activeLane, setActiveLane] = useState<LaneId>(INITIAL_LANE);
+  // Ref mirror of activeLane for the live-follow effect below. That effect must
+  // read the CURRENT lane (the role-less branch lands on it) without listing it
+  // as a dependency — a lane change used to restart the effect, and the restart
+  // silently discarded an in-flight follow. Synced from an effect, not during
+  // render (refs must not be written while rendering); the only reader is an
+  // async continuation, which always runs after this effect has committed.
+  const activeLaneRef = useRef<LaneId>(activeLane);
+  useEffect(() => {
+    activeLaneRef.current = activeLane;
+  }, [activeLane]);
   const [buildTab, setBuildTab] = useState<BuildTab>(DEFAULT_BUILD_TAB);
   // v0.26.0 (issue 2): lanes are LANE SELECTORS for the champion being
   // viewed, not independent per-lane champion slots — one `champ` for the
@@ -285,10 +298,9 @@ export default function HomePage() {
     const parsed = parseLiveDeepLink(window.location.search);
     if (!parsed) return; // no champion to apply — default view stands, untouched
 
-    fetch("/api/champions")
-      .then((r) => (r.ok ? (r.json() as Promise<ChampionRef[]>) : []))
+    getChampionMap()
       .then((champs) => {
-        const found = Array.isArray(champs) ? champs.find((c) => c.id === parsed.championId) : undefined;
+        const found = champs.get(parsed.championId);
         if (!found) return; // unresolvable champion id (coachless gap, bad id) — leave the default view alone
         // v1.3.0: this IS a genuine companion signal (a deep-link open),
         // not a fallback/default render — auto-export effects gate on this.
@@ -334,26 +346,55 @@ export default function HomePage() {
   }, []);
 
   // Live-follow effect (v1.3.0 attached-tab behavior; provider-lifted
-  // v0.37.0; Round-B P2 "follow-fights-user" fix) — "the tab follows the
-  // user's champ-select hovers in place, UNLESS the user is manually
-  // browsing something else." Re-keyed off `companion.tick` so it
+  // v0.37.0; Round-B P2 "follow-fights-user" fix; v0.111.0 lost-follow fix) —
+  // "the tab follows the user's champ-select hovers in place, UNLESS the user
+  // is manually browsing something else." Re-keyed off `companion.tick` so it
   // re-evaluates on EVERY poll tick, not just when phase/champSelect happen
   // to change value.
+  //
+  // v0.111.0 — WHAT CHANGED AND WHY IT MUST NOT GO BACK. This effect used to
+  // mark the champion as followed BEFORE awaiting the champion list, and used
+  // an effect-cleanup `cancelled` flag to discard the result. Effect cleanup
+  // runs on every DEPENDENCY CHANGE, not just unmount, and `activeLane` is a
+  // dependency — so the restored "last champion you looked at" (which sets
+  // activeLane during the very first commit after mount) cancelled the follow's
+  // in-flight resolution while leaving the champion permanently marked as
+  // already-followed. Result, reported live 2026-08-18 and reproduced in
+  // scripts/bench-champselect.mjs: champ select picks Volibear, the user opens
+  // Builds, and the page shows the previous champion for the rest of the draft.
+  //
+  // Two changes close it, and they work together:
+  //  1. The gate is now begin/commit/abandon (champSelectFollowState.ts) — an
+  //     attempt that does not apply is retried on the next tick.
+  //  2. Staleness is decided by the TARGET, not by the effect lifecycle:
+  //     getCurrentChampSelectChampionId() is the provider's live mirror of what
+  //     champ select says RIGHT NOW, so an out-of-order response can only ever
+  //     lose to a genuinely newer champion. A re-render caused by our own
+  //     setActiveLane no longer discards anything.
   useEffect(() => {
-    let cancelled = false;
+    let unmounted = false;
     if (!companion.statusFresh) return;
     const resolvedChampionId = resolveCurrentChampSelectChampionId(companion.champSelect);
     if (companion.phase !== "ChampSelect" || resolvedChampionId === null) return;
-    if (!shouldFollowChampSelectChange(resolvedChampionId)) return;
-    markFollowedChampSelectChampion(resolvedChampionId);
+    if (!beginFollowAttempt(resolvedChampionId)) return;
     const target = { championId: resolvedChampionId, roleId: resolveChampSelectRoleId(companion.champSelect) };
 
-    fetch("/api/champions")
-      .then((r) => (r.ok ? (r.json() as Promise<ChampionRef[]>) : []))
+    // getChampionMap() is the module-cached, in-flight-deduped champion list
+    // (heroContracts.ts) the rest of the app already shares — the raw
+    // fetch("/api/champions") this used to do repeated a full round trip on
+    // every single champion change, on the one code path whose entire job is to
+    // be fast.
+    getChampionMap()
       .then((champs) => {
-        if (cancelled) return;
-        const found = Array.isArray(champs) ? champs.find((c) => c.id === target.championId) : undefined;
-        if (!found) return;
+        const found = champs.get(target.championId);
+        // Superseded by a newer champ-select champion while we resolved, or the
+        // id is unresolvable (coachless gap / bad id). Either way this attempt
+        // did not apply, so release it rather than recording it as done.
+        if (unmounted || !found || getCurrentChampSelectChampionId() !== target.championId) {
+          abandonFollowAttempt(target.championId);
+          return;
+        }
+        commitFollowAttempt(target.championId);
         markCompanionDriven(found.id);
 
         if (target.roleId !== undefined) {
@@ -366,7 +407,7 @@ export default function HomePage() {
           return;
         }
 
-        const landedLane = activeLane;
+        const landedLane = activeLaneRef.current;
         setChamp(found);
         setChampChosen(true);
         sheetNav.replaceSelection(wireViewForChampion(found, landedLane, FIXED_TAB, source));
@@ -379,18 +420,22 @@ export default function HomePage() {
         });
       })
       .catch(() => {
-        /* network hiccup — live-follow silently no-ops this tick, retries next poll */
+        // Network hiccup — release the attempt so the next poll tick retries it.
+        // Swallowing it while still holding the mark is precisely the failure
+        // mode this rewrite exists to remove.
+        abandonFollowAttempt(target.championId);
       });
     return () => {
-      cancelled = true;
+      unmounted = true;
     };
-    // companion.tick MUST be a dependency — see the doc comment above;
-    // activeLane must also stay (the role-less branch's landedLane fallback
-    // reads it). champ.id is deliberately NOT a dependency — this effect
-    // must NOT re-run just because the user manually browsed to a different
-    // champion. sheetNav/the ref objects are stable across renders.
+    // companion.tick MUST be a dependency — see the doc comment above.
+    // `activeLane` is deliberately NOT a dependency any more: the role-less
+    // branch reads it through activeLaneRef instead, so a lane change can no
+    // longer restart (and previously, silently kill) an in-flight follow.
+    // champ.id is likewise not a dependency — this effect must not re-run just
+    // because the user manually browsed to a different champion.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companion.tick, companion.statusFresh, activeLane]);
+  }, [companion.tick, companion.statusFresh]);
 
   /** Repaints activeLane/champ from a landed-on entry — fired on mount-resume
    *  and every popstate. Delegates the actual wire->state mapping to
@@ -466,10 +511,9 @@ export default function HomePage() {
   const handleQuickPick = useCallback(
     (championId: number, lane: LaneId) => {
       if (sheetNav.isRestoring()) return;
-      fetch("/api/champions")
-        .then((r) => (r.ok ? (r.json() as Promise<ChampionRef[]>) : []))
+      getChampionMap()
         .then((champs) => {
-          const found = Array.isArray(champs) ? champs.find((c) => c.id === championId) : undefined;
+          const found = champs.get(championId);
           if (!found) return; // unresolvable id — no-op, the prompt stays as-is
           mostPlayedLaneRequestRef.current++; // cancel any in-flight lane correction
           setBuildTab(DEFAULT_BUILD_TAB);

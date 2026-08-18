@@ -17,7 +17,11 @@ import {
   markCompanionDriven,
   isCompanionDrivenChampion,
   shouldFollowChampSelectChange,
-  markFollowedChampSelectChampion,
+  beginFollowAttempt,
+  commitFollowAttempt,
+  abandonFollowAttempt,
+  resumeChampSelectFollow,
+  hasFollowedChampSelectChampion,
   resetChampSelectFollowState,
   tryClaimAutoExportLock,
 } from "../live/champSelectFollowState";
@@ -172,7 +176,7 @@ describe("champSelectFollowState — shouldAutoExportForLane / markAutoExported"
 // (which the user's manual browse changes) rather than against the last
 // champ-select championId the follow effect itself acted on. See
 // shouldFollowChampSelectChange's own doc comment.
-describe("champSelectFollowState — shouldFollowChampSelectChange / markFollowedChampSelectChampion", () => {
+describe("champSelectFollowState — the follow gate (begin / commit / abandon)", () => {
   beforeEach(() => resetChampSelectFollowState());
 
   it("fires on the first-ever resolution (nothing followed yet)", () => {
@@ -180,12 +184,14 @@ describe("champSelectFollowState — shouldFollowChampSelectChange / markFollowe
   });
 
   it("does not re-fire once the SAME champ-select championId has been followed", () => {
-    markFollowedChampSelectChampion(103);
+    beginFollowAttempt(103);
+    commitFollowAttempt(103);
     expect(shouldFollowChampSelectChange(103)).toBe(false);
   });
 
-  it("a manual browse away does NOT cause a re-fire on the next tick (the bug fix) -- champ-select championId is unchanged", () => {
-    markFollowedChampSelectChampion(103);
+  it("a manual browse away does NOT cause a re-fire on the next tick (Round-B P2) -- champ-select championId is unchanged", () => {
+    beginFollowAttempt(103);
+    commitFollowAttempt(103);
     // User manually browses to champion 7 -- nothing in this module's state
     // changes as a result (app/page.tsx no longer feeds champ.id into this
     // decision at all), so the champ-select champion (still 103) must not
@@ -195,16 +201,65 @@ describe("champSelectFollowState — shouldFollowChampSelectChange / markFollowe
   });
 
   it("a genuine champ-select champion CHANGE re-fires exactly once", () => {
-    markFollowedChampSelectChampion(103);
+    beginFollowAttempt(103);
+    commitFollowAttempt(103);
     expect(shouldFollowChampSelectChange(7)).toBe(true); // hover/lock moved to a new champion
-    markFollowedChampSelectChampion(7);
+    beginFollowAttempt(7);
+    commitFollowAttempt(7);
     expect(shouldFollowChampSelectChange(7)).toBe(false); // settles again
   });
 
   it("a fresh ChampSelect epoch clears the last-followed championId too", () => {
-    markFollowedChampSelectChampion(103);
+    beginFollowAttempt(103);
+    commitFollowAttempt(103);
     noteCompanionPhase("ChampSelect");
     expect(shouldFollowChampSelectChange(103)).toBe(true);
+  });
+
+  // ── v0.111.0 lost-follow regression ────────────────────────────────────────
+  // The live report (2026-08-18): champ select picked Volibear, the Builds page
+  // kept showing the previously-viewed Wukong for the whole draft. The old gate
+  // was "mark, then apply" — the mark survived an application that never
+  // happened, so nothing ever retried.
+
+  it("an in-flight attempt suppresses a duplicate attempt on the next poll tick", () => {
+    expect(beginFollowAttempt(106)).toBe(true);
+    // The next /status tick arrives while the champion list is still resolving.
+    expect(beginFollowAttempt(106)).toBe(false);
+    expect(shouldFollowChampSelectChange(106)).toBe(false);
+  });
+
+  it("REGRESSION: an attempt that never applied is retried, not recorded as followed", () => {
+    expect(beginFollowAttempt(106)).toBe(true);
+    // ...the resolution is discarded (superseded render, unmount, network
+    // failure). Under the old mark-then-apply gate this champion was gone for
+    // the rest of champ select.
+    abandonFollowAttempt(106);
+    expect(shouldFollowChampSelectChange(106)).toBe(true);
+    expect(beginFollowAttempt(106)).toBe(true);
+    commitFollowAttempt(106);
+    expect(hasFollowedChampSelectChampion(106)).toBe(true);
+  });
+
+  it("abandoning a SUPERSEDED attempt never releases the champion that replaced it", () => {
+    beginFollowAttempt(106); // Volibear starts resolving
+    // Champ select moves to Ahri and that attempt wins the race.
+    abandonFollowAttempt(106);
+    expect(beginFollowAttempt(103)).toBe(true);
+    commitFollowAttempt(103);
+    // The late Volibear response now abandons itself. It must not disturb Ahri.
+    abandonFollowAttempt(106);
+    expect(hasFollowedChampSelectChampion(103)).toBe(true);
+    expect(shouldFollowChampSelectChange(103)).toBe(false);
+  });
+
+  it("resumeChampSelectFollow re-arms the CURRENT champion after a manual browse", () => {
+    beginFollowAttempt(106);
+    commitFollowAttempt(106);
+    expect(shouldFollowChampSelectChange(106)).toBe(false); // manual browse is respected
+    resumeChampSelectFollow(); // user taps the champ-select chip
+    expect(shouldFollowChampSelectChange(106)).toBe(true);
+    expect(hasFollowedChampSelectChampion(106)).toBe(false);
   });
 });
 

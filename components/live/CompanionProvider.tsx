@@ -63,6 +63,7 @@ import {
   followKindForRoute,
   detachFollow,
   COMPANION_STATUS_POLL_MS,
+  statusPollIntervalMs,
   type CompanionChampSelectSnapshot,
   type FollowKind,
 } from "./companionClient";
@@ -168,6 +169,10 @@ export default function CompanionProvider({ children }: { children: ReactNode })
   const pathname = usePathname();
   const followRef = useRef<FollowKind>(followKindForRoute(pathname));
   const pollRequestRef = useRef(0);
+  // The phase the most recent successful poll reported — read by the poll
+  // loop to pick the next delay. A ref, not state: changing the cadence must
+  // not restart the loop (that is how a phase flip would drop a tick).
+  const lastPolledPhaseRef = useRef<string | null>(null);
   useEffect(() => {
     const next = followKindForRoute(pathname);
     const prev = followRef.current;
@@ -235,6 +240,7 @@ export default function CompanionProvider({ children }: { children: ReactNode })
         setClientConnected(false);
         noteCompanionPhase("None");
         setCurrentChampSelectChampionId(null);
+        lastPolledPhaseRef.current = null;
         setTick((t) => t + 1);
         return;
       }
@@ -247,6 +253,7 @@ export default function CompanionProvider({ children }: { children: ReactNode })
       setClientConnected(state.status.clientConnected);
 
       noteCompanionPhase(nextPhase);
+      lastPolledPhaseRef.current = nextPhase;
 
       const liveChampSelectId =
         nextPhase === "ChampSelect" ? resolveCurrentChampSelectChampionId(nextChampSelect) : null;
@@ -259,12 +266,26 @@ export default function CompanionProvider({ children }: { children: ReactNode })
       setTick((t) => t + 1);
     }
 
-    poll();
-    const id = setInterval(poll, COMPANION_STATUS_POLL_MS);
+    // v0.111.0 — self-scheduling instead of setInterval, so the cadence can
+    // follow the PHASE (statusPollIntervalMs: 1s in champ select, 3s otherwise)
+    // without tearing down and rebuilding the loop on every phase change. It
+    // also removes request overlap by construction: the next delay starts after
+    // the previous response has been applied, which the fixed interval did not
+    // guarantee once the cadence approached the 2s request timeout.
+    //
+    // Nothing about the ORDER of work inside poll() changed — the Round-B P1
+    // sequencing note above still governs it.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    async function loop(): Promise<void> {
+      await poll();
+      if (cancelled) return;
+      timer = setTimeout(loop, statusPollIntervalMs(lastPolledPhaseRef.current));
+    }
+    void loop();
     return () => {
       cancelled = true;
       pollRequestRef.current += 1;
-      clearInterval(id);
+      if (timer !== undefined) clearTimeout(timer);
     };
   }, [session]);
 
