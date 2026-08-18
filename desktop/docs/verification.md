@@ -194,14 +194,19 @@ first question that answers "no" is the answer.
    — `/liveclientdata/activeplayer` stopped answering for 5 s, so the last
    reading was discarded rather than repeated. Expected as a game shuts down.
    Mid-game it means the loopback endpoint went away under a live match.
-10. **`hotkey: registered Ctrl+Shift+S (adjust overlay position)`** — the
-   global adjust shortcut is bound. Both `Ctrl+Shift+S` and the legacy
-   `Ctrl+Shift+A` are registered independently, so one being taken by another
-   app still leaves a working key. `hotkey: registration FAILED for … —
-   already registered by another application [win32 1409]` names the collision;
-   the tray item "Adjust overlay position" always works regardless. Press the
-   key again to leave adjust mode — in a borderless game, reaching the tray to
-   cancel means alt-tabbing out of the thing being aligned.
+10. **`hotkey: registered Ctrl+Shift+A (adjust overlay position)`** — the
+   global adjust shortcut is bound. **This is the only accelerator, and there
+   must be exactly one such line.** 1.0.12 also bound `Ctrl+Shift+S`; 1.0.13
+   dropped it because a global hotkey takes that combination away from every
+   app that uses it as "Save As". A second `hotkey: registered` line, or one
+   naming `Ctrl+Shift+S`, means a build older than 1.0.13. `hotkey:
+   registration FAILED for Ctrl+Shift+A (adjust overlay position) — already
+   registered by another application [win32 1409]` names a collision, and is
+   followed by `hotkey: Ctrl+Shift+A could not be registered; use the tray icon
+   → "Adjust overlay position" instead` plus a tray balloon — the tray item
+   always works regardless. Press the key again to leave adjust mode; in a
+   borderless game, reaching the tray to cancel means alt-tabbing out of the
+   thing being aligned.
 11. **`skill-order: champion <id> returned <status>; retry in <n>s`** — a failed
    or empty fetch, with the retry that follows it. `recovered after N failed
    attempt(s)` closes the loop. `no further retry` means the schedule is

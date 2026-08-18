@@ -1,5 +1,40 @@
 # Changelog
 
+## Desktop 1.0.13 — 2026-08-18 — the adjust shortcut is Ctrl+Shift+A, and only Ctrl+Shift+A
+
+### Changed — Ctrl+Shift+S is no longer bound
+
+1.0.12 bound two accelerators for overlay adjust mode: `Ctrl+Shift+A`, which is
+what the old Electron overlay used, and `Ctrl+Shift+S`, which is what the report
+asked for. The second one was insurance — Windows hands a global hotkey to
+whichever process asks first and refuses everyone after, so binding two unrelated
+combinations meant one squatter could not take the feature away.
+
+The insurance cost more than it was worth. **A global hotkey is exclusive: for as
+long as CoachBuild runs, `Ctrl+Shift+S` stops reaching whatever else you are
+using**, and in a great many applications that combination is Save As. So it is
+gone, and `Ctrl+Shift+A` — the bind this feature had before the .NET rewrite —
+is the only one.
+
+- **`Ctrl+Shift+A` is unchanged in every other respect.** Same message-only
+  window created at startup, so it still survives the browser-window teardown at
+  game start (1.0.10). Still a toggle: the same key gets you back out without
+  reaching for the tray. Still logs every outcome.
+- **Nothing asks Windows for `Ctrl+Shift+S` any more**, so it is free for other
+  apps again from the moment 1.0.13 starts. Its hotkey id is retired rather than
+  reused, so there is no path left on which it could fire.
+- **The startup log now reports one bind, not two.** Exactly one
+  `hotkey: registered Ctrl+Shift+A (adjust overlay position)` line. If you see
+  two, or one naming `Ctrl+Shift+S`, you are on an older build.
+- If `Ctrl+Shift+A` cannot be registered because another app already owns it,
+  the log and the tray balloon now **name the key** — with one bind there is no
+  second key to silently fall back to, so losing it has to be visible. The tray
+  item "Adjust overlay position" always works.
+
+No other behaviour changed: the banked-point highlight, the 250 ms live poll,
+the 350 ms champ-select poll, the state-clear at game end and the updater are
+all exactly as they shipped in 1.0.12.
+
 ## Desktop 1.0.12 — 2026-08-18 — the pink box is a prompt again, and it stops when the game does
 
 1.0.11 finally got the in-game skill order on screen. Three things about it were
@@ -85,6 +120,9 @@ the window had *before* adjustment and repainted the retained in-game snapshot.
   **now**, instead of from a flag recorded when adjustment began.
 
 ### Fixed — Ctrl+Shift+S actually exists now
+
+> *Superseded by 1.0.13: the shortcut is `Ctrl+Shift+A` only. `Ctrl+Shift+S` was
+> unbound again one release later.*
 
 > *"ctrl shift s to move it isnt working"*
 

@@ -42,7 +42,7 @@ public sealed record HotkeyRegistration(string Accelerator, string Purpose, bool
 }
 
 /// <summary>
-/// System-wide hotkeys, hosted on a message-only window this class owns.
+/// The app's system-wide hotkey, hosted on a message-only window this class owns.
 ///
 /// <para><b>Why a window of its own.</b> A global hotkey is delivered as
 /// <c>WM_HOTKEY</c> to the window that registered it, and dies with that
@@ -54,14 +54,18 @@ public sealed record HotkeyRegistration(string Accelerator, string Purpose, bool
 /// never closed before shutdown, and is a child of <c>HWND_MESSAGE</c> so the
 /// shell never sees it.</para>
 ///
-/// <para><b>Why more than one accelerator.</b> <c>RegisterHotKey</c> is
-/// exclusive system-wide: whichever process asks first owns the combination,
-/// and every later caller just gets <c>false</c> with
-/// <c>ERROR_HOTKEY_ALREADY_REGISTERED</c> (1409). Registering both the
-/// combination the user asked for and the one the old Electron overlay used
-/// means one process squatting on either still leaves a working key. Every
-/// attempt is registered independently and every outcome is logged; nothing is
-/// swallowed.</para>
+/// <para><b>Exactly one accelerator, on purpose (1.0.13).</b> 1.0.12 bound
+/// <c>Ctrl+Shift+S</c> as well, on the theory that <c>RegisterHotKey</c> is
+/// exclusive system-wide — whichever process asks first owns the combination
+/// and every later caller gets <c>false</c> with
+/// <c>ERROR_HOTKEY_ALREADY_REGISTERED</c> (1409) — so a second, unrelated
+/// combination is insurance against one being squatted. The user removed it:
+/// <c>Ctrl+Shift+S</c> is "Save As" in a great many applications, and a global
+/// hotkey is stolen from every one of them for as long as this app runs. The
+/// insurance was worth less than the collision. <c>Ctrl+Shift+A</c> is what the
+/// Electron overlay bound before the .NET rewrite and is the only bind now; if
+/// it cannot be registered the outcome is logged and the tray item is named
+/// (<see cref="FallbackAdviceOrNull"/>). Nothing is swallowed.</para>
 ///
 /// <para><b>F12 is refused, deliberately.</b> Microsoft's own
 /// <c>RegisterHotKey</c> documentation reserves it for the debugger at all
@@ -74,24 +78,27 @@ public sealed class GlobalHotkeyService : IDisposable
     public const int WmHotkey = 0x0312;
     private const int HwndMessage = -3;
 
-    /// <summary>Ctrl+Shift+S — the combination the user asked for.</summary>
-    public const uint VkS = 0x53;
-
-    /// <summary>Ctrl+Shift+A — what the Electron overlay bound before the .NET rewrite.</summary>
+    /// <summary>Ctrl+Shift+A — what the Electron overlay bound before the .NET rewrite, and the only bind.</summary>
     public const uint VkA = 0x41;
 
-    public const int AdjustHotkeyIdPrimary = 0xC0DE01;
-    public const int AdjustHotkeyIdLegacy = 0xC0DE02;
+    /// <summary>
+    /// The one hotkey id this app registers.
+    ///
+    /// <para>It is <c>0xC0DE02</c> — the id Ctrl+Shift+A already carried in
+    /// 1.0.12 — and <c>0xC0DE01</c>, which was Ctrl+Shift+S, is deliberately
+    /// left unused rather than recycled. A <c>WM_HOTKEY</c> naming the retired
+    /// id can therefore only ever be a no-op, never a press of the surviving
+    /// key wearing the dead one's number.</para>
+    /// </summary>
+    public const int AdjustHotkeyId = 0xC0DE02;
 
     /// <summary>
-    /// Both accelerators mean the same thing: toggle overlay adjust mode.
-    /// Neither is a League default bind, and neither is Ctrl+Q/W/E/R (which
-    /// League itself uses to level abilities).
+    /// The single accelerator: toggle overlay adjust mode. Not a League default
+    /// bind, and not Ctrl+Q/W/E/R (which League itself uses to level abilities).
     /// </summary>
     public static IReadOnlyList<HotkeyBinding> AdjustBindings { get; } =
     [
-        new(AdjustHotkeyIdPrimary, HotkeyModifiers.Control | HotkeyModifiers.Shift | HotkeyModifiers.NoRepeat, VkS, "Ctrl+Shift+S", "adjust overlay position"),
-        new(AdjustHotkeyIdLegacy, HotkeyModifiers.Control | HotkeyModifiers.Shift | HotkeyModifiers.NoRepeat, VkA, "Ctrl+Shift+A", "adjust overlay position (legacy bind)"),
+        new(AdjustHotkeyId, HotkeyModifiers.Control | HotkeyModifiers.Shift | HotkeyModifiers.NoRepeat, VkA, "Ctrl+Shift+A", "adjust overlay position"),
     ];
 
     private readonly List<HotkeyBinding> _registered = [];
@@ -202,10 +209,19 @@ public sealed class GlobalHotkeyService : IDisposable
     /// <summary>
     /// The summary line the tray/user needs when nothing could be bound, or
     /// null when at least one accelerator works.
+    ///
+    /// <para>It names the accelerators actually attempted rather than a count,
+    /// so the line cannot go stale the way a hardcoded "both keys" would have
+    /// when Ctrl+Shift+S was dropped in 1.0.13.</para>
     /// </summary>
-    public string? FallbackAdviceOrNull() => AnyRegistered
-        ? null
-        : "hotkey: no accelerator could be registered; use the tray icon → \"Adjust overlay position\" instead";
+    public string? FallbackAdviceOrNull()
+    {
+        if (AnyRegistered) return null;
+        var attempted = Outcomes.Count == 0
+            ? "the adjust accelerator"
+            : string.Join(" / ", Outcomes.Select(outcome => outcome.Accelerator));
+        return $"hotkey: {attempted} could not be registered; use the tray icon → \"Adjust overlay position\" instead";
+    }
 
     /// <summary>Drives the message hook directly, for tests without a pump.</summary>
     public bool Dispatch(int message, nint wParam)

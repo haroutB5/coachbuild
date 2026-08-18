@@ -10,50 +10,129 @@ namespace CoachBuild.Desktop.Tests;
 ///
 /// <para><b>Root cause: it was never registered.</b> Not a failed
 /// <c>RegisterHotKey</c>, not a torn-down window, not focus. The .NET/WPF app
-/// has never contained a single <c>RegisterHotKey</c> call — the feature lived
+/// had never contained a single <c>RegisterHotKey</c> call — the feature lived
 /// in the Electron overlay this app replaced (<c>overlay-host/main.js</c>,
 /// <c>HOTKEY_TOGGLE_ADJUST = 'Control+Shift+A'</c>) and was dropped in the
-/// rewrite. The only way into adjust mode since has been the tray menu, which
+/// rewrite. The only way into adjust mode since had been the tray menu, which
 /// in a borderless game means alt-tabbing out of the thing you are aligning
-/// against. The user's memory of the accelerator is one key off, which is why
-/// both are bound now.</para>
+/// against.</para>
+///
+/// <para><b>1.0.13: Ctrl+Shift+A only.</b> 1.0.12 bound the accelerator the user
+/// remembered (<c>Ctrl+Shift+S</c>) alongside the historical one, as insurance
+/// against another process squatting on either. The user then asked for the
+/// Electron behaviour back and only that: a global <c>Ctrl+Shift+S</c> is taken
+/// away from every application that uses it as "Save As" for as long as
+/// CoachBuild runs, which costs more than the insurance is worth. These tests
+/// pin the surviving bind AND the absence of the retired one — an accelerator
+/// that is merely unused but still registered is still stolen from everyone
+/// else, so "S is gone" has to be asserted, not assumed.</para>
 ///
 /// <para>The registration OUTCOME is as much of the fix as the registration.
-/// Because nothing was ever attempted, nothing was ever logged either way, so
-/// "the hotkey does nothing" was unanswerable from the log — the same shape of
-/// silence that hid the dead skill order until 1.0.11.</para>
+/// Because nothing was ever attempted before 1.0.12, nothing was ever logged
+/// either way, so "the hotkey does nothing" was unanswerable from the log — the
+/// same shape of silence that hid the dead skill order until 1.0.11.</para>
 /// </summary>
 public sealed class HotkeyRegistrationTests
 {
     private const int ErrorHotkeyAlreadyRegistered = 1409;
 
-    [Fact]
-    public void Ctrl_shift_s_is_the_accelerator_the_user_asked_for()
-    {
-        var primary = GlobalHotkeyService.AdjustBindings[0];
+    /// <summary>1.0.12's Ctrl+Shift+S id. Retired, never recycled.</summary>
+    private const int RetiredCtrlShiftSId = 0xC0DE01;
 
-        Assert.Equal("Ctrl+Shift+S", primary.Accelerator);
-        Assert.Equal(GlobalHotkeyService.VkS, primary.VirtualKey);
-        Assert.True(primary.Modifiers.HasFlag(HotkeyModifiers.Control));
-        Assert.True(primary.Modifiers.HasFlag(HotkeyModifiers.Shift));
-        Assert.False(primary.Modifiers.HasFlag(HotkeyModifiers.Alt));
-        Assert.False(primary.Modifiers.HasFlag(HotkeyModifiers.Win));
+    private const uint VkS = 0x53;
+
+    /// <summary>Some other application asking Windows for its "Save As" key.</summary>
+    private static readonly HotkeyBinding SaveAsProbe = new(
+        0x5AFE01,
+        HotkeyModifiers.Control | HotkeyModifiers.Shift | HotkeyModifiers.NoRepeat,
+        VkS,
+        "Ctrl+Shift+S",
+        "another application's Save As");
+
+    [Fact]
+    public void Ctrl_shift_a_is_the_accelerator_and_it_is_the_only_one()
+    {
+        Assert.Single(GlobalHotkeyService.AdjustBindings);
+        var only = GlobalHotkeyService.AdjustBindings[0];
+
+        Assert.Equal("Ctrl+Shift+A", only.Accelerator);
+        Assert.Equal(GlobalHotkeyService.VkA, only.VirtualKey);
+        Assert.Equal(GlobalHotkeyService.AdjustHotkeyId, only.Id);
+        Assert.True(only.Modifiers.HasFlag(HotkeyModifiers.Control));
+        Assert.True(only.Modifiers.HasFlag(HotkeyModifiers.Shift));
+        Assert.False(only.Modifiers.HasFlag(HotkeyModifiers.Alt));
+        Assert.False(only.Modifiers.HasFlag(HotkeyModifiers.Win));
     }
 
     /// <summary>
-    /// The Electron bind is kept as a second, independent registration.
-    /// <c>RegisterHotKey</c> is exclusive system-wide, so one squatting
-    /// process is enough to lose an accelerator entirely; two unrelated
-    /// combinations both having to be taken is a far less likely accident.
+    /// The 1.0.13 change, asserted as an absence at every level it could
+    /// survive at: the binding table, the virtual key actually handed to
+    /// <c>RegisterHotKey</c>, the id, and the log.
+    ///
+    /// <para>This is the test that fails against 1.0.12 — where
+    /// <c>AdjustBindings</c> has two entries, the registrar is called twice,
+    /// <c>0x53</c> is one of the keys, and the first log line names
+    /// Ctrl+Shift+S.</para>
     /// </summary>
     [Fact]
-    public void The_legacy_electron_accelerator_is_bound_as_well()
+    public void Ctrl_shift_s_is_not_registered_any_more()
     {
-        Assert.Equal(2, GlobalHotkeyService.AdjustBindings.Count);
-        Assert.Contains(GlobalHotkeyService.AdjustBindings, binding => binding.Accelerator == "Ctrl+Shift+A");
-        Assert.Equal(
-            GlobalHotkeyService.AdjustBindings.Select(binding => binding.Id).Distinct().Count(),
-            GlobalHotkeyService.AdjustBindings.Count);
+        var attempted = new List<HotkeyBinding>();
+        using var service = new GlobalHotkeyService(
+            register: binding => { attempted.Add(binding); return 0; },
+            unregister: _ => { });
+
+        var outcomes = service.Start(createWindow: false);
+
+        // Nothing asks Windows for S, so nothing takes it off "Save As".
+        Assert.Single(attempted);
+        Assert.DoesNotContain(attempted, binding => binding.VirtualKey == VkS);
+        Assert.DoesNotContain(attempted, binding => binding.Id == RetiredCtrlShiftSId);
+        Assert.DoesNotContain(
+            GlobalHotkeyService.AdjustBindings,
+            binding => binding.Accelerator.Contains("Ctrl+Shift+S", StringComparison.Ordinal));
+
+        // And the log cannot mention it either, in success or in failure.
+        Assert.Single(outcomes);
+        Assert.DoesNotContain(
+            outcomes,
+            outcome => outcome.ToLogLine().Contains("Ctrl+Shift+S", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The retired id must not be recycled onto the surviving key. If it were,
+    /// a <c>WM_HOTKEY</c> carrying 1.0.12's Ctrl+Shift+S id would toggle adjust
+    /// mode, which is the "nothing left that could still fire" hole wearing a
+    /// different number.
+    /// </summary>
+    [Fact]
+    public void The_retired_ctrl_shift_s_id_fires_nothing()
+    {
+        using var service = new GlobalHotkeyService(register: _ => 0, unregister: _ => { });
+        service.Start(createWindow: false);
+        var fired = 0;
+        service.Pressed += _ => fired++;
+
+        Assert.NotEqual(RetiredCtrlShiftSId, GlobalHotkeyService.AdjustHotkeyId);
+        Assert.False(service.Dispatch(GlobalHotkeyService.WmHotkey, RetiredCtrlShiftSId));
+        Assert.Equal(0, fired);
+    }
+
+    /// <summary>
+    /// Every registered accelerator is released on shutdown — and with one
+    /// bind, exactly one release, so a retired id cannot linger as an
+    /// unmatched <c>UnregisterHotKey</c> either.
+    /// </summary>
+    [Fact]
+    public void Every_registered_accelerator_is_released_on_shutdown()
+    {
+        var released = new List<int>();
+        var service = new GlobalHotkeyService(register: _ => 0, unregister: released.Add);
+        service.Start(createWindow: false);
+
+        service.Dispose();
+
+        Assert.Equal(GlobalHotkeyService.AdjustHotkeyId, Assert.Single(released));
     }
 
     [Fact]
@@ -63,10 +142,10 @@ public sealed class HotkeyRegistrationTests
 
         var outcomes = service.Start(createWindow: false);
 
-        Assert.All(outcomes, outcome => Assert.True(outcome.Registered));
-        Assert.Equal(
-            "hotkey: registered Ctrl+Shift+S (adjust overlay position)",
-            outcomes[0].ToLogLine());
+        // One binding, one line. A second line here would be the log claiming
+        // a bind the app no longer has.
+        var line = Assert.Single(outcomes).ToLogLine();
+        Assert.Equal("hotkey: registered Ctrl+Shift+A (adjust overlay position)", line);
         Assert.True(service.AnyRegistered);
         Assert.Null(service.FallbackAdviceOrNull());
     }
@@ -74,7 +153,7 @@ public sealed class HotkeyRegistrationTests
     /// <summary>
     /// The failure this is most likely to hit in the wild: another overlay,
     /// screenshot tool or macro app already owns the combination. The log must
-    /// name the reason, not just report a boolean.
+    /// name the accelerator and the reason, not just report a boolean.
     /// </summary>
     [Fact]
     public void A_collision_is_logged_with_the_reason_not_swallowed()
@@ -85,39 +164,21 @@ public sealed class HotkeyRegistrationTests
 
         var outcomes = service.Start(createWindow: false);
 
-        Assert.All(outcomes, outcome => Assert.False(outcome.Registered));
-        Assert.Contains("registration FAILED", outcomes[0].ToLogLine(), StringComparison.Ordinal);
-        Assert.Contains("already registered by another application", outcomes[0].ToLogLine(), StringComparison.Ordinal);
-        Assert.Contains("1409", outcomes[0].ToLogLine(), StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// One accelerator lost must not cost the other. Ctrl+Shift+S being taken
-    /// still leaves Ctrl+Shift+A working, and the app must not advertise a
-    /// fallback it does not need.
-    /// </summary>
-    [Fact]
-    public void One_taken_accelerator_does_not_take_the_other_down_with_it()
-    {
-        using var service = new GlobalHotkeyService(
-            register: binding => binding.VirtualKey == GlobalHotkeyService.VkS ? ErrorHotkeyAlreadyRegistered : 0,
-            unregister: _ => { });
-
-        var outcomes = service.Start(createWindow: false);
-
+        var line = Assert.Single(outcomes).ToLogLine();
         Assert.False(outcomes[0].Registered);
-        Assert.True(outcomes[1].Registered);
-        Assert.True(service.AnyRegistered);
-        Assert.Null(service.FallbackAdviceOrNull());
+        Assert.Contains("registration FAILED for Ctrl+Shift+A", line, StringComparison.Ordinal);
+        Assert.Contains("already registered by another application", line, StringComparison.Ordinal);
+        Assert.Contains("1409", line, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// When nothing can be bound the user must be pointed at the tray, which is
-    /// the only other way in. Silence here is what a user experiences as "the
-    /// app is broken".
+    /// With a single bind there is no second key to fall back to, so losing it
+    /// must reach the user rather than leaving adjust mode apparently dead. The
+    /// advice names the accelerator it actually attempted — a hardcoded "both
+    /// keys" would have gone stale the moment Ctrl+Shift+S was dropped.
     /// </summary>
     [Fact]
-    public void When_nothing_can_be_bound_the_tray_fallback_is_named()
+    public void When_the_only_accelerator_is_taken_the_tray_fallback_is_named()
     {
         using var service = new GlobalHotkeyService(
             register: _ => ErrorHotkeyAlreadyRegistered,
@@ -126,8 +187,11 @@ public sealed class HotkeyRegistrationTests
 
         var advice = service.FallbackAdviceOrNull();
 
+        Assert.False(service.AnyRegistered);
         Assert.NotNull(advice);
-        Assert.Contains("tray", advice!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Ctrl+Shift+A", advice!, StringComparison.Ordinal);
+        Assert.DoesNotContain("Ctrl+Shift+S", advice, StringComparison.Ordinal);
+        Assert.Contains("tray", advice, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Adjust overlay position", advice, StringComparison.Ordinal);
     }
 
@@ -162,39 +226,45 @@ public sealed class HotkeyRegistrationTests
         HotkeyBinding? fired = null;
         service.Pressed += binding => fired = binding;
 
-        var handled = service.Dispatch(GlobalHotkeyService.WmHotkey, GlobalHotkeyService.AdjustHotkeyIdPrimary);
+        var handled = service.Dispatch(GlobalHotkeyService.WmHotkey, GlobalHotkeyService.AdjustHotkeyId);
 
         Assert.True(handled);
-        Assert.Equal("Ctrl+Shift+S", fired?.Accelerator);
+        Assert.Equal("Ctrl+Shift+A", fired?.Accelerator);
     }
 
     [Fact]
     public void An_unregistered_id_and_an_unrelated_message_are_both_ignored()
     {
         using var service = new GlobalHotkeyService(
-            register: binding => binding.VirtualKey == GlobalHotkeyService.VkS ? 0 : ErrorHotkeyAlreadyRegistered,
+            register: binding => binding.VirtualKey == GlobalHotkeyService.VkA ? 0 : ErrorHotkeyAlreadyRegistered,
             unregister: _ => { });
         service.Start(createWindow: false);
         var fired = 0;
         service.Pressed += _ => fired++;
 
-        Assert.False(service.Dispatch(GlobalHotkeyService.WmHotkey, GlobalHotkeyService.AdjustHotkeyIdLegacy));
-        Assert.False(service.Dispatch(0x0100 /* WM_KEYDOWN */, GlobalHotkeyService.AdjustHotkeyIdPrimary));
+        Assert.False(service.Dispatch(GlobalHotkeyService.WmHotkey, 0xDEAD));
+        Assert.False(service.Dispatch(0x0100 /* WM_KEYDOWN */, GlobalHotkeyService.AdjustHotkeyId));
         Assert.Equal(0, fired);
     }
 
+    /// <summary>
+    /// A registration that fails is not in the dispatch table. Without this,
+    /// dropping to one bind would be a silent downgrade: a machine where
+    /// Ctrl+Shift+A is squatted would still route a stray WM_HOTKEY into
+    /// adjust mode.
+    /// </summary>
     [Fact]
-    public void Every_registered_accelerator_is_released_on_shutdown()
+    public void A_failed_registration_does_not_dispatch()
     {
-        var released = new List<int>();
-        var service = new GlobalHotkeyService(register: _ => 0, unregister: released.Add);
+        using var service = new GlobalHotkeyService(
+            register: _ => ErrorHotkeyAlreadyRegistered,
+            unregister: _ => { });
         service.Start(createWindow: false);
+        var fired = 0;
+        service.Pressed += _ => fired++;
 
-        service.Dispose();
-
-        Assert.Equal(
-            GlobalHotkeyService.AdjustBindings.Select(binding => binding.Id).OrderBy(id => id),
-            released.OrderBy(id => id));
+        Assert.False(service.Dispatch(GlobalHotkeyService.WmHotkey, GlobalHotkeyService.AdjustHotkeyId));
+        Assert.Equal(0, fired);
     }
 
     // ------------------------------------------------------- the real window
@@ -219,19 +289,20 @@ public sealed class HotkeyRegistrationTests
             var outcomes = service.Start();
 
             Assert.NotEqual(0, service.Handle);
-            // A machine where another app owns BOTH is possible, so this
-            // asserts that each attempt produced a real verdict rather than
-            // asserting success it cannot guarantee.
-            Assert.Equal(GlobalHotkeyService.AdjustBindings.Count, outcomes.Count);
+            // A machine where another app owns Ctrl+Shift+A is possible, so
+            // this asserts that the attempt produced a real verdict rather than
+            // asserting a success it cannot guarantee.
+            Assert.Single(outcomes);
             Assert.All(outcomes, outcome =>
                 Assert.True(outcome.Registered || outcome.ErrorCode != 0, outcome.ToLogLine()));
         });
     }
 
     /// <summary>
-    /// A second process asking for the same accelerator gets 1409. This drives
-    /// the real Win32 path to its documented failure rather than trusting the
-    /// injected fake to model it — the fake is only honest if this is true.
+    /// Real Win32, on the surviving key: registering Ctrl+Shift+A a second time
+    /// gets 1409. This drives the real path to its documented failure rather
+    /// than trusting the injected fake to model it — the fake is only honest if
+    /// this is true.
     /// </summary>
     [Fact]
     public void A_second_registration_of_the_same_accelerator_really_does_collide()
@@ -248,6 +319,38 @@ public sealed class HotkeyRegistrationTests
             Assert.False(secondOutcomes[0].Registered);
             Assert.Equal(ErrorHotkeyAlreadyRegistered, secondOutcomes[0].ErrorCode);
             Assert.Contains("already registered", secondOutcomes[0].ToLogLine(), StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>
+    /// Real Win32, stated as the point of the change: after this app has bound
+    /// its accelerator, <c>Ctrl+Shift+S</c> is still free for whoever wants it.
+    /// Against 1.0.12 this fails — CoachBuild owns it and the probe gets 1409.
+    /// </summary>
+    [Fact]
+    public void Ctrl_shift_s_is_left_free_for_other_applications()
+    {
+        RunOnSta(() =>
+        {
+            // Positive control first: if something else on this box already
+            // owns Ctrl+Shift+S there is nothing this test can prove, and a
+            // failure here would be about the machine, not the code.
+            using (var control = new GlobalHotkeyService())
+            {
+                if (!control.Start([SaveAsProbe])[0].Registered) return;
+            }
+
+            using var service = new GlobalHotkeyService();
+            service.Start();
+
+            // A second service standing in for "some other app on the user's
+            // PC", asking Windows for Ctrl+Shift+S while CoachBuild is running.
+            using var otherApp = new GlobalHotkeyService();
+            var probe = otherApp.Start([SaveAsProbe]);
+
+            Assert.True(
+                probe[0].Registered,
+                $"Ctrl+Shift+S was free a moment ago and is not now: {probe[0].ToLogLine()}");
         });
     }
 

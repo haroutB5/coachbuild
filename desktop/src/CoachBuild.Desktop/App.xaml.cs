@@ -298,13 +298,17 @@ public partial class App : WpfApplication
     }
 
     /// <summary>
-    /// Binds the adjust hotkeys and writes one line per attempt.
+    /// Binds the adjust hotkey and writes one line per attempt.
     ///
     /// <para>Through 1.0.11 this app registered no global hotkey at all — the
     /// feature was lost in the Electron→WPF rewrite, and because nothing was
     /// ever attempted, nothing was ever logged either. The outcome lines are
     /// therefore as much of the fix as the registration is: the next report of
     /// "the hotkey does nothing" is answerable from companion.log.</para>
+    ///
+    /// <para>1.0.13 binds <c>Ctrl+Shift+A</c> only. 1.0.12 also bound
+    /// <c>Ctrl+Shift+S</c>; the user dropped it because a global hotkey takes
+    /// that combination away from every app that uses it as "Save As".</para>
     /// </summary>
     private void StartHotkeys()
     {
@@ -318,7 +322,7 @@ public partial class App : WpfApplication
             // hotkey has no way to discover that. Say so once, out loud.
             _tray?.ShowBalloon(
                 "CoachBuild overlay",
-                "The overlay adjust shortcut could not be registered (another app owns it). "
+                "The overlay adjust shortcut (Ctrl+Shift+A) could not be registered (another app owns it). "
                 + "Right-click the CoachBuild tray icon and choose “Adjust overlay position” instead.",
                 System.Windows.Forms.ToolTipIcon.Warning);
         }
