@@ -22,7 +22,11 @@ public sealed class TrayControllerTests
             var phaseItem = menu.Items.OfType<Forms.ToolStripMenuItem>()
                 .Single(item => (item.Text ?? string.Empty).StartsWith("Phase: ", StringComparison.Ordinal));
             var phaseIndex = menu.Items.IndexOf(phaseItem);
-            var versionItem = Assert.IsType<Forms.ToolStripMenuItem>(menu.Items[phaseIndex - 1]);
+            // 1.0.15 inserted the WEB build's own line between these two, so
+            // this reads the app-version line by position relative to IT
+            // rather than assuming the app version is immediately above Phase.
+            var webItem = Assert.IsType<Forms.ToolStripMenuItem>(menu.Items[phaseIndex - 1]);
+            var versionItem = Assert.IsType<Forms.ToolStripMenuItem>(menu.Items[phaseIndex - 2]);
 
             var informationalVersion = Assembly.GetEntryAssembly()?
                 .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
@@ -33,6 +37,13 @@ public sealed class TrayControllerTests
 
             Assert.Equal($"CoachBuild v{expectedVersion}", versionItem.Text);
             Assert.False(versionItem.Enabled);
+
+            // The two versions are DIFFERENT numbers and the menu must not
+            // let them be confused: the desktop app's, and the web build the
+            // hosted window is running. A fresh tray has no window.
+            Assert.Equal("Web: no window open", webItem.Text);
+            Assert.False(webItem.Enabled);
+            Assert.NotEqual(versionItem.Text, webItem.Text);
         }
         finally
         {

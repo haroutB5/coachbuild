@@ -133,11 +133,69 @@ public partial class WebView2Window : Window
         {
             Browser.Visibility = Visibility.Visible;
             Fallback.Visibility = Visibility.Collapsed;
+            _ = ReadLoadedWebVersionAsync();
         }
         else
         {
             ShowFallback($"CoachBuild could not load this page ({e.WebErrorStatus}). Check your connection and retry from the tray.");
         }
+    }
+
+    /// <summary>
+    /// The web app version the document in this window actually came from, or
+    /// null when the page carries no <c>coachbuild-version</c> meta tag — i.e.
+    /// a deployment older than web 0.113.0, which added it.
+    ///
+    /// <para>Read from the DOM rather than tracked by the host on purpose. The
+    /// host knows which URL it asked for; it does not know which BUILD came
+    /// back, and the gap between those two is the entire defect this exists to
+    /// surface (see <see cref="CoachBuild.Core.WebAppVersionClient"/>).</para>
+    /// </summary>
+    public string? LoadedWebVersion { get; private set; }
+
+    /// <summary>Raised after every successful navigation with whatever
+    /// <see cref="LoadedWebVersion"/> resolved to, including null. The null
+    /// case is a result and is logged as one.</summary>
+    public event Action<string?>? WebVersionObserved;
+
+    private async Task ReadLoadedWebVersionAsync()
+    {
+        var version = await QueryLoadedWebVersionAsync().ConfigureAwait(true);
+        if (_disposed) return;
+        LoadedWebVersion = version;
+        WebVersionObserved?.Invoke(version);
+    }
+
+    private async Task<string?> QueryLoadedWebVersionAsync()
+    {
+        // NavigationCompleted can beat the parser to a tag near the end of
+        // <head> on a slow paint, and a spurious "no version tag" would be
+        // read as "older than 0.113.0" and force a pointless reload. One
+        // retry, then believe the answer.
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            if (_disposed || Browser.CoreWebView2 is not { } webView) return null;
+            try
+            {
+                var raw = await webView
+                    .ExecuteScriptAsync(
+                        "(function(){var m=document.querySelector('meta[name=\"coachbuild-version\"]');" +
+                        "return m&&m.content?m.content:null;})()")
+                    .ConfigureAwait(true);
+                // ExecuteScriptAsync returns the result as JSON: a quoted
+                // string, or the literal "null".
+                if (!string.IsNullOrWhiteSpace(raw) && raw != "null")
+                    return System.Text.Json.JsonSerializer.Deserialize<string>(raw);
+            }
+            catch
+            {
+                // A controller torn down mid-navigation, or a page that has
+                // already navigated away. Neither is worth a fallback screen.
+                return null;
+            }
+            if (attempt == 0) await Task.Delay(400).ConfigureAwait(true);
+        }
+        return null;
     }
 
     private void OnNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e)

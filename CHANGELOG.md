@@ -1,12 +1,79 @@
 # Changelog
 
-## Web 0.113.1 — 2026-08-19 — verification probe (no product change)
+## Desktop 1.0.15 — 2026-08-19 — the app was running last week's web code and nobody could see it
 
-No user-visible change. Cut solely so desktop 1.0.15's "is the page in my
-window still the build the site is serving?" check has a real deploy to
-notice — the fix is unfalsifiable without one, since a window opened after a
-deploy is never stale. The desktop bench log for this release is in
-`HANDOFF-core-stale-webview.md`.
+### Fixed — the CoachBuild window kept whatever web build it opened with
+
+On 2026-08-19 a user entered champ select roughly eighteen minutes after web
+0.112.0 went live, and the window in front of them was still running 0.111.0.
+Their log said `apply-itemsets: count=1` where the new code says 2. Restarting
+the app fixed it. The only reason anyone noticed at all is that a screenshot
+happened to include the page header.
+
+**Why.** This app opens its window once and then leaves it alone: champ-select
+entry only navigates when no page is following it, and a page that is open is
+following it. So the window is never re-navigated, and a browser tab that is
+never re-navigated keeps executing the JavaScript it downloaded — for as long
+as the window is open, which for a tray app left running is all day. Every web
+release could have failed to reach you this way. Most did not, only because
+you usually restart.
+
+**Now.** Entering champ select checks the version the page is running against
+the version the site is serving, and reloads the window when they differ.
+Measured on the bench, real app against real production:
+
+```
+15:39:28  phase: Lobby -> ChampSelect            <- 1.0.14 behaviour: page left on
+                                                    v0.113.1 while the site served
+                                                    v0.113.2. Nothing logged, nothing
+                                                    reloaded, nothing to notice.
+
+15:42:28  phase: Lobby -> ChampSelect            <- 1.0.15
+15:42:28  web: window is running v0.113.2 but the site serves v0.113.3 - reloading
+15:42:29  web: loaded v0.113.3
+```
+
+New code in your hands 1.3 seconds after champ select opens, instead of never.
+
+- **It does not churn.** When the page is already current the log says so and
+  nothing reloads: `web: window is current (v0.113.3)`.
+- **It never reloads on a failed check.** If the site cannot be reached, the
+  window you have is the window you keep — being offline mid-draft must not
+  cost you your page.
+- **Once per champ select**, not once per poll. The draft loop ticks three
+  times a second.
+
+### Added — the app now says which web build it is running
+
+Two places, because the failure above was invisible for its entire lifetime:
+
+- **`companion.log`** gets one line per navigation: `web: loaded v0.113.3`.
+- **The tray menu** gets a `Web: v0.113.3` line under `CoachBuild v1.0.15`.
+  They are different numbers and the menu now shows both. It distinguishes
+  three states rather than blurring them: `Web: no window open`,
+  `Web: unknown (page predates v0.113.0)`, and the version.
+
+Needs web 0.113.0 or newer, which is already live. An older page reports
+"unknown" and is treated as stale, which is correct — it is the oldest thing
+that can be in that window.
+
+### Unchanged
+
+1.0.9's updater gates, 1.0.10's game-start window teardown, 1.0.11's champion
+resolution, 1.0.12's banked-point gate and 250 ms poll, 1.0.13's
+Ctrl+Shift+A-only binding (Ctrl+Shift+S stays free for other apps), 1.0.14's
+tray shortcut label and Open log folder, the frozen `/api/champions` shape, and
+every item-set safety rule. 383 tests green in Debug and Release.
+
+## Web 0.113.1 / 0.113.2 / 0.113.3 — 2026-08-19 — verification probes (no product change)
+
+Three version-only releases, no user-visible change in any of them. Desktop
+1.0.15 reloads the hosted window when the site has moved on, and that claim is
+unfalsifiable without a site that actually moves on — a window opened AFTER a
+deploy is never stale. So: 0.113.1 primed the bench, 0.113.2 created the gap
+that reproduced the old behaviour, and 0.113.3 created the gap the fix closed.
+The paired log is in `HANDOFF-core-stale-webview.md`. Everything a user sees
+shipped in 0.113.0.
 
 ## Web 0.113.0 — 2026-08-19 — one set, the numbers in it, and the runes keep up
 

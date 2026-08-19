@@ -159,6 +159,9 @@ public sealed class TrayController : IDisposable
 
         _menu.Items.Add(new Forms.ToolStripSeparator());
         _menu.Items.Add(StatusItem($"CoachBuild v{AppVersion}"));
+        // The WEB build the open window is running — a different number from
+        // the line above it, and the one nobody could answer on 2026-08-19.
+        _menu.Items.Add(StatusItem(_state.WebVersionLine));
         _menu.Items.Add(StatusItem($"Phase: {DisplayPhase(_state.Phase)}"));
         _menu.Items.Add(StatusItem(_state.IsCompanionBusy ? "Companion: busy" : "Companion: ready"));
         using (var process = Process.GetCurrentProcess())

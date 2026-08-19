@@ -255,6 +255,7 @@ public partial class App : WpfApplication
         {
             var nativeServices = new CoreDesktopHostServices(SessionToken, Paths.Root, log: _log);
             nativeServices.PageRequested += OnNativePageRequested;
+            nativeServices.WebFreshnessCheckRequested += OnWebFreshnessCheckRequested;
             _services = nativeServices;
         }
 
@@ -582,6 +583,107 @@ public partial class App : WpfApplication
             DispatcherPriority.Background);
     }
 
+    // ── The web build the window is actually running (1.0.15) ────────────────
+    //
+    // Through 1.0.14 this app had no idea. It navigates on open, and after
+    // that the window is left alone: `WindowDecisionService.OnChampSelectEntry`
+    // returns `None` whenever a follow attachment is live, and an open page
+    // polling /status is permanently attached. So the page keeps executing the
+    // bundle it loaded — for as long as the window stays open, which for a
+    // tray app left running is all day.
+    //
+    // 2026-08-19, on the user's machine: champ select at 14:30:24 UTC, ~18
+    // minutes after web 0.112.0 went live, and the window was still running
+    // 0.111.0. Their log said `apply-itemsets: count=1` where the new code
+    // says 1 for a different reason and 0.112.0 said 2; the only reason anyone
+    // noticed at all is that a screenshot happened to include the page header.
+    // Restarting the app fixed it. Every web release before that could have
+    // failed to reach them the same way, silently, and did not because they
+    // usually restart.
+    //
+    // Two changes, and the FIRST one is the important one:
+    //   1. Every navigation now logs the version the document reports. The
+    //      class of failure is no longer invisible, whatever else breaks.
+    //   2. Champ-select entry compares it against the origin's own answer and
+    //      re-navigates when they differ.
+    private readonly WebAppVersionClient _webVersions = new(AppOrigin);
+    private string? _liveWebVersion;
+    private DateTimeOffset _lastWebVersionCheck = DateTimeOffset.MinValue;
+    private static readonly TimeSpan WebVersionCheckInterval = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// One line per navigation, including the null case. "Unknown" is not a
+    /// non-answer here: the meta tag arrived in web 0.113.0, so its absence
+    /// dates the page.
+    /// </summary>
+    private void OnWebVersionObserved(string? version)
+    {
+        _log?.Info(version is null
+            ? "web: loaded a build with no version tag (older than web 0.113.0)"
+            : $"web: loaded v{version}");
+        _trayState = _trayState with { WebVersion = version, WebWindowOpen = true };
+        _tray?.UpdateState(_trayState);
+    }
+
+    private void OnWebFreshnessCheckRequested(ReopenTarget target)
+    {
+        if (_isShuttingDown) return;
+        Dispatcher.BeginInvoke(
+            () => _ = CheckWebFreshnessAsync(target),
+            DispatcherPriority.Background);
+    }
+
+    /// <summary>
+    /// Reloads the hosted page when it is running a different build than the
+    /// site is serving. Fail-soft in every direction: no window, no check; no
+    /// answer from the origin, no reload.
+    /// </summary>
+    internal async Task CheckWebFreshnessAsync(ReopenTarget target)
+    {
+        var window = _webView;
+        if (window is null || !window.IsWebViewInitialized) return;
+
+        var now = DateTimeOffset.UtcNow;
+        if (now - _lastWebVersionCheck < WebVersionCheckInterval) return;
+        _lastWebVersionCheck = now;
+
+        var loaded = window.LoadedWebVersion;
+        string? live;
+        try
+        {
+            live = await _webVersions.GetVersionAsync(_shutdown.Token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        _liveWebVersion = live;
+
+        switch (WebAppVersionClient.Compare(loaded, live))
+        {
+            case WebFreshness.Unknown:
+                // Offline, or a deployment with no /api/app-version. NOT a
+                // reason to replace a working page mid-draft.
+                _log?.Info($"web: could not reach {WebAppVersionClient.VersionPath}; leaving the window on "
+                    + (loaded is null ? "an untagged build" : $"v{loaded}"));
+                return;
+            case WebFreshness.Current:
+                _log?.Info($"web: window is current (v{loaded})");
+                return;
+            case WebFreshness.StaleUntagged:
+                _log?.Info($"web: window is running a build older than v0.113.0; the site serves v{live} — reloading");
+                break;
+            case WebFreshness.Stale:
+                _log?.Info($"web: window is running v{loaded} but the site serves v{live} — reloading");
+                break;
+        }
+
+        // Exactly the navigation champ select would have performed had the
+        // window not been attached, so this is not a new code path for the
+        // page — it is the one that was skipped.
+        await OpenTargetAsync(target, userInitiated: false).ConfigureAwait(true);
+    }
+
     private void OnTrayCommand(object? sender, TrayCommandEventArgs e)
     {
         if (_isShuttingDown) return;
@@ -695,7 +797,12 @@ public partial class App : WpfApplication
         if (sender is WebView2Window closed && ReferenceEquals(_webView, closed))
         {
             closed.Closed -= OnWebViewClosed;
+            closed.WebVersionObserved -= OnWebVersionObserved;
             _webView = null;
+            // The tray must not keep advertising the version of a window that
+            // no longer exists (the game-start teardown closes it every match).
+            _trayState = _trayState with { WebVersion = null, WebWindowOpen = false };
+            _tray?.UpdateState(_trayState);
         }
         if (_isShuttingDown) return;
         SetUpdateBusy(IsUpdateBusyContext());
@@ -811,6 +918,7 @@ public partial class App : WpfApplication
                 Paths.WebView2UserDataFolder,
                 OnWebViewRepairCompleted)).Task.ConfigureAwait(false);
             _webView!.Closed += OnWebViewClosed;
+            _webView!.WebVersionObserved += OnWebVersionObserved;
             Volatile.Write(ref _webViewVisible, 1);
             SetUpdateBusy(IsUpdateBusyContext());
 
@@ -1136,6 +1244,26 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
 
     public event Action<ReopenTarget>? PageRequested;
 
+    /// <summary>
+    /// Champ select began and no navigation is going to happen, so whatever
+    /// build the open window is running is the build the user is about to
+    /// play with. Carries the target a draft open WOULD have used, so the
+    /// handler can re-navigate to exactly that if the page turns out stale.
+    /// See <see cref="RunGameflowAsync"/>'s raise site and
+    /// <see cref="CoachBuild.Core.WebAppVersionClient"/>.
+    /// </summary>
+    public event Action<ReopenTarget>? WebFreshnessCheckRequested;
+
+    /// <summary>
+    /// A transition INTO champ select, and only that. Not "the phase is
+    /// ChampSelect" — during champ select this loop ticks every 350 ms
+    /// (<see cref="App.GameflowDelayForPhase"/>), and a version check per tick
+    /// would be ~85 requests per draft.
+    /// </summary>
+    internal static bool EnteredChampSelect(string? before, string? after) =>
+        string.Equals(after, "ChampSelect", StringComparison.Ordinal) &&
+        !string.Equals(before, "ChampSelect", StringComparison.Ordinal);
+
     /// <inheritdoc />
     public event Action<OverlayState?>? OverlayStateChanged;
 
@@ -1262,6 +1390,7 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         {
             try
             {
+                var phaseBefore = _state.Phase;
                 var decision = await _gameflow.TickAsync(cancellationToken).ConfigureAwait(false);
                 if (decision is { Kind: WindowDecisionKind.OpenDraft })
                 {
@@ -1269,6 +1398,24 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
                         ReopenDestination.Draft,
                         decision.ChampionId,
                         decision.RoleId));
+                }
+                else if (EnteredChampSelect(phaseBefore, _state.Phase))
+                {
+                    // Champ select began and NOTHING is going to navigate the
+                    // window, because a live follow attachment made the
+                    // decision `None` (WindowDecisionService.OnChampSelectEntry
+                    // -> FollowAttachmentTracker.IsAnyAttached). That is
+                    // correct as far as windows go — there is already one open
+                    // and it is following — but it also means the page in it
+                    // keeps running whichever build it loaded, which on
+                    // 2026-08-19 was an 18-minute-old release the user never
+                    // received. This is the one moment where that matters and
+                    // the one moment where replacing the page is free, so it is
+                    // where the version is checked.
+                    WebFreshnessCheckRequested?.Invoke(new ReopenTarget(
+                        ReopenDestination.Draft,
+                        decision?.ChampionId,
+                        decision?.RoleId));
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

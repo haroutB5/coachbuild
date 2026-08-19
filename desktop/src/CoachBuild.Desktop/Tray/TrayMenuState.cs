@@ -63,8 +63,28 @@ public sealed record TrayMenuState(
     WebView2Availability WebView2Available = WebView2Availability.Unknown,
     bool IsAdjusting = false,
     string? AdjustAccelerator = null,
-    string? AdjustHotkeyAdvice = null)
+    string? AdjustHotkeyAdvice = null,
+    string? WebVersion = null,
+    bool WebWindowOpen = false)
 {
+    /// <summary>
+    /// The status line naming the WEB build the open window is running — a
+    /// different number from the desktop app's own version, and the one that
+    /// was unanswerable on 2026-08-19 when a user's window sat on web 0.111.0
+    /// for eighteen minutes after 0.112.0 shipped.
+    ///
+    /// <para>Three distinct states, deliberately worded so none of them reads
+    /// as another: no window open at all, a window whose page predates the
+    /// version tag (web 0.113.0), and a known version.</para>
+    /// </summary>
+    /// <para><c>WebVersion == null</c> alone cannot say which of the last two
+    /// it is, which is why <c>WebWindowOpen</c> is a separate field rather
+    /// than being inferred from it.</para>
+    public string WebVersionLine =>
+        !WebWindowOpen ? "Web: no window open"
+        : WebVersion is null ? "Web: unknown (page predates v0.113.0)"
+        : $"Web: v{WebVersion}";
+
     /// <summary>
     /// The tray wording for adjust mode, in one place. <see
     /// cref="Overlay.GlobalHotkeyService.FallbackAdviceOrNull"/> quotes this
