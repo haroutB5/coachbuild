@@ -384,6 +384,157 @@ describe("applyItemSetsForBuild", () => {
     expect(core.items).toEqual([]); // every id unknown -- excluded, never an unfiltered/invented item
     expect(parsed.sets[0].blocks.map((b: { type: string }) => b.type)).not.toContain("Hidden gem"); // nothing qualifies
   });
+
+  // ── The overlay deltas, at the POST boundary (v0.114.0) ───────────────────
+  // The pairing itself is proven pure in situationalItemSet.test.ts. What is
+  // only provable HERE is that it survives the trip: applyItemSetsForBuild
+  // destructures buildItemSets' record and spreads the field onto the body, and
+  // a body is the last thing anyone can inspect before it is someone else's
+  // problem. A dropped spread, an assignment that leaves `undefined`, or a
+  // caller that rebuilt the sets and forgot the deltas all look identical from
+  // inside the builder and different from out here.
+
+  it("POSTs `situational` alongside the sets, paired with the Situational block's items", async () => {
+    let capturedBridgeBody: string | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.startsWith("/api/pros")) return jsonResponse({ games: [] });
+        if (url.startsWith("https://cdn.coachless.gg")) return jsonResponse(ITEM_JSON_FIXTURE);
+        if (url.includes("/apply-itemsets")) {
+          capturedBridgeBody = init?.body as string;
+          return jsonResponse({ ok: true, count: 1 });
+        }
+        return jsonResponse({}, false);
+      })
+    );
+    const { applyItemSetsForBuild } = await import("../hextech/itemSetsApply");
+    const build = baseBuild();
+    // Two alternatives, one positive and one negative, so the sign survives to
+    // the wire and the order is observable. Ids deliberately OUTSIDE
+    // ITEM_JSON_FIXTURE: an unknown id fails isFullItem and so can never be
+    // pulled into a build line as padding, which would then exclude it from the
+    // situational row (the WPA-build exclusion) and leave this test asserting
+    // over an empty block.
+    build.items.alts = {
+      first: [
+        { ...pick(4645), wpa: 1.5 },
+        { ...pick(4646), wpa: -0.25 },
+      ],
+    };
+    const result = await applyItemSetsForBuild({
+      champ: CHAMP,
+      lane: "bot",
+      roleLabel: "Bot",
+      build,
+      port: 48291,
+      session: "sess-1",
+    });
+    expect(result).toEqual({ ok: true, count: 1 });
+
+    const parsed = JSON.parse(capturedBridgeBody!);
+    const sit = parsed.sets[0].blocks.find((b: { type: string }) => b.type === "Situational");
+    expect(sit).toBeDefined();
+    const blockIds = sit.items.map((i: { id: string }) => Number(i.id));
+    expect(blockIds.length).toBeGreaterThan(0);
+    // Same ids, same order, same length — read off the wire, not off the
+    // builder's return value.
+    expect(parsed.situational.map((e: { id: number }) => e.id)).toEqual(blockIds);
+    expect(parsed.situational).toHaveLength(blockIds.length);
+    // The formatted string is what the overlay draws, verbatim.
+    for (const entry of parsed.situational) {
+      expect(typeof entry.text).toBe("string");
+      expect(entry.text).toBe((entry.wpa > 0 ? "+" : "") + entry.wpa.toFixed(2));
+      expect(entry.text.length).toBeGreaterThan(0);
+    }
+    // ...and the rest of the body is untouched by its presence.
+    expect(parsed.championId).toBe(222);
+    expect(parsed.sets).toHaveLength(1);
+    expect(parsed.replacePrefix).toBe("CoachBuild Jinx ");
+  });
+
+  it("OMITS `situational` from the body entirely for a champion with no alternatives", async () => {
+    // `baseItems()` carries no `alts`. The key must be absent from the JSON —
+    // not present as null, not present as []. An older companion.ps1 / desktop
+    // never sees it either way, but "absent" is the only one of the three that
+    // is also true of every build before 0.114.0.
+    let capturedBridgeBody: string | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.startsWith("/api/pros")) return jsonResponse({ games: [] });
+        if (url.startsWith("https://cdn.coachless.gg")) return jsonResponse(ITEM_JSON_FIXTURE);
+        if (url.includes("/apply-itemsets")) {
+          capturedBridgeBody = init?.body as string;
+          return jsonResponse({ ok: true, count: 1 });
+        }
+        return jsonResponse({}, false);
+      })
+    );
+    const { applyItemSetsForBuild } = await import("../hextech/itemSetsApply");
+    const result = await applyItemSetsForBuild({
+      champ: CHAMP,
+      lane: "bot",
+      roleLabel: "Bot",
+      build: baseBuild(),
+      port: 48291,
+      session: "sess-1",
+    });
+    expect(result).toEqual({ ok: true, count: 1 });
+    const parsed = JSON.parse(capturedBridgeBody!);
+    expect(Object.prototype.hasOwnProperty.call(parsed, "situational")).toBe(false);
+    expect(capturedBridgeBody).not.toContain("situational");
+    // The apply still happened, with the same sets it always sent.
+    expect(parsed.sets).toHaveLength(1);
+    expect(parsed.sets[0].title).toBe("CoachBuild Jinx Bot");
+  });
+
+  it("the field changes nothing about the apply — same sets, same result, either way", async () => {
+    // "Decoration" as a measurement rather than a promise: run the SAME export
+    // with and without alternatives and diff everything except the new key.
+    const capture = async (withAlts: boolean) => {
+      vi.resetModules();
+      vi.unstubAllGlobals();
+      let body: string | undefined;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url.startsWith("/api/pros")) return jsonResponse({ games: [] });
+          if (url.startsWith("https://cdn.coachless.gg")) return jsonResponse(ITEM_JSON_FIXTURE);
+          if (url.includes("/apply-itemsets")) {
+            body = init?.body as string;
+            return jsonResponse({ ok: true, count: 1 });
+          }
+          return jsonResponse({}, false);
+        })
+      );
+      const { applyItemSetsForBuild } = await import("../hextech/itemSetsApply");
+      const build = baseBuild();
+      if (withAlts) build.items.alts = { first: [{ ...pick(4645), wpa: 1.5 }] };
+      const result = await applyItemSetsForBuild({
+        champ: CHAMP,
+        lane: "bot",
+        roleLabel: "Bot",
+        build,
+        port: 48291,
+        session: "sess-1",
+      });
+      return { result, parsed: JSON.parse(body!) };
+    };
+    const withAlts = await capture(true);
+    const without = await capture(false);
+
+    expect(withAlts.result).toEqual(without.result);
+    expect(withAlts.parsed.championId).toBe(without.parsed.championId);
+    expect(withAlts.parsed.replacePrefix).toBe(without.parsed.replacePrefix);
+    // The one legitimate difference in the SETS is the Situational block the
+    // alternatives produce; every build line is identical.
+    const lines = (p: { sets: { blocks: { type: string }[] }[] }) =>
+      p.sets[0].blocks.filter((b) => b.type !== "Situational");
+    expect(JSON.stringify(lines(withAlts.parsed))).toBe(JSON.stringify(lines(without.parsed)));
+    expect(withAlts.parsed.situational).toBeDefined();
+    expect(without.parsed.situational).toBeUndefined();
+  });
 });
 
 describe("shouldAutoApplyItemSets — pure gate", () => {

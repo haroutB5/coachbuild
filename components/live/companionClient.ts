@@ -42,7 +42,10 @@
 //   POST /apply-runes  body {..., mode:'auto'|'manual'} ->
 //                          {ok:true, selected, verified, mismatch} |
 //                          {ok:false, reason, hint?}
-//   POST /apply-itemsets body {championId, sets:ItemSet[], replacePrefix?:string} ->
+//   POST /apply-itemsets body {championId, sets:ItemSet[], replacePrefix?:string,
+//                              situational?:{id,wpa,text}[]  (v0.114.0, optional,
+//                              decorative — paired positionally with the
+//                              Situational block's items; see applyItemSets)} ->
 //                          {ok:true, count} | {ok:false, reason, hint?}
 //
 // v0.35.0 / companion 1.3.1: `replacePrefix` is an explicit, CHAMP-SCOPED
@@ -895,11 +898,39 @@ export async function applyRunes(
  *  path both call this SAME function with the SAME body shape.
  *
  *  `replacePrefix` (v0.35.0 / companion 1.3.1+) — see this file's header
- *  comment and itemSetBody.ts's champScopedReplacePrefix. */
+ *  comment and itemSetBody.ts's champScopedReplacePrefix.
+ *
+ *  `situational` (v0.114.0 / desktop overlay) — OPTIONAL, DECORATIVE, and it
+ *  must stay both. It carries one `{id, wpa, text}` per item in the set's
+ *  `Situational` block, POSITIONALLY PAIRED with that block's `items` (same
+ *  membership, same order, same length — built from one shared derivation in
+ *  itemSetBody.ts's buildItemSets, not recomputed here or anywhere else). The
+ *  desktop overlay draws `text` verbatim over the matching item icon and uses
+ *  `wpa` only for its sign, to colour it.
+ *
+ *  Nothing about it may fail or alter an apply. It is simply a top-level key
+ *  on a body that is already JSON.stringify'd whole, so:
+ *    - an OLDER bridge ignores it. companion.ps1's handler reads `$bodyObj.sets`
+ *      and `$bodyObj.replacePrefix` by name and hands only `.sets` to
+ *      `Test-ItemSetsPayload`, so a new top-level field is never even looked
+ *      at; the desktop deserializes into `ApplyItemSetsRequest` with
+ *      `JsonOptions.Wire`, which does not set `UnmappedMemberHandling.Disallow`,
+ *      so System.Text.Json skips unknown members by default. Both are pinned
+ *      by source assertions in components/__tests__/situationalItemSet.test.ts
+ *      — the same pattern that file already uses for the C#/PowerShell 1-3-set
+ *      rule, because neither adapter is reachable from vitest.
+ *    - a NEWER bridge against an older web simply receives no field. There is
+ *      deliberately NO version gate here: adding one would make a decorative
+ *      field capable of failing an apply, which is the thing it must not be. */
 export async function applyItemSets(
   port: CompanionPort,
   session: string,
-  body: { championId: number; sets: unknown[]; replacePrefix?: string },
+  body: {
+    championId: number;
+    sets: unknown[];
+    replacePrefix?: string;
+    situational?: { id: number; wpa: number; text: string }[];
+  },
   deps: CompanionClientDeps = {}
 ): Promise<ApplyItemSetsResult> {
   const f = deps.fetchImpl ?? fetch;

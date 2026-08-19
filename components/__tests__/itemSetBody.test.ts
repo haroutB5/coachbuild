@@ -18,9 +18,22 @@
  * came from a real reported bug, because that is why they must not be dropped.
  */
 import { describe, it, expect } from "vitest";
-import { buildItemSets, champScopedReplacePrefix, selectHiddenGemPicks } from "../hextech/itemSetBody";
+import {
+  buildItemSets as buildItemSetExport,
+  champScopedReplacePrefix,
+  selectHiddenGemPicks,
+} from "../hextech/itemSetBody";
 import type { ChampionRef, BuildResponse, ItemsBlock, Pick, RunesBlock } from "@/lib/types";
 import type { ItemDetail } from "@/components/itemDetail";
+
+/** v0.114.0 — buildItemSets returns `{sets, situational?}` rather than a bare
+ *  `ItemSet[]`, so the overlay deltas can be derived from the SAME
+ *  situationalBlockPicks call the Situational block is (see ItemSetExport's
+ *  doc comment). Every test in THIS file is about the sets; the wire array has
+ *  its own suite in components/__tests__/situationalItemSet.test.ts. Narrowed
+ *  here rather than adding `.sets` to ~20 call sites, so the diff stays about
+ *  the contract change and not about punctuation. */
+const buildItemSets = (...args: Parameters<typeof buildItemSetExport>) => buildItemSetExport(...args).sets;
 
 function pick(id: number, wpa = 0.02, extra: Partial<Pick> = {}): Pick {
   return { id, name: `Item ${id}`, icon: `icon-${id}`, wpa, winrate: 52, occurrence: 5000, ...extra };

@@ -20,9 +20,10 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  buildItemSets,
+  buildItemSets as buildItemSetExport,
   situationalBlockPicks,
   situationalBlocks,
+  situationalWire,
   champScopedReplacePrefix,
 } from "../hextech/itemSetBody";
 import { wpaText } from "../StatBadge";
@@ -128,15 +129,26 @@ function galioBuild(items: ItemsBlock = galioMidItems()): BuildResponse {
   };
 }
 
+/** v0.114.0 — buildItemSets returns `{sets, situational?}`. Most tests in this
+ *  file are about the SETS; the wire array has its own describe block below and
+ *  calls `buildItemSetExport` directly. */
+const buildItemSets = (...args: Parameters<typeof buildItemSetExport>) => buildItemSetExport(...args).sets;
+
 const block = (set: { blocks: { type: string; items: { id: string; count: number }[] }[] }, type: string) =>
   set.blocks.find((b) => b.type === type);
 const idsOf = (b: { items: { id: string }[] } | undefined) => (b?.items ?? []).map((i) => Number(i.id));
 
-// ── Situational is now one block PER ITEM, titled with that item's delta ────
-// (2026-08-19, "is there a way to show the wpa values in game so i can make
-// better decisions on what to buy?"). A block's title is the only writable
-// string anywhere near an item, so binding a number to an item means one block
-// per item. These helpers read the row back across however many blocks it took.
+// ── Situational is ONE block again (0.114.0) ────────────────────────────────
+// 0.113.x emitted one block PER ITEM, titled `Situational +4.27`, because a
+// block title is the only writable string anywhere near an item and that was
+// the only way to bind a number to one. The user rejected the shape ("doesnt
+// look great" — a 5-block set became eleven), so the numbers moved onto the
+// desktop overlay via the wire array and the row collapsed back to one block.
+//
+// These helpers deliberately still match ANY `Situational*` block type, not
+// just the exact string. That is what lets "there is exactly one block and its
+// type is exactly `Situational`" fail loudly if the per-item titles are ever
+// restored, instead of quietly reading zero blocks and passing.
 type TestBlock = { type: string; items: { id: string; count: number }[] };
 const isSituational = (b: TestBlock) => b.type === "Situational" || b.type.startsWith("Situational ");
 const situationalBlocksOf = (set: { blocks: TestBlock[] }) => set.blocks.filter(isSituational);
@@ -251,49 +263,44 @@ describe("situational — the ids in the screenshot", () => {
     }
   });
 
-  it("each screenshot item gets its OWN block, titled with the delta the panel prints", () => {
-    // The whole point of the 2026-08-19 titling change: the shop can now say
-    // WHICH item is worth +4.27 and which is worth -0.06. An LCU block item is
-    // {id, count} — the block title is the only place a number can live, so
-    // one item per block is the only shape that binds them.
+  it("all six sit in ONE block titled exactly 'Situational' — not one block each", () => {
+    // 0.113.x gave every pick its own block so the title could carry its delta
+    // (`Situational +4.27`). The user rejected it: a 5-block set became eleven
+    // and "doesnt look great". The numbers now travel on the wire to the
+    // desktop overlay (see the wire suite below) and the row is one block.
+    //
+    // `situationalBlocksOf` still matches any `Situational*` type, so restoring
+    // the per-item titles fails HERE (six blocks, digits in the titles) rather
+    // than silently matching nothing.
     const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
     const blocks = situationalBlocksOf(sets[0]);
-    expect(blocks).toHaveLength(SCREENSHOT_ITEMS.length);
-    expect(blocks.map((b) => b.type)).toEqual([
-      "Situational +4.27",
-      "Situational +2.79",
-      "Situational +1.13",
-      "Situational +0.45",
-      "Situational +0.39",
-      "Situational -0.06",
-    ]);
-    for (const b of blocks) expect(b.items).toHaveLength(1);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe("Situational");
+    expect(blocks[0].items).toHaveLength(SCREENSHOT_ITEMS.length);
   });
 
-  it("prints the number through the Builds page's OWN formatter, not a second toFixed", () => {
-    // Two surfaces formatting the same field with two formatters is how they
-    // end up disagreeing at a rounding boundary. SituationalCard renders
-    // wpaText(pick.wpa); the block title must contain the same string.
-    const picks = situationalBlockPicks(galioMidItems());
-    const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
-    const blocks = situationalBlocksOf(sets[0]);
-    picks.forEach((pick, i) => {
-      expect(blocks[i].type).toBe(`Situational ${wpaText(pick.wpa)}`);
-      expect(blocks[i].items[0].id).toBe(String(pick.id));
-    });
-  });
-
-  it("keeps every situational title inside the longest title this app already ships", () => {
-    // Measured 2026-08-19: Riot's own Recommended sets and the user's real
-    // ItemSets.json both top out at 19 chars; THIS app already emits 29
-    // ("Pro build (same as WPA build)") and has since 2026-07-29. The
-    // situational titles are 16-17. Bounded here so a future "add the item
-    // name" idea has to argue with a test.
+  it("puts NO number, and no item name, in any block title", () => {
+    // The shop's own chrome carries no delta any more — the overlay does. A
+    // digit reappearing in a Situational title means the 0.113.x shape came
+    // back; an item name means someone reached for the other rejected idea
+    // ("Ionian Boots of Lucidity +4.27" is 30 chars, against a measured
+    // in-the-wild ceiling of 19 for Riot's own and the user's own sets).
     const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
     for (const b of situationalBlocksOf(sets[0])) {
-      expect(b.type.length).toBeLessThanOrEqual(17);
-      expect(b.type).not.toMatch(/Boots|Shadowflame|Aegis/); // never the item NAME
+      expect(b.type).toBe("Situational");
+      expect(b.type).not.toMatch(/\d/);
+      expect(b.type).not.toMatch(/Boots|Shadowflame|Aegis/);
     }
+  });
+
+  it("the whole set is back to FIVE blocks, not eleven", () => {
+    // The actual complaint, stated as a number. Galio mid with no pro/OTP data
+    // is Starting + WPA build + Hidden gem + Situational; 0.113.x turned that
+    // last one into six. Bounded against the client's own sets, which never
+    // exceed five blocks.
+    const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
+    expect(sets[0].blocks.length).toBeLessThanOrEqual(5);
+    expect(sets[0].blocks.filter((b) => b.type.startsWith("Situational"))).toHaveLength(1);
   });
 });
 
@@ -332,29 +339,20 @@ describe("situational — block generation and ordering", () => {
     for (let i = 0; i < firstSituational; i++) expect(types[i]).not.toMatch(/^Situational/);
   });
 
-  it("degrades to ONE plain block when there are more picks than can be titled", () => {
-    // Unreachable in production today: situationalBlockPicks caps at
-    // SITUATIONAL_DISPLAY_LIMIT, which equals the titling cap (asserted below).
-    // Reachable — and reached — by calling the pure function directly, which is
-    // the only honest way to test a guard that exists for a FUTURE raise of the
-    // display limit rather than for today's data.
-    const many = Array.from({ length: SITUATIONAL_DISPLAY_LIMIT + 1 }, (_, i) =>
-      p(1000 + i, `Item ${i}`, 1 - i * 0.1)
-    );
-    const blocks = situationalBlocks(many);
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0].type).toBe("Situational");
-    expect(blocks[0].items.map((x) => Number(x.id))).toEqual(many.map((x) => x.id));
-  });
-
-  it("titles exactly as many picks as the page displays — the two caps are one number", () => {
-    // If SITUATIONAL_DISPLAY_LIMIT is ever raised past the titling cap, every
-    // real export silently falls into the degrade branch above and the numbers
-    // vanish from the shop with the whole suite green. This is the tripwire.
-    const atCap = Array.from({ length: SITUATIONAL_DISPLAY_LIMIT }, (_, i) =>
-      p(2000 + i, `Item ${i}`, 1 - i * 0.1)
-    );
-    expect(situationalBlocks(atCap)).toHaveLength(SITUATIONAL_DISPLAY_LIMIT);
+  it("is ONE block at any length — one pick, six, or more than the display limit", () => {
+    // The block count must not depend on how many picks there are. 0.113.x had
+    // a length-sensitive shape (one block each below a cap, one block above
+    // it), which is exactly the kind of branch that ships a different shop
+    // panel to a champion nobody tested. Driven through the pure function
+    // because raising SITUATIONAL_DISPLAY_LIMIT is a one-line change on the
+    // page and this is what says the shop still holds.
+    for (const n of [1, SITUATIONAL_DISPLAY_LIMIT, SITUATIONAL_DISPLAY_LIMIT + 1, 15]) {
+      const many = Array.from({ length: n }, (_, i) => p(1000 + i, `Item ${i}`, 1 - i * 0.1));
+      const blocks = situationalBlocks(many);
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0].type).toBe("Situational");
+      expect(blocks[0].items.map((x) => Number(x.id))).toEqual(many.map((x) => x.id));
+    }
     expect(situationalBlocks([])).toEqual([]);
   });
 
@@ -411,12 +409,12 @@ describe("situational — negative deltas", () => {
     expect(sit.map((x) => x.id)).toEqual([1, 2]);
     const sets = buildItemSets(GALIO, "Mid", galioBuild(items), null, galioMeta());
     expect(situationalIds(sets[0])).toEqual([1, 2]);
-    // ...and the shop says so out loud, rather than showing a bare icon row
-    // the user has to guess at.
-    expect(situationalBlocksOf(sets[0]).map((b) => b.type)).toEqual([
-      "Situational -0.50",
-      "Situational -2.00",
-    ]);
+    expect(situationalBlocksOf(sets[0]).map((b) => b.type)).toEqual(["Situational"]);
+    // ...and the shop still says so out loud, because the overlay carries the
+    // signs the block cannot: -0.50 and -2.00, not a bare icon row.
+    const { situational } = buildItemSetExport(GALIO, "Mid", galioBuild(items), null, galioMeta());
+    expect(situational?.map((e) => e.text)).toEqual(["-0.50", "-2.00"]);
+    expect(situational?.every((e) => e.wpa < 0)).toBe(true);
   });
 });
 
@@ -647,6 +645,265 @@ describe("situational — ONE set, and the orphan 0.112.0 left behind", () => {
     withOrphan.itemSets.push({ title: ORPHAN_TITLE, uid: "coachbuild-galio-mid-situational", sortrank: 1 } as RealSet);
     expect(withOrphan.itemSets.map((s) => s.title)).toContain(ORPHAN_TITLE);
     expect(realItemSetsFile().itemSets.map((s) => s.title)).not.toContain(ORPHAN_TITLE);
+  });
+});
+
+describe("situational — the WPA deltas the desktop overlay draws (0.114.0 wire)", () => {
+  // The numbers left the shop's own chrome in 0.114.0. 0.113.x titled a block
+  // per item (`Situational +4.27`) because a block title is the only writable
+  // string near an item; the user rejected the shape ("doesnt look great" — an
+  // eleven-block set). So the row is one block and the deltas ride along on the
+  // /apply-itemsets body for CoachBuild's own overlay to draw over the icons.
+  //
+  // Everything below is about the ONE property that makes that safe: the wire
+  // and the block must be the same list, in the same order, or the overlay
+  // paints the wrong number on the wrong item.
+
+  it("pairs index-by-index with the Situational block: same ids, same order, same length", () => {
+    const out = buildItemSetExport(GALIO, "Mid", galioBuild(), null, galioMeta());
+    const blocks = situationalBlocksOf(out.sets[0]);
+    expect(blocks).toHaveLength(1);
+    const blockIds = blocks[0].items.map((i) => Number(i.id));
+    expect(out.situational).toBeDefined();
+    expect(out.situational!.map((e) => e.id)).toEqual(blockIds);
+    // Stated the way the desktop consumes it, not just as array equality:
+    // entry i annotates item i.
+    out.situational!.forEach((entry, i) => expect(entry.id).toBe(blockIds[i]));
+    expect(out.situational).toHaveLength(SCREENSHOT_ITEMS.length);
+    expect(blockIds).toEqual(SCREENSHOT_ITEMS.map((x) => x.id));
+  });
+
+  it("STILL pairs when the WPA-build exclusion drops a pick — one derivation, not two", () => {
+    // THE test that a second derivation cannot pass. `situationalBlockPicks`
+    // filters out ids the WPA build already recommends; the raw shortlist does
+    // not. Here 8020 (Galio's first core item) is also offered as an
+    // alternative at the top of the list, so:
+    //     shortlist          -> [8020, 3158, 3009, 3047, 4645, 4646]   (6)
+    //     block / wire       -> [      3158, 3009, 3047, 4645, 4646]   (5)
+    // A wire rebuilt from `situationalShortlist(items)` would be six long and
+    // start with 8020 — every number one icon out of step, and the topmost item
+    // annotated with a delta for an item that is not even in the row.
+    const items = galioMidItems();
+    items.alts!.third = [p(8020, "Abyssal Mask", 9.0)];
+    const out = buildItemSetExport(GALIO, "Mid", galioBuild(items), null, galioMeta());
+    const blockIds = situationalBlocksOf(out.sets[0])[0].items.map((i) => Number(i.id));
+
+    // The exclusion really did bite — without this the pairing below is a
+    // tautology over an unfiltered list.
+    expect(situationalShortlist(items).map((x) => x.id)).toContain(8020);
+    expect(situationalShortlist(items)).toHaveLength(SITUATIONAL_DISPLAY_LIMIT);
+    expect(blockIds).not.toContain(8020);
+    expect(blockIds).toHaveLength(SITUATIONAL_DISPLAY_LIMIT - 1);
+
+    expect(out.situational!.map((e) => e.id)).toEqual(blockIds);
+    expect(out.situational!.map((e) => e.id)).not.toContain(8020);
+    expect(out.situational).toHaveLength(blockIds.length);
+  });
+
+  it("pairs on every shape this builder can emit, not just the one fixture", () => {
+    // A single fixture proves one path. These sweep the branches that change
+    // the row: pro/OTP data present (more build blocks, same situational row),
+    // an all-negative row, a one-item row, and a champion with no alternatives.
+    const consensus = {
+      items: [
+        { itemId: 4645, share: 0.9 },
+        { itemId: 8020, share: 0.8 },
+        { itemId: 4633, share: 0.7 },
+        { itemId: 3143, share: 0.6 },
+        { itemId: 3152, share: 0.5 },
+      ],
+      boots: [{ itemId: 3020, share: 0.8 }],
+    };
+    const allNegative = galioMidItems();
+    allNegative.alts = { first: [p(101, "A", -0.5), p(102, "B", -2.0)] };
+    const single = galioMidItems();
+    single.alts = { first: [p(103, "C", 1.25)] };
+
+    const cases: [string, ItemsBlock, typeof consensus | null][] = [
+      ["plain", galioMidItems(), null],
+      ["with pro+otp consensus", galioMidItems(), consensus],
+      ["all negative", allNegative, null],
+      ["single pick", single, null],
+    ];
+    for (const [label, items, pro] of cases) {
+      const out = buildItemSetExport(GALIO, "Mid", galioBuild(items), pro, galioMeta(), pro);
+      const blocks = situationalBlocksOf(out.sets[0]);
+      expect(blocks, label).toHaveLength(1);
+      const blockIds = blocks[0].items.map((i) => Number(i.id));
+      expect(out.situational!.map((e) => e.id), label).toEqual(blockIds);
+    }
+    // ...and the no-alternatives case, where BOTH sides are absent together.
+    const none = buildItemSetExport(GALIO, "Mid", galioBuild({ ...galioMidItems(), alts: undefined }), null, galioMeta());
+    expect(situationalBlocksOf(none.sets[0])).toEqual([]);
+    expect(none.situational).toBeUndefined();
+  });
+
+  it("formats `text` with the Builds page's OWN wpaText, never a local toFixed", () => {
+    // Two surfaces formatting the same field through two formatters is how they
+    // disagree at a boundary. The concrete difference here is the SIGN: wpaText
+    // prefixes positives with "+", a bare toFixed(2) does not — so a local
+    // formatter would silently drop the plus off every positive delta in the
+    // overlay while the page beside it kept it.
+    const picks = situationalBlockPicks(galioMidItems());
+    const out = buildItemSetExport(GALIO, "Mid", galioBuild(), null, galioMeta());
+    out.situational!.forEach((entry, i) => {
+      expect(entry.text).toBe(wpaText(picks[i].wpa));
+      expect(entry.wpa).toBe(picks[i].wpa); // the RAW number, not a rounded one
+    });
+    // Pinned as literals too, so "wpaText changed and both sides moved
+    // together" cannot pass this quietly.
+    expect(out.situational!.map((e) => e.text)).toEqual([
+      "+4.27", "+2.79", "+1.13", "+0.45", "+0.39", "-0.06",
+    ]);
+    // And the difference is real for this data, not theoretical: five of six
+    // would lose their sign under a bare toFixed(2).
+    const naive = picks.map((x) => x.wpa.toFixed(2));
+    expect(naive.filter((t, i) => t !== out.situational![i].text)).toHaveLength(5);
+  });
+
+  it("carries the raw wpa, whose SIGN is all the desktop reads from it", () => {
+    const out = buildItemSetExport(GALIO, "Mid", galioBuild(), null, galioMeta());
+    const picks = situationalBlockPicks(galioMidItems());
+    expect(out.situational!.map((e) => e.wpa)).toEqual(picks.map((x) => x.wpa));
+    // Sunfire Aegis is the negative one the user pointed at; it must still be
+    // distinguishable as negative after the trip.
+    const sunfire = out.situational!.find((e) => e.id === 3068);
+    expect(sunfire!.wpa).toBeLessThan(0);
+    expect(sunfire!.text.startsWith("-")).toBe(true);
+  });
+
+  it("OMITS the field entirely when there are no picks — not [], not null", () => {
+    // An absent key is what an older bridge, a stale cache and any future
+    // strict validator all already agree on. `situational: []` is a third
+    // thing that has to be handled, for no gain.
+    const out = buildItemSetExport(GALIO, "Mid", galioBuild({ ...galioMidItems(), alts: undefined }), null, galioMeta());
+    expect(Object.prototype.hasOwnProperty.call(out, "situational")).toBe(false);
+    expect("situational" in out).toBe(false);
+    expect(Object.keys(out)).toEqual(["sets"]);
+    expect(JSON.parse(JSON.stringify(out))).toEqual({ sets: out.sets });
+    // ...and PRESENT, as a non-empty array, when there are picks. Both
+    // branches, because asserting only the absent one passes on a function
+    // that never emits the field at all.
+    const withPicks = buildItemSetExport(GALIO, "Mid", galioBuild(), null, galioMeta());
+    expect(Object.prototype.hasOwnProperty.call(withPicks, "situational")).toBe(true);
+    expect(withPicks.situational!.length).toBeGreaterThan(0);
+  });
+
+  it("the pure wire helper takes the BLOCK's own picks, so it cannot re-derive them", () => {
+    // situationalWire's only input is a resolved pick list — it has no access
+    // to ItemsBlock and therefore no way to run its own shortlist/exclusion.
+    // That is the structural half of the guarantee the pairing tests assert
+    // behaviourally.
+    const picks = situationalBlockPicks(galioMidItems());
+    expect(situationalWire(picks)).toEqual(
+      picks.map((x) => ({ id: x.id, wpa: x.wpa, text: wpaText(x.wpa) }))
+    );
+    expect(situationalWire([])).toEqual([]);
+    // The block and the wire, from ONE call, describe the same list.
+    expect(situationalWire(picks).map((e) => e.id)).toEqual(
+      situationalBlocks(picks)[0].items.map((i) => Number(i.id))
+    );
+  });
+
+  it("buildItemSets derives the row ONCE and hands it to both consumers (source)", () => {
+    // Behavioural tests above catch a recompute that DIFFERS. This catches the
+    // shape directly: two calls to situationalBlockPicks in this function would
+    // be a second derivation even on the day they happen to agree.
+    const body = fs.readFileSync(
+      path.join(process.cwd(), "components/hextech/itemSetBody.ts"),
+      "utf8"
+    );
+    const calls = body.match(/situationalBlockPicks\(items/g) ?? [];
+    expect(calls).toHaveLength(1);
+    expect(body).toMatch(/const picks = situationalBlockPicks\(items,\s*wpaBuildIds\)/);
+    expect(body).toMatch(/situationalBlocks\(picks\)/);
+    expect(body).toMatch(/situationalWire\(picks\)/);
+    // The wire must not reach for the unfiltered shortlist on its own.
+    expect(body).not.toMatch(/situationalWire\(situationalShortlist/);
+  });
+
+  it("changes NOTHING about the sets — same set, same blocks, with and without it", () => {
+    // "It is decoration" as an assertion. The sets a bridge receives must be
+    // byte-identical to what it received before the field existed.
+    const out = buildItemSetExport(GALIO, "Mid", galioBuild(), null, galioMeta());
+    expect(out.sets).toHaveLength(1);
+    expect(out.sets[0].title).toBe("CoachBuild Galio Mid");
+    expect(out.sets[0].sortrank).toBe(0);
+    // Serialising the sets alone is unaffected by the sibling field.
+    const setsOnly = JSON.stringify(out.sets);
+    expect(JSON.parse(setsOnly)).toEqual(JSON.parse(JSON.stringify(out.sets)));
+    // And the field never leaks INTO a set or a block.
+    expect(setsOnly).not.toContain("situational");
+    expect(setsOnly).not.toContain('"wpa"');
+    expect(setsOnly).not.toContain('"text"');
+  });
+});
+
+describe("situational — an OLDER bridge must not notice the new field", () => {
+  // Source assertions, the same way this file already pins the C#/PowerShell
+  // 1-3-set rule: neither adapter is reachable from vitest, and "the extra
+  // field is harmless" is a claim about THEIR parsers, not ours. A user on
+  // desktop 1.0.15 or companion 1.14.1 gets 0.114.0 web the moment it deploys,
+  // so this is the compatibility that is actually load-bearing on day one.
+
+  it("companion.ps1 never hands the BODY to its validator — only .sets", () => {
+    // Test-ItemSetsPayload's whole surface is (Sets, ReplacePrefix). A new
+    // top-level key on the body is not reachable by it, so it cannot reject
+    // one, and PowerShell's ConvertFrom-Json accepts unknown members by
+    // construction (it builds a PSCustomObject from whatever is there).
+    const ps = fs.readFileSync(path.join(process.cwd(), "public/companion.ps1"), "utf8");
+    expect(ps).toMatch(/function Test-ItemSetsPayload[\s\S]{0,2000}?param\(\$Sets,\s*\$ReplacePrefix = \$null\)/);
+    // The handler reads the body's fields BY NAME — it never enumerates or
+    // whitelists them.
+    expect(ps).toMatch(/Invoke-ApplyItemSets -Sets \$bodyObj\.sets/);
+    expect(ps).toMatch(/-ReplacePrefix \$bodyObj\.replacePrefix/);
+    expect(ps).not.toMatch(/\$bodyObj\.PSObject\.Properties[\s\S]{0,120}(reject|invalid|return \$false)/);
+  });
+
+  it("the desktop deserializes with unknown members SKIPPED (System.Text.Json default)", () => {
+    // System.Text.Json ignores unmapped members unless something explicitly
+    // opts into Disallow — either on the options or via the attribute on the
+    // record. Assert BOTH absences: turning on either one would 400 every
+    // apply from 0.114.0 web on a 1.0.15 desktop, which is a field failure
+    // with no web-side symptom at all.
+    const opts = fs.readFileSync(
+      path.join(process.cwd(), "desktop/src/CoachBuild.Core/JsonOptions.cs"),
+      "utf8"
+    );
+    expect(opts).not.toMatch(/UnmappedMemberHandling/);
+    const wire = fs.readFileSync(
+      path.join(process.cwd(), "desktop/src/CoachBuild.Core/WireContracts.cs"),
+      "utf8"
+    );
+    expect(wire).not.toMatch(/JsonUnmappedMemberHandling/);
+    expect(wire).toMatch(/record ApplyItemSetsRequest\(/);
+    // NOT asserted: that ApplyItemSetsRequest has no `situational` member. The
+    // desktop lane is adding one to READ this field, in this same tree. The
+    // compatibility claim is about the desktop the user is RUNNING TODAY
+    // (1.0.15, and companion.ps1 1.14.1), neither of which has ever heard of
+    // the field — and what makes those safe is the Skip default above, not the
+    // shape of a record that is being changed as this ships.
+  });
+
+  it("the web never makes the apply depend on the field", () => {
+    // Decoration means no branch. `applyItemSetsForBuild` spreads it onto the
+    // body and nothing reads it back; `applyItemSets` types it optional and
+    // JSON.stringifies the body whole. A version gate or a guard here would
+    // hand a decorative field the power to fail an apply.
+    const apply = fs.readFileSync(
+      path.join(process.cwd(), "components/hextech/itemSetsApply.ts"),
+      "utf8"
+    );
+    expect(apply).toMatch(/\.\.\.\(situational \? \{ situational \} : \{\}\)/);
+    expect(apply).not.toMatch(/if \(situational/);
+    const client = fs.readFileSync(
+      path.join(process.cwd(), "components/live/companionClient.ts"),
+      "utf8"
+    );
+    expect(client).toMatch(/situational\?: \{ id: number; wpa: number; text: string \}\[\]/);
+    expect(client).toMatch(/body: JSON\.stringify\(body\)/);
+    // No companion-version check anywhere near the item-set POST.
+    expect(client).not.toMatch(/situational[\s\S]{0,200}companionVersion/);
   });
 });
 

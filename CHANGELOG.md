@@ -1,5 +1,95 @@
 # Changelog
 
+## Web 0.114.0 — 2026-08-19 — one Situational row again, with the numbers drawn on the icons
+
+### Changed — the situational swaps are one row, not six
+
+0.113.0 gave every situational item its own row so the row's title could carry
+its win-rate delta: `Situational +4.27`, `Situational -0.06`. The numbers were
+right and it is not how anyone wants to read a shop panel — a five-block set
+became **eleven**, against a League client whose own recommended sets never
+exceed five. User verdict, same day: *"doesnt look great"*.
+
+So the row is back to one plain `Situational` block, in the same order it has
+always been (best delta first, negatives last), and **the numbers move onto
+CoachBuild's own overlay**, drawn on top of the item icons where they belong.
+The shop panel is five blocks again.
+
+```
+Starting            1056
+WPA build           8020, 4633, 3157, 3020, 3143, 3152
+Pro build           4005, 3152, 3157, 3173, 8020, 6664
+OTP build           4005, 3152, 4645, 3173, 6664, 4646
+Situational         3158, 3009, 3047, 4645, 4646, 3068
+                    +4.27  +2.79  +1.13  +0.45  +0.39  -0.06   <- drawn by the overlay
+```
+
+### Added — the deltas travel with the item set
+
+`POST /apply-itemsets` now carries an **optional** `situational` array beside
+the sets:
+
+```jsonc
+{
+  "championId": 3,
+  "sets": [ /* unchanged */ ],
+  "replacePrefix": "CoachBuild Galio Mid",
+  "situational": [
+    { "id": 3158, "wpa": 4.27, "text": "+4.27" },
+    { "id": 3009, "wpa": 2.79, "text": "+2.79" },
+    { "id": 3068, "wpa": -0.06, "text": "-0.06" }
+  ]
+}
+```
+
+- **`id` pairs positionally with the `Situational` block's items** — same
+  membership, same order, same length. Both are built from ONE
+  `situationalBlockPicks` call inside `buildItemSets`, not derived twice. That
+  is the whole safety argument: the block drops ids the WPA build already
+  recommends, so a wire rebuilt independently would be a different length and
+  the overlay would paint each number over the wrong icon. A test drives a
+  fixture where that exclusion bites and asserts the pairing index-by-index.
+- **`text` is formatted here, by `wpaText`** — the Builds page's own formatter
+  — and the desktop draws it verbatim. Two surfaces formatting the same field
+  through two formatters is how they disagree at a boundary; concretely, a bare
+  `toFixed(2)` drops the leading `+` off every positive delta.
+- **`wpa` is the raw number.** The desktop uses only its sign, to colour it.
+- **Omitted entirely** (key absent, never `[]`, never `null`) for a champion
+  with no situational alternatives.
+
+**It is decoration and can never fail an apply.** An older desktop or an older
+`companion.ps1` ignores it: the PowerShell handler hands only `$bodyObj.sets`
+to its validator and never sees the body, and the desktop deserializes into
+`ApplyItemSetsRequest` with `JsonOptions.Wire`, which leaves
+`UnmappedMemberHandling` at its default of Skip. Both are pinned by source
+assertions in the web suite. There is deliberately **no version gate** — adding
+one would give a decorative field the power to fail a write.
+
+### Internal
+
+`buildItemSets` now returns `{ sets, situational? }` rather than a bare
+`ItemSet[]`. A sibling function taking the same inputs was the alternative and
+was rejected: it would have to derive the shortlist a second time to answer,
+which is the precise failure the pairing exists to prevent. `sets` is still a
+list and is still posted **whole** — both bridges' merge keeps only the sets in
+the current write and prunes every other `CoachBuild`-titled set, so a caller
+that sliced it would delete the rest.
+
+### Tests
+
+`2964 passed / 185 files` (from 2950). Every new assertion was mutation-checked
+against five arms — restore the per-item titles, recompute the wire
+independently, format `text` with a local `toFixed(2)`, emit `situational: []`
+instead of omitting it, reverse the wire order — each of which killed between
+2 and 11 tests, with a fully green restored control.
+
+### Not verified
+
+Nobody has watched the shop render this either. The one-row shape is what the
+app shipped from 0.112.0 through 0.112.x, so it is not new ground, but the
+overlay drawing over it is the desktop's half of this change and lands with
+its own release.
+
 ## Desktop 1.0.15 — 2026-08-19 — the app was running last week's web code and nobody could see it
 
 ### Fixed — the CoachBuild window kept whatever web build it opened with

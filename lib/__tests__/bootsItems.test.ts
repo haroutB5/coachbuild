@@ -26,9 +26,14 @@ import type { ItemDetail } from "@/components/itemDetail";
 import { isBootsItem, isFinalBootsItem, BOOTS_ID_EXCEPTIONS } from "@/lib/bootsItems";
 import { isBuildItem, aggregateProConsensus } from "@/components/hextech/proConsensus";
 import { classifyFeaturedItem, buildFeaturedView } from "@/lib/otp/featuredBuild";
-import { buildItemSets } from "@/components/hextech/itemSetBody";
+import { buildItemSets as buildItemSetExport } from "@/components/hextech/itemSetBody";
 import type { ChampionRef, BuildResponse, ItemsBlock, Pick, RunesBlock } from "@/lib/types";
 import type { ProGame } from "@/components/proGames.types";
+
+/** v0.114.0 — buildItemSets returns `{sets, situational?}`. These tests are
+ *  about boots inside the SETS; the overlay-delta array has its own suite in
+ *  components/__tests__/situationalItemSet.test.ts. */
+const buildItemSets = (...args: Parameters<typeof buildItemSetExport>) => buildItemSetExport(...args).sets;
 
 // ── The live 16.15.1 catalog, verbatim (pulled 2026-07-29) ──────────────────
 type Raw = Omit<ItemDetail, "id" | "descriptionText">;

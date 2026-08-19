@@ -343,116 +343,135 @@ export function situationalBlockPicks(
 // "is there a way to show the wpa values in game so i can make better
 // decisions on what to buy?"
 //
-// An LCU block item is `{id, count}` — there is no field on an ITEM for a
-// number. The only writable string anywhere near an item is its BLOCK's title.
-// So the only way to bind a delta to a specific item is to give that item a
-// block of its own and put the number in the title. That is what
-// `situationalBlocks` does, and it is why it is applied to Situational and NOT
-// to the build lines (see below).
+// ── THE FIRST ANSWER, AND WHY IT IS GONE (0.113.x -> 0.114.0) ──────────────
+// An LCU block item is `{id, count}`. There is no field on an ITEM for a
+// number, and the only writable string anywhere near an item is its BLOCK's
+// title — so 0.113.0 gave every situational pick a block of its own titled
+// `Situational +4.27`. It worked, and the SHAPE was rejected on sight: it
+// turned a 5-block set into ELEVEN blocks, against a client whose own sets
+// never exceed five. User, 2026-08-19: "doesnt look great".
 //
-// ── LENGTH: MEASURED, NOT ASSUMED ──────────────────────────────────────────
-// Ground-truthed on this machine, 2026-08-19, against three sources:
+// So the number does NOT go in the shop's own chrome any more. The row is one
+// plain `Situational` block again, and the deltas are drawn by CoachBuild's
+// own overlay ON TOP OF the item icons — the only surface that can put a
+// number next to an icon without asking the client for a place to put it.
 //
-//   1. C:\Riot Games\League of Legends\Config\Champions\*\Recommended\
-//      RIOT_ItemSet_*.json  — 60 files, RIOT's own sets.
-//      Longest block title: 19 ("Fourth Item Options"). Titles with a digit: 0.
-//   2. C:\Riot Games\League of Legends\Config\ItemSets.json — the user's real
-//      file, 61 sets / 300 blocks, 59 of them U.GG's.
-//      Longest block title: 19 ("Fourth Item Options"). Titles with a digit: 0.
-//   3. THIS FILE'S OWN LIVE OUTPUT, swept over 80 champion+lane combos against
-//      production /api/build + /api/pros + /api/otp.
-//      Longest block title: **29** — "Pro build (same as WPA build)" (Akshan
-//      bot), emitted by `blockTitle`'s `sameAs` suffix and shipping
-//      unremarked since 2026-07-29.
+// ── WHAT THAT COSTS THIS FILE: the deltas now leave on the wire ────────────
+// The overlay needs the same numbers, bound to the same items, in the same
+// order. `situationalWire` below emits them as an optional `situational`
+// array on the `/apply-itemsets` body.
 //
-// Source 3 is the one that matters and it is the reason this is safe: the app
-// has been putting a 29-character block title into this user's shop for three
-// weeks with no complaint. The titles below are 17:
+// ONE DERIVATION, TWO CONSUMERS. `buildItemSets` calls `situationalBlockPicks`
+// exactly ONCE and hands the SAME array to `situationalBlocks` (what the shop
+// renders) and `situationalWire` (what the overlay draws). Recomputing the
+// shortlist for the wire would be a second derivation of a FILTERED list, and
+// the WPA-build exclusion is exactly where two derivations diverge: the block
+// drops an id the build already recommends, an independently-recomputed wire
+// would not, and the overlay would then paint the Nth number over the (N+1)th
+// icon. A test drives a fixture where that exclusion bites and asserts the
+// pairing index-by-index, so a recompute fails rather than misaligning
+// silently.
 //
-//   "Situational +4.27"  17     "Situational -5.54"  17   (worst delta seen
-//   "Situational 0.00"   16      across all 173 champions x 5 lanes)
+// THE NUMBER IS A STRING ON THE WIRE, formatted HERE by `wpaText` — the Builds
+// page's own formatter. The desktop renders `text` verbatim and never formats
+// a number itself. Two surfaces printing the same field through two formatters
+// is how they end up disagreeing at a rounding boundary (`wpaText` prints a
+// leading `+` on positives; a bare `toFixed(2)` prints none, so every positive
+// delta in the shop would disagree with the page immediately).
+// `wpa` also rides along as the raw number, and the desktop uses ONLY ITS
+// SIGN, for colour.
 //
-// The item NAME is deliberately NOT in the title. "Ionian Boots of Lucidity
-// +4.27" is 30 characters, and the item's own icon is sitting directly under
-// the title already. The title carries only what the icon cannot.
+// DECORATION, NEVER A PRECONDITION. The field is optional in both directions:
+// an older desktop / older companion.ps1 ignores it (companion.ps1's
+// `Test-ItemSetsPayload` is handed `$bodyObj.sets`, never the body, so a new
+// top-level field is not reachable by it; C#'s `ApplyItemSetsRequest` is
+// deserialized with `JsonOptions.Wire`, which does not set
+// `UnmappedMemberHandling.Disallow`, so System.Text.Json's default skips
+// unknown members — both pinned by source tests in
+// components/__tests__/situationalItemSet.test.ts), and a newer desktop
+// against an older web simply receives nothing. Nothing about `situational`
+// may fail or alter an apply.
 //
-// ── WHAT IS NOT VERIFIED. Read this before believing the paragraph above ──
-// Nobody has watched the shop render ANY of these. The client is installed on
-// this machine but not logged in, and launching it starts Vanguard, a kernel
-// anti-cheat, for evidence that can be had no other way. Two specific unknowns:
-//
-//   * Where the shop panel truncates a title. 17 < 29-already-shipping is an
-//     argument from precedent, not a measurement, and the 29-char case has
-//     never been confirmed to render either — only to be emitted.
-//   * The panel is now up to ELEVEN blocks for a champion with a full
-//     situational row (Starting + 4 build lines + 6), where it was five, and
-//     where the client's own sets never exceed five. Six one-item rows may
-//     read better than one six-item row, or may push the build lines off the
-//     top of the panel. That is a rendering question and it is open.
-//
-// Reverting is one line: drop the `.map` in `situationalBlocks` and return the
-// single plain block it returns for an over-long row.
-//
-// ── WHY THE BUILD LINES ARE LEFT ALONE ─────────────────────────────────────
-// Per-item titling costs one block per item. Applied to WPA/Pro/OTP that is
-// 5 blocks -> 25, against a client whose own sets never exceed 5, and it
-// destroys the one thing a build line is FOR: it is an ordered sequence (buy
-// this, then this), not a menu of independent choices. Situational is the
-// opposite — a row of mutually-exclusive swaps, where per-item is the honest
-// shape and the number is the whole point.
-//
-// It would also be dishonest on two of the three lines: Pro and OTP items are
-// ranked on CONSENSUS SHARE, not WPA (`Candidate.raw.scale`), so most of their
-// items have no delta at all and would have to render a blank or a fabricated
-// zero. Recommending this stays a Situational-only change, and saying so, is
-// the finding — not an omission.
+// OMITTED, NOT EMPTY, when there are no picks — the key is absent rather than
+// `situational: []`. "There is no such field" and "there are zero of them" are
+// the same fact here, and an absent key is the one an older bridge, a stale
+// cache and a future strict validator all already agree on.
 //
 // ── "NEVER RENDER A FABRICATED ZERO": MEASURED, AND IT DOES NOT ARISE HERE ─
 // `Pick.wpa` is a non-nullable number, so a 0 could in principle mean "no
 // data". Swept 150 champion+lane combos / 487 situational picks against live
 // prod, 2026-08-19: **exactly-zero wpa: 0 of 487.** Three round to 0.00 for
-// display (|wpa| < 0.005) and are real, tiny measurements. So every number in
-// a Situational title below is a genuine value; there is nothing to suppress.
-// (260 of 487 are negative — that is the known, deliberately-kept negative
-// tail, ordered last, not an absence.) If a future data source ever DOES emit
-// a placeholder zero, this is the paragraph that is now wrong, and the block
-// title must degrade to the bare label rather than print it.
+// display (|wpa| < 0.005) and are real, tiny measurements. So every number on
+// the wire below is a genuine value; there is nothing to suppress. (260 of 487
+// are negative — that is the known, deliberately-kept negative tail, ordered
+// last, not an absence.) If a future data source ever DOES emit a placeholder
+// zero, this is the paragraph that is now wrong, and `text` must degrade to a
+// dash rather than print it.
 
-/** Situational picks that get their own titled block before the whole row
- *  degrades back to one plain `Situational` block.
+/** One situational delta on the `/apply-itemsets` wire, for the desktop
+ *  overlay to draw over the matching item icon.
  *
- *  Six, matching `SITUATIONAL_DISPLAY_LIMIT`, and the two are asserted equal
- *  by a test. `situationalBlockPicks` already caps at that limit, so with
- *  today's constants the degrade branch in `situationalBlocks` cannot fire in
- *  production — it is reachable only by calling that function directly, which
- *  is exactly what its test does. It exists so that RAISING the display limit
- *  (a one-line change on the page) cannot silently ship a shop panel with
- *  fifteen single-item blocks in it. */
-const SITUATIONAL_MAX_TITLED_BLOCKS = 6;
+ *  `id`   — pairs POSITIONALLY with the `Situational` block's items. Same
+ *           membership, same order, same length, by construction (see
+ *           `buildItemSets`).
+ *  `wpa`  — the raw measurement. The desktop uses only its SIGN, for colour.
+ *  `text` — what to draw, already formatted by `wpaText`. Rendered verbatim;
+ *           the desktop never formats a number itself. */
+export interface SituationalWireEntry {
+  id: number;
+  wpa: number;
+  text: string;
+}
 
-/** The Situational row as shop blocks.
+/** What `buildItemSets` returns: the sets that go to the bridge, plus the
+ *  optional overlay deltas.
  *
- *  One block per pick, titled `Situational <delta>`, in the picks' own order
- *  (WPA descending, negatives last) — so the shop shows the same six items in
- *  the same order with the same numbers the Builds page prints beside them.
+ *  A RECORD RATHER THAN A SIBLING FUNCTION, deliberately. The obvious
+ *  alternative — a second exported pure function taking the same
+ *  (champ, roleLabel, build, pro, itemMeta, otp) inputs — would have to derive
+ *  the shortlist a SECOND time to answer, which is the precise failure this
+ *  field exists to avoid (see the note above). Returning both from the one
+ *  call makes the shared derivation structural instead of a convention two
+ *  functions have to keep, and it is why the record was worth the churn at
+ *  every call site.
  *
- *  THE NUMBER IS FORMATTED BY `wpaText`, the Builds page's own formatter, not
- *  by a second `toFixed(2)` here. Two surfaces printing the same field through
- *  two formatters is how they end up disagreeing about a rounding boundary;
- *  a test pins that the block title contains exactly `wpaText(pick.wpa)`.
+ *  `sets` is still a LIST and is still posted WHOLE. Both bridges' merge keeps
+ *  only the sets in the current write and prunes every other CoachBuild-titled
+ *  set, so a caller that sliced it would delete the rest — see
+ *  itemSetsApply.ts's "one call, never slice" contract. */
+export interface ItemSetExport {
+  sets: ItemSet[];
+  /** OMITTED (key absent) when there are no situational picks — never `[]`,
+   *  never `null`. */
+  situational?: SituationalWireEntry[];
+}
+
+/** The Situational row as shop blocks: exactly ONE `Situational` block
+ *  carrying every pick in the picks' own order (WPA descending, negatives
+ *  last), or `[]` for no picks — never an empty block.
  *
- *  Degrades to a single untitled-per-item `Situational` block when there are
- *  more picks than `SITUATIONAL_MAX_TITLED_BLOCKS`. Returns `[]` for no picks,
- *  never an empty block. */
+ *  ONE BLOCK, not one per pick. 0.113.x titled a block per item to bind a
+ *  number to it (`Situational +4.27`); the user rejected the shape, and the
+ *  numbers moved to the overlay via `situationalWire`. Nothing lives in a
+ *  block title now, so there is no longer any reason to split the row.
+ *
+ *  Returns an array rather than one block because the caller splices it into
+ *  `blocks` and the empty case must contribute nothing. */
 export function situationalBlocks(picks: readonly PickType[]): ItemSetBlock[] {
   if (picks.length === 0) return [];
-  if (picks.length > SITUATIONAL_MAX_TITLED_BLOCKS) {
-    return [{ type: SITUATIONAL_BLOCK_TYPE, items: picks.map((p) => itemRef(p.id)) }];
-  }
-  return picks.map((p) => ({
-    type: `${SITUATIONAL_BLOCK_TYPE} ${wpaText(p.wpa)}`,
-    items: [itemRef(p.id)],
-  }));
+  return [{ type: SITUATIONAL_BLOCK_TYPE, items: picks.map((p) => itemRef(p.id)) }];
+}
+
+/** The same picks as `situationalBlocks`, as overlay deltas.
+ *
+ *  Takes the ALREADY-RESOLVED picks — not an `ItemsBlock` — on purpose: a
+ *  function that took the raw items would have to re-run the shortlist and the
+ *  exclusion, and could then disagree with the block it exists to annotate.
+ *  Its only input is the block's own input.
+ *
+ *  Order is preserved verbatim, so `wire[i]` describes `block.items[i]`. */
+export function situationalWire(picks: readonly PickType[]): SituationalWireEntry[] {
+  return picks.map((p) => ({ id: p.id, wpa: p.wpa, text: wpaText(p.wpa) }));
 }
 
 // ── Cross-family de-dup (audit P1-B) ────────────────────────────────────────
@@ -1228,12 +1247,19 @@ function baseSet(champ: ChampionRef, roleLabel: string): Omit<ItemSet, "blocks">
  *  Builds page's SITUATIONAL panel verbatim, exempt from buildLine/
  *  fullItemsOnly/dedupeLineBlocks — see SITUATIONAL_BLOCK_TYPE's note).
  *
- *  RETURNS EXACTLY ONE SET, always. It briefly (web 0.112.0, 32 minutes in
- *  production) returned a second standalone `CoachBuild <champ> <role>
- *  Situational` set; the user rejected it on sight and it is gone. The return
- *  type stays `ItemSet[]` because both bridges' wire contract is a LIST and
+ *  RETURNS EXACTLY ONE SET, always, in `.sets`. It briefly (web 0.112.0, 32
+ *  minutes in production) returned a second standalone `CoachBuild <champ>
+ *  <role> Situational` set; the user rejected it on sight and it is gone.
+ *  `.sets` is still a LIST because both bridges' wire contract is a list and
  *  their merge takes the whole list — see the Situational push site for why a
- *  single call is load-bearing either way.
+ *  single, unsliced call is load-bearing either way.
+ *
+ *  RETURNS A RECORD, not a bare `ItemSet[]` (0.114.0). The second field,
+ *  `.situational`, is the optional overlay-delta array — omitted entirely when
+ *  the champion has no situational picks. It rides along on the same return
+ *  rather than living in its own exported function so that it is derived from
+ *  the SAME `situationalBlockPicks` call the `Situational` block is built
+ *  from; see `ItemSetExport` for the full argument.
  *
  *  PADDING CASCADES, stated exactly (this doc claimed a symmetry that never
  *  existed — that both consensus lines padded from "the other consensus" —
@@ -1262,7 +1288,7 @@ export function buildItemSets(
    *  denominators, and averaging them would produce a build nobody actually
    *  plays. */
   otp?: ProConsensusItemsInput | null
-): ItemSet[] {
+): ItemSetExport {
   const items = build.items;
   const meta = itemMeta ?? new Map<number, ItemDetail>();
   const hasPro = !!pro && (pro.items.length > 0 || pro.boots.length > 0);
@@ -1528,8 +1554,23 @@ export function buildItemSets(
   // for the Hidden gem) is the exclusion set — deliberately the SAME set the
   // gem uses, so "already in your build" means one thing in this file and not
   // two.
-  const situational = situationalBlockPicks(items, wpaBuildIds);
-  for (const block of situationalBlocks(situational)) blocks.push(block);
+  //
+  // ONE CALL, TWO CONSUMERS (0.114.0). `picks` is derived HERE, once, and both
+  // the shop block and the overlay wire are built from that same array. Do not
+  // "tidy" this into two calls: `situationalBlockPicks` applies the WPA-build
+  // exclusion, so two independent derivations can return different-LENGTH
+  // lists and the overlay would paint each number over the wrong icon. The
+  // pairing is asserted index-by-index by a test whose fixture makes the
+  // exclusion bite.
+  const picks = situationalBlockPicks(items, wpaBuildIds);
+  for (const block of situationalBlocks(picks)) blocks.push(block);
+  const wire = situationalWire(picks);
 
-  return [{ ...baseSet(champ, roleLabel), blocks }];
+  // Spread rather than assigned, so the key is genuinely ABSENT (not
+  // `undefined`) for a champion with no alternatives — `"situational" in body`
+  // and `JSON.stringify` must both agree there is no such field.
+  return {
+    sets: [{ ...baseSet(champ, roleLabel), blocks }],
+    ...(wire.length > 0 ? { situational: wire } : {}),
+  };
 }

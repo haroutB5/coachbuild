@@ -173,10 +173,22 @@ export async function resolveItemMetaForSets(patch: string): Promise<Map<number,
  *  BLOCKS inside it — see itemSetBody.ts's v0.34.1 header for the
  *  3-sets-to-1-set restructure), POST it.
  *
- *  `buildItemSets` returns EXACTLY ONE set. For 32 minutes on 2026-08-19 it
- *  returned two (the main one plus a standalone `CoachBuild <champ> <role>
- *  Situational`); the user saw both in the shop's set dropdown and asked for
- *  one, so the Situational picks are blocks inside the single set again.
+ *  `buildItemSets` returns EXACTLY ONE set, in `.sets`. For 32 minutes on
+ *  2026-08-19 it returned two (the main one plus a standalone `CoachBuild
+ *  <champ> <role> Situational`); the user saw both in the shop's set dropdown
+ *  and asked for one, so the Situational picks are a block inside the single
+ *  set again.
+ *
+ *  0.114.0 — it also returns `.situational`, the optional per-item WPA deltas
+ *  the DESKTOP OVERLAY draws on top of the situational item icons. Purely
+ *  decorative: it is passed straight through to the POST body and nothing on
+ *  this path branches on it, so an older bridge that ignores the field applies
+ *  exactly the same sets. The 0.113.x alternative — one titled block per
+ *  situational item, `Situational +4.27` — put the numbers in the shop's own
+ *  chrome and took a 5-block set to eleven; the user rejected that shape
+ *  ("doesnt look great"), so the row is one block again and the numbers travel
+ *  beside it instead of inside it.
+ *
  *  `sets` is still passed through WHOLE and must stay that way: the bridge's
  *  merge keeps only the sets in this call and prunes every other
  *  CoachBuild-titled set, so a caller that posted a subset would delete the
@@ -206,11 +218,16 @@ export async function applyItemSetsForBuild(params: {
       ? resolveOtpConsensusForSets(params.champ, params.lane, params.build.patch)
       : Promise.resolve(params.otp),
   ]);
-  const sets = buildItemSets(params.champ, params.roleLabel, params.build, pro, itemMeta, otp);
+  const { sets, situational } = buildItemSets(params.champ, params.roleLabel, params.build, pro, itemMeta, otp);
   return applyItemSets(params.port, params.session, {
     championId: params.champ.id,
     sets,
     replacePrefix: champScopedReplacePrefix(params.champ),
+    // Spread, not assigned: a champion with no situational picks must POST a
+    // body with NO `situational` key at all, not `situational: undefined`
+    // (which JSON.stringify drops anyway) and never `[]`. Keeping the absence
+    // structural here means the one place that decides it is buildItemSets.
+    ...(situational ? { situational } : {}),
   });
 }
 
