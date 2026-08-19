@@ -1,5 +1,180 @@
 # Changelog
 
+## Desktop 1.0.16 — 2026-08-19 — the win-rate numbers, drawn on the shop's own item icons
+
+Web 0.113.0 put each situational item's delta into its own shop row title, which
+worked and turned a five-block set into eleven. The user: *"doesnt look great"*.
+Web 0.114.0 puts the row back to one plain `Situational` block; **1.0.16 is the
+half that draws the numbers**, on CoachBuild's own overlay, on top of the item
+icons, while the shop is open.
+
+### How the shop is detected — and why it is not read off the screen
+
+There is **no shop-open signal anywhere**. Neither the Live Client Data API nor
+the LCU exposes one, so any answer is inferred. The two candidates were sampling
+pixels from the game window and watching the player's own shop key. The key won,
+on policy first and cost second.
+
+**Policy.** Riot has published *nothing* about screen capture, OCR or pixel
+sampling — not a permission, not a prohibition — in the Developer Portal
+policies, the LoL game policy, the API T&Cs, the ToS, the Vanguard FAQ, or the
+player-facing third-party article. Meanwhile the one clause in the ToS that
+names a specific technical method of extracting game information names exactly
+one, and it is *"reading areas of memory"*. Riot's line is drawn at memory,
+repeatedly and explicitly. Asked this precise question in public in May 2025, by
+a developer describing this exact architecture, Riot DevRel replied only *"If
+you have questions about a specific application please submit a ticket"*. That
+is a documented refusal to state a position, not an endorsement. **An argument
+from silence is not a licence**, so the pixel probe was not shipped. Reading the
+player's own keyboard reads no game data at all, and reading their own
+`Config\input.ini` sits in a directory Riot publicly instructs third-party
+developers to *write* to.
+
+**Cost**, re-measured on the reference machine 2026-08-19 rather than taken on
+trust:
+
+| operation | samples | mean |
+|---|---|---|
+| the six `GetAsyncKeyState` calls in one watcher tick | 20,000 | **0.0023 ms** |
+| `GetForegroundWindow` + `GetWindowThreadProcessId` | 20,000 | **0.0009 ms** |
+| `BitBlt` of a **single pixel** from the screen DC | 300 | **16.65 ms** |
+| `BitBlt` at 64x64 | 300 | **16.66 ms** |
+
+A one-pixel read costs a whole 60 Hz frame: the floor is the compositor sync,
+not the area. At the shipped 50 ms tick the watcher costs **0.046 ms per second
+of play (0.005% of one core)**; a screen probe at the same cadence would cost
+**333 ms per second of play — 33% of one core**, blocking on the compositor the
+game presents through.
+
+### Your shop key is read from your own League config, not assumed
+
+League's default shop bind is `P`. **On this machine it is not P** — the config
+says `evtOpenShop=[`]`, grave/backtick. Hardcoding the default would have
+shipped a feature that never once fired, with nothing anywhere to explain why.
+So the bind is read at startup from `Config\input.ini`, falling back to
+`Config\PersistedSettings.json`, and the resolved key goes straight into
+`companion.log`:
+
+```
+shop: config C:\Riot Games\League of Legends\Config
+shop: evtOpenShop = [`] [from input.ini]
+```
+
+One paste of that file answers *"is it even watching the right key?"*. Every
+failure branch names itself instead — unbound, bound to a mouse button, or a key
+name the table does not carry (named in the log, never guessed at). The two
+files can disagree; when they do, `input.ini` wins and the disagreement is
+printed rather than swallowed. **Nothing is ever written to the League folder.**
+
+The watcher only ever *reads* key state. It does not use `RegisterHotKey` —
+that is exclusive, and registering your shop bind would stop that key opening
+your shop, which is the exact opposite of the feature. It does not install a
+low-level keyboard hook either. It consumes nothing, blocks nothing, injects
+nothing.
+
+### The latch, and what it honestly cannot see
+
+The shop key toggles, so this mirrors a toggle. Four gates bound the drift, each
+separately tested: leaving the game forgets everything; League losing the
+foreground forces it shut (so a key pressed in another application can never
+reach it); your `evtSysMenu` bind closes it; and while League's chat input looks
+open the shop key is deliberately **ignored** — otherwise every backtick typed
+in chat would open the numbers. That suppression gets its own log line, because
+"your key was ignored" and "your key was never seen" are two reports a player
+describes with the same sentence.
+
+**Stated plainly: closing the shop by clicking its own close button, or by
+walking out of range, produces no key edge**, and the numbers stay up until the
+next press. Nothing here can see that. The tray's `Show item numbers now` is the
+way back, and it clears itself when the game ends.
+
+### Where the numbers go
+
+A **second calibration target**, independent of the skill-order box, with its
+own saved geometry per display. Tray → `Adjust item numbers`, or `Tab` inside
+the existing adjust mode to switch between the two; `Enter` saves every target
+you touched, `Esc` discards all of them. It is a menu item rather than a second
+global shortcut for the same reason 1.0.13 removed `Ctrl+Shift+S`: a global
+accelerator is taken from every other application for as long as this app runs.
+
+**An uncalibrated row draws nothing at all.** There is no honest default: the
+shop panel is draggable, resizable, and scaled by a `ShopScale` setting whose
+own two config files disagree with each other on this very machine (`game.cfg`
+0.4100, `PersistedSettings.json` 0.2000). Guessing would paint numbers over the
+wrong part of your game, so it does not guess — and the log says which display
+has never been positioned.
+
+Legibility: a near-opaque dark pill above each icon, never over it and never
+over the price, sized off your calibrated slot so a 4K and a 1080p player get
+the same proportions. Positive and negative differ **by colour and by the sign
+character**, so the distinction survives a colour-blind player and a screenshot
+alike. The text is drawn exactly as the Builds page formatted it; there is no
+second formatter here, because that is how two surfaces end up disagreeing at a
+rounding boundary while both look right alone. **An absent delta draws nothing.
+It never draws `+0.00`.**
+
+### The numbers can never cost you your item set
+
+`situational` is optional decoration on `POST /apply-itemsets`, read as a raw
+`JsonElement` and validated separately. A typed model would throw inside
+`JsonSerializer.Deserialize` on the first malformed member, turning the *whole*
+request into `default` and failing an item-set write over a decoration. It is
+recorded **after** the LCU write succeeds, inside a `catch`, so nothing about it
+can change the result the caller receives — and a write that failed leaves no
+numbers claiming it did not. An older web build simply omits the field; an older
+desktop ignores it. Both directions are pinned by tests.
+
+The numbers are gated on the champion **matching**, never on their merely being
+present: the set is written in champ select and drawn in game, so the data
+outlives the phase that produced it, and anything that outlives a phase can
+outlive the champion it described.
+
+### Fixed, in the inherited implementation
+
+- **A key held across the start of a game read as a fresh press.** The latch
+  zeroed its previous-key state whenever it was out of a game, which is exactly
+  what turns a held key into a rising edge on the first in-game tick. Resting a
+  finger on grave during the loading screen would have opened the numbers over a
+  shut shop.
+- **The chat gate could never appear in a log.** A suppressed edge changes the
+  verdict by definition not at all, so the watcher's transition-only reporting
+  swallowed it entirely.
+- **The 50 ms timer and the phase-change callback both drove one mutable state
+  machine with no mutual exclusion.**
+- `IsDrawingBadges` could report numbers on screen after the overlay was
+  switched off; the manual override could not be unticked once a game ended;
+  and identical deltas arriving every 750 ms forced a redundant second render
+  pass per tick.
+
+### Unchanged
+
+1.0.9's updater gates, 1.0.10's game-start WebView2 teardown, 1.0.11's champion
+resolution (`/api/champions` still `{id, key, name}`), 1.0.12's banked-point
+skill gate and 250 ms poll, 1.0.13's `Ctrl+Shift+A`-only binding — **no second
+global accelerator was added, and `Ctrl+Shift+S` stays free for other
+applications** — 1.0.14's derived tray label and `Open log folder`, and 1.0.15's
+web-version reload and 480 ms apply path.
+
+### Verification
+
+`dotnet test` **500 passed / 0 failed**, green in **Debug and Release**, both
+projects executed in both configurations, zero `Application Control policy` hits
+in any run. Baseline was 383. Sixteen mutation arms, every one killed (1 to 6
+tests each), with a restored control asserted green after every arm; one further
+arm survived and is documented in the harness as a genuinely equivalent mutant.
+
+The bind resolver was driven against the **real** League config on this machine
+through the shipped assembly, with a negative control in the same run, and the
+whole `Config` directory verified byte-identical afterwards —
+`ItemSets.json` md5 `46DB31F3…` unchanged, all 10 files identical by md5 and
+mtime.
+
+**Not verified, and only a live game can:** what the pill actually looks like
+over League's shop art, whether the calibrated default lands anywhere sensible
+before you adjust it, and the end-to-end latency from your keypress to the
+numbers appearing.
+
+
 ## Web 0.114.0 — 2026-08-19 — one Situational row again, with the numbers drawn on the icons
 
 ### Changed — the situational swaps are one row, not six

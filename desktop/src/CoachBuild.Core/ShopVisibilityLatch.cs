@@ -35,15 +35,29 @@ public readonly record struct ShopLatchState(
 /// nor the LCU has a "shop is open" field, so every possible answer is
 /// inferred. The two candidates were reading the screen and watching the
 /// player's own shop key, and the choice between them was settled by
-/// measurement, not preference: on the reference machine a single
-/// <c>BitBlt</c> from the screen DC costs <b>16.67 ms</b> — one whole 60 Hz
-/// frame — and costs the same 16.67 ms for one pixel as for the entire screen,
-/// because the read synchronises with the compositor rather than scaling with
-/// area. Four <c>GetAsyncKeyState</c> calls cost <b>0.0017 ms</b>. That is
-/// roughly ten thousand to one, against a component whose own perf notes treat
-/// 8.9 ms of blocking work every three seconds as waste worth removing. Screen
-/// reading was never affordable at any useful cadence, and it would have
-/// blocked on the same compositor the game presents through.</para>
+/// measurement, not preference. Re-measured on this machine, 2026-08-19:</para>
+/// <list type="bullet">
+/// <item>one <c>BitBlt</c> of a <b>single pixel</b> from the screen DC:
+/// <b>16.65 ms mean</b> over 300 samples — one whole 60 Hz frame;</item>
+/// <item>the same <c>BitBlt</c> at 64x64: <b>16.66 ms</b>. The floor is the
+/// compositor sync, not the area. (Full screen is 75.9 ms, so it is not that
+/// size never matters — it is that even one pixel already costs a frame.)</item>
+/// <item>the six <c>GetAsyncKeyState</c> calls one tick of this watcher makes:
+/// <b>0.0023 ms mean</b> over 20,000 samples.</item>
+/// </list>
+/// <para>That is <b>7,194 : 1</b>. At the 50 ms tick the watcher costs 0.046 ms
+/// per second of play (0.005% of one core); a screen probe at the same cadence
+/// would cost <b>333 ms per second of play — 33% of one core</b>, blocking on
+/// the very compositor the game presents through, in a component whose own perf
+/// notes treat 8.9 ms of blocking work every three seconds as waste worth
+/// removing. Screen reading was never affordable at any useful cadence.</para>
+///
+/// <para>The cost was never the deciding argument on its own, though. Riot has
+/// published nothing whatsoever about screen capture, OCR or pixel sampling —
+/// not a permission and not a prohibition — while its ToS names exactly one
+/// prohibited acquisition technique and that technique is READING MEMORY. An
+/// argument from silence is not a licence, so the shop state is inferred from
+/// the player's own keyboard, which reads no game data at all.</para>
 ///
 /// <para><b>This is a latch, and a latch can drift.</b> The shop key TOGGLES,
 /// so this mirrors a toggle — and League can close the shop with no key press

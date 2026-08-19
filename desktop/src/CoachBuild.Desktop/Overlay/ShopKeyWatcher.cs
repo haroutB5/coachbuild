@@ -22,14 +22,15 @@ namespace CoachBuild.Desktop.Overlay;
 /// low-level hooks out of this codebase on evidence, and nothing here needs
 /// them.</para>
 ///
-/// <para><b>Cost, measured on the reference machine.</b> Four
-/// <c>GetAsyncKeyState</c> calls: <b>0.0017 ms</b>.
-/// <c>GetForegroundWindow</c> + <c>GetWindowThreadProcessId</c>:
-/// <b>0.0001 ms</b>. At the 50 ms tick below that is about 0.04 ms of work per
-/// second of play — roughly 0.004% of one core. The alternative that was
-/// considered and rejected, one <c>BitBlt</c> from the screen DC, measured
-/// <b>16.67 ms</b> per read at ANY size, which is a full 60 Hz frame of
-/// blocking per sample.</para>
+/// <para><b>Cost, re-measured on this machine 2026-08-19.</b> The six
+/// <c>GetAsyncKeyState</c> calls one tick makes: <b>0.0023 ms</b> mean over
+/// 20,000 samples. <c>GetForegroundWindow</c> +
+/// <c>GetWindowThreadProcessId</c>: <b>0.0009 ms</b> over 20,000. At the 50 ms
+/// tick below that is <b>0.046 ms of work per second of play</b> — 0.005% of
+/// one core. The alternative that was considered and rejected, one
+/// <c>BitBlt</c> from the screen DC, measured <b>16.65 ms for a single
+/// pixel</b> (300 samples) — a full 60 Hz frame of blocking per sample, and
+/// 333 ms per second of play at this cadence.</para>
 ///
 /// <para>The timer runs on a thread-pool thread, not the WPF dispatcher: the
 /// dispatcher already carries the 750 ms render tick, and 1.0.9's perf work
@@ -115,6 +116,18 @@ public sealed class ShopKeyWatcher : IDisposable
 
         Tick();
     }
+
+    /// <summary>
+    /// One poll, synchronously, exactly as the timer would run it.
+    ///
+    /// <para>The test seam for the whole watcher. Driving it by toggling
+    /// <see cref="SetInGame"/> does not work and is worse than useless: leaving
+    /// a game RESETS the latch, so a test that forces ticks that way silently
+    /// erases the chat and key state it is trying to assert about, and passes
+    /// or fails for the wrong reason. The alternative is sleeping past the
+    /// 50 ms timer, and a sleeping test is a flaky one.</para>
+    /// </summary>
+    public void Poll() => Tick();
 
     /// <summary>
     /// Reads the current keyboard and foreground state. Separated from
