@@ -70,7 +70,7 @@ export default function AutomationToggles({
         title="Auto-add item builds on champ select"
         description={
           <>
-            One item set for your champion and role appears in the in-client shop, holding four build lines side by side — WPA build, Pro build, OTP build and Hidden gem — plus your starting items.
+            An item set for your champion and role appears in the in-client shop, holding four build lines side by side — WPA build, Pro build, OTP build and Hidden gem — plus your starting items and a Situational row of swaps. Those situational items also get their own set, so you can pull them up on their own.
           </>
         }
       />

@@ -1,5 +1,65 @@
 # Changelog
 
+## Web 0.112.0 — 2026-08-19 — the situational items reach the shop
+
+The Builds page has always had a **SITUATIONAL** panel — the per-slot
+alternatives, each with the win-rate delta it actually measured. None of it
+reached the in-game shop. It does now, in two places, and no re-install of
+anything is needed to get it.
+
+### Added — a `Situational` block inside the item set
+
+The set the companion writes for your champion and role now carries a fifth
+block, after `WPA build` / `Pro build` / `OTP build` / `Hidden gem` and last in
+the panel, holding the same items the page shows, in the same order.
+
+- **Same data, not a second opinion.** It reads
+  `BuildResponse.items.alts` — the field the page's own panel renders —
+  through one shared helper (`situationalShortlist`), and both surfaces take
+  their cap from one constant. The shop can no longer show a different six from
+  the page.
+- **Ordered by the delta, best first.** An LCU block item is `{id, count}`;
+  there is nowhere to put a number. Order is the only thing that survives the
+  trip, so a negative-delta pick lands last by construction.
+- **The build rules do not apply to it, on purpose.** It is a row of swaps, not
+  a loadout, so the one-boots-per-line rule is scoped away from it. Galio mid
+  offers Ionian Boots, Boots of Swiftness *and* Plated Steelcaps as
+  alternatives, and you get all three — a build line would have kept one.
+- **An item your own build already tells you to buy is not an alternative to
+  it,** so a pick that is already in the `WPA build` block is left out of the
+  situational row rather than named twice under contradictory headings. It is
+  still on screen, one block up. Overlap with `Pro build` / `OTP build` /
+  `Hidden gem` is *kept* — those answer a different question, and an item being
+  in both is a finding, not a repetition. Measured live across 38
+  champion+lane combos: the contradictory case was 8 of 124 slots, the
+  informative one 58.
+
+### Added — a standalone `CoachBuild <champ> <role> Situational` set
+
+The same block also ships as its own item set, so it can be selected on its
+own instead of scrolled to. Both sets are written in the **same** call — that
+is not incidental, the client-side merge keeps only the sets in the current
+write, so sending them separately would have the second delete the first.
+
+- **No companion or desktop update.** Both bridges have always accepted 1-3
+  sets per write; this uses two. Verified by running the shipped desktop 1.0.14
+  validator over the real payload, including a negative control proving it
+  still rejects four.
+- **Your own item sets are still untouched.** Verified against a real
+  61-set League profile: all 60 hand-made sets survive byte-for-byte and in
+  order, the previous CoachBuild set is replaced rather than duplicated, and
+  re-exporting produces a byte-identical file.
+
+### Note — negative-delta items are shown, not hidden
+
+Some situational picks measure *below* the champion's baseline (Galio mid's
+Sunfire Aegis at -0.06). They are still shown, last, because the block's label
+is a claim about where the items came from and not about which is better —
+55% of live situational slots are negative, so filtering them would silently
+delete the block for roughly one champion+lane in five. See
+`situationalBlockPicks` for the measurement and the open proposal for a
+smarter, *relative* rule.
+
 ## Desktop 1.0.14 — 2026-08-19 — the tray says which key, and takes you to the log
 
 Two additions to the tray menu. Nothing else changed: the banked-point

@@ -132,9 +132,12 @@ const BOOTS_IDS = new Set([3006, 3111, 3157, 3158]);
 // ── The four-category contract ──────────────────────────────────────────────
 
 describe("buildItemSets — block set", () => {
-  it("emits ONE set, Starting first, and never a removed category", () => {
+  it("emits ONE set when there are no situational alternatives, Starting first, never a removed category", () => {
+    // `baseItems()` carries no `alts`, so there is no Situational block and no
+    // second set — the 2026-08-19 addition is strictly additive on this input.
     const sets = buildItemSets(CHAMP, "Bot", baseBuild(baseItems()), null, baseItemMetaMap());
     expect(sets).toHaveLength(1);
+    expect(blockTypes(sets)).not.toContain("Situational");
     const types = blockTypes(sets);
     expect(types[0]).toBe("Starting");
     for (const gone of ["Core build", "Buy order", "Situational swaps", "Highest WPA"]) {
@@ -170,7 +173,13 @@ describe("buildItemSets — block set", () => {
       metaMap(...Array.from(baseItemMetaMap().values())),
       consensus([3200, 3153, 42])
     );
-    expect(blockTypes(sets).length).toBeLessThanOrEqual(5);
+    // Starting + at most four build blocks + at most one Situational.
+    // Situational is counted separately on purpose: it is not a build
+    // category, so letting it inflate the "four categories" budget would
+    // quietly re-open the pre-2026-07-28 nine-block shop panel.
+    const types = blockTypes(sets);
+    expect(types.filter((t) => t !== "Situational").length).toBeLessThanOrEqual(5);
+    expect(types.filter((t) => t === "Situational").length).toBeLessThanOrEqual(1);
   });
 
   it("Starting stays its own slot and never leaks into a build line (HARD RULE 2)", () => {
@@ -191,18 +200,49 @@ describe("buildItemSets — block set", () => {
   it("caps every build line at 6 slots with at most one boots", () => {
     // Regression (live bug: "a line with 2 boots") — a second boots id arriving
     // via alts must not produce two pairs of boots in one worn loadout.
+    //
+    // SCOPE, 2026-08-19: "Starting" and "Situational" are excluded because
+    // neither is a worn loadout. Starting always was. Situational is the swap
+    // row this file has documented as exempt since v0.34.1 — and the very
+    // fixture below, whose `alts.boots` carries TWO boots, is exactly the case
+    // where the user needs to see both. The exclusion is not a weakening: the
+    // test below it asserts the multiple boots DO land in Situational, so this
+    // pair fails if the exemption is ever used to hide a real 2-boots bug in a
+    // build line.
     const items = baseItems({
       fourthPlus: [pick(3072), pick(3046), pick(3020)],
       alts: { boots: [pick(3111), pick(3158)] },
     });
     const sets = buildItemSets(CHAMP, "Bot", baseBuild(items), null, baseItemMetaMap());
+    let lineBlocks = 0;
     for (const b of sets[0].blocks) {
-      if (b.type === "Starting") continue;
+      if (b.type === "Starting" || b.type === "Situational") continue;
+      lineBlocks++;
       const ids = b.items.map((i) => Number(i.id));
       expect(ids.length).toBeLessThanOrEqual(6);
       expect(ids.filter((id) => BOOTS_IDS.has(id)).length).toBeLessThanOrEqual(1);
       expect(new Set(ids).size).toBe(ids.length);
     }
+    // The loop must have had something to check — a `continue` that swallowed
+    // every block would make the assertions above vacuous.
+    expect(lineBlocks).toBeGreaterThan(0);
+  });
+
+  it("Situational is where the extra boots go — the one-boots rule is scoped, not dropped", () => {
+    // The counterweight to the exclusion above. Same fixture: two alt boots.
+    const items = baseItems({
+      fourthPlus: [pick(3072), pick(3046), pick(3020)],
+      alts: { boots: [pick(3111), pick(3158)] },
+    });
+    const sets = buildItemSets(CHAMP, "Bot", baseBuild(items), null, baseItemMetaMap());
+    const sit = findBlock(sets, "Situational");
+    expect(sit).toBeDefined();
+    const ids = sit!.items.map((i) => Number(i.id));
+    // BOTH boots alternatives survive. If a future change routed Situational
+    // through buildLine, this drops to 1 and fails.
+    expect(ids).toContain(3111);
+    expect(ids).toContain(3158);
+    expect(ids.filter((id) => BOOTS_IDS.has(id)).length).toBe(2);
   });
 
   // ── Pro/OTP agreement is shown, not collapsed ────────────────────────────

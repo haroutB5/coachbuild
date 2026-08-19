@@ -149,7 +149,7 @@
 
 import type { ChampionRef, BuildResponse, ItemsBlock, Pick as PickType } from "@/lib/types";
 import type { ItemDetail } from "@/components/itemDetail";
-import { flattenSituational } from "./situational";
+import { flattenSituational, situationalShortlist } from "./situational";
 import { resolveOptimizedPathView } from "./optimizedPath";
 import { isBootsItem, isFinalBootsItem, type ItemCatalog } from "@/lib/bootsItems";
 
@@ -213,6 +213,130 @@ export interface ProConsensusItemsInput {
 }
 
 const LINE_LEN = 6;
+
+// ── Situational (2026-08-19, user directive) ────────────────────────────────
+// "i want you to also add the situational items shown here into the in game
+// item list as well as another item set." — the SITUATIONAL panel on the
+// Builds page, verbatim, reaching the shop.
+//
+// It used to be emitted (as "Situational swaps") and was cut by the 2026-07-28
+// four-build-category directive along with the archetype lines. This brings it
+// back as a FIFTH block plus a standalone second set, and it is deliberately
+// NOT a fifth LineFamily:
+//
+//   * `buildLine` must not touch it. That function enforces "a worn loadout":
+//     exactly 6, exactly ONE boots, padded from the fallback cascade. A
+//     situational list is a SWAP ROW — three boots alternatives sitting side by
+//     side is the answer, not a bug (this file has said so since v0.34.1), and
+//     padding it from the pro/optimized pools would put items in it that the
+//     champion's own per-slot alternatives never offered, under a label that
+//     claims they did.
+//   * `fullItemsOnly` must not touch it either, for the reason the v0.36.0
+//     header already gives: a stacking/starting item is exactly where it
+//     belongs in a swap row.
+//   * It is not in `dedupeLineBlocks`. That machinery compares BUILDS. A
+//     situational row that happens to overlap a build line is not "the same
+//     recommendation twice" — see the duplicate note on `situationalBlockPicks`.
+//
+// The label is "Situational" and not "Situational swaps": the Builds page's own
+// panel heading is SITUATIONAL, and the two surfaces now show the same six
+// items, so they should say the same word.
+const SITUATIONAL_BLOCK_TYPE = "Situational";
+
+/** The picks that go in the Situational block — the SAME window the Builds
+ *  page's SituationalCard renders, from the SAME field of the SAME response
+ *  (`BuildResponse.items.alts`, per-slot ranked alternatives). Not a
+ *  re-derivation and not a heuristic: `situationalShortlist` is the one helper
+ *  both surfaces call, and `SITUATIONAL_DISPLAY_LIMIT` lives beside it.
+ *
+ *  ── ORDER ────────────────────────────────────────────────────────────────
+ *  WPA descending (`flattenSituational`'s own sort, id ascending as tiebreak).
+ *  That is the same number the panel prints beside each item, and in the shop
+ *  it is the ONLY thing that survives: an LCU block item is `{id, count}` and
+ *  has nowhere to put a delta. Negative-delta picks therefore land last for
+ *  free.
+ *
+ *  ── NEGATIVE DELTAS: INCLUDED, AND HERE IS WHY, WITH THE NUMBERS ─────────
+ *  Measured 2026-08-19 against live prod (`/api/build`, patch 16.16, all 173
+ *  champions x 5 lanes; 323 combos returned build data, 273 of them carry at
+ *  least one situational pick):
+ *    - 1,132 top-6 slots. 623 of them (55.0%) have wpa < 0.
+ *    - 252 of 323 combos (78.0%) have at least one negative pick in the top 6.
+ *    - 62 combos are ENTIRELY negative in the top 6.
+ *    - Worst that would ship: Xerath mid, Ionian Boots of Lucidity, -5.54.
+ *  So this is not an edge case, and a floor at 0 is not a cosmetic tweak: it
+ *  would delete the block outright for 62 champion+lane combos and, on the very
+ *  champion the user was looking at (Galio mid), drop Sunfire Aegis at -0.06 —
+ *  an item they explicitly pointed at.
+ *
+ *  Three reasons it ships unfiltered anyway:
+ *    1. The block's title is a claim about its SOURCE, which is this file's
+ *       standing rule. "Situational" claims these are the alternatives the
+ *       champion's own per-slot data offers. That is true of every entry,
+ *       including the negative ones. It does not claim they are better.
+ *    2. Shop and page must not disagree about what a named block contains
+ *       (the Hidden gem precedent above). A shop-only floor makes them
+ *       disagree on 252 of 323 combos.
+ *    3. There is no principled floor available today. The obvious candidate,
+ *       `Pick.lowSample`, is measurably ANTI-correlated: 21.5% of negative
+ *       slots are lowSample vs 47.2% of non-negative ones, and 4 of Galio
+ *       mid's own 6 screenshot picks are flagged lowSample. Filtering on it
+ *       would cut the user's list from 6 to 2 and still keep a -4.96. Picking
+ *       a bare number instead (-0.02, -0.5) would be a magic constant this
+ *       file would have to defend and could not.
+ *
+ *  OPEN, and reported rather than silently decided: the principled version of
+ *  the filter is RELATIVE, not absolute — an alternative only means anything
+ *  against the pick it replaces (Galio's Ionian Boots at +4.27 beats his own
+ *  Sorcerer's Shoes at +1.56 and is a genuine recommendation; Xerath's Ionian
+ *  at -5.54 is not). That needs the per-SLOT provenance `flattenSituational`
+ *  currently discards when it flattens `alts` into one list, so it is a real
+ *  change to the data model and a user call, not a silent one. See
+ *  HANDOFF-core-situational.md.
+ *
+ *  ── DUPLICATES: EXCLUDE THE WPA BUILD, AND NOTHING ELSE ─────────────────
+ *  `excludeIds` is the emitted WPA build line's ids. An item that block
+ *  already tells you to buy is not an ALTERNATIVE to your build — it IS your
+ *  build, and naming it both "buy this" and "consider this instead" in one
+ *  shop panel is a contradiction, not extra information.
+ *
+ *  Scoped to that one block on purpose, and the split is measured. Live, 2026-
+ *  08-19, driving the real export path (`/api/build` + `/api/pros` + `/api/otp`
+ *  + the 16.16.1 catalog) over 38 champion+lane combos, 124 emitted situational
+ *  slots:
+ *    - 8 slots (6.5%), on 8 combos, also sat in the WPA build. Never more than
+ *      one per combo. These are the contradiction, and they are what this
+ *      excludes.
+ *    - 58 slots (46.8%) also sat in a Pro / OTP / Hidden gem block. Those are
+ *      KEPT. Those blocks answer a different question ("what do pros build")
+ *      and an item being both is a real finding, not a duplicate — the same
+ *      reasoning that stops `dedupeLineBlocks` collapsing Pro into WPA.
+ *  Nothing is hidden by the exclusion: the excluded id is still on screen in
+ *  the very same set, in the block directly above.
+ *
+ *  Order matters. The top-6 window is taken FIRST and the exclusion applied
+ *  after, so the block is always a SUBSET of what the Builds page showed. It
+ *  never reaches for a 7th pick to backfill — a shop block containing an item
+ *  the page did not show would be a worse disagreement than a shorter one.
+ *
+ *  BOOTS ARE SAFE FROM THIS, structurally, not by luck. The situational boots
+ *  live in `items.alts.boots`, which by construction never contains the boot
+ *  the build chose (Galio: alts.boots is Ionian/Swiftness/Steelcaps; the chosen
+ *  boot, Sorcerer's Shoes 3020, is not among them). Measured: 0 collisions
+ *  between a top-6 situational pick and the champion's own core picks across
+ *  all 323 live combos. So a situational boot is never dropped because a
+ *  DIFFERENT boot is in the main path — only ever because the WPA line took
+ *  that exact boot, which is the one case where it genuinely is not an
+ *  alternative.
+ *
+ *  @param excludeIds ids already emitted in the WPA build block. Pass an empty
+ *                    set to get the panel's own list verbatim. */
+export function situationalBlockPicks(
+  items: ItemsBlock,
+  excludeIds: ReadonlySet<number> = new Set()
+): PickType[] {
+  return situationalShortlist(items).filter((p) => !excludeIds.has(p.id));
+}
 
 // ── Cross-family de-dup (audit P1-B) ────────────────────────────────────────
 // The shop panel used to carry Core build + Buy order + Pro build + OTP build
@@ -924,10 +1048,29 @@ export function champScopedReplacePrefix(champ: ChampionRef): string {
   return `CoachBuild ${champ.name} `;
 }
 
-function baseSet(champ: ChampionRef, roleLabel: string): Omit<ItemSet, "blocks"> {
+/** @param suffix appended to BOTH the title and the uid, or omitted for the
+ *  main set. Two hard constraints on any value passed here:
+ *
+ *  1. The title must still START WITH "CoachBuild" — a suffix, never a prefix.
+ *     Both bridges validate exactly that (`ApplyPayloadValidation
+ *     .IsCoachBuildTitle` in the desktop app, `Test-ItemSetsPayload` in
+ *     companion.ps1), and it is also what makes the set OURS to prune. A set
+ *     that fails it is rejected whole, and HARD RULE 5 says a set that is not
+ *     ours is never touched.
+ *  2. It must stay inside `champScopedReplacePrefix`'s reach
+ *     ("CoachBuild <champ> "), so a lane flip still cleans up the other lane's
+ *     copy. `CoachBuild Galio Mid Situational` does; `CoachBuild Situational
+ *     Galio Mid` would not.
+ *
+ *  The MAIN set's uid and title are unchanged, byte for byte — verified against
+ *  a real client-written set on disk (`CoachBuild Urgot Top` /
+ *  `coachbuild-urgot-top`). That matters for the upgrade path: an existing
+ *  install's set is replaced in place rather than accumulating a second copy. */
+function baseSet(champ: ChampionRef, roleLabel: string, suffix?: string): Omit<ItemSet, "blocks"> {
+  const suffixPart = suffix ? ` ${suffix}` : "";
   return {
-    uid: `coachbuild-${slugPart(champ.name)}-${slugPart(roleLabel)}`,
-    title: `CoachBuild ${champ.name} ${roleLabel}`,
+    uid: `coachbuild-${slugPart(champ.name)}-${slugPart(roleLabel)}${suffix ? `-${slugPart(suffix)}` : ""}`,
+    title: `CoachBuild ${champ.name} ${roleLabel}${suffixPart}`,
     type: "custom",
     map: "any",
     mode: "any",
@@ -961,7 +1104,15 @@ function baseSet(champ: ChampionRef, roleLabel: string): Omit<ItemSet, "blocks">
  *  their own blocks) → Pro build (only when pro-consensus data resolves,
  *  boots-deduped to the single highest-share pick) → OTP build (same shape,
  *  one-trick consensus) → Hidden gem (only when selectHiddenGemPicks finds a
- *  genuine under-played/over-performing pick).
+ *  genuine under-played/over-performing pick) → Situational (2026-08-19; the
+ *  Builds page's SITUATIONAL panel verbatim, exempt from buildLine/
+ *  fullItemsOnly/dedupeLineBlocks — see SITUATIONAL_BLOCK_TYPE's note).
+ *
+ *  RETURNS ONE OR TWO SETS. One when the champion+role has no situational
+ *  alternatives at all (50 of 323 live combos, measured 2026-08-19); two
+ *  otherwise, the second being a standalone `CoachBuild <champ> <role>
+ *  Situational` carrying only that block. Callers must pass the whole array
+ *  through in ONE /apply-itemsets call — see the push site.
  *
  *  PADDING CASCADES, stated exactly (this doc claimed a symmetry that never
  *  existed — that both consensus lines padded from "the other consensus" —
@@ -1227,5 +1378,50 @@ export function buildItemSets(
   const blocks: ItemSetBlock[] = [{ type: "Starting", items: [itemRef(items.starter.id)] }];
   for (const b of survivors) blocks.push({ type: blockTitle(b), items: toItemRefs(b.line) });
 
-  return [{ ...baseSet(champ, roleLabel), blocks }];
+  // ── Situational: a block LAST, and a second set (2026-08-19) ─────────────
+  // LAST inside the main set on purpose. Everything above it is a build you
+  // could play start to finish; this is a row of swaps to read after you have
+  // one. Putting it above the build lines would make the first thing a user
+  // sees mid-game a list of things NOT to buy yet.
+  //
+  // The second set is what makes it selectable on its own, which is the half
+  // of the ask a block cannot satisfy. It costs no bridge change and no
+  // release: BOTH bridges have always accepted 1-3 sets in one call
+  // (`request.Sets.Count is < 1 or > 3` in the desktop app's
+  // ApplyPayloadValidation; the same 1-3 rule in companion.ps1 1.14.1), and
+  // both merge by taking the whole list, so the pair lands in one PUT and the
+  // O(1) CoachBuild-prune still bounds the payload. Writing them in the SAME
+  // call is load-bearing: the merge keeps only the sets being written now and
+  // drops every other CoachBuild-titled set, so splitting them across two
+  // calls would have the second delete the first.
+  //
+  // Emitted only when there is something in it. An empty second set would be a
+  // titled, selectable, permanently blank entry in the user's shop — worse
+  // than absent. (Contrast the WPA build block above, which IS emitted empty:
+  // there its presence is the signal that the export ran.)
+  // `wpaBuildIds` (computed above for the Hidden gem) is the exclusion set —
+  // deliberately the SAME set the gem uses, so "already in your build" means
+  // one thing in this file and not two.
+  const situational = situationalBlockPicks(items, wpaBuildIds);
+  const situationalBlock: ItemSetBlock | null =
+    situational.length > 0
+      ? { type: SITUATIONAL_BLOCK_TYPE, items: situational.map((p) => itemRef(p.id)) }
+      : null;
+  if (situationalBlock) blocks.push(situationalBlock);
+
+  const sets: ItemSet[] = [{ ...baseSet(champ, roleLabel), blocks }];
+  if (situationalBlock) {
+    sets.push({
+      ...baseSet(champ, roleLabel, SITUATIONAL_BLOCK_TYPE),
+      // Higher than the main set's 0 so it sorts after it wherever the client
+      // honours sortrank. UNVERIFIED as a default-selection guarantee — the
+      // real ItemSets.json on this machine has every set at 0 except a U.GG
+      // one at 9999, so the field is clearly used, but which set the shop
+      // pre-selects for a champion with two sets cannot be observed without a
+      // live game. See HANDOFF-core-situational.md.
+      sortrank: 1,
+      blocks: [situationalBlock],
+    });
+  }
+  return sets;
 }

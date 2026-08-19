@@ -169,9 +169,18 @@ export async function resolveItemMetaForSets(patch: string): Promise<Map<number,
 
 /** The ONE call both the manual button and the auto-export effect make:
  *  resolve pro-consensus data + item metadata (both best-effort, in
- *  parallel), build the one champ+role set (Core/Buy order/Pro/themed/
- *  Situational as BLOCKS inside it — see itemSetBody.ts's v0.34.1 header
- *  for the 3-sets-to-1-set restructure), POST it. Never throws —
+ *  parallel), build the champ+role set (WPA/Pro/OTP/Hidden gem/Situational as
+ *  BLOCKS inside it — see itemSetBody.ts's v0.34.1 header for the
+ *  3-sets-to-1-set restructure), POST it.
+ *
+ *  Since 2026-08-19 `buildItemSets` returns ONE OR TWO sets: the main one, plus
+ *  a standalone `CoachBuild <champ> <role> Situational` when the champion has
+ *  situational alternatives. Both go in the SAME POST, and that is not a
+ *  detail — the bridge's merge keeps only the sets in this call and prunes
+ *  every other CoachBuild-titled set, so posting them separately would have the
+ *  second delete the first. `sets` is passed through whole; never slice it, and
+ *  never add a third caller that posts a subset. Both bridges have always
+ *  accepted 1-3 sets, so no companion/desktop change was needed. Never throws —
  *  applyItemSets itself is already fail-soft, a failed pro-consensus fetch
  *  just means no Pro build block this round, and a failed item-metadata
  *  fetch degrades the 6-item build lines per isFullItem's own doc comment. */

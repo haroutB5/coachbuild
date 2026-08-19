@@ -3,7 +3,7 @@
 import type { ItemsBlock, Pick as PickType } from "@/lib/types";
 import { wpaClass, wpaText } from "@/components/StatBadge";
 import { IconWithFallback } from "@/components/IconWithFallback";
-import { flattenSituational } from "./situational";
+import { flattenSituational, SITUATIONAL_DISPLAY_LIMIT } from "./situational";
 
 interface SituationalCardProps {
   items: ItemsBlock;
@@ -38,7 +38,12 @@ function withHighlightsFirst(picks: PickType[], highlightIds: number[]): PickTyp
 // single-row note above).
 export default function SituationalCard({ items, onItemClick, highlightIds }: SituationalCardProps) {
   const ordered = withHighlightsFirst(flattenSituational(items), highlightIds ?? []);
-  const situational = ordered.slice(0, 6);
+  // SITUATIONAL_DISPLAY_LIMIT, not a literal 6: itemSetBody.ts now ships this
+  // same window into the in-game shop as a "Situational" block, and the two
+  // must not drift. With no highlights (the live default — compHighlight.ts
+  // returns [] until upstream matchup data exists) this is byte-identical to
+  // situationalShortlist(items).
+  const situational = ordered.slice(0, SITUATIONAL_DISPLAY_LIMIT);
   if (situational.length === 0) return null;
 
   return (
