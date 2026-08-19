@@ -1,5 +1,13 @@
 # Changelog
 
+## Web 0.113.1 — 2026-08-19 — verification probe (no product change)
+
+No user-visible change. Cut solely so desktop 1.0.15's "is the page in my
+window still the build the site is serving?" check has a real deploy to
+notice — the fix is unfalsifiable without one, since a window opened after a
+deploy is never stale. The desktop bench log for this release is in
+`HANDOFF-core-stale-webview.md`.
+
 ## Web 0.113.0 — 2026-08-19 — one set, the numbers in it, and the runes keep up
 
 Three things, all from the same session's on-device evidence.
