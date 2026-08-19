@@ -152,9 +152,34 @@ public partial class OverlayWindow : Window
             return;
         }
 
-        _situational = deltas ?? [];
+        var next = deltas ?? [];
+        if (SameDeltas(_situational, next))
+        {
+            // Identical content arrives every snapshot tick. SituationalDelta is
+            // a readonly record struct, so this is a real value comparison and
+            // not reference identity — the caller hands us a fresh list each
+            // time and a reference check would never match.
+            _situational = next;
+            return;
+        }
+
+        _situational = next;
         if (_adjusting) { RenderAdjustment(); return; }
         RenderCurrentState();
+    }
+
+    private static bool SameDeltas(
+        IReadOnlyList<CoachBuild.Core.SituationalDelta> left,
+        IReadOnlyList<CoachBuild.Core.SituationalDelta> right)
+    {
+        if (ReferenceEquals(left, right)) return true;
+        if (left.Count != right.Count) return false;
+        for (var index = 0; index < left.Count; index++)
+        {
+            if (!left[index].Equals(right[index])) return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -530,6 +555,7 @@ public partial class OverlayWindow : Window
             // it has no HWND, so it reported a monitor failure — and the user
             // reading the log was hunting a display bug that did not exist.
             IsDrawingHighlight = false;
+            IsDrawingBadges = false;
             HasRenderableSkillOrder = false;
             ReportOverlayReason("overlay-hidden (tray: Show overlay)");
             return;
@@ -537,6 +563,7 @@ public partial class OverlayWindow : Window
         if (_display is null)
         {
             IsDrawingHighlight = false;
+            IsDrawingBadges = false;
             HasRenderableSkillOrder = false;
             ReportOverlayReason("no-display");
             return;

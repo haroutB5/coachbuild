@@ -14,7 +14,19 @@ public readonly record struct ShopObservation(
     bool ChatKeyDown = false);
 
 /// <summary>The latch's verdict, plus why it says so.</summary>
-public readonly record struct ShopLatchState(bool Open, string Reason, bool Changed);
+/// <param name="SuppressedByChatNow">
+/// A shop-key edge was seen on THIS tick and deliberately ignored because chat
+/// is believed open. Carried separately from <paramref name="Changed"/> because
+/// a suppressed edge changes the verdict by definition NOT AT ALL - so a
+/// consumer that only reacts to <paramref name="Changed"/> could never tell
+/// "your key was ignored" from "your key was never seen", which are the two
+/// reports this distinction exists to separate.
+/// </param>
+public readonly record struct ShopLatchState(
+    bool Open,
+    string Reason,
+    bool Changed,
+    bool SuppressedByChatNow = false);
 
 /// <summary>
 /// Decides whether the shop is believed open, from key edges alone.
@@ -124,10 +136,19 @@ public sealed class ShopVisibilityLatch
 
         if (!observation.InGame)
         {
-            // Reset rather than merely close: a key held across the end of a
-            // game must not read as a fresh press at the start of the next one,
-            // and the counters belong to the game that produced them.
+            // Forget the latch and the counters - they belong to the game that
+            // produced them - but KEEP TRACKING the raw key state.
+            //
+            // Zeroing the previous-key fields here was a bug, and precisely the
+            // one the comment claimed to prevent: it is what makes a key held
+            // across the start of a game read as a fresh press on the first
+            // in-game tick. "Held across the boundary is not a press" is a
+            // statement about edge detection, and edge detection needs the
+            // previous sample, not the absence of one.
             Reset();
+            _previousShopDown = observation.ShopKeyDown;
+            _previousCloseDown = observation.CloseKeyDown;
+            _previousChatDown = observation.ChatKeyDown;
             return Settle(wasOpen, ReasonNotInGame);
         }
 
@@ -173,11 +194,13 @@ public sealed class ShopVisibilityLatch
             }
         }
 
+        var suppressedNow = false;
         if (shopEdge)
         {
             if (_chatOpen)
             {
                 SuppressedByChat++;
+                suppressedNow = true;
                 reason = ReasonChatSuppressed;
             }
             else
@@ -197,12 +220,12 @@ public sealed class ShopVisibilityLatch
             reason = ReasonIdle;
         }
 
-        return Settle(wasOpen, reason);
+        return Settle(wasOpen, reason, suppressedNow);
     }
 
-    private ShopLatchState Settle(bool wasOpen, string reason)
+    private ShopLatchState Settle(bool wasOpen, string reason, bool suppressedNow = false)
     {
         _reason = reason;
-        return new ShopLatchState(_open, reason, _open != wasOpen);
+        return new ShopLatchState(_open, reason, _open != wasOpen, suppressedNow);
     }
 }

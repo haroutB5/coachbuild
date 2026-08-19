@@ -55,6 +55,16 @@ public sealed class ShopKeyWatcher : IDisposable
     private readonly Func<bool> _leagueIsForeground;
     private readonly ShopVisibilityLatch _latch = new();
     private readonly object _gate = new();
+
+    // A SECOND lock, held only across sample-and-observe.
+    //
+    // Tick() has two callers: the 50 ms timer thread and SetInGame, which runs
+    // on whichever thread noticed the phase change (in production, the WPF
+    // dispatcher). ShopVisibilityLatch is a plain mutable state machine, so two
+    // concurrent Observe calls can interleave their edge bookkeeping and lose or
+    // invent a press. It is deliberately not _gate: _gate is also held while
+    // Dispose runs, and event handlers must never be invoked under it.
+    private readonly object _tickGate = new();
     private ThreadingTimer? _timer;
     private bool _inGame;
     private bool _disposed;
@@ -153,13 +163,34 @@ public sealed class ShopKeyWatcher : IDisposable
         }
 
         ShopLatchState state;
-        try { state = _latch.Observe(Sample(inGame)); }
-        catch { return; }
+        int toggles;
+        int suppressed;
+        lock (_tickGate)
+        {
+            try { state = _latch.Observe(Sample(inGame)); }
+            catch { return; }
+            toggles = _latch.Toggles;
+            suppressed = _latch.SuppressedByChat;
+        }
+
+        // A suppressed edge is reported even though the verdict did not change.
+        // Without this the chat gate is a branch that can never appear in a log:
+        // suppression means "the latch did NOT flip", so a Changed-only report
+        // is silent on exactly the case the gate exists for, and the player who
+        // says "I press my key and nothing happens" gets an empty log either
+        // way.
+        if (state.SuppressedByChatNow)
+        {
+            Diagnostics?.Invoke(
+                $"shop: your shop key was ignored - League's chat looks open"
+                + $" ({suppressed} so far this game; press Enter or Esc to leave chat,"
+                + $" or use the tray item to show the numbers)");
+        }
 
         if (!state.Changed) return;
         Diagnostics?.Invoke(
             $"shop: {(state.Open ? "open" : "closed")} ({state.Reason};"
-            + $" {_latch.Toggles} toggle(s), {_latch.SuppressedByChat} ignored while chatting)");
+            + $" {toggles} toggle(s), {suppressed} ignored while chatting)");
         ShopVisibilityChanged?.Invoke(state);
     }
 

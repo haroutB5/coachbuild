@@ -524,7 +524,22 @@ public partial class App : WpfApplication
         // The watcher's own 50 ms timer owns the key edges; this only tells it
         // whether a game is running, which is the gate that resets the latch
         // between matches.
-        _shopWatcher?.SetInGame(snapshot.Overlay?.InGame == true);
+        var inGame = snapshot.Overlay?.InGame == true;
+        _shopWatcher?.SetInGame(inGame);
+
+        // "Show item numbers NOW" is a per-game override, and the verb is the
+        // contract. It is also the one tray item that is disabled out of a game
+        // (there is no shop to sit over), so a player who leaves it ticked
+        // cannot untick it afterwards — leaving it latched would silently turn
+        // a one-off "show me anyway" into "show me in every future game", with
+        // the only control greyed out.
+        if (!inGame && _trayState.ForceItemNumbers)
+        {
+            _trayState = _trayState with { ForceItemNumbers = false };
+            _overlay?.SetForceBadges(false);
+            _tray?.UpdateState(_trayState);
+            _log?.Info("badges: manual override cleared (the game ended)");
+        }
 
         if (snapshot.Overlay is not null)
         {
