@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using CoachBuild.Core;
 using ThreadingTimer = System.Threading.Timer;
@@ -54,6 +55,15 @@ public sealed class ShopKeyWatcher : IDisposable
     private readonly ResolvedShopBinds _binds;
     private readonly Func<uint, bool> _isKeyDown;
     private readonly Func<bool> _leagueIsForeground;
+
+    /// <summary>
+    /// MONOTONIC, not wall-clock. The latch expires a stale chat belief off
+    /// this, and a clock that can step backwards (NTP, DST, the user setting
+    /// the time) would either expire a belief the instant it was formed or
+    /// never expire one at all.
+    /// </summary>
+    private readonly Func<TimeSpan> _uptime;
+
     private readonly ShopVisibilityLatch _latch = new();
     private readonly object _gate = new();
 
@@ -73,12 +83,31 @@ public sealed class ShopKeyWatcher : IDisposable
     public ShopKeyWatcher(
         ResolvedShopBinds binds,
         Func<uint, bool>? isKeyDown = null,
-        Func<bool>? leagueIsForeground = null)
+        Func<bool>? leagueIsForeground = null,
+        Func<TimeSpan>? uptime = null)
     {
         _binds = binds ?? throw new ArgumentNullException(nameof(binds));
         _isKeyDown = isKeyDown ?? IsKeyDownNative;
         _leagueIsForeground = leagueIsForeground ?? (() => false);
+        var started = Stopwatch.StartNew();
+        _uptime = uptime ?? (() => started.Elapsed);
     }
+
+    /// <summary>
+    /// League's ALL-CHAT accelerator, derived from the chat bind rather than
+    /// resolved separately: it is the SAME key with Shift held, and
+    /// <c>input.ini</c> carries no entry for either (see
+    /// <see cref="ShopBindResolver"/>'s "Escape and Enter are constants").
+    ///
+    /// <para>It has to be watched explicitly because
+    /// <see cref="IsBindDown"/> matches modifiers EXACTLY, which is right for
+    /// Alt+Enter (League's fullscreen toggle, which opens no chat) and wrong
+    /// for Shift+Enter (which opens the same chat input the plain bind does).
+    /// Seeing only one of the two is what let the belief invert and strand a
+    /// player for a whole game.</para>
+    /// </summary>
+    public static LeagueKeybind AllChatBind(LeagueKeybind chat) =>
+        chat with { Shift = true, Display = $"Shift+{chat.Display}" };
 
     /// <summary>Raised whenever the latch's verdict CHANGES. Not raised per tick.</summary>
     public event Action<ShopLatchState>? ShopVisibilityChanged;
@@ -145,7 +174,9 @@ public sealed class ShopKeyWatcher : IDisposable
             LeagueForeground: foreground,
             ShopKeyDown: _binds.Shop.Any(IsBindDown),
             CloseKeyDown: IsBindDown(_binds.Close),
-            ChatKeyDown: IsBindDown(_binds.Chat));
+            ChatKeyDown: IsBindDown(_binds.Chat),
+            ChatAllKeyDown: IsBindDown(AllChatBind(_binds.Chat)),
+            At: _uptime());
     }
 
     /// <summary>
@@ -192,12 +223,18 @@ public sealed class ShopKeyWatcher : IDisposable
         // is silent on exactly the case the gate exists for, and the player who
         // says "I press my key and nothing happens" gets an empty log either
         // way.
+        // The belief itself, one line per transition. Four identical
+        // "your key was ignored" lines and NOTHING about when the watcher came
+        // to believe chat was open is what made the 2026-08-19 incident
+        // undiagnosable from the log alone.
+        if (state.ChatNote is { } note) Diagnostics?.Invoke($"shop: {note}");
+
         if (state.SuppressedByChatNow)
         {
             Diagnostics?.Invoke(
                 $"shop: your shop key was ignored - League's chat looks open"
-                + $" ({suppressed} so far this game; press Enter or Esc to leave chat,"
-                + $" or use the tray item to show the numbers)");
+                + $" ({suppressed} so far this game; press your shop key again to override,"
+                + $" or Enter/Esc to leave chat)");
         }
 
         if (!state.Changed) return;

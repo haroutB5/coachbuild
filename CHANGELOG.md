@@ -1,5 +1,139 @@
 # Changelog
 
+## Desktop 1.0.17 — 2026-08-19 — the numbers were never broken, they were being swallowed
+
+1.0.16 shipped the win-rate numbers on the shop overlay. The first live game they
+ever ran in did not draw a single one. **Nothing about drawing them was wrong.**
+The payload arrived, the geometry was calibrated, the champion matched, the
+renderer ran for twenty minutes — and every press of the shop key was thrown away
+by the chat gate, because the app had decided chat was open and had no way left to
+change its mind.
+
+### What the log proves, and how one keypress inverted the belief
+
+A photo of `companion.log` from the user's gaming PC is the first live evidence
+this feature has ever had. It reads, four times in nineteen seconds:
+
+```
+21:04:31.38  shop: your shop key was ignored - League's chat looks open (1 so far this game)
+21:04:31.69  shop: your shop key was ignored - League's chat looks open (2 so far this game)
+21:04:40.20  shop: your shop key was ignored - League's chat looks open (3 so far this game)
+21:04:50.69  shop: your shop key was ignored - League's chat looks open (4 so far this game)
+```
+
+The gate was a pure Enter-edge **toggle**, and the watcher matched modifiers
+**exactly**. League's all-chat bind is `Shift+Enter`. So the two halves of one
+conversation were observed asymmetrically:
+
+```
+Shift+Enter  -> chat really OPENS,  the app sees nothing        -> believes: closed
+type...
+Enter (send) -> chat really CLOSES, the app sees a rising edge  -> believes: OPEN
+```
+
+The belief inverted **at the exact moment chat actually closed**, and from there
+nothing in the shipped code could flip it back. `Alt+Enter` is League's fullscreen
+toggle and opens no chat, so the exactness rule was right for Alt and wrong for
+Shift: one rule over two different underlying behaviours.
+
+What the player experienced was simpler than any of that. **Four presses, nineteen
+seconds, nothing on screen, and then the rest of the match with a dead feature.**
+Escape would have cleared it, and so would alt-tabbing, and so would the tray's
+`Show item numbers now` — none of which is discoverable from inside a fullscreen
+game, which is why the honest report was "it does not work".
+
+The 1.0.16 doc comment justified the gate by saying that believing chat is open
+when it is not *merely suppresses a toggle, the player presses the key again and
+it works*. **This log falsifies that sentence.** The player did press again, four
+times, and it did not work. A stuck belief is not a suppressed toggle; it
+suppresses everything, for as long as it lasts, and nothing ended it.
+
+### Three guarantees, so this cannot strand a player again
+
+**1. Enter and Shift+Enter are one physical key.** The all-chat bind is derived
+from the chat bind rather than resolved separately (`input.ini` carries no chat
+entry at all), and `Shift+Enter` *sets* the belief open instead of toggling it,
+because in game it opens all-chat or switches channel — it never closes the input.
+Modulating Shift while Enter is already held cannot invent a second press.
+`Alt+Enter` stays invisible on both axes, and is pinned that way by test.
+
+**2. Your second press wins.** A suppressed shop-key press, at least **600 ms**
+after the first in the same belief episode, clears the belief and is honoured.
+That makes the old comment's promise true: press it again and it works. It heals
+*every* way the belief can desync, including the ones the log cannot discriminate
+and the ones only a live game could confirm. The 600 ms gap is what keeps the gate
+doing its job — a repeated letter inside a typed word lands about 100 ms apart, so
+it is still swallowed, while a player who thinks the app is broken re-presses far
+slower. Replayed against the real log's timings (0.00 s, +0.31 s, +8.82 s) the
+fumbled double-tap is still ignored and **the third press draws the numbers**.
+
+**3. A belief goes stale on its own.** It expires **30 seconds** after the Enter
+that last affirmed it, so a desync cannot outlive a fight even if the player never
+touches the shop key again. It is deliberately generous, because guarantee 2 is
+the fast path and this only bounds the worst case. Staleness is judged after the
+key edges, so a fresh Enter always re-arms the belief rather than racing the
+expiry, and the clock is a `Stopwatch` — an NTP step or a DST change cannot expire
+anything.
+
+The **first** typed shop character is still swallowed. That was the gate's whole
+original job and it still does it.
+
+### The belief now says so in the log
+
+The gate that decides whether your shop key counts at all used to move in total
+silence: four identical "your key was ignored" lines and not one word about when
+or why the app came to believe chat was open. The next incident would have been
+exactly as blind. Belief transitions now name themselves —
+
+```
+shop: chat: believed open (Shift+Enter, all chat)
+shop: chat: believed closed (Enter sent or dismissed the message)
+shop: chat: belief dropped after 30s with no Enter
+```
+
+— and two counters ride into the log line beside the existing suppression count:
+`ChatOverrides` and `ChatBeliefsExpired`. A non-zero override count in a future
+log is the signature of a desync that healed itself before the player noticed it.
+The suppression advice changed too, from *"press Enter or Esc to leave chat"* to
+*"press your shop key again to override, or Enter/Esc to leave chat"*.
+
+### Nothing new is read
+
+No screen capture, no OCR, no memory reads — 1.0.16's policy call stands
+unchanged. The only new syscall is one extra `GetAsyncKeyState` per tick while
+Enter is up: the idle tick goes from three calls to four, about **0.0008 ms**.
+Nothing is written to the League folder.
+
+### Unchanged
+
+1.0.9's updater gates, 1.0.10's game-start WebView2 teardown, 1.0.11's champion
+resolution, 1.0.12's banked-point skill gate and 250 ms poll, 1.0.13's
+`Ctrl+Shift+A`-only binding — still no second global accelerator, `Ctrl+Shift+S`
+stays free — 1.0.14's derived tray label and `Open log folder`, 1.0.15's
+web-version reload and 480 ms apply path, and all of 1.0.16's shop detection,
+calibration and badge drawing.
+
+### Verification
+
+`dotnet test` **517 passed / 0 failed** (213 Core + 304 Desktop), stable over
+three consecutive full runs; the baseline before this change was 500.
+
+Green tests prove nothing on their own, so each guarantee was removed in turn and
+the right tests confirmed dead: reverting the all-chat observation to shipped
+1.0.16 kills the Shift+Enter and end-to-end replay tests; disabling insistence
+kills the override, real-log-replay and end-of-game tests; disabling the expiry
+kills the staleness test. Two further tests cover the **production** half
+specifically, because a state machine that handles all-chat is not the same claim
+as an app that can ever see it: one asserts the live sampler distinguishes
+`Shift+Enter` from plain Enter while keeping `Alt+Enter` invisible, the other that
+production stamps a clock that actually advances — an expiry is inert against a
+constant.
+
+**Not verified, and only a live game can:** that League's all-chat bind is what
+this particular session used, rather than one of the other divergence modes the
+log cannot tell apart. The recovery is deliberately built to be indifferent to
+which one it was.
+
 ## Desktop 1.0.16 — 2026-08-19 — the win-rate numbers, drawn on the shop's own item icons
 
 Web 0.113.0 put each situational item's delta into its own shop row title, which
