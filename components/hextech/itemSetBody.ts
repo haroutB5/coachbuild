@@ -150,6 +150,7 @@
 import type { ChampionRef, BuildResponse, ItemsBlock, Pick as PickType } from "@/lib/types";
 import type { ItemDetail } from "@/components/itemDetail";
 import { flattenSituational, situationalShortlist } from "./situational";
+import { wpaText } from "@/components/StatBadge";
 import { resolveOptimizedPathView } from "./optimizedPath";
 import { isBootsItem, isFinalBootsItem, type ItemCatalog } from "@/lib/bootsItems";
 
@@ -336,6 +337,122 @@ export function situationalBlockPicks(
   excludeIds: ReadonlySet<number> = new Set()
 ): PickType[] {
   return situationalShortlist(items).filter((p) => !excludeIds.has(p.id));
+}
+
+// ── Putting the WPA number in the shop (2026-08-19, user directive) ──────────
+// "is there a way to show the wpa values in game so i can make better
+// decisions on what to buy?"
+//
+// An LCU block item is `{id, count}` — there is no field on an ITEM for a
+// number. The only writable string anywhere near an item is its BLOCK's title.
+// So the only way to bind a delta to a specific item is to give that item a
+// block of its own and put the number in the title. That is what
+// `situationalBlocks` does, and it is why it is applied to Situational and NOT
+// to the build lines (see below).
+//
+// ── LENGTH: MEASURED, NOT ASSUMED ──────────────────────────────────────────
+// Ground-truthed on this machine, 2026-08-19, against three sources:
+//
+//   1. C:\Riot Games\League of Legends\Config\Champions\*\Recommended\
+//      RIOT_ItemSet_*.json  — 60 files, RIOT's own sets.
+//      Longest block title: 19 ("Fourth Item Options"). Titles with a digit: 0.
+//   2. C:\Riot Games\League of Legends\Config\ItemSets.json — the user's real
+//      file, 61 sets / 300 blocks, 59 of them U.GG's.
+//      Longest block title: 19 ("Fourth Item Options"). Titles with a digit: 0.
+//   3. THIS FILE'S OWN LIVE OUTPUT, swept over 80 champion+lane combos against
+//      production /api/build + /api/pros + /api/otp.
+//      Longest block title: **29** — "Pro build (same as WPA build)" (Akshan
+//      bot), emitted by `blockTitle`'s `sameAs` suffix and shipping
+//      unremarked since 2026-07-29.
+//
+// Source 3 is the one that matters and it is the reason this is safe: the app
+// has been putting a 29-character block title into this user's shop for three
+// weeks with no complaint. The titles below are 17:
+//
+//   "Situational +4.27"  17     "Situational -5.54"  17   (worst delta seen
+//   "Situational 0.00"   16      across all 173 champions x 5 lanes)
+//
+// The item NAME is deliberately NOT in the title. "Ionian Boots of Lucidity
+// +4.27" is 30 characters, and the item's own icon is sitting directly under
+// the title already. The title carries only what the icon cannot.
+//
+// ── WHAT IS NOT VERIFIED. Read this before believing the paragraph above ──
+// Nobody has watched the shop render ANY of these. The client is installed on
+// this machine but not logged in, and launching it starts Vanguard, a kernel
+// anti-cheat, for evidence that can be had no other way. Two specific unknowns:
+//
+//   * Where the shop panel truncates a title. 17 < 29-already-shipping is an
+//     argument from precedent, not a measurement, and the 29-char case has
+//     never been confirmed to render either — only to be emitted.
+//   * The panel is now up to ELEVEN blocks for a champion with a full
+//     situational row (Starting + 4 build lines + 6), where it was five, and
+//     where the client's own sets never exceed five. Six one-item rows may
+//     read better than one six-item row, or may push the build lines off the
+//     top of the panel. That is a rendering question and it is open.
+//
+// Reverting is one line: drop the `.map` in `situationalBlocks` and return the
+// single plain block it returns for an over-long row.
+//
+// ── WHY THE BUILD LINES ARE LEFT ALONE ─────────────────────────────────────
+// Per-item titling costs one block per item. Applied to WPA/Pro/OTP that is
+// 5 blocks -> 25, against a client whose own sets never exceed 5, and it
+// destroys the one thing a build line is FOR: it is an ordered sequence (buy
+// this, then this), not a menu of independent choices. Situational is the
+// opposite — a row of mutually-exclusive swaps, where per-item is the honest
+// shape and the number is the whole point.
+//
+// It would also be dishonest on two of the three lines: Pro and OTP items are
+// ranked on CONSENSUS SHARE, not WPA (`Candidate.raw.scale`), so most of their
+// items have no delta at all and would have to render a blank or a fabricated
+// zero. Recommending this stays a Situational-only change, and saying so, is
+// the finding — not an omission.
+//
+// ── "NEVER RENDER A FABRICATED ZERO": MEASURED, AND IT DOES NOT ARISE HERE ─
+// `Pick.wpa` is a non-nullable number, so a 0 could in principle mean "no
+// data". Swept 150 champion+lane combos / 487 situational picks against live
+// prod, 2026-08-19: **exactly-zero wpa: 0 of 487.** Three round to 0.00 for
+// display (|wpa| < 0.005) and are real, tiny measurements. So every number in
+// a Situational title below is a genuine value; there is nothing to suppress.
+// (260 of 487 are negative — that is the known, deliberately-kept negative
+// tail, ordered last, not an absence.) If a future data source ever DOES emit
+// a placeholder zero, this is the paragraph that is now wrong, and the block
+// title must degrade to the bare label rather than print it.
+
+/** Situational picks that get their own titled block before the whole row
+ *  degrades back to one plain `Situational` block.
+ *
+ *  Six, matching `SITUATIONAL_DISPLAY_LIMIT`, and the two are asserted equal
+ *  by a test. `situationalBlockPicks` already caps at that limit, so with
+ *  today's constants the degrade branch in `situationalBlocks` cannot fire in
+ *  production — it is reachable only by calling that function directly, which
+ *  is exactly what its test does. It exists so that RAISING the display limit
+ *  (a one-line change on the page) cannot silently ship a shop panel with
+ *  fifteen single-item blocks in it. */
+const SITUATIONAL_MAX_TITLED_BLOCKS = 6;
+
+/** The Situational row as shop blocks.
+ *
+ *  One block per pick, titled `Situational <delta>`, in the picks' own order
+ *  (WPA descending, negatives last) — so the shop shows the same six items in
+ *  the same order with the same numbers the Builds page prints beside them.
+ *
+ *  THE NUMBER IS FORMATTED BY `wpaText`, the Builds page's own formatter, not
+ *  by a second `toFixed(2)` here. Two surfaces printing the same field through
+ *  two formatters is how they end up disagreeing about a rounding boundary;
+ *  a test pins that the block title contains exactly `wpaText(pick.wpa)`.
+ *
+ *  Degrades to a single untitled-per-item `Situational` block when there are
+ *  more picks than `SITUATIONAL_MAX_TITLED_BLOCKS`. Returns `[]` for no picks,
+ *  never an empty block. */
+export function situationalBlocks(picks: readonly PickType[]): ItemSetBlock[] {
+  if (picks.length === 0) return [];
+  if (picks.length > SITUATIONAL_MAX_TITLED_BLOCKS) {
+    return [{ type: SITUATIONAL_BLOCK_TYPE, items: picks.map((p) => itemRef(p.id)) }];
+  }
+  return picks.map((p) => ({
+    type: `${SITUATIONAL_BLOCK_TYPE} ${wpaText(p.wpa)}`,
+    items: [itemRef(p.id)],
+  }));
 }
 
 // ── Cross-family de-dup (audit P1-B) ────────────────────────────────────────
@@ -1048,29 +1165,32 @@ export function champScopedReplacePrefix(champ: ChampionRef): string {
   return `CoachBuild ${champ.name} `;
 }
 
-/** @param suffix appended to BOTH the title and the uid, or omitted for the
- *  main set. Two hard constraints on any value passed here:
+/** The ONE set's envelope. Two invariants, both enforced elsewhere and both
+ *  load-bearing:
  *
- *  1. The title must still START WITH "CoachBuild" — a suffix, never a prefix.
- *     Both bridges validate exactly that (`ApplyPayloadValidation
- *     .IsCoachBuildTitle` in the desktop app, `Test-ItemSetsPayload` in
- *     companion.ps1), and it is also what makes the set OURS to prune. A set
- *     that fails it is rejected whole, and HARD RULE 5 says a set that is not
- *     ours is never touched.
+ *  1. The title must START WITH "CoachBuild". Both bridges validate exactly
+ *     that (`ApplyPayloadValidation.IsCoachBuildTitle` in the desktop app,
+ *     `Test-ItemSetsPayload` in companion.ps1), and it is also what makes the
+ *     set OURS to prune. A set that fails it is rejected whole, and HARD RULE
+ *     5 says a set that is not ours is never touched.
  *  2. It must stay inside `champScopedReplacePrefix`'s reach
  *     ("CoachBuild <champ> "), so a lane flip still cleans up the other lane's
- *     copy. `CoachBuild Galio Mid Situational` does; `CoachBuild Situational
- *     Galio Mid` would not.
+ *     copy under companion.ps1's champion-scoped prune.
  *
- *  The MAIN set's uid and title are unchanged, byte for byte — verified against
- *  a real client-written set on disk (`CoachBuild Urgot Top` /
- *  `coachbuild-urgot-top`). That matters for the upgrade path: an existing
- *  install's set is replaced in place rather than accumulating a second copy. */
-function baseSet(champ: ChampionRef, roleLabel: string, suffix?: string): Omit<ItemSet, "blocks"> {
-  const suffixPart = suffix ? ` ${suffix}` : "";
+ *  Both are why 0.112.0's short-lived second set was titled `CoachBuild <champ>
+ *  <role> Situational` and not `CoachBuild Situational <champ> <role>` — and
+ *  why, now that it is gone, the orphan it left on disk is pruned by a normal
+ *  export instead of needing a bespoke cleanup path.
+ *
+ *  The uid and title are unchanged, byte for byte, from every version that has
+ *  ever shipped — verified against a real client-written set on disk
+ *  (`CoachBuild Urgot Top` / `coachbuild-urgot-top`). That is the upgrade path:
+ *  an existing install's set is replaced in place rather than accumulating a
+ *  second copy. */
+function baseSet(champ: ChampionRef, roleLabel: string): Omit<ItemSet, "blocks"> {
   return {
-    uid: `coachbuild-${slugPart(champ.name)}-${slugPart(roleLabel)}${suffix ? `-${slugPart(suffix)}` : ""}`,
-    title: `CoachBuild ${champ.name} ${roleLabel}${suffixPart}`,
+    uid: `coachbuild-${slugPart(champ.name)}-${slugPart(roleLabel)}`,
+    title: `CoachBuild ${champ.name} ${roleLabel}`,
     type: "custom",
     map: "any",
     mode: "any",
@@ -1108,11 +1228,12 @@ function baseSet(champ: ChampionRef, roleLabel: string, suffix?: string): Omit<I
  *  Builds page's SITUATIONAL panel verbatim, exempt from buildLine/
  *  fullItemsOnly/dedupeLineBlocks — see SITUATIONAL_BLOCK_TYPE's note).
  *
- *  RETURNS ONE OR TWO SETS. One when the champion+role has no situational
- *  alternatives at all (50 of 323 live combos, measured 2026-08-19); two
- *  otherwise, the second being a standalone `CoachBuild <champ> <role>
- *  Situational` carrying only that block. Callers must pass the whole array
- *  through in ONE /apply-itemsets call — see the push site.
+ *  RETURNS EXACTLY ONE SET, always. It briefly (web 0.112.0, 32 minutes in
+ *  production) returned a second standalone `CoachBuild <champ> <role>
+ *  Situational` set; the user rejected it on sight and it is gone. The return
+ *  type stays `ItemSet[]` because both bridges' wire contract is a LIST and
+ *  their merge takes the whole list — see the Situational push site for why a
+ *  single call is load-bearing either way.
  *
  *  PADDING CASCADES, stated exactly (this doc claimed a symmetry that never
  *  existed — that both consensus lines padded from "the other consensus" —
@@ -1378,50 +1499,37 @@ export function buildItemSets(
   const blocks: ItemSetBlock[] = [{ type: "Starting", items: [itemRef(items.starter.id)] }];
   for (const b of survivors) blocks.push({ type: blockTitle(b), items: toItemRefs(b.line) });
 
-  // ── Situational: a block LAST, and a second set (2026-08-19) ─────────────
-  // LAST inside the main set on purpose. Everything above it is a build you
-  // could play start to finish; this is a row of swaps to read after you have
-  // one. Putting it above the build lines would make the first thing a user
-  // sees mid-game a list of things NOT to buy yet.
+  // ── Situational: blocks LAST, inside the ONE set ──────────────────────────
+  // LAST inside the set on purpose. Everything above it is a build you could
+  // play start to finish; this is a row of swaps to read after you have one.
+  // Putting it above the build lines would make the first thing a user sees
+  // mid-game a list of things NOT to buy yet.
   //
-  // The second set is what makes it selectable on its own, which is the half
-  // of the ask a block cannot satisfy. It costs no bridge change and no
-  // release: BOTH bridges have always accepted 1-3 sets in one call
-  // (`request.Sets.Count is < 1 or > 3` in the desktop app's
-  // ApplyPayloadValidation; the same 1-3 rule in companion.ps1 1.14.1), and
-  // both merge by taking the whole list, so the pair lands in one PUT and the
-  // O(1) CoachBuild-prune still bounds the payload. Writing them in the SAME
-  // call is load-bearing: the merge keeps only the sets being written now and
-  // drops every other CoachBuild-titled set, so splitting them across two
-  // calls would have the second delete the first.
+  // ── ONE SET. There is no second set, and there was one for 32 minutes ────
+  // 0.112.0 also emitted a standalone `CoachBuild <champ> <role> Situational`
+  // set. The user saw both in the shop's set dropdown and rejected it:
+  // "you added it as a new set i just wanted it in the same default set from
+  // coachbuild." So this returns exactly ONE set again, `apply-itemsets`
+  // reports `count=1` again, and the shop has nothing to switch between.
   //
-  // Emitted only when there is something in it. An empty second set would be a
-  // titled, selectable, permanently blank entry in the user's shop — worse
-  // than absent. (Contrast the WPA build block above, which IS emitted empty:
-  // there its presence is the signal that the export ran.)
-  // `wpaBuildIds` (computed above for the Hidden gem) is the exclusion set —
-  // deliberately the SAME set the gem uses, so "already in your build" means
-  // one thing in this file and not two.
+  // THE ORPHAN ON DISK CLEANS ITSELF UP, and that is not luck — it is the
+  // prune both bridges already run. `ItemSetMergeService.Merge` drops EVERY
+  // existing set whose title starts with "CoachBuild" before appending the
+  // sets in the current write (companion.ps1's `Merge-ItemSets` does the same,
+  // scoped to `champScopedReplacePrefix`, which `CoachBuild <champ> <role>
+  // Situational` is inside by construction — see `baseSet`'s constraint 2,
+  // which was written for exactly this suffix). So the first export after this
+  // ships removes the orphaned set rather than leaving it in the user's shop
+  // forever. Pinned by a test that seeds one into a copy of a real 61-set
+  // ItemSets.json and asserts it is gone while all 60 foreign sets come back
+  // byte-identical.
+  //
+  // Emitted only when there is something in it. `wpaBuildIds` (computed above
+  // for the Hidden gem) is the exclusion set — deliberately the SAME set the
+  // gem uses, so "already in your build" means one thing in this file and not
+  // two.
   const situational = situationalBlockPicks(items, wpaBuildIds);
-  const situationalBlock: ItemSetBlock | null =
-    situational.length > 0
-      ? { type: SITUATIONAL_BLOCK_TYPE, items: situational.map((p) => itemRef(p.id)) }
-      : null;
-  if (situationalBlock) blocks.push(situationalBlock);
+  for (const block of situationalBlocks(situational)) blocks.push(block);
 
-  const sets: ItemSet[] = [{ ...baseSet(champ, roleLabel), blocks }];
-  if (situationalBlock) {
-    sets.push({
-      ...baseSet(champ, roleLabel, SITUATIONAL_BLOCK_TYPE),
-      // Higher than the main set's 0 so it sorts after it wherever the client
-      // honours sortrank. UNVERIFIED as a default-selection guarantee — the
-      // real ItemSets.json on this machine has every set at 0 except a U.GG
-      // one at 9999, so the field is clearly used, but which set the shop
-      // pre-selects for a champion with two sets cannot be observed without a
-      // live game. See HANDOFF-core-situational.md.
-      sortrank: 1,
-      blocks: [situationalBlock],
-    });
-  }
-  return sets;
+  return [{ ...baseSet(champ, roleLabel), blocks }];
 }

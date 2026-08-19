@@ -178,8 +178,10 @@ describe("buildItemSets — block set", () => {
     // category, so letting it inflate the "four categories" budget would
     // quietly re-open the pre-2026-07-28 nine-block shop panel.
     const types = blockTypes(sets);
-    expect(types.filter((t) => t !== "Situational").length).toBeLessThanOrEqual(5);
-    expect(types.filter((t) => t === "Situational").length).toBeLessThanOrEqual(1);
+    expect(types.filter((t) => !t.startsWith("Situational")).length).toBeLessThanOrEqual(5);
+    // Situational is one block per item since 2026-08-19 (the delta lives in
+    // the title). Bounded by SITUATIONAL_DISPLAY_LIMIT, not by 1.
+    expect(types.filter((t) => t.startsWith("Situational")).length).toBeLessThanOrEqual(6);
   });
 
   it("Starting stays its own slot and never leaks into a build line (HARD RULE 2)", () => {
@@ -235,9 +237,11 @@ describe("buildItemSets — block set", () => {
       alts: { boots: [pick(3111), pick(3158)] },
     });
     const sets = buildItemSets(CHAMP, "Bot", baseBuild(items), null, baseItemMetaMap());
-    const sit = findBlock(sets, "Situational");
-    expect(sit).toBeDefined();
-    const ids = sit!.items.map((i) => Number(i.id));
+    // Since 2026-08-19 the situational row is one block PER ITEM, titled with
+    // that item's WPA delta, so it has to be read back across blocks.
+    const sitBlocks = sets[0].blocks.filter((b) => b.type.startsWith("Situational"));
+    expect(sitBlocks.length).toBeGreaterThan(0);
+    const ids = sitBlocks.flatMap((b) => b.items.map((i) => Number(i.id)));
     // BOTH boots alternatives survive. If a future change routed Situational
     // through buildLine, this drops to 1 and fails.
     expect(ids).toContain(3111);

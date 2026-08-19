@@ -24,6 +24,7 @@ import {
   hasFollowedChampSelectChampion,
   resetChampSelectFollowState,
   tryClaimAutoExportLock,
+  resetAutoExportLockPrune,
 } from "../live/champSelectFollowState";
 import { isBuildForLane } from "../hextech/heroContracts";
 
@@ -38,6 +39,13 @@ function makeLocalStorageShim() {
       store.delete(k);
     },
     clear: () => store.clear(),
+    // Enumeration, because the legacy-key prune walks the store. A shim
+    // without these silently made the prune a no-op and its test vacuous.
+    get length() {
+      return store.size;
+    },
+    key: (i: number) => [...store.keys()][i] ?? null,
+    _dump: () => [...store.keys()],
   };
 }
 
@@ -321,24 +329,115 @@ describe("lane-flip auto-export sequence (BuildTabContent effect, replayed)", ()
 });
 
 describe("tryClaimAutoExportLock", () => {
+  beforeEach(() => resetAutoExportLockPrune());
   afterEach(() => unstubWindow());
 
   it("fails open (returns true) with no window (SSR)", () => {
     expect(tryClaimAutoExportLock("runes", 1, 103, "mid")).toBe(true);
   });
 
-  it("first claim succeeds, a second claim within the TTL for the SAME key fails", () => {
+  it("first claim succeeds, a second claim within the TTL for the SAME pair fails", () => {
     stubWindow(makeLocalStorageShim());
     expect(tryClaimAutoExportLock("runes", 1, 103, "mid")).toBe(true);
     expect(tryClaimAutoExportLock("runes", 1, 103, "mid")).toBe(false);
   });
 
-  it("different championId/kind/laneId are independent locks", () => {
+  it("different kind/championId/laneId all claim freely", () => {
     stubWindow(makeLocalStorageShim());
     expect(tryClaimAutoExportLock("runes", 1, 103, "mid")).toBe(true);
     expect(tryClaimAutoExportLock("items", 1, 103, "mid")).toBe(true); // different kind
     expect(tryClaimAutoExportLock("runes", 1, 7, "mid")).toBe(true); // different championId
-    expect(tryClaimAutoExportLock("runes", 1, 103, "bot")).toBe(true); // different laneId -- a lane flip's lock must not be starved by the OLD lane's lock (v0.35.0)
+    expect(tryClaimAutoExportLock("runes", 1, 103, "bot")).toBe(true); // different laneId (v0.35.0 lane flip)
+  });
+
+  // ── The 2026-08-19 report, replayed ────────────────────────────────────────
+  // "for like 20s the runes didnt change as i switched to udyr then went back
+  // to galio quickly. It stayed on udyr runes but changed after a while."
+  // companion.log: apply-runes 14:30:29, 14:30:31, then nothing until 14:30:59
+  // — 28 seconds, i.e. the old 30s TTL.
+  //
+  // The old key was per (kind, champion, lane) and was never released, so
+  // coming BACK to a champion inside 30 seconds found its own key still warm.
+  // These three fail against that implementation and pass against a shared
+  // most-recently-exported record.
+  it("A -> B -> A re-claims immediately: the last champion picked wins", () => {
+    stubWindow(makeLocalStorageShim());
+    expect(tryClaimAutoExportLock("runes", 1, 3, "mid")).toBe(true); // Galio
+    expect(tryClaimAutoExportLock("runes", 1, 77, "jungle")).toBe(true); // Udyr
+    // Straight back to Galio, well inside the 30s TTL. The client is currently
+    // holding UDYR's runes, so this must fire.
+    expect(tryClaimAutoExportLock("runes", 1, 3, "mid")).toBe(true);
+  });
+
+  it("A -> B -> A -> B -> A re-claims every single time", () => {
+    stubWindow(makeLocalStorageShim());
+    const seq: [number, string][] = [[3, "mid"], [77, "jungle"], [3, "mid"], [77, "jungle"], [3, "mid"]];
+    for (const [champ, lane] of seq) {
+      expect(tryClaimAutoExportLock("runes", 1, champ, lane)).toBe(true);
+    }
+  });
+
+  it("agrees with the in-document dedup on the same sequence — one rule, not two", () => {
+    // shouldAutoExportForLane has always said "latest wins ... A -> B -> A:
+    // each flip differs from whatever was most recently applied, so each
+    // re-fires". The cross-tab record contradicted it for 30 seconds. Now the
+    // two answer identically for every step of the sequence, which is the
+    // actual invariant — either alone can be right while the pair disagrees.
+    stubWindow(makeLocalStorageShim());
+    resetChampSelectFollowState();
+    noteCompanionPhase("ChampSelect");
+    const seq: [number, string][] = [[3, "mid"], [77, "jungle"], [3, "mid"], [3, "mid"]];
+    for (const [champ, lane] of seq) {
+      setCurrentChampSelectChampionId(champ);
+      const inDocument = shouldAutoExportForLane("runes", champ, lane);
+      const crossTab = tryClaimAutoExportLock("runes", 1, champ, lane);
+      expect(crossTab).toBe(inDocument);
+      if (inDocument) markAutoExported("runes", champ, lane);
+    }
+  });
+
+  it("still blocks a SECOND TAB repeating the identical pair — the case it exists for", () => {
+    // The reason the record is not simply released on completion: tab B's own
+    // lastApplied is empty, so only a shared record stops it writing the same
+    // set a second time.
+    const shim = makeLocalStorageShim();
+    stubWindow(shim);
+    expect(tryClaimAutoExportLock("items", 1, 3, "mid")).toBe(true); // tab A
+    expect(tryClaimAutoExportLock("items", 1, 3, "mid")).toBe(false); // tab B, same tick
+    expect(tryClaimAutoExportLock("items", 5, 3, "mid")).toBe(false); // tab B, later tick
+  });
+
+  it("expires by TTL, so a crashed tab cannot pin the record forever", () => {
+    const shim = makeLocalStorageShim();
+    stubWindow(shim);
+    expect(tryClaimAutoExportLock("runes", 1, 3, "mid")).toBe(true);
+    expect(tryClaimAutoExportLock("runes", 1, 3, "mid")).toBe(false);
+    // Age the record past the 30s TTL by rewriting its timestamp.
+    const key = "coachbuild:autoExport:last:runes";
+    const rec = JSON.parse(shim.getItem(key)!);
+    shim.setItem(key, JSON.stringify({ ...rec, at: rec.at - 30_001 }));
+    expect(tryClaimAutoExportLock("runes", 1, 3, "mid")).toBe(true);
+  });
+
+  it("uses ONE key per kind, and prunes the pre-2026-08-19 per-pair keys", () => {
+    const shim = makeLocalStorageShim();
+    // A returning user's storage, littered by the old scheme.
+    shim.setItem("coachbuild:autoExport:runes:3:mid", String(Date.now()));
+    shim.setItem("coachbuild:autoExport:items:77:jungle", String(Date.now()));
+    shim.setItem("coachbuild:somethingElse", "keep me");
+    stubWindow(shim);
+    tryClaimAutoExportLock("runes", 1, 3, "mid");
+    const keys = shim._dump();
+    expect(keys).toContain("coachbuild:autoExport:last:runes");
+    expect(keys).toContain("coachbuild:somethingElse"); // unrelated keys survive
+    expect(keys.filter((k) => /^coachbuild:autoExport:(items|runes):/.test(k))).toEqual([]);
+  });
+
+  it("survives a corrupt record rather than blocking the export forever", () => {
+    const shim = makeLocalStorageShim();
+    shim.setItem("coachbuild:autoExport:last:runes", "not json");
+    stubWindow(shim);
+    expect(tryClaimAutoExportLock("runes", 1, 3, "mid")).toBe(true);
   });
 
   // v0.101.0, the BLOCK direction of the same change: the epoch is a per-

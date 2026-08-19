@@ -31,6 +31,13 @@ export const metadata: Metadata = {
   // don't cover; the apple-prefixed tag above stays for iOS Safari.
   other: {
     "mobile-web-app-capable": "yes",
+    // The version of the web app in THIS document, for the desktop companion
+    // to read out of its own WebView2 window (see app/api/app-version/route.ts
+    // for why it has to). Same source as the footer and the service-worker
+    // cache name: package.json -> next.config.mjs -> NEXT_PUBLIC_APP_VERSION.
+    // A meta tag rather than a global because it is present before hydration,
+    // so the host can read it the moment navigation completes.
+    "coachbuild-version": process.env.NEXT_PUBLIC_APP_VERSION ?? "",
   },
   icons: {
     icon: "/icon-192.png",

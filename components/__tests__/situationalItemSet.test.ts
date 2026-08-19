@@ -19,7 +19,13 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { buildItemSets, situationalBlockPicks, champScopedReplacePrefix } from "../hextech/itemSetBody";
+import {
+  buildItemSets,
+  situationalBlockPicks,
+  situationalBlocks,
+  champScopedReplacePrefix,
+} from "../hextech/itemSetBody";
+import { wpaText } from "../StatBadge";
 import {
   flattenSituational,
   situationalShortlist,
@@ -126,7 +132,101 @@ const block = (set: { blocks: { type: string; items: { id: string; count: number
   set.blocks.find((b) => b.type === type);
 const idsOf = (b: { items: { id: string }[] } | undefined) => (b?.items ?? []).map((i) => Number(i.id));
 
+// ── Situational is now one block PER ITEM, titled with that item's delta ────
+// (2026-08-19, "is there a way to show the wpa values in game so i can make
+// better decisions on what to buy?"). A block's title is the only writable
+// string anywhere near an item, so binding a number to an item means one block
+// per item. These helpers read the row back across however many blocks it took.
+type TestBlock = { type: string; items: { id: string; count: number }[] };
+const isSituational = (b: TestBlock) => b.type === "Situational" || b.type.startsWith("Situational ");
+const situationalBlocksOf = (set: { blocks: TestBlock[] }) => set.blocks.filter(isSituational);
+const situationalIds = (set: { blocks: TestBlock[] }) =>
+  situationalBlocksOf(set).flatMap((b) => b.items.map((i) => Number(i.id)));
+const situationalEntries = (set: { blocks: TestBlock[] }) =>
+  situationalBlocksOf(set).flatMap((b) => b.items);
+
+// ── A stand-in for the user's real Config\ItemSets.json ─────────────────────
+// SHAPE TAKEN FROM THE REAL FILE, VALUES NOT. Read on 2026-08-19 from
+// C:\Riot Games\League of Legends\Config\ItemSets.json (59,622 bytes, md5
+// 46db31f3…, 61 sets, unmodified since 2026-08-11): top-level keys
+// {accountId, itemSets, timestamp}; per-set keys {associatedChampions,
+// associatedMaps, blocks, map, mode, preferredItemSlots, sortrank,
+// startedFrom, title, type, uid}; per-block keys {hideIfSummonerSpell, items,
+// showIfSummonerSpell, type}; per-item keys {count, id}. `startedFrom` and the
+// two summoner-spell fields are the client's OWN additions — it rewrote our
+// set with them — which is why they are here: a fixture missing them would
+// pass a merge that dropped them.
+//
+// The values are synthetic on purpose. The real file carries the user's
+// accountId, and a test fixture is not the place for it. The real file itself
+// IS run through this same merge, outside the suite — see
+// HANDOFF-core-stale-webview.md for that measurement.
+const REAL_SET_KEYS = [
+  "associatedChampions", "associatedMaps", "blocks", "map", "mode",
+  "preferredItemSlots", "sortrank", "startedFrom", "title", "type", "uid",
+] as const;
+type RealSet = Record<string, unknown> & { title?: string };
+type RealItemSetsFile = { accountId: number; timestamp: number; itemSets: RealSet[] };
+
+/** The set title web 0.112.0 wrote and the user rejected. */
+const ORPHAN_TITLE = "CoachBuild Galio Mid Situational";
+
+const UGG_BLOCK_TITLES = [
+  "Starting Items", "Core Items", "Fourth Item Options", "Fifth Item Options", "Sixth Item Options",
+];
+
+function foreignSet(index: number, title: string): RealSet {
+  return {
+    associatedChampions: [100 + index],
+    associatedMaps: [11],
+    blocks: UGG_BLOCK_TITLES.map((type, b) => ({
+      hideIfSummonerSpell: "",
+      items: [{ count: 1, id: String(3000 + index * 10 + b) }],
+      showIfSummonerSpell: "",
+      type,
+    })),
+    map: "any",
+    mode: "any",
+    preferredItemSlots: [],
+    sortrank: 0,
+    startedFrom: "blank",
+    title,
+    type: "custom",
+    uid: `foreign-${index}`,
+  };
+}
+
+/** 61 sets: 59 U.GG + 1 hand-made + the ONE CoachBuild set an existing install
+ *  already has (`CoachBuild Urgot Top`, present verbatim in the real file). */
+function realItemSetsFile(): RealItemSetsFile {
+  const itemSets: RealSet[] = [];
+  for (let i = 0; i < 59; i++) itemSets.push(foreignSet(i, i === 7 ? "U.GG - Galio" : `U.GG - Champ${i}`));
+  itemSets.push(foreignSet(59, "AP"));
+  itemSets.push({ ...foreignSet(60, "CoachBuild Urgot Top"), uid: "coachbuild-urgot-top" });
+  return { accountId: 1234567890, timestamp: 1755000000000, itemSets };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
+
+describe("the ItemSets.json stand-in matches the real file's shape", () => {
+  it("carries every key the real client writes, on every level", () => {
+    // Without this the fixture could quietly drift into a simpler shape than
+    // the client actually produces, and the merge tests below would be proving
+    // something about a document nobody has.
+    const file = realItemSetsFile();
+    expect(Object.keys(file).sort()).toEqual(["accountId", "itemSets", "timestamp"]);
+    expect(file.itemSets).toHaveLength(61);
+    for (const s of file.itemSets) {
+      expect(Object.keys(s).sort()).toEqual([...REAL_SET_KEYS].sort());
+      for (const b of s.blocks as { [k: string]: unknown }[]) {
+        expect(Object.keys(b).sort()).toEqual(["hideIfSummonerSpell", "items", "showIfSummonerSpell", "type"]);
+        for (const i of b.items as object[]) expect(Object.keys(i).sort()).toEqual(["count", "id"]);
+      }
+    }
+    // Exactly one CoachBuild set to start with — the pre-upgrade state.
+    expect(file.itemSets.filter((s) => String(s.title).startsWith("CoachBuild"))).toHaveLength(1);
+  });
+});
 
 describe("situational — the ids in the screenshot", () => {
   it("every screenshot item resolves to its Summoner's Rift id, not an alt-map twin", () => {
@@ -140,13 +240,59 @@ describe("situational — the ids in the screenshot", () => {
     }
   });
 
-  it("the emitted block carries those ids as STRINGS with count 1 (LCU item-set schema)", () => {
+  it("the emitted blocks carry those ids as STRINGS with count 1 (LCU item-set schema)", () => {
     const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
-    const sit = block(sets[0], "Situational")!;
-    expect(sit.items).toEqual(SCREENSHOT_ITEMS.map((x) => ({ id: String(x.id), count: 1 })));
-    for (const entry of sit.items) {
+    expect(situationalEntries(sets[0])).toEqual(
+      SCREENSHOT_ITEMS.map((x) => ({ id: String(x.id), count: 1 }))
+    );
+    for (const entry of situationalEntries(sets[0])) {
       expect(typeof entry.id).toBe("string");
       expect(entry.count).toBe(1);
+    }
+  });
+
+  it("each screenshot item gets its OWN block, titled with the delta the panel prints", () => {
+    // The whole point of the 2026-08-19 titling change: the shop can now say
+    // WHICH item is worth +4.27 and which is worth -0.06. An LCU block item is
+    // {id, count} — the block title is the only place a number can live, so
+    // one item per block is the only shape that binds them.
+    const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
+    const blocks = situationalBlocksOf(sets[0]);
+    expect(blocks).toHaveLength(SCREENSHOT_ITEMS.length);
+    expect(blocks.map((b) => b.type)).toEqual([
+      "Situational +4.27",
+      "Situational +2.79",
+      "Situational +1.13",
+      "Situational +0.45",
+      "Situational +0.39",
+      "Situational -0.06",
+    ]);
+    for (const b of blocks) expect(b.items).toHaveLength(1);
+  });
+
+  it("prints the number through the Builds page's OWN formatter, not a second toFixed", () => {
+    // Two surfaces formatting the same field with two formatters is how they
+    // end up disagreeing at a rounding boundary. SituationalCard renders
+    // wpaText(pick.wpa); the block title must contain the same string.
+    const picks = situationalBlockPicks(galioMidItems());
+    const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
+    const blocks = situationalBlocksOf(sets[0]);
+    picks.forEach((pick, i) => {
+      expect(blocks[i].type).toBe(`Situational ${wpaText(pick.wpa)}`);
+      expect(blocks[i].items[0].id).toBe(String(pick.id));
+    });
+  });
+
+  it("keeps every situational title inside the longest title this app already ships", () => {
+    // Measured 2026-08-19: Riot's own Recommended sets and the user's real
+    // ItemSets.json both top out at 19 chars; THIS app already emits 29
+    // ("Pro build (same as WPA build)") and has since 2026-07-29. The
+    // situational titles are 16-17. Bounded here so a future "add the item
+    // name" idea has to argue with a test.
+    const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
+    for (const b of situationalBlocksOf(sets[0])) {
+      expect(b.type.length).toBeLessThanOrEqual(17);
+      expect(b.type).not.toMatch(/Boots|Shadowflame|Aegis/); // never the item NAME
     }
   });
 });
@@ -168,18 +314,48 @@ describe("situational — block generation and ordering", () => {
     expect(situationalBlockPicks(galioMidItems()).map((x) => x.id)).not.toContain(6664);
   });
 
-  it("emits NO block and NO second set when the champion has no alternatives", () => {
+  it("emits NO situational block at all when the champion has no alternatives", () => {
     const noAlts = { ...galioMidItems(), alts: undefined };
     const sets = buildItemSets(GALIO, "Mid", galioBuild(noAlts), null, galioMeta());
     expect(sets).toHaveLength(1);
-    expect(block(sets[0], "Situational")).toBeUndefined();
+    expect(situationalBlocksOf(sets[0])).toEqual([]);
   });
 
-  it("sits LAST in the main set, after every build block", () => {
+  it("sits LAST in the set, after every build block, and is contiguous", () => {
     const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
     const types = sets[0].blocks.map((b) => b.type);
     expect(types[0]).toBe("Starting");
-    expect(types[types.length - 1]).toBe("Situational");
+    const firstSituational = types.findIndex((t) => t.startsWith("Situational"));
+    expect(firstSituational).toBeGreaterThan(0);
+    // Everything from there to the end is situational, and nothing before it is.
+    for (let i = firstSituational; i < types.length; i++) expect(types[i]).toMatch(/^Situational/);
+    for (let i = 0; i < firstSituational; i++) expect(types[i]).not.toMatch(/^Situational/);
+  });
+
+  it("degrades to ONE plain block when there are more picks than can be titled", () => {
+    // Unreachable in production today: situationalBlockPicks caps at
+    // SITUATIONAL_DISPLAY_LIMIT, which equals the titling cap (asserted below).
+    // Reachable — and reached — by calling the pure function directly, which is
+    // the only honest way to test a guard that exists for a FUTURE raise of the
+    // display limit rather than for today's data.
+    const many = Array.from({ length: SITUATIONAL_DISPLAY_LIMIT + 1 }, (_, i) =>
+      p(1000 + i, `Item ${i}`, 1 - i * 0.1)
+    );
+    const blocks = situationalBlocks(many);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe("Situational");
+    expect(blocks[0].items.map((x) => Number(x.id))).toEqual(many.map((x) => x.id));
+  });
+
+  it("titles exactly as many picks as the page displays — the two caps are one number", () => {
+    // If SITUATIONAL_DISPLAY_LIMIT is ever raised past the titling cap, every
+    // real export silently falls into the degrade branch above and the numbers
+    // vanish from the shop with the whole suite green. This is the tripwire.
+    const atCap = Array.from({ length: SITUATIONAL_DISPLAY_LIMIT }, (_, i) =>
+      p(2000 + i, `Item ${i}`, 1 - i * 0.1)
+    );
+    expect(situationalBlocks(atCap)).toHaveLength(SITUATIONAL_DISPLAY_LIMIT);
+    expect(situationalBlocks([])).toEqual([]);
   });
 
   it("the shop block and the Builds panel read from ONE helper — not two copies", () => {
@@ -234,14 +410,20 @@ describe("situational — negative deltas", () => {
     const sit = situationalBlockPicks(items);
     expect(sit.map((x) => x.id)).toEqual([1, 2]);
     const sets = buildItemSets(GALIO, "Mid", galioBuild(items), null, galioMeta());
-    expect(idsOf(block(sets[0], "Situational"))).toEqual([1, 2]);
+    expect(situationalIds(sets[0])).toEqual([1, 2]);
+    // ...and the shop says so out loud, rather than showing a bare icon row
+    // the user has to guess at.
+    expect(situationalBlocksOf(sets[0]).map((b) => b.type)).toEqual([
+      "Situational -0.50",
+      "Situational -2.00",
+    ]);
   });
 });
 
 describe("situational — boots and duplicates", () => {
   it("keeps ALL THREE situational boots even though a different boot is in the main path", () => {
     const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
-    const sit = idsOf(block(sets[0], "Situational"));
+    const sit = situationalIds(sets[0]);
     expect(sit).toEqual(expect.arrayContaining([3158, 3009, 3047]));
     // Sorcerer's Shoes (3020) is the main path's boot and is NOT an alternative
     // to itself — it never appears in `alts`, so it must not appear here.
@@ -269,10 +451,10 @@ describe("situational — boots and duplicates", () => {
     items.alts!.third = [p(8020, "Abyssal Mask", 9.0)];
     const sets = buildItemSets(GALIO, "Mid", galioBuild(items), null, galioMeta());
     expect(idsOf(block(sets[0], "WPA build"))).toContain(8020);
-    expect(idsOf(block(sets[0], "Situational"))).not.toContain(8020);
+    expect(situationalIds(sets[0])).not.toContain(8020);
     // ...and it is dropped, not backfilled from a 7th pick the page never
     // showed. Hollow Radiance (6664) is the 7th and must stay off.
-    expect(idsOf(block(sets[0], "Situational"))).not.toContain(6664);
+    expect(situationalIds(sets[0])).not.toContain(6664);
   });
 
   it("KEEPS a pick that only overlaps a Pro/OTP block — that agreement is a finding", () => {
@@ -293,7 +475,7 @@ describe("situational — boots and duplicates", () => {
     const sets = buildItemSets(GALIO, "Mid", galioBuild(items), consensus, galioMeta(), null);
     expect(idsOf(block(sets[0], "Pro build"))).toContain(4645);
     expect(idsOf(block(sets[0], "WPA build"))).not.toContain(4645);
-    expect(idsOf(block(sets[0], "Situational"))).toContain(4645);
+    expect(situationalIds(sets[0])).toContain(4645);
   });
 
   it("the exclusion set is the SAME one the Hidden gem uses", () => {
@@ -322,19 +504,43 @@ describe("situational — boots and duplicates", () => {
   });
 });
 
-describe("situational — the standalone second set", () => {
-  it("emits exactly two sets, the second carrying only the Situational block", () => {
+describe("situational — ONE set, and the orphan 0.112.0 left behind", () => {
+  it("emits exactly ONE set, with the situational picks inside it", () => {
+    // web 0.112.0 emitted a second `CoachBuild Galio Mid Situational` set. The
+    // user saw both in the shop's set dropdown and said: "you added it as a new
+    // set i just wanted it in the same default set from coachbuild."
     const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
-    expect(sets).toHaveLength(2);
-    expect(sets[1].blocks).toHaveLength(1);
-    expect(sets[1].blocks[0].type).toBe("Situational");
-    expect(sets[1].blocks[0].items).toEqual(block(sets[0], "Situational")!.items);
+    expect(sets).toHaveLength(1);
+    expect(sets[0].title).toBe("CoachBuild Galio Mid");
+    expect(situationalIds(sets[0])).toEqual(SCREENSHOT_ITEMS.map((x) => x.id));
   });
 
-  it("both titles start with CoachBuild and both fall inside the champ-scoped replace prefix", () => {
+  it("never emits a set whose title carries the Situational suffix, for ANY champion+lane", () => {
+    // The specific string the user rejected. Asserted across several combos and
+    // both the with-alternatives and without-alternatives paths, because the
+    // second set was CONDITIONAL — a single-champion assertion could pass while
+    // the branch that emits it stayed live.
+    const combos: [ChampionRef, string, ItemsBlock][] = [
+      [GALIO, "Mid", galioMidItems()],
+      [GALIO, "Mid", { ...galioMidItems(), alts: undefined }],
+      [{ id: 6, key: "Urgot", name: "Urgot", icon: "u.png" }, "Top", galioMidItems()],
+    ];
+    for (const [champ, role, items] of combos) {
+      const sets = buildItemSets(champ, role, { ...galioBuild(items), champion: champ }, null, galioMeta());
+      expect(sets).toHaveLength(1);
+      for (const s of sets) {
+        expect(s.title).not.toMatch(/Situational/);
+        expect(s.uid).not.toMatch(/situational/);
+      }
+    }
+  });
+
+  it("the ONE title starts with CoachBuild and falls inside the champ-scoped replace prefix", () => {
     // Both bridges reject the WHOLE payload if any title fails the first rule
     // (ApplyPayloadValidation.IsCoachBuildTitle / Test-ItemSetsPayload), and the
-    // second rule is what makes a lane flip clean up the other lane's copies.
+    // second rule is what makes a lane flip clean up the other lane's copies —
+    // and what makes 0.112.0's orphan cleanable, since it was named to sit
+    // inside the same prefix.
     const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
     const prefix = champScopedReplacePrefix(GALIO);
     expect(prefix).toBe("CoachBuild Galio ");
@@ -343,7 +549,9 @@ describe("situational — the standalone second set", () => {
       expect(s.title.startsWith(prefix)).toBe(true);
     }
     expect(sets[0].title).toBe("CoachBuild Galio Mid");
-    expect(sets[1].title).toBe("CoachBuild Galio Mid Situational");
+    // The orphan's own title, which is what the cleanup below has to match.
+    expect(ORPHAN_TITLE.startsWith("CoachBuild")).toBe(true);
+    expect(ORPHAN_TITLE.startsWith(prefix)).toBe(true);
   });
 
   it("leaves the MAIN set's uid and title byte-identical (the upgrade path)", () => {
@@ -358,18 +566,11 @@ describe("situational — the standalone second set", () => {
     expect(sets[0].title).toBe("CoachBuild Urgot Top");
   });
 
-  it("gives the two sets distinct uids and sorts the situational one after the main one", () => {
+  it("carries the full LCU set envelope, sortrank back to a single 0", () => {
     const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
-    expect(sets[0].uid).toBe("coachbuild-galio-mid");
-    expect(sets[1].uid).toBe("coachbuild-galio-mid-situational");
-    expect(sets[0].uid).not.toBe(sets[1].uid);
-    expect(sets[0].sortrank).toBe(0);
-    expect(sets[1].sortrank).toBe(1);
-  });
-
-  it("carries the full LCU set envelope on the second set too", () => {
-    const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
-    const s = sets[1];
+    const s = sets[0];
+    expect(s.uid).toBe("coachbuild-galio-mid");
+    expect(s.sortrank).toBe(0);
     expect(s.type).toBe("custom");
     expect(s.map).toBe("any");
     expect(s.mode).toBe("any");
@@ -382,6 +583,70 @@ describe("situational — the standalone second set", () => {
     const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
     expect(sets.length).toBeGreaterThanOrEqual(1);
     expect(sets.length).toBeLessThanOrEqual(3);
+  });
+
+  // ── The orphan cleanup, against the user's REAL 61-set file ───────────────
+  // 0.112.0 was live for 32 minutes and the user played at least one game on
+  // it, so `CoachBuild Galio Mid Situational` is on a real disk somewhere. It
+  // must not sit in their shop forever. It does not, and the mechanism is the
+  // prune both bridges already run — no new cleanup path, no migration.
+  //
+  // These run the SAME merge the desktop bridge runs, reimplemented here only
+  // because the bridge is C#; the C# source is asserted separately below so the
+  // reimplementation cannot drift from it silently.
+  const mergeLikeTheBridge = (existing: RealItemSetsFile, newSets: { title: string }[]) => ({
+    ...existing,
+    itemSets: [
+      ...existing.itemSets.filter((s) => !(typeof s.title === "string" && s.title.startsWith("CoachBuild"))),
+      ...newSets,
+    ],
+  });
+
+  it("prunes the orphaned '… Situational' set on the next ordinary export", () => {
+    const file = realItemSetsFile();
+    const before = file.itemSets.length;
+    // Seed the orphan exactly as 0.112.0 wrote it.
+    file.itemSets.push({ title: ORPHAN_TITLE, uid: "coachbuild-galio-mid-situational", sortrank: 1 } as RealSet);
+    const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
+    const merged = mergeLikeTheBridge(file, sets);
+    const titles = merged.itemSets.map((s) => s.title);
+    expect(titles).not.toContain(ORPHAN_TITLE);
+    expect(titles.filter((t) => typeof t === "string" && t.startsWith("CoachBuild"))).toEqual([
+      "CoachBuild Galio Mid",
+    ]);
+    // The file had ONE CoachBuild set before (Urgot Top); after the seed and
+    // the export it has one again, not three.
+    expect(merged.itemSets).toHaveLength(before + 1 - 1 - 1 + 1);
+  });
+
+  it("leaves all 60 of the user's own sets byte-identical, and in the same order", () => {
+    const original = realItemSetsFile();
+    const foreignBefore = original.itemSets.filter((s) => !String(s.title ?? "").startsWith("CoachBuild"));
+    const seeded = realItemSetsFile();
+    seeded.itemSets.push({ title: ORPHAN_TITLE, uid: "coachbuild-galio-mid-situational", sortrank: 1 } as RealSet);
+    const sets = buildItemSets(GALIO, "Mid", galioBuild(), null, galioMeta());
+    const merged = mergeLikeTheBridge(seeded, sets);
+    const foreignAfter = merged.itemSets.filter((s) => !String(s.title ?? "").startsWith("CoachBuild"));
+    expect(foreignAfter).toHaveLength(60);
+    expect(foreignBefore).toHaveLength(60);
+    // Byte-identical AND in the same order — a set-equality check would pass on
+    // a reordered file, and the client renders them in file order.
+    expect(JSON.stringify(foreignAfter)).toBe(JSON.stringify(foreignBefore));
+    // The third-party sets the user named are among them, untouched.
+    const titles = foreignAfter.map((s) => s.title);
+    expect(titles).toContain("U.GG - Galio");
+    // Top-level document fields survive (accountId/timestamp are what the
+    // client uses to decide the file is theirs).
+    expect(Object.keys(merged).sort()).toEqual(Object.keys(original).sort());
+  });
+
+  it("the seeded orphan is a real difference — the same merge WITHOUT it is not the same file", () => {
+    // Positive control for the two tests above: if the prune were a no-op, or
+    // the fixture had no orphan in it, they would pass over nothing.
+    const withOrphan = realItemSetsFile();
+    withOrphan.itemSets.push({ title: ORPHAN_TITLE, uid: "coachbuild-galio-mid-situational", sortrank: 1 } as RealSet);
+    expect(withOrphan.itemSets.map((s) => s.title)).toContain(ORPHAN_TITLE);
+    expect(realItemSetsFile().itemSets.map((s) => s.title)).not.toContain(ORPHAN_TITLE);
   });
 });
 

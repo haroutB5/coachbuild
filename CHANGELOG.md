@@ -1,5 +1,87 @@
 # Changelog
 
+## Web 0.113.0 — 2026-08-19 — one set, the numbers in it, and the runes keep up
+
+Three things, all from the same session's on-device evidence.
+
+### Changed — back to ONE CoachBuild item set
+
+0.112.0 also wrote a standalone `CoachBuild <champ> <role> Situational` set.
+You saw both in the shop's set dropdown and said: *"you added it as a new set i
+just wanted it in the same default set from coachbuild."* It is gone. There is
+one set again, `apply-itemsets` reports `count=1` again, and there is nothing
+to switch between.
+
+**The extra set already on your disk removes itself.** No migration, no cleanup
+step: the merge both bridges already run drops every existing
+`CoachBuild`-titled set before writing the current one, so the first export
+after this update takes the orphan with it. Verified against a 61-set profile
+with the orphan seeded in — it is gone afterwards, and all 60 foreign sets
+(`U.GG - Galio`, `AP`, the rest) come back byte-identical and in the same
+order.
+
+### Added — the WPA delta, in the shop, next to the item it belongs to
+
+*"is there a way to show the wpa values in game so i can make better decisions
+on what to buy?"*
+
+Each situational swap now gets its own block, titled with its own number:
+
+```
+Situational +4.27   -> Ionian Boots of Lucidity
+Situational +2.79   -> Boots of Swiftness
+Situational +1.13   -> Plated Steelcaps
+Situational +0.45   -> Shadowflame
+Situational +0.39   -> Stormsurge
+Situational -0.06   -> Sunfire Aegis
+```
+
+- **One item per block, because that is the only way to bind a number to an
+  item.** An LCU block item is `{id, count}` — the block's title is the only
+  writable string anywhere near it.
+- **The number is the page's number.** Formatted by the same helper the
+  SITUATIONAL panel uses, so the two cannot disagree at a rounding boundary.
+- **The item name is deliberately not in the title.** Its icon is right there,
+  and adding the name would take `Ionian Boots of Lucidity +4.27` to 30
+  characters. These are 16-17. Riot's own sets and U.GG's top out at 19; this
+  app has been emitting 29 (`Pro build (same as WPA build)`) since 2026-07-29
+  without a complaint.
+- **Every number is real.** Swept 487 situational picks across 150
+  champion+lane combos: not one carries a placeholder zero, so nothing is
+  fabricated and nothing needed suppressing.
+- **The build lines are unchanged.** They are ordered sequences, not menus, and
+  Pro/OTP items are ranked on consensus share rather than WPA — most of them
+  have no delta to show, and inventing one would be worse than the gap.
+
+### Fixed — runes were up to 30 seconds behind a quick champion switch
+
+*"for like 20s the runes didnt change as i switched to udyr then went back to
+galio quickly. It stayed on udyr runes but changed after a while."*
+
+Measured on production before the fix, driving the real app against the same
+two champions: **Galio to Udyr took 1.0s; Udyr back to Galio took 29.4s**,
+twice in a row.
+
+The cross-tab guard that stops two open tabs writing the same thing was keyed
+per (kind, champion, lane) with a 30-second lifetime and was never released. So
+coming *back* to a champion inside 30 seconds found its own key still warm and
+stood down — every poll tick — until the key expired. It contradicted the app's
+own in-document rule, which has always been "latest wins, so an A → B → A
+bounce re-fires on every change". That rule now holds in both places: one
+shared record of the most recently exported champion+lane, per kind. The same
+champion+lane in a second tab is still deduped, which is the case the guard
+exists for.
+
+Stale keys from the old scheme are cleaned out of your browser storage on the
+next export.
+
+### Added — `/api/app-version`
+
+A one-field endpoint reporting the version this deployment serves, plus a
+`coachbuild-version` meta tag on every page. Both exist for the desktop app,
+which could not previously tell that the window it was hosting was running
+older code than the site was serving. See desktop 1.0.15.
+
 ## Web 0.112.0 — 2026-08-19 — the situational items reach the shop
 
 The Builds page has always had a **SITUATIONAL** panel — the per-slot

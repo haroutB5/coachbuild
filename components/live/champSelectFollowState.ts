@@ -265,27 +265,80 @@ export function resetChampSelectFollowState(): void {
 
 const AUTO_EXPORT_LOCK_TTL_MS = 30000;
 
-/** Cheap multi-tab dedupe: before auto-exporting, claim a localStorage lock
- *  keyed by (kind, championId, laneId) so two open tabs (the original + one
- *  the companion or the user opened) don't both fire the same write.
- *  laneId joined the key in v0.35.0 alongside the dedup generalization above
- *  — without it, a lock claimed for one lane could wrongly starve a
- *  legitimate re-fire for a DIFFERENT lane on the same champion within the
- *  same 30s window. Writes are merge-safe on the companion side regardless
- *  (item-sets merge logic, rune CoachBuild-page replacement) — this is
- *  waste-avoidance, not a correctness requirement. Fails OPEN (returns true,
- *  proceed) on any storage error/SSR — best-effort only.
+/** One key per KIND, not one key per (kind, champion, lane) — see the
+ *  2026-08-19 note on `tryClaimAutoExportLock`. */
+const autoExportLockKey = (kind: AutoExportKind) => `coachbuild:autoExport:last:${kind}`;
+
+/** Keys written by the pre-2026-08-19 per-pair scheme
+ *  (`coachbuild:autoExport:items:3:mid`). Nothing reads them any more, and a
+ *  user who has been through a few hundred champ selects has a few hundred of
+ *  them. Distinguishable from the current key by its third segment: `last` is
+ *  not a kind. */
+const LEGACY_AUTO_EXPORT_LOCK_PREFIX = /^coachbuild:autoExport:(items|runes):/;
+let legacyLocksPruned = false;
+
+function pruneLegacyAutoExportLocks(): void {
+  if (legacyLocksPruned) return;
+  legacyLocksPruned = true;
+  try {
+    const doomed: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (key && LEGACY_AUTO_EXPORT_LOCK_PREFIX.test(key)) doomed.push(key);
+    }
+    for (const key of doomed) window.localStorage.removeItem(key);
+  } catch {
+    // Best-effort housekeeping; never a reason to skip an export.
+  }
+}
+
+/** Cheap multi-tab dedupe: before auto-exporting, check the shared record of
+ *  what was LAST exported for this kind, so two open tabs (the original + one
+ *  the companion or the user opened) don't both fire the same write. Fails
+ *  OPEN (returns true, proceed) on any storage error/SSR — best-effort only.
  *
- *  v0.101.0: the phase EPOCH is no longer part of the key, and the parameter
- *  is ignored. The epoch is a counter this MODULE increments, and the module
- *  is per document — a tab opened mid-champ-select starts at 0 and reaches 1
- *  on its first poll, while a tab that has been open for five games is at 5.
- *  Two tabs in the same champ select therefore wrote two different keys and
- *  the lock deduped nothing across exactly the case it exists for. Dropping
- *  it makes the key the same in every tab; the 30s TTL still bounds it, and a
- *  genuinely new champ select differs by champion or lane in practice (and by
- *  more than 30s when it doesn't). The parameter stays in the signature so
- *  call sites and the injected-dep test seam don't churn. */
+ *  ── 2026-08-19: THIS WAS A 30-SECOND COOLDOWN, AND IT SHOWED ─────────────
+ *  Reported: *"for like 20s the runes didnt change as i switched to udyr then
+ *  went back to galio quickly. It stayed on udyr runes but changed after a
+ *  while."* Their companion.log, verbatim: `apply-runes` at 14:30:29 and
+ *  14:30:31, then nothing until **14:30:59** — a 28-second gap ending, to the
+ *  second, at the TTL boundary below.
+ *
+ *  The old key was `coachbuild:autoExport:<kind>:<champion>:<lane>` and was
+ *  written on claim and never released. So Galio -> Udyr -> Galio inside 30s
+ *  found Galio's own key still warm and returned false, every poll tick, until
+ *  it expired. The client was left holding Udyr's runes the whole time.
+ *
+ *  That directly contradicted the in-document dedup two functions up, which
+ *  documents "latest wins ... correctly handles a same-champion lane bounce
+ *  A -> B -> A: each flip differs from whatever was most recently applied, so
+ *  each re-fires." `shouldAutoExportForLane` said fire; this said no. The
+ *  in-document one is right, and this is now the same rule, shared across
+ *  tabs: ONE key per kind holding the most recently exported (champion, lane).
+ *
+ *  Fire iff the stored pair differs from the pair being asked about. So:
+ *    - A -> B -> A: the record reads B when A comes back, so A re-fires on the
+ *      NEXT POLL TICK rather than at the TTL.
+ *    - two tabs, same pair, same moment: the second reads the first's record
+ *      and stands down — the case this function exists for, unchanged.
+ *
+ *  Releasing the key on completion instead would have been the other obvious
+ *  shape and is WRONG here: the second tab's next tick would find it released,
+ *  still have nothing in its own `lastApplied`, and write the same set again.
+ *  A completion RECORD is what dedupes tabs; a mutex is not.
+ *
+ *  The TTL survives only as a staleness bound on that record (a tab that
+ *  crashed mid-apply, a record from an old game). It no longer gates a
+ *  legitimate re-fire, because a re-fire always carries a different pair.
+ *
+ *  v0.101.0: the phase EPOCH is not part of the key and the parameter is
+ *  ignored. The epoch is a counter this MODULE increments, and the module is
+ *  per document — a tab opened mid-champ-select starts at 0 and reaches 1 on
+ *  its first poll, while a tab that has been open for five games is at 5. Two
+ *  tabs in the same champ select therefore wrote two different keys and the
+ *  lock deduped nothing across exactly the case it exists for. The parameter
+ *  stays in the signature so call sites and the injected-dep test seam don't
+ *  churn. */
 export function tryClaimAutoExportLock(
   kind: AutoExportKind,
   _phaseEpoch: number,
@@ -294,16 +347,31 @@ export function tryClaimAutoExportLock(
 ): boolean {
   if (typeof window === "undefined") return true;
   try {
-    const storageKey = `coachbuild:autoExport:${kind}:${championId}:${laneId}`;
+    pruneLegacyAutoExportLocks();
+    const storageKey = autoExportLockKey(kind);
     const now = Date.now();
     const existing = window.localStorage.getItem(storageKey);
     if (existing) {
-      const at = parseInt(existing, 10);
-      if (Number.isFinite(at) && now - at < AUTO_EXPORT_LOCK_TTL_MS) return false;
+      const record = JSON.parse(existing) as { championId?: unknown; laneId?: unknown; at?: unknown };
+      const at = typeof record?.at === "number" ? record.at : Number.NaN;
+      if (
+        record?.championId === championId &&
+        record?.laneId === laneId &&
+        Number.isFinite(at) &&
+        now - at < AUTO_EXPORT_LOCK_TTL_MS
+      ) {
+        return false;
+      }
     }
-    window.localStorage.setItem(storageKey, String(now));
+    window.localStorage.setItem(storageKey, JSON.stringify({ championId, laneId, at: now }));
     return true;
   } catch {
     return true;
   }
+}
+
+/** Test-only: the legacy-key prune is a once-per-document side effect, and a
+ *  vitest worker is one document for the whole file. */
+export function resetAutoExportLockPrune(): void {
+  legacyLocksPruned = false;
 }

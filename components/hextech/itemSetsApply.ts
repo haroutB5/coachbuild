@@ -173,14 +173,15 @@ export async function resolveItemMetaForSets(patch: string): Promise<Map<number,
  *  BLOCKS inside it — see itemSetBody.ts's v0.34.1 header for the
  *  3-sets-to-1-set restructure), POST it.
  *
- *  Since 2026-08-19 `buildItemSets` returns ONE OR TWO sets: the main one, plus
- *  a standalone `CoachBuild <champ> <role> Situational` when the champion has
- *  situational alternatives. Both go in the SAME POST, and that is not a
- *  detail — the bridge's merge keeps only the sets in this call and prunes
- *  every other CoachBuild-titled set, so posting them separately would have the
- *  second delete the first. `sets` is passed through whole; never slice it, and
- *  never add a third caller that posts a subset. Both bridges have always
- *  accepted 1-3 sets, so no companion/desktop change was needed. Never throws —
+ *  `buildItemSets` returns EXACTLY ONE set. For 32 minutes on 2026-08-19 it
+ *  returned two (the main one plus a standalone `CoachBuild <champ> <role>
+ *  Situational`); the user saw both in the shop's set dropdown and asked for
+ *  one, so the Situational picks are blocks inside the single set again.
+ *  `sets` is still passed through WHOLE and must stay that way: the bridge's
+ *  merge keeps only the sets in this call and prunes every other
+ *  CoachBuild-titled set, so a caller that posted a subset would delete the
+ *  rest — and that same prune is what silently removes the orphaned
+ *  `... Situational` set left on disk by 0.112.0. Never throws —
  *  applyItemSets itself is already fail-soft, a failed pro-consensus fetch
  *  just means no Pro build block this round, and a failed item-metadata
  *  fetch degrades the 6-item build lines per isFullItem's own doc comment. */
