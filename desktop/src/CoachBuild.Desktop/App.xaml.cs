@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Threading;
 using System.Text.Json;
 using CoachBuild.Core;
+using CoachBuild.Desktop.Diagnostics;
 using CoachBuild.Desktop.Overlay;
 using CoachBuild.Desktop.Tray;
 using CoachBuild.Desktop.Updates;
@@ -309,21 +310,35 @@ public partial class App : WpfApplication
     /// <para>1.0.13 binds <c>Ctrl+Shift+A</c> only. 1.0.12 also bound
     /// <c>Ctrl+Shift+S</c>; the user dropped it because a global hotkey takes
     /// that combination away from every app that uses it as "Save As".</para>
+    ///
+    /// <para>1.0.14 feeds the outcome to the tray, so the menu item names the
+    /// accelerator that was actually registered — and names none when the
+    /// registration failed. Every string that mentions the key (the log line,
+    /// the balloon, the menu label, the tooltip) is derived from
+    /// <see cref="GlobalHotkeyService.AdjustBindings"/>; none of them is a
+    /// second copy that could survive a change of bind.</para>
     /// </summary>
     private void StartHotkeys()
     {
         _hotkeys = new GlobalHotkeyService();
         _hotkeys.Pressed += OnHotkeyPressed;
         foreach (var outcome in _hotkeys.Start()) _log?.Info(outcome.ToLogLine());
-        if (_hotkeys.FallbackAdviceOrNull() is { } advice)
+        var advice = _hotkeys.FallbackAdviceOrNull();
+        _trayState = _trayState with
+        {
+            AdjustAccelerator = _hotkeys.RegisteredAdjustAccelerator,
+            AdjustHotkeyAdvice = advice,
+        };
+        _tray?.UpdateState(_trayState);
+        if (advice is not null)
         {
             _log?.Info(advice);
             // The tray item is always present, but a user who only knows the
             // hotkey has no way to discover that. Say so once, out loud.
             _tray?.ShowBalloon(
                 "CoachBuild overlay",
-                "The overlay adjust shortcut (Ctrl+Shift+A) could not be registered (another app owns it). "
-                + "Right-click the CoachBuild tray icon and choose “Adjust overlay position” instead.",
+                $"The overlay adjust shortcut ({_hotkeys.AttemptedAdjustAccelerators}) could not be registered "
+                + $"(another app owns it). Right-click the CoachBuild tray icon and choose “{TrayMenuState.AdjustMenuVerb}” instead.",
                 System.Windows.Forms.ToolTipIcon.Warning);
         }
     }
@@ -604,6 +619,9 @@ public partial class App : WpfApplication
             case TrayCommand.RepairWebView2:
                 _ = RepairWebView2Async();
                 break;
+            case TrayCommand.OpenLogFolder:
+                OpenLogFolder();
+                break;
             case TrayCommand.ApplyUpdate:
                 _log?.Info("update: restart requested from the tray");
                 var updates = _updates;
@@ -616,6 +634,30 @@ public partial class App : WpfApplication
                 Shutdown();
                 break;
         }
+    }
+
+    /// <summary>
+    /// Takes the user to <c>companion.log</c> in File Explorer, with the file
+    /// selected.
+    ///
+    /// <para><b>The path comes from the log instance that is writing</b>
+    /// (<see cref="RedactedLog.FilePath"/>), not from a second copy of
+    /// <c>%LOCALAPPDATA%\CoachBuild\companion.log</c>. The two derivations in
+    /// this app — <see cref="DesktopPaths.LogFile"/> and the one inside
+    /// <see cref="RedactedLog"/> — agree today and a test pins that they do,
+    /// but only one of them is the file the app appends to, and that is the one
+    /// this opens.</para>
+    ///
+    /// <para><b>It cannot disturb a game.</b> Explorer takes the foreground —
+    /// the tray click already had it — but it is not a topmost window, and the
+    /// overlay is, so it cannot cover it. Adjust mode ends only on Enter,
+    /// Escape or a tray cancel; there is no deactivation handler for an
+    /// Explorer window to trip. Nothing here touches <c>_overlay</c>.</para>
+    /// </summary>
+    private void OpenLogFolder()
+    {
+        var path = _log?.FilePath ?? Paths.LogFile;
+        _log?.Info(new LogFolderRevealer().Reveal(path));
     }
 
     private void OnAdjustmentStateChanged(bool adjusting)

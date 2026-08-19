@@ -20,6 +20,7 @@ public enum TrayCommand
     Adjust,
     CancelAdjust,
     RepairWebView2,
+    OpenLogFolder,
     ApplyUpdate,
     Quit,
 }
@@ -182,12 +183,21 @@ public sealed class TrayController : IDisposable
             _menu.Items.Add(MenuItem("Repair WebView2 runtime", (_, _) => RaiseCommand(TrayCommand.RepairWebView2)));
         }
 
+        // Every diagnosis in this project starts with companion.log, and until
+        // 1.0.14 reaching it meant pasting %LOCALAPPDATA%\CoachBuild into an
+        // address bar. It sits with the status lines it explains.
+        _menu.Items.Add(MenuItem(
+            TrayMenuState.OpenLogFolderVerb,
+            (_, _) => RaiseCommand(TrayCommand.OpenLogFolder)));
+
         _menu.Items.Add(new Forms.ToolStripSeparator());
         if (!_state.IsAdjusting)
             _menu.Items.Add(MenuItem("Calibrate overlay", (_, _) => RaiseCommand(TrayCommand.Calibrate)));
-        _menu.Items.Add(_state.IsAdjusting
-            ? MenuItem("Cancel adjust", (_, _) => RaiseCommand(TrayCommand.CancelAdjust))
-            : MenuItem("Adjust overlay position", (_, _) => RaiseCommand(TrayCommand.Adjust)));
+        // The accelerator is named here rather than spelled out, so the label
+        // follows GlobalHotkeyService's binding table and disappears when
+        // nothing could be registered. The same key toggles back out, so the
+        // cancel item names it too.
+        _menu.Items.Add(AdjustItem());
         _menu.Items.Add(new Forms.ToolStripSeparator());
         var startWithWindows = new Forms.ToolStripMenuItem("Start with Windows")
         {
@@ -201,6 +211,32 @@ public sealed class TrayController : IDisposable
         };
         _menu.Items.Add(startWithWindows);
         _menu.Items.Add(MenuItem("Quit CoachBuild", (_, _) => RaiseCommand(TrayCommand.Quit)));
+    }
+
+    /// <summary>
+    /// The adjust item, named after the accelerator that is actually
+    /// registered.
+    ///
+    /// <para>When none is — another application owns Ctrl+Shift+A, which
+    /// <c>RegisterHotKey</c>'s system-wide exclusivity makes entirely possible —
+    /// the label stays bare rather than naming a key that does nothing, and the
+    /// tooltip carries <see cref="Overlay.GlobalHotkeyService.FallbackAdviceOrNull"/>,
+    /// the same sentence the log and the startup balloon use. This item is the
+    /// documented fallback for that case, so it is the right place to say
+    /// so.</para>
+    /// </summary>
+    private Forms.ToolStripMenuItem AdjustItem()
+    {
+        var item = _state.IsAdjusting
+            ? MenuItem(
+                TrayMenuState.WithAccelerator(TrayMenuState.CancelAdjustMenuVerb, _state.AdjustAccelerator),
+                (_, _) => RaiseCommand(TrayCommand.CancelAdjust))
+            : MenuItem(
+                TrayMenuState.WithAccelerator(TrayMenuState.AdjustMenuVerb, _state.AdjustAccelerator),
+                (_, _) => RaiseCommand(TrayCommand.Adjust));
+        if (_state.AdjustAccelerator is null && !string.IsNullOrWhiteSpace(_state.AdjustHotkeyAdvice))
+            item.ToolTipText = _state.AdjustHotkeyAdvice;
+        return item;
     }
 
     private static Forms.ToolStripMenuItem MenuItem(string text, EventHandler action)

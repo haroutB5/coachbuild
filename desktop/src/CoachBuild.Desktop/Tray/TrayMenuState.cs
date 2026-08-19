@@ -61,8 +61,38 @@ public sealed record TrayMenuState(
     UpdateTrayModel Update,
     LastOpenPage? LastOpen,
     WebView2Availability WebView2Available = WebView2Availability.Unknown,
-    bool IsAdjusting = false)
+    bool IsAdjusting = false,
+    string? AdjustAccelerator = null,
+    string? AdjustHotkeyAdvice = null)
 {
+    /// <summary>
+    /// The tray wording for adjust mode, in one place. <see
+    /// cref="Overlay.GlobalHotkeyService.FallbackAdviceOrNull"/> quotes this
+    /// item by name when no accelerator could be bound, so the advice and the
+    /// menu cannot come to disagree about what the user is being told to click.
+    /// </summary>
+    public const string AdjustMenuVerb = "Adjust overlay position";
+
+    public const string CancelAdjustMenuVerb = "Cancel adjust";
+
+    public const string OpenLogFolderVerb = "Open log folder";
+
+    /// <summary>
+    /// Names the accelerator in a menu label — and, when <paramref
+    /// name="accelerator"/> is null, deliberately does not.
+    ///
+    /// <para><b>The null branch is the point.</b> <c>RegisterHotKey</c> is
+    /// exclusive system-wide, so on a machine where another app already owns
+    /// Ctrl+Shift+A this app has no shortcut at all. A label that named one
+    /// anyway would be the menu promising a key that does nothing, which is
+    /// worse than the unlabelled item it replaced. The caller passes
+    /// <see cref="Overlay.GlobalHotkeyService.RegisteredAdjustAccelerator"/>,
+    /// which is null in exactly that case; the tooltip then carries
+    /// <see cref="AdjustHotkeyAdvice"/> so the failure is still visible.</para>
+    /// </summary>
+    public static string WithAccelerator(string verb, string? accelerator) =>
+        string.IsNullOrWhiteSpace(accelerator) ? verb : $"{verb} ({accelerator})";
+
     public static TrayMenuState Default { get; } = new(
         CompanionPhase.None,
         OverlayVisible: true,

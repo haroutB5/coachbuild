@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
+using CoachBuild.Desktop.Tray;
 
 namespace CoachBuild.Desktop.Overlay;
 
@@ -128,6 +129,24 @@ public sealed class GlobalHotkeyService : IDisposable
 
     public bool AnyRegistered => _registered.Count > 0;
 
+    /// <summary>
+    /// The accelerator the user can actually press right now, or null when
+    /// nothing could be bound.
+    ///
+    /// <para>Derived from <see cref="AdjustBindings"/> filtered by what
+    /// <c>RegisterHotKey</c> actually accepted, so it is the single source of
+    /// truth for any UI that names the key — the tray label (1.0.14) and the
+    /// balloon both read it rather than carrying a second copy of the string.
+    /// Changing the bind changes the menu automatically; losing the bind
+    /// removes the promise automatically, which is the half that matters. A
+    /// menu item reading "Adjust overlay position (Ctrl+Shift+A)" on a machine
+    /// where another app owns Ctrl+Shift+A would be the app lying about a key
+    /// it does not have.</para>
+    /// </summary>
+    public string? RegisteredAdjustAccelerator => _registered.Count == 0
+        ? null
+        : string.Join(" / ", _registered.Select(binding => binding.Accelerator));
+
     public nint Handle => _source?.Handle ?? 0;
 
     /// <summary>
@@ -217,11 +236,18 @@ public sealed class GlobalHotkeyService : IDisposable
     public string? FallbackAdviceOrNull()
     {
         if (AnyRegistered) return null;
-        var attempted = Outcomes.Count == 0
-            ? "the adjust accelerator"
-            : string.Join(" / ", Outcomes.Select(outcome => outcome.Accelerator));
-        return $"hotkey: {attempted} could not be registered; use the tray icon → \"Adjust overlay position\" instead";
+        return $"hotkey: {AttemptedAdjustAccelerators} could not be registered; use the tray icon → \"{TrayMenuState.AdjustMenuVerb}\" instead";
     }
+
+    /// <summary>
+    /// Every accelerator this app asked Windows for, registered or not, named.
+    /// The failure UX (log line and tray balloon) is built from this so neither
+    /// can go stale the way a hardcoded "both keys" did when Ctrl+Shift+S was
+    /// dropped in 1.0.13.
+    /// </summary>
+    public string AttemptedAdjustAccelerators => Outcomes.Count == 0
+        ? "the adjust accelerator"
+        : string.Join(" / ", Outcomes.Select(outcome => outcome.Accelerator));
 
     /// <summary>Drives the message hook directly, for tests without a pump.</summary>
     public bool Dispatch(int message, nint wParam)

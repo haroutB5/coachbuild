@@ -207,6 +207,24 @@ first question that answers "no" is the answer.
    always works regardless. Press the key again to leave adjust mode; in a
    borderless game, reaching the tray to cancel means alt-tabbing out of the
    thing being aligned.
+
+   From 1.0.14 the tray item **names the key it registered**: right-click the
+   tray icon and it reads `Adjust overlay position (Ctrl+Shift+A)`, or
+   `Cancel adjust (Ctrl+Shift+A)` while adjusting. The label is derived from
+   `GlobalHotkeyService.AdjustBindings` filtered by what `RegisterHotKey`
+   actually accepted, so **an item with no key in brackets means the
+   registration failed** — hover it and the tooltip carries the same sentence
+   as the log line above. A bracketed key that does nothing when pressed is
+   therefore a defect, not a stale label.
+10b. **`tray: opened log folder (companion.log selected)`** — the 1.0.14
+   `Open log folder` tray item. Variants: `(no companion.log yet)` on a fresh
+   install where nothing has been written, `(created it; no companion.log yet)`
+   where the folder was missing too, and `tray: open log folder FAILED
+   (<reason>)`. There is exactly one line per click and never a silent no-op;
+   no line at all after clicking the item means a build older than 1.0.14. The
+   path opened is the one the running `RedactedLog` writes to, not a second
+   copy of `%LOCALAPPDATA%\CoachBuild\companion.log`, so it cannot open a real
+   but wrong folder.
 11. **`skill-order: champion <id> returned <status>; retry in <n>s`** — a failed
    or empty fetch, with the retry that follows it. `recovered after N failed
    attempt(s)` closes the loop. `no further retry` means the schedule is

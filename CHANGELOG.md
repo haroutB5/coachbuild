@@ -1,5 +1,49 @@
 # Changelog
 
+## Desktop 1.0.14 — 2026-08-19 — the tray says which key, and takes you to the log
+
+Two additions to the tray menu. Nothing else changed: the banked-point
+highlight, the 250 ms live poll, the 350 ms champ-select poll, the state clear
+at game end, champion resolution and the updater are all exactly as they
+shipped in 1.0.13.
+
+### Added — the adjust item names the shortcut
+
+The tray item read `Adjust overlay position` and said nothing about the key,
+so the shortcut was only discoverable by being told about it. It now reads
+**`Adjust overlay position (Ctrl+Shift+A)`**, and `Cancel adjust (Ctrl+Shift+A)`
+while you are adjusting, because the same key gets you back out.
+
+- **The label is derived from the binding, not written twice.** It comes from
+  `GlobalHotkeyService.AdjustBindings` — the one table that decides what is
+  registered — so if the bind ever moves, the menu moves with it. A second
+  hardcoded `(Ctrl+Shift+A)` would have been worse than no label at all: it
+  would keep confidently naming a key the app had stopped registering.
+- **If the shortcut could not be registered, the menu does not claim one.**
+  Windows hands a global hotkey to whichever process asks first, so another
+  app can own `Ctrl+Shift+A`. On that machine the item stays plain
+  `Adjust overlay position` and its tooltip carries the reason — the same
+  sentence that goes in the log and the startup balloon. The item itself
+  always works either way.
+
+### Added — `Open log folder`
+
+Every question about this app starts with `companion.log`, and reaching it
+meant pasting `%LOCALAPPDATA%\CoachBuild` into an address bar. The tray now has
+an **`Open log folder`** item that opens File Explorer with `companion.log`
+selected.
+
+- **It opens the file the app is actually writing**, taken from the running
+  logger rather than a second copy of the path, so it cannot open a real but
+  wrong folder.
+- **On a fresh install, where no log exists yet, it opens the folder** instead
+  of doing nothing. If the folder is missing it is created first.
+- **Every click writes one line** — `tray: opened log folder (companion.log
+  selected)`, or a named `tray: open log folder FAILED (…)`. It never fails
+  silently.
+- It cannot disturb a game in progress: the overlay is a topmost window and
+  Explorer is not, and adjust mode is not ended by another window appearing.
+
 ## Desktop 1.0.13 — 2026-08-18 — the adjust shortcut is Ctrl+Shift+A, and only Ctrl+Shift+A
 
 ### Changed — Ctrl+Shift+S is no longer bound
