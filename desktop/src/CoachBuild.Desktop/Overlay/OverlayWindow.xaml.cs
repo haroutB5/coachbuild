@@ -34,6 +34,16 @@ public partial class OverlayWindow : Window
     private string _displaySource = OverlayDisplayResolver.SelfSource;
     private long _nextDisplayRecheckTicks;
     private CalibrationGeometry? _workingCalibration;
+    // One working copy PER target, so Tab can switch between the ability bar
+    // and the item row without throwing away edits the player has not saved
+    // yet. Enter commits every target that was touched; Esc discards all of
+    // them. Anything less makes Tab a trap.
+    private readonly Dictionary<CalibrationTarget, CalibrationGeometry> _workingByTarget = [];
+    private CalibrationTarget _adjustTarget = CalibrationTarget.SkillOrder;
+    private IReadOnlyList<CoachBuild.Core.SituationalDelta> _situational = [];
+    private bool _shopOpen;
+    private bool _forceBadges;
+    private string? _lastBadgeReason;
     private HwndSource? _hwndSource;
     private NativeBounds? _lastNativeBounds;
     private bool? _lastClickThrough;
@@ -119,6 +129,76 @@ public partial class OverlayWindow : Window
     public bool IsInteractive => _interactive;
 
     public bool IsAdjusting => _adjusting;
+
+    /// <summary>Which calibration the arrow keys are currently moving.</summary>
+    public CalibrationTarget AdjustTarget => _adjustTarget;
+
+    /// <summary>True while the situational numbers are on screen.</summary>
+    public bool IsDrawingBadges { get; private set; }
+
+    /// <summary>
+    /// The situational deltas to draw, for the champion currently in game.
+    ///
+    /// <para>Supplied already champion-matched by the caller
+    /// (<see cref="CoachBuild.Core.SituationalOverlaySet.For"/>), so an empty
+    /// list here means "no numbers for THIS champion" and never "some other
+    /// champion's numbers are available".</para>
+    /// </summary>
+    public void SetSituationalDeltas(IReadOnlyList<CoachBuild.Core.SituationalDelta>? deltas)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(() => SetSituationalDeltas(deltas));
+            return;
+        }
+
+        _situational = deltas ?? [];
+        if (_adjusting) { RenderAdjustment(); return; }
+        RenderCurrentState();
+    }
+
+    /// <summary>
+    /// The shop-open latch's verdict. Driven off <see cref="ShopKeyWatcher"/>'s
+    /// own 50 ms timer rather than the 750 ms snapshot tick, because the whole
+    /// point is that the numbers appear as the shop does.
+    /// </summary>
+    public void SetShopOpen(bool open)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(() => SetShopOpen(open));
+            return;
+        }
+
+        if (_shopOpen == open) return;
+        _shopOpen = open;
+        if (_adjusting) return;
+        RenderCurrentState();
+    }
+
+    /// <summary>
+    /// The manual override: show the numbers regardless of what the shop latch
+    /// believes.
+    ///
+    /// <para>It exists because the latch is an inference. A shop closed by
+    /// clicking its own button, or a shop bind that could not be read out of
+    /// League's config, both leave the latch wrong with nothing on this side
+    /// able to notice — so there has to be a way back that does not depend on
+    /// the thing that is broken.</para>
+    /// </summary>
+    public void SetForceBadges(bool force)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(() => SetForceBadges(force));
+            return;
+        }
+
+        if (_forceBadges == force) return;
+        _forceBadges = force;
+        if (_adjusting) return;
+        RenderCurrentState();
+    }
 
     public event Action<bool>? AdjustmentStateChanged;
 
@@ -249,31 +329,71 @@ public partial class OverlayWindow : Window
 
     public void BeginCalibration() => BeginAdjustment();
 
-    public void BeginAdjustment()
+    public void BeginAdjustment() => BeginAdjustment(CalibrationTarget.SkillOrder);
+
+    public void BeginAdjustment(CalibrationTarget target)
     {
         if (!Dispatcher.CheckAccess())
         {
-            Dispatcher.BeginInvoke(BeginAdjustment);
+            Dispatcher.BeginInvoke(() => BeginAdjustment(target));
             return;
         }
 
-        if (_adjusting) return;
+        if (_adjusting)
+        {
+            // Already adjusting: treat a second request as "switch to that
+            // target" rather than a no-op, so the tray's two items always do
+            // what they say even if one is used while the other is open.
+            SwitchAdjustTarget(target);
+            return;
+        }
+
         _wasVisibleBeforeAdjustment = IsVisible;
         ShowInactive();
         if (_display is null)
         {
+            // 1.0.15 §5.2: this exit used to be silent, which made "adjust mode
+            // does nothing" indistinguishable from "adjust mode is broken".
+            Diagnostics?.Invoke("overlay: adjust mode could not start — no monitor resolved (no-display)");
             if (!_wasVisibleBeforeAdjustment) Hide();
             _wasVisibleBeforeAdjustment = false;
             return;
         }
-        _workingCalibration = _settingsStore.LoadCalibration(_display!.Resolution);
+
+        _workingByTarget.Clear();
+        _adjustTarget = target;
+        _workingCalibration = WorkingFor(target);
         _adjusting = true;
         AdjustmentStateChanged?.Invoke(true);
         SetInteractive(true);
         Activate();
         Focus();
+        Diagnostics?.Invoke($"overlay: adjust mode entered for {Describe(target)}");
         RenderAdjustment();
     }
+
+    /// <summary>The working copy for a target: whatever is being edited, else the saved value, else the default.</summary>
+    private CalibrationGeometry WorkingFor(CalibrationTarget target)
+    {
+        if (_workingByTarget.TryGetValue(target, out var inProgress)) return inProgress;
+        return _display is null
+            ? CalibrationGeometry.Reference
+            : _settingsStore.LoadCalibrationOrDefault(target, _display.Resolution);
+    }
+
+    private void SwitchAdjustTarget(CalibrationTarget target)
+    {
+        if (!_adjusting || target == _adjustTarget) return;
+        if (_workingCalibration is not null) _workingByTarget[_adjustTarget] = _workingCalibration;
+        _adjustTarget = target;
+        _workingCalibration = WorkingFor(target);
+        Diagnostics?.Invoke($"overlay: adjust mode switched to {Describe(target)}");
+        RenderAdjustment();
+    }
+
+    private static string Describe(CalibrationTarget target) => target == CalibrationTarget.ItemRow
+        ? "the situational item numbers"
+        : "the skill-order box";
 
     public void ShowInactive()
     {
@@ -429,12 +549,69 @@ public partial class OverlayWindow : Window
         };
         var physicalCalibration = _settingsStore.LoadCalibration(_display.Resolution);
         var dipCalibration = CalibrationGeometry.ForDpi(physicalCalibration, _display.DpiX, 96);
-        _renderer.Render(RootCanvas, renderState, _settings, _display.Resolution, dipCalibration);
+        var badges = BuildBadgeInput();
+        _renderer.Render(RootCanvas, renderState, _settings, _display.Resolution, dipCalibration, badges);
         var outcome = DescribeRenderOutcome(renderState, dipCalibration, _display);
         IsDrawingHighlight = outcome.StartsWith("highlight ", StringComparison.Ordinal);
+        IsDrawingBadges = badges.WillDraw;
         HasRenderableSkillOrder = renderState.HasRenderableData;
         ReportKitAnomaly(renderState);
         ReportOverlayReason(outcome);
+        ReportBadgeReason(badges);
+    }
+
+    /// <summary>
+    /// The situational numbers' inputs for this frame: where they go, what they
+    /// say, and whether the shop is believed open.
+    ///
+    /// <para><c>TryLoadCalibration</c>, not <c>LoadCalibration</c> — a null here
+    /// means the player has never positioned the row on this display and the
+    /// numbers must not be drawn at a guessed spot over their game.</para>
+    /// </summary>
+    private ItemBadgeInput BuildBadgeInput()
+    {
+        if (_display is null || !_settings.OverlayVisible) return ItemBadgeInput.None;
+        var physical = _settingsStore.TryLoadCalibration(CalibrationTarget.ItemRow, _display.Resolution);
+        var geometry = physical is null
+            ? null
+            : CalibrationGeometry.ForDpi(physical, _display.DpiX, 96);
+        return new ItemBadgeInput((_shopOpen || _forceBadges) && _state.InGame, _situational, geometry);
+    }
+
+    /// <summary>
+    /// Why the numbers are or are not on screen, deduped to one line per
+    /// transition — the badge twin of <see cref="ReportOverlayReason"/>.
+    ///
+    /// <para>Every "not drawn" branch names ITSELF. An overlay that draws
+    /// nothing looks identical whether the shop is shut, the champion has no
+    /// alternatives, the web build is too old to send any, or the row has never
+    /// been positioned; those are four different problems with four different
+    /// answers, and the log is the only place they can be told apart.</para>
+    /// </summary>
+    private void ReportBadgeReason(ItemBadgeInput badges)
+    {
+        string reason;
+        if (!_settings.OverlayVisible) reason = "badges: overlay switched off (tray: Show overlay)";
+        else if (!_state.InGame) reason = "badges: not in a game";
+        else if (_situational.Count == 0)
+            reason = "badges: no situational numbers for this champion "
+                + "(the web app sends them with the item set; an older web build sends none)";
+        else if (badges.Geometry is null)
+            reason = $"badges: the item row has never been positioned on {_display?.DeviceName ?? "?"}"
+                + $" {_display?.Resolution.Key ?? "?"} — tray → \"{Tray.TrayMenuState.AdjustItemsMenuVerb}\"";
+        else if (!_shopOpen && !_forceBadges) reason = "badges: hidden (shop closed)";
+        else
+        {
+            var slots = badges.Geometry.GetSlotRects(_situational.Count);
+            var first = slots.Count > 0 ? slots[0] : default;
+            reason = $"badges: {_situational.Count} shown at {first.Left:0}x{first.Top:0}"
+                + $" size {first.Width:0} pitch {badges.Geometry.Spacing:0}"
+                + $" on {OverlayDisplayResolver.Describe(_display!, _displaySource)}";
+        }
+
+        if (string.Equals(reason, _lastBadgeReason, StringComparison.Ordinal)) return;
+        _lastBadgeReason = reason;
+        Diagnostics?.Invoke($"overlay: {reason}");
     }
 
     /// <summary>
@@ -533,7 +710,11 @@ public partial class OverlayWindow : Window
                     return;
                 }
 
-                _workingCalibration = _settingsStore.LoadCalibration(display.Resolution);
+                // Re-derive for the target currently being adjusted, and drop
+                // every working copy: they were keyed to the display that has
+                // just gone away.
+                _workingByTarget.Clear();
+                _workingCalibration = _settingsStore.LoadCalibrationOrDefault(_adjustTarget, display.Resolution);
                 RenderAdjustment();
             }
             else
@@ -577,6 +758,17 @@ public partial class OverlayWindow : Window
             case Key.OemCloseBrackets:
                 geometry = geometry with { Spacing = geometry.Spacing + step };
                 break;
+            case Key.Tab:
+                // Switches which overlay the arrow keys move. Handled here
+                // rather than on a second global accelerator: 1.0.13 removed
+                // Ctrl+Shift+S because a global hotkey is taken from every
+                // other application for as long as this app runs, and that
+                // argument did not stop being true for a second one.
+                e.Handled = true;
+                SwitchAdjustTarget(_adjustTarget == CalibrationTarget.SkillOrder
+                    ? CalibrationTarget.ItemRow
+                    : CalibrationTarget.SkillOrder);
+                return;
             case Key.Enter:
                 SaveAdjustment();
                 break;
@@ -602,10 +794,25 @@ public partial class OverlayWindow : Window
     private void SaveAdjustment()
     {
         if (!_adjusting || _display is null || _workingCalibration is null) return;
-        _settingsStore.SaveCalibration(_display.Resolution, _workingCalibration);
+
+        // EVERY target touched this session, not just the one on screen. Tab
+        // lets the player move both overlays in one visit, and saving only the
+        // visible one would silently drop the other half of their work.
+        _workingByTarget[_adjustTarget] = _workingCalibration;
+        foreach (var (target, geometry) in _workingByTarget)
+        {
+            _settingsStore.SaveCalibration(target, _display.Resolution, geometry);
+            Diagnostics?.Invoke(
+                $"overlay: saved {Describe(target)} at {geometry.FirstBoxCenterX:0}x{geometry.CenterY:0}"
+                + $" size {geometry.BoxSize:0} pitch {geometry.Spacing:0}"
+                + $" for {_display.Resolution.Key}");
+        }
+
         _settings = _settingsStore.Read();
         _adjusting = false;
         _workingCalibration = null;
+        _workingByTarget.Clear();
+        _lastBadgeReason = null;
         AdjustmentStateChanged?.Invoke(false);
         SetInteractive(false);
         RestoreVisibilityAfterAdjustment();
@@ -616,6 +823,8 @@ public partial class OverlayWindow : Window
         if (!_adjusting) return;
         _adjusting = false;
         _workingCalibration = null;
+        _workingByTarget.Clear();
+        _lastBadgeReason = null;
         AdjustmentStateChanged?.Invoke(false);
         SetInteractive(false);
         RestoreVisibilityAfterAdjustment();
@@ -655,8 +864,22 @@ public partial class OverlayWindow : Window
             _workingCalibration.Normalize(),
             _display?.DpiX ?? 96,
             96);
-        foreach (var (rect, index) in geometry.GetAbilityRects().Select((rect, index) => (rect, index)))
+        // The item row is as long as the champion's own situational list, so
+        // the boxes the player lines up are the boxes that will be drawn. With
+        // no numbers to hand (out of a game, or an older web build) a
+        // placeholder row of the maximum length is shown instead, labelled as
+        // such, rather than a single box that would calibrate the pitch wrong.
+        var isItemRow = _adjustTarget == CalibrationTarget.ItemRow;
+        var slotCount = isItemRow
+            ? Math.Max(1, _situational.Count > 0 ? _situational.Count : CoachBuild.Core.SituationalOverlayParser.MaxDeltas)
+            : 4;
+        var usingPlaceholders = isItemRow && _situational.Count == 0;
+
+        foreach (var (rect, index) in geometry.GetSlotRects(slotCount).Select((rect, index) => (rect, index)))
         {
+            var label = isItemRow
+                ? (index < _situational.Count ? _situational[index].Text : $"#{index + 1}")
+                : ((OverlayAbility)index).ToString();
             var box = new Border
             {
                 Width = rect.Width,
@@ -667,7 +890,7 @@ public partial class OverlayWindow : Window
                 CornerRadius = new CornerRadius(8),
                 Child = new TextBlock
                 {
-                    Text = ((OverlayAbility)index).ToString(),
+                    Text = label,
                     Foreground = WpfBrushes.White,
                     FontWeight = FontWeights.Bold,
                     FontSize = 12,
@@ -678,6 +901,11 @@ public partial class OverlayWindow : Window
             RootCanvas.Children.Add(box);
         }
 
+        var heading = isItemRow ? "Adjusting the situational item numbers" : "Adjusting the skill-order box";
+        var switchTo = isItemRow ? "the skill-order box" : "the situational item numbers";
+        var placeholderNote = usingPlaceholders
+            ? "\nShowing 6 placeholder slots — line them up with your Situational row in the shop"
+            : string.Empty;
         var legend = new Border
         {
             Background = new SolidColorBrush(WpfColor.FromArgb(236, 8, 13, 28)),
@@ -687,7 +915,11 @@ public partial class OverlayWindow : Window
             Padding = new Thickness(10, 7, 10, 7),
             Child = new TextBlock
             {
-                Text = "Adjusting overlay\nEnter: save · Esc: cancel\nArrow keys: move · Shift: ×10 · +/-: size · [/]: spacing",
+                Text = heading
+                    + placeholderNote
+                    + "\nEnter: save · Esc: cancel"
+                    + "\nArrow keys: move · Shift: ×10 · +/-: size · [/]: spacing"
+                    + $"\nTab: switch to {switchTo}",
                 Foreground = WpfBrushes.White,
                 FontSize = 11,
             },
@@ -752,9 +984,10 @@ public partial class OverlayWindow : Window
                 SetBoundsToDisplay();
                 if (_adjusting)
                 {
+                    _workingByTarget.Clear();
                     _workingCalibration = _display is null
                         ? null
-                        : _settingsStore.LoadCalibration(_display.Resolution);
+                        : _settingsStore.LoadCalibrationOrDefault(_adjustTarget, _display.Resolution);
                     RenderAdjustment();
                 }
                 else

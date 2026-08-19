@@ -13,6 +13,39 @@ public sealed class OverlaySettings
     public bool AutostartConfigured { get; set; }
 
     public Dictionary<string, PersistedCalibration> Calibrations { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Where the situational item row's numbers go — a SECOND calibration
+    /// target, in its own map.
+    ///
+    /// <para><b>Why not an extension of <see cref="Calibrations"/>.</b> The two
+    /// targets describe different things in different places on the screen: the
+    /// ability HUD is fixed by League at the bottom centre and always has
+    /// exactly four slots, while the shop panel is draggable, resizable, scaled
+    /// by the player's own <c>ShopScale</c>, and shows between one and six
+    /// situational items. One geometry cannot serve both, and folding them into
+    /// one map keyed by display would mean a monitor change silently applied
+    /// the ability bar's position to the shop row. A separate property also
+    /// means an existing settings file simply lacks it, so nobody's ability-bar
+    /// calibration is touched by this feature arriving.</para>
+    ///
+    /// <para><b>Empty means "do not draw".</b> There is no honest default for
+    /// this position — see <c>CalibrationGeometry.ItemRowReference</c> — so an
+    /// uncalibrated display draws no numbers at all rather than guessing a spot
+    /// over the player's game.</para>
+    /// </summary>
+    [JsonPropertyName("itemRowCalibrations")]
+    public Dictionary<string, PersistedCalibration> ItemRowCalibrations { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+/// <summary>Which of the two independently positioned overlays a calibration belongs to.</summary>
+public enum CalibrationTarget
+{
+    /// <summary>The four ability boxes on League's HUD (1.0.7 onwards).</summary>
+    SkillOrder,
+
+    /// <summary>The situational item row inside the shop panel (1.0.16 onwards).</summary>
+    ItemRow,
 }
 
 public sealed class PersistedCalibration
@@ -94,12 +127,15 @@ public sealed class OverlaySettingsStore
         }
     }
 
-    public void SaveCalibration(DisplayResolution display, CalibrationGeometry geometry)
+    public void SaveCalibration(DisplayResolution display, CalibrationGeometry geometry) =>
+        SaveCalibration(CalibrationTarget.SkillOrder, display, geometry);
+
+    public void SaveCalibration(CalibrationTarget target, DisplayResolution display, CalibrationGeometry geometry)
     {
         lock (_gate)
         {
             var settings = ReadCore();
-            settings.Calibrations[display.Key] = new PersistedCalibration
+            Map(settings, target)[display.Key] = new PersistedCalibration
             {
                 Resolution = display,
                 Geometry = geometry.Normalize(),
@@ -108,12 +144,27 @@ public sealed class OverlaySettingsStore
         }
     }
 
-    public CalibrationGeometry LoadCalibration(DisplayResolution display)
+    public CalibrationGeometry LoadCalibration(DisplayResolution display) =>
+        TryLoadCalibration(CalibrationTarget.SkillOrder, display)
+        ?? CalibrationGeometry.ScaledDefault(display);
+
+    /// <summary>
+    /// The saved geometry for this target on this exact display, or null when
+    /// the player has never calibrated it here.
+    ///
+    /// <para>Returning null rather than a default is the whole point for the
+    /// item row: "no calibration" and "the default calibration" are different
+    /// facts, and the item row must draw nothing in the first case. The skill
+    /// overlay keeps its defaulting behaviour through
+    /// <see cref="LoadCalibration(DisplayResolution)"/>, because there the
+    /// default IS a measurement — the ability HUD does not move.</para>
+    /// </summary>
+    public CalibrationGeometry? TryLoadCalibration(CalibrationTarget target, DisplayResolution display)
     {
         lock (_gate)
         {
             var settings = ReadCore();
-            if (settings.Calibrations.TryGetValue(display.Key, out var calibration)
+            if (Map(settings, target).TryGetValue(display.Key, out var calibration)
                 && calibration.Resolution.Width == display.Width
                 && calibration.Resolution.Height == display.Height
                 && calibration.Resolution.DpiX == display.DpiX
@@ -122,9 +173,19 @@ public sealed class OverlaySettingsStore
                 return calibration.Geometry.Normalize();
             }
 
-            return CalibrationGeometry.ScaledDefault(display);
+            return null;
         }
     }
+
+    /// <summary>The geometry to START an adjustment from: the saved one, else this target's default.</summary>
+    public CalibrationGeometry LoadCalibrationOrDefault(CalibrationTarget target, DisplayResolution display) =>
+        TryLoadCalibration(target, display)
+        ?? (target == CalibrationTarget.ItemRow
+            ? CalibrationGeometry.ItemRowScaledDefault(display)
+            : CalibrationGeometry.ScaledDefault(display));
+
+    private static Dictionary<string, PersistedCalibration> Map(OverlaySettings settings, CalibrationTarget target) =>
+        target == CalibrationTarget.ItemRow ? settings.ItemRowCalibrations : settings.Calibrations;
 
     private OverlaySettings ReadCore()
     {
@@ -168,17 +229,24 @@ public sealed class OverlaySettingsStore
             LaneOverride = settings.LaneOverride,
             OverlayVisible = settings.OverlayVisible,
             AutostartConfigured = settings.AutostartConfigured,
-            Calibrations = (settings.Calibrations ?? new Dictionary<string, PersistedCalibration>())
-                .Where(pair => pair.Value is not null)
-                .ToDictionary(
-                    pair => pair.Key,
-                    pair => new PersistedCalibration
-                    {
-                        Resolution = pair.Value.Resolution,
-                        Geometry = pair.Value.Geometry.Normalize(),
-                    },
-                    StringComparer.OrdinalIgnoreCase),
+            Calibrations = CloneMap(settings.Calibrations),
+            ItemRowCalibrations = CloneMap(settings.ItemRowCalibrations),
         };
+    }
+
+    private static Dictionary<string, PersistedCalibration> CloneMap(
+        Dictionary<string, PersistedCalibration>? map)
+    {
+        return (map ?? new Dictionary<string, PersistedCalibration>())
+            .Where(pair => pair.Value is not null)
+            .ToDictionary(
+                pair => pair.Key,
+                pair => new PersistedCalibration
+                {
+                    Resolution = pair.Value.Resolution,
+                    Geometry = pair.Value.Geometry.Normalize(),
+                },
+                StringComparer.OrdinalIgnoreCase);
     }
 
     private static OverlaySettings? TryRead(string path)
@@ -233,17 +301,8 @@ public sealed class OverlaySettingsStore
     private static OverlaySettings Normalize(OverlaySettings settings)
     {
         settings.LaneOverride = NormalizeLane(settings.LaneOverride);
-        settings.Calibrations ??= new Dictionary<string, PersistedCalibration>(StringComparer.OrdinalIgnoreCase);
-        settings.Calibrations = settings.Calibrations
-            .Where(pair => pair.Value is not null)
-            .ToDictionary(
-                pair => pair.Key,
-                pair => new PersistedCalibration
-                {
-                    Resolution = pair.Value.Resolution,
-                    Geometry = pair.Value.Geometry.Normalize(),
-                },
-                StringComparer.OrdinalIgnoreCase);
+        settings.Calibrations = CloneMap(settings.Calibrations);
+        settings.ItemRowCalibrations = CloneMap(settings.ItemRowCalibrations);
         return settings;
     }
 

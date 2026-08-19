@@ -71,7 +71,13 @@ public sealed record DesktopPhaseSnapshot(
     LastOpenPage? LastOpen = null,
     bool IsCompanionBusy = false,
     string? Error = null,
-    OverlayState? Overlay = null);
+    OverlayState? Overlay = null,
+    /// <summary>
+    /// The WPA deltas that came with the most recent item-set write, or null.
+    /// Carried on the snapshot rather than read out of CompanionState by the UI
+    /// so the overlay has exactly one source of truth per tick.
+    /// </summary>
+    SituationalOverlaySet? Situational = null);
 
 public sealed class NullDesktopHostServices : IDesktopHostServices
 {
@@ -181,6 +187,7 @@ public partial class App : WpfApplication
     private WebView2EnvironmentService? _webViewEnvironment;
     private RedactedLog? _log;
     private GlobalHotkeyService? _hotkeys;
+    private ShopKeyWatcher? _shopWatcher;
     private VelopackUpdateService? _updates;
     private Task? _pollTask;
     private TrayMenuState _trayState = TrayMenuState.Default;
@@ -283,6 +290,7 @@ public partial class App : WpfApplication
         _overlay.Hide();
         _tray.Start(_trayState);
         StartHotkeys();
+        StartShopWatcher();
         _webViewEnvironment = new WebView2EnvironmentService(Paths.WebView2UserDataFolder);
         _ = ProbeWebView2AvailabilityAsync(_shutdown.Token);
         _updates = new VelopackUpdateService(
@@ -350,6 +358,44 @@ public partial class App : WpfApplication
     /// the tray to cancel means alt-tabbing out of the game they are aligning
     /// the overlay against.
     /// </summary>
+    /// <summary>
+    /// Starts the shop-key watcher, and writes down what it decided to watch.
+    ///
+    /// <para><b>The log lines are the feature's only witness.</b> A watcher
+    /// pointed at the wrong key is indistinguishable, from the outside, from a
+    /// watcher that never started — the player sees no numbers either way. The
+    /// resolved bind, the file it came from, and any disagreement between
+    /// League's two copies of it all go to <c>companion.log</c> at startup, so
+    /// one paste of that file answers "is it even watching the right key?".
+    /// The reference machine's answer is <c>[`]</c>, not the League default
+    /// <c>P</c>, which is precisely why nothing here is hardcoded.</para>
+    /// </summary>
+    private void StartShopWatcher()
+    {
+        try
+        {
+            var configDirectory = LeagueConfigLocator.Find();
+            var binds = ShopBindResolver.Resolve(configDirectory);
+            foreach (var line in binds.LogLines) _log?.Info(line);
+
+            _shopWatcher = new ShopKeyWatcher(
+                binds,
+                leagueIsForeground: new LeagueForegroundProbe(new DeferredGameWindowLocator()).IsLeagueForeground)
+            {
+                Diagnostics = message => _log?.Info(message),
+            };
+            _shopWatcher.ShopVisibilityChanged += state => _overlay?.SetShopOpen(state.Open);
+            _shopWatcher.Start();
+        }
+        catch (Exception error)
+        {
+            // A watcher that cannot start must not take the app with it. The
+            // tray's manual "Show item numbers now" is the way back.
+            _log?.Info($"shop: watcher could not start ({error.GetType().Name}); use the tray item to show the numbers");
+            _shopWatcher = null;
+        }
+    }
+
     private void OnHotkeyPressed(HotkeyBinding binding)
     {
         if (_isShuttingDown || _overlay is null) return;
@@ -475,9 +521,21 @@ public partial class App : WpfApplication
             CloseCompanionWindowForGame();
         }
 
+        // The watcher's own 50 ms timer owns the key edges; this only tells it
+        // whether a game is running, which is the gate that resets the latch
+        // between matches.
+        _shopWatcher?.SetInGame(snapshot.Overlay?.InGame == true);
+
         if (snapshot.Overlay is not null)
         {
             _overlay?.ApplyState(snapshot.Overlay);
+            // Champion-MATCHED, not merely present. The item set is written in
+            // champ select and the numbers are drawn in game, so the data
+            // outlives the phase that produced it — and anything that outlives
+            // a phase can outlive the champion it described. `For` returns null
+            // for every champion but the one the set was written for.
+            _overlay?.SetSituationalDeltas(
+                snapshot.Situational?.For(snapshot.Overlay.ChampionId ?? 0));
             if (_trayState.OverlayVisible) _overlay?.ShowInactive();
         }
         else
@@ -714,6 +772,14 @@ public partial class App : WpfApplication
                 break;
             case TrayCommand.Adjust:
                 _overlay?.BeginAdjustment();
+                break;
+            case TrayCommand.AdjustItems:
+                _overlay?.BeginAdjustment(CalibrationTarget.ItemRow);
+                break;
+            case TrayCommand.ToggleItemNumbers:
+                _trayState = _trayState with { ForceItemNumbers = !_trayState.ForceItemNumbers };
+                _overlay?.SetForceBadges(_trayState.ForceItemNumbers);
+                _tray?.UpdateState(_trayState);
                 break;
             case TrayCommand.CancelAdjust:
                 _overlay?.CancelAdjustment();
@@ -1065,6 +1131,7 @@ public partial class App : WpfApplication
         webView?.Close();
         _overlay?.Close();
         _hotkeys?.Dispose();
+        _shopWatcher?.Dispose();
         _hotkeys = null;
         _tray?.Dispose();
         try { _companionMutex?.ReleaseMutex(); } catch { }
@@ -1358,7 +1425,8 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             lastOpen,
             _state.IsCompanionBusy,
             status.LastError,
-            BuildOverlayState()));
+            BuildOverlayState(),
+            _state.Situational));
     }
 
     public Task<bool> RepairWebView2Async(CancellationToken cancellationToken)

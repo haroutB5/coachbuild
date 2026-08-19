@@ -63,7 +63,24 @@ public sealed record ApplyRunesRequest(
 public sealed record ApplyItemSetsRequest(
     [property: JsonPropertyName("championId")] int ChampionId,
     [property: JsonPropertyName("sets")] IReadOnlyList<JsonElement>? Sets,
-    [property: JsonPropertyName("replacePrefix")] string? ReplacePrefix = null);
+    [property: JsonPropertyName("replacePrefix")] string? ReplacePrefix = null,
+    /// <summary>
+    /// Optional. The win-rate deltas for the <c>Situational</c> block, in the
+    /// same order as that block's items, so the native overlay can draw the
+    /// numbers the shop panel has nowhere to put.
+    ///
+    /// <para>Deliberately a raw <see cref="JsonElement"/> rather than a typed
+    /// list. A typed model throws inside <c>JsonSerializer.Deserialize</c> on
+    /// the first malformed member, which turns the WHOLE request into
+    /// <c>default</c> and fails an item-set write over a decoration. See
+    /// <see cref="SituationalOverlayParser"/>, which validates it separately
+    /// and can only ever return fewer numbers.</para>
+    ///
+    /// <para>An older web build simply omits it; an older desktop ignores it,
+    /// because <c>JsonOptions.Wire</c> leaves <c>UnmappedMemberHandling</c> at
+    /// its default of Skip. Both directions are pinned by tests.</para>
+    /// </summary>
+    [property: JsonPropertyName("situational")] JsonElement? Situational = null);
 
 /// <summary>
 /// Success and failure are intentionally separate records. This preserves the

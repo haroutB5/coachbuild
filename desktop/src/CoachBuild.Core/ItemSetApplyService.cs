@@ -46,7 +46,43 @@ public sealed class ItemSetApplyService
         if (!put.Ok)
             return new ApplyItemSetsFailure("write-failed", LcuFailureHint(put.StatusCode));
         _log?.Info($"apply-itemsets: count={sets.Count}");
+        RecordSituational(request);
         return new ApplyItemSetsSuccess(sets.Count);
+    }
+
+    /// <summary>
+    /// Files the optional situational deltas away for the overlay, AFTER the
+    /// item-set write has already succeeded.
+    ///
+    /// <para>Position matters. Reading them earlier would put a decoration
+    /// between the caller and their write; reading them here means the worst
+    /// case is a successful write with no numbers attached. Nothing in this
+    /// method can change the result the caller receives, and the whole body is
+    /// inside a catch for the same reason.</para>
+    /// </summary>
+    private void RecordSituational(ApplyItemSetsRequest request)
+    {
+        if (_state is null) return;
+        try
+        {
+            var parsed = SituationalOverlayParser.Parse(
+                request.ChampionId,
+                request.Situational,
+                DateTimeOffset.UtcNow,
+                out var rejections);
+            _state.SetSituational(parsed);
+            if (rejections.Count > 0)
+                _log?.Info($"situational: dropped {rejections.Count} entr{(rejections.Count == 1 ? "y" : "ies")} — {string.Join("; ", rejections)}");
+            _log?.Info(parsed.Any
+                ? $"situational: {parsed.Deltas.Count} delta(s) for champion {parsed.ChampionId}"
+                : $"situational: none supplied for champion {request.ChampionId}; no numbers will be drawn");
+        }
+        catch (Exception error)
+        {
+            // Decoration must never be able to make a completed write look
+            // broken, not even by throwing after the fact.
+            _log?.Info($"situational: ignored ({error.GetType().Name})");
+        }
     }
 
     private static bool TryReadSummonerId(JsonElement? value, out long id)

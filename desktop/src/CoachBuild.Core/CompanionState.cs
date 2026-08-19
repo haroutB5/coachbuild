@@ -15,6 +15,7 @@ public sealed class CompanionState
     private string? _lastError;
     private int _activeLcuWriteTransactions;
     private string? _lastLoggedPhase;
+    private SituationalOverlaySet? _situational;
 
     public FollowAttachmentTracker FollowAttachments { get; } = new();
 
@@ -118,6 +119,29 @@ public sealed class CompanionState
     public void SetChampSelect(CompanionChampSelectSnapshot? snapshot)
     {
         lock (_gate) _champSelect = snapshot;
+    }
+
+    /// <summary>
+    /// The win-rate deltas for the <c>Situational</c> block of the item set most
+    /// recently written, or null when none have been written this session.
+    ///
+    /// <para>Champion-scoped, and read back through
+    /// <see cref="SituationalOverlaySet.For"/> rather than directly, so a set
+    /// written for the previous game can never draw over this one.</para>
+    /// </summary>
+    public SituationalOverlaySet? Situational { get { lock (_gate) return _situational; } }
+
+    /// <summary>
+    /// Records (or clears) the deltas that came with an item-set write.
+    ///
+    /// <para>A write with NO situational field CLEARS the stored set rather
+    /// than leaving the previous one in place. An older web build, or a build
+    /// whose champion genuinely has no alternatives, must produce no numbers —
+    /// not last champion's numbers.</para>
+    /// </summary>
+    public void SetSituational(SituationalOverlaySet? situational)
+    {
+        lock (_gate) _situational = situational is { Deltas.Count: > 0 } ? situational : null;
     }
 
     public void SetLastOpen(int championId, int? roleId, DateTimeOffset? at = null)
