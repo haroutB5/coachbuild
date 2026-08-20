@@ -21,6 +21,7 @@ import { getDdragonMaps } from "./ddragon";
 import { extractProstageRow } from "./extract";
 import { orderByStaleness, resolveActiveTournaments } from "./tournaments";
 import type { CargoScoreboardPlayerRow } from "./types";
+import { runRetentionPruneSafely } from "@/lib/retention/prune";
 
 // ROOT CAUSE (2026-07-09, post-ship): every ScoreboardPlayers call that got
 // PAST the rate limiter (3/3 in the real ingest run) failed with a
@@ -41,6 +42,9 @@ const SCOREBOARD_PLAYERS_FIELDS =
 
 export interface ProstageIngestOptions {
   cursor?: number;
+  /** Set false to skip the end-of-sweep retention prune. Tests and deliberate
+   *  ingest-only runs; on by default (see lib/pro/ingestMatches.ts). */
+  prune?: boolean;
   tournaments?: string[]; // override — skips resolveActiveTournaments AND staleness reordering (used by tests; the script resolves once itself, see scripts/ingest-prostage.mjs)
   onProgress?: (msg: string) => void;
   /** See CargoRetryOptions.fastFail in lib/prostage/cargo.ts. Pass true from
@@ -332,6 +336,27 @@ export async function runProstageIngest(opts: ProstageIngestOptions = {}): Promi
     }
   } catch (err) {
     result.errors.push(`tournament ${overviewPage}: ${(err as Error).message}`);
+  }
+
+  // RETENTION, once the tournament walk has drained — see the equivalent block
+  // in lib/pro/ingestMatches.ts for why this is folded into an existing ingest
+  // rather than registered as another scheduled task.
+  //
+  // `nextCursor === null` is this walk's own end-of-list signal and is exactly
+  // what scripts/ingest-prostage.mjs loops until, so this fires once per sweep.
+  // The prune runs even when this tournament errored: a Cargo failure says
+  // nothing about whether 97-day-old rows are still worth storing, and
+  // lib/retention/prune.ts's own 20h throttle keeps the cadence sane either way.
+  //
+  // NOTE THE COLUMN: prostage_matches keys on `game_datetime`, not
+  // `game_creation` — the registry in lib/retention/prune.ts carries that, and
+  // a test asserts it against migrations/0002_prostage.sql.
+  //
+  // Never throws. A pro-play ingest that wrote real rows must not be failed by
+  // housekeeping, and the database being unreachable must degrade to "did not
+  // prune".
+  if (result.nextCursor === null && opts.prune !== false) {
+    await runRetentionPruneSafely(sql, ["prostage_matches"], { log });
   }
 
   return result;

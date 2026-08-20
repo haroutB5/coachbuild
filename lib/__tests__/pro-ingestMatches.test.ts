@@ -37,7 +37,10 @@ describe("runMatchIngest account-selection ordering", () => {
   it("orders by last_fetched_at ASC NULLS FIRST with a created_at ASC tiebreaker", async () => {
     mockSql.mockResolvedValueOnce([]); // account SELECT returns nothing -> no further calls
 
-    await runMatchIngest({ batch: 5 });
+    // prune:false so the call count still means "no per-account work". The
+    // end-of-sweep retention prune is covered by
+    // lib/retention/__tests__/pruneWiring.test.ts.
+    await runMatchIngest({ batch: 5, prune: false });
 
     expect(mockSql).toHaveBeenCalledTimes(1);
     const strings = mockSql.mock.calls[0][0] as TemplateStringsArray;
@@ -52,7 +55,7 @@ describe("runMatchIngest account-selection ordering", () => {
 
   it("returns nextCursor null (no accounts) without attempting any per-account work", async () => {
     mockSql.mockResolvedValueOnce([]);
-    const result = await runMatchIngest({ batch: 5 });
+    const result = await runMatchIngest({ batch: 5, prune: false });
     expect(result.accountsProcessed).toBe(0);
     expect(result.nextCursor).toBeNull();
     expect(mockSql).toHaveBeenCalledTimes(1);

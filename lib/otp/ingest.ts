@@ -30,6 +30,7 @@ import type { RiotTimeline } from "../pro/types";
 import { opggChampionName } from "../opgg";
 import { fetchOtpCandidates, type OtpCandidate } from "./leaderboard";
 import { ROUTINGS, type Routing } from "./featured";
+import { runRetentionPruneSafely } from "@/lib/retention/prune";
 
 /** Regions the leaderboard is read from, best-first.
  *
@@ -260,6 +261,9 @@ export async function runOtpMatchIngest(
     matchesPerAccount?: number;
     /** Only timeline the account currently surfaced by otp_featured. */
     fetchFeaturedTimelines?: boolean;
+    /** Set false to skip the retention prune of coachbuild.otp_featured_scanned.
+     *  Tests and deliberate ingest-only runs; on by default. */
+    prune?: boolean;
     log?: (msg: string) => void;
   } = {}
 ): Promise<OtpMatchIngestResult> {
@@ -350,6 +354,30 @@ export async function runOtpMatchIngest(
         result.errors.push(`${account.game_name}: stamp-bump failed: ${(bumpErr as Error).message}`);
       }
     }
+  }
+
+  // RETENTION for coachbuild.otp_featured_scanned — the deep walk's "which
+  // matches have I already asked Riot about" ledger, which had no retention at
+  // all and grows by one row per Riot call, forever.
+  //
+  // Hooked here rather than in scripts/ingest-otp-priority.mjs (which is the
+  // table's main writer) for two reasons: this is the lib-level OTP ingest, so
+  // the wiring is reachable by the test suite, and unlike the pro and prostage
+  // walks this function has no "sweep drained" signal to key off — it processes
+  // a fixed batch of accounts per call. lib/retention/prune.ts's own 20h
+  // per-table throttle is what makes an unconditional call here correct: the
+  // cost on a throttled call is a single indexed primary-key lookup against
+  // coachbuild.ingest_health, against a call that has just spent many paced
+  // Riot requests.
+  //
+  // otp_MATCHES is deliberately NOT pruned here. See
+  // PRUNE_BLOCKED_REASON.otp_matches — app/api/otp/featured/route.ts reads that
+  // table with no time bound and aggregates over every row, so it genuinely
+  // serves rows older than the fresh window today.
+  //
+  // Never throws.
+  if (opts.prune !== false) {
+    await runRetentionPruneSafely(sql, ["otp_featured_scanned"], { log });
   }
 
   return result;

@@ -30,6 +30,7 @@ import { extractMatch } from "./extract";
 import { freshStartTimeEpochSec } from "./fresh";
 import { routingForServer } from "./regionMap";
 import { getMatch, getMatchIdsByPuuid, getMatchTimeline, isRateLimited, RiotRequestError } from "./riot";
+import { runRetentionPruneSafely } from "@/lib/retention/prune";
 
 export interface MatchIngestOptions {
   batch?: number;
@@ -39,6 +40,10 @@ export interface MatchIngestOptions {
   cursor?: string;
   matchesPerAccount?: number;
   onProgress?: (msg: string) => void;
+  /** Set false to skip the end-of-sweep retention prune. Exists for tests and
+   *  for a deliberate "ingest only" run; the prune is on by default because a
+   *  retention policy nobody remembers to enable is not a retention policy. */
+  prune?: boolean;
 }
 
 export interface MatchIngestResult {
@@ -166,6 +171,36 @@ export async function runMatchIngest(opts: MatchIngestOptions = {}): Promise<Mat
   }
 
   result.nextCursor = accounts.length < batch ? null : walkStart;
+
+  // RETENTION, at the end of a COMPLETED sweep — not on every page.
+  //
+  // `nextCursor === null` is this walk's own "the queue drained" signal (see
+  // the CURSOR CONTRACT above), and scripts/ingest-matches.mjs loops until it
+  // sees exactly that, so this fires once per sweep rather than ~289 times.
+  // A rate-limited abort also nulls the cursor but accomplished nothing, so it
+  // is excluded — spending database time to tidy up after a walk that could
+  // not run is the wrong instinct on a metered compute. That path already
+  // RETURNS EARLY from inside the loop, so `!result.rateLimited` here is a
+  // second line of defence rather than the live mechanism; it is kept
+  // deliberately so that turning the early return into a `break` later cannot
+  // silently start pruning after a 429. (Mutation-checked: removing this
+  // clause alone does not change behaviour today, precisely because the early
+  // return is doing the work.)
+  //
+  // Deliberately NOT a new scheduled task. The incident this cleans up after
+  // was caused by an unattended scheduled task with a bad cadence; folding the
+  // prune into work that is already happening adds no new duty cycle, no new
+  // registration to hand-edit, and no new thing to forget. lib/retention/prune
+  // .ts additionally throttles itself to one run per table per 20h, so this
+  // stays correct no matter how often the sweep completes.
+  //
+  // `runRetentionPruneSafely` never throws: a walk that fetched real matches
+  // must never be failed by housekeeping, and the database being unreachable
+  // must degrade to "did not prune", never to a failed ingest.
+  if (!result.rateLimited && result.nextCursor === null && opts.prune !== false) {
+    await runRetentionPruneSafely(sql, ["pro_matches"], { log });
+  }
+
   return result;
 }
 
