@@ -17,6 +17,7 @@
     "ingest:matches": "tsx scripts/ingest-matches.mjs",
     "ingest:draft": "tsx scripts/ingest-draft.mjs",
     "ingest:mystats": "tsx scripts/ingest-mystats.mjs",
+    "consensus:generate": "tsx scripts/generate-consensus-artifact.mts",
     "prebuild": "node scripts/sync-companion-version.mjs"
   },
   "dependencies": {

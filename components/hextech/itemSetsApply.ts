@@ -16,6 +16,16 @@
 // cost is one extra /api/pros + item-metadata fetch when the user clicks
 // "Add item builds" or a deep-link auto-fires — acceptable for a
 // user-triggered or once-per-navigation action, not a hot path.
+//
+// ── Where the consensus numbers come from now ───────────────────────────────
+// Since the 2026-08-20 Neon outage, that fetch is the SECOND choice, not the
+// first. `resolveConsensus` reads the per-patch precomputed artifact
+// (consensusArtifact.ts) and only falls through to `/api/pros` / `/api/otp`
+// when the artifact is missing, built for another patch, or does not cover the
+// champion-role. The reduction both paths run is one shared function, so the
+// two produce byte-identical output for the same sample. See the block comment
+// above `resolveConsensus` for the four cases and why the order is inverted
+// relative to a cache.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { ChampionRef, BuildResponse } from "@/lib/types";
@@ -23,6 +33,18 @@ import type { ProGame, ProGamesApiResponse } from "@/components/proGames.types";
 import { getItemDetailMap, type ItemDetail } from "@/components/itemDetail";
 import { versionFromPatch } from "@/components/proAssets";
 import { aggregateProConsensus } from "./proConsensus";
+import {
+  CONSENSUS_ENDPOINT,
+  consensusArtifactKey,
+  consensusRequestPath,
+  consensusSourceToInput,
+  isConsensusArtifactFresh,
+  loadConsensusArtifact,
+  reduceConsensusModel,
+  type ConsensusArtifact,
+  type ConsensusArtifactSource,
+  type ConsensusSource,
+} from "./consensusArtifact";
 import { LANE_TO_ROLE_ID, type LaneId } from "./heroContracts";
 import { buildItemSets, champScopedReplacePrefix, type ProConsensusItemsInput } from "./itemSetBody";
 import {
@@ -34,7 +56,7 @@ import {
 } from "@/components/live/companionClient";
 import { shouldAutoExport, type AutoApplyGateInput } from "./autoExportShared";
 
-export { type AutoApplyGateInput };
+export { type AutoApplyGateInput, type ConsensusSource };
 
 // MUST stay in step with ProConsensusCard's own AGGREGATION_LIMIT/
 // PRO_PLAY_FLOOR. This module performs an INDEPENDENT second aggregation for
@@ -43,10 +65,11 @@ export { type AutoApplyGateInput };
 // limit=200&proMin=100 while this path silently kept limit=100 with no floor,
 // so the "Pro build" line the user got IN THEIR SHOP was still ~96% solo
 // queue after the card beside it had been fixed. Two copies of one query is
-// the defect; until they share a helper, changing one means changing both.
-const PRO_CONSENSUS_LIMIT = 200;
-const PRO_PLAY_FLOOR = 100;
-const OTP_CONSENSUS_LIMIT = 200;
+// the defect — so the limits and the URL that carries them now live in ONE
+// place (consensusArtifact.ts's `consensusRequestPath`), which this path and
+// the per-patch generator both call. Re-exported here because this module's
+// public surface is where callers and tests have always looked for them.
+export { PRO_CONSENSUS_LIMIT, PRO_PLAY_FLOOR, OTP_CONSENSUS_LIMIT } from "./consensusArtifact";
 
 // ── "no data" vs "the query failed" ─────────────────────────────────────────
 //
@@ -74,7 +97,6 @@ const OTP_CONSENSUS_LIMIT = 200;
 // export missing one optional block, and nothing here can throw or fail an
 // apply. What changes is that the third case now says so out loud -- see
 // reportConsensusFailure below.
-export type ConsensusSource = "pro" | "otp";
 
 export interface ConsensusFailure {
   /** Which of the two aggregations could not be resolved. */
@@ -93,11 +115,37 @@ export interface ConsensusFailure {
   status?: number;
   /** One line, already safe to write to a log verbatim. */
   message: string;
+  /** Set when the PRECOMPUTED artifact answered after the live query failed.
+   *  The failure is real and still worth logging — a 500 from our own API is
+   *  news either way — but the user did NOT lose the block, and a line that
+   *  says "OMITTED" when nothing was omitted trains a reader to ignore it. */
+  recoveredFrom?: { patch: string; generatedAt: string; stale: boolean };
+  /** Why the artifact could not answer, when it could not. Present exactly
+   *  when `recoveredFrom` is absent, so a reader who sees a lost block also
+   *  sees why the fallback that exists to prevent it did not fire. */
+  artifactReason?: string;
 }
+
+/** Where the numbers in `data` came from. Diagnostic only — nothing branches
+ *  on it, and `buildItemSets` cannot tell the difference (which is the point:
+ *  the two paths are byte-identical for the same sample). */
+export type ConsensusOrigin =
+  /** The per-patch precomputed artifact, generated for THIS patch. No
+   *  database was touched. */
+  | "artifact"
+  /** A live `/api/pros` / `/api/otp` round trip. */
+  | "live"
+  /** The artifact, after the live query failed — either because the artifact
+   *  was generated for an older patch, or because it does not cover this
+   *  champion-role. Carries `failure.recoveredFrom`. */
+  | "artifact-fallback";
 
 export interface ConsensusResolution {
   data: ProConsensusItemsInput | null;
   failure: ConsensusFailure | null;
+  /** Optional so every existing construction site and test of this shape
+   *  stays valid; always set by `resolveConsensus`. */
+  origin?: ConsensusOrigin;
 }
 
 /** Marker thrown across the `fetch(...).then(...)` boundary purely so the
@@ -110,7 +158,6 @@ class ConsensusHttpError extends Error {
   }
 }
 
-const CONSENSUS_ENDPOINT: Record<ConsensusSource, string> = { pro: "/api/pros", otp: "/api/otp" };
 const CONSENSUS_LABEL: Record<ConsensusSource, string> = { pro: "Pro build", otp: "OTP build" };
 
 /** Turns a failure into the sentence that goes in a log or a diagnostics
@@ -119,9 +166,22 @@ const CONSENSUS_LABEL: Record<ConsensusSource, string> = { pro: "Pro build", otp
  *  "/api/pros answered 500" without a human having to know they are the same
  *  event. */
 export function consensusFailureLine(failure: ConsensusFailure): string {
+  if (failure.recoveredFrom) {
+    // Deliberately does NOT say "OMITTED": the block is in the set. What the
+    // reader needs from this line is that the live query failed (so the
+    // outage is visible) AND how old the numbers they are looking at are (so
+    // the artifact's patch-freshness is never an unstated assumption) — the
+    // project's standing rule that a gate withholding fresh data must say so.
+    return (
+      `${CONSENSUS_LABEL[failure.source]} block SERVED FROM the precomputed patch-${failure.recoveredFrom.patch} ` +
+      `artifact (generated ${failure.recoveredFrom.generatedAt}${failure.recoveredFrom.stale ? ", STALE for this patch" : ""}) ` +
+      `because the live query FAILED: ${failure.message}`
+    );
+  }
   return (
     `${CONSENSUS_LABEL[failure.source]} block OMITTED because the query FAILED, ` +
-    `not because this champion has no data: ${failure.message}`
+    `not because this champion has no data: ${failure.message}` +
+    (failure.artifactReason ? ` — and the precomputed fallback could not cover it: ${failure.artifactReason}` : "")
   );
 }
 
@@ -147,7 +207,9 @@ export function reportConsensusFailure(failure: ConsensusFailure): void {
   }
   try {
     recordCompanionError(
-      failure.kind === "http" ? `${failure.source}-consensus-http-${failure.status}` : `${failure.source}-consensus-network`,
+      (failure.kind === "http"
+        ? `${failure.source}-consensus-http-${failure.status}`
+        : `${failure.source}-consensus-network`) + (failure.recoveredFrom ? "-recovered" : ""),
       line
     );
   } catch {
@@ -155,17 +217,23 @@ export function reportConsensusFailure(failure: ConsensusFailure): void {
   }
 }
 
-/** The ONE implementation behind both resolvers. Pro and OTP differ only in
- *  which endpoint they read and which query params they send — the frequency
- *  maths, the starter/boots partition and the support-final carve-out are the
- *  same `aggregateProConsensus` in both cases, which is the property that
- *  keeps the exported blocks agreeing with the cards the user just read.
- *  Keeping them as two copies of one body is how the v0.70.0 pro-play
- *  starvation fix landed on one path and not the other (see the
- *  PRO_CONSENSUS_LIMIT comment above); one body, two call sites, no drift.
+/** The LIVE, database-backed resolution — the ONE implementation behind both
+ *  resolvers. Pro and OTP differ only in which endpoint they read and which
+ *  query params they send — the frequency maths, the starter/boots partition
+ *  and the support-final carve-out are the same `aggregateProConsensus` in
+ *  both cases, which is the property that keeps the exported blocks agreeing
+ *  with the cards the user just read. Keeping them as two copies of one body
+ *  is how the v0.70.0 pro-play starvation fix landed on one path and not the
+ *  other (see the PRO_CONSENSUS_LIMIT comment above); one body, two call
+ *  sites, no drift.
+ *
+ *  Reporting is deliberately NOT done here: `resolveConsensus` above may
+ *  recover a failure from the precomputed artifact, and what gets logged
+ *  ("block OMITTED" vs "block SERVED FROM the artifact") depends on whether it
+ *  did. A failure reported here would be reported before that is known.
  *
  *  Never throws. Every exit is a `ConsensusResolution`. */
-async function resolveConsensus(
+async function resolveConsensusLive(
   source: ConsensusSource,
   champ: ChampionRef,
   lane: LaneId,
@@ -173,10 +241,7 @@ async function resolveConsensus(
 ): Promise<ConsensusResolution> {
   const role = LANE_TO_ROLE_ID[lane];
   const ver = versionFromPatch(patch);
-  const url =
-    source === "pro"
-      ? `${CONSENSUS_ENDPOINT.pro}?championId=${champ.id}&role=${role}&limit=${PRO_CONSENSUS_LIMIT}&proMin=${PRO_PLAY_FLOOR}&source=all`
-      : `${CONSENSUS_ENDPOINT.otp}?championId=${champ.id}&role=${role}&limit=${OTP_CONSENSUS_LIMIT}`;
+  const url = consensusRequestPath(source, champ.id, role);
 
   try {
     const [games, itemMeta] = await Promise.all([
@@ -196,26 +261,14 @@ async function resolveConsensus(
     // `catch { return null }` was drowning out.
     if (games2.length === 0) return { data: null, failure: null };
 
-    const model = aggregateProConsensus(games2, itemMeta);
-    if (model.items.length === 0 && model.boots.length === 0 && model.supportFinals === null) {
-      return { data: null, failure: null };
-    }
-
-    // The support-final fold-in, identical on both paths and for the same
-    // reason: only `top` is added back, because the alternatives are by
-    // definition items the player cannot also own, and a 6-item shop line
-    // carrying two of them is the exact duplication bug that partition exists
-    // to prevent. Merged then re-sorted with this input's documented
-    // share-desc / itemId-asc order rather than appended, so the invariant the
-    // shape's doc comment states still holds.
-    const items = [...model.items, ...(model.supportFinals ? [model.supportFinals.top] : [])].sort((a, b) =>
-      b.share !== a.share ? b.share - a.share : a.itemId - b.itemId
-    );
+    // ONE reduction, shared with the artifact generator — the empty test, the
+    // support-final fold-in (only `top`, never the mutually-exclusive
+    // alternatives) and the share-desc / itemId-asc re-sort all live in
+    // `reduceConsensusModel` now. That is what makes the precomputed artifact
+    // byte-identical to this path by construction rather than by two
+    // implementations happening to agree; see consensusArtifact.ts's header.
     return {
-      data: {
-        items: items.map((e) => ({ itemId: e.itemId, share: e.share })),
-        boots: model.boots.map((e) => ({ itemId: e.itemId, share: e.share })),
-      },
+      data: consensusSourceToInput(reduceConsensusModel(aggregateProConsensus(games2, itemMeta))),
       failure: null,
     };
   } catch (err) {
@@ -234,9 +287,90 @@ async function resolveConsensus(
               `${CONSENSUS_ENDPOINT[source]} was unreachable or sent an unreadable body for ` +
               `championId=${champ.id} role=${role}: ${err instanceof Error ? err.message : String(err)}`,
           };
-    reportConsensusFailure(failure);
     return { data: null, failure };
   }
+}
+
+// ── Artifact first, database second ─────────────────────────────────────────
+//
+// THE ORDER IS THE POINT, and it is the opposite of a cache. A cache asks the
+// authority and keeps a copy in case it is slow; this asks the precomputed
+// artifact and only reaches for the database when the artifact cannot answer.
+// The reason is the 2026-08-20 outage: the export's dependency on Postgres was
+// never a data dependency at all — 200 jsonb-carrying match rows were fetched
+// and reduced to eighteen numbers before anything looked at them — so it was a
+// dependency the export was paying for in availability and getting nothing for.
+// Preferring the artifact removes the database from the request path entirely,
+// which is what makes the failure structurally impossible rather than rarer.
+//
+// The four cases, in order:
+//
+//   1. FRESH ARTIFACT THAT COVERS THIS COMBO -> serve it. No database, no
+//      network beyond one static asset. A stored `null` means the generator
+//      asked and got nothing, which is the genuine-absence case and is
+//      returned as such, with no failure, exactly like the live path's.
+//   2. Otherwise -> live query. Missing artifact, artifact built for an older
+//      patch, or a champion-role the generator never covered all land here.
+//   3. LIVE FAILED but we hold an entry anyway (stale patch, or a fresh
+//      artifact that skipped this combo) -> serve the artifact and report a
+//      RECOVERED failure. The block survives; the outage is still loud.
+//   4. Live failed and nothing precomputed -> the 33785c7 behaviour, with the
+//      reason the artifact could not help folded into the same line. This is
+//      the only path that still loses a block, and it cannot do so quietly.
+function artifactEntryFor(
+  artifact: ConsensusArtifact | null,
+  source: ConsensusSource,
+  championId: number,
+  role: number
+): { covered: boolean; src: ConsensusArtifactSource | null } {
+  const entry = artifact?.entries[consensusArtifactKey(championId, role)];
+  if (!entry) return { covered: false, src: null };
+  return { covered: true, src: entry[source] };
+}
+
+async function resolveConsensus(
+  source: ConsensusSource,
+  champ: ChampionRef,
+  lane: LaneId,
+  patch: string
+): Promise<ConsensusResolution> {
+  const role = LANE_TO_ROLE_ID[lane];
+  const load = await loadConsensusArtifact();
+  const { covered, src } = artifactEntryFor(load.artifact, source, champ.id, role);
+  const fresh = load.artifact ? isConsensusArtifactFresh(load.artifact.patch, patch) : false;
+
+  // 1.
+  if (fresh && covered) {
+    return { data: consensusSourceToInput(src), failure: null, origin: "artifact" };
+  }
+
+  // 2.
+  const live = await resolveConsensusLive(source, champ, lane, patch);
+  if (live.failure === null) return { ...live, origin: "live" };
+
+  // 3.
+  if (covered && load.artifact) {
+    const recovered: ConsensusFailure = {
+      ...live.failure,
+      recoveredFrom: {
+        patch: load.artifact.patch,
+        generatedAt: load.artifact.generatedAt,
+        stale: !fresh,
+      },
+    };
+    reportConsensusFailure(recovered);
+    return { data: consensusSourceToInput(src), failure: recovered, origin: "artifact-fallback" };
+  }
+
+  // 4.
+  const uncovered: ConsensusFailure = {
+    ...live.failure,
+    artifactReason: load.artifact
+      ? `the patch-${load.artifact.patch} artifact has no entry for championId=${champ.id} role=${role}`
+      : load.reason,
+  };
+  reportConsensusFailure(uncovered);
+  return { data: null, failure: uncovered, origin: "live" };
 }
 
 /** Failure-aware Pro resolution. Prefer this over
