@@ -96,7 +96,10 @@ public static class LeagueKeybindReader
     /// when both files carry the event; the disagreement, if any, is reported
     /// rather than dropped.
     /// </summary>
-    public static KeybindSource Read(string? configDirectory, string eventName)
+    public static KeybindSource Read(
+        string? configDirectory,
+        string eventName,
+        Func<char, uint>? punctuationLayout = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(eventName);
         if (string.IsNullOrWhiteSpace(configDirectory) || !Directory.Exists(configDirectory))
@@ -110,13 +113,15 @@ public static class LeagueKeybindReader
         if (fromIni is null && fromJson is null)
             return new KeybindSource(eventName, LeagueKeybindResult.Empty, null);
 
-        if (fromIni is null) return new KeybindSource(eventName, Parse(fromJson!), jsonPath);
-        if (fromJson is null) return new KeybindSource(eventName, Parse(fromIni), iniPath);
+        if (fromIni is null)
+            return new KeybindSource(eventName, Parse(fromJson!, punctuationLayout), jsonPath);
+        if (fromJson is null)
+            return new KeybindSource(eventName, Parse(fromIni, punctuationLayout), iniPath);
 
         var disagrees = !string.Equals(fromIni.Trim(), fromJson.Trim(), StringComparison.OrdinalIgnoreCase);
         return new KeybindSource(
             eventName,
-            Parse(fromIni),
+            Parse(fromIni, punctuationLayout),
             iniPath,
             disagrees ? $"{jsonPath} says \"{fromJson}\"" : null);
     }
@@ -218,7 +223,7 @@ public static class LeagueKeybindReader
     /// guess and never a default. Guessing here means watching the wrong key
     /// forever with nothing in the log to say so.</para>
     /// </summary>
-    public static LeagueKeybindResult Parse(string? raw)
+    public static LeagueKeybindResult Parse(string? raw, Func<char, uint>? punctuationLayout = null)
     {
         var value = raw?.Trim() ?? string.Empty;
         if (value.Length == 0 || string.Equals(value, "null", StringComparison.OrdinalIgnoreCase))
@@ -262,7 +267,7 @@ public static class LeagueKeybindReader
                 continue;
             }
 
-            if (!LeagueVirtualKeys.TryResolve(keyToken, out var virtualKey))
+            if (!LeagueVirtualKeys.TryResolve(keyToken, out var virtualKey, punctuationLayout))
             {
                 if (problem == LeagueKeybindProblem.None && binds.Count == 0)
                 {
@@ -361,8 +366,23 @@ public static class LeagueVirtualKeys
     };
 
     // US-layout OEM punctuation. League writes the CHARACTER, Windows wants a
-    // virtual key, and the mapping is layout dependent — so this table is the
-    // US answer and anything outside it fails closed with the token named.
+    // virtual key, and the mapping is layout dependent.
+    //
+    // THE COMMENT THAT USED TO BE HERE said this table "is the US answer and
+    // anything outside it fails closed with the token named". Half of that was
+    // false, and it is the half that mattered: a character IN this table on a
+    // NON-US layout does not fail closed at all — it returns the US key code
+    // silently. Measured on the en-GB layout this project is developed on,
+    // `VkKeyScanEx('`')` is 0xDF (VK_OEM_8) while this table says 0xC0, which
+    // on en-GB is the '/@ key. That is a different physical key, resolved with
+    // full confidence, and nothing in the log said which one.
+    //
+    // The table is now the FALLBACK, consulted after the caller's own layout
+    // (see the punctuationLayout parameter on TryResolve). It is kept rather
+    // than deleted because it is the only answer available when a layout
+    // cannot type the character unmodified, and because it keeps Parse
+    // deterministic for tests that are about parsing rather than about
+    // keyboards.
     private static readonly Dictionary<char, uint> Punctuation = new()
     {
         ['`'] = 0xC0,
@@ -378,7 +398,27 @@ public static class LeagueVirtualKeys
         ['/'] = 0xBF,
     };
 
-    public static bool TryResolve(string? token, out uint virtualKey)
+    /// <param name="punctuationLayout">
+    /// Maps a punctuation CHARACTER to the virtual key that produces it on the
+    /// player's own keyboard layout, or 0 when it cannot. Consulted before the
+    /// US table below, because that table is wrong on every layout but one.
+    ///
+    /// <para><b>Measured, not assumed.</b> On the en-GB layout this project is
+    /// developed on, <c>VkKeyScanEx('`')</c> returns <b>0xDF (VK_OEM_8)</b>,
+    /// while the US table says <c>0xC0</c> — which on en-GB is the
+    /// <c>'</c>/<c>@</c> key, a completely different physical key. A player
+    /// whose <c>input.ini</c> says <c>evtOpenShop=[`]</c> would therefore have
+    /// their bind read CORRECTLY and then have the watcher poll a key they
+    /// never press. That is precisely the failure this class's own doctrine
+    /// forbids: "watching the wrong key forever with nothing in the log to say
+    /// so".</para>
+    ///
+    /// <para>Deliberately scoped to punctuation. A-Z and 0-9 are left on the
+    /// existing rule because the layout question there (AZERTY's A/Q swap) is
+    /// not answerable without a machine that has one, and guessing at it would
+    /// trade a measured bug for an unmeasured one.</para>
+    /// </param>
+    public static bool TryResolve(string? token, out uint virtualKey, Func<char, uint>? punctuationLayout = null)
     {
         virtualKey = 0;
         if (string.IsNullOrWhiteSpace(token)) return false;
@@ -401,6 +441,15 @@ public static class LeagueVirtualKeys
         if (character is >= 'a' and <= 'z') { virtualKey = (uint)(character - 'a' + 0x41); return true; }
         if (character is >= 'A' and <= 'Z') { virtualKey = (uint)(character - 'A' + 0x41); return true; }
         if (character is >= '0' and <= '9') { virtualKey = (uint)(character - '0' + 0x30); return true; }
+
+        if (punctuationLayout is not null)
+        {
+            uint fromLayout;
+            try { fromLayout = punctuationLayout(character); }
+            catch { fromLayout = 0; }
+            if (fromLayout != 0) { virtualKey = fromLayout; return true; }
+        }
+
         if (Punctuation.TryGetValue(character, out virtualKey)) return true;
         virtualKey = 0;
         return false;

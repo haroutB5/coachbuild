@@ -187,12 +187,46 @@ public sealed class OverlaySettingsStore
                 && calibration.Resolution.DpiX == display.DpiX
                 && calibration.Resolution.DpiY == display.DpiY)
             {
-                return calibration.Geometry.Normalize();
+                var geometry = calibration.Geometry.Normalize();
+
+                // An item row stored at EXACTLY this display's untouched
+                // default is not a calibration, it is the starting position
+                // written out by a save that should never have happened, and
+                // it must not be treated as a measurement.
+                //
+                // This exists because it already shipped. 1.0.18's field log
+                // reads `badges: 6 shown at 544x904 size 59 pitch 69` on
+                // 2560x1440 — ItemRowScaledDefault to the pixel — and the
+                // player's report is that the pills sit well below their shop's
+                // Situational row. The write path is fixed above, but the
+                // player's settings.json already holds the bad entry and no
+                // one is going to hand-edit JSON. Reading it as "never
+                // positioned" is what makes the fix reach them: the badges stop
+                // painting over their game and ReportBadgeReason names the tray
+                // item that fixes it.
+                //
+                // The cost is that a player who genuinely lines the row up on
+                // the default to within a rounding error loses it. Four
+                // independent doubles agreeing exactly is not something a
+                // human does with arrow keys.
+                if (target == CalibrationTarget.ItemRow
+                    && IsSameGeometry(geometry, CalibrationGeometry.ItemRowScaledDefault(display)))
+                {
+                    return null;
+                }
+
+                return geometry;
             }
 
             return null;
         }
     }
+
+    private static bool IsSameGeometry(CalibrationGeometry left, CalibrationGeometry right) =>
+        Math.Abs(left.FirstBoxCenterX - right.FirstBoxCenterX) < 0.001
+        && Math.Abs(left.CenterY - right.CenterY) < 0.001
+        && Math.Abs(left.BoxSize - right.BoxSize) < 0.001
+        && Math.Abs(left.Spacing - right.Spacing) < 0.001;
 
     /// <summary>The geometry to START an adjustment from: the saved one, else this target's default.</summary>
     public CalibrationGeometry LoadCalibrationOrDefault(CalibrationTarget target, DisplayResolution display) =>

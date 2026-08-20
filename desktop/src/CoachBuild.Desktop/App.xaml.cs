@@ -188,6 +188,11 @@ public partial class App : WpfApplication
     private RedactedLog? _log;
     private GlobalHotkeyService? _hotkeys;
     private ShopKeyWatcher? _shopWatcher;
+
+    // True while the watcher is polling League's DEFAULT P because the player's
+    // own config could not be read. Drives one retry per game start; see
+    // RetryShopBindsIfFallback.
+    private bool _shopBindsAreFallback;
     private VelopackUpdateService? _updates;
     private Task? _pollTask;
     private TrayMenuState _trayState = TrayMenuState.Default;
@@ -375,9 +380,9 @@ public partial class App : WpfApplication
     {
         try
         {
-            var configDirectory = LeagueConfigLocator.Find();
-            var binds = ShopBindResolver.Resolve(configDirectory);
+            var binds = ShopBindResolver.ResolveForCurrentMachine();
             foreach (var line in binds.LogLines) _log?.Info(line);
+            if (binds.ConfigDirectory is null) LogConfigSearch();
 
             // OFF unless the settings file asks for it. The gate swallowed six
             // presses across a whole game on 1.0.17 and honoured none, and the
@@ -400,6 +405,7 @@ public partial class App : WpfApplication
             };
             _shopWatcher.ShopVisibilityChanged += state => _overlay?.SetShopOpen(state.Open);
             _shopWatcher.Start();
+            _shopBindsAreFallback = binds.UsedFallback;
         }
         catch (Exception error)
         {
@@ -407,6 +413,67 @@ public partial class App : WpfApplication
             // tray's manual "Show item numbers now" is the way back.
             _log?.Info($"shop: watcher could not start ({error.GetType().Name}); use the tray item to show the numbers");
             _shopWatcher = null;
+        }
+    }
+
+    /// <summary>
+    /// Names every directory the config search looked in, when it found none.
+    ///
+    /// <para>"No League config directory found" is a conclusion; this is the
+    /// evidence for it. The search is Riot's own install manifests followed by
+    /// a hardcoded path, Program Files and each drive root, and which of those
+    /// were tried is the difference between "League is somewhere we do not look"
+    /// and "the manifests are unreadable".</para>
+    /// </summary>
+    private void LogConfigSearch()
+    {
+        try
+        {
+            var candidates = LeagueConfigLocator.Candidates();
+            _log?.Info($"shop: looked for League's Config in {candidates.Count} place(s): "
+                + string.Join(" | ", candidates.Take(8)));
+        }
+        catch (Exception error)
+        {
+            _log?.Info($"shop: could not list the config search paths ({error.GetType().Name})");
+        }
+    }
+
+    /// <summary>
+    /// Resolves the shop bind again when a game starts, but only if the last
+    /// answer was League's default P.
+    ///
+    /// <para>The resolution used to happen exactly once, in
+    /// <see cref="OnStartup"/>. This app autostarts at login and then lives in
+    /// the tray for days, so every reason the config might be unreadable at
+    /// 07:00 — a drive not yet ready, League installed after the app, a config
+    /// League had not yet written — became a permanent wrong answer. The
+    /// player's own report is the shape of that: the app was watching P while
+    /// their bind is grave/backtick.</para>
+    ///
+    /// <para>Gated on <c>UsedFallback</c> and on the answer actually changing,
+    /// so a healthy machine does nothing here beyond one cheap directory probe
+    /// per game, and a swap can never surprise a player whose bind was already
+    /// read correctly.</para>
+    /// </summary>
+    private void RetryShopBindsIfFallback()
+    {
+        if (_shopWatcher is null || !_shopBindsAreFallback) return;
+
+        try
+        {
+            var binds = ShopBindResolver.ResolveForCurrentMachine();
+            if (binds.UsedFallback || !binds.CanWatch) return;
+
+            _shopBindsAreFallback = false;
+            _shopWatcher.UpdateBinds(binds);
+            _log?.Info("shop: your League config became readable after startup - re-resolved the shop bind");
+            foreach (var line in binds.LogLines) _log?.Info(line);
+        }
+        catch (Exception error)
+        {
+            _shopBindsAreFallback = false;
+            _log?.Info($"shop: could not re-resolve the shop bind ({error.GetType().Name}); staying on the default");
         }
     }
 
@@ -562,6 +629,7 @@ public partial class App : WpfApplication
         // whether a game is running, which is the gate that resets the latch
         // between matches.
         var inGame = snapshot.Overlay?.InGame == true;
+        if (inGame) RetryShopBindsIfFallback();
         _shopWatcher?.SetInGame(inGame);
 
         // "Show item numbers NOW" is a per-game override, and the verb is the

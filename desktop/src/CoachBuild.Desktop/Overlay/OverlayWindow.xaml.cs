@@ -39,6 +39,22 @@ public partial class OverlayWindow : Window
     // yet. Enter commits every target that was touched; Esc discards all of
     // them. Anything less makes Tab a trap.
     private readonly Dictionary<CalibrationTarget, CalibrationGeometry> _workingByTarget = [];
+
+    // WHICH targets the player actually MOVED this visit. "Enter commits every
+    // target that was touched" was true of the working copies and false of the
+    // saves: `_workingByTarget` is seeded from LoadCalibrationOrDefault the
+    // instant a target is opened or Tabbed to, so merely LOOKING at the item
+    // row and pressing Enter used to persist `ItemRowScaledDefault` as though
+    // it were a measurement.
+    //
+    // That is not a cosmetic distinction. The item row deliberately draws
+    // NOTHING until it has been positioned (TryLoadCalibration returns null
+    // rather than a default) precisely so an invented constant never paints
+    // numbers over the wrong part of the game — and the 2026-08-20 field log
+    // shows exactly that guarantee defeated: `badges: 6 shown at 544x904
+    // size 59 pitch 69` on a 2560x1440 display is ItemRowScaledDefault to the
+    // pixel, roughly 210 px BELOW the shop's Situational row.
+    private readonly HashSet<CalibrationTarget> _touchedTargets = [];
     private CalibrationTarget _adjustTarget = CalibrationTarget.SkillOrder;
     private IReadOnlyList<CoachBuild.Core.SituationalDelta> _situational = [];
     private bool _shopOpen;
@@ -416,6 +432,7 @@ public partial class OverlayWindow : Window
         }
 
         _workingByTarget.Clear();
+        _touchedTargets.Clear();
         _adjustTarget = target;
         _workingCalibration = WorkingFor(target);
         _adjusting = true;
@@ -771,6 +788,7 @@ public partial class OverlayWindow : Window
                 // every working copy: they were keyed to the display that has
                 // just gone away.
                 _workingByTarget.Clear();
+                _touchedTargets.Clear();
                 _workingCalibration = _settingsStore.LoadCalibrationOrDefault(_adjustTarget, display.Resolution);
                 RenderAdjustment();
             }
@@ -783,11 +801,31 @@ public partial class OverlayWindow : Window
 
     private void OnKeyDown(object sender, WpfKeyEventArgs e)
     {
-        if (!_adjusting || _workingCalibration is null) return;
         var step = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? 10 : 1;
+        if (HandleAdjustKey(e.Key, step)) e.Handled = true;
+    }
+
+    /// <summary>
+    /// One adjust-mode keypress, without a keyboard.
+    ///
+    /// <para>Split out of the WPF handler so the rule that decides what gets
+    /// SAVED is testable. It is not a cosmetic rule: through 1.0.18 an adjust
+    /// session that moved nothing still persisted the item row's invented
+    /// default, and that is what put the badges 210 px below the shop row in
+    /// the field. A guarantee about which keypresses count cannot be pinned by
+    /// a test that has to synthesise <c>KeyEventArgs</c> against a live
+    /// <c>PresentationSource</c>.</para>
+    /// </summary>
+    /// <returns>True when the key belonged to adjust mode and was consumed.</returns>
+    public bool HandleAdjustKey(Key key, int step = 1)
+    {
+        if (!_adjusting || _workingCalibration is null) return false;
         var geometry = _workingCalibration;
         var handled = true;
-        switch (e.Key)
+        // Distinct from `handled`: Enter and Esc are handled and move nothing,
+        // and a target that was never moved must never be saved.
+        var moved = true;
+        switch (key)
         {
             case Key.Left:
                 geometry = geometry with { FirstBoxCenterX = geometry.FirstBoxCenterX - step };
@@ -821,31 +859,38 @@ public partial class OverlayWindow : Window
                 // Ctrl+Shift+S because a global hotkey is taken from every
                 // other application for as long as this app runs, and that
                 // argument did not stop being true for a second one.
-                e.Handled = true;
                 SwitchAdjustTarget(_adjustTarget == CalibrationTarget.SkillOrder
                     ? CalibrationTarget.ItemRow
                     : CalibrationTarget.SkillOrder);
-                return;
+                return true;
             case Key.Enter:
-                SaveAdjustment();
-                break;
             case Key.Escape:
-                CancelAdjustment();
+                moved = false;
                 break;
             default:
                 handled = false;
+                moved = false;
                 break;
         }
 
-        if (handled)
+        // The move is applied BEFORE Enter and Esc are dispatched, and `moved`
+        // is the only thing standing between them. Leaving SaveAdjustment
+        // inside the switch made this rule accidentally true — Enter turned
+        // `_adjusting` off before the touch could be recorded — and a rule that
+        // holds by accident is a rule the next edit silently removes. A
+        // mutation that made Enter count as a move survived the whole suite for
+        // exactly that reason.
+        if (handled && moved)
         {
-            e.Handled = true;
-            if (_adjusting)
-            {
-                _workingCalibration = geometry.Normalize();
-                RenderAdjustment();
-            }
+            _touchedTargets.Add(_adjustTarget);
+            _workingCalibration = geometry.Normalize();
+            RenderAdjustment();
+            return true;
         }
+
+        if (key == Key.Enter) SaveAdjustment();
+        else if (key == Key.Escape) CancelAdjustment();
+        return handled;
     }
 
     private void SaveAdjustment()
@@ -855,20 +900,44 @@ public partial class OverlayWindow : Window
         // EVERY target touched this session, not just the one on screen. Tab
         // lets the player move both overlays in one visit, and saving only the
         // visible one would silently drop the other half of their work.
+        //
+        // TOUCHED, and that word now means MOVED. Until 1.0.19 it meant
+        // "visited": `_workingByTarget` is seeded the moment a target is opened
+        // or Tabbed to, so tray -> "Adjust item numbers" -> Enter persisted
+        // `ItemRowScaledDefault` — a constant the model itself documents as "a
+        // starting position, not a measurement" — as though the player had
+        // measured it. That is how the field log came to read `badges: 6 shown
+        // at 544x904 size 59 pitch 69`, which is that default to the pixel on a
+        // 2560x1440 screen, about 210 px below the row it is meant to sit on.
+        // Saving nothing is the honest outcome of an adjust session in which
+        // nothing was adjusted.
         _workingByTarget[_adjustTarget] = _workingCalibration;
+        var saved = 0;
         foreach (var (target, geometry) in _workingByTarget)
         {
+            if (!_touchedTargets.Contains(target)) continue;
             _settingsStore.SaveCalibration(target, _display.Resolution, geometry);
+            saved++;
             Diagnostics?.Invoke(
                 $"overlay: saved {Describe(target)} at {geometry.FirstBoxCenterX:0}x{geometry.CenterY:0}"
                 + $" size {geometry.BoxSize:0} pitch {geometry.Spacing:0}"
                 + $" for {_display.Resolution.Key}");
         }
 
+        if (saved == 0)
+        {
+            Diagnostics?.Invoke(
+                "overlay: adjust mode saved nothing - neither overlay was moved."
+                + " An untouched default is a guess, not a calibration, so it is not written."
+                + " Use the arrow keys (Shift for x10), +/- for size and [/] for spacing,"
+                + " then press Enter.");
+        }
+
         _settings = _settingsStore.Read();
         _adjusting = false;
         _workingCalibration = null;
         _workingByTarget.Clear();
+        _touchedTargets.Clear();
         _lastBadgeReason = null;
         AdjustmentStateChanged?.Invoke(false);
         SetInteractive(false);
@@ -881,6 +950,7 @@ public partial class OverlayWindow : Window
         _adjusting = false;
         _workingCalibration = null;
         _workingByTarget.Clear();
+        _touchedTargets.Clear();
         _lastBadgeReason = null;
         AdjustmentStateChanged?.Invoke(false);
         SetInteractive(false);
@@ -960,8 +1030,17 @@ public partial class OverlayWindow : Window
 
         var heading = isItemRow ? "Adjusting the situational item numbers" : "Adjusting the skill-order box";
         var switchTo = isItemRow ? "the skill-order box" : "the situational item numbers";
-        var placeholderNote = usingPlaceholders
-            ? "\nShowing 6 placeholder slots — line them up with your Situational row in the shop"
+        // The item row is the only target with no honest default, so it is the
+        // only one where the instruction has to be on screen every time rather
+        // than only when there are no numbers to hand. A player who opens this,
+        // sees six boxes and presses Enter no longer saves anything (see
+        // SaveAdjustment) — so they need to be told what the boxes are for.
+        var placeholderNote = isItemRow
+            ? (usingPlaceholders
+                ? "\nShowing 6 placeholder slots — line them up with your Situational row in the shop"
+                : "\nLine these up with the Situational row in your shop")
+              + "\nOpen your shop before entering adjust mode so you can see that row"
+              + "\nNothing is saved unless you actually move them"
             : string.Empty;
         var legend = new Border
         {
@@ -1042,6 +1121,7 @@ public partial class OverlayWindow : Window
                 if (_adjusting)
                 {
                     _workingByTarget.Clear();
+                    _touchedTargets.Clear();
                     _workingCalibration = _display is null
                         ? null
                         : _settingsStore.LoadCalibrationOrDefault(_adjustTarget, _display.Resolution);

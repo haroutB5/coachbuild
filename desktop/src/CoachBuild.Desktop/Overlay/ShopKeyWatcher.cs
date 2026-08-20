@@ -52,7 +52,13 @@ public sealed class ShopKeyWatcher : IDisposable
     private const int VkControl = 0x11;
     private const int VkMenu = 0x12;
 
-    private readonly ResolvedShopBinds _binds;
+    // NOT readonly. The binds are resolved from League's config, and that
+    // resolution can fail at app start for reasons that stop being true later:
+    // the app autostarts at login, and this tray app then runs for days. A
+    // resolution that fell back to League's default P at 07:00 used to mean the
+    // watcher polled P until the machine was rebooted, however many games were
+    // played on the player's real bind in between. See UpdateBinds.
+    private ResolvedShopBinds _binds;
     private readonly Func<uint, bool> _isKeyDown;
     private readonly Func<bool> _leagueIsForeground;
 
@@ -127,7 +133,24 @@ public sealed class ShopKeyWatcher : IDisposable
 
     public ShopVisibilityLatch Latch => _latch;
 
-    public ResolvedShopBinds Binds => _binds;
+    public ResolvedShopBinds Binds
+    {
+        get { lock (_tickGate) return _binds; }
+    }
+
+    /// <summary>
+    /// Replaces the keys being polled, mid-session.
+    ///
+    /// <para>Taken under <c>_tickGate</c> so a swap cannot land between the two
+    /// halves of one <see cref="Sample"/> and produce an observation that is
+    /// half one bind and half the other — which the latch would read as a key
+    /// edge and act on.</para>
+    /// </summary>
+    public void UpdateBinds(ResolvedShopBinds binds)
+    {
+        ArgumentNullException.ThrowIfNull(binds);
+        lock (_tickGate) _binds = binds;
+    }
 
     public void Start()
     {

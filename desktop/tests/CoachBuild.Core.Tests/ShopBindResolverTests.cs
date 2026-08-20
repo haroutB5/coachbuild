@@ -5,6 +5,18 @@ namespace CoachBuild.Core.Tests;
 
 public sealed class ShopBindResolverTests
 {
+    /// <summary>
+    /// "Use the built-in US punctuation table", stated rather than defaulted.
+    ///
+    /// <para>The layout argument is required precisely so this choice is
+    /// visible at every call site. Every assertion in this file that expects
+    /// 0xC0 for a backtick is an assertion about the US table, NOT about what
+    /// happens on the machine running the test — this project's own dev box is
+    /// en-GB, where that same character is 0xDF. The en-GB behaviour is pinned
+    /// separately in KeyboardLayoutBindTests.</para>
+    /// </summary>
+    private static readonly Func<char, uint>? UsTableOnly = null;
+
     private const uint VkGrave = 0xC0;
     private const uint VkP = 0x50;
     private const uint VkEscape = 0x1B;
@@ -16,7 +28,7 @@ public sealed class ShopBindResolverTests
         var directory = NewConfig("evtSysMenu=[Esc]\nevtOpenShop=[`]\n");
         try
         {
-            var binds = ShopBindResolver.Resolve(directory);
+            var binds = ShopBindResolver.Resolve(directory, UsTableOnly);
 
             Assert.True(binds.CanWatch);
             Assert.False(binds.UsedFallback);
@@ -47,7 +59,7 @@ public sealed class ShopBindResolverTests
             var directory = NewConfig(raw + "\n");
             try
             {
-                var binds = ShopBindResolver.Resolve(directory);
+                var binds = ShopBindResolver.Resolve(directory, UsTableOnly);
 
                 Assert.True(binds.UsedFallback);
                 Assert.Equal(VkP, Assert.Single(binds.Shop).VirtualKey);
@@ -69,7 +81,7 @@ public sealed class ShopBindResolverTests
     [Fact]
     public void No_config_directory_at_all_still_produces_a_watchable_bind_and_an_explanation()
     {
-        var binds = ShopBindResolver.Resolve(null);
+        var binds = ShopBindResolver.Resolve(null, UsTableOnly);
 
         Assert.True(binds.CanWatch);
         Assert.True(binds.UsedFallback);
@@ -87,7 +99,7 @@ public sealed class ShopBindResolverTests
         var rebound = NewConfig("evtSysMenu=[F10]\nevtOpenShop=[`]\n");
         try
         {
-            Assert.Equal(0x79u, ShopBindResolver.Resolve(rebound).Close.VirtualKey);
+            Assert.Equal(0x79u, ShopBindResolver.Resolve(rebound, UsTableOnly).Close.VirtualKey);
         }
         finally
         {
@@ -97,7 +109,7 @@ public sealed class ShopBindResolverTests
         var missing = NewConfig("evtOpenShop=[`]\n");
         try
         {
-            Assert.Equal(VkEscape, ShopBindResolver.Resolve(missing).Close.VirtualKey);
+            Assert.Equal(VkEscape, ShopBindResolver.Resolve(missing, UsTableOnly).Close.VirtualKey);
         }
         finally
         {
@@ -116,7 +128,7 @@ public sealed class ShopBindResolverTests
                 { "name": "evtOpenShop", "value": "[`]" } ] } ] } ] }
             """);
 
-            var binds = ShopBindResolver.Resolve(directory);
+            var binds = ShopBindResolver.Resolve(directory, UsTableOnly);
             Assert.Equal(VkP, Assert.Single(binds.Shop).VirtualKey);
 
             var log = string.Join("\n", binds.LogLines);
@@ -135,7 +147,7 @@ public sealed class ShopBindResolverTests
         var directory = NewConfig("evtOpenShop=[p],[`]\n");
         try
         {
-            var binds = ShopBindResolver.Resolve(directory);
+            var binds = ShopBindResolver.Resolve(directory, UsTableOnly);
             Assert.Equal(2, binds.Shop.Count);
             Assert.Contains(binds.Shop, bind => bind.VirtualKey == VkP);
             Assert.Contains(binds.Shop, bind => bind.VirtualKey == VkGrave);
@@ -161,7 +173,7 @@ public sealed class ShopBindResolverTests
             """);
 
             var before = Snapshot(directory);
-            ShopBindResolver.Resolve(directory);
+            ShopBindResolver.Resolve(directory, UsTableOnly);
             var after = Snapshot(directory);
 
             Assert.Equal(before, after);

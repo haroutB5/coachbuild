@@ -43,7 +43,14 @@ public sealed class ItemRowCalibrationTests
         {
             var store = new OverlaySettingsStore(Path.Combine(root, "desktop-settings.json"));
             var skill = new CalibrationGeometry(910, 940, 52, 73);
-            var itemRow = new CalibrationGeometry(430, 700, 44, 52);
+            // Deliberately NOT (430, 700, 44, 52): that is
+            // ItemRowScaledDefault on this 1920x1080 display, and since 1.0.19
+            // an item row stored at its display's untouched default reads back
+            // as "never positioned" — because that is exactly what shipped to
+            // the player's machine and put the pills 210 px below their shop
+            // row. A fixture that sits on the sentinel would be testing the
+            // wrong thing here. See SituationalRowPlacementTests.
+            var itemRow = new CalibrationGeometry(634, 721, 53, 63);
 
             store.SaveCalibration(CalibrationTarget.SkillOrder, Display, skill);
             Assert.Equal(skill, store.LoadCalibration(Display));
@@ -72,7 +79,14 @@ public sealed class ItemRowCalibrationTests
         try
         {
             var store = new OverlaySettingsStore(Path.Combine(root, "desktop-settings.json"));
-            var itemRow = new CalibrationGeometry(430, 700, 44, 52);
+            // Deliberately NOT (430, 700, 44, 52): that is
+            // ItemRowScaledDefault on this 1920x1080 display, and since 1.0.19
+            // an item row stored at its display's untouched default reads back
+            // as "never positioned" — because that is exactly what shipped to
+            // the player's machine and put the pills 210 px below their shop
+            // row. A fixture that sits on the sentinel would be testing the
+            // wrong thing here. See SituationalRowPlacementTests.
+            var itemRow = new CalibrationGeometry(634, 721, 53, 63);
             store.SaveCalibration(CalibrationTarget.ItemRow, Display, itemRow);
 
             Assert.Equal(itemRow, store.TryLoadCalibration(CalibrationTarget.ItemRow, Display));
@@ -94,7 +108,14 @@ public sealed class ItemRowCalibrationTests
         {
             var path = Path.Combine(root, "desktop-settings.json");
             var skill = new CalibrationGeometry(910, 940, 52, 73);
-            var itemRow = new CalibrationGeometry(430, 700, 44, 52);
+            // Deliberately NOT (430, 700, 44, 52): that is
+            // ItemRowScaledDefault on this 1920x1080 display, and since 1.0.19
+            // an item row stored at its display's untouched default reads back
+            // as "never positioned" — because that is exactly what shipped to
+            // the player's machine and put the pills 210 px below their shop
+            // row. A fixture that sits on the sentinel would be testing the
+            // wrong thing here. See SituationalRowPlacementTests.
+            var itemRow = new CalibrationGeometry(634, 721, 53, 63);
 
             var writer = new OverlaySettingsStore(path);
             writer.SaveCalibration(CalibrationTarget.SkillOrder, Display, skill);

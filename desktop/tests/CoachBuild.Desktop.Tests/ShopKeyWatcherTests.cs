@@ -414,6 +414,81 @@ public sealed class ShopKeyWatcherTests
         Assert.True(ShopKeyWatcher.PollIntervalMs >= 10);
     }
 
+    [Fact]
+    public void A_fallback_bind_can_be_replaced_without_restarting_the_app()
+    {
+        // THE ROUND-3 DEFECT, in the smallest form that can hold it. The bind
+        // used to be resolved exactly once, in OnStartup. This app autostarts
+        // at login and then lives in the tray for days, so every reason the
+        // config might be unreadable at 07:00 - a drive not yet ready, League
+        // installed after the app, a config League had not yet written -
+        // became a permanent wrong answer, and the player spent the whole
+        // session pressing a key nothing was watching.
+        var held = new HashSet<uint>();
+        using var watcher = Watcher(held, Fallback());
+        watcher.SetInGame(true);
+
+        // On the fallback P, the player's real bind does nothing at all.
+        held.Add(VkGrave);
+        watcher.Poll();
+        Assert.False(watcher.IsShopOpen);
+        held.Remove(VkGrave);
+        watcher.Poll();
+
+        watcher.UpdateBinds(Grave());
+
+        held.Add(VkGrave);
+        watcher.Poll();
+        Assert.True(watcher.IsShopOpen);
+        Assert.Equal(Grave().Shop[0].VirtualKey, watcher.Binds.Shop[0].VirtualKey);
+    }
+
+    [Fact]
+    public void A_key_held_across_the_swap_toggles_once_and_only_once()
+    {
+        // The edge case the swap creates, pinned to the behaviour it actually
+        // has rather than to a behaviour I would prefer. The latch's edge is
+        // `down && !previouslyDown`, and `previouslyDown` was about the OLD
+        // bind - so a player already holding their real key at the instant the
+        // new bind lands reads as one press.
+        //
+        // Left as-is deliberately. The swap fires once per session, at the
+        // start of a game, and its cost is at worst one extra toggle of a
+        // click-through decoration that the next press removes. Suppressing it
+        // would mean priming the latch's edge state from outside, which is a
+        // new way for the latch to be told something untrue - the exact class
+        // of defect rounds 1 and 2 were both about. What must NOT happen is a
+        // held key toggling per tick, and that is the assertion below.
+        var held = new HashSet<uint> { VkGrave };
+        using var watcher = Watcher(held, Fallback());
+        watcher.SetInGame(true);
+        watcher.Poll();
+        Assert.False(watcher.IsShopOpen);
+
+        watcher.UpdateBinds(Grave());
+        watcher.Poll();
+        Assert.True(watcher.IsShopOpen);
+
+        watcher.Poll();
+        watcher.Poll();
+        Assert.True(watcher.IsShopOpen);
+
+        // ...and the release-then-press after it is a normal second press.
+        held.Remove(VkGrave);
+        watcher.Poll();
+        held.Add(VkGrave);
+        watcher.Poll();
+        Assert.False(watcher.IsShopOpen);
+    }
+
+    private static ResolvedShopBinds Fallback() => new(
+        [new LeagueKeybind(VkP, false, false, false, "P (League default)")],
+        new LeagueKeybind(0x1B, false, false, false, "Esc"),
+        new LeagueKeybind(0x0D, false, false, false, "Return"),
+        null,
+        UsedFallback: true,
+        []);
+
     private static ResolvedShopBinds Grave() => new(
         [new LeagueKeybind(VkGrave, false, false, false, "[`]")],
         new LeagueKeybind(0x1B, false, false, false, "Esc"),

@@ -1,5 +1,163 @@
 # Changelog
 
+## Desktop 1.0.19 — 2026-08-20 — your own shop key, and numbers that land where you put them
+
+1.0.18 delivered on both of its promises and the log from the gaming PC proves it: eleven
+clean toggles, badges shown and hidden in lockstep, one press honoured that 1.0.17 would
+have swallowed, and the close key retracting correctly every time. What the same log
+showed is that the user was pressing **P** to get any of it — and their shop is bound to
+the backtick. And that when the numbers did draw, they drew in the wrong part of the
+screen.
+
+So 1.0.19 is two sentences: **your own shop key is honoured, whatever you bound it to and
+whatever keyboard you type on**, and **the numbers land where you put them**.
+
+### Your key. Not League's default.
+
+The app was watching P because it never found your config, and it would then have watched
+the wrong key even once it did. Two independent causes, and fixing either one alone would
+have produced another round of this.
+
+**It looked for League in places League might not be.** The search was a hardcoded
+`C:\Riot Games\...`, the three standard program folders, and the *root* of every drive. A
+League installed at `D:\Games\Riot Games\League of Legends` — an ordinary layout on a
+machine with a games drive — matches none of them, and the result is not "no feature": it
+is the watcher confidently polling a key you never press, for the whole session. It now
+asks **Riot** where League is, reading `product_install_full_path` out of the
+product-settings manifest and the path entries out of `RiotClientInstalls.json`, ahead of
+every hardcoded guess. That is not new machinery — it is exactly how this app has always
+found the League client's lockfile; only the config lookup was still guessing.
+
+**And the backtick was hardcoded to the US keyboard.** The `evtOpenShop` line was read out
+of your `input.ini` correctly and then mapped through a fixed US table to key `0xC0`. On a
+UK layout the backtick is `0xDF`, and `0xC0` is the apostrophe key on the other side of
+the keyboard. The shipped comment claimed anything outside that table "fails closed with
+the token named" — and it did, but a character *inside* the table on a non-US layout
+returned the US code silently, with full confidence, which is the half that mattered.
+Punctuation binds now resolve through **your active keyboard layout**, falling back to the
+US table only when the layout cannot type that character unmodified. Backtick is the case
+that was reported; every punctuation bind in League's config went through the same table.
+Letters and digits are deliberately left alone — the AZERTY question is real but cannot be
+answered without a machine that has one, and quietly re-mapping letters would trade a
+measured bug for an unmeasured one.
+
+Two smaller things came with it. The bind **re-resolves on game start** if the app had to
+fall back, so a League that was installed or moved after launch is picked up without a
+restart. And the startup log now prints one decisive line naming the character, the key
+code it is actually polling, where that came from, and your keyboard layout — or, when
+your config was never read, it says so out loud and names every directory it searched. One
+log paste now answers "is it watching the right key?".
+
+Nothing is written to the League folder. That has not changed and will not.
+
+### The numbers land where you put them — after you put them there once
+
+The pills in the field log drew at `544x904 size 59 pitch 69` on a 2560x1440 display.
+That is the scaled item-row default for that resolution, to the pixel — a starting
+position whose own comment says it is *not a measurement*, and which the item row is
+designed never to draw from.
+
+It got drawn because it got **saved**. Opening the adjust overlay seeds a working
+calibration from that default, and saving persisted every target you had *visited*, with
+no record of whether you had ever moved a box. Tray → *Adjust item numbers*, Tab to the
+shop row, Enter — and the guess was written to `settings.json` as though it were a
+measurement. Both previous rounds of this investigation had told you to use exactly those
+tray items.
+
+Two fixes, because one is not enough. **A target you never moved is no longer saved** —
+only a key that actually moves, resizes or re-pitches a box marks it, and pressing Enter
+having moved nothing now saves nothing and says so. **And a stored item-row value that is
+byte-identical to that display's computed default now reads back as never positioned**,
+because the bad entry is already in your `settings.json` and nobody hand-edits JSON. That
+second fix is scoped to the item row only; the ability HUD's default *is* a measurement
+and stays a legal saved value.
+
+### So it will draw nothing until you calibrate it once. On purpose.
+
+**An item row that has never been positioned now draws nothing at all rather than
+guessing.** League's shop panel is draggable, resizable and scaled by your own shop-scale
+setting, so there is no honest default — and this app's rule has always been that a guess
+painted over your game is worse than nothing. This release is what enforcing that rule
+actually costs: after updating, your pills will stop appearing until you place them. The
+log will say exactly why, naming the display and pointing at the tray.
+
+It is about thirty seconds, once, per display:
+
+1. Get into a game and **open the shop**, so the Situational row is on screen to aim at.
+2. Press **Ctrl+Shift+A**, or tray → **Adjust item numbers**.
+3. Press **Tab** if the pink boxes are on the ability bar rather than the shop.
+4. **Arrow keys** move (hold **Shift** for x10), **+ / -** resize, **[ / ]** change spacing.
+5. Press **Enter** to save.
+
+The adjust legend now says all of this on screen every time it opens — including "open
+your shop before entering adjust mode so you can see that row" and "nothing is saved
+unless you actually move them" — instead of only when there were no numbers to show.
+
+The reference constant behind that starting position is still invented and is deliberately
+**not** re-seeded from the screenshot measurements. It can no longer be persisted by
+accident, but it is still where every adjust session starts, and replacing one invented
+number with another derived through the very model this release proves wrong would not be
+an improvement.
+
+### Nothing new is read
+
+Two new syscalls, `GetKeyboardLayout` and `VkKeyScanEx`, both one-shot at bind resolution
+rather than per tick; the 50 ms watcher tick is unchanged. No screen capture, no OCR, no
+memory reads. 1.0.16's policy call stands.
+
+### Unchanged
+
+1.0.9's updater gates, 1.0.10's game-start WebView2 teardown, 1.0.11's champion
+resolution, 1.0.12's banked-point skill gate and 250 ms poll, 1.0.13's `Ctrl+Shift+A`-only
+binding, 1.0.14's derived tray label and `Open log folder`, 1.0.15's web-version reload
+and 480 ms apply path, 1.0.16's shop detection and badge drawing, 1.0.17's
+Enter/`Shift+Enter` unification, and 1.0.18's game-scoped bypass counter, override
+clearing and 90 s latch backstop.
+
+### Verification
+
+`dotnet test CoachBuild.Desktop.sln` — **558 passed / 0 failed** (237 Core + 321 Desktop),
+stable across 3 consecutive full runs. The baseline before this change was 533.
+
+Eleven mutation arms, every new guarantee removed in turn and all eleven killed: ignoring
+the layout hook, or consulting it after the US table, kills three tests each; never
+consulting Riot's manifests kills two; consulting them after the hardcoded guess kills
+one; a watch line that names the character but not the key kills three; a fallback that
+stops saying your config was unread kills one; a no-op bind swap kills two; persisting an
+untouched target again kills two; counting Enter or Esc as a move kills four; reading a
+stored default back as a calibration kills one; and applying that sentinel to the skill
+box as well kills its negative control.
+
+**One arm survived the first pass, and that produced a real change.** Saving was being
+called from inside the key switch, so Enter turned adjust mode off before the touch could
+be recorded — the rule held *by accident*, which is the kind of rule the next edit
+silently removes. The move is now applied before Enter and Esc are dispatched.
+
+Two tests exist purely to stop the rest being circular. One asserts the real layout probe
+is alive on the machine running the suite, because every other layout test uses a fake
+layout and would pass just as well if the P/Invoke were dead — which is exactly the
+shipped bug. The other reproduces `544x904 size 59 pitch 69` by arithmetic rather than by
+paraphrase; if it ever stops matching, the diagnosis behind this whole release is wrong.
+
+### Known, and stated rather than buried
+
+**Which of the two causes fired on the gaming PC is still unknown.** Both are fixed, so it
+is self-healing rather than diagnosed, but only one of them was the actual cause, and
+knowing which tells us whether other players are affected. The next log answers it
+outright.
+
+The two `App` methods that start and retry the watcher are WPF `Application` members and
+are not unit-covered; the resolution they call was extracted so *it* is covered, but the
+wiring itself is asserted by inspection. A key held down across a bind swap toggles once —
+deliberate, pinned by test, with the reasoning in the test body. The 90 s latch backstop
+is still a guess, and its counter has still never been observed non-zero.
+
+**Runes are healthy on the real machine.** `apply-runes: ok=True reason=none`, twice, in
+the field log. The chronic `invalid-page` run — 265 failures over five days, never once a
+success — was **dev-box only**. Splitting that error's eight causes apart is still worth
+doing for diagnosability, but it is no longer a user-facing defect. The Kennen
+point-arithmetic defect (champion id 85) is untouched and remains the open one.
+
 ## Desktop 1.0.18 — 2026-08-20 — the key always works, and the numbers always go away
 
 The win-rate pills have now been **seen drawing in a real game**. A screenshot from the
