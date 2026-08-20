@@ -95,6 +95,17 @@ public partial class OverlayWindow : Window
     /// </summary>
     public Action<string>? Diagnostics { get; set; }
 
+    /// <summary>
+    /// Which game this is, when the host knows it. Pulled rather than pushed:
+    /// the value is captured on the live-poll thread and read here on the
+    /// render thread, so the host owns the lock.
+    ///
+    /// <para>Read only by <see cref="ReportKitAnomaly"/>, and only in the log.
+    /// Nothing on screen depends on it and nothing player-identifying is in
+    /// it.</para>
+    /// </summary>
+    public Func<LiveGameMode?>? GameMode { get; set; }
+
     // App projects snapshots every 750 ms. Reassert topmost only occasionally
     // so ordinary overlay ticks stay cheap while still recovering if another
     // window (notably exclusive fullscreen) pushes this HWND down the stack.
@@ -763,11 +774,16 @@ public partial class OverlayWindow : Window
     /// <summary>
     /// Names a champion whose ranks do not add up against its level, once.
     ///
-    /// <para>That reading means this champion holds a rank the game granted for
-    /// free and <see cref="ChampionKit"/> does not know about it. The highlight
-    /// deliberately keeps drawing in that case (see
+    /// <para>The highlight deliberately keeps drawing in that case (see
     /// <c>OverlayState.HasPointToSpend</c>), so nothing on screen would ever
-    /// reveal the gap — this line is the only way the table gets corrected.</para>
+    /// reveal the gap — this line is the only trace the defect leaves.</para>
+    ///
+    /// <para>The wording, and everything the line carries, lives in
+    /// <see cref="KitAnomalyLine"/> so it can be pinned by a test without a
+    /// message pump. It used to be built here, printed only the SUM of the
+    /// ranks, and asserted a cause that turned out to be disproven; five of
+    /// those lines from a real game could not be told apart from three
+    /// different bugs. Read that type's remarks before changing this.</para>
     /// </summary>
     private void ReportKitAnomaly(OverlayState state)
     {
@@ -777,11 +793,18 @@ public partial class OverlayWindow : Window
             return;
         }
 
-        var line = $"overlay: point arithmetic incoherent for {state.ChampionName ?? "?"}"
-            + $" (id {state.ChampionId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"}):"
-            + $" level {state.Points.Level}, {state.Points.Purchased} purchased."
-            + " This champion grants a free rank ChampionKit does not list;"
-            + " the highlight stays always-on for it rather than never showing.";
+        var line = KitAnomalyLine.Format(
+            state.ChampionName,
+            state.ChampionId,
+            state.Points,
+            [
+                state.Rank(OverlayAbility.Q),
+                state.Rank(OverlayAbility.W),
+                state.Rank(OverlayAbility.E),
+                state.Rank(OverlayAbility.R),
+            ],
+            state.Kit,
+            GameMode?.Invoke());
         if (string.Equals(_lastKitAnomaly, line, StringComparison.Ordinal)) return;
         _lastKitAnomaly = line;
         Diagnostics?.Invoke(line);

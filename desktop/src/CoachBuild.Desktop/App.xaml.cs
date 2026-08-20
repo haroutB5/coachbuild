@@ -64,6 +64,13 @@ public interface ILiveOverlayPushSource
 {
     /// <summary>Raised off the UI thread; the payload is null when there is nothing to show.</summary>
     event Action<OverlayState?>? OverlayStateChanged;
+
+    /// <summary>
+    /// Which game is running, as allgamedata last reported it, or null before
+    /// the first body arrives. Read on the UI thread and written on the poll
+    /// thread, so the implementation owns the lock.
+    /// </summary>
+    LiveGameMode? CurrentGameMode { get; }
 }
 
 public sealed record DesktopPhaseSnapshot(
@@ -283,6 +290,10 @@ public partial class App : WpfApplication
 
         _overlay = new OverlayWindow(settingsStore);
         _overlay.Diagnostics = message => _log?.Info(message);
+        // A pull, not a pushed property: the mode is captured on the poll
+        // thread and read here on the render thread, and one lock at the point
+        // of use is cheaper to reason about than a second copy kept in sync.
+        _overlay.GameMode = () => (_services as ILiveOverlayPushSource)?.CurrentGameMode;
         _overlay.ManualBadgeOverrideCleared += OnManualBadgeOverrideCleared;
         _overlay.AdjustmentStateChanged += OnAdjustmentStateChanged;
         if (_services is ILiveOverlayPushSource push) push.OverlayStateChanged += OnLiveOverlayPush;
@@ -1320,6 +1331,14 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     private bool _started;
     private bool _stopped;
     private LiveLocalIdentity? _localIdentity;
+    // Which game this is. Read off allgamedata, which the poller already
+    // fetches every 3 s, and printed once per game plus into the kit-anomaly
+    // line. Nothing read this field's source before 1.0.20, which is why the
+    // 2026-08-19 Kennen anomaly could not be tested against "the mode granted
+    // a point" - see KitAnomalyLine.
+    private LiveGameMode? _gameMode;
+    private string? _lastGameModeLine;
+
     private int? _championId;
     private ChampionIdSource _championIdSource = ChampionIdSource.None;
     private string? _championName;
@@ -1460,7 +1479,18 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         !string.Equals(before, "ChampSelect", StringComparison.Ordinal);
 
     /// <inheritdoc />
+
     public event Action<OverlayState?>? OverlayStateChanged;
+
+    /// <summary>
+    /// The mode captured off the last allgamedata body. Exposed rather than
+    /// pushed because only one caller wants it, and only when something has
+    /// already gone wrong.
+    /// </summary>
+    public LiveGameMode? CurrentGameMode
+    {
+        get { lock (_gate) return _gameMode; }
+    }
 
     public int BridgePort => _bridge.Port;
 
@@ -1657,6 +1687,10 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
 
     private void CaptureAllGameData(JsonElement data)
     {
+        // Before the activePlayer gate on purpose: a body that fails to publish
+        // an identity still names the mode, and a game whose identity never
+        // resolves is exactly a game whose mode is worth knowing.
+        CaptureGameMode(data);
         if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("activePlayer", out var active)) return;
         // Through 1.0.10 this read activePlayer.riotId and nothing else, so a
         // client build that publishes the parts (riotIdGameName +
@@ -1665,6 +1699,31 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         var identity = LiveLocalPlayerResolver.ReadActivePlayer(active);
         if (identity is null) return;
         lock (_gate) _localIdentity = LiveLocalPlayerResolver.Merge(_localIdentity, identity);
+    }
+
+    /// <summary>
+    /// Names the mode once per game, and holds it for the kit-anomaly line.
+    ///
+    /// <para>Deduped on the rendered line rather than fired per poll: this runs
+    /// every 3 s for a whole game, and a log that repeats the same fact 300
+    /// times is a log nobody reads to the end of. Reset on the phase
+    /// transition alongside the champion, so a second game in one session
+    /// prints its own line rather than inheriting the first game's.</para>
+    /// </summary>
+    private void CaptureGameMode(JsonElement data)
+    {
+        var mode = LiveGameModeReader.TryRead(data);
+        if (mode is null) return;
+
+        string line;
+        lock (_gate)
+        {
+            _gameMode = mode;
+            line = $"live: {mode.Describe()}";
+            if (string.Equals(_lastGameModeLine, line, StringComparison.Ordinal)) return;
+            _lastGameModeLine = line;
+        }
+        _log?.Info(line);
     }
 
     /// <summary>
@@ -2136,6 +2195,8 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
                 _lastIdentityLine = null;
                 _lastChampionLine = null;
                 _lastOverlayInputReason = null;
+                _gameMode = null;
+                _lastGameModeLine = null;
             }
             _lastOverlayPhase = phase;
         }
