@@ -654,8 +654,16 @@ public partial class App : WpfApplication
             // outlives the phase that produced it — and anything that outlives
             // a phase can outlive the champion it described. `For` returns null
             // for every champion but the one the set was written for.
+            // The set LABEL travels with the deltas and never without them: it
+            // names the one shop set the positional mapping is true of and the
+            // block position the saved calibration is true of, and a label left
+            // behind by another champion's write would send the player to line
+            // their numbers up against the wrong row.
+            var situational = snapshot.Situational;
+            var situationalDeltas = situational?.For(snapshot.Overlay.ChampionId ?? 0);
             _overlay?.SetSituationalDeltas(
-                snapshot.Situational?.For(snapshot.Overlay.ChampionId ?? 0));
+                situationalDeltas,
+                situationalDeltas is null ? string.Empty : situational!.SetLabel);
             if (_trayState.OverlayVisible) _overlay?.ShowInactive();
         }
         else

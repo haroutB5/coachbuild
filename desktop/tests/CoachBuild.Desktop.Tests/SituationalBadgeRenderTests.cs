@@ -200,17 +200,42 @@ public sealed class SituationalBadgeRenderTests
             Assert.StartsWith("+", ((TextBlock)pills[0].Child).Text, StringComparison.Ordinal);
             Assert.StartsWith("-", ((TextBlock)pills[5].Child).Text, StringComparison.Ordinal);
 
-            // Nothing is drawn over the icon or its price: every pill sits
-            // ABOVE its slot.
+            // DELIBERATELY CHANGED IN ROUND 4, and this is the guardian of the
+            // rule that changed. It used to assert the opposite — that every
+            // pill sits entirely ABOVE its slot — on the promise that the
+            // number would then cover "neither the item icon nor the price the
+            // shop prints under it".
+            //
+            // That promise could not be kept and it cost the calibration. There
+            // is no free space above a League shop row: the space above an item
+            // row is the next block's section header, and the player's
+            // 2026-08-20 screenshot of Riot's "AP" set shows all three pills
+            // printed across the words "Situational items that are also good".
+            // Worse, adjust mode drew its alignment boxes AT the slot and told
+            // the player to line THOSE up, so what they aligned was a pill-
+            // height away from what they got and no amount of arrow-key work
+            // could converge.
+            //
+            // The pill is now CENTRED on the slot, which makes the calibrated
+            // box and the printed number the same object. Where the number sits
+            // relative to the icon is the player's decision (arrow keys), not a
+            // constant this file invents.
             var slots = ItemRow.GetSlotRects(6);
             for (var index = 0; index < pills.Count; index++)
             {
                 pills[index].Measure(new System.Windows.Size(
                     double.PositiveInfinity, double.PositiveInfinity));
+                var size = pills[index].DesiredSize;
                 var top = Canvas.GetTop(pills[index]);
-                Assert.True(
-                    top + pills[index].DesiredSize.Height <= slots[index].Top,
-                    $"badge {index} at {top} overlaps its slot at {slots[index].Top}");
+                var left = Canvas.GetLeft(pills[index]);
+                Assert.Equal(
+                    slots[index].Top + slots[index].Height / 2,
+                    top + size.Height / 2,
+                    3);
+                Assert.Equal(
+                    slots[index].Left + slots[index].Width / 2,
+                    left + size.Width / 2,
+                    3);
                 Assert.False(pills[index].IsHitTestVisible);
             }
         });

@@ -65,17 +65,45 @@ public sealed class ItemSetApplyService
         if (_state is null) return;
         try
         {
+            var block = SituationalSetLocator.Find(request.Sets);
             var parsed = SituationalOverlayParser.Parse(
                 request.ChampionId,
                 request.Situational,
                 DateTimeOffset.UtcNow,
+                block,
                 out var rejections);
             _state.SetSituational(parsed);
             if (rejections.Count > 0)
                 _log?.Info($"situational: dropped {rejections.Count} entr{(rejections.Count == 1 ? "y" : "ies")} — {string.Join("; ", rejections)}");
+
+            // NAME THE SET, AND SAY WHERE IN IT THE ROW SITS. The badges are
+            // mapped positionally, so they are only true of the set this write
+            // produced — and the player picks a set from a dropdown the app
+            // cannot see (no LCU read exposes the in-game selection; screen
+            // capture, OCR and memory reads are out by the 1.0.16 policy). On
+            // 2026-08-20 the shop was showing Riot's own "AP" recommended set,
+            // seven items in its situational row, while three numbers for three
+            // different items were drawn over it, and the log said only
+            // "situational: 6 delta(s) for champion 112".
+            //
+            // The BLOCK POSITION is in the line for a second reason: the shop
+            // stacks blocks vertically, so "block 3 of 3" and "block 4 of 5"
+            // put the same row a block-pitch apart under one saved calibration.
+            // Two reports of "the numbers are off" are one subtraction apart
+            // with this line and indistinguishable without it.
+            //
+            // THREE OUTCOMES, THREE SENTENCES. "none supplied" used to be
+            // printed for a payload that supplied plenty and had every entry
+            // rejected — the summary contradicted the rejection line directly
+            // above it, and the summary is the line people read.
             _log?.Info(parsed.Any
                 ? $"situational: {parsed.Deltas.Count} delta(s) for champion {parsed.ChampionId}"
-                : $"situational: none supplied for champion {request.ChampionId}; no numbers will be drawn");
+                    + $"; they line up ONLY with shop set {block.Describe()}"
+                    + (block.Known ? "" : " — the payload named no Situational block, so nothing was cross-checked")
+                : rejections.Count > 0
+                    ? $"situational: every number was rejected for champion {request.ChampionId}"
+                        + "; none will be drawn (reasons on the line above)"
+                    : $"situational: none supplied for champion {request.ChampionId}; no numbers will be drawn");
         }
         catch (Exception error)
         {

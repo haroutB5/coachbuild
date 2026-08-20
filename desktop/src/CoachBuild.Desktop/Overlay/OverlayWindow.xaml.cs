@@ -57,6 +57,19 @@ public partial class OverlayWindow : Window
     private readonly HashSet<CalibrationTarget> _touchedTargets = [];
     private CalibrationTarget _adjustTarget = CalibrationTarget.SkillOrder;
     private IReadOnlyList<CoachBuild.Core.SituationalDelta> _situational = [];
+
+    /// <summary>
+    /// The shop set the current numbers were computed for and where the
+    /// Situational block sits inside it, or empty when there are no numbers.
+    ///
+    /// <para>Adjust mode prints it, and the badge diagnostic line carries it.
+    /// The 2026-08-20 round is the reason: the player calibrated the row while
+    /// their shop was showing Riot's own "AP" recommended set, so they lined the
+    /// boxes up against a row this app never wrote — a different row, with a
+    /// different number of blocks above it, in a different place. Nothing on
+    /// screen or in the log told them which set to be looking at.</para>
+    /// </summary>
+    private string _situationalSetLabel = string.Empty;
     private bool _shopOpen;
     private bool _forceBadges;
     private string? _lastBadgeReason;
@@ -149,8 +162,37 @@ public partial class OverlayWindow : Window
     /// <summary>Which calibration the arrow keys are currently moving.</summary>
     public CalibrationTarget AdjustTarget => _adjustTarget;
 
+    /// <summary>
+    /// The rects the item-row PREVIEW pills were last painted at, in order.
+    ///
+    /// <para>Exists so the WYSIWYG guarantee is assertable rather than merely
+    /// intended: for the same calibration and the same deltas these must equal
+    /// <see cref="OverlayRenderer.LastBadgeRects"/>, which is what a live game
+    /// paints. 1.0.19 shipped with the two disagreeing by a pill-height and
+    /// nothing in the suite could see it.</para>
+    /// </summary>
+    public IReadOnlyList<Rect> LastAdjustBadgeRects { get; private set; } = [];
+
+    /// <summary>
+    /// The geometry adjust mode last drew at, in DIPs — the value
+    /// <see cref="RenderAdjustment"/> actually used, not a re-derivation of it.
+    ///
+    /// <para>Exposed so the WYSIWYG pair can be asserted against a REAL live
+    /// render rather than against a second copy of the same arithmetic: a test
+    /// that re-derived this geometry could agree with a preview that disagrees
+    /// with the game, which is precisely the class of bug being fixed.</para>
+    /// </summary>
+    public CalibrationGeometry? LastAdjustGeometry { get; private set; }
+
     /// <summary>True while the situational numbers are on screen.</summary>
     public bool IsDrawingBadges { get; private set; }
+
+    /// <summary>
+    /// The set label the current numbers arrived with, or empty. Read-only
+    /// view of <c>_situationalSetLabel</c> for the tests that assert it reaches
+    /// both surfaces that are supposed to show it.
+    /// </summary>
+    public string SituationalSetLabel => _situationalSetLabel;
 
     /// <summary>
     /// The situational deltas to draw, for the champion currently in game.
@@ -160,16 +202,36 @@ public partial class OverlayWindow : Window
     /// list here means "no numbers for THIS champion" and never "some other
     /// champion's numbers are available".</para>
     /// </summary>
-    public void SetSituationalDeltas(IReadOnlyList<CoachBuild.Core.SituationalDelta>? deltas)
+    /// <param name="setLabel">
+    /// The shop set the numbers were computed for and the Situational block's
+    /// position inside it (<see cref="CoachBuild.Core.SituationalBlockInfo.Describe"/>),
+    /// or empty when there are no numbers.
+    /// REQUIRED, not optional: the badges are mapped positionally and are only
+    /// true of that set, and adjust mode has to be able to say which one BEFORE
+    /// the player lines anything up. An optional argument here is how the
+    /// shipped path ends up as the only uncovered one — round 3's argument for
+    /// the layout hook, applied again.
+    /// </param>
+    public void SetSituationalDeltas(
+        IReadOnlyList<CoachBuild.Core.SituationalDelta>? deltas,
+        string setLabel)
     {
         if (!Dispatcher.CheckAccess())
         {
-            Dispatcher.BeginInvoke(() => SetSituationalDeltas(deltas));
+            Dispatcher.BeginInvoke(() => SetSituationalDeltas(deltas, setLabel));
             return;
         }
 
         var next = deltas ?? [];
-        if (SameDeltas(_situational, next))
+        var label = setLabel ?? string.Empty;
+        // The LABEL is a visual input too — it is printed in adjust mode and in
+        // the badge diagnostic line. Folding it into this early-out is the same
+        // lesson as `badges.SignatureKey()` in the renderer's memo: a change
+        // nothing else in the comparison can see is a change the memo reports
+        // as "nothing happened".
+        var labelChanged = !string.Equals(_situationalSetLabel, label, StringComparison.Ordinal);
+        _situationalSetLabel = label;
+        if (!labelChanged && SameDeltas(_situational, next))
         {
             // Identical content arrives every snapshot tick. SituationalDelta is
             // a readonly record struct, so this is a real value comparison and
@@ -680,7 +742,17 @@ public partial class OverlayWindow : Window
             var first = slots.Count > 0 ? slots[0] : default;
             reason = $"badges: {_situational.Count} shown at {first.Left:0}x{first.Top:0}"
                 + $" size {first.Width:0} pitch {badges.Geometry.Spacing:0}"
-                + $" on {OverlayDisplayResolver.Describe(_display!, _displaySource)}";
+                + $" on {OverlayDisplayResolver.Describe(_display!, _displaySource)}"
+                // WHAT THE ROW IS AIMED AT, on the same line as where it is
+                // aimed. This position is FIXED by the saved calibration and
+                // has no term for the set's shape — proven in
+                // BadgePlacementTests — while the shop's Situational row moves
+                // down by one block-pitch for every block above it. So the two
+                // 2026-08-20 screenshots, taken at one calibration, showed the
+                // pills below the icons on a 3-block set and above them on a
+                // 5-block set, and this line was identical in both. It is not
+                // any more, and the difference is the diagnosis.
+                + (_situationalSetLabel.Length > 0 ? $" for {_situationalSetLabel}" : string.Empty);
         }
 
         if (string.Equals(reason, _lastBadgeReason, StringComparison.Ordinal)) return;
@@ -996,28 +1068,37 @@ public partial class OverlayWindow : Window
         // no numbers to hand (out of a game, or an older web build) a
         // placeholder row of the maximum length is shown instead, labelled as
         // such, rather than a single box that would calibrate the pitch wrong.
+        LastAdjustGeometry = geometry;
         var isItemRow = _adjustTarget == CalibrationTarget.ItemRow;
         var slotCount = isItemRow
             ? Math.Max(1, _situational.Count > 0 ? _situational.Count : CoachBuild.Core.SituationalOverlayParser.MaxDeltas)
             : 4;
         var usingPlaceholders = isItemRow && _situational.Count == 0;
 
+        var previewRects = new List<Rect>(slotCount);
         foreach (var (rect, index) in geometry.GetSlotRects(slotCount).Select((rect, index) => (rect, index)))
         {
-            var label = isItemRow
-                ? (index < _situational.Count ? _situational[index].Text : $"#{index + 1}")
-                : ((OverlayAbility)index).ToString();
             var box = new Border
             {
                 Width = rect.Width,
                 Height = rect.Height,
-                Background = new SolidColorBrush(WpfColor.FromArgb(55, 255, 47, 158)),
+                // The item row's frame is a THIN GUIDE, not the thing being
+                // aligned. Adjust mode used to draw a solid pink block here and
+                // the live render then drew the number somewhere else entirely
+                // (above it), so the player lined up the block and the numbers
+                // landed on the shop's section header. The pill below is now the
+                // dominant element for exactly that reason; the frame survives
+                // only so +/- (size) and [ / ] (pitch) have something visible to
+                // act on. The skill-order target keeps the solid box: there IS
+                // nothing else to draw there, and its highlight is painted at
+                // the slot in play too.
+                Background = new SolidColorBrush(WpfColor.FromArgb(isItemRow ? (byte)18 : (byte)55, 255, 47, 158)),
                 BorderBrush = new SolidColorBrush(WpfColor.FromRgb(255, 47, 158)),
-                BorderThickness = new Thickness(3),
+                BorderThickness = new Thickness(isItemRow ? 1.5 : 3),
                 CornerRadius = new CornerRadius(8),
-                Child = new TextBlock
+                Child = isItemRow ? null : new TextBlock
                 {
-                    Text = label,
+                    Text = ((OverlayAbility)index).ToString(),
                     Foreground = WpfBrushes.White,
                     FontWeight = FontWeights.Bold,
                     FontSize = 12,
@@ -1026,7 +1107,23 @@ public partial class OverlayWindow : Window
             Canvas.SetLeft(box, rect.Left);
             Canvas.SetTop(box, rect.Top);
             RootCanvas.Children.Add(box);
+
+            if (!isItemRow) continue;
+
+            // WHAT YOU ALIGN IS WHAT YOU GET. The pill is built and placed by
+            // the SAME two calls the live render makes (OverlayRenderer
+            // .CreateBadgePill / .PlaceBadgeOnCanvas), so the preview cannot
+            // describe a position the game will not use. Placeholder slots
+            // carry "#N" and a neutral sign, which is still the real pill.
+            var known = index < _situational.Count;
+            var pill = OverlayRenderer.CreateBadgePill(
+                known ? _situational[index].Text : $"#{index + 1}",
+                known ? Math.Sign(_situational[index].Wpa) : 0,
+                rect);
+            previewRects.Add(OverlayRenderer.PlaceBadgeOnCanvas(RootCanvas, pill, rect));
         }
+
+        LastAdjustBadgeRects = previewRects;
 
         var heading = isItemRow ? "Adjusting the situational item numbers" : "Adjusting the skill-order box";
         var switchTo = isItemRow ? "the skill-order box" : "the situational item numbers";
@@ -1035,8 +1132,21 @@ public partial class OverlayWindow : Window
         // than only when there are no numbers to hand. A player who opens this,
         // sees six boxes and presses Enter no longer saves anything (see
         // SaveAdjustment) — so they need to be told what the boxes are for.
+        // NAME THE SET ON SCREEN. Defect E: the app writes an item set but
+        // cannot see which one the player has SELECTED in the shop's dropdown,
+        // so it cannot detect that they are aiming at the wrong row — and on
+        // 2026-08-20 they were, at Riot's own "AP" recommended set. Printing
+        // the set the numbers belong to, and the block position inside it, is
+        // the whole of what the app can honestly do about that, and it has to
+        // be here rather than only in the log because here is where the player
+        // is looking while they decide which row to aim at.
+        var setNote = isItemRow && _situationalSetLabel.Length > 0
+            ? $"\nThese numbers are for {_situationalSetLabel}"
+              + "\nSelect that set in the shop's dropdown before you line anything up"
+            : string.Empty;
         var placeholderNote = isItemRow
-            ? (usingPlaceholders
+            ? setNote
+              + (usingPlaceholders
                 ? "\nShowing 6 placeholder slots — line them up with your Situational row in the shop"
                 : "\nLine these up with the Situational row in your shop")
               + "\nOpen your shop before entering adjust mode so you can see that row"

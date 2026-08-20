@@ -24,10 +24,25 @@ public readonly record struct SituationalDelta(int ItemId, double Wpa, string Te
 /// champion it belongs to. Rendering is gated on the id MATCHING, never on the
 /// data merely being present.</para>
 /// </summary>
+/// <param name="SetLabel">
+/// The shop set these numbers were computed for AND the position of the
+/// Situational block inside it, already rendered for a human by
+/// <see cref="SituationalBlockInfo.Describe"/> —
+/// <c>"CoachBuild Syndra Mid" — Situational is block 3 of 3 (6 items)</c>.
+/// Empty when this set carries no deltas for the champion being asked about.
+///
+/// <para>Carried because the badges are mapped POSITIONALLY and are therefore
+/// only true of that one set, drawn at one saved calibration that is only true
+/// of that set's SHAPE. The app cannot see which set the player has selected in
+/// the shop — see <see cref="SituationalSetLocator"/> — so saying which one it
+/// meant, and where in it the row sits, is the whole of what it CAN do: in the
+/// log, and in adjust mode before the player lines anything up.</para>
+/// </param>
 public sealed record SituationalOverlaySet(
     int ChampionId,
     IReadOnlyList<SituationalDelta> Deltas,
-    DateTimeOffset At)
+    DateTimeOffset At,
+    string SetLabel)
 {
     public bool Any => Deltas.Count > 0;
 
@@ -69,15 +84,31 @@ public static class SituationalOverlayParser
     /// <summary>Item ids at or above this are the ARAM/Arena twins of a Summoner's Rift item.</summary>
     public const int MaxItemId = 10000;
 
+    /// <param name="block">
+    /// The <c>Situational</c> block these numbers annotate, from the same
+    /// payload. REQUIRED and positional, following round 3's argument for
+    /// <c>chatGateEnabled</c> and the layout hook verbatim: an optional
+    /// trailing argument that production fills in and fixtures leave empty is
+    /// how the shipped configuration ends up with no coverage while every suite
+    /// stays green. Pass <see cref="SituationalBlockInfo.Unknown"/> to mean
+    /// "not checked" — and mean it.
+    /// </param>
     public static SituationalOverlaySet Parse(
         int championId,
         JsonElement? situational,
         DateTimeOffset at,
+        SituationalBlockInfo block,
         out IReadOnlyList<string> rejections)
     {
         var rejected = new List<string>();
         rejections = rejected;
-        var empty = new SituationalOverlaySet(championId, Array.Empty<SituationalDelta>(), at);
+        block ??= SituationalBlockInfo.Unknown;
+        // An EMPTY label on an empty set, always. The label's whole job is to
+        // say which set the numbers ON SCREEN belong to; a set with no numbers
+        // on screen has nothing to claim, and a label left on one is a name the
+        // adjust-mode legend would print beside a row it is not describing.
+        var empty = new SituationalOverlaySet(
+            championId, Array.Empty<SituationalDelta>(), at, string.Empty);
 
         if (championId <= 0)
         {
@@ -113,7 +144,24 @@ public static class SituationalOverlayParser
             deltas.Add(delta);
         }
 
-        return new SituationalOverlaySet(championId, deltas, at);
+        if (!SituationalSetLocator.Agrees(block, deltas, out var disagreement))
+        {
+            // NOT a degraded row: numbers whose ids do not match the icons they
+            // will be drawn over are a confident claim about the wrong items,
+            // and on screen that is indistinguishable from a correct one. The
+            // apply itself is already done and is untouched.
+            rejected.Add($"the numbers do not describe the Situational block that was written ({disagreement}); none will be drawn");
+            return empty;
+        }
+
+        // KNOWN only. `Describe()` renders an unknown block as prose ("an item
+        // set this payload did not identify"), which is the right thing for the
+        // log and the wrong thing for the adjust-mode legend: that legend
+        // follows the label with "select that set in the shop's dropdown", and
+        // there is no such set to select. An empty label makes the legend say
+        // nothing rather than send the player looking for a name.
+        return new SituationalOverlaySet(
+            championId, deltas, at, block.Known ? block.Describe() : string.Empty);
     }
 
     private static bool TryReadDelta(JsonElement entry, out SituationalDelta delta, out string why)

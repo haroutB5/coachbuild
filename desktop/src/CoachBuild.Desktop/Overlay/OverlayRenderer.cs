@@ -74,6 +74,16 @@ public sealed class OverlayRenderer
     public OverlayRenderModel? LastModel { get; private set; }
 
     /// <summary>
+    /// The rects the badge pills were last actually painted at, in order.
+    ///
+    /// <para>Not the same thing as <c>LastModel.Badges[i].Slot</c>: the slot is
+    /// the calibrated box, the pill is measured from its own text. This is the
+    /// half of the pair that adjust mode has to match — see
+    /// <see cref="PlaceBadge"/>.</para>
+    /// </summary>
+    public IReadOnlyList<Rect> LastBadgeRects { get; private set; } = Array.Empty<Rect>();
+
+    /// <summary>
     /// Drops the memoised signature so the next <see cref="Render"/> repaints
     /// unconditionally.
     ///
@@ -125,7 +135,7 @@ public sealed class OverlayRenderer
         _lastSignature = signature;
         LastModel = model;
         RenderCount++;
-        Paint(canvas, model);
+        LastBadgeRects = Paint(canvas, model);
         return true;
     }
 
@@ -235,76 +245,141 @@ public sealed class OverlayRenderer
     private static readonly WpfColor NegativeInk = WpfColor.FromRgb(248, 113, 113);
     private static readonly WpfColor NeutralInk = WpfColor.FromRgb(226, 232, 240);
 
+    /// <summary>The type size a badge uses inside <paramref name="slot"/>.</summary>
+    /// <remarks>
+    /// Everything about a pill scales off the calibrated slot, so a 4K player
+    /// and a 1080p player get the same proportions rather than the same pixel
+    /// count. Public because adjust mode builds the SAME pill (see
+    /// <see cref="CreateBadgePill"/>) and a second copy of this expression is a
+    /// second answer to the question "how big is the number".
+    /// </remarks>
+    public static double BadgeFontSize(Rect slot) => Math.Clamp(slot.Height * 0.34, 9d, 22d);
+
     /// <summary>
-    /// Draws the WPA delta above each situational item.
+    /// The pill for one delta, built exactly as it is painted in a live game.
     ///
-    /// <para><b>Above the slot, never over it.</b> The badge's bottom edge sits
-    /// just above the slot's top edge, so it covers neither the item icon nor
-    /// the price the shop prints under it. Everything scales off the calibrated
-    /// slot size, so a 4K player and a 1080p player get the same proportions
-    /// rather than the same pixel count.</para>
+    /// <para><b>ONE implementation, shared with adjust mode.</b> Through 1.0.19
+    /// adjust mode drew its own pink box AT the slot while this painter drew a
+    /// pill ABOVE the slot, so what the player lined up was never what appeared
+    /// — see <see cref="PlaceBadge"/> for the arithmetic and the field
+    /// evidence.</para>
     ///
     /// <para>Positive and negative are told apart by COLOUR AND by the sign
     /// character the web already put in the text (<c>+4.27</c> / <c>-0.06</c>),
     /// so the distinction survives a colour-blind player and a screenshot
     /// alike.</para>
     /// </summary>
-    private static void PaintBadges(Canvas canvas, IReadOnlyList<OverlayItemBadge>? badges)
+    public static Border CreateBadgePill(string text, int sign, Rect slot)
     {
-        if (badges is null || badges.Count == 0) return;
+        var fontSize = BadgeFontSize(slot);
+        var ink = sign switch
+        {
+            > 0 => PositiveInk,
+            < 0 => NegativeInk,
+            _ => NeutralInk,
+        };
+
+        return new Border
+        {
+            Background = new SolidColorBrush(BadgeBackground),
+            BorderBrush = new SolidColorBrush(WpfColor.FromArgb(170, ink.R, ink.G, ink.B)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(fontSize * 0.38),
+            Padding = new Thickness(fontSize * 0.42, fontSize * 0.10, fontSize * 0.42, fontSize * 0.14),
+            IsHitTestVisible = false,
+            SnapsToDevicePixels = true,
+            Child = new TextBlock
+            {
+                Text = text,
+                Foreground = new SolidColorBrush(ink),
+                FontWeight = FontWeights.Bold,
+                FontSize = fontSize,
+                TextAlignment = TextAlignment.Center,
+            },
+        };
+    }
+
+    /// <summary>
+    /// Where a measured pill lands: CENTRED on its slot, both axes.
+    ///
+    /// <para><b>The calibrated box IS the badge.</b> Through 1.0.19 the pill was
+    /// drawn ABOVE the slot (<c>slot.Top - pillHeight - gap</c>) on the promise
+    /// that it would cover "neither the item icon nor the price the shop prints
+    /// under it". That promise could not be kept and it broke calibration
+    /// outright:</para>
+    ///
+    /// <list type="number">
+    /// <item>There is no free space above a League shop row — the space above
+    /// an item row is the block's own section header. The player's 2026-08-20
+    /// screenshot shows all three pills printed across the words "Situational
+    /// items that are also good".</item>
+    /// <item>Adjust mode drew its alignment boxes AT the slot and told the
+    /// player "Line these up with the Situational row in your shop". They did.
+    /// The numbers then appeared one pill-height higher. What you align was not
+    /// what you get, so no amount of arrow-key work could ever converge — the
+    /// player had to deliberately mis-align the boxes to fix the pills.</item>
+    /// <item>The diagnostic line <c>badges: N shown at XxY size W pitch P</c>
+    /// reported the SLOT, which after this offset was a position where nothing
+    /// was drawn. Two answers to one question.</item>
+    /// </list>
+    ///
+    /// <para>Centring collapses all three: the box the player moves is the box
+    /// the number appears in, the log line describes the pixels, and where the
+    /// pill sits relative to the icon is the player's decision (arrow keys)
+    /// rather than a constant this file invented. That matters more than usual
+    /// here because the Situational row's own position on screen depends on how
+    /// many blocks the SELECTED item set puts above it — which this app cannot
+    /// observe (no screen reads, 1.0.16 policy).</para>
+    ///
+    /// <para>Measured, not fixed-width: a fixed width would either clip
+    /// "-0.06" or leave "+4.27" swimming, and the two occur in the same
+    /// row.</para>
+    /// </summary>
+    public static Rect PlaceBadge(Rect slot, System.Windows.Size pill) => new(
+        slot.Left + (slot.Width - pill.Width) / 2,
+        Math.Max(0d, slot.Top + (slot.Height - pill.Height) / 2),
+        pill.Width,
+        pill.Height);
+
+    /// <summary>
+    /// Measures <paramref name="pill"/>, places it on <paramref name="canvas"/>
+    /// and returns the rect it occupies. The one call adjust mode and the live
+    /// render both make, so neither can drift from the other.
+    /// </summary>
+    public static Rect PlaceBadgeOnCanvas(Canvas canvas, Border pill, Rect slot)
+    {
+        pill.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+        var placed = PlaceBadge(slot, pill.DesiredSize);
+        Canvas.SetLeft(pill, placed.Left);
+        Canvas.SetTop(pill, placed.Top);
+        canvas.Children.Add(pill);
+        return placed;
+    }
+
+    /// <summary>Draws the WPA delta on each situational item.</summary>
+    private static IReadOnlyList<Rect> PaintBadges(Canvas canvas, IReadOnlyList<OverlayItemBadge>? badges)
+    {
+        if (badges is null || badges.Count == 0) return Array.Empty<Rect>();
+        var painted = new List<Rect>(badges.Count);
         foreach (var badge in badges)
         {
             var slot = badge.Slot;
             if (slot.Width <= 0 || slot.Height <= 0) continue;
-
-            var fontSize = Math.Clamp(slot.Height * 0.34, 9d, 22d);
-            var ink = badge.Sign switch
-            {
-                > 0 => PositiveInk,
-                < 0 => NegativeInk,
-                _ => NeutralInk,
-            };
-
-            var pill = new Border
-            {
-                Background = new SolidColorBrush(BadgeBackground),
-                BorderBrush = new SolidColorBrush(WpfColor.FromArgb(170, ink.R, ink.G, ink.B)),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(fontSize * 0.38),
-                Padding = new Thickness(fontSize * 0.42, fontSize * 0.10, fontSize * 0.42, fontSize * 0.14),
-                IsHitTestVisible = false,
-                SnapsToDevicePixels = true,
-                Child = new TextBlock
-                {
-                    Text = badge.Text,
-                    Foreground = new SolidColorBrush(ink),
-                    FontWeight = FontWeights.Bold,
-                    FontSize = fontSize,
-                    TextAlignment = TextAlignment.Center,
-                },
-            };
-
-            // Measured, then centred on the slot. A fixed width would either
-            // clip "-0.06" or leave "+4.27" swimming, and the two occur in the
-            // same row.
-            pill.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
-            var size = pill.DesiredSize;
-            var gap = Math.Max(2d, slot.Height * 0.08);
-            Canvas.SetLeft(pill, slot.Left + (slot.Width - size.Width) / 2);
-            Canvas.SetTop(pill, Math.Max(0d, slot.Top - size.Height - gap));
-            canvas.Children.Add(pill);
+            painted.Add(PlaceBadgeOnCanvas(canvas, CreateBadgePill(badge.Text, badge.Sign, slot), slot));
         }
+
+        return painted;
     }
 
-    private static void Paint(Canvas canvas, OverlayRenderModel model)
+    private static IReadOnlyList<Rect> Paint(Canvas canvas, OverlayRenderModel model)
     {
         canvas.Children.Clear();
-        PaintBadges(canvas, model.Badges);
+        var badgeRects = PaintBadges(canvas, model.Badges);
         // The badges are painted BEFORE this gate, not after it. `Visible` is
         // "there is a skill order to highlight", which has nothing to do with
         // whether the shop is open — a player with no skill-order data must
         // still get their item numbers.
-        if (!model.Visible) return;
+        if (!model.Visible) return badgeRects;
 
         if (model.HighlightedAbility is { } next)
         {
@@ -332,6 +407,8 @@ public sealed class OverlayRenderer
             Canvas.SetTop(highlight, rect.Top);
             canvas.Children.Add(highlight);
         }
+
+        return badgeRects;
     }
 }
 

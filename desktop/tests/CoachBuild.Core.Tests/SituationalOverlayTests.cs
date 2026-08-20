@@ -20,10 +20,40 @@ public sealed class SituationalOverlayTests
 
     private static JsonElement Json(string raw) => JsonDocument.Parse(raw).RootElement.Clone();
 
+    /// <summary>
+    /// The <c>Situational</c> block as <c>itemSetBody.ts</c> actually writes it:
+    /// ids are STRINGS on the LCU item-set wire, and the block is the LAST of
+    /// however many the export produced.
+    /// </summary>
+    private static SituationalBlockInfo Block(string title, int ordinal, int count, params int[] ids) =>
+        new(title, ordinal, count, ids);
+
+    /// <summary>
+    /// The block that GalioMid's numbers actually annotate. `situationalWire`
+    /// and `situationalBlocks` are both built from ONE `picks` array in
+    /// `itemSetBody.ts`, so this agreement is production's own invariant and
+    /// not a convenience of the fixture.
+    /// </summary>
+    private static SituationalBlockInfo GalioBlock =>
+        Block("CoachBuild Galio Mid", 3, 3, 3158, 3009, 3047, 4645, 4646, 3068);
+
+    /// <summary>
+    /// NOT CHECKED, and meant. Used by the tests below that are about reading
+    /// one entry rather than about cross-checking the row: a Known block plus a
+    /// deliberately-dropped entry is a count mismatch, which would suppress the
+    /// whole row and hide the very rejection those tests assert.
+    /// </summary>
+    private static SituationalBlockInfo Unchecked => SituationalBlockInfo.Unknown;
+
     [Fact]
     public void Parses_the_real_payload_in_order_and_keeps_the_webs_own_text()
     {
-        var set = SituationalOverlayParser.Parse(3, Json(GalioMid), DateTimeOffset.UnixEpoch, out var rejections);
+        // The PRODUCTION shape: a real Situational block from the same payload,
+        // not `Unknown`. Round 4 added the cross-check and every existing test
+        // here would have kept passing with it permanently disabled, because
+        // every existing fixture wrote `"blocks":[]`.
+        var set = SituationalOverlayParser.Parse(
+            3, Json(GalioMid), DateTimeOffset.UnixEpoch, GalioBlock, out var rejections);
 
         Assert.Empty(rejections);
         Assert.Equal(3, set.ChampionId);
@@ -45,7 +75,7 @@ public sealed class SituationalOverlayTests
         var many = "[" + string.Join(",", Enumerable.Range(1, 12)
             .Select(index => $"{{\"id\":{1000 + index},\"wpa\":1.0,\"text\":\"+1.00\"}}")) + "]";
 
-        var set = SituationalOverlayParser.Parse(3, Json(many), DateTimeOffset.UnixEpoch, out var rejections);
+        var set = SituationalOverlayParser.Parse(3, Json(many), DateTimeOffset.UnixEpoch, Unchecked, out var rejections);
 
         Assert.Equal(SituationalOverlayParser.MaxDeltas, set.Deltas.Count);
         Assert.NotEmpty(rejections);
@@ -69,7 +99,7 @@ public sealed class SituationalOverlayTests
     [InlineData("""[ "not an object" ]""", "not an object")]
     public void A_malformed_entry_is_dropped_with_a_reason_and_never_invented(string raw, string reasonFragment)
     {
-        var set = SituationalOverlayParser.Parse(3, Json(raw), DateTimeOffset.UnixEpoch, out var rejections);
+        var set = SituationalOverlayParser.Parse(3, Json(raw), DateTimeOffset.UnixEpoch, Unchecked, out var rejections);
 
         Assert.Empty(set.Deltas);
         Assert.Contains(reasonFragment, string.Join("; ", rejections), StringComparison.OrdinalIgnoreCase);
@@ -79,7 +109,7 @@ public sealed class SituationalOverlayTests
     public void An_absent_delta_renders_nothing_and_never_plus_zero()
     {
         var set = SituationalOverlayParser.Parse(
-            3, Json("""[ {"id":3158,"wpa":0,"text":""} ]"""), DateTimeOffset.UnixEpoch, out _);
+            3, Json("""[ {"id":3158,"wpa":0,"text":""} ]"""), DateTimeOffset.UnixEpoch, Unchecked, out _);
 
         Assert.Empty(set.Deltas);
         Assert.DoesNotContain(set.Deltas, delta => delta.Text.Contains('0', StringComparison.Ordinal));
@@ -91,7 +121,7 @@ public sealed class SituationalOverlayTests
         // wpa drives colour only. Losing it should cost the number its colour,
         // never the number.
         var set = SituationalOverlayParser.Parse(
-            3, Json("""[ {"id":3158,"text":"+4.27"} ]"""), DateTimeOffset.UnixEpoch, out var rejections);
+            3, Json("""[ {"id":3158,"text":"+4.27"} ]"""), DateTimeOffset.UnixEpoch, Unchecked, out var rejections);
 
         Assert.Empty(rejections);
         Assert.Equal("+4.27", Assert.Single(set.Deltas).Text);
@@ -105,7 +135,7 @@ public sealed class SituationalOverlayTests
         [ {"id":3158,"wpa":4.27,"text":"+4.27"},
           {"id":999999,"wpa":1.0,"text":"+1.00"},
           {"id":3009,"wpa":2.79,"text":"+2.79"} ]
-        """), DateTimeOffset.UnixEpoch, out var rejections);
+        """), DateTimeOffset.UnixEpoch, Unchecked, out var rejections);
 
         Assert.Equal([3158, 3009], set.Deltas.Select(delta => delta.ItemId));
         Assert.Single(rejections);
@@ -115,24 +145,24 @@ public sealed class SituationalOverlayTests
     [Fact]
     public void An_absent_field_is_empty_and_silent_but_a_wrong_shaped_one_is_reported()
     {
-        Assert.Empty(SituationalOverlayParser.Parse(3, null, DateTimeOffset.UnixEpoch, out var absent).Deltas);
+        Assert.Empty(SituationalOverlayParser.Parse(3, null, DateTimeOffset.UnixEpoch, Unchecked, out var absent).Deltas);
         Assert.Empty(absent);
 
-        Assert.Empty(SituationalOverlayParser.Parse(3, Json("null"), DateTimeOffset.UnixEpoch, out var nulled).Deltas);
+        Assert.Empty(SituationalOverlayParser.Parse(3, Json("null"), DateTimeOffset.UnixEpoch, Unchecked, out var nulled).Deltas);
         Assert.Empty(nulled);
 
         // An older web build omits the key entirely; a WRONG one sends the
         // wrong type, and that is worth a line.
-        Assert.Empty(SituationalOverlayParser.Parse(3, Json("{}"), DateTimeOffset.UnixEpoch, out var wrong).Deltas);
+        Assert.Empty(SituationalOverlayParser.Parse(3, Json("{}"), DateTimeOffset.UnixEpoch, Unchecked, out var wrong).Deltas);
         Assert.NotEmpty(wrong);
-        Assert.Empty(SituationalOverlayParser.Parse(3, Json("42"), DateTimeOffset.UnixEpoch, out var number).Deltas);
+        Assert.Empty(SituationalOverlayParser.Parse(3, Json("42"), DateTimeOffset.UnixEpoch, Unchecked, out var number).Deltas);
         Assert.NotEmpty(number);
     }
 
     [Fact]
     public void A_payload_without_a_champion_is_refused_outright()
     {
-        var set = SituationalOverlayParser.Parse(0, Json(GalioMid), DateTimeOffset.UnixEpoch, out var rejections);
+        var set = SituationalOverlayParser.Parse(0, Json(GalioMid), DateTimeOffset.UnixEpoch, GalioBlock, out var rejections);
         Assert.Empty(set.Deltas);
         Assert.NotEmpty(rejections);
     }
@@ -143,7 +173,7 @@ public sealed class SituationalOverlayTests
         // The item set is written in champ select and drawn in game, so the
         // data outlives its phase - and anything that outlives a phase can
         // outlive the champion it described.
-        var set = SituationalOverlayParser.Parse(3, Json(GalioMid), DateTimeOffset.UnixEpoch, out _);
+        var set = SituationalOverlayParser.Parse(3, Json(GalioMid), DateTimeOffset.UnixEpoch, GalioBlock, out _);
 
         Assert.NotNull(set.For(3));
         Assert.Equal(6, set.For(3)!.Count);
@@ -155,7 +185,7 @@ public sealed class SituationalOverlayTests
     [Fact]
     public void An_empty_set_answers_null_for_its_own_champion_too()
     {
-        var empty = new SituationalOverlaySet(3, Array.Empty<SituationalDelta>(), DateTimeOffset.UnixEpoch);
+        var empty = new SituationalOverlaySet(3, Array.Empty<SituationalDelta>(), DateTimeOffset.UnixEpoch, string.Empty);
         Assert.False(empty.Any);
         Assert.Null(empty.For(3));
     }
@@ -164,7 +194,7 @@ public sealed class SituationalOverlayTests
     public void Companion_state_clears_rather_than_keeping_the_last_champions_numbers()
     {
         var state = new CompanionState();
-        var galio = SituationalOverlayParser.Parse(3, Json(GalioMid), DateTimeOffset.UnixEpoch, out _);
+        var galio = SituationalOverlayParser.Parse(3, Json(GalioMid), DateTimeOffset.UnixEpoch, GalioBlock, out _);
 
         state.SetSituational(galio);
         Assert.Equal(6, state.Situational!.Deltas.Count);
@@ -172,7 +202,7 @@ public sealed class SituationalOverlayTests
         // A write with NO situational field must CLEAR, not leave the previous
         // one in place. An older web build, or a champion with no alternatives,
         // must produce no numbers - not last champion's numbers.
-        state.SetSituational(SituationalOverlayParser.Parse(64, null, DateTimeOffset.UnixEpoch, out _));
+        state.SetSituational(SituationalOverlayParser.Parse(64, null, DateTimeOffset.UnixEpoch, Unchecked, out _));
         Assert.Null(state.Situational);
 
         state.SetSituational(galio);

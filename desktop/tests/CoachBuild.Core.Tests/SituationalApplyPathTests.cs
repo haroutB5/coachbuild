@@ -129,6 +129,159 @@ public sealed class SituationalApplyPathTests
         Assert.Null(state.Situational);
     }
 
+    /// <summary>
+    /// The set as the web actually writes it, with a real <c>Situational</c>
+    /// block. Round 4 exists partly because every fixture in this file wrote
+    /// <c>"blocks":[]</c>, so the cross-check the apply path now runs would
+    /// have been permanently unreachable from the suite while every test stayed
+    /// green.
+    /// </summary>
+    private const string RealSet = """
+    {"title":"CoachBuild Galio Mid","blocks":[
+      {"type":"Starting","items":[{"id":"1056","count":1}]},
+      {"type":"WPA build","items":[{"id":"2503","count":1}]},
+      {"type":"Situational","items":[{"id":"3158","count":1},{"id":"3068","count":1}]}]}
+    """;
+
+    private const string WrongRow = """
+    [ {"id":6653,"wpa":4.27,"text":"+4.27"}, {"id":3068,"wpa":-0.06,"text":"-0.06"} ]
+    """;
+
+    [Fact]
+    public async Task The_numbers_are_cross_checked_against_the_block_that_was_written()
+    {
+        var state = Connected();
+
+        var result = await new ItemSetApplyService(SuccessfulLcu(), state)
+            .ApplyAsync(RealRequest(3, RealSet, GoodSituational));
+
+        Assert.IsType<ApplyItemSetsSuccess>(result);
+        Assert.Equal(2, state.Situational!.Deltas.Count);
+        // ...and the set they belong to travels WITH them, block position and
+        // all, because that is the only thing the app can honestly say about a
+        // shop dropdown it cannot see.
+        Assert.Contains("CoachBuild Galio Mid", state.Situational.SetLabel, StringComparison.Ordinal);
+        Assert.Contains("block 3 of 3", state.Situational.SetLabel, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Numbers_that_describe_a_DIFFERENT_row_are_dropped_whole()
+    {
+        // Six green pills over six icons look correct whichever items they are.
+        // A row of numbers that does not describe the row of icons under it is
+        // not a degraded feature -- it is a confident claim about the wrong
+        // items, and it is indistinguishable from a right one on screen.
+        var state = Connected();
+
+        var result = await new ItemSetApplyService(SuccessfulLcu(), state)
+            .ApplyAsync(RealRequest(3, RealSet, WrongRow));
+
+        // The WRITE is untouched. The decoration can never cost the player
+        // their item set -- that is this file's whole subject.
+        Assert.IsType<ApplyItemSetsSuccess>(result);
+        Assert.Null(state.Situational);
+    }
+
+    [Fact]
+    public async Task A_payload_with_no_situational_block_still_draws_its_numbers()
+    {
+        // NEGATIVE CONTROL, and the one that stops the cross-check from being a
+        // new way to silently delete the feature. An older web build, or any
+        // future change to the block name, must cost the numbers their
+        // CROSS-CHECK and never the numbers.
+        var state = Connected();
+
+        var result = await new ItemSetApplyService(SuccessfulLcu(), state).ApplyAsync(
+            RealRequest(3, """{"title":"CoachBuild Galio Mid","blocks":[]}""", GoodSituational));
+
+        Assert.IsType<ApplyItemSetsSuccess>(result);
+        Assert.Equal(2, state.Situational!.Deltas.Count);
+        Assert.Equal(string.Empty, state.Situational.SetLabel);
+    }
+
+    [Fact]
+    public async Task The_log_names_the_set_and_the_block_position_it_aimed_at()
+    {
+        // Defect D and E share one line. The block ORDINAL is in it because the
+        // shop stacks blocks vertically: "block 3 of 3" and "block 5 of 5" put
+        // the same row a block-pitch apart under one saved calibration, which
+        // is exactly what the 2026-08-20 pair of screenshots showed.
+        var root = Path.Combine(Path.GetTempPath(), $"cb-log-{Guid.NewGuid():N}");
+        try
+        {
+            var log = new RedactedLog(root);
+            await new ItemSetApplyService(SuccessfulLcu(), Connected(), log)
+                .ApplyAsync(RealRequest(3, RealSet, GoodSituational));
+
+            var text = File.ReadAllText(log.FilePath);
+            Assert.Contains("situational: 2 delta(s) for champion 3", text, StringComparison.Ordinal);
+            Assert.Contains("they line up ONLY with shop set", text, StringComparison.Ordinal);
+            Assert.Contains("CoachBuild Galio Mid", text, StringComparison.Ordinal);
+            Assert.Contains("Situational is block 3 of 3", text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task A_row_that_was_REJECTED_never_reports_itself_as_never_supplied()
+    {
+        // The summary line is the line people read, and it used to contradict
+        // the rejection line directly above it: a payload that supplied plenty
+        // and had every entry thrown away logged "none supplied", which reads
+        // as "the web sent nothing" and sends the next diagnostic round at the
+        // wrong side of the wire.
+        var root = Path.Combine(Path.GetTempPath(), $"cb-log-{Guid.NewGuid():N}");
+        try
+        {
+            var log = new RedactedLog(root);
+            await new ItemSetApplyService(SuccessfulLcu(), Connected(), log)
+                .ApplyAsync(RealRequest(3, RealSet, WrongRow));
+
+            var text = File.ReadAllText(log.FilePath);
+            Assert.Contains("every number was rejected for champion 3", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("none supplied", text, StringComparison.Ordinal);
+            Assert.Contains("position 1", text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task A_payload_that_really_supplied_nothing_still_says_so()
+    {
+        // The other half of the pair. Two different silences with two different
+        // answers: nothing arrived, versus everything arrived and was refused.
+        var root = Path.Combine(Path.GetTempPath(), $"cb-log-{Guid.NewGuid():N}");
+        try
+        {
+            var log = new RedactedLog(root);
+            await new ItemSetApplyService(SuccessfulLcu(), Connected(), log)
+                .ApplyAsync(RealRequest(3, RealSet, null));
+
+            var text = File.ReadAllText(log.FilePath);
+            Assert.Contains("none supplied for champion 3", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("every number was rejected", text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    private static ApplyItemSetsRequest RealRequest(int championId, string set, string? situational)
+    {
+        return new ApplyItemSetsRequest(
+            championId,
+            [JsonDocument.Parse(set).RootElement.Clone()],
+            null,
+            situational is null ? null : JsonDocument.Parse(situational).RootElement.Clone());
+    }
+
     private static ApplyItemSetsRequest Request(int championId, string? situational)
     {
         var set = JsonDocument.Parse("{\"title\":\"CoachBuild Set\",\"blocks\":[]}").RootElement.Clone();
