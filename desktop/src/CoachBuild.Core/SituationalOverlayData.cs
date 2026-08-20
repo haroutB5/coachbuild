@@ -144,7 +144,28 @@ public static class SituationalOverlayParser
             deltas.Add(delta);
         }
 
-        if (!SituationalSetLocator.Agrees(block, deltas, out var disagreement))
+        // CROSS-CHECK ONLY A ROW NOTHING WAS DROPPED FROM.
+        //
+        // `deltas` is the POST-rejection list; `block.ItemIds` is the
+        // PRE-rejection one, straight off the wire. Comparing the two after an
+        // entry has been dropped compares different things: the counts
+        // disagree because THIS METHOD made them disagree, and the positions
+        // after the drop are off by one for the same reason. One blank text,
+        // one null wpa (JSON.stringify(NaN) emits null) or one out-of-range id
+        // then turned six badges into zero and logged "every number was
+        // rejected" beside a line naming exactly one. That is a per-item
+        // degradation promoted to a whole-feature outage.
+        //
+        // ReadItemIds already learned this one level down, where it pads an
+        // unreadable id with 0 rather than shortening the row. Same reasoning,
+        // one layer up: a parse problem is already reported per entry above and
+        // must not be re-reported as a contradiction with the shop.
+        //
+        // The IDENTITY half of the check keeps its full force on a clean row,
+        // which is the case it exists for: six good numbers over six icons look
+        // correct whichever items they describe.
+        var crossCheck = rejected.Count == 0 ? block : SituationalBlockInfo.Unknown;
+        if (!SituationalSetLocator.Agrees(crossCheck, deltas, out var disagreement))
         {
             // NOT a degraded row: numbers whose ids do not match the icons they
             // will be drawn over are a confident claim about the wrong items,

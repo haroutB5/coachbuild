@@ -147,6 +147,15 @@ public sealed class SituationalApplyPathTests
     [ {"id":6653,"wpa":4.27,"text":"+4.27"}, {"id":3068,"wpa":-0.06,"text":"-0.06"} ]
     """;
 
+    /// <summary>
+    /// The RealSet's two items, one of them carrying a null wpa.
+    /// <c>JSON.stringify(NaN)</c> emits <c>null</c>, so this is the shape a
+    /// single NaN in a freshly-baked artifact arrives as.
+    /// </summary>
+    private const string OneBadEntry = """
+    [ {"id":3158,"wpa":4.27,"text":"+4.27"}, {"id":3068,"wpa":null,"text":"-0.06"} ]
+    """;
+
     [Fact]
     public async Task The_numbers_are_cross_checked_against_the_block_that_was_written()
     {
@@ -180,6 +189,44 @@ public sealed class SituationalApplyPathTests
         // their item set -- that is this file's whole subject.
         Assert.IsType<ApplyItemSetsSuccess>(result);
         Assert.Null(state.Situational);
+    }
+
+    [Fact]
+    public async Task One_rejected_entry_costs_that_number_and_never_the_whole_row()
+    {
+        // The apply-path half of the B2 regression. The cross-check compared a
+        // PRE-rejection block against a POST-rejection row, so one null wpa in
+        // the artifact took every number off the screen for that champion and
+        // said "every number was rejected" while the log line above it named
+        // exactly one. A cold rebuild is producing new artifacts right now;
+        // this is the path that would have gone dark.
+        var root = Path.Combine(Path.GetTempPath(), $"cb-log-{Guid.NewGuid():N}");
+        try
+        {
+            var log = new RedactedLog(root);
+            var state = Connected();
+
+            var result = await new ItemSetApplyService(SuccessfulLcu(), state, log)
+                .ApplyAsync(RealRequest(3, RealSet, OneBadEntry));
+
+            Assert.IsType<ApplyItemSetsSuccess>(result);
+            Assert.Equal(3158, Assert.Single(state.Situational!.Deltas).ItemId);
+
+            var text = File.ReadAllText(log.FilePath);
+            Assert.Contains("situational: 1 delta(s) for champion 3", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("every number was rejected", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("do not describe", text, StringComparison.Ordinal);
+
+            // ...and the log SAYS the cross-check did not run, rather than
+            // claiming a one-per-icon fit it no longer verified. A row short of
+            // its block is drawn from slot 1 outwards, so anything after the
+            // dropped entry sits an icon early.
+            Assert.Contains("NOT cross-checked", text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
     }
 
     [Fact]

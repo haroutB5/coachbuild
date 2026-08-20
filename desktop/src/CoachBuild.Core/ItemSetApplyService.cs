@@ -96,10 +96,24 @@ public sealed class ItemSetApplyService
             // printed for a payload that supplied plenty and had every entry
             // rejected — the summary contradicted the rejection line directly
             // above it, and the summary is the line people read.
+            //
+            // AND SAY WHEN THE CHECK DID NOT RUN. The parser cross-checks only
+            // a row it dropped nothing from, because the block is the wire's
+            // pre-rejection list and the deltas are the post-rejection one.
+            // That is right - one bad number must not cost the other five - but
+            // "they line up ONLY with shop set X" is a positive claim, and a
+            // row short of its block is drawn from slot 1 outwards, so every
+            // number after the drop sits an icon early. Say so rather than
+            // assert a fit nothing verified.
             _log?.Info(parsed.Any
                 ? $"situational: {parsed.Deltas.Count} delta(s) for champion {parsed.ChampionId}"
                     + $"; they line up ONLY with shop set {block.Describe()}"
-                    + (block.Known ? "" : " — the payload named no Situational block, so nothing was cross-checked")
+                    + (block.Known
+                        ? rejections.Count > 0
+                            ? " — NOT cross-checked against it: entries were dropped above,"
+                                + " so the numbers may not sit one per icon"
+                            : ""
+                        : " — the payload named no Situational block, so nothing was cross-checked")
                 : rejections.Count > 0
                     ? $"situational: every number was rejected for champion {request.ChampionId}"
                         + "; none will be drawn (reasons on the line above)"
