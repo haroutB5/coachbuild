@@ -104,6 +104,43 @@ public sealed class SettingsStoreTests
         }
     }
 
+
+    [Fact]
+    public void TheChatGateIsOffOnAFreshProfileAndSurvivesOtherWrites()
+    {
+        // Off by default with no settings file at all - the shipped behaviour
+        // must not depend on a key being present.
+        var root = MakeTempDirectory();
+        try
+        {
+            var path = Path.Combine(root, "desktop-settings.json");
+            var store = new OverlaySettingsStore(path);
+            Assert.False(store.Read().ChatGateEnabled);
+
+            // Opt in by hand, the way the escape hatch is documented...
+            var settings = store.Read();
+            settings.ChatGateEnabled = true;
+            store.Save(settings);
+            Assert.True(store.Read().ChatGateEnabled);
+
+            // ...and it must survive a write of a COMPLETELY unrelated setting.
+            // Save() clones before it writes, so a field missing from
+            // CloneSettings is silently reset by the next lane change - which
+            // is a data-loss bug that no test of the field on its own catches.
+            store.SetLaneOverride("mid");
+            store.SetOverlayVisible(false);
+            store.SaveCalibration(new DisplayResolution(1920, 1080), new CalibrationGeometry(910, 940, 52, 73));
+            Assert.True(store.Read().ChatGateEnabled);
+
+            // And it must survive a reload from disk, not just the cache.
+            Assert.True(new OverlaySettingsStore(path).Read().ChatGateEnabled);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static string MakeTempDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), "CoachBuild-SettingsTests", Guid.NewGuid().ToString("N"));

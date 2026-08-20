@@ -64,7 +64,7 @@ public sealed class ShopKeyWatcher : IDisposable
     /// </summary>
     private readonly Func<TimeSpan> _uptime;
 
-    private readonly ShopVisibilityLatch _latch = new();
+    private readonly ShopVisibilityLatch _latch;
     private readonly object _gate = new();
 
     // A SECOND lock, held only across sample-and-observe.
@@ -80,12 +80,20 @@ public sealed class ShopKeyWatcher : IDisposable
     private bool _inGame;
     private bool _disposed;
 
+    /// <param name="chatGateEnabled">
+    /// Whether a shop-key press may be swallowed because League's chat input
+    /// looks focused. Positional and required, not an optional trailing flag:
+    /// the shipped default is OFF, and an optional one would let every fixture
+    /// keep testing the configuration nobody runs.
+    /// </param>
     public ShopKeyWatcher(
         ResolvedShopBinds binds,
+        bool chatGateEnabled,
         Func<uint, bool>? isKeyDown = null,
         Func<bool>? leagueIsForeground = null,
         Func<TimeSpan>? uptime = null)
     {
+        _latch = new ShopVisibilityLatch(chatGateEnabled);
         _binds = binds ?? throw new ArgumentNullException(nameof(binds));
         _isKeyDown = isKeyDown ?? IsKeyDownNative;
         _leagueIsForeground = leagueIsForeground ?? (() => false);
@@ -209,12 +217,14 @@ public sealed class ShopKeyWatcher : IDisposable
         ShopLatchState state;
         int toggles;
         int suppressed;
+        int bypassed;
         lock (_tickGate)
         {
             try { state = _latch.Observe(Sample(inGame)); }
             catch { return; }
             toggles = _latch.Toggles;
             suppressed = _latch.SuppressedByChat;
+            bypassed = _latch.ChatGateBypassed;
         }
 
         // A suppressed edge is reported even though the verdict did not change.
@@ -238,9 +248,20 @@ public sealed class ShopKeyWatcher : IDisposable
         }
 
         if (!state.Changed) return;
+
+        // THE HONOURED-PRESS LINE, and it is the one this feature is read
+        // through. A press that WORKS always changes the verdict, so it always
+        // lands here - but until 1.0.18 it said nothing about the gate, so a
+        // log full of nothing was equally consistent with "the gate ate them
+        // all" and "the watcher never saw the key". The gate's state is on
+        // every line now, and so is the count of presses honoured while chat
+        // looked open, which is the number that says whether the gate would
+        // have been right.
         Diagnostics?.Invoke(
             $"shop: {(state.Open ? "open" : "closed")} ({state.Reason};"
-            + $" {toggles} toggle(s), {suppressed} ignored while chatting)");
+            + $" {toggles} toggle(s), {suppressed} ignored while chatting,"
+            + $" {bypassed} honoured while chat looked open,"
+            + $" chat gate {(_latch.ChatGateEnabled ? "on" : "off")})");
         ShopVisibilityChanged?.Invoke(state);
     }
 

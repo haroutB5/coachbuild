@@ -3,7 +3,13 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Version,
     [string]$GitHubToken = $env:GITHUB_TOKEN,
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\artifacts'),
+    # Deliberately NOT defaulted here. Under Windows PowerShell 5.1 $PSScriptRoot
+    # is EMPTY inside a param() block default, so `Join-Path $PSScriptRoot ...`
+    # throws before the script does anything ("Cannot bind argument to parameter
+    # 'Path' because it is an empty string") — hit for real cutting 1.0.17 on a
+    # machine with no pwsh 7. The default is resolved in the body instead, exactly
+    # as package.ps1 already does for the same parameter.
+    [string]$OutputDirectory,
     [string]$Vpk = 'vpk',
     # Leave the GitHub release as a draft. Drafts are never served as `latest`,
     # so the in-app Velopack updater will not see the release until a human
@@ -12,6 +18,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    $OutputDirectory = Join-Path $PSScriptRoot '..\artifacts'
+}
 $packageScript = Join-Path $PSScriptRoot 'package.ps1'
 & $packageScript -Version $Version -OutputDirectory $OutputDirectory -Vpk $Vpk
 if ($LASTEXITCODE -ne 0) { throw "Packaging failed with exit code $LASTEXITCODE" }

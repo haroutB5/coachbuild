@@ -1,5 +1,125 @@
 # Changelog
 
+## Desktop 1.0.18 — 2026-08-20 — the key always works, and the numbers always go away
+
+The win-rate pills have now been **seen drawing in a real game**. A screenshot from the
+user's gaming PC shows four of them in a row — `+0.38` and `+0.24` green, `-0.26` and
+`-0.29` red — correctly styled, on League's own window. Everything this feature was built
+to do, it does: the renderer, the item-row geometry, that display's calibration, the
+web→desktop payload, the champion match and the colour rules are all proven good in the
+field.
+
+What the same screenshot shows wrong is everything this release is about. **The shop was
+down and the pills were still up**, floating over open terrain. In the user's words: *"I
+see it but it should go when i press button again since shop is down."*
+
+So 1.0.18 makes two promises, and they are the whole release:
+
+**Your shop key works. Every time you press it.** The chat gate that swallowed presses in
+1.0.16 and 1.0.17 now defaults **off**. You know your shop character can turn up in a typed
+word, and you would rather the numbers pop once in a while than have the key go dead for a
+whole match. That is now the shipped behaviour.
+
+**The numbers go away.** Press the key again and they retract, whatever else you have
+touched — and if League closes the shop without your key ever being involved, they retract
+on their own.
+
+### The gate could not be argued with, and its escape hatch did not exist
+
+1.0.17 shipped a recovery for exactly this: press the key a second time, at least 600 ms
+after the first, and the app forgets its belief about chat and honours you. That recovery
+**never fired once in the whole observed game** — neither line it must emit appears anywhere
+in the log.
+
+It was not the arithmetic. Both `BelieveChatOpen` and `ForgetChatBelief` zeroed the
+suppression counter, so the rule did not mean *press it again*, it meant *press it again
+without chat opening or closing in between*. For a player who actually uses chat — and this
+one does, the belief flipped about fifteen times in eight minutes — that is **structurally
+unreachable**: of six swallowed presses, five were the only press inside their belief
+episode. The counter was scoped to the wrong lifetime. It is now scoped to the game, cleared
+only by an honoured press or by the match ending, and the test that asserted the old
+behaviour has been inverted on purpose with the reversal written into its body.
+
+That fix stands even with the gate off, because the gate is a setting rather than a
+deletion. It is still correct for the player it was built for — League's default shop bind
+is `P`, a letter that lands in typed words constantly — so it lives behind
+`"chatGateEnabled": true` in `settings.json`, named in the startup log line so it is
+discoverable from the file you already send. There is no tray item for it.
+
+### Two ways the pills got stranded, both fixed
+
+The chat gate was one of them: the latch is a toggle, so a swallowed press desyncs it from
+the real shop by exactly one. You press to close, League closes the shop, the press is
+eaten, and the latch still says open with the pills still drawn. Gate off removes that
+cause entirely.
+
+**The tray override was a one-way door.** `ReportBadgeReason` read
+`if (!_shopOpen && !_forceBadges)`, which means that with *Show item numbers now* ticked,
+the shop key could not put the badges away **at all**. 1.0.17's own advice was to use that
+tray item as the workaround for the chat gate — so the escape hatch contained the same
+"no recovery you can find from inside a fullscreen game" defect it was meant to escape. A
+press that closes the latch now clears the override too, and the tray tick follows it.
+
+**League closes the shop without any key edge** — you click its close button, or you walk
+out of range. Neither produces an edge, so the latch stayed open. This has been in the class
+comment since 1.0.16 and was invisible while the badges never drew, but walking away from
+the fountain is how every shop visit ends. An open verdict that nothing has affirmed for
+**90 s** is now dropped, with its own reason (`shop-latch-timed-out`) and its own counter
+(`LatchesTimedOut`). 90 s is deliberately generous and is the number least trusted here: a
+real shop visit is seconds, the cost of firing early is one press, and the counter exists
+precisely so the next log can tune it rather than a guess doing it now.
+
+### An honoured press now says so
+
+In both observed games the user had **zero** honoured shop presses. Six ignored, none
+honoured — a fact that took a proof-by-absence to establish, because only the suppressions
+were reported. Every honoured press now writes one transition line carrying the gate's own
+state and a bypass count:
+
+```
+shop: open (shop-key-honoured-chat-gate-off; 3 toggle(s), 0 ignored while chatting,
+            1 honoured while chat looked open, chat gate off)
+```
+
+One line answers all of: was the press seen, was it honoured, was the gate on, and would the
+old gate have eaten it. The belief itself now writes nothing while the gate is off — about
+fifty lines a game about a decision that is no longer being made, in a file trimmed at
+200 KB.
+
+### Nothing new is read
+
+No screen capture, no OCR, no memory reads, no new syscall — 1.0.16's policy call stands
+unchanged. Nothing is written to the League folder.
+
+### Unchanged
+
+1.0.9's updater gates, 1.0.10's game-start WebView2 teardown, 1.0.11's champion resolution,
+1.0.12's banked-point skill gate and 250 ms poll, 1.0.13's `Ctrl+Shift+A`-only binding,
+1.0.14's derived tray label and `Open log folder`, 1.0.15's web-version reload and 480 ms
+apply path, 1.0.16's shop detection, calibration and badge drawing, and 1.0.17's
+Enter/`Shift+Enter` unification and 30 s belief expiry — both still live, and still doing
+their job whenever the gate is switched back on.
+
+### Verification
+
+`dotnet test CoachBuild.Desktop.sln` — **533 passed / 0 failed** (223 Core + 310 Desktop),
+stable across 22 consecutive full runs. The baseline before this change was 517.
+
+Green tests prove nothing on their own, so all ten new guarantees were removed in turn and
+the right tests confirmed dead — reinstating the gate kills seven, reinstating the 1.0.17
+per-belief counter kills the override test, removing the 90 s backstop kills two, removing
+the override-clearing kills one, and clearing it on *open* as well as close kills its
+negative control. Two tests carry the field evidence directly rather than a paraphrase: the
+whole second game replayed from the log to the millisecond, all 26 events, and twenty presses
+with a chat message between every pair asserting the show/hide toggle never slips.
+
+### Known, and stated rather than buried
+
+`BadgeRetractionTests.Opening_the_shop_never_clears_the_manual_override` failed once, in one
+full run, in a harness with a documented one-off flake of the same shape. Its assertion is
+not reachable by the code under test, two throwing teardown paths were made non-fatal, and
+it has passed every run since — but it was not reproduced, so it is not being called fixed.
+
 ## Desktop 1.0.17 — 2026-08-19 — the numbers were never broken, they were being swallowed
 
 1.0.16 shipped the win-rate numbers on the shop overlay. The first live game they

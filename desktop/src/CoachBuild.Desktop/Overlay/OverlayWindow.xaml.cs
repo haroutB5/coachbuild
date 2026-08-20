@@ -197,9 +197,39 @@ public partial class OverlayWindow : Window
 
         if (_shopOpen == open) return;
         _shopOpen = open;
-        if (_adjusting) return;
-        RenderCurrentState();
+
+        // 1.0.18: a press that CLOSES the latch means "put them away", and it
+        // has to beat the manual override too.
+        //
+        // Until now it did not. "Show item numbers now" draws the badges
+        // regardless of the latch, so a player who used it - and round 1 told
+        // this player to use it, as the workaround for the chat gate - had no
+        // way to put the numbers back down from inside a fullscreen game. They
+        // sat over open terrain until the match ended, and the only control was
+        // a tray tick they could not reach. That is the same "no recovery you
+        // can find from in-game" defect the chat gate had, in the very feature
+        // that was meant to be its escape hatch.
+        var droppedOverride = false;
+        if (!open && _forceBadges)
+        {
+            _forceBadges = false;
+            droppedOverride = true;
+        }
+
+        if (!_adjusting) RenderCurrentState();
+
+        // AFTER the render, and outside the adjusting early-out: the tray's tick
+        // must follow the overlay even while the player is mid-calibration, or
+        // the menu claims an override that is no longer in force.
+        if (droppedOverride) ManualBadgeOverrideCleared?.Invoke();
     }
+
+    /// <summary>
+    /// Raised when the overlay drops "Show item numbers now" by itself, so the
+    /// tray's tick can follow. The overlay owns the decision because the
+    /// overlay owns the flag; the tray only mirrors it.
+    /// </summary>
+    public event Action? ManualBadgeOverrideCleared;
 
     /// <summary>
     /// The manual override: show the numbers regardless of what the shop latch

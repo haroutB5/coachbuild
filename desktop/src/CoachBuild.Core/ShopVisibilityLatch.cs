@@ -103,7 +103,8 @@ public readonly record struct ShopLatchState(
 /// pressed in any other application can never reach the latch;</item>
 /// <item>the Escape bind closes it, because Escape closes the shop in game;</item>
 /// <item>while League's chat input is believed open, the shop key is ignored —
-/// see below.</item>
+/// see below. <b>Off unless asked for since 1.0.18</b>; the other three are
+/// unconditional.</item>
 /// </list>
 ///
 /// <para><b>Why the chat gate exists.</b> The player this was built for toggles
@@ -179,16 +180,59 @@ public readonly record struct ShopLatchState(
 /// whole game. The gate keeps doing its one job — the FIRST typed shop
 /// character is still swallowed, which is the case it was built for.</para>
 ///
-/// <para><b>Residual, stated plainly:</b> closing the shop by clicking its own
-/// close button, or by walking out of range, produces no key edge and leaves
-/// the latch open until the next press. Nothing here can see that, and nothing
-/// here pretends to.</para>
+/// <para><b>Residual, stated plainly, and now BOUNDED:</b> closing the shop by
+/// clicking its own close button, or by walking out of range, produces no key
+/// edge. Nothing here can see that and nothing here pretends to — but 1.0.18
+/// stops it lasting forever. The first field screenshot of this feature
+/// working showed the badges drawn correctly over open terrain with the shop
+/// shut, so the residual is not theoretical and it is not rare: walking away
+/// from the fountain is what every shop visit ends with. An open verdict that
+/// nothing has affirmed for <see cref="OpenLatchTimeout"/> is dropped, and says
+/// so in the log. The player's own press is still the fast path.</para>
+///
+/// <para><b>1.0.18: the gate is OFF by default, and this is a decision about
+/// one player, not a discovery about the code.</b> A second game, played on
+/// 1.0.17 with the self-healing above, swallowed six more presses and honoured
+/// none — the log is <c>_evidence/gaming-pc-companion-2026-08-19-1017.log</c>.
+/// The player's instruction after reading it was that the shop key must show
+/// the numbers EVERY time it is pressed, no gate and no exceptions; they know
+/// their shop character can appear in a typed message and they want the press
+/// honoured anyway. So <see cref="ChatGateEnabled"/> now has to be asked for.
+/// With it off the belief is still tracked — it costs one
+/// <c>GetAsyncKeyState</c> and it is what puts "chat gate off" and
+/// <see cref="ChatGateBypassed"/> on the honoured-press line, which is the only
+/// way a future log can say whether the gate would have been right — but it
+/// never swallows anything, and it writes no lines of its own.</para>
+///
+/// <para>The gate is kept rather than deleted because it is CORRECT for the
+/// player it was built for, which is not this one: League's default shop bind
+/// is <c>P</c>, a letter that lands in typed words constantly, and for that
+/// player an ungated latch pops the overlay mid-sentence. The measurement, the
+/// state machine and its tests are the record of that; a bool is four lines and
+/// deleting them would make re-enabling a rewrite.</para>
 ///
 /// <para>Pure and edge-driven so the whole state machine is testable without a
 /// keyboard, a game, or an unlocked workstation.</para>
 /// </summary>
 public sealed class ShopVisibilityLatch
 {
+    private readonly bool _chatGateEnabled;
+
+    /// <param name="chatGateEnabled">
+    /// Whether a shop-key edge may be SWALLOWED because League's chat input is
+    /// believed to have focus. Required rather than defaulted, deliberately:
+    /// the product default is OFF and a test fixture that could quietly supply
+    /// ON would leave the shipped configuration uncovered while every suite
+    /// stayed green.
+    /// </param>
+    public ShopVisibilityLatch(bool chatGateEnabled)
+    {
+        _chatGateEnabled = chatGateEnabled;
+    }
+
+    /// <summary>Whether the chat gate may swallow a shop-key edge at all.</summary>
+    public bool ChatGateEnabled => _chatGateEnabled;
+
     public const string ReasonNotInGame = "not-in-game";
     public const string ReasonLeagueNotForeground = "league-not-foreground";
     public const string ReasonShopKey = "shop-key";
@@ -201,6 +245,22 @@ public sealed class ShopVisibilityLatch
     /// so the log can say the gate was overridden rather than never engaged.
     /// </summary>
     public const string ReasonChatOverridden = "shop-key-insisted-past-chat";
+
+    /// <summary>
+    /// A shop-key edge honoured while chat WAS believed open, because the gate
+    /// is switched off. It is a distinct reason so that a log can answer, per
+    /// press, the question the 1.0.17 incident could not: would the old gate
+    /// have swallowed this one? Every occurrence is a press the player wanted
+    /// and 1.0.17 would have eaten.
+    /// </summary>
+    public const string ReasonChatGateOff = "shop-key-honoured-chat-gate-off";
+
+    /// <summary>
+    /// The latch dropped an open verdict that nothing had affirmed for
+    /// <see cref="OpenLatchTimeout"/>. Its own reason so a log can tell a
+    /// backstop firing from a player pressing their key.
+    /// </summary>
+    public const string ReasonOpenTimedOut = "shop-latch-timed-out";
 
     public const string ReasonIdle = "closed";
 
@@ -226,8 +286,45 @@ public sealed class ShopVisibilityLatch
     /// 19.3 s after the first, so the second qualifies nothing and the third
     /// recovers — which is the intended shape: a fumbled double-tap does not
     /// override the gate, a deliberate second attempt does.</para>
+    ///
+    /// <para><b>1.0.18: measured against the SECOND log, insistence is counted
+    /// per GAME and not per belief.</b> In 1.0.17 the episode was zeroed by
+    /// every belief transition, because <c>BelieveChatOpen</c> and
+    /// <c>ForgetChatBelief</c> both cleared the counter. That made the override
+    /// unreachable for any player whose chat opens and closes between presses,
+    /// which is every player who actually uses chat: in the 1.0.17 log the
+    /// belief flipped roughly fifteen times in eight minutes and five of the
+    /// six suppressed presses were alone inside their belief episode, so
+    /// "press it again" had nothing to count against. The counter now survives
+    /// belief transitions and is cleared only by an HONOURED press and by the
+    /// end of the game — the two events that mean the player got what they
+    /// asked for.</para>
     /// </summary>
     public static readonly TimeSpan InsistGap = TimeSpan.FromMilliseconds(600);
+
+    /// <summary>
+    /// How long the latch may claim the shop is open with nothing affirming it.
+    ///
+    /// <para><b>This bounds the residual the class comment has always admitted
+    /// to, and 1.0.18 is the first release in which that residual is VISIBLE.</b>
+    /// A screenshot from the player's gaming PC shows the badges drawing
+    /// correctly — four pills, right colours, right styling, on League's own
+    /// window — over open terrain with the shop shut. League closes the shop
+    /// when you click its close button and when you walk out of range, and
+    /// NEITHER produces a key edge, so the latch stays open and the pills stay
+    /// up. Walking away from the fountain is not an edge case; it is what
+    /// happens every single time somebody shops.</para>
+    ///
+    /// <para>90 s, and deliberately generous. It is a BACKSTOP against pills
+    /// stranded over gameplay for the rest of a match, not an attempt to track
+    /// the shop: a real visit is seconds, and the cost of firing too early is
+    /// one press to bring the numbers back, against a whole match of clutter if
+    /// it never fires at all. It is logged with its own reason, so the next log
+    /// says whether it ever fired while the player was really shopping — which
+    /// is the evidence needed to tune it, and the reason it is not tuned
+    /// tighter now.</para>
+    /// </summary>
+    public static readonly TimeSpan OpenLatchTimeout = TimeSpan.FromSeconds(90);
 
     private bool _open;
     private bool _chatOpen;
@@ -239,8 +336,15 @@ public sealed class ShopVisibilityLatch
     /// <summary>When the current chat belief was last affirmed by a chat edge.</summary>
     private TimeSpan _chatSince;
 
-    /// <summary>Suppressed shop-key edges within the CURRENT belief episode, and when the first landed.</summary>
-    private int _suppressedThisBelief;
+    /// <summary>When the shop-key edge that opened the latch landed.</summary>
+    private TimeSpan _openSince;
+
+    /// <summary>
+    /// Suppressed shop-key edges since the last HONOURED one, and when the
+    /// first of them landed. Deliberately NOT per belief episode — see
+    /// <see cref="InsistGap"/>.
+    /// </summary>
+    private int _suppressedSincePress;
     private TimeSpan _firstSuppressedAt;
 
     public bool IsOpen => _open;
@@ -276,6 +380,24 @@ public sealed class ShopVisibilityLatch
     public int ChatBeliefsExpired { get; private set; }
 
     /// <summary>
+    /// How many shop-key edges were honoured this game while chat WAS believed
+    /// open, because the gate is off. This is the number that says whether the
+    /// gate would have been earning its keep: a game full of these where the
+    /// player also reports the numbers behaving is a game in which the gate
+    /// would have been wrong every time.
+    /// </summary>
+    public int ChatGateBypassed { get; private set; }
+
+    /// <summary>
+    /// How many times an open verdict was dropped for going stale this game.
+    /// Every one is a shop that closed without a key edge — or, if the player
+    /// says the numbers vanished while they were still shopping,
+    /// <see cref="OpenLatchTimeout"/> being too short. The counter is what
+    /// tells those two apart.
+    /// </summary>
+    public int LatchesTimedOut { get; private set; }
+
+    /// <summary>
     /// Forgets everything. Called when a game ends so the next game cannot
     /// inherit a latch — the same class of defect as the 1.0.11 highlight that
     /// outlived its match.
@@ -289,12 +411,15 @@ public sealed class ShopVisibilityLatch
         _previousChatDown = false;
         _reason = ReasonNotInGame;
         _chatSince = TimeSpan.Zero;
-        _suppressedThisBelief = 0;
+        _openSince = TimeSpan.Zero;
+        _suppressedSincePress = 0;
         _firstSuppressedAt = TimeSpan.Zero;
         Toggles = 0;
+        LatchesTimedOut = 0;
         SuppressedByChat = 0;
         ChatOverrides = 0;
         ChatBeliefsExpired = 0;
+        ChatGateBypassed = 0;
     }
 
     public ShopLatchState Observe(ShopObservation observation)
@@ -337,7 +462,7 @@ public sealed class ShopVisibilityLatch
             // Whatever was typed elsewhere, League's chat is not focused while
             // League is not the foreground window.
             var leftNote = ForgetChatBelief("chat: belief cleared (League is not the foreground window)");
-            return Settle(wasOpen, ReasonLeagueNotForeground, chatNote: leftNote);
+            return Settle(wasOpen, ReasonLeagueNotForeground, chatNote: GateNote(leftNote));
         }
 
         var shopEdge = observation.ShopKeyDown && !_previousShopDown;
@@ -400,12 +525,22 @@ public sealed class ShopVisibilityLatch
         if (shopEdge)
         {
             var insisted = false;
-            if (_chatOpen)
+            var bypassed = false;
+            if (_chatOpen && !_chatGateEnabled)
             {
-                // The player has already had one press swallowed in this
-                // episode and has pressed again, slowly enough that it cannot
-                // be a repeated letter. Believe the player over the inference.
-                if (_suppressedThisBelief >= 1 && observation.At - _firstSuppressedAt >= InsistGap)
+                // The gate is off, so the belief is an observation and not a
+                // veto. Counted, because this is the only per-press evidence
+                // that says whether the gate would have been right.
+                bypassed = true;
+                ChatGateBypassed++;
+            }
+            else if (_chatOpen)
+            {
+                // The player has already had one press swallowed since their
+                // last honoured one and has pressed again, slowly enough that
+                // it cannot be a repeated letter. Believe the player over the
+                // inference.
+                if (_suppressedSincePress >= 1 && observation.At - _firstSuppressedAt >= InsistGap)
                 {
                     insisted = true;
                     ChatOverrides++;
@@ -417,19 +552,41 @@ public sealed class ShopVisibilityLatch
                 else
                 {
                     SuppressedByChat++;
-                    if (_suppressedThisBelief == 0) _firstSuppressedAt = observation.At;
-                    _suppressedThisBelief++;
+                    if (_suppressedSincePress == 0) _firstSuppressedAt = observation.At;
+                    _suppressedSincePress++;
                     suppressedNow = true;
                     reason = ReasonChatSuppressed;
                 }
             }
 
-            if (!_chatOpen)
+            if (!suppressedNow)
             {
                 _open = !_open;
+                _openSince = observation.At;
                 Toggles++;
-                reason = insisted ? ReasonChatOverridden : ReasonShopKey;
+
+                // An honoured press is the event that means the player got what
+                // they asked for, so it - and NOT the next belief transition -
+                // is what ends an insistence run. See InsistGap.
+                _suppressedSincePress = 0;
+                _firstSuppressedAt = TimeSpan.Zero;
+
+                reason = insisted ? ReasonChatOverridden
+                    : bypassed ? ReasonChatGateOff
+                    : ReasonShopKey;
             }
+        }
+
+        // Judged AFTER the edges, exactly like the chat belief above, so a fresh
+        // press always re-arms the latch rather than racing the expiry. This is
+        // the only thing standing between "League closed the shop without a key
+        // edge" and pills drawn over open terrain for the rest of the match -
+        // see OpenLatchTimeout.
+        if (_open && !shopEdge && observation.At - _openSince >= OpenLatchTimeout)
+        {
+            _open = false;
+            LatchesTimedOut++;
+            reason = ReasonOpenTimedOut;
         }
 
         // Once the game is running, League has the foreground and nothing is
@@ -441,21 +598,24 @@ public sealed class ShopVisibilityLatch
             reason = ReasonIdle;
         }
 
-        return Settle(wasOpen, reason, suppressedNow, chatNote);
+        return Settle(wasOpen, reason, suppressedNow, GateNote(chatNote));
     }
 
     /// <summary>
-    /// Starts (or re-affirms) a chat belief and opens a fresh suppression
-    /// episode, so insistence counts presses against THIS belief and not
-    /// against one three minutes ago.
+    /// The belief's own log lines exist to diagnose the GATE. With the gate off
+    /// they are ~50 lines a game about a decision that is no longer being made,
+    /// in a file that is trimmed at 200 KB, so they are dropped — the fact the
+    /// next incident needs, "was chat believed open when this press landed",
+    /// rides on the honoured-press line instead (<see cref="ReasonChatGateOff"/>).
     /// </summary>
+    private string? GateNote(string? note) => _chatGateEnabled ? note : null;
+
+    /// <summary>Starts (or re-affirms) a chat belief.</summary>
     private string? BelieveChatOpen(TimeSpan at, string note)
     {
         var wasOpen = _chatOpen;
         _chatOpen = true;
         _chatSince = at;
-        _suppressedThisBelief = 0;
-        _firstSuppressedAt = TimeSpan.Zero;
         return wasOpen ? null : note;
     }
 
@@ -468,8 +628,6 @@ public sealed class ShopVisibilityLatch
         var wasOpen = _chatOpen;
         _chatOpen = false;
         _chatSince = TimeSpan.Zero;
-        _suppressedThisBelief = 0;
-        _firstSuppressedAt = TimeSpan.Zero;
         return wasOpen ? note : null;
     }
 

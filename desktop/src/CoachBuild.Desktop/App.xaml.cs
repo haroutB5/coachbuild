@@ -278,6 +278,7 @@ public partial class App : WpfApplication
 
         _overlay = new OverlayWindow(settingsStore);
         _overlay.Diagnostics = message => _log?.Info(message);
+        _overlay.ManualBadgeOverrideCleared += OnManualBadgeOverrideCleared;
         _overlay.AdjustmentStateChanged += OnAdjustmentStateChanged;
         if (_services is ILiveOverlayPushSource push) push.OverlayStateChanged += OnLiveOverlayPush;
         if (_services is ILaneOverrideHostServices laneOverrideServices)
@@ -290,7 +291,7 @@ public partial class App : WpfApplication
         _overlay.Hide();
         _tray.Start(_trayState);
         StartHotkeys();
-        StartShopWatcher();
+        StartShopWatcher(settingsStore);
         _webViewEnvironment = new WebView2EnvironmentService(Paths.WebView2UserDataFolder);
         _ = ProbeWebView2AvailabilityAsync(_shutdown.Token);
         _updates = new VelopackUpdateService(
@@ -370,7 +371,7 @@ public partial class App : WpfApplication
     /// The reference machine's answer is <c>[`]</c>, not the League default
     /// <c>P</c>, which is precisely why nothing here is hardcoded.</para>
     /// </summary>
-    private void StartShopWatcher()
+    private void StartShopWatcher(OverlaySettingsStore settingsStore)
     {
         try
         {
@@ -378,8 +379,21 @@ public partial class App : WpfApplication
             var binds = ShopBindResolver.Resolve(configDirectory);
             foreach (var line in binds.LogLines) _log?.Info(line);
 
+            // OFF unless the settings file asks for it. The gate swallowed six
+            // presses across a whole game on 1.0.17 and honoured none, and the
+            // player's answer to that log was that the key must work every
+            // time. Logged either way, because "which way was it configured"
+            // is the first question any future report about this raises.
+            var chatGateEnabled = settingsStore.Read().ChatGateEnabled;
+            _log?.Info(chatGateEnabled
+                ? "shop: chat gate ON - your shop key is ignored while League's chat looks open"
+                  + " (set \"chatGateEnabled\": false in settings.json to have it always work)"
+                : "shop: chat gate OFF - your shop key always shows or hides the numbers, chat or no chat"
+                  + " (set \"chatGateEnabled\": true in settings.json to restore the old behaviour)");
+
             _shopWatcher = new ShopKeyWatcher(
                 binds,
+                chatGateEnabled,
                 leagueIsForeground: new LeagueForegroundProbe(new DeferredGameWindowLocator()).IsLeagueForeground)
             {
                 Diagnostics = message => _log?.Info(message),
@@ -394,6 +408,29 @@ public partial class App : WpfApplication
             _log?.Info($"shop: watcher could not start ({error.GetType().Name}); use the tray item to show the numbers");
             _shopWatcher = null;
         }
+    }
+
+    /// <summary>
+    /// The overlay dropped "Show item numbers now" because the player pressed
+    /// their shop key to put the badges away; the tray's tick follows it.
+    ///
+    /// <para>The overlay owns the decision, not this class, because the overlay
+    /// owns the flag that decides whether the pills draw. This only mirrors it
+    /// into the menu — a tick claiming an override that is no longer in force
+    /// is how a player ends up pressing a control that does nothing.</para>
+    /// </summary>
+    private void OnManualBadgeOverrideCleared()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(OnManualBadgeOverrideCleared);
+            return;
+        }
+
+        if (!_trayState.ForceItemNumbers) return;
+        _trayState = _trayState with { ForceItemNumbers = false };
+        _tray?.UpdateState(_trayState);
+        _log?.Info("badges: manual override cleared (you pressed your shop key)");
     }
 
     private void OnHotkeyPressed(HotkeyBinding binding)

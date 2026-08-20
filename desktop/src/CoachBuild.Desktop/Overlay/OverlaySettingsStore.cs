@@ -12,6 +12,23 @@ public sealed class OverlaySettings
     [JsonPropertyName("autostartConfigured")]
     public bool AutostartConfigured { get; set; }
 
+    /// <summary>
+    /// Whether a shop-key press may be IGNORED while League's chat input looks
+    /// focused. <b>Off by default</b>, and there is no menu item for it.
+    ///
+    /// <para>The gate exists for a player whose shop bind is a letter that
+    /// lands in typed words — League's default is <c>P</c> — and it is simply
+    /// wrong for a player whose bind is not. The one it was built for read two
+    /// games of <c>companion.log</c> and asked for their key to be honoured
+    /// every single time, so the default flipped. It stays reachable by hand
+    /// (<c>"chatGateEnabled": true</c> in this file) rather than being deleted,
+    /// because the behaviour is still correct for the other player; it stays
+    /// out of the tray because a visible control invites the flapping the
+    /// evidence has already settled.</para>
+    /// </summary>
+    [JsonPropertyName("chatGateEnabled")]
+    public bool ChatGateEnabled { get; set; }
+
     public Dictionary<string, PersistedCalibration> Calibrations { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
@@ -229,6 +246,10 @@ public sealed class OverlaySettingsStore
             LaneOverride = settings.LaneOverride,
             OverlayVisible = settings.OverlayVisible,
             AutostartConfigured = settings.AutostartConfigured,
+            // Every field has to be here: Save() clones before it writes, so a
+            // field missed in this method is silently reset to its default on
+            // the next write of ANY other setting.
+            ChatGateEnabled = settings.ChatGateEnabled,
             Calibrations = CloneMap(settings.Calibrations),
             ItemRowCalibrations = CloneMap(settings.ItemRowCalibrations),
         };
