@@ -33,7 +33,14 @@ namespace CoachBuild.Core;
 /// </summary>
 public sealed record ChampionKit(int MaxQ, int MaxW, int MaxE, int MaxR, int FreeR)
 {
-    /// <summary>5/5/5/3, nothing free. Correct for 166 of the 173 champions.</summary>
+    /// <summary>
+    /// Ability points in a game — one per level, and therefore also the number
+    /// of purchasable ranks a champion who wastes nothing must have. Mirrors
+    /// <c>TOTAL_LEVELS</c> in <c>lib/championKit.ts</c>.
+    /// </summary>
+    public const int TotalLevels = 18;
+
+    /// <summary>5/5/5/3, nothing free. Correct for 166 of the 173 champions on the current roster.</summary>
     public static ChampionKit Standard { get; } = new(5, 5, 5, 3, 0);
 
     private static readonly IReadOnlyDictionary<int, ChampionKit> Measured =
@@ -57,8 +64,29 @@ public sealed record ChampionKit(int MaxQ, int MaxW, int MaxE, int MaxR, int Fre
     public static ChampionKit For(int? championId) =>
         championId is { } id && Measured.TryGetValue(id, out var kit) ? kit : Standard;
 
+    /// <summary>
+    /// Every id this table measures, exposed for the drift guard in
+    /// <c>ChampionKitDriftTests</c> and for nothing else. The table is a
+    /// transcription of a CDN the tests can re-derive; without a way to read it
+    /// back, "is it still right?" is unanswerable in an offline suite.
+    /// </summary>
+    public static IReadOnlyDictionary<int, ChampionKit> MeasuredKits => Measured;
+
     /// <summary>True when this champion has a rank the game grants for free.</summary>
     public bool HasFreeRanks => FreeR > 0;
+
+    /// <summary>
+    /// Ranks that actually cost a skill point. Twin of <c>purchasableTotal</c>
+    /// in <c>lib/championKit.ts</c>.
+    ///
+    /// <para>A kit below <see cref="TotalLevels"/> here is not a curiosity, it
+    /// is unshippable: the web's <c>skillOrderModel.ts</c> refuses
+    /// <c>kit-not-derivable</c> for any such champion, so the desktop then logs
+    /// <c>no-skill-order</c> and the highlight never draws — the Jayce blank
+    /// overlay this whole file exists to prevent. Guarded in
+    /// <c>ChampionKitDriftTests</c>.</para>
+    /// </summary>
+    public int PurchasableTotal => MaxQ + MaxW + MaxE + (MaxR - FreeR);
 
     /// <summary>Q=0, W=1, E=2, R=3 — the order <c>LiveAbilityRanks</c> uses.</summary>
     public int MaxRankAt(int slot) => slot switch
