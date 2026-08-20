@@ -694,3 +694,279 @@ describe("OTP consensus for item sets", () => {
     expect(prosCall).toContain("limit=200");
   });
 });
+
+// ── "no data" vs "the query FAILED" (2026-08-20 Neon outage) ────────────────
+//
+// WHAT HAPPENED. The shared Neon Free-plan compute quota was exhausted at
+// 07:57 UTC by a scheduled walk running at an ~89% duty cycle. Neon started
+// answering 402; `/api/pros` and `/api/otp` caught the driver error and
+// answered 500; both resolvers here ended in `catch { return null }`;
+// `buildItemSets` reads `pro: null` as "this champion has no pro data and the
+// block should be omitted". Result: every export silently shipped without its
+// Pro and OTP blocks, and the only signal ANYWHERE in the system — no server
+// alert, no client log, nothing on the wire — was the user eventually
+// noticing two missing blocks in their in-game shop panel.
+//
+// These tests pin the distinction that was missing. The bar is not "does it
+// cope" (it always coped, that was the problem) — it is "can something
+// downstream TELL THE TWO CASES APART". Each test below therefore asserts
+// both halves: the failure is visible, AND the genuinely-empty case stays
+// quiet, because a diagnostic that fires on every unpopulated champion is
+// noise and would be tuned out within a day.
+describe("consensus failure is distinguishable from consensus absence", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** `jsonResponse` above models ok/not-ok but carries no status, and the
+   *  status is the whole point here — a reader has to be able to see 500
+   *  (our API's translation of Neon's 402) rather than a bare "it failed". */
+  function statusResponse(status: number) {
+    return { ok: false, status, json: async () => ({ error: "Internal server error" }) };
+  }
+
+  /** The exact outage: /api/pros and /api/otp both 500, item metadata (a
+   *  separate CDN, unaffected) still fine. */
+  function outageFetch() {
+    return vi.fn(async (url: string) => {
+      if (url.startsWith("/api/pros") || url.startsWith("/api/otp")) return statusResponse(500);
+      if (url.startsWith("https://cdn.coachless.gg")) return jsonResponse(ITEM_JSON_FIXTURE);
+      return jsonResponse({}, false);
+    });
+  }
+
+  it("THE BUG: a 500 from /api/pros resolves as a FAILURE, not as an empty sample", async () => {
+    vi.stubGlobal("fetch", outageFetch());
+    const { resolveProConsensus } = await import("../hextech/itemSetsApply");
+    const res = await resolveProConsensus(CHAMP, "bot", "16.13");
+    expect(res.data).toBeNull();
+    expect(res.failure).not.toBeNull();
+    expect(res.failure).toMatchObject({ source: "pro", kind: "http", status: 500 });
+    // The status must survive into the human-readable message too -- a reader
+    // staring at companion.log needs the number, not just "it failed".
+    expect(res.failure!.message).toContain("500");
+    expect(res.failure!.message).toContain("/api/pros");
+  });
+
+  it("THE OTHER HALF: a genuinely empty sample resolves with NO failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch([
+        ["/api/pros", { games: [] }],
+        ["https://cdn.coachless.gg", ITEM_JSON_FIXTURE],
+      ])
+    );
+    const { resolveProConsensus } = await import("../hextech/itemSetsApply");
+    const res = await resolveProConsensus(CHAMP, "bot", "16.13");
+    expect(res.data).toBeNull();
+    // Same `data: null` as the test above, DIFFERENT `failure`. That is the
+    // entire fix in one assertion.
+    expect(res.failure).toBeNull();
+  });
+
+  it("a sample that aggregates to nothing is absence, not failure", async () => {
+    // Every game carries only the allowlisted starter, which the support/
+    // starter partition carves out -- so items and boots both come back empty
+    // from a query that worked perfectly. Must not be reported as an outage.
+    vi.stubGlobal(
+      "fetch",
+      routedFetch([
+        ["/api/pros", { games: [PRO_GAME(1054), PRO_GAME(1054)] }],
+        ["https://cdn.coachless.gg", { type: "item", version: "16.13.1", data: {} }],
+      ])
+    );
+    const { resolveProConsensus } = await import("../hextech/itemSetsApply");
+    const res = await resolveProConsensus(CHAMP, "bot", "16.13");
+    expect(res.data).toBeNull();
+    expect(res.failure).toBeNull();
+  });
+
+  it("a thrown fetch classifies as `network`, not `http` — offline is not an outage", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      })
+    );
+    const { resolveOtpConsensus } = await import("../hextech/itemSetsApply");
+    const res = await resolveOtpConsensus(CHAMP, "bot", "16.13");
+    expect(res.data).toBeNull();
+    expect(res.failure).toMatchObject({ source: "otp", kind: "network" });
+    expect(res.failure!.status).toBeUndefined();
+    expect(res.failure!.message).toContain("Failed to fetch");
+  });
+
+  it("the OTP path is failure-aware too — the outage took BOTH blocks", async () => {
+    vi.stubGlobal("fetch", outageFetch());
+    const { resolveOtpConsensus } = await import("../hextech/itemSetsApply");
+    const res = await resolveOtpConsensus(CHAMP, "bot", "16.13");
+    expect(res.failure).toMatchObject({ source: "otp", kind: "http", status: 500 });
+    expect(res.failure!.message).toContain("/api/otp");
+  });
+
+  it("warns to the console on failure, and says WHICH BLOCK the user lost", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("fetch", outageFetch());
+    const { resolveProConsensus } = await import("../hextech/itemSetsApply");
+    await resolveProConsensus(CHAMP, "bot", "16.13");
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0][0]);
+    // Naming the BLOCK, not just the endpoint, is what connects the user's
+    // report ("my Pro build block is gone") to the cause ("/api/pros 500").
+    expect(line).toContain("Pro build");
+    expect(line).toContain("500");
+    // And it must say, in words, that this is not an empty champion.
+    expect(line).toMatch(/FAILED/);
+  });
+
+  it("stays SILENT for a champion that genuinely has no data", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      routedFetch([
+        ["/api/pros", { games: [] }],
+        ["https://cdn.coachless.gg", ITEM_JSON_FIXTURE],
+      ])
+    );
+    const { resolveProConsensus } = await import("../hextech/itemSetsApply");
+    await resolveProConsensus(CHAMP, "bot", "16.13");
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("records the failure in the /live-setup ring buffer, classified by status", async () => {
+    // The channel the user can actually reach from the machine they play on,
+    // with no PowerShell and no log files -- the constraint that made the
+    // v0.43.0 companion failures so hard to diagnose.
+    //
+    // Stub `window`, not `localStorage`: companionClient's safeLocalStorage
+    // gates on `typeof window === "undefined"` FIRST (it is imported by
+    // server-rendered code and must no-op there), so a bare localStorage stub
+    // is never even consulted in this node-env harness. Which is itself worth
+    // stating: this channel is browser-only by design, and `console.warn` is
+    // the one that fires unconditionally.
+    const store = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => void store.set(k, v),
+        removeItem: (k: string) => void store.delete(k),
+      },
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("fetch", outageFetch());
+    const { resolveProConsensus } = await import("../hextech/itemSetsApply");
+    await resolveProConsensus(CHAMP, "bot", "16.13");
+    const entries = JSON.parse(store.get("coachbuild:companion:lastErrors:v1") ?? "[]");
+    expect(entries).toHaveLength(1);
+    expect(entries[0].kind).toBe("pro-consensus-http-500");
+    expect(entries[0].detail).toContain("Pro build");
+  });
+
+  it("BACK-COMPAT: the old `...ForSets` wrappers still return null on failure", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("fetch", outageFetch());
+    const { resolveProConsensusForSets, resolveOtpConsensusForSets } = await import("../hextech/itemSetsApply");
+    expect(await resolveProConsensusForSets(CHAMP, "bot", "16.13")).toBeNull();
+    expect(await resolveOtpConsensusForSets(CHAMP, "bot", "16.13")).toBeNull();
+  });
+});
+
+// ── The signal crosses the wire (so it can reach companion.log) ────────────
+describe("applyItemSetsForBuild — outage diagnostics on the apply body", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function bridgeFetch(consensusStatus: number | null, captured: { body?: string }) {
+    return vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith("/api/pros") || url.startsWith("/api/otp")) {
+        return consensusStatus === null
+          ? jsonResponse({ games: [PRO_GAME(3031), PRO_GAME(3031)] })
+          : { ok: false, status: consensusStatus, json: async () => ({ error: "Internal server error" }) };
+      }
+      if (url.startsWith("https://cdn.coachless.gg")) return jsonResponse(ITEM_JSON_FIXTURE);
+      if (url.includes("/apply-itemsets")) {
+        captured.body = init?.body as string;
+        return jsonResponse({ ok: true, count: 1 });
+      }
+      return jsonResponse({}, false);
+    });
+  }
+
+  const APPLY_ARGS = {
+    champ: CHAMP,
+    lane: "bot" as const,
+    roleLabel: "Bot",
+    port: 48291 as const,
+    session: "sess-diag",
+  };
+
+  it("POSTs a `diagnostics` line per block lost to a failed query", async () => {
+    const captured: { body?: string } = {};
+    vi.stubGlobal("fetch", bridgeFetch(500, captured));
+    const { applyItemSetsForBuild } = await import("../hextech/itemSetsApply");
+    await applyItemSetsForBuild({ ...APPLY_ARGS, build: baseBuild() });
+    const parsed = JSON.parse(captured.body!);
+    // Both consensus queries 500'd, so both blocks are missing for a reason
+    // the bridge can now write to companion.log verbatim.
+    expect(parsed.diagnostics).toHaveLength(2);
+    expect(parsed.diagnostics.join("\n")).toContain("Pro build");
+    expect(parsed.diagnostics.join("\n")).toContain("OTP build");
+    expect(parsed.diagnostics.join("\n")).toContain("500");
+  });
+
+  it("omits the `diagnostics` KEY entirely when nothing failed", async () => {
+    const captured: { body?: string } = {};
+    vi.stubGlobal("fetch", bridgeFetch(null, captured));
+    const { applyItemSetsForBuild } = await import("../hextech/itemSetsApply");
+    await applyItemSetsForBuild({ ...APPLY_ARGS, build: baseBuild() });
+    const parsed = JSON.parse(captured.body!);
+    // Structural absence, same convention as `situational`: the happy path
+    // must put NO new key on the wire, so an older bridge sees byte-identical
+    // bodies to the ones it has always received.
+    expect("diagnostics" in parsed).toBe(false);
+  });
+
+  it("GRACEFUL: the export still succeeds during a full consensus outage", async () => {
+    // The non-negotiable half. Diagnosability must not have been bought by
+    // making an outage fail the apply -- the user still gets their WPA and
+    // Situational blocks, they just also get told why the other two are gone.
+    const captured: { body?: string } = {};
+    vi.stubGlobal("fetch", bridgeFetch(500, captured));
+    const { applyItemSetsForBuild } = await import("../hextech/itemSetsApply");
+    const result = await applyItemSetsForBuild({ ...APPLY_ARGS, build: baseBuild() });
+    expect(result).toEqual({ ok: true, count: 1 });
+    const parsed = JSON.parse(captured.body!);
+    expect(parsed.sets).toHaveLength(1);
+    expect(parsed.championId).toBe(222);
+  });
+
+  it("a caller-supplied OTP line is not re-fetched and reports no OTP failure", async () => {
+    const captured: { body?: string } = {};
+    vi.stubGlobal("fetch", bridgeFetch(500, captured));
+    const { applyItemSetsForBuild } = await import("../hextech/itemSetsApply");
+    await applyItemSetsForBuild({
+      ...APPLY_ARGS,
+      build: baseBuild(),
+      otp: { items: [{ itemId: 3031, share: 1 }], boots: [] },
+    });
+    const parsed = JSON.parse(captured.body!);
+    // Only the pro query ran and failed. The card that handed us `otp` did its
+    // own error handling, so inventing a second diagnostic for it would be a
+    // lie about which query failed.
+    expect(parsed.diagnostics).toHaveLength(1);
+    expect(parsed.diagnostics[0]).toContain("Pro build");
+    expect(parsed.diagnostics[0]).not.toContain("OTP build");
+  });
+});

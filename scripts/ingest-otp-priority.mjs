@@ -179,7 +179,14 @@ const DRY_RUN = hasFlag("--dry-run");
 const ONCE = hasFlag("--once");
 const FLEET = hasFlag("--fleet");
 const VERBOSE = hasFlag("--verbose") || Boolean(process.stdout.isTTY);
-const MAX_HOURS = Number(argValue("--max-hours", "12")) || 12;
+// 1, not 12 (changed 2026-08-20). Neon bills compute as wall-clock ACTIVE
+// seconds and this walk queries continuously, so this number multiplied by the
+// trigger frequency IS the monthly bill. A 12-hour walk on an hourly trigger is
+// a ~89% duty cycle, which exhausted the shared Free-plan 100 CU-hour quota 19
+// days into the August 2026 period and took the shop panel's Pro/OTP blocks
+// with it. See scripts/ingest-otp-priority.ps1's "DUTY CYCLE IS A NEON BILL"
+// header section before raising it.
+const MAX_HOURS = Number(argValue("--max-hours", "1")) || 1;
 
 // ── Logging ─────────────────────────────────────────────────────────────────
 

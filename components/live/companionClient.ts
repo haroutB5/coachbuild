@@ -921,7 +921,19 @@ export async function applyRunes(
  *      rule, because neither adapter is reachable from vitest.
  *    - a NEWER bridge against an older web simply receives no field. There is
  *      deliberately NO version gate here: adding one would make a decorative
- *      field capable of failing an apply, which is the thing it must not be. */
+ *      field capable of failing an apply, which is the thing it must not be.
+ *
+ *  `diagnostics` (2026-08-20) — OPTIONAL, INERT, absent when empty, skipped by
+ *  an older bridge for exactly the same reasons as `situational`. It carries
+ *  one already-formatted line per consensus block this export had to DROP
+ *  BECAUSE THE QUERY FAILED, as opposed to dropped because the champion
+ *  genuinely has no data (see itemSetsApply.ts's `ConsensusResolution`). It
+ *  exists because those two cases were indistinguishable everywhere in the
+ *  system on 2026-08-20, so an exhausted Neon compute quota presented as "some
+ *  champions lost their Pro and OTP blocks" with no error in any log, on
+ *  either side of the wire, for nine hours. A bridge that reads it should
+ *  write each line to companion.log and do nothing else with it — it must
+ *  never influence, delay or fail the write. */
 export async function applyItemSets(
   port: CompanionPort,
   session: string,
@@ -930,6 +942,7 @@ export async function applyItemSets(
     sets: unknown[];
     replacePrefix?: string;
     situational?: { id: number; wpa: number; text: string }[];
+    diagnostics?: string[];
   },
   deps: CompanionClientDeps = {}
 ): Promise<ApplyItemSetsResult> {

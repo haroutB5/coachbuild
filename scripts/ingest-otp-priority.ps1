@@ -27,11 +27,12 @@
 #
 # So the trigger is chosen for RESTART, not for isolation:
 #
-#   * hourly, starting 00:10 — off the :20 that both existing Riot jobs fire on,
-#     purely so a restart tick does not land in the same second as a slot start;
-#   * the walk exits cleanly at --max-hours, and the next hourly tick brings it
-#     back. A crash, a reboot or an aborted run therefore self-heals within an
-#     hour with no watchdog;
+#   * every 6 hours, starting 00:10 — so 00:10 / 06:10 / 12:10 / 18:10, off the
+#     :20 that both existing Riot jobs fire on, purely so a restart tick does
+#     not land in the same second as a slot start;
+#   * the walk exits cleanly at --max-hours, and the next 6-hourly tick brings
+#     it back. A crash, a reboot or an aborted run therefore self-heals within
+#     six hours with no watchdog;
 #   * a second copy must never start. TWO layers, because the obvious one is not
 #     enough:
 #       1. Task Scheduler's multiple-instance policy. schtasks-created tasks are
@@ -55,12 +56,45 @@
 # only way to spend them is across the ~10 hours a day the key is otherwise
 # idle, in pieces, around jobs whose runtimes span 23-115 minutes.
 #
+# ── DUTY CYCLE IS A NEON BILL. DO NOT RAISE IT WITHOUT DOING THE ARITHMETIC ─
+# Corrected 2026-08-20 after this job exhausted the shared Neon Free-plan
+# compute quota and took the shop panel's Pro and OTP blocks down with it.
+#
+# Neon bills COMPUTE AS WALL-CLOCK ACTIVE SECONDS, not per query. This walk
+# issues ~45-75 statements a minute continuously, so for as long as it runs the
+# compute never gets to autosuspend (which on Free is fixed at 5 min idle and
+# cannot be changed). Duty cycle IS the bill. Query optimisation is worth
+# almost nothing here; the trigger interval is worth everything.
+#
+#   trigger x --max-hours   duty      CU-hours/month @0.25 CU   verdict
+#   1h  x 12h               ~89%      ~160                      BLEW the 100 quota
+#                                                               on 2026-08-20 at
+#                                                               07:57 UTC, 19 days
+#                                                               into the period
+#   6h  x  1h               ~17%      ~30                       CURRENT. Chosen by
+#                                                               the user: four
+#                                                               refreshes a day,
+#                                                               3.3x headroom
+#   24h x  1h                ~4%      ~7                        maximum headroom,
+#                                                               slowest coverage
+#
+# The quota is 100 CU-hours per Neon PROJECT per month and this project is
+# SHARED with matchday. The walk is resumable by design, so a shorter budget
+# does not lose work — it only slows how fast coverage deepens.
+#
+# Before changing either number, read HANDOFF-marco-neon-usage.md, then
+# recompute: (24 / trigger_hours) * max_hours * 30 * 0.25 must stay well under
+# 100. Anything at or above a ~30% duty cycle will exhaust the quota again.
+#
 # ── EXECUTION TIME LIMIT ────────────────────────────────────────────────────
-# The walk bounds ITSELF with --max-hours (default 12) and exits cleanly. Task
+# The walk bounds ITSELF with --max-hours (default 1) and exits cleanly. Task
 # Scheduler's own ExecutionTimeLimit is a backstop, not the mechanism — a kill
 # is safe here (every match is persisted the moment it is fetched, ON CONFLICT
 # DO NOTHING, so a kill loses at most one in-flight match and duplicates
-# nothing) but it produces no summary line in the log. Set it above --max-hours.
+# nothing) but it produces no summary line in the log. Set it above --max-hours
+# but WELL below the trigger interval, so a wedged run can never bridge two
+# slots and quietly restore the old ~100% duty cycle. Currently PT2H against a
+# 6-hour trigger and a 1-hour walk.
 #
 # ── LOGS: TWO FILES, ON PURPOSE ─────────────────────────────────────────────
 #   otp-priority.log       — owned and written by the NODE process, UTF-8,
@@ -78,21 +112,30 @@
 # headers warn about (PS 5.1's bare *>> writes UTF-16LE while Add-Content writes
 # ANSI). One owner per file, one encoding per file.
 #
-# ── REGISTER IT (after reviewing the yield logic) ───────────────────────────
+# ── REGISTER IT ─────────────────────────────────────────────────────────────
 #
-#   schtasks /create /tn CoachBuildOtpPriority /sc HOURLY /mo 1 /st 00:10 /f `
-#     /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"C:\Claude\AI\coachbuild\scripts\ingest-otp-priority.ps1\""
+# Use the script. It is the ONLY supported way to create or re-cadence this
+# task, and it exists because every settings-level guarantee below (interval,
+# instance policy, execution limit, battery) is one a raw `schtasks /create`
+# either cannot express or gets wrong by default:
+#
+#   powershell -NoProfile -ExecutionPolicy Bypass -File `
+#     scripts\register-otp-priority-task.ps1
+#
+# It is idempotent, needs no elevation (the task runs as the interactive user,
+# RunLevel Limited), and re-running it repairs a hand-edited task.
 #
 #   Status:  schtasks /query  /tn CoachBuildOtpPriority /v /fo list
 #   Run now: schtasks /run    /tn CoachBuildOtpPriority
 #   Stop:    schtasks /end    /tn CoachBuildOtpPriority
 #   Remove:  schtasks /delete /tn CoachBuildOtpPriority /f
 #
-#   Then confirm the settings schtasks cannot express on the command line:
-#     - Settings > "If the task is already running: Do not start a new instance"
-#     - Settings > "Stop the task if it runs longer than" > above -MaxHours
-#     - Conditions > UNTICK "Start the task only if the computer is on AC power"
-#       and UNTICK "Stop if the computer switches to battery power"
+# DO NOT re-register with the old one-liner, which is kept here only so the
+# thing you must not paste is recognisable. `/sc HOURLY` plus this script's
+# former 12-hour default is the ~89% duty cycle that exhausted the Neon quota:
+#
+#   # WRONG — this is the 2026-08-20 outage, verbatim:
+#   # schtasks /create /tn CoachBuildOtpPriority /sc HOURLY /mo 1 /st 00:10 /f ...
 #
 # ── THE BATTERY DEFAULT, WHICH COSTS A WHOLE SLOT AND LEAVES NO TRACE ───────
 # `schtasks /create` sets DisallowStartIfOnBatteries=True and
@@ -137,8 +180,13 @@
 # runtime.
 
 param(
-    # Wall-clock ceiling for one run. The hourly trigger brings it back.
-    [int]$MaxHours = 12,
+    # Wall-clock ceiling for one run. The 6-hourly trigger brings it back.
+    #
+    # 1, not 12. This default is a COST control, not a tuning knob — see the
+    # "DUTY CYCLE IS A NEON BILL" section in this file's header before raising
+    # it. The registered task passes `-MaxHours 1` explicitly as well, so both
+    # the scheduled path and a bare hand-run land on the same budget.
+    [int]$MaxHours = 1,
     # Plan only: derive and log the priority order, make no Riot calls.
     [switch]$DryRun,
     # Run exactly one unit of work, then exit. For verifying the walk end to end.
