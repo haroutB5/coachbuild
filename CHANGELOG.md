@@ -1,5 +1,142 @@
 # Changelog
 
+## Desktop 1.0.20 — 2026-08-20 — re-place the numbers once, and this time they stick
+
+**Your numbers have moved down, and you need to place them again. Once. Press
+`Ctrl+Shift+A` in your first game after updating.** Nothing was lost and nothing reset —
+your saved calibration still loads exactly as you left it — but it now *means* something
+different, and at your saved `size 59` on 2560x1440 every badge lands about **51 pixels
+lower** than it did in 1.0.19. That is roughly one shop slot, so the first thing you will
+see is numbers under the icons rather than on them. It is expected. Fix it in thirty
+seconds and it will not come back.
+
+### Why they had to move
+
+1.0.19 asked you to line up a box and then drew the pill somewhere else. Adjust mode put a
+frame on the slot; the renderer painted the number *above* that slot. The box you aligned
+and the number you got were a pill-height apart, permanently — so you could nudge the row
+all night and it would never land where you put it, because the thing you were positioning
+was not the thing being drawn. Every round of "the numbers are in the wrong place" was
+that gap, and no amount of calibrating could close it.
+
+The pill is now drawn **centred in the box you position**. What you see in adjust mode is
+what appears in the shop. That is the whole release: the WYSIWYG contract that 1.0.19
+promised and could not keep.
+
+The cost of fixing it is that the old calibration was silently compensating for the gap.
+It cannot carry over, because it encodes an offset that no longer exists. One
+re-calibration buys a rule that holds from here on.
+
+### Thirty seconds, once, per display
+
+1. Get into a game and **open the shop**, so the Situational row is on screen to aim at.
+2. Select the **CoachBuild** set in the shop's dropdown — the numbers only describe that set.
+3. Press **Ctrl+Shift+A**, or tray → **Adjust item numbers**.
+4. Press **Tab** if the pink boxes are on the ability bar rather than the shop row.
+5. **Arrow keys** move (hold **Shift** for x10), **+ / -** resize, **[ / ]** change spacing.
+6. Press **Enter** to save.
+
+The adjust legend names the set it is describing and which block the Situational row is,
+so you can tell at a glance whether the shop is showing the set the numbers belong to.
+
+### One bad number no longer blanks the whole row
+
+The row is cross-checked against the shop set before it draws, and that check was
+comparing the count of items in the set against the count of numbers that survived
+validation. So a single malformed entry — a blank label, a missing value, an item id out
+of range — made the two counts disagree and took **all six badges** dark rather than the
+one. The check now runs only over a row nothing was dropped from, and says so in the log
+when it skips. Five of six numbers is the right answer; zero of six is not.
+
+If a line in your log ever says the row was `NOT cross-checked against it`, that is this
+branch firing, and it means the website sent a malformed entry. Worth reporting.
+
+### The 327 `invalid-page` rune failures were ours, not yours
+
+`companion.log` carried 327 rune-apply rejections. Every one of them was **our own test
+suite writing into your real log file** — a test that deliberately posts a rune page that
+must be rejected, using a code path that defaulted to the shipped app's log location. Real
+rune applies were never affected; the shipped app has always passed its own log in. Tests
+now write to a temporary file, and a full test run leaves your `companion.log`
+byte-identical.
+
+While that was being proved, two real things came out of it. The single opaque
+`invalid-page` reason is now **`bad-body` / `bad-title` / `bad-runes`**, carrying the same
+hints the PowerShell companion has always given, so the next real failure says which half
+is wrong instead of making us guess. And a gate requiring a `current` field was removed:
+nothing reads that field, the PowerShell companion never required it, and every existing
+test hardcoded it to true — so it was a live rejection condition that no test could catch.
+
+### The anomaly line now prints its working
+
+When your spent ability points do not add up to your level, the log said so and printed
+the **sum** of your four ranks — the one number that cannot tell the difference between
+the two remaining explanations. It now prints the raw per-ability ranks against their own
+caps, whether the champion grants a free ultimate rank, and the **game mode and map**:
+
+```
+level 10, 11 purchased, ranks Q/W/E/R=5/4/1/1 against caps 5/5/5/3 freeR 0, mode=CLASSIC map=11
+```
+
+The sentence claiming the champion grants a free rank is gone, because Riot's own data
+disproves it. The mode costs no new request; the app was already polling that response and
+reading nothing from it.
+
+The Kennen case that started this is **not fixed** — deliberately. The obvious one-line fix
+is actively harmful: it would make the app publish no skill order for Kennen at all, and
+the highlight would never draw for him again. Both champion tables are now checked against
+Riot's data and against each other, in both directions, so that fix cannot be merged by
+accident. One more Kennen game with the new line decides it.
+
+### When the site cannot answer, the app now says which question failed
+
+The website has been sending a diagnostics field with every item-set write since 0.113.0,
+and the desktop was throwing it away. It now writes those lines into `companion.log` under
+the existing `apply-itemsets:` prefix, verbatim — and they name the **block** you lost, not
+just the endpoint, so "my Pro block is gone" and "the Pro query failed" become the same
+line instead of two mysteries. This is the only channel that reaches the gaming PC
+mid-game. Content is bounded, control characters stripped, and dashed UUIDs are redacted
+before anything is written, because a Riot PUUID has exactly that shape.
+
+### Unchanged
+
+1.0.9's updater gates, 1.0.10's game-start WebView2 teardown, 1.0.11's champion
+resolution, 1.0.12's banked-point skill gate and 250 ms poll, 1.0.13's `Ctrl+Shift+A`-only
+binding, 1.0.14's derived tray label and `Open log folder`, 1.0.15's web-version reload and
+480 ms apply path, 1.0.16's shop detection and its no-pixel-probe policy, 1.0.17's
+Enter/`Shift+Enter` unification, 1.0.18's game-scoped bypass counter and 90 s latch
+backstop, and 1.0.19's keyboard-layout-aware shop bind and never-saved-unless-moved
+calibration rule. Nothing is written to the League folder. No screen capture, no OCR, no
+memory reads.
+
+### Verification
+
+`dotnet test CoachBuild.Desktop.sln -c Release` — **674 passed / 0 failed** (333 Core + 341
+Desktop). At 1.0.19 it was 558.
+
+Every change in this release was proved by removing it: 24 armed controls behind the
+champion-table guard and the anomaly line, 8 behind the diagnostics channel, and a
+red/green measurement on the blanked-row fix (20 failed against the unfixed parser, 0
+after). The commit that started this work **did not compile as committed** — three files it
+referenced were never added — which was caught by building it from a clean checkout rather
+than from the working tree, and is why the test figure above is a property of the release
+and not of somebody's desk.
+
+### Known, and stated rather than buried
+
+**Switching to Riot's own recommended set moves the icons and the numbers do not follow.**
+That is a real defect and it is **not fixed here** — the row moves because the shop moves,
+and the fix belongs on the website, not in this app. Confirming it still misbehaves is what
+makes that fix provable later.
+
+If the website does send a malformed entry, the surviving badges shift one icon to the
+left rather than holding their slots. That is the older behaviour and far better than the
+row going dark, but it is not correct, and it is out of scope here.
+
+**Nothing in this release has been proven against a real League client from this machine**
+— there is no game installed on it. The rune reasons, the diagnostics lines and the anomaly
+line all need one real game to say anything. If you play one, the log is the deliverable.
+
 ## Desktop 1.0.19 — 2026-08-20 — your own shop key, and numbers that land where you put them
 
 1.0.18 delivered on both of its promises and the log from the gaming PC proves it: eleven
