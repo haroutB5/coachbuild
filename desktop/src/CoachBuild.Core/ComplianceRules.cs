@@ -156,6 +156,7 @@ public static partial class ComplianceRules
         result = SessionQueryRegex().Replace(result, "session=[redacted]");
         result = AuthTokenRegex().Replace(result, "remoting-auth-token=[redacted]");
         result = RiotIdRegex().Replace(result, "[player-redacted]");
+        result = UuidRegex().Replace(result, "[id-redacted]");
         return result;
     }
 
@@ -170,5 +171,28 @@ public static partial class ComplianceRules
     // a Riot ID-shaped value accidentally.
     [GeneratedRegex("\\b[A-Za-z0-9][A-Za-z0-9 _.-]{1,31}#[A-Za-z0-9]{2,8}\\b")]
     private static partial Regex RiotIdRegex();
+
+    // A RIOT PUUID IS A DASHED UUID, and nothing this product logs is.
+    //
+    // The rule above catches `Name#TAG`; it cannot catch the account
+    // identifier, which is the one that survives a name change and the one
+    // Riot's own APIs key on. Redacting every dashed UUID is safe here rather
+    // than merely cautious: every Guid in the shipped desktop is formatted "N"
+    // (SessionTokenStore's token, the atomic-write temp suffixes in
+    // App.xaml.cs and OverlaySettingsStore, SelfTestRunner's scratch
+    // directory), so no line the product writes contains this shape at all --
+    // which means any that arrives came from outside.
+    //
+    // "outside" now includes the `diagnostics` field: free text chosen by
+    // whatever POSTed to the bridge, written into the one file the user is
+    // asked to send us. See ApplyDiagnosticsParser.
+    //
+    // KNOWN LIMIT, stated rather than papered over: a bare summoner name with
+    // no `#tag` is indistinguishable from ordinary prose and no regex can find
+    // it. The defence there is that the bridge never receives one -- champ
+    // select carries champion ids, and the item-set path carries a numeric
+    // summonerId it does not log.
+    [GeneratedRegex("\\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\b")]
+    private static partial Regex UuidRegex();
 }
 

@@ -80,7 +80,29 @@ public sealed record ApplyItemSetsRequest(
     /// because <c>JsonOptions.Wire</c> leaves <c>UnmappedMemberHandling</c> at
     /// its default of Skip. Both directions are pinned by tests.</para>
     /// </summary>
-    [property: JsonPropertyName("situational")] JsonElement? Situational = null);
+    [property: JsonPropertyName("situational")] JsonElement? Situational = null,
+    /// <summary>
+    /// Optional. One already-formatted sentence per consensus block whose
+    /// query FAILED, so <c>companion.log</c> can say "no Pro build block
+    /// because /api/pros returned 500" instead of leaving a reader to guess
+    /// between an outage and a champion nobody has ingested. The web has
+    /// emitted this since <c>33785c7</c>; until now the bridge skipped it.
+    ///
+    /// <para>Raw <see cref="JsonElement"/> rather than <c>string[]</c> for
+    /// exactly the reason <see cref="Situational"/> is: a typed model throws
+    /// inside <c>JsonSerializer.Deserialize</c> on the first malformed member,
+    /// which turns the WHOLE request into <c>default</c> and fails an
+    /// item-set write over a diagnostic. See
+    /// <see cref="ApplyDiagnosticsParser"/>, which validates it separately and
+    /// can only ever return fewer lines.</para>
+    ///
+    /// <para>NOT a version-gated field, and it must never become one: a
+    /// diagnostic capable of failing an apply is worse than no diagnostic. An
+    /// older web build simply omits it; an older desktop ignores it, because
+    /// <c>JsonOptions.Wire</c> leaves <c>UnmappedMemberHandling</c> at its
+    /// default of Skip. Both directions are pinned by tests.</para>
+    /// </summary>
+    [property: JsonPropertyName("diagnostics")] JsonElement? Diagnostics = null);
 
 /// <summary>
 /// Success and failure are intentionally separate records. This preserves the

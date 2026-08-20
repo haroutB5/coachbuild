@@ -46,8 +46,53 @@ public sealed class ItemSetApplyService
         if (!put.Ok)
             return new ApplyItemSetsFailure("write-failed", LcuFailureHint(put.StatusCode));
         _log?.Info($"apply-itemsets: count={sets.Count}");
+        // Immediately after the count, because the two lines are one thought:
+        // here is what you got, and here is what you did NOT get and why.
+        RecordDiagnostics(request);
         RecordSituational(request);
         return new ApplyItemSetsSuccess(sets.Count);
+    }
+
+    /// <summary>
+    /// Writes the web's outage diagnostics to the log, AFTER the item-set
+    /// write has already succeeded.
+    ///
+    /// <para>Same position and the same posture as
+    /// <see cref="RecordSituational"/>: nothing in this method can change the
+    /// result the caller receives, and the whole body is inside a catch.</para>
+    ///
+    /// <para>SUCCESS ONLY, deliberately. A failed write already tells the user
+    /// loudly that nothing happened, and the case this exists for is the
+    /// opposite one — an export that SUCCEEDS and is quietly missing a block
+    /// because an upstream query failed. That is the shape the 2026-08-20 Neon
+    /// outage had, and it is the shape with no other symptom.</para>
+    ///
+    /// <para>SILENT WHEN ABSENT. Every healthy export omits the key, so there
+    /// is no "no diagnostics" line: a diagnostic that fires on every apply is
+    /// noise, and noise is what the one line that matters gets lost in.</para>
+    /// </summary>
+    private void RecordDiagnostics(ApplyItemSetsRequest request)
+    {
+        if (_log is null) return;
+        try
+        {
+            var lines = ApplyDiagnosticsParser.Parse(request.Diagnostics, out var rejections);
+            // The web's sentence, verbatim, under the existing apply-itemsets
+            // prefix so one grep still finds the whole export. It already names
+            // the BLOCK the user lost rather than just the endpoint -- that is
+            // what connects "my Pro build block is gone" to "/api/pros answered
+            // 500" without a reader knowing they are the same event -- so
+            // re-wording it here could only weaken it.
+            foreach (var line in lines)
+                _log.Info($"apply-itemsets: {line}");
+            if (rejections.Count > 0)
+                _log.Info($"apply-itemsets: diagnostics dropped {rejections.Count} " +
+                    $"line{(rejections.Count == 1 ? "" : "s")} — {string.Join("; ", rejections)}");
+        }
+        catch (Exception error)
+        {
+            _log.Info($"apply-itemsets: diagnostics ignored ({error.GetType().Name})");
+        }
     }
 
     /// <summary>

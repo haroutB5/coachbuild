@@ -8,6 +8,8 @@
  * pattern, mirrored from heroContracts.test.ts).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import type { ChampionRef, BuildResponse, Pick, ItemsBlock, RunesBlock } from "@/lib/types";
 
 function jsonResponse(body: unknown, ok = true) {
@@ -968,5 +970,60 @@ describe("applyItemSetsForBuild — outage diagnostics on the apply body", () =>
     expect(parsed.diagnostics).toHaveLength(1);
     expect(parsed.diagnostics[0]).toContain("Pro build");
     expect(parsed.diagnostics[0]).not.toContain("OTP build");
+  });
+});
+
+describe("diagnostics - the other side of the wire actually reads it", () => {
+  // SOURCE ASSERTIONS, in the pattern situationalItemSet.test.ts established
+  // for the same reason: the bridge is C# and is not reachable from vitest,
+  // this repo has two ecosystems, and a web-only change need never run
+  // `dotnet test`. Without these, the field could go back to being written by
+  // one side and dropped by the other with both suites green - which is
+  // exactly the state it shipped in between 33785c7 and now.
+
+  const read = (relative: string) =>
+    fs.readFileSync(path.join(process.cwd(), relative), "utf8");
+
+  it("the desktop request has somewhere to PUT the field", () => {
+    const wire = read("desktop/src/CoachBuild.Core/WireContracts.cs");
+    expect(wire).toMatch(/record ApplyItemSetsRequest\(/);
+    expect(wire).toMatch(/JsonPropertyName\("diagnostics"\)\] JsonElement\? Diagnostics/);
+    // RAW JsonElement, never string[]. A typed model throws inside
+    // JsonSerializer.Deserialize on the first non-string member, which turns
+    // the WHOLE request into default -- so a malformed diagnostic would fail
+    // the item-set write it exists only to describe.
+    expect(wire).not.toMatch(/diagnostics"\)\] (IReadOnlyList<string>|string\[\])/);
+  });
+
+  it("the desktop WRITES it, after the item-set write has already succeeded", () => {
+    const service = read("desktop/src/CoachBuild.Core/ItemSetApplyService.cs");
+    expect(service).toMatch(/RecordDiagnostics\(request\);/);
+    expect(service).toMatch(/apply-itemsets: \{line\}/);
+    // Position, not just presence. The call must sit after the PUT is checked
+    // -- a successful export quietly missing a block is the case this exists
+    // for, and a failed export is already loud.
+    expect(service.indexOf("RecordDiagnostics(request);")).toBeGreaterThan(
+      service.indexOf('return new ApplyItemSetsFailure("write-failed"')
+    );
+  });
+
+  it("neither side may ever gate the field on a version", () => {
+    // A diagnostic capable of failing an apply is worse than no diagnostic.
+    const client = read("components/live/companionClient.ts");
+    expect(client).toMatch(/diagnostics\?: string\[\]/);
+    expect(client).not.toMatch(/diagnostics[\s\S]{0,200}companionVersion/);
+    const apply = read("components/hextech/itemSetsApply.ts");
+    expect(apply).toMatch(/\.\.\.\(diagnostics\.length > 0 \? \{ diagnostics \} : \{\}\)/);
+  });
+
+  it("the array is not only about blocks that were LOST, whatever the docs say", () => {
+    // 56bbe6a added the precomputed-artifact fallback, so a live query can
+    // fail and the block still ship -- and that case emits a line too. Both
+    // HANDOFF-marco-neon-usage.md 3a and companionClient.ts's header still
+    // describe this array as one line per DROPPED block. Pin the code, since
+    // the desktop's log wording follows the sentence verbatim.
+    const apply = read("components/hextech/itemSetsApply.ts");
+    expect(apply).toMatch(/block SERVED FROM the precomputed patch-/);
+    expect(apply).toMatch(/block OMITTED because the query FAILED/);
   });
 });

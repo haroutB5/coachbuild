@@ -925,15 +925,25 @@ export async function applyRunes(
  *
  *  `diagnostics` (2026-08-20) — OPTIONAL, INERT, absent when empty, skipped by
  *  an older bridge for exactly the same reasons as `situational`. It carries
- *  one already-formatted line per consensus block this export had to DROP
- *  BECAUSE THE QUERY FAILED, as opposed to dropped because the champion
- *  genuinely has no data (see itemSetsApply.ts's `ConsensusResolution`). It
+ *  one already-formatted line per consensus query THAT FAILED, as opposed to a
+ *  block dropped because the champion genuinely has no data (see
+ *  itemSetsApply.ts's `ConsensusResolution`).
+ *
+ *  A FAILED QUERY DOES NOT ALWAYS MEAN A LOST BLOCK, and this comment used to
+ *  say it did. Since 56bbe6a the export reads a precomputed per-patch artifact
+ *  first, so a failed live query can still be recovered from — and that case
+ *  emits a line too, one that says SERVED FROM rather than OMITTED and carries
+ *  the age of the numbers the user is looking at. Two different sentences,
+ *  because they are two different actions for whoever reads the log. It
  *  exists because those two cases were indistinguishable everywhere in the
  *  system on 2026-08-20, so an exhausted Neon compute quota presented as "some
  *  champions lost their Pro and OTP blocks" with no error in any log, on
  *  either side of the wire, for nine hours. A bridge that reads it should
  *  write each line to companion.log and do nothing else with it — it must
- *  never influence, delay or fail the write. */
+ *  never influence, delay or fail the write. The desktop does exactly that
+ *  as of ApplyDiagnosticsParser / ItemSetApplyService.RecordDiagnostics;
+ *  companion.ps1 still ignores it, which is the older-bridge case above and
+ *  costs that bridge the lines and nothing more. */
 export async function applyItemSets(
   port: CompanionPort,
   session: string,
