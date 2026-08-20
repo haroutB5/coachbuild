@@ -74,8 +74,26 @@ export interface PlanOptions {
   championChunk?: number;
   /** Size of the champion pool being discovered. */
   championCount?: number;
-  /** 1-hour slots of the OTP deep walk. This is the stage that actually
-   *  produces OTP coverage, and coverage is what the artifact gate measures. */
+  /** Matches fetched per discovered one-trick.
+   *
+   *  This is the single most expensive number in the whole plan and it is easy
+   *  to miss: `scripts/ingest-otp-featured.mjs` DEFAULTS to 100, which across
+   *  173 champions is roughly 22,000 paced Riot calls — over eight hours, on
+   *  the critical path to the artifact. 40 matches a champion is what the
+   *  proven scheduled cadence already uses, it is what produced the pre-outage
+   *  baseline of ~39 stored games for a non-deep-walked champion, and it cuts
+   *  this stage to about five hours. Depth beyond that is the deep walk's job,
+   *  and the deep walk is NOT on the critical path — see `otpPrioritySlots`. */
+  featuredMatches?: number;
+  /** 1-hour slots of the OTP deep walk.
+   *
+   *  Deliberately small by default. The walk deepens the sample for champions
+   *  that already have one; it does not put new champion-roles on the board.
+   *  BREADTH — which is what the artifact gate measures — comes entirely from
+   *  the discovery stage above. So the fastest route to a shippable artifact is
+   *  `--otp-slots 0`, and the deep walk can run afterwards, at its re-cadenced
+   *  duty cycle, with the artifact already shipped. That ordering matters:
+   *  this walk is the job that exhausted the compute quota. */
   otpPrioritySlots?: number;
   /** Wall-clock slots for the pro match walk. It drains on its own, so this is
    *  a ceiling, not a target. */
@@ -91,7 +109,8 @@ export const PLAN_DEFAULTS: ResolvedPlanOptions = {
   rosterSize: 200,
   championChunk: 10,
   championCount: 173,
-  otpPrioritySlots: 9,
+  featuredMatches: 40,
+  otpPrioritySlots: 3,
   matchSlots: 6,
   matchSlotHours: 4,
   phase: "all",
@@ -106,6 +125,7 @@ export function resolvePlanOptions(opts: PlanOptions = {}): ResolvedPlanOptions 
   if (merged.rosterSize < 1) throw new Error("rosterSize must be >= 1");
   if (merged.championChunk < 1) throw new Error("championChunk must be >= 1");
   if (merged.championCount < 1) throw new Error("championCount must be >= 1");
+  if (merged.featuredMatches < 1) throw new Error("featuredMatches must be >= 1");
   if (merged.otpPrioritySlots < 0) throw new Error("otpPrioritySlots must be >= 0");
   if (merged.matchSlots < 0) throw new Error("matchSlots must be >= 0");
   if (merged.matchSlotHours <= 0) throw new Error("matchSlotHours must be > 0");
@@ -136,7 +156,12 @@ export const REBUILD_STAGES: RebuildStageSpec[] = [
     title: "one-trick discovery (onetricks.gg scrape + account resolution)",
     script: "scripts/ingest-otp-featured.mjs",
     units: (o) => Math.ceil(o.championCount / o.championChunk),
-    unitArgs: (_i, o) => ["--champions", String(o.championChunk)],
+    unitArgs: (_i, o) => [
+      "--champions",
+      String(o.championChunk),
+      "--matches",
+      String(o.featuredMatches),
+    ],
     maxMs: () => 2 * HOUR,
     // Stalest-first and bounded by --champions, so every invocation advances
     // the frontier and exits 0 whether or not the fleet is covered. No drain
@@ -144,12 +169,14 @@ export const REBUILD_STAGES: RebuildStageSpec[] = [
     drainOnCleanExit: false,
     usesRiot: true,
     usesChrome: true,
-    writes: ["otp_featured", "otp_accounts"],
+    // It writes otp_matches too, and that is the point: this stage — not the
+    // deep walk — is what puts a champion-role on the board at all.
+    writes: ["otp_featured", "otp_accounts", "otp_matches"],
   },
   {
     id: "otp-priority",
     phase: 1,
-    title: "OTP deep walk (the stage that actually produces OTP coverage)",
+    title: "OTP deep walk (sample DEPTH only — breadth already came from discovery)",
     script: "scripts/ingest-otp-priority.mjs",
     units: (o) => o.otpPrioritySlots,
     unitArgs: () => ["--max-hours", "1"],

@@ -87,7 +87,38 @@ describe("rebuild plan — options", () => {
     const plan = buildPlan({ phase: 1, championCount: 173, championChunk: 10 });
     const units = plan.filter((u) => u.stage === "otp-featured");
     expect(units.length).toBe(18);
-    expect(units[0].argv).toEqual(["--champions", "10"]);
+    expect(units[0].argv).toEqual(["--champions", "10", "--matches", "40"]);
+  });
+
+  it("overrides the discovery script's 100-match default", () => {
+    // Left at 100 this stage is ~22,000 paced Riot calls — over eight hours,
+    // on the critical path. The default here must never silently be 100.
+    const [u] = buildPlan({ phase: 1 }).filter((s) => s.stage === "otp-featured");
+    const i = u.argv.indexOf("--matches");
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(Number(u.argv[i + 1])).toBeLessThanOrEqual(40);
+  });
+
+  it("keeps the deep walk off the critical path by default", () => {
+    // Breadth comes from discovery; the deep walk only deepens. It is also the
+    // job that exhausted the compute quota, so it gets a small default.
+    const slots = buildPlan({ phase: 1 }).filter((u) => u.stage === "otp-priority");
+    expect(slots.length).toBeLessThanOrEqual(3);
+    const discovery = buildPlan({ phase: 1 }).filter((u) => u.stage === "otp-featured");
+    expect(discovery.length).toBeGreaterThan(slots.length);
+  });
+
+  it("supports skipping the deep walk entirely for the fastest artifact", () => {
+    const plan = buildPlan({ phase: 1, otpPrioritySlots: 0 });
+    expect(plan.some((u) => u.stage === "otp-priority")).toBe(false);
+    expect(plan.some((u) => u.stage === "otp-featured")).toBe(true);
+    // …and dropping it must not lose an artifact-critical table.
+    const written = new Set(
+      REBUILD_STAGES.filter((s) => s.phase === 1 && s.id !== "otp-priority").flatMap((s) => s.writes)
+    );
+    for (const table of ARTIFACT_CRITICAL_TABLES) {
+      expect(written.has(table), `--otp-slots 0 leaves ${table} unwritten`).toBe(true);
+    }
   });
 
   it("passes the roster size through to the roster script", () => {
@@ -105,6 +136,7 @@ describe("rebuild plan — options", () => {
     expect(() => resolvePlanOptions({ rosterSize: 0 })).toThrow(/rosterSize/);
     expect(() => resolvePlanOptions({ championChunk: 0 })).toThrow(/championChunk/);
     expect(() => resolvePlanOptions({ matchSlotHours: 0 })).toThrow(/matchSlotHours/);
+    expect(() => resolvePlanOptions({ featuredMatches: 0 })).toThrow(/featuredMatches/);
   });
 
   it("reports a wall-clock ceiling that grows with the match budget", () => {

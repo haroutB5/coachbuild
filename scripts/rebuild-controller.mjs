@@ -93,7 +93,9 @@ if (has("--help") || has("-h")) {
       "",
       "  --phase <1|2|all>       which half of the plan to run (default 1)",
       "  --roster-size <n>       pro roster depth (default 200; 1445 was the pre-outage corpus)",
-      "  --otp-slots <n>         1-hour OTP deep-walk slots (default 9)",
+      "  --otp-slots <n>         1-hour OTP deep-walk slots (default 3; 0 is the fastest artifact)",
+      "  --featured-matches <n>  matches per discovered one-trick (default 40; the script's own",
+      "                          default of 100 is ~8h of paced Riot time across 173 champions)",
       "  --match-slots <n>       pro-match walk slots (default 6)",
       "  --match-slot-hours <n>  hours per pro-match slot (default 4)",
       "  --champion-chunk <n>    champions per onetricks discovery invocation (default 10)",
@@ -125,6 +127,7 @@ const planOpts = {
   matchSlots: numOrUndef(val("--match-slots")),
   matchSlotHours: numOrUndef(val("--match-slot-hours")),
   championChunk: numOrUndef(val("--champion-chunk")),
+  featuredMatches: numOrUndef(val("--featured-matches")),
 };
 const journalPath = val("--journal", DEFAULT_JOURNAL);
 const baseMs = numOrUndef(val("--backoff-base-ms"));
