@@ -7,6 +7,7 @@ public sealed class RedactedLog
     private readonly object _gate = new();
     private readonly string _path;
     private readonly int _maxBytes;
+    private readonly bool _discarding;
     private readonly Dictionary<string, DateTimeOffset> _lastErrorAt = new(StringComparer.Ordinal);
     private string? _lastError;
 
@@ -19,6 +20,35 @@ public sealed class RedactedLog
         _maxBytes = Math.Max(1024, maxBytes);
     }
 
+    private RedactedLog(bool discarding)
+    {
+        _discarding = discarding;
+        _path = string.Empty;
+        _maxBytes = 1024;
+    }
+
+    /// <summary>
+    /// A log that writes nowhere, and the default for any component whose
+    /// caller did not supply one.
+    ///
+    /// <para>WHY THIS EXISTS. The parameterless <see cref="RedactedLog"/>
+    /// resolves to the USER'S real
+    /// <c>%LOCALAPPDATA%\CoachBuild\companion.log</c>. The shipped app never
+    /// relies on that default (App.xaml.cs builds its log from
+    /// <c>Paths.Root</c> and passes it in), so the only callers that ever hit
+    /// it are tests and harnesses -- which meant every <c>dotnet test</c> run
+    /// appended bridge lines to the one artifact used to diagnose real
+    /// in-game sessions. 327 of the 349 <c>apply-runes</c> lines in that file
+    /// on 2026-08-20 were written by WireContractReplayTests, not by the
+    /// product, and two investigations were spent on them. Diagnostics that
+    /// invent their own evidence are worse than no diagnostics.</para>
+    /// </summary>
+    public static RedactedLog Discarding { get; } = new(discarding: true);
+
+    /// <summary>True for <see cref="Discarding"/> only.</summary>
+    public bool IsDiscarding => _discarding;
+
+    /// <summary>The log file, or an empty string for <see cref="Discarding"/>.</summary>
     public string FilePath => _path;
     public string? LastError { get { lock (_gate) return _lastError; } }
 
@@ -50,6 +80,7 @@ public sealed class RedactedLog
 
     private void AppendLocked(string safeMessage)
     {
+        if (_discarding) return;
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);

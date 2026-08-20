@@ -82,7 +82,13 @@ public sealed class WireContractReplayTests
         };
         invalidRunes.Headers.TryAddWithoutValidation("Origin", CompanionWire.AppOrigin);
         var runeResponse = await client.SendAsync(invalidRunes);
-        Assert.Equal("invalid-page", (await ReadJsonAsync(runeResponse)).GetProperty("reason").GetString());
+        // "User page" is not a CoachBuild title -- bad-title, not the old
+        // catch-all "invalid-page". See ApplyPayloadValidation.RuneRejection.
+        var runeRejection = await ReadJsonAsync(runeResponse);
+        Assert.Equal("bad-title", runeRejection.GetProperty("reason").GetString());
+        Assert.Equal(
+            ApplyPayloadValidation.RunePayloadHint("bad-title"),
+            runeRejection.GetProperty("hint").GetString());
 
         lcu.Enqueue(HttpMethod.Get, "/lol-summoner/v1/current-summoner", new LcuResponse(
             true, 200, MockLcuApi.Json("{\"summonerId\":7}")));

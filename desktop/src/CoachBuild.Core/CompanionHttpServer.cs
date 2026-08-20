@@ -62,7 +62,11 @@ public sealed class CompanionHttpServer : IAsyncDisposable
         {
             _live = live;
         }
-        _log = log ?? new RedactedLog();
+        // NOT `new RedactedLog()` -- that resolves to the user's real
+        // %LOCALAPPDATA%\CoachBuild\companion.log, and this fallback is only
+        // ever taken by tests and harnesses (App.xaml.cs always passes its
+        // own). See RedactedLog.Discarding for what that cost.
+        _log = log ?? RedactedLog.Discarding;
         _runes = runes ?? new RuneApplyService(_lcu, state: _state, log: _log);
         _state.RegisterRuneApplyService(_runes);
         _itemSets = itemSets ?? new ItemSetApplyService(_lcu, _state, _log);
@@ -83,6 +87,7 @@ public sealed class CompanionHttpServer : IAsyncDisposable
     public string SessionToken => _sessionToken;
     public int Port { get; private set; }
     public CompanionState State => _state;
+    public RedactedLog Log => _log;
     public RuneApplyService RuneApplyService => _runes;
     public ISkillOrderProvider SkillOrderProvider => _skillOrders;
     public bool IsRunning => _listener?.IsListening == true;
