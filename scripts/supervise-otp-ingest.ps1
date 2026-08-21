@@ -67,12 +67,37 @@ $ErrorActionPreference = "Stop"
 
 $logDir = Join-Path $env:LOCALAPPDATA "CoachBuild"
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
-$log = if ($LogPath -ne "") { $LogPath } else { Join-Path $logDir "otp-ingest.out.log" }
 
+# ONE LOG FILE PER RUN, not a shared append target. MEASURED 2026-08-21: five
+# orphaned `tail -f` processes left behind by earlier lanes (the oldest four
+# hours old) still held otp-ingest.out.log open WITHOUT sharing writes, so
+# Add-Content threw IOException - and with $ErrorActionPreference = "Stop" that
+# killed the supervisor before its first log line, exit 1, nothing written
+# anywhere to say why. A five-hour walk must not be defeatable by somebody
+# else's forgotten monitor. A per-run file cannot be contended by definition.
+$shared = Join-Path $logDir "otp-ingest.out.log"
+$stampForName = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
+$log = if ($LogPath -ne "") { $LogPath } else { Join-Path $logDir "otp-ingest-walk-$stampForName.log" }
+
+# The logger must never be able to abort the run it is only supposed to
+# describe. Retries briefly, then gives up quietly - losing a log line is bad,
+# losing four hours of Riot-paced walking because of one is worse.
 function Say($m) {
   $stamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-  Add-Content -Path $log -Value "[supervisor $stamp] $m" -Encoding utf8
+  $line = "[supervisor $stamp] $m"
+  for ($t = 1; $t -le 3; $t++) {
+    try { Add-Content -Path $log -Value $line -Encoding utf8 -ErrorAction Stop; break }
+    catch { Start-Sleep -Milliseconds 200 }
+  }
+  Write-Output $line
 }
+
+# Best-effort pointer, so an operator who looks in the historical shared log
+# still finds this run. Swallowed on failure for the same reason as above.
+try {
+  Add-Content -Path $shared -Encoding utf8 -ErrorAction Stop `
+    -Value "[supervisor $stampForName] this run logs to $log"
+} catch { }
 
 # Resolve the database explicitly, or refuse. Never fall back to .env.local:
 # scripts/_env.mjs fills only keys that are still undefined, so an unset
