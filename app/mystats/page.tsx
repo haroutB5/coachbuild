@@ -282,13 +282,13 @@ function MyStatsSurface({ summary, sessions, icons, onSwitched }: { summary: MyS
             />
           </div>
 
-          <div className="mt-4 grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_372px]">
-            <ChampionPool rows={rows} recentGames={recentGames} />
+          <div className="mt-4 grid grid-cols-1 items-start gap-4 xl:grid-cols-[372px_minmax(0,1fr)]">
             <aside className="space-y-4">
               <PatternCard summary={summary} games={recentGames} overall={overall} />
               <LastTwenty games={recentGames} iconOf={(id) => icons.get(id)} />
               <SessionPanel sessions={sessions} />
             </aside>
+            <ChampionPool rows={rows} recentGames={recentGames} />
           </div>
         </>
       )}
