@@ -23,6 +23,7 @@ public enum TrayCommand
     ToggleItemNumbers,
     RepairWebView2,
     OpenLogFolder,
+    PairMyStats,
     ApplyUpdate,
     Quit,
 }
@@ -194,6 +195,9 @@ public sealed class TrayController : IDisposable
         _menu.Items.Add(MenuItem(
             TrayMenuState.OpenLogFolderVerb,
             (_, _) => RaiseCommand(TrayCommand.OpenLogFolder)));
+        _menu.Items.Add(MenuItem(
+            TrayMenuState.PairMyStatsVerb,
+            (_, _) => RaiseCommand(TrayCommand.PairMyStats)));
 
         _menu.Items.Add(new Forms.ToolStripSeparator());
         if (!_state.IsAdjusting)

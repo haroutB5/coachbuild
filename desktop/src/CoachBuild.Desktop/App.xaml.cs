@@ -190,6 +190,7 @@ public partial class App : WpfApplication
     private Mutex? _companionMutex;
     private TrayController? _tray;
     private OverlayWindow? _overlay;
+    private OverlaySettingsStore? _settingsStore;
     private WebView2Window? _webView;
     private WebView2EnvironmentService? _webViewEnvironment;
     private RedactedLog? _log;
@@ -274,6 +275,7 @@ public partial class App : WpfApplication
         // secret out of it. The constructor touches no disk, so moving it up
         // costs nothing and changes no behaviour for anything below.
         var settingsStore = new OverlaySettingsStore(Paths.SettingsFile);
+        _settingsStore = settingsStore;
 
         if (_services is NullDesktopHostServices)
         {
@@ -340,7 +342,7 @@ public partial class App : WpfApplication
     /// environment wins so a support session can turn capture on for one launch
     /// without writing a secret into a file that stays there afterwards.</para>
     ///
-    /// <para>Null is the normal state today and it means capture is INERT. It
+    /// <para>Null means the desktop has not been paired and capture is INERT. It
     /// never degrades into an unauthenticated POST — that is the same fail-closed
     /// rule <c>lib/mystats/accountAuth.ts</c> states for the server half.</para>
     /// </summary>
@@ -966,6 +968,9 @@ public partial class App : WpfApplication
             case TrayCommand.OpenLogFolder:
                 OpenLogFolder();
                 break;
+            case TrayCommand.PairMyStats:
+                PairDesktopWithMyStats();
+                break;
             case TrayCommand.ApplyUpdate:
                 _log?.Info("update: restart requested from the tray");
                 var updates = _updates;
@@ -977,6 +982,44 @@ public partial class App : WpfApplication
             case TrayCommand.Quit:
                 Shutdown();
                 break;
+        }
+    }
+
+    /// <summary>
+    /// Accepts the browser's shared secret through a masked, one-way paste
+    /// dialog and writes it through the app's existing settings store.
+    ///
+    /// <para>The stored value is deliberately never read into the dialog: the
+    /// prompt receives only whether it is replacing a saved credential. No log
+    /// line contains the pasted value, and a save failure reports only the
+    /// exception type.</para>
+    /// </summary>
+    private void PairDesktopWithMyStats()
+    {
+        var settingsStore = _settingsStore;
+        if (settingsStore is null) return;
+
+        try
+        {
+            var replacingExisting = !string.IsNullOrWhiteSpace(settingsStore.Read().RankSampleSecret);
+            var pastedSecret = RankSampleSecretDialog.Prompt(replacingExisting);
+            if (pastedSecret is null) return;
+
+            settingsStore.SetRankSampleSecret(pastedSecret);
+            _tray?.ShowBalloon(
+                "CoachBuild My Stats",
+                "Desktop pairing saved. Ranked LP capture will use it at the next capture point.");
+        }
+        catch (Exception error)
+        {
+            _log?.Error(
+                "rank-sample-pairing-save",
+                $"rank-sample: desktop pairing could not be saved ({error.GetType().Name})");
+            WpfMessageBox.Show(
+                "CoachBuild could not save the desktop pairing. Please try again.",
+                "My Stats pairing",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
     }
 

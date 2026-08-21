@@ -169,6 +169,46 @@ public sealed class TrayControllerTests
         }
     }
 
+    [Fact]
+    public void My_Stats_pairing_is_reachable_from_the_tray()
+    {
+        using var tray = new TrayController(Dispatcher.CurrentDispatcher);
+        var raised = new List<TrayCommand>();
+        tray.CommandRequested += (_, e) => raised.Add(e.Command);
+        tray.Start();
+        var menu = tray.ContextMenuForTesting;
+
+        menu.Show(new Point(0, 0));
+        try
+        {
+            var pairing = menu.Items.OfType<Forms.ToolStripMenuItem>()
+                .Single(item => item.Text == TrayMenuState.PairMyStatsVerb);
+
+            pairing.PerformClick();
+
+            Assert.Equal(TrayCommand.PairMyStats, Assert.Single(raised));
+        }
+        finally
+        {
+            menu.Close();
+        }
+    }
+
+    [Fact]
+    public void Pairing_dialog_starts_empty_and_masks_every_pasted_character()
+    {
+        using var dialog = new RankSampleSecretDialog(replacingExisting: true);
+
+        Assert.True(dialog.SecretInputForTesting.UseSystemPasswordChar);
+        Assert.Equal(string.Empty, dialog.SecretInputForTesting.Text);
+        Assert.False(dialog.SaveButtonForTesting.Enabled);
+
+        dialog.SecretInputForTesting.Text = "fixture-shared-secret";
+
+        Assert.True(dialog.SecretInputForTesting.UseSystemPasswordChar);
+        Assert.True(dialog.SaveButtonForTesting.Enabled);
+    }
+
     private sealed class RecordingStartupManager(bool enabled) : IStartupManager
     {
         public bool IsEnabled { get; private set; } = enabled;

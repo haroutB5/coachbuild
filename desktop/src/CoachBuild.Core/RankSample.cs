@@ -29,7 +29,12 @@ public enum RankCaptureTrigger
 /// <param name="Tier">Uppercase League tier — IRON..CHALLENGER. Never blank, never NONE.</param>
 /// <param name="Division">Uppercase Roman division, or null for an apex tier / an absent value.</param>
 /// <param name="LeaguePoints">LP within the division; unbounded above in apex tiers.</param>
-public sealed record RankSample(string Tier, string? Division, int LeaguePoints);
+/// <param name="CumulativeLp">Riot's own absolute ladder integer, when the LCU supplied one.</param>
+public sealed record RankSample(
+    string Tier,
+    string? Division,
+    int LeaguePoints,
+    int? CumulativeLp = null);
 
 /// <summary>
 /// PURE readers for the LCU's ranked-stats document.
@@ -165,7 +170,11 @@ public static class RankedStats
         var lp = ReadLeaguePoints(entry);
         if (lp is null) return null;
 
-        return new RankSample(tier, NormalizeDivision(tier, ReadDivision(entry)), lp.Value);
+        return new RankSample(
+            tier,
+            NormalizeDivision(tier, ReadDivision(entry)),
+            lp.Value,
+            ReadCumulativeLp(entry));
     }
 
     /// <summary>
@@ -203,6 +212,23 @@ public static class RankedStats
                 return number;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Riot's absolute ladder position. This field is optional: older or
+    /// alternate LCU shapes without it still produce a sample, and the server
+    /// derives the same integer from tier/division/LP as its tested fallback.
+    /// A malformed value is treated exactly like an absent one so an optional
+    /// optimization can never cost the bracket edge itself.
+    /// </summary>
+    private static int? ReadCumulativeLp(JsonElement entry)
+    {
+        if (!entry.TryGetProperty("cumulativeLp", out var value)) return null;
+        return value.ValueKind == JsonValueKind.Number
+            && value.TryGetInt32(out var number)
+            && number >= 0
+                ? number
+                : null;
     }
 
     /// <summary>
@@ -265,6 +291,9 @@ public sealed record RankSampleBody(
     [property: JsonPropertyName("tier")] string Tier,
     [property: JsonPropertyName("division")] string? Division,
     [property: JsonPropertyName("lp")] int Lp,
+    [property: JsonPropertyName("cumulativeLp")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? CumulativeLp,
     [property: JsonPropertyName("observedAt")] string ObservedAt,
     [property: JsonPropertyName("source")] string Source)
 {
@@ -281,6 +310,7 @@ public sealed record RankSampleBody(
             sample.Tier,
             sample.Division,
             sample.LeaguePoints,
+            sample.CumulativeLp,
             observedAt.ToUniversalTime().ToString("O"),
             CompanionSource);
 }

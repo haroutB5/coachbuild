@@ -15,12 +15,10 @@ namespace CoachBuild.Core;
 ///
 /// <para><b>Auth.</b> Spec §4 gates the endpoint with the existing
 /// <c>x-coachbuild-account-secret</c> shared secret and forbids inventing a
-/// second scheme. That secret is currently only ever held by the BROWSER
-/// (localStorage, <c>components/live/mystatsAccount.ts</c>); nothing in the
-/// desktop app has ever had a copy. Provisioning it here is an open product
-/// question — see HANDOFF-lp-capture.md — and until it is answered, capture is
-/// INERT rather than unauthenticated. Inert is the same posture
-/// <c>mystatsAccount.ts</c> already takes when the secret is missing.</para>
+/// second scheme. The user copies it once from the browser's Pair desktop
+/// control into the native tray's masked dialog; both the C# and PowerShell
+/// companions then read the same persisted desktop setting. When it is absent,
+/// capture stays INERT rather than posting unauthenticated.</para>
 /// </summary>
 public sealed class RankSampleClient : IRankSampleSink, IDisposable
 {

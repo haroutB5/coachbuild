@@ -35,16 +35,11 @@ public sealed class OverlaySettings
     /// Empty or absent means capture is INERT — nothing is posted and one line
     /// says so in the log.
     ///
-    /// <para><b>Why it lives here and not in a UI.</b> The secret has only ever
-    /// existed in the BROWSER's localStorage
-    /// (<c>components/live/mystatsAccount.ts</c>), because until now only the
-    /// browser ever wrote to a gated endpoint. The desktop app posting samples
-    /// at app start and at game end cannot depend on a page being open, so it
-    /// needs its own copy — and how the user is supposed to GET one here is an
-    /// open product question, not something this lane should answer by
-    /// inventing a tray dialog for a secret. A hand-editable settings key is the
-    /// smallest thing that works and the easiest to replace. See
-    /// HANDOFF-lp-capture.md.</para>
+    /// <para>The tray's “Pair desktop with My Stats” dialog writes this field
+    /// through <see cref="OverlaySettingsStore.SetRankSampleSecret"/>. The
+    /// dialog is a masked, paste-only handoff and is never given the existing
+    /// value to echo back. PowerShell reads this same settings key, so either
+    /// companion uses the one persisted credential.</para>
     ///
     /// <para>It must be a real property rather than an unmodelled JSON key:
     /// <c>Save()</c> serialises this exact type, so a key this class does not
@@ -164,6 +159,20 @@ public sealed class OverlaySettingsStore
         {
             var settings = ReadCore();
             settings.AutostartConfigured = configured;
+            WriteCore(settings);
+        }
+    }
+
+    /// <summary>
+    /// Persists the shared account credential in the app's existing settings
+    /// file. Blank input removes it; every capture caller treats that as INERT.
+    /// </summary>
+    public void SetRankSampleSecret(string? secret)
+    {
+        lock (_gate)
+        {
+            var settings = ReadCore();
+            settings.RankSampleSecret = NormalizeSecret(secret);
             WriteCore(settings);
         }
     }
@@ -381,6 +390,7 @@ public sealed class OverlaySettingsStore
     private static OverlaySettings Normalize(OverlaySettings settings)
     {
         settings.LaneOverride = NormalizeLane(settings.LaneOverride);
+        settings.RankSampleSecret = NormalizeSecret(settings.RankSampleSecret);
         settings.Calibrations = CloneMap(settings.Calibrations);
         settings.ItemRowCalibrations = CloneMap(settings.ItemRowCalibrations);
         return settings;
@@ -391,5 +401,11 @@ public sealed class OverlaySettingsStore
         if (string.IsNullOrWhiteSpace(lane)) return null;
         var value = lane.Trim().ToUpperInvariant();
         return value is "TOP" or "JUNGLE" or "MID" or "BOT" or "SUPPORT" ? value : null;
+    }
+
+    private static string? NormalizeSecret(string? secret)
+    {
+        var value = secret?.Trim();
+        return string.IsNullOrEmpty(value) ? null : value;
     }
 }

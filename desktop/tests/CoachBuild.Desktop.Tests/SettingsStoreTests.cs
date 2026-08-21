@@ -141,6 +141,43 @@ public sealed class SettingsStoreTests
         }
     }
 
+    [Fact]
+    public void MyStatsPairingSecretPersistsAcrossRestartAndFeedsCaptureAuth()
+    {
+        const string fixtureCredential = "fixture-shared-secret";
+        var root = MakeTempDirectory();
+        var previousEnvironment = Environment.GetEnvironmentVariable("COACHBUILD_MYSTATS_SECRET");
+        try
+        {
+            Environment.SetEnvironmentVariable("COACHBUILD_MYSTATS_SECRET", null);
+            var path = Path.Combine(root, "desktop-settings.json");
+            var store = new OverlaySettingsStore(path);
+
+            store.SetRankSampleSecret($"  {fixtureCredential}  ");
+            store.SetLaneOverride("mid");
+            store.SetOverlayVisible(false);
+
+            // A new store is a process-restart boundary: no in-memory cache is
+            // shared with the writer, and unrelated settings writes happened
+            // after the credential was pasted.
+            var afterRestart = new OverlaySettingsStore(path);
+            Assert.Equal(fixtureCredential, afterRestart.Read().RankSampleSecret);
+            Assert.Equal(fixtureCredential, App.ResolveRankSampleSecret(afterRestart));
+
+            // Blank means absent. RankCaptureTests separately pins that absent
+            // auth reads no LCU state and performs no POST.
+            afterRestart.SetRankSampleSecret("   ");
+            var unpairedRestart = new OverlaySettingsStore(path);
+            Assert.Null(unpairedRestart.Read().RankSampleSecret);
+            Assert.Null(App.ResolveRankSampleSecret(unpairedRestart));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("COACHBUILD_MYSTATS_SECRET", previousEnvironment);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static string MakeTempDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), "CoachBuild-SettingsTests", Guid.NewGuid().ToString("N"));

@@ -123,6 +123,12 @@ public sealed record TrayMenuState(
     public const string OpenLogFolderVerb = "Open log folder";
 
     /// <summary>
+    /// Opens the masked, one-way credential handoff. The stored value is never
+    /// placed in the label or supplied back to the dialog.
+    /// </summary>
+    public const string PairMyStatsVerb = "Pair desktop with My Stats…";
+
+    /// <summary>
     /// Names the accelerator in a menu label — and, when <paramref
     /// name="accelerator"/> is null, deliberately does not.
     ///

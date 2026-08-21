@@ -913,7 +913,7 @@ function Get-RankSampleSecret {
     # App.ResolveRankSampleSecret -- one secret in one place, so a user who
     # configures the native app has also configured this script.
     #
-    # $null is the normal state today and it means capture is INERT. It never
+    # $null means the desktop has not been paired and capture is INERT. It never
     # degrades into an unauthenticated POST: that is the fail-closed rule
     # lib/mystats/accountAuth.ts states for the server half, and the posture
     # components/live/mystatsAccount.ts already takes in the browser.
@@ -1014,8 +1014,9 @@ function Get-RankString {
 
 function ConvertTo-RankSample {
     # PURE. Given whatever /lol-ranked/v1/current-ranked-stats returned,
-    # produce @{ tier = <string>; division = <string|null>; lp = <int> } or
-    # $null. The exact counterpart of RankedStats.ReadSoloQueue in
+    # produce @{ tier = <string>; division = <string|null>; lp = <int>;
+    # cumulativeLp = <int|null> } or $null. The exact counterpart of
+    # RankedStats.ReadSoloQueue in
     # CoachBuild.Core -- the two must agree, because the same session's
     # samples can come from either half.
     #
@@ -1031,7 +1032,7 @@ function ConvertTo-RankSample {
     # as record {"t":"re1",...,"ri":14}, whose matching {"t":"er1"} request is
     # leagues-ledge/v2/signedRankedStats. It reads:
     #   {"queues":[{"queueType":"RANKED_SOLO_5x5","tier":"PLATINUM","rank":"IV",
-    #     "leaguePoints":91,"provisionalGamesRemaining":0,...}]}
+    #     "leaguePoints":91,"cumulativeLp":1691,"provisionalGamesRemaining":0,...}]}
     # Note what is NOT in it: no "queueMap", no "division", no "isProvisional".
     # Note also that the unplayed flex queue in the same body reports
     # tier:null with leaguePoints:0 -- a zero a reader that checked LP before
@@ -1059,6 +1060,13 @@ function ConvertTo-RankSample {
     $lp = Get-RankInt -Entry $entry -Names @('leaguePoints', 'lp')
     if ($null -eq $lp -or $lp -lt 0) { return $null }
 
+    # Riot's own absolute ladder integer. Optional by contract: older LCU
+    # shapes without it still produce a sample, and the server derives the
+    # same value from tier/division/LP. A malformed optional field is ignored
+    # rather than costing the bracket edge itself.
+    $cumulativeLp = Get-RankInt -Entry $entry -Names @('cumulativeLp')
+    if ($null -ne $cumulativeLp -and $cumulativeLp -lt 0) { $cumulativeLp = $null }
+
     # Master/Grandmaster/Challenger have no divisions and the client is not
     # consistent about whether it says "NA", "I" or nothing in that slot. A
     # literal "I" forwarded on a Master account would tell the ladder module
@@ -1073,13 +1081,15 @@ function ConvertTo-RankSample {
         }
     }
 
-    return @{ tier = $tier; division = $division; lp = $lp }
+    return @{ tier = $tier; division = $division; lp = $lp; cumulativeLp = $cumulativeLp }
 }
 
 function Test-RankStandingEqual {
     param($Left, $Right)
     if ($null -eq $Left -or $null -eq $Right) { return $false }
-    return ($Left.lp -eq $Right.lp) -and ($Left.tier -eq $Right.tier) -and ($Left.division -eq $Right.division)
+    return ($Left.lp -eq $Right.lp) -and
+        ($Left.tier -eq $Right.tier) -and
+        ($Left.division -eq $Right.division)
 }
 
 function Get-RankSettleDecision {
@@ -1122,6 +1132,27 @@ function Get-RankSettleDecision {
     return 'wait'
 }
 
+function New-RankSamplePayload {
+    # PURE wire projection shared by Send-RankSampleBody and SelfTest. The
+    # cumulative field is omitted when the LCU did not supply it, preserving
+    # the server's real tier/division/LP fallback path.
+    param($Identity, $Sample, [string]$ObservedAt)
+
+    $payload = @{
+        gameName   = $Identity.gameName
+        tagLine    = $Identity.tagLine
+        tier       = $Sample.tier
+        division   = $Sample.division
+        lp         = $Sample.lp
+        observedAt = $ObservedAt
+        source     = 'companion'
+    }
+    if ($null -ne $Sample.cumulativeLp) {
+        $payload['cumulativeLp'] = $Sample.cumulativeLp
+    }
+    return $payload
+}
+
 function Send-RankSampleBody {
     # The POST half. Every failure is a RETURN VALUE, never an exception --
     # the same posture as Invoke-LcuRaw and for the same reason.
@@ -1143,15 +1174,7 @@ function Send-RankSampleBody {
         # and re-resolves identity server-side from gameName + tagLine. Filling
         # the field from the LCU would write a time series that joins to
         # nothing, and would do it silently.
-        $payload = @{
-            gameName   = $Identity.gameName
-            tagLine    = $Identity.tagLine
-            tier       = $Sample.tier
-            division   = $Sample.division
-            lp         = $Sample.lp
-            observedAt = $ObservedAt
-            source     = 'companion'
-        }
+        $payload = New-RankSamplePayload -Identity $Identity -Sample $Sample -ObservedAt $ObservedAt
         $json = ConvertTo-Json -InputObject $payload -Depth 4 -Compress
         $bytes = [Text.Encoding]::UTF8.GetBytes($json)
 
@@ -4871,13 +4894,27 @@ function Invoke-SelfTest {
         if ($realSample.tier -ne 'PLATINUM') { $failures.Add("rank-sample: real body tier expected PLATINUM, got $($realSample.tier)") }
         if ($realSample.division -ne 'IV') { $failures.Add("rank-sample: real body division expected IV, got $($realSample.division)") }
         if ($realSample.lp -ne 91) { $failures.Add("rank-sample: real body lp expected 91, got $($realSample.lp)") }
+        if ($realSample.cumulativeLp -ne 1691) { $failures.Add("rank-sample: real body cumulativeLp expected 1691, got $($realSample.cumulativeLp)") }
     }
 
     # Both shapes, because only the array one has ever been observed and only
     # the object one is what the LCU's own model uses.
     $mapSample = ConvertTo-RankSample -Body ('{"queueMap":{"RANKED_SOLO_5x5":{"tier":"gold","division":"ii","leaguePoints":47}}}' | ConvertFrom-Json)
-    if ($null -eq $mapSample -or $mapSample.tier -ne 'GOLD' -or $mapSample.division -ne 'II' -or $mapSample.lp -ne 47) {
-        $failures.Add('rank-sample: queueMap shape did not read back as GOLD II 47')
+    if ($null -eq $mapSample -or $mapSample.tier -ne 'GOLD' -or $mapSample.division -ne 'II' -or $mapSample.lp -ne 47 -or $null -ne $mapSample.cumulativeLp) {
+        $failures.Add('rank-sample: queueMap shape without cumulativeLp did not read back as GOLD II 47 with fallback intact')
+    }
+
+    # Pin the actual PowerShell wire projection, not only the LCU reader. Riot's
+    # integer travels when present; a body without it omits the key so the
+    # server's tested ladder fallback remains a real compatibility path.
+    $wireIdentity = @{ gameName = 'Name'; tagLine = 'TAG' }
+    $wireWithCumulative = New-RankSamplePayload -Identity $wireIdentity -Sample $realSample -ObservedAt '2026-08-21T09:30:00.0000000Z'
+    if (-not $wireWithCumulative.ContainsKey('cumulativeLp') -or $wireWithCumulative.cumulativeLp -ne 1691) {
+        $failures.Add('rank-sample: PowerShell wire payload did not carry Riot cumulativeLp=1691')
+    }
+    $wireWithoutCumulative = New-RankSamplePayload -Identity $wireIdentity -Sample $mapSample -ObservedAt '2026-08-21T09:30:00.0000000Z'
+    if ($wireWithoutCumulative.ContainsKey('cumulativeLp')) {
+        $failures.Add('rank-sample: PowerShell wire payload must omit cumulativeLp when the LCU body omitted it')
     }
 
     # Apex tiers have no divisions (spec section 2). A literal "I" forwarded on

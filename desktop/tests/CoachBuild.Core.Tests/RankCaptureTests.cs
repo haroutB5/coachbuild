@@ -134,6 +134,19 @@ public sealed class RankCaptureTests
         Assert.Equal("PLATINUM", sample!.Tier);
         Assert.Equal("IV", sample.Division);
         Assert.Equal(91, sample.LeaguePoints);
+        Assert.Equal(1691, sample.CumulativeLp);
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("\"1691\"")]
+    public void A_malformed_optional_cumulative_lp_keeps_the_fallback_sample(string cumulativeLp)
+    {
+        var sample = RankedStats.ReadSoloQueue(MockLcuApi.Json(
+            $$$$"""{"queues":[{"queueType":"RANKED_SOLO_5x5","tier":"GOLD","rank":"I","leaguePoints":90,"cumulativeLp":{{{{cumulativeLp}}}}}]}"""));
+
+        Assert.Equal(new RankSample("GOLD", "I", 90), sample);
+        Assert.Null(sample?.CumulativeLp);
     }
 
     /// <summary>
@@ -269,7 +282,21 @@ public sealed class RankCaptureTests
         Assert.Equal("EMERALD", root.GetProperty("tier").GetString());
         Assert.Equal("III", root.GetProperty("division").GetString());
         Assert.Equal(42, root.GetProperty("lp").GetInt32());
+        Assert.False(root.TryGetProperty("cumulativeLp", out _));
         Assert.Equal("2026-08-21T09:30:00.0000000+00:00", root.GetProperty("observedAt").GetString());
+    }
+
+    [Fact]
+    public void Riots_cumulative_lp_is_serialized_when_the_lcu_supplies_it()
+    {
+        var sample = Assert.IsType<RankSample>(RankedStats.ReadSoloQueue(MockLcuApi.Json(CapturedRankedStatsBody)));
+        var body = RankSampleBody.Create(
+            new OwnIdentity("Name", "TAG", "local-uuid"),
+            sample,
+            new DateTimeOffset(2026, 8, 21, 9, 30, 0, TimeSpan.Zero));
+
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(body, JsonOptions.Wire));
+        Assert.Equal(1691, document.RootElement.GetProperty("cumulativeLp").GetInt32());
     }
 
     /// <summary>
@@ -547,6 +574,21 @@ public sealed class RankCaptureTests
     // ─────────────────────────────────────────────────────────────────────
     // The game-end settle loop
     // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Account_secret_redaction_uses_the_shared_compliance_policy()
+    {
+        const string secret = "fixture-shared-secret";
+
+        var redacted = ComplianceRules.Redact(
+            $"rank-sample: header x-coachbuild-account-secret={secret}",
+            secrets: [secret]);
+
+        Assert.DoesNotContain(secret, redacted, StringComparison.Ordinal);
+        Assert.Equal(
+            "rank-sample: header x-coachbuild-account-secret=[redacted]",
+            redacted);
+    }
 
     /// <summary>
     /// Leaving InProgress is the client noticing the game is over, not the
