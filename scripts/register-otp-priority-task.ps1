@@ -146,10 +146,25 @@ $settings = New-ScheduledTaskSettingsSet `
 
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 
+# RE-CADENCING MUST NOT ALSO RE-ENABLE. Set-ScheduledTask REPLACES the settings
+# object wholesale, and Enabled lives in that object: a settings set fresh from
+# New-ScheduledTaskSettingsSet carries Enabled = True, so running this script
+# against a DISABLED task silently turns it back on. Verified 2026-08-21 on a
+# throwaway task: Disabled -> Set-ScheduledTask -> Ready.
+#
+# That is a live hazard, not a theoretical one. The five CoachBuild ingest tasks
+# were disabled on 2026-08-20 to stop the Neon burn, and StartWhenAvailable is
+# true, so a re-enabled task with a missed slot behind it does not wait for the
+# next 6-hourly tick -- it fires almost immediately, against whatever the shared
+# Riot key is doing at the time. "Fix the cadence" must never mean "start the
+# job". Carry the previous state forward and let enabling stay a separate,
+# deliberate act.
+if ($existing) { $settings.Enabled = $existing.Settings.Enabled }
+
 if ($PSCmdlet.ShouldProcess($TaskName, "register every ${IntervalHours}h x ${MaxHours}h walk (~$cuHoursPerMonth CU-hours/mo)")) {
     if ($existing) {
         Set-ScheduledTask -TaskName $TaskName -Trigger $trigger -Action $action -Settings $settings | Out-Null
-        Write-Output "updated: $TaskName"
+        Write-Output "updated: $TaskName (left $(if ($settings.Enabled) { 'ENABLED' } else { 'DISABLED' }), as found)"
     } else {
         Register-ScheduledTask -TaskName $TaskName -Trigger $trigger -Action $action -Settings $settings `
             -Description 'CoachBuild OTP priority deep walk. Cadence is a Neon compute budget - see scripts/register-otp-priority-task.ps1.' | Out-Null
