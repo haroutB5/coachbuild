@@ -87,7 +87,13 @@ interface Statement {
 const SESSION_SELECT = "SELECT game_creation, win, game_duration_sec";
 
 type MatchRow = { game_creation: string; win: boolean; game_duration_sec: number | null };
-type SampleRow = { observed_at: string; tier: string | null; division: string | null; lp: number | null };
+type SampleRow = {
+  observed_at: string;
+  tier: string | null;
+  division: string | null;
+  lp: number | null;
+  cumulative_lp?: number | null;
+};
 
 interface Fixture {
   matches?: MatchRow[];
@@ -116,11 +122,18 @@ const game = (iso: string, win = true, durMin = 30): MatchRow => ({
   win,
   game_duration_sec: durMin * 60,
 });
-const sample = (iso: string, tier: string | null, division: string | null, lp: number | null): SampleRow => ({
+const sample = (
+  iso: string,
+  tier: string | null,
+  division: string | null,
+  lp: number | null,
+  cumulativeLp?: number | null
+): SampleRow => ({
   observed_at: iso,
   tier,
   division,
   lp,
+  ...(cumulativeLp === undefined ? {} : { cumulative_lp: cumulativeLp }),
 });
 
 /** Two sittings. The second runs 20:00 -> past midnight, which is the headline
@@ -233,6 +246,17 @@ describe("summary.sessions — the three confidence states, end to end", () => {
     expect(older.lpDelta).toEqual({ value: 50, confidence: "exact" });
   });
 
+  it("carries cumulative_lp out of storage and prefers it over ladder fallback", async () => {
+    const body = await summaryBody({
+      matches: TWO_SITTINGS,
+      samples: [
+        sample("2026-08-19T19:50:00.000Z", "MYTHIC", "IV", 10, 1691),
+        sample("2026-08-20T01:20:00.000Z", "MYTHIC", "IV", 24, 1705),
+      ],
+    });
+    expect(body.sessions[0].lpDelta).toEqual({ value: 14, confidence: "exact" });
+  });
+
   it("APPROXIMATE: a bracket that swallows the OTHER sitting's games is marked and counted", async () => {
     // Only two readings exist, days apart, so each sitting's bracket contains
     // the other's games. The number is real; the attribution is not.
@@ -313,6 +337,7 @@ describe("summary.sessions — the two new reads", () => {
     await summaryBody({ matches: TWO_SITTINGS, collected });
     const stmt = collected.find((s) => s.text.includes("coachbuild.my_rank_samples"));
     expect(stmt, "no rank-sample query was issued").toBeDefined();
+    expect(stmt!.text).toContain("cumulative_lp");
     expect(stmt!.values).toContain(PUUID);
     expect(stmt!.values).toContain(FRESH_WINDOW_DAYS);
   });

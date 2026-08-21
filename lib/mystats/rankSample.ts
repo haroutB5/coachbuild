@@ -53,6 +53,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { getSql } from "@/lib/pro/db";
+import { isAccountsRequestError, parseAccountsBody } from "@/lib/mystats/accountRequest";
 import { RETENTION_DAYS } from "@/lib/retention/prune";
 
 type Sql = NonNullable<ReturnType<typeof getSql>>;
@@ -83,6 +84,11 @@ export const RANK_SAMPLE_PRUNE_LIMIT = 500;
  *  characters. */
 const PUUID_RE = /^[A-Za-z0-9_-]{20,128}$/;
 
+/** The LCU labels its 36-character LOCAL account UUID `puuid`, but Riot's
+ *  public APIs cannot use it. It happens to pass PUUID_RE, so it needs an
+ *  explicit refusal or it will key a permanently orphaned time series. */
+const LCU_LOCAL_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Tier and division are stored as normalised uppercase tokens. Bounded in
  *  length and charset so nothing arbitrary reaches the column, but NOT checked
  *  against a list of known values — see this file's header. */
@@ -93,11 +99,14 @@ const RANK_TOKEN_RE = /^[A-Z]{1,20}$/;
  *  absolute ladder scale by more than the entire ladder is wide. */
 const MAX_LP = 10_000;
 
+/** Riot's absolute ladder integer includes all lower tiers as well as the LP
+ *  inside the current tier. Keep a generous safety ceiling without coupling
+ *  acceptance to today's tier vocabulary. */
+export const MAX_CUMULATIVE_LP = 100_000;
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** One validated reading, in the exact shape insertRankSample writes. */
-export interface RankSampleWrite {
-  puuid: string;
+interface RankSampleValues {
   /** Normalised to UTC ISO-8601 with milliseconds. NORMALISATION IS LOAD-
    *  BEARING: the idempotency guarantee is a primary key on this value, so two
    *  spellings of one instant ("…+02:00" and "…Z") must collapse to one string
@@ -106,14 +115,27 @@ export interface RankSampleWrite {
   tier: string | null;
   division: string | null;
   lp: number | null;
+  /** Riot's own absolute ladder position. Null for the public-API sources,
+   *  which do not return it; session arithmetic falls back to ladder.ts. */
+  cumulativeLp: number | null;
   source: RankSampleSource;
+}
+
+/** A validated request. The companion supplies a Riot ID for server-side
+ *  resolution; trusted cron/page callers may continue supplying a real puuid. */
+export type RankSampleRequest = RankSampleValues &
+  ({ puuid: string } | { gameName: string; tagLine: string });
+
+/** One validated and RESOLVED reading, in the exact shape the insert writes. */
+export interface RankSampleWrite extends RankSampleValues {
+  puuid: string;
 }
 
 export interface RankSampleError {
   error: string;
 }
 
-export function isRankSampleError(v: RankSampleWrite | RankSampleError): v is RankSampleError {
+export function isRankSampleError(v: RankSampleRequest | RankSampleError): v is RankSampleError {
   return typeof (v as RankSampleError).error === "string";
 }
 
@@ -134,12 +156,28 @@ function token(v: unknown): string | null {
  * request body would let a client date its own reading past the future bound
  * and park a permanent closing bracket in the table.
  */
-export function parseRankSampleBody(body: unknown, nowMs: number): RankSampleWrite | RankSampleError {
+export function parseRankSampleBody(body: unknown, nowMs: number): RankSampleRequest | RankSampleError {
   if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "body must be a JSON object" };
   const b = body as Record<string, unknown>;
 
-  const puuid = typeof b.puuid === "string" ? b.puuid.trim() : "";
-  if (!PUUID_RE.test(puuid)) return { error: "puuid must be 20-128 URL-safe characters" };
+  let identity: { puuid: string } | { gameName: string; tagLine: string };
+  // When either Riot-ID field is present, this is the companion/detect path.
+  // Reuse the accounts endpoint's validator so legitimate Unicode names and
+  // custom tagLines have ONE contract. Its detect mode deliberately ignores a
+  // caller-supplied puuid, which also makes mixed old-client payloads safe.
+  if (b.gameName !== undefined || b.tagLine !== undefined) {
+    const detected = parseAccountsBody({ mode: "detect", gameName: b.gameName, tagLine: b.tagLine });
+    if (isAccountsRequestError(detected)) return { error: detected.error };
+    if (detected.mode !== "detect") return { error: "gameName and tagLine are required together" };
+    identity = { gameName: detected.gameName, tagLine: detected.tagLine };
+  } else {
+    const puuid = typeof b.puuid === "string" ? b.puuid.trim() : "";
+    if (!PUUID_RE.test(puuid)) return { error: "puuid must be 20-128 URL-safe characters" };
+    if (LCU_LOCAL_UUID_RE.test(puuid)) {
+      return { error: "puuid is a League-local UUID; send gameName and tagLine for server-side resolution" };
+    }
+    identity = { puuid };
+  }
 
   const rawSource = typeof b.source === "string" ? b.source : "";
   if (!(RANK_SAMPLE_SOURCES as readonly string[]).includes(rawSource)) {
@@ -168,6 +206,19 @@ export function parseRankSampleBody(body: unknown, nowMs: number): RankSampleWri
   const tier = token(b.tier);
   const division = token(b.division);
   const lp = b.lp;
+  const rawCumulativeLp = b.cumulativeLp;
+  let cumulativeLp: number | null = null;
+  if (rawCumulativeLp !== null && rawCumulativeLp !== undefined) {
+    if (
+      typeof rawCumulativeLp !== "number" ||
+      !Number.isInteger(rawCumulativeLp) ||
+      rawCumulativeLp < 0 ||
+      rawCumulativeLp > MAX_CUMULATIVE_LP
+    ) {
+      return { error: `cumulativeLp must be an integer between 0 and ${MAX_CUMULATIVE_LP} when supplied` };
+    }
+    cumulativeLp = rawCumulativeLp;
+  }
 
   if (tier === null) {
     // UNRANKED — a real, storable observation, and the only shape in which the
@@ -176,7 +227,16 @@ export function parseRankSampleBody(body: unknown, nowMs: number): RankSampleWri
     // tier is not an unranked reading, it is a broken one.
     if (division !== null) return { error: "division without a tier" };
     if (lp !== null && lp !== undefined) return { error: "lp without a tier" };
-    return { puuid, observedAt: new Date(observedMs).toISOString(), tier: null, division: null, lp: null, source };
+    if (cumulativeLp !== null) return { error: "cumulativeLp without a tier" };
+    return {
+      ...identity,
+      observedAt: new Date(observedMs).toISOString(),
+      tier: null,
+      division: null,
+      lp: null,
+      cumulativeLp: null,
+      source,
+    };
   }
 
   if (!RANK_TOKEN_RE.test(tier)) return { error: "tier must be a short alphabetic token" };
@@ -188,7 +248,15 @@ export function parseRankSampleBody(body: unknown, nowMs: number): RankSampleWri
     return { error: `lp must be an integer between 0 and ${MAX_LP} when a tier is given` };
   }
 
-  return { puuid, observedAt: new Date(observedMs).toISOString(), tier, division, lp, source };
+  return {
+    ...identity,
+    observedAt: new Date(observedMs).toISOString(),
+    tier,
+    division,
+    lp,
+    cumulativeLp,
+    source,
+  };
 }
 
 export interface RankSampleWriteResult {
@@ -229,13 +297,14 @@ export interface RankSampleWriteResult {
 export async function insertRankSample(sql: Sql, sample: RankSampleWrite): Promise<RankSampleWriteResult> {
   const rows = (await sql`
     WITH inserted AS (
-      INSERT INTO coachbuild.my_rank_samples (puuid, observed_at, tier, division, lp, source)
+      INSERT INTO coachbuild.my_rank_samples (puuid, observed_at, tier, division, lp, cumulative_lp, source)
       VALUES (
         ${sample.puuid},
         ${sample.observedAt}::timestamptz,
         ${sample.tier},
         ${sample.division},
         ${sample.lp},
+        ${sample.cumulativeLp},
         ${sample.source}
       )
       ON CONFLICT (puuid, observed_at) DO NOTHING

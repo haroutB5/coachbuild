@@ -70,6 +70,14 @@ describe("ladderPoints — the absolute scale", () => {
     }
   });
 
+  it("agrees with cumulativeLp in the captured LCU ranked fixture", () => {
+    // Verbatim rank fields from the real signedRankedStats capture pinned by
+    // the desktop half: Riot says PLATINUM IV 91 is absolute position 1691.
+    // A disagreement here means ladder.ts is wrong, not that Riot's integer is.
+    const captured = { tier: "PLATINUM", division: "IV", lp: 91, cumulativeLp: 1691 };
+    expect(P(captured.tier, captured.division, captured.lp)).toBe(captured.cumulativeLp);
+  });
+
   it("the apex tiers share ONE base and ignore division entirely", () => {
     // Diamond I 100 and Master 0 are the SAME point on the ladder — promotion
     // into Master is continuous, not a 400-point jump.

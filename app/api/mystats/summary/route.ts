@@ -80,6 +80,7 @@ interface RankSampleRow {
   tier: string | null;
   division: string | null;
   lp: number | null;
+  cumulative_lp: number | null;
 }
 
 const EMPTY_STATS = {
@@ -350,7 +351,7 @@ export async function GET(req: NextRequest) {
     if (sessionRows.length > 0) {
       try {
         const sampleRows = (await sql`
-          SELECT observed_at, tier, division, lp
+          SELECT observed_at, tier, division, lp, cumulative_lp
           FROM coachbuild.my_rank_samples
           WHERE puuid = ${account.puuid}
             AND observed_at > now() - make_interval(days => ${FRESH_WINDOW_DAYS})
@@ -361,6 +362,7 @@ export async function GET(req: NextRequest) {
           tier: r.tier,
           division: r.division,
           lp: r.lp,
+          cumulativeLp: r.cumulative_lp ?? null,
         }));
       } catch (err) {
         console.warn("[/api/mystats/summary] rank samples unavailable, LP deltas degrade to a dash:", err);

@@ -64,7 +64,7 @@
 // account reaches Master.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { ladderDelta, ladderPoints, type LadderPosition } from "@/lib/mystats/ladder";
+import { ladderPoints, type LadderPosition } from "@/lib/mystats/ladder";
 
 /** The gap that ends a sitting. The user chose 8h over 3/4/6 — see the spec's
  *  "decisions taken (do not re-litigate)". */
@@ -106,10 +106,11 @@ export interface PlaySession {
   gameEndsMs: number[];
 }
 
-/** One row of `coachbuild.my_rank_samples`. All three rank fields are nullable
- *  because an unranked reading is a real, storable observation. */
+/** One row of `coachbuild.my_rank_samples`. The public Riot API does not return
+ *  cumulativeLp, so null/absent means ladder.ts must derive the same integer. */
 export interface RankSample extends LadderPosition {
   observedAt: string | number | Date;
+  cumulativeLp?: number | null;
 }
 
 export type LpDeltaConfidence = "exact" | "approximate" | "unavailable";
@@ -224,14 +225,19 @@ export function groupSessions(matches: readonly SessionMatchInput[]): PlaySessio
 interface UsableSample {
   ms: number;
   points: number;
-  /** THE SAMPLE, not a narrowed view of it. Typed `LadderPosition` this file
-   *  did not compile: the `filter((s): s is UsableSample => ...)` below narrows
-   *  an array of `{..., position: RankSample} | null`, and a type predicate's
-   *  type must be ASSIGNABLE TO its parameter's type — `LadderPosition` is the
-   *  supertype, so it is not (TS2677), and the failed narrowing then cascaded
-   *  into three more errors. `ladderDelta` still only reads the LadderPosition
-   *  half of it. */
-  position: RankSample;
+}
+
+/** Riot's LCU already supplies the absolute ladder integer. It is the source
+ *  of truth when present; league-v4 does not return it, so cron/page readings
+ *  continue through the independently tested ladder conversion. A malformed
+ *  present value fails closed rather than being treated as absent. */
+function samplePoints(sample: RankSample): number | null {
+  if (sample.cumulativeLp !== null && sample.cumulativeLp !== undefined) {
+    const value = sample.cumulativeLp;
+    const hasRankedTier = typeof sample.tier === "string" && sample.tier.trim().length > 0;
+    return hasRankedTier && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  return ladderPoints(sample);
 }
 
 /**
@@ -256,8 +262,8 @@ export function sessionLpDelta(
   const usable: UsableSample[] = samples
     .map((s) => {
       const ms = toMs(s.observedAt);
-      const points = ladderPoints(s);
-      return ms === null || points === null ? null : { ms, points, position: s };
+      const points = samplePoints(s);
+      return ms === null || points === null ? null : { ms, points };
     })
     .filter((s): s is UsableSample => s !== null)
     .sort((a, b) => a.ms - b.ms);
@@ -286,11 +292,9 @@ export function sessionLpDelta(
     return { value: null, confidence: "unavailable", reason: "unbracketed" };
   }
 
-  const value = ladderDelta(open.position, close.position);
-  // Both ends are usable by construction, so this cannot be null — but a null
-  // here would mean the ladder module and this one disagree about what
-  // "usable" means, and that must not surface as a fabricated 0.
-  if (value === null) return { value: null, confidence: "unavailable", reason: "unbracketed" };
+  const rawValue = close.points - open.points;
+  // Keep the same signed-zero guarantee ladderDelta provides to its callers.
+  const value = rawValue === 0 ? 0 : rawValue;
 
   const inBracket = (endMs: number) => endMs > open.ms && endMs <= close.ms;
   let bracketGames = 0;

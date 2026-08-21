@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/pro/db";
 import { DbUnavailableError } from "@/lib/pro/errors";
+import { linkAccount } from "@/lib/mystats/account";
 import { ACCOUNT_SECRET_HEADER, checkAccountSecret } from "@/lib/mystats/accountAuth";
-import { insertRankSample, isRankSampleError, parseRankSampleBody } from "@/lib/mystats/rankSample";
+import {
+  insertRankSample,
+  isRankSampleError,
+  parseRankSampleBody,
+  type RankSampleWrite,
+} from "@/lib/mystats/rankSample";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,7 +23,8 @@ function json(body: unknown, status: number) {
  * POST /api/mystats/rank-sample — records ONE reading of the account's ranked
  * standing (spec §4, migration 0027).
  *
- * Request:  {puuid, tier, division, lp, observedAt, source}
+ * Request:  {puuid, tier, division, lp, cumulativeLp?, observedAt, source}
+ *       OR: {gameName, tagLine, tier, division, lp, cumulativeLp?, observedAt, source}
  * Response: {ok:true, stored} | {ok:false, reason, detail?}
  *
  * WHY THIS ENDPOINT EXISTS. Riot's match API has never returned per-game LP
@@ -75,7 +82,33 @@ export async function POST(req: NextRequest) {
   if (isRankSampleError(parsed)) return json({ ok: false, reason: "invalid-body", detail: parsed.error }, 400);
 
   try {
-    const { stored } = await insertRankSample(sql, parsed);
+    let sample: RankSampleWrite;
+    if ("puuid" in parsed) {
+      // Cron/page sources already hold Riot's encrypted puuid and stay on the
+      // existing zero-resolution path.
+      sample = parsed;
+    } else {
+      // The desktop can only name the logged-in account by Riot ID. Reuse the
+      // accounts detect path wholesale: its stored riot_id fast path costs no
+      // Riot call, and its miss path owns the paced account-v1/region lookup
+      // discipline. Never substitute the LCU's 36-character local UUID.
+      const resolved = await linkAccount(sql, { gameName: parsed.gameName, tagLine: parsed.tagLine });
+      if (!resolved.ok) {
+        const status = resolved.reason === "account-not-found" ? 404 : 502;
+        return json({ ok: false, reason: resolved.reason }, status);
+      }
+      sample = {
+        puuid: resolved.account.puuid,
+        observedAt: parsed.observedAt,
+        tier: parsed.tier,
+        division: parsed.division,
+        lp: parsed.lp,
+        cumulativeLp: parsed.cumulativeLp,
+        source: parsed.source,
+      };
+    }
+
+    const { stored } = await insertRankSample(sql, sample);
     return json({ ok: true, stored }, 200);
   } catch (err) {
     if (err instanceof DbUnavailableError) {

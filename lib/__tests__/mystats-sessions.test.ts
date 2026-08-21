@@ -45,8 +45,14 @@ function game(iso: string, win = true, durationMin: number | null = 30): Session
   return { gameCreation: iso, win, gameDurationSec: durationMin === null ? null : durationMin * 60 };
 }
 
-function sample(iso: string, tier: string | null, division: string | null, lp: number | null): RankSample {
-  return { observedAt: iso, tier, division, lp };
+function sample(
+  iso: string,
+  tier: string | null,
+  division: string | null,
+  lp: number | null,
+  cumulativeLp?: number | null
+): RankSample {
+  return { observedAt: iso, tier, division, lp, ...(cumulativeLp === undefined ? {} : { cumulativeLp }) };
 }
 
 const utcDay = (iso: string) => iso.slice(0, 10);
@@ -213,6 +219,16 @@ describe("sessionLpDelta — the three confidence states", () => {
     // Friday crosses a division: Emerald II 61 -> Emerald I 8 is +47, not -53.
     const friday = sessionLpDelta(SESSIONS[1], samples, SESSIONS);
     expect(friday).toEqual({ value: 47, confidence: "exact" });
+  });
+
+  it("prefers Riot's cumulativeLp when present", () => {
+    // Even a tier this build cannot yet place is usable when Riot supplied its
+    // own absolute integer. Without the preferred field both rows are skipped.
+    const samples = [
+      sample("2026-08-13T18:55:00.000Z", "MYTHIC", "IV", 10, 1691),
+      sample("2026-08-13T20:52:00.000Z", "MYTHIC", "IV", 24, 1705),
+    ];
+    expect(sessionLpDelta(SESSIONS[0], samples, SESSIONS)).toEqual({ value: 14, confidence: "exact" });
   });
 
   it("APPROXIMATE: a CONTAMINATED bracket — the only samples straddle both sittings", () => {

@@ -72,6 +72,10 @@
 -- session rather than being scored as zero LP (which would produce a delta of
 -- a couple of thousand points that looks like data).
 --
+-- cumulative_lp is Riot's own absolute ladder integer from the LCU. It is
+-- nullable because league-v4 (the cron/page source) does not return it; those
+-- rows deliberately fall back to lib/mystats/ladder.ts at read time.
+--
 -- PRIMARY KEY (puuid, observed_at) IS THE IDEMPOTENCY GUARANTEE AND THE INDEX.
 -- The companion captures on app start, champ select and game end, and it
 -- retries; POST /api/mystats/rank-sample must never 500 on a duplicate, so the
@@ -86,6 +90,7 @@ CREATE TABLE IF NOT EXISTS coachbuild.my_rank_samples (
   tier text,
   division text,
   lp integer,
+  cumulative_lp integer,
   -- 'companion' | 'cron' | 'page'. Which capture produced this reading, so a
   -- future question about sampling density has an answer without a join.
   -- Validated as an allowlist at the API boundary (lib/mystats/rankSample.ts):

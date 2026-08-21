@@ -36,6 +36,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const mockSql = vi.fn();
 vi.mock("@/lib/pro/db", () => ({ getSql: vi.fn(() => mockSql) }));
 
+const mockLinkAccount = vi.fn();
+vi.mock("@/lib/mystats/account", () => ({ linkAccount: (...args: unknown[]) => mockLinkAccount(...args) }));
+
 import { POST as rankSamplePOST } from "@/app/api/mystats/rank-sample/route";
 import { ACCOUNT_SECRET_HEADER } from "@/lib/mystats/accountAuth";
 import {
@@ -51,11 +54,27 @@ import { ladderPoints } from "@/lib/mystats/ladder";
 
 const SECRET = "correct-horse-battery-staple";
 const PUUID = "abcdefghijklmnopqrstuvwxyz0123456789-_ABCDEFGHIJ";
+const RESOLVED_PUUID = "riot-encrypted-puuid-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ";
 const NOW = Date.parse("2026-08-21T12:00:00.000Z");
 const OBSERVED = "2026-08-21T11:59:00.000Z";
+const CUMULATIVE_LP = 1642;
 
 function body(over: Record<string, unknown> = {}) {
-  return { puuid: PUUID, tier: "PLATINUM", division: "IV", lp: 42, observedAt: OBSERVED, source: "companion", ...over };
+  return {
+    puuid: PUUID,
+    tier: "PLATINUM",
+    division: "IV",
+    lp: 42,
+    cumulativeLp: CUMULATIVE_LP,
+    observedAt: OBSERVED,
+    source: "companion",
+    ...over,
+  };
+}
+
+function detectedBody(over: Record<string, unknown> = {}) {
+  const { puuid: _ignored, ...sample } = body(over);
+  return { gameName: "K1ayer", tagLine: "swift", ...sample };
 }
 
 function postReq(payload: unknown, headers: Record<string, string> = {}) {
@@ -98,13 +117,34 @@ describe("parseRankSampleBody — the shape of an acceptable reading", () => {
       tier: "PLATINUM",
       division: "IV",
       lp: 42,
+      cumulativeLp: CUMULATIVE_LP,
       source: "companion",
     });
+  });
+
+  it("accepts the companion's Riot ID and does not trust a puuid beside it", () => {
+    const parsed = parseRankSampleBody({ ...body(), gameName: " K1ayer ", tagLine: " swift " }, NOW);
+    expect(parsed).toEqual({
+      gameName: "K1ayer",
+      tagLine: "swift",
+      observedAt: OBSERVED,
+      tier: "PLATINUM",
+      division: "IV",
+      lp: 42,
+      cumulativeLp: CUMULATIVE_LP,
+      source: "companion",
+    });
+    expect(parsed).not.toHaveProperty("puuid");
   });
 
   it("upper-cases tier and division, so one rank is not stored two ways", () => {
     const parsed = parseRankSampleBody(body({ tier: " platinum ", division: "iv" }), NOW);
     expect(parsed).toMatchObject({ tier: "PLATINUM", division: "IV" });
+  });
+
+  it("accepts cron/page readings without cumulativeLp for ladder.ts fallback", () => {
+    const parsed = parseRankSampleBody(body({ source: "cron", cumulativeLp: undefined }), NOW);
+    expect(parsed).toMatchObject({ puuid: PUUID, cumulativeLp: null, source: "cron" });
   });
 
   it("normalises observedAt to UTC ISO, so two spellings of ONE instant share a key", () => {
@@ -124,13 +164,14 @@ describe("parseRankSampleBody — the shape of an acceptable reading", () => {
     // A successful read of an unranked account is a real observation and is
     // stored (migration 0022's convention, kept by 0027). ladder.ts refuses to
     // place it, so it is skipped when bracketing rather than scored as 0 LP.
-    const parsed = parseRankSampleBody(body({ tier: null, division: null, lp: null }), NOW);
+    const parsed = parseRankSampleBody(body({ tier: null, division: null, lp: null, cumulativeLp: null }), NOW);
     expect(parsed).toEqual({
       puuid: PUUID,
       observedAt: OBSERVED,
       tier: null,
       division: null,
       lp: null,
+      cumulativeLp: null,
       source: "companion",
     });
     expect(ladderPoints(parsed as { tier: null; division: null; lp: null })).toBeNull();
@@ -162,6 +203,8 @@ describe("parseRankSampleBody — what it refuses", () => {
     ["a missing puuid", body({ puuid: undefined })],
     ["a puuid with a path separator in it", body({ puuid: "aaaaaaaaaaaaaaaaaaaa/../etc" })],
     ["a too-short puuid", body({ puuid: "short" })],
+    ["the LCU's local UUID masquerading as a puuid", body({ puuid: "550e8400-e29b-41d4-a716-446655440000" })],
+    ["a partial Riot ID", detectedBody({ tagLine: undefined })],
     ["a missing source", body({ source: undefined })],
     ["a source outside the allowlist", body({ source: "desktop" })],
     ["a missing observedAt", body({ observedAt: undefined })],
@@ -170,9 +213,13 @@ describe("parseRankSampleBody — what it refuses", () => {
     ["a fractional lp", body({ lp: 42.5 })],
     ["a negative lp", body({ lp: -1 })],
     ["a string lp", body({ lp: "42" })],
+    ["a fractional cumulativeLp", body({ cumulativeLp: 1691.5 })],
+    ["a negative cumulativeLp", body({ cumulativeLp: -1 })],
+    ["a string cumulativeLp", body({ cumulativeLp: "1691" })],
     ["a ranked reading with NO lp", body({ lp: null })],
     ["lp without a tier", body({ tier: null, division: null })],
     ["a division without a tier", body({ tier: null, lp: null })],
+    ["cumulativeLp without a tier", body({ tier: null, division: null, lp: null, cumulativeLp: 0 })],
   ];
 
   for (const [label, input] of bad) {
@@ -232,11 +279,14 @@ describe("insertRankSample", () => {
     expect(collected).toHaveLength(1);
     const [stmt] = collected;
     expect(stmt.text).toContain("coachbuild.my_rank_samples");
+    expect(stmt.text).toContain("cumulative_lp");
     expect(stmt.text).toContain("ON CONFLICT");
     expect(stmt.text).toContain("DO NOTHING");
     expect(stmt.text).toContain("DELETE");
     // Every field of the reading reaches the statement...
-    for (const v of [PUUID, OBSERVED, "PLATINUM", "IV", 42, "companion"]) expect(stmt.values).toContain(v);
+    for (const v of [PUUID, OBSERVED, "PLATINUM", "IV", 42, CUMULATIVE_LP, "companion"]) {
+      expect(stmt.values).toContain(v);
+    }
     // ...and the retention bound is the SHARED constant, not a copy. A prune
     // window that drifted below the read window would delete samples the
     // summary route still reads.
@@ -281,6 +331,8 @@ describe("POST /api/mystats/rank-sample", () => {
   beforeEach(() => {
     mockSql.mockReset();
     mockSql.mockImplementation(() => Promise.resolve([{ stored: 1, pruned: 0 }]));
+    mockLinkAccount.mockReset();
+    mockLinkAccount.mockResolvedValue({ ok: true, account: { puuid: RESOLVED_PUUID }, created: false });
     process.env.MYSTATS_ACCOUNT_SECRET = SECRET;
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -300,6 +352,30 @@ describe("POST /api/mystats/rank-sample", () => {
     await expect(res.json()).resolves.toEqual({ ok: true, stored: true });
     expect(res.headers.get("Cache-Control")).toBe("no-store");
     expect(mockSql).toHaveBeenCalledTimes(1);
+    expect(mockLinkAccount).not.toHaveBeenCalled();
+  });
+
+  it("resolves the companion's Riot ID through the existing detect path before storing", async () => {
+    const res = await rankSamplePOST(authed(detectedBody()));
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ ok: true, stored: true });
+    expect(mockLinkAccount).toHaveBeenCalledTimes(1);
+    expect(mockLinkAccount).toHaveBeenCalledWith(mockSql, { gameName: "K1ayer", tagLine: "swift" });
+    expect(mockSql).toHaveBeenCalledTimes(1);
+    expect(mockSql.mock.calls[0].slice(1)).toContain(RESOLVED_PUUID);
+    expect(mockSql.mock.calls[0].slice(1)).not.toContain("K1ayer");
+  });
+
+  it.each([
+    ["account-not-found", 404],
+    ["region-unresolved", 502],
+    ["riot-unavailable", 502],
+  ] as const)("rejects an unresolved Riot ID as %s and stores nothing", async (reason, status) => {
+    mockLinkAccount.mockResolvedValueOnce({ ok: false, reason });
+    const res = await rankSamplePOST(authed(detectedBody()));
+    expect(res.status).toBe(status);
+    await expect(res.json()).resolves.toEqual({ ok: false, reason });
+    expect(mockSql).not.toHaveBeenCalled();
   });
 
   it("IDEMPOTENT: a duplicate is 200 ok, never a 500", async () => {
