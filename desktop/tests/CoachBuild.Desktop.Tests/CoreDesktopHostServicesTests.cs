@@ -65,6 +65,85 @@ public sealed class CoreDesktopHostServicesTests
         }
     }
 
+    /// <summary>
+    /// Spec §5's FIRST moment: app start. The other two (champ select entry,
+    /// game end) are phase transitions and are proven in
+    /// <c>RankCaptureTests</c> against the gameflow poller. App start is not a
+    /// transition — the poller sees None -> None and has nothing to compare — so
+    /// the host raises it, and this is the only place that can say it did.
+    ///
+    /// <para>Two claims, and the second is the important one. That a capture was
+    /// STARTED: <c>PendingRankCapture</c> is non-null the moment StartAsync
+    /// returns. That starting it COST STARTUP NOTHING: there is no League client
+    /// on a test agent, so the capture necessarily fails, and StartAsync still
+    /// returns and the host still serves. A capture that could delay or fail a
+    /// startup would fail here by hanging or throwing.</para>
+    /// </summary>
+    [Fact]
+    public async Task App_start_fires_a_rank_capture_without_delaying_startup()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CoachBuild-HostTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var token = new string('a', 64);
+        var sink = new NeverCalledRankSink();
+
+        try
+        {
+            await using var host = new CoreDesktopHostServices(
+                token,
+                root,
+                bridgePorts: [FindFreePort()],
+                rankSampleSecret: () => "test-secret",
+                rankSampleSink: sink,
+                rankCaptureOptions: new RankCaptureOptions(GameEndSettleAttempts: 0));
+
+            Assert.Null(host.PendingRankCapture);
+
+            await host.StartAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+            var capture = host.PendingRankCapture;
+            Assert.NotNull(capture);
+
+            // Completes, and completes without faulting. CaptureAsync has no
+            // throw path; if one is ever added, this is where it surfaces.
+            await capture!.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(TaskStatus.RanToCompletion, capture.Status);
+
+            // Whether anything POSTED is not asserted, deliberately: on an agent
+            // with no League client the capture stops at identity, while on a
+            // developer box with one running it can go all the way. Both are
+            // correct. The sink is injected so that the second case cannot put a
+            // real developer's ladder position on the production origin from a
+            // test run; if it did fire, all it may claim is `companion`.
+            Assert.All(sink.Sources, source => Assert.Equal("companion", source));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Swallows samples so a test run can never post to the production origin,
+    /// and records what it saw.
+    /// </summary>
+    private sealed class NeverCalledRankSink : IRankSampleSink
+    {
+        private readonly object _gate = new();
+        private readonly List<string> _sources = [];
+
+        public IReadOnlyList<string> Sources { get { lock (_gate) return [.. _sources]; } }
+
+        public Task<RankSamplePostResult> PostAsync(
+            RankSampleBody body,
+            string secret,
+            CancellationToken cancellationToken)
+        {
+            lock (_gate) _sources.Add(body.Source);
+            return Task.FromResult(RankSamplePostResult.Posted);
+        }
+    }
+
     private static ChampSelectResolution Resolution(int championId, int roleId) => new(
         LocalPlayerCellId: 1,
         ChampionId: championId,

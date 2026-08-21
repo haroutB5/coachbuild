@@ -270,15 +270,23 @@ public partial class App : WpfApplication
             return;
         }
 
+        // Built before the host services so the LP capture can read the account
+        // secret out of it. The constructor touches no disk, so moving it up
+        // costs nothing and changes no behaviour for anything below.
+        var settingsStore = new OverlaySettingsStore(Paths.SettingsFile);
+
         if (_services is NullDesktopHostServices)
         {
-            var nativeServices = new CoreDesktopHostServices(SessionToken, Paths.Root, log: _log);
+            var nativeServices = new CoreDesktopHostServices(
+                SessionToken,
+                Paths.Root,
+                log: _log,
+                rankSampleSecret: () => ResolveRankSampleSecret(settingsStore));
             nativeServices.PageRequested += OnNativePageRequested;
             nativeServices.WebFreshnessCheckRequested += OnWebFreshnessCheckRequested;
             _services = nativeServices;
         }
 
-        var settingsStore = new OverlaySettingsStore(Paths.SettingsFile);
         _startupManager = new StartupManager();
         AutostartConfiguration.EnsureConfigured(settingsStore, _startupManager);
 
@@ -322,6 +330,35 @@ public partial class App : WpfApplication
         _pollTask = PollAsync(_shutdown.Token);
         if (Options.ShouldOpenWebViewOnLaunch)
             _ = ReopenAsync();
+    }
+
+    /// <summary>
+    /// The shared account secret the ranked-LP capture posts with, or null.
+    ///
+    /// <para>Two sources, environment first: <c>COACHBUILD_MYSTATS_SECRET</c>
+    /// then <c>rankSampleSecret</c> in <c>desktop-settings.json</c>. The
+    /// environment wins so a support session can turn capture on for one launch
+    /// without writing a secret into a file that stays there afterwards.</para>
+    ///
+    /// <para>Null is the normal state today and it means capture is INERT. It
+    /// never degrades into an unauthenticated POST — that is the same fail-closed
+    /// rule <c>lib/mystats/accountAuth.ts</c> states for the server half.</para>
+    /// </summary>
+    internal static string? ResolveRankSampleSecret(OverlaySettingsStore store)
+    {
+        try
+        {
+            var fromEnvironment = Environment.GetEnvironmentVariable("COACHBUILD_MYSTATS_SECRET")?.Trim();
+            if (!string.IsNullOrEmpty(fromEnvironment)) return fromEnvironment;
+            var fromSettings = store.Read().RankSampleSecret?.Trim();
+            return string.IsNullOrEmpty(fromSettings) ? null : fromSettings;
+        }
+        catch
+        {
+            // A settings file that cannot be read is a capture that does not
+            // happen, never a startup that does not happen.
+            return null;
+        }
     }
 
     /// <summary>
@@ -1325,6 +1362,9 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     private readonly WindowDecisionService _windowDecisions;
     private readonly GameflowPoller _gameflow;
     private readonly LivePollingCoordinator _livePolling;
+    private readonly RankCaptureService _rankCapture;
+    private readonly IRankSampleSink _rankSink;
+    private readonly bool _ownsRankSink;
     private readonly CancellationTokenSource _stop = new();
     private Task? _gameflowTask;
     private Task? _liveTask;
@@ -1407,7 +1447,15 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         HttpMessageHandler? liveHandler = null,
         TimeProvider? timeProvider = null,
         LiveClientDataOptions? liveOptions = null,
-        IChampionDirectory? championDirectory = null)
+        IChampionDirectory? championDirectory = null,
+        // Where the shared account secret comes from. Null means "there is no
+        // secret", which makes LP capture INERT rather than unauthenticated --
+        // see RankSampleClient's remarks and HANDOFF-lp-capture.md.
+        Func<string?>? rankSampleSecret = null,
+        // Test seam. Production always builds a RankSampleClient against the
+        // real origin; a test that wanted one would need a socket.
+        IRankSampleSink? rankSampleSink = null,
+        RankCaptureOptions? rankCaptureOptions = null)
     {
         if (!SessionTokenStore.IsValid(sessionToken))
             throw new ArgumentException("A valid persistent session token is required.", nameof(sessionToken));
@@ -1436,12 +1484,25 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             log: _log,
             ports: bridgePorts);
         _skillOrders = _bridge.SkillOrderProvider;
+        _ownsRankSink = rankSampleSink is null;
+        _rankSink = rankSampleSink ?? new RankSampleClient(CompanionWire.AppOrigin);
+        _rankCapture = new RankCaptureService(
+            _lcu,
+            _rankSink,
+            rankSampleSecret ?? (static () => null),
+            _log,
+            _time,
+            rankCaptureOptions);
         _gameflow = new GameflowPoller(
             _credentials,
             _lcu,
             _state,
             _windowDecisions,
-            _log);
+            _log,
+            // Fire-and-forget by construction. The gameflow loop drives champ
+            // select; nothing it calls may take time, and Fire() returns before
+            // the first LCU byte is sent.
+            rankCapture: trigger => _rankCapture.Fire(trigger, _stop.Token));
         // Live Client Data names the local player's champion; /api/skill-order
         // is keyed by numeric id. Nothing bridged that gap before 1.0.11.
         _ownsChampions = championDirectory is null;
@@ -1563,9 +1624,20 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         }
 
         await _bridge.StartAsync(cancellationToken).ConfigureAwait(false);
+        // Spec §5's first moment. Raised here rather than in the gameflow loop
+        // because "the app just started" is the one transition the phase poller
+        // cannot see: it observes None -> None and has nothing to compare.
+        // Detached, so a client that is not running yet costs startup nothing.
+        _rankCapture.Fire(RankCaptureTrigger.AppStart, _stop.Token);
         _gameflowTask = RunGameflowAsync(_stop.Token);
         _liveTask = RunLivePollingAsync(_stop.Token);
     }
+
+    /// <summary>
+    /// The most recent LP capture, for tests to settle on. Production never
+    /// reads it — see <see cref="RankCaptureService.PendingCapture"/>.
+    /// </summary>
+    public Task? PendingRankCapture => _rankCapture.PendingCapture;
 
     public Task<DesktopPhaseSnapshot> ReadSnapshotAsync(CancellationToken cancellationToken)
     {
@@ -2354,6 +2426,7 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             disposableChampions.Dispose();
         _live.Dispose();
         _lcu.Dispose();
+        if (_ownsRankSink && _rankSink is IDisposable disposableRankSink) disposableRankSink.Dispose();
         _stop.Dispose();
     }
 

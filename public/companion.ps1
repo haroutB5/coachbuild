@@ -898,6 +898,442 @@ function Get-CurrentSummonerIdentity {
     return ConvertTo-MeIdentity -Summoner $summoner.Content
 }
 
+# ---------------------------------------------------------------------------
+# Ranked-LP capture (spec 2026-08-20-session-record-lp-design.md, section 5).
+# The PowerShell half. Its C# counterpart is CoachBuild.Core's RankedStats /
+# RankCaptureService; the readers below are written to agree with it field for
+# field, because a single user's session can be sampled by either half.
+# ---------------------------------------------------------------------------
+function Get-RankSampleSecret {
+    # The shared account secret the ranked-LP capture posts with, or $null.
+    #
+    # Two sources, environment first: COACHBUILD_MYSTATS_SECRET, then
+    # "rankSampleSecret" in %LOCALAPPDATA%\CoachBuild\desktop-settings.json.
+    # The SAME two sources, in the SAME order, as the C# half's
+    # App.ResolveRankSampleSecret -- one secret in one place, so a user who
+    # configures the native app has also configured this script.
+    #
+    # $null is the normal state today and it means capture is INERT. It never
+    # degrades into an unauthenticated POST: that is the fail-closed rule
+    # lib/mystats/accountAuth.ts states for the server half, and the posture
+    # components/live/mystatsAccount.ts already takes in the browser.
+    param([string]$SettingsPath)
+
+    try {
+        $fromEnv = $env:COACHBUILD_MYSTATS_SECRET
+        if ($fromEnv -and $fromEnv.Trim()) { return $fromEnv.Trim() }
+
+        if (-not $SettingsPath) {
+            $SettingsPath = Join-Path (Join-Path $env:LOCALAPPDATA 'CoachBuild') 'desktop-settings.json'
+        }
+        if (-not (Test-Path -LiteralPath $SettingsPath)) { return $null }
+        $settings = Get-Content -LiteralPath $SettingsPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        $value = $settings.rankSampleSecret
+        if ($value -is [string] -and $value.Trim()) { return $value.Trim() }
+        return $null
+    } catch {
+        # A settings file that cannot be read is a capture that does not
+        # happen, never a tick that does not happen.
+        return $null
+    }
+}
+
+function Test-RankApexTier {
+    param([string]$Tier)
+    if (-not $Tier) { return $false }
+    return @('MASTER', 'GRANDMASTER', 'CHALLENGER') -contains $Tier.Trim().ToUpperInvariant()
+}
+
+function Get-RankSoloEntry {
+    # The ranked-solo entry out of either shape, mirroring
+    # RankedStats.FindSoloQueueEntry in CoachBuild.Core.
+    #
+    # "queues" (array) is the shape OBSERVED on this machine -- see
+    # ConvertTo-RankSample's provenance note. "queueMap" (object) is the shape
+    # the LCU's own model uses and is the hop still unverified. Reading both
+    # costs one branch.
+    param($Body)
+
+    if ($null -eq $Body) { return $null }
+
+    $map = $null
+    try { $map = $Body.queueMap } catch { $map = $null }
+    if ($map -and $map.PSObject) {
+        foreach ($prop in $map.PSObject.Properties) {
+            if ($prop.Name -eq 'RANKED_SOLO_5x5' -and $prop.Value -and $prop.Value.PSObject) {
+                return $prop.Value
+            }
+        }
+    }
+
+    $queues = $null
+    try { $queues = $Body.queues } catch { $queues = $null }
+    if ($queues -is [System.Array] -or $queues -is [System.Collections.IList]) {
+        foreach ($entry in $queues) {
+            if ($null -eq $entry -or -not $entry.PSObject) { continue }
+            $type = $entry.queueType
+            if ($type -is [string] -and $type.Trim().ToUpperInvariant() -eq 'RANKED_SOLO_5X5') {
+                return $entry
+            }
+        }
+    }
+
+    return $null
+}
+
+function Get-RankInt {
+    # An integer JSON field, or $null. Deliberately REFUSES a numeric string:
+    # ConvertFrom-Json gives back exactly what the client sent, and a client
+    # that started sending "90" instead of 90 has changed its schema. Coercing
+    # it would hide that behind a number that might not mean what it used to.
+    param($Entry, [string[]]$Names)
+
+    foreach ($name in $Names) {
+        if (-not ($Entry.PSObject.Properties.Name -contains $name)) { continue }
+        $value = $Entry.$name
+        if ($value -is [int] -or $value -is [long] -or $value -is [int16] -or $value -is [byte]) {
+            return [int]$value
+        }
+    }
+    return $null
+}
+
+function Get-RankString {
+    param($Entry, [string[]]$Names)
+
+    foreach ($name in $Names) {
+        if (-not ($Entry.PSObject.Properties.Name -contains $name)) { continue }
+        $value = $Entry.$name
+        if ($value -is [string]) {
+            $trimmed = $value.Trim()
+            if ($trimmed) { return $trimmed }
+        }
+    }
+    return $null
+}
+
+function ConvertTo-RankSample {
+    # PURE. Given whatever /lol-ranked/v1/current-ranked-stats returned,
+    # produce @{ tier = <string>; division = <string|null>; lp = <int> } or
+    # $null. The exact counterpart of RankedStats.ReadSoloQueue in
+    # CoachBuild.Core -- the two must agree, because the same session's
+    # samples can come from either half.
+    #
+    # ALL OR NOTHING, the same rule as ConvertTo-MeIdentity and
+    # ConvertTo-LiveSkillState, and here it matters more than usual: the
+    # consumer SUBTRACTS two of these to get an LP delta, so a partial reading
+    # is not a weaker number, it is a wrong one. A missing tier defaulted to
+    # IRON would print a four-figure loss the player never took.
+    #
+    # Field names are OBSERVED, not assumed. A real ranked-stats body from
+    # this user's own client is recorded in
+    #   Logs\LeagueClient Logs\2026-07-27T14-00-20_3788_LeagueClient-tracing.json
+    # as record {"t":"re1",...,"ri":14}, whose matching {"t":"er1"} request is
+    # leagues-ledge/v2/signedRankedStats. It reads:
+    #   {"queues":[{"queueType":"RANKED_SOLO_5x5","tier":"PLATINUM","rank":"IV",
+    #     "leaguePoints":91,"provisionalGamesRemaining":0,...}]}
+    # Note what is NOT in it: no "queueMap", no "division", no "isProvisional".
+    # Note also that the unplayed flex queue in the same body reports
+    # tier:null with leaguePoints:0 -- a zero a reader that checked LP before
+    # tier would happily have recorded as a standing. That is why tier is
+    # demanded first.
+    param($Body)
+
+    $entry = Get-RankSoloEntry -Body $Body
+    if ($null -eq $entry) { return $null }
+
+    # Placements have no ladder position, so there is nothing to difference.
+    # Skipping renders as `unavailable` (spec section 6), which is honest;
+    # recording the provisional zero would render as a confident number.
+    # provisionalGamesRemaining is the observed field; isProvisional is the
+    # LCU model's boolean and is only the fallback.
+    $remaining = Get-RankInt -Entry $entry -Names @('provisionalGamesRemaining')
+    if ($null -ne $remaining -and $remaining -gt 0) { return $null }
+    if (($entry.PSObject.Properties.Name -contains 'isProvisional') -and $entry.isProvisional -eq $true) { return $null }
+
+    $tier = Get-RankString -Entry $entry -Names @('tier')
+    if (-not $tier) { return $null }
+    $tier = $tier.ToUpperInvariant()
+    if ($tier -eq 'NONE' -or $tier -eq 'UNRANKED') { return $null }
+
+    $lp = Get-RankInt -Entry $entry -Names @('leaguePoints', 'lp')
+    if ($null -eq $lp -or $lp -lt 0) { return $null }
+
+    # Master/Grandmaster/Challenger have no divisions and the client is not
+    # consistent about whether it says "NA", "I" or nothing in that slot. A
+    # literal "I" forwarded on a Master account would tell the ladder module
+    # the account sits one division off the apex floor and quietly change the
+    # arithmetic; $null cannot.
+    $division = $null
+    if (-not (Test-RankApexTier -Tier $tier)) {
+        $raw = Get-RankString -Entry $entry -Names @('division', 'rank')
+        if ($raw) {
+            $upper = $raw.ToUpperInvariant()
+            if ($upper -ne 'NA') { $division = $upper }
+        }
+    }
+
+    return @{ tier = $tier; division = $division; lp = $lp }
+}
+
+function Test-RankStandingEqual {
+    param($Left, $Right)
+    if ($null -eq $Left -or $null -eq $Right) { return $false }
+    return ($Left.lp -eq $Right.lp) -and ($Left.tier -eq $Right.tier) -and ($Left.division -eq $Right.division)
+}
+
+function Get-RankSettleDecision {
+    # PURE. What a game-end settle pass should do with the reading it just
+    # took: 'post', 'wait' or 'drop'.
+    #
+    # WHY GAME END SETTLES AT ALL. Leaving InProgress is the client noticing
+    # the game is over; it is not the platform having finished scoring it. The
+    # ranked stats can still report the PRE-game number at that instant, and a
+    # sample taken then is worse than useless: spec section 6 calls a bracket
+    # `exact` when a sample exists at or after the session's last game, so a
+    # stale one would make the last game of every session vanish from the
+    # total while still being labelled exact.
+    #
+    # WHY THIS IS A DECISION FUNCTION AND NOT A SLEEP LOOP. The C# half can
+    # await a delay on a detached task. This script cannot: Invoke-GameflowTick
+    # runs on the MAIN thread, and a 30-second sleep in it would stall phase
+    # detection -- the player who queues straight after a game would get their
+    # champ select noticed late. So the wait is spread across ticks the loop
+    # was going to run anyway, one LCU read each, and no single tick is
+    # delayed by more than one call.
+    param($Sample, $Baseline, [datetime]$ExpiresAt, [datetime]$Now)
+
+    # Unreadable or unranked will still be unreadable in five seconds; only a
+    # settled-versus-unsettled NUMBER is worth waiting on.
+    if ($null -eq $Sample) { return 'drop' }
+
+    # No baseline means nothing to compare against, so this reading is as
+    # settled as it is ever going to look.
+    if ($null -eq $Baseline) { return 'post' }
+
+    if (-not (Test-RankStandingEqual -Left $Sample -Right $Baseline)) { return 'post' }
+
+    # Budget spent: post the unchanged reading anyway. A dodge, a remake or an
+    # already-settled read all legitimately leave LP where it was, and
+    # refusing to record those would silently delete the bracket edge for
+    # them.
+    if ($Now -ge $ExpiresAt) { return 'post' }
+
+    return 'wait'
+}
+
+function Send-RankSampleBody {
+    # The POST half. Every failure is a RETURN VALUE, never an exception --
+    # the same posture as Invoke-LcuRaw and for the same reason.
+    # 'posted' | 'rejected' | 'failed'.
+    param(
+        [string]$AppOrigin,
+        $Identity,
+        $Sample,
+        [string]$Secret,
+        [string]$ObservedAt
+    )
+
+    try {
+        # NOT the puuid. Spec section 4 asks for one; the companion has none
+        # worth sending, because the League client's puuid is a local UUID and
+        # not the Riot puuid coachbuild.my_matches is keyed on (CLAUDE.md, My
+        # Stats invariant 1). That is exactly why
+        # lib/mystats/accountRequest.ts's detect mode carries no puuid either
+        # and re-resolves identity server-side from gameName + tagLine. Filling
+        # the field from the LCU would write a time series that joins to
+        # nothing, and would do it silently.
+        $payload = @{
+            gameName   = $Identity.gameName
+            tagLine    = $Identity.tagLine
+            tier       = $Sample.tier
+            division   = $Sample.division
+            lp         = $Sample.lp
+            observedAt = $ObservedAt
+            source     = 'companion'
+        }
+        $json = ConvertTo-Json -InputObject $payload -Depth 4 -Compress
+        $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+
+        $res = Invoke-WebRequest -Uri "$AppOrigin/api/mystats/rank-sample" `
+            -Method POST `
+            -Body $bytes `
+            -ContentType 'application/json' `
+            -Headers @{ 'x-coachbuild-account-secret' = $Secret } `
+            -TimeoutSec 5 `
+            -UseBasicParsing
+
+        # A 200 carrying {"ok":false} is a refusal however friendly the status
+        # line is. An unreadable body on a 2xx is treated as posted: the
+        # endpoint is idempotent, so the cost of being wrong that way is a
+        # duplicate row the server already dedupes.
+        try {
+            $parsed = $res.Content | ConvertFrom-Json
+            if (($parsed.PSObject.Properties.Name -contains 'ok') -and $parsed.ok -eq $false) { return 'rejected' }
+        } catch { }
+        return 'posted'
+    } catch {
+        # A 4xx is the server having an OPINION and it will have the same one
+        # next time; a 5xx or a transport failure is genuinely unknown.
+        $status = 0
+        try { $status = [int]$_.Exception.Response.StatusCode } catch { $status = 0 }
+        if ($status -ge 400 -and $status -lt 500) { return 'rejected' }
+        return 'failed'
+    }
+}
+
+function Invoke-RankCapture {
+    # One capture, start to finish. NEVER THROWS, for any input, from any
+    # dependency -- the whole body is inside a catch.
+    #
+    # THE ONE RULE THIS FUNCTION EXISTS TO KEEP. Capture fails silently and
+    # never blocks, delays or degrades an item-set or rune apply. A player
+    # losing their item set because an LP read timed out would be a far worse
+    # bug than this whole feature is worth. Two things enforce it:
+    #
+    #  1. It runs on the MAIN thread, inside Invoke-GameflowTick. Every apply
+    #     runs in the BRIDGE runspace (Invoke-ApplyRunes / Invoke-ApplyItemSets
+    #     are called from $script:BridgeWorkerSrc). They are different threads
+    #     sharing no lock, so a capture wedged on a hung read leaves an apply
+    #     completely untouched.
+    #  2. Every call it makes is bounded: Invoke-LcuRaw carries its own
+    #     timeout and Send-RankSampleBody uses -TimeoutSec 5. A single call is
+    #     the most any one tick can cost, which is why the game-end settle is
+    #     a per-tick decision (Get-RankSettleDecision) rather than a sleep.
+    #
+    # Screen capture, OCR and memory reads are permanently off the table for
+    # this app (1.0.16 policy, CHANGELOG.md). This is an LCU HTTP read, the
+    # mechanism the companion has always used.
+    param(
+        [string]$Trigger,
+        [int]$LcuPort,
+        [string]$LcuToken,
+        [string]$Scheme = 'https',
+        [string]$AppOrigin
+    )
+
+    try {
+        $secret = Get-RankSampleSecret
+        if (-not $secret) {
+            # Once per process. Without this line the feature's total
+            # observable behaviour when unconfigured is "nothing happens",
+            # which is indistinguishable from it being broken.
+            if (-not $script:RankSecretAnnounced) {
+                $script:RankSecretAnnounced = $true
+                Write-CompanionLog 'rank-sample: no account secret configured -- LP capture is inert'
+            }
+            return 'inert'
+        }
+
+        if (-not $LcuPort) { return 'no-client' }
+
+        $identity = Get-CurrentSummonerIdentity -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
+        if (-not $identity) {
+            Write-CompanionLog "rank-sample: $Trigger skipped -- client identity unavailable" -IsError
+            return 'no-identity'
+        }
+
+        $raw = Invoke-LcuRaw -Method GET -Path '/lol-ranked/v1/current-ranked-stats' -Port $LcuPort -Token $LcuToken -Scheme $Scheme
+        if (-not $raw.Ok) {
+            Write-CompanionLog "rank-sample: $Trigger skipped -- ranked read failed (status=$($raw.StatusCode))" -IsError
+            return 'read-failed'
+        }
+
+        $sample = ConvertTo-RankSample -Body $raw.Content
+        if ($null -eq $sample) {
+            Write-CompanionLog "rank-sample: $Trigger skipped -- no ranked-solo standing to record" -IsError
+            return 'no-standing'
+        }
+
+        $script:LastRankStanding = $sample
+
+        $observedAt = (Get-Date).ToUniversalTime().ToString('o')
+        $result = Send-RankSampleBody -AppOrigin $AppOrigin -Identity $identity -Sample $sample -Secret $secret -ObservedAt $observedAt
+
+        # Tier/division/LP are the account's ladder position, not an
+        # identifier, and they are the only thing that makes this line worth
+        # having. The identity that travelled on the wire, and the secret, are
+        # deliberately absent -- Write-CompanionLog never logs a name and this
+        # caller never hands it one.
+        $shown = $sample.tier
+        if ($sample.division) { $shown = "$shown $($sample.division)" }
+        Write-CompanionLog "rank-sample: $Trigger $shown $($sample.lp)lp -> $result"
+        return $result
+    } catch {
+        Write-CompanionLog "rank-sample: $Trigger capture failed: $($_.Exception.GetType().Name)" -IsError
+        return 'failed'
+    }
+}
+
+function Start-RankGameEndSettle {
+    # Arms the game-end settle described on Get-RankSettleDecision. Takes no
+    # LCU call itself: the first read happens on the next tick, which is also
+    # the soonest the platform could plausibly have scored the game.
+    param([int]$BudgetSeconds = 30)
+    $script:RankSettle = @{
+        Baseline  = $script:LastRankStanding
+        ExpiresAt = (Get-Date).AddSeconds($BudgetSeconds)
+    }
+}
+
+function Update-RankGameEndSettle {
+    # One settle pass, at most one LCU read, called from the tail of every
+    # tick while a settle is armed. Never throws.
+    param([int]$LcuPort, [string]$LcuToken, [string]$Scheme = 'https', [string]$AppOrigin)
+
+    try {
+        if (-not $script:RankSettle) { return 'idle' }
+        if (-not $LcuPort) { return 'wait' }
+
+        $raw = Invoke-LcuRaw -Method GET -Path '/lol-ranked/v1/current-ranked-stats' -Port $LcuPort -Token $LcuToken -Scheme $Scheme
+        $sample = $null
+        if ($raw.Ok) { $sample = ConvertTo-RankSample -Body $raw.Content }
+
+        $decision = Get-RankSettleDecision -Sample $sample -Baseline $script:RankSettle.Baseline -ExpiresAt $script:RankSettle.ExpiresAt -Now (Get-Date)
+        if ($decision -eq 'wait') { return 'wait' }
+
+        $script:RankSettle = $null
+        if ($decision -eq 'drop') {
+            Write-CompanionLog 'rank-sample: game-end skipped -- no ranked-solo standing to record' -IsError
+            return 'drop'
+        }
+
+        $script:LastRankStanding = $sample
+        $secret = Get-RankSampleSecret
+        if (-not $secret) { return 'inert' }
+
+        $identity = Get-CurrentSummonerIdentity -LcuPort $LcuPort -LcuToken $LcuToken -Scheme $Scheme
+        if (-not $identity) {
+            Write-CompanionLog 'rank-sample: game-end skipped -- client identity unavailable' -IsError
+            return 'no-identity'
+        }
+
+        $observedAt = (Get-Date).ToUniversalTime().ToString('o')
+        $result = Send-RankSampleBody -AppOrigin $AppOrigin -Identity $identity -Sample $sample -Secret $secret -ObservedAt $observedAt
+        $shown = $sample.tier
+        if ($sample.division) { $shown = "$shown $($sample.division)" }
+        Write-CompanionLog "rank-sample: game-end $shown $($sample.lp)lp -> $result"
+        return $result
+    } catch {
+        $script:RankSettle = $null
+        Write-CompanionLog "rank-sample: game-end settle failed: $($_.Exception.GetType().Name)" -IsError
+        return 'failed'
+    }
+}
+
+function Test-RankLeftGame {
+    # A transition OUT of the in-game phases, and only that.
+    #
+    # Reconnect is an IN-GAME phase on purpose: a player who drops and
+    # reconnects passes InProgress -> Reconnect -> InProgress, and treating
+    # that as a game ending would post a mid-game sample and then fail to post
+    # a real one.
+    param([string]$Before, [string]$After)
+    $wasInGame = ($Before -eq 'InProgress' -or $Before -eq 'Reconnect')
+    $isInGame = ($After -eq 'InProgress' -or $After -eq 'Reconnect')
+    return ($wasInGame -and -not $isInGame)
+}
+
 function Set-CorsHeaders {
     param($Response, [string]$AppOrigin)
     $Response.Headers.Add('Access-Control-Allow-Origin', $AppOrigin)
@@ -2235,11 +2671,19 @@ function Invoke-GameflowTick {
             Clear-LcuCredentialsCache
         }
     }
+    # Held before the log line overwrites it: a game ENDING is a transition
+    # away from InProgress, so by the time this tick notices, the only record
+    # that a game was being played is the phase we are about to replace.
+    $previousPhase = $script:LastLoggedPhase
     if ($phase -ne $script:LastLoggedPhase) {
         Write-CompanionLog "phase: $script:LastLoggedPhase -> $phase"
         $script:LastLoggedPhase = $phase
     }
     $script:Bridge.Sync.Phase = $phase
+
+    # Spec section 5, third moment. Arms the settle described on
+    # Get-RankSettleDecision; takes no LCU call of its own.
+    if (Test-RankLeftGame -Before $previousPhase -After $phase) { Start-RankGameEndSettle }
 
     if ($phase -eq 'ChampSelect') {
         if (-not $script:WasChampSelect) {
@@ -2254,6 +2698,11 @@ function Invoke-GameflowTick {
             # after Reset-TabOpenGrace so the previous game's grace can never
             # suppress this entry's opens.
             Invoke-ChampSelectPrewarm -AppOrigin $script:Config.AppOrigin -SessionToken $script:Config.Session
+            # Spec section 5, second moment -- FLAGGED, not taken here. The
+            # capture runs at the tail of this tick, strictly after the
+            # prewarm above, so a slow ranked read can never delay the page
+            # the user is waiting on.
+            $script:RankChampSelectPending = $true
         }
         $script:WasChampSelect = $true
         if ($creds) {
@@ -2266,6 +2715,37 @@ function Invoke-GameflowTick {
         }
     } else {
         $script:WasChampSelect = $false
+    }
+
+    # ---- ranked-LP capture, spec section 5 ------------------------------
+    # LAST in the tick, on purpose: everything above it is work the user can
+    # see (phase, prewarm, champ-select state), and this is a diagnostic the
+    # user cannot. It never runs before them and it never runs instead of
+    # them.
+    #
+    # AT MOST ONE capture per tick, which is what the elseif chain buys. A
+    # tick's added cost is therefore bounded by a single LCU round trip plus
+    # at most one 5-second POST -- and never by the 30-second game-end settle
+    # budget, which is spread across ticks instead (Get-RankSettleDecision).
+    #
+    # None of this can reach an apply: Invoke-ApplyRunes and
+    # Invoke-ApplyItemSets run in the BRIDGE runspace, a different thread that
+    # shares no lock with this one.
+    if ($creds) {
+        if ($script:RankAppStartPending) {
+            # Spec section 5, first moment. Deferred to the first tick that
+            # HAS a client rather than fired at process start, because the
+            # companion routinely starts before or alongside the client and an
+            # app-start sample with no client to read is just a log line. The
+            # flag is cleared either way, so this fires exactly once per run.
+            $script:RankAppStartPending = $false
+            [void](Invoke-RankCapture -Trigger 'app-start' -LcuPort $creds.Port -LcuToken $creds.Token -AppOrigin $script:Config.AppOrigin)
+        } elseif ($script:RankChampSelectPending) {
+            $script:RankChampSelectPending = $false
+            [void](Invoke-RankCapture -Trigger 'champ-select' -LcuPort $creds.Port -LcuToken $creds.Token -AppOrigin $script:Config.AppOrigin)
+        } elseif ($script:RankSettle) {
+            [void](Update-RankGameEndSettle -LcuPort $creds.Port -LcuToken $creds.Token -AppOrigin $script:Config.AppOrigin)
+        }
     }
 }
 #endregion
@@ -2594,6 +3074,13 @@ function Start-Companion {
     $script:LastLoggedPhase = $null
     $script:CompanionRunning = $true
     $script:CachedLcuCreds = $null  # fresh discovery on every real run
+    # Ranked-LP capture state, reset per run so a restarted companion takes a
+    # fresh app-start sample and inherits no stale settle from the last one.
+    $script:RankAppStartPending = $true
+    $script:RankChampSelectPending = $false
+    $script:RankSettle = $null
+    $script:LastRankStanding = $null
+    $script:RankSecretAnnounced = $false
 
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
@@ -4363,6 +4850,168 @@ function Invoke-SelfTest {
     }
     if ($c4.Port -ne 65000) { $failures.Add('LCU creds cache: re-discovery after invalidation did not return fresh creds') }
     Clear-LcuCredentialsCache  # leave global state clean for anything run after SelfTest in-process
+
+    # ---- ranked-LP capture (spec section 5) -----------------------------
+    # These pin the PowerShell half against the SAME cases CoachBuild.Core's
+    # RankCaptureTests pins the C# half against. The two readers must agree:
+    # one user's session can be sampled by either, and a disagreement would
+    # show up as an LP delta that is wrong rather than absent.
+
+    # The body a real client actually returned. Copied verbatim (trimmed to
+    # the fields under test) from record {"t":"re1",...,"ri":14} of
+    # Logs\LeagueClient Logs\2026-07-27T14-00-20_3788_LeagueClient-tracing.json,
+    # whose matching {"t":"er1"} request is leagues-ledge/v2/signedRankedStats.
+    # Every other fixture here is something a person wrote; this one is the
+    # client's own words.
+    $capturedRanked = '{"queues":[{"queueType":"RANKED_SOLO_5x5","provisionalGameThreshold":5,"tier":"PLATINUM","rank":"IV","leaguePoints":91,"cumulativeLp":1691,"wins":64,"losses":65,"provisionalGamesRemaining":0,"highestTier":"PLATINUM","highestRank":"II","ratedRating":0},{"queueType":"RANKED_FLEX_SR","provisionalGameThreshold":5,"tier":null,"rank":null,"leaguePoints":0,"cumulativeLp":0,"wins":0,"losses":0,"provisionalGamesRemaining":0}]}'
+    $realSample = ConvertTo-RankSample -Body ($capturedRanked | ConvertFrom-Json)
+    if ($null -eq $realSample) {
+        $failures.Add('rank-sample: the body a real client returned produced no sample')
+    } else {
+        if ($realSample.tier -ne 'PLATINUM') { $failures.Add("rank-sample: real body tier expected PLATINUM, got $($realSample.tier)") }
+        if ($realSample.division -ne 'IV') { $failures.Add("rank-sample: real body division expected IV, got $($realSample.division)") }
+        if ($realSample.lp -ne 91) { $failures.Add("rank-sample: real body lp expected 91, got $($realSample.lp)") }
+    }
+
+    # Both shapes, because only the array one has ever been observed and only
+    # the object one is what the LCU's own model uses.
+    $mapSample = ConvertTo-RankSample -Body ('{"queueMap":{"RANKED_SOLO_5x5":{"tier":"gold","division":"ii","leaguePoints":47}}}' | ConvertFrom-Json)
+    if ($null -eq $mapSample -or $mapSample.tier -ne 'GOLD' -or $mapSample.division -ne 'II' -or $mapSample.lp -ne 47) {
+        $failures.Add('rank-sample: queueMap shape did not read back as GOLD II 47')
+    }
+
+    # Apex tiers have no divisions (spec section 2). A literal "I" forwarded on
+    # a Master account would tell the ladder module the account sits one
+    # division off the apex floor and silently shift the arithmetic.
+    foreach ($apex in @(
+        @{ json = '{"queues":[{"queueType":"RANKED_SOLO_5x5","tier":"MASTER","rank":"NA","leaguePoints":432}]}'; tier = 'MASTER' },
+        @{ json = '{"queues":[{"queueType":"RANKED_SOLO_5x5","tier":"GRANDMASTER","rank":"I","leaguePoints":432}]}'; tier = 'GRANDMASTER' },
+        @{ json = '{"queues":[{"queueType":"RANKED_SOLO_5x5","tier":"CHALLENGER","leaguePoints":432}]}'; tier = 'CHALLENGER' }
+    )) {
+        $s = ConvertTo-RankSample -Body ($apex.json | ConvertFrom-Json)
+        if ($null -eq $s) { $failures.Add("rank-sample: apex $($apex.tier) produced no sample"); continue }
+        if ($s.tier -ne $apex.tier) { $failures.Add("rank-sample: apex tier expected $($apex.tier), got $($s.tier)") }
+        if ($null -ne $s.division) { $failures.Add("rank-sample: apex $($apex.tier) must carry no division, got $($s.division)") }
+        if ($s.lp -ne 432) { $failures.Add("rank-sample: apex $($apex.tier) lp expected 432, got $($s.lp)") }
+    }
+
+    # ALL OR NOTHING. Each of these must be $null, because the consumer
+    # SUBTRACTS two samples: a partial reading is a wrong number, not a weak
+    # one. The `"90"` case is the subtle one -- a numeric string is a schema
+    # change, and coercing it would hide that behind a plausible number.
+    $rejectCases = @(
+        @{ why = 'no tier'; json = '{"queues":[{"queueType":"RANKED_SOLO_5x5","rank":"I","leaguePoints":90}]}' },
+        @{ why = 'no lp'; json = '{"queues":[{"queueType":"RANKED_SOLO_5x5","tier":"GOLD","rank":"I"}]}' },
+        @{ why = 'negative lp'; json = '{"queues":[{"queueType":"RANKED_SOLO_5x5","tier":"GOLD","rank":"I","leaguePoints":-4}]}' },
+        @{ why = 'lp as a string'; json = '{"queues":[{"queueType":"RANKED_SOLO_5x5","tier":"GOLD","rank":"I","leaguePoints":"90"}]}' },
+        @{ why = 'tier NONE'; json = '{"queues":[{"queueType":"RANKED_SOLO_5x5","tier":"NONE","rank":"I","leaguePoints":0}]}' },
+        @{ why = 'tier UNRANKED'; json = '{"queues":[{"queueType":"RANKED_SOLO_5x5","tier":"UNRANKED","leaguePoints":0}]}' },
+        @{ why = 'tier null'; json = '{"queues":[{"queueType":"RANKED_SOLO_5x5","tier":null,"rank":null,"leaguePoints":0}]}' },
+        @{ why = 'flex only'; json = '{"queues":[{"queueType":"RANKED_FLEX_SR","tier":"DIAMOND","rank":"I","leaguePoints":75}]}' },
+        @{ why = 'in placements (provisionalGamesRemaining)'; json = '{"queues":[{"queueType":"RANKED_SOLO_5x5","tier":"GOLD","rank":"IV","leaguePoints":0,"provisionalGamesRemaining":3}]}' },
+        @{ why = 'in placements (isProvisional)'; json = '{"queueMap":{"RANKED_SOLO_5x5":{"tier":"GOLD","division":"IV","leaguePoints":0,"isProvisional":true}}}' },
+        @{ why = 'queues not an array'; json = '{"queues":"nope"}' },
+        @{ why = 'queueMap not an object'; json = '{"queueMap":[]}' },
+        @{ why = 'empty object'; json = '{}' },
+        @{ why = 'array root'; json = '[]' },
+        @{ why = 'string root'; json = '"a string"' }
+    )
+    foreach ($case in $rejectCases) {
+        $parsed = $null
+        try { $parsed = $case.json | ConvertFrom-Json } catch { $parsed = $null }
+        $s = ConvertTo-RankSample -Body $parsed
+        if ($null -ne $s) { $failures.Add("rank-sample: '$($case.why)' should have produced no sample, got $($s.tier) $($s.division) $($s.lp)") }
+    }
+    if ($null -ne (ConvertTo-RankSample -Body $null)) { $failures.Add('rank-sample: a null body should have produced no sample') }
+
+    # A settled account reports provisionalGamesRemaining 0. Reading that as
+    # "provisional" would make the feature record nothing, forever, for
+    # everyone -- the exact failure mode that is invisible in testing.
+    $settled = ConvertTo-RankSample -Body ('{"queues":[{"queueType":"RANKED_SOLO_5x5","tier":"GOLD","rank":"IV","leaguePoints":42,"provisionalGamesRemaining":0}]}' | ConvertFrom-Json)
+    if ($null -eq $settled -or $settled.lp -ne 42) { $failures.Add('rank-sample: provisionalGamesRemaining 0 must mean a SETTLED account') }
+
+    # A game ending, and the one transition that only looks like one.
+    if (-not (Test-RankLeftGame -Before 'InProgress' -After 'WaitingForStats')) { $failures.Add('rank-sample: InProgress -> WaitingForStats is a game ending') }
+    if (-not (Test-RankLeftGame -Before 'Reconnect' -After 'None')) { $failures.Add('rank-sample: Reconnect -> None is a game ending') }
+    if (Test-RankLeftGame -Before 'InProgress' -After 'Reconnect') { $failures.Add('rank-sample: a RECONNECT is not a game ending -- it would post a mid-game sample and then miss the real one') }
+    if (Test-RankLeftGame -Before 'Reconnect' -After 'InProgress') { $failures.Add('rank-sample: reconnecting back into a game is not a game ending') }
+    if (Test-RankLeftGame -Before 'ChampSelect' -After 'InProgress') { $failures.Add('rank-sample: entering a game is not a game ending') }
+    if (Test-RankLeftGame -Before 'None' -After 'None') { $failures.Add('rank-sample: no transition is not a game ending') }
+
+    # The settle decision. This is the whole reason a game-end sample is not
+    # simply the first reading after the phase flips.
+    $gold90 = @{ tier = 'GOLD'; division = 'I'; lp = 90 }
+    $gold75 = @{ tier = 'GOLD'; division = 'I'; lp = 75 }
+    $future = (Get-Date).AddSeconds(30)
+    $past = (Get-Date).AddSeconds(-1)
+    $now = Get-Date
+    if ((Get-RankSettleDecision -Sample $gold90 -Baseline $gold90 -ExpiresAt $future -Now $now) -ne 'wait') {
+        $failures.Add('rank-sample settle: an UNCHANGED reading inside the budget must wait -- posting it would label a stale bracket edge `exact`')
+    }
+    if ((Get-RankSettleDecision -Sample $gold75 -Baseline $gold90 -ExpiresAt $future -Now $now) -ne 'post') {
+        $failures.Add('rank-sample settle: a MOVED reading must post immediately')
+    }
+    if ((Get-RankSettleDecision -Sample $gold90 -Baseline $gold90 -ExpiresAt $past -Now $now) -ne 'post') {
+        $failures.Add('rank-sample settle: once the budget is spent an unchanged reading must post anyway -- a dodge or a remake legitimately leaves LP where it was')
+    }
+    if ((Get-RankSettleDecision -Sample $gold90 -Baseline $null -ExpiresAt $future -Now $now) -ne 'post') {
+        $failures.Add('rank-sample settle: with no baseline there is nothing to wait for')
+    }
+    if ((Get-RankSettleDecision -Sample $null -Baseline $gold90 -ExpiresAt $future -Now $now) -ne 'drop') {
+        $failures.Add('rank-sample settle: an unreadable account will still be unreadable in five seconds -- only a NUMBER is worth waiting on')
+    }
+
+    # THE RULE. No secret means INERT, never unauthenticated, and never a
+    # throw: Invoke-RankCapture is called from the gameflow tick and the tick
+    # is the loop that drives champ select.
+    $savedSecretEnv = $env:COACHBUILD_MYSTATS_SECRET
+    $savedSettle = $script:RankSettle
+    try {
+        $env:COACHBUILD_MYSTATS_SECRET = ''
+        $missingSettings = Join-Path ([IO.Path]::GetTempPath()) "coachbuild-no-settings-$([Guid]::NewGuid().ToString('N')).json"
+        if ($null -ne (Get-RankSampleSecret -SettingsPath $missingSettings)) {
+            $failures.Add('rank-sample: an absent settings file and an empty env var must resolve to NO secret')
+        }
+
+        $script:RankSecretAnnounced = $false
+        $inert = Invoke-RankCapture -Trigger 'app-start' -LcuPort $mockLcu.Port -LcuToken 'mocktoken' -Scheme 'http' -AppOrigin $appOrigin
+        if ($inert -ne 'inert') { $failures.Add("rank-sample: with no secret the capture must be inert, got '$inert'") }
+
+        # Hostile inputs, one at a time. The assertion IS that these return --
+        # an escaping exception fails the SelfTest by escaping.
+        $env:COACHBUILD_MYSTATS_SECRET = 'selftest-secret'
+        $script:RankSecretAnnounced = $false
+        foreach ($hostile in @(
+            @{ why = 'no client at all'; port = 0 },
+            @{ why = 'a port nothing is listening on'; port = 65533 }
+        )) {
+            $r = $null
+            try {
+                $r = Invoke-RankCapture -Trigger 'game-end' -LcuPort $hostile.port -LcuToken 'mocktoken' -Scheme 'http' -AppOrigin $appOrigin
+            } catch {
+                $failures.Add("rank-sample: capture THREW on $($hostile.why) -- it is called from the gameflow tick and may never throw: $($_.Exception.Message)")
+            }
+            if ($null -eq $r) { $failures.Add("rank-sample: capture returned nothing on $($hostile.why)") }
+        }
+
+        # The settle pass has the same obligation and, unlike the capture, it
+        # also has to disarm itself so a dead client cannot leave the loop
+        # re-reading a hung port on every tick forever.
+        $script:RankSettle = @{ Baseline = $gold90; ExpiresAt = (Get-Date).AddSeconds(-1) }
+        try {
+            [void](Update-RankGameEndSettle -LcuPort 65533 -LcuToken 'mocktoken' -Scheme 'http' -AppOrigin $appOrigin)
+        } catch {
+            $failures.Add("rank-sample: the game-end settle THREW against a dead port: $($_.Exception.Message)")
+        }
+        if ($null -ne $script:RankSettle) {
+            $failures.Add('rank-sample: an expired settle against a dead client must disarm, not re-read every tick forever')
+        }
+    } finally {
+        $env:COACHBUILD_MYSTATS_SECRET = $savedSecretEnv
+        $script:RankSettle = $savedSettle
+        $script:RankSecretAnnounced = $false
+    }
+
 
     if ($failures.Count -gt 0) {
         Write-Host "SELFTEST FAILED ($($failures.Count)):" -ForegroundColor Red

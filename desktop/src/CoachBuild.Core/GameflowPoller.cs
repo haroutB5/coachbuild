@@ -12,6 +12,7 @@ public sealed class GameflowPoller
     private readonly WindowDecisionService? _windows;
     private readonly RedactedLog? _log;
     private readonly Action? _champSelectEntered;
+    private readonly Action<RankCaptureTrigger>? _rankCapture;
     private readonly int _pollMilliseconds;
     private int? _lastChampSelectChampionId;
 
@@ -22,7 +23,20 @@ public sealed class GameflowPoller
         WindowDecisionService? windows = null,
         RedactedLog? log = null,
         Action? champSelectEntered = null,
-        GameflowPollerOptions? options = null)
+        GameflowPollerOptions? options = null,
+        // Raised at champ-select ENTRY and at GAME END (spec §5's second and
+        // third moments; app start is raised by the host, which is the only
+        // thing that knows the process just came up).
+        //
+        // Deliberately a SEPARATE callback from champSelectEntered, which
+        // already means "forget last game's rune ledger" and defaults to the
+        // rune service. Folding a second meaning into it would make one of the
+        // two impossible to suppress without suppressing the other.
+        //
+        // The implementation must not block -- see RankCaptureService.Fire.
+        // This poller wraps the call in a catch anyway, because a diagnostic
+        // feature does not get to stop the gameflow loop.
+        Action<RankCaptureTrigger>? rankCapture = null)
     {
         _credentials = credentials;
         _lcu = lcu;
@@ -33,7 +47,19 @@ public sealed class GameflowPoller
             (state.RuneApplyService is { } registeredRunes
                 ? new Action(registeredRunes.ClearForChampSelect)
                 : null);
+        _rankCapture = rankCapture;
         _pollMilliseconds = Math.Max(100, options?.PollMilliseconds ?? 1500);
+    }
+
+    /// <summary>
+    /// Raises a rank-capture trigger without letting it reach the caller. The
+    /// callback is already required not to throw; this is the second lock on
+    /// the door, because the caller here is the loop that drives champ select.
+    /// </summary>
+    private void RaiseRankCapture(RankCaptureTrigger trigger)
+    {
+        try { _rankCapture?.Invoke(trigger); }
+        catch { /* an LP sample never gets to break the gameflow tick */ }
     }
 
     public async Task<WindowDecision?> TickAsync(CancellationToken cancellationToken = default)
@@ -62,6 +88,12 @@ public sealed class GameflowPoller
         _state.SetPhase(phase);
         if (phaseChanged)
             _log?.Info($"phase: {previousPhase} -> {phase}");
+        // BEFORE the non-champ-select early return below, and before anything
+        // that depends on credentials: a game ending is a transition away from
+        // InProgress, so by the time we notice it the phase is one this method
+        // otherwise stops caring about.
+        if (RankCaptureService.LeftGame(previousPhase, phase))
+            RaiseRankCapture(RankCaptureTrigger.GameEnd);
         _windows?.OnPhaseChanged(phase);
 
         if (!string.Equals(phase, "ChampSelect", StringComparison.Ordinal) || credentials is null)
@@ -74,6 +106,7 @@ public sealed class GameflowPoller
         if (enteredChampSelect)
         {
             _champSelectEntered?.Invoke();
+            RaiseRankCapture(RankCaptureTrigger.ChampSelect);
         }
 
         var sessionResponse = await _lcu.SendAsync(

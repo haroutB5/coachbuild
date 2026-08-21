@@ -29,6 +29,30 @@ public sealed class OverlaySettings
     [JsonPropertyName("chatGateEnabled")]
     public bool ChatGateEnabled { get; set; }
 
+    /// <summary>
+    /// The shared account secret the ranked-LP capture posts with
+    /// (<c>MYSTATS_ACCOUNT_SECRET</c> / <c>x-coachbuild-account-secret</c>).
+    /// Empty or absent means capture is INERT — nothing is posted and one line
+    /// says so in the log.
+    ///
+    /// <para><b>Why it lives here and not in a UI.</b> The secret has only ever
+    /// existed in the BROWSER's localStorage
+    /// (<c>components/live/mystatsAccount.ts</c>), because until now only the
+    /// browser ever wrote to a gated endpoint. The desktop app posting samples
+    /// at app start and at game end cannot depend on a page being open, so it
+    /// needs its own copy — and how the user is supposed to GET one here is an
+    /// open product question, not something this lane should answer by
+    /// inventing a tray dialog for a secret. A hand-editable settings key is the
+    /// smallest thing that works and the easiest to replace. See
+    /// HANDOFF-lp-capture.md.</para>
+    ///
+    /// <para>It must be a real property rather than an unmodelled JSON key:
+    /// <c>Save()</c> serialises this exact type, so a key this class does not
+    /// know about is DELETED the next time the user toggles the overlay.</para>
+    /// </summary>
+    [JsonPropertyName("rankSampleSecret")]
+    public string? RankSampleSecret { get; set; }
+
     public Dictionary<string, PersistedCalibration> Calibrations { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
@@ -284,6 +308,7 @@ public sealed class OverlaySettingsStore
             // field missed in this method is silently reset to its default on
             // the next write of ANY other setting.
             ChatGateEnabled = settings.ChatGateEnabled,
+            RankSampleSecret = settings.RankSampleSecret,
             Calibrations = CloneMap(settings.Calibrations),
             ItemRowCalibrations = CloneMap(settings.ItemRowCalibrations),
         };
