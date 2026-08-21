@@ -7,6 +7,7 @@ import { IconWithFallback } from "@/components/IconWithFallback";
 import MyStatsRefresher from "@/components/hextech/MyStatsRefresher";
 import SessionPanel, { type SessionPanelProps } from "@/components/hextech/SessionPanel";
 import AccountPicker from "@/components/hextech/mystats/AccountPicker";
+import PairDesktopControl from "@/components/hextech/mystats/PairDesktopControl";
 import PostGameReview from "@/components/hextech/postgame/PostGameReview";
 import { getChampionIconMap, type ChampionIconEntry } from "@/components/proAssets";
 import {
@@ -368,6 +369,7 @@ function MyStatsContent() {
       <MyStatsRefresher onRefreshed={() => setRefreshKey((key) => key + 1)} />
       {isPostGame ? <PostGameReview summary={state.summary} iconOf={iconOf} /> : <MyStatsSurface summary={state.summary} sessions={state.sessions} icons={icons} onSwitched={handleAccountSwitched} />}
       {showAccountLinking && <AccountPicker accounts={state.summary.accounts ?? []} activeRiotId={state.summary.riotId} activeId={state.summary.accountId ?? null} onSwitched={handleAccountSwitched} collapsed={false} />}
+      <PairDesktopControl />
       <footer className="mt-10 border-t border-white/[0.06] pt-4 text-[11px] text-mut">Your own match history · shown for context only, never blended into any recommendation or ranking.</footer>
     </main>
   );
