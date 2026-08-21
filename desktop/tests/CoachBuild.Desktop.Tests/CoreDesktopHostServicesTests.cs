@@ -124,6 +124,75 @@ public sealed class CoreDesktopHostServicesTests
     }
 
     /// <summary>
+    /// STARTING THE HOST UPLOADS NOTHING, and the click does.
+    ///
+    /// <para>The behavioural half of the user-triggered-only rule. The Core-side
+    /// test pins that the service exposes no automatic trigger; this one pins
+    /// that the production host does not call the one trigger it has behind the
+    /// user's back. Silent background log shipping is a different product with a
+    /// different consent conversation, and this is where it would arrive by
+    /// accident -- StartAsync already fires an LP capture two lines away.</para>
+    /// </summary>
+    [Fact]
+    public async Task Starting_the_host_never_uploads_diagnostics_but_a_click_does()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CoachBuild-HostTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var token = new string('a', 64);
+        var diagnostics = new NeverCalledDiagnosticsSink();
+
+        try
+        {
+            await using var host = new CoreDesktopHostServices(
+                token,
+                root,
+                bridgePorts: [FindFreePort()],
+                rankSampleSecret: () => "test-secret",
+                rankSampleSink: new NeverCalledRankSink(),
+                diagnosticsSink: diagnostics,
+                rankCaptureOptions: new RankCaptureOptions(GameEndSettleAttempts: 0));
+
+            Assert.Null(host.PendingDiagnosticsUpload);
+            await host.StartAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Null(host.PendingDiagnosticsUpload);
+
+            host.SendDiagnostics();
+            var upload = host.PendingDiagnosticsUpload;
+            Assert.NotNull(upload);
+            await upload!.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(TaskStatus.RanToCompletion, upload.Status);
+
+            // Whether it POSTED is deliberately not asserted: on an agent with no
+            // League client it stops at identity, on a box with one it can go all
+            // the way. Both are correct. What it may never be is `source` anything
+            // other than the one value the server's closed vocabulary admits.
+            Assert.All(diagnostics.Sources, source => Assert.Equal("companion", source));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>The diagnostics equivalent of <see cref="NeverCalledRankSink"/>.</summary>
+    private sealed class NeverCalledDiagnosticsSink : IDiagnosticsSink
+    {
+        private readonly object _gate = new();
+        private readonly List<string> _sources = [];
+
+        public IReadOnlyList<string> Sources { get { lock (_gate) return [.. _sources]; } }
+
+        public Task<RankSamplePostResult> PostAsync(
+            DiagnosticsBody body,
+            string secret,
+            CancellationToken cancellationToken)
+        {
+            lock (_gate) _sources.Add(body.Source);
+            return Task.FromResult(RankSamplePostResult.Posted);
+        }
+    }
+
+    /// <summary>
     /// Swallows samples so a test run can never post to the production origin,
     /// and records what it saw.
     /// </summary>

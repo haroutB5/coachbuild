@@ -157,6 +157,7 @@ public static partial class ComplianceRules
         result = AuthTokenRegex().Replace(result, "remoting-auth-token=[redacted]");
         result = RiotIdRegex().Replace(result, "[player-redacted]");
         result = UuidRegex().Replace(result, "[id-redacted]");
+        result = UserProfileRegex().Replace(result, "$1[user-redacted]");
         return result;
     }
 
@@ -194,5 +195,32 @@ public static partial class ComplianceRules
     // summonerId it does not log.
     [GeneratedRegex("\\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\b")]
     private static partial Regex UuidRegex();
+
+    // THE WINDOWS ACCOUNT NAME IS AN IDENTIFIER, and it is the one shape a
+    // real companion.log actually carries.
+    //
+    // Added 2026-08-21 by the desktop diagnostics-upload lane, which had to
+    // answer "does the existing policy cover what is really in that file?"
+    // before shipping a button that uploads it. The four rules above scored
+    // ZERO against the 166KB companion.log on the authoring machine -- no Riot
+    // ID, no dashed UUID, no session=, no remoting-auth-token. A user-profile
+    // path is different, and it is reachable by construction rather than by
+    // accident: LeagueConfigLocator.Candidates() (ShopBindResolver.cs) adds
+    // SpecialFolder.LocalApplicationData to the search list, and App.xaml.cs's
+    // LogConfigSearch joins the first eight candidates into one Info line
+    // whenever no League config is found. On an ordinary install that line
+    // contains <drive>:\Users\<their Windows account name>\AppData\Local\...
+    // -- a name, written into the one file the user is now asked to upload.
+    //
+    // Only the profile SEGMENT is replaced. The rest of the path is the entire
+    // diagnostic value of the line ("we looked here, it was not there"), so
+    // redacting the whole path would trade a real answer for a marginal gain.
+    //
+    // KNOWN LIMIT, stated rather than papered over: a redirected or
+    // domain-joined profile that does not live under <drive>:\Users is not
+    // matched, and neither is a bare account name appearing as ordinary prose
+    // -- the same limit RiotIdRegex already states for un-tagged names.
+    [GeneratedRegex("(?i)([A-Za-z]:[\\\\/]{1,2}Users[\\\\/]{1,2})([^\\\\/\\s\"']+)")]
+    private static partial Regex UserProfileRegex();
 }
 

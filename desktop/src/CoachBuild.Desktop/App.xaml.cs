@@ -51,6 +51,25 @@ public interface ILaneOverrideHostServices
 }
 
 /// <summary>
+/// A host that can upload the companion log to My Stats on request.
+///
+/// <para>Its own interface rather than a member of
+/// <see cref="IDesktopHostServices"/> so that a host which cannot do it
+/// (the inert default) is distinguishable AT THE CALL SITE from one that can.
+/// The tray item must never be able to produce nothing: an
+/// <c>is not IDiagnosticsUploadHost</c> miss has to report a failure the user
+/// can see, and it cannot do that if the method exists and silently no-ops.</para>
+/// </summary>
+public interface IDiagnosticsUploadHost
+{
+    /// <summary>
+    /// Returns immediately. <paramref name="report"/> is invoked exactly once,
+    /// off the UI thread; the caller marshals it.
+    /// </summary>
+    void SendDiagnostics(Action<DiagnosticsUploadOutcome>? report = null);
+}
+
+/// <summary>
 /// A host that can hand the overlay a new state the moment the live game
 /// produces one, instead of waiting to be asked.
 ///
@@ -971,6 +990,9 @@ public partial class App : WpfApplication
             case TrayCommand.PairMyStats:
                 PairDesktopWithMyStats();
                 break;
+            case TrayCommand.SendDiagnostics:
+                SendDiagnosticsToMyStats();
+                break;
             case TrayCommand.ApplyUpdate:
                 _log?.Info("update: restart requested from the tray");
                 var updates = _updates;
@@ -1021,6 +1043,69 @@ public partial class App : WpfApplication
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
+    }
+
+    /// <summary>
+    /// Uploads the tail of companion.log to My Stats, because the user asked
+    /// for it from the tray.
+    ///
+    /// <para><b>Every route out of here is visible.</b> A diagnostics button
+    /// that can be pressed and produce nothing is the exact failure mode that
+    /// makes people stop trusting one -- and the user pressing it is on a
+    /// machine they cannot copy a file off, so "look in the log" is not a
+    /// recovery for them. There are three outcomes and all three say something:
+    /// an acknowledgement on the click, a balloon on success, and a MODAL on
+    /// every failure.</para>
+    ///
+    /// <para><b>Why a modal for failures specifically.</b> Windows suppresses
+    /// balloon tips under focus assist, which a fullscreen game turns on. The
+    /// one case that must never be swallowed is therefore the one case that
+    /// does not use a balloon. A modal is also the honest shape for a failure:
+    /// it names the next action and waits to be acknowledged, and the click
+    /// that opened the tray already took the foreground.</para>
+    ///
+    /// <para>It cannot disturb a game beyond that. Nothing here touches
+    /// <c>_overlay</c>; adjust mode ends only on Enter, Escape or a tray
+    /// cancel, and there is no deactivation handler for a dialog to trip.</para>
+    /// </summary>
+    private void SendDiagnosticsToMyStats()
+    {
+        if (_services is not IDiagnosticsUploadHost host)
+        {
+            // The inert host. Reported rather than ignored: from the tray this
+            // is indistinguishable from a broken button.
+            ReportDiagnosticsOutcome(DiagnosticsUploadOutcome.Failed);
+            return;
+        }
+
+        // The upload can take an LCU read plus a 5 s HTTP timeout. Without this
+        // the click looks dead for as long as it takes.
+        _tray?.ShowBalloon(DiagnosticsMessages.Title, "Sending your companion log to My Stats…");
+        host.SendDiagnostics(outcome =>
+            Dispatcher.BeginInvoke(new Action(() => ReportDiagnosticsOutcome(outcome))));
+    }
+
+    /// <summary>
+    /// One outcome, one message. The wording lives in
+    /// <see cref="DiagnosticsMessages"/> (pure, in Core, tested) so the balloon
+    /// and the modal cannot come to describe the same outcome differently, and
+    /// so the "not paired" sentence keeps naming the tray item that fixes it.
+    /// The companion.log line is written by the service, not here.
+    /// </summary>
+    private void ReportDiagnosticsOutcome(DiagnosticsUploadOutcome outcome)
+    {
+        if (_isShuttingDown) return;
+        var text = DiagnosticsMessages.Text(outcome);
+        if (DiagnosticsMessages.IsSuccess(outcome))
+        {
+            _tray?.ShowBalloon(DiagnosticsMessages.Title, text);
+            return;
+        }
+        WpfMessageBox.Show(
+            text,
+            DiagnosticsMessages.Title,
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
     }
 
     /// <summary>
@@ -1390,7 +1475,7 @@ public partial class App : WpfApplication
 /// bridge, LCU/gameflow poller, and Live Client Data workers off WPF's
 /// dispatcher while exposing only immutable UI snapshots to App.
 /// </summary>
-public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHostLifecycle, ILaneOverrideHostServices, ILiveOverlayPushSource, IAsyncDisposable
+public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHostLifecycle, ILaneOverrideHostServices, ILiveOverlayPushSource, IDiagnosticsUploadHost, IAsyncDisposable
 {
     private readonly object _gate = new();
     private readonly CompanionState _state;
@@ -1407,7 +1492,9 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     private readonly LivePollingCoordinator _livePolling;
     private readonly RankCaptureService _rankCapture;
     private readonly IRankSampleSink _rankSink;
-    private readonly bool _ownsRankSink;
+    private readonly DiagnosticsUploadService _diagnostics;
+    /// <summary>The one client this instance built, if it built one. Disposed on teardown.</summary>
+    private readonly RankSampleClient? _ownedMyStatsClient;
     private readonly CancellationTokenSource _stop = new();
     private Task? _gameflowTask;
     private Task? _liveTask;
@@ -1498,6 +1585,9 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         // Test seam. Production always builds a RankSampleClient against the
         // real origin; a test that wanted one would need a socket.
         IRankSampleSink? rankSampleSink = null,
+        // The other half of the same seam. Production leaves BOTH null and one
+        // RankSampleClient serves both POSTs; see the construction below.
+        IDiagnosticsSink? diagnosticsSink = null,
         RankCaptureOptions? rankCaptureOptions = null)
     {
         if (!SessionTokenStore.IsValid(sessionToken))
@@ -1527,8 +1617,16 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             log: _log,
             ports: bridgePorts);
         _skillOrders = _bridge.SkillOrderProvider;
-        _ownsRankSink = rankSampleSink is null;
-        _rankSink = rankSampleSink ?? new RankSampleClient(CompanionWire.AppOrigin);
+        // ONE My Stats transport for BOTH account-secret POSTs. The LP sample
+        // and the diagnostics upload share a client, a timeout, a header
+        // spelling and a failure taxonomy on purpose -- a second client here is
+        // how those four quietly come to disagree, and three of them are
+        // load-bearing. It is built whenever either seam is unfilled, which is
+        // always in production and never in a test that supplies both.
+        _ownedMyStatsClient = rankSampleSink is null || diagnosticsSink is null
+            ? new RankSampleClient(CompanionWire.AppOrigin)
+            : null;
+        _rankSink = rankSampleSink ?? _ownedMyStatsClient!;
         _rankCapture = new RankCaptureService(
             _lcu,
             _rankSink,
@@ -1536,6 +1634,17 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             _log,
             _time,
             rankCaptureOptions);
+        // The log PATH comes from the log instance that is actually writing,
+        // never from a second derivation of %LOCALAPPDATA%\CoachBuild -- the
+        // same argument App.OpenLogFolder makes. Note it is only ever READ
+        // here; RedactedLog.Discarding remains the write-side default that
+        // BridgeLogIsolationTests guards.
+        _diagnostics = new DiagnosticsUploadService(
+            _lcu,
+            diagnosticsSink ?? _ownedMyStatsClient!,
+            rankSampleSecret ?? (static () => null),
+            () => _log.FilePath,
+            _log);
         _gameflow = new GameflowPoller(
             _credentials,
             _lcu,
@@ -1681,6 +1790,24 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     /// reads it — see <see cref="RankCaptureService.PendingCapture"/>.
     /// </summary>
     public Task? PendingRankCapture => _rankCapture.PendingCapture;
+
+    /// <summary>
+    /// Uploads the tail of companion.log to My Stats, because the user clicked
+    /// the tray item. Returns immediately; <paramref name="report"/> is invoked
+    /// once on a thread-pool thread and the caller marshals it.
+    ///
+    /// <para>There is no other caller and there must not be one. See
+    /// <see cref="DiagnosticsUploadService"/> on why an automatic upload is a
+    /// different product.</para>
+    /// </summary>
+    public void SendDiagnostics(Action<DiagnosticsUploadOutcome>? report = null) =>
+        _diagnostics.Fire(report, _stop.Token);
+
+    /// <summary>
+    /// The most recent diagnostics upload, for tests to settle on. Production
+    /// never reads it -- see <see cref="DiagnosticsUploadService.PendingUpload"/>.
+    /// </summary>
+    public Task? PendingDiagnosticsUpload => _diagnostics.PendingUpload;
 
     public Task<DesktopPhaseSnapshot> ReadSnapshotAsync(CancellationToken cancellationToken)
     {
@@ -2469,7 +2596,7 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             disposableChampions.Dispose();
         _live.Dispose();
         _lcu.Dispose();
-        if (_ownsRankSink && _rankSink is IDisposable disposableRankSink) disposableRankSink.Dispose();
+        _ownedMyStatsClient?.Dispose();
         _stop.Dispose();
     }
 

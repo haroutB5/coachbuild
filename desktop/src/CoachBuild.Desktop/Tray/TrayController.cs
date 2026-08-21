@@ -24,6 +24,7 @@ public enum TrayCommand
     RepairWebView2,
     OpenLogFolder,
     PairMyStats,
+    SendDiagnostics,
     ApplyUpdate,
     Quit,
 }
@@ -198,6 +199,11 @@ public sealed class TrayController : IDisposable
         _menu.Items.Add(MenuItem(
             TrayMenuState.PairMyStatsVerb,
             (_, _) => RaiseCommand(TrayCommand.PairMyStats)));
+        // Directly under the pairing item: it needs the same secret, and the
+        // "not paired yet" message names that item above by its exact string.
+        _menu.Items.Add(MenuItem(
+            TrayMenuState.SendDiagnosticsVerb,
+            (_, _) => RaiseCommand(TrayCommand.SendDiagnostics)));
 
         _menu.Items.Add(new Forms.ToolStripSeparator());
         if (!_state.IsAdjusting)

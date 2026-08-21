@@ -5,7 +5,18 @@ using System.Text.Json;
 namespace CoachBuild.Core;
 
 /// <summary>
-/// Posts one ranked-LP sample to the web app.
+/// The single My Stats transport: one HttpClient, one timeout, one auth header
+/// spelling, one failure taxonomy, for every account-secret POST the desktop
+/// makes.
+///
+/// <para><b>It posts two things.</b> One ranked-LP sample
+/// (<see cref="PostAsync(RankSampleBody,string,CancellationToken)"/>) and one
+/// companion-log upload
+/// (<see cref="PostAsync(DiagnosticsBody,string,CancellationToken)"/>). They
+/// share <see cref="SendAsync{T}"/> deliberately rather than getting a client
+/// each: a second HTTP client is how the timeout, the header name, the 4xx/5xx
+/// distinction and the <c>ok:false</c> reading quietly come to disagree, and
+/// three of those four are load-bearing.</para>
 ///
 /// <para>Modelled on <see cref="WebAppVersionClient"/> deliberately: same
 /// fail-soft posture, same "every failure is a return value, never an
@@ -20,10 +31,17 @@ namespace CoachBuild.Core;
 /// companions then read the same persisted desktop setting. When it is absent,
 /// capture stays INERT rather than posting unauthenticated.</para>
 /// </summary>
-public sealed class RankSampleClient : IRankSampleSink, IDisposable
+public sealed class RankSampleClient : IRankSampleSink, IDiagnosticsSink, IDisposable
 {
     /// <summary>The route spec §4 defines. Lane J owns the server half.</summary>
     public const string SamplePath = "/api/mystats/rank-sample";
+
+    /// <summary>
+    /// The companion-log upload route. Same origin, same secret header, same
+    /// <c>{ok}</c> response shape — see app/api/mystats/diagnostics/route.ts,
+    /// which gates it with the same <c>checkAccountSecret</c> as rank-sample.
+    /// </summary>
+    public const string DiagnosticsPath = "/api/mystats/diagnostics";
 
     /// <summary>Must equal <c>ACCOUNT_SECRET_HEADER</c> in lib/mystats/accountAuth.ts.</summary>
     public const string SecretHeader = "x-coachbuild-account-secret";
@@ -32,6 +50,7 @@ public sealed class RankSampleClient : IRankSampleSink, IDisposable
 
     private readonly HttpClient _http;
     private readonly Uri _endpoint;
+    private readonly Uri _diagnosticsEndpoint;
     private readonly bool _ownsHttp;
     private bool _disposed;
 
@@ -43,6 +62,7 @@ public sealed class RankSampleClient : IRankSampleSink, IDisposable
         if (!Uri.TryCreate(appOrigin, UriKind.Absolute, out var origin))
             throw new ArgumentException("The app origin must be an absolute URI.", nameof(appOrigin));
         _endpoint = new Uri(origin, SamplePath);
+        _diagnosticsEndpoint = new Uri(origin, DiagnosticsPath);
         _ownsHttp = handler is null;
         _http = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: false);
         _http.Timeout = timeout ?? DefaultTimeout;
@@ -50,15 +70,36 @@ public sealed class RankSampleClient : IRankSampleSink, IDisposable
 
     public Uri Endpoint => _endpoint;
 
-    public async Task<RankSamplePostResult> PostAsync(
+    /// <summary>The companion-log upload endpoint. Same origin as <see cref="Endpoint"/>.</summary>
+    public Uri DiagnosticsEndpoint => _diagnosticsEndpoint;
+
+    public Task<RankSamplePostResult> PostAsync(
         RankSampleBody body,
+        string secret,
+        CancellationToken cancellationToken) =>
+        SendAsync(_endpoint, body, secret, cancellationToken);
+
+    /// <summary>
+    /// One companion-log upload. Identical transport and identical failure
+    /// taxonomy to the LP sample above — the ONLY difference is the route and
+    /// the body type, which is the whole argument for them sharing a client.
+    /// </summary>
+    public Task<RankSamplePostResult> PostAsync(
+        DiagnosticsBody body,
+        string secret,
+        CancellationToken cancellationToken) =>
+        SendAsync(_diagnosticsEndpoint, body, secret, cancellationToken);
+
+    private async Task<RankSamplePostResult> SendAsync<TBody>(
+        Uri endpoint,
+        TBody body,
         string secret,
         CancellationToken cancellationToken)
     {
         if (_disposed) return RankSamplePostResult.Failed;
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Post, _endpoint);
+            using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
             request.Headers.TryAddWithoutValidation(SecretHeader, secret);
             request.Content = new StringContent(
                 JsonSerializer.Serialize(body, JsonOptions.Wire), Encoding.UTF8, "application/json");

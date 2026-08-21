@@ -129,6 +129,24 @@ public sealed record TrayMenuState(
     public const string PairMyStatsVerb = "Pair desktop with My Stats…";
 
     /// <summary>
+    /// Uploads the tail of companion.log to My Stats.
+    ///
+    /// <para>A MENU ITEM, and never a timer. The user runs this on a separate
+    /// gaming PC and cannot copy a file off it, so diagnosing an in-game bug has
+    /// meant asking them to photograph two hundred lines of log; this is the way
+    /// out of that. A scheduled version of the same upload is not a smaller
+    /// version of this feature, it is silent log shipping, which is a different
+    /// product with a different consent conversation. The click IS the
+    /// consent.</para>
+    ///
+    /// <para>It sits directly under <see cref="PairMyStatsVerb"/> because it is
+    /// useless without it, and the failure message for an unpaired desktop
+    /// names that item by this exact string
+    /// (<c>DiagnosticsMessages.PairingVerb</c>, pinned by a test).</para>
+    /// </summary>
+    public const string SendDiagnosticsVerb = "Send diagnostics to My Stats…";
+
+    /// <summary>
     /// Names the accelerator in a menu label — and, when <paramref
     /// name="accelerator"/> is null, deliberately does not.
     ///

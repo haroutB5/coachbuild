@@ -2,6 +2,7 @@ using System.Drawing;
 using System.Reflection;
 using Forms = System.Windows.Forms;
 using System.Windows.Threading;
+using CoachBuild.Core;
 using CoachBuild.Desktop.Tray;
 using Xunit;
 
@@ -192,6 +193,59 @@ public sealed class TrayControllerTests
         {
             menu.Close();
         }
+    }
+
+    /// <summary>
+    /// The diagnostics upload is reachable, and it is reachable by CLICK.
+    ///
+    /// <para>The item is the entire consent story for this feature: a log the
+    /// user pressed a button to send is diagnostics, and the same log on a timer
+    /// is silent log shipping. A test that only checked the upload works would
+    /// pass just as happily against a scheduled one.</para>
+    /// </summary>
+    [Fact]
+    public void Sending_diagnostics_is_reachable_from_the_tray()
+    {
+        using var tray = new TrayController(Dispatcher.CurrentDispatcher);
+        var raised = new List<TrayCommand>();
+        tray.CommandRequested += (_, e) => raised.Add(e.Command);
+        tray.Start();
+        var menu = tray.ContextMenuForTesting;
+
+        menu.Show(new Point(0, 0));
+        try
+        {
+            var items = menu.Items.OfType<Forms.ToolStripMenuItem>().ToList();
+            var send = items.Single(item => item.Text == TrayMenuState.SendDiagnosticsVerb);
+
+            Assert.True(send.Enabled, "the item must never be a control that cannot be pressed");
+            send.PerformClick();
+            Assert.Equal(TrayCommand.SendDiagnostics, Assert.Single(raised));
+
+            // Directly under the pairing item, which is what makes it useful.
+            Assert.Equal(
+                items.FindIndex(item => item.Text == TrayMenuState.PairMyStatsVerb) + 1,
+                items.IndexOf(send));
+        }
+        finally
+        {
+            menu.Close();
+        }
+    }
+
+    /// <summary>
+    /// The "not paired yet" message tells the user to use a menu item BY NAME.
+    /// Core cannot reference the WPF assembly, so the string is duplicated; this
+    /// is what stops the duplicate becoming a lie.
+    /// </summary>
+    [Fact]
+    public void The_unpaired_message_names_the_tray_item_that_fixes_it()
+    {
+        Assert.Equal(TrayMenuState.PairMyStatsVerb, DiagnosticsMessages.PairingVerb);
+        Assert.Contains(
+            TrayMenuState.PairMyStatsVerb,
+            DiagnosticsMessages.Text(DiagnosticsUploadOutcome.NotPaired),
+            StringComparison.Ordinal);
     }
 
     [Fact]
