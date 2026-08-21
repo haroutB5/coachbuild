@@ -169,9 +169,50 @@ export const REBUILD_STAGES: RebuildStageSpec[] = [
     drainOnCleanExit: false,
     usesRiot: true,
     usesChrome: true,
-    // It writes otp_matches too, and that is the point: this stage — not the
-    // deep walk — is what puts a champion-role on the board at all.
-    writes: ["otp_featured", "otp_accounts", "otp_matches"],
+    // It writes otp_matches too — but NOT otp_accounts, and that correction is
+    // the whole reason the 2026-08-21 rebuild produced a corpus the artifact
+    // gate refused. This list claimed otp_accounts for weeks; grep says the
+    // only INSERT INTO coachbuild.otp_accounts in the repo is lib/otp/ingest.ts
+    // (reached via discoverOtpAccounts), which this script never calls.
+    //
+    // The rows it DOES write are therefore unreachable on their own:
+    // /api/otp INNER JOINs otp_matches to otp_accounts, so a featured account's
+    // games are invisible to the consensus feed until an accounts row with the
+    // SAME (champion_id, puuid) exists. And the two rosters are disjoint
+    // populations, not merely out of sync — measured on champion 99, op.gg
+    // leaderboard discovery returned 8 accounts and NONE of them was the
+    // featured one-trick. So this stage cannot put a champion-role on the
+    // consensus board at any depth; only `otp-accounts` below can. Its output
+    // still backs /api/otp/featured, which reads it without the join.
+    writes: ["otp_featured", "otp_matches"],
+  },
+  {
+    // THE STAGE WHOSE ABSENCE MADE PHASE 1 UNSHIPPABLE. Without it a
+    // run-to-completion rebuild leaves coachbuild.otp_accounts EMPTY, every
+    // otp_matches row unreachable behind the join above, and the gate reporting
+    // `otp 0` while `--min-coverage` scores the same hollow corpus at 100.0% —
+    // because an empty 200 counts as resolved. It is placed before the deep
+    // walk deliberately: the walk deepens champions that already have a roster
+    // and cannot create one.
+    id: "otp-accounts",
+    phase: 1,
+    title: "OTP roster discovery (op.gg leaderboard -> account-v1 -> otp_accounts) + its matches",
+    script: "scripts/ingest-otp.mjs",
+    units: (o) => Math.ceil(o.championCount / o.championChunk),
+    unitArgs: (_i, o) => ["--champions", String(o.championChunk)],
+    // Measured 2026-08-21 on this machine: ~6.5 min per champion end to end
+    // (2 op.gg calls + up to 8 account-v1 resolutions + up to 8 accounts x
+    // (1 ids call + 20 match calls), all through the shared 1.3s pacer). At the
+    // default chunk of 10 that is ~65 min, so the 2h cap is a backstop for a
+    // wedged unit rather than a bound a healthy one can hit.
+    maxMs: () => 2 * HOUR,
+    // Stalest-first over otp_champion_cursor and bounded by --champions, so
+    // every invocation advances the frontier and exits 0 regardless of how much
+    // of the fleet is covered. No drain signal: all units run.
+    drainOnCleanExit: false,
+    usesRiot: true,
+    usesChrome: false,
+    writes: ["otp_accounts", "otp_matches", "otp_champion_cursor"],
   },
   {
     id: "otp-priority",
