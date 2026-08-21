@@ -224,7 +224,14 @@ export function groupSessions(matches: readonly SessionMatchInput[]): PlaySessio
 interface UsableSample {
   ms: number;
   points: number;
-  position: LadderPosition;
+  /** THE SAMPLE, not a narrowed view of it. Typed `LadderPosition` this file
+   *  did not compile: the `filter((s): s is UsableSample => ...)` below narrows
+   *  an array of `{..., position: RankSample} | null`, and a type predicate's
+   *  type must be ASSIGNABLE TO its parameter's type — `LadderPosition` is the
+   *  supertype, so it is not (TS2677), and the failed narrowing then cascaded
+   *  into three more errors. `ladderDelta` still only reads the LadderPosition
+   *  half of it. */
+  position: RankSample;
 }
 
 /**
@@ -302,6 +309,63 @@ export function sessionLpDelta(
         : "extra-games";
 
   return { value, confidence: "approximate", reason, extraGames };
+}
+
+/** How many sittings /api/mystats/summary carries, and the ONE number that
+ *  decides it (spec §7: "the last 10"). It lives here rather than in the route
+ *  because a Next.js route file may export only its handlers and its segment
+ *  config, and because the panel's heading will want to state the same number —
+ *  the RECENT_GAMES_LIMIT lesson, where a cap in two places quietly served five
+ *  rows under a heading that said twenty. */
+export const SESSIONS_LIMIT = 10;
+
+/** ONE row of the summary payload's `sessions` array — spec §7, exactly these
+ *  five fields.
+ *
+ *  It is a SEPARATE type from PlaySession on purpose. PlaySession carries four
+ *  fields the arithmetic needs and no consumer should see, and one of them —
+ *  `gameEndsMs` — holds a timestamp per game in the whole season. Emitting the
+ *  session objects straight onto the response would render perfectly and
+ *  quietly ship a few hundred numbers nobody reads. */
+export interface SessionSummary {
+  startedAt: string;
+  endedAt: string;
+  wins: number;
+  losses: number;
+  lpDelta: SessionLpDelta;
+}
+
+/**
+ * The whole payload block in one call: group everything, price each sitting,
+ * and hand back the newest `limit` of them, NEWEST FIRST.
+ *
+ * ORDER OF OPERATIONS IS THE POINT. Grouping runs over the account's COMPLETE
+ * stored history and the LP delta is computed against that complete list,
+ * because "no other counted game resolved inside the bracket" cannot be
+ * evaluated from a slice — a caller that sliced first would silently upgrade
+ * every contaminated bracket to `exact`, which is the one failure this feature
+ * cannot have (a confident wrong number, HARD RULE 4). Only after every delta
+ * is priced does the list get cut down to what the panel shows.
+ *
+ * NEWEST FIRST matches `recentGames` and the way the page already reads. The
+ * slice therefore comes off the END of the ascending list, not the start.
+ */
+export function summarizeSessions(
+  matches: readonly SessionMatchInput[],
+  samples: readonly RankSample[],
+  limit: number = SESSIONS_LIMIT
+): SessionSummary[] {
+  const all = groupSessions(matches);
+  const shown = all.slice(Math.max(0, all.length - Math.max(0, limit)));
+  return shown
+    .map((session) => ({
+      startedAt: session.startedAt,
+      endedAt: session.endedAt,
+      wins: session.wins,
+      losses: session.losses,
+      lpDelta: sessionLpDelta(session, samples, all),
+    }))
+    .reverse();
 }
 
 function firstWhere(list: readonly UsableSample[], pred: (s: UsableSample) => boolean): UsableSample | null {

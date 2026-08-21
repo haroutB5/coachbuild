@@ -12,6 +12,8 @@ import {
 } from "@/lib/mystats/aggregate";
 import { SEASON_LABEL } from "@/lib/mystats/season";
 import { COUNTED_QUEUE_IDS } from "@/lib/mystats/queues";
+import { summarizeSessions, type RankSample, type SessionSummary } from "@/lib/mystats/sessions";
+import { FRESH_WINDOW_DAYS } from "@/lib/pro/fresh";
 import { readHistoryComplete } from "@/lib/mystats/ingest";
 import { refreshStaleRanks, UNKNOWN_RANK } from "@/lib/mystats/rank";
 import { routingForServer } from "@/lib/pro/regionMap";
@@ -62,6 +64,24 @@ interface RecentRow {
   patch: string | null;
 }
 
+/** The three columns session grouping needs, and nothing else. Deliberately a
+ *  separate read from `rows` above: that one honours the optional role/
+ *  championId filters, and a sitting is a fact about the EVENING, not about the
+ *  champion the filter happens to be set to. */
+interface SessionRow {
+  game_creation: string;
+  win: boolean;
+  game_duration_sec: number | null;
+}
+
+/** One row of coachbuild.my_rank_samples (migration 0027). */
+interface RankSampleRow {
+  observed_at: string;
+  tier: string | null;
+  division: string | null;
+  lp: number | null;
+}
+
 const EMPTY_STATS = {
   historyComplete: false,
   buildAdherencePct: null as number | null,
@@ -75,6 +95,9 @@ const EMPTY_STATS = {
   csPerMin: null as number | null,
   csGames: 0,
   recentGames: [] as ReturnType<typeof buildRecentGames>,
+  // An EMPTY ARRAY, never absent. A consumer must not have to branch on which
+  // response shape it got -- the same rule the seven rank keys follow.
+  sessions: [] as SessionSummary[],
 };
 
 function parseIntParam(raw: string | null): number | null | undefined {
@@ -287,6 +310,72 @@ export async function GET(req: NextRequest) {
       LIMIT ${RECENT_GAMES_LIMIT}
     `) as unknown as RecentRow[];
 
+    // ── SESSIONS (spec §7) ──────────────────────────────────────────────────
+    //
+    // NO LIMIT, and no role/champion filter, on purpose. A sitting is a fact
+    // about an evening, and the "no other counted game resolved inside the LP
+    // bracket" rule is evaluated against the account's WHOLE stored history --
+    // see summarizeSessions. Slicing to the ten shown before pricing them would
+    // upgrade every contaminated bracket to `exact`. The read is bounded anyway:
+    // every row in my_matches is already season-scoped by ingest/storage
+    // (lib/mystats/season.ts), and this SELECT is three narrow columns off the
+    // puuid index.
+    const sessionRows = (await sql`
+      SELECT game_creation, win, game_duration_sec
+      FROM coachbuild.my_matches
+      WHERE puuid = ${account.puuid}
+        AND queue_id = ANY(${COUNTED_QUEUE_IDS}::int[])
+    `) as unknown as SessionRow[];
+
+    // THE LP TIME SERIES -- and the one read on this route allowed to FAIL.
+    //
+    // Migration 0027 creates coachbuild.my_rank_samples and lands at CUTOVER,
+    // after this code ships. Until then the table does not exist on any
+    // environment, and letting that error propagate would 500 the entire My
+    // Stats page -- champion pool, adherence, CS headline, Match Performance,
+    // the account picker -- for the sake of a panel that has nothing to show
+    // yet. So a failure here degrades to "no samples", which is exactly the
+    // state every session predating capture is in anyway: a dash, never a
+    // fabricated number. The W/L half of every session needs no new table at
+    // all and is unaffected.
+    //
+    // Skipped entirely when there are no counted games: nothing to bracket, and
+    // Neon compute is the resource this app ran out of on 2026-08-20.
+    //
+    // Bounded to FRESH_WINDOW_DAYS -- the same constant RETENTION_DAYS is
+    // derived from (lib/retention/prune.ts). The prune clause inside
+    // insertRankSample is the strict complement of this predicate plus grace,
+    // which is why neither number may be edited alone.
+    let rankSamples: RankSample[] = [];
+    if (sessionRows.length > 0) {
+      try {
+        const sampleRows = (await sql`
+          SELECT observed_at, tier, division, lp
+          FROM coachbuild.my_rank_samples
+          WHERE puuid = ${account.puuid}
+            AND observed_at > now() - make_interval(days => ${FRESH_WINDOW_DAYS})
+          ORDER BY observed_at
+        `) as unknown as RankSampleRow[];
+        rankSamples = sampleRows.map((r) => ({
+          observedAt: r.observed_at,
+          tier: r.tier,
+          division: r.division,
+          lp: r.lp,
+        }));
+      } catch (err) {
+        console.warn("[/api/mystats/summary] rank samples unavailable, LP deltas degrade to a dash:", err);
+      }
+    }
+
+    const sessions = summarizeSessions(
+      sessionRows.map((r) => ({
+        gameCreation: r.game_creation,
+        win: r.win,
+        gameDurationSec: r.game_duration_sec,
+      })),
+      rankSamples
+    );
+
     // RANK REFRESH, before listAccounts reads the stored values back. Bounded
     // at RANK_REFRESH_MAX_PER_REQUEST Riot calls and gated per account by a
     // DATABASE timestamp, so the steady state on a warm account is ZERO calls
@@ -407,6 +496,11 @@ export async function GET(req: NextRequest) {
         csGames,
         ...activeRank,
         recentGames,
+        // The last SESSIONS_LIMIT sittings, newest first, each with a W/L
+        // record and an LP delta carrying its own honesty (spec §6/§7). A
+        // `confidence: "unavailable"` entry renders a DASH -- it must never be
+        // turned into a number by a consumer either.
+        sessions,
       },
       { status: 200, headers: { "Cache-Control": "no-store" } }
     );
