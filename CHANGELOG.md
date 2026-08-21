@@ -1,5 +1,94 @@
 # Changelog
 
+## Desktop 1.0.21 — 2026-08-21 — your sessions, once you pair the desktop
+
+**This release does nothing until you pair it, and pairing takes one paste.** Open
+**My Stats** on the website, press **Pair desktop app**, reveal the secret and copy it.
+Then, in the tray, choose **Pair desktop with My Stats…** and paste it in. Until you do
+that, no LP is ever captured, and every session on the page reads `unavailable`.
+
+Two things to expect even after pairing, so they do not look like faults:
+
+- **Session W/L stays empty until your match history is re-ingested.** The panel reads
+  your stored games, and that table is not repopulated yet.
+- **LP only starts accruing from the moment you pair.** There is no backfill, and none is
+  possible — the numbers are read live from the League client at the end of a game, so a
+  game played before pairing left nothing behind to read. Every session older than your
+  pairing shows a dash forever.
+
+### What you get
+
+Ranked games are grouped into **sessions** — one row per sitting — and each row carries
+the time range, the record, and the LP you gained or lost across it. A session ends on an
+**8 hour gap**, not at midnight, so a 22:40-to-01:32 run is one row rather than two.
+
+LP is read as a **ladder position**, not a raw number, so Gold I 90 to Platinum IV 10
+reads as **+20** rather than -80, and Master 500 to Grandmaster 520 as **+20** rather than
++420. Promotions stop looking like collapses.
+
+### The number is never invented
+
+Three states, and they are visibly different on purpose:
+
+- **Exact** — both ends of the session were sampled. Renders plainly.
+- **Approximate** — marked as such, and it tells you why and how many extra games sit
+  inside the bracket it had to price across.
+- **Unavailable** — a dash. It never falls back to zero and never derives a figure from
+  your win count.
+
+A dash is the honest answer for every session that predates your pairing, so today it is
+the common case rather than a fault.
+
+### Capture never delays an apply
+
+LP is sampled at three moments around a game, and every one of them sits behind the item
+set and rune apply. Nothing awaits the capture, the whole body sits in a catch, it shares
+no lock, and in the PowerShell companion it runs on the main thread while every apply runs
+in the bridge runspace. If the sample fails, times out, or the client answers something
+unrecognised, your build still lands on time. Four separate enforcements hold that rule,
+because making the capture blocking does not fail the test suite — it hangs it forever,
+which is the production bug exactly.
+
+The PowerShell half deliberately does **not** get the 30 second settle loop the C# half
+has: a sleep in the tick would stall phase detection for anyone who queues straight into
+the next game. It decides across ticks the loop was already running.
+
+### The secret is treated as a credential
+
+The tray dialog is masked for its whole lifetime and is **one-way**: it is told only
+whether a secret already exists, never what it is, so the saved value cannot be prefilled,
+revealed, copied back out, or pulled into a diagnostic line. On the website the secret is
+hidden on first paint and revealed only on an explicit press. It goes through the same
+redaction as every other secret and never reaches `companion.log` or a URL.
+
+With no secret set, capture stays **inert** and never posts unauthenticated — the
+behaviour that was already there.
+
+### An unplayed queue is not a rank
+
+The client reports an unplayed flex queue as tier `null` with `leaguePoints 0`. A reader
+that checked LP before tier would have recorded that zero as a standing. Both halves
+demand the tier first. A provisional series is read from the games actually remaining
+rather than a field the live client does not send.
+
+### Fixed
+
+The tray's pairing dialog was referenced by the app but its source was never committed, so
+`main` did not compile even though every local build and the full suite were green. It is
+in the release now, and the desktop builds from a clean checkout.
+
+### Unchanged
+
+1.0.9's updater gates, 1.0.10's game-start WebView2 teardown, 1.0.11's champion
+resolution, 1.0.12's banked-point skill gate and 250 ms poll, 1.0.13's `Ctrl+Shift+A`-only
+binding, 1.0.14's derived tray label and `Open log folder`, 1.0.15's web-version reload and
+480 ms apply path, 1.0.16's shop detection and its no-pixel-probe policy, 1.0.17's
+Enter/`Shift+Enter` unification, 1.0.18's game-scoped bypass counter and 90 s latch
+backstop, 1.0.19's keyboard-layout-aware shop bind, and 1.0.20's centred-in-the-box badge
+rule and per-badge validation. Your 1.0.20 calibration carries over untouched — there is
+no re-placing to do in this release. Nothing is written to the League folder. No screen
+capture, no OCR, no memory reads.
+
 ## Desktop 1.0.20 — 2026-08-20 — re-place the numbers once, and this time they stick
 
 **Your numbers have moved down, and you need to place them again. Once. Press
