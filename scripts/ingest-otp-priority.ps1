@@ -216,6 +216,15 @@ if ((Test-Path $hostLog) -and ((Get-Item $hostLog).Length -gt 256KB)) {
 }
 
 $env:Path = 'C:\Program Files\nodejs;' + $env:Path
+
+# Point every ingest below at the REBUILT Neon project, or stop here. These
+# scripts reach the database through scripts/_env.mjs, which fills only keys
+# that are still undefined -- so with DATABASE_URL unset this wrapper silently
+# inherited .env.local's OLD, matchday-shared, quota-exhausted project. That is
+# a refusal, not a warning: see scripts/_cbnew-db.ps1.
+. (Join-Path $PSScriptRoot '_cbnew-db.ps1') -Root $repo -LogPath $hostLog
+if (-not $CbnewDbResolved) { exit 78 }
+
 Set-Location $repo
 
 # NOT `$args`. That is a PowerShell AUTOMATIC variable (a script's own unbound

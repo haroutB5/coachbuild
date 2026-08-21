@@ -86,6 +86,19 @@ $repo    = Split-Path -Parent $PSScriptRoot
 $wrapper = Join-Path $repo 'scripts\ingest-otp-priority.ps1'
 if (-not (Test-Path $wrapper)) { throw "wrapper not found: $wrapper" }
 
+# The wrapper must resolve DATABASE_URL to the rebuilt Neon project before it
+# runs. Until 2026-08-21 it did not: it inherited .env.local's OLD,
+# matchday-shared, exhausted project through scripts/_env.mjs, because that
+# loader treats a missing DATABASE_URL as a fallback rather than an error.
+# Refuse to register a wrapper that has not been fixed, rather than register a
+# task whose writes land in a database nobody intended. Same guard as
+# register-ingest-tasks.ps1.
+$wrapperText = Get-Content $wrapper -Raw
+if ($wrapperText -notmatch '_cbnew-db\.ps1' -or $wrapperText -notmatch '\$CbnewDbResolved') {
+    throw ("REFUSING: scripts\ingest-otp-priority.ps1 does not dot-source scripts\_cbnew-db.ps1 " +
+           'and check $CbnewDbResolved, so it would walk into whatever .env.local points at.')
+}
+
 # The guard that makes the arithmetic in the header enforceable rather than
 # merely documented. Duty cycle = MaxHours / IntervalHours; at Neon's 0.25 CU
 # floor a 30% duty cycle is ~54 CU-hours a month and climbing toward a quota

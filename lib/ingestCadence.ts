@@ -49,29 +49,35 @@ export type ScheduledIngest = {
   readonly registeredBy: string;
 };
 
-/** Tasks whose cadence is reproducible from a committed script. */
+/** Placeholder for a task whose cadence is not reproducible from the repo. */
 export const UNREGISTERED = "(none -- hand-registered, cadence not in the repo)";
 
 /**
- * The cadence as REGISTERED on this machine on 2026-08-21, after 33785c7.
+ * The fleet cadence AS FOUND on 2026-08-21, before it was re-registered.
  *
- * All five tasks are currently Disabled. These entries describe the shape they
- * would resume in when enabled, which is the thing worth asserting: enabling is
- * a one-click action and re-registering is not.
+ * Kept because a budget with no "before" is unfalsifiable: this is the shape
+ * that projected OVER the quota, and the tests below assert both that it did
+ * and that the applied cadence below is strictly slower. Delete it and the
+ * only evidence the change did anything is a sentence in a handoff.
+ *
+ * Note CoachBuildDraftIngest is 84, not 168, even here. Its StartBoundary
+ * falls on a Friday, which reads as weekly, but its DaysOfWeek bitmask is
+ * 18 = Monday|Thursday and draft-ingest.log confirms it: 27 Jul (Mon), 30 Jul
+ * (Thu), 3 Aug (Mon), 6 Aug (Thu). Modelling it as weekly halved it.
  */
-export const SCHEDULED_INGESTS: readonly ScheduledIngest[] = [
+export const AS_FOUND_INGESTS: readonly ScheduledIngest[] = [
   {
     task: "CoachBuildOtpPriority",
     intervalHours: 6,
-    startOffsetMinutes: 10, // 00:10 / 06:10 / 12:10 / 18:10
-    runMinutes: 60, // hard-bounded by -MaxHours 1; the walk exits cleanly
+    startOffsetMinutes: 10,
+    runMinutes: 60,
     registeredBy: "scripts/register-otp-priority-task.ps1",
   },
   {
     task: "CoachBuildOtpIngest",
     intervalHours: 6,
     startOffsetMinutes: 4 * 60 + 20,
-    runMinutes: 73, // 53 consensus + 20 featured, sequential within one slot
+    runMinutes: 73,
     registeredBy: UNREGISTERED,
   },
   {
@@ -90,10 +96,75 @@ export const SCHEDULED_INGESTS: readonly ScheduledIngest[] = [
   },
   {
     task: "CoachBuildDraftIngest",
-    intervalHours: 168, // weekly
+    intervalHours: 84,
     startOffsetMinutes: 9 * 60,
     runMinutes: 63,
     registeredBy: UNREGISTERED,
+  },
+];
+
+/**
+ * The cadence as REGISTERED on this machine on 2026-08-21, and the budget the
+ * fleet is now held to. ~49 CU-hours, comfortably past the 2x headroom target.
+ *
+ * The principle was to cut only the numbers nobody ever chose.
+ * CoachBuildOtpPriority stays at 6h x 1h because the user picked that
+ * deliberately on 2026-08-20 (four refreshes a day) against this exact
+ * arithmetic. CoachBuildOtpIngest and CoachBuildMatchIngest, by contrast, had
+ * never had a cadence chosen against a budget at all -- they were
+ * hand-registered at 6-hourly and between them were 68 CU-hours, more than the
+ * priority walk the incident was blamed on. Both are resumable, so a longer
+ * interval slows how fast coverage deepens rather than losing work.
+ *
+ * CoachBuildProstageIngest goes 3h -> 6h, and the reason is worth stating
+ * because it is invisible without an overlap model. At 6-hourly its :15 slots
+ * fall entirely INSIDE the priority walk's :10-to-:70 windows, so all four of
+ * them cost nothing at all; at 3-hourly the four extra slots (03:15, 09:15,
+ * 15:15, 21:15) land in gaps where nothing else is running and each one wakes
+ * the compute on its own. Halving the frequency of this job therefore removes
+ * 20 active minutes a day while halving nothing anyone would notice. A per-job
+ * duty-cycle table cannot see this: it would have called prostage a rounding
+ * error at 2.8% and left it alone.
+ *
+ * All five tasks are Disabled as of 2026-08-21. These entries describe the
+ * shape they resume in when enabled, which is the thing worth asserting:
+ * enabling is a one-click action and re-registering is not.
+ */
+export const SCHEDULED_INGESTS: readonly ScheduledIngest[] = [
+  {
+    task: "CoachBuildOtpPriority",
+    intervalHours: 6,
+    startOffsetMinutes: 10, // 00:10 / 06:10 / 12:10 / 18:10
+    runMinutes: 60, // hard-bounded by -MaxHours 1; the walk exits cleanly
+    registeredBy: "scripts/register-otp-priority-task.ps1",
+  },
+  {
+    task: "CoachBuildOtpIngest",
+    intervalHours: 24,
+    startOffsetMinutes: 4 * 60 + 20,
+    runMinutes: 73, // 53 consensus + 20 featured, sequential within one slot
+    registeredBy: "scripts/register-ingest-tasks.ps1",
+  },
+  {
+    task: "CoachBuildMatchIngest",
+    intervalHours: 24,
+    startOffsetMinutes: 1 * 60 + 20,
+    runMinutes: 63,
+    registeredBy: "scripts/register-ingest-tasks.ps1",
+  },
+  {
+    task: "CoachBuildProstageIngest",
+    intervalHours: 6,
+    startOffsetMinutes: 15,
+    runMinutes: 5,
+    registeredBy: "scripts/register-ingest-tasks.ps1",
+  },
+  {
+    task: "CoachBuildDraftIngest",
+    intervalHours: 84, // Monday + Thursday, NOT weekly -- see AS_FOUND_INGESTS
+    startOffsetMinutes: 9 * 60,
+    runMinutes: 63,
+    registeredBy: "scripts/register-ingest-tasks.ps1",
   },
 ];
 
@@ -154,36 +225,3 @@ export function projectedCuHours(
  * every caller that does not explicitly check.
  */
 export const REQUIRED_HEADROOM = 2;
-
-/**
- * The cadence this file recommends: ~48 CU-hours, 2.1x headroom.
- *
- * The principle is to cut only the numbers nobody ever chose. CoachBuildOtpPriority
- * stays at 6h x 1h because the user picked that deliberately on 2026-08-20
- * (four refreshes a day) against this exact arithmetic. CoachBuildOtpIngest and
- * CoachBuildMatchIngest, by contrast, have never had a cadence chosen against a
- * budget at all -- they were hand-registered at 6-hourly and between them are
- * 68 CU-hours, more than the priority walk the incident was blamed on. Both are
- * resumable, so a longer interval slows how fast coverage deepens rather than
- * losing work.
- *
- * CoachBuildProstageIngest goes 3h -> 6h, and the reason is worth stating
- * because it is invisible without an overlap model. At 6-hourly its :15 slots
- * fall entirely INSIDE the priority walk's :10-to-:70 windows, so all four of
- * them cost nothing at all; at 3-hourly the four extra slots (03:15, 09:15,
- * 15:15, 21:15) land in gaps where nothing else is running and each one wakes
- * the compute on its own. Halving the frequency of this job therefore removes
- * 20 active minutes a day -- 2.5 CU-hours, the margin that takes the fleet from
- * 1.98x to 2.08x -- while halving nothing anyone would notice. A per-job duty
- * cycle table cannot see this: it would have called prostage a rounding error
- * at 2.8% and left it alone.
- */
-export const RECOMMENDED_INGESTS: readonly ScheduledIngest[] = SCHEDULED_INGESTS.map(
-  (t) => {
-    if (t.task === "CoachBuildOtpIngest" || t.task === "CoachBuildMatchIngest") {
-      return { ...t, intervalHours: 24 };
-    }
-    if (t.task === "CoachBuildProstageIngest") return { ...t, intervalHours: 6 };
-    return t;
-  },
-);
