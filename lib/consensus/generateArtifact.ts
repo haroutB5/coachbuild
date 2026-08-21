@@ -98,10 +98,20 @@ export async function resolveArtifactPatch(
   }
   for (const role of ARTIFACT_ROLES) {
     try {
-      const build = await deps.fetchJson<{ patch?: string }>(
+      // BOTH SHAPES ON PURPOSE. /api/build answered a single object when this
+      // probe was written; since situational items shipped as a SECOND item set
+      // it answers an ARRAY of them, and every element carries the same `patch`.
+      // Reading only `.patch` silently yielded undefined for every role, so the
+      // loop fell through all five and threw "Could not read a patch label" —
+      // the generator, and therefore the artifact gate, could not run at all.
+      // The unit tests still mocked the object, which is why a green suite did
+      // not catch it. Accepting either shape keeps an older deployment (a
+      // `--base` pointing at production mid-rollout) working too.
+      const build = await deps.fetchJson<{ patch?: string } | Array<{ patch?: string }>>(
         `${opts.base}/api/build?champ=${seedChampionId}&role=${role}`
       );
-      const normalized = normalizePatchLabel(build?.patch);
+      const first = Array.isArray(build) ? build[0] : build;
+      const normalized = normalizePatchLabel(first?.patch);
       if (normalized) return normalized;
     } catch {
       /* not played in this role, or a transient probe failure — try the next */

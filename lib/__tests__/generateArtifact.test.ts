@@ -259,6 +259,39 @@ describe("resolveArtifactPatch", () => {
     expect(calls).toBe(3);
   });
 
+  it("reads the patch off /api/build's ARRAY shape, not just the single object", async () => {
+    // The live route returns an array of item sets (situational ships as a
+    // second one). This test exists because the object-only mock below stayed
+    // green while the real generator could not resolve a patch at all, which
+    // blocked the artifact gate during the 2026-08-21 Neon cutover.
+    const { deps } = harness();
+    const wrapped: GenerateDeps = {
+      ...deps,
+      fetchJson: (async (url: string) => {
+        if (url.includes("/api/build")) return [{ patch: "16.16.1" }, { patch: "16.16.1" }];
+        return { games: [] };
+      }) as GenerateDeps["fetchJson"],
+    };
+    expect(await resolveArtifactPatch({ base: "http://x" }, wrapped, 3)).toBe("16.16");
+  });
+
+  it("treats an EMPTY array from /api/build as no answer, and walks on", async () => {
+    const { deps } = harness();
+    let calls = 0;
+    const wrapped: GenerateDeps = {
+      ...deps,
+      fetchJson: (async (url: string) => {
+        if (url.includes("/api/build")) {
+          calls++;
+          return calls < 3 ? [] : [{ patch: "16.14.1" }];
+        }
+        return { games: [] };
+      }) as GenerateDeps["fetchJson"],
+    };
+    expect(await resolveArtifactPatch({ base: "http://x" }, wrapped, 3)).toBe("16.14");
+    expect(calls).toBe(3);
+  });
+
   it("throws rather than guessing when no role answers", async () => {
     const { deps } = harness({ buildPatch: null });
     await expect(resolveArtifactPatch({ base: "http://x" }, deps, 3)).rejects.toThrow(/Could not read a patch label/);

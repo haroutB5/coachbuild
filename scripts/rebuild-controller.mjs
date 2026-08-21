@@ -228,6 +228,18 @@ if (has("--status")) {
   process.exit(0);
 }
 
+// ── spawn tunables ──────────────────────────────────────────────────────────
+//
+// These live ABOVE --gate on purpose. `--gate` calls spawnUnit() directly, and
+// spawnUnit reads all three at call time; declared after the gate branch they
+// sat in the temporal dead zone, so `--gate` died on
+// `ReferenceError: Cannot access 'HEARTBEAT_MS' before initialization`
+// before it could issue a single request. Every other entry point reaches
+// spawnUnit further down the file, which is why only the gate was affected.
+const HEARTBEAT_MS = 30_000;
+const OUTPUT_TAIL_BYTES = 64 * 1024;
+const KILL_GRACE_MS = 20_000;
+
 // ── --gate ──────────────────────────────────────────────────────────────────
 
 if (has("--gate")) {
@@ -265,9 +277,6 @@ if (has("--gate")) {
 
 // ── spawning a unit ─────────────────────────────────────────────────────────
 
-const HEARTBEAT_MS = 30_000;
-const OUTPUT_TAIL_BYTES = 64 * 1024;
-const KILL_GRACE_MS = 20_000;
 
 /** Runs one unit, enforcing `maxMs` of AWAKE time.
  *
