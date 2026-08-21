@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import MyStatsRefresher from "@/components/hextech/MyStatsRefresher";
+import SessionPanel, { type SessionPanelProps } from "@/components/hextech/SessionPanel";
 import AccountPicker from "@/components/hextech/mystats/AccountPicker";
 import PostGameReview from "@/components/hextech/postgame/PostGameReview";
 import { getChampionIconMap, type ChampionIconEntry } from "@/components/proAssets";
@@ -24,7 +25,13 @@ import {
 type SummaryState =
   | { status: "loading" }
   | { status: "error" }
-  | { status: "ok"; summary: MyStatsSummary };
+  | { status: "ok"; summary: MyStatsSummary; sessions: SessionPanelProps["sessions"] };
+
+function summarySessions(raw: unknown): SessionPanelProps["sessions"] {
+  if (!raw || typeof raw !== "object") return [];
+  const sessions = (raw as { sessions?: unknown }).sessions;
+  return Array.isArray(sessions) ? (sessions as SessionPanelProps["sessions"]) : [];
+}
 
 function formatPct(fraction: number): string {
   return `${(fraction * 100).toFixed(1)}%`;
@@ -209,7 +216,7 @@ function LastTwenty({ games, iconOf }: { games: MyStatsRecentGame[]; iconOf: (id
   );
 }
 
-function MyStatsSurface({ summary, icons, onSwitched }: { summary: MyStatsSummary; icons: Map<number, ChampionIconEntry>; onSwitched: () => void }) {
+function MyStatsSurface({ summary, sessions, icons, onSwitched }: { summary: MyStatsSummary; sessions: SessionPanelProps["sessions"]; icons: Map<number, ChampionIconEntry>; onSwitched: () => void }) {
   const rows = buildMyStatsRows(summary.records, (id) => icons.get(id));
   const overall = computeMyStatsOverall(summary.records);
   const main = computeMainChampion(summary.records, (id) => icons.get(id));
@@ -279,6 +286,7 @@ function MyStatsSurface({ summary, icons, onSwitched }: { summary: MyStatsSummar
             <aside className="space-y-4">
               <PatternCard summary={summary} games={recentGames} overall={overall} />
               <LastTwenty games={recentGames} iconOf={(id) => icons.get(id)} />
+              <SessionPanel sessions={sessions} />
             </aside>
           </div>
         </>
@@ -323,12 +331,13 @@ function MyStatsContent() {
         if (!response.ok) throw new Error("summary request failed");
         return response.json();
       })
-      .then((raw) => {
+      .then((raw: unknown) => {
         if (!cancelled) {
-          // Keep all wire-shape validation in the shared normalizer. The page
-          // never renders raw API fields or assumes a missing value is zero.
+          // Keep the established summary fields on the shared normalizer.
+          // Sessions come from this same response, so mounting the panel does
+          // not introduce another request or data path.
           const summary = normalizeMyStatsSummary(raw);
-          setState(summary ? { status: "ok", summary } : { status: "error" });
+          setState(summary ? { status: "ok", summary, sessions: summarySessions(raw) } : { status: "error" });
         }
       })
       .catch(() => {
@@ -357,7 +366,7 @@ function MyStatsContent() {
   return (
     <main className="mx-auto max-w-[1180px] px-4 pb-16 pt-8 sm:px-6">
       <MyStatsRefresher onRefreshed={() => setRefreshKey((key) => key + 1)} />
-      {isPostGame ? <PostGameReview summary={state.summary} iconOf={iconOf} /> : <MyStatsSurface summary={state.summary} icons={icons} onSwitched={handleAccountSwitched} />}
+      {isPostGame ? <PostGameReview summary={state.summary} iconOf={iconOf} /> : <MyStatsSurface summary={state.summary} sessions={state.sessions} icons={icons} onSwitched={handleAccountSwitched} />}
       {showAccountLinking && <AccountPicker accounts={state.summary.accounts ?? []} activeRiotId={state.summary.riotId} activeId={state.summary.accountId ?? null} onSwitched={handleAccountSwitched} collapsed={false} />}
       <footer className="mt-10 border-t border-white/[0.06] pt-4 text-[11px] text-mut">Your own match history · shown for context only, never blended into any recommendation or ranking.</footer>
     </main>
