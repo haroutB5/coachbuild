@@ -1,5 +1,51 @@
 # Changelog
 
+## Desktop 1.0.22 — 2026-08-21 — send the log instead of photographing it
+
+**When something goes wrong in a game, you can now hand the log over from the tray.**
+Right-click the CoachBuild tray icon and choose **Send diagnostics to My Stats…**. That is
+the whole thing. No file to find, no folder to open, nothing to copy off the machine that
+League is running on — which until now meant photographing a couple of hundred lines off
+the screen and reading them back by eye.
+
+It uses the same pairing you already set up for sessions, so if you have not paired yet the
+item tells you so and names **Pair desktop with My Stats…** as the thing to do first.
+
+### It only ever happens because you clicked it
+
+There is no automatic upload, no upload on start, no upload after a crash, and no schedule.
+The only thing that sends a log is that menu item, and the service has no timer and no event
+that could grow into one later — that is asserted by test, not left to good intentions.
+
+### The log is redacted before it leaves the machine
+
+It goes through the same redaction policy the companion already uses for everything it
+writes, not a second one written for this feature. Riot IDs, session tokens, auth tokens,
+long opaque blobs and anything shaped like a key are replaced before the upload is built,
+and one more shape was added for this release: your **Windows account name**, which could
+appear inside a `C:\Users\...` path on an install where League's config was not where we
+looked. The rest of the path survives, because "we looked here and it was not there" is
+exactly the fact worth having.
+
+Only the tail is sent — the last 200 KB, which on a healthy install is the whole file. Lines
+nobody has written a parser for are sent as they are. A filter tuned to today's bug is how
+next month's bug becomes invisible.
+
+### It cannot cost you a build
+
+The upload is detached, its whole body sits in a catch, and it holds no lock and no state
+that the item set or rune apply paths touch. If it hangs, times out or fails outright, your
+build still lands on time. As with the LP capture, making it blocking does not fail the test
+suite — it hangs it forever, which is the production bug exactly, so that is what the test
+measures.
+
+### You always find out what happened
+
+Success is a balloon. **Every failure is a dialog**, deliberately, because Windows suppresses
+balloon tips under the focus assist a fullscreen game turns on — and the one message that
+must never be swallowed is the one that says it did not work. Six outcomes, six distinct
+sentences, each also written into `companion.log` so it can be found afterwards.
+
 ## Desktop 1.0.21 — 2026-08-21 — your sessions, once you pair the desktop
 
 **This release does nothing until you pair it, and pairing takes one paste.** Open
