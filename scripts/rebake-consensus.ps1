@@ -46,9 +46,10 @@
 #   80  generate / commit / push / deploy / post-deploy verification failed
 #
 # The NO-OP is the one to understand: an unchanged artifact must NOT produce a
-# commit and must NOT burn a deployment. Most weeks nothing will have crossed
-# the floor, and a job that churns an empty commit every Sunday is a job that
-# gets ignored - and then its real failures get ignored too.
+# commit and must NOT burn a deployment. This matters MORE now the job is daily
+# rather than weekly: it runs 7x as often, so 7x as many chances to churn an
+# empty commit, and a job that churns is a job that gets ignored - and then its
+# real failures get ignored too.
 #
 # ── RUN BY HAND ─────────────────────────────────────────────────────────────
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\rebake-consensus.ps1
@@ -251,9 +252,9 @@ if ($dirty -ne '') { Refuse 70 "$artifactRel already has uncommitted changes ('$
 # A scheduled task runs without an interactive shell. Both of these are
 # file-backed on this machine (git's `store` helper reads ~/.git-credentials;
 # the Vercel CLI reads AppData\Roaming\xdg.data\com.vercel.cli\auth.json), so
-# both SHOULD work unattended - but "should" is how a weekly job fails silently
-# for a month. Prove it in under two seconds, before spending five minutes of
-# Neon compute on a bake that could not have been shipped anyway.
+# both SHOULD work unattended - but "should" is how a scheduled job fails
+# silently for a month. Prove it in under two seconds, before spending two
+# minutes of Neon compute on a bake that could not have been shipped anyway.
 #
 # GIT_TERMINAL_PROMPT=0 is the whole point: without it a missing credential
 # BLOCKS on a prompt that no one will ever answer, and the task sits Running
@@ -417,7 +418,7 @@ if ((Get-Date) -gt $deadline) { Refuse 79 "deadline reached before commit - noth
 
 # ── commit, by explicit path ───────────────────────────────────────────────
 Copy-Item $tmpOut $artifactAbs -Force
-$msg = "chore(consensus): weekly re-bake - otp $($served.Otp) -> $($new.Otp), pro $($served.Pro) -> $($new.Pro) (patch $($new.Patch))"
+$msg = "chore(consensus): scheduled re-bake - otp $($served.Otp) -> $($new.Otp), pro $($served.Pro) -> $($new.Pro) (patch $($new.Patch))"
 & git add -- $artifactRel 2>&1 | Out-File -FilePath $log -Append -Encoding utf8
 & git commit -m $msg 2>&1 | Out-File -FilePath $log -Append -Encoding utf8
 if ($LASTEXITCODE -ne 0) { Refuse 80 "git commit failed - see $log" }

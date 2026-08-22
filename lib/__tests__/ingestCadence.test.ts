@@ -169,19 +169,59 @@ describe("the registered cadence matches the scripts that register it", () => {
     const offset = Number(boundary![2]) * 60 + Number(boundary![3]);
     expect(task("CoachBuildConsensusRebake").startOffsetMinutes).toBe(offset);
 
-    // Weekly, and weekly WITHOUT a repetition block: a CalendarTrigger carrying
+    // Daily, and daily WITHOUT a repetition block: a CalendarTrigger carrying
     // a Repetition skips slots on this machine, and a repetition with a
-    // duration expires and stops the job dead with no error in any log.
-    expect(rebake).toMatch(/-Weekly -DaysOfWeek \$DayOfWeek/);
+    // duration expires and stops the job dead with no error in any log. That is
+    // the shape that wrapped an hourly trigger around a twelve-hour walk on
+    // 2026-08-20, so "daily" must mean -Daily and never a 24h repetition.
+    expect(rebake).toMatch(/New-ScheduledTaskTrigger -Daily -At \$startDt/);
+    expect(rebake).not.toMatch(/-Weekly/);
     expect(rebake).not.toMatch(/RepetitionInterval/);
-    expect(task("CoachBuildConsensusRebake").intervalHours).toBe(168);
+    expect(task("CoachBuildConsensusRebake").intervalHours).toBe(24);
 
-    // And the day the script defaults to must be a day CoachBuildDraftIngest
-    // does not run, because the overlap model here is per-day and the table
-    // above amortises the weekly job rather than painting its actual day.
-    const day = /\[string\]\$DayOfWeek\s*=\s*'(\w+)'/.exec(rebake);
-    expect(day).not.toBeNull();
-    expect(["Monday", "Thursday"]).not.toContain(day![1]);
+    // THE DAY FILTER MUST STAY GONE. While this job was weekly, the collision
+    // check skipped any busy window whose Days did not include its single fire
+    // day -- which let a Sunday slot ignore CoachBuildDraftIngest (Mon+Thu)
+    // entirely. A daily job fires on those days too, so that filter is a hole
+    // in the guard, not a refinement. If someone reinstates a `$b.Days`
+    // skip while the task is still daily, the slot stops being checked against
+    // the only day-specific writer on the machine.
+    expect(rebake).not.toMatch(/\$b\.Days\s+-notcontains/);
+    expect(rebake).not.toMatch(/\[string\]\$DayOfWeek/);
+  });
+
+  it("keeps the re-bake slot clear of every writer on EVERY day, not just one", () => {
+    // The arithmetic the register script throws on, re-derived here against the
+    // cadence table rather than the script's own copy of it -- so the two
+    // cannot drift into agreeing with each other and disagreeing with reality.
+    //
+    // A daily job has no day to hide behind: it must clear CoachBuildDraftIngest
+    // (Mon+Thu 09:00, 63 min) exactly as it clears the every-6h walks.
+    const rebakeTask = task("CoachBuildConsensusRebake");
+    const slotStart = rebakeTask.startOffsetMinutes;
+    // The ceiling the wrapper is actually given, not its measured runtime: a
+    // slot is only clear if the WHOLE permitted window is clear.
+    const deadline = /\[int\]\$DeadlineMinutes\s*=\s*(\d+)/.exec(
+      readFileSync(REBAKE_SCRIPT, "utf8"),
+    );
+    expect(deadline, "register-rebake-task.ps1 lost its $DeadlineMinutes default").not.toBeNull();
+    const slotEnd = slotStart + Number(deadline![1]);
+
+    for (const other of SCHEDULED_INGESTS) {
+      if (other.task === "CoachBuildConsensusRebake") continue;
+      // Expand every-N-hours jobs across the day. Day-specific jobs are NOT
+      // skipped -- that is the whole point of this test.
+      const interval = Math.min(other.intervalHours, 24) * 60;
+      for (let s = other.startOffsetMinutes; s < other.startOffsetMinutes + 1440; s += interval) {
+        const start = s % 1440;
+        const end = start + other.runMinutes;
+        const overlaps = slotStart < end && start < slotEnd;
+        expect(
+          overlaps,
+          `re-bake slot ${slotStart}-${slotEnd} overlaps ${other.task} at ${start}-${end}`,
+        ).toBe(false);
+      }
+    }
   });
 
   it("keeps the sibling script's fleet tripwire, and stays under it", () => {

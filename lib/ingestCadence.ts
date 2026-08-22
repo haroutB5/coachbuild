@@ -176,16 +176,32 @@ export const SCHEDULED_INGESTS: readonly ScheduledIngest[] = [
     // the whole point of this file is that NO scheduled job's cadence lives
     // only in Task Scheduler.
     //
-    // Sunday 15:00 local, in the week's widest gap: 13:10 (the priority walk
-    // ends) to 18:10 (it starts again), on a day CoachBuildDraftIngest does not
-    // run. scripts/register-rebake-task.ps1 refuses to register a colliding
-    // slot rather than documenting the requirement.
+    // 15:00 local EVERY DAY, in the widest gap that exists on every day of the
+    // week: 13:10 (the priority walk ends) to 18:10 (it starts again). 190 min
+    // of clearance. scripts/register-rebake-task.ps1 refuses to register a
+    // colliding slot rather than documenting the requirement, and since going
+    // daily it checks every day rather than skipping Mon/Thu.
+    //
+    // DAILY, changed 2026-08-22 from weekly (168). The first weekly run was
+    // predicted to no-op and instead found seven champion-roles that had
+    // crossed the 21-game floor in twelve hours. At ~14/day a weekly cadence
+    // leaves ~100 champion-roles serving no OTP block by the end of a cycle,
+    // because a stored null is believed with no live fallback.
     task: "CoachBuildConsensusRebake",
-    intervalHours: 168,
+    intervalHours: 24,
     startOffsetMinutes: 15 * 60,
-    // ~5 min of generation plus commit/push/deploy. Only the generation half
-    // touches Neon, so this OVERSTATES the bill, which is the safe direction.
-    runMinutes: 10,
+    // MEASURED, and it had to be. At 168 this job was amortised by
+    // activeMinutesPerDay (the > 24 branch) so the old placeholder 10 cost only
+    // 1.4 min/day and overstating was free. At 24 it is PAINTED, and 10 pushed
+    // the fleet projection to 50.50 against the 50 cap -- the headroom gate
+    // fired, correctly, because daily really does cost more.
+    //
+    // Fixed by correcting the input, not the gate. Generation is the only
+    // Neon-touching half and measured 57s / 114s / 117s across the three real
+    // runs on 2026-08-22; whole-run wall clock was 113s and 132s. This is the
+    // measured worst (2.2 min) doubled and rounded up -- still an overstatement,
+    // but a calibrated one. Not tuned to fit: 6 also clears the cap.
+    runMinutes: 5,
     registeredBy: "scripts/register-rebake-task.ps1",
   },
 ];
