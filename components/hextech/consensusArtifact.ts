@@ -154,6 +154,16 @@ export const PRO_PLAY_FLOOR = 100;
 export const PRO_CONSENSUS_SOURCE = "all";
 export const OTP_CONSENSUS_LIMIT = 200;
 
+/** Minimum sample size for an OTP champion-role to count as consensus data.
+ *
+ *  The OTP player is selected per champion, then that player's games are
+ *  bucketed by the role played in each game. Without a floor, one off-role
+ *  game becomes a lane build presented as fact. The product rule is `n > 20`:
+ *  `n <= 20` is absence, not thin data, so the inclusive minimum is 21 games.
+ *  This single value is enforced by `reduceConsensusModel`, which both the
+ *  artifact bake and live fallback call. */
+export const OTP_CONSENSUS_MIN_GAMES = 21;
+
 export type ConsensusSource = "pro" | "otp";
 
 export const CONSENSUS_ENDPOINT: Record<ConsensusSource, string> = {
@@ -208,8 +218,8 @@ export function isConsensusArtifactFresh(artifactPatch: string, buildPatch: stri
 /** The ENTIRE database-derived content of one consensus block, in the exact
  *  form the shop export consumes it.
  *
- *  Extracted verbatim from `resolveConsensus` in itemSetsApply.ts. Two rules
- *  it must keep, both of which have their own history:
+ *  Extracted verbatim from `resolveConsensus` in itemSetsApply.ts. Three rules
+ *  it must keep, each of which has its own history:
  *
  *  1. THE EMPTY TEST comes first and matches the live path's exactly:
  *     `items` and `boots` both empty AND no support final. A sample that
@@ -217,14 +227,24 @@ export function isConsensusArtifactFresh(artifactPatch: string, buildPatch: stri
  *     of 33785c7 — so it must reduce to `null` here too and be STORED as an
  *     explicit `null`, not omitted.
  *
- *  2. ONLY `supportFinals.top` is folded in, never the alternatives: the five
+ *  2. OTP SAMPLES BELOW `OTP_CONSENSUS_MIN_GAMES` are absence. The check uses
+ *     `itemsSampleSize`, the exact `n` stored in the artifact and used as every
+ *     item's denominator. Pro consensus deliberately does not use this rule.
+ *
+ *  3. ONLY `supportFinals.top` is folded in, never the alternatives: the five
  *     support-quest finals are mutually exclusive, so a six-item shop line
  *     carrying two of them spends two slots on one choice (live user report,
  *     2026-07-26). Merged and RE-SORTED rather than appended, so
  *     ProConsensusItemsInput's documented share-desc / itemId-asc order still
  *     holds for the merged list. */
-export function reduceConsensusModel(model: ProConsensusModel): ConsensusArtifactSource | null {
+export function reduceConsensusModel(
+  source: ConsensusSource,
+  model: ProConsensusModel
+): ConsensusArtifactSource | null {
   if (model.items.length === 0 && model.boots.length === 0 && model.supportFinals === null) {
+    return null;
+  }
+  if (source === "otp" && model.itemsSampleSize < OTP_CONSENSUS_MIN_GAMES) {
     return null;
   }
   const items = [...model.items, ...(model.supportFinals ? [model.supportFinals.top] : [])].sort((a, b) =>

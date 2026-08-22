@@ -261,14 +261,14 @@ async function resolveConsensusLive(
     // `catch { return null }` was drowning out.
     if (games2.length === 0) return { data: null, failure: null };
 
-    // ONE reduction, shared with the artifact generator — the empty test, the
-    // support-final fold-in (only `top`, never the mutually-exclusive
-    // alternatives) and the share-desc / itemId-asc re-sort all live in
+    // ONE reduction, shared with the artifact generator — the empty test, OTP
+    // minimum sample, support-final fold-in (only `top`, never the mutually-
+    // exclusive alternatives) and share-desc / itemId-asc re-sort all live in
     // `reduceConsensusModel` now. That is what makes the precomputed artifact
     // byte-identical to this path by construction rather than by two
     // implementations happening to agree; see consensusArtifact.ts's header.
     return {
-      data: consensusSourceToInput(reduceConsensusModel(aggregateProConsensus(games2, itemMeta))),
+      data: consensusSourceToInput(reduceConsensusModel(source, aggregateProConsensus(games2, itemMeta))),
       failure: null,
     };
   } catch (err) {

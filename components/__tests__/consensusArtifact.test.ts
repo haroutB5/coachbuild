@@ -42,6 +42,8 @@
  * assertion. See "held-out" below.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import type { BuildResponse, ChampionRef, ItemsBlock, Pick, RunesBlock } from "@/lib/types";
 import type { ProGame } from "@/components/proGames.types";
 
@@ -280,17 +282,16 @@ async function buildArtifact(patch: string, proGames: ProGame[], otpGames: ProGa
   vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(ITEM_JSON)));
   const meta = await getItemDetailMap("16.13.1");
   expect(meta.size).toBeGreaterThan(0);
+  const pro = proGames.length === 0 ? null : reduceConsensusModel("pro", aggregateProConsensus(proGames, meta));
+  const otp = otpGames.length === 0 ? null : reduceConsensusModel("otp", aggregateProConsensus(otpGames, meta));
   return serializeConsensusArtifact({
     schema: CONSENSUS_ARTIFACT_SCHEMA,
     patch,
     generatedAt: "2026-08-21T00:00:00.000Z",
     query: currentConsensusQuery(),
-    coverage: { combos: 1, pro: 1, otp: 1 },
+    coverage: { combos: 1, pro: pro ? 1 : 0, otp: otp ? 1 : 0 },
     entries: {
-      [consensusArtifactKey(GALIO.id, 2)]: {
-        pro: proGames.length === 0 ? null : reduceConsensusModel(aggregateProConsensus(proGames, meta)),
-        otp: otpGames.length === 0 ? null : reduceConsensusModel(aggregateProConsensus(otpGames, meta)),
-      },
+      [consensusArtifactKey(GALIO.id, 2)]: { pro, otp },
     },
   });
 }
@@ -365,6 +366,28 @@ describe("artifact-driven export == live-query export, byte for byte", () => {
     expect(fromArtifact.body).toBe(live.body);
   });
 
+  it.each([
+    ["n = 20 is absent", -1, false],
+    ["n = 21 is present", 0, true],
+  ])("applies the OTP floor identically through the artifact and live paths: %s", async (_label, offset, present) => {
+    const { OTP_CONSENSUS_MIN_GAMES } = await import("../hextech/consensusArtifact");
+    const otpGames = Array.from({ length: OTP_CONSENSUS_MIN_GAMES + offset }, (_, gameIndex) =>
+      proGame(`otp-floor-${gameIndex}`, [OTP_LINE[0], BOOTS])
+    );
+
+    const live = await exportOnce({ db: "live", artifact: null, otpGames });
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    const artifact = await buildArtifact("16.13", galioProSample(), otpGames);
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    const fromArtifact = await exportOnce({ db: "down", artifact, otpGames });
+
+    expect(fromArtifact.log.dbCalls).toEqual([]);
+    expect(fromArtifact.body).toBe(live.body);
+    expect(blocksOf(live.body).includes("OTP build")).toBe(present);
+  });
+
   it("the shape is the documented five-block 0.114.0 export, from the artifact alone", async () => {
     const artifact = await buildArtifact("16.13", galioProSample(), galioOtpSample());
     vi.resetModules();
@@ -423,7 +446,7 @@ describe("artifact-driven export == live-query export, byte for byte", () => {
         games.push(proGame(`t${trial}-${g}`, items));
       }
       const model = aggregateProConsensus(games, meta);
-      const reduced = reduceConsensusModel(model);
+      const reduced = reduceConsensusModel("pro", model);
 
       // THE ORACLE, and it is deliberately NOT `consensusSourceToInput`.
       //
@@ -496,7 +519,7 @@ describe("the count encoding reproduces shares exactly", () => {
     // line carrying two of them spends two slots on one choice.
     const { reduceConsensusModel } = await import("../hextech/consensusArtifact");
     const freq = (itemId: number, count: number) => ({ itemId, count, share: count / 100 });
-    const reduced = reduceConsensusModel({
+    const reduced = reduceConsensusModel("pro", {
       items: [freq(3152, 80)],
       boots: [freq(3020, 60)],
       itemsSampleSize: 100,
@@ -509,8 +532,61 @@ describe("the count encoding reproduces shares exactly", () => {
   it("an aggregate that came to nothing reduces to null — genuine absence, not an empty object", async () => {
     const { reduceConsensusModel } = await import("../hextech/consensusArtifact");
     expect(
-      reduceConsensusModel({ items: [], boots: [], itemsSampleSize: 0, supportFinals: null } as never)
+      reduceConsensusModel("pro", { items: [], boots: [], itemsSampleSize: 0, supportFinals: null } as never)
     ).toBeNull();
+  });
+});
+
+describe("OTP consensus minimum sample", () => {
+  const modelWithSampleSize = (itemsSampleSize: number) =>
+    ({
+      items: [{ itemId: 3152, count: itemsSampleSize, share: 1 }],
+      boots: [],
+      itemsSampleSize,
+      supportFinals: null,
+    }) as never;
+
+  it("excludes OTP n = 20 at the boundary", async () => {
+    const { OTP_CONSENSUS_MIN_GAMES, reduceConsensusModel } = await import("../hextech/consensusArtifact");
+    expect(reduceConsensusModel("otp", modelWithSampleSize(OTP_CONSENSUS_MIN_GAMES - 1))).toBeNull();
+  });
+
+  it("includes OTP n = 21 at the boundary", async () => {
+    const { OTP_CONSENSUS_MIN_GAMES, reduceConsensusModel } = await import("../hextech/consensusArtifact");
+    expect(reduceConsensusModel("otp", modelWithSampleSize(OTP_CONSENSUS_MIN_GAMES))?.n).toBe(
+      OTP_CONSENSUS_MIN_GAMES
+    );
+  });
+
+  it("excludes an OTP sample of n = 1", async () => {
+    const { reduceConsensusModel } = await import("../hextech/consensusArtifact");
+    expect(reduceConsensusModel("otp", modelWithSampleSize(1))).toBeNull();
+  });
+
+  it("includes a large OTP sample", async () => {
+    const { OTP_CONSENSUS_MIN_GAMES, reduceConsensusModel } = await import("../hextech/consensusArtifact");
+    const largeSampleSize = OTP_CONSENSUS_MIN_GAMES * 10;
+    expect(reduceConsensusModel("otp", modelWithSampleSize(largeSampleSize))?.n).toBe(largeSampleSize);
+  });
+
+  it("does not apply the OTP floor to pro consensus", async () => {
+    const { reduceConsensusModel } = await import("../hextech/consensusArtifact");
+    expect(reduceConsensusModel("pro", modelWithSampleSize(1))?.n).toBe(1);
+  });
+
+  it("keeps both the artifact bake and live fallback on the one source-aware reducer", () => {
+    const generator = fs.readFileSync(
+      path.join(process.cwd(), "lib", "consensus", "generateArtifact.ts"),
+      "utf8"
+    );
+    const liveFallback = fs.readFileSync(
+      path.join(process.cwd(), "components", "hextech", "itemSetsApply.ts"),
+      "utf8"
+    );
+    const sharedCall = /reduceConsensusModel\(\s*source,\s*aggregateProConsensus\(/g;
+
+    expect(generator.match(sharedCall)).toHaveLength(1);
+    expect(liveFallback.match(sharedCall)).toHaveLength(1);
   });
 });
 

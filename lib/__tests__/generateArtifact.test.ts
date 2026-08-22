@@ -35,6 +35,7 @@ import {
   ARTIFACT_ROLES,
   type GenerateDeps,
 } from "@/lib/consensus/generateArtifact";
+import { OTP_CONSENSUS_MIN_GAMES } from "@/components/hextech/consensusArtifact";
 
 const CHAMPS: ChampionRef[] = [
   { id: 3, key: "Galio", name: "Galio", icon: "g.png" },
@@ -309,6 +310,27 @@ describe("generateConsensusArtifact — the report", () => {
     expect(report.coverage).toBe(1);
     expect(report.artifact.coverage.pro).toBe(2); // one per champion, role 2 only
     expect(report.artifact.coverage.otp).toBe(0);
+  });
+
+  it("counts only OTP entries at or above the shared minimum sample", async () => {
+    const { deps } = harness({
+      sample: (url) => {
+        if (!url.includes("/api/otp")) return [];
+        const match = /championId=(\d+)&role=(\d+)/.exec(url)!;
+        const championId = Number(match[1]);
+        const role = Number(match[2]);
+        if (role > 1) return [];
+        const sampleSize = role === 0 ? OTP_CONSENSUS_MIN_GAMES - 1 : OTP_CONSENSUS_MIN_GAMES;
+        return Array.from({ length: sampleSize }, (_, gameIndex) =>
+          game(`otp-${championId}-${role}-${gameIndex}`, championId, role, [3152])
+        );
+      },
+    });
+
+    const report = await generateConsensusArtifact({ base: "http://x" }, deps);
+    expect(report.artifact.entries["3|0"].otp).toBeNull();
+    expect(report.artifact.entries["3|1"].otp?.n).toBe(OTP_CONSENSUS_MIN_GAMES);
+    expect(report.artifact.coverage.otp).toBe(CHAMPS.length);
   });
 
   it("uses the injected clock, so a regenerated artifact with identical data is a reviewable diff", async () => {

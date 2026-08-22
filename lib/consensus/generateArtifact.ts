@@ -159,7 +159,8 @@ export async function resolveArtifactCombo(
       // Mirrors the live path exactly, including its order: the empty-sample
       // check comes first and means genuine absence, and everything else goes
       // through the one shared reduction.
-      out[source] = games.length === 0 ? null : reduceConsensusModel(aggregateProConsensus(games, itemMeta));
+      out[source] =
+        games.length === 0 ? null : reduceConsensusModel(source, aggregateProConsensus(games, itemMeta));
     } catch (err) {
       errors.push(`${source} ${key}: ${err instanceof Error ? err.message : String(err)}`);
     }

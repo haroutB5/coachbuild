@@ -648,10 +648,15 @@ describe("OTP consensus for item sets", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("resolveOtpConsensusForSets reads /api/otp and returns item frequencies", async () => {
+    const { OTP_CONSENSUS_MIN_GAMES } = await import("../hextech/consensusArtifact");
+    const otpGames = Array.from({ length: OTP_CONSENSUS_MIN_GAMES }, (_, gameIndex) => ({
+      ...PRO_GAME(3031),
+      id: `otp-${gameIndex}`,
+    }));
     vi.stubGlobal(
       "fetch",
       routedFetch([
-        ["/api/otp", { games: [PRO_GAME(3031), PRO_GAME(3031)], players: [], pending: false }],
+        ["/api/otp", { games: otpGames, players: [], pending: false }],
         ["https://cdn.coachless.gg", ITEM_JSON_FIXTURE],
       ])
     );
