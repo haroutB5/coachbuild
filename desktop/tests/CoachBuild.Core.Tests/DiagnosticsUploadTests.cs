@@ -217,10 +217,12 @@ public sealed class DiagnosticsUploadTests
     /// authoring machine on 2026-08-21 — the product's own writes are already
     /// redacted, so they are defence for text that arrives from outside (the
     /// bridge's free-text `diagnostics` field, or an older build's lines). The
-    /// user-profile path is different: it is reachable by construction, via
-    /// LeagueConfigLocator's %LOCALAPPDATA% candidate and App.LogConfigSearch's
-    /// one-line join of the first eight candidates. See
-    /// ComplianceRules.UserProfileRegex.</para>
+    /// user-profile path is different: any line naming a path the app probed
+    /// carries one. The specific line in the fixture below no longer has a
+    /// producer (it went with the item-number overlay in 1.0.23), and the rule
+    /// is deliberately kept anyway -- it defends the SHAPE, in a file the user
+    /// uploads by hand, against every future line and every older build's log.
+    /// See ComplianceRules.UserProfileRegex.</para>
     /// </summary>
     [Fact]
     public async Task Every_identifier_shape_a_real_log_can_carry_is_redacted_before_it_leaves()

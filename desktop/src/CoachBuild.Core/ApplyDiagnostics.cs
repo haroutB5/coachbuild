@@ -17,8 +17,7 @@ namespace CoachBuild.Core;
 /// sends the reason across the wire; this reads it. See
 /// <c>components/hextech/itemSetsApply.ts</c>'s <c>ConsensusResolution</c>.</para>
 ///
-/// <para><b>This can never fail an apply.</b> Same posture as
-/// <see cref="SituationalOverlayParser"/> and for the same reason: the field is
+/// <para><b>This can never fail an apply.</b> The field is
 /// commentary on a write that changes the player's League config, so a
 /// malformed line must cost the player some log text and never their item set.
 /// The field is read as a raw <see cref="JsonElement"/> so a typed

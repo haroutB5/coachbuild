@@ -34,45 +34,17 @@ public partial class OverlayWindow : Window
     private string _displaySource = OverlayDisplayResolver.SelfSource;
     private long _nextDisplayRecheckTicks;
     private CalibrationGeometry? _workingCalibration;
-    // One working copy PER target, so Tab can switch between the ability bar
-    // and the item row without throwing away edits the player has not saved
-    // yet. Enter commits every target that was touched; Esc discards all of
-    // them. Anything less makes Tab a trap.
-    private readonly Dictionary<CalibrationTarget, CalibrationGeometry> _workingByTarget = [];
 
-    // WHICH targets the player actually MOVED this visit. "Enter commits every
-    // target that was touched" was true of the working copies and false of the
-    // saves: `_workingByTarget` is seeded from LoadCalibrationOrDefault the
-    // instant a target is opened or Tabbed to, so merely LOOKING at the item
-    // row and pressing Enter used to persist `ItemRowScaledDefault` as though
-    // it were a measurement.
+    // Whether the player actually MOVED the box this visit, as opposed to
+    // merely opening adjust mode and pressing Enter.
     //
-    // That is not a cosmetic distinction. The item row deliberately draws
-    // NOTHING until it has been positioned (TryLoadCalibration returns null
-    // rather than a default) precisely so an invented constant never paints
-    // numbers over the wrong part of the game — and the 2026-08-20 field log
-    // shows exactly that guarantee defeated: `badges: 6 shown at 544x904
-    // size 59 pitch 69` on a 2560x1440 display is ItemRowScaledDefault to the
-    // pixel, roughly 210 px BELOW the shop's Situational row.
-    private readonly HashSet<CalibrationTarget> _touchedTargets = [];
-    private CalibrationTarget _adjustTarget = CalibrationTarget.SkillOrder;
-    private IReadOnlyList<CoachBuild.Core.SituationalDelta> _situational = [];
+    // Not a cosmetic distinction, and it is kept from 1.0.19 deliberately: an
+    // untouched default is a guess, not a calibration, and writing one as
+    // though it were a measurement is what put the (now removed) item numbers
+    // 210 px below their row in the field. The same rule is cheap here and
+    // means "saved" in the log always describes a decision the player made.
+    private bool _adjustMoved;
 
-    /// <summary>
-    /// The shop set the current numbers were computed for and where the
-    /// Situational block sits inside it, or empty when there are no numbers.
-    ///
-    /// <para>Adjust mode prints it, and the badge diagnostic line carries it.
-    /// The 2026-08-20 round is the reason: the player calibrated the row while
-    /// their shop was showing Riot's own "AP" recommended set, so they lined the
-    /// boxes up against a row this app never wrote — a different row, with a
-    /// different number of blocks above it, in a different place. Nothing on
-    /// screen or in the log told them which set to be looking at.</para>
-    /// </summary>
-    private string _situationalSetLabel = string.Empty;
-    private bool _shopOpen;
-    private bool _forceBadges;
-    private string? _lastBadgeReason;
     private HwndSource? _hwndSource;
     private NativeBounds? _lastNativeBounds;
     private bool? _lastClickThrough;
@@ -170,179 +142,15 @@ public partial class OverlayWindow : Window
 
     public bool IsAdjusting => _adjusting;
 
-    /// <summary>Which calibration the arrow keys are currently moving.</summary>
-    public CalibrationTarget AdjustTarget => _adjustTarget;
-
-    /// <summary>
-    /// The rects the item-row PREVIEW pills were last painted at, in order.
-    ///
-    /// <para>Exists so the WYSIWYG guarantee is assertable rather than merely
-    /// intended: for the same calibration and the same deltas these must equal
-    /// <see cref="OverlayRenderer.LastBadgeRects"/>, which is what a live game
-    /// paints. 1.0.19 shipped with the two disagreeing by a pill-height and
-    /// nothing in the suite could see it.</para>
-    /// </summary>
-    public IReadOnlyList<Rect> LastAdjustBadgeRects { get; private set; } = [];
-
     /// <summary>
     /// The geometry adjust mode last drew at, in DIPs — the value
     /// <see cref="RenderAdjustment"/> actually used, not a re-derivation of it.
     ///
-    /// <para>Exposed so the WYSIWYG pair can be asserted against a REAL live
-    /// render rather than against a second copy of the same arithmetic: a test
-    /// that re-derived this geometry could agree with a preview that disagrees
-    /// with the game, which is precisely the class of bug being fixed.</para>
+    /// <para>Exposed so a test can assert what the player was shown against a
+    /// value the window actually used, rather than against a second copy of the
+    /// same arithmetic.</para>
     /// </summary>
     public CalibrationGeometry? LastAdjustGeometry { get; private set; }
-
-    /// <summary>True while the situational numbers are on screen.</summary>
-    public bool IsDrawingBadges { get; private set; }
-
-    /// <summary>
-    /// The set label the current numbers arrived with, or empty. Read-only
-    /// view of <c>_situationalSetLabel</c> for the tests that assert it reaches
-    /// both surfaces that are supposed to show it.
-    /// </summary>
-    public string SituationalSetLabel => _situationalSetLabel;
-
-    /// <summary>
-    /// The situational deltas to draw, for the champion currently in game.
-    ///
-    /// <para>Supplied already champion-matched by the caller
-    /// (<see cref="CoachBuild.Core.SituationalOverlaySet.For"/>), so an empty
-    /// list here means "no numbers for THIS champion" and never "some other
-    /// champion's numbers are available".</para>
-    /// </summary>
-    /// <param name="setLabel">
-    /// The shop set the numbers were computed for and the Situational block's
-    /// position inside it (<see cref="CoachBuild.Core.SituationalBlockInfo.Describe"/>),
-    /// or empty when there are no numbers.
-    /// REQUIRED, not optional: the badges are mapped positionally and are only
-    /// true of that set, and adjust mode has to be able to say which one BEFORE
-    /// the player lines anything up. An optional argument here is how the
-    /// shipped path ends up as the only uncovered one — round 3's argument for
-    /// the layout hook, applied again.
-    /// </param>
-    public void SetSituationalDeltas(
-        IReadOnlyList<CoachBuild.Core.SituationalDelta>? deltas,
-        string setLabel)
-    {
-        if (!Dispatcher.CheckAccess())
-        {
-            Dispatcher.BeginInvoke(() => SetSituationalDeltas(deltas, setLabel));
-            return;
-        }
-
-        var next = deltas ?? [];
-        var label = setLabel ?? string.Empty;
-        // The LABEL is a visual input too — it is printed in adjust mode and in
-        // the badge diagnostic line. Folding it into this early-out is the same
-        // lesson as `badges.SignatureKey()` in the renderer's memo: a change
-        // nothing else in the comparison can see is a change the memo reports
-        // as "nothing happened".
-        var labelChanged = !string.Equals(_situationalSetLabel, label, StringComparison.Ordinal);
-        _situationalSetLabel = label;
-        if (!labelChanged && SameDeltas(_situational, next))
-        {
-            // Identical content arrives every snapshot tick. SituationalDelta is
-            // a readonly record struct, so this is a real value comparison and
-            // not reference identity — the caller hands us a fresh list each
-            // time and a reference check would never match.
-            _situational = next;
-            return;
-        }
-
-        _situational = next;
-        if (_adjusting) { RenderAdjustment(); return; }
-        RenderCurrentState();
-    }
-
-    private static bool SameDeltas(
-        IReadOnlyList<CoachBuild.Core.SituationalDelta> left,
-        IReadOnlyList<CoachBuild.Core.SituationalDelta> right)
-    {
-        if (ReferenceEquals(left, right)) return true;
-        if (left.Count != right.Count) return false;
-        for (var index = 0; index < left.Count; index++)
-        {
-            if (!left[index].Equals(right[index])) return false;
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// The shop-open latch's verdict. Driven off <see cref="ShopKeyWatcher"/>'s
-    /// own 50 ms timer rather than the 750 ms snapshot tick, because the whole
-    /// point is that the numbers appear as the shop does.
-    /// </summary>
-    public void SetShopOpen(bool open)
-    {
-        if (!Dispatcher.CheckAccess())
-        {
-            Dispatcher.BeginInvoke(() => SetShopOpen(open));
-            return;
-        }
-
-        if (_shopOpen == open) return;
-        _shopOpen = open;
-
-        // 1.0.18: a press that CLOSES the latch means "put them away", and it
-        // has to beat the manual override too.
-        //
-        // Until now it did not. "Show item numbers now" draws the badges
-        // regardless of the latch, so a player who used it - and round 1 told
-        // this player to use it, as the workaround for the chat gate - had no
-        // way to put the numbers back down from inside a fullscreen game. They
-        // sat over open terrain until the match ended, and the only control was
-        // a tray tick they could not reach. That is the same "no recovery you
-        // can find from in-game" defect the chat gate had, in the very feature
-        // that was meant to be its escape hatch.
-        var droppedOverride = false;
-        if (!open && _forceBadges)
-        {
-            _forceBadges = false;
-            droppedOverride = true;
-        }
-
-        if (!_adjusting) RenderCurrentState();
-
-        // AFTER the render, and outside the adjusting early-out: the tray's tick
-        // must follow the overlay even while the player is mid-calibration, or
-        // the menu claims an override that is no longer in force.
-        if (droppedOverride) ManualBadgeOverrideCleared?.Invoke();
-    }
-
-    /// <summary>
-    /// Raised when the overlay drops "Show item numbers now" by itself, so the
-    /// tray's tick can follow. The overlay owns the decision because the
-    /// overlay owns the flag; the tray only mirrors it.
-    /// </summary>
-    public event Action? ManualBadgeOverrideCleared;
-
-    /// <summary>
-    /// The manual override: show the numbers regardless of what the shop latch
-    /// believes.
-    ///
-    /// <para>It exists because the latch is an inference. A shop closed by
-    /// clicking its own button, or a shop bind that could not be read out of
-    /// League's config, both leave the latch wrong with nothing on this side
-    /// able to notice — so there has to be a way back that does not depend on
-    /// the thing that is broken.</para>
-    /// </summary>
-    public void SetForceBadges(bool force)
-    {
-        if (!Dispatcher.CheckAccess())
-        {
-            Dispatcher.BeginInvoke(() => SetForceBadges(force));
-            return;
-        }
-
-        if (_forceBadges == force) return;
-        _forceBadges = force;
-        if (_adjusting) return;
-        RenderCurrentState();
-    }
 
     public event Action<bool>? AdjustmentStateChanged;
 
@@ -473,24 +281,15 @@ public partial class OverlayWindow : Window
 
     public void BeginCalibration() => BeginAdjustment();
 
-    public void BeginAdjustment() => BeginAdjustment(CalibrationTarget.SkillOrder);
-
-    public void BeginAdjustment(CalibrationTarget target)
+    public void BeginAdjustment()
     {
         if (!Dispatcher.CheckAccess())
         {
-            Dispatcher.BeginInvoke(() => BeginAdjustment(target));
+            Dispatcher.BeginInvoke(BeginAdjustment);
             return;
         }
 
-        if (_adjusting)
-        {
-            // Already adjusting: treat a second request as "switch to that
-            // target" rather than a no-op, so the tray's two items always do
-            // what they say even if one is used while the other is open.
-            SwitchAdjustTarget(target);
-            return;
-        }
+        if (_adjusting) return;
 
         _wasVisibleBeforeAdjustment = IsVisible;
         ShowInactive();
@@ -504,41 +303,24 @@ public partial class OverlayWindow : Window
             return;
         }
 
-        _workingByTarget.Clear();
-        _touchedTargets.Clear();
-        _adjustTarget = target;
-        _workingCalibration = WorkingFor(target);
+        _adjustMoved = false;
+        _workingCalibration = _display is null
+            ? CalibrationGeometry.Reference
+            : _settingsStore.LoadCalibration(_display.Resolution);
         _adjusting = true;
         AdjustmentStateChanged?.Invoke(true);
         SetInteractive(true);
         Activate();
         Focus();
-        Diagnostics?.Invoke($"overlay: adjust mode entered for {Describe(target)}");
+        Diagnostics?.Invoke($"overlay: adjust mode entered for {AdjustTargetName}");
         RenderAdjustment();
     }
 
-    /// <summary>The working copy for a target: whatever is being edited, else the saved value, else the default.</summary>
-    private CalibrationGeometry WorkingFor(CalibrationTarget target)
-    {
-        if (_workingByTarget.TryGetValue(target, out var inProgress)) return inProgress;
-        return _display is null
-            ? CalibrationGeometry.Reference
-            : _settingsStore.LoadCalibrationOrDefault(target, _display.Resolution);
-    }
-
-    private void SwitchAdjustTarget(CalibrationTarget target)
-    {
-        if (!_adjusting || target == _adjustTarget) return;
-        if (_workingCalibration is not null) _workingByTarget[_adjustTarget] = _workingCalibration;
-        _adjustTarget = target;
-        _workingCalibration = WorkingFor(target);
-        Diagnostics?.Invoke($"overlay: adjust mode switched to {Describe(target)}");
-        RenderAdjustment();
-    }
-
-    private static string Describe(CalibrationTarget target) => target == CalibrationTarget.ItemRow
-        ? "the situational item numbers"
-        : "the skill-order box";
+    /// <summary>
+    /// What the arrow keys are moving, in one place so the entry line, the save
+    /// line and the on-screen heading cannot come to disagree.
+    /// </summary>
+    private const string AdjustTargetName = "the skill-order box";
 
     public void ShowInactive()
     {
@@ -675,7 +457,6 @@ public partial class OverlayWindow : Window
             // it has no HWND, so it reported a monitor failure — and the user
             // reading the log was hunting a display bug that did not exist.
             IsDrawingHighlight = false;
-            IsDrawingBadges = false;
             HasRenderableSkillOrder = false;
             ReportOverlayReason("overlay-hidden (tray: Show overlay)");
             return;
@@ -683,7 +464,6 @@ public partial class OverlayWindow : Window
         if (_display is null)
         {
             IsDrawingHighlight = false;
-            IsDrawingBadges = false;
             HasRenderableSkillOrder = false;
             ReportOverlayReason("no-display");
             return;
@@ -696,79 +476,12 @@ public partial class OverlayWindow : Window
         };
         var physicalCalibration = _settingsStore.LoadCalibration(_display.Resolution);
         var dipCalibration = CalibrationGeometry.ForDpi(physicalCalibration, _display.DpiX, 96);
-        var badges = BuildBadgeInput();
-        _renderer.Render(RootCanvas, renderState, _settings, _display.Resolution, dipCalibration, badges);
+        _renderer.Render(RootCanvas, renderState, _settings, _display.Resolution, dipCalibration);
         var outcome = DescribeRenderOutcome(renderState, dipCalibration, _display);
         IsDrawingHighlight = outcome.StartsWith("highlight ", StringComparison.Ordinal);
-        IsDrawingBadges = badges.WillDraw;
         HasRenderableSkillOrder = renderState.HasRenderableData;
         ReportKitAnomaly(renderState);
         ReportOverlayReason(outcome);
-        ReportBadgeReason(badges);
-    }
-
-    /// <summary>
-    /// The situational numbers' inputs for this frame: where they go, what they
-    /// say, and whether the shop is believed open.
-    ///
-    /// <para><c>TryLoadCalibration</c>, not <c>LoadCalibration</c> — a null here
-    /// means the player has never positioned the row on this display and the
-    /// numbers must not be drawn at a guessed spot over their game.</para>
-    /// </summary>
-    private ItemBadgeInput BuildBadgeInput()
-    {
-        if (_display is null || !_settings.OverlayVisible) return ItemBadgeInput.None;
-        var physical = _settingsStore.TryLoadCalibration(CalibrationTarget.ItemRow, _display.Resolution);
-        var geometry = physical is null
-            ? null
-            : CalibrationGeometry.ForDpi(physical, _display.DpiX, 96);
-        return new ItemBadgeInput((_shopOpen || _forceBadges) && _state.InGame, _situational, geometry);
-    }
-
-    /// <summary>
-    /// Why the numbers are or are not on screen, deduped to one line per
-    /// transition — the badge twin of <see cref="ReportOverlayReason"/>.
-    ///
-    /// <para>Every "not drawn" branch names ITSELF. An overlay that draws
-    /// nothing looks identical whether the shop is shut, the champion has no
-    /// alternatives, the web build is too old to send any, or the row has never
-    /// been positioned; those are four different problems with four different
-    /// answers, and the log is the only place they can be told apart.</para>
-    /// </summary>
-    private void ReportBadgeReason(ItemBadgeInput badges)
-    {
-        string reason;
-        if (!_settings.OverlayVisible) reason = "badges: overlay switched off (tray: Show overlay)";
-        else if (!_state.InGame) reason = "badges: not in a game";
-        else if (_situational.Count == 0)
-            reason = "badges: no situational numbers for this champion "
-                + "(the web app sends them with the item set; an older web build sends none)";
-        else if (badges.Geometry is null)
-            reason = $"badges: the item row has never been positioned on {_display?.DeviceName ?? "?"}"
-                + $" {_display?.Resolution.Key ?? "?"} — tray → \"{Tray.TrayMenuState.AdjustItemsMenuVerb}\"";
-        else if (!_shopOpen && !_forceBadges) reason = "badges: hidden (shop closed)";
-        else
-        {
-            var slots = badges.Geometry.GetSlotRects(_situational.Count);
-            var first = slots.Count > 0 ? slots[0] : default;
-            reason = $"badges: {_situational.Count} shown at {first.Left:0}x{first.Top:0}"
-                + $" size {first.Width:0} pitch {badges.Geometry.Spacing:0}"
-                + $" on {OverlayDisplayResolver.Describe(_display!, _displaySource)}"
-                // WHAT THE ROW IS AIMED AT, on the same line as where it is
-                // aimed. This position is FIXED by the saved calibration and
-                // has no term for the set's shape — proven in
-                // BadgePlacementTests — while the shop's Situational row moves
-                // down by one block-pitch for every block above it. So the two
-                // 2026-08-20 screenshots, taken at one calibration, showed the
-                // pills below the icons on a 3-block set and above them on a
-                // 5-block set, and this line was identical in both. It is not
-                // any more, and the difference is the diagnosis.
-                + (_situationalSetLabel.Length > 0 ? $" for {_situationalSetLabel}" : string.Empty);
-        }
-
-        if (string.Equals(reason, _lastBadgeReason, StringComparison.Ordinal)) return;
-        _lastBadgeReason = reason;
-        Diagnostics?.Invoke($"overlay: {reason}");
     }
 
     /// <summary>
@@ -879,12 +592,10 @@ public partial class OverlayWindow : Window
                     return;
                 }
 
-                // Re-derive for the target currently being adjusted, and drop
-                // every working copy: they were keyed to the display that has
-                // just gone away.
-                _workingByTarget.Clear();
-                _touchedTargets.Clear();
-                _workingCalibration = _settingsStore.LoadCalibrationOrDefault(_adjustTarget, display.Resolution);
+                // Re-derive, and drop the working copy: it was keyed to the
+                // display that has just gone away.
+                _adjustMoved = false;
+                _workingCalibration = _settingsStore.LoadCalibration(display.Resolution);
                 RenderAdjustment();
             }
             else
@@ -905,11 +616,10 @@ public partial class OverlayWindow : Window
     ///
     /// <para>Split out of the WPF handler so the rule that decides what gets
     /// SAVED is testable. It is not a cosmetic rule: through 1.0.18 an adjust
-    /// session that moved nothing still persisted the item row's invented
-    /// default, and that is what put the badges 210 px below the shop row in
-    /// the field. A guarantee about which keypresses count cannot be pinned by
-    /// a test that has to synthesise <c>KeyEventArgs</c> against a live
-    /// <c>PresentationSource</c>.</para>
+    /// session that moved nothing still persisted an invented default as though
+    /// it were a measurement. A guarantee about which keypresses count cannot
+    /// be pinned by a test that has to synthesise <c>KeyEventArgs</c> against a
+    /// live <c>PresentationSource</c>.</para>
     /// </summary>
     /// <returns>True when the key belonged to adjust mode and was consumed.</returns>
     public bool HandleAdjustKey(Key key, int step = 1)
@@ -948,16 +658,6 @@ public partial class OverlayWindow : Window
             case Key.OemCloseBrackets:
                 geometry = geometry with { Spacing = geometry.Spacing + step };
                 break;
-            case Key.Tab:
-                // Switches which overlay the arrow keys move. Handled here
-                // rather than on a second global accelerator: 1.0.13 removed
-                // Ctrl+Shift+S because a global hotkey is taken from every
-                // other application for as long as this app runs, and that
-                // argument did not stop being true for a second one.
-                SwitchAdjustTarget(_adjustTarget == CalibrationTarget.SkillOrder
-                    ? CalibrationTarget.ItemRow
-                    : CalibrationTarget.SkillOrder);
-                return true;
             case Key.Enter:
             case Key.Escape:
                 moved = false;
@@ -977,7 +677,7 @@ public partial class OverlayWindow : Window
         // exactly that reason.
         if (handled && moved)
         {
-            _touchedTargets.Add(_adjustTarget);
+            _adjustMoved = true;
             _workingCalibration = geometry.Normalize();
             RenderAdjustment();
             return true;
@@ -992,37 +692,26 @@ public partial class OverlayWindow : Window
     {
         if (!_adjusting || _display is null || _workingCalibration is null) return;
 
-        // EVERY target touched this session, not just the one on screen. Tab
-        // lets the player move both overlays in one visit, and saving only the
-        // visible one would silently drop the other half of their work.
-        //
-        // TOUCHED, and that word now means MOVED. Until 1.0.19 it meant
-        // "visited": `_workingByTarget` is seeded the moment a target is opened
-        // or Tabbed to, so tray -> "Adjust item numbers" -> Enter persisted
-        // `ItemRowScaledDefault` — a constant the model itself documents as "a
-        // starting position, not a measurement" — as though the player had
-        // measured it. That is how the field log came to read `badges: 6 shown
-        // at 544x904 size 59 pitch 69`, which is that default to the pixel on a
-        // 2560x1440 screen, about 210 px below the row it is meant to sit on.
-        // Saving nothing is the honest outcome of an adjust session in which
-        // nothing was adjusted.
-        _workingByTarget[_adjustTarget] = _workingCalibration;
-        var saved = 0;
-        foreach (var (target, geometry) in _workingByTarget)
+        // MOVED, not merely visited. Saving nothing is the honest outcome of
+        // an adjust session in which nothing was adjusted: an untouched default
+        // is a guess, and writing one as though the player had measured it is
+        // exactly how the removed item-number row ended up 210 px below its
+        // target in the field. The ability HUD's default is a real measurement,
+        // so the cost of the rule here is nil and the meaning of "saved" in the
+        // log stays honest.
+        if (_adjustMoved)
         {
-            if (!_touchedTargets.Contains(target)) continue;
-            _settingsStore.SaveCalibration(target, _display.Resolution, geometry);
-            saved++;
+            var geometry = _workingCalibration;
+            _settingsStore.SaveCalibration(_display.Resolution, geometry);
             Diagnostics?.Invoke(
-                $"overlay: saved {Describe(target)} at {geometry.FirstBoxCenterX:0}x{geometry.CenterY:0}"
+                $"overlay: saved {AdjustTargetName} at {geometry.FirstBoxCenterX:0}x{geometry.CenterY:0}"
                 + $" size {geometry.BoxSize:0} pitch {geometry.Spacing:0}"
                 + $" for {_display.Resolution.Key}");
         }
-
-        if (saved == 0)
+        else
         {
             Diagnostics?.Invoke(
-                "overlay: adjust mode saved nothing - neither overlay was moved."
+                "overlay: adjust mode saved nothing - the overlay was not moved."
                 + " An untouched default is a guess, not a calibration, so it is not written."
                 + " Use the arrow keys (Shift for x10), +/- for size and [/] for spacing,"
                 + " then press Enter.");
@@ -1031,9 +720,7 @@ public partial class OverlayWindow : Window
         _settings = _settingsStore.Read();
         _adjusting = false;
         _workingCalibration = null;
-        _workingByTarget.Clear();
-        _touchedTargets.Clear();
-        _lastBadgeReason = null;
+        _adjustMoved = false;
         AdjustmentStateChanged?.Invoke(false);
         SetInteractive(false);
         RestoreVisibilityAfterAdjustment();
@@ -1044,9 +731,7 @@ public partial class OverlayWindow : Window
         if (!_adjusting) return;
         _adjusting = false;
         _workingCalibration = null;
-        _workingByTarget.Clear();
-        _touchedTargets.Clear();
-        _lastBadgeReason = null;
+        _adjustMoved = false;
         AdjustmentStateChanged?.Invoke(false);
         SetInteractive(false);
         RestoreVisibilityAfterAdjustment();
@@ -1086,40 +771,19 @@ public partial class OverlayWindow : Window
             _workingCalibration.Normalize(),
             _display?.DpiX ?? 96,
             96);
-        // The item row is as long as the champion's own situational list, so
-        // the boxes the player lines up are the boxes that will be drawn. With
-        // no numbers to hand (out of a game, or an older web build) a
-        // placeholder row of the maximum length is shown instead, labelled as
-        // such, rather than a single box that would calibrate the pitch wrong.
         LastAdjustGeometry = geometry;
-        var isItemRow = _adjustTarget == CalibrationTarget.ItemRow;
-        var slotCount = isItemRow
-            ? Math.Max(1, _situational.Count > 0 ? _situational.Count : CoachBuild.Core.SituationalOverlayParser.MaxDeltas)
-            : 4;
-        var usingPlaceholders = isItemRow && _situational.Count == 0;
 
-        var previewRects = new List<Rect>(slotCount);
-        foreach (var (rect, index) in geometry.GetSlotRects(slotCount).Select((rect, index) => (rect, index)))
+        foreach (var (rect, index) in geometry.GetAbilityRects().Select((rect, index) => (rect, index)))
         {
             var box = new Border
             {
                 Width = rect.Width,
                 Height = rect.Height,
-                // The item row's frame is a THIN GUIDE, not the thing being
-                // aligned. Adjust mode used to draw a solid pink block here and
-                // the live render then drew the number somewhere else entirely
-                // (above it), so the player lined up the block and the numbers
-                // landed on the shop's section header. The pill below is now the
-                // dominant element for exactly that reason; the frame survives
-                // only so +/- (size) and [ / ] (pitch) have something visible to
-                // act on. The skill-order target keeps the solid box: there IS
-                // nothing else to draw there, and its highlight is painted at
-                // the slot in play too.
-                Background = new SolidColorBrush(WpfColor.FromArgb(isItemRow ? (byte)18 : (byte)55, 255, 47, 158)),
+                Background = new SolidColorBrush(WpfColor.FromArgb(55, 255, 47, 158)),
                 BorderBrush = new SolidColorBrush(WpfColor.FromRgb(255, 47, 158)),
-                BorderThickness = new Thickness(isItemRow ? 1.5 : 3),
+                BorderThickness = new Thickness(3),
                 CornerRadius = new CornerRadius(8),
-                Child = isItemRow ? null : new TextBlock
+                Child = new TextBlock
                 {
                     Text = ((OverlayAbility)index).ToString(),
                     Foreground = WpfBrushes.White,
@@ -1130,51 +794,8 @@ public partial class OverlayWindow : Window
             Canvas.SetLeft(box, rect.Left);
             Canvas.SetTop(box, rect.Top);
             RootCanvas.Children.Add(box);
-
-            if (!isItemRow) continue;
-
-            // WHAT YOU ALIGN IS WHAT YOU GET. The pill is built and placed by
-            // the SAME two calls the live render makes (OverlayRenderer
-            // .CreateBadgePill / .PlaceBadgeOnCanvas), so the preview cannot
-            // describe a position the game will not use. Placeholder slots
-            // carry "#N" and a neutral sign, which is still the real pill.
-            var known = index < _situational.Count;
-            var pill = OverlayRenderer.CreateBadgePill(
-                known ? _situational[index].Text : $"#{index + 1}",
-                known ? Math.Sign(_situational[index].Wpa) : 0,
-                rect);
-            previewRects.Add(OverlayRenderer.PlaceBadgeOnCanvas(RootCanvas, pill, rect));
         }
 
-        LastAdjustBadgeRects = previewRects;
-
-        var heading = isItemRow ? "Adjusting the situational item numbers" : "Adjusting the skill-order box";
-        var switchTo = isItemRow ? "the skill-order box" : "the situational item numbers";
-        // The item row is the only target with no honest default, so it is the
-        // only one where the instruction has to be on screen every time rather
-        // than only when there are no numbers to hand. A player who opens this,
-        // sees six boxes and presses Enter no longer saves anything (see
-        // SaveAdjustment) — so they need to be told what the boxes are for.
-        // NAME THE SET ON SCREEN. Defect E: the app writes an item set but
-        // cannot see which one the player has SELECTED in the shop's dropdown,
-        // so it cannot detect that they are aiming at the wrong row — and on
-        // 2026-08-20 they were, at Riot's own "AP" recommended set. Printing
-        // the set the numbers belong to, and the block position inside it, is
-        // the whole of what the app can honestly do about that, and it has to
-        // be here rather than only in the log because here is where the player
-        // is looking while they decide which row to aim at.
-        var setNote = isItemRow && _situationalSetLabel.Length > 0
-            ? $"\nThese numbers are for {_situationalSetLabel}"
-              + "\nSelect that set in the shop's dropdown before you line anything up"
-            : string.Empty;
-        var placeholderNote = isItemRow
-            ? setNote
-              + (usingPlaceholders
-                ? "\nShowing 6 placeholder slots — line them up with your Situational row in the shop"
-                : "\nLine these up with the Situational row in your shop")
-              + "\nOpen your shop before entering adjust mode so you can see that row"
-              + "\nNothing is saved unless you actually move them"
-            : string.Empty;
         var legend = new Border
         {
             Background = new SolidColorBrush(WpfColor.FromArgb(236, 8, 13, 28)),
@@ -1184,11 +805,11 @@ public partial class OverlayWindow : Window
             Padding = new Thickness(10, 7, 10, 7),
             Child = new TextBlock
             {
-                Text = heading
-                    + placeholderNote
-                    + "\nEnter: save · Esc: cancel"
-                    + "\nArrow keys: move · Shift: ×10 · +/-: size · [/]: spacing"
-                    + $"\nTab: switch to {switchTo}",
+                Text = "Adjusting the skill-order box"
+                    + "\nLine these up with your ability bar"
+                    + "\nNothing is saved unless you actually move them"
+                    + "\nEnter: save \u00b7 Esc: cancel"
+                    + "\nArrow keys: move \u00b7 Shift: \u00d710 \u00b7 +/-: size \u00b7 [/]: spacing",
                 Foreground = WpfBrushes.White,
                 FontSize = 11,
             },
@@ -1253,11 +874,10 @@ public partial class OverlayWindow : Window
                 SetBoundsToDisplay();
                 if (_adjusting)
                 {
-                    _workingByTarget.Clear();
-                    _touchedTargets.Clear();
+                    _adjustMoved = false;
                     _workingCalibration = _display is null
                         ? null
-                        : _settingsStore.LoadCalibrationOrDefault(_adjustTarget, _display.Resolution);
+                        : _settingsStore.LoadCalibration(_display.Resolution);
                     RenderAdjustment();
                 }
                 else

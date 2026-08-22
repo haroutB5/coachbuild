@@ -1,5 +1,41 @@
 # Changelog
 
+## Desktop 1.0.23 — the WPA numbers over the shop are gone
+
+**The overlay no longer draws win-rate numbers on your Situational items.** That feature is
+removed, not disabled, and there is nothing left in the app that could draw them.
+
+**Your situational items have NOT changed.** The Situational block is still written into your
+CoachBuild item set exactly as before, with the same items in the same order, so you still get
+the suggestions in the shop — just with no numbers painted over them.
+
+**The skill-order overlay is untouched.** The pink "level this next" box, its calibration and
+`Adjust overlay position` all work exactly as they did. Adjust mode now has one thing to
+adjust instead of two, so `Tab` no longer switches between targets; everything else — arrows,
+Shift for ×10, `+`/`-` for size, `[`/`]` for spacing, Enter to save, Esc to cancel — is the
+same, including the rule that nothing is saved unless you actually moved the box.
+
+### Why it was removed rather than fixed again
+
+The numbers were placed from a single position you calibrated once. Where the Situational row
+actually sits in your shop moves up and down by a whole row depending on how many blocks are
+above it — and that count changes from champion to champion, because the Pro and OTP blocks
+are only present when there is data for them. The app has no way to see your screen (it does
+not capture, OCR or read game memory, and that is not going to change), so it cannot follow
+the row. In practice that meant re-calibrating per champion, and the next fix would have been
+a third forced re-calibration. That is not worth it for a decoration.
+
+### What that took with it
+
+Two tray items are gone: **Adjust item numbers** and **Show item numbers now**. So is
+everything that existed only to know when your shop was open — the app no longer reads your
+League keybind config, no longer watches your shop key, and no longer writes any of the
+`shop:` lines to `companion.log`. The `chatGateEnabled` setting went with it, since the chat
+gate only ever existed to decide whether a shop-key press should count.
+
+**Your saved item-row alignment is left alone.** It stays in `desktop-settings.json` under
+`itemRowCalibrations`, unread. Nothing deletes it, in case you ever want it back.
+
 ## Desktop 1.0.22 — 2026-08-21 — send the log instead of photographing it
 
 **When something goes wrong in a game, you can now hand the log over from the tray.**

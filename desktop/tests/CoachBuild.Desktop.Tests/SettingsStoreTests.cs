@@ -106,34 +106,70 @@ public sealed class SettingsStoreTests
 
 
     [Fact]
-    public void TheChatGateIsOffOnAFreshProfileAndSurvivesOtherWrites()
+    public void TheRemovedItemRowsSavedGeometrySurvivesEveryLaterWrite()
     {
-        // Off by default with no settings file at all - the shipped behaviour
-        // must not depend on a key being present.
+        // 1.0.23 removed the item-number overlay. NOTHING reads
+        // itemRowCalibrations any more, and this test is the reason the
+        // property still exists at all.
+        //
+        // Save() serialises OverlaySettings itself, so a key the class does not
+        // model is DROPPED the first time any unrelated setting changes -- the
+        // exact trap RankSampleSecret documents from the other direction.
+        // Deleting the property would therefore have been a silent migration
+        // that threw away geometry the player aligned by hand with arrow keys,
+        // in exchange for nothing. An unread JSON key costs nothing; their work
+        // is not recoverable.
         var root = MakeTempDirectory();
         try
         {
             var path = Path.Combine(root, "desktop-settings.json");
+            File.WriteAllText(path, """
+            {
+              "laneOverride": "MID",
+              "overlayVisible": true,
+              "calibrations": {
+                "1920x1080@96x96:DISPLAY1": {
+                  "resolution": { "width": 1920, "height": 1080, "dpiX": 96, "dpiY": 96, "deviceName": "DISPLAY1" },
+                  "geometry": { "firstBoxCenterX": 910, "centerY": 940, "boxSize": 52, "spacing": 73 }
+                }
+              },
+              "itemRowCalibrations": {
+                "2560x1440@96x96:DISPLAY1": {
+                  "resolution": { "width": 2560, "height": 1440, "dpiX": 96, "dpiY": 96, "deviceName": "DISPLAY1" },
+                  "geometry": { "firstBoxCenterX": 611, "centerY": 693, "boxSize": 59, "spacing": 69 }
+                }
+              }
+            }
+            """);
+
             var store = new OverlaySettingsStore(path);
-            Assert.False(store.Read().ChatGateEnabled);
+            Assert.Equal(
+                new CalibrationGeometry(611, 693, 59, 69),
+                store.Read().ItemRowCalibrations["2560x1440@96x96:DISPLAY1"].Geometry);
 
-            // Opt in by hand, the way the escape hatch is documented...
-            var settings = store.Read();
-            settings.ChatGateEnabled = true;
-            store.Save(settings);
-            Assert.True(store.Read().ChatGateEnabled);
-
-            // ...and it must survive a write of a COMPLETELY unrelated setting.
-            // Save() clones before it writes, so a field missing from
-            // CloneSettings is silently reset by the next lane change - which
-            // is a data-loss bug that no test of the field on its own catches.
-            store.SetLaneOverride("mid");
+            // Every mutation path, because Save() clones and each of these
+            // round-trips the whole file.
+            store.SetLaneOverride("top");
             store.SetOverlayVisible(false);
-            store.SaveCalibration(new DisplayResolution(1920, 1080), new CalibrationGeometry(910, 940, 52, 73));
-            Assert.True(store.Read().ChatGateEnabled);
+            store.SetAutostartConfigured(true);
+            store.SetRankSampleSecret("secret");
+            store.SaveCalibration(
+                new DisplayResolution(1920, 1080, 96, 96, "DISPLAY1"),
+                new CalibrationGeometry(900, 930, 50, 70));
 
-            // And it must survive a reload from disk, not just the cache.
-            Assert.True(new OverlaySettingsStore(path).Read().ChatGateEnabled);
+            // From disk, not from the cache: the point is what is on the user's
+            // filesystem after the app has been used for a while.
+            var reloaded = new OverlaySettingsStore(path).Read();
+            Assert.Equal(
+                new CalibrationGeometry(611, 693, 59, 69),
+                reloaded.ItemRowCalibrations["2560x1440@96x96:DISPLAY1"].Geometry);
+            Assert.Contains("itemRowCalibrations", File.ReadAllText(path), StringComparison.Ordinal);
+
+            // ...and the skill-order calibration, which IS read, still is.
+            Assert.Equal(
+                new CalibrationGeometry(900, 930, 50, 70),
+                new OverlaySettingsStore(path).LoadCalibration(
+                    new DisplayResolution(1920, 1080, 96, 96, "DISPLAY1")));
         }
         finally
         {

@@ -204,13 +204,13 @@ public static partial class ComplianceRules
     // before shipping a button that uploads it. The four rules above scored
     // ZERO against the 166KB companion.log on the authoring machine -- no Riot
     // ID, no dashed UUID, no session=, no remoting-auth-token. A user-profile
-    // path is different, and it is reachable by construction rather than by
-    // accident: LeagueConfigLocator.Candidates() (ShopBindResolver.cs) adds
-    // SpecialFolder.LocalApplicationData to the search list, and App.xaml.cs's
-    // LogConfigSearch joins the first eight candidates into one Info line
-    // whenever no League config is found. On an ordinary install that line
-    // contains <drive>:\Users\<their Windows account name>\AppData\Local\...
-    // -- a name, written into the one file the user is now asked to upload.
+    // path is different: any line that names a filesystem path the app probed
+    // carries <drive>:\Users\<their Windows account name>\... on an ordinary
+    // install -- a name, written into the one file the user is now asked to
+    // upload. The line that motivated this rule ("shop: looked for League's
+    // Config in N place(s): ...") was removed with the item-number overlay in
+    // 1.0.23; the rule stays, because it defends against the SHAPE and the
+    // upload is what it defends, not any one caller.
     //
     // Only the profile SEGMENT is replaced. The rest of the path is the entire
     // diagnostic value of the line ("we looked here, it was not there"), so

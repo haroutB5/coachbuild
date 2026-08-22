@@ -97,13 +97,7 @@ public sealed record DesktopPhaseSnapshot(
     LastOpenPage? LastOpen = null,
     bool IsCompanionBusy = false,
     string? Error = null,
-    OverlayState? Overlay = null,
-    /// <summary>
-    /// The WPA deltas that came with the most recent item-set write, or null.
-    /// Carried on the snapshot rather than read out of CompanionState by the UI
-    /// so the overlay has exactly one source of truth per tick.
-    /// </summary>
-    SituationalOverlaySet? Situational = null);
+    OverlayState? Overlay = null);
 
 public sealed class NullDesktopHostServices : IDesktopHostServices
 {
@@ -214,12 +208,6 @@ public partial class App : WpfApplication
     private WebView2EnvironmentService? _webViewEnvironment;
     private RedactedLog? _log;
     private GlobalHotkeyService? _hotkeys;
-    private ShopKeyWatcher? _shopWatcher;
-
-    // True while the watcher is polling League's DEFAULT P because the player's
-    // own config could not be read. Drives one retry per game start; see
-    // RetryShopBindsIfFallback.
-    private bool _shopBindsAreFallback;
     private VelopackUpdateService? _updates;
     private Task? _pollTask;
     private TrayMenuState _trayState = TrayMenuState.Default;
@@ -323,7 +311,6 @@ public partial class App : WpfApplication
         // thread and read here on the render thread, and one lock at the point
         // of use is cheaper to reason about than a second copy kept in sync.
         _overlay.GameMode = () => (_services as ILiveOverlayPushSource)?.CurrentGameMode;
-        _overlay.ManualBadgeOverrideCleared += OnManualBadgeOverrideCleared;
         _overlay.AdjustmentStateChanged += OnAdjustmentStateChanged;
         if (_services is ILiveOverlayPushSource push) push.OverlayStateChanged += OnLiveOverlayPush;
         if (_services is ILaneOverrideHostServices laneOverrideServices)
@@ -336,7 +323,6 @@ public partial class App : WpfApplication
         _overlay.Hide();
         _tray.Start(_trayState);
         StartHotkeys();
-        StartShopWatcher(settingsStore);
         _webViewEnvironment = new WebView2EnvironmentService(Paths.WebView2UserDataFolder);
         _ = ProbeWebView2AvailabilityAsync(_shutdown.Token);
         _updates = new VelopackUpdateService(
@@ -433,142 +419,6 @@ public partial class App : WpfApplication
     /// the tray to cancel means alt-tabbing out of the game they are aligning
     /// the overlay against.
     /// </summary>
-    /// <summary>
-    /// Starts the shop-key watcher, and writes down what it decided to watch.
-    ///
-    /// <para><b>The log lines are the feature's only witness.</b> A watcher
-    /// pointed at the wrong key is indistinguishable, from the outside, from a
-    /// watcher that never started — the player sees no numbers either way. The
-    /// resolved bind, the file it came from, and any disagreement between
-    /// League's two copies of it all go to <c>companion.log</c> at startup, so
-    /// one paste of that file answers "is it even watching the right key?".
-    /// The reference machine's answer is <c>[`]</c>, not the League default
-    /// <c>P</c>, which is precisely why nothing here is hardcoded.</para>
-    /// </summary>
-    private void StartShopWatcher(OverlaySettingsStore settingsStore)
-    {
-        try
-        {
-            var binds = ShopBindResolver.ResolveForCurrentMachine();
-            foreach (var line in binds.LogLines) _log?.Info(line);
-            if (binds.ConfigDirectory is null) LogConfigSearch();
-
-            // OFF unless the settings file asks for it. The gate swallowed six
-            // presses across a whole game on 1.0.17 and honoured none, and the
-            // player's answer to that log was that the key must work every
-            // time. Logged either way, because "which way was it configured"
-            // is the first question any future report about this raises.
-            var chatGateEnabled = settingsStore.Read().ChatGateEnabled;
-            _log?.Info(chatGateEnabled
-                ? "shop: chat gate ON - your shop key is ignored while League's chat looks open"
-                  + " (set \"chatGateEnabled\": false in settings.json to have it always work)"
-                : "shop: chat gate OFF - your shop key always shows or hides the numbers, chat or no chat"
-                  + " (set \"chatGateEnabled\": true in settings.json to restore the old behaviour)");
-
-            _shopWatcher = new ShopKeyWatcher(
-                binds,
-                chatGateEnabled,
-                leagueIsForeground: new LeagueForegroundProbe(new DeferredGameWindowLocator()).IsLeagueForeground)
-            {
-                Diagnostics = message => _log?.Info(message),
-            };
-            _shopWatcher.ShopVisibilityChanged += state => _overlay?.SetShopOpen(state.Open);
-            _shopWatcher.Start();
-            _shopBindsAreFallback = binds.UsedFallback;
-        }
-        catch (Exception error)
-        {
-            // A watcher that cannot start must not take the app with it. The
-            // tray's manual "Show item numbers now" is the way back.
-            _log?.Info($"shop: watcher could not start ({error.GetType().Name}); use the tray item to show the numbers");
-            _shopWatcher = null;
-        }
-    }
-
-    /// <summary>
-    /// Names every directory the config search looked in, when it found none.
-    ///
-    /// <para>"No League config directory found" is a conclusion; this is the
-    /// evidence for it. The search is Riot's own install manifests followed by
-    /// a hardcoded path, Program Files and each drive root, and which of those
-    /// were tried is the difference between "League is somewhere we do not look"
-    /// and "the manifests are unreadable".</para>
-    /// </summary>
-    private void LogConfigSearch()
-    {
-        try
-        {
-            var candidates = LeagueConfigLocator.Candidates();
-            _log?.Info($"shop: looked for League's Config in {candidates.Count} place(s): "
-                + string.Join(" | ", candidates.Take(8)));
-        }
-        catch (Exception error)
-        {
-            _log?.Info($"shop: could not list the config search paths ({error.GetType().Name})");
-        }
-    }
-
-    /// <summary>
-    /// Resolves the shop bind again when a game starts, but only if the last
-    /// answer was League's default P.
-    ///
-    /// <para>The resolution used to happen exactly once, in
-    /// <see cref="OnStartup"/>. This app autostarts at login and then lives in
-    /// the tray for days, so every reason the config might be unreadable at
-    /// 07:00 — a drive not yet ready, League installed after the app, a config
-    /// League had not yet written — became a permanent wrong answer. The
-    /// player's own report is the shape of that: the app was watching P while
-    /// their bind is grave/backtick.</para>
-    ///
-    /// <para>Gated on <c>UsedFallback</c> and on the answer actually changing,
-    /// so a healthy machine does nothing here beyond one cheap directory probe
-    /// per game, and a swap can never surprise a player whose bind was already
-    /// read correctly.</para>
-    /// </summary>
-    private void RetryShopBindsIfFallback()
-    {
-        if (_shopWatcher is null || !_shopBindsAreFallback) return;
-
-        try
-        {
-            var binds = ShopBindResolver.ResolveForCurrentMachine();
-            if (binds.UsedFallback || !binds.CanWatch) return;
-
-            _shopBindsAreFallback = false;
-            _shopWatcher.UpdateBinds(binds);
-            _log?.Info("shop: your League config became readable after startup - re-resolved the shop bind");
-            foreach (var line in binds.LogLines) _log?.Info(line);
-        }
-        catch (Exception error)
-        {
-            _shopBindsAreFallback = false;
-            _log?.Info($"shop: could not re-resolve the shop bind ({error.GetType().Name}); staying on the default");
-        }
-    }
-
-    /// <summary>
-    /// The overlay dropped "Show item numbers now" because the player pressed
-    /// their shop key to put the badges away; the tray's tick follows it.
-    ///
-    /// <para>The overlay owns the decision, not this class, because the overlay
-    /// owns the flag that decides whether the pills draw. This only mirrors it
-    /// into the menu — a tick claiming an override that is no longer in force
-    /// is how a player ends up pressing a control that does nothing.</para>
-    /// </summary>
-    private void OnManualBadgeOverrideCleared()
-    {
-        if (!Dispatcher.CheckAccess())
-        {
-            Dispatcher.BeginInvoke(OnManualBadgeOverrideCleared);
-            return;
-        }
-
-        if (!_trayState.ForceItemNumbers) return;
-        _trayState = _trayState with { ForceItemNumbers = false };
-        _tray?.UpdateState(_trayState);
-        _log?.Info("badges: manual override cleared (you pressed your shop key)");
-    }
-
     private void OnHotkeyPressed(HotkeyBinding binding)
     {
         if (_isShuttingDown || _overlay is null) return;
@@ -694,45 +544,9 @@ public partial class App : WpfApplication
             CloseCompanionWindowForGame();
         }
 
-        // The watcher's own 50 ms timer owns the key edges; this only tells it
-        // whether a game is running, which is the gate that resets the latch
-        // between matches.
-        var inGame = snapshot.Overlay?.InGame == true;
-        if (inGame) RetryShopBindsIfFallback();
-        _shopWatcher?.SetInGame(inGame);
-
-        // "Show item numbers NOW" is a per-game override, and the verb is the
-        // contract. It is also the one tray item that is disabled out of a game
-        // (there is no shop to sit over), so a player who leaves it ticked
-        // cannot untick it afterwards — leaving it latched would silently turn
-        // a one-off "show me anyway" into "show me in every future game", with
-        // the only control greyed out.
-        if (!inGame && _trayState.ForceItemNumbers)
-        {
-            _trayState = _trayState with { ForceItemNumbers = false };
-            _overlay?.SetForceBadges(false);
-            _tray?.UpdateState(_trayState);
-            _log?.Info("badges: manual override cleared (the game ended)");
-        }
-
         if (snapshot.Overlay is not null)
         {
             _overlay?.ApplyState(snapshot.Overlay);
-            // Champion-MATCHED, not merely present. The item set is written in
-            // champ select and the numbers are drawn in game, so the data
-            // outlives the phase that produced it — and anything that outlives
-            // a phase can outlive the champion it described. `For` returns null
-            // for every champion but the one the set was written for.
-            // The set LABEL travels with the deltas and never without them: it
-            // names the one shop set the positional mapping is true of and the
-            // block position the saved calibration is true of, and a label left
-            // behind by another champion's write would send the player to line
-            // their numbers up against the wrong row.
-            var situational = snapshot.Situational;
-            var situationalDeltas = situational?.For(snapshot.Overlay.ChampionId ?? 0);
-            _overlay?.SetSituationalDeltas(
-                situationalDeltas,
-                situationalDeltas is null ? string.Empty : situational!.SetLabel);
             if (_trayState.OverlayVisible) _overlay?.ShowInactive();
         }
         else
@@ -969,14 +783,6 @@ public partial class App : WpfApplication
                 break;
             case TrayCommand.Adjust:
                 _overlay?.BeginAdjustment();
-                break;
-            case TrayCommand.AdjustItems:
-                _overlay?.BeginAdjustment(CalibrationTarget.ItemRow);
-                break;
-            case TrayCommand.ToggleItemNumbers:
-                _trayState = _trayState with { ForceItemNumbers = !_trayState.ForceItemNumbers };
-                _overlay?.SetForceBadges(_trayState.ForceItemNumbers);
-                _tray?.UpdateState(_trayState);
                 break;
             case TrayCommand.CancelAdjust:
                 _overlay?.CancelAdjustment();
@@ -1435,7 +1241,6 @@ public partial class App : WpfApplication
         webView?.Close();
         _overlay?.Close();
         _hotkeys?.Dispose();
-        _shopWatcher?.Dispose();
         _hotkeys = null;
         _tray?.Dispose();
         try { _companionMutex?.ReleaseMutex(); } catch { }
@@ -1825,8 +1630,7 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             lastOpen,
             _state.IsCompanionBusy,
             status.LastError,
-            BuildOverlayState(),
-            _state.Situational));
+            BuildOverlayState()));
     }
 
     public Task<bool> RepairWebView2Async(CancellationToken cancellationToken)

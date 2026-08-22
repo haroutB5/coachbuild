@@ -11,51 +11,7 @@ public sealed record OverlayRenderModel(
     bool Visible,
     IReadOnlyList<Rect> AbilityRects,
     OverlayAbility? HighlightedAbility,
-    CalibrationGeometry Calibration,
-    IReadOnlyList<OverlayItemBadge>? Badges = null);
-
-/// <summary>One WPA delta, and the item slot it belongs above.</summary>
-/// <param name="Sign">-1, 0 or +1. Colour only — the NUMBER is <paramref name="Text"/>, verbatim.</param>
-public readonly record struct OverlayItemBadge(Rect Slot, string Text, int Sign);
-
-/// <summary>
-/// Everything the situational badges need, or <see cref="None"/>.
-///
-/// <para><see cref="Geometry"/> is nullable and that is load-bearing: null
-/// means the player has never calibrated the item row on this display, and the
-/// only honest response to "we do not know where the shop row is" is to draw
-/// nothing. There is no default position worth guessing — the shop panel is
-/// draggable, resizable and scaled by a setting whose own two config files
-/// disagree with each other.</para>
-/// </summary>
-public sealed record ItemBadgeInput(
-    bool ShopOpen,
-    IReadOnlyList<CoachBuild.Core.SituationalDelta> Deltas,
-    CalibrationGeometry? Geometry)
-{
-    public static ItemBadgeInput None { get; } =
-        new(false, Array.Empty<CoachBuild.Core.SituationalDelta>(), null);
-
-    /// <summary>True only when there is a position, a number to draw, and a shop to draw it over.</summary>
-    public bool WillDraw => ShopOpen && Geometry is not null && Deltas.Count > 0;
-
-    /// <summary>
-    /// Every visual input, flattened. Folded into the render signature so the
-    /// memo cannot report "nothing to repaint" about a badge row that just
-    /// appeared, changed number, or moved — the same trap 1.0.12 hit when the
-    /// highlight gained a level gate and LEVEL was not yet in the signature.
-    /// </summary>
-    public string SignatureKey()
-    {
-        if (!WillDraw) return string.Empty;
-        var geometry = Geometry!.Normalize();
-        return string.Create(
-            System.Globalization.CultureInfo.InvariantCulture,
-            $"{geometry.FirstBoxCenterX}/{geometry.CenterY}/{geometry.BoxSize}/{geometry.Spacing}#")
-            + string.Join(',', Deltas.Select(delta =>
-                $"{delta.ItemId}:{delta.Text}:{Math.Sign(delta.Wpa)}"));
-    }
-}
+    CalibrationGeometry Calibration);
 
 /// <summary>
 /// Pure-ish projection plus a small WPF painter. The render signature is
@@ -74,16 +30,6 @@ public sealed class OverlayRenderer
     public OverlayRenderModel? LastModel { get; private set; }
 
     /// <summary>
-    /// The rects the badge pills were last actually painted at, in order.
-    ///
-    /// <para>Not the same thing as <c>LastModel.Badges[i].Slot</c>: the slot is
-    /// the calibrated box, the pill is measured from its own text. This is the
-    /// half of the pair that adjust mode has to match — see
-    /// <see cref="PlaceBadge"/>.</para>
-    /// </summary>
-    public IReadOnlyList<Rect> LastBadgeRects { get; private set; } = Array.Empty<Rect>();
-
-    /// <summary>
     /// Drops the memoised signature so the next <see cref="Render"/> repaints
     /// unconditionally.
     ///
@@ -100,10 +46,9 @@ public sealed class OverlayRenderer
     public bool ShouldRender(
         OverlayState state,
         DisplayResolution display,
-        CalibrationGeometry? calibration = null,
-        ItemBadgeInput? badges = null)
+        CalibrationGeometry? calibration = null)
     {
-        return CreateSignature(state, display, calibration, badges) != _lastSignature;
+        return CreateSignature(state, display, calibration) != _lastSignature;
     }
 
     public bool Render(
@@ -111,8 +56,7 @@ public sealed class OverlayRenderer
         OverlayState state,
         OverlaySettings settings,
         DisplayResolution display,
-        CalibrationGeometry? calibration = null,
-        ItemBadgeInput? badges = null)
+        CalibrationGeometry? calibration = null)
     {
         ArgumentNullException.ThrowIfNull(canvas);
         ArgumentNullException.ThrowIfNull(state);
@@ -127,34 +71,31 @@ public sealed class OverlayRenderer
             && saved.Resolution.DpiY == display.DpiY
             ? saved.Geometry.Normalize()
             : CalibrationGeometry.ScaledDefault(display));
-        var badgeInput = badges ?? ItemBadgeInput.None;
-        var signature = CreateSignatureNormalized(normalized, display, resolvedCalibration, badgeInput);
+        var signature = CreateSignatureNormalized(normalized, display, resolvedCalibration);
         if (signature == _lastSignature) return false;
 
-        var model = BuildModelNormalized(normalized, resolvedCalibration, badgeInput);
+        var model = BuildModelNormalized(normalized, resolvedCalibration);
         _lastSignature = signature;
         LastModel = model;
         RenderCount++;
-        LastBadgeRects = Paint(canvas, model);
+        Paint(canvas, model);
         return true;
     }
 
     public OverlayRenderSignature CreateSignature(
         OverlayState state,
         DisplayResolution display,
-        CalibrationGeometry? calibration = null,
-        ItemBadgeInput? badges = null)
+        CalibrationGeometry? calibration = null)
     {
         var normalized = state.Normalize();
         var geometry = (calibration ?? CalibrationGeometry.ScaledDefault(display)).Normalize();
-        return CreateSignatureNormalized(normalized, display, geometry, badges ?? ItemBadgeInput.None);
+        return CreateSignatureNormalized(normalized, display, geometry);
     }
 
     private static OverlayRenderSignature CreateSignatureNormalized(
         OverlayState normalized,
         DisplayResolution display,
-        CalibrationGeometry geometry,
-        ItemBadgeInput badges)
+        CalibrationGeometry geometry)
     {
         var ranks = string.Join(',', AbilityValues.Select(normalized.Rank));
         var order = string.Join(',', normalized.SkillOrder.Order);
@@ -173,29 +114,22 @@ public sealed class OverlayRenderer
             // that is the whole point. Without this the memo would report
             // "nothing to repaint" about the one frame the user is waiting for.
             normalized.Level,
-            normalized.HasPointToSpend,
-            // 1.0.16: the situational badges are a visual input with NOTHING
-            // else in this signature behind them. Opening the shop changes no
-            // rank, no level and no geometry, so without this the memo would
-            // report "nothing to repaint" about the entire feature.
-            badges.SignatureKey());
+            normalized.HasPointToSpend);
     }
 
     public OverlayRenderModel BuildModel(
         OverlayState state,
         DisplayResolution display,
-        CalibrationGeometry? calibration = null,
-        ItemBadgeInput? badges = null)
+        CalibrationGeometry? calibration = null)
     {
         var normalized = state.Normalize();
         var geometry = (calibration ?? CalibrationGeometry.ScaledDefault(display)).Normalize();
-        return BuildModelNormalized(normalized, geometry, badges ?? ItemBadgeInput.None);
+        return BuildModelNormalized(normalized, geometry);
     }
 
     private static OverlayRenderModel BuildModelNormalized(
         OverlayState normalized,
-        CalibrationGeometry geometry,
-        ItemBadgeInput badges)
+        CalibrationGeometry geometry)
     {
         // ONE implementation of "which ability", shared with
         // OverlayWindow.DescribeRenderOutcome. Through 1.0.11 this method kept
@@ -206,180 +140,13 @@ public sealed class OverlayRenderer
             normalized.HasRenderableData,
             geometry.GetAbilityRects(),
             normalized.NextAbility(),
-            geometry,
-            BuildBadges(badges));
+            geometry);
     }
 
-    /// <summary>
-    /// One badge per delta, positioned on the item row's own pitch.
-    ///
-    /// <para>The slot count is the number of DELTAS, not a constant: the
-    /// situational row is between one and six items long depending on the
-    /// champion, and drawing six badges over a four-item row would put two of
-    /// them over whatever sits to the right of it.</para>
-    /// </summary>
-    private static IReadOnlyList<OverlayItemBadge> BuildBadges(ItemBadgeInput badges)
-    {
-        if (!badges.WillDraw) return Array.Empty<OverlayItemBadge>();
-        var slots = badges.Geometry!.GetSlotRects(badges.Deltas.Count);
-        var result = new List<OverlayItemBadge>(badges.Deltas.Count);
-        for (var index = 0; index < badges.Deltas.Count && index < slots.Count; index++)
-        {
-            var delta = badges.Deltas[index];
-            // An absent number draws nothing. It never draws "+0.00": a
-            // placeholder is a claim about a measurement nobody made.
-            if (string.IsNullOrWhiteSpace(delta.Text)) continue;
-            result.Add(new OverlayItemBadge(slots[index], delta.Text, Math.Sign(delta.Wpa)));
-        }
-
-        return result;
-    }
-
-    // Near-opaque dark backing rather than a translucent tint or a text
-    // outline: League's shop art is busy and light in places, and a number that
-    // is only legible over some item icons is a number the player has to squint
-    // at. The backing is one flat colour so the delta reads the same over every
-    // icon in the row.
-    private static readonly WpfColor BadgeBackground = WpfColor.FromArgb(238, 6, 10, 22);
-    private static readonly WpfColor PositiveInk = WpfColor.FromRgb(74, 222, 128);
-    private static readonly WpfColor NegativeInk = WpfColor.FromRgb(248, 113, 113);
-    private static readonly WpfColor NeutralInk = WpfColor.FromRgb(226, 232, 240);
-
-    /// <summary>The type size a badge uses inside <paramref name="slot"/>.</summary>
-    /// <remarks>
-    /// Everything about a pill scales off the calibrated slot, so a 4K player
-    /// and a 1080p player get the same proportions rather than the same pixel
-    /// count. Public because adjust mode builds the SAME pill (see
-    /// <see cref="CreateBadgePill"/>) and a second copy of this expression is a
-    /// second answer to the question "how big is the number".
-    /// </remarks>
-    public static double BadgeFontSize(Rect slot) => Math.Clamp(slot.Height * 0.34, 9d, 22d);
-
-    /// <summary>
-    /// The pill for one delta, built exactly as it is painted in a live game.
-    ///
-    /// <para><b>ONE implementation, shared with adjust mode.</b> Through 1.0.19
-    /// adjust mode drew its own pink box AT the slot while this painter drew a
-    /// pill ABOVE the slot, so what the player lined up was never what appeared
-    /// — see <see cref="PlaceBadge"/> for the arithmetic and the field
-    /// evidence.</para>
-    ///
-    /// <para>Positive and negative are told apart by COLOUR AND by the sign
-    /// character the web already put in the text (<c>+4.27</c> / <c>-0.06</c>),
-    /// so the distinction survives a colour-blind player and a screenshot
-    /// alike.</para>
-    /// </summary>
-    public static Border CreateBadgePill(string text, int sign, Rect slot)
-    {
-        var fontSize = BadgeFontSize(slot);
-        var ink = sign switch
-        {
-            > 0 => PositiveInk,
-            < 0 => NegativeInk,
-            _ => NeutralInk,
-        };
-
-        return new Border
-        {
-            Background = new SolidColorBrush(BadgeBackground),
-            BorderBrush = new SolidColorBrush(WpfColor.FromArgb(170, ink.R, ink.G, ink.B)),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(fontSize * 0.38),
-            Padding = new Thickness(fontSize * 0.42, fontSize * 0.10, fontSize * 0.42, fontSize * 0.14),
-            IsHitTestVisible = false,
-            SnapsToDevicePixels = true,
-            Child = new TextBlock
-            {
-                Text = text,
-                Foreground = new SolidColorBrush(ink),
-                FontWeight = FontWeights.Bold,
-                FontSize = fontSize,
-                TextAlignment = TextAlignment.Center,
-            },
-        };
-    }
-
-    /// <summary>
-    /// Where a measured pill lands: CENTRED on its slot, both axes.
-    ///
-    /// <para><b>The calibrated box IS the badge.</b> Through 1.0.19 the pill was
-    /// drawn ABOVE the slot (<c>slot.Top - pillHeight - gap</c>) on the promise
-    /// that it would cover "neither the item icon nor the price the shop prints
-    /// under it". That promise could not be kept and it broke calibration
-    /// outright:</para>
-    ///
-    /// <list type="number">
-    /// <item>There is no free space above a League shop row — the space above
-    /// an item row is the block's own section header. The player's 2026-08-20
-    /// screenshot shows all three pills printed across the words "Situational
-    /// items that are also good".</item>
-    /// <item>Adjust mode drew its alignment boxes AT the slot and told the
-    /// player "Line these up with the Situational row in your shop". They did.
-    /// The numbers then appeared one pill-height higher. What you align was not
-    /// what you get, so no amount of arrow-key work could ever converge — the
-    /// player had to deliberately mis-align the boxes to fix the pills.</item>
-    /// <item>The diagnostic line <c>badges: N shown at XxY size W pitch P</c>
-    /// reported the SLOT, which after this offset was a position where nothing
-    /// was drawn. Two answers to one question.</item>
-    /// </list>
-    ///
-    /// <para>Centring collapses all three: the box the player moves is the box
-    /// the number appears in, the log line describes the pixels, and where the
-    /// pill sits relative to the icon is the player's decision (arrow keys)
-    /// rather than a constant this file invented. That matters more than usual
-    /// here because the Situational row's own position on screen depends on how
-    /// many blocks the SELECTED item set puts above it — which this app cannot
-    /// observe (no screen reads, 1.0.16 policy).</para>
-    ///
-    /// <para>Measured, not fixed-width: a fixed width would either clip
-    /// "-0.06" or leave "+4.27" swimming, and the two occur in the same
-    /// row.</para>
-    /// </summary>
-    public static Rect PlaceBadge(Rect slot, System.Windows.Size pill) => new(
-        slot.Left + (slot.Width - pill.Width) / 2,
-        Math.Max(0d, slot.Top + (slot.Height - pill.Height) / 2),
-        pill.Width,
-        pill.Height);
-
-    /// <summary>
-    /// Measures <paramref name="pill"/>, places it on <paramref name="canvas"/>
-    /// and returns the rect it occupies. The one call adjust mode and the live
-    /// render both make, so neither can drift from the other.
-    /// </summary>
-    public static Rect PlaceBadgeOnCanvas(Canvas canvas, Border pill, Rect slot)
-    {
-        pill.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
-        var placed = PlaceBadge(slot, pill.DesiredSize);
-        Canvas.SetLeft(pill, placed.Left);
-        Canvas.SetTop(pill, placed.Top);
-        canvas.Children.Add(pill);
-        return placed;
-    }
-
-    /// <summary>Draws the WPA delta on each situational item.</summary>
-    private static IReadOnlyList<Rect> PaintBadges(Canvas canvas, IReadOnlyList<OverlayItemBadge>? badges)
-    {
-        if (badges is null || badges.Count == 0) return Array.Empty<Rect>();
-        var painted = new List<Rect>(badges.Count);
-        foreach (var badge in badges)
-        {
-            var slot = badge.Slot;
-            if (slot.Width <= 0 || slot.Height <= 0) continue;
-            painted.Add(PlaceBadgeOnCanvas(canvas, CreateBadgePill(badge.Text, badge.Sign, slot), slot));
-        }
-
-        return painted;
-    }
-
-    private static IReadOnlyList<Rect> Paint(Canvas canvas, OverlayRenderModel model)
+    private static void Paint(Canvas canvas, OverlayRenderModel model)
     {
         canvas.Children.Clear();
-        var badgeRects = PaintBadges(canvas, model.Badges);
-        // The badges are painted BEFORE this gate, not after it. `Visible` is
-        // "there is a skill order to highlight", which has nothing to do with
-        // whether the shop is open — a player with no skill-order data must
-        // still get their item numbers.
-        if (!model.Visible) return badgeRects;
+        if (!model.Visible) return;
 
         if (model.HighlightedAbility is { } next)
         {
@@ -407,8 +174,6 @@ public sealed class OverlayRenderer
             Canvas.SetTop(highlight, rect.Top);
             canvas.Children.Add(highlight);
         }
-
-        return badgeRects;
     }
 }
 
@@ -422,5 +187,4 @@ public sealed record OverlayRenderSignature(
     double BoxSize,
     double Spacing,
     int Level = 0,
-    bool HasPointToSpend = false,
-    string Badges = "");
+    bool HasPointToSpend = false);

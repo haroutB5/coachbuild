@@ -64,8 +64,6 @@ public sealed record TrayMenuState(
     bool IsAdjusting = false,
     string? AdjustAccelerator = null,
     string? AdjustHotkeyAdvice = null,
-    /// <summary>The player has asked for the situational numbers by hand, overriding the shop latch.</summary>
-    bool ForceItemNumbers = false,
     string? WebVersion = null,
     bool WebWindowOpen = false)
 {
@@ -96,29 +94,6 @@ public sealed record TrayMenuState(
     public const string AdjustMenuVerb = "Adjust overlay position";
 
     public const string CancelAdjustMenuVerb = "Cancel adjust";
-
-    /// <summary>
-    /// The second calibration target (1.0.16): where the situational WPA
-    /// numbers sit over the shop's item row.
-    ///
-    /// <para>It gets a menu item rather than a second global accelerator on
-    /// purpose. 1.0.13 removed Ctrl+Shift+S because <c>RegisterHotKey</c> is
-    /// exclusive system-wide and a global bind is taken from every other
-    /// application for as long as this app runs; that argument does not stop
-    /// applying just because there is now a second thing to position. Inside
-    /// adjust mode, Tab switches between the two targets.</para>
-    /// </summary>
-    public const string AdjustItemsMenuVerb = "Adjust item numbers";
-
-    /// <summary>
-    /// Shows or hides the situational numbers by hand.
-    ///
-    /// <para>The documented fallback for a player whose shop bind could not be
-    /// read, or whose shop was closed by clicking rather than by a key — the
-    /// two cases the key watcher cannot see. A feature that can only be driven
-    /// by an inferred signal has no way back when the inference is wrong.</para>
-    /// </summary>
-    public const string ShowItemNumbersVerb = "Show item numbers now";
 
     public const string OpenLogFolderVerb = "Open log folder";
 

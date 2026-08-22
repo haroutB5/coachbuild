@@ -13,23 +13,6 @@ public sealed class OverlaySettings
     public bool AutostartConfigured { get; set; }
 
     /// <summary>
-    /// Whether a shop-key press may be IGNORED while League's chat input looks
-    /// focused. <b>Off by default</b>, and there is no menu item for it.
-    ///
-    /// <para>The gate exists for a player whose shop bind is a letter that
-    /// lands in typed words — League's default is <c>P</c> — and it is simply
-    /// wrong for a player whose bind is not. The one it was built for read two
-    /// games of <c>companion.log</c> and asked for their key to be honoured
-    /// every single time, so the default flipped. It stays reachable by hand
-    /// (<c>"chatGateEnabled": true</c> in this file) rather than being deleted,
-    /// because the behaviour is still correct for the other player; it stays
-    /// out of the tray because a visible control invites the flapping the
-    /// evidence has already settled.</para>
-    /// </summary>
-    [JsonPropertyName("chatGateEnabled")]
-    public bool ChatGateEnabled { get; set; }
-
-    /// <summary>
     /// The shared account secret the ranked-LP capture posts with
     /// (<c>MYSTATS_ACCOUNT_SECRET</c> / <c>x-coachbuild-account-secret</c>).
     /// Empty or absent means capture is INERT — nothing is posted and one line
@@ -51,37 +34,26 @@ public sealed class OverlaySettings
     public Dictionary<string, PersistedCalibration> Calibrations { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Where the situational item row's numbers go — a SECOND calibration
-    /// target, in its own map.
+    /// The item row the WPA numbers used to be drawn on. NOTHING READS THIS.
     ///
-    /// <para><b>Why not an extension of <see cref="Calibrations"/>.</b> The two
-    /// targets describe different things in different places on the screen: the
-    /// ability HUD is fixed by League at the bottom centre and always has
-    /// exactly four slots, while the shop panel is draggable, resizable, scaled
-    /// by the player's own <c>ShopScale</c>, and shows between one and six
-    /// situational items. One geometry cannot serve both, and folding them into
-    /// one map keyed by display would mean a monitor change silently applied
-    /// the ability bar's position to the shop row. A separate property also
-    /// means an existing settings file simply lacks it, so nobody's ability-bar
-    /// calibration is touched by this feature arriving.</para>
+    /// <para><b>It is kept solely so the player's saved geometry survives.</b>
+    /// 1.0.23 removed the item-number overlay; this property is the only reason
+    /// the <c>itemRowCalibrations</c> key in their <c>desktop-settings.json</c>
+    /// is not silently deleted the next time any setting changes. <c>Save()</c>
+    /// serialises this exact type, so a key this class does not model is
+    /// DROPPED on the next write — the same trap
+    /// <see cref="RankSampleSecret"/> documents, arriving from the other
+    /// direction. Deleting the property would be a migration that throws away
+    /// the player's work, and an unread JSON key costs nothing.</para>
     ///
-    /// <para><b>Empty means "do not draw".</b> There is no honest default for
-    /// this position — see <c>CalibrationGeometry.ItemRowReference</c> — so an
-    /// uncalibrated display draws no numbers at all rather than guessing a spot
-    /// over the player's game.</para>
+    /// <para>There is deliberately no <c>CalibrationTarget</c> enum any more
+    /// and no read path that can reach this map. If the numbers ever come back
+    /// they will need a fresh position anyway: the reason they were removed is
+    /// that a single saved origin cannot track a row whose Y depends on how
+    /// many blocks the selected item set puts above it.</para>
     /// </summary>
     [JsonPropertyName("itemRowCalibrations")]
     public Dictionary<string, PersistedCalibration> ItemRowCalibrations { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-}
-
-/// <summary>Which of the two independently positioned overlays a calibration belongs to.</summary>
-public enum CalibrationTarget
-{
-    /// <summary>The four ability boxes on League's HUD (1.0.7 onwards).</summary>
-    SkillOrder,
-
-    /// <summary>The situational item row inside the shop panel (1.0.16 onwards).</summary>
-    ItemRow,
 }
 
 public sealed class PersistedCalibration
@@ -177,15 +149,12 @@ public sealed class OverlaySettingsStore
         }
     }
 
-    public void SaveCalibration(DisplayResolution display, CalibrationGeometry geometry) =>
-        SaveCalibration(CalibrationTarget.SkillOrder, display, geometry);
-
-    public void SaveCalibration(CalibrationTarget target, DisplayResolution display, CalibrationGeometry geometry)
+    public void SaveCalibration(DisplayResolution display, CalibrationGeometry geometry)
     {
         lock (_gate)
         {
             var settings = ReadCore();
-            Map(settings, target)[display.Key] = new PersistedCalibration
+            settings.Calibrations[display.Key] = new PersistedCalibration
             {
                 Resolution = display,
                 Geometry = geometry.Normalize(),
@@ -194,82 +163,32 @@ public sealed class OverlaySettingsStore
         }
     }
 
-    public CalibrationGeometry LoadCalibration(DisplayResolution display) =>
-        TryLoadCalibration(CalibrationTarget.SkillOrder, display)
-        ?? CalibrationGeometry.ScaledDefault(display);
-
     /// <summary>
-    /// The saved geometry for this target on this exact display, or null when
-    /// the player has never calibrated it here.
+    /// The skill-order geometry for this display: the saved one, else the
+    /// scaled default.
     ///
-    /// <para>Returning null rather than a default is the whole point for the
-    /// item row: "no calibration" and "the default calibration" are different
-    /// facts, and the item row must draw nothing in the first case. The skill
-    /// overlay keeps its defaulting behaviour through
-    /// <see cref="LoadCalibration(DisplayResolution)"/>, because there the
-    /// default IS a measurement — the ability HUD does not move.</para>
+    /// <para>Defaulting is correct HERE and was not for the item row: League
+    /// fixes the ability HUD at the bottom centre, so
+    /// <see cref="CalibrationGeometry.Reference"/> is a measurement rather than
+    /// a guess. That asymmetry is why the two ever had separate load paths.</para>
     /// </summary>
-    public CalibrationGeometry? TryLoadCalibration(CalibrationTarget target, DisplayResolution display)
+    public CalibrationGeometry LoadCalibration(DisplayResolution display)
     {
         lock (_gate)
         {
             var settings = ReadCore();
-            if (Map(settings, target).TryGetValue(display.Key, out var calibration)
+            if (settings.Calibrations.TryGetValue(display.Key, out var calibration)
                 && calibration.Resolution.Width == display.Width
                 && calibration.Resolution.Height == display.Height
                 && calibration.Resolution.DpiX == display.DpiX
                 && calibration.Resolution.DpiY == display.DpiY)
             {
-                var geometry = calibration.Geometry.Normalize();
-
-                // An item row stored at EXACTLY this display's untouched
-                // default is not a calibration, it is the starting position
-                // written out by a save that should never have happened, and
-                // it must not be treated as a measurement.
-                //
-                // This exists because it already shipped. 1.0.18's field log
-                // reads `badges: 6 shown at 544x904 size 59 pitch 69` on
-                // 2560x1440 — ItemRowScaledDefault to the pixel — and the
-                // player's report is that the pills sit well below their shop's
-                // Situational row. The write path is fixed above, but the
-                // player's settings.json already holds the bad entry and no
-                // one is going to hand-edit JSON. Reading it as "never
-                // positioned" is what makes the fix reach them: the badges stop
-                // painting over their game and ReportBadgeReason names the tray
-                // item that fixes it.
-                //
-                // The cost is that a player who genuinely lines the row up on
-                // the default to within a rounding error loses it. Four
-                // independent doubles agreeing exactly is not something a
-                // human does with arrow keys.
-                if (target == CalibrationTarget.ItemRow
-                    && IsSameGeometry(geometry, CalibrationGeometry.ItemRowScaledDefault(display)))
-                {
-                    return null;
-                }
-
-                return geometry;
+                return calibration.Geometry.Normalize();
             }
 
-            return null;
+            return CalibrationGeometry.ScaledDefault(display);
         }
     }
-
-    private static bool IsSameGeometry(CalibrationGeometry left, CalibrationGeometry right) =>
-        Math.Abs(left.FirstBoxCenterX - right.FirstBoxCenterX) < 0.001
-        && Math.Abs(left.CenterY - right.CenterY) < 0.001
-        && Math.Abs(left.BoxSize - right.BoxSize) < 0.001
-        && Math.Abs(left.Spacing - right.Spacing) < 0.001;
-
-    /// <summary>The geometry to START an adjustment from: the saved one, else this target's default.</summary>
-    public CalibrationGeometry LoadCalibrationOrDefault(CalibrationTarget target, DisplayResolution display) =>
-        TryLoadCalibration(target, display)
-        ?? (target == CalibrationTarget.ItemRow
-            ? CalibrationGeometry.ItemRowScaledDefault(display)
-            : CalibrationGeometry.ScaledDefault(display));
-
-    private static Dictionary<string, PersistedCalibration> Map(OverlaySettings settings, CalibrationTarget target) =>
-        target == CalibrationTarget.ItemRow ? settings.ItemRowCalibrations : settings.Calibrations;
 
     private OverlaySettings ReadCore()
     {
@@ -315,8 +234,8 @@ public sealed class OverlaySettingsStore
             AutostartConfigured = settings.AutostartConfigured,
             // Every field has to be here: Save() clones before it writes, so a
             // field missed in this method is silently reset to its default on
-            // the next write of ANY other setting.
-            ChatGateEnabled = settings.ChatGateEnabled,
+            // the next write of ANY other setting. That is also why
+            // ItemRowCalibrations is cloned below despite nothing reading it.
             RankSampleSecret = settings.RankSampleSecret,
             Calibrations = CloneMap(settings.Calibrations),
             ItemRowCalibrations = CloneMap(settings.ItemRowCalibrations),

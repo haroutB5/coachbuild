@@ -49,7 +49,6 @@ public sealed class ItemSetApplyService
         // Immediately after the count, because the two lines are one thought:
         // here is what you got, and here is what you did NOT get and why.
         RecordDiagnostics(request);
-        RecordSituational(request);
         return new ApplyItemSetsSuccess(sets.Count);
     }
 
@@ -57,9 +56,9 @@ public sealed class ItemSetApplyService
     /// Writes the web's outage diagnostics to the log, AFTER the item-set
     /// write has already succeeded.
     ///
-    /// <para>Same position and the same posture as
-    /// <see cref="RecordSituational"/>: nothing in this method can change the
-    /// result the caller receives, and the whole body is inside a catch.</para>
+    /// <para>Nothing in this method can change the result the caller
+    /// receives, and the whole body is inside a catch. A diagnostic capable of
+    /// failing an apply is worse than no diagnostic.</para>
     ///
     /// <para>SUCCESS ONLY, deliberately. A failed write already tells the user
     /// loudly that nothing happened, and the case this exists for is the
@@ -92,83 +91,6 @@ public sealed class ItemSetApplyService
         catch (Exception error)
         {
             _log.Info($"apply-itemsets: diagnostics ignored ({error.GetType().Name})");
-        }
-    }
-
-    /// <summary>
-    /// Files the optional situational deltas away for the overlay, AFTER the
-    /// item-set write has already succeeded.
-    ///
-    /// <para>Position matters. Reading them earlier would put a decoration
-    /// between the caller and their write; reading them here means the worst
-    /// case is a successful write with no numbers attached. Nothing in this
-    /// method can change the result the caller receives, and the whole body is
-    /// inside a catch for the same reason.</para>
-    /// </summary>
-    private void RecordSituational(ApplyItemSetsRequest request)
-    {
-        if (_state is null) return;
-        try
-        {
-            var block = SituationalSetLocator.Find(request.Sets);
-            var parsed = SituationalOverlayParser.Parse(
-                request.ChampionId,
-                request.Situational,
-                DateTimeOffset.UtcNow,
-                block,
-                out var rejections);
-            _state.SetSituational(parsed);
-            if (rejections.Count > 0)
-                _log?.Info($"situational: dropped {rejections.Count} entr{(rejections.Count == 1 ? "y" : "ies")} — {string.Join("; ", rejections)}");
-
-            // NAME THE SET, AND SAY WHERE IN IT THE ROW SITS. The badges are
-            // mapped positionally, so they are only true of the set this write
-            // produced — and the player picks a set from a dropdown the app
-            // cannot see (no LCU read exposes the in-game selection; screen
-            // capture, OCR and memory reads are out by the 1.0.16 policy). On
-            // 2026-08-20 the shop was showing Riot's own "AP" recommended set,
-            // seven items in its situational row, while three numbers for three
-            // different items were drawn over it, and the log said only
-            // "situational: 6 delta(s) for champion 112".
-            //
-            // The BLOCK POSITION is in the line for a second reason: the shop
-            // stacks blocks vertically, so "block 3 of 3" and "block 4 of 5"
-            // put the same row a block-pitch apart under one saved calibration.
-            // Two reports of "the numbers are off" are one subtraction apart
-            // with this line and indistinguishable without it.
-            //
-            // THREE OUTCOMES, THREE SENTENCES. "none supplied" used to be
-            // printed for a payload that supplied plenty and had every entry
-            // rejected — the summary contradicted the rejection line directly
-            // above it, and the summary is the line people read.
-            //
-            // AND SAY WHEN THE CHECK DID NOT RUN. The parser cross-checks only
-            // a row it dropped nothing from, because the block is the wire's
-            // pre-rejection list and the deltas are the post-rejection one.
-            // That is right - one bad number must not cost the other five - but
-            // "they line up ONLY with shop set X" is a positive claim, and a
-            // row short of its block is drawn from slot 1 outwards, so every
-            // number after the drop sits an icon early. Say so rather than
-            // assert a fit nothing verified.
-            _log?.Info(parsed.Any
-                ? $"situational: {parsed.Deltas.Count} delta(s) for champion {parsed.ChampionId}"
-                    + $"; they line up ONLY with shop set {block.Describe()}"
-                    + (block.Known
-                        ? rejections.Count > 0
-                            ? " — NOT cross-checked against it: entries were dropped above,"
-                                + " so the numbers may not sit one per icon"
-                            : ""
-                        : " — the payload named no Situational block, so nothing was cross-checked")
-                : rejections.Count > 0
-                    ? $"situational: every number was rejected for champion {request.ChampionId}"
-                        + "; none will be drawn (reasons on the line above)"
-                    : $"situational: none supplied for champion {request.ChampionId}; no numbers will be drawn");
-        }
-        catch (Exception error)
-        {
-            // Decoration must never be able to make a completed write look
-            // broken, not even by throwing after the fact.
-            _log?.Info($"situational: ignored ({error.GetType().Name})");
         }
     }
 

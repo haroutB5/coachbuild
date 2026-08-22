@@ -19,8 +19,6 @@ public enum TrayCommand
     Calibrate,
     Adjust,
     CancelAdjust,
-    AdjustItems,
-    ToggleItemNumbers,
     RepairWebView2,
     OpenLogFolder,
     PairMyStats,
@@ -213,23 +211,6 @@ public sealed class TrayController : IDisposable
         // nothing could be registered. The same key toggles back out, so the
         // cancel item names it too.
         _menu.Items.Add(AdjustItem());
-        if (!_state.IsAdjusting)
-        {
-            _menu.Items.Add(MenuItem(
-                TrayMenuState.AdjustItemsMenuVerb,
-                (_, _) => RaiseCommand(TrayCommand.AdjustItems)));
-            var showNumbers = new Forms.ToolStripMenuItem(TrayMenuState.ShowItemNumbersVerb)
-            {
-                Checked = _state.ForceItemNumbers,
-                CheckOnClick = true,
-                // Only meaningful in a game: there is no shop to sit over
-                // otherwise, and an item that can be ticked to no effect is a
-                // control that lies about what it does.
-                Enabled = _state.IsInGame,
-            };
-            showNumbers.Click += (_, _) => RaiseCommand(TrayCommand.ToggleItemNumbers);
-            _menu.Items.Add(showNumbers);
-        }
 
         _menu.Items.Add(new Forms.ToolStripSeparator());
         var startWithWindows = new Forms.ToolStripMenuItem("Start with Windows")

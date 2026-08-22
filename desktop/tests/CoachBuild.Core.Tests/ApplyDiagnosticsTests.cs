@@ -123,7 +123,7 @@ public sealed class ApplyDiagnosticsTests
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
             Assert.True(document.RootElement.GetProperty("ok").GetBoolean());
 
-            Assert.Contains($"apply-itemsets: {OmittedLine}", File.ReadAllText(supplied.FilePath), StringComparison.Ordinal);
+            Assert.Contains($"apply-itemsets: {OmittedLine}", ReadLog(supplied.FilePath), StringComparison.Ordinal);
             Assert.Equal(before, Length(productionLog));
         }
         finally
@@ -145,7 +145,6 @@ public sealed class ApplyDiagnosticsTests
         Assert.Equal(3, request!.ChampionId);
         Assert.Single(request.Sets!);
         Assert.Null(request.Diagnostics);
-        Assert.Null(request.Situational);
         Assert.True(ApplyPayloadValidation.TryValidateItemSets(request, out _));
     }
 
@@ -209,7 +208,7 @@ public sealed class ApplyDiagnosticsTests
     [Fact]
     public async Task A_failed_write_records_no_diagnostics()
     {
-        // Order matters, exactly as it does for RecordSituational: the lines go
+        // Order matters: the lines go
         // out AFTER the PUT succeeds. An export that never reached League has
         // already failed loudly, and the case this feature exists for is the
         // opposite one -- a SUCCESSFUL export quietly missing a block.
@@ -377,7 +376,26 @@ public sealed class ApplyDiagnosticsTests
     /// test below asserts that NOTHING was -- so an absent file is a pass, not
     /// an exception.
     /// </summary>
-    private static string ReadLog(string path) => File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+    /// <summary>
+    /// Reads a companion log that something may still be appending to.
+    ///
+    /// <para><c>File.ReadAllText</c> opens with <c>FileShare.Read</c>, which
+    /// REFUSES to coexist with the write handle <c>RedactedLog.AppendLocked</c>
+    /// holds for the length of one <c>File.AppendAllText</c>. In the tests that
+    /// drive a real <c>CompanionHttpServer</c> the bridge is still writing its
+    /// own lines when the assertion reads, so the two collide roughly one run
+    /// in three and the test fails with an IOException that says nothing about
+    /// the behaviour under test. Sharing ReadWrite is the fix rather than a
+    /// retry loop: the reader has no business locking a log out.</para>
+    /// </summary>
+    private static string ReadLog(string path)
+    {
+        if (!File.Exists(path)) return string.Empty;
+        using var stream = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
 
     private static long Length(string path) => File.Exists(path) ? new FileInfo(path).Length : -1;
 
@@ -394,7 +412,6 @@ public sealed class ApplyDiagnosticsTests
         return new ApplyItemSetsRequest(
             championId,
             [set],
-            null,
             null,
             diagnostics is null ? null : JsonDocument.Parse(diagnostics).RootElement.Clone());
     }
