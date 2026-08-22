@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   AS_FOUND_INGESTS,
   CU_SIZE,
+  POST_AUDIT_ADDITIONS,
   NEON_FREE_CU_HOUR_QUOTA,
   REQUIRED_HEADROOM,
   SCHEDULED_INGESTS,
@@ -18,10 +19,15 @@ import {
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const REGISTER_SCRIPT = path.join(REPO_ROOT, "scripts", "register-otp-priority-task.ps1");
 const SIBLING_SCRIPT = path.join(REPO_ROOT, "scripts", "register-ingest-tasks.ps1");
+const REBAKE_SCRIPT = path.join(REPO_ROOT, "scripts", "register-rebake-task.ps1");
 
 /** Every wrapper Task Scheduler launches, plus the one chained from otp. */
 const WRAPPERS = [
   "ingest-otp-priority.ps1",
+  // Not an ingest, but it is launched by Task Scheduler and it must prove which
+  // database this checkout is configured against before it bakes a snapshot of
+  // that corpus into a file the export believes without fallback.
+  "rebake-consensus.ps1",
   "ingest-otp-scheduled.ps1",
   "ingest-otp-featured-scheduled.ps1",
   "ingest-matches-scheduled.ps1",
@@ -151,6 +157,33 @@ describe("the registered cadence matches the scripts that register it", () => {
     expect(duty).toBeLessThanOrEqual(threshold);
   });
 
+  it("uses the rebake script's own slot as the re-bake cadence entry", () => {
+    // Same drift gate as the two above, for the one job whose cadence is a SLOT
+    // rather than an interval. The register script refuses to install a
+    // colliding slot, so its StartBoundary is the authoritative time -- and if
+    // it moves without this table moving, the fleet overlap model is modelling
+    // a job that no longer runs when it says it does.
+    const rebake = readFileSync(REBAKE_SCRIPT, "utf8");
+    const boundary = /\[string\]\$StartBoundary\s*=\s*'(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/.exec(rebake);
+    expect(boundary, "register-rebake-task.ps1 lost its $StartBoundary default").not.toBeNull();
+    const offset = Number(boundary![2]) * 60 + Number(boundary![3]);
+    expect(task("CoachBuildConsensusRebake").startOffsetMinutes).toBe(offset);
+
+    // Weekly, and weekly WITHOUT a repetition block: a CalendarTrigger carrying
+    // a Repetition skips slots on this machine, and a repetition with a
+    // duration expires and stops the job dead with no error in any log.
+    expect(rebake).toMatch(/-Weekly -DaysOfWeek \$DayOfWeek/);
+    expect(rebake).not.toMatch(/RepetitionInterval/);
+    expect(task("CoachBuildConsensusRebake").intervalHours).toBe(168);
+
+    // And the day the script defaults to must be a day CoachBuildDraftIngest
+    // does not run, because the overlap model here is per-day and the table
+    // above amortises the weekly job rather than painting its actual day.
+    const day = /\[string\]\$DayOfWeek\s*=\s*'(\w+)'/.exec(rebake);
+    expect(day).not.toBeNull();
+    expect(["Monday", "Thursday"]).not.toContain(day![1]);
+  });
+
   it("keeps the sibling script's fleet tripwire, and stays under it", () => {
     // Same shape of guard as the priority script's duty-cycle throw: if the
     // refusal is deleted, the suite says so rather than the next cadence
@@ -210,10 +243,33 @@ describe("fleet budget against the Neon Free quota", () => {
   it("the change only slowed jobs down, never sped them up", () => {
     for (const now of SCHEDULED_INGESTS) {
       const before = AS_FOUND_INGESTS.find((t) => t.task === now.task);
-      expect(before, `no as-found entry for ${now.task}`).toBeDefined();
-      expect(now.intervalHours).toBeGreaterThanOrEqual(before!.intervalHours);
-      expect(now.runMinutes).toBeLessThanOrEqual(before!.runMinutes);
+      if (!before) {
+        // A task registered after the audit has no baseline to be slower than.
+        // It has to say so out loud: without this the way to bypass the fleet's
+        // only cadence-regression check would be to misspell a task name.
+        expect(
+          POST_AUDIT_ADDITIONS,
+          `${now.task} has no as-found entry and is not declared in POST_AUDIT_ADDITIONS`,
+        ).toContain(now.task);
+        continue;
+      }
+      expect(now.intervalHours).toBeGreaterThanOrEqual(before.intervalHours);
+      expect(now.runMinutes).toBeLessThanOrEqual(before.runMinutes);
     }
+  });
+
+  it("every post-audit addition is actually in the fleet, and is a net ADDITION", () => {
+    // The other half of the exemption: a name may sit in POST_AUDIT_ADDITIONS
+    // only while it names a real scheduled task that genuinely predates no
+    // baseline. Otherwise the list becomes a place to park exemptions.
+    for (const name of POST_AUDIT_ADDITIONS) {
+      expect(SCHEDULED_INGESTS.some((t) => t.task === name)).toBe(true);
+      expect(AS_FOUND_INGESTS.some((t) => t.task === name)).toBe(false);
+    }
+    // And an addition must not have quietly eaten the headroom the audit won.
+    expect(projectedCuHours(SCHEDULED_INGESTS)).toBeLessThanOrEqual(
+      NEON_FREE_CU_HOUR_QUOTA / REQUIRED_HEADROOM,
+    );
   });
 });
 

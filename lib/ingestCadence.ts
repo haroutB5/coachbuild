@@ -166,7 +166,40 @@ export const SCHEDULED_INGESTS: readonly ScheduledIngest[] = [
     runMinutes: 63,
     registeredBy: "scripts/register-ingest-tasks.ps1",
   },
+  {
+    // Registered 2026-08-22, AFTER the audit above -- see POST_AUDIT_ADDITIONS.
+    //
+    // Not an ingest: it regenerates public/consensus/item-set-consensus.json
+    // and, only if that file actually changed, commits, pushes and deploys it.
+    // It is in this table anyway because it spends the same Neon compute (the
+    // generator draws ~1,730 samples through the production API) and because
+    // the whole point of this file is that NO scheduled job's cadence lives
+    // only in Task Scheduler.
+    //
+    // Sunday 15:00 local, in the week's widest gap: 13:10 (the priority walk
+    // ends) to 18:10 (it starts again), on a day CoachBuildDraftIngest does not
+    // run. scripts/register-rebake-task.ps1 refuses to register a colliding
+    // slot rather than documenting the requirement.
+    task: "CoachBuildConsensusRebake",
+    intervalHours: 168,
+    startOffsetMinutes: 15 * 60,
+    // ~5 min of generation plus commit/push/deploy. Only the generation half
+    // touches Neon, so this OVERSTATES the bill, which is the safe direction.
+    runMinutes: 10,
+    registeredBy: "scripts/register-rebake-task.ps1",
+  },
 ];
+
+/**
+ * Tasks registered AFTER the 2026-08-21 cadence audit, so they have no entry in
+ * AS_FOUND_INGESTS and cannot be compared against one.
+ *
+ * This list exists so that "no as-found entry" has to be an explicit, reviewed
+ * claim. The alternative -- letting the never-sped-up test skip anything it
+ * cannot find a baseline for -- would mean the way to bypass the fleet's only
+ * regression check is to misspell a task name.
+ */
+export const POST_AUDIT_ADDITIONS: readonly string[] = ["CoachBuildConsensusRebake"];
 
 /**
  * Active minutes per day, counting OVERLAP ONCE.
