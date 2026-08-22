@@ -453,8 +453,16 @@ export async function resolveItemMetaForSets(patch: string): Promise<Map<number,
  *  and asked for one, so the Situational picks are a block inside the single
  *  set again.
  *
- *  0.114.0 — it also returns `.situational`, the optional per-item WPA deltas
- *  the DESKTOP OVERLAY draws on top of the situational item icons. Purely
+ *  0.114.0 — it also returns `.situational`, the optional per-item WPA deltas.
+ *  These were drawn over the shop's item icons by the DESKTOP OVERLAY from
+ *  desktop 1.0.16 to 1.0.22; **desktop 1.0.23 removed that overlay entirely**
+ *  (a single saved calibration origin cannot track a row whose Y moves with the
+ *  number of conditional blocks above it, and the overlay cannot see the
+ *  screen). The field is still emitted on every apply and is deliberately NOT
+ *  removed: the current desktop skips it as an unmodelled member
+ *  (`JsonOptions.Wire` leaves `UnmappedMemberHandling` at Skip, pinned by
+ *  `ItemSetWireToleranceTests`), so it costs nothing and any future renderer
+ *  gets it for free. Purely
  *  decorative: it is passed straight through to the POST body and nothing on
  *  this path branches on it, so an older bridge that ignores the field applies
  *  exactly the same sets. The 0.113.x alternative — one titled block per
