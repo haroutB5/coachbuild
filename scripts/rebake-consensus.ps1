@@ -41,6 +41,7 @@
 #   75  an ingest is running, or the next ingest slot is too close
 #   76  coverage.otp REGRESSED against what production is serving
 #   77  patch flip - the artifact patch and the live patch disagree
+#       (the human path is -AcceptPatchFlip, see RUN BY HAND)
 #   78  DATABASE_URL could not be resolved to the rebuilt Neon project
 #   79  deadline reached before the work could be done safely
 #   80  generate / commit / push / deploy / post-deploy verification failed
@@ -54,6 +55,14 @@
 # ── RUN BY HAND ─────────────────────────────────────────────────────────────
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\rebake-consensus.ps1
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\rebake-consensus.ps1 -DryRun
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\rebake-consensus.ps1 -AcceptPatchFlip
+#
+# -AcceptPatchFlip is the human path out of exit 77. The unattended job must
+# never decide on its own that a thin first-bake of a new patch is fine to
+# ship; an operator running this switch is that decision. It skips ONLY the
+# cross-patch coverage guard (76), which is meaningless across patches; every
+# other guard still applies, and when the patches happen to match it is a
+# no-op.
 #
 # -DryRun does everything up to and including the comparison and every guard,
 # and then stops before `git add`. It is the honest rehearsal: it spends the
@@ -91,6 +100,8 @@ param(
     [int]$DeadlineMinutes = 60,
     # Do everything except commit / push / deploy.
     [switch]$DryRun,
+    # Accept a patch flip (exit 77) that a human has looked at. See RUN BY HAND.
+    [switch]$AcceptPatchFlip,
     # Branch this is allowed to operate on. A bake committed onto a stray
     # branch would push nothing and deploy the wrong tree.
     [string]$Branch = "main"
@@ -351,11 +362,19 @@ Say "generated: patch=$($new.Patch) combos=$($new.Combos) pro=$($new.Pro) otp=$(
 # silent quota regression that five handoff entries flagged into a visible one,
 # without letting an unattended job decide on its own that a thin new-patch
 # artifact is fine to ship.
+$patchFlipAccepted = $false
 if ($new.Patch -ne $served.Patch) {
-    Refuse 77 ("PATCH FLIP: serving $($served.Patch), generated $($new.Patch). The deployed artifact " +
-               "is now STALE for every combo and the export has silently reverted to the database. " +
-               "A first-bake-of-a-patch is thin by nature and coverage cannot be compared across " +
-               "patches, so this needs a human. Generated file kept at $tmpOut")
+    if (-not $AcceptPatchFlip) {
+        Refuse 77 ("PATCH FLIP: serving $($served.Patch), generated $($new.Patch). The deployed artifact " +
+                   "is now STALE for every combo and the export has silently reverted to the database. " +
+                   "A first-bake-of-a-patch is thin by nature and coverage cannot be compared across " +
+                   "patches, so this needs a human: re-run with -AcceptPatchFlip. Generated file kept at $tmpOut")
+    }
+    $patchFlipAccepted = $true
+    Say ("PATCH FLIP ACCEPTED by operator: serving $($served.Patch), generated $($new.Patch); " +
+         "cross-patch coverage guard (76) skipped")
+} elseif ($AcceptPatchFlip) {
+    Say "-AcceptPatchFlip given but patches match ($($new.Patch)); ignored"
 }
 
 # ── (76) coverage.otp must not regress ─────────────────────────────────────
@@ -374,7 +393,7 @@ if ($new.Patch -ne $served.Patch) {
 # every one of the 281 losses against `n <= 20`. An unattended job has no way to
 # tell a deliberate narrowing from a corpus that has gone wrong, and the two
 # look identical from here.
-if ($new.Otp -lt $served.Otp) {
+if (-not $patchFlipAccepted -and $new.Otp -lt $served.Otp) {
     Refuse 76 ("coverage.otp REGRESSED $($served.Otp) -> $($new.Otp). Refusing to commit, push or " +
                "deploy. If this is an intended narrowing (a floor change), bake it by hand and " +
                "reconcile the losses. Generated file kept at $tmpOut")
@@ -385,7 +404,11 @@ if ($new.Otp -lt $served.Otp) {
 if ($new.Pro -lt $served.Pro) {
     Say "WARNING: coverage.pro fell $($served.Pro) -> $($new.Pro). Not a refusal (this job gates on otp), but worth a look."
 }
-Say "coverage OK: otp $($served.Otp) -> $($new.Otp), pro $($served.Pro) -> $($new.Pro), patch $($new.Patch) unchanged"
+if ($patchFlipAccepted) {
+    Say "coverage not compared (patch flip): otp $($served.Otp) -> $($new.Otp), pro $($served.Pro) -> $($new.Pro), patch $($served.Patch) -> $($new.Patch)"
+} else {
+    Say "coverage OK: otp $($served.Otp) -> $($new.Otp), pro $($served.Pro) -> $($new.Pro), patch $($new.Patch) unchanged"
+}
 
 # ── the NO-OP path - the common case, and it must not churn ────────────────
 # Reached only once the patch matches and coverage has not regressed.
