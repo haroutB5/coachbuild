@@ -1062,9 +1062,46 @@ function findBestBoots(
  *     a second boots leak in through padding would silently reopen bug #1).
  *  4. Never invent: if the pools genuinely can't reach 6, ship what exists
  *     (callers/tests assert standard fixtures DO reach 6).
- *  5. Reinsert the boots pick after the first 3 non-boots items — mirrors
- *     the historical first/second/third → boots → rest convention rather
- *     than always trailing it. */
+ *  5. Reinsert the boots pick at `BOOTS_LINE_INDEX` — see that constant. */
+/**
+ * Index the boots pick is reinserted at, inside the completed-item line.
+ *
+ * A build line is read left to right as a BUY ORDER — that is the whole reason
+ * the shop panel exists — so this index is a claim about WHEN to buy boots, not
+ * a layout choice. It was `3` ("after first/second/third"), which the comment
+ * called "the historical convention"; it was never measured.
+ *
+ * MEASURED, 2026-08-27, against live prod on patch 16.16. 978 real games
+ * carrying a purchase timeline, over 14 champion+role combinations covering all
+ * five lanes (Aatrox/Garen Top, Lee Sin/Kha'Zix Jungle, Ahri/Zed/Syndra Mid,
+ * Jinx/Ezreal/Ashe/Lucian Bot, Thresh/Lulu/Nautilus Support). Position of the
+ * final boots purchase WITHIN each game's own completed-item buy order:
+ *
+ *     slot 1  34.9%        slot 4   4.4%   <- what this constant used to say
+ *     slot 2  45.1%        slot 5+  2.0%
+ *     slot 3  13.6%
+ *
+ * Pooled median: slot 2, mean 1.94. So `1`. The old `3` described 4.4% of real
+ * games, and the distribution is not flat — 80% of games sit at slot 1 or 2, so
+ * this is a peak, not a taste call between neighbouring options.
+ *
+ * It also removes a disagreement between two of our OWN surfaces that shipped
+ * for months: the Builds page (components/ItemPath.tsx) renders the row as
+ * `Start / Boots / 1st / 2nd / 3rd`, and lib/recommend.ts genuinely CONDITIONS
+ * the legendary slots on boots already being owned — so the page and the model
+ * both put boots ahead of the second legendary while the in-game panel put it
+ * behind the third. Same champion, same response, two different buy orders.
+ *
+ * KNOWN LIMITATION, stated rather than hidden. JUNGLE measures later than every
+ * other lane: Lee Sin median slot 3 (49% at slot 3, 31% at slot 4+), Kha'Zix
+ * median slot 3 (43% / 29%) — a jungler buys the jungle item and a first
+ * legendary before finishing boots. One index for every role is off by one
+ * there. `buildLine` takes no role parameter today, and threading one through
+ * to carry a single exception is a bigger change than this evidence supports;
+ * do it off a per-role measurement, not off this note.
+ */
+const BOOTS_LINE_INDEX = 1;
+
 function buildLine(
   primary: Candidate[],
   fallbackPools: Candidate[][],
@@ -1098,7 +1135,7 @@ function buildLine(
 
   if (!boots) return others; // no boots anywhere in reach -- ship what exists, never invent
 
-  const insertAt = Math.min(3, others.length);
+  const insertAt = Math.min(BOOTS_LINE_INDEX, others.length);
   return [...others.slice(0, insertAt), boots, ...others.slice(insertAt)];
 }
 

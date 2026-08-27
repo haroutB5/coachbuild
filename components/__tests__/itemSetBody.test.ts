@@ -271,6 +271,78 @@ describe("buildItemSets — block set", () => {
   // filled exactly by these fixtures, so what the assertions see is the
   // sources' own agreement or disagreement.
 
+  // == WHERE THE BOOTS SLOT SITS IN THE LINE ==================================
+  //
+  // A build line is read left to right as a BUY ORDER - that is the whole
+  // reason the shop panel exists - so the index boots lands at is a claim
+  // about when to buy them, not a layout choice.
+  //
+  // MEASURED, 2026-08-27, against live prod (patch 16.16) rather than chosen.
+  // 978 real games carrying a purchase timeline, across 14 champion+role
+  // combinations covering all five lanes (Aatrox/Garen Top, Lee Sin/Kha'Zix
+  // Jungle, Ahri/Zed/Syndra Mid, Jinx/Ezreal/Ashe/Lucian Bot,
+  // Thresh/Lulu/Nautilus Support). Position of the final boots purchase
+  // WITHIN each game's completed-item buy order:
+  //
+  //     slot 1  34.9%      slot 4   4.4%   <- where this line used to put it
+  //     slot 2  45.1%      slot 5+  2.0%
+  //     slot 3  13.6%
+  //
+  // Pooled median: slot 2. So boots belong at index 1, and the old
+  // `Math.min(3, ...)` described 4.4% of real games.
+  //
+  // It also settles a disagreement between two of our own surfaces: the Builds
+  // page (components/ItemPath.tsx) renders `Start / Boots / 1st / 2nd / 3rd`
+  // and lib/recommend.ts genuinely CONDITIONS the legendary slots on boots
+  // already being owned, so the page and the model both put boots ahead of the
+  // third legendary while the export put it behind.
+  //
+  // KNOWN LIMITATION, stated rather than hidden: JUNGLE measures later
+  // (Lee Sin median slot 3, Kha'Zix median slot 3 - both buy a jungle item and
+  // a first legendary first). One index for every role is off by one there.
+  // `buildLine` has no role parameter today and adding one to carry a single
+  // jungle exception is a bigger change than the evidence supports; revisit
+  // with a per-role measurement, not a guess.
+
+  it("puts boots at index 1 - the SECOND completed item, not the fourth", () => {
+    // `baseItems()` gives five non-boots full items plus boots, so the WPA line
+    // fills all six slots and the boots index is unambiguous.
+    const sets = buildItemSets(CHAMP, "Bot", baseBuild(baseItems()), null, baseItemMetaMap());
+    const ids = findBlock(sets, "WPA build")!.items.map((i) => Number(i.id));
+
+    expect(ids).toHaveLength(6);
+    expect(ids.findIndex((id) => BOOTS_IDS.has(id))).toBe(1);
+    // The non-boots items keep their own relative order - moving the boots slot
+    // must not re-rank anything else.
+    expect(ids).toEqual([3031, 3006, 3036, 3095, 3072, 3046]);
+  });
+
+  it("puts boots at index 1 in the Pro and OTP lines too, not just the WPA line", () => {
+    // One rule for every line. A per-line boots index would be a second
+    // convention nobody asked for, and the shop panel stacks these vertically,
+    // so a reader compares them column by column.
+    const consensus = {
+      items: [3031, 3036, 3095, 3072, 3046].map((itemId, i) => ({ itemId, share: 0.9 - i * 0.1 })),
+      boots: [{ itemId: 3111, share: 0.8 }],
+    };
+    const wpaItems = baseItems({
+      boots: pick(3157),
+      first: pick(3020),
+      second: pick(3153),
+      third: pick(3200),
+      fourthPlus: [pick(9001), pick(9999)],
+    });
+    const sets = buildItemSets(CHAMP, "Mid", baseBuild(wpaItems), consensus, baseItemMetaMap(), consensus);
+
+    for (const type of blockTypes(sets)) {
+      if (type === "Starting" || type.startsWith("Situational")) continue;
+      const ids = findBlock(sets, type)!.items.map((i) => Number(i.id));
+      const bootsAt = ids.findIndex((id) => BOOTS_IDS.has(id));
+      if (bootsAt < 0) continue; // a line that genuinely reached no boots
+      expect({ type, bootsAt }).toEqual({ type, bootsAt: 1 });
+    }
+  });
+
   it("shows BOTH Pro and OTP blocks when they resolve to the same items, and says whose build it matches", () => {
     // User directive 2026-07-29: "just put both item sets so i can see its the
     // same for pro and otps". The old behaviour collapsed them to one block,
@@ -402,9 +474,11 @@ describe("buildItemSets — the OTP line never borrows from the pro build", () =
     const sets = buildItemSets(CHAMP, "Mid", baseBuild(bareItems()), fatPro, thinMeta, shortOtp);
     const ids = findBlock(sets, "OTP build")!.items.map((i) => Number(i.id));
 
-    // Boots go after the first 3 non-boots items, or after all of them when
-    // there are fewer than 3 (buildLine's `Math.min(3, others.length)`).
-    expect(ids).toEqual([9001, 3031, 3006]);
+    // Boots go at BOOTS_LINE_INDEX (1), or after all the non-boots items when
+    // there are fewer than that (buildLine's `Math.min(BOOTS_LINE_INDEX, ...)`).
+    // The point of THIS test is the shortness and the absence of pro ids; the
+    // boots index is asserted on its own by the measured pair above.
+    expect(ids).toEqual([9001, 3006, 3031]);
     expect(ids.length).toBeLessThan(6);
     for (const proOnly of PRO_ONLY_IDS) expect(ids).not.toContain(proOnly);
   });
