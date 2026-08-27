@@ -364,12 +364,12 @@ describe("buildItemSets — block set", () => {
     const sets = buildItemSets(CHAMP, "Mid", baseBuild(wpaItems), consensus, baseItemMetaMap(), consensus);
 
     const types = blockTypes(sets);
-    expect(types).toContain("Pro build");
-    expect(types).toContain("OTP build (same as Pro build)");
+    expect(types).toContain("Pro most built");
+    expect(types).toContain("OTP most built (same as Pro most built)");
 
     // The claim in that label has to be true.
-    const pro = findBlock(sets, "Pro build")!;
-    const otp = findBlock(sets, "OTP build (same as Pro build)")!;
+    const pro = findBlock(sets, "Pro most built")!;
+    const otp = findBlock(sets, "OTP most built (same as Pro most built)")!;
     expect(otp.items.map((i) => i.id).sort()).toEqual(pro.items.map((i) => i.id).sort());
   });
 
@@ -395,9 +395,9 @@ describe("buildItemSets — block set", () => {
     const sets = buildItemSets(CHAMP, "Mid", baseBuild(wpaItems), pro, baseItemMetaMap(), otp);
 
     const types = blockTypes(sets);
-    expect(types).toContain("Pro build");
-    expect(types).toContain("OTP build");
-    expect(types.some((t) => t.startsWith("OTP build (same as"))).toBe(false);
+    expect(types).toContain("Pro most built");
+    expect(types).toContain("OTP most built");
+    expect(types.some((t) => t.startsWith("OTP most built (same as"))).toBe(false);
   });
 
   it("keeps the champ-scoped replace prefix", () => {
@@ -435,7 +435,7 @@ describe("buildItemSets — the OTP line never borrows from the pro build", () =
 
   it("pads a short OTP line from the champion's own pools, never from pro items", () => {
     const sets = buildItemSets(CHAMP, "Mid", baseBuild(bareItems()), fatPro, baseItemMetaMap(), shortOtp);
-    const otp = findBlock(sets, "OTP build")!;
+    const otp = findBlock(sets, "OTP most built")!;
     const ids = otp.items.map((i) => Number(i.id));
 
     // The one-trick's own pick leads.
@@ -444,7 +444,7 @@ describe("buildItemSets — the OTP line never borrows from the pro build", () =
     for (const proOnly of PRO_ONLY_IDS) expect(ids).not.toContain(proOnly);
     // ...and the Pro block beside it genuinely does carry those ids, so the
     // assertion above is about the cascade and not about an empty pro fixture.
-    const pro = findBlock(sets, "Pro build")!;
+    const pro = findBlock(sets, "Pro most built")!;
     expect(pro.items.map((i) => Number(i.id))).toEqual(expect.arrayContaining([3200, 3153]));
   });
 
@@ -458,7 +458,7 @@ describe("buildItemSets — the OTP line never borrows from the pro build", () =
       boots: [] as { itemId: number; share: number }[],
     };
     const sets = buildItemSets(CHAMP, "Mid", baseBuild(bareItems()), fatPro, baseItemMetaMap(), sixOtpItemsNoBoots);
-    const ids = findBlock(sets, "OTP build")!.items.map((i) => Number(i.id));
+    const ids = findBlock(sets, "OTP most built")!.items.map((i) => Number(i.id));
 
     expect(ids.filter((id) => BOOTS_IDS.has(id))).toEqual([3006]); // the champ's own core boots
     expect(ids).not.toContain(3111); // NOT the pro feed's boot
@@ -472,7 +472,7 @@ describe("buildItemSets — the OTP line never borrows from the pro build", () =
     // champion's own pools genuinely cannot fill six slots.
     const thinMeta = metaMap(meta(9001), meta(3031), bootsMeta(3006), meta(3200), meta(3153), meta(3020), meta(42), meta(100), bootsMeta(3111));
     const sets = buildItemSets(CHAMP, "Mid", baseBuild(bareItems()), fatPro, thinMeta, shortOtp);
-    const ids = findBlock(sets, "OTP build")!.items.map((i) => Number(i.id));
+    const ids = findBlock(sets, "OTP most built")!.items.map((i) => Number(i.id));
 
     // Boots go at BOOTS_LINE_INDEX (1), or after all the non-boots items when
     // there are fewer than that (buildLine's `Math.min(BOOTS_LINE_INDEX, ...)`).
@@ -495,7 +495,7 @@ describe("buildItemSets — the OTP line never borrows from the pro build", () =
       boots: [{ itemId: 3111, share: 0.7 }],
     };
     const sets = buildItemSets(CHAMP, "Mid", baseBuild(bareItems()), shortPro, baseItemMetaMap(), fatOtp);
-    const ids = findBlock(sets, "Pro build")!.items.map((i) => Number(i.id));
+    const ids = findBlock(sets, "Pro most built")!.items.map((i) => Number(i.id));
 
     for (const otpOnly of [9001, 9999, 8888, 3111]) expect(ids).not.toContain(otpOnly);
   });

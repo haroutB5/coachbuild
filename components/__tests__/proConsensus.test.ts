@@ -1601,3 +1601,98 @@ describe("aggregateProConsensus — itemSlots", () => {
     expect(aggregateProConsensus(games, completedMeta).itemSlots).toEqual([]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RC-2 / RC-4 (2026-08-27) — WHEN pros bought a thing, not just how often it
+// ended up in the inventory. See lib/purchasePositions.ts's header for the
+// live measurement; these tests pin the two fields the aggregation now
+// exposes, and the fact that the OLD ones are unchanged beside them.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("aggregateProConsensus — purchase positions and purchased boots", () => {
+  const HEXOPTICS = 2523;
+  const RUNAANS = 3085;
+  const INFINITY_EDGE = 3031;
+  const BERSERKERS = 3006; // tier-2 boot: from:["1001",...], into:["3172"]
+  const IONIAN = 3158; // tier-2 boot: from:["1001","2022"], into:["3171"]
+  const CRIMSON_LUCIDITY = 3171; // tier-3 enchant: from:["3158"], into:[]
+
+  const positionMeta = itemMeta(
+    item(HEXOPTICS, { from: ["1037"] }),
+    item(RUNAANS, { from: ["3086"] }),
+    item(INFINITY_EDGE, { from: ["1038"] }),
+    item(BERSERKERS, { from: ["1001"], into: ["3172"], tags: ["Boots"] }),
+    item(IONIAN, { from: ["1001", "2022"], into: ["3171"], tags: ["Boots"] }),
+    item(CRIMSON_LUCIDITY, { from: ["3158"], tags: ["Boots"] }),
+    item(RAW_BOOTS, { into: ["3006", "3158"], tags: ["Boots"] })
+  );
+
+  /** The real Jinx Bot disagreement, 12 games: Infinity Edge is the most-built
+   *  item and the THIRD-bought one, and the boots are SOLD before the game
+   *  ends so the final inventory has none at all. */
+  const jinxGames = Array.from({ length: 12 }, () =>
+    game({
+      finalItems: [INFINITY_EDGE, HEXOPTICS, RUNAANS],
+      purchaseOrder: [
+        { itemId: RAW_BOOTS, ts: 200 },
+        { itemId: HEXOPTICS, ts: 600 },
+        { itemId: BERSERKERS, ts: 700 },
+        { itemId: RUNAANS, ts: 1100 },
+        { itemId: INFINITY_EDGE, ts: 1600 },
+      ],
+    })
+  );
+
+  it("measures a median purchase position for every item the block will carry", () => {
+    const model = aggregateProConsensus(jinxGames, positionMeta);
+    expect(model.purchasePositions).not.toBeNull();
+    expect(model.purchasePositions!.sampleSize).toBe(12);
+    expect(model.purchasePositions!.positions.get(HEXOPTICS)!.median).toBe(1);
+    expect(model.purchasePositions!.positions.get(INFINITY_EDGE)!.median).toBe(3);
+  });
+
+  it("leaves the FREQUENCY ranking exactly as it was — order is a second axis", () => {
+    const model = aggregateProConsensus(jinxGames, positionMeta);
+    // All three are in all 12 games, so this is the module's count-desc /
+    // itemId-asc tie-break, untouched. The point is that `items` did NOT
+    // silently become purchase-ordered: that reordering happens downstream,
+    // in reduceConsensusModel, and only for the shop export.
+    expect(model.items.map((e) => e.itemId)).toEqual([HEXOPTICS, INFINITY_EDGE, RUNAANS]);
+  });
+
+  it("reports the boots pros BOUGHT even when every one of them sold it", () => {
+    const model = aggregateProConsensus(jinxGames, positionMeta);
+    expect(model.boots).toEqual([]); // final inventory: an ADC sold them
+    expect(model.bootsPurchased.map((e) => e.itemId)).toEqual([BERSERKERS]);
+    expect(model.bootsPurchased[0].count).toBe(12);
+    expect(model.bootsPurchased[0].share).toBe(1);
+  });
+
+  it("positions a tier-3 boot enchant at the tier-2 boot its owner actually bought", () => {
+    const games = Array.from({ length: 12 }, () =>
+      game({
+        finalItems: [CRIMSON_LUCIDITY, HEXOPTICS, RUNAANS],
+        purchaseOrder: [
+          { itemId: RAW_BOOTS, ts: 185 },
+          { itemId: HEXOPTICS, ts: 300 },
+          { itemId: IONIAN, ts: 447 },
+          { itemId: RUNAANS, ts: 1100 },
+        ],
+      })
+    );
+    const model = aggregateProConsensus(games, positionMeta);
+    // Crimson Lucidity is NEVER purchased. A `finalItems.includes(purchase)`
+    // filter drops it; forward resolution puts it second, after Hexoptics.
+    expect(model.purchasePositions!.positions.get(CRIMSON_LUCIDITY)!.median).toBe(2);
+    // and the boot the shop panel must actually tell you to buy is the tier 2.
+    expect(model.bootsPurchased.map((e) => e.itemId)).toEqual([IONIAN]);
+  });
+
+  it("has no positions at all when the sample carries no timelines", () => {
+    const model = aggregateProConsensus(
+      Array.from({ length: 12 }, () => game({ finalItems: [INFINITY_EDGE], purchaseOrder: [] })),
+      positionMeta
+    );
+    expect(model.purchasePositions!.sampleSize).toBe(0);
+    expect(model.bootsPurchased).toEqual([]);
+  });
+});

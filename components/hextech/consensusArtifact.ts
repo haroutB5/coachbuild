@@ -60,6 +60,7 @@
 // one copy and not the other). One body, two call sites, no drift.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { purchaseOrderedIds } from "@/lib/purchasePositions";
 import type { ProConsensusModel } from "./proConsensus";
 import type { ProConsensusItemsInput } from "./itemSetBody";
 
@@ -88,8 +89,42 @@ export interface ConsensusArtifactSource {
    *  and already sorted share-desc / itemId-asc. Stored in final order so the
    *  reader never re-sorts and so a re-sort can never disagree. */
   i: ConsensusCountEntry[];
-  /** Boots, in the model's own count-desc / itemId-asc order. */
+  /** Boots, in the model's own count-desc / itemId-asc order. FINAL INVENTORY
+   *  — see `bp` for the boots the sample actually bought. */
   b: ConsensusCountEntry[];
+  /** 2026-08-27 (RC-2) — `i`'s item ids in real MEDIAN PURCHASE POSITION
+   *  order, measured off the sample's own timelines.
+   *
+   *  OPTIONAL, and that is the whole design. `i` stays share-desc, so an
+   *  artifact written by this code is read correctly by code that predates it,
+   *  and — the direction that actually mattered — an artifact written BEFORE
+   *  it is read correctly by this code: absent `p` simply means "no order
+   *  claim", which is exactly the pre-2026-08-27 behaviour. That is why
+   *  `CONSENSUS_ARTIFACT_SCHEMA` does NOT bump. A bump would have made all 865
+   *  combos fail the reader's version check the instant the code deployed and
+   *  before the re-bake landed, i.e. the full pre-56bbe6a Neon load in
+   *  production for the length of that window.
+   *
+   *  ABSENT, never empty, when the sample cannot support the claim: no
+   *  timelines at all (the permanent state of `/api/otp` — its ingest skips
+   *  the match-v5 timeline call on purpose), fewer than
+   *  `MIN_POSITION_GAMES` of them, or fewer than two items clearing
+   *  `MIN_POSITION_OBSERVATIONS`. A block with no `p` keeps its frequency
+   *  order AND stops calling itself a build — see itemSetBody.ts's
+   *  `consensusBlockTitle`. */
+  p?: number[];
+  /** 2026-08-27 (RC-4) — boots as PURCHASED, count-desc / itemId-asc, over
+   *  `pn` games. The tier-2 boot the player had to buy, which `b` cannot
+   *  report for two measured reasons: ADCs SELL boots (Jinx Bot, 0 of 53 games
+   *  ended holding any, 34 of 51 bought Berserker's Greaves) and a tier-3
+   *  ENCHANT is not a purchase (Ahri Mid's `b` is Crimson Lucidity 50%, while
+   *  Ionian Boots of Lucidity — bought in 66% of the same games and the thing
+   *  you must buy FIRST — appeared nowhere in the exported set). */
+  bp?: ConsensusCountEntry[];
+  /** Denominator for `bp`. Its own number, not `n`: a game can carry final
+   *  items and no timeline, and can carry a timeline and never buy a tracked
+   *  boot. Present exactly when `bp` is. */
+  pn?: number;
 }
 
 /** One (champion, role). `null` for a source means the generator ASKED and the
@@ -250,10 +285,31 @@ export function reduceConsensusModel(
   const items = [...model.items, ...(model.supportFinals ? [model.supportFinals.top] : [])].sort((a, b) =>
     b.share !== a.share ? b.share - a.share : a.itemId - b.itemId
   );
+  // 4. THE ORDER IS COMPUTED HERE, over the FOLDED list, and nowhere else.
+  //    `p` has to be a permutation of `i` or the reader cannot use it, and `i`
+  //    only exists after the support-final fold and the re-sort above. Doing
+  //    it upstream in aggregateProConsensus would order a list that is not the
+  //    one shipped.
+  const order = purchaseOrderedIds(
+    items.map((e) => e.itemId),
+    model.purchasePositions
+  );
+  const bootsPurchased = model.bootsPurchased;
   return {
     n: model.itemsSampleSize,
     i: items.map((e): ConsensusCountEntry => [e.itemId, e.count]),
     b: model.boots.map((e): ConsensusCountEntry => [e.itemId, e.count]),
+    // Spread so the keys are genuinely ABSENT rather than `undefined`: the
+    // serialiser is a committed review surface and `JSON.stringify` must not
+    // start writing an order field for the 272 OTP entries that can never have
+    // one.
+    ...(order ? { p: order } : {}),
+    ...(bootsPurchased.length > 0
+      ? {
+          bp: bootsPurchased.map((e): ConsensusCountEntry => [e.itemId, e.count]),
+          pn: model.purchasePositions.bootsSampleSize,
+        }
+      : {}),
   };
 }
 
@@ -268,10 +324,33 @@ export function consensusSourceToInput(
 ): ProConsensusItemsInput | null {
   if (!src) return null;
   const share = (count: number): number => (src.n > 0 ? count / src.n : 0);
-  return {
-    items: src.i.map(([itemId, count]) => ({ itemId, share: share(count) })),
-    boots: src.b.map(([itemId, count]) => ({ itemId, share: share(count) })),
-  };
+  const entries = src.i.map(([itemId, count]) => ({ itemId, share: share(count) }));
+
+  // `p` is a PERMUTATION of `i`, never a filter: an id `p` never positioned
+  // keeps its share rank and follows the ones it did. Built by lookup rather
+  // than by trusting `p` to be complete, so a stale or partial order can only
+  // ever REORDER the block, never drop an item out of it or invent one.
+  const ordered = src.p && src.p.length > 0;
+  const items = ordered
+    ? (() => {
+        const byId = new Map(entries.map((e) => [e.itemId, e]));
+        const front = src.p!.map((id) => byId.get(id)).filter((e): e is (typeof entries)[number] => !!e);
+        const placed = new Set(front.map((e) => e.itemId));
+        return [...front, ...entries.filter((e) => !placed.has(e.itemId))];
+      })()
+    : entries;
+
+  // Boots from the TIMELINE when the bake measured one, and only then. `bp`'s
+  // denominator is `pn`, not `n` — see ConsensusArtifactSource.pn.
+  const boots =
+    src.bp && src.bp.length > 0
+      ? src.bp.map(([itemId, count]) => ({
+          itemId,
+          share: src.pn && src.pn > 0 ? count / src.pn : 0,
+        }))
+      : src.b.map(([itemId, count]) => ({ itemId, share: share(count) }));
+
+  return { items, boots, ...(ordered ? { ordered: true } : {}) };
 }
 
 // ── Parse / serialise ───────────────────────────────────────────────────────
@@ -288,6 +367,29 @@ function parseCountEntries(raw: unknown): ConsensusCountEntry[] | null {
   return out;
 }
 
+/** `undefined` in, `undefined` out — the field is optional. Anything present
+ *  and not fully understood returns `MALFORMED`, which the caller turns into a
+ *  refusal of the WHOLE file, same as every other field. An order that is
+ *  half-read is worse than no order: it would silently reorder a shop panel. */
+const MALFORMED = Symbol("malformed");
+
+function parseIdList(raw: unknown): number[] | undefined | typeof MALFORMED {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) return MALFORMED;
+  const out: number[] = [];
+  for (const id of raw) {
+    if (typeof id !== "number" || !Number.isFinite(id)) return MALFORMED;
+    out.push(id);
+  }
+  return out;
+}
+
+function parseOptionalCountEntries(raw: unknown): ConsensusCountEntry[] | undefined | typeof MALFORMED {
+  if (raw === undefined) return undefined;
+  const parsed = parseCountEntries(raw);
+  return parsed === null ? MALFORMED : parsed;
+}
+
 function parseSource(raw: unknown): ConsensusArtifactSource | null | undefined {
   if (raw === null) return null;
   if (typeof raw !== "object") return undefined;
@@ -296,7 +398,25 @@ function parseSource(raw: unknown): ConsensusArtifactSource | null | undefined {
   const i = parseCountEntries(o.i);
   const b = parseCountEntries(o.b);
   if (i === null || b === null) return undefined;
-  return { n: Number(o.n), i, b };
+
+  const p = parseIdList(o.p);
+  const bp = parseOptionalCountEntries(o.bp);
+  if (p === MALFORMED || bp === MALFORMED) return undefined;
+  // `bp` and `pn` travel together: purchased-boots counts with no denominator
+  // are unreadable, and a denominator with no counts is a field that describes
+  // nothing. Either both or neither.
+  const hasPn = o.pn !== undefined;
+  if (bp !== undefined || hasPn) {
+    if (bp === undefined || !hasPn || typeof o.pn !== "number" || !Number.isFinite(o.pn)) return undefined;
+  }
+
+  return {
+    n: Number(o.n),
+    i,
+    b,
+    ...(p !== undefined ? { p } : {}),
+    ...(bp !== undefined ? { bp, pn: Number(o.pn) } : {}),
+  };
 }
 
 /** Fails CLOSED. Any shape it does not fully recognise returns `null`, and a

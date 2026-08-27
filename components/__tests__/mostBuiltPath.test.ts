@@ -190,4 +190,71 @@ describe("mostBuiltPath", () => {
 
     expect(entries).toEqual([{ itemId: GUNMETAL_GREAVES, count: 1, denominator: 1 }]);
   });
+  // ── RC-3 (2026-08-27): items UPGRADED IN PLACE were deleted from the path ──
+  // Riot's timeline fires ITEM_PURCHASED for the thing you BUY. A tier-3 boot
+  // enchant is not bought — the tier-2 boot becomes it — so the filter
+  // `finalIds.has(purchase.itemId)` matched nothing and the item vanished.
+  // Measured live: 85 of 127 Ahri Mid timelines end holding Crimson Lucidity
+  // and ZERO of them purchased it, so the card's "most built path" rendered
+  // with no boots in it at all.
+  it("keeps an item that was upgraded in place, at the position it was bought", () => {
+    const IONIAN = 3158;
+    const CRIMSON_LUCIDITY = 3171;
+    const FIRST_ITEM = 3152;
+    const LATE_ITEM = 3157;
+    const meta = itemMeta(
+      item(IONIAN, { from: ["1001"], into: [String(CRIMSON_LUCIDITY)], tags: ["Boots"] }),
+      item(CRIMSON_LUCIDITY, { from: [String(IONIAN)], tags: ["Boots"] }),
+      item(FIRST_ITEM),
+      item(LATE_ITEM)
+    );
+    const games = Array.from({ length: 3 }, () =>
+      game({
+        finalItems: [FIRST_ITEM, CRIMSON_LUCIDITY, LATE_ITEM],
+        purchaseOrder: [
+          { itemId: FIRST_ITEM, ts: 700 },
+          { itemId: IONIAN, ts: 830 },
+          { itemId: LATE_ITEM, ts: 1400 },
+        ],
+      })
+    );
+
+    const entries = mostBuiltPath(games, emptyModel(), meta);
+
+    expect(entries.map((e) => e.itemId)).toEqual([FIRST_ITEM, CRIMSON_LUCIDITY, LATE_ITEM]);
+  });
+
+  // The hazard the RC-3 brief flagged, pinned in the OTHER direction: World
+  // Atlas is bought at 0:00 and the quest final it becomes completes ~13
+  // minutes in, so a naive ancestor walk would put a mid-build item at
+  // position 1. It does not happen here, and the measurement says it cannot:
+  // across 145 Thresh Support timelines the whole chain (World Atlas, Runic
+  // Compass, Bounty of Worlds) fires ZERO purchase events.
+  it("never promotes a support-quest final to position 1", () => {
+    const WORLD_ATLAS = 3865;
+    const BOUNTY_OF_WORLDS = 3867;
+    const SOLSTICE_SLEIGH = 3876;
+    const LOCKET = 3190;
+    const meta = itemMeta(
+      item(WORLD_ATLAS, { into: [String(BOUNTY_OF_WORLDS)] }),
+      item(BOUNTY_OF_WORLDS, { into: [String(SOLSTICE_SLEIGH)], purchasable: false }),
+      item(SOLSTICE_SLEIGH, { from: [String(BOUNTY_OF_WORLDS)] }),
+      item(LOCKET)
+    );
+    // Even in the WORST case — the chain root DOES fire an event at ts 0 —
+    // the quest final must not inherit it.
+    const games = Array.from({ length: 3 }, () =>
+      game({
+        finalItems: [SOLSTICE_SLEIGH, LOCKET],
+        purchaseOrder: [
+          { itemId: WORLD_ATLAS, ts: 0 },
+          { itemId: LOCKET, ts: 870 },
+        ],
+      })
+    );
+
+    const entries = mostBuiltPath(games, emptyModel(), meta);
+
+    expect(entries.map((e) => e.itemId)).toEqual([LOCKET]);
+  });
 });

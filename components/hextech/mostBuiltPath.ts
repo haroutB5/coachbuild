@@ -1,5 +1,6 @@
 import type { ProGame } from "@/components/proGames.types";
 import type { ItemDetail } from "@/components/itemDetail";
+import { resolveFinalItemPositions } from "@/lib/purchasePositions";
 import { formatSharePct, isBuildItem, type ProConsensusModel } from "./proConsensus";
 
 export interface ConsensusPathEntry {
@@ -18,7 +19,23 @@ export function pathEntryPct(entry: ConsensusPathEntry): string {
  * the same honest final-item frequencies the old card already exposed.
  * Timeline positions are resolved left to right, greedily excluding item ids
  * already placed because a player can only own one copy of an item and the
- * strip represents a purchase path rather than independent position modals. */
+ * strip represents a purchase path rather than independent position modals.
+ *
+ * ── RC-3, 2026-08-27: this used to DELETE every item upgraded in place ─────
+ * The filter was `finalIds.has(purchase.itemId)`, and Riot's timeline fires
+ * ITEM_PURCHASED only for a thing you BUY. A tier-3 boot enchant is not
+ * bought — the tier-2 boot becomes it — so the purchased id and the final id
+ * never intersect and the item was dropped from the path entirely. Measured
+ * live on patch 16.16: 85 of 127 Ahri Mid timelines end holding Crimson
+ * Lucidity and ZERO of them purchased it, so this strip rendered with no boots
+ * in it at all.
+ *
+ * `resolveFinalItemPositions` closes it by walking the recipe FORWARD from the
+ * final id to the purchase that put it on the board — and, critically, only
+ * when the consumed parent was a legitimate standalone item rather than a
+ * recipe component. That guard is why a support-quest final still cannot land
+ * at position 1 off its 0:00 chain root; see that module's header for the
+ * 145-game measurement showing the chain fires no events at all. */
 export function mostBuiltPath(
   games: readonly ProGame[],
   model: ProConsensusModel,
@@ -26,20 +43,19 @@ export function mostBuiltPath(
 ): ConsensusPathEntry[] {
   const positionCounts = new Map<number, Map<number, number>>();
   let pathGames = 0;
+  // The card's own partition, unchanged: allowlist-inclusive `isBuildItem`, so
+  // a starter still opens the path the way the no-timeline fallback below
+  // does. Both the slot test and the anchor test use it — the anchor test is
+  // what excludes a shared component like Kindlegem.
+  const isPathItem = (id: number) => isBuildItem(id, itemMeta.get(id), itemMeta);
 
   games.forEach((game) => {
-    const finalIds = new Set((game.finalItems ?? []).filter((id) => id > 0));
-    if (finalIds.size === 0 || !Array.isArray(game.purchaseOrder) || game.purchaseOrder.length === 0) return;
-
-    const seen = new Set<number>();
-    const ordered = [...game.purchaseOrder]
-      .sort((a, b) => a.ts - b.ts)
-      .map((purchase) => purchase.itemId)
-      .filter((id) => {
-        if (seen.has(id) || !finalIds.has(id) || !isBuildItem(id, itemMeta.get(id), itemMeta)) return false;
-        seen.add(id);
-        return true;
-      })
+    const ordered = resolveFinalItemPositions(game.finalItems ?? [], game.purchaseOrder ?? [], {
+      catalog: itemMeta,
+      isSlotItem: isPathItem,
+      isAnchorItem: isPathItem,
+    })
+      .map((entry) => entry.itemId)
       .slice(0, 6);
 
     if (ordered.length === 0) return;

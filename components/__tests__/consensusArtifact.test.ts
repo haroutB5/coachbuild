@@ -385,7 +385,7 @@ describe("artifact-driven export == live-query export, byte for byte", () => {
 
     expect(fromArtifact.log.dbCalls).toEqual([]);
     expect(fromArtifact.body).toBe(live.body);
-    expect(blocksOf(live.body).includes("OTP build")).toBe(present);
+    expect(blocksOf(live.body).includes("OTP most built")).toBe(present);
   });
 
   it("the shape is the documented five-block 0.114.0 export, from the artifact alone", async () => {
@@ -395,13 +395,13 @@ describe("artifact-driven export == live-query export, byte for byte", () => {
     const { body } = await exportOnce({ db: "down", artifact });
     // The canonical order from HANDOFF-core-itemset-blocks.md §2: Starting,
     // then the source-named build lines in emit order, then Situational last.
-    expect(blocksOf(body)).toEqual(["Starting", "WPA build", "Pro build", "OTP build", "Situational"]);
+    expect(blocksOf(body)).toEqual(["Starting", "WPA build", "Pro most built", "OTP most built", "Situational"]);
     expect(idsOf(body, "Starting")).toEqual([STARTER]);
     // Every id in the two consensus blocks came out of the artifact's counts,
     // so this is also a check that the reduction survived the JSON round trip
     // with its ORDER intact (share desc, itemId asc).
-    expect(idsOf(body, "Pro build")).toContain(PRO_LINE[0]);
-    expect(idsOf(body, "OTP build")).toContain(OTP_LINE[0]);
+    expect(idsOf(body, "Pro most built")).toContain(PRO_LINE[0]);
+    expect(idsOf(body, "OTP most built")).toContain(OTP_LINE[0]);
   });
 
   it("REGRESSION (2026-08-20): with the database down and NO artifact, the same export loses both blocks", async () => {
@@ -524,7 +524,12 @@ describe("the count encoding reproduces shares exactly", () => {
       boots: [freq(3020, 60)],
       itemsSampleSize: 100,
       supportFinals: { top: freq(3871, 90), alternatives: [freq(3876, 10)] },
+      // No timelines in this fixture: the subject is the support-final FOLD,
+      // and `p` must stay out of it entirely.
+      purchasePositions: { sampleSize: 0, positions: new Map(), boots: [], bootsSampleSize: 0 },
+      bootsPurchased: [],
     } as never);
+    expect(reduced!.p).toBeUndefined();
     expect(reduced!.i.map(([id]) => id)).toEqual([3871, 3152]); // 0.90 then 0.80
     expect(reduced!.i.map(([id]) => id)).not.toContain(3876);
   });
@@ -544,6 +549,12 @@ describe("OTP consensus minimum sample", () => {
       boots: [],
       itemsSampleSize,
       supportFinals: null,
+      // 2026-08-27 — the empty purchase-position model. Present rather than
+      // omitted because this describe is about the OTP SAMPLE floor and
+      // nothing else: a model missing the field would make these five tests
+      // fail for a reason that has nothing to do with what they assert.
+      purchasePositions: { sampleSize: 0, positions: new Map(), boots: [], bootsSampleSize: 0 },
+      bootsPurchased: [],
     }) as never;
 
   it("excludes OTP n = 20 at the boundary", async () => {
@@ -627,7 +638,7 @@ describe("parseConsensusArtifact refuses anything it does not fully understand",
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { body, log } = await exportOnce({ db: "live", artifact: JSON.stringify({ schema: 99 }) });
     expect(log.dbCalls.length).toBeGreaterThan(0);
-    expect(blocksOf(body)).toContain("Pro build");
+    expect(blocksOf(body)).toContain("Pro most built");
     expect(warn).not.toHaveBeenCalled();
   });
 });

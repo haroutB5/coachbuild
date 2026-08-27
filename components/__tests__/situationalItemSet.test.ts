@@ -471,7 +471,7 @@ describe("situational — boots and duplicates", () => {
       boots: [{ itemId: 3020, share: 0.8 }],
     };
     const sets = buildItemSets(GALIO, "Mid", galioBuild(items), consensus, galioMeta(), null);
-    expect(idsOf(block(sets[0], "Pro build"))).toContain(4645);
+    expect(idsOf(block(sets[0], "Pro most built"))).toContain(4645);
     expect(idsOf(block(sets[0], "WPA build"))).not.toContain(4645);
     expect(situationalIds(sets[0])).toContain(4645);
   });

@@ -264,6 +264,7 @@ import { isSupportFinalItem, rankSupportFinals, type SupportFinalRanking } from 
 import { isSnowballStackItem } from "@/lib/snowballStacks";
 import { isBootsItem, isFinalBootsItem, type ItemCatalog } from "@/lib/bootsItems";
 import { resolveBuildSlots, type BuildSlot } from "@/lib/buildSlots";
+import { aggregatePurchasePositions, type PurchasePositionModel } from "@/lib/purchasePositions";
 import { STARTING_ITEM_ALLOWLIST } from "@/lib/startingItems";
 
 export { STARTING_ITEM_ALLOWLIST };
@@ -467,6 +468,40 @@ export interface ProConsensusModel {
    *  `boots`/`starters`. Capped at `TOP_SUPPORT_FINALS_LIMIT` total entries
    *  so the slot's footprint matches the boots/starters stacks beside it. */
   supportFinals: SupportFinalRanking<ItemFrequency> | null;
+  /** 2026-08-27 (RC-2/RC-4) — WHEN the sample bought each of the items above,
+   *  measured off `ProGame.purchaseOrder`. A SECOND AXIS, not a replacement:
+   *  every field above still answers "how often did this end up in the
+   *  inventory," which is the right question for this card's grid. It is the
+   *  wrong question for the in-game shop panel, which renders a block left to
+   *  right and is read as a buy order — and the two answers genuinely
+   *  disagree. Live, Jinx Bot: Infinity Edge is the MOST built item (70%) and
+   *  the THIRD bought one, behind Hexoptics and Runaan's.
+   *
+   *  `sampleSize` is games that carried a usable timeline, which is NOT
+   *  `itemsSampleSize` — a stored game can have final items and no timeline
+   *  (measured coverage across 14 champion-roles: 35%-100%). Zero when the
+   *  feed carries no timelines at all, which is the permanent state of
+   *  `/api/otp` (its ingest skips the match-v5 timeline call on purpose).
+   *  Never null, so a consumer never has to distinguish "no field" from "no
+   *  data"; `sampleSize === 0` is the honest empty. */
+  purchasePositions: PurchasePositionModel;
+  /** 2026-08-27 (RC-4) — the boots the sample actually BOUGHT, from the
+   *  timeline, top `TOP_BOOTS_LIMIT` by count.
+   *
+   *  `boots` above reads FINAL INVENTORY and is right for the card. It is
+   *  unusable as a buy order for two measured reasons:
+   *    - ADCs SELL boots for a sixth item. Jinx Bot: 0 of 53 games ended
+   *      holding any; 34 of 51 bought Berserker's Greaves. With nothing in
+   *      `boots`, the shop export filled the slot from the situational pool
+   *      and shipped Plated Steelcaps — a boot 2% of those pros bought.
+   *    - A tier-3 ENCHANT is not a purchase. Ahri Mid's `boots` resolves to
+   *      Crimson Lucidity (50%), and Ionian Boots of Lucidity — bought in 66%
+   *      of the very same games and the thing you must actually buy first —
+   *      appeared nowhere in the set.
+   *  `share` divides by `purchasePositions.bootsSampleSize`, its own
+   *  denominator: a game can resolve item positions and still never buy a
+   *  tracked boot. */
+  bootsPurchased: ItemFrequency[];
   /** 2026-07-25 (P1-2 audit fix) — denominator for `items`/`boots`/
    *  `starters` shares: games whose `finalItems` array is non-empty, NOT
    *  `gamesTotal`. Before this field existed, every item-family share was
@@ -1067,6 +1102,39 @@ export function aggregateProConsensus(
       }
     : null;
 
+  // ── The second axis: WHEN, not how often (2026-08-27, RC-2/RC-4) ─────────
+  // The universe of positions is deliberately WIDER than `includeInSlot`: it
+  // keeps boots and the support-quest final in, because the exported block
+  // spends a slot on each of them and a position measured over a universe the
+  // block does not have would not describe the block. It is the same chain
+  // otherwise, so an id can never hold a position in a list it is not allowed
+  // to appear in.
+  //
+  // `isAnchorItem` is plain `isBuildItem` — the "did the player STOP here"
+  // test. That is the safety property, not a detail: it is what stops a shared
+  // recipe component (Kindlegem builds into both Locket and Knight's Vow, and
+  // a support buys three of them) from dragging a 15-minute item to minute 8.
+  // See lib/purchasePositions.ts's header for the measurement behind it.
+  const isPositionSlotItem = (itemId: number): boolean => {
+    if (!itemId || CONSUMABLE_ITEM_IDS.has(itemId)) return false;
+    if (!isBuildItem(itemId, itemMeta.get(itemId), itemMeta)) return false;
+    if (STARTING_ITEM_ALLOWLIST.has(itemId)) return false;
+    if (isSnowballStackItem(itemId)) return false;
+    return true;
+  };
+  const purchasePositions = aggregatePurchasePositions(games, {
+    catalog: itemMeta,
+    isSlotItem: isPositionSlotItem,
+    isAnchorItem: (itemId) => isBuildItem(itemId, itemMeta.get(itemId), itemMeta),
+  });
+  const bootsPurchased: ItemFrequency[] = purchasePositions.boots
+    .slice(0, TOP_BOOTS_LIMIT)
+    .map(({ itemId, count }) => ({
+      itemId,
+      count,
+      share: purchasePositions.bootsSampleSize > 0 ? count / purchasePositions.bootsSampleSize : 0,
+    }));
+
   const topKeystone = sortEntries(keystoneCounts)[0];
   const keystone: KeystoneFrequency | null = topKeystone
     ? { keystoneId: topKeystone[0], count: topKeystone[1], share: topKeystone[1] / runesSampleSize }
@@ -1192,6 +1260,8 @@ export function aggregateProConsensus(
     boots,
     starters,
     supportFinals,
+    purchasePositions,
+    bootsPurchased,
     itemsSampleSize,
     keystone: effectiveKeystone,
     runesSampleSize: effectiveRunesSampleSize,

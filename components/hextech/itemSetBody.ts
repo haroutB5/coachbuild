@@ -211,6 +211,22 @@ export interface ItemSet {
 export interface ProConsensusItemsInput {
   items: { itemId: number; share: number }[];
   boots: { itemId: number; share: number }[];
+  /** 2026-08-27 (RC-2) — `items` is ALREADY in real purchase order and must
+   *  NOT be re-sorted by share.
+   *
+   *  Absent/false means the only thing the source could offer is a frequency
+   *  ranking. That is not a buy order and this file must stop presenting it as
+   *  one: the block keeps the order it was given AND changes its own title
+   *  (see `consensusBlockTitle`), because a block's title is a claim about its
+   *  contents and "Pro build" read left to right in the shop panel is a claim
+   *  about sequence.
+   *
+   *  Permanently absent for OTP: `/api/otp` sets `purchaseOrder: []`
+   *  unconditionally — its ingest skips the match-v5 timeline call on purpose —
+   *  so there is no order to have. A flag rather than an inference from the
+   *  data, so the day the OTP ingest starts fetching timelines the title fixes
+   *  itself with no code change here. */
+  ordered?: boolean;
 }
 
 const LINE_LEN = 6;
@@ -929,6 +945,59 @@ function fromShares(
   return entries.map((e) => toCandidate(e.itemId, ranking, { weight: e.share, scale: "share" }));
 }
 
+/** The order a consensus pool feeds `buildLine` in — and therefore, since
+ *  `buildLine` preserves its primary's order, the order the shop panel shows.
+ *
+ *  This function is the RC-2 fix, and it is one line because the defect was
+ *  one line: the pool was unconditionally `.sort((a, b) => b.share - a.share)`,
+ *  so a block read left to right as a buy order was ranked by how often an item
+ *  ENDED UP in the inventory. Live, Jinx Bot, patch 16.16: Infinity Edge is the
+ *  most-built item (70%) and the third-bought one, behind Hexoptics C44 and
+ *  Runaan's Hurricane, so the panel told an ADC to buy it first.
+ *
+ *  When the source declares `ordered`, its `items` are already in median
+ *  purchase position and must be passed through untouched. Boots lead the array
+ *  either way — `buildLine` pulls them out and reinserts at `BOOTS_LINE_INDEX`,
+ *  so their position in this list is not a claim about anything.
+ *
+ *  When it does not, the share sort stays — it is still the best available
+ *  ranking, and it is still not an order. `consensusBlockTitle` is what stops
+ *  the block claiming otherwise. */
+function consensusPoolOrder(
+  input: ProConsensusItemsInput | null | undefined,
+  entries: { itemId: number; share: number }[]
+): { itemId: number; share: number }[] {
+  return input?.ordered ? entries : [...entries].sort((a, b) => b.share - a.share);
+}
+
+/** The title a consensus block gets, given whether its source could measure a
+ *  buy order.
+ *
+ *  `lib/buildSlots.ts` and `components/hextech/buildSlotView.ts` have said this
+ *  in their headers since 2026-07-29 — *"nothing here knows purchase order and
+ *  the render must not number the slots"* / *"NO SLOT NUMBERS, EVER"* — and the
+ *  Builds page honours it: no slot numbers, and `FeaturedOtpCard`'s strip
+ *  carries a "not a purchase order" caption. THE EXPORT DID NOT. The League
+ *  shop panel renders a block as a left-to-right ordered row, there is no
+ *  caption channel in the item-set format, and so the only lever is the title.
+ *
+ *  Live example, Ahri's OTP block: Malignance -> boots -> Lich Bane -> Zhonya's
+ *  -> Shadowflame -> Blackfire Torch. Malignance (76%) and Blackfire (21%) are
+ *  the pair `lib/buildSlots.ts` measured at LIFT 0 — never built together — and
+ *  the block instructed the player to buy both, at positions 1 and 6. No
+ *  ordering of frequency data can fix that; only not claiming to be an order
+ *  can.
+ *
+ *  "most built" rather than "build": it names the measurement the block
+ *  actually is, it is short enough for the client's narrow title column, and it
+ *  matches the language the Pro Consensus card already uses for the same
+ *  quantity. The `(same as ...)` suffix still composes on top of it. */
+const CONSENSUS_UNORDERED_SUFFIX = "most built";
+
+function consensusBlockTitle(source: "Pro" | "OTP", input: ProConsensusItemsInput | null | undefined): string {
+  return input?.ordered ? `${source} build` : `${source} ${CONSENSUS_UNORDERED_SUFFIX}`;
+}
+
 /** Sort a candidate list best-first on the ONE legal axis. The original array
  *  index is the tiebreak, so equal scores keep the caller's order (which is
  *  itself deterministic: pool priority, then within-pool rank) instead of
@@ -1399,14 +1468,8 @@ export function buildItemSets(
   // FULL-FILTERED — used only as a fallback/padding pool for the 6-item
   // build lines below, never for the Situational swaps block itself.
   const situationalPoolFull = fullItemsOnly(fromPicks(situationalPicks, wpaRanking), meta);
-  const proPool = fullItemsOnly(
-    fromShares([...proEntries].sort((a, b) => b.share - a.share), shareRanking),
-    meta
-  );
-  const otpPool = fullItemsOnly(
-    fromShares([...otpEntries].sort((a, b) => b.share - a.share), otpShareRanking),
-    meta
-  );
+  const proPool = fullItemsOnly(fromShares(consensusPoolOrder(pro, proEntries), shareRanking), meta);
+  const otpPool = fullItemsOnly(fromShares(consensusPoolOrder(otp, otpEntries), otpShareRanking), meta);
 
   // General padding priority for any short line: optimized -> situational ->
   // consensus, per the spec's cascade. Buy order's OWN padding overrides this
@@ -1499,7 +1562,7 @@ export function buildItemSets(
     // Same "never a genuinely empty block" guard as Buy order above --
     // `hasPro` only means the SOURCE pro-consensus data was non-empty, not
     // that anything survived the full-items-only filter.
-    pushLine("Pro build", "pro", FAMILY_KEEP_RANK.pro, buildLine(proPool, [...generalFallback, corePrimary], bootsIds));
+    pushLine(consensusBlockTitle("Pro", pro), "pro", FAMILY_KEEP_RANK.pro, buildLine(proPool, [...generalFallback, corePrimary], bootsIds));
   }
 
   if (hasOtp) {
@@ -1513,7 +1576,7 @@ export function buildItemSets(
     // is not hypothetical on this line — measured live, the boots slot is where
     // most OTP padding actually lands: every Bot-lane one-trick line with a full
     // six-item OTP pool still reaches outside it for footwear.
-    pushLine("OTP build", "otp", FAMILY_KEEP_RANK.otp, buildLine(otpPool, [...otpFallback, corePrimary], bootsIds));
+    pushLine(consensusBlockTitle("OTP", otp), "otp", FAMILY_KEEP_RANK.otp, buildLine(otpPool, [...otpFallback, corePrimary], bootsIds));
   }
 
   // ── Hidden gem — the fourth and last category ─────────────────────────────

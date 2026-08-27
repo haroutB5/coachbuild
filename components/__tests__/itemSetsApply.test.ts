@@ -353,8 +353,8 @@ describe("applyItemSetsForBuild", () => {
     const parsed = JSON.parse(capturedBridgeBody!);
     expect(parsed.sets).toHaveLength(1);
     const types = parsed.sets[0].blocks.map((b: { type: string }) => b.type);
-    expect(types).toContain("Pro build");
-    const proBlock = parsed.sets[0].blocks.find((b: { type: string }) => b.type === "Pro build");
+    expect(types).toContain("Pro most built");
+    const proBlock = parsed.sets[0].blocks.find((b: { type: string }) => b.type === "Pro most built");
     expect(proBlock.items.map((i: { id: string }) => i.id)).toContain("3094");
   });
 
