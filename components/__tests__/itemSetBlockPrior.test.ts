@@ -328,8 +328,75 @@ describe("WPA per-slot prior — when neither source measured anything", () => {
   const bootsIn = [{ itemId: PLATED, share: 0.47 }];
 
   it("orders by the model's own per-slot occurrence pools", () => {
+    // slotItems(): first = TRINITY_FORCE, second = RAVENOUS_HYDRA,
+    // third = STERAKS, fourthPlus = DEATHS_DANCE. The consensus source supplies
+    // three of those four; RAVENOUS_HYDRA arrives as buildLine PADDING, and
+    // since RC-5b the prior orders the padding too - it is in the row the
+    // player reads, so a block that claims to be a build cannot leave its tail
+    // in fallback-priority order.
     const sets = buildItemSets(CAMILLE, "Top", build(slotItems()), { items, boots: bootsIn }, CATALOG);
-    expect(idsOf(sets, "Pro").slice(0, 3)).toEqual([TRINITY_FORCE, STERAKS, DEATHS_DANCE]);
+    expect(idsOf(sets, "Pro").slice(0, 4)).toEqual([
+      TRINITY_FORCE,
+      RAVENOUS_HYDRA,
+      STERAKS,
+      DEATHS_DANCE,
+    ]);
+  });
+
+  it("orders the PADDING as well as the consensus items", () => {
+    // The same claim, isolated: MAW is not in the consensus source at all, it
+    // is padded in from the champion's own pools, and the model puts it at
+    // slot 2. Before RC-5b it sat wherever buildLine's fallback cascade left
+    // it, inside a block titled "build".
+    const padded: ItemsBlock = {
+      ...slotItems(),
+      second: pick(MAW, 7505),
+      alts: { second: [pick(RAVENOUS_HYDRA, 900)] },
+    };
+    const ids = idsOf(
+      buildItemSets(
+        CAMILLE,
+        "Top",
+        build(padded),
+        { items: [{ itemId: TRINITY_FORCE, share: 0.9 }, { itemId: DEATHS_DANCE, share: 0.5 }], boots: bootsIn },
+        CATALOG
+      ),
+      "Pro"
+    );
+    expect(ids.indexOf(MAW)).toBeGreaterThan(ids.indexOf(TRINITY_FORCE));
+    expect(ids.indexOf(MAW)).toBeLessThan(ids.indexOf(DEATHS_DANCE));
+  });
+
+  it("PERMUTES the block and never re-selects it", () => {
+    // RC-5b, the content-freezing rule, at unit scale. STERAKS has the top
+    // share and the model puts it at slot 3; TRINITY_FORCE is bottom share and
+    // slot 1. Ordering the POOL would let the prior decide which items survive
+    // buildLine's six-slot cut. It does not get to: the item SET is whatever
+    // share order selected, and only the sequence moves.
+    const wide = {
+      items: [
+        { itemId: STERAKS, share: 0.9 },
+        { itemId: DEATHS_DANCE, share: 0.8 },
+        { itemId: GUARDIAN_ANGEL, share: 0.7 },
+        { itemId: MAW, share: 0.6 },
+        { itemId: RAVENOUS_HYDRA, share: 0.5 },
+        { itemId: TRINITY_FORCE, share: 0.4 },
+      ],
+      boots: bootsIn,
+    };
+    const withPrior = idsOf(buildItemSets(CAMILLE, "Top", build(slotItems()), wide, CATALOG), "Pro");
+    const withoutPrior = idsOf(
+      buildItemSets(CAMILLE, "Top", build(unrelatedSlotItems()), wide, CATALOG),
+      "Pro"
+    );
+    expect([...withPrior].sort()).toEqual([...withoutPrior].sort());
+    expect(withPrior).not.toEqual(withoutPrior);
+    // TRINITY_FORCE has the LOWEST share, so share order cuts it from the six
+    // slots - and the model ranks it slot 1. Pulling it in would be the exact
+    // re-selection this rule forbids, so it must stay out, and the block must
+    // open on the earliest-slot item that WAS selected.
+    expect(withPrior).not.toContain(TRINITY_FORCE);
+    expect(withPrior[0]).toBe(RAVENOUS_HYDRA);
   });
 
   it("titles it a build", () => {

@@ -996,38 +996,115 @@ interface ConsensusOrderContext {
   wpaSlots?: ReadonlyMap<number, number> | null;
 }
 
+interface ConsensusOrderResult {
+  /** The pool `buildLine` selects the block's six slots FROM. */
+  entries: { itemId: number; share: number }[];
+  prior: PositionPrior | null;
+  /** RC-5b. Ranks to permute the BUILT LINE with, set for the cross-source and
+   *  WPA priors and null for the other two.
+   *
+   *  This split is the whole content-freezing rule. Ordering the POOL changes
+   *  which six items survive `buildLine`'s cut, so an out-of-sample prior that
+   *  reordered the pool would silently RE-SELECT the block: measured over all
+   *  551 renderable blocks, permuting the pool changed the CONTENTS of 141 of
+   *  them (Urgot Top's OTP block lost Youmuu's Ghostblade, 32 of 200 one-trick
+   *  games, because no slot pool of that champion-role ranks it). A prior is
+   *  evidence about SEQUENCE and carries no information about which items
+   *  belong in the block, so it does not get to answer that question.
+   *
+   *  The own-timeline prior keeps ordering the pool, and the asymmetry is the
+   *  point rather than an oversight: those medians are measured on the very
+   *  games that produced the shares, so reordering is within-sample and the
+   *  selection it implies is a better answer than the share ranking. A
+   *  cross-source or model-wide prior is out-of-sample and gets the narrower
+   *  mandate. */
+  lineRanks: ReadonlyMap<number, number> | null;
+}
+
 function consensusPoolOrder(
   input: ProConsensusItemsInput | null | undefined,
   entries: { itemId: number; share: number }[],
   ctx: ConsensusOrderContext = {}
-): { entries: { itemId: number; share: number }[]; prior: PositionPrior | null } {
+): ConsensusOrderResult {
   // 1. The source measured its OWN median purchase positions. `entries` is
   //    already in that order (consensusSourceToInput reordered it), so this is
   //    the pass-through RC-2 introduced.
-  if (input?.ordered) return { entries, prior: "timeline" };
+  if (input?.ordered) return { entries, prior: "timeline", lineRanks: null };
 
   // Boots are pinned to the head and never count as evidence: `buildLine`
   // lifts them out of this pool and reinserts them at BOOTS_LINE_INDEX, so
   // their place here is not a claim, and a block must not get to say it knows
   // a legendary order on the strength of a boot.
   const front = new Set((input?.boots ?? []).map((b) => b.itemId));
+  // The pool the two priors below leave ALONE. Share order decides the block's
+  // contents, exactly as it did before RC-5.
+  const byShare = [...entries].sort((a, b) => b.share - a.share);
 
   // 2. The OTHER source measured one, for the SAME champion-role. Still a
   //    timeline measurement of real games of this champion in this lane.
-  const crossSource = applyPositionRanks(entries, orderedIdRanks(ctx.crossSourceOrder), { front });
-  if (crossSource) return { entries: crossSource.entries, prior: "cross-source" };
+  //
+  //    `applyPositionRanks` is called here as the DECISION - does this block's
+  //    own source have enough positioned items to claim an order - and its
+  //    reordered output is deliberately discarded; the same ranks then permute
+  //    the built line instead. Asking the question of the source's own items
+  //    and applying the answer to the line is what keeps the evidence and the
+  //    effect on the populations each belongs to.
+  const crossSourceRanks = orderedIdRanks(ctx.crossSourceOrder);
+  if (applyPositionRanks(entries, crossSourceRanks, { front })) {
+    return { entries: byShare, prior: "cross-source", lineRanks: crossSourceRanks };
+  }
 
   // 3. The champion's own WPA model, which publishes a candidate pool PER
   //    LEGENDARY SLOT with per-item occurrence. Weakest of the three because it
   //    describes the whole ranked population rather than this block's, and
   //    last for exactly that reason.
-  const wpa = applyPositionRanks(entries, ctx.wpaSlots, { front });
-  if (wpa) return { entries: wpa.entries, prior: "wpa-slot" };
+  if (ctx.wpaSlots && applyPositionRanks(entries, ctx.wpaSlots, { front })) {
+    return { entries: byShare, prior: "wpa-slot", lineRanks: ctx.wpaSlots };
+  }
 
   // 4. Residual. Share order is still the best RANKING available and it is
   //    still not an order; `consensusBlockTitle` is what stops the block
   //    claiming otherwise.
-  return { entries: [...entries].sort((a, b) => b.share - a.share), prior: null };
+  return { entries: byShare, prior: null, lineRanks: null };
+}
+
+/** RC-5b. A built line, permuted into purchase order - and nothing else.
+ *
+ *  CONTENT-PRESERVING BY CONSTRUCTION, which is the whole reason the ordering
+ *  moved here from the pool: this returns a permutation of the array
+ *  `buildLine` produced, so the block's items are exactly the ones share order
+ *  selected. It cannot promote an item into the block or drop one out of it,
+ *  because it never sees a candidate that is not already in it.
+ *
+ *  Two consequences worth stating. The PADDING is ordered too - `buildLine`
+ *  fills a short consensus line from the champion's own pools, and those items
+ *  are in the row the player reads, so leaving them in fallback-priority order
+ *  would put an ordered block's tail out of order (Urgot Top's Pro block is
+ *  three consensus items and two padded ones). And boots go back at the index
+ *  they came out of, so `BOOTS_LINE_INDEX` still owns that slot and this
+ *  function has no opinion about it. */
+function orderBuiltLine(
+  line: Candidate[],
+  ranks: ReadonlyMap<number, number> | null,
+  bootsIds: ReadonlySet<number>
+): Candidate[] {
+  if (!ranks) return line;
+  const bootsAt = line.findIndex((c) => bootsIds.has(c.id));
+  const rest = bootsAt >= 0 ? line.filter((_, index) => index !== bootsAt) : line;
+  // minPositioned 1: the DECISION was already taken in `consensusPoolOrder`,
+  // against the source's own items. This call is the permutation, not the
+  // judgement, and re-asking a two-item question of a list that also contains
+  // padding would be a different question answered with the same number.
+  const applied = applyPositionRanks(
+    rest.map((cand) => ({ itemId: cand.id, cand })),
+    ranks,
+    { minPositioned: 1 }
+  );
+  if (!applied) return line;
+  const ordered = applied.entries.map((e) => e.cand);
+  if (bootsAt < 0) return ordered;
+  const insertAt = Math.min(bootsAt, ordered.length);
+  return [...ordered.slice(0, insertAt), line[bootsAt], ...ordered.slice(insertAt)];
 }
 
 /** The title a consensus block gets, given whether its source could measure a
@@ -1652,7 +1729,12 @@ export function buildItemSets(
     // Same "never a genuinely empty block" guard as Buy order above --
     // `hasPro` only means the SOURCE pro-consensus data was non-empty, not
     // that anything survived the full-items-only filter.
-    pushLine(consensusBlockTitle("Pro", proOrder.prior), "pro", FAMILY_KEEP_RANK.pro, buildLine(proPool, [...generalFallback, corePrimary], bootsIds));
+    pushLine(
+      consensusBlockTitle("Pro", proOrder.prior),
+      "pro",
+      FAMILY_KEEP_RANK.pro,
+      orderBuiltLine(buildLine(proPool, [...generalFallback, corePrimary], bootsIds), proOrder.lineRanks, bootsIds)
+    );
   }
 
   if (hasOtp) {
@@ -1666,7 +1748,12 @@ export function buildItemSets(
     // is not hypothetical on this line — measured live, the boots slot is where
     // most OTP padding actually lands: every Bot-lane one-trick line with a full
     // six-item OTP pool still reaches outside it for footwear.
-    pushLine(consensusBlockTitle("OTP", otpOrder.prior), "otp", FAMILY_KEEP_RANK.otp, buildLine(otpPool, [...otpFallback, corePrimary], bootsIds));
+    pushLine(
+      consensusBlockTitle("OTP", otpOrder.prior),
+      "otp",
+      FAMILY_KEEP_RANK.otp,
+      orderBuiltLine(buildLine(otpPool, [...otpFallback, corePrimary], bootsIds), otpOrder.lineRanks, bootsIds)
+    );
   }
 
   // ── Hidden gem — the fourth and last category ─────────────────────────────

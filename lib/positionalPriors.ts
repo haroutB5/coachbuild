@@ -256,6 +256,16 @@ export interface ApplyPositionRanksOptions {
    *  `MIN_PRIOR_POSITIONED` would let a block claim to know a legendary order
    *  on the strength of a boot. */
   front?: ReadonlySet<number>;
+  /** How many ranked entries this call needs before it will reorder anything.
+   *  Defaults to `MIN_PRIOR_POSITIONED`, which is the DECISION threshold —
+   *  "does this block have an order at all", asked once, of the source's own
+   *  items.
+   *
+   *  RC-5b calls this function a SECOND time, on the already-built line, purely
+   *  to permute it, and passes 1: the decision was made upstream on the right
+   *  population, and re-asking it here of a list that also contains padding
+   *  would be a different question answered with the same number. */
+  minPositioned?: number;
 }
 
 /** `entries` (share-desc, as every consensus source produces them) reordered by
@@ -292,7 +302,7 @@ export function applyPositionRanks<T extends { itemId: number }>(
     else ranked.push({ entry, rank, index });
   });
 
-  if (ranked.length < MIN_PRIOR_POSITIONED) return null;
+  if (ranked.length < (opts.minPositioned ?? MIN_PRIOR_POSITIONED)) return null;
 
   ranked.sort((a, b) => a.rank - b.rank || a.index - b.index);
   return {

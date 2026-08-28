@@ -68,7 +68,10 @@ const ENTRIES = parseConsensusArtifact({
 
 type Combo = (typeof fixture.combos)[number];
 
-function exportFor(combo: Combo) {
+function exportFor(
+  combo: Combo,
+  override?: { pro: ReturnType<typeof consensusSourceToInput>; otp: ReturnType<typeof consensusSourceToInput> }
+) {
   const champ: ChampionRef = {
     id: combo.championId,
     key: combo.championKey,
@@ -91,16 +94,19 @@ function exportFor(combo: Combo) {
     champ,
     combo.roleLabel,
     build,
-    consensusSourceToInput(ENTRIES?.[combo.key]?.pro ?? null),
+    override ? override.pro : consensusSourceToInput(ENTRIES?.[combo.key]?.pro ?? null),
     CATALOG,
-    consensusSourceToInput(ENTRIES?.[combo.key]?.otp ?? null)
+    override ? override.otp : consensusSourceToInput(ENTRIES?.[combo.key]?.otp ?? null)
   );
 }
 
 /** Every consensus block of one combo, `{ title: [itemId, ...] }`. */
-function consensusBlocks(combo: Combo): Record<string, number[]> {
+function consensusBlocks(
+  combo: Combo,
+  override?: { pro: ReturnType<typeof consensusSourceToInput>; otp: ReturnType<typeof consensusSourceToInput> }
+): Record<string, number[]> {
   const out: Record<string, number[]> = {};
-  for (const block of exportFor(combo).sets[0].blocks) {
+  for (const block of exportFor(combo, override).sets[0].blocks) {
     if (!/^(Pro|OTP)/.test(block.type)) continue;
     out[block.type] = block.items.map((i) => Number(i.id));
   }
@@ -146,6 +152,9 @@ describe("the user's two verdicts, 2026-08-28", () => {
     const ids = legendaries(consensusBlocks(comboBy("112|2"))["OTP build"]);
     expect(ids.map(name).slice(0, 2)).toContain("Hextech Rocketbelt");
     expect(ids.indexOf(HEXTECH_ROCKETBELT)).toBe(1);
+    // And the block is the same six items it was before any prior touched it:
+    // this assertion is about SEQUENCE only.
+    expect(ids).toHaveLength(5);
   });
 
   it("Urgot Top Pro: Black Cleaver is the FIRST legendary", () => {
@@ -215,25 +224,97 @@ describe("the standing claims, re-checked against the same capture", () => {
   });
 });
 
+describe("RC-5b: a prior PERMUTES a block, it never re-selects it", () => {
+  /** The same export with the two RC-5 priors made unavailable: `orderedIds`
+   *  stripped (no cross-source transfer) and every slot-pool occurrence zeroed
+   *  (no modal slot). What is left is exactly RC-2 behaviour — a block ordered
+   *  only if its OWN timelines measured it, share order otherwise — which is
+   *  what shipped in `a044dec` and is therefore the contents users have. */
+  function withoutNewPriors(combo: Combo): Record<string, number[]> {
+    const blind = (p: unknown) =>
+      p && typeof p === "object" ? { ...(p as Record<string, unknown>), occurrence: 0 } : p;
+    const items = combo.items as Record<string, unknown>;
+    const blinded = {
+      ...items,
+      first: blind(items.first),
+      second: blind(items.second),
+      third: blind(items.third),
+      fourthPlus: ((items.fourthPlus ?? []) as unknown[]).map(blind),
+      alts: Object.fromEntries(
+        Object.entries((items.alts ?? {}) as Record<string, unknown[]>).map(([k, v]) => [
+          k,
+          (v ?? []).map(blind),
+        ])
+      ),
+    };
+    const strip = (src: ReturnType<typeof consensusSourceToInput>) => {
+      if (!src) return src;
+      const { orderedIds: _drop, ...rest } = src;
+      return rest;
+    };
+    return consensusBlocks({ ...combo, items: blinded } as Combo, {
+      pro: strip(consensusSourceToInput(ENTRIES?.[combo.key]?.pro ?? null)),
+      otp: strip(consensusSourceToInput(ENTRIES?.[combo.key]?.otp ?? null)),
+    });
+  }
+
+  it.each(fixture.combos.map((c) => [c.label, c.key] as const))(
+    "%s: identical item SETS with and without the priors",
+    (_label, key) => {
+      const combo = comboBy(key);
+      const after = consensusBlocks(combo);
+      const before = withoutNewPriors(combo);
+      expect(Object.keys(after).map((t) => t.replace("most built", "build"))).toEqual(
+        Object.keys(before).map((t) => t.replace("most built", "build"))
+      );
+      const sets = (o: Record<string, number[]>) =>
+        Object.values(o).map((ids) => [...ids].map(name).sort());
+      expect(sets(after)).toEqual(sets(before));
+    }
+  );
+
+  it("still MOVES things — a frozen-contents rule that froze the order too would be a no-op", () => {
+    // The negative control. Without it, the assertion above passes trivially if
+    // the priors stopped doing anything at all.
+    const moved = fixture.combos.filter((c) => {
+      const a = consensusBlocks(c);
+      const b = withoutNewPriors(c);
+      return Object.keys(a).some(
+        (t, i) => JSON.stringify(Object.values(a)[i]) !== JSON.stringify(Object.values(b)[i])
+      );
+    });
+    expect(moved.length).toBeGreaterThanOrEqual(6);
+  });
+});
+
 describe("the exported rows, captured 2026-08-28", () => {
   /** Verified by value against the live prod artifact + `/api/build` before it
-   *  was written down. Re-capture deliberately if the real answer moves. */
+   *  was written down. Re-capture deliberately if the real answer moves.
+   *
+   *  Re-captured at RC-5b, when the two out-of-sample priors stopped ordering
+   *  the POOL and started permuting the built LINE instead. Every item MULTISET
+   *  here is now identical to what the same export produces with those priors
+   *  switched off - pinned independently, one describe block up - so each row
+   *  below differs from its RC-5a version only in the order of the same six
+   *  ids. Urgot Top's OTP block is the readable case: Youmuu's Ghostblade
+   *  (32 of 200 one-trick games, in no slot pool of that champion-role) is back
+   *  in the block, where the pool-ordering version had dropped it. */
   const EXPECTED: Record<string, Record<string, number[]>> = {
     "112|2": {
       "Pro build": [2503, 3020, 3152, 6653, 3089, 3157],
       "OTP build": [2503, 3175, 3152, 6653, 3089, 3157],
     },
     "6|0": {
-      "Pro build": [3071, 3047, 3053, 6665, 2504, 3181],
-      "OTP build": [3071, 3047, 3053, 3742, 2504, 3143],
+      "Pro build": [3071, 3047, 3053, 3181, 2504, 6665],
+      "OTP build": [3071, 3047, 3053, 3742, 3143, 3142],
     },
     "103|2": {
       "Pro build": [3118, 3158, 2503, 3100, 3152, 3089],
-      "OTP build": [3118, 3175, 2503, 3100, 3089, 3157],
+      "OTP build": [3118, 3175, 2503, 3100, 3157, 4645],
     },
     "222|3": {
       "Pro build": [2523, 3006, 3032, 3085, 3046, 3031],
-      "OTP build": [2523, 3008, 3032, 3085, 3046, 3031],
+      "OTP build": [2523, 3008, 3085, 3046, 3031, 3036],
     },
     "412|4": {
       "Pro build": [3190, 3009, 3876, 3109, 3222, 2524],
@@ -241,7 +322,7 @@ describe("the exported rows, captured 2026-08-28", () => {
     },
     "81|3": {
       "Pro build": [3078, 3158, 2517, 3161, 6694, 3036],
-      "OTP build": [3078, 3047, 2517, 3161, 6694, 3026],
+      "OTP build": [3078, 3047, 2517, 3161, 6694, 3110],
     },
     "24|0": {
       "Pro build": [3078, 3047, 6610, 6631, 3157, 3053],
@@ -249,7 +330,7 @@ describe("the exported rows, captured 2026-08-28", () => {
     },
     "164|0": {
       "Pro build": [3078, 3047, 3074, 6333, 3053, 3156],
-      "OTP build": [3078, 3047, 3074, 6333, 3053, 3026],
+      "OTP build": [3078, 3047, 3074, 6333, 3053, 3161],
     },
   };
 
