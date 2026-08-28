@@ -178,6 +178,37 @@ describe("consensusSourceToInput", () => {
     })!;
     expect(input.items.map((e) => e.itemId)).toEqual([HEXOPTICS, INFINITY_EDGE, RUNAANS]);
   });
+
+  it("publishes `orderedIds` as `p` ITSELF, never as the reordered item list", () => {
+    // RC-5: the other source reads this as a positional prior. `items`
+    // additionally carries Runaan's, which these timelines never positioned —
+    // handing that over would export a rank the sample never measured, to a
+    // block that has no way to tell the difference.
+    const input = consensusSourceToInput({
+      n: 12,
+      i: [
+        [INFINITY_EDGE, 12],
+        [HEXOPTICS, 11],
+        [RUNAANS, 4],
+      ],
+      b: [],
+      p: [HEXOPTICS, INFINITY_EDGE],
+    })!;
+    expect(input.orderedIds).toEqual([HEXOPTICS, INFINITY_EDGE]);
+    expect(input.orderedIds).not.toContain(RUNAANS);
+  });
+
+  it("publishes no `orderedIds` when there is no `p`", () => {
+    const input = consensusSourceToInput({ n: 10, i: [[INFINITY_EDGE, 8]], b: [] })!;
+    expect(input.orderedIds).toBeUndefined();
+  });
+
+  it("copies `p` rather than aliasing it, so a consumer cannot mutate the artifact", () => {
+    const src = { n: 12, i: [[INFINITY_EDGE, 12], [HEXOPTICS, 11]] as [number, number][], b: [], p: [HEXOPTICS, INFINITY_EDGE] };
+    const input = consensusSourceToInput(src)!;
+    input.orderedIds!.push(RUNAANS);
+    expect(src.p).toEqual([HEXOPTICS, INFINITY_EDGE]);
+  });
 });
 
 describe("the addition does not break an artifact already in production", () => {

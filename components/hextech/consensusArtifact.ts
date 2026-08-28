@@ -350,7 +350,16 @@ export function consensusSourceToInput(
         }))
       : src.b.map(([itemId, count]) => ({ itemId, share: share(count) }));
 
-  return { items, boots, ...(ordered ? { ordered: true } : {}) };
+  // `orderedIds` carries `p` ITSELF, not `items`. RC-5 hands it to the OTHER
+  // source as a positional prior, and the two are not interchangeable: `items`
+  // additionally carries every id the sample never positioned, trailing behind
+  // the ones it did. Transferring `items` would publish an order this sample
+  // never measured as if it had.
+  return {
+    items,
+    boots,
+    ...(ordered ? { ordered: true, orderedIds: [...src.p!] } : {}),
+  };
 }
 
 // ── Parse / serialise ───────────────────────────────────────────────────────

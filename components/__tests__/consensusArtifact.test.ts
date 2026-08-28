@@ -385,7 +385,9 @@ describe("artifact-driven export == live-query export, byte for byte", () => {
 
     expect(fromArtifact.log.dbCalls).toEqual([]);
     expect(fromArtifact.body).toBe(live.body);
-    expect(blocksOf(live.body).includes("OTP most built")).toBe(present);
+    // RC-5 retitles an ordered block, so the SUBJECT here is whether the OTP
+    // block exists at all, not what it is called.
+    expect(blocksOf(live.body).some((t) => t.startsWith("OTP"))).toBe(present);
   });
 
   it("the shape is the documented five-block 0.114.0 export, from the artifact alone", async () => {
@@ -395,13 +397,16 @@ describe("artifact-driven export == live-query export, byte for byte", () => {
     const { body } = await exportOnce({ db: "down", artifact });
     // The canonical order from HANDOFF-core-itemset-blocks.md §2: Starting,
     // then the source-named build lines in emit order, then Situational last.
-    expect(blocksOf(body)).toEqual(["Starting", "WPA build", "Pro most built", "OTP most built", "Situational"]);
+    // The two consensus titles read "build" rather than "most built" since
+    // RC-5: this fixture's model carries per-slot occurrence pools covering
+    // its consensus items, so both blocks are ordered by the WPA slot prior.
+    expect(blocksOf(body)).toEqual(["Starting", "WPA build", "Pro build", "OTP build", "Situational"]);
     expect(idsOf(body, "Starting")).toEqual([STARTER]);
     // Every id in the two consensus blocks came out of the artifact's counts,
     // so this is also a check that the reduction survived the JSON round trip
     // with its ORDER intact (share desc, itemId asc).
-    expect(idsOf(body, "Pro most built")).toContain(PRO_LINE[0]);
-    expect(idsOf(body, "OTP most built")).toContain(OTP_LINE[0]);
+    expect(idsOf(body, "Pro build")).toContain(PRO_LINE[0]);
+    expect(idsOf(body, "OTP build")).toContain(OTP_LINE[0]);
   });
 
   it("REGRESSION (2026-08-20): with the database down and NO artifact, the same export loses both blocks", async () => {
@@ -638,7 +643,7 @@ describe("parseConsensusArtifact refuses anything it does not fully understand",
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { body, log } = await exportOnce({ db: "live", artifact: JSON.stringify({ schema: 99 }) });
     expect(log.dbCalls.length).toBeGreaterThan(0);
-    expect(blocksOf(body)).toContain("Pro most built");
+    expect(blocksOf(body).some((t) => t.startsWith("Pro"))).toBe(true);
     expect(warn).not.toHaveBeenCalled();
   });
 });

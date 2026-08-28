@@ -1,0 +1,4634 @@
+{
+ "capturedAt": "2026-08-28",
+ "patch": "16.16",
+ "artifactGeneratedAt": "2026-08-27T22:57:22.214Z",
+ "source": "live prod https://coachbuild.vercel.app /api/build + public/consensus/item-set-consensus.json",
+ "ddragon": "16.16.1",
+ "combos": [
+  {
+   "key": "112|2",
+   "label": "Viktor Mid",
+   "championId": 112,
+   "championKey": "Viktor",
+   "championName": "Viktor",
+   "role": 2,
+   "roleLabel": "Mid",
+   "patch": "16.16",
+   "items": {
+    "starter": {
+     "id": 1056,
+     "name": "Doran's Ring",
+     "icon": "",
+     "wpa": 0.000702735036611557,
+     "winrate": 50.48106384277344,
+     "occurrence": 37521
+    },
+    "boots": {
+     "id": 3020,
+     "name": "Sorcerer's Shoes",
+     "icon": "",
+     "wpa": 0.6125656962394714,
+     "winrate": 51.64386749267578,
+     "occurrence": 17398
+    },
+    "first": {
+     "id": 2503,
+     "name": "Blackfire Torch",
+     "icon": "",
+     "wpa": -0.0033029711339622736,
+     "winrate": 50.70131301879883,
+     "occurrence": 30942
+    },
+    "second": {
+     "id": 3100,
+     "name": "Lich Bane",
+     "icon": "",
+     "wpa": 0.42054006457328796,
+     "winrate": 54.3637580871582,
+     "occurrence": 7505
+    },
+    "third": {
+     "id": 4645,
+     "name": "Shadowflame",
+     "icon": "",
+     "wpa": 0.6904098391532898,
+     "winrate": 56.5018310546875,
+     "occurrence": 3276
+    },
+    "fourthPlus": [
+     {
+      "id": 3089,
+      "name": "Rabadon's Deathcap",
+      "icon": "",
+      "wpa": 0.1819482147693634,
+      "winrate": 57.9315185546875,
+      "occurrence": 2862
+     },
+     {
+      "id": 3157,
+      "name": "Zhonya's Hourglass",
+      "icon": "",
+      "wpa": -0.8728039264678955,
+      "winrate": 58.705989837646484,
+      "occurrence": 2102
+     }
+    ],
+    "alts": {
+     "boots": [
+      {
+       "id": 3047,
+       "name": "Plated Steelcaps",
+       "icon": "",
+       "wpa": 1.8930377960205078,
+       "winrate": 53.95683670043945,
+       "occurrence": 1529,
+       "lowSample": true
+      },
+      {
+       "id": 3009,
+       "name": "Boots of Swiftness",
+       "icon": "",
+       "wpa": 0.4854173958301544,
+       "winrate": 53.15660858154297,
+       "occurrence": 2867
+      },
+      {
+       "id": 3158,
+       "name": "Ionian Boots of Lucidity",
+       "icon": "",
+       "wpa": 0.45877280831336975,
+       "winrate": 50.40008544921875,
+       "occurrence": 9623
+      }
+     ],
+     "first": [
+      {
+       "id": 6657,
+       "name": "Rod of Ages",
+       "icon": "",
+       "wpa": 0.6806139945983887,
+       "winrate": 52.08333206176758,
+       "occurrence": 1200,
+       "lowSample": true
+      },
+      {
+       "id": 6655,
+       "name": "Luden's Echo",
+       "icon": "",
+       "wpa": -0.33133378624916077,
+       "winrate": 49.936519622802734,
+       "occurrence": 4726
+      }
+     ],
+     "second": [
+      {
+       "id": 4629,
+       "name": "Cosmic Drive",
+       "icon": "",
+       "wpa": 1.9931213855743408,
+       "winrate": 56.528419494628906,
+       "occurrence": 651,
+       "lowSample": true
+      },
+      {
+       "id": 6653,
+       "name": "Liandry's Torment",
+       "icon": "",
+       "wpa": 0.12908591330051422,
+       "winrate": 51.506317138671875,
+       "occurrence": 5145
+      },
+      {
+       "id": 3152,
+       "name": "Hextech Rocketbelt",
+       "icon": "",
+       "wpa": -0.24424585700035095,
+       "winrate": 52.41994094848633,
+       "occurrence": 12335
+      }
+     ],
+     "third": [
+      {
+       "id": 3137,
+       "name": "Cryptbloom",
+       "icon": "",
+       "wpa": 1.2962630987167358,
+       "winrate": 56,
+       "occurrence": 575,
+       "lowSample": true
+      },
+      {
+       "id": 6653,
+       "name": "Liandry's Torment",
+       "icon": "",
+       "wpa": -0.5360485911369324,
+       "winrate": 53.64161682128906,
+       "occurrence": 865,
+       "lowSample": true
+      },
+      {
+       "id": 3135,
+       "name": "Void Staff",
+       "icon": "",
+       "wpa": -0.8557265400886536,
+       "winrate": 50.08680725097656,
+       "occurrence": 1152,
+       "lowSample": true
+      }
+     ]
+    },
+    "optimizedPath": [
+     {
+      "id": 2503,
+      "name": "Blackfire Torch",
+      "icon": "",
+      "wpa": -0.0033029711339622736,
+      "winrate": 50.70131301879883,
+      "occurrence": 30942
+     },
+     {
+      "id": 3100,
+      "name": "Lich Bane",
+      "icon": "",
+      "wpa": 0.728343665599823,
+      "winrate": 54.45402145385742,
+      "occurrence": 6264
+     },
+     {
+      "id": 4645,
+      "name": "Shadowflame",
+      "icon": "",
+      "wpa": 2.78440260887146,
+      "winrate": 58.78928756713867,
+      "occurrence": 859,
+      "lowSample": true
+     }
+    ]
+   },
+   "consensus": {
+    "pro": {
+     "n": 199,
+     "i": [
+      [
+       2503,
+       173
+      ],
+      [
+       3152,
+       103
+      ],
+      [
+       3157,
+       58
+      ],
+      [
+       3089,
+       53
+      ],
+      [
+       6653,
+       38
+      ],
+      [
+       4645,
+       36
+      ]
+     ],
+     "b": [
+      [
+       3171,
+       59
+      ],
+      [
+       3175,
+       57
+      ]
+     ],
+     "p": [
+      2503,
+      3152,
+      6653,
+      3089,
+      3157,
+      4645
+     ],
+     "bp": [
+      [
+       3020,
+       33
+      ],
+      [
+       3158,
+       29
+      ]
+     ],
+     "pn": 97
+    },
+    "otp": {
+     "n": 111,
+     "i": [
+      [
+       2503,
+       90
+      ],
+      [
+       6653,
+       37
+      ],
+      [
+       3157,
+       26
+      ],
+      [
+       3152,
+       19
+      ],
+      [
+       3089,
+       14
+      ],
+      [
+       6657,
+       14
+      ]
+     ],
+     "b": [
+      [
+       3175,
+       51
+      ],
+      [
+       3171,
+       36
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "key": "6|0",
+   "label": "Urgot Top",
+   "championId": 6,
+   "championKey": "Urgot",
+   "championName": "Urgot",
+   "role": 0,
+   "roleLabel": "Top",
+   "patch": "16.16",
+   "items": {
+    "starter": {
+     "id": 1054,
+     "name": "Doran's Shield",
+     "icon": "",
+     "wpa": 1.5414224863052368,
+     "winrate": 52.436195373535156,
+     "occurrence": 862
+    },
+    "boots": {
+     "id": 3009,
+     "name": "Boots of Swiftness",
+     "icon": "",
+     "wpa": 2.0768258571624756,
+     "winrate": 53.94673156738281,
+     "occurrence": 2065
+    },
+    "first": {
+     "id": 3071,
+     "name": "Black Cleaver",
+     "icon": "",
+     "wpa": 0.2558264136314392,
+     "winrate": 51.957340240478516,
+     "occurrence": 8532
+    },
+    "second": {
+     "id": 3053,
+     "name": "Sterak's Gage",
+     "icon": "",
+     "wpa": 0.24825027585029602,
+     "winrate": 53.267852783203125,
+     "occurrence": 5600
+    },
+    "third": {
+     "id": 3742,
+     "name": "Dead Man's Plate",
+     "icon": "",
+     "wpa": 2.182295799255371,
+     "winrate": 59.73451232910156,
+     "occurrence": 678
+    },
+    "fourthPlus": [
+     {
+      "id": 6665,
+      "name": "Jak'Sho, The Protean",
+      "icon": "",
+      "wpa": 0.4477682411670685,
+      "winrate": 55.0544319152832,
+      "occurrence": 643
+     },
+     {
+      "id": 2501,
+      "name": "Overlord's Bloodmail",
+      "icon": "",
+      "wpa": -0.768280029296875,
+      "winrate": 53.6804313659668,
+      "occurrence": 557
+     }
+    ],
+    "alts": {
+     "boots": [
+      {
+       "id": 3111,
+       "name": "Mercury's Treads",
+       "icon": "",
+       "wpa": 1.2122712135314941,
+       "winrate": 52.27272415161133,
+       "occurrence": 2200
+      },
+      {
+       "id": 3047,
+       "name": "Plated Steelcaps",
+       "icon": "",
+       "wpa": 0.14662732183933258,
+       "winrate": 51.189517974853516,
+       "occurrence": 4960
+      }
+     ],
+     "second": [
+      {
+       "id": 3181,
+       "name": "Hullbreaker",
+       "icon": "",
+       "wpa": -0.36517688632011414,
+       "winrate": 54.982818603515625,
+       "occurrence": 582
+      }
+     ],
+     "third": [
+      {
+       "id": 2504,
+       "name": "Kaenic Rookern",
+       "icon": "",
+       "wpa": 2.3507964611053467,
+       "winrate": 57.85877227783203,
+       "occurrence": 439,
+       "lowSample": true
+      }
+     ]
+    },
+    "optimizedPath": [
+     {
+      "id": 3071,
+      "name": "Black Cleaver",
+      "icon": "",
+      "wpa": 0.2558264136314392,
+      "winrate": 51.957340240478516,
+      "occurrence": 8532
+     },
+     {
+      "id": 3053,
+      "name": "Sterak's Gage",
+      "icon": "",
+      "wpa": 0.30714544653892517,
+      "winrate": 53.36863327026367,
+      "occurrence": 5477
+     },
+     {
+      "id": 3742,
+      "name": "Dead Man's Plate",
+      "icon": "",
+      "wpa": 1.9874658584594727,
+      "winrate": 58.96551513671875,
+      "occurrence": 580
+     }
+    ]
+   },
+   "consensus": {
+    "pro": {
+     "n": 1,
+     "i": [
+      [
+       3053,
+       1
+      ],
+      [
+       3071,
+       1
+      ],
+      [
+       6665,
+       1
+      ]
+     ],
+     "b": [
+      [
+       3047,
+       1
+      ]
+     ]
+    },
+    "otp": {
+     "n": 200,
+     "i": [
+      [
+       3071,
+       186
+      ],
+      [
+       3053,
+       112
+      ],
+      [
+       3143,
+       36
+      ],
+      [
+       3142,
+       32
+      ],
+      [
+       3742,
+       26
+      ],
+      [
+       2504,
+       22
+      ]
+     ],
+     "b": [
+      [
+       3047,
+       93
+      ],
+      [
+       3111,
+       50
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "key": "103|2",
+   "label": "Ahri Mid",
+   "championId": 103,
+   "championKey": "Ahri",
+   "championName": "Ahri",
+   "role": 2,
+   "roleLabel": "Mid",
+   "patch": "16.16",
+   "items": {
+    "starter": {
+     "id": 1056,
+     "name": "Doran's Ring",
+     "icon": "",
+     "wpa": -0.0045411065220832825,
+     "winrate": 51.04804229736328,
+     "occurrence": 36783
+    },
+    "boots": {
+     "id": 3158,
+     "name": "Ionian Boots of Lucidity",
+     "icon": "",
+     "wpa": 1.1650176048278809,
+     "winrate": 52.649330139160156,
+     "occurrence": 12154
+    },
+    "first": {
+     "id": 2503,
+     "name": "Blackfire Torch",
+     "icon": "",
+     "wpa": 1.132643461227417,
+     "winrate": 52.250099182128906,
+     "occurrence": 10044
+    },
+    "second": {
+     "id": 3100,
+     "name": "Lich Bane",
+     "icon": "",
+     "wpa": 0.9044129252433777,
+     "winrate": 54.68171691894531,
+     "occurrence": 10541
+    },
+    "third": {
+     "id": 3089,
+     "name": "Rabadon's Deathcap",
+     "icon": "",
+     "wpa": 0.9811621308326721,
+     "winrate": 57.426597595214844,
+     "occurrence": 5790
+    },
+    "fourthPlus": [
+     {
+      "id": 3157,
+      "name": "Zhonya's Hourglass",
+      "icon": "",
+      "wpa": -0.4834965765476227,
+      "winrate": 59.825164794921875,
+      "occurrence": 2631
+     }
+    ],
+    "alts": {
+     "boots": [
+      {
+       "id": 3047,
+       "name": "Plated Steelcaps",
+       "icon": "",
+       "wpa": 2.3893041610717773,
+       "winrate": 52.807281494140625,
+       "occurrence": 659,
+       "lowSample": true
+      },
+      {
+       "id": 3020,
+       "name": "Sorcerer's Shoes",
+       "icon": "",
+       "wpa": -0.42072972655296326,
+       "winrate": 51.406253814697266,
+       "occurrence": 19200
+      },
+      {
+       "id": 3111,
+       "name": "Mercury's Treads",
+       "icon": "",
+       "wpa": -0.8370649218559265,
+       "winrate": 48.50815963745117,
+       "occurrence": 4290
+      }
+     ],
+     "first": [
+      {
+       "id": 3118,
+       "name": "Malignance",
+       "icon": "",
+       "wpa": -0.2926613390445709,
+       "winrate": 50.97666549682617,
+       "occurrence": 23652
+      },
+      {
+       "id": 6655,
+       "name": "Luden's Echo",
+       "icon": "",
+       "wpa": -1.7621715068817139,
+       "winrate": 48.59079360961914,
+       "occurrence": 2803
+      }
+     ],
+     "second": [
+      {
+       "id": 6653,
+       "name": "Liandry's Torment",
+       "icon": "",
+       "wpa": 2.8058664798736572,
+       "winrate": 52.36427307128906,
+       "occurrence": 571,
+       "lowSample": true
+      },
+      {
+       "id": 4629,
+       "name": "Cosmic Drive",
+       "icon": "",
+       "wpa": 0.5713624358177185,
+       "winrate": 51.240013122558594,
+       "occurrence": 2379
+      },
+      {
+       "id": 3152,
+       "name": "Hextech Rocketbelt",
+       "icon": "",
+       "wpa": -0.47079190611839294,
+       "winrate": 53.14054489135742,
+       "occurrence": 3216
+      }
+     ],
+     "third": [
+      {
+       "id": 3102,
+       "name": "Banshee's Veil",
+       "icon": "",
+       "wpa": 0.7909754514694214,
+       "winrate": 52.96803665161133,
+       "occurrence": 438,
+       "lowSample": true
+      },
+      {
+       "id": 3137,
+       "name": "Cryptbloom",
+       "icon": "",
+       "wpa": 0.040492281317710876,
+       "winrate": 52.71739196777344,
+       "occurrence": 552,
+       "lowSample": true
+      },
+      {
+       "id": 3135,
+       "name": "Void Staff",
+       "icon": "",
+       "wpa": -0.16727659106254578,
+       "winrate": 47.88135528564453,
+       "occurrence": 472,
+       "lowSample": true
+      }
+     ]
+    },
+    "optimizedPath": [
+     {
+      "id": 2503,
+      "name": "Blackfire Torch",
+      "icon": "",
+      "wpa": 1.132643461227417,
+      "winrate": 52.250099182128906,
+      "occurrence": 10044
+     },
+     {
+      "id": 3100,
+      "name": "Lich Bane",
+      "icon": "",
+      "wpa": 1.1860086917877197,
+      "winrate": 55.02131652832031,
+      "occurrence": 4222
+     },
+     {
+      "id": 3089,
+      "name": "Rabadon's Deathcap",
+      "icon": "",
+      "wpa": 1.9937330484390259,
+      "winrate": 59.38494110107422,
+      "occurrence": 943,
+      "lowSample": true
+     }
+    ]
+   },
+   "consensus": {
+    "pro": {
+     "n": 200,
+     "i": [
+      [
+       3118,
+       133
+      ],
+      [
+       3100,
+       89
+      ],
+      [
+       2503,
+       65
+      ],
+      [
+       3089,
+       48
+      ],
+      [
+       3152,
+       45
+      ],
+      [
+       3157,
+       36
+      ]
+     ],
+     "b": [
+      [
+       3171,
+       99
+      ],
+      [
+       3175,
+       61
+      ]
+     ],
+     "p": [
+      3118,
+      2503,
+      3100,
+      3152,
+      3089,
+      3157
+     ],
+     "bp": [
+      [
+       3158,
+       84
+      ],
+      [
+       3020,
+       26
+      ]
+     ],
+     "pn": 127
+    },
+    "otp": {
+     "n": 185,
+     "i": [
+      [
+       3118,
+       141
+      ],
+      [
+       3100,
+       69
+      ],
+      [
+       3157,
+       62
+      ],
+      [
+       4645,
+       43
+      ],
+      [
+       2503,
+       39
+      ],
+      [
+       3089,
+       38
+      ]
+     ],
+     "b": [
+      [
+       3175,
+       76
+      ],
+      [
+       3171,
+       64
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "key": "222|3",
+   "label": "Jinx Bot",
+   "championId": 222,
+   "championKey": "Jinx",
+   "championName": "Jinx",
+   "role": 3,
+   "roleLabel": "Bot",
+   "patch": "16.16",
+   "items": {
+    "starter": {
+     "id": 1086,
+     "name": "Doran's Bow",
+     "icon": "",
+     "wpa": 0.09792134910821915,
+     "winrate": 52.517425537109375,
+     "occurrence": 38452
+    },
+    "boots": {
+     "id": 3006,
+     "name": "Berserker's Greaves",
+     "icon": "",
+     "wpa": 0.1577194482088089,
+     "winrate": 52.671600341796875,
+     "occurrence": 39321
+    },
+    "first": {
+     "id": 2523,
+     "name": "Hexoptics C44",
+     "icon": "",
+     "wpa": 0.2482009381055832,
+     "winrate": 52.8430061340332,
+     "occurrence": 30918
+    },
+    "second": {
+     "id": 3085,
+     "name": "Runaan's Hurricane",
+     "icon": "",
+     "wpa": 0.7153242230415344,
+     "winrate": 54.056243896484375,
+     "occurrence": 20980
+    },
+    "third": {
+     "id": 3036,
+     "name": "Lord Dominik's Regards",
+     "icon": "",
+     "wpa": 0.9259883165359497,
+     "winrate": 54.06538391113281,
+     "occurrence": 3579
+    },
+    "fourthPlus": [
+     {
+      "id": 3031,
+      "name": "Infinity Edge",
+      "icon": "",
+      "wpa": 0.7122182846069336,
+      "winrate": 60.24555587768555,
+      "occurrence": 2362
+     },
+     {
+      "id": 3026,
+      "name": "Guardian Angel",
+      "icon": "",
+      "wpa": 0.2777072787284851,
+      "winrate": 63.23786926269531,
+      "occurrence": 3422
+     },
+     {
+      "id": 3033,
+      "name": "Mortal Reminder",
+      "icon": "",
+      "wpa": -0.49862805008888245,
+      "winrate": 57.77446746826172,
+      "occurrence": 4026
+     }
+    ],
+    "alts": {
+     "boots": [
+      {
+       "id": 3047,
+       "name": "Plated Steelcaps",
+       "icon": "",
+       "wpa": -0.4659687280654907,
+       "winrate": 53.4069938659668,
+       "occurrence": 543,
+       "lowSample": true
+      },
+      {
+       "id": 3008,
+       "name": "Gluttonous Greaves",
+       "icon": "",
+       "wpa": -0.5003392696380615,
+       "winrate": 54.93527603149414,
+       "occurrence": 2472
+      }
+     ],
+     "first": [
+      {
+       "id": 3032,
+       "name": "Yun Tal Wildarrows",
+       "icon": "",
+       "wpa": -0.18947023153305054,
+       "winrate": 53.91167449951172,
+       "occurrence": 6340
+      },
+      {
+       "id": 6672,
+       "name": "Kraken Slayer",
+       "icon": "",
+       "wpa": -0.7514771819114685,
+       "winrate": 50.362674713134766,
+       "occurrence": 5101
+      },
+      {
+       "id": 6676,
+       "name": "The Collector",
+       "icon": "",
+       "wpa": -4.888864994049072,
+       "winrate": 44.630069732666016,
+       "occurrence": 419,
+       "lowSample": true
+      }
+     ],
+     "second": [
+      {
+       "id": 3046,
+       "name": "Phantom Dancer",
+       "icon": "",
+       "wpa": -0.6560573577880859,
+       "winrate": 54.22948455810547,
+       "occurrence": 11077
+      }
+     ],
+     "third": [
+      {
+       "id": 3046,
+       "name": "Phantom Dancer",
+       "icon": "",
+       "wpa": -0.353569895029068,
+       "winrate": 62.54545593261719,
+       "occurrence": 1100,
+       "lowSample": true
+      }
+     ]
+    },
+    "optimizedPath": [
+     {
+      "id": 2523,
+      "name": "Hexoptics C44",
+      "icon": "",
+      "wpa": 0.2482009381055832,
+      "winrate": 52.8430061340332,
+      "occurrence": 30918
+     },
+     {
+      "id": 3085,
+      "name": "Runaan's Hurricane",
+      "icon": "",
+      "wpa": 0.9923991560935974,
+      "winrate": 54.375816345214844,
+      "occurrence": 15380
+     },
+     {
+      "id": 3036,
+      "name": "Lord Dominik's Regards",
+      "icon": "",
+      "wpa": 2.382650852203369,
+      "winrate": 54.219032287597656,
+      "occurrence": 1114,
+      "lowSample": true
+     }
+    ]
+   },
+   "consensus": {
+    "pro": {
+     "n": 53,
+     "i": [
+      [
+       3031,
+       37
+      ],
+      [
+       2523,
+       29
+      ],
+      [
+       3085,
+       28
+      ],
+      [
+       3032,
+       23
+      ],
+      [
+       3036,
+       19
+      ],
+      [
+       3046,
+       15
+      ]
+     ],
+     "b": [],
+     "p": [
+      2523,
+      3032,
+      3085,
+      3046,
+      3031,
+      3036
+     ],
+     "bp": [
+      [
+       3006,
+       34
+      ],
+      [
+       3008,
+       15
+      ]
+     ],
+     "pn": 50
+    },
+    "otp": {
+     "n": 180,
+     "i": [
+      [
+       3031,
+       108
+      ],
+      [
+       2523,
+       106
+      ],
+      [
+       3085,
+       100
+      ],
+      [
+       3036,
+       53
+      ],
+      [
+       3046,
+       52
+      ],
+      [
+       3032,
+       43
+      ]
+     ],
+     "b": [
+      [
+       3008,
+       1
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "key": "412|4",
+   "label": "Thresh Support",
+   "championId": 412,
+   "championKey": "Thresh",
+   "championName": "Thresh",
+   "role": 4,
+   "roleLabel": "Support",
+   "patch": "16.16",
+   "items": {
+    "starter": {
+     "id": 3865,
+     "name": "World Atlas",
+     "icon": "",
+     "wpa": 4.669001327783917e-7,
+     "winrate": 52.44790267944336,
+     "occurrence": 54128
+    },
+    "boots": {
+     "id": 3009,
+     "name": "Boots of Swiftness",
+     "icon": "",
+     "wpa": 0.33475494384765625,
+     "winrate": 53.9118766784668,
+     "occurrence": 32772
+    },
+    "first": {
+     "id": 3190,
+     "name": "Locket of the Iron Solari",
+     "icon": "",
+     "wpa": 0.24399642646312714,
+     "winrate": 52.766544342041016,
+     "occurrence": 43755
+    },
+    "second": {
+     "id": 3109,
+     "name": "Knight's Vow",
+     "icon": "",
+     "wpa": 0.3989206552505493,
+     "winrate": 56.78229904174805,
+     "occurrence": 17037
+    },
+    "third": {
+     "id": 3075,
+     "name": "Thornmail",
+     "icon": "",
+     "wpa": 0.20669226348400116,
+     "winrate": 56.26850891113281,
+     "occurrence": 3039
+    },
+    "fourthPlus": [
+     {
+      "id": 3050,
+      "name": "Zeke's Convergence",
+      "icon": "",
+      "wpa": -0.3478659987449646,
+      "winrate": 59.032676696777344,
+      "occurrence": 3825
+     }
+    ],
+    "alts": {
+     "boots": [
+      {
+       "id": 3158,
+       "name": "Ionian Boots of Lucidity",
+       "icon": "",
+       "wpa": 0.25234729051589966,
+       "winrate": 53.27336883544922,
+       "occurrence": 8783
+      },
+      {
+       "id": 3111,
+       "name": "Mercury's Treads",
+       "icon": "",
+       "wpa": -0.3254069685935974,
+       "winrate": 50.11586380004883,
+       "occurrence": 6473
+      },
+      {
+       "id": 3047,
+       "name": "Plated Steelcaps",
+       "icon": "",
+       "wpa": -0.41752615571022034,
+       "winrate": 50.25323486328125,
+       "occurrence": 5331
+      }
+     ],
+     "first": [
+      {
+       "id": 3222,
+       "name": "Mikael's Blessing",
+       "icon": "",
+       "wpa": 0.5689423084259033,
+       "winrate": 55.063289642333984,
+       "occurrence": 1580,
+       "lowSample": true
+      },
+      {
+       "id": 2524,
+       "name": "Bandlepipes",
+       "icon": "",
+       "wpa": -2.395024061203003,
+       "winrate": 53.301029205322266,
+       "occurrence": 1651,
+       "lowSample": true
+      }
+     ],
+     "second": [
+      {
+       "id": 3107,
+       "name": "Redemption",
+       "icon": "",
+       "wpa": 2.706303358078003,
+       "winrate": 59.009010314941406,
+       "occurrence": 444,
+       "lowSample": true
+      },
+      {
+       "id": 3110,
+       "name": "Frozen Heart",
+       "icon": "",
+       "wpa": 0.3347514569759369,
+       "winrate": 53.3896369934082,
+       "occurrence": 4381
+      },
+      {
+       "id": 3222,
+       "name": "Mikael's Blessing",
+       "icon": "",
+       "wpa": -0.11586486548185349,
+       "winrate": 58.344417572021484,
+       "occurrence": 3008
+      }
+     ],
+     "third": [
+      {
+       "id": 2525,
+       "name": "Protoplasm Harness",
+       "icon": "",
+       "wpa": 2.471722364425659,
+       "winrate": 63.33333206176758,
+       "occurrence": 570,
+       "lowSample": true
+      },
+      {
+       "id": 2504,
+       "name": "Kaenic Rookern",
+       "icon": "",
+       "wpa": 0.9379269480705261,
+       "winrate": 58.77803421020508,
+       "occurrence": 1293,
+       "lowSample": true
+      },
+      {
+       "id": 3107,
+       "name": "Redemption",
+       "icon": "",
+       "wpa": 0.5659875273704529,
+       "winrate": 61.0567512512207,
+       "occurrence": 511,
+       "lowSample": true
+      }
+     ]
+    }
+   },
+   "consensus": {
+    "pro": {
+     "n": 151,
+     "i": [
+      [
+       3190,
+       133
+      ],
+      [
+       3876,
+       85
+      ],
+      [
+       3109,
+       75
+      ],
+      [
+       3222,
+       32
+      ],
+      [
+       2524,
+       11
+      ],
+      [
+       2504,
+       8
+      ],
+      [
+       8020,
+       7
+      ]
+     ],
+     "b": [
+      [
+       3009,
+       92
+      ],
+      [
+       3158,
+       42
+      ]
+     ],
+     "p": [
+      3190,
+      3876,
+      3109,
+      3222,
+      2524,
+      2504,
+      8020
+     ],
+     "bp": [
+      [
+       3009,
+       88
+      ],
+      [
+       3158,
+       42
+      ]
+     ],
+     "pn": 142
+    },
+    "otp": {
+     "n": 200,
+     "i": [
+      [
+       3190,
+       156
+      ],
+      [
+       3876,
+       146
+      ],
+      [
+       3109,
+       70
+      ],
+      [
+       3222,
+       37
+      ],
+      [
+       2524,
+       26
+      ],
+      [
+       2525,
+       19
+      ],
+      [
+       3075,
+       18
+      ]
+     ],
+     "b": [
+      [
+       3009,
+       119
+      ],
+      [
+       3158,
+       26
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "key": "81|3",
+   "label": "Ezreal Bot",
+   "championId": 81,
+   "championKey": "Ezreal",
+   "championName": "Ezreal",
+   "role": 3,
+   "roleLabel": "Bot",
+   "patch": "16.16",
+   "items": {
+    "starter": {
+     "id": 1086,
+     "name": "Doran's Bow",
+     "icon": "",
+     "wpa": 0.06902298331260681,
+     "winrate": 46.11055374145508,
+     "occurrence": 38913
+    },
+    "boots": {
+     "id": 3008,
+     "name": "Gluttonous Greaves",
+     "icon": "",
+     "wpa": 0.44564950466156006,
+     "winrate": 50.128334045410156,
+     "occurrence": 11688
+    },
+    "first": {
+     "id": 3078,
+     "name": "Trinity Force",
+     "icon": "",
+     "wpa": 0.1713860034942627,
+     "winrate": 46.46226501464844,
+     "occurrence": 50456
+    },
+    "second": {
+     "id": 3004,
+     "name": "Manamune",
+     "icon": "",
+     "wpa": 0.08940251171588898,
+     "winrate": 47.81566619873047,
+     "occurrence": 47566
+    },
+    "third": {
+     "id": 6694,
+     "name": "Serylda's Grudge",
+     "icon": "",
+     "wpa": 0.8632956147193909,
+     "winrate": 45.1376838684082,
+     "occurrence": 5193
+    },
+    "fourthPlus": [
+     {
+      "id": 3110,
+      "name": "Frozen Heart",
+      "icon": "",
+      "wpa": 1.491819977760315,
+      "winrate": 53.18439483642578,
+      "occurrence": 2999
+     },
+     {
+      "id": 2517,
+      "name": "Endless Hunger",
+      "icon": "",
+      "wpa": 0.3511100113391876,
+      "winrate": 54.417274475097656,
+      "occurrence": 5603
+     },
+     {
+      "id": 3161,
+      "name": "Spear of Shojin",
+      "icon": "",
+      "wpa": -0.6146937012672424,
+      "winrate": 53.05377197265625,
+      "occurrence": 6844
+     }
+    ],
+    "alts": {
+     "boots": [
+      {
+       "id": 3047,
+       "name": "Plated Steelcaps",
+       "icon": "",
+       "wpa": 1.506301999092102,
+       "winrate": 47.46864700317383,
+       "occurrence": 2153,
+       "lowSample": true
+      },
+      {
+       "id": 3111,
+       "name": "Mercury's Treads",
+       "icon": "",
+       "wpa": -0.031106147915124893,
+       "winrate": 46.8208122253418,
+       "occurrence": 1038,
+       "lowSample": true
+      },
+      {
+       "id": 3158,
+       "name": "Ionian Boots of Lucidity",
+       "icon": "",
+       "wpa": -0.20337700843811035,
+       "winrate": 46.30891418457031,
+       "occurrence": 35369
+      }
+     ],
+     "first": [
+      {
+       "id": 3508,
+       "name": "Essence Reaver",
+       "icon": "",
+       "wpa": -3.106555700302124,
+       "winrate": 42.37102127075195,
+       "occurrence": 1822,
+       "lowSample": true
+      }
+     ],
+     "third": [
+      {
+       "id": 3156,
+       "name": "Maw of Malmortius",
+       "icon": "",
+       "wpa": 1.4643007516860962,
+       "winrate": 53.30738830566406,
+       "occurrence": 514,
+       "lowSample": true
+      },
+      {
+       "id": 3033,
+       "name": "Mortal Reminder",
+       "icon": "",
+       "wpa": 0.2390238493680954,
+       "winrate": 41.17647171020508,
+       "occurrence": 527,
+       "lowSample": true
+      }
+     ]
+    },
+    "optimizedPath": [
+     {
+      "id": 3078,
+      "name": "Trinity Force",
+      "icon": "",
+      "wpa": 0.1713860034942627,
+      "winrate": 46.46226501464844,
+      "occurrence": 50456
+     },
+     {
+      "id": 3004,
+      "name": "Manamune",
+      "icon": "",
+      "wpa": 0.17404621839523315,
+      "winrate": 47.95233154296875,
+      "occurrence": 46150
+     },
+     {
+      "id": 6694,
+      "name": "Serylda's Grudge",
+      "icon": "",
+      "wpa": 0.8576322197914124,
+      "winrate": 45.12348175048828,
+      "occurrence": 4778
+     }
+    ]
+   },
+   "consensus": {
+    "pro": {
+     "n": 199,
+     "i": [
+      [
+       3078,
+       198
+      ],
+      [
+       3161,
+       97
+      ],
+      [
+       2517,
+       83
+      ],
+      [
+       6694,
+       42
+      ],
+      [
+       3036,
+       9
+      ],
+      [
+       3026,
+       5
+      ]
+     ],
+     "b": [],
+     "p": [
+      3078,
+      2517,
+      3161,
+      6694,
+      3036,
+      3026
+     ],
+     "bp": [
+      [
+       3158,
+       67
+      ],
+      [
+       3008,
+       25
+      ]
+     ],
+     "pn": 93
+    },
+    "otp": {
+     "n": 117,
+     "i": [
+      [
+       3078,
+       113
+      ],
+      [
+       2517,
+       59
+      ],
+      [
+       3161,
+       29
+      ],
+      [
+       6694,
+       20
+      ],
+      [
+       3110,
+       17
+      ],
+      [
+       3026,
+       5
+      ]
+     ],
+     "b": []
+    }
+   }
+  },
+  {
+   "key": "24|0",
+   "label": "Jax Top",
+   "championId": 24,
+   "championKey": "Jax",
+   "championName": "Jax",
+   "role": 0,
+   "roleLabel": "Top",
+   "patch": "16.16",
+   "items": {
+    "starter": {
+     "id": 1055,
+     "name": "Doran's Blade",
+     "icon": "",
+     "wpa": 0.15868569910526276,
+     "winrate": 49.94376754760742,
+     "occurrence": 11559
+    },
+    "boots": {
+     "id": 3158,
+     "name": "Ionian Boots of Lucidity",
+     "icon": "",
+     "wpa": 0.8730950951576233,
+     "winrate": 54.19075012207031,
+     "occurrence": 2076
+    },
+    "first": {
+     "id": 2510,
+     "name": "Dusk and Dawn",
+     "icon": "",
+     "wpa": 0.6287519931793213,
+     "winrate": 49.57777404785156,
+     "occurrence": 3671
+    },
+    "second": {
+     "id": 3146,
+     "name": "Hextech Gunblade",
+     "icon": "",
+     "wpa": 0.35673201084136963,
+     "winrate": 51.033912658691406,
+     "occurrence": 1209
+    },
+    "third": {
+     "id": 6333,
+     "name": "Death's Dance",
+     "icon": "",
+     "wpa": 1.0855854749679565,
+     "winrate": 57.543861389160156,
+     "occurrence": 1425
+    },
+    "fourthPlus": [
+     {
+      "id": 2504,
+      "name": "Kaenic Rookern",
+      "icon": "",
+      "wpa": 3.531393051147461,
+      "winrate": 62.328765869140625,
+      "occurrence": 146,
+      "lowSample": true
+     },
+     {
+      "id": 3053,
+      "name": "Sterak's Gage",
+      "icon": "",
+      "wpa": 2.311638832092285,
+      "winrate": 60.84558868408203,
+      "occurrence": 544,
+      "lowSample": true
+     }
+    ],
+    "alts": {
+     "boots": [
+      {
+       "id": 3008,
+       "name": "Gluttonous Greaves",
+       "icon": "",
+       "wpa": 1.3269577026367188,
+       "winrate": 58.18584060668945,
+       "occurrence": 452,
+       "lowSample": true
+      },
+      {
+       "id": 3111,
+       "name": "Mercury's Treads",
+       "icon": "",
+       "wpa": 0.6292322874069214,
+       "winrate": 50.2489013671875,
+       "occurrence": 6830
+      },
+      {
+       "id": 3047,
+       "name": "Plated Steelcaps",
+       "icon": "",
+       "wpa": -0.04021836444735527,
+       "winrate": 50.54094314575195,
+       "occurrence": 11369
+      }
+     ],
+     "first": [
+      {
+       "id": 3078,
+       "name": "Trinity Force",
+       "icon": "",
+       "wpa": 0.018356287851929665,
+       "winrate": 50.551570892333984,
+       "occurrence": 16589
+      },
+      {
+       "id": 3153,
+       "name": "Blade of The Ruined King",
+       "icon": "",
+       "wpa": -0.7490856051445007,
+       "winrate": 47.98206329345703,
+       "occurrence": 892,
+       "lowSample": true
+      }
+     ],
+     "second": [
+      {
+       "id": 3091,
+       "name": "Wit's End",
+       "icon": "",
+       "wpa": 0.684964656829834,
+       "winrate": 48.34123229980469,
+       "occurrence": 422,
+       "lowSample": true
+      },
+      {
+       "id": 3153,
+       "name": "Blade of The Ruined King",
+       "icon": "",
+       "wpa": 0.10357393324375153,
+       "winrate": 49.83677673339844,
+       "occurrence": 1838
+      },
+      {
+       "id": 6610,
+       "name": "Sundered Sky",
+       "icon": "",
+       "wpa": 0.008304672315716743,
+       "winrate": 53.114540100097656,
+       "occurrence": 9263
+      }
+     ],
+     "third": [
+      {
+       "id": 6610,
+       "name": "Sundered Sky",
+       "icon": "",
+       "wpa": 2.5497100353240967,
+       "winrate": 57.901554107666016,
+       "occurrence": 772,
+       "lowSample": true
+      },
+      {
+       "id": 3157,
+       "name": "Zhonya's Hourglass",
+       "icon": "",
+       "wpa": -0.41526690125465393,
+       "winrate": 56.87989044189453,
+       "occurrence": 4346
+      },
+      {
+       "id": 3091,
+       "name": "Wit's End",
+       "icon": "",
+       "wpa": -2.0791263580322266,
+       "winrate": 51.914894104003906,
+       "occurrence": 705,
+       "lowSample": true
+      }
+     ]
+    },
+    "optimizedPath": [
+     {
+      "id": 2510,
+      "name": "Dusk and Dawn",
+      "icon": "",
+      "wpa": 0.6287519931793213,
+      "winrate": 49.57777404785156,
+      "occurrence": 3671
+     },
+     {
+      "id": 3146,
+      "name": "Hextech Gunblade",
+      "icon": "",
+      "wpa": 0.6466482877731323,
+      "winrate": 50.42283630371094,
+      "occurrence": 946,
+      "lowSample": true
+     }
+    ]
+   },
+   "consensus": {
+    "pro": {
+     "n": 77,
+     "i": [
+      [
+       3078,
+       75
+      ],
+      [
+       6610,
+       52
+      ],
+      [
+       3157,
+       38
+      ],
+      [
+       6631,
+       12
+      ],
+      [
+       3053,
+       6
+      ],
+      [
+       3143,
+       3
+      ]
+     ],
+     "b": [
+      [
+       3047,
+       40
+      ],
+      [
+       3111,
+       22
+      ]
+     ],
+     "p": [
+      3078,
+      6610,
+      6631,
+      3157,
+      3053,
+      3143
+     ],
+     "bp": [
+      [
+       3047,
+       23
+      ],
+      [
+       3158,
+       9
+      ]
+     ],
+     "pn": 39
+    },
+    "otp": {
+     "n": 98,
+     "i": [
+      [
+       3078,
+       48
+      ],
+      [
+       2510,
+       41
+      ],
+      [
+       3157,
+       22
+      ],
+      [
+       3146,
+       15
+      ],
+      [
+       3153,
+       15
+      ],
+      [
+       3050,
+       12
+      ]
+     ],
+     "b": [
+      [
+       3111,
+       37
+      ],
+      [
+       3047,
+       34
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "key": "164|0",
+   "label": "Camille Top",
+   "championId": 164,
+   "championKey": "Camille",
+   "championName": "Camille",
+   "role": 0,
+   "roleLabel": "Top",
+   "patch": "16.16",
+   "items": {
+    "starter": {
+     "id": 1055,
+     "name": "Doran's Blade",
+     "icon": "",
+     "wpa": 0.45359501242637634,
+     "winrate": 52.883506774902344,
+     "occurrence": 10404
+    },
+    "boots": {
+     "id": 3111,
+     "name": "Mercury's Treads",
+     "icon": "",
+     "wpa": 0.5022578239440918,
+     "winrate": 54.05527877807617,
+     "occurrence": 4414
+    },
+    "first": {
+     "id": 3078,
+     "name": "Trinity Force",
+     "icon": "",
+     "wpa": 0.1007961556315422,
+     "winrate": 52.87737274169922,
+     "occurrence": 15396
+    },
+    "second": {
+     "id": 3074,
+     "name": "Ravenous Hydra",
+     "icon": "",
+     "wpa": 0.03796885535120964,
+     "winrate": 55.59584426879883,
+     "occurrence": 12411
+    },
+    "third": {
+     "id": 3053,
+     "name": "Sterak's Gage",
+     "icon": "",
+     "wpa": 0.9339293241500854,
+     "winrate": 60.494537353515625,
+     "occurrence": 1739
+    },
+    "fourthPlus": [
+     {
+      "id": 6333,
+      "name": "Death's Dance",
+      "icon": "",
+      "wpa": -0.9675248265266418,
+      "winrate": 57.24867630004883,
+      "occurrence": 945
+     }
+    ],
+    "alts": {
+     "boots": [
+      {
+       "id": 3047,
+       "name": "Plated Steelcaps",
+       "icon": "",
+       "wpa": -0.21357247233390808,
+       "winrate": 53.437931060791016,
+       "occurrence": 8668
+      },
+      {
+       "id": 3158,
+       "name": "Ionian Boots of Lucidity",
+       "icon": "",
+       "wpa": -0.21654118597507477,
+       "winrate": 58.812950134277344,
+       "occurrence": 556,
+       "lowSample": true
+      }
+     ],
+     "third": [
+      {
+       "id": 3156,
+       "name": "Maw of Malmortius",
+       "icon": "",
+       "wpa": 1.9572290182113647,
+       "winrate": 56.447689056396484,
+       "occurrence": 411,
+       "lowSample": true
+      },
+      {
+       "id": 3161,
+       "name": "Spear of Shojin",
+       "icon": "",
+       "wpa": -1.4016190767288208,
+       "winrate": 60.3879508972168,
+       "occurrence": 1959
+      }
+     ]
+    },
+    "optimizedPath": [
+     {
+      "id": 3078,
+      "name": "Trinity Force",
+      "icon": "",
+      "wpa": 0.1007961556315422,
+      "winrate": 52.87737274169922,
+      "occurrence": 15396
+     },
+     {
+      "id": 3074,
+      "name": "Ravenous Hydra",
+      "icon": "",
+      "wpa": 0.035847023129463196,
+      "winrate": 55.60303497314453,
+      "occurrence": 12404
+     },
+     {
+      "id": 3053,
+      "name": "Sterak's Gage",
+      "icon": "",
+      "wpa": 1.168156623840332,
+      "winrate": 60.80997085571289,
+      "occurrence": 1605
+     }
+    ]
+   },
+   "consensus": {
+    "pro": {
+     "n": 85,
+     "i": [
+      [
+       3078,
+       84
+      ],
+      [
+       3074,
+       68
+      ],
+      [
+       6333,
+       33
+      ],
+      [
+       3053,
+       16
+      ],
+      [
+       3026,
+       5
+      ],
+      [
+       3156,
+       4
+      ]
+     ],
+     "b": [
+      [
+       3047,
+       44
+      ],
+      [
+       3111,
+       20
+      ]
+     ],
+     "p": [
+      3078,
+      3074,
+      6333,
+      3053,
+      3156,
+      3026
+     ],
+     "bp": [
+      [
+       3047,
+       35
+      ],
+      [
+       3111,
+       15
+      ]
+     ],
+     "pn": 54
+    },
+    "otp": {
+     "n": 167,
+     "i": [
+      [
+       3078,
+       165
+      ],
+      [
+       3074,
+       138
+      ],
+      [
+       3053,
+       35
+      ],
+      [
+       6333,
+       27
+      ],
+      [
+       3161,
+       12
+      ],
+      [
+       3026,
+       9
+      ]
+     ],
+     "b": [
+      [
+       3047,
+       94
+      ],
+      [
+       3111,
+       46
+      ]
+     ]
+    }
+   }
+  }
+ ],
+ "catalog": {
+  "1001": {
+   "id": 1001,
+   "name": "Boots",
+   "goldTotal": 300,
+   "into": [
+    "3005",
+    "3047",
+    "3008",
+    "3006",
+    "3009",
+    "3010",
+    "3020",
+    "3111",
+    "3117",
+    "3158"
+   ],
+   "from": [],
+   "tags": [
+    "Boots"
+   ],
+   "purchasable": true
+  },
+  "1004": {
+   "id": 1004,
+   "name": "Faerie Charm",
+   "goldTotal": 200,
+   "into": [
+    "3114",
+    "3012",
+    "4642"
+   ],
+   "from": [],
+   "tags": [
+    "ManaRegen"
+   ],
+   "purchasable": true
+  },
+  "1006": {
+   "id": 1006,
+   "name": "Rejuvenation Bead",
+   "goldTotal": 300,
+   "into": [
+    "3109",
+    "3211",
+    "323109",
+    "3801"
+   ],
+   "from": [],
+   "tags": [
+    "HealthRegen"
+   ],
+   "purchasable": true
+  },
+  "1011": {
+   "id": 1011,
+   "name": "Giant's Belt",
+   "goldTotal": 900,
+   "into": [
+    "4637",
+    "3084",
+    "2525",
+    "3039",
+    "3083",
+    "3116",
+    "3119",
+    "3143",
+    "323119",
+    "3748",
+    "6665",
+    "6609",
+    "6667",
+    "8001"
+   ],
+   "from": [
+    "1028"
+   ],
+   "tags": [
+    "Health"
+   ],
+   "purchasable": true
+  },
+  "1018": {
+   "id": 1018,
+   "name": "Cloak of Agility",
+   "goldTotal": 600,
+   "into": [
+    "123430",
+    "667666",
+    "3031",
+    "3086",
+    "6670",
+    "3033",
+    "3039",
+    "3508",
+    "3095",
+    "3097",
+    "6676"
+   ],
+   "from": [],
+   "tags": [
+    "CriticalStrike"
+   ],
+   "purchasable": true
+  },
+  "1026": {
+   "id": 1026,
+   "name": "Blasting Wand",
+   "goldTotal": 850,
+   "into": [
+    "2522",
+    "3100",
+    "326621",
+    "4637",
+    "3135",
+    "3165",
+    "3115",
+    "324005",
+    "2510",
+    "3116",
+    "3118",
+    "326657",
+    "6621",
+    "6657"
+   ],
+   "from": [],
+   "tags": [
+    "SpellDamage"
+   ],
+   "purchasable": true
+  },
+  "1027": {
+   "id": 1027,
+   "name": "Sapphire Crystal",
+   "goldTotal": 300,
+   "into": [
+    "3024",
+    "3802",
+    "3803"
+   ],
+   "from": [],
+   "tags": [
+    "Mana"
+   ],
+   "purchasable": true
+  },
+  "1028": {
+   "id": 1028,
+   "name": "Ruby Crystal",
+   "goldTotal": 400,
+   "into": [
+    "3742",
+    "1011",
+    "3068",
+    "2021",
+    "323222",
+    "323075",
+    "326617",
+    "323107",
+    "3012",
+    "3147",
+    "3211",
+    "2502",
+    "322526",
+    "2526",
+    "3023",
+    "3044",
+    "3053",
+    "3066",
+    "3067",
+    "3075",
+    "3152",
+    "3161",
+    "3801",
+    "3803",
+    "4401",
+    "4635",
+    "6035",
+    "6660",
+    "6662"
+   ],
+   "from": [],
+   "tags": [
+    "Health"
+   ],
+   "purchasable": true
+  },
+  "1029": {
+   "id": 1029,
+   "name": "Cloth Armor",
+   "goldTotal": 300,
+   "into": [
+    "2421",
+    "2420",
+    "1031",
+    "323050",
+    "323190",
+    "2019",
+    "3193",
+    "3047",
+    "3024",
+    "3050",
+    "2524",
+    "3023",
+    "3076",
+    "3082",
+    "3105",
+    "3190"
+   ],
+   "from": [],
+   "tags": [
+    "Armor"
+   ],
+   "purchasable": true
+  },
+  "1031": {
+   "id": 1031,
+   "name": "Chain Vest",
+   "goldTotal": 800,
+   "into": [
+    "3742",
+    "3068",
+    "323002",
+    "3109",
+    "323075",
+    "2502",
+    "3002",
+    "3075",
+    "323109",
+    "6665",
+    "6662"
+   ],
+   "from": [
+    "1029"
+   ],
+   "tags": [
+    "Armor"
+   ],
+   "purchasable": true
+  },
+  "1033": {
+   "id": 1033,
+   "name": "Null-Magic Mantle",
+   "goldTotal": 400,
+   "into": [
+    "1057",
+    "3140",
+    "323050",
+    "323190",
+    "3193",
+    "3050",
+    "3001",
+    "3211",
+    "2524",
+    "3155",
+    "3105",
+    "3111",
+    "3190",
+    "4632"
+   ],
+   "from": [],
+   "tags": [
+    "SpellBlock"
+   ],
+   "purchasable": true
+  },
+  "1036": {
+   "id": 1036,
+   "name": "Long Sword",
+   "goldTotal": 350,
+   "into": [
+    "1053",
+    "4003",
+    "6701",
+    "2015",
+    "2019",
+    "2021",
+    "3077",
+    "6670",
+    "3133",
+    "2517",
+    "323004",
+    "3142",
+    "3004",
+    "2523",
+    "3032",
+    "3035",
+    "3044",
+    "3051",
+    "3155",
+    "6690",
+    "3123",
+    "3134",
+    "6699",
+    "6671",
+    "6692"
+   ],
+   "from": [],
+   "tags": [
+    "Damage",
+    "Lane"
+   ],
+   "purchasable": true
+  },
+  "1037": {
+   "id": 1037,
+   "name": "Pickaxe",
+   "goldTotal": 875,
+   "into": [
+    "667666",
+    "3071",
+    "6333",
+    "3031",
+    "3153",
+    "6701",
+    "2020",
+    "2517",
+    "3087",
+    "6695",
+    "2523",
+    "3053",
+    "3072",
+    "3124",
+    "3181",
+    "3139",
+    "3161",
+    "6029",
+    "6035",
+    "6673",
+    "6676",
+    "6692"
+   ],
+   "from": [],
+   "tags": [
+    "Damage"
+   ],
+   "purchasable": true
+  },
+  "1038": {
+   "id": 1038,
+   "name": "B. F. Sword",
+   "goldTotal": 1300,
+   "into": [
+    "3031",
+    "3026",
+    "3032",
+    "3072",
+    "3095",
+    "3097",
+    "4403",
+    "6671"
+   ],
+   "from": [],
+   "tags": [
+    "Damage"
+   ],
+   "purchasable": true
+  },
+  "1042": {
+   "id": 1042,
+   "name": "Dagger",
+   "goldTotal": 250,
+   "into": [
+    "1043",
+    "3086",
+    "2510",
+    "3006",
+    "3046",
+    "3051",
+    "3073",
+    "3131",
+    "3144",
+    "6631",
+    "6675",
+    "6677"
+   ],
+   "from": [],
+   "tags": [
+    "AttackSpeed"
+   ],
+   "purchasable": true
+  },
+  "1043": {
+   "id": 1043,
+   "name": "Recurve Bow",
+   "goldTotal": 700,
+   "into": [
+    "3302",
+    "3153",
+    "3115",
+    "6672",
+    "3091",
+    "3124"
+   ],
+   "from": [
+    "1042"
+   ],
+   "tags": [
+    "AttackSpeed",
+    "OnHit"
+   ],
+   "purchasable": true
+  },
+  "1052": {
+   "id": 1052,
+   "name": "Amplifying Tome",
+   "goldTotal": 400,
+   "into": [
+    "3113",
+    "2421",
+    "2420",
+    "3145",
+    "124011",
+    "4637",
+    "3916",
+    "6656",
+    "3147",
+    "3146",
+    "3802",
+    "4005",
+    "2508",
+    "326616",
+    "3108",
+    "3116",
+    "3124",
+    "4630",
+    "323504",
+    "4628",
+    "4632",
+    "4635",
+    "4642",
+    "4644"
+   ],
+   "from": [],
+   "tags": [
+    "SpellDamage"
+   ],
+   "purchasable": true
+  },
+  "1053": {
+   "id": 1053,
+   "name": "Vampiric Scepter",
+   "goldTotal": 900,
+   "into": [
+    "3153",
+    "3146",
+    "3072",
+    "3074",
+    "3139",
+    "4403"
+   ],
+   "from": [
+    "1036"
+   ],
+   "tags": [
+    "Damage",
+    "LifeSteal"
+   ],
+   "purchasable": true
+  },
+  "1054": {
+   "id": 1054,
+   "name": "Doran's Shield",
+   "goldTotal": 450,
+   "into": [],
+   "from": [],
+   "tags": [
+    "Health",
+    "HealthRegen",
+    "Lane"
+   ],
+   "purchasable": true
+  },
+  "1055": {
+   "id": 1055,
+   "name": "Doran's Blade",
+   "goldTotal": 450,
+   "into": [],
+   "from": [],
+   "tags": [
+    "Health",
+    "Damage",
+    "LifeSteal",
+    "SpellVamp",
+    "Lane"
+   ],
+   "purchasable": true
+  },
+  "1056": {
+   "id": 1056,
+   "name": "Doran's Ring",
+   "goldTotal": 400,
+   "into": [],
+   "from": [],
+   "tags": [
+    "Health",
+    "Lane",
+    "ManaRegen",
+    "SpellDamage"
+   ],
+   "purchasable": true
+  },
+  "1057": {
+   "id": 1057,
+   "name": "Negatron Cloak",
+   "goldTotal": 850,
+   "into": [
+    "2504",
+    "8020",
+    "328020",
+    "3091",
+    "6665",
+    "4401"
+   ],
+   "from": [
+    "1033"
+   ],
+   "tags": [
+    "SpellBlock"
+   ],
+   "purchasable": true
+  },
+  "1058": {
+   "id": 1058,
+   "name": "Needlessly Large Rod",
+   "goldTotal": 1200,
+   "into": [
+    "3157",
+    "4645",
+    "3089",
+    "3102",
+    "3128",
+    "4403"
+   ],
+   "from": [],
+   "tags": [
+    "SpellDamage"
+   ],
+   "purchasable": true
+  },
+  "1086": {
+   "id": 1086,
+   "name": "Doran's Bow",
+   "goldTotal": 400,
+   "into": [],
+   "from": [],
+   "tags": [
+    "Damage",
+    "AttackSpeed",
+    "SpellVamp",
+    "Lane"
+   ],
+   "purchasable": true
+  },
+  "2019": {
+   "id": 2019,
+   "name": "Steel Sigil",
+   "goldTotal": 1100,
+   "into": [
+    "6333",
+    "6700",
+    "3026"
+   ],
+   "from": [
+    "1029",
+    "1036",
+    "1029"
+   ],
+   "tags": [
+    "Armor",
+    "Damage"
+   ],
+   "purchasable": true
+  },
+  "2021": {
+   "id": 2021,
+   "name": "Tunneler",
+   "goldTotal": 1150,
+   "into": [
+    "2501",
+    "3053",
+    "3073",
+    "3814",
+    "3181",
+    "3161",
+    "3748",
+    "6610"
+   ],
+   "from": [
+    "1036",
+    "1028"
+   ],
+   "tags": [
+    "Health",
+    "Damage"
+   ],
+   "purchasable": true
+  },
+  "2022": {
+   "id": 2022,
+   "name": "Glowing Mote",
+   "goldTotal": 250,
+   "into": [
+    "2020",
+    "3024",
+    "3133",
+    "3802",
+    "3057",
+    "3067",
+    "3108",
+    "3158",
+    "4642",
+    "6660"
+   ],
+   "from": [],
+   "tags": [
+    "CooldownReduction"
+   ],
+   "purchasable": true
+  },
+  "2420": {
+   "id": 2420,
+   "name": "Seeker's Armguard",
+   "goldTotal": 1600,
+   "into": [
+    "3157"
+   ],
+   "from": [
+    "1052",
+    "1029",
+    "1052"
+   ],
+   "tags": [
+    "Armor",
+    "SpellDamage",
+    "Active"
+   ],
+   "purchasable": true
+  },
+  "2501": {
+   "id": 2501,
+   "name": "Overlord's Bloodmail",
+   "goldTotal": 3300,
+   "into": [],
+   "from": [
+    "2021",
+    "2021"
+   ],
+   "tags": [
+    "Health",
+    "Damage"
+   ],
+   "purchasable": true
+  },
+  "2503": {
+   "id": 2503,
+   "name": "Blackfire Torch",
+   "goldTotal": 2800,
+   "into": [],
+   "from": [
+    "3802",
+    "2508"
+   ],
+   "tags": [
+    "SpellDamage",
+    "Mana",
+    "CooldownReduction",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "2504": {
+   "id": 2504,
+   "name": "Kaenic Rookern",
+   "goldTotal": 2900,
+   "into": [],
+   "from": [
+    "3211",
+    "1057"
+   ],
+   "tags": [
+    "Health",
+    "SpellBlock",
+    "HealthRegen"
+   ],
+   "purchasable": true
+  },
+  "2508": {
+   "id": 2508,
+   "name": "Fated Ashes",
+   "goldTotal": 900,
+   "into": [
+    "2503",
+    "6653"
+   ],
+   "from": [
+    "1052"
+   ],
+   "tags": [
+    "SpellDamage"
+   ],
+   "purchasable": true
+  },
+  "2510": {
+   "id": 2510,
+   "name": "Dusk and Dawn",
+   "goldTotal": 3100,
+   "into": [],
+   "from": [
+    "3057",
+    "1026",
+    "3067",
+    "1042"
+   ],
+   "tags": [
+    "Health",
+    "AttackSpeed",
+    "SpellDamage",
+    "OnHit",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "2517": {
+   "id": 2517,
+   "name": "Endless Hunger",
+   "goldTotal": 3100,
+   "into": [],
+   "from": [
+    "3133",
+    "1037",
+    "1036"
+   ],
+   "tags": [
+    "Damage",
+    "LifeSteal",
+    "SpellVamp",
+    "Tenacity",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "2523": {
+   "id": 2523,
+   "name": "Hexoptics C44",
+   "goldTotal": 2800,
+   "into": [],
+   "from": [
+    "1037",
+    "6670",
+    "1036"
+   ],
+   "tags": [
+    "Damage",
+    "CriticalStrike"
+   ],
+   "purchasable": true
+  },
+  "2524": {
+   "id": 2524,
+   "name": "Bandlepipes",
+   "goldTotal": 2300,
+   "into": [],
+   "from": [
+    "3067",
+    "1029",
+    "1033"
+   ],
+   "tags": [
+    "Health",
+    "SpellBlock",
+    "Armor",
+    "AttackSpeed",
+    "NonbootsMovement",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "2525": {
+   "id": 2525,
+   "name": "Protoplasm Harness",
+   "goldTotal": 2600,
+   "into": [],
+   "from": [
+    "3067",
+    "1011"
+   ],
+   "tags": [
+    "Health",
+    "NonbootsMovement",
+    "Tenacity",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3004": {
+   "id": 3004,
+   "name": "Manamune",
+   "goldTotal": 2900,
+   "into": [],
+   "from": [
+    "3070",
+    "3133",
+    "1036"
+   ],
+   "tags": [
+    "Damage",
+    "Mana",
+    "CooldownReduction",
+    "OnHit",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3006": {
+   "id": 3006,
+   "name": "Berserker's Greaves",
+   "goldTotal": 1100,
+   "into": [
+    "3172"
+   ],
+   "from": [
+    "1001",
+    "1042",
+    "1042"
+   ],
+   "tags": [
+    "AttackSpeed",
+    "Boots"
+   ],
+   "purchasable": true
+  },
+  "3008": {
+   "id": 3008,
+   "name": "Gluttonous Greaves",
+   "goldTotal": 1000,
+   "into": [
+    "3168"
+   ],
+   "from": [
+    "1001"
+   ],
+   "tags": [
+    "LifeSteal",
+    "SpellVamp",
+    "Boots"
+   ],
+   "purchasable": true
+  },
+  "3009": {
+   "id": 3009,
+   "name": "Boots of Swiftness",
+   "goldTotal": 1000,
+   "into": [
+    "3170"
+   ],
+   "from": [
+    "1001"
+   ],
+   "tags": [
+    "Boots"
+   ],
+   "purchasable": true
+  },
+  "3020": {
+   "id": 3020,
+   "name": "Sorcerer's Shoes",
+   "goldTotal": 1100,
+   "into": [
+    "3175"
+   ],
+   "from": [
+    "1001"
+   ],
+   "tags": [
+    "Boots",
+    "MagicPenetration"
+   ],
+   "purchasable": true
+  },
+  "3024": {
+   "id": 3024,
+   "name": "Glacial Buckler",
+   "goldTotal": 900,
+   "into": [
+    "323110",
+    "3110"
+   ],
+   "from": [
+    "1029",
+    "1027",
+    "2022"
+   ],
+   "tags": [
+    "Armor",
+    "Mana",
+    "CooldownReduction",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3026": {
+   "id": 3026,
+   "name": "Guardian Angel",
+   "goldTotal": 3200,
+   "into": [],
+   "from": [
+    "2019",
+    "1038"
+   ],
+   "tags": [
+    "Armor",
+    "Damage"
+   ],
+   "purchasable": true
+  },
+  "3031": {
+   "id": 3031,
+   "name": "Infinity Edge",
+   "goldTotal": 3500,
+   "into": [],
+   "from": [
+    "1038",
+    "1037",
+    "1018"
+   ],
+   "tags": [
+    "CriticalStrike",
+    "Damage"
+   ],
+   "purchasable": true
+  },
+  "3032": {
+   "id": 3032,
+   "name": "Yun Tal Wildarrows",
+   "goldTotal": 3000,
+   "into": [],
+   "from": [
+    "1038",
+    "3144",
+    "1036"
+   ],
+   "tags": [
+    "Damage",
+    "CriticalStrike",
+    "AttackSpeed"
+   ],
+   "purchasable": true
+  },
+  "3033": {
+   "id": 3033,
+   "name": "Mortal Reminder",
+   "goldTotal": 3000,
+   "into": [],
+   "from": [
+    "3123",
+    "3035",
+    "1018"
+   ],
+   "tags": [
+    "Damage",
+    "CriticalStrike",
+    "ArmorPenetration"
+   ],
+   "purchasable": true
+  },
+  "3035": {
+   "id": 3035,
+   "name": "Last Whisper",
+   "goldTotal": 1450,
+   "into": [
+    "3033",
+    "3036",
+    "6694"
+   ],
+   "from": [
+    "1036",
+    "1036"
+   ],
+   "tags": [
+    "ArmorPenetration",
+    "Damage"
+   ],
+   "purchasable": true
+  },
+  "3036": {
+   "id": 3036,
+   "name": "Lord Dominik's Regards",
+   "goldTotal": 3300,
+   "into": [],
+   "from": [
+    "3035",
+    "6670"
+   ],
+   "tags": [
+    "Damage",
+    "CriticalStrike",
+    "ArmorPenetration"
+   ],
+   "purchasable": true
+  },
+  "3044": {
+   "id": 3044,
+   "name": "Phage",
+   "goldTotal": 1100,
+   "into": [
+    "3071",
+    "3078",
+    "3073",
+    "6630",
+    "6631"
+   ],
+   "from": [
+    "1028",
+    "1036"
+   ],
+   "tags": [
+    "Health",
+    "Damage",
+    "NonbootsMovement"
+   ],
+   "purchasable": true
+  },
+  "3046": {
+   "id": 3046,
+   "name": "Phantom Dancer",
+   "goldTotal": 2650,
+   "into": [],
+   "from": [
+    "1042",
+    "3086",
+    "1042"
+   ],
+   "tags": [
+    "CriticalStrike",
+    "AttackSpeed",
+    "NonbootsMovement"
+   ],
+   "purchasable": true
+  },
+  "3047": {
+   "id": 3047,
+   "name": "Plated Steelcaps",
+   "goldTotal": 1200,
+   "into": [
+    "3174"
+   ],
+   "from": [
+    "1001",
+    "1029"
+   ],
+   "tags": [
+    "Armor",
+    "Boots"
+   ],
+   "purchasable": true
+  },
+  "3050": {
+   "id": 3050,
+   "name": "Zeke's Convergence",
+   "goldTotal": 2200,
+   "into": [],
+   "from": [
+    "3067",
+    "1029",
+    "1033"
+   ],
+   "tags": [
+    "Health",
+    "SpellBlock",
+    "Armor",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3051": {
+   "id": 3051,
+   "name": "Hearthbound Axe",
+   "goldTotal": 1200,
+   "into": [
+    "3078",
+    "3302",
+    "6672"
+   ],
+   "from": [
+    "1036",
+    "1042",
+    "1036"
+   ],
+   "tags": [
+    "Damage",
+    "AttackSpeed"
+   ],
+   "purchasable": true
+  },
+  "3053": {
+   "id": 3053,
+   "name": "Sterak's Gage",
+   "goldTotal": 3200,
+   "into": [],
+   "from": [
+    "1037",
+    "2021",
+    "1028"
+   ],
+   "tags": [
+    "Health",
+    "Damage",
+    "Tenacity"
+   ],
+   "purchasable": true
+  },
+  "3057": {
+   "id": 3057,
+   "name": "Sheen",
+   "goldTotal": 900,
+   "into": [
+    "3078",
+    "3100",
+    "2510",
+    "3508",
+    "6632",
+    "6662"
+   ],
+   "from": [
+    "2022"
+   ],
+   "tags": [
+    "OnHit",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3066": {
+   "id": 3066,
+   "name": "Winged Moonplate",
+   "goldTotal": 800,
+   "into": [
+    "3742",
+    "323002",
+    "3002",
+    "3181",
+    "4401"
+   ],
+   "from": [
+    "1028"
+   ],
+   "tags": [
+    "Health",
+    "NonbootsMovement"
+   ],
+   "purchasable": true
+  },
+  "3067": {
+   "id": 3067,
+   "name": "Kindlegem",
+   "goldTotal": 800,
+   "into": [
+    "3071",
+    "8020",
+    "323050",
+    "328020",
+    "124011",
+    "323190",
+    "323222",
+    "3165",
+    "6620",
+    "3050",
+    "3109",
+    "6656",
+    "326617",
+    "323107",
+    "2502",
+    "2510",
+    "2524",
+    "2525",
+    "6617",
+    "3065",
+    "3152",
+    "3119",
+    "326620",
+    "3190",
+    "3222",
+    "323109",
+    "323119",
+    "4403",
+    "4629",
+    "4644",
+    "6630",
+    "6632",
+    "8001"
+   ],
+   "from": [
+    "1028",
+    "2022"
+   ],
+   "tags": [
+    "Health",
+    "CooldownReduction",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3070": {
+   "id": 3070,
+   "name": "Tear of the Goddess",
+   "goldTotal": 400,
+   "into": [
+    "3003",
+    "3004",
+    "2526",
+    "3119"
+   ],
+   "from": [],
+   "tags": [
+    "Mana",
+    "ManaRegen"
+   ],
+   "purchasable": true
+  },
+  "3071": {
+   "id": 3071,
+   "name": "Black Cleaver",
+   "goldTotal": 3000,
+   "into": [],
+   "from": [
+    "3044",
+    "3067",
+    "1037"
+   ],
+   "tags": [
+    "Health",
+    "Damage",
+    "CooldownReduction",
+    "OnHit",
+    "NonbootsMovement",
+    "ArmorPenetration",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3074": {
+   "id": 3074,
+   "name": "Ravenous Hydra",
+   "goldTotal": 3300,
+   "into": [],
+   "from": [
+    "3077",
+    "1053",
+    "3133"
+   ],
+   "tags": [
+    "Damage",
+    "LifeSteal",
+    "CooldownReduction",
+    "OnHit",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3075": {
+   "id": 3075,
+   "name": "Thornmail",
+   "goldTotal": 2450,
+   "into": [],
+   "from": [
+    "3076",
+    "1031",
+    "1028"
+   ],
+   "tags": [
+    "Health",
+    "Armor"
+   ],
+   "purchasable": true
+  },
+  "3076": {
+   "id": 3076,
+   "name": "Bramble Vest",
+   "goldTotal": 800,
+   "into": [
+    "323075",
+    "3075"
+   ],
+   "from": [
+    "1029",
+    "1029"
+   ],
+   "tags": [
+    "Armor"
+   ],
+   "purchasable": true
+  },
+  "3077": {
+   "id": 3077,
+   "name": "Tiamat",
+   "goldTotal": 1200,
+   "into": [
+    "3074",
+    "3748",
+    "6698",
+    "6631"
+   ],
+   "from": [
+    "1036",
+    "1036"
+   ],
+   "tags": [
+    "Damage",
+    "OnHit"
+   ],
+   "purchasable": true
+  },
+  "3078": {
+   "id": 3078,
+   "name": "Trinity Force",
+   "goldTotal": 3333,
+   "into": [],
+   "from": [
+    "3057",
+    "3044",
+    "3051"
+   ],
+   "tags": [
+    "Health",
+    "Damage",
+    "AttackSpeed",
+    "CooldownReduction",
+    "OnHit",
+    "NonbootsMovement",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3082": {
+   "id": 3082,
+   "name": "Warden's Mail",
+   "goldTotal": 1000,
+   "into": [
+    "323110",
+    "3110",
+    "3143"
+   ],
+   "from": [
+    "1029",
+    "1029"
+   ],
+   "tags": [
+    "Armor"
+   ],
+   "purchasable": true
+  },
+  "3085": {
+   "id": 3085,
+   "name": "Runaan's Hurricane",
+   "goldTotal": 2650,
+   "into": [],
+   "from": [
+    "3086",
+    "3144"
+   ],
+   "tags": [
+    "CriticalStrike",
+    "AttackSpeed",
+    "OnHit",
+    "NonbootsMovement"
+   ],
+   "purchasable": true
+  },
+  "3086": {
+   "id": 3086,
+   "name": "Zeal",
+   "goldTotal": 1200,
+   "into": [
+    "2512",
+    "3094",
+    "3046",
+    "3085",
+    "4403",
+    "6671",
+    "6675"
+   ],
+   "from": [
+    "1018",
+    "1042"
+   ],
+   "tags": [
+    "CriticalStrike",
+    "AttackSpeed",
+    "NonbootsMovement"
+   ],
+   "purchasable": true
+  },
+  "3089": {
+   "id": 3089,
+   "name": "Rabadon's Deathcap",
+   "goldTotal": 3500,
+   "into": [],
+   "from": [
+    "1058",
+    "1058"
+   ],
+   "tags": [
+    "SpellDamage"
+   ],
+   "purchasable": true
+  },
+  "3091": {
+   "id": 3091,
+   "name": "Wit's End",
+   "goldTotal": 2800,
+   "into": [],
+   "from": [
+    "1043",
+    "1057",
+    "1043"
+   ],
+   "tags": [
+    "SpellBlock",
+    "AttackSpeed",
+    "OnHit",
+    "Tenacity"
+   ],
+   "purchasable": true
+  },
+  "3100": {
+   "id": 3100,
+   "name": "Lich Bane",
+   "goldTotal": 2900,
+   "into": [],
+   "from": [
+    "3057",
+    "3113",
+    "1026"
+   ],
+   "tags": [
+    "SpellDamage",
+    "OnHit",
+    "NonbootsMovement",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3102": {
+   "id": 3102,
+   "name": "Banshee's Veil",
+   "goldTotal": 3000,
+   "into": [],
+   "from": [
+    "1058",
+    "4632"
+   ],
+   "tags": [
+    "SpellBlock",
+    "SpellDamage"
+   ],
+   "purchasable": true
+  },
+  "3107": {
+   "id": 3107,
+   "name": "Redemption",
+   "goldTotal": 2300,
+   "into": [],
+   "from": [
+    "3108",
+    "3114"
+   ],
+   "tags": [
+    "SpellDamage",
+    "ManaRegen",
+    "CooldownReduction",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3108": {
+   "id": 3108,
+   "name": "Fiendish Codex",
+   "goldTotal": 850,
+   "into": [
+    "123430",
+    "4636",
+    "323003",
+    "3115",
+    "3003",
+    "326616",
+    "3107",
+    "3128",
+    "3137",
+    "8010",
+    "6616",
+    "4628",
+    "4629",
+    "4633"
+   ],
+   "from": [
+    "1052",
+    "2022"
+   ],
+   "tags": [
+    "SpellDamage",
+    "CooldownReduction",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3109": {
+   "id": 3109,
+   "name": "Knight's Vow",
+   "goldTotal": 2300,
+   "into": [],
+   "from": [
+    "3067",
+    "1031",
+    "1006"
+   ],
+   "tags": [
+    "Health",
+    "HealthRegen",
+    "Armor",
+    "Aura",
+    "Active",
+    "CooldownReduction",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3110": {
+   "id": 3110,
+   "name": "Frozen Heart",
+   "goldTotal": 2500,
+   "into": [],
+   "from": [
+    "3082",
+    "3024"
+   ],
+   "tags": [
+    "Armor",
+    "Mana",
+    "Aura",
+    "CooldownReduction",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3111": {
+   "id": 3111,
+   "name": "Mercury's Treads",
+   "goldTotal": 1250,
+   "into": [
+    "3173"
+   ],
+   "from": [
+    "1001",
+    "1033"
+   ],
+   "tags": [
+    "Boots",
+    "SpellBlock",
+    "Tenacity"
+   ],
+   "purchasable": true
+  },
+  "3113": {
+   "id": 3113,
+   "name": "Aether Wisp",
+   "goldTotal": 900,
+   "into": [
+    "123430",
+    "3100",
+    "2065",
+    "322065",
+    "3087",
+    "323504",
+    "3504",
+    "4629",
+    "4646"
+   ],
+   "from": [
+    "1052"
+   ],
+   "tags": [
+    "NonbootsMovement",
+    "SpellDamage"
+   ],
+   "purchasable": true
+  },
+  "3114": {
+   "id": 3114,
+   "name": "Forbidden Idol",
+   "goldTotal": 600,
+   "into": [
+    "124011",
+    "326621",
+    "223011",
+    "323222",
+    "323107",
+    "322526",
+    "2526",
+    "3011",
+    "326616",
+    "3107",
+    "3222",
+    "323504",
+    "3504",
+    "6616",
+    "6621"
+   ],
+   "from": [
+    "1004"
+   ],
+   "tags": [
+    "ManaRegen"
+   ],
+   "purchasable": true
+  },
+  "3118": {
+   "id": 3118,
+   "name": "Malignance",
+   "goldTotal": 2700,
+   "into": [],
+   "from": [
+    "3802",
+    "1026"
+   ],
+   "tags": [
+    "SpellDamage",
+    "Mana",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3123": {
+   "id": 3123,
+   "name": "Executioner's Calling",
+   "goldTotal": 800,
+   "into": [
+    "3033",
+    "6609"
+   ],
+   "from": [
+    "1036"
+   ],
+   "tags": [
+    "Damage"
+   ],
+   "purchasable": true
+  },
+  "3133": {
+   "id": 3133,
+   "name": "Caulfield's Warhammer",
+   "goldTotal": 1050,
+   "into": [
+    "6333",
+    "126697",
+    "6697",
+    "4402",
+    "3156",
+    "2517",
+    "323004",
+    "6693",
+    "3004",
+    "3508",
+    "3074",
+    "3179",
+    "6691",
+    "6609",
+    "6610",
+    "6632",
+    "6692",
+    "6694",
+    "6696"
+   ],
+   "from": [
+    "1036",
+    "2022",
+    "1036"
+   ],
+   "tags": [
+    "Damage",
+    "CooldownReduction",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3134": {
+   "id": 3134,
+   "name": "Serrated Dirk",
+   "goldTotal": 1000,
+   "into": [
+    "3142",
+    "667666",
+    "126697",
+    "6697",
+    "6701",
+    "6693",
+    "2520",
+    "4004",
+    "6695",
+    "3814",
+    "3131",
+    "3179",
+    "6691",
+    "6676"
+   ],
+   "from": [
+    "1036",
+    "1036"
+   ],
+   "tags": [
+    "Damage",
+    "ArmorPenetration"
+   ],
+   "purchasable": true
+  },
+  "3135": {
+   "id": 3135,
+   "name": "Void Staff",
+   "goldTotal": 3000,
+   "into": [],
+   "from": [
+    "4630",
+    "1026"
+   ],
+   "tags": [
+    "MagicPenetration",
+    "SpellDamage"
+   ],
+   "purchasable": true
+  },
+  "3137": {
+   "id": 3137,
+   "name": "Cryptbloom",
+   "goldTotal": 3000,
+   "into": [],
+   "from": [
+    "4630",
+    "3108",
+    "3108"
+   ],
+   "tags": [
+    "SpellDamage",
+    "MagicPenetration",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3142": {
+   "id": 3142,
+   "name": "Youmuu's Ghostblade",
+   "goldTotal": 2800,
+   "into": [],
+   "from": [
+    "3134",
+    "6690",
+    "1036"
+   ],
+   "tags": [
+    "Damage",
+    "Active",
+    "NonbootsMovement",
+    "ArmorPenetration"
+   ],
+   "purchasable": true
+  },
+  "3143": {
+   "id": 3143,
+   "name": "Randuin's Omen",
+   "goldTotal": 2700,
+   "into": [],
+   "from": [
+    "3082",
+    "1011"
+   ],
+   "tags": [
+    "Health",
+    "Armor",
+    "Active",
+    "Slow"
+   ],
+   "purchasable": true
+  },
+  "3144": {
+   "id": 3144,
+   "name": "Scout's Slingshot",
+   "goldTotal": 600,
+   "into": [
+    "2512",
+    "3094",
+    "3087",
+    "3032",
+    "3085",
+    "3095",
+    "3097"
+   ],
+   "from": [
+    "1042",
+    "1042"
+   ],
+   "tags": [
+    "AttackSpeed"
+   ],
+   "purchasable": true
+  },
+  "3145": {
+   "id": 3145,
+   "name": "Hextech Alternator",
+   "goldTotal": 1100,
+   "into": [
+    "4645",
+    "4636",
+    "3146",
+    "6655",
+    "3152",
+    "4646"
+   ],
+   "from": [
+    "1052",
+    "1052"
+   ],
+   "tags": [
+    "SpellDamage"
+   ],
+   "purchasable": true
+  },
+  "3146": {
+   "id": 3146,
+   "name": "Hextech Gunblade",
+   "goldTotal": 3000,
+   "into": [],
+   "from": [
+    "1053",
+    "3145",
+    "1052"
+   ],
+   "tags": [
+    "Damage",
+    "LifeSteal",
+    "SpellDamage",
+    "Active",
+    "SpellVamp"
+   ],
+   "purchasable": true
+  },
+  "3147": {
+   "id": 3147,
+   "name": "Haunting Guise",
+   "goldTotal": 1300,
+   "into": [
+    "8010",
+    "4633",
+    "6653"
+   ],
+   "from": [
+    "1052",
+    "1028"
+   ],
+   "tags": [
+    "Health",
+    "SpellDamage"
+   ],
+   "purchasable": true
+  },
+  "3152": {
+   "id": 3152,
+   "name": "Hextech Rocketbelt",
+   "goldTotal": 2650,
+   "into": [],
+   "from": [
+    "3145",
+    "3067",
+    "1028"
+   ],
+   "tags": [
+    "Health",
+    "SpellDamage",
+    "Active",
+    "CooldownReduction",
+    "NonbootsMovement",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3153": {
+   "id": 3153,
+   "name": "Blade of The Ruined King",
+   "goldTotal": 3200,
+   "into": [],
+   "from": [
+    "1053",
+    "1043",
+    "1037"
+   ],
+   "tags": [
+    "Damage",
+    "AttackSpeed",
+    "LifeSteal",
+    "Slow",
+    "OnHit"
+   ],
+   "purchasable": true
+  },
+  "3155": {
+   "id": 3155,
+   "name": "Hexdrinker",
+   "goldTotal": 1300,
+   "into": [
+    "3156"
+   ],
+   "from": [
+    "1036",
+    "1033",
+    "1036"
+   ],
+   "tags": [
+    "Damage",
+    "SpellBlock"
+   ],
+   "purchasable": true
+  },
+  "3156": {
+   "id": 3156,
+   "name": "Maw of Malmortius",
+   "goldTotal": 3100,
+   "into": [],
+   "from": [
+    "3155",
+    "3133"
+   ],
+   "tags": [
+    "SpellBlock",
+    "Damage",
+    "LifeSteal",
+    "SpellVamp",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3157": {
+   "id": 3157,
+   "name": "Zhonya's Hourglass",
+   "goldTotal": 3250,
+   "into": [],
+   "from": [
+    "1058",
+    "2420"
+   ],
+   "tags": [
+    "Armor",
+    "SpellDamage",
+    "Active"
+   ],
+   "purchasable": true
+  },
+  "3158": {
+   "id": 3158,
+   "name": "Ionian Boots of Lucidity",
+   "goldTotal": 900,
+   "into": [
+    "3171"
+   ],
+   "from": [
+    "1001",
+    "2022"
+   ],
+   "tags": [
+    "Boots",
+    "CooldownReduction"
+   ],
+   "purchasable": true
+  },
+  "3161": {
+   "id": 3161,
+   "name": "Spear of Shojin",
+   "goldTotal": 3100,
+   "into": [],
+   "from": [
+    "1037",
+    "2021",
+    "1028"
+   ],
+   "tags": [
+    "Health",
+    "Damage",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3171": {
+   "id": 3171,
+   "name": "Crimson Lucidity",
+   "goldTotal": 900,
+   "into": [],
+   "from": [
+    "3158"
+   ],
+   "tags": [
+    "CooldownReduction",
+    "Boots"
+   ],
+   "purchasable": true
+  },
+  "3175": {
+   "id": 3175,
+   "name": "Spellslinger's Shoes",
+   "goldTotal": 1100,
+   "into": [],
+   "from": [
+    "3020"
+   ],
+   "tags": [
+    "Boots",
+    "MagicPenetration"
+   ],
+   "purchasable": true
+  },
+  "3181": {
+   "id": 3181,
+   "name": "Hullbreaker",
+   "goldTotal": 3000,
+   "into": [],
+   "from": [
+    "2021",
+    "3066",
+    "1037"
+   ],
+   "tags": [
+    "Health",
+    "Damage",
+    "NonbootsMovement"
+   ],
+   "purchasable": true
+  },
+  "3190": {
+   "id": 3190,
+   "name": "Locket of the Iron Solari",
+   "goldTotal": 2200,
+   "into": [],
+   "from": [
+    "3067",
+    "1029",
+    "1033"
+   ],
+   "tags": [
+    "Health",
+    "SpellBlock",
+    "Armor",
+    "Aura",
+    "Active",
+    "MagicResist",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3211": {
+   "id": 3211,
+   "name": "Spectre's Cowl",
+   "goldTotal": 1250,
+   "into": [
+    "2504",
+    "3065",
+    "6664"
+   ],
+   "from": [
+    "1028",
+    "1033",
+    "1006"
+   ],
+   "tags": [
+    "Health",
+    "HealthRegen",
+    "SpellBlock"
+   ],
+   "purchasable": true
+  },
+  "3222": {
+   "id": 3222,
+   "name": "Mikael's Blessing",
+   "goldTotal": 2300,
+   "into": [],
+   "from": [
+    "3067",
+    "3114"
+   ],
+   "tags": [
+    "Health",
+    "ManaRegen",
+    "Active",
+    "CooldownReduction",
+    "Tenacity",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3508": {
+   "id": 3508,
+   "name": "Essence Reaver",
+   "goldTotal": 3050,
+   "into": [],
+   "from": [
+    "3057",
+    "3133",
+    "1018"
+   ],
+   "tags": [
+    "Damage",
+    "CriticalStrike",
+    "ManaRegen",
+    "CooldownReduction",
+    "OnHit",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3742": {
+   "id": 3742,
+   "name": "Dead Man's Plate",
+   "goldTotal": 2900,
+   "into": [],
+   "from": [
+    "3066",
+    "1028",
+    "1031"
+   ],
+   "tags": [
+    "Health",
+    "Armor",
+    "Slow",
+    "NonbootsMovement"
+   ],
+   "purchasable": true
+  },
+  "3802": {
+   "id": 3802,
+   "name": "Lost Chapter",
+   "goldTotal": 1200,
+   "into": [
+    "2522",
+    "323003",
+    "6656",
+    "3003",
+    "6655",
+    "2503",
+    "3118",
+    "4644"
+   ],
+   "from": [
+    "1052",
+    "1027",
+    "2022"
+   ],
+   "tags": [
+    "SpellDamage",
+    "Mana",
+    "ManaRegen",
+    "CooldownReduction",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "3803": {
+   "id": 3803,
+   "name": "Catalyst of Aeons",
+   "goldTotal": 1300,
+   "into": [
+    "4402",
+    "326657",
+    "6657"
+   ],
+   "from": [
+    "1028",
+    "1028",
+    "1027"
+   ],
+   "tags": [
+    "Health",
+    "HealthRegen",
+    "Mana",
+    "ManaRegen"
+   ],
+   "purchasable": true
+  },
+  "3865": {
+   "id": 3865,
+   "name": "World Atlas",
+   "goldTotal": 400,
+   "into": [],
+   "from": [],
+   "tags": [
+    "Health",
+    "ManaRegen",
+    "Vision",
+    "GoldPer",
+    "Lane"
+   ],
+   "purchasable": true
+  },
+  "3867": {
+   "id": 3867,
+   "name": "Bounty of Worlds",
+   "goldTotal": 400,
+   "into": [
+    "3869",
+    "3870",
+    "3871",
+    "3876",
+    "3877"
+   ],
+   "from": [],
+   "tags": [
+    "SpellDamage",
+    "ManaRegen",
+    "Vision",
+    "GoldPer",
+    "Lane"
+   ],
+   "purchasable": false
+  },
+  "3876": {
+   "id": 3876,
+   "name": "Solstice Sleigh",
+   "goldTotal": 400,
+   "into": [],
+   "from": [
+    "3867"
+   ],
+   "tags": [
+    "Health",
+    "HealthRegen",
+    "ManaRegen",
+    "Vision",
+    "GoldPer",
+    "Lane"
+   ],
+   "purchasable": true
+  },
+  "4629": {
+   "id": 4629,
+   "name": "Cosmic Drive",
+   "goldTotal": 3000,
+   "into": [],
+   "from": [
+    "3067",
+    "3113",
+    "3108"
+   ],
+   "tags": [
+    "Health",
+    "SpellDamage",
+    "NonbootsMovement",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "4630": {
+   "id": 4630,
+   "name": "Blighting Jewel",
+   "goldTotal": 1100,
+   "into": [
+    "3135",
+    "3137"
+   ],
+   "from": [
+    "1052"
+   ],
+   "tags": [
+    "MagicPenetration",
+    "SpellDamage"
+   ],
+   "purchasable": true
+  },
+  "4632": {
+   "id": 4632,
+   "name": "Verdant Barrier",
+   "goldTotal": 1600,
+   "into": [
+    "3102"
+   ],
+   "from": [
+    "1052",
+    "1033",
+    "1052"
+   ],
+   "tags": [
+    "SpellBlock",
+    "SpellDamage"
+   ],
+   "purchasable": true
+  },
+  "4645": {
+   "id": 4645,
+   "name": "Shadowflame",
+   "goldTotal": 3200,
+   "into": [],
+   "from": [
+    "3145",
+    "1058"
+   ],
+   "tags": [
+    "SpellDamage",
+    "MagicPenetration"
+   ],
+   "purchasable": true
+  },
+  "6333": {
+   "id": 6333,
+   "name": "Death's Dance",
+   "goldTotal": 3300,
+   "into": [],
+   "from": [
+    "2019",
+    "1037",
+    "3133"
+   ],
+   "tags": [
+    "Armor",
+    "Damage",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "6610": {
+   "id": 6610,
+   "name": "Sundered Sky",
+   "goldTotal": 3100,
+   "into": [],
+   "from": [
+    "2021",
+    "3133"
+   ],
+   "tags": [
+    "Health",
+    "Damage",
+    "CooldownReduction",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "6631": {
+   "id": 6631,
+   "name": "Stridebreaker",
+   "goldTotal": 3300,
+   "into": [],
+   "from": [
+    "3077",
+    "3044",
+    "1042"
+   ],
+   "tags": [
+    "Health",
+    "Damage",
+    "AttackSpeed",
+    "Slow"
+   ],
+   "purchasable": true
+  },
+  "6653": {
+   "id": 6653,
+   "name": "Liandry's Torment",
+   "goldTotal": 3000,
+   "into": [],
+   "from": [
+    "3147",
+    "2508"
+   ],
+   "tags": [
+    "Health",
+    "SpellDamage"
+   ],
+   "purchasable": true
+  },
+  "6655": {
+   "id": 6655,
+   "name": "Luden's Echo",
+   "goldTotal": 2750,
+   "into": [],
+   "from": [
+    "3802",
+    "3145"
+   ],
+   "tags": [
+    "SpellDamage",
+    "Mana",
+    "CooldownReduction",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "6657": {
+   "id": 6657,
+   "name": "Rod of Ages",
+   "goldTotal": 2600,
+   "into": [],
+   "from": [
+    "1026",
+    "3803"
+   ],
+   "tags": [
+    "Health",
+    "HealthRegen",
+    "SpellDamage",
+    "Mana",
+    "ManaRegen"
+   ],
+   "purchasable": true
+  },
+  "6665": {
+   "id": 6665,
+   "name": "Jak'Sho, The Protean",
+   "goldTotal": 3200,
+   "into": [],
+   "from": [
+    "1011",
+    "1031",
+    "1057"
+   ],
+   "tags": [
+    "Health",
+    "SpellBlock",
+    "Armor",
+    "MagicResist"
+   ],
+   "purchasable": true
+  },
+  "6670": {
+   "id": 6670,
+   "name": "Noonquiver",
+   "goldTotal": 1300,
+   "into": [
+    "2523",
+    "3036",
+    "6673"
+   ],
+   "from": [
+    "1036",
+    "1018"
+   ],
+   "tags": [
+    "Damage",
+    "CriticalStrike"
+   ],
+   "purchasable": true
+  },
+  "6672": {
+   "id": 6672,
+   "name": "Kraken Slayer",
+   "goldTotal": 3000,
+   "into": [],
+   "from": [
+    "6690",
+    "3051",
+    "1043"
+   ],
+   "tags": [
+    "Damage",
+    "AttackSpeed",
+    "OnHit",
+    "NonbootsMovement"
+   ],
+   "purchasable": true
+  },
+  "6676": {
+   "id": 6676,
+   "name": "The Collector",
+   "goldTotal": 3000,
+   "into": [],
+   "from": [
+    "1037",
+    "3134",
+    "1018"
+   ],
+   "tags": [
+    "Damage",
+    "CriticalStrike",
+    "ArmorPenetration"
+   ],
+   "purchasable": true
+  },
+  "6690": {
+   "id": 6690,
+   "name": "Rectrix",
+   "goldTotal": 775,
+   "into": [
+    "4003",
+    "6700",
+    "6672",
+    "3142"
+   ],
+   "from": [
+    "1036"
+   ],
+   "tags": [
+    "Damage",
+    "NonbootsMovement"
+   ],
+   "purchasable": true
+  },
+  "6694": {
+   "id": 6694,
+   "name": "Serylda's Grudge",
+   "goldTotal": 3000,
+   "into": [],
+   "from": [
+    "3133",
+    "3035"
+   ],
+   "tags": [
+    "Damage",
+    "CooldownReduction",
+    "ArmorPenetration",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  },
+  "8020": {
+   "id": 8020,
+   "name": "Abyssal Mask",
+   "goldTotal": 2650,
+   "into": [],
+   "from": [
+    "3067",
+    "1057"
+   ],
+   "tags": [
+    "Health",
+    "SpellBlock",
+    "CooldownReduction",
+    "MagicResist",
+    "AbilityHaste"
+   ],
+   "purchasable": true
+  }
+ }
+}

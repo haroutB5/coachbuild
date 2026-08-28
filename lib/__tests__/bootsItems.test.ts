@@ -215,7 +215,7 @@ describe("all three call sites agree that 3172 is boots", () => {
     // Proven through buildItemSets: if isFullItem rejected 3172 it could never
     // appear in any line at all.
     const sets = buildItemSets(CHAMP, "Mid", baseBuild(), null, CATALOG, otpWithBothBoots());
-    const otpLine = sets[0].blocks.find((b) => b.type === "OTP most built")!;
+    const otpLine = sets[0].blocks.find((b) => b.type.startsWith("OTP"))!;
     expect(otpLine.items.map((i) => Number(i.id))).toContain(GUNMETAL_GREAVES);
   });
 });
@@ -228,7 +228,7 @@ describe("the one-boots invariant, against the live defect", () => {
     // `bootsIds`, buildLine counted it as a full item, and the exported loadout
     // held two pairs of boots.
     const sets = buildItemSets(CHAMP, "Mid", baseBuild(), null, CATALOG, otpWithBothBoots());
-    const otpLine = sets[0].blocks.find((b) => b.type === "OTP most built")!;
+    const otpLine = sets[0].blocks.find((b) => b.type.startsWith("OTP"))!;
     const ids = otpLine.items.map((i) => Number(i.id));
     const boots = bootsIn(ids);
     expect(boots).toHaveLength(1);
@@ -255,7 +255,7 @@ describe("the one-boots invariant, against the live defect", () => {
       boots: [] as { itemId: number; share: number }[],
     };
     const sets = buildItemSets(CHAMP, "Mid", baseBuild(), null, CATALOG, otpNoBoots);
-    const ids = sets[0].blocks.find((b) => b.type === "OTP most built")!.items.map((i) => Number(i.id));
+    const ids = sets[0].blocks.find((b) => b.type.startsWith("OTP"))!.items.map((i) => Number(i.id));
     const boots = bootsIn(ids);
     expect(boots).toEqual([3006]); // the champ's own core boots
   });

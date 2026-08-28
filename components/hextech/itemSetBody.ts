@@ -153,6 +153,12 @@ import { flattenSituational, situationalShortlist } from "./situational";
 import { wpaText } from "@/components/StatBadge";
 import { resolveOptimizedPathView } from "./optimizedPath";
 import { isBootsItem, isFinalBootsItem, type ItemCatalog } from "@/lib/bootsItems";
+import {
+  applyPositionRanks,
+  orderedIdRanks,
+  wpaSlotRanks,
+  type PositionPrior,
+} from "@/lib/positionalPriors";
 
 export interface ItemSetItem {
   id: string;
@@ -227,6 +233,16 @@ export interface ProConsensusItemsInput {
    *  data, so the day the OTP ingest starts fetching timelines the title fixes
    *  itself with no code change here. */
   ordered?: boolean;
+  /** 2026-08-28 (RC-5) — the ids this source's timelines actually POSITIONED,
+   *  in median purchase order: `ConsensusArtifactSource.p` verbatim.
+   *
+   *  Present exactly when `ordered` is, and NOT the same list as `items`:
+   *  `items` additionally carries every id the sample could not position,
+   *  trailing behind the ones it could. This field exists because the OTHER
+   *  source uses it as a positional prior (see `consensusPoolOrder`), and
+   *  handing over `items` instead would export an order this sample never
+   *  measured. */
+  orderedIds?: number[];
 }
 
 const LINE_LEN = 6;
@@ -963,11 +979,55 @@ function fromShares(
  *  When it does not, the share sort stays — it is still the best available
  *  ranking, and it is still not an order. `consensusBlockTitle` is what stops
  *  the block claiming otherwise. */
+/** RC-5 (2026-08-28). The cascade below is the user's directive in code:
+ *  *"frequency order is NOT an acceptable fallback anywhere a block reads as a
+ *  build."* RC-2 stopped a frequency-ordered block from CALLING itself a build,
+ *  which was honest and did not help — it was still a row in a shop panel, for
+ *  236 of 442 pro entries and all 297 OTP entries in the committed artifact.
+ *
+ *  Each step is real positional evidence, ranked by how close it is to this
+ *  block's own population. See lib/positionalPriors.ts for what each signal is
+ *  and what it is worth; the ONLY thing decided here is precedence. */
+interface ConsensusOrderContext {
+  /** The other source's `orderedIds`, when it measured one. */
+  crossSourceOrder?: readonly number[] | null;
+  /** Modal WPA slot per item id, from this champion-role's own model. Built
+   *  once per export and shared by both blocks. */
+  wpaSlots?: ReadonlyMap<number, number> | null;
+}
+
 function consensusPoolOrder(
   input: ProConsensusItemsInput | null | undefined,
-  entries: { itemId: number; share: number }[]
-): { itemId: number; share: number }[] {
-  return input?.ordered ? entries : [...entries].sort((a, b) => b.share - a.share);
+  entries: { itemId: number; share: number }[],
+  ctx: ConsensusOrderContext = {}
+): { entries: { itemId: number; share: number }[]; prior: PositionPrior | null } {
+  // 1. The source measured its OWN median purchase positions. `entries` is
+  //    already in that order (consensusSourceToInput reordered it), so this is
+  //    the pass-through RC-2 introduced.
+  if (input?.ordered) return { entries, prior: "timeline" };
+
+  // Boots are pinned to the head and never count as evidence: `buildLine`
+  // lifts them out of this pool and reinserts them at BOOTS_LINE_INDEX, so
+  // their place here is not a claim, and a block must not get to say it knows
+  // a legendary order on the strength of a boot.
+  const front = new Set((input?.boots ?? []).map((b) => b.itemId));
+
+  // 2. The OTHER source measured one, for the SAME champion-role. Still a
+  //    timeline measurement of real games of this champion in this lane.
+  const crossSource = applyPositionRanks(entries, orderedIdRanks(ctx.crossSourceOrder), { front });
+  if (crossSource) return { entries: crossSource.entries, prior: "cross-source" };
+
+  // 3. The champion's own WPA model, which publishes a candidate pool PER
+  //    LEGENDARY SLOT with per-item occurrence. Weakest of the three because it
+  //    describes the whole ranked population rather than this block's, and
+  //    last for exactly that reason.
+  const wpa = applyPositionRanks(entries, ctx.wpaSlots, { front });
+  if (wpa) return { entries: wpa.entries, prior: "wpa-slot" };
+
+  // 4. Residual. Share order is still the best RANKING available and it is
+  //    still not an order; `consensusBlockTitle` is what stops the block
+  //    claiming otherwise.
+  return { entries: [...entries].sort((a, b) => b.share - a.share), prior: null };
 }
 
 /** The title a consensus block gets, given whether its source could measure a
@@ -994,8 +1054,19 @@ function consensusPoolOrder(
  *  quantity. The `(same as ...)` suffix still composes on top of it. */
 const CONSENSUS_UNORDERED_SUFFIX = "most built";
 
-function consensusBlockTitle(source: "Pro" | "OTP", input: ProConsensusItemsInput | null | undefined): string {
-  return input?.ordered ? `${source} build` : `${source} ${CONSENSUS_UNORDERED_SUFFIX}`;
+/** RC-5: the argument now takes the RESOLVED prior, not the source's own
+ *  `ordered` flag, because there are three ways to be in purchase order and
+ *  only one of them is the source's own timelines.
+ *
+ *  A block ordered by a cross-source or WPA-slot prior is titled a BUILD. Its
+ *  contents are still that source's items — the prior permutes the block, it
+ *  never re-selects it — and the row is now a real purchase sequence, which is
+ *  the claim the title makes. "most built" is reserved for the residual, where
+ *  no positional evidence of any kind exists and the row really is a
+ *  popularity ranking; measured on the committed patch-16.16 artifact that is
+ *  17 pro and 3 OTP blocks of the 551 the export can render. */
+function consensusBlockTitle(source: "Pro" | "OTP", prior: PositionPrior | null): string {
+  return prior ? `${source} build` : `${source} ${CONSENSUS_UNORDERED_SUFFIX}`;
 }
 
 /** Sort a candidate list best-first on the ONE legal axis. The original array
@@ -1468,8 +1539,27 @@ export function buildItemSets(
   // FULL-FILTERED — used only as a fallback/padding pool for the 6-item
   // build lines below, never for the Situational swaps block itself.
   const situationalPoolFull = fullItemsOnly(fromPicks(situationalPicks, wpaRanking), meta);
-  const proPool = fullItemsOnly(fromShares(consensusPoolOrder(pro, proEntries), shareRanking), meta);
-  const otpPool = fullItemsOnly(fromShares(consensusPoolOrder(otp, otpEntries), otpShareRanking), meta);
+  // RC-5. Built ONCE, from the champion's own model, and handed to both blocks
+  // — the modal slot of an item does not depend on which consensus population
+  // is being ordered, and two derivations of one number is how the drift this
+  // file's header catalogues starts.
+  const wpaSlots = wpaSlotRanks(items);
+  const proOrder = consensusPoolOrder(pro, proEntries, {
+    // The cross-source prior reads the OTHER source's `orderedIds`. Note that
+    // it is one-directional TODAY only because `/api/otp` ships no timelines
+    // at all (re-measured 2026-08-28: 0 of 111 Viktor, 0 of 200 Urgot, 0 of
+    // 186 Ahri, 0 of 98 Jax); the code is symmetric, so the day that ingest
+    // starts fetching timelines a thin PRO block starts being rescued too,
+    // with no change here.
+    crossSourceOrder: otp?.orderedIds,
+    wpaSlots,
+  });
+  const otpOrder = consensusPoolOrder(otp, otpEntries, {
+    crossSourceOrder: pro?.orderedIds,
+    wpaSlots,
+  });
+  const proPool = fullItemsOnly(fromShares(proOrder.entries, shareRanking), meta);
+  const otpPool = fullItemsOnly(fromShares(otpOrder.entries, otpShareRanking), meta);
 
   // General padding priority for any short line: optimized -> situational ->
   // consensus, per the spec's cascade. Buy order's OWN padding overrides this
@@ -1562,7 +1652,7 @@ export function buildItemSets(
     // Same "never a genuinely empty block" guard as Buy order above --
     // `hasPro` only means the SOURCE pro-consensus data was non-empty, not
     // that anything survived the full-items-only filter.
-    pushLine(consensusBlockTitle("Pro", pro), "pro", FAMILY_KEEP_RANK.pro, buildLine(proPool, [...generalFallback, corePrimary], bootsIds));
+    pushLine(consensusBlockTitle("Pro", proOrder.prior), "pro", FAMILY_KEEP_RANK.pro, buildLine(proPool, [...generalFallback, corePrimary], bootsIds));
   }
 
   if (hasOtp) {
@@ -1576,7 +1666,7 @@ export function buildItemSets(
     // is not hypothetical on this line — measured live, the boots slot is where
     // most OTP padding actually lands: every Bot-lane one-trick line with a full
     // six-item OTP pool still reaches outside it for footwear.
-    pushLine(consensusBlockTitle("OTP", otp), "otp", FAMILY_KEEP_RANK.otp, buildLine(otpPool, [...otpFallback, corePrimary], bootsIds));
+    pushLine(consensusBlockTitle("OTP", otpOrder.prior), "otp", FAMILY_KEEP_RANK.otp, buildLine(otpPool, [...otpFallback, corePrimary], bootsIds));
   }
 
   // ── Hidden gem — the fourth and last category ─────────────────────────────

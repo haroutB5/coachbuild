@@ -79,6 +79,10 @@ const CATALOG = new Map<number, ItemDetail>(
     meta(STERAKS),
     meta(MAW),
     meta(GUARDIAN_ANGEL),
+    meta(7001),
+    meta(7002),
+    meta(7003),
+    meta(7004),
     boots(MERCURYS),
     boots(PLATED),
   ].map((m) => [m.id, m])
@@ -122,6 +126,24 @@ function camilleItems(): ItemsBlock {
     second: pick(RAVENOUS_HYDRA, 0.038),
     third: pick(STERAKS, 0.934),
     fourthPlus: [pick(DEATHS_DANCE, -0.968)],
+  };
+}
+
+/** A model whose per-slot pools name ids NOTHING in the consensus blocks below
+ *  uses. This is the RESIDUAL shape, and since RC-5 it is the ONLY shape in
+ *  which a consensus block may still be frequency-ordered: `camilleItems()`
+ *  ranks Trinity/Ravenous/Sterak's/Death's Dance by slot, so a block built from
+ *  those ids is now ordered by the WPA slot prior and titled a build. Measured
+ *  on the committed patch-16.16 artifact, the residual is 17 pro and 3 OTP
+ *  blocks of the 551 the export can render. */
+function noSlotSignalItems(): ItemsBlock {
+  return {
+    starter: pick(DORANS_BLADE),
+    boots: pick(MERCURYS, 0.502),
+    first: pick(7001),
+    second: pick(7002),
+    third: pick(7003),
+    fourthPlus: [pick(7004)],
   };
 }
 
@@ -203,12 +225,14 @@ describe("a consensus block that DECLARES an order is not re-sorted by share", (
   });
 
   it("still re-sorts by share when the source could not measure an order", () => {
+    // RC-5: and when no positional prior can be measured for it either — hence
+    // `noSlotSignalItems()`. Share order is the residual, not the default.
     const { ordered: _drop, ...unorderedPro } = orderedPro;
     const ids = idsOf(
-      buildItemSets(CAMILLE, "Top", build(camilleItems()), unorderedPro, CATALOG),
+      buildItemSets(CAMILLE, "Top", build(noSlotSignalItems()), unorderedPro, CATALOG),
       "Pro most built"
     );
-    expect(ids.filter((id) => id !== PLATED)).toEqual([
+    expect(ids.filter((id) => id !== PLATED).slice(0, 5)).toEqual([
       TRINITY_FORCE,
       RAVENOUS_HYDRA,
       DEATHS_DANCE,
@@ -254,7 +278,7 @@ describe("a block only claims to be a build when its source could measure one", 
     // imply one. Ahri's live OTP block shipped Malignance ... Blackfire Torch
     // at positions 1 and 6 — a pair lib/buildSlots.ts measured at LIFT 0,
     // never built together — as if it were a sequence.
-    const sets = buildItemSets(CAMILLE, "Top", build(camilleItems()), { items, boots }, CATALOG, {
+    const sets = buildItemSets(CAMILLE, "Top", build(noSlotSignalItems()), { items, boots }, CATALOG, {
       items,
       boots,
     });
@@ -265,10 +289,14 @@ describe("a block only claims to be a build when its source could measure one", 
   });
 
   it("mixes: an ordered Pro block beside a frequency-only OTP block", () => {
+    // RC-5: the Pro block declares `ordered` but publishes no `orderedIds`, so
+    // there is nothing for the OTP block to inherit — the mixed state an
+    // artifact baked BEFORE RC-5 produces, read by this code. With no slot
+    // signal either, the OTP block is a genuine residual.
     const sets = buildItemSets(
       CAMILLE,
       "Top",
-      build(camilleItems()),
+      build(noSlotSignalItems()),
       { items, boots, ordered: true },
       CATALOG,
       { items: [...items, { itemId: MAW, share: 0.1 }], boots }
