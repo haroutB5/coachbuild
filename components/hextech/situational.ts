@@ -40,21 +40,30 @@ export function flattenSituational(items: ItemsBlock): PickType[] {
 }
 
 /** The exact window EVERY situational surface renders: `flattenSituational`'s
- *  order with the enemy-comp promotion applied, capped at
- *  SITUATIONAL_DISPLAY_LIMIT.
+ *  order, capped at SITUATIONAL_DISPLAY_LIMIT.
  *
- *  ORDER OF OPERATIONS IS THE WHOLE POINT, and getting it wrong is how the
- *  page and the shop would silently disagree. The promotion runs BEFORE the
- *  slice, so a comp-relevant pick sitting at position 7 on raw WPA can reach
- *  the visible six. Slicing first and promoting after would make the promotion
- *  a no-op in exactly the cases it exists for, AND it would produce a
- *  different six than the Builds page shows, for the same champion, in the
- *  same champ select. One function, one order, both surfaces.
+ *  ── NO LONGER COMP-ORDERED (0.120.0), AND THE REMOVAL IS THE DECISION ─────
+ *  From 0.118.0 to 0.119.0 this took a `promotedIds` argument and moved the
+ *  enemy-comp signal's picks to the front before the slice. That is gone, and
+ *  `orderSituationalForComp` with it. The reasons, in order of weight:
  *
- *  `promotedIds` is REQUIRED, not optional with a `[]` default. A caller that
- *  has no comp must say `[]` out loud. An optional parameter here would let a
- *  fixture exercise a path production does not take (or the reverse), which is
- *  the failure this codebase has already paid for elsewhere.
+ *    1. The item set now carries a `For this game` block, which is a whole
+ *       comp-adjusted BUILD. Two comp-driven opinions inside one set cannot be
+ *       reconciled by the reader: the situational promotion was gated on the
+ *       item existing in the champion's own pool AND on costing at most
+ *       MAX_WPA_COST, and the new block is gated on neither, so the two could
+ *       legitimately disagree about the same comp with nothing on screen
+ *       explaining why.
+ *    2. It mostly did not do anything. Measured over 4,900 held-out trials in
+ *       scripts/sweep-enemycomp.mts: a 7.3% fire rate, of which 58.2% only
+ *       RELABELLED an item that was already at the head of the row.
+ *    3. It retires MAX_WPA_COST, which sat at the median of a smooth
+ *       distribution with no natural break and was the top open decision on
+ *       the whole feature. Nothing depends on it now.
+ *
+ *  So this row is a pure SOURCE claim again -- "the alternatives this
+ *  champion's own per-slot data offers, WPA-ordered" -- which is the standing
+ *  rule in itemSetBody.ts and the thing its title has always promised.
  *
  *  ORDER IS THE ONLY THING CARRYING THE DELTA. The Builds page prints each
  *  pick's WPA next to it (`wpaText`); an LCU item-set block carries nothing but
@@ -66,45 +75,6 @@ export function flattenSituational(items: ItemsBlock): PickType[] {
  *  NOT FILTERED on WPA sign, deliberately — see itemSetBody.ts's
  *  `situationalBlockPicks` for the measurement behind that call and the open
  *  recommendation attached to it. */
-export function situationalShortlist(
-  items: ItemsBlock,
-  promotedIds: readonly number[]
-): PickType[] {
-  return orderSituationalForComp(flattenSituational(items), promotedIds).slice(
-    0,
-    SITUATIONAL_DISPLAY_LIMIT
-  );
-}
-
-/** Moves every pick whose id is in `promotedIds` to the front, preserving the
- *  relative order of both groups.
- *
- *  APPLIED TO THE FULL FLATTENED LIST, BEFORE THE TOP-6 SLICE, and that order
- *  of operations is the whole reason this is a named function rather than a
- *  sort comparator: a comp-relevant pick sitting at position 7 on raw WPA has
- *  to be able to reach the visible window. Slicing first would make the
- *  promotion a no-op in exactly the cases it exists for.
- *
- *  CONTENT-PRESERVING BY CONSTRUCTION. It partitions the input and
- *  concatenates, so the output is always a permutation of the input: same
- *  members, same length, no id introduced and none dropped. That is the
- *  structural form of RC-5b's rule (a prior may PERMUTE a block, never
- *  re-select it) and it is what lets the block keep a title that claims a
- *  source. An id in `promotedIds` that is not in `picks` is silently ignored,
- *  because it cannot be added.
- *
- *  ONE DEFINITION, and it has to stay that way. The Builds page's
- *  SituationalCard, the live panel and (from phase 2) itemSetBody's shop block
- *  all order the same row; two implementations of "promote these" is how the
- *  page and the shop come to disagree about what a named block contains, which
- *  is a defect class this file's header already documents. */
-export function orderSituationalForComp(
-  picks: readonly PickType[],
-  promotedIds: readonly number[]
-): PickType[] {
-  if (promotedIds.length === 0) return [...picks];
-  const set = new Set(promotedIds);
-  const promoted = picks.filter((p) => set.has(p.id));
-  const rest = picks.filter((p) => !set.has(p.id));
-  return [...promoted, ...rest];
+export function situationalShortlist(items: ItemsBlock): PickType[] {
+  return flattenSituational(items).slice(0, SITUATIONAL_DISPLAY_LIMIT);
 }

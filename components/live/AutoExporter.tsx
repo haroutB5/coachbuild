@@ -51,7 +51,7 @@ import {
   getCompGateState,
 } from "./champSelectFollowState";
 import { MAX_COMP_REEXPORTS_PER_CHAMP_SELECT } from "./compReexportGate";
-import { resolveCompSignal, compSignalKey } from "@/lib/enemyComp/compSignal";
+import { resolveForThisGamePlan, forThisGameKey } from "@/lib/enemyComp/forThisGame";
 import { normalizeDraftEnemyIds } from "./draftLiveSync";
 import {
   getStoredSession,
@@ -197,7 +197,14 @@ export default function AutoExporter() {
         const enemies = normalizeDraftEnemyIds(companion.champSelect?.theirTeam ?? []);
         const buildForSignal = await fetchBuildFor(championId, laneId);
         const liveKey = buildForSignal
-          ? compSignalKey(resolveCompSignal(enemies, buildForSignal.items))
+          ? forThisGameKey(
+              resolveForThisGamePlan({
+                enemyChampionIds: enemies,
+                championId,
+                lane: laneId,
+                items: buildForSignal.items,
+              })
+            )
           : "none";
         observeCompSignalTick(liveKey);
         const lastKey = getLastAppliedSignalKey("items", championId, laneId);

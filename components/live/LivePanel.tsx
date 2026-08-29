@@ -25,7 +25,6 @@ import { useBodyScrollLock } from "@/components/useBodyScrollLock";
 import SituationalCard from "@/components/hextech/SituationalCard";
 import { getStoredSession, getStoredPort, getLive, isLiveError, LIVE_POLL_MS } from "./companionClient";
 import { buildLivePanelModel, indexChampionsByKey, sameLivePanelModel, type LivePanelModel } from "./livePanelModel";
-import { resolveCompSignal } from "@/lib/enemyComp/compSignal";
 import { readStoredRankBracketId } from "@/components/hextech/rankBracketStorage";
 import { rankQueryParam } from "@/lib/rankBrackets";
 
@@ -153,17 +152,20 @@ export default function LivePanel({ champ, lane }: LivePanelProps) {
 
   if (!model || model.enemies.length === 0) return null;
 
-  const enemyChampionIds = model.enemies
-    .map((e) => champByKey?.get(e.championKey)?.id)
-    .filter((id): id is number => typeof id === "number");
-  // 2026-08-29: was `selectCompAwareHighlights`, which gated on
-  // `Pick.matchupConditioned` and therefore returned [] on every call in
-  // production for as long as it existed (the coachless matchup path 403s).
-  // `resolveCompSignal` derives the same decision from data this app actually
-  // holds, and returns null rather than an empty array so "no rule fired" is
-  // ONE value and not two. Enemy CHAMPIONS only, as ever: nothing here reads
-  // what any enemy has bought.
-  const compSignal = items ? resolveCompSignal(enemyChampionIds, items) : null;
+  // NO COMP-DRIVEN SURFACE HERE, and the absence is deliberate (0.120.0).
+  //
+  // This panel used to resolve the enemy-comp signal and hand it to
+  // SituationalCard, which reordered the row and relabelled it. That whole
+  // mechanism is gone -- the comp now gets its own block, `For this game`,
+  // built during CHAMP SELECT and written into the item set before the game
+  // starts.
+  //
+  // It is not re-derived in-game, and that is the point: by the time this panel
+  // renders, the shop already holds the block. Recomputing it here would give a
+  // player a second, later opinion about a build they have already started, and
+  // this panel would be deriving it from the LIVE game rather than from champ
+  // select -- a different input reaching a surface that looks identical. One
+  // decision, made once, before the game.
   const ver = versionFromPatch(patch ?? undefined);
 
   return (
@@ -197,7 +199,7 @@ export default function LivePanel({ champ, lane }: LivePanelProps) {
         })}
       </div>
 
-      {items && <SituationalCard items={items} onItemClick={openItem} compSignal={compSignal} />}
+      {items && <SituationalCard items={items} onItemClick={openItem} />}
 
       {lastItemId !== null && (
         <ItemDetailPopover itemId={lastItemId} ver={ver} open={activeItemId !== null} onClose={closeItem} />

@@ -55,7 +55,11 @@ import {
   type CompanionPort,
 } from "@/components/live/companionClient";
 import { shouldAutoExport, type AutoApplyGateInput } from "./autoExportShared";
-import { resolveCompSignal, type CompSignal } from "@/lib/enemyComp/compSignal";
+import {
+  resolveForThisGamePlan,
+  type ForThisGamePlan,
+  type ForThisGameSwap,
+} from "@/lib/enemyComp/forThisGame";
 import { getCurrentEnemyChampionIds } from "@/components/live/champSelectFollowState";
 
 export { type AutoApplyGateInput, type ConsensusSource };
@@ -532,6 +536,59 @@ export async function resolveItemMetaForSets(patch: string): Promise<Map<number,
   }
 }
 
+/**
+ * The desktop's own `ApplyDiagnostics.MaxLines`, mirrored.
+ *
+ * WE CAP, RATHER THAN LETTING THE BRIDGE TRUNCATE. `ApplyDiagnosticsParser`
+ * drops everything past its fourth line and appends its own "the rest were
+ * dropped" note, so a fifth line does not vanish silently -- but WHICH line
+ * survives would then be decided by emission order in this file rather than by
+ * importance. The consensus failures are the ones a reader is actually
+ * debugging with ("no Pro build block because /api/pros returned 500"); the
+ * `For this game` caption is nice to have. So failures first, notices next,
+ * caption last, and the slice happens here where the priority is visible.
+ *
+ * A source test pins this against the C# constant.
+ */
+export const DIAGNOSTICS_MAX_LINES = 4;
+
+export function capDiagnostics(lines: readonly string[]): string[] {
+  return lines.slice(0, DIAGNOSTICS_MAX_LINES);
+}
+
+/**
+ * ONE line naming every swap the `For this game` block made, for
+ * `companion.log`.
+ *
+ * ONE LINE, NOT ONE PER SWAP, and the reason is the budget above: two swaps
+ * plus a failure and a notice would be four lines before the caption even
+ * started, and the caption is the least important of them. One line also reads
+ * better in a log that is scanned rather than parsed.
+ *
+ * BUILT FROM THE SWAPS THE BLOCK ACTUALLY MADE, handed back by `buildItemSets`
+ * -- never from a second `applyForThisGameLine` call. Line assembly is where a
+ * swap can turn out to be a MOVE rather than a replacement, so an independently
+ * derived caption would name a displaced item the block did not displace. Same
+ * "one derivation, two consumers" rule the `situational` wire follows.
+ *
+ * Item NAMES come from the catalogue when it resolved and degrade to the id
+ * when it did not. An id in a log is still actionable; a fabricated name is
+ * not.
+ */
+export function forThisGameCaption(
+  swaps: readonly ForThisGameSwap[],
+  itemMeta: ReadonlyMap<number, ItemDetail>
+): string | null {
+  if (swaps.length === 0) return null;
+  const name = (id: number) => itemMeta.get(id)?.name ?? `item ${id}`;
+  const parts = swaps.map((s) => {
+    const prefix = s.channel === "boots" ? "boots " : "";
+    const judgment = s.measured ? "" : ", judgment";
+    return `${prefix}${name(s.itemId)} (${s.reason}${judgment})`;
+  });
+  return `For this game: ${parts.join("; ")}`;
+}
+
 /** The ONE call both the manual button and the auto-export effect make:
  *  resolve pro-consensus data + item metadata (both best-effort, in
  *  parallel), build the champ+role set (WPA/Pro/OTP/Hidden gem/Situational as
@@ -645,31 +702,42 @@ export async function applyItemSetsForBuild(params: {
   // is here anyway because a decorative signal must never be able to fail an
   // apply, which is the same rule the `situational` wire and `diagnostics`
   // already follow.
-  let compSignal: CompSignal | null = null;
+  let forThisGame: ForThisGamePlan | null = null;
   try {
-    compSignal = resolveCompSignal(params.enemies ?? getCurrentEnemyChampionIds(), params.build.items);
+    forThisGame = resolveForThisGamePlan({
+      enemyChampionIds: params.enemies ?? getCurrentEnemyChampionIds(),
+      championId: params.champ.id,
+      lane: params.lane,
+      items: params.build.items,
+    });
   } catch (err) {
-    compSignal = null;
+    forThisGame = null;
     recordCompanionError(
       "comp-signal",
-      `enemy-comp signal skipped for championId=${params.champ.id}: ${err instanceof Error ? err.message : String(err)}`
+      `enemy-comp plan skipped for championId=${params.champ.id}: ${err instanceof Error ? err.message : String(err)}`
     );
   }
 
-  const { sets, situational } = buildItemSets(
+  const { sets, situational, forThisGame: swaps } = buildItemSets(
     params.champ,
     params.roleLabel,
     params.build,
     pro,
     itemMeta,
     otp,
-    compSignal
+    forThisGame
   );
+
+  // The caption for the block, on the SAME channel as the consensus failures
+  // and notices, and LAST. See `forThisGameCaption` and DIAGNOSTICS_MAX_LINES.
+  const caption = swaps ? forThisGameCaption(swaps, itemMeta) : null;
+  const allDiagnostics = capDiagnostics([...diagnostics, ...(caption ? [caption] : [])]);
+
   return applyItemSets(params.port, params.session, {
     championId: params.champ.id,
     sets,
     replacePrefix: champScopedReplacePrefix(params.champ),
-    ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    ...(allDiagnostics.length > 0 ? { diagnostics: allDiagnostics } : {}),
     // Spread, not assigned: a champion with no situational picks must POST a
     // body with NO `situational` key at all, not `situational: undefined`
     // (which JSON.stringify drops anyway) and never `[]`. Keeping the absence

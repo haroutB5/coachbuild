@@ -8,7 +8,6 @@ import {
   MAX_COMP_REEXPORTS_PER_CHAMP_SELECT,
   type CompGateState,
 } from "../live/compReexportGate";
-import { compSignalKey } from "@/lib/enemyComp/compSignal";
 
 /** Drives the gate the way the poll does: one observation per tick, then ask. */
 function run(
@@ -35,55 +34,6 @@ function run(
 function ticksAt1s(keys: string[], startMs = 0) {
   return keys.map((key, i) => ({ key, at: startMs + i * 1000 }));
 }
-
-describe("compSignalKey is the DERIVED decision, never the enemy list", () => {
-  it("is stable for two different comps that decide the same thing", () => {
-    const a = compSignalKey({
-      rule: "cc",
-      promotedIds: [3111],
-      labelSuffix: "vs CC",
-      wpaCost: 0.1,
-      evidence: { enemiesConsidered: 3, estimatedCount: 0 },
-    });
-    const b = compSignalKey({
-      rule: "cc",
-      promotedIds: [3111],
-      labelSuffix: "vs CC",
-      wpaCost: 0.9, // a different cost, same decision
-      evidence: { enemiesConsidered: 5, estimatedCount: 2 }, // two more enemies locked
-    });
-    // THE central requirement of this phase. Two more enemies locking in
-    // without changing what we would export must NOT produce a new key, or
-    // every pick in the draft becomes a whole-document LCU PUT.
-    expect(a).toBe(b);
-  });
-
-  it("differs when the rule differs and when the promoted item differs", () => {
-    const base = {
-      promotedIds: [3111],
-      labelSuffix: "vs CC",
-      wpaCost: 0.1,
-      evidence: { enemiesConsidered: 3, estimatedCount: 0 },
-    };
-    const cc = compSignalKey({ ...base, rule: "cc" });
-    const ap = compSignalKey({ ...base, rule: "damage-ap" });
-    const other = compSignalKey({ ...base, rule: "cc", promotedIds: [3047] });
-    expect(new Set([cc, ap, other]).size).toBe(3);
-  });
-
-  it("gives null its own stable key, distinct from every real decision", () => {
-    expect(compSignalKey(null)).toBe("none");
-    expect(compSignalKey(null)).not.toBe(
-      compSignalKey({
-        rule: "cc",
-        promotedIds: [3111],
-        labelSuffix: "vs CC",
-        wpaCost: 0,
-        evidence: { enemiesConsidered: 3, estimatedCount: 0 },
-      })
-    );
-  });
-});
 
 describe("the first export is not comp-gated", () => {
   it("allows immediately when nothing has been exported for this champion and lane", () => {

@@ -150,7 +150,12 @@
 import type { ChampionRef, BuildResponse, ItemsBlock, Pick as PickType } from "@/lib/types";
 import type { ItemDetail } from "@/components/itemDetail";
 import { flattenSituational, situationalShortlist } from "./situational";
-import type { CompSignal } from "@/lib/enemyComp/compSignal";
+import {
+  applyForThisGameLine,
+  FOR_THIS_GAME_BLOCK_TITLE,
+  type ForThisGamePlan,
+  type ForThisGameSwap,
+} from "@/lib/enemyComp/forThisGame";
 import { wpaText } from "@/components/StatBadge";
 import { resolveOptimizedPathView } from "./optimizedPath";
 import { isBootsItem, isFinalBootsItem, type ItemCatalog } from "@/lib/bootsItems";
@@ -377,15 +382,9 @@ const SITUATIONAL_BLOCK_TYPE = "Situational";
  *                    set to get the panel's own list verbatim. */
 export function situationalBlockPicks(
   items: ItemsBlock,
-  excludeIds: ReadonlySet<number> = new Set(),
-  /** Enemy-comp promotions, from `resolveCompSignal`. REQUIRED, and `[]` means
-   *  "no comp" rather than being a default a caller can forget: the promotion
-   *  is applied inside `situationalShortlist` BEFORE the top-6 slice, so a
-   *  caller that omitted it would get a different six than every other
-   *  surface. See that function's own note on the order of operations. */
-  promotedIds: readonly number[] = []
+  excludeIds: ReadonlySet<number> = new Set()
 ): PickType[] {
-  return situationalShortlist(items, promotedIds).filter((p) => !excludeIds.has(p.id));
+  return situationalShortlist(items).filter((p) => !excludeIds.has(p.id));
 }
 
 // ── Putting the WPA number in the shop (2026-08-19, user directive) ──────────
@@ -493,6 +492,17 @@ export interface ItemSetExport {
   /** OMITTED (key absent) when there are no situational picks — never `[]`,
    *  never `null`. */
   situational?: SituationalWireEntry[];
+  /** The changes the `For this game` block actually made, in the order it made
+   *  them. OMITTED (key absent) when there is no such block.
+   *
+   *  ONE DERIVATION, TWO CONSUMERS, exactly like `situational` above and for
+   *  the same reason. The caption that rides the `diagnostics` array to
+   *  `companion.log` is built from THIS array, not from a second call to
+   *  `applyForThisGameLine`, because the line assembly is where a swap can
+   *  turn out to be a MOVE rather than a replacement — and a caption derived
+   *  independently would name a displaced item that the block did not actually
+   *  displace. */
+  forThisGame?: ForThisGameSwap[];
 }
 
 /** The Situational row as shop blocks: exactly ONE `Situational` block
@@ -506,22 +516,14 @@ export interface ItemSetExport {
  *
  *  Returns an array rather than one block because the caller splices it into
  *  `blocks` and the empty case must contribute nothing. */
-export function situationalBlocks(
-  picks: readonly PickType[],
-  /** `CompSignal.labelSuffix` ("vs CC" / "vs AD" / "vs AP") when a comp rule
-   *  fired, absent otherwise.
-   *
-   *  A TITLE IS A CLAIM ABOUT THE BLOCK, which is this file's standing rule,
-   *  and that cuts both ways here: the suffix appears ONLY when the row was
-   *  actually reordered against the enemy comp. An unchanged row keeps the
-   *  bare `Situational`, because a title that always says "vs" trains the
-   *  reader to stop reading it. Block name first and suffix short, because the
-   *  client renders set titles in a narrow column. */
-  labelSuffix?: string
-): ItemSetBlock[] {
+export function situationalBlocks(picks: readonly PickType[]): ItemSetBlock[] {
   if (picks.length === 0) return [];
-  const type = labelSuffix ? `${SITUATIONAL_BLOCK_TYPE} ${labelSuffix}` : SITUATIONAL_BLOCK_TYPE;
-  return [{ type, items: picks.map((p) => itemRef(p.id)) }];
+  // NO COMP SUFFIX (0.120.0). 0.118.0 titled this `Situational vs CC` /
+  // `vs AD` / `vs AP` when the enemy-comp signal fired. The comp now gets its
+  // own block -- `For this game`, a whole adjusted build -- and two
+  // comp-driven opinions in one set cannot be reconciled by the reader. This
+  // row is a pure SOURCE claim again. See situational.ts's own note.
+  return [{ type: SITUATIONAL_BLOCK_TYPE, items: picks.map((p) => itemRef(p.id)) }];
 }
 
 /** The same picks as `situationalBlocks`, as overlay deltas.
@@ -1584,16 +1586,20 @@ export function buildItemSets(
    *  denominators, and averaging them would produce a build nobody actually
    *  plays. */
   otp?: ProConsensusItemsInput | null,
-  /** The enemy-composition signal (lib/enemyComp/compSignal.ts), or
-   *  null/undefined when no rule fired, which is the common case and produces
-   *  a byte-identical export to before this parameter existed.
+  /** The enemy-composition plan (lib/enemyComp/forThisGame.ts), or
+   *  null/undefined when the comp is incomplete or nothing fired -- the common
+   *  case, which produces a byte-identical export to before this parameter
+   *  existed.
    *
-   *  It may PERMUTE the Situational row and add a suffix to that one block's
-   *  title. It cannot add an item, remove one, change any number, or touch any
-   *  other block. `orderSituationalForComp` is content-preserving by
-   *  construction (it partitions and concatenates), so that guarantee is
-   *  structural rather than a rule this function has to remember. */
-  compSignal?: CompSignal | null
+   *  It adds ONE block (`For this game`) and touches nothing else. Every other
+   *  block, the Starting slot, the `situational` wire and the set envelope are
+   *  identical with and without it, and a test asserts that byte for byte
+   *  across the fixture set.
+   *
+   *  It replaces the `compSignal` parameter, which permuted the Situational row
+   *  instead. See situational.ts for why that was removed rather than kept
+   *  alongside. */
+  forThisGame?: ForThisGamePlan | null
 ): ItemSetExport {
   const items = build.items;
   const meta = itemMeta ?? new Map<number, ItemDetail>();
@@ -1832,7 +1838,8 @@ export function buildItemSets(
   //      make the shop and the page disagree about what the gem is — the exact
   //      class of inconsistency this pass exists to remove. One definition,
   //      computed from data both surfaces hold.
-  const wpaBuildIds = new Set<number>(lines[0]?.line.map((c) => c.id) ?? []);
+  const wpaLineIds = lines[0]?.line.map((c) => c.id) ?? [];
+  const wpaBuildIds = new Set<number>(wpaLineIds);
   const gemPicks = selectHiddenGemPicks(
     [...corePicks, ...(optimizedPicks ?? []), ...situationalPicks],
     wpaBuildIds,
@@ -1860,8 +1867,48 @@ export function buildItemSets(
   // (a starter never renders inside a completed-item list) is a standing user
   // directive, and keeping the starter in its own labelled block is the only
   // way to honour it while shipping exactly four build lines.
+  // ── "For this game" (0.120.0, user directive) ────────────────────────────
+  // A FIFTH build line, and the only one whose contents depend on who the
+  // enemy team picked. It is the WPA line above with at most two slots swapped
+  // for items chosen against the comp -- see lib/enemyComp/forThisGame.ts for
+  // the decision, the spine rule and why the LAST item is what gets dropped.
+  //
+  // WHY IT IS NOT A LineFamily, and therefore not in `dedupeLineBlocks`. That
+  // machinery answers "did two SOURCES land on the same build" -- its whole
+  // premise is that pro, otp and the model are rival populations answering one
+  // question. This block answers a different question, and its title is a claim
+  // about an ADJUSTMENT rather than about a source, so it stays true even when
+  // its items coincide with another block's. Collapsing it into Pro build
+  // because they happen to match would delete the only comp-aware thing in the
+  // set.
+  //
+  // WHY IT SITS DIRECTLY AFTER `WPA build` rather than first. It is the spine
+  // plus an opinion, so reading them adjacent is what makes the opinion legible
+  // -- and a JUDGMENT line never leads a MEASURED one in this app (FEATURES.md's
+  // honesty posture). Starting first, then WPA build, then this, then the
+  // consensus lines, then Situational.
+  //
+  // EMITTED ONLY WHEN IT CHANGES SOMETHING. A plan that produced no swap (every
+  // candidate already in the line at its target position, or the only candidate
+  // being the boot the champion already builds) yields no block, because a
+  // block titled "For this game" that is byte-identical to the one above it
+  // claims an adjustment that did not happen.
+  const forThisGameLine =
+    forThisGame && wpaLineIds.length > 0
+      ? applyForThisGameLine(wpaLineIds, forThisGame, bootsIds)
+      : null;
+  const emitForThisGame = forThisGameLine !== null && forThisGameLine.swaps.length > 0;
+
   const blocks: ItemSetBlock[] = [{ type: "Starting", items: [itemRef(items.starter.id)] }];
-  for (const b of survivors) blocks.push({ type: blockTitle(b), items: toItemRefs(b.line) });
+  for (const b of survivors) {
+    blocks.push({ type: blockTitle(b), items: toItemRefs(b.line) });
+    if (emitForThisGame && b.family === "wpa") {
+      blocks.push({
+        type: FOR_THIS_GAME_BLOCK_TITLE,
+        items: forThisGameLine!.ids.map((id) => itemRef(id)),
+      });
+    }
+  }
 
   // ── Situational: blocks LAST, inside the ONE set ──────────────────────────
   // LAST inside the set on purpose. Everything above it is a build you could
@@ -1900,15 +1947,17 @@ export function buildItemSets(
   // lists and the overlay would paint each number over the wrong icon. The
   // pairing is asserted index-by-index by a test whose fixture makes the
   // exclusion bite.
-  const picks = situationalBlockPicks(items, wpaBuildIds, compSignal?.promotedIds ?? []);
-  for (const block of situationalBlocks(picks, compSignal?.labelSuffix)) blocks.push(block);
+  const picks = situationalBlockPicks(items, wpaBuildIds);
+  for (const block of situationalBlocks(picks)) blocks.push(block);
   const wire = situationalWire(picks);
 
   // Spread rather than assigned, so the key is genuinely ABSENT (not
   // `undefined`) for a champion with no alternatives — `"situational" in body`
-  // and `JSON.stringify` must both agree there is no such field.
+  // and `JSON.stringify` must both agree there is no such field. Same rule for
+  // `forThisGame`: no block means no key, never `[]`.
   return {
     sets: [{ ...baseSet(champ, roleLabel), blocks }],
     ...(wire.length > 0 ? { situational: wire } : {}),
+    ...(emitForThisGame ? { forThisGame: forThisGameLine!.swaps } : {}),
   };
 }

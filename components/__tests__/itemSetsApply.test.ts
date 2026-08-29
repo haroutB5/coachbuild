@@ -1018,7 +1018,14 @@ describe("diagnostics - the other side of the wire actually reads it", () => {
     expect(client).toMatch(/diagnostics\?: string\[\]/);
     expect(client).not.toMatch(/diagnostics[\s\S]{0,200}companionVersion/);
     const apply = read("components/hextech/itemSetsApply.ts");
-    expect(apply).toMatch(/\.\.\.\(diagnostics\.length > 0 \? \{ diagnostics \} : \{\}\)/);
+    // 0.120.0: the array is now capped in the WEB before it is sent
+    // (DIAGNOSTICS_MAX_LINES, mirroring the desktop's own MaxLines), so the
+    // spread reads `allDiagnostics`. Still absent-when-empty, still ungated on
+    // any version -- which is what this test is actually about.
+    expect(apply).toMatch(
+      /\.\.\.\(allDiagnostics\.length > 0 \? \{ diagnostics: allDiagnostics \} : \{\}\)/
+    );
+    expect(apply).not.toMatch(/diagnostics[\s\S]{0,200}companionVersion/);
   });
 
   it("the array is not only about blocks that were LOST, whatever the docs say", () => {

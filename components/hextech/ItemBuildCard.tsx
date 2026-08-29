@@ -10,9 +10,7 @@ import SupportItemCard from "./SupportItemCard";
 import { hasSession } from "@/components/live/companionClient";
 import { ACCENT_CARD_CLASS, CARD_CLASS, SectionLabel } from "./builds/BuildVisuals";
 import { applyLabel, importItemBuild, useApplyAction } from "./builds/applyActions";
-import { useCompanion } from "@/components/live/CompanionProvider";
-import { resolveCompSignal } from "@/lib/enemyComp/compSignal";
-import { normalizeDraftEnemyIds } from "@/components/live/draftLiveSync";
+import ForThisGameCard from "./ForThisGameCard";
 
 const subscribeToSession = () => () => {};
 
@@ -51,18 +49,6 @@ interface ItemBuildCardProps {
 }
 
 export default function ItemBuildCard({ champ, lane, build, ver, onItemClick }: ItemBuildCardProps) {
-  // The SAME signal the exported item set is built from, so the SITUATIONAL
-  // panel on this page and the `Situational` block in the shop show the same
-  // six items in the same order during the same champ select. Reading it here
-  // from the live provider (rather than from the singleton itemSetsApply uses)
-  // is deliberate: this is a render, and a render has to re-run when the comp
-  // changes, which a module singleton would not make it do. Both paths derive
-  // from the same `theirTeam` on the same poll.
-  const companion = useCompanion();
-  const compSignal =
-    companion.phase === "ChampSelect" && companion.statusFresh
-      ? resolveCompSignal(normalizeDraftEnemyIds(companion.champSelect?.theirTeam ?? []), build.items)
-      : null;
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 px-0.5">
@@ -70,9 +56,20 @@ export default function ItemBuildCard({ champ, lane, build, ver, onItemClick }: 
         <AddToClientButton champ={champ} lane={lane} build={build} />
       </div>
       <CoreBuildOrderCard items={build.items} onItemClick={onItemClick} />
+      {/* 0.120.0 -- the ONE comp-driven surface on this page, and it renders
+          nothing outside champ select or on an incomplete comp. It sits
+          directly under the WPA order for the same reason the shop block sits
+          directly under `WPA build`: it is that build with at most two slots
+          swapped, and reading them adjacent is what makes the swap legible. */}
+      <ForThisGameCard
+        championId={champ.id}
+        lane={lane}
+        build={build}
+        onItemClick={onItemClick}
+      />
       <div className="grid gap-4 lg:grid-cols-2">
         <section className={`${CARD_CLASS} min-w-0 p-4`}>
-          <SituationalCard items={build.items} onItemClick={onItemClick} compSignal={compSignal} />
+          <SituationalCard items={build.items} onItemClick={onItemClick} />
         </section>
         <HiddenGemCard items={build.items} ver={ver} onItemClick={onItemClick} />
       </div>
