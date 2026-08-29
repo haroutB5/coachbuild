@@ -23,3 +23,24 @@ export declare function deriveCounterItems(itemJson: unknown): Promise<DerivedCo
 export declare function deriveDamageBaseline(
   championJson: unknown
 ): Record<number, DerivedDamageType | null>;
+
+/** Mirrors lib/enemyComp/championClass.ts's own union. Declared here rather
+ *  than imported from it, deliberately: the ORACLE must not depend on the table
+ *  it is the oracle for, or a wrong value in the table could not disagree with
+ *  it. */
+export type DerivedChampionItemClass =
+  | "mage"
+  | "assassin"
+  | "marksman"
+  | "fighter-bruiser"
+  | "tank"
+  | "enchanter-support";
+
+/** `[ddragonTag, class]` pairs, in resolution order. */
+export declare const CLASS_TAG_PRIORITY: readonly (readonly [string, DerivedChampionItemClass])[];
+
+/** Every live champion id, resolved by CLASS_TAG_PRIORITY. Never null: a
+ *  champion carrying none of the six tags falls to "fighter-bruiser". */
+export declare function deriveChampionClassBaseline(
+  championJson: unknown
+): Record<number, DerivedChampionItemClass>;

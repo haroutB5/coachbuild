@@ -79,6 +79,43 @@ export function deriveDamageBaseline(championJson) {
   return out;
 }
 
+/** The DERIVED baseline behind lib/enemyComp/championClass.ts.
+ *
+ *  ddragon `tags` resolved by a FIXED priority, because the tag array is a set
+ *  and most champions carry two: Marksman > Assassin > Tank > Mage > Fighter >
+ *  Support. The priority is what makes the derivation deterministic; it is not
+ *  a claim that it is right. It is measurably not right -- 57 of 173 rows are
+ *  corrected in source -- and that is exactly why the table is pinned there and
+ *  this function is only its oracle. See that file's header.
+ *
+ *  A champion with none of the six tags falls to "fighter-bruiser", which no
+ *  live champion currently hits; the branch exists so a future tag rename
+ *  produces a stable wrong answer that a correction can disagree with, rather
+ *  than an undefined the CI test cannot compare. */
+export const CLASS_TAG_PRIORITY = [
+  ["Marksman", "marksman"],
+  ["Assassin", "assassin"],
+  ["Tank", "tank"],
+  ["Mage", "mage"],
+  ["Fighter", "fighter-bruiser"],
+  ["Support", "enchanter-support"],
+];
+
+export function deriveChampionClassBaseline(championJson) {
+  const out = {};
+  for (const e of Object.values(championJson.data)) {
+    const id = parseInt(e.key, 10);
+    if (id >= MAX_REAL_ID) continue;
+    const tags = Array.isArray(e.tags) ? e.tags : [];
+    let cls = "fighter-bruiser";
+    for (const [tag, candidate] of CLASS_TAG_PRIORITY) {
+      if (tags.includes(tag)) { cls = candidate; break; }
+    }
+    out[id] = cls;
+  }
+  return out;
+}
+
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("derive-enemycomp-tables.mjs")) {
   const [items, champs] = await Promise.all([
     fetch(CDN("item.json")).then((r) => r.json()),
@@ -99,4 +136,8 @@ if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith
     Object.entries(base).filter(([, v]) => v === null).map(([id]) => `${id} ${byId.get(+id)}`).join(", "));
   console.log("\n// paste-ready baseline");
   console.log(JSON.stringify(base));
+  const cb = deriveChampionClassBaseline(champs);
+  const clsCounts = {};
+  for (const v of Object.values(cb)) clsCounts[v] = (clsCounts[v] ?? 0) + 1;
+  console.log("class baseline:", JSON.stringify(clsCounts));
 }

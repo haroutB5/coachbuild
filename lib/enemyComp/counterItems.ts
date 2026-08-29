@@ -28,6 +28,18 @@ export const MAGIC_RESIST_BOOTS: ReadonlySet<number> = new Set([
   3173, // Chainlaced Crushers (tier-3 enchant of 3111)
 ]);
 
+/** The tier-2 magic-resist boot by name, for lib/enemyComp/scenarioItems.ts.
+ *
+ *  A NAMED CONSTANT RATHER THAN A LITERAL 3111, and it is asserted to be a
+ *  MEMBER of the derived set above by the same CI test that pins the set. So
+ *  the scenario table's boots answer is still guarded by the catalogue
+ *  derivation even though it names one id rather than a class -- which it has
+ *  to, because a build line holds one pair of boots and a set is not an answer
+ *  to "which boot". The tier-3 enchant is deliberately NOT the answer: it is a
+ *  later upgrade of whichever boot you took, not a different reading of the
+ *  comp. */
+export const MERCURYS_TREADS = 3111;
+
 /** Boots carrying armour. Plated Steelcaps and its tier-3 enchant. The
  *  promotion target for the heavy-AD rule. */
 export const ARMOR_BOOTS: ReadonlySet<number> = new Set([
@@ -35,11 +47,18 @@ export const ARMOR_BOOTS: ReadonlySet<number> = new Set([
   3174, // Armored Advance (tier-3 enchant of 3047)
 ]);
 
+/** The tier-2 armour boot by name. Same contract as MERCURYS_TREADS. */
+export const PLATED_STEELCAPS = 3047;
+
 /**
- * Anti-heal items. **Present as a NEGATIVE CONTROL and nothing else.**
+ * Anti-heal items. TWO duties, and they pull in opposite directions on
+ * purpose.
  *
- * User decision 2026-08-29: anti-heal never enters the exported item set,
- * because it cannot be delivered honestly. Measured across 24 champion-roles
+ * 1. **NEGATIVE CONTROL for the SITUATIONAL row.** User decision 2026-08-29:
+ *    anti-heal never enters that row, because there it cannot be delivered
+ *    honestly. The situational contract is that a promoted item must already
+ *    exist in the champion's own measured pool, and it does not. Measured
+ *    across 24 champion-roles
  * on production, an anti-heal item appears anywhere in the champion's own
  * `/api/build` data (core, boots, starter, fourthPlus, optimizedPath and every
  * alt) for only **9 of 24**, and for **0 of the 4 AP champions sampled**
@@ -47,8 +66,21 @@ export const ARMOR_BOOTS: ReadonlySet<number> = new Set([
  * champion's own data never offered, under a block title that claims a source
  * -- HARD RULE 4, and the first fabricated recommendation in the app.
  *
- * So this set exists so a test can assert the signal NEVER promotes one of
- * these ids, for any comp, on any champion. Deleting it would delete the proof.
+ *    So a test asserts nothing on that path ever promotes one of these ids,
+ *    for any comp, on any champion. Deleting the set would delete the proof.
+ *
+ * 2. **MEMBERSHIP ORACLE for the "For this game" block.** That block is
+ *    explicitly a JUDGMENT build rather than a claim about the champion's own
+ *    data, so the honesty argument above does not apply to it and the user
+ *    directive of 2026-08-29 names Morellonomicon as its headline case. Every
+ *    anti-heal id lib/enemyComp/scenarioItems.ts names must be a member of this
+ *    set, which is DERIVED from the catalogue's own description text -- so a
+ *    Riot keyword rename fails the build instead of silently recommending an
+ *    item that no longer does the thing it was chosen for.
+ *
+ * The two duties are not in tension: one says "never on that surface", the
+ * other says "only ids the catalogue still agrees are anti-heal". Both are
+ * checked by tests that name each other.
  */
 export const ANTI_HEAL: ReadonlySet<number> = new Set([
   3033, // Mortal Reminder
