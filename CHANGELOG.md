@@ -1,5 +1,68 @@
 # Changelog
 
+## 0.120.0 -- "For this game" (2026-08-29)
+
+A FIFTH build line inside the one item set, and the only one whose contents
+depend on who the enemy team picked: the WPA line as a spine with at most two
+slots swapped against the enemy composition, placed at documented purchase
+positions. Six items, exactly one boots, no starter -- the same invariant every
+other line holds. **It replaces the 0.118.0/0.119.0 Situational relabel rather
+than joining it.**
+
+- **New tables, all pure and all pinned.** `scenarios.ts` classifies a FULL
+  five-champion comp into seven combinable scenarios under ONE priority order
+  walked once against TWO budgets (boots 1, items 2). `kitAxes.ts` adds only the
+  three axes nothing else carries -- `assassin`, `heal`, `shield` -- and says
+  out loud that no derived baseline exists for them rather than inventing an
+  all-zero one that would make every row a trivially-passing "correction".
+  `championClass.ts` names the ITEM class a champion builds, not its playstyle
+  (Master Yi is `marksman`, Gragas is `mage`), with **57 of 173 rows corrected**
+  off the ddragon-tag baseline. `scenarioItems.ts` is the curated per-class
+  candidate table; empty cells are refusals with reasons, not gaps.
+- **`cc` and `tankiness` are REUSED, not re-curated.** The draft page's
+  "Heavy CC" and this block's Mercury's Treads are the same number and the same
+  constant. Tank is `compRatings.tankiness >= 3`, the top band of that file's own
+  published rubric.
+- **Anti-heal is IN, and the reversal is scoped.** The 2026-08-29 exclusion was
+  about the Situational row, whose contract requires the item to exist in the
+  champion's own measured pool (9 of 24 sampled, 0 of 4 AP champions). This block
+  is explicitly a JUDGMENT build, so that argument does not apply -- and
+  `ANTI_HEAL` keeps its negative-control duty for the situational path alongside
+  a new one: every anti-heal id the curated table names must be a member of the
+  set derived from the catalogue's own description text, so a Riot keyword
+  rename goes red instead of quietly recommending an item that no longer applies
+  Wounds.
+- **Prefer the measured, fall back to the curated.** The first candidate that
+  appears in the champion's own `/api/build` universe wins; when none does, the
+  head of the list is taken anyway and reported as `measured: false`. That
+  branch is exactly why the block is labelled JUDGMENT rather than MEASURED, and
+  it is stated per swap on the page and in `companion.log`.
+- **The spine is the point.** Everything outside the swapped positions is the
+  WPA line verbatim, including where it put the boots (`BOOTS_LINE_INDEX` is not
+  re-derived). What gets dropped is the LAST item -- the one you buy last.
+  An item the build already holds is MOVED to its purchase position rather than
+  displacing anything.
+- **The Situational relabel is REMOVED, and `MAX_WPA_COST` with it.** Two
+  comp-driven opinions in one set cannot be reconciled by a reader when one is
+  gated on a WPA ceiling and the other is not; the promotion measurably only
+  relabelled in 58.2% of its 7.3% of fires; and the top open decision on the
+  feature -- a threshold sitting at the median of a smooth distribution with no
+  natural break -- stops being load-bearing instead of being defended forever.
+- **The export trigger is FINALIZATION, not a budget.** `compReexportGate.ts` is
+  replaced by `compFinalization.ts`. `champSelect.timerPhase` was already on the
+  /status wire (companion v1.4.0, desktop wire 1.13.0), so **no desktop
+  release**. It refuses during `PLANNING`/`BAN_PICK` even with a full comp,
+  because champion TRADES happen during finalization. The fallback -- five stable
+  enemy ids for 3s -- fires only when the phase is genuinely unobservable.
+  **Worst case is TWO whole-document PUTs per champ select**, pinned by a
+  90-tick adversarial draft.
+- **`diagnostics` is capped in the WEB** at `DIAGNOSTICS_MAX_LINES = 4`,
+  mirroring the desktop's own `MaxLines` and pinned to it by a source test, so a
+  consensus failure is never the line the bridge drops.
+- `scripts/sweep-enemycomp.mts` and its baseline are **deleted** rather than left
+  importing a removed module. The new block has no calibration sweep yet.
+- 3731 tests / 216 files, `tsc --noEmit` clean.
+
 ## 0.119.0 -- the comp re-export trigger (2026-08-29)
 
 Phase 3. A comp that changes mid-draft now re-exports the item set, once,
