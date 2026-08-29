@@ -35,10 +35,10 @@ import { versionFromPatch } from "@/components/proAssets";
 import { aggregateProConsensus } from "./proConsensus";
 import {
   CONSENSUS_ENDPOINT,
+  classifyConsensusArtifactFreshness,
   consensusArtifactKey,
   consensusRequestPath,
   consensusSourceToInput,
-  isConsensusArtifactFresh,
   loadConsensusArtifact,
   reduceConsensusModel,
   type ConsensusArtifact,
@@ -133,6 +133,11 @@ export type ConsensusOrigin =
   /** The per-patch precomputed artifact, generated for THIS patch. No
    *  database was touched. */
   | "artifact"
+  /** The precomputed artifact, generated for an OLDER patch but within
+   *  `CONSENSUS_MAX_STALE_MINORS`, served DELIBERATELY and labelled — see
+   *  `resolveConsensus` case 1s. No database was touched, and this is not a
+   *  failure: `failure` stays null and `notice` carries the honesty line. */
+  | "artifact-stale"
   /** A live `/api/pros` / `/api/otp` round trip. */
   | "live"
   /** The artifact, after the live query failed — either because the artifact
@@ -146,6 +151,19 @@ export interface ConsensusResolution {
   /** Optional so every existing construction site and test of this shape
    *  stays valid; always set by `resolveConsensus`. */
   origin?: ConsensusOrigin;
+  /** One line, safe to log verbatim, for a state that is WORKING AS DESIGNED
+   *  but that the user is owed a word about — today that is exactly one thing:
+   *  a stale artifact being served across a patch flip.
+   *
+   *  A separate field from `failure` on purpose. Reusing `ConsensusFailure`
+   *  would have put a designed, healthy state through
+   *  `reportConsensusFailure`, into the /live-setup ring buffer that renders as
+   *  RECENT FAILURE HISTORY, on every export for the length of the stale
+   *  window. A log that cries outage during normal operation is how the one
+   *  line that matters gets tuned out — the same argument
+   *  `ApplyDiagnosticsParser` makes for why an absent `diagnostics` key prints
+   *  nothing at all. */
+  notice?: string;
 }
 
 /** Marker thrown across the `fetch(...).then(...)` boundary purely so the
@@ -182,6 +200,34 @@ export function consensusFailureLine(failure: ConsensusFailure): string {
     `${CONSENSUS_LABEL[failure.source]} block OMITTED because the query FAILED, ` +
     `not because this champion has no data: ${failure.message}` +
     (failure.artifactReason ? ` — and the precomputed fallback could not cover it: ${failure.artifactReason}` : "")
+  );
+}
+
+/** The sentence a STALE-BUT-SERVED artifact writes (case 1s). It has to answer
+ *  three questions in one line, because it is read in a log file with no
+ *  surrounding context: which block, how old the numbers are, and why nobody
+ *  went and got fresher ones.
+ *
+ *  It deliberately does NOT read like a failure. Nothing is broken here: this
+ *  is the export doing the thing it was built to do. The shop panel makes the
+ *  same statement where the user can actually see it, in the block's own title
+ *  (`Pro build (16.16 data)`).
+ *
+ *  Under `ApplyDiagnosticsParser.MaxLineLength` (512) with room to spare, and
+ *  at most two of these exist per export (one per source) against
+ *  `MaxLines` (4). */
+export function consensusStaleLine(
+  source: ConsensusSource,
+  artifactPatch: string,
+  buildPatch: string,
+  generatedAt: string
+): string {
+  return (
+    `${CONSENSUS_LABEL[source]} block SERVED FROM the precomputed patch-${artifactPatch} artifact ` +
+    `(generated ${generatedAt}) while the build is patch-${buildPatch}: the numbers are STALE by ` +
+    `design, not missing. Going to the database for all 865 combos on every export is the load the ` +
+    `artifact exists to remove, and the sample behind it is not patch-scoped anyway. ` +
+    `The next scheduled re-bake refreshes it.`
   );
 }
 
@@ -309,8 +355,30 @@ async function resolveConsensusLive(
 //      network beyond one static asset. A stored `null` means the generator
 //      asked and got nothing, which is the genuine-absence case and is
 //      returned as such, with no failure, exactly like the live path's.
-//   2. Otherwise -> live query. Missing artifact, artifact built for an older
-//      patch, or a champion-role the generator never covered all land here.
+//  1s. STALE ARTIFACT (1..CONSENSUS_MAX_STALE_MINORS behind) THAT COVERS THIS
+//      COMBO -> serve it TOO, and say so. Added 2026-08-29, and it is the case
+//      this whole file exists for: a Riot patch flipped the freshness boolean
+//      false for all 865 combos at once and put every export in production
+//      back on Postgres, silently. Measured that day, one champion-role export
+//      costs 384,806 bytes and ~1.9 s of database time on two routes that both
+//      answer `max-age=0, must-revalidate` (so it is paid EVERY export), where
+//      the artifact entry replacing them is 291 bytes off a year-cached CDN
+//      asset. The data lost by serving the old bake is far smaller than the
+//      stamp implies: neither /api/pros nor /api/otp filters by patch — both
+//      window on FRESH_WINDOW_DAYS = 90 — so on flip day the live query would
+//      return substantially the sample the artifact already holds. See
+//      `classifyConsensusArtifactFreshness`.
+//        A stale stored `null` is still believed, exactly as a fresh one is.
+//      That is the known cost (HANDOFF open item 2, the artifact's A+C gap):
+//      562 of 865 OTP entries and 416 of 865 pro entries are null, so falling
+//      through on them would put the majority of resolutions straight back on
+//      the database and forfeit most of the saving — and every one of those
+//      nulls was written BECAUSE the live query returned nothing. The window
+//      is bounded by the daily re-bake, which now accepts a single forward
+//      patch step unattended.
+//   2. Otherwise -> live query. A missing artifact, an artifact NEWER than the
+//      build or more than CONSENSUS_MAX_STALE_MINORS behind it, or a
+//      champion-role the generator never covered all land here.
 //   3. LIVE FAILED but we hold an entry anyway (stale patch, or a fresh
 //      artifact that skipped this combo) -> serve the artifact and report a
 //      RECOVERED failure. The block survives; the outage is still loud.
@@ -337,11 +405,32 @@ async function resolveConsensus(
   const role = LANE_TO_ROLE_ID[lane];
   const load = await loadConsensusArtifact();
   const { covered, src } = artifactEntryFor(load.artifact, source, champ.id, role);
-  const fresh = load.artifact ? isConsensusArtifactFresh(load.artifact.patch, patch) : false;
+  const freshness = load.artifact
+    ? classifyConsensusArtifactFreshness(load.artifact.patch, patch)
+    : "unusable";
+  const fresh = freshness === "fresh";
 
   // 1.
   if (fresh && covered) {
     return { data: consensusSourceToInput(src), failure: null, origin: "artifact" };
+  }
+
+  // 1s.
+  if (freshness === "stale" && covered && load.artifact) {
+    const notice = consensusStaleLine(source, load.artifact.patch, patch, load.artifact.generatedAt);
+    // console only. NOT reportConsensusFailure — see ConsensusResolution.notice
+    // for why a designed state must not be filed as a failure.
+    try {
+      console.warn(`[itemSetsApply] ${notice}`);
+    } catch {
+      /* ignore */
+    }
+    return {
+      data: consensusSourceToInput(src, load.artifact.patch),
+      failure: null,
+      origin: "artifact-stale",
+      notice,
+    };
   }
 
   // 2.
@@ -521,9 +610,21 @@ export async function applyItemSetsForBuild(params: {
   // UnmappedMemberHandling at its default of Skip). There is deliberately NO
   // version gate: a diagnostic that can fail an apply is worse than no
   // diagnostic.
-  const diagnostics = [proRes.failure, otpRes.failure]
-    .filter((f): f is ConsensusFailure => f !== null)
-    .map(consensusFailureLine);
+  //
+  // 2026-08-29: `notice` rides the SAME array. A stale-but-served artifact is
+  // not a failure and is not reported as one anywhere else (see
+  // ConsensusResolution.notice), but `companion.log` is the one channel that
+  // reaches the machine the game is actually on, and "why does my shop panel
+  // say 16.16 data" has to be answerable there. Failures first, so a real
+  // outage is never the line that gets cut if both fire at once —
+  // ApplyDiagnosticsParser.MaxLines is 4 and this can now emit at most 4
+  // (a failure and a notice cannot both come from one source).
+  const diagnostics = [
+    ...[proRes.failure, otpRes.failure]
+      .filter((f): f is ConsensusFailure => f !== null)
+      .map(consensusFailureLine),
+    ...[proRes.notice, otpRes.notice].filter((n): n is string => !!n),
+  ];
 
   const { sets, situational } = buildItemSets(params.champ, params.roleLabel, params.build, pro, itemMeta, otp);
   return applyItemSets(params.port, params.session, {

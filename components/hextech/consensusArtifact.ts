@@ -238,14 +238,109 @@ export function normalizePatchLabel(patch: string | null | undefined): string {
   return `${major}.${minor}`;
 }
 
+/** How many MINOR steps `artifactPatch` sits BEHIND `livePatch`.
+ *
+ *  `0` same patch. `n > 0` the artifact is n steps behind. `null` means the
+ *  question has no answer this function is willing to give: either side
+ *  unparseable, the artifact NEWER than live, or a distance that cannot be
+ *  counted. `null` is the fail-closed value everywhere it is consumed.
+ *
+ *  ── The season rollover, stated rather than fudged ────────────────────────
+ *  `16.24 -> 17.1` is one patch in the real world, but the two labels do not
+ *  contain the fact that season 16 ended at 24 — nothing in this repo knows how
+ *  many minors a season has, and hardcoding it would be a table that silently
+ *  goes wrong the year Riot changes the cadence. So across a single major
+ *  bump the NEW season's minor IS the step count: `17.1` is one step, `17.2`
+ *  two, `17.3` three. That is exact for the only case that matters (the first
+ *  bake after a rollover) and conservatively LARGE afterwards, which is the
+ *  safe direction — an overcount can only make a caller reach for fresher
+ *  data, never serve staler.
+ *
+ *  A gap of two or more majors is not counted at all: an artifact a whole
+ *  season old is not "stale", it is abandoned. */
+export function patchDriftSteps(
+  artifactPatch: string | null | undefined,
+  livePatch: string | null | undefined
+): number | null {
+  const a = normalizePatchLabel(artifactPatch);
+  const b = normalizePatchLabel(livePatch);
+  if (a === "" || b === "") return null;
+  const [aMajor, aMinor] = a.split(".").map(Number);
+  const [bMajor, bMinor] = b.split(".").map(Number);
+  if (bMajor === aMajor) return bMinor >= aMinor ? bMinor - aMinor : null;
+  if (bMajor === aMajor + 1) return bMinor >= 1 ? bMinor : null;
+  return null;
+}
+
+/** How far behind the artifact may be and still be SERVED (with a stale label)
+ *  rather than dropped in favour of the live database.
+ *
+ *  Two, and the number is a statement about the re-bake job, not about the
+ *  data. `CoachBuildConsensusRebake` runs daily and now accepts a single
+ *  forward patch step on its own (scripts/rebake-consensus.ps1), while Riot
+ *  ships a patch roughly fortnightly. Reaching TWO steps behind therefore means
+ *  the automated bake has been failing for about two weeks with urgot's
+ *  greeting digest warning the whole time. Past that point the artifact really
+ *  is old enough that fresher numbers are worth the load this whole file exists
+ *  to avoid, so the pre-2026-08-29 behaviour resumes: go to the database. */
+export const CONSENSUS_MAX_STALE_MINORS = 2;
+
+/** `fresh`    the artifact was generated for the SAME patch as the build.
+ *  `stale`    it is 1..CONSENSUS_MAX_STALE_MINORS behind — SERVE IT, labelled.
+ *  `unusable` newer, unparseable, or further behind than that — use the live
+ *             query, exactly as before.
+ *
+ *  ── Why `stale` is served rather than replaced (2026-08-29) ───────────────
+ *  Until this classifier existed the answer was a boolean, and one Riot patch
+ *  turned it false for all 865 combos at once: every export in production went
+ *  back to Postgres, which is the entire load `56bbe6a` removed. Measured
+ *  against production on 2026-08-29, ONE champion-role export costs
+ *  `/api/pros` 247,619 B + `/api/otp` 137,187 B = 384,806 B and ~1.9 s of
+ *  database time, both routes answering `Cache-Control: max-age=0,
+ *  must-revalidate` with `X-Vercel-Cache: MISS`, so that is paid on EVERY
+ *  export and never amortised. The artifact entry that replaces both is 291
+ *  bytes inside a single file the CDN holds for a year.
+ *
+ *  And the numbers a flip invalidates are far fewer than the stamp suggests:
+ *  NEITHER `/api/pros` NOR `/api/otp` filters by patch. Both window on
+ *  `FRESH_WINDOW_DAYS = 90` (lib/pro/fresh.ts) and return `patch` only as an
+ *  output column. On the day of a flip the live query would return
+ *  substantially the same 90-day sample the artifact was baked from — so
+ *  dropping to the database buys almost nothing and costs everything.
+ *
+ *  What the reader owes the user in exchange is honesty, not silence: a stale
+ *  serve is labelled in the shop panel's own block titles and reported in the
+ *  apply diagnostics. See itemSetsApply.ts's `resolveConsensus`. */
+export type ConsensusArtifactFreshness = "fresh" | "stale" | "unusable";
+
+export function classifyConsensusArtifactFreshness(
+  artifactPatch: string | null | undefined,
+  buildPatch: string | null | undefined
+): ConsensusArtifactFreshness {
+  const drift = patchDriftSteps(artifactPatch, buildPatch);
+  if (drift === null) return "unusable";
+  if (drift === 0) return "fresh";
+  return drift <= CONSENSUS_MAX_STALE_MINORS ? "stale" : "unusable";
+}
+
 /** Fresh = the artifact was generated for the SAME patch the build being
  *  exported was computed on. An unparseable patch on either side is never
  *  fresh, so a bad string degrades to "use the live query", never to "serve
- *  whatever we have and call it current". */
+ *  whatever we have and call it current".
+ *
+ *  Kept as its own name because callers and tests read for it, but it is now
+ *  ONE branch of the classifier above rather than a second implementation of
+ *  the same comparison. */
 export function isConsensusArtifactFresh(artifactPatch: string, buildPatch: string): boolean {
-  const a = normalizePatchLabel(artifactPatch);
-  const b = normalizePatchLabel(buildPatch);
-  return a !== "" && a === b;
+  return classifyConsensusArtifactFreshness(artifactPatch, buildPatch) === "fresh";
+}
+
+/** Exactly one patch forward, the only flip the unattended re-bake accepts on
+ *  its own. `scripts/patch-step.mts` is a CLI wrapper over THIS function, so
+ *  `scripts/rebake-consensus.ps1` decides with the same arithmetic the resolver
+ *  uses instead of carrying a PowerShell copy of it. */
+export function isSingleForwardPatchStep(fromPatch: string, toPatch: string): boolean {
+  return patchDriftSteps(fromPatch, toPatch) === 1;
 }
 
 // ── The one reduction ───────────────────────────────────────────────────────
@@ -320,7 +415,14 @@ export function reduceConsensusModel(
  *  it is what makes this a re-derivation of the same double rather than an
  *  approximation of it. */
 export function consensusSourceToInput(
-  src: ConsensusArtifactSource | null | undefined
+  src: ConsensusArtifactSource | null | undefined,
+  /** The artifact's own patch, passed ONLY when this artifact is being served
+   *  stale (see `classifyConsensusArtifactFreshness`). It travels with the data
+   *  rather than beside it because the block title that renders it is built
+   *  deep inside `buildItemSets`, and a second channel for "is this stale"
+   *  would be a second thing to keep in step. Absent on every fresh serve, so
+   *  the healthy export is byte-identical to what it was before. */
+  stalePatch?: string
 ): ProConsensusItemsInput | null {
   if (!src) return null;
   const share = (count: number): number => (src.n > 0 ? count / src.n : 0);
@@ -359,6 +461,8 @@ export function consensusSourceToInput(
     items,
     boots,
     ...(ordered ? { ordered: true, orderedIds: [...src.p!] } : {}),
+    // Spread for the same reason `p` and `bp` are: absent, never `undefined`.
+    ...(stalePatch ? { stalePatch } : {}),
   };
 }
 

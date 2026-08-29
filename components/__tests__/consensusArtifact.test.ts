@@ -681,6 +681,85 @@ describe("serializeConsensusArtifact", () => {
   });
 });
 
+// ── How far behind is the artifact, and what does that license ─────────────
+//
+// The freshness question used to be a boolean, and one Riot patch turned it
+// false for all 865 combos at once. These tests pin the three-state answer that
+// replaced it. Both halves matter: `stale` must be reached for a real flip (or
+// the fix does nothing), and `unusable` must be reached for anything the
+// arithmetic cannot honestly count (or a garbage label serves a shop panel).
+describe("patch drift", () => {
+  it("counts minor steps forward, and refuses to count backwards", async () => {
+    const { patchDriftSteps } = await import("../hextech/consensusArtifact");
+    expect(patchDriftSteps("16.16", "16.16")).toBe(0);
+    expect(patchDriftSteps("16.16", "16.17")).toBe(1);
+    expect(patchDriftSteps("16.16", "16.18")).toBe(2);
+    expect(patchDriftSteps("16.16", "16.20")).toBe(4);
+    // Backwards is not "zero steps" and not "four steps": it is a question
+    // this function will not answer, because serving numbers from a patch the
+    // build was never computed on is a claim nothing here can support.
+    expect(patchDriftSteps("16.17", "16.16")).toBeNull();
+  });
+
+  it("treats a season rollover as the new season's minor, rather than hardcoding a season length", async () => {
+    const { patchDriftSteps } = await import("../hextech/consensusArtifact");
+    // Nothing in this repo knows that season 16 ended at 16.24, and a table
+    // that claimed to would go wrong the year Riot changes cadence.
+    expect(patchDriftSteps("16.24", "17.1")).toBe(1);
+    expect(patchDriftSteps("16.9", "17.1")).toBe(1);
+    expect(patchDriftSteps("16.24", "17.2")).toBe(2);
+    expect(patchDriftSteps("16.24", "17.3")).toBe(3);
+    // Two majors is not staleness, it is abandonment.
+    expect(patchDriftSteps("16.24", "18.1")).toBeNull();
+  });
+
+  it("an unparseable label on either side is never a distance", async () => {
+    const { patchDriftSteps } = await import("../hextech/consensusArtifact");
+    // normalizePatchLabel returns "" for these, and the reason it does not
+    // return the input is precisely so two garbage strings cannot compare
+    // equal and pass a freshness check.
+    for (const [a, b] of [
+      ["", "16.17"],
+      ["16.16", ""],
+      ["sixteen.sixteen", "16.17"],
+      ["16.16", "latest"],
+    ] as const) {
+      expect(patchDriftSteps(a, b)).toBeNull();
+    }
+    expect(patchDriftSteps(null, "16.17")).toBeNull();
+    expect(patchDriftSteps("16.16", undefined)).toBeNull();
+  });
+
+  it("classifies fresh / stale / unusable at the documented boundary", async () => {
+    const { classifyConsensusArtifactFreshness, CONSENSUS_MAX_STALE_MINORS, isConsensusArtifactFresh } =
+      await import("../hextech/consensusArtifact");
+    expect(CONSENSUS_MAX_STALE_MINORS).toBe(2);
+    expect(classifyConsensusArtifactFreshness("16.16", "16.16")).toBe("fresh");
+    expect(classifyConsensusArtifactFreshness("16.16", "16.17")).toBe("stale");
+    expect(classifyConsensusArtifactFreshness("16.16", "16.18")).toBe("stale");
+    // The boundary itself, asserted on both sides so a fencepost change fails
+    // rather than silently widening what production will serve.
+    expect(classifyConsensusArtifactFreshness("16.16", "16.19")).toBe("unusable");
+    expect(classifyConsensusArtifactFreshness("16.17", "16.16")).toBe("unusable");
+    expect(classifyConsensusArtifactFreshness("nonsense", "16.16")).toBe("unusable");
+    // The old boolean is now one branch of the classifier, not a second
+    // implementation of the same comparison.
+    expect(isConsensusArtifactFresh("16.16", "16.16")).toBe(true);
+    expect(isConsensusArtifactFresh("16.16", "16.17")).toBe(false);
+    expect(isConsensusArtifactFresh("", "")).toBe(false);
+  });
+
+  it("a single forward step — the ONLY flip the unattended re-bake accepts alone", async () => {
+    const { isSingleForwardPatchStep } = await import("../hextech/consensusArtifact");
+    expect(isSingleForwardPatchStep("16.16", "16.17")).toBe(true);
+    expect(isSingleForwardPatchStep("16.24", "17.1")).toBe(true);
+    expect(isSingleForwardPatchStep("16.16", "16.16")).toBe(false);
+    expect(isSingleForwardPatchStep("16.16", "16.18")).toBe(false);
+    expect(isSingleForwardPatchStep("16.17", "16.16")).toBe(false);
+    expect(isSingleForwardPatchStep("16.16", "")).toBe(false);
+  });
+});
+
 // ── The order of preference, case by case ───────────────────────────────────
 //
 // The order is the point, and it is the opposite of a cache. A cache asks the
@@ -691,7 +770,15 @@ describe("serializeConsensusArtifact", () => {
 // items" would pass just as well if it quietly queried Postgres to get them,
 // and not querying Postgres is the entire deliverable.
 describe("artifact first, database second", () => {
-  async function resolveOnce(opts: { db: "live" | "down"; artifact: string | null; proGames?: ProGame[] }) {
+  async function resolveOnce(opts: {
+    db: "live" | "down";
+    artifact: string | null;
+    proGames?: ProGame[];
+    /** The patch the BUILD is on. Defaults to the fixture's own 16.13, so an
+     *  artifact stamped anything else is stale by exactly the distance between
+     *  the two labels. */
+    buildPatch?: string;
+  }) {
     const log = stubFetch({
       db: opts.db,
       artifact: opts.artifact,
@@ -699,7 +786,7 @@ describe("artifact first, database second", () => {
       otpGames: galioOtpSample(),
     });
     const { resolveProConsensus } = await import("../hextech/itemSetsApply");
-    const res = await resolveProConsensus(GALIO, "mid", "16.13");
+    const res = await resolveProConsensus(GALIO, "mid", opts.buildPatch ?? "16.13");
     return { res, log };
   }
 
@@ -761,21 +848,121 @@ describe("artifact first, database second", () => {
     expect(log.dbCalls.length).toBeGreaterThan(0);
   });
 
-  it("CASE 2b — a STALE artifact loses to a working database: fresh data wins whenever it is available", async () => {
-    const artifact = await buildArtifact("16.12", galioProSample(), galioOtpSample());
+  // ── CASE 1s — the patch flip ────────────────────────────────────────────
+  //
+  // This test was the exact inverse until 2026-08-29 ("a STALE artifact loses
+  // to a working database: fresh data wins whenever it is available"), and it
+  // passed while describing a production hazard. The moment Riot shipped a
+  // patch, EVERY combo took this branch at once and every export in production
+  // went back to Postgres, silently, until a human ran
+  // `rebake-consensus.ps1 -AcceptPatchFlip`.
+  //
+  // Two measurements, taken against production on 2026-08-29, are why the
+  // preference now runs the other way:
+  //
+  //   * COST. One champion-role export off the database is /api/pros 247,619 B
+  //     + /api/otp 137,187 B = 384,806 B and ~1.9 s, and BOTH routes answer
+  //     `Cache-Control: max-age=0, must-revalidate` with `X-Vercel-Cache: MISS`
+  //     — so it is paid on every export, forever, not once per patch. The
+  //     artifact entry that replaces both is 291 bytes inside one file the CDN
+  //     holds for a year.
+  //   * BENEFIT. Nearly none. Neither route filters by patch; both window on
+  //     FRESH_WINDOW_DAYS = 90 and return `patch` only as an output column. The
+  //     "fresh data" this branch used to go and get is substantially the same
+  //     90-day sample the stale artifact already holds.
+  //
+  // So a stale artifact within CONSENSUS_MAX_STALE_MINORS is SERVED, and the
+  // price of that is honesty — asserted below, and again on the block titles.
+  it("CASE 1s — a ONE-PATCH-STALE artifact is SERVED, not replaced: no database call at all", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const artifact = await buildArtifact("16.16", galioProSample(), galioOtpSample());
     vi.resetModules();
     vi.unstubAllGlobals();
-    const { res, log } = await resolveOnce({ db: "live", artifact });
+    const { res, log } = await resolveOnce({ db: "live", artifact, buildPatch: "16.17" });
+    expect(res.origin).toBe("artifact-stale");
+    expect(res.data!.items.length).toBeGreaterThan(0);
+    // The whole deliverable. A working database was RIGHT THERE and was not
+    // asked, which is the opposite of what this branch used to do.
+    expect(log.dbCalls).toEqual([]);
+    // Not a failure: nothing is broken, so nothing may be reported as broken.
+    expect(res.failure).toBeNull();
+    // But it is not silent either.
+    expect(res.notice).toContain("patch-16.16");
+    expect(res.notice).toContain("patch-16.17");
+    expect(res.notice).toContain("STALE");
+    expect(String(warn.mock.calls[0][0])).toContain("STALE");
+    // And the data carries the patch it is actually from, so the shop panel's
+    // own title can say so.
+    expect(res.data!.stalePatch).toBe("16.16");
+  });
+
+  it("CASE 1s — the season rollover 16.24 -> 17.1 is ONE step, so it is served too", async () => {
+    // The one flip a year that a naive same-major comparison would call
+    // unusable, sending production to the database for a fortnight.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const artifact = await buildArtifact("16.24", galioProSample(), galioOtpSample());
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    const { res, log } = await resolveOnce({ db: "live", artifact, buildPatch: "17.1" });
+    expect(res.origin).toBe("artifact-stale");
+    expect(log.dbCalls).toEqual([]);
+  });
+
+  it("CASE 1s — a stale stored null is believed, exactly as a fresh one is", async () => {
+    // 562 of 865 OTP entries and 416 of 865 pro entries in the committed
+    // artifact are null, and every one was written BECAUSE the live query
+    // returned nothing. Falling through on them across a flip would put the
+    // majority of resolutions back on Postgres and forfeit most of the saving.
+    // The cost — a champion-role whose data landed after the bake stays hidden
+    // until the next one — is HANDOFF open item 2, and it is identical to the
+    // cost a FRESH artifact already carries between bakes.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const artifact = await artifactWith("16.16", { "3|2": { pro: null, otp: null } });
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    const { res, log } = await resolveOnce({ db: "live", artifact, buildPatch: "16.17" });
+    expect(res.data).toBeNull();
+    expect(res.failure).toBeNull();
+    expect(log.dbCalls).toEqual([]);
+  });
+
+  it("CASE 2b — an artifact stale BEYOND the served window loses to a working database", async () => {
+    // Three patches behind means the daily re-bake — which now accepts a single
+    // forward step on its own — has been failing for about six weeks with the
+    // greeting digest warning throughout. At that point the numbers really are
+    // old enough to be worth the load, so the pre-2026-08-29 behaviour resumes.
+    const artifact = await buildArtifact("16.13", galioProSample(), galioOtpSample());
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    const { res, log } = await resolveOnce({ db: "live", artifact, buildPatch: "16.16" });
     expect(res.origin).toBe("live");
     expect(log.dbCalls.length).toBeGreaterThan(0);
   });
 
-  it("CASE 3 — a STALE artifact RECOVERS the block when the database is down, and says so honestly", async () => {
+  it("CASE 2c — an artifact NEWER than the build is never served: staleness is directional", async () => {
+    // A deploy that ships a 16.17 artifact while /api/build still answers 16.16
+    // is a real ordering, and serving 16.17 numbers is a claim about a patch
+    // the build was not computed on. `patchDriftSteps` refuses to count
+    // backwards, so this falls to the live query.
+    const artifact = await buildArtifact("16.17", galioProSample(), galioOtpSample());
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    const { res, log } = await resolveOnce({ db: "live", artifact, buildPatch: "16.16" });
+    expect(res.origin).toBe("live");
+    expect(log.dbCalls.length).toBeGreaterThan(0);
+  });
+
+  it("CASE 3 — an artifact too stale to SERVE still RECOVERS the block when the database is down", async () => {
+    // Deliberately beyond CONSENSUS_MAX_STALE_MINORS (16.12 against a 16.16
+    // build, four steps): inside the window this never reaches the database at
+    // all, so the recovery path can only be exercised outside it. The ordering
+    // that matters is unchanged — it TRIES the database first, and falls back
+    // only on that having failed.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const artifact = await buildArtifact("16.12", galioProSample(), galioOtpSample());
     vi.resetModules();
     vi.unstubAllGlobals();
-    const { res, log } = await resolveOnce({ db: "down", artifact });
+    const { res, log } = await resolveOnce({ db: "down", artifact, buildPatch: "16.16" });
 
     expect(log.dbCalls.length).toBeGreaterThan(0); // it DID try the database first
     expect(res.origin).toBe("artifact-fallback");
@@ -834,10 +1021,64 @@ describe("artifact first, database second", () => {
       },
     });
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    await resolveOnce({ db: "down", artifact });
+    // 16.12 against the fixture's own 16.13 build would now be SERVED without
+    // ever touching the database (case 1s), so the recovery this test is about
+    // is driven through a build far enough ahead to sit outside that window.
+    await resolveOnce({ db: "down", artifact, buildPatch: "16.16" });
     const entries = JSON.parse(store.get("coachbuild:companion:lastErrors:v1") ?? "[]");
     expect(entries).toHaveLength(1);
     expect(entries[0].kind).toBe("pro-consensus-http-500-recovered");
+  });
+
+  it("CASE 1s end to end — the shop panel's own titles say which patch the numbers are from", async () => {
+    // The honesty half of the stale serve, checked on the wire rather than on
+    // the resolver's return value. This is the only one of the three surfaces
+    // the user sees WITHOUT opening a log: it is in front of them, in the shop,
+    // while they are buying.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const artifact = await buildArtifact("16.12", galioProSample(), galioOtpSample());
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    const { body, log } = await exportOnce({ db: "live", artifact });
+
+    expect(log.dbCalls).toEqual([]);
+    const consensusBlocks = blocksOf(body).filter((t) => t.startsWith("Pro") || t.startsWith("OTP"));
+    expect(consensusBlocks).toHaveLength(2);
+    for (const title of consensusBlocks) expect(title.endsWith("(16.12 data)")).toBe(true);
+    // And ONLY those two. Every other block is computed from the live
+    // BuildResponse, which is the current patch by definition, so tagging one
+    // would be a false claim in the other direction.
+    for (const title of blocksOf(body)) {
+      if (!title.startsWith("Pro") && !title.startsWith("OTP")) expect(title).not.toContain("data)");
+    }
+
+    // Second surface: the line that reaches companion.log on the gaming PC.
+    // Bounded by ApplyDiagnosticsParser (MaxLines 4, MaxLineLength 512), which
+    // the desktop already ships — no desktop release is needed for this.
+    const diagnostics: string[] = JSON.parse(body).diagnostics;
+    expect(diagnostics).toHaveLength(2);
+    for (const line of diagnostics) {
+      expect(line).toContain("SERVED FROM the precomputed patch-16.12");
+      expect(line.length).toBeLessThanOrEqual(512);
+      // It must not read as an outage. `consensusFailureLine`'s wording is for
+      // a real failure, and a designed state borrowing it is how the line that
+      // matters gets tuned out.
+      expect(line).not.toContain("OMITTED");
+      expect(line).not.toContain("FAILED");
+    }
+  });
+
+  it("a FRESH artifact export is byte-identical to what it was before the stale tag existed", async () => {
+    // The regression this whole change most needs to not cause. `stalePatch` is
+    // spread, never assigned, at every hop — so the healthy path must carry no
+    // trace of it: no tag in any title, and no `diagnostics` key at all.
+    const artifact = await buildArtifact("16.13", galioProSample(), galioOtpSample());
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    const { body, log } = await exportOnce({ db: "live", artifact });
+    expect(log.dbCalls).toEqual([]);
+    for (const title of blocksOf(body)) expect(title).not.toContain("data)");
+    expect(Object.keys(JSON.parse(body))).not.toContain("diagnostics");
   });
 
   it("fetches the artifact ONCE per page even though both resolvers consult it", async () => {

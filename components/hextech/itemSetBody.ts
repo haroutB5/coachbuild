@@ -243,6 +243,16 @@ export interface ProConsensusItemsInput {
    *  handing over `items` instead would export an order this sample never
    *  measured. */
   orderedIds?: number[];
+  /** 2026-08-29 — set to the ARTIFACT'S OWN patch when these numbers came from
+   *  a precomputed artifact that is one or two patches behind the build being
+   *  exported (`classifyConsensusArtifactFreshness` -> `"stale"`).
+   *
+   *  Serving stale is deliberate and measured — see that function — but the
+   *  standing rule on this file is that a block's title is a CLAIM about its
+   *  contents, and "Pro build" on patch 16.17 claims 16.17 pros. So the title
+   *  carries the patch the numbers are actually from. Absent on every fresh
+   *  serve and on every live query, so the healthy export is unchanged. */
+  stalePatch?: string;
 }
 
 const LINE_LEN = 6;
@@ -570,6 +580,11 @@ interface LineBlock {
    *  of leaving two identical-looking blocks unexplained. Never set on a
    *  near-duplicate: see dedupeLineBlocks. */
   sameAs?: string;
+  /** The patch these numbers are from, when that is NOT the patch being
+   *  exported. See `ProConsensusItemsInput.stalePatch`. Only the pro and OTP
+   *  blocks can carry it — every other block is computed from the live
+   *  `BuildResponse`, which is the current patch by definition. */
+  stalePatch?: string;
 }
 
 function idSetKey(line: Candidate[]): string {
@@ -692,9 +707,16 @@ function dedupeLineBlocks(blocks: LineBlock[]): LineBlock[] {
 
 /** The title the shop panel actually shows. Parentheses rather than a dash
  *  because the client renders these titles in a narrow column and a bracketed
- *  suffix stays readable when it wraps. */
+ *  suffix stays readable when it wraps.
+ *
+ *  The stale tag is composed HERE and never written into `LineBlock.type`, for
+ *  the same reason `sameAs` is not: `dedupeLineBlocks` labels a duplicate with
+ *  the other block's `type`, so a tag living in `type` would nest into
+ *  `OTP build (16.16 data) (same as Pro build (16.16 data))`. One tag, at the
+ *  end, whatever else the title says. */
 function blockTitle(b: LineBlock): string {
-  return b.sameAs ? `${b.type} (same as ${b.sameAs})` : b.type;
+  const base = b.sameAs ? `${b.type} (same as ${b.sameAs})` : b.type;
+  return b.stalePatch ? `${base} (${b.stalePatch} data)` : base;
 }
 
 function slugPart(s: string): string {
@@ -1692,9 +1714,16 @@ export function buildItemSets(
   // output array as opaque {type, items} records.
   const lines: LineBlock[] = [];
   let emit = 0;
-  const pushLine = (type: string, family: LineFamily, keep: number, line: Candidate[]) => {
+  const pushLine = (
+    type: string,
+    family: LineFamily,
+    keep: number,
+    line: Candidate[],
+    /** See `LineBlock.stalePatch`. Passed only by the two consensus lines. */
+    stalePatch?: string
+  ) => {
     if (line.length === 0) return; // never a genuinely empty shop-panel block
-    lines.push({ type, family, keep, emit: emit++, line });
+    lines.push({ type, family, keep, emit: emit++, line, ...(stalePatch ? { stalePatch } : {}) });
   };
 
   // Core build is the ONE block emitted unconditionally, EVEN WHEN EMPTY. That
@@ -1733,7 +1762,8 @@ export function buildItemSets(
       consensusBlockTitle("Pro", proOrder.prior),
       "pro",
       FAMILY_KEEP_RANK.pro,
-      orderBuiltLine(buildLine(proPool, [...generalFallback, corePrimary], bootsIds), proOrder.lineRanks, bootsIds)
+      orderBuiltLine(buildLine(proPool, [...generalFallback, corePrimary], bootsIds), proOrder.lineRanks, bootsIds),
+      pro!.stalePatch
     );
   }
 
@@ -1752,7 +1782,8 @@ export function buildItemSets(
       consensusBlockTitle("OTP", otpOrder.prior),
       "otp",
       FAMILY_KEEP_RANK.otp,
-      orderBuiltLine(buildLine(otpPool, [...otpFallback, corePrimary], bootsIds), otpOrder.lineRanks, bootsIds)
+      orderBuiltLine(buildLine(otpPool, [...otpFallback, corePrimary], bootsIds), otpOrder.lineRanks, bootsIds),
+      otp!.stalePatch
     );
   }
 

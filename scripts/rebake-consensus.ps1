@@ -100,6 +100,11 @@ param(
     [int]$DeadlineMinutes = 60,
     # Do everything except commit / push / deploy.
     [switch]$DryRun,
+    # How far coverage.otp may fall on an ACCEPTED PATCH FLIP before guard 76
+    # refuses. Only consulted on a flip - the ordinary run keeps the absolute
+    # "must not fall at all" comparison. See guard 76 for the measurement
+    # behind 0.02.
+    [double]$CoverageDropTolerance = 0.02,
     # Accept a patch flip (exit 77) that a human has looked at. See RUN BY HAND.
     [switch]$AcceptPatchFlip,
     # Branch this is allowed to operate on. A bake committed onto a stray
@@ -352,27 +357,56 @@ if (-not $new) { Refuse 80 "the generated file did not parse as a consensus arti
 Say "generated: patch=$($new.Patch) combos=$($new.Combos) pro=$($new.Pro) otp=$($new.Otp) bytes=$($new.Bytes)"
 
 # ── (77) patch flip ────────────────────────────────────────────────────────
-# When the live patch moves, isConsensusArtifactFresh goes false for all 865
-# combos at once and the whole export silently reverts to the database path.
-# That IS the case this job most needs to catch - but it is also the one case
-# where the coverage guard below cannot help, because a fresh patch legitimately
-# bakes thin and "did coverage regress?" is meaningless across patches.
+# When the live patch moves, the deployed artifact is stamped for the previous
+# one. Until 2026-08-29 that meant `isConsensusArtifactFresh` went false for all
+# 865 combos at once and the whole export reverted to the database path, so this
+# guard refused and waited for a human with -AcceptPatchFlip. That refusal was
+# correct for its time and is now the WRONG default for two reasons:
 #
-# So: refuse, loudly, and let LastTaskResult 77 be the alarm. This converts the
-# silent quota regression that five handoff entries flagged into a visible one,
-# without letting an unattended job decide on its own that a thin new-patch
-# artifact is fine to ship.
+#   1. The export no longer falls over on a flip. The resolver serves the stale
+#      artifact, labelled, for up to CONSENSUS_MAX_STALE_MINORS patches
+#      (components/hextech/consensusArtifact.ts). So the flip is no longer an
+#      emergency that justifies waiting for a person.
+#   2. The user does no manual steps. A sanctioned human path that nobody runs
+#      is not a path. -AcceptPatchFlip existed for six days and was never used
+#      once, while the exposure it was meant to close stayed open.
+#
+# So a flip of EXACTLY ONE FORWARD STEP is now accepted unattended. Anything
+# else - two or more steps, a backwards flip, an unparseable label - still
+# refuses 77, because those are not "the patch moved", they are "something is
+# wrong with which patch we think we are on".
+#
+# THE STEP ARITHMETIC IS NOT REIMPLEMENTED HERE. scripts/patch-step.mts is a CLI
+# over the very function the resolver uses, so this job and the shop export can
+# never disagree about what a single step is. Any non-zero exit - including tsx
+# failing to start - is a refusal, which is the fail-closed direction: refusing a
+# real single step costs one alert and a day of a labelled stale artifact, while
+# accepting the wrong thing ships a bake nobody reviewed.
 $patchFlipAccepted = $false
 if ($new.Patch -ne $served.Patch) {
-    if (-not $AcceptPatchFlip) {
-        Refuse 77 ("PATCH FLIP: serving $($served.Patch), generated $($new.Patch). The deployed artifact " +
-                   "is now STALE for every combo and the export has silently reverted to the database. " +
-                   "A first-bake-of-a-patch is thin by nature and coverage cannot be compared across " +
-                   "patches, so this needs a human: re-run with -AcceptPatchFlip. Generated file kept at $tmpOut")
+    $stepOut = (& npx tsx scripts/patch-step.mts --from $served.Patch --to $new.Patch 2>&1 | Out-String).Trim()
+    $stepCode = $LASTEXITCODE
+    Say "patch step check: $($served.Patch) -> $($new.Patch) => $stepOut (exit $stepCode)"
+    if ($stepCode -ne 0 -and -not $AcceptPatchFlip) {
+        Refuse 77 ("PATCH FLIP the job will not accept on its own: serving $($served.Patch), generated " +
+                   "$($new.Patch) ($stepOut). Only a SINGLE FORWARD step is auto-accepted; this is not " +
+                   "one, so a person needs to look at which patch this machine thinks it is on. The " +
+                   "deployed artifact keeps serving, labelled stale, until then. " +
+                   "Generated file kept at $tmpOut")
     }
     $patchFlipAccepted = $true
-    Say ("PATCH FLIP ACCEPTED by operator: serving $($served.Patch), generated $($new.Patch); " +
-         "cross-patch coverage guard (76) skipped")
+    if ($stepCode -ne 0) {
+        # -AcceptPatchFlip survives as the override for the cases the job will
+        # not take alone. It is no longer the ROUTINE path, so it is no longer
+        # the thing standing between a Riot patch and a fresh artifact.
+        Say ("PATCH FLIP ACCEPTED by operator override: $($served.Patch) -> $($new.Patch) ($stepOut). " +
+             "Coverage guard (76) applies as a RELATIVE floor for this run.")
+    } else {
+        # ONE canonical line, matched verbatim by urgot scripts/check-coachbuild-live.sh
+        # so the greeting digest can report the flip without a new state file.
+        Say ("PATCH FLIP AUTO-ACCEPTED: $($served.Patch) -> $($new.Patch), a single forward step. " +
+             "Coverage guard (76) applies as a RELATIVE floor for this run.")
+    }
 } elseif ($AcceptPatchFlip) {
     Say "-AcceptPatchFlip given but patches match ($($new.Patch)); ignored"
 }
@@ -393,10 +427,34 @@ if ($new.Patch -ne $served.Patch) {
 # every one of the 281 losses against `n <= 20`. An unattended job has no way to
 # tell a deliberate narrowing from a corpus that has gone wrong, and the two
 # look identical from here.
-if (-not $patchFlipAccepted -and $new.Otp -lt $served.Otp) {
-    Refuse 76 ("coverage.otp REGRESSED $($served.Otp) -> $($new.Otp). Refusing to commit, push or " +
-               "deploy. If this is an intended narrowing (a floor change), bake it by hand and " +
-               "reconcile the losses. Generated file kept at $tmpOut")
+#
+# ── ON A FLIP IT IS A RELATIVE FLOOR, NOT NOTHING (2026-08-29) ─────────────
+# This guard used to be SKIPPED ENTIRELY on an accepted flip, on the stated
+# premise that "a first-bake-of-a-patch is thin by nature and coverage cannot be
+# compared across patches". That premise is FALSE for this codebase, and it
+# matters now that the flip is accepted unattended:
+#
+#   * NOTHING in the sample is patch-scoped. Neither /api/pros nor /api/otp
+#     filters on patch - both window on FRESH_WINDOW_DAYS = 90 (lib/pro/fresh.ts)
+#     and return `patch` only as an output column. A flip changes the artifact's
+#     STAMP, not the corpus underneath it, so the first bake of a new patch is
+#     not thin at all.
+#   * MEASURED over the eight scheduled bakes in this file's git history, the
+#     coverage.otp deltas are +7 +6 +2 +8 +4 +5 0 +6. It has never once fallen
+#     under normal operation; the only drops in the whole history (546 -> 265)
+#     were hand-run floor changes.
+#
+# So a flip run gets a 2% floor rather than a blind pass. On the current 303
+# that permits a loss of six entries - an order of magnitude outside anything
+# ever observed - while still catching the collapse this guard exists for. The
+# NON-flip path keeps the ABSOLUTE comparison: it has never fired spuriously,
+# and there is no reason to loosen a guard that is working.
+$otpFloor = if ($patchFlipAccepted) { [math]::Floor($served.Otp * (1 - $CoverageDropTolerance)) } else { $served.Otp }
+if ($new.Otp -lt $otpFloor) {
+    Refuse 76 ("coverage.otp REGRESSED $($served.Otp) -> $($new.Otp) (floor $otpFloor" +
+               $(if ($patchFlipAccepted) { ", relative: $([int]($CoverageDropTolerance * 100))% tolerance on a patch flip" } else { ", absolute" }) +
+               "). Refusing to commit, push or deploy. If this is an intended narrowing (a floor " +
+               "change), bake it by hand and reconcile the losses. Generated file kept at $tmpOut")
 }
 # The pro side gets a warning rather than a refusal: it is not what this job
 # exists to protect, and pro entries legitimately churn as the match corpus
@@ -405,7 +463,13 @@ if ($new.Pro -lt $served.Pro) {
     Say "WARNING: coverage.pro fell $($served.Pro) -> $($new.Pro). Not a refusal (this job gates on otp), but worth a look."
 }
 if ($patchFlipAccepted) {
-    Say "coverage not compared (patch flip): otp $($served.Otp) -> $($new.Otp), pro $($served.Pro) -> $($new.Pro), patch $($served.Patch) -> $($new.Patch)"
+    # It WAS compared - against the relative floor. The previous wording here
+    # ("coverage not compared") was accurate when a flip skipped the guard, and
+    # observed once live on the 16.16 -> 16.17 flip still saying so after the
+    # floor had in fact been applied. A summary line that under-reports the
+    # checks that ran is how a guard gets deleted by the next reader.
+    Say ("coverage OK against the RELATIVE floor $otpFloor (patch flip $($served.Patch) -> $($new.Patch)): " +
+         "otp $($served.Otp) -> $($new.Otp), pro $($served.Pro) -> $($new.Pro)")
 } else {
     Say "coverage OK: otp $($served.Otp) -> $($new.Otp), pro $($served.Pro) -> $($new.Pro), patch $($new.Patch) unchanged"
 }
