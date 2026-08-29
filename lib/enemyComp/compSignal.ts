@@ -221,3 +221,28 @@ function tryPromote(
   if (wpaCost > MAX_WPA_COST) return null;
   return { promotedIds: [pick.id], wpaCost };
 }
+
+/**
+ * The DERIVED decision as one short stable string, for dedup keys.
+ *
+ * THE POINT IS WHAT IT LEAVES OUT. It is built from the rule and the promoted
+ * ids and nothing else: not the enemy list, not the WPA cost, not how many
+ * enemies have locked in. Two comps that would produce the same export produce
+ * the same key, so a fourth and fifth enemy locking in during the draft is not
+ * a reason to rewrite the user's whole item-set document. Keying on the raw
+ * enemy list instead would make almost every pick in champ select a
+ * whole-document LCU PUT, which is the failure `compReexportGate.ts` exists to
+ * bound and this function exists to make rare in the first place.
+ *
+ * `wpaCost` is deliberately excluded even though it is derived: it moves with
+ * the champion's own numbers, not with the decision, and including it would
+ * make the key change for a reason the exported set does not reflect.
+ *
+ * `null` maps to a real key rather than to null, so "no rule fired" is an
+ * ordinary value that compares like any other. Reverting a stale `vs CC` title
+ * back to plain `Situational` matters exactly as much as setting it.
+ */
+export function compSignalKey(signal: CompSignal | null): string {
+  if (!signal) return "none";
+  return `${signal.rule}:${signal.promotedIds.join(",")}`;
+}
