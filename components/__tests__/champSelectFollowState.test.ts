@@ -60,73 +60,73 @@ describe("champSelectFollowState — shouldAutoExportForLane / markAutoExported"
   beforeEach(() => resetChampSelectFollowState());
 
   it("fires on the first-ever export (nothing applied yet)", () => {
-    expect(shouldAutoExportForLane("items", 103, "bot")).toBe(true);
+    expect(shouldAutoExportForLane("items", 103, "bot", "none")).toBe(true);
   });
 
   it("does not re-fire for the SAME (championId, laneId) pair already applied", () => {
-    markAutoExported("items", 103, "bot");
-    expect(shouldAutoExportForLane("items", 103, "bot")).toBe(false);
+    markAutoExported("items", 103, "bot", "none");
+    expect(shouldAutoExportForLane("items", 103, "bot", "none")).toBe(false);
   });
 
   it("items and runes dedup are independent (a user can toggle one off)", () => {
-    markAutoExported("items", 103, "bot");
-    expect(shouldAutoExportForLane("items", 103, "bot")).toBe(false);
-    expect(shouldAutoExportForLane("runes", 103, "bot")).toBe(true);
+    markAutoExported("items", 103, "bot", "none");
+    expect(shouldAutoExportForLane("items", 103, "bot", "none")).toBe(false);
+    expect(shouldAutoExportForLane("runes", 103, "bot", "none")).toBe(true);
   });
 
   it("a DIFFERENT champion always fires, regardless of champ-select-follow state", () => {
-    markAutoExported("items", 103, "bot");
-    expect(shouldAutoExportForLane("items", 7, "bot")).toBe(true);
+    markAutoExported("items", 103, "bot", "none");
+    expect(shouldAutoExportForLane("items", 7, "bot", "none")).toBe(true);
   });
 
   it("LANE FLIP on the SAME champion re-fires when still in champ select and the client agrees (the live bug fix)", () => {
     noteCompanionPhase("ChampSelect");
     setCurrentChampSelectChampionId(103);
-    markAutoExported("items", 103, "bot");
+    markAutoExported("items", 103, "bot", "none");
 
-    expect(shouldAutoExportForLane("items", 103, "support")).toBe(true); // Senna Bot -> Support
-    markAutoExported("items", 103, "support");
-    expect(shouldAutoExportForLane("items", 103, "support")).toBe(false); // already applied for Support
+    expect(shouldAutoExportForLane("items", 103, "support", "none")).toBe(true); // Senna Bot -> Support
+    markAutoExported("items", 103, "support", "none");
+    expect(shouldAutoExportForLane("items", 103, "support", "none")).toBe(false); // already applied for Support
   });
 
   it("LANE FLIP A -> B -> A each re-fires ('latest wins', sequence-based)", () => {
     noteCompanionPhase("ChampSelect");
     setCurrentChampSelectChampionId(103);
 
-    expect(shouldAutoExportForLane("runes", 103, "bot")).toBe(true);
-    markAutoExported("runes", 103, "bot");
+    expect(shouldAutoExportForLane("runes", 103, "bot", "none")).toBe(true);
+    markAutoExported("runes", 103, "bot", "none");
 
-    expect(shouldAutoExportForLane("runes", 103, "support")).toBe(true);
-    markAutoExported("runes", 103, "support");
+    expect(shouldAutoExportForLane("runes", 103, "support", "none")).toBe(true);
+    markAutoExported("runes", 103, "support", "none");
 
     // Back to bot -- differs from the most recently applied (support) -> re-fires.
-    expect(shouldAutoExportForLane("runes", 103, "bot")).toBe(true);
+    expect(shouldAutoExportForLane("runes", 103, "bot", "none")).toBe(true);
   });
 
   it("a SAME-(champ,lane) re-render (e.g. a rank-bracket change re-fetching the same build) does NOT re-fire", () => {
     noteCompanionPhase("ChampSelect");
     setCurrentChampSelectChampionId(103);
-    markAutoExported("items", 103, "mid");
-    expect(shouldAutoExportForLane("items", 103, "mid")).toBe(false);
+    markAutoExported("items", 103, "mid", "none");
+    expect(shouldAutoExportForLane("items", 103, "mid", "none")).toBe(false);
   });
 
   it("does NOT re-fire a lane flip when NOT currently in champ select (browsing an old pick post-game)", () => {
     noteCompanionPhase("ChampSelect");
     setCurrentChampSelectChampionId(103);
-    markAutoExported("items", 103, "bot");
+    markAutoExported("items", 103, "bot", "none");
 
     noteCompanionPhase("InProgress"); // champ select ended -- isCompanionDrivenChampion(103) would still be true today
     expect(isInChampSelect()).toBe(false);
-    expect(shouldAutoExportForLane("items", 103, "support")).toBe(false);
+    expect(shouldAutoExportForLane("items", 103, "support", "none")).toBe(false);
   });
 
   it("does NOT re-fire a lane flip when the client's live champ-select session has moved to a DIFFERENT champion", () => {
     noteCompanionPhase("ChampSelect");
     setCurrentChampSelectChampionId(103);
-    markAutoExported("items", 103, "bot");
+    markAutoExported("items", 103, "bot", "none");
 
     setCurrentChampSelectChampionId(7); // user has since hovered/locked someone else in the real client
-    expect(shouldAutoExportForLane("items", 103, "support")).toBe(false);
+    expect(shouldAutoExportForLane("items", 103, "support", "none")).toBe(false);
   });
 
   it("current champ-select championId getter/setter round-trip, cleared outside ChampSelect", () => {
@@ -145,12 +145,12 @@ describe("champSelectFollowState — shouldAutoExportForLane / markAutoExported"
     noteCompanionPhase("ChampSelect");
     const epoch1 = getChampSelectPhaseEpoch();
     expect(epoch1).toBe(epoch0 + 1);
-    markAutoExported("runes", 103, "mid");
+    markAutoExported("runes", 103, "mid", "none");
 
     // Still in ChampSelect on the next poll -- no re-bump, state persists.
     noteCompanionPhase("ChampSelect");
     expect(getChampSelectPhaseEpoch()).toBe(epoch1);
-    expect(shouldAutoExportForLane("runes", 103, "mid")).toBe(false);
+    expect(shouldAutoExportForLane("runes", 103, "mid", "none")).toBe(false);
 
     // Leaves ChampSelect (game starts) -- no bump on exit itself.
     noteCompanionPhase("InProgress");
@@ -160,7 +160,7 @@ describe("champSelectFollowState — shouldAutoExportForLane / markAutoExported"
     // -- the same champion is eligible to auto-export again.
     noteCompanionPhase("ChampSelect");
     expect(getChampSelectPhaseEpoch()).toBe(epoch1 + 1);
-    expect(shouldAutoExportForLane("runes", 103, "mid")).toBe(true);
+    expect(shouldAutoExportForLane("runes", 103, "mid", "none")).toBe(true);
   });
 
   it("markCompanionDriven/isCompanionDrivenChampion — only marked champions are eligible", () => {
@@ -288,8 +288,11 @@ describe("lane-flip auto-export sequence (BuildTabContent effect, replayed)", ()
   function runEffect(kind: "items" | "runes", buildRole: number, lane: "bot" | "support", championId: number): boolean {
     if (!isBuildForLane(buildRole, lane)) return false;
     const epoch = getChampSelectPhaseEpoch();
-    if (shouldAutoExportForLane(kind, championId, lane) && tryClaimAutoExportLock(kind, epoch, championId, lane)) {
-      markAutoExported(kind, championId, lane);
+    if (
+      shouldAutoExportForLane(kind, championId, lane, "none") &&
+      tryClaimAutoExportLock(kind, epoch, championId, lane, "none")
+    ) {
+      markAutoExported(kind, championId, lane, "none");
       return true;
     }
     return false;
@@ -333,21 +336,21 @@ describe("tryClaimAutoExportLock", () => {
   afterEach(() => unstubWindow());
 
   it("fails open (returns true) with no window (SSR)", () => {
-    expect(tryClaimAutoExportLock("runes", 1, 103, "mid")).toBe(true);
+    expect(tryClaimAutoExportLock("runes", 1, 103, "mid", "none")).toBe(true);
   });
 
   it("first claim succeeds, a second claim within the TTL for the SAME pair fails", () => {
     stubWindow(makeLocalStorageShim());
-    expect(tryClaimAutoExportLock("runes", 1, 103, "mid")).toBe(true);
-    expect(tryClaimAutoExportLock("runes", 1, 103, "mid")).toBe(false);
+    expect(tryClaimAutoExportLock("runes", 1, 103, "mid", "none")).toBe(true);
+    expect(tryClaimAutoExportLock("runes", 1, 103, "mid", "none")).toBe(false);
   });
 
   it("different kind/championId/laneId all claim freely", () => {
     stubWindow(makeLocalStorageShim());
-    expect(tryClaimAutoExportLock("runes", 1, 103, "mid")).toBe(true);
-    expect(tryClaimAutoExportLock("items", 1, 103, "mid")).toBe(true); // different kind
-    expect(tryClaimAutoExportLock("runes", 1, 7, "mid")).toBe(true); // different championId
-    expect(tryClaimAutoExportLock("runes", 1, 103, "bot")).toBe(true); // different laneId (v0.35.0 lane flip)
+    expect(tryClaimAutoExportLock("runes", 1, 103, "mid", "none")).toBe(true);
+    expect(tryClaimAutoExportLock("items", 1, 103, "mid", "none")).toBe(true); // different kind
+    expect(tryClaimAutoExportLock("runes", 1, 7, "mid", "none")).toBe(true); // different championId
+    expect(tryClaimAutoExportLock("runes", 1, 103, "bot", "none")).toBe(true); // different laneId (v0.35.0 lane flip)
   });
 
   // ── The 2026-08-19 report, replayed ────────────────────────────────────────
@@ -362,18 +365,18 @@ describe("tryClaimAutoExportLock", () => {
   // most-recently-exported record.
   it("A -> B -> A re-claims immediately: the last champion picked wins", () => {
     stubWindow(makeLocalStorageShim());
-    expect(tryClaimAutoExportLock("runes", 1, 3, "mid")).toBe(true); // Galio
-    expect(tryClaimAutoExportLock("runes", 1, 77, "jungle")).toBe(true); // Udyr
+    expect(tryClaimAutoExportLock("runes", 1, 3, "mid", "none")).toBe(true); // Galio
+    expect(tryClaimAutoExportLock("runes", 1, 77, "jungle", "none")).toBe(true); // Udyr
     // Straight back to Galio, well inside the 30s TTL. The client is currently
     // holding UDYR's runes, so this must fire.
-    expect(tryClaimAutoExportLock("runes", 1, 3, "mid")).toBe(true);
+    expect(tryClaimAutoExportLock("runes", 1, 3, "mid", "none")).toBe(true);
   });
 
   it("A -> B -> A -> B -> A re-claims every single time", () => {
     stubWindow(makeLocalStorageShim());
     const seq: [number, string][] = [[3, "mid"], [77, "jungle"], [3, "mid"], [77, "jungle"], [3, "mid"]];
     for (const [champ, lane] of seq) {
-      expect(tryClaimAutoExportLock("runes", 1, champ, lane)).toBe(true);
+      expect(tryClaimAutoExportLock("runes", 1, champ, lane, "none")).toBe(true);
     }
   });
 
@@ -389,10 +392,10 @@ describe("tryClaimAutoExportLock", () => {
     const seq: [number, string][] = [[3, "mid"], [77, "jungle"], [3, "mid"], [3, "mid"]];
     for (const [champ, lane] of seq) {
       setCurrentChampSelectChampionId(champ);
-      const inDocument = shouldAutoExportForLane("runes", champ, lane);
-      const crossTab = tryClaimAutoExportLock("runes", 1, champ, lane);
+      const inDocument = shouldAutoExportForLane("runes", champ, lane, "none");
+      const crossTab = tryClaimAutoExportLock("runes", 1, champ, lane, "none");
       expect(crossTab).toBe(inDocument);
-      if (inDocument) markAutoExported("runes", champ, lane);
+      if (inDocument) markAutoExported("runes", champ, lane, "none");
     }
   });
 
@@ -402,21 +405,21 @@ describe("tryClaimAutoExportLock", () => {
     // set a second time.
     const shim = makeLocalStorageShim();
     stubWindow(shim);
-    expect(tryClaimAutoExportLock("items", 1, 3, "mid")).toBe(true); // tab A
-    expect(tryClaimAutoExportLock("items", 1, 3, "mid")).toBe(false); // tab B, same tick
-    expect(tryClaimAutoExportLock("items", 5, 3, "mid")).toBe(false); // tab B, later tick
+    expect(tryClaimAutoExportLock("items", 1, 3, "mid", "none")).toBe(true); // tab A
+    expect(tryClaimAutoExportLock("items", 1, 3, "mid", "none")).toBe(false); // tab B, same tick
+    expect(tryClaimAutoExportLock("items", 5, 3, "mid", "none")).toBe(false); // tab B, later tick
   });
 
   it("expires by TTL, so a crashed tab cannot pin the record forever", () => {
     const shim = makeLocalStorageShim();
     stubWindow(shim);
-    expect(tryClaimAutoExportLock("runes", 1, 3, "mid")).toBe(true);
-    expect(tryClaimAutoExportLock("runes", 1, 3, "mid")).toBe(false);
+    expect(tryClaimAutoExportLock("runes", 1, 3, "mid", "none")).toBe(true);
+    expect(tryClaimAutoExportLock("runes", 1, 3, "mid", "none")).toBe(false);
     // Age the record past the 30s TTL by rewriting its timestamp.
     const key = "coachbuild:autoExport:last:runes";
     const rec = JSON.parse(shim.getItem(key)!);
     shim.setItem(key, JSON.stringify({ ...rec, at: rec.at - 30_001 }));
-    expect(tryClaimAutoExportLock("runes", 1, 3, "mid")).toBe(true);
+    expect(tryClaimAutoExportLock("runes", 1, 3, "mid", "none")).toBe(true);
   });
 
   it("uses ONE key per kind, and prunes the pre-2026-08-19 per-pair keys", () => {
@@ -426,7 +429,7 @@ describe("tryClaimAutoExportLock", () => {
     shim.setItem("coachbuild:autoExport:items:77:jungle", String(Date.now()));
     shim.setItem("coachbuild:somethingElse", "keep me");
     stubWindow(shim);
-    tryClaimAutoExportLock("runes", 1, 3, "mid");
+    tryClaimAutoExportLock("runes", 1, 3, "mid", "none");
     const keys = shim._dump();
     expect(keys).toContain("coachbuild:autoExport:last:runes");
     expect(keys).toContain("coachbuild:somethingElse"); // unrelated keys survive
@@ -437,7 +440,7 @@ describe("tryClaimAutoExportLock", () => {
     const shim = makeLocalStorageShim();
     shim.setItem("coachbuild:autoExport:last:runes", "not json");
     stubWindow(shim);
-    expect(tryClaimAutoExportLock("runes", 1, 3, "mid")).toBe(true);
+    expect(tryClaimAutoExportLock("runes", 1, 3, "mid", "none")).toBe(true);
   });
 
   // v0.101.0, the BLOCK direction of the same change: the epoch is a per-
@@ -448,8 +451,8 @@ describe("tryClaimAutoExportLock", () => {
   // how a user's manual rune edits got overwritten. Same key now, regardless.
   it("the epoch argument does NOT split the lock -- two tabs in one champ select share it", () => {
     stubWindow(makeLocalStorageShim());
-    expect(tryClaimAutoExportLock("runes", 1, 103, "mid")).toBe(true);
-    expect(tryClaimAutoExportLock("runes", 2, 103, "mid")).toBe(false);
-    expect(tryClaimAutoExportLock("runes", 99, 103, "mid")).toBe(false);
+    expect(tryClaimAutoExportLock("runes", 1, 103, "mid", "none")).toBe(true);
+    expect(tryClaimAutoExportLock("runes", 2, 103, "mid", "none")).toBe(false);
+    expect(tryClaimAutoExportLock("runes", 99, 103, "mid", "none")).toBe(false);
   });
 });

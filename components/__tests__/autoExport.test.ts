@@ -92,6 +92,7 @@ function makeDeps(opts: {
   itemOutcome?: AutoApplyOutcome;
   runeOutcome?: AutoApplyRunesOutcome;
   itemThrows?: boolean;
+  itemsSignalKey?: string;
 }): DepsHarness {
   const itemGates: DepsHarness["itemGates"] = [];
   const runeGates: DepsHarness["runeGates"] = [];
@@ -109,6 +110,10 @@ function makeDeps(opts: {
   });
 
   const deps: AutoExportExecDeps = {
+    // "none" unless a case overrides it: these tests predate the enemy-comp
+    // signal and assert the champion/lane dedup, which must behave exactly as
+    // it did when no comp is in play.
+    itemsSignalKey: opts.itemsSignalKey ?? "none",
     fetchBuild: async () => (opts.build === undefined ? buildFor(VIKTOR) : opts.build),
     isStillCurrent: () => opts.isStillCurrent ?? true,
     isCompanionDriven: isCompanionDrivenChampion,
@@ -196,8 +201,8 @@ describe("executeAutoExport — fires independent of any page/route", () => {
     expect(h.itemApply).toHaveBeenCalledTimes(1);
     expect(h.runeApply).toHaveBeenCalledTimes(1);
     // Slot consumed both kinds -> a second run for the SAME (champ,lane) dedups.
-    expect(shouldAutoExportForLane("items", VIKTOR, "mid")).toBe(false);
-    expect(shouldAutoExportForLane("runes", VIKTOR, "mid")).toBe(false);
+    expect(shouldAutoExportForLane("items", VIKTOR, "mid", "none")).toBe(false);
+    expect(shouldAutoExportForLane("runes", VIKTOR, "mid", "none")).toBe(false);
     // Success toasts surfaced for both.
     expect(h.toasts.map((t) => t.kind).sort()).toEqual(["items", "runes"]);
   });
@@ -225,8 +230,8 @@ describe("executeAutoExport — identity guard (champion change mid-FETCH)", () 
     expect(h.itemApply).not.toHaveBeenCalled();
     expect(h.runeApply).not.toHaveBeenCalled();
     // CRITICAL: the dedup slot is UNTOUCHED — a later genuine run still fires.
-    expect(shouldAutoExportForLane("items", VIKTOR, "mid")).toBe(true);
-    expect(shouldAutoExportForLane("runes", VIKTOR, "mid")).toBe(true);
+    expect(shouldAutoExportForLane("items", VIKTOR, "mid", "none")).toBe(true);
+    expect(shouldAutoExportForLane("runes", VIKTOR, "mid", "none")).toBe(true);
 
     // A subsequent run for the same (champ,lane), now current, exports for real.
     const h2 = makeDeps({});
@@ -242,7 +247,7 @@ describe("executeAutoExport — latest-wins re-export (champion change)", () => 
     const hA = makeDeps({ build: buildFor(VIKTOR, "Viktor") });
     await executeAutoExport(VIKTOR, "mid", hA.deps);
     expect(hA.itemApply).toHaveBeenCalledTimes(1);
-    expect(shouldAutoExportForLane("items", VIKTOR, "mid")).toBe(false);
+    expect(shouldAutoExportForLane("items", VIKTOR, "mid", "none")).toBe(false);
 
     // Champion changes to Ahri (still mid) — latest-wins: fires again.
     markCompanionDriven(AHRI);
@@ -251,7 +256,7 @@ describe("executeAutoExport — latest-wins re-export (champion change)", () => 
     const resB = await executeAutoExport(AHRI, "mid", hB.deps);
     expect(resB).toEqual({ items: "exported-ok", runes: "exported-ok" });
     expect(hB.itemApply).toHaveBeenCalledTimes(1);
-    expect(shouldAutoExportForLane("items", AHRI, "mid")).toBe(false);
+    expect(shouldAutoExportForLane("items", AHRI, "mid", "none")).toBe(false);
   });
 });
 
@@ -289,8 +294,8 @@ describe("executeAutoExport — toggles respected + gate-refused leaves slot ope
     // Item attempt refused by the gate -> slot LEFT OPEN (not marked); runes exported.
     expect(res.items).toBe("gate-refused");
     expect(res.runes).toBe("exported-ok");
-    expect(shouldAutoExportForLane("items", VIKTOR, "mid")).toBe(true); // retryable
-    expect(shouldAutoExportForLane("runes", VIKTOR, "mid")).toBe(false); // done
+    expect(shouldAutoExportForLane("items", VIKTOR, "mid", "none")).toBe(true); // retryable
+    expect(shouldAutoExportForLane("runes", VIKTOR, "mid", "none")).toBe(false); // done
   });
 
   it("no session/port is plumbed through to the gate", async () => {
@@ -311,7 +316,7 @@ describe("executeAutoExport — error hardening", () => {
     const itemToast = h.toasts.find((t) => t.kind === "items");
     expect(itemToast?.toast.kind).toBe("error");
     // Marked done despite the throw — won't retry into the same exception.
-    expect(shouldAutoExportForLane("items", VIKTOR, "mid")).toBe(false);
+    expect(shouldAutoExportForLane("items", VIKTOR, "mid", "none")).toBe(false);
   });
 
   it("companion returned ok:false surfaces the hint as an error toast", async () => {
@@ -425,7 +430,7 @@ describe("executeAutoExport — same-champion lane flip mid-FETCH (audit P1)", (
     expect(h2.runeApply).toHaveBeenCalledTimes(1);
     // Dedup ledger: top slot untouched (a genuine later top run may fire),
     // mid slot consumed by run 2.
-    expect(shouldAutoExportForLane("items", VIKTOR, "top")).toBe(true);
-    expect(shouldAutoExportForLane("items", VIKTOR, "mid")).toBe(false);
+    expect(shouldAutoExportForLane("items", VIKTOR, "top", "none")).toBe(true);
+    expect(shouldAutoExportForLane("items", VIKTOR, "mid", "none")).toBe(false);
   });
 });

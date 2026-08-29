@@ -53,11 +53,25 @@
 // both need to read/write, not view-model state either one of them owns.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import {
+  initialCompGateState,
+  observeCompSignal,
+  canCompReexport,
+  commitCompReexport,
+  type CompGateState,
+  type CompGateDecision,
+} from "./compReexportGate";
+
 export type AutoExportKind = "items" | "runes";
 
 interface AppliedLaneRecord {
   championId: number;
   laneId: string;
+  /** The DERIVED enemy-comp decision this export was built with
+   *  (`compSignalKey`), so a comp change is a genuine re-export and a comp that
+   *  merely gained an enemy without changing the decision is not. Always
+   *  `"none"` for runes, which the comp signal does not touch. */
+  signalKey: string;
 }
 
 let phaseEpoch = 0;
@@ -86,6 +100,11 @@ export function noteCompanionPhase(phase: string): void {
     companionDrivenChampionIds = new Set();
     lastFollowedChampSelectChampionId = null;
     followAttemptInFlightChampionId = null;
+    // The budget is PER CHAMP SELECT, so it resets on entry with everything
+    // else. The decision log is cleared with it: a log spanning two drafts
+    // reads as one, which is worse than no log.
+    compGate = initialCompGateState;
+    autoExportDecisions = [];
   }
   lastPhase = phase;
   if (phase !== "ChampSelect") {
@@ -118,6 +137,59 @@ export function setCurrentEnemyChampionIds(ids: readonly number[]): void {
 
 export function getCurrentEnemyChampionIds(): number[] {
   return currentEnemyChampionIds;
+}
+
+// -- The comp re-export gate, as a singleton over the pure policy -----------
+// The POLICY lives in compReexportGate.ts and is tested without any of this.
+// What lives here is the per-document state it operates on, plus the decision
+// LOG, because both have the same lifetime as everything else in this module
+// and are reset by the same champ-select entry.
+let compGate: CompGateState = initialCompGateState;
+
+/** Every decision that led to a write, plus every refusal that had a budget or
+ *  stability reason, newest last. Bounded. Read by tests and by the bench; also
+ *  mirrored to `console.info` with a stable prefix so a browser-driven run can
+ *  scrape it. A re-export appearing in companion.log with no reason beside it
+ *  is indistinguishable from a bug. */
+const AUTO_EXPORT_DECISION_LOG_MAX = 40;
+let autoExportDecisions: string[] = [];
+
+export function recordAutoExportDecision(line: string): void {
+  autoExportDecisions.push(line);
+  if (autoExportDecisions.length > AUTO_EXPORT_DECISION_LOG_MAX) autoExportDecisions.shift();
+  try {
+    console.info(`[autoExport] ${line}`);
+  } catch {
+    /* a stubbed console must never break an export */
+  }
+}
+
+export function getAutoExportDecisions(): string[] {
+  return [...autoExportDecisions];
+}
+
+/** Called every poll tick with the current derived key, to age the stability
+ *  window. Cheap and idempotent for an unchanged key. */
+export function observeCompSignalTick(key: string, now: number = Date.now()): void {
+  compGate = observeCompSignal(compGate, key, now);
+}
+
+/** The full decision for one tick: may this key cause a write right now? */
+export function decideCompReexport(
+  key: string,
+  lastExportedKey: string | null,
+  now: number = Date.now()
+): CompGateDecision {
+  return canCompReexport(compGate, key, now, lastExportedKey);
+}
+
+/** Spend one unit of the per-champ-select budget. Call only after a write. */
+export function noteCompReexportCommitted(): void {
+  compGate = commitCompReexport(compGate);
+}
+
+export function getCompGateState(): CompGateState {
+  return compGate;
 }
 
 export function getChampSelectPhaseEpoch(): number {
@@ -256,16 +328,50 @@ export function hasFollowedChampSelectChampion(championId: number): boolean {
  *  "Latest wins" (a single pair, not a per-championId lane map) also
  *  correctly handles a same-champion lane bounce A -> B -> A: each flip
  *  differs from whatever was most recently applied, so each re-fires. */
-export function shouldAutoExportForLane(kind: AutoExportKind, championId: number, laneId: string): boolean {
+export function shouldAutoExportForLane(
+  kind: AutoExportKind,
+  championId: number,
+  laneId: string,
+  /** REQUIRED since 0.119.0. `compSignalKey(signal)` for items, `"none"` for
+   *  runes. Not optional with a default, because a caller that forgot it would
+   *  silently restore the pre-0.119.0 behaviour (a comp change never
+   *  re-exports) while every existing test kept passing. */
+  signalKey: string
+): boolean {
   const last = lastApplied[kind];
   if (!last) return true;
   if (last.championId !== championId) return true;
-  if (last.laneId === laneId) return false;
-  return isInChampSelect() && getCurrentChampSelectChampionId() === championId;
+  if (last.laneId !== laneId) {
+    return isInChampSelect() && getCurrentChampSelectChampionId() === championId;
+  }
+  // Same champion, same lane: the only remaining reason to write again is that
+  // the enemy comp now implies a DIFFERENT export. The stability window and
+  // budget that decide whether we are allowed to act on that live in
+  // compReexportGate.ts; by the time a differing key reaches here, the caller
+  // has already passed those.
+  return last.signalKey !== signalKey;
 }
 
-export function markAutoExported(kind: AutoExportKind, championId: number, laneId: string): void {
-  lastApplied[kind] = { championId, laneId };
+export function markAutoExported(
+  kind: AutoExportKind,
+  championId: number,
+  laneId: string,
+  signalKey: string
+): void {
+  lastApplied[kind] = { championId, laneId, signalKey };
+}
+
+/** The signal key of the most recent export for exactly this (kind, champion,
+ *  lane), or null when there has not been one. Null is what tells the gate
+ *  "this is the first export, do not delay it". */
+export function getLastAppliedSignalKey(
+  kind: AutoExportKind,
+  championId: number,
+  laneId: string
+): string | null {
+  const last = lastApplied[kind];
+  if (!last || last.championId !== championId || last.laneId !== laneId) return null;
+  return last.signalKey;
 }
 
 /** Marks that `championId` was reached via an ACTUAL companion signal
@@ -284,6 +390,8 @@ export function isCompanionDrivenChampion(championId: number): boolean {
  *  between test cases in the same vitest worker. */
 export function resetChampSelectFollowState(): void {
   phaseEpoch = 0;
+  compGate = initialCompGateState;
+  autoExportDecisions = [];
   lastApplied = { items: null, runes: null };
   companionDrivenChampionIds = new Set();
   lastPhase = null;
@@ -372,7 +480,14 @@ export function tryClaimAutoExportLock(
   kind: AutoExportKind,
   _phaseEpoch: number,
   championId: number,
-  laneId: string
+  laneId: string,
+  /** REQUIRED since 0.119.0, and it MUST be the same value handed to
+   *  `shouldAutoExportForLane` on the same tick. These two stores are one rule
+   *  with two implementations, and they have silently disagreed before (the
+   *  2026-08-19 30-second cooldown, measured at 29.4s on production). A
+   *  comp-driven re-export that the in-document store allows and this one
+   *  blocks would reproduce that bug exactly, one champ select at a time. */
+  signalKey: string
 ): boolean {
   if (typeof window === "undefined") return true;
   try {
@@ -381,18 +496,29 @@ export function tryClaimAutoExportLock(
     const now = Date.now();
     const existing = window.localStorage.getItem(storageKey);
     if (existing) {
-      const record = JSON.parse(existing) as { championId?: unknown; laneId?: unknown; at?: unknown };
+      const record = JSON.parse(existing) as {
+        championId?: unknown;
+        laneId?: unknown;
+        signalKey?: unknown;
+        at?: unknown;
+      };
       const at = typeof record?.at === "number" ? record.at : Number.NaN;
+      // A record written before 0.119.0 has no signalKey. Treating a missing
+      // one as "none" rather than as a mismatch keeps an in-flight champ select
+      // deduping correctly across the deploy instead of firing one extra write
+      // per open tab.
+      const storedSignal = typeof record?.signalKey === "string" ? record.signalKey : "none";
       if (
         record?.championId === championId &&
         record?.laneId === laneId &&
+        storedSignal === signalKey &&
         Number.isFinite(at) &&
         now - at < AUTO_EXPORT_LOCK_TTL_MS
       ) {
         return false;
       }
     }
-    window.localStorage.setItem(storageKey, JSON.stringify({ championId, laneId, at: now }));
+    window.localStorage.setItem(storageKey, JSON.stringify({ championId, laneId, signalKey, at: now }));
     return true;
   } catch {
     return true;

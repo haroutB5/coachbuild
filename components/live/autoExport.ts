@@ -96,6 +96,11 @@ export function inFlightKey(championId: number, knownLane: LaneId | null): strin
   return `${championId}:${knownLane ?? "pending"}`;
 }
 
+/** Runes are not enemy-comp conditioned, so their dedup key is constant. A
+ *  named constant rather than a bare "none" at four call sites, so the
+ *  intent survives someone later making it dynamic by accident. */
+const RUNES_SIGNAL_KEY = "none";
+
 export interface AutoExportToast {
   kind: "success" | "error";
   message: string;
@@ -136,9 +141,29 @@ export interface AutoExportExecDeps {
   autoRunesEnabled: boolean;
   session: string | null;
   port: number | null;
-  shouldExportForLane: (kind: AutoExportKind, championId: number, laneId: LaneId) => boolean;
-  claimLock: (kind: AutoExportKind, epoch: number, championId: number, laneId: LaneId) => boolean;
-  markExported: (kind: AutoExportKind, championId: number, laneId: LaneId) => void;
+  shouldExportForLane: (
+    kind: AutoExportKind,
+    championId: number,
+    laneId: LaneId,
+    signalKey: string
+  ) => boolean;
+  claimLock: (
+    kind: AutoExportKind,
+    epoch: number,
+    championId: number,
+    laneId: LaneId,
+    signalKey: string
+  ) => boolean;
+  markExported: (kind: AutoExportKind, championId: number, laneId: LaneId, signalKey: string) => void;
+  /** The DERIVED enemy-comp decision for THIS export (`compSignalKey`), already
+   *  passed through the stability window and budget in compReexportGate.ts by
+   *  the caller. It participates in the items dedup only.
+   *
+   *  RUNES ARE NOT COMP-CONDITIONED and must never re-fire on a comp change:
+   *  rewriting a rune page because a fourth enemy locked in would be a write
+   *  the user did not ask for and could not explain. `exportRunes` hardcodes
+   *  "none" for exactly that reason, rather than reading this field. */
+  itemsSignalKey: string;
   applyItemSets: (
     gate: AutoApplyGateInput,
     build: () => Promise<{ champ: ChampionRef; lane: LaneId; roleLabel: string; build: BuildResponse }>
@@ -201,8 +226,8 @@ async function exportItems(
   build: BuildResponse,
   deps: AutoExportExecDeps
 ): Promise<AutoExportKindResult> {
-  if (!deps.shouldExportForLane("items", championId, laneId)) return "deduped";
-  if (!deps.claimLock("items", deps.epoch, championId, laneId)) return "deduped";
+  if (!deps.shouldExportForLane("items", championId, laneId, deps.itemsSignalKey)) return "deduped";
+  if (!deps.claimLock("items", deps.epoch, championId, laneId, deps.itemsSignalKey)) return "deduped";
   try {
     const outcome = await deps.applyItemSets(
       {
@@ -217,7 +242,7 @@ async function exportItems(
     // Gate refused (not yet connected / toggle off) — quiet, no toast, dedup
     // slot LEFT OPEN for a later genuine attempt (matches the old effect).
     if (!outcome.attempted) return "gate-refused";
-    deps.markExported("items", championId, laneId);
+    deps.markExported("items", championId, laneId, deps.itemsSignalKey);
     if (outcome.result.ok) {
       deps.onToast("items", {
         kind: "success",
@@ -234,7 +259,7 @@ async function exportItems(
     // v0.35 lesson: an uncaught rejection must surface a visible error, never
     // vanish silently. Still counts as a completed attempt (marked done) so it
     // doesn't retry into the same exception every tick.
-    deps.markExported("items", championId, laneId);
+    deps.markExported("items", championId, laneId, deps.itemsSignalKey);
     deps.onToast("items", {
       kind: "error",
       message: "Couldn't auto-add item builds — add them manually from the Runes & Summoners card.",
@@ -249,8 +274,8 @@ async function exportRunes(
   build: BuildResponse,
   deps: AutoExportExecDeps
 ): Promise<AutoExportKindResult> {
-  if (!deps.shouldExportForLane("runes", championId, laneId)) return "deduped";
-  if (!deps.claimLock("runes", deps.epoch, championId, laneId)) return "deduped";
+  if (!deps.shouldExportForLane("runes", championId, laneId, RUNES_SIGNAL_KEY)) return "deduped";
+  if (!deps.claimLock("runes", deps.epoch, championId, laneId, RUNES_SIGNAL_KEY)) return "deduped";
   try {
     const outcome = await deps.applyRunes(
       {
@@ -263,7 +288,7 @@ async function exportRunes(
       async () => ({ championName: build.champion.name, roleLabel: build.roleLabel, runes: build.runes })
     );
     if (!outcome.attempted) return "gate-refused";
-    deps.markExported("runes", championId, laneId);
+    deps.markExported("runes", championId, laneId, RUNES_SIGNAL_KEY);
     if (outcome.result.ok) {
       const r = outcome.result;
       // v0.101.0 — the companion found the page already holding exactly this
@@ -296,7 +321,7 @@ async function exportRunes(
     });
     return "exported-error";
   } catch {
-    deps.markExported("runes", championId, laneId);
+    deps.markExported("runes", championId, laneId, RUNES_SIGNAL_KEY);
     deps.onToast("runes", {
       kind: "error",
       message: "Couldn't auto-apply runes — use the Apply runes button instead.",

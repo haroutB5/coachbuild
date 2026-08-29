@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.119.0 -- the comp re-export trigger (2026-08-29)
+
+Phase 3. A comp that changes mid-draft now re-exports the item set, once,
+without turning every hover into a whole-document LCU PUT.
+
+- **Both dedup stores are keyed on the DERIVED decision**, never the enemy list.
+  `compSignalKey` is built from the rule and the promoted ids only, so a fourth
+  and fifth enemy locking in without changing what we would export produces the
+  same key and no write. `shouldAutoExportForLane` and `tryClaimAutoExportLock`
+  both take it as a REQUIRED argument, and a test drives the same tick sequence
+  through both asserting they answer identically on every tick. They have
+  disagreed in production before (the 2026-08-19 cooldown, 29.4s measured).
+- **A stability window and a per-champ-select budget** (`compReexportGate.ts`,
+  pure): a decision must hold `SIGNAL_STABILITY_MS` (1500ms, deliberately longer
+  than the 1s champ-select poll so one stray tick can never write), and at most
+  `MAX_COMP_REEXPORTS_PER_CHAMP_SELECT` (2) comp-driven re-exports per draft.
+  **Worst case is 3 whole-document writes per champ select**: one un-gated
+  export from the champion's own resolution, plus the budget.
+- **Runes never re-fire on a comp change.** They are not comp conditioned and
+  their key is pinned to a named constant.
+- **Every decision is logged with its reason** and mirrored to the console with
+  an `[autoExport]` prefix, cleared on champ-select entry.
+- **Benched in a real browser** (`scripts/bench-compreexport.mjs`, the fake
+  bridge on the real `/status` contract): a 27-second draft, 30 status polls,
+  four enemies locking in with a non-qualifying hover flickering between each,
+  produced exactly **2 writes** -- `Situational` at 1s and `Situational vs CC`
+  at 17s -- with the log showing the window holding at 0ms and 985ms before
+  allowing at 2001ms.
+
 ## 0.118.0 -- the enemy-comp signal reaches the shop (2026-08-29)
 
 Phase 2. The `Situational` block in the exported in-game item set is now ordered
