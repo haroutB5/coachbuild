@@ -44,13 +44,12 @@ import {
   markAutoExported,
   tryClaimAutoExportLock,
   getLastAppliedSignalKey,
-  observeCompSignalTick,
-  decideCompReexport,
-  noteCompReexportCommitted,
+  observeFinalCompTick,
+  decideFinalExport,
+  noteFinalExportWritten,
   recordAutoExportDecision,
-  getCompGateState,
+  hasWrittenFinalExport,
 } from "./champSelectFollowState";
-import { MAX_COMP_REEXPORTS_PER_CHAMP_SELECT } from "./compReexportGate";
 import { resolveForThisGamePlan, forThisGameKey } from "@/lib/enemyComp/forThisGame";
 import { normalizeDraftEnemyIds } from "./draftLiveSync";
 import {
@@ -147,18 +146,18 @@ export default function AutoExporter() {
     // executeAutoExport re-checks the real dedup per kind.)
     //
     // 0.119.0 made this condition narrower, and it had to. Items are no longer
-    // final once exported: a later enemy-comp change can legitimately require a
+    // final once exported: the enemy comp completing can legitimately require a
     // second write. Asking `shouldAutoExportForLane("items", ...)` here would
     // need the signal key, which needs the build, which is the fetch this
     // pre-check exists to avoid. So the items leg skips on the one condition
-    // under which no future comp change can matter either: the per-champ-select
-    // re-export budget is already spent. Everything else falls through to the
-    // full run, which is cheap because lib/buildCache.ts serves the build from
-    // memory after the first tick.
+    // under which no future comp change can matter either: the one permitted
+    // comp-driven overwrite has already happened. Everything else falls through
+    // to the full run, which is cheap because lib/buildCache.ts serves the
+    // build from memory after the first tick.
     const itemsSettled =
       knownLane !== null &&
       getLastAppliedSignalKey("items", championId, knownLane) !== null &&
-      getCompGateState().reexports >= MAX_COMP_REEXPORTS_PER_CHAMP_SELECT;
+      hasWrittenFinalExport();
     if (
       knownLane !== null &&
       itemsSettled &&
@@ -186,14 +185,15 @@ export default function AutoExporter() {
           laneId = best;
         }
 
-        // -- The enemy-comp re-export decision --------------------------------
+        // -- The one comp-driven overwrite, and when it is allowed ------------
         // Derived from the build we are about to export, so the key describes
         // the actual export rather than an intention. Three steps, in this
-        // order and no other: age the stability window with the CURRENT key on
-        // every tick, ask whether that key may cause a write, and only then let
-        // the dedup stores see it. Handing the new key straight to the dedup
-        // would make every flicker a whole-document LCU PUT, which is precisely
-        // what the gate exists to stop.
+        // order and no other: age the fallback stability window with the
+        // CURRENT enemy list on every tick, ask whether the overwrite may
+        // happen right now, and only then let the dedup stores see the new key.
+        // Handing it straight to the dedup would make every hover a
+        // whole-document LCU PUT, which is precisely what the trigger exists to
+        // stop.
         const enemies = normalizeDraftEnemyIds(companion.champSelect?.theirTeam ?? []);
         const buildForSignal = await fetchBuildFor(championId, laneId);
         const liveKey = buildForSignal
@@ -206,16 +206,24 @@ export default function AutoExporter() {
               })
             )
           : "none";
-        observeCompSignalTick(liveKey);
+        observeFinalCompTick(enemies);
         const lastKey = getLastAppliedSignalKey("items", championId, laneId);
-        const decision = decideCompReexport(liveKey, lastKey);
-        // Hold the PREVIOUS key when the gate refuses, so the dedup store sees
-        // "nothing changed" and no write happens. The gate never forces a
-        // write; it only decides whether a changed key is allowed to be seen.
-        const itemsSignalKey = decision.allow ? liveKey : lastKey ?? liveKey;
+        const decision = decideFinalExport({
+          timerPhase: companion.champSelect?.timerPhase ?? null,
+          enemyChampionIds: enemies,
+        });
+        // The BASELINE export is never gated. `lastKey === null` means nothing
+        // has been written for this champion and lane yet, and delaying that
+        // until finalization would leave the shop with no CoachBuild set at all
+        // for most of the draft -- which is the whole reason the early export
+        // exists. Once there IS a baseline, the trigger decides whether a
+        // CHANGED key is allowed to be seen; when it refuses we hold the
+        // PREVIOUS key, so the dedup store sees "nothing changed" and no write
+        // happens. The trigger never forces a write.
+        const itemsSignalKey = lastKey === null || decision.allow ? liveKey : lastKey;
         if (lastKey !== null && liveKey !== lastKey) {
           recordAutoExportDecision(
-            `${championId}/${laneId}: ${decision.allow ? "RE-EXPORT" : "hold"} - ${decision.reason}`
+            `${championId}/${laneId}: ${decision.allow ? "FINAL EXPORT" : "hold"} - ${decision.reason}`
           );
         }
 
@@ -241,11 +249,12 @@ export default function AutoExporter() {
           claimLock: tryClaimAutoExportLock,
           markExported: (kind, cid, lane, key) => {
             markAutoExported(kind, cid, lane, key);
-            // Budget is spent only on a genuine comp-driven RE-export, never on
-            // the first export for a champion and lane (which is not gated) and
-            // never on runes.
+            // The one permitted overwrite is spent only by a genuine
+            // comp-driven RE-export: never by the first export for a champion
+            // and lane (which is not gated), and never by runes, which are not
+            // comp-conditioned at all.
             if (kind === "items" && lastKey !== null && key !== lastKey) {
-              noteCompReexportCommitted();
+              noteFinalExportWritten();
               recordAutoExportDecision(`${championId}/${laneId}: wrote item set with signal ${key}`);
             }
           },

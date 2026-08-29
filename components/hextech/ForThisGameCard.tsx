@@ -35,7 +35,6 @@ import {
   FOR_THIS_GAME_BLOCK_TITLE,
   type ForThisGameSwap,
 } from "@/lib/enemyComp/forThisGame";
-import { isBootsItem } from "@/lib/bootsItems";
 
 interface ForThisGameCardProps {
   championId: number;
@@ -95,12 +94,18 @@ export default function ForThisGameCard({
     items.third.id,
     ...items.fourthPlus.map((p) => p.id),
   ].slice(0, 6);
+  // POSITIONAL boots only, and that is all this surface can honestly offer.
+  // itemSetBody's `collectBootsIds` also runs every candidate through
+  // `isBootsItem`, which needs the ddragon catalogue -- and this component has
+  // no catalogue in scope. Calling it with an empty map here would look like a
+  // second source while classifying nothing (every tag lookup misses), which is
+  // worse than not calling it: the spine above is built from the champion's own
+  // slots, so the positional source already names its boot by construction.
   const bootsIds = new Set<number>([
     items.boots.id,
     ...(items.alts?.boots ?? []).map((p) => p.id),
     ...(plan.boots ? [plan.boots.itemId] : []),
   ]);
-  for (const id of spine) if (isBootsItem(id, undefined, new Map())) bootsIds.add(id);
 
   const line = applyForThisGameLine(spine, plan, bootsIds);
   if (line.swaps.length === 0) return null;

@@ -24,11 +24,15 @@
 // genuinely DISAGREES with the derived baseline, so a correction that upstream
 // later agrees with is flagged as redundant rather than silently kept.
 //
-// `mixed` is an HONEST ANSWER, not a failure: it means the champion counts
-// toward neither side, and `resolveCompSignal`'s rule then does not fire on
-// them. Three champions end up there (Corki, Skarner, Ornn) and they belong
-// there. An unknown id also resolves to `mixed`, which is the conservative
-// direction: fail closed, never guess a lean.
+// `mixed` is an HONEST ANSWER, not a failure. It means two different things to
+// two different callers, and both are the conservative one:
+//   * as an ENEMY, the champion counts toward neither damage lean, so
+//     `classifyEnemyComp`'s heavy-ad/heavy-ap rules do not fire on them;
+//   * as OUR OWN champion, it reaches only a scenario cell's `any` list, so a
+//     cell whose answer depends on which kind of damage we deal (Serylda's
+//     Grudge vs Void Staff) names nothing rather than guessing.
+// Three champions end up there (Corki, Skarner, Ornn) and they belong there. An
+// unknown id also resolves to `mixed`: fail closed, never guess a lean.
 //
 // MAINTENANCE: a new champion is ONE hand-added row, same convention
 // lib/draft/compRatings.ts documents for itself. The CI test below fails until

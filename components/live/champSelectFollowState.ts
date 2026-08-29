@@ -54,13 +54,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import {
-  initialCompGateState,
-  observeCompSignal,
-  canCompReexport,
-  commitCompReexport,
-  type CompGateState,
-  type CompGateDecision,
-} from "./compReexportGate";
+  initialFinalizationState,
+  observeComp,
+  canWriteFinalExport,
+  commitFinalExport,
+  type FinalizationState,
+  type FinalizationDecision,
+} from "./compFinalization";
 
 export type AutoExportKind = "items" | "runes";
 
@@ -68,9 +68,9 @@ interface AppliedLaneRecord {
   championId: number;
   laneId: string;
   /** The DERIVED enemy-comp decision this export was built with
-   *  (`compSignalKey`), so a comp change is a genuine re-export and a comp that
-   *  merely gained an enemy without changing the decision is not. Always
-   *  `"none"` for runes, which the comp signal does not touch. */
+   *  (`forThisGameKey`), so a comp change is a genuine re-export and a comp
+   *  that merely gained an enemy without changing the decision is not. Always
+   *  `"none"` for runes, which the comp never touches. */
   signalKey: string;
 }
 
@@ -100,10 +100,10 @@ export function noteCompanionPhase(phase: string): void {
     companionDrivenChampionIds = new Set();
     lastFollowedChampSelectChampionId = null;
     followAttemptInFlightChampionId = null;
-    // The budget is PER CHAMP SELECT, so it resets on entry with everything
-    // else. The decision log is cleared with it: a log spanning two drafts
-    // reads as one, which is worse than no log.
-    compGate = initialCompGateState;
+    // The one permitted comp-driven overwrite is PER CHAMP SELECT, so it
+    // resets on entry with everything else. The decision log is cleared with
+    // it: a log spanning two drafts reads as one, which is worse than no log.
+    finalization = initialFinalizationState;
     autoExportDecisions = [];
   }
   lastPhase = phase;
@@ -139,12 +139,12 @@ export function getCurrentEnemyChampionIds(): number[] {
   return currentEnemyChampionIds;
 }
 
-// -- The comp re-export gate, as a singleton over the pure policy -----------
-// The POLICY lives in compReexportGate.ts and is tested without any of this.
+// -- The finalization trigger, as a singleton over the pure policy ----------
+// The POLICY lives in compFinalization.ts and is tested without any of this.
 // What lives here is the per-document state it operates on, plus the decision
 // LOG, because both have the same lifetime as everything else in this module
 // and are reset by the same champ-select entry.
-let compGate: CompGateState = initialCompGateState;
+let finalization: FinalizationState = initialFinalizationState;
 
 /** Every decision that led to a write, plus every refusal that had a budget or
  *  stability reason, newest last. Bounded. Read by tests and by the bench; also
@@ -168,28 +168,39 @@ export function getAutoExportDecisions(): string[] {
   return [...autoExportDecisions];
 }
 
-/** Called every poll tick with the current derived key, to age the stability
- *  window. Cheap and idempotent for an unchanged key. */
-export function observeCompSignalTick(key: string, now: number = Date.now()): void {
-  compGate = observeCompSignal(compGate, key, now);
-}
-
-/** The full decision for one tick: may this key cause a write right now? */
-export function decideCompReexport(
-  key: string,
-  lastExportedKey: string | null,
+/** Called every poll tick with the current enemy list, to age the fallback
+ *  stability window. Cheap and idempotent for an unchanged comp. */
+export function observeFinalCompTick(
+  enemyChampionIds: readonly number[],
   now: number = Date.now()
-): CompGateDecision {
-  return canCompReexport(compGate, key, now, lastExportedKey);
+): void {
+  finalization = observeComp(finalization, enemyChampionIds, now);
 }
 
-/** Spend one unit of the per-champ-select budget. Call only after a write. */
-export function noteCompReexportCommitted(): void {
-  compGate = commitCompReexport(compGate);
+/** The full decision for one tick: may the ONE comp-driven overwrite happen
+ *  right now? */
+export function decideFinalExport(
+  snapshot: { timerPhase: string | null; enemyChampionIds: readonly number[] },
+  now: number = Date.now()
+): FinalizationDecision {
+  return canWriteFinalExport(finalization, snapshot, now);
 }
 
-export function getCompGateState(): CompGateState {
-  return compGate;
+/** Spend the one permitted overwrite. Call only after a write actually
+ *  happened. */
+export function noteFinalExportWritten(): void {
+  finalization = commitFinalExport(finalization);
+}
+
+export function getFinalizationState(): FinalizationState {
+  return finalization;
+}
+
+/** Whether the one comp-driven overwrite has already happened this champ
+ *  select. Read by AutoExporter's pre-check to skip the whole items leg once
+ *  no further comp change can matter. */
+export function hasWrittenFinalExport(): boolean {
+  return finalization.written;
 }
 
 export function getChampSelectPhaseEpoch(): number {
@@ -332,7 +343,7 @@ export function shouldAutoExportForLane(
   kind: AutoExportKind,
   championId: number,
   laneId: string,
-  /** REQUIRED since 0.119.0. `compSignalKey(signal)` for items, `"none"` for
+  /** REQUIRED since 0.119.0. `forThisGameKey(plan)` for items, `"none"` for
    *  runes. Not optional with a default, because a caller that forgot it would
    *  silently restore the pre-0.119.0 behaviour (a comp change never
    *  re-exports) while every existing test kept passing. */
@@ -345,10 +356,10 @@ export function shouldAutoExportForLane(
     return isInChampSelect() && getCurrentChampSelectChampionId() === championId;
   }
   // Same champion, same lane: the only remaining reason to write again is that
-  // the enemy comp now implies a DIFFERENT export. The stability window and
-  // budget that decide whether we are allowed to act on that live in
-  // compReexportGate.ts; by the time a differing key reaches here, the caller
-  // has already passed those.
+  // the enemy comp now implies a DIFFERENT export. WHEN that is allowed to
+  // happen -- once, at the end of champ select -- is decided in
+  // compFinalization.ts; by the time a differing key reaches here, the caller
+  // has already passed it.
   return last.signalKey !== signalKey;
 }
 
@@ -390,7 +401,7 @@ export function isCompanionDrivenChampion(championId: number): boolean {
  *  between test cases in the same vitest worker. */
 export function resetChampSelectFollowState(): void {
   phaseEpoch = 0;
-  compGate = initialCompGateState;
+  finalization = initialFinalizationState;
   autoExportDecisions = [];
   lastApplied = { items: null, runes: null };
   companionDrivenChampionIds = new Set();
@@ -486,7 +497,9 @@ export function tryClaimAutoExportLock(
    *  with two implementations, and they have silently disagreed before (the
    *  2026-08-19 30-second cooldown, measured at 29.4s on production). A
    *  comp-driven re-export that the in-document store allows and this one
-   *  blocks would reproduce that bug exactly, one champ select at a time. */
+   *  blocks would reproduce that bug exactly, one champ select at a time --
+   *  and now that there is only ONE permitted comp-driven write per draft, a
+   *  disagreement does not merely delay it, it loses it outright. */
   signalKey: string
 ): boolean {
   if (typeof window === "undefined") return true;

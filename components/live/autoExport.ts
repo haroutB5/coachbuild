@@ -155,8 +155,8 @@ export interface AutoExportExecDeps {
     signalKey: string
   ) => boolean;
   markExported: (kind: AutoExportKind, championId: number, laneId: LaneId, signalKey: string) => void;
-  /** The DERIVED enemy-comp decision for THIS export (`compSignalKey`), already
-   *  passed through the stability window and budget in compReexportGate.ts by
+  /** The DERIVED enemy-comp decision for THIS export (`forThisGameKey`),
+   *  already passed through the finalization trigger in compFinalization.ts by
    *  the caller. It participates in the items dedup only.
    *
    *  RUNES ARE NOT COMP-CONDITIONED and must never re-fire on a comp change:
