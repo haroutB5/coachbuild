@@ -1,0 +1,178 @@
+{
+  "_capturedAt": "2026-08-29T02:16:37.520Z",
+  "_source": "GET /api/build?champ=157&role=2",
+  "champion": {
+    "id": 157,
+    "key": "Yasuo",
+    "name": "Yasuo",
+    "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/champion/Yasuo.webp",
+    "difficulty": 10,
+    "tags": [
+      "Fighter",
+      "Assassin"
+    ]
+  },
+  "role": 2,
+  "roleLabel": "Mid",
+  "patch": "16.17",
+  "items": {
+    "starter": {
+      "id": 1054,
+      "name": "Doran's Shield",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/1054.webp",
+      "wpa": 0.587110161781311,
+      "winrate": 49.40312194824219,
+      "occurrence": 1089,
+      "lowSample": false
+    },
+    "boots": {
+      "id": 3047,
+      "name": "Plated Steelcaps",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3047.webp",
+      "wpa": 2.9402167797088623,
+      "winrate": 51.7017822265625,
+      "occurrence": 617,
+      "lowSample": false
+    },
+    "first": {
+      "id": 3046,
+      "name": "Phantom Dancer",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3046.webp",
+      "wpa": 5.3836870193481445,
+      "winrate": 55.8238639831543,
+      "occurrence": 704,
+      "lowSample": false
+    },
+    "second": {
+      "id": 3031,
+      "name": "Infinity Edge",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3031.webp",
+      "wpa": 1.246938705444336,
+      "winrate": 55.52146911621094,
+      "occurrence": 1630,
+      "lowSample": false
+    },
+    "third": {
+      "id": 3036,
+      "name": "Lord Dominik's Regards",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3036.webp",
+      "wpa": 1.6783926486968994,
+      "winrate": 57.4272575378418,
+      "occurrence": 653,
+      "lowSample": false
+    },
+    "fourthPlus": [
+      {
+        "id": 6333,
+        "name": "Death's Dance",
+        "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/6333.webp",
+        "wpa": 0.21193304657936096,
+        "winrate": 56.11650466918945,
+        "occurrence": 1030,
+        "lowSample": false
+      }
+    ],
+    "alts": {
+      "boots": [
+        {
+          "id": 3111,
+          "name": "Mercury's Treads",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3111.webp",
+          "wpa": 2.8480188846588135,
+          "winrate": 51.36911392211914,
+          "occurrence": 913,
+          "lowSample": false
+        },
+        {
+          "id": 3006,
+          "name": "Berserker's Greaves",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3006.webp",
+          "wpa": 0.16150572896003723,
+          "winrate": 48.66769790649414,
+          "occurrence": 10358,
+          "lowSample": false
+        }
+      ],
+      "first": [
+        {
+          "id": 6673,
+          "name": "Immortal Shieldbow",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/6673.webp",
+          "wpa": 3.143655776977539,
+          "winrate": 53.40909194946289,
+          "occurrence": 1408,
+          "lowSample": false
+        },
+        {
+          "id": 3153,
+          "name": "Blade of The Ruined King",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3153.webp",
+          "wpa": -0.7917834520339966,
+          "winrate": 48.41023635864258,
+          "occurrence": 5158,
+          "lowSample": false
+        },
+        {
+          "id": 6672,
+          "name": "Kraken Slayer",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/6672.webp",
+          "wpa": -1.0095453262329102,
+          "winrate": 48.79008102416992,
+          "occurrence": 3306,
+          "lowSample": false
+        }
+      ],
+      "second": [
+        {
+          "id": 6673,
+          "name": "Immortal Shieldbow",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/6673.webp",
+          "wpa": -0.2941776514053345,
+          "winrate": 51.05375671386719,
+          "occurrence": 6548,
+          "lowSample": false
+        }
+      ],
+      "third": [
+        {
+          "id": 3033,
+          "name": "Mortal Reminder",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3033.webp",
+          "wpa": 1.591483473777771,
+          "winrate": 54.708099365234375,
+          "occurrence": 1062,
+          "lowSample": false
+        },
+        {
+          "id": 6673,
+          "name": "Immortal Shieldbow",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/6673.webp",
+          "wpa": -0.6567626595497131,
+          "winrate": 55.74571990966797,
+          "occurrence": 409,
+          "lowSample": true
+        }
+      ]
+    },
+    "optimizedPath": [
+      {
+        "id": 3046,
+        "name": "Phantom Dancer",
+        "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3046.webp",
+        "wpa": 5.3836870193481445,
+        "winrate": 55.8238639831543,
+        "occurrence": 704,
+        "lowSample": false
+      },
+      {
+        "id": 3031,
+        "name": "Infinity Edge",
+        "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3031.webp",
+        "wpa": 4.467628002166748,
+        "winrate": 59.561126708984375,
+        "occurrence": 319,
+        "lowSample": true
+      }
+    ]
+  }
+}

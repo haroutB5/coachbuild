@@ -1,0 +1,121 @@
+{
+  "_capturedAt": "2026-08-29T02:29:56.632Z",
+  "_source": "GET /api/build?champ=99&role=4",
+  "champion": {
+    "id": 99,
+    "key": "Lux",
+    "name": "Lux",
+    "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/champion/Lux.webp",
+    "difficulty": 5,
+    "tags": [
+      "Mage",
+      "Support"
+    ]
+  },
+  "role": 4,
+  "roleLabel": "Support",
+  "patch": "16.17",
+  "items": {
+    "starter": {
+      "id": 3865,
+      "name": "World Atlas",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3865.webp",
+      "wpa": 0.0000012309182011449593,
+      "winrate": 48.97035217285156,
+      "occurrence": 6847,
+      "lowSample": false
+    },
+    "boots": {
+      "id": 3020,
+      "name": "Sorcerer's Shoes",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3020.webp",
+      "wpa": 0.028851278126239777,
+      "winrate": 50.60922622680664,
+      "occurrence": 4596,
+      "lowSample": false
+    },
+    "first": {
+      "id": 6655,
+      "name": "Luden's Echo",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/6655.webp",
+      "wpa": 0.41828346252441406,
+      "winrate": 49.45790100097656,
+      "occurrence": 4335,
+      "lowSample": false
+    },
+    "second": {
+      "id": 4646,
+      "name": "Stormsurge",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/4646.webp",
+      "wpa": 0.3068743646144867,
+      "winrate": 50.19029235839844,
+      "occurrence": 2102,
+      "lowSample": false
+    },
+    "third": {
+      "id": 4645,
+      "name": "Shadowflame",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/4645.webp",
+      "wpa": 2.2590386867523193,
+      "winrate": 57.400001525878906,
+      "occurrence": 500,
+      "lowSample": false
+    },
+    "fourthPlus": [],
+    "alts": {
+      "boots": [
+        {
+          "id": 3158,
+          "name": "Ionian Boots of Lucidity",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3158.webp",
+          "wpa": -0.07984615117311478,
+          "winrate": 47.734954833984375,
+          "occurrence": 1479,
+          "lowSample": false
+        }
+      ],
+      "first": [
+        {
+          "id": 2065,
+          "name": "Shurelya's Battlesong",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/2065.webp",
+          "wpa": 0.20183077454566956,
+          "winrate": 52.20417404174805,
+          "occurrence": 431,
+          "lowSample": true
+        },
+        {
+          "id": 3118,
+          "name": "Malignance",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3118.webp",
+          "wpa": -1.525495171546936,
+          "winrate": 48.21872329711914,
+          "occurrence": 1207,
+          "lowSample": false
+        }
+      ],
+      "second": [
+        {
+          "id": 3157,
+          "name": "Zhonya's Hourglass",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3157.webp",
+          "wpa": -1.0458062887191772,
+          "winrate": 49.7652587890625,
+          "occurrence": 426,
+          "lowSample": true
+        }
+      ],
+      "third": [
+        {
+          "id": 3157,
+          "name": "Zhonya's Hourglass",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3157.webp",
+          "wpa": -1.5427072048187256,
+          "winrate": 48.57143020629883,
+          "occurrence": 455,
+          "lowSample": true
+        }
+      ]
+    }
+  }
+}

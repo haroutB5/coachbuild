@@ -1,0 +1,136 @@
+{
+  "_capturedAt": "2026-08-29T02:16:37.357Z",
+  "_source": "GET /api/build?champ=6&role=0",
+  "champion": {
+    "id": 6,
+    "key": "Urgot",
+    "name": "Urgot",
+    "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/champion/Urgot.webp",
+    "difficulty": 8,
+    "tags": [
+      "Fighter",
+      "Tank"
+    ]
+  },
+  "role": 0,
+  "roleLabel": "Top",
+  "patch": "16.17",
+  "items": {
+    "starter": {
+      "id": 1055,
+      "name": "Doran's Blade",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/1055.webp",
+      "wpa": 0.5064881443977356,
+      "winrate": 53.21559143066406,
+      "occurrence": 3001,
+      "lowSample": false
+    },
+    "boots": {
+      "id": 3009,
+      "name": "Boots of Swiftness",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3009.webp",
+      "wpa": 2.601940393447876,
+      "winrate": 56.05187225341797,
+      "occurrence": 694,
+      "lowSample": false
+    },
+    "first": {
+      "id": 3071,
+      "name": "Black Cleaver",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3071.webp",
+      "wpa": 0.23377583920955658,
+      "winrate": 53.35051345825195,
+      "occurrence": 3104,
+      "lowSample": false
+    },
+    "second": {
+      "id": 3053,
+      "name": "Sterak's Gage",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3053.webp",
+      "wpa": -0.10131073743104935,
+      "winrate": 53.63636779785156,
+      "occurrence": 2090,
+      "lowSample": false
+    },
+    "third": {
+      "id": 6665,
+      "name": "Jak'Sho, The Protean",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/6665.webp",
+      "wpa": 0.7334447503089905,
+      "winrate": 54.6875,
+      "occurrence": 448,
+      "lowSample": true
+    },
+    "fourthPlus": [
+      {
+        "id": 3143,
+        "name": "Randuin's Omen",
+        "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3143.webp",
+        "wpa": 1.4421303272247314,
+        "winrate": 54.857139587402344,
+        "occurrence": 175,
+        "lowSample": true
+      },
+      {
+        "id": 2501,
+        "name": "Overlord's Bloodmail",
+        "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/2501.webp",
+        "wpa": 1.1381913423538208,
+        "winrate": 62.5,
+        "occurrence": 200,
+        "lowSample": true
+      }
+    ],
+    "alts": {
+      "boots": [
+        {
+          "id": 3111,
+          "name": "Mercury's Treads",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3111.webp",
+          "wpa": 1.7347065210342407,
+          "winrate": 52.99479293823242,
+          "occurrence": 768,
+          "lowSample": false
+        },
+        {
+          "id": 3047,
+          "name": "Plated Steelcaps",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3047.webp",
+          "wpa": -1.248266339302063,
+          "winrate": 51.899410247802734,
+          "occurrence": 1869,
+          "lowSample": false
+        }
+      ]
+    },
+    "optimizedPath": [
+      {
+        "id": 3071,
+        "name": "Black Cleaver",
+        "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3071.webp",
+        "wpa": 0.23377583920955658,
+        "winrate": 53.35051345825195,
+        "occurrence": 3104,
+        "lowSample": false
+      },
+      {
+        "id": 3053,
+        "name": "Sterak's Gage",
+        "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3053.webp",
+        "wpa": -0.031219862401485443,
+        "winrate": 53.76344299316406,
+        "occurrence": 2046,
+        "lowSample": false
+      },
+      {
+        "id": 6665,
+        "name": "Jak'Sho, The Protean",
+        "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/6665.webp",
+        "wpa": 1.4557530879974365,
+        "winrate": 54.918033599853516,
+        "occurrence": 366,
+        "lowSample": true
+      }
+    ]
+  }
+}

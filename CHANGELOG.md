@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased -- enemy-comp signal, phase 1 (2026-08-29)
+
+Champ select's enemy composition now drives the SITUATIONAL row's order on the
+live panel. Phase 1 of the backlog item in `docs/research/competitors-2026-08-28.md`
+section 7. **The exported in-game item set is untouched in this phase** (see
+`HANDOFF-core-enemycomp.md` for why, and what phase 2 wires).
+
+- **New** `lib/enemyComp/compSignal.ts`. Five champion ids in, at most one
+  PROMOTION inside the champion's own situational pool out. Two rules: heavy CC
+  (reusing `compTakeaways`' own `CC_HEAVY_FLOOR`, now exported rather than
+  duplicated) and a decisive AD/AP lean, each gated on the item existing in the
+  champion's measured data AND on the swap costing at most `MAX_WPA_COST` WPA
+  against the boots the model picked.
+- **Removed the dead predecessor.** `components/live/compHighlight.ts` gated on
+  `Pick.matchupConditioned`, which needs the coachless matchup filter, which
+  403s on every endpoint, so it returned `[]` on every call in production for
+  its entire life with its consumer chain fully wired.
+- **Anti-heal is deliberately excluded** and there is a test that keeps it out.
+  Measured across 24 production champion-roles, an anti-heal item is reachable
+  anywhere in a champion's own data for only 9, and for 0 of the 4 AP champions
+  sampled. Promoting one would mean inventing it.
+- **New** `lib/enemyComp/counterItems.ts` (pinned id allowlists) and
+  `lib/enemyComp/damageType.ts` (173 curated rows). Both are checked against a
+  captured catalogue by `scripts/derive-enemycomp-tables.mjs` in CI, because
+  the obvious runtime classifier is wrong twice: on Summoner's Rift Thornmail
+  and Chempunk Chainsword say "40% Wounds" and only their Arena variants say
+  "Grievous Wounds", and `maps["11"]` admits mode variants like 323075.
+- Tests 3492 -> 3527. Six mutants run against the thresholds and the invention
+  guard, six killed; the invention mutant needed a specific fixture (Lux
+  support) to kill it, because on every other fixture the WPA tolerance masked
+  it and the membership check was doing no work.
+
 ## Desktop 1.0.23 — the WPA numbers over the shop are gone
 
 **The overlay no longer draws win-rate numbers on your Situational items.** That feature is

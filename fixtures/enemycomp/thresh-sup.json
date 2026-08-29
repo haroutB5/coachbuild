@@ -1,0 +1,185 @@
+{
+  "_capturedAt": "2026-08-29T02:16:37.445Z",
+  "_source": "GET /api/build?champ=412&role=4",
+  "champion": {
+    "id": 412,
+    "key": "Thresh",
+    "name": "Thresh",
+    "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/champion/Thresh.webp",
+    "difficulty": 7,
+    "tags": [
+      "Support",
+      "Tank"
+    ]
+  },
+  "role": 4,
+  "roleLabel": "Support",
+  "patch": "16.17",
+  "items": {
+    "starter": {
+      "id": 3865,
+      "name": "World Atlas",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3865.webp",
+      "wpa": 4.002515083811886e-7,
+      "winrate": 52.30195617675781,
+      "occurrence": 23328,
+      "lowSample": false
+    },
+    "boots": {
+      "id": 3158,
+      "name": "Ionian Boots of Lucidity",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3158.webp",
+      "wpa": 1.2636584043502808,
+      "winrate": 54.91984558105469,
+      "occurrence": 3618,
+      "lowSample": false
+    },
+    "first": {
+      "id": 3190,
+      "name": "Locket of the Iron Solari",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3190.webp",
+      "wpa": 0.1066359430551529,
+      "winrate": 52.21506881713867,
+      "occurrence": 18487,
+      "lowSample": false
+    },
+    "second": {
+      "id": 3109,
+      "name": "Knight's Vow",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3109.webp",
+      "wpa": 0.8115930557250977,
+      "winrate": 56.53013610839844,
+      "occurrence": 7251,
+      "lowSample": false
+    },
+    "third": {
+      "id": 3050,
+      "name": "Zeke's Convergence",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3050.webp",
+      "wpa": 0.25387635827064514,
+      "winrate": 62.00787353515625,
+      "occurrence": 1524,
+      "lowSample": false
+    },
+    "fourthPlus": [
+      {
+        "id": 3075,
+        "name": "Thornmail",
+        "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3075.webp",
+        "wpa": -0.8633307218551636,
+        "winrate": 57.25190734863281,
+        "occurrence": 1310,
+        "lowSample": false
+      }
+    ],
+    "alts": {
+      "boots": [
+        {
+          "id": 3111,
+          "name": "Mercury's Treads",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3111.webp",
+          "wpa": 1.1485882997512817,
+          "winrate": 51.608131408691406,
+          "occurrence": 2705,
+          "lowSample": false
+        },
+        {
+          "id": 3009,
+          "name": "Boots of Swiftness",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3009.webp",
+          "wpa": -0.1748175173997879,
+          "winrate": 53.022212982177734,
+          "occurrence": 14228,
+          "lowSample": false
+        },
+        {
+          "id": 3047,
+          "name": "Plated Steelcaps",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3047.webp",
+          "wpa": -0.4796880781650543,
+          "winrate": 50.125946044921875,
+          "occurrence": 2382,
+          "lowSample": false
+        }
+      ],
+      "first": [
+        {
+          "id": 3222,
+          "name": "Mikael's Blessing",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3222.webp",
+          "wpa": 0.7621309757232666,
+          "winrate": 55.80474853515625,
+          "occurrence": 758,
+          "lowSample": true
+        },
+        {
+          "id": 2524,
+          "name": "Bandlepipes",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/2524.webp",
+          "wpa": -1.4152860641479492,
+          "winrate": 53.84615707397461,
+          "occurrence": 598,
+          "lowSample": true
+        }
+      ],
+      "second": [
+        {
+          "id": 3110,
+          "name": "Frozen Heart",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3110.webp",
+          "wpa": -0.36568254232406616,
+          "winrate": 53.08769989013672,
+          "occurrence": 1927,
+          "lowSample": false
+        },
+        {
+          "id": 2504,
+          "name": "Kaenic Rookern",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/2504.webp",
+          "wpa": -0.7701889872550964,
+          "winrate": 52.91262435913086,
+          "occurrence": 412,
+          "lowSample": true
+        },
+        {
+          "id": 3222,
+          "name": "Mikael's Blessing",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3222.webp",
+          "wpa": -0.8401743173599243,
+          "winrate": 58.15047073364258,
+          "occurrence": 1276,
+          "lowSample": false
+        }
+      ],
+      "third": [
+        {
+          "id": 2524,
+          "name": "Bandlepipes",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/2524.webp",
+          "wpa": 2.1631975173950195,
+          "winrate": 65.03401184082031,
+          "occurrence": 735,
+          "lowSample": true
+        },
+        {
+          "id": 3110,
+          "name": "Frozen Heart",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3110.webp",
+          "wpa": 0.7997255921363831,
+          "winrate": 59.66069793701172,
+          "occurrence": 1061,
+          "lowSample": true
+        },
+        {
+          "id": 2504,
+          "name": "Kaenic Rookern",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/2504.webp",
+          "wpa": -0.1687621772289276,
+          "winrate": 60.279441833496094,
+          "occurrence": 501,
+          "lowSample": true
+        }
+      ]
+    }
+  }
+}

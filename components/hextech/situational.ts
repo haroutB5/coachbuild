@@ -55,3 +55,36 @@ export function flattenSituational(items: ItemsBlock): PickType[] {
 export function situationalShortlist(items: ItemsBlock): PickType[] {
   return flattenSituational(items).slice(0, SITUATIONAL_DISPLAY_LIMIT);
 }
+
+/** Moves every pick whose id is in `promotedIds` to the front, preserving the
+ *  relative order of both groups.
+ *
+ *  APPLIED TO THE FULL FLATTENED LIST, BEFORE THE TOP-6 SLICE, and that order
+ *  of operations is the whole reason this is a named function rather than a
+ *  sort comparator: a comp-relevant pick sitting at position 7 on raw WPA has
+ *  to be able to reach the visible window. Slicing first would make the
+ *  promotion a no-op in exactly the cases it exists for.
+ *
+ *  CONTENT-PRESERVING BY CONSTRUCTION. It partitions the input and
+ *  concatenates, so the output is always a permutation of the input: same
+ *  members, same length, no id introduced and none dropped. That is the
+ *  structural form of RC-5b's rule (a prior may PERMUTE a block, never
+ *  re-select it) and it is what lets the block keep a title that claims a
+ *  source. An id in `promotedIds` that is not in `picks` is silently ignored,
+ *  because it cannot be added.
+ *
+ *  ONE DEFINITION, and it has to stay that way. The Builds page's
+ *  SituationalCard, the live panel and (from phase 2) itemSetBody's shop block
+ *  all order the same row; two implementations of "promote these" is how the
+ *  page and the shop come to disagree about what a named block contains, which
+ *  is a defect class this file's header already documents. */
+export function orderSituationalForComp(
+  picks: readonly PickType[],
+  promotedIds: readonly number[]
+): PickType[] {
+  if (promotedIds.length === 0) return [...picks];
+  const set = new Set(promotedIds);
+  const promoted = picks.filter((p) => set.has(p.id));
+  const rest = picks.filter((p) => !set.has(p.id));
+  return [...promoted, ...rest];
+}

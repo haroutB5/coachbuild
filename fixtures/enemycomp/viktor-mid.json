@@ -1,0 +1,213 @@
+{
+  "_capturedAt": "2026-08-29T02:16:37.312Z",
+  "_source": "GET /api/build?champ=112&role=2",
+  "champion": {
+    "id": 112,
+    "key": "Viktor",
+    "name": "Viktor",
+    "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/champion/Viktor.webp",
+    "difficulty": 9,
+    "tags": [
+      "Mage"
+    ]
+  },
+  "role": 2,
+  "roleLabel": "Mid",
+  "patch": "16.17",
+  "items": {
+    "starter": {
+      "id": 1056,
+      "name": "Doran's Ring",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/1056.webp",
+      "wpa": 0.012772765941917896,
+      "winrate": 49.821739196777344,
+      "occurrence": 14305,
+      "lowSample": false
+    },
+    "boots": {
+      "id": 3020,
+      "name": "Sorcerer's Shoes",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3020.webp",
+      "wpa": 1.4588464498519897,
+      "winrate": 51.76451873779297,
+      "occurrence": 6319,
+      "lowSample": false
+    },
+    "first": {
+      "id": 2503,
+      "name": "Blackfire Torch",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/2503.webp",
+      "wpa": 0.47452816367149353,
+      "winrate": 50.36613464355469,
+      "occurrence": 11881,
+      "lowSample": false
+    },
+    "second": {
+      "id": 6653,
+      "name": "Liandry's Torment",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/6653.webp",
+      "wpa": 1.1899075508117676,
+      "winrate": 51.020408630371094,
+      "occurrence": 1764,
+      "lowSample": false
+    },
+    "third": {
+      "id": 3157,
+      "name": "Zhonya's Hourglass",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3157.webp",
+      "wpa": -0.39807116985321045,
+      "winrate": 55.65058135986328,
+      "occurrence": 3274,
+      "lowSample": false
+    },
+    "fourthPlus": [
+      {
+        "id": 3089,
+        "name": "Rabadon's Deathcap",
+        "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3089.webp",
+        "wpa": 0.1986657977104187,
+        "winrate": 57.5403938293457,
+        "occurrence": 1114,
+        "lowSample": false
+      }
+    ],
+    "alts": {
+      "boots": [
+        {
+          "id": 3158,
+          "name": "Ionian Boots of Lucidity",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3158.webp",
+          "wpa": 0.26219552755355835,
+          "winrate": 49.959293365478516,
+          "occurrence": 3685,
+          "lowSample": false
+        },
+        {
+          "id": 3009,
+          "name": "Boots of Swiftness",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3009.webp",
+          "wpa": 0.15638704597949982,
+          "winrate": 52.00313949584961,
+          "occurrence": 1273,
+          "lowSample": false
+        },
+        {
+          "id": 3111,
+          "name": "Mercury's Treads",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3111.webp",
+          "wpa": -1.7382880449295044,
+          "winrate": 47.2552604675293,
+          "occurrence": 2186,
+          "lowSample": false
+        }
+      ],
+      "first": [
+        {
+          "id": 6655,
+          "name": "Luden's Echo",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/6655.webp",
+          "wpa": -2.550513505935669,
+          "winrate": 48.299320220947266,
+          "occurrence": 1764,
+          "lowSample": false
+        },
+        {
+          "id": 6657,
+          "name": "Rod of Ages",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/6657.webp",
+          "wpa": -2.7146506309509277,
+          "winrate": 47.716896057128906,
+          "occurrence": 438,
+          "lowSample": true
+        }
+      ],
+      "second": [
+        {
+          "id": 3100,
+          "name": "Lich Bane",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3100.webp",
+          "wpa": 1.057163119316101,
+          "winrate": 53.73090362548828,
+          "occurrence": 3404,
+          "lowSample": false
+        },
+        {
+          "id": 4645,
+          "name": "Shadowflame",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/4645.webp",
+          "wpa": -0.9502093195915222,
+          "winrate": 50.75282287597656,
+          "occurrence": 1594,
+          "lowSample": false
+        },
+        {
+          "id": 3152,
+          "name": "Hextech Rocketbelt",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3152.webp",
+          "wpa": -0.9700005650520325,
+          "winrate": 51.65137481689453,
+          "occurrence": 4360,
+          "lowSample": false
+        }
+      ],
+      "third": [
+        {
+          "id": 3135,
+          "name": "Void Staff",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3135.webp",
+          "wpa": 2.0279181003570557,
+          "winrate": 51.05485153198242,
+          "occurrence": 474,
+          "lowSample": true
+        },
+        {
+          "id": 4645,
+          "name": "Shadowflame",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/4645.webp",
+          "wpa": -0.48085618019104004,
+          "winrate": 53.533714294433594,
+          "occurrence": 1231,
+          "lowSample": false
+        },
+        {
+          "id": 3100,
+          "name": "Lich Bane",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3100.webp",
+          "wpa": -1.1094117164611816,
+          "winrate": 57.57009506225586,
+          "occurrence": 535,
+          "lowSample": true
+        }
+      ]
+    },
+    "optimizedPath": [
+      {
+        "id": 2503,
+        "name": "Blackfire Torch",
+        "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/2503.webp",
+        "wpa": 0.47452816367149353,
+        "winrate": 50.36613464355469,
+        "occurrence": 11881,
+        "lowSample": false
+      },
+      {
+        "id": 6653,
+        "name": "Liandry's Torment",
+        "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/6653.webp",
+        "wpa": 1.1950691938400269,
+        "winrate": 51.29310607910156,
+        "occurrence": 1624,
+        "lowSample": false
+      },
+      {
+        "id": 3157,
+        "name": "Zhonya's Hourglass",
+        "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3157.webp",
+        "wpa": 1.8233941793441772,
+        "winrate": 56.532066345214844,
+        "occurrence": 421,
+        "lowSample": true
+      }
+    ]
+  }
+}

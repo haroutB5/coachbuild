@@ -10,7 +10,12 @@
 
 import type { AggregatedComp } from "./compRatings";
 
-const CC_HEAVY_FLOOR = 2.2;
+/** Exported since 2026-08-29: lib/enemyComp/compSignal.ts's heavy-CC rule
+ *  reads THIS constant rather than a second 2.2 of its own. The draft page
+ *  saying "Heavy CC" and the item set promoting a tenacity boot have to mean
+ *  the same thing about the same comp, and two copies of a threshold is how
+ *  they stop meaning it. */
+export const CC_HEAVY_FLOOR = 2.2;
 const FRONT_TO_BACK_TANKINESS_FLOOR = 2.2;
 const FRONT_TO_BACK_DAMAGE_FLOOR = 2.0;
 const LOW_MOBILITY_CEILING = 1.2;

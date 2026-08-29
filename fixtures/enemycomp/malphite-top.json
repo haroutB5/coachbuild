@@ -1,0 +1,147 @@
+{
+  "_capturedAt": "2026-08-29T02:16:37.483Z",
+  "_source": "GET /api/build?champ=54&role=0",
+  "champion": {
+    "id": 54,
+    "key": "Malphite",
+    "name": "Malphite",
+    "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/champion/Malphite.webp",
+    "difficulty": 2,
+    "tags": [
+      "Tank",
+      "Mage"
+    ]
+  },
+  "role": 0,
+  "roleLabel": "Top",
+  "patch": "16.17",
+  "items": {
+    "starter": {
+      "id": 1056,
+      "name": "Doran's Ring",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/1056.webp",
+      "wpa": 0.691012442111969,
+      "winrate": 51.18877410888672,
+      "occurrence": 6982,
+      "lowSample": false
+    },
+    "boots": {
+      "id": 3020,
+      "name": "Sorcerer's Shoes",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3020.webp",
+      "wpa": 0.5295497179031372,
+      "winrate": 50.71839141845703,
+      "occurrence": 696,
+      "lowSample": false
+    },
+    "first": {
+      "id": 3110,
+      "name": "Frozen Heart",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3110.webp",
+      "wpa": 1.5485869646072388,
+      "winrate": 55.512939453125,
+      "occurrence": 1043,
+      "lowSample": false
+    },
+    "second": {
+      "id": 6664,
+      "name": "Hollow Radiance",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/6664.webp",
+      "wpa": 0.8040525913238525,
+      "winrate": 51.63776397705078,
+      "occurrence": 519,
+      "lowSample": false
+    },
+    "third": {
+      "id": 2504,
+      "name": "Kaenic Rookern",
+      "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/2504.webp",
+      "wpa": 1.2894797325134277,
+      "winrate": 56.73759078979492,
+      "occurrence": 987,
+      "lowSample": false
+    },
+    "fourthPlus": [
+      {
+        "id": 3143,
+        "name": "Randuin's Omen",
+        "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3143.webp",
+        "wpa": 2.28881573677063,
+        "winrate": 54.05405044555664,
+        "occurrence": 296,
+        "lowSample": true
+      },
+      {
+        "id": 6665,
+        "name": "Jak'Sho, The Protean",
+        "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/6665.webp",
+        "wpa": 1.920381784439087,
+        "winrate": 56.98005676269531,
+        "occurrence": 351,
+        "lowSample": true
+      }
+    ],
+    "alts": {
+      "boots": [
+        {
+          "id": 3111,
+          "name": "Mercury's Treads",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3111.webp",
+          "wpa": 0.5072917938232422,
+          "winrate": 49.619346618652344,
+          "occurrence": 2233,
+          "lowSample": false
+        },
+        {
+          "id": 3047,
+          "name": "Plated Steelcaps",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3047.webp",
+          "wpa": -0.04529014974832535,
+          "winrate": 51.87012481689453,
+          "occurrence": 6283,
+          "lowSample": false
+        }
+      ],
+      "first": [
+        {
+          "id": 3118,
+          "name": "Malignance",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3118.webp",
+          "wpa": 0.30392834544181824,
+          "winrate": 50.54513931274414,
+          "occurrence": 2293,
+          "lowSample": false
+        },
+        {
+          "id": 3068,
+          "name": "Sunfire Aegis",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3068.webp",
+          "wpa": -0.4412686824798584,
+          "winrate": 50.580299377441406,
+          "occurrence": 3705,
+          "lowSample": false
+        }
+      ],
+      "second": [
+        {
+          "id": 4646,
+          "name": "Stormsurge",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/4646.webp",
+          "wpa": 3.7343647480010986,
+          "winrate": 52.928871154785156,
+          "occurrence": 478,
+          "lowSample": true
+        },
+        {
+          "id": 3068,
+          "name": "Sunfire Aegis",
+          "icon": "https://cdn.coachless.gg/static-files/16.17.1/16.17.1/img/item/3068.webp",
+          "wpa": -0.7516734600067139,
+          "winrate": 54.525386810302734,
+          "occurrence": 906,
+          "lowSample": false
+        }
+      ]
+    }
+  }
+}

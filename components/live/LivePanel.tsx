@@ -23,10 +23,9 @@ import { IconWithFallback } from "@/components/IconWithFallback";
 import ItemDetailPopover from "@/components/ItemDetailPopover";
 import { useBodyScrollLock } from "@/components/useBodyScrollLock";
 import SituationalCard from "@/components/hextech/SituationalCard";
-import { flattenSituational } from "@/components/hextech/situational";
 import { getStoredSession, getStoredPort, getLive, isLiveError, LIVE_POLL_MS } from "./companionClient";
 import { buildLivePanelModel, indexChampionsByKey, sameLivePanelModel, type LivePanelModel } from "./livePanelModel";
-import { selectCompAwareHighlights } from "./compHighlight";
+import { resolveCompSignal } from "@/lib/enemyComp/compSignal";
 import { readStoredRankBracketId } from "@/components/hextech/rankBracketStorage";
 import { rankQueryParam } from "@/lib/rankBrackets";
 
@@ -157,7 +156,14 @@ export default function LivePanel({ champ, lane }: LivePanelProps) {
   const enemyChampionIds = model.enemies
     .map((e) => champByKey?.get(e.championKey)?.id)
     .filter((id): id is number => typeof id === "number");
-  const highlightIds = items ? selectCompAwareHighlights(flattenSituational(items), enemyChampionIds) : [];
+  // 2026-08-29: was `selectCompAwareHighlights`, which gated on
+  // `Pick.matchupConditioned` and therefore returned [] on every call in
+  // production for as long as it existed (the coachless matchup path 403s).
+  // `resolveCompSignal` derives the same decision from data this app actually
+  // holds, and returns null rather than an empty array so "no rule fired" is
+  // ONE value and not two. Enemy CHAMPIONS only, as ever: nothing here reads
+  // what any enemy has bought.
+  const compSignal = items ? resolveCompSignal(enemyChampionIds, items) : null;
   const ver = versionFromPatch(patch ?? undefined);
 
   return (
@@ -191,7 +197,7 @@ export default function LivePanel({ champ, lane }: LivePanelProps) {
         })}
       </div>
 
-      {items && <SituationalCard items={items} onItemClick={openItem} highlightIds={highlightIds} />}
+      {items && <SituationalCard items={items} onItemClick={openItem} compSignal={compSignal} />}
 
       {lastItemId !== null && (
         <ItemDetailPopover itemId={lastItemId} ver={ver} open={activeItemId !== null} onClose={closeItem} />
