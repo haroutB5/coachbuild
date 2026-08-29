@@ -55,6 +55,8 @@ import {
   type CompanionPort,
 } from "@/components/live/companionClient";
 import { shouldAutoExport, type AutoApplyGateInput } from "./autoExportShared";
+import { resolveCompSignal, type CompSignal } from "@/lib/enemyComp/compSignal";
+import { getCurrentEnemyChampionIds } from "@/components/live/champSelectFollowState";
 
 export { type AutoApplyGateInput, type ConsensusSource };
 
@@ -577,6 +579,16 @@ export async function applyItemSetsForBuild(params: {
   session: string;
   /** Optional already-aggregated OTP line from the card being applied. */
   otp?: ProConsensusItemsInput | null;
+  /**
+   * The enemy champion ids from champ select. Defaults to the app-wide
+   * singleton CompanionProvider writes on every poll tick, so the four callers
+   * of this function do not each grow their own way of answering "who are the
+   * enemies" (which is how they would come to answer differently).
+   *
+   * Injectable because a default that can only be observed through a module
+   * singleton is a default no test can vary. Pass `[]` for "no comp".
+   */
+  enemies?: readonly number[];
 }): Promise<ApplyItemSetsResult> {
   const [proRes, itemMeta, otpRes] = await Promise.all([
     resolveProConsensus(params.champ, params.lane, params.build.patch),
@@ -626,7 +638,33 @@ export async function applyItemSetsForBuild(params: {
     ...[proRes.notice, otpRes.notice].filter((n): n is string => !!n),
   ];
 
-  const { sets, situational } = buildItemSets(params.champ, params.roleLabel, params.build, pro, itemMeta, otp);
+  // Resolved AFTER the awaits and OUTSIDE the Promise.all on purpose: it is a
+  // pure synchronous function over data already in hand, so putting it in the
+  // parallel block would add a promise and no concurrency. It cannot throw in
+  // a way that matters (every failure path inside returns null), but the guard
+  // is here anyway because a decorative signal must never be able to fail an
+  // apply, which is the same rule the `situational` wire and `diagnostics`
+  // already follow.
+  let compSignal: CompSignal | null = null;
+  try {
+    compSignal = resolveCompSignal(params.enemies ?? getCurrentEnemyChampionIds(), params.build.items);
+  } catch (err) {
+    compSignal = null;
+    recordCompanionError(
+      "comp-signal",
+      `enemy-comp signal skipped for championId=${params.champ.id}: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+
+  const { sets, situational } = buildItemSets(
+    params.champ,
+    params.roleLabel,
+    params.build,
+    pro,
+    itemMeta,
+    otp,
+    compSignal
+  );
   return applyItemSets(params.port, params.session, {
     championId: params.champ.id,
     sets,

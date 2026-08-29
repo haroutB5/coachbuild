@@ -1,11 +1,43 @@
 # Changelog
 
-## Unreleased -- enemy-comp signal, phase 1 (2026-08-29)
+## 0.118.0 -- the enemy-comp signal reaches the shop (2026-08-29)
 
-Champ select's enemy composition now drives the SITUATIONAL row's order on the
-live panel. Phase 1 of the backlog item in `docs/research/competitors-2026-08-28.md`
-section 7. **The exported in-game item set is untouched in this phase** (see
-`HANDOFF-core-enemycomp.md` for why, and what phase 2 wires).
+Phase 2. The `Situational` block in the exported in-game item set is now ordered
+against the enemy composition seen in champ select, and titled with the reason:
+`Situational vs AD` / `vs AP` / `vs CC`. The Builds page's own SITUATIONAL panel
+is wired in the SAME commit from the SAME signal, so the two cannot show a
+player different rows for one champion in one champ select.
+
+- **One window, one order.** `situationalShortlist` applies the promotion BEFORE
+  the top-6 slice, and its `promotedIds` argument is REQUIRED so a caller has to
+  say `[]` out loud. Slicing first would have made the promotion a no-op in the
+  cases it exists for and given the page a different six than the shop.
+- **Item-set shape unchanged, no desktop release.** Still one set, same uid and
+  title, same block count; only the order inside one block and that block's own
+  title string move. Tests assert every other block is byte-identical with and
+  without a signal, and that the overlay wire still pairs index-by-index with
+  the reordered block.
+- **Enemy ids have one source.** `champSelectFollowState` gained
+  `currentEnemyChampionIds`, written by the same CompanionProvider tick that
+  already writes the champion id and cleared in lockstep with it, so the four
+  callers that can trigger an item-set write cannot answer "who are the enemies"
+  four different ways.
+- **Held-out sweep** (`scripts/sweep-enemycomp.mts`, dated baseline beside it):
+  865 champion-roles against production, 20 random comps each, 4,900 trials.
+  Fires on **7.3%**; 24.5% of champion-roles ever fire, **0% always fire**. Of
+  the fires, **41.8% actually reorder and 58.2% only add the title** because the
+  item was already at the head of the row. Both are real and they are different
+  features, so the numbers are reported apart rather than as one.
+- **`MAX_WPA_COST = 1.0` is still not validated by the data**, and the sweep is
+  what says so: the swap-gap distribution is smooth with a median of 1.10, so
+  the threshold sits almost exactly at the median in a dense band with no
+  natural break to put it in. Left unchanged rather than moved arbitrarily.
+
+## 0.117.1 -- enemy-comp signal, phase 1 (2026-08-29)
+
+Champ select's enemy composition drives the SITUATIONAL row's order on the live
+panel. Phase 1 of the backlog item in `docs/research/competitors-2026-08-28.md`
+section 7. The exported in-game item set was untouched in this phase.
 
 - **New** `lib/enemyComp/compSignal.ts`. Five champion ids in, at most one
   PROMOTION inside the champion's own situational pool out. Two rules: heavy CC

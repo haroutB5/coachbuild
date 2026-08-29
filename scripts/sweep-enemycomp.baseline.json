@@ -1,0 +1,77 @@
+{
+  "base": "https://coachbuild.vercel.app",
+  "generatedAt": "2026-08-29T02:47:14.541Z",
+  "seed": 20260829,
+  "compsPerCombo": 20,
+  "combosRequested": 865,
+  "combosWithData": 245,
+  "combosNotPlayedInRole": 620,
+  "combosUnresolved": 0,
+  "reachability": {
+    "magicResistBootAvailable": 76,
+    "armorBootAvailable": 71,
+    "eitherAvailable": 122,
+    "eitherPct": "49.8%"
+  },
+  "fireRate": {
+    "trials": 4900,
+    "fired": 359,
+    "pct": "7.3%",
+    "byRule": {
+      "cc": 141,
+      "damage-ad": 92,
+      "damage-ap": 126
+    },
+    "combosThatEverFire": 60,
+    "combosThatEverFirePct": "24.5%",
+    "combosThatAlwaysFire": 0,
+    "combosThatAlwaysFirePct": "0.0%",
+    "firesThatReorder": 150,
+    "firesThatReorderPct": "41.8%",
+    "firesThatOnlyRelabel": 209,
+    "firesThatOnlyRelabelPct": "58.2%"
+  },
+  "maxWpaCost": 1,
+  "swapGapDistribution": {
+    "n": 147,
+    "min": -4.508975327014923,
+    "p10": 0.10592122077941898,
+    "p25": 0.5398507416248322,
+    "median": 1.0966952443122864,
+    "p75": 1.685476690530777,
+    "p90": 2.8294969439506534,
+    "max": 5.268908262252808,
+    "atOrUnderThreshold": 67,
+    "atOrUnderThresholdPct": "45.6%",
+    "within0p1OfThreshold": 10,
+    "histogram": {
+      "-1.50": 0,
+      "-1.25": 3,
+      "-1.00": 1,
+      "-0.75": 2,
+      "-0.50": 1,
+      "-0.25": 1,
+      "0.00": 16,
+      "0.25": 9,
+      "0.50": 18,
+      "0.75": 13,
+      "1.00": 18,
+      "1.25": 20,
+      "1.50": 8,
+      "1.75": 5,
+      "2.00": 3,
+      "2.25": 7,
+      "2.50": 3,
+      "2.75": 5,
+      "3.00": 5,
+      "3.25": 1
+    }
+  },
+  "firedCostDistribution": {
+    "n": 359,
+    "median": 0.39027889259159565,
+    "p90": 0.8538220524787903,
+    "max": 0.9908761978149414
+  },
+  "_note": "Dated capture of scripts/sweep-enemycomp.mts against production. Committed so a future run can be DIFFED against it rather than read in isolation: a change in fire rate or reachability with no code change means the upstream data moved, not the rules. Re-run: npx tsx scripts/sweep-enemycomp.mts --comps 20 --concurrency 8"
+}

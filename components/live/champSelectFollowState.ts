@@ -88,7 +88,36 @@ export function noteCompanionPhase(phase: string): void {
     followAttemptInFlightChampionId = null;
   }
   lastPhase = phase;
-  if (phase !== "ChampSelect") currentChampSelectChampionId = null;
+  if (phase !== "ChampSelect") {
+    currentChampSelectChampionId = null;
+    // Cleared in lockstep with the champion id: a stale enemy comp outliving
+    // champ select would label a block for a game that already ended.
+    currentEnemyChampionIds = [];
+  }
+}
+
+/** The enemy champion ids the companion currently reports for champ select,
+ *  deduped and capped, or [] outside champ select.
+ *
+ *  WHY IT LIVES HERE rather than being threaded through the four call sites
+ *  that can trigger an item-set write. Those four (the manual "Add to client"
+ *  button, the Pro card's apply, the OTP card's apply, and the champ-select
+ *  auto-export) already share ONE apply path, and giving each of them its own
+ *  way to answer "who are the enemies" is how they would come to answer
+ *  differently. This is the same singleton, with the same lifecycle, that
+ *  already holds `currentChampSelectChampionId` for exactly the same reason,
+ *  written by the same CompanionProvider tick.
+ *
+ *  Enemy CHAMPIONS only, from champ select, which is information the player can
+ *  already see before the game starts. Nothing here touches what anyone buys. */
+let currentEnemyChampionIds: number[] = [];
+
+export function setCurrentEnemyChampionIds(ids: readonly number[]): void {
+  currentEnemyChampionIds = [...ids];
+}
+
+export function getCurrentEnemyChampionIds(): number[] {
+  return currentEnemyChampionIds;
 }
 
 export function getChampSelectPhaseEpoch(): number {

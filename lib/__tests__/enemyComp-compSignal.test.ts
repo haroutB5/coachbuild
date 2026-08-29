@@ -229,7 +229,7 @@ describe("negative control: with no signal, nothing about the row moves", () => 
       expect(
         orderSituationalForComp(raw, []).slice(0, 6).map((p) => p.id),
         name
-      ).toEqual(situationalShortlist(items).map((p) => p.id));
+      ).toEqual(situationalShortlist(items, []).map((p) => p.id));
     }
   });
 

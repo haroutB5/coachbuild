@@ -359,7 +359,7 @@ describe("situational — block generation and ordering", () => {
   it("the shop block and the Builds panel read from ONE helper — not two copies", () => {
     // Behavioural: the module the card renders from and the module the shop
     // builds from must agree on the same input.
-    expect(situationalBlockPicks(galioMidItems())).toEqual(situationalShortlist(galioMidItems()));
+    expect(situationalBlockPicks(galioMidItems())).toEqual(situationalShortlist(galioMidItems(), []));
   });
 
   it("BOTH call sites use SITUATIONAL_DISPLAY_LIMIT, not a hardcoded 6", () => {
@@ -482,13 +482,13 @@ describe("situational — boots and duplicates", () => {
       path.join(process.cwd(), "components/hextech/itemSetBody.ts"),
       "utf8"
     );
-    expect(body).toMatch(/situationalBlockPicks\(items,\s*wpaBuildIds\)/);
+    expect(body).toMatch(/situationalBlockPicks\(items,\s*wpaBuildIds,/);
     expect(body).toMatch(/selectHiddenGemPicks\([\s\S]{0,120}wpaBuildIds/);
   });
 
   it("with an empty exclusion set the block is the panel's list verbatim", () => {
     expect(situationalBlockPicks(galioMidItems(), new Set())).toEqual(
-      situationalShortlist(galioMidItems())
+      situationalShortlist(galioMidItems(), [])
     );
   });
 
@@ -690,8 +690,8 @@ describe("situational — the WPA deltas the desktop overlay draws (0.114.0 wire
 
     // The exclusion really did bite — without this the pairing below is a
     // tautology over an unfiltered list.
-    expect(situationalShortlist(items).map((x) => x.id)).toContain(8020);
-    expect(situationalShortlist(items)).toHaveLength(SITUATIONAL_DISPLAY_LIMIT);
+    expect(situationalShortlist(items, []).map((x) => x.id)).toContain(8020);
+    expect(situationalShortlist(items, [])).toHaveLength(SITUATIONAL_DISPLAY_LIMIT);
     expect(blockIds).not.toContain(8020);
     expect(blockIds).toHaveLength(SITUATIONAL_DISPLAY_LIMIT - 1);
 
@@ -815,11 +815,24 @@ describe("situational — the WPA deltas the desktop overlay draws (0.114.0 wire
     );
     const calls = body.match(/situationalBlockPicks\(items/g) ?? [];
     expect(calls).toHaveLength(1);
-    expect(body).toMatch(/const picks = situationalBlockPicks\(items,\s*wpaBuildIds\)/);
-    expect(body).toMatch(/situationalBlocks\(picks\)/);
+    expect(body).toMatch(
+      /const picks = situationalBlockPicks\(items,\s*wpaBuildIds,\s*compSignal\?\.promotedIds \?\? \[\]\)/
+    );
+    // 2026-08-29: the comp signal made this stricter rather than looser. The
+    // block and the wire must both take `picks`, the ONE already-reordered and
+    // already-filtered array. If the block were built from a comp-ordered list
+    // and the wire from an unordered one, the overlay would paint each delta
+    // over the wrong icon, and the two would agree on length so no size check
+    // would catch it.
+    expect(body).toMatch(/situationalBlocks\(picks,\s*compSignal\?\.labelSuffix\)/);
     expect(body).toMatch(/situationalWire\(picks\)/);
-    // The wire must not reach for the unfiltered shortlist on its own.
+    // Neither consumer may reach for the shortlist on its own.
     expect(body).not.toMatch(/situationalWire\(situationalShortlist/);
+    expect(body).not.toMatch(/situationalBlocks\(situationalShortlist/);
+    // And the wire must not re-apply the promotion itself: it receives an
+    // already-ordered array, so a second orderSituationalForComp on this path
+    // would be a second derivation.
+    expect(body).not.toMatch(/situationalWire\(orderSituationalForComp/);
   });
 
   it("changes NOTHING about the sets — same set, same blocks, with and without it", () => {

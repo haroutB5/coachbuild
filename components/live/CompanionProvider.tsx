@@ -67,7 +67,13 @@ import {
   type CompanionChampSelectSnapshot,
   type FollowKind,
 } from "./companionClient";
-import { noteCompanionPhase, markCompanionDriven, setCurrentChampSelectChampionId } from "./champSelectFollowState";
+import {
+  noteCompanionPhase,
+  markCompanionDriven,
+  setCurrentChampSelectChampionId,
+  setCurrentEnemyChampionIds,
+} from "./champSelectFollowState";
+import { normalizeDraftEnemyIds } from "./draftLiveSync";
 import { resolveCurrentChampSelectChampionId } from "./champSelectFollow";
 import { isCompanionStatusFresh } from "./companionLiveness";
 
@@ -258,6 +264,10 @@ export default function CompanionProvider({ children }: { children: ReactNode })
       const liveChampSelectId =
         nextPhase === "ChampSelect" ? resolveCurrentChampSelectChampionId(nextChampSelect) : null;
       setCurrentChampSelectChampionId(liveChampSelectId);
+      // Same tick, same source, same normalisation /draft uses. Written here
+      // rather than read ad hoc at apply time so every consumer sees one
+      // answer per poll.
+      setCurrentEnemyChampionIds(normalizeDraftEnemyIds(nextChampSelect?.theirTeam ?? []));
       // Round-B audit P1 (see this file's header comment) — must stay
       // unconditional and in this exact position (same tick, right after
       // setCurrentChampSelectChampionId, before anything async).

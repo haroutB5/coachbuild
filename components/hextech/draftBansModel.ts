@@ -43,13 +43,21 @@ const LANE_BULLY_WIN_FLOOR = 0.55;
  *  patterns map directly onto `winVsYou`, which is real per-matchup data:
  *    - >= LANE_BULLY_WIN_FLOOR  -> "lane bully, 56.0%"
  *    - present, below the floor -> "56.0% into you"
- *  The third mockup pattern ("denies your sustain") is a per-champion
- *  qualitative claim (anti-heal/sustain-denial kit identity) that this repo
- *  has no dataset for — compHighlight.ts's own header note already flags
- *  that no per-champion damage-type/kit-tag classification exists here, and
- *  fabricating one just for ban copy would be exactly the kind of invented
- *  signal that file's compliance guardrail exists to prevent (and would
- *  contradict this file's own "data-honest, no fabricated stats" brief).
+ *  The third mockup pattern ("denies your sustain") stays out, and the reason
+ *  was RESTATED 2026-08-29 because the one it used to give expired. It used to
+ *  cite compHighlight.ts's header for "no per-champion damage-type/kit-tag
+ *  classification exists here". That file is deleted, and the claim had already
+ *  stopped being true: lib/draft/compRatings.ts curates six kit axes and
+ *  lib/enemyComp/damageType.ts carries a damage-type row per champion.
+ *
+ *  The refusal survives on a better argument. "Denies your sustain" is an
+ *  ANTI-HEAL claim, and anti-heal is the one axis that was measured and found
+ *  undeliverable: across 24 production champion-roles an anti-heal item is
+ *  reachable anywhere in a champion's own data for only 9, and for none of the
+ *  AP champions sampled (see lib/enemyComp/counterItems.ts's ANTI_HEAL note and
+ *  the 2026-08-29 user decision). So the copy would be asserting a counter the
+ *  reader frequently cannot act on, which is worse than generic, and it would
+ *  contradict this file's own "data-honest, no fabricated stats" brief.
  *  So the no-matchup-data fallback below is an honest, category-neutral
  *  string instead of literally reproducing that mockup line — flagged here
  *  as a deliberate contract deviation, not an oversight. */

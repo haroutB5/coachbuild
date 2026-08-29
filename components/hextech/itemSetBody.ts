@@ -150,6 +150,7 @@
 import type { ChampionRef, BuildResponse, ItemsBlock, Pick as PickType } from "@/lib/types";
 import type { ItemDetail } from "@/components/itemDetail";
 import { flattenSituational, situationalShortlist } from "./situational";
+import type { CompSignal } from "@/lib/enemyComp/compSignal";
 import { wpaText } from "@/components/StatBadge";
 import { resolveOptimizedPathView } from "./optimizedPath";
 import { isBootsItem, isFinalBootsItem, type ItemCatalog } from "@/lib/bootsItems";
@@ -376,9 +377,15 @@ const SITUATIONAL_BLOCK_TYPE = "Situational";
  *                    set to get the panel's own list verbatim. */
 export function situationalBlockPicks(
   items: ItemsBlock,
-  excludeIds: ReadonlySet<number> = new Set()
+  excludeIds: ReadonlySet<number> = new Set(),
+  /** Enemy-comp promotions, from `resolveCompSignal`. REQUIRED, and `[]` means
+   *  "no comp" rather than being a default a caller can forget: the promotion
+   *  is applied inside `situationalShortlist` BEFORE the top-6 slice, so a
+   *  caller that omitted it would get a different six than every other
+   *  surface. See that function's own note on the order of operations. */
+  promotedIds: readonly number[] = []
 ): PickType[] {
-  return situationalShortlist(items).filter((p) => !excludeIds.has(p.id));
+  return situationalShortlist(items, promotedIds).filter((p) => !excludeIds.has(p.id));
 }
 
 // ── Putting the WPA number in the shop (2026-08-19, user directive) ──────────
@@ -499,9 +506,22 @@ export interface ItemSetExport {
  *
  *  Returns an array rather than one block because the caller splices it into
  *  `blocks` and the empty case must contribute nothing. */
-export function situationalBlocks(picks: readonly PickType[]): ItemSetBlock[] {
+export function situationalBlocks(
+  picks: readonly PickType[],
+  /** `CompSignal.labelSuffix` ("vs CC" / "vs AD" / "vs AP") when a comp rule
+   *  fired, absent otherwise.
+   *
+   *  A TITLE IS A CLAIM ABOUT THE BLOCK, which is this file's standing rule,
+   *  and that cuts both ways here: the suffix appears ONLY when the row was
+   *  actually reordered against the enemy comp. An unchanged row keeps the
+   *  bare `Situational`, because a title that always says "vs" trains the
+   *  reader to stop reading it. Block name first and suffix short, because the
+   *  client renders set titles in a narrow column. */
+  labelSuffix?: string
+): ItemSetBlock[] {
   if (picks.length === 0) return [];
-  return [{ type: SITUATIONAL_BLOCK_TYPE, items: picks.map((p) => itemRef(p.id)) }];
+  const type = labelSuffix ? `${SITUATIONAL_BLOCK_TYPE} ${labelSuffix}` : SITUATIONAL_BLOCK_TYPE;
+  return [{ type, items: picks.map((p) => itemRef(p.id)) }];
 }
 
 /** The same picks as `situationalBlocks`, as overlay deltas.
@@ -1563,7 +1583,17 @@ export function buildItemSets(
    *  into `pro` upstream: the two are different populations with different
    *  denominators, and averaging them would produce a build nobody actually
    *  plays. */
-  otp?: ProConsensusItemsInput | null
+  otp?: ProConsensusItemsInput | null,
+  /** The enemy-composition signal (lib/enemyComp/compSignal.ts), or
+   *  null/undefined when no rule fired, which is the common case and produces
+   *  a byte-identical export to before this parameter existed.
+   *
+   *  It may PERMUTE the Situational row and add a suffix to that one block's
+   *  title. It cannot add an item, remove one, change any number, or touch any
+   *  other block. `orderSituationalForComp` is content-preserving by
+   *  construction (it partitions and concatenates), so that guarantee is
+   *  structural rather than a rule this function has to remember. */
+  compSignal?: CompSignal | null
 ): ItemSetExport {
   const items = build.items;
   const meta = itemMeta ?? new Map<number, ItemDetail>();
@@ -1870,8 +1900,8 @@ export function buildItemSets(
   // lists and the overlay would paint each number over the wrong icon. The
   // pairing is asserted index-by-index by a test whose fixture makes the
   // exclusion bite.
-  const picks = situationalBlockPicks(items, wpaBuildIds);
-  for (const block of situationalBlocks(picks)) blocks.push(block);
+  const picks = situationalBlockPicks(items, wpaBuildIds, compSignal?.promotedIds ?? []);
+  for (const block of situationalBlocks(picks, compSignal?.labelSuffix)) blocks.push(block);
   const wire = situationalWire(picks);
 
   // Spread rather than assigned, so the key is genuinely ABSENT (not

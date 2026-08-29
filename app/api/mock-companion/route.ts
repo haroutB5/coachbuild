@@ -34,7 +34,7 @@ const MOCK_PORT = 48291;
 
 // A representative slice of https://127.0.0.1:2999/liveclientdata/allgamedata
 // (the OFFICIAL, supported Live Client Data API companion.ps1's /live route
-// passes through verbatim). Enough shape for LivePanel/compHighlight dev
+// passes through verbatim). Enough shape for LivePanel dev
 // work: enemy champions, team side, position, items. Real endpoint also
 // includes summoner/riotId fields for the local player's own team (that's
 // player-visible, official-API data, not the champ-select anonymity case) --

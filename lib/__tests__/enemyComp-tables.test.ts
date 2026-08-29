@@ -18,27 +18,49 @@ import {
   getDamageType,
 } from "@/lib/enemyComp/damageType";
 
-// The catalogue the derivation runs against. Captured, reduced to the fields
+// The catalogues the derivation runs against. Captured, reduced to the fields
 // the derivation reads, and UNFILTERED: every entry is kept, so the derivation
 // sees the same candidate space the live catalogue offers and cannot pass by
 // having been handed a pre-narrowed set.
-const items = JSON.parse(readFileSync("fixtures/enemycomp/catalogue-items-16.16.1.json", "utf8"));
-const champs = JSON.parse(
-  readFileSync("fixtures/enemycomp/catalogue-champions-16.16.1.json", "utf8")
+//
+// TWO PATCHES, deliberately. A single capture only proves the tables matched
+// the catalogue on the day they were generated, which is the weaker half of
+// what this test is for. Running the same derivation across a real patch bump
+// (16.16.1 to 16.17.1) is what shows the pinned ids are STABLE and not a
+// snapshot that will rot on the next upstream change. If a future patch moves
+// one of them, the newer catalogue fails here while the older one still
+// passes, which localises the change to the bump instead of to the table.
+const CATALOGUES = ["16.16.1", "16.17.1"] as const;
+const CATALOGUE = Object.fromEntries(
+  CATALOGUES.map((v) => [
+    v,
+    {
+      items: JSON.parse(readFileSync(`fixtures/enemycomp/catalogue-items-${v}.json`, "utf8")),
+      champs: JSON.parse(readFileSync(`fixtures/enemycomp/catalogue-champions-${v}.json`, "utf8")),
+    },
+  ])
 );
+/** The CURRENT catalogue: what production is actually serving. Spot checks that
+ *  assert a specific description or id read from this one. */
+const LIVE = "16.17.1";
+const items = CATALOGUE[LIVE].items;
+const champs = CATALOGUE[LIVE].champs;
 
 describe("counterItems.ts is the derivation, pinned", () => {
-  it("matches scripts/derive-enemycomp-tables.mjs run against the captured catalogue", async () => {
-    // THE POINT OF THIS TEST. The tables are ids in source rather than a
-    // runtime regex, so the failure mode they replace (upstream renames a
-    // keyword, a whole class silently empties) has to be caught somewhere.
-    // Here. When Riot changes the wording again this goes red instead of the
-    // feature going quiet.
-    const derived = await deriveCounterItems(items);
-    expect([...MAGIC_RESIST_BOOTS].sort((a, b) => a - b)).toEqual(derived.tenacityBoots);
-    expect([...ARMOR_BOOTS].sort((a, b) => a - b)).toEqual(derived.armorBoots);
-    expect([...ANTI_HEAL].sort((a, b) => a - b)).toEqual(derived.antiHeal);
-  });
+  it.each(CATALOGUES)(
+    "matches scripts/derive-enemycomp-tables.mjs run against the %s catalogue",
+    async (version) => {
+      // THE POINT OF THIS TEST. The tables are ids in source rather than a
+      // runtime regex, so the failure mode they replace (upstream renames a
+      // keyword, a whole class silently empties) has to be caught somewhere.
+      // Here. When Riot changes the wording again this goes red instead of the
+      // feature going quiet.
+      const derived = await deriveCounterItems(CATALOGUE[version].items);
+      expect([...MAGIC_RESIST_BOOTS].sort((a, b) => a - b)).toEqual(derived.tenacityBoots);
+      expect([...ARMOR_BOOTS].sort((a, b) => a - b)).toEqual(derived.armorBoots);
+      expect([...ANTI_HEAL].sort((a, b) => a - b)).toEqual(derived.antiHeal);
+    }
+  );
 
   it('finds the anti-heal items that say "Wounds" and not "Grievous Wounds"', () => {
     // The measured trap, kept as a test because it is not obvious and it cost
@@ -88,6 +110,13 @@ describe("damageType.ts carries a row for every live champion", () => {
     for (const id of liveIds) expect(CHAMPION_DAMAGE_TYPE[id], `champion ${id}`).toBeDefined();
     const tableIds = Object.keys(CHAMPION_DAMAGE_TYPE).map(Number).sort((a, b) => a - b);
     expect(tableIds).toEqual([...liveIds].sort((a, b) => a - b));
+  });
+
+  it.each(CATALOGUES)("carries a row for every champion on the %s roster", (version) => {
+    const ids = Object.values(CATALOGUE[version].champs.data as Record<string, { key: string }>)
+      .map((c) => parseInt(c.key, 10))
+      .filter((id) => id < 10000);
+    for (const id of ids) expect(CHAMPION_DAMAGE_TYPE[id], `champion ${id}`).toBeDefined();
   });
 
   it("every hand correction genuinely disagrees with the derived baseline", () => {

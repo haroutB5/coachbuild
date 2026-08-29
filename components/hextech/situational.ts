@@ -39,8 +39,22 @@ export function flattenSituational(items: ItemsBlock): PickType[] {
   return out.sort((a, b) => b.wpa - a.wpa || a.id - b.id);
 }
 
-/** The exact window BOTH situational surfaces render: `flattenSituational`'s
- *  order, capped at SITUATIONAL_DISPLAY_LIMIT.
+/** The exact window EVERY situational surface renders: `flattenSituational`'s
+ *  order with the enemy-comp promotion applied, capped at
+ *  SITUATIONAL_DISPLAY_LIMIT.
+ *
+ *  ORDER OF OPERATIONS IS THE WHOLE POINT, and getting it wrong is how the
+ *  page and the shop would silently disagree. The promotion runs BEFORE the
+ *  slice, so a comp-relevant pick sitting at position 7 on raw WPA can reach
+ *  the visible six. Slicing first and promoting after would make the promotion
+ *  a no-op in exactly the cases it exists for, AND it would produce a
+ *  different six than the Builds page shows, for the same champion, in the
+ *  same champ select. One function, one order, both surfaces.
+ *
+ *  `promotedIds` is REQUIRED, not optional with a `[]` default. A caller that
+ *  has no comp must say `[]` out loud. An optional parameter here would let a
+ *  fixture exercise a path production does not take (or the reverse), which is
+ *  the failure this codebase has already paid for elsewhere.
  *
  *  ORDER IS THE ONLY THING CARRYING THE DELTA. The Builds page prints each
  *  pick's WPA next to it (`wpaText`); an LCU item-set block carries nothing but
@@ -52,8 +66,14 @@ export function flattenSituational(items: ItemsBlock): PickType[] {
  *  NOT FILTERED on WPA sign, deliberately — see itemSetBody.ts's
  *  `situationalBlockPicks` for the measurement behind that call and the open
  *  recommendation attached to it. */
-export function situationalShortlist(items: ItemsBlock): PickType[] {
-  return flattenSituational(items).slice(0, SITUATIONAL_DISPLAY_LIMIT);
+export function situationalShortlist(
+  items: ItemsBlock,
+  promotedIds: readonly number[]
+): PickType[] {
+  return orderSituationalForComp(flattenSituational(items), promotedIds).slice(
+    0,
+    SITUATIONAL_DISPLAY_LIMIT
+  );
 }
 
 /** Moves every pick whose id is in `promotedIds` to the front, preserving the
