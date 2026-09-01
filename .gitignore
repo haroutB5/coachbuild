@@ -69,3 +69,6 @@ INVESTIGATION-*.md
 
 # Local bench artefacts (scripts/bench-champselect.mjs screenshots)
 scripts/.bench-*.png
+
+# Response cache for scripts/sweep-forthisgame.mts (production /api/build bodies)
+scripts/.sweep-*.json
