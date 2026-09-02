@@ -363,6 +363,23 @@ export async function getLatestPatch(
 }
 
 /**
+ * The resolved patch PLUS whether it was confirmed or fell back — for /status.
+ *
+ * `getLatestPatch` deliberately hides this: every caller wants a patch, and a
+ * fallback IS a patch. The status page is the one reader that needs to say
+ * "16.17, confirmed against coachless" versus "16.17, but only because that is
+ * what we last saw" — the second is what a coachless outage looks like from
+ * the outside, and it is invisible on every other surface. Additive; no
+ * caller of getLatestPatch changes.
+ */
+export async function getLatestPatchStatus(
+  now: () => number = Date.now
+): Promise<{ patch: ResolvedPatch; ok: boolean; resolvedAt: number | null }> {
+  const patch = await getLatestPatch(now);
+  return { patch, ok: patchCache?.ok ?? false, resolvedAt: patchCache?.resolvedAt ?? null };
+}
+
+/**
  * Feature 4 (patch movers): the newest coachless-populated patch STRICTLY OLDER
  * than `current`. Walks the same ddragon candidate list newest→oldest, skipping
  * anything ≥ current, and returns the first older candidate with live keystone

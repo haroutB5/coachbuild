@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.121.0 -- `/status` (2026-09-02)
+
+A public status page (`/status`) and the JSON behind it (`/api/status`), each
+check with a pass / warn / fail verdict, a one-sentence detail with the number
+in it, and the timestamp the fact is about. Competitor backlog item 7b: the
+2026-08-23 blank-counters incident (empty draft tables, `/api/draft/recommend`
+answering a correct-looking `patch: null` for three days) is now a `fail` line
+that names the fix, readable in seconds on a phone.
+
+- **Seven checks.** The patch `/api/build` resolves, and whether it was
+  confirmed against coachless or fell back; the consensus artifact's patch
+  against it (`classifyConsensusArtifactFreshness`, the resolver's own
+  arithmetic); the artifact's age; Neon reachability (`SELECT 1`, with the
+  latency); the latest `pro_matches` row; the draft tables in the SERVED tier
+  (`resolveServingPatch`, reused rather than copied); and the artifact's
+  pro / OTP coverage counts.
+- **Drift 1 is a PASS with its reason, never a warn.** The export serves a
+  stale artifact labelled and the daily re-bake accepts a single forward step
+  unattended, so the hours between a Riot patch and 15:00 are expected. Paging
+  for them is how a reader learns to skip the page. urgot's
+  `check-coachbuild-live.sh` keeps the alerting; this page exposes the facts.
+- **Bounded.** One in-process collection per 60 s per warm instance
+  (single-flight), `s-maxage=60` at the CDN on BOTH the 200 and the 503, so a
+  monitor polling every second cannot become a load source against Neon. Every
+  fact is read fail-soft: no `DATABASE_URL` renders a page whose DB lines say
+  so, never a 500.
+- **The artifact is read from the build**, not fetched: the committed
+  `public/consensus/item-set-consensus.json` is imported, so the patch and
+  coverage reported are those of the file THIS deployment serves.
+- `getLatestPatchStatus()` is a new additive export on `lib/staticData.ts`
+  exposing whether the resolved patch was confirmed or a fallback; no caller of
+  `getLatestPatch` changes.
+- 28 new tests: every threshold asserted as a threshold, the 2026-08-23 shape
+  driven through the collector, the burst-shares-one-collection guarantee, and
+  the route's status-code / cache-header contract.
+
 ## 0.120.0 -- "For this game" (2026-08-29)
 
 A FIFTH build line inside the one item set, and the only one whose contents
