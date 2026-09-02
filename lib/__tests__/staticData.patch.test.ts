@@ -11,8 +11,10 @@ vi.mock("../coachless", () => ({
 }));
 
 import { getKeystoneData } from "../coachless";
+import { memoryLastGoodStore } from "../lastGood";
 import {
   getLatestPatch,
+  getLatestPatchStatus,
   parseDdragonVersions,
   versionFolder,
   resolveItem,
@@ -135,6 +137,34 @@ describe("getLatestPatch — probe resolution", () => {
     const sevenHoursLater = 7 * 60 * 60 * 1000;
     const second = await getLatestPatch(() => sevenHoursLater);
     expect(second.label).toBe("16.12");
+  });
+
+  // 0.122.0 (backlog 9): the last-known-good patch survives a COLD instance via
+  // the persisted store, which is what the in-memory cache above cannot do.
+  it("a cold instance during an outage reads the PERSISTED last-good patch, not the static 16.11", async () => {
+    const shared = memoryLastGoodStore(() => 0);
+    __resetPatchCacheForTests(shared);
+    mockDdragon(DDRAGON_VERSIONS);
+    vi.mocked(getKeystoneData).mockImplementation(async (_c, _r, patch) =>
+      patch.patch === 12 ? row() : []
+    );
+    expect((await getLatestPatch(() => 0)).label).toBe("16.12");
+
+    // New instance: empty in-memory cache, SAME persisted store, everything down.
+    __resetPatchCacheForTests(shared);
+    mockDdragon("fail");
+    const cold = await getLatestPatch(() => 0);
+    expect(cold.label).toBe("16.12");
+    // And it is reported as a fallback, not a confirmed resolution.
+    expect((await getLatestPatchStatus(() => 0)).ok).toBe(false);
+  });
+
+  it("a malformed persisted value is ignored: the static default still wins over garbage", async () => {
+    const shared = memoryLastGoodStore(() => 0);
+    await shared.set("patch:1", { label: "16.99" }, 60);
+    __resetPatchCacheForTests(shared);
+    mockDdragon("fail");
+    expect((await getLatestPatch(() => 0)).label).toBe("16.11");
   });
 
   it("respects the success TTL — does not re-probe within the cache window", async () => {

@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { ApiError, RoleId } from "@/lib/types";
-import { buildRecommendations, NotPlayedInRoleError } from "@/lib/recommend";
+import { buildRecommendations } from "@/lib/recommend";
 import { resolveRankBracket } from "@/lib/rankBrackets";
 import { MAX_REAL_CHAMPION_ID } from "@/lib/staticData";
+import { buildLastGoodKey, resolveBuildWithFallback } from "@/lib/buildFallback";
+import { runtimeLastGoodStore } from "@/lib/lastGood";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -69,33 +71,51 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(body, { status: 400 });
   }
 
-  try {
-    const builds = await buildRecommendations(champId, roleId, {
-      enemyChampionId,
-      rankBracket: bracket,
-    });
-    if (!builds || builds.length === 0) {
-      const body: ApiError = { error: "Champion not played in this role" };
-      return NextResponse.json(body, { status: 404 });
-    }
-    // Returns the top-3 recommended setups (BuildResponse[]). The CDN caches per
-    // full query string, so enemyChampionId + rank each key their own entry.
-    return NextResponse.json(builds, {
-      headers: {
-        "Cache-Control": "s-maxage=21600, stale-while-revalidate=86400",
-      },
-    });
-  } catch (err) {
-    if (err instanceof NotPlayedInRoleError) {
+  // 0.122.0 (backlog 9): degrade instead of empty. A coachless 403/5xx/timeout
+  // used to be a 500 here and an empty Builds page; now it is the last
+  // known-good copy for this exact key, labelled `stale: true` + `asOf`, when
+  // the runtime cache holds one. A 404 stays a 404: "not played in this role"
+  // is a fact about the data, never papered over. See lib/buildFallback.ts.
+  const resolution = await resolveBuildWithFallback({
+    key: buildLastGoodKey(champId, roleId, bracket.id, enemyChampionId),
+    compute: () => buildRecommendations(champId, roleId, { enemyChampionId, rankBracket: bracket }),
+    store: runtimeLastGoodStore(),
+  });
+
+  switch (resolution.kind) {
+    case "fresh":
+      // Returns the top-3 recommended setups (BuildResponse[]). The CDN caches
+      // per full query string, so enemyChampionId + rank each key their own
+      // entry. `stale-if-error` is the CDN's own second layer under the runtime
+      // cache: an edge that still holds an expired copy may serve it while the
+      // origin is erroring, for up to a week.
+      return NextResponse.json(resolution.builds, {
+        headers: {
+          "Cache-Control": "s-maxage=21600, stale-while-revalidate=86400, stale-if-error=604800",
+        },
+      });
+    case "stale":
+      // Short at the edge on purpose: the copy is already old, and the point
+      // is to keep asking the origin so recovery is minutes, not hours, while
+      // still bounding how many failing coachless calls one outage can cost.
+      console.warn(
+        `[/api/build] upstream failed, served last known-good copy for champ=${champId} role=${roleId} asOf=${resolution.asOf}`
+      );
+      return NextResponse.json(resolution.builds, {
+        headers: { "Cache-Control": "s-maxage=300, stale-while-revalidate=300" },
+      });
+    case "not-played": {
       const body: ApiError = {
         error: "Champion not played in this role",
-        detail: err.message,
+        detail: resolution.detail,
       };
       return NextResponse.json(body, { status: 404 });
     }
-    // Log full error server-side; do not leak internals to the client.
-    console.error("[/api/build] Unexpected error:", err);
-    const body: ApiError = { error: "Internal server error" };
-    return NextResponse.json(body, { status: 500 });
+    case "error": {
+      // Log full error server-side; do not leak internals to the client.
+      console.error("[/api/build] Unexpected error:", resolution.error);
+      const body: ApiError = { error: "Internal server error" };
+      return NextResponse.json(body, { status: 500 });
+    }
   }
 }

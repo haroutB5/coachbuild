@@ -40,6 +40,15 @@ function AddToClientButton({ champ, lane, build }: { champ: ChampionRef; lane: L
     </button>
   );
 }
+/** `2026-09-02T04:13:48.531Z` -> `2026-09-02 04:13 UTC`; anything unparseable
+ *  is shown as-is rather than as "Invalid Date". */
+export function formatAsOf(iso: string | undefined): string {
+  if (!iso) return "earlier";
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso;
+  return new Date(t).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+}
+
 interface ItemBuildCardProps {
   champ: ChampionRef;
   lane: LaneId;
@@ -52,7 +61,18 @@ export default function ItemBuildCard({ champ, lane, build, ver, onItemClick }: 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 px-0.5">
-        <div><SectionLabel>WPA build</SectionLabel><p className="mt-1 text-[11px] text-[#9397ab]/60">The highest-value path for this champion and lane.</p></div>
+        <div>
+          <SectionLabel>WPA build</SectionLabel>
+          <p className="mt-1 text-[11px] text-[#9397ab]/60">The highest-value path for this champion and lane.</p>
+          {/* 0.122.0 -- the one place a served-from-cache build says so. Quiet
+              on purpose: the build is still this champion's build, just not
+              recomputed today. Absent on every fresh response. */}
+          {build.stale && (
+            <p className="mt-1 text-[11px] text-accent-400/80" data-testid="build-stale-note">
+              Cached copy from {formatAsOf(build.asOf)}; the stats source is not answering right now.
+            </p>
+          )}
+        </div>
         <AddToClientButton champ={champ} lane={lane} build={build} />
       </div>
       <CoreBuildOrderCard items={build.items} onItemClick={onItemClick} />

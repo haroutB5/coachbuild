@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.122.0 -- degrade instead of empty (2026-09-02)
+
+A 403, 5xx or timeout from the upstream coachless API used to be a 500 from
+`/api/build` and an empty Builds page. It is now the last known-good response
+for that exact champion, role, bracket and matchup, served with `stale: true`
+and `asOf` on every build, and one quiet line on the WPA build card saying so.
+Competitor backlog item 9.
+
+- **Storage is the Vercel Runtime Cache** (`@vercel/functions` getCache,
+  `lib/lastGood.ts`), chosen because it survives a cold function, which the
+  CDN and an in-memory map both do not, without making the one route that has
+  no database dependency depend on the database or spending Neon CU-hours on
+  every fresh build. 128-bit key hash (the SDK default is 32-bit djb2, and a
+  collision serves one champion's build under another's key). Every store
+  method swallows: a fallback that throws is the opposite of a fallback.
+- **A 404 stays a 404.** "Not played in this role" is a fact about the data
+  and is never papered over with an old copy; only a genuine upstream failure
+  falls back. A copy lives 7 days, so a two-patch-old build cannot resurface.
+- **The last known-good PATCH is persisted too.** On a cold instance during an
+  outage `getLatestPatch` used to fall all the way to the static 16.11, which
+  coachless may answer with empty rows -- a 404 that looks like a data fact.
+  The persisted patch is consulted on the failure path only; the success path
+  is unchanged.
+- **Cache discipline.** Fresh responses keep `s-maxage=21600` and gain
+  `stale-if-error=604800` as the CDN's own second layer; a stale response is
+  `s-maxage=300` so recovery is minutes and one outage is bounded in failing
+  upstream calls.
+- **/status gains an eighth check**, whether the platform cache or the SDK's
+  private in-memory fallback is live for this request, read per call and never
+  memoized (the wrong-signal mistake matchday shipped on 2026-09-01).
+- `resolveBuildWithFallback` lives in `lib/buildFallback.ts` so the four
+  outcomes are tested with an injected store: 11 new tests plus 2 on the
+  persisted patch and 1 on the new status check.
+
 ## 0.121.0 -- `/status` (2026-09-02)
 
 A public status page (`/status`) and the JSON behind it (`/api/status`), each

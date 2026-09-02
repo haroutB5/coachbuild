@@ -29,6 +29,7 @@ import { resolveServingPatch } from "@/lib/draft/servingPatch";
 import { DIAMOND_2_PLUS_TIER } from "@/lib/draft/ugg";
 import { getIngestHealth } from "@/lib/ingestHealth";
 import { parseConsensusArtifact } from "@/components/hextech/consensusArtifact";
+import { lastGoodBackend } from "@/lib/lastGood";
 import artifactJson from "@/public/consensus/item-set-consensus.json";
 import {
   judgeArtifactAge,
@@ -38,6 +39,7 @@ import {
   judgeDraft,
   judgeLivePatch,
   judgeMatchesIngest,
+  judgeRuntimeCache,
   overallVerdict,
   type DraftFact,
   type LivePatchFact,
@@ -144,6 +146,7 @@ export async function collectStatusUncached(now: () => number = Date.now): Promi
     judgeMatchesIngest(latestMatch, t, db.ok && !dbErrors.some((e) => e.startsWith("pro_matches"))),
     judgeDraft(draft, t, db.ok),
     judgeCoverage(artifact?.coverage ?? null),
+    judgeRuntimeCache(lastGoodBackend()),
   ];
   // A query that threw after SELECT 1 succeeded is its own line: the verdict
   // functions above already say "not checked", this says why.

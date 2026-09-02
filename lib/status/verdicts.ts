@@ -268,6 +268,20 @@ export function judgeCoverage(coverage: { combos: number; pro: number; otp: numb
   };
 }
 
+// ── 6. The last-known-good store behind /api/build (0.122.0) ────────────────
+
+export function judgeRuntimeCache(backend: "runtime-cache" | "in-memory"): StatusCheck {
+  const id = "runtime-cache";
+  const label = "Last-known-good store";
+  if (backend === "runtime-cache") {
+    return { id, label, verdict: "pass", detail: "Vercel Runtime Cache; cached builds and the last-good patch survive a cold function", at: null };
+  }
+  // Locally this is the expected reading. On a deployed Function it means the
+  // platform did not inject its cache and /api/build's fallback copies die
+  // with each instance — degraded, not broken, so a warn.
+  return { id, label, verdict: "warn", detail: "in-memory only; fallback copies die with the instance (expected outside Vercel)", at: null };
+}
+
 // ── Roll-up ──────────────────────────────────────────────────────────────────
 
 const RANK: Record<Verdict, number> = { pass: 0, warn: 1, fail: 2 };

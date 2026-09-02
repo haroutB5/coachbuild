@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/lib/staticData", () => ({ getLatestPatchStatus: vi.fn() }));
 vi.mock("@/lib/pro/db", () => ({ getSql: vi.fn() }));
+vi.mock("@/lib/lastGood", () => ({ lastGoodBackend: vi.fn(() => "runtime-cache") }));
 
 import { getLatestPatchStatus } from "@/lib/staticData";
 import { getSql } from "@/lib/pro/db";
@@ -66,6 +67,7 @@ describe("collectStatusUncached", () => {
       ["matches-ingest", "pass"],
       ["draft-tables", "pass"],
       ["consensus-coverage", "pass"],
+      ["runtime-cache", "pass"],
     ]);
     const cov = r.checks.find((c) => c.id === "consensus-coverage")!;
     expect(cov.detail).toContain(`pro ${ARTIFACT.coverage.pro}, otp ${ARTIFACT.coverage.otp} of ${ARTIFACT.coverage.combos}`);

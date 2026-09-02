@@ -10,6 +10,7 @@ import {
   STANDARD_KIT,
   kitFromMaxRanks,
 } from "./championKit";
+import { LAST_GOOD_TTL_SECONDS, memoryLastGoodStore, runtimeLastGoodStore, type LastGoodStore } from "./lastGood";
 
 // ── CDN bases ────────────────────────────────────────────────────────────────
 //
@@ -250,10 +251,38 @@ let patchCache: { patch: ResolvedPatch; resolvedAt: number; ok: boolean } | null
 // ddragon fetch + probe fan-out.
 let inFlight: Promise<ResolvedPatch> | null = null;
 
-/** Test-only: clear the module-level patch cache + in-flight guard between test cases. */
-export function __resetPatchCacheForTests(): void {
+// ── The persisted last known-good patch (0.122.0, backlog 9) ────────────────
+//
+// The in-memory `patchCache` above dies with the instance, so on a cold start
+// during a coachless outage every probe fails and the walk lands on
+// STATIC_FALLBACK_PATCH — 16.11, a patch coachless may answer with EMPTY rows
+// rather than an error, which surfaces as a 404 "not played in this role" and
+// an empty Builds page that looks like a data fact. The runtime cache
+// (lib/lastGood.ts) survives a cold function, so a confirmed resolution is
+// written there and read back only on the failure path, before the static
+// default. The success path is unchanged: probe, cache in memory, return.
+const LAST_GOOD_PATCH_KEY = "patch:1";
+let patchStore: LastGoodStore = runtimeLastGoodStore();
+
+function isResolvedPatch(v: unknown): v is ResolvedPatch {
+  if (!v || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  return (
+    Number.isInteger(o.major) &&
+    Number.isInteger(o.patch) &&
+    Number.isInteger(o.patchAdditions) &&
+    typeof o.label === "string" &&
+    o.label.length > 0
+  );
+}
+
+/** Test-only: clear the module-level patch cache + in-flight guard between
+ *  test cases, and swap the persisted store for a fresh in-memory one so a
+ *  last-known-good patch written by one case cannot leak into the next. */
+export function __resetPatchCacheForTests(store: LastGoodStore = memoryLastGoodStore()): void {
   patchCache = null;
   inFlight = null;
+  patchStore = store;
 }
 
 /**
@@ -347,9 +376,14 @@ export async function getLatestPatch(
       const resolved = await resolveViaProbe();
       if (resolved) {
         patchCache = { patch: resolved, resolvedAt: t, ok: true };
+        // Awaited, not fire-and-forget: a serverless function may not outlive
+        // an un-awaited promise, and this is one write per 6h per instance.
+        await patchStore.set(LAST_GOOD_PATCH_KEY, resolved, LAST_GOOD_TTL_SECONDS);
         return resolved;
       }
-      const fallback = patchCache?.patch ?? STATIC_FALLBACK_PATCH;
+      const persisted = patchCache?.patch ? null : await patchStore.get<unknown>(LAST_GOOD_PATCH_KEY);
+      const fallback =
+        patchCache?.patch ?? (isResolvedPatch(persisted) ? persisted : null) ?? STATIC_FALLBACK_PATCH;
       patchCache = { patch: fallback, resolvedAt: t, ok: false };
       return fallback;
     } finally {

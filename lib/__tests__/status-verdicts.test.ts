@@ -17,6 +17,7 @@ import {
   judgeDraft,
   judgeLivePatch,
   judgeMatchesIngest,
+  judgeRuntimeCache,
   overallVerdict,
   type StatusCheck,
 } from "@/lib/status/verdicts";
@@ -153,6 +154,15 @@ describe("judgeCoverage", () => {
     });
     expect(judgeCoverage({ combos: 865, pro: 0, otp: 320 }).verdict).toBe("fail");
     expect(judgeCoverage(null).verdict).toBe("fail");
+  });
+});
+
+describe("judgeRuntimeCache", () => {
+  it("platform cache passes; the in-memory fallback is a warn, never a fail", () => {
+    expect(judgeRuntimeCache("runtime-cache").verdict).toBe("pass");
+    const c = judgeRuntimeCache("in-memory");
+    expect(c.verdict).toBe("warn");
+    expect(c.detail).toMatch(/die with the instance/);
   });
 });
 

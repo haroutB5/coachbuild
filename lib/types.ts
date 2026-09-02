@@ -139,6 +139,12 @@ export interface BuildResponse {
    *  unrecognised value as stale data computed from the OLD tier numbers,
    *  not as a bracket to honour. */
   rankBracket?: string;
+  /** 0.122.0 (backlog 9): present, and `true`, ONLY when /api/build served a
+   *  cached last-known-good copy because the upstream stats source failed.
+   *  `asOf` is when that copy was computed. Absent on every fresh response, so
+   *  a client that ignores both fields sees exactly what it saw before. */
+  stale?: true;
+  asOf?: string;
   /** Feature 1 (matchup): present ONLY when an `enemyChampionId` was requested.
    *  `supported: false` means coachless returned no usable matchup-conditioned
    *  data (today it ALWAYS 403s → always false) and the build fell back to the
