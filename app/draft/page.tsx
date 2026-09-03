@@ -50,6 +50,7 @@ import DraftLockInCard from "@/components/hextech/draft/DraftLockInCard";
 import DraftMatchupGrid from "@/components/hextech/draft/DraftMatchupGrid";
 import DraftRecommendation from "@/components/hextech/draft/DraftRecommendation";
 import { preserveOriginalDraftRanks } from "@/components/hextech/draft/draftRanking";
+import { reasonForCandidate } from "@/components/hextech/draft/draftReason";
 
 const RECOMMEND_DEBOUNCE_MS = 300;
 const MAX_ALLIED_ADDITIONAL = 4;
@@ -306,34 +307,6 @@ function laneAverage(laneStats: DraftLaneStat[]): number | null {
 function floorForCandidate(candidate: DraftAssistantCandidate, blindPicks: BlindPickResult[]): number | null {
   if (candidate.floor !== null) return candidate.floor;
   return blindPicks.find((pick) => pick.champId === candidate.champId)?.es10 ?? null;
-}
-
-function reasonForCandidate(args: {
-  candidate: DraftAssistantCandidate;
-  laneOpponentName: string | null;
-  preview: DraftMatchupPreview | undefined;
-  floor: number | null;
-  compTakeaway: string | null;
-}): { chip: string | null; reason: string | null } {
-  const parts: string[] = [];
-  let chip: string | null = null;
-  if (args.laneOpponentName && typeof args.candidate.synergyDelta === "number" && args.candidate.synergyDelta > 0) {
-    chip = `Favored into ${args.laneOpponentName}`;
-    parts.push(`It answers ${args.laneOpponentName} with the strongest available matchup evidence.`);
-  }
-  const bestMatchup = args.preview?.best[0];
-  if (bestMatchup) {
-    parts.push(`It holds up well into ${bestMatchup.oppId === args.candidate.champId ? "the current enemy field" : "popular enemy picks"}.`);
-  }
-  if (args.floor !== null) {
-    chip = chip ?? "Blind-safe";
-    parts.push("Its first-pick floor stays useful before the enemy lane is known.");
-  }
-  if (args.compTakeaway) {
-    const plainTakeaway = args.compTakeaway.split(" — ")[0].toLowerCase();
-    parts.push(`The enemy read is ${plainTakeaway}, so this keeps the call focused.`);
-  }
-  return { chip, reason: parts.length > 0 ? parts.join(" ") : null };
 }
 
 export default function DraftPage() {
@@ -698,7 +671,7 @@ export default function DraftPage() {
   const compTakeaway = enemyIds.length > 0 ? deriveTakeaways(aggregateEnemyComp(enemyIds))[0] ?? null : null;
   const topFloor = topCandidate ? floorForCandidate(topCandidate, blindPicks) : null;
   const topReason = topCandidate
-    ? reasonForCandidate({ candidate: topCandidate, laneOpponentName, preview: matchupPreviewMap.get(topCandidate.champId), floor: topFloor, compTakeaway })
+    ? reasonForCandidate({ candidate: topCandidate, laneOpponentName, preview: matchupPreviewMap.get(topCandidate.champId), floor: topFloor, compTakeaway, hasEnemyInfo: enemyIds.length > 0 || laneOpponentName !== null })
     : { chip: null, reason: null };
 
   function selectCandidate(championId: number) {

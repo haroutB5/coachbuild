@@ -210,6 +210,14 @@ export function resolveVisibleDraftAssistantRanking(args: {
   }));
 }
 
+/** Display tag shared by THE CALL and its alternates: comfort, floor,
+ *  off-meta (lane-share), or reliable — in that precedence. */
+export function tagFor(candidate: Pick<DraftAssistantCandidate, "personalOverall" | "floor" | "laneShare">): string {
+  if (candidate.personalOverall.games > 0) return "YOUR COMFORT";
+  if (candidate.floor !== null) return "SAFEST";
+  if (isOffMetaLaneShare(candidate.laneShare)) return "OFF-META";
+  return "RELIABLE";
+}
 /** Resolve THE CALL from the first three candidates in server order.
  * Display sorting is intentionally not an input: the verdict and alternates
  * are pinned to the server order shown by the active tab/filter. */

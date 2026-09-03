@@ -25,10 +25,13 @@ function buildFixture(patch = "16.15"): BuildResponse {
   return { patch } as unknown as BuildResponse;
 }
 
-function jsonResponse(status: number, body: unknown): Response {
+function jsonResponse(status: number, body: unknown, headers?: Record<string, string>): Response {
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: {
+      get: (name: string) => headers?.[name.toLowerCase()] ?? null,
+    },
     json: async () => body,
   } as unknown as Response;
 }
@@ -163,6 +166,24 @@ describe("buildCache — honest failure handling", () => {
     });
     expect(peekBuild(106, 0, DIAMOND)).toBeNull();
     expect(buildCacheStats().inFlight).toBe(0);
+  });
+
+  it("a response WITHOUT the offline header is an ordinary fresh outcome", async () => {
+    const { impl } = recordingFetch(() => jsonResponse(200, [buildFixture()]));
+    const out = await loadBuild(106, 0, DIAMOND, { fetchImpl: impl });
+    expect(out).toEqual({ status: "ok", builds: [buildFixture()] });
+  });
+
+  it("a response WITH the offline header is still served, but flagged servedOffline", async () => {
+    const { impl } = recordingFetch(() =>
+      jsonResponse(200, [buildFixture()], { "x-coachbuild-offline": "served-from-cache" })
+    );
+    const out = await loadBuild(106, 0, DIAMOND, { fetchImpl: impl });
+    expect(out.status).toBe("ok");
+    expect(out.status === "ok" && out.servedOffline).toBe(true);
+    // The flag rides the cached entry too, so a re-read keeps its label.
+    const hit = peekBuild(106, 0, DIAMOND);
+    expect(hit?.status === "ok" && hit.servedOffline).toBe(true);
   });
 });
 

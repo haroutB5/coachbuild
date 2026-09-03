@@ -31,13 +31,15 @@ function EmptyPanel({ title, body }: { title: string; body: string }) {
   return <div className="rounded-[9px] bg-panel-glass px-5 py-10 text-center shadow-[inset_0_0_0_1px_rgba(233,233,237,.08)]"><p className="text-[13px] font-semibold text-txt">{title}</p><p className="mt-1.5 text-[12px] leading-relaxed text-mut">{body}</p></div>;
 }
 
-function ShiftBar({ delta }: { delta: number }) {
+function ShiftBar({ delta, label }: { delta: number; label: string }) {
   const positive = delta > 0;
   const negative = delta < 0;
+  // Scale: the largest observed shifts run ~±4pp, so 12%/pp saturates the
+  // 142px track at 4pp — a deliberate full-scale choice, not a magic number.
   const width = Math.min(48, Math.abs(delta) * 12);
   return (
-    <div className="flex items-center gap-3">
-      <div className="relative h-2 w-[142px] rounded-full bg-white/[0.06]">
+    <div className="flex items-center gap-3" role="img" aria-label={`${label}: ${formatDelta(delta)}`}>
+      <div className="relative h-2 w-[142px] rounded-full bg-white/[0.06]" aria-hidden="true">
         <span className="absolute bottom-[-3px] left-1/2 top-[-3px] w-px bg-white/[0.25]" aria-hidden="true" />
         {width > 0 && <span className={`absolute top-0 h-2 rounded-full ${positive ? "bg-good" : "bg-bad"}`} style={positive ? { left: "50%", width: `${width}%` } : { right: "50%", width: `${width}%` }} />}
       </div>
@@ -57,12 +59,12 @@ function MoverRow({ mover, icon }: { mover: PatchMover; icon: ChampionIconEntry 
         </div>
         <span className="text-right text-[12px] text-mut tabular-nums">{mover.wrPrev.toFixed(1)}%</span>
         <span className="text-right text-[12px] font-semibold text-txt tabular-nums">{mover.wrNow.toFixed(1)}%</span>
-        <ShiftBar delta={mover.deltaPp} />
+        <ShiftBar delta={mover.deltaPp} label={`${mover.championName} ${roleLabel(mover.role)} win-rate shift`} />
         <span className="text-right text-[11px] text-mut tabular-nums">{formatGames(mover.games)}</span>
       </div>
       <div className="flex items-center gap-3 px-4 py-3 sm:hidden">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-[7px] bg-gradient-to-br from-[#2b2e42] to-[#1c1e2c] shadow-[inset_0_0_0_1px_rgba(233,233,237,.12)]"><IconWithFallback src={icon?.icon ?? ""} alt={mover.championName} fallbackGlyph={mover.championName} className="h-full w-full object-cover" size={36} /></span>
-        <span className="min-w-0 flex-1"><span className="block truncate text-[13px] font-semibold text-txt">{mover.championName}</span><span className="block text-[9px] uppercase tracking-[0.08em] text-mut">{roleLabel(mover.role)} · {formatGames(mover.games)} games</span><span className="mt-1 block truncate text-[11px] text-mut/60">{mover.note ?? "—"}</span></span>
+        <span className="min-w-0 flex-1"><span className="block truncate text-[13px] font-semibold text-txt">{mover.championName}</span><span className="block text-[9px] uppercase tracking-[0.08em] text-mut">{roleLabel(mover.role)} · {formatGames(mover.games)} games · {mover.wrPrev.toFixed(1)}→{mover.wrNow.toFixed(1)}%</span><span className="mt-1 block truncate text-[11px] text-mut/60">{mover.note ?? "—"}</span></span>
         <span className={`text-[13px] font-semibold tabular-nums ${mover.deltaPp >= 0 ? "text-good" : "text-bad"}`}>{formatDelta(mover.deltaPp)}</span>
       </div>
     </Link>

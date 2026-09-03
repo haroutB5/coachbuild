@@ -13,6 +13,11 @@
 //   split on) that's two-to-three stacked search boxes on one screen. Desktop
 //   always keeps the global search on every route — there's room, and it's a
 //   genuine global-nav affordance; only mobile needs the route-aware hide.
+//   The hide collapses the whole bar on those routes (v0.63.4's "no empty
+//   bordered strip" rule) — EXCEPT while the champ-select chip is live:
+//   TopBar tracks the chip's own onVisibleChange and keeps the bar mounted
+//   for the live dot/pill, which is exactly when a phone user most needs a
+//   way back to the draft.
 //
 // Extracted as a pure function (not inlined in TopBar.tsx) so this route list
 // is ONE source of truth and is unit-testable without mounting TopBar/

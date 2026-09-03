@@ -13,6 +13,7 @@ public sealed class GameflowPoller
     private readonly RedactedLog? _log;
     private readonly Action? _champSelectEntered;
     private readonly Action<RankCaptureTrigger>? _rankCapture;
+    private readonly Func<bool>? _browserAliveProbe;
     private readonly int _pollMilliseconds;
     private int? _lastChampSelectChampionId;
 
@@ -36,7 +37,13 @@ public sealed class GameflowPoller
         // The implementation must not block -- see RankCaptureService.Fire.
         // This poller wraps the call in a catch anyway, because a diagnostic
         // feature does not get to stop the gameflow loop.
-        Action<RankCaptureTrigger>? rankCapture = null)
+        Action<RankCaptureTrigger>? rankCapture = null,
+        // Hard-kill fallback for the attach suppression (BrowserProcessProbe).
+        // Evaluated once per champ-select tick and handed to every window
+        // decision on that tick; null preserves the old always-alive answer,
+        // which is what every existing caller and test constructs. A throwing
+        // probe degrades to alive (trust the stamp), never to a reopen storm.
+        Func<bool>? browserAliveProbe = null)
     {
         _credentials = credentials;
         _lcu = lcu;
@@ -48,6 +55,7 @@ public sealed class GameflowPoller
                 ? new Action(registeredRunes.ClearForChampSelect)
                 : null);
         _rankCapture = rankCapture;
+        _browserAliveProbe = browserAliveProbe;
         _pollMilliseconds = Math.Max(100, options?.PollMilliseconds ?? 1500);
     }
 
@@ -113,6 +121,7 @@ public sealed class GameflowPoller
             HttpMethod.Get,
             "/lol-champ-select/v1/session",
             cancellationToken: cancellationToken).ConfigureAwait(false);
+        var browserAlive = ReadBrowserAlive();
         if (!sessionResponse.Ok || sessionResponse.Content is not { } session)
         {
             if (sessionResponse.IsConnectionOrAuthFailure)
@@ -120,14 +129,14 @@ public sealed class GameflowPoller
                 _credentials.Invalidate();
                 _state.SetCredentials(null);
             }
-            return enteredChampSelect ? _windows?.OnChampSelectEntry(browserAlive: true) : null;
+            return enteredChampSelect ? _windows?.OnChampSelectEntry(browserAlive: browserAlive) : null;
         }
 
         var resolution = ChampSelectResolver.Resolve(session);
         if (resolution is null)
-            return enteredChampSelect ? _windows?.OnChampSelectEntry(browserAlive: true) : null;
+            return enteredChampSelect ? _windows?.OnChampSelectEntry(browserAlive: browserAlive) : null;
         WindowDecision? entryDecision = enteredChampSelect
-            ? _windows?.OnChampSelectEntry(resolution, browserAlive: true)
+            ? _windows?.OnChampSelectEntry(resolution, browserAlive: browserAlive)
             : null;
         _state.SetChampSelect(new CompanionChampSelectSnapshot(
             resolution.LocalPlayerCellId,
@@ -137,7 +146,7 @@ public sealed class GameflowPoller
             resolution.RoleId,
             resolution.TheirTeam,
             resolution.TimerPhase));
-        var decision = _windows?.OnChampSelectPoll(resolution, browserAlive: true);
+        var decision = _windows?.OnChampSelectPoll(resolution, browserAlive: browserAlive);
         if (resolution.ChampionId is > 0)
         {
             if (_lastChampSelectChampionId != resolution.ChampionId)
@@ -167,6 +176,18 @@ public sealed class GameflowPoller
                 _state.SetLastError($"gameflow poll failed: {ex.GetType().Name}");
             }
         }
+    }
+
+    /// <summary>
+    /// Reads the liveness probe once per champ-select tick. Only champ-select
+    /// ticks reach this (every other phase returns before the session read),
+    /// so a browser process enumeration costs nothing outside champ select.
+    /// </summary>
+    private bool ReadBrowserAlive()
+    {
+        if (_browserAliveProbe is null) return true;
+        try { return _browserAliveProbe(); }
+        catch { return true; }
     }
 
     private static string? ReadString(JsonElement content) => content.ValueKind switch

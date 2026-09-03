@@ -42,10 +42,19 @@ export const BUILD_CACHE_TTL_MS = 10 * 60 * 1000;
  *  of the document. Oldest-inserted is evicted first. */
 export const BUILD_CACHE_MAX_ENTRIES = 32;
 
+/** Header the service worker stamps onto an /api response it serves from its
+ *  own cache because the network failed (public/sw.js). Same-origin, so the
+ *  page can read it — the one signal distinguishing "fresh from the CDN" from
+ *  "offline copy" without changing any response body. */
+export const OFFLINE_SERVED_HEADER = "x-coachbuild-offline";
+
 export type BuildOutcome =
   /** The route answered with at least one build. `builds` is the full array —
-   *  BuildTabContent's alt-keystone salvage reads past index 0. */
-  | { status: "ok"; builds: BuildResponse[] }
+   *  BuildTabContent's alt-keystone salvage reads past index 0. `servedOffline`
+   *  is true when the service worker served this out of its cache while the
+   *  device was offline: still this champion's build, but possibly older than
+   *  the in-memory TTL implies, so the card says so. */
+  | { status: "ok"; builds: BuildResponse[]; servedOffline?: boolean }
   /** 404, or a 2xx with an empty/malformed array: this champion+role genuinely
    *  has nothing. Cached — it is a real answer, not a failure. */
   | { status: "empty" }
@@ -144,7 +153,9 @@ export function loadBuild(
         remember(key, { status: "empty" }, nowFn());
         return { status: "empty" };
       }
-      const outcome = { status: "ok" as const, builds: data };
+      // Optional-chained: unit-test fakes stub only ok/status/json.
+      const offlineFlag = res.headers?.get(OFFLINE_SERVED_HEADER);
+      const outcome = { status: "ok" as const, builds: data, ...(offlineFlag != null ? { servedOffline: true as const } : {}) };
       remember(key, outcome, nowFn());
       return outcome;
     } catch {

@@ -15,6 +15,13 @@ const SHELL = ["/"];
 const ICON_CACHE = "coachbuild-icons-v1";
 const ICON_ORIGIN = "https://cdn.coachless.gg";
 const ICON_PATH_PREFIX = "/static-files/";
+/* FIFO bound on the icon cache. Icons are a few KB each and the URL space a
+   user actually views is small, but every patch mints a whole new URL set, so
+   an unbounded cache grows a little every patch forever and pins any single
+   broken-URL entry for the life of the install. Cache.keys() resolves in
+   insertion order, so trimming the head is a genuine oldest-first eviction —
+   and a broken icon ages out instead of being pinned. */
+const ICON_CACHE_MAX_ENTRIES = 1500;
 
 self.addEventListener("install", (event) => {
   // v0.101.0 — skipWaiting is BACK, and the "Update ready" toast is gone with
@@ -74,6 +81,34 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+/* Header stamped onto an /api response served from cache while offline —
+   must match lib/buildCache.ts's OFFLINE_SERVED_HEADER exactly. */
+const OFFLINE_SERVED_HEADER = "x-coachbuild-offline";
+
+/* Oldest-first trim for the icon cache. keys() resolves in insertion order,
+   so deleting the head is a FIFO eviction. Fire-and-forget by design (see the
+   put call site) — a failed trim just means the next put trims instead. */
+function trimIconCache(cache) {
+  cache
+    .keys()
+    .then((keys) => {
+      if (keys.length <= ICON_CACHE_MAX_ENTRIES) return;
+      return Promise.all(keys.slice(0, keys.length - ICON_CACHE_MAX_ENTRIES).map((k) => cache.delete(k)));
+    })
+    .catch(() => {});
+}
+
+/* Rebuild a cached response with the offline-served flag stamped on it. The
+   body passes through byte-identical — only the header is added — so shapes,
+   parsers, and the SW's own no-store guard (which already ran when the entry
+   was written) are untouched. */
+async function withOfflineFlag(cached) {
+  const headers = new Headers(cached.headers);
+  headers.set(OFFLINE_SERVED_HEADER, "served-from-cache");
+  const body = await cached.blob();
+  return new Response(body, { status: cached.status, statusText: cached.statusText, headers });
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
@@ -108,18 +143,16 @@ self.addEventListener("fetch", (event) => {
           // UX-wise: the browser still fails to decode it as an image and
           // IconWithFallback's onError still swaps in the fallback glyph —
           // it just no longer re-hits the network to fail the same way
-          // twice. Deliberately unbounded/no LRU — icons are a few KB each
-          // and the URL space is naturally capped by how many
-          // champs/items/runes/patches a user actually views; revisit if
-          // storage quota ever becomes a real complaint.
+          // twice. The cache is FIFO-bounded (ICON_CACHE_MAX_ENTRIES), so a
+          // broken entry ages out instead of pinning forever.
           if (res.ok || res.type === "opaque") {
             // Un-awaited on purpose (the response must not wait on the write),
             // which means a rejection has nowhere to go: on quota exhaustion
             // this throws an unhandled rejection inside the SW. Swallow it —
-            // a failed icon cache write is not worth surfacing, and this cache
-            // is deliberately unbounded (see above), so quota is its expected
-            // long-run failure mode rather than a surprise.
+            // a failed icon cache write is not worth surfacing, and the FIFO
+            // bound below keeps quota pressure flat rather than growing.
             cache.put(req, res.clone()).catch(() => {});
+            trimIconCache(cache);
           }
           return res;
         } catch {
@@ -161,7 +194,18 @@ self.addEventListener("fetch", (event) => {
           }
           return res;
         })
-        .catch(() => caches.match(req))
+        .catch(async () => {
+          const cached = await caches.match(req);
+          // Offline serving a cached API body used to be indistinguishable
+          // from a fresh one: lib/buildCache.ts re-based its TTL on it and
+          // the card rendered it with no label. Stamp it so the page can say
+          // "offline copy" instead of silently presenting possibly-old
+          // numbers as today's. Only the /api branch is stamped — the app
+          // shell below is version-identifying on its own (footer reads the
+          // bundle's NEXT_PUBLIC_APP_VERSION), so it needs no label.
+          if (!cached) return cached;
+          return withOfflineFlag(cached);
+        })
     );
     return;
   }

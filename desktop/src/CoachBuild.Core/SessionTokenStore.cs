@@ -12,6 +12,20 @@ public sealed class SessionTokenStore
             "CoachBuild");
     }
 
+    /// <summary>
+    /// The token file is shared with the PowerShell bridge and the Desktop
+    /// app's own store, which mint different shapes (32-hex Guid "N" here,
+    /// 64-hex there), so the rule accepts any all-hex token of 32+ chars —
+    /// the same rule as the Desktop store's IsValid. Anything else (a
+    /// truncated write, a tampered file) is treated as absent: GetOrCreate
+    /// mints fresh, TryRead reports false, and the browser re-pairs instead
+    /// of running a session no bridge will ever accept.
+    /// </summary>
+    public static bool IsValidSessionToken(string? token) =>
+        !string.IsNullOrWhiteSpace(token)
+        && token.Length >= 32
+        && token.All(static c => c is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F');
+
     public string GetOrCreate()
     {
         try
@@ -20,7 +34,7 @@ public sealed class SessionTokenStore
             if (File.Exists(FilePath))
             {
                 var existing = File.ReadAllText(FilePath).Trim();
-                if (!string.IsNullOrEmpty(existing)) return existing;
+                if (IsValidSessionToken(existing)) return existing;
             }
 
             var token = Guid.NewGuid().ToString("N");
@@ -40,7 +54,12 @@ public sealed class SessionTokenStore
         try
         {
             token = File.Exists(FilePath) ? File.ReadAllText(FilePath).Trim() : null;
-            return !string.IsNullOrEmpty(token);
+            if (!IsValidSessionToken(token))
+            {
+                token = null;
+                return false;
+            }
+            return true;
         }
         catch
         {

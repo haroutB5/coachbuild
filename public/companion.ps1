@@ -158,10 +158,14 @@ WIRE CONTRACT (must match components/live/companionClient.ts exactly):
                        -> 200 {ok:true, selected:boolean, verified:boolean,
                                 mismatch:string[]}
                         | 200 {ok:false, reason:string, hint?:string}
-    v1.6.3 TWO-PAGE MODEL (user-reported: "pro runes get reverted"): the WPA
+    v1.6.3 TITLE-AGNOSTIC PAGE MODEL (user-reported: "pro runes get reverted"): the WPA
     auto-export writes "CoachBuild <champ> <role>" and the manual "Apply pro
     runes" button writes "CoachBuild <champ> <role> Pro" -- TWO distinct
-    titles that must COEXIST as two separate LCU rune pages. Before 1.6.3 the
+    titles that must COEXIST as two separate LCU rune pages. (A third variant,
+    "CoachBuild <champ> <role> OTP", arrived with web v0.70.1 and rides these
+    same mechanics with no bridge change -- the handler below matches EXACT
+    titles and protects the whole champ-scoped prefix, so it never needed to
+    know how many variants exist.) Before 1.6.3 the
     handler matched ANY "CoachBuild"-prefixed page and edited the oldest in
     place, so both writes fought over ONE physical page (each renamed/
     overwrote the other -> the revert). Now each apply targets its OWN
@@ -171,9 +175,10 @@ WIRE CONTRACT (must match components/live/companionClient.ts exactly):
     STEP 1 -- champ-scoped stale cleanup (only when replacePrefix is present
     and starts with "CoachBuild"): DELETE our OWN pages titled "CoachBuild*"
     whose title does NOT start with replacePrefix (i.e. OTHER champions'
-    pages). This bounds us at the current champ's <=2 pages. A page starting
-    with replacePrefix is NEVER deleted -- that protects BOTH the current
-    champ's WPA and Pro pages from cross-deletion. A non-"CoachBuild" page is
+    pages). This bounds us at the current champ's own pages (WPA, Pro, and --
+    since web v0.70.1 -- OTP). A page starting
+    with replacePrefix is NEVER deleted -- that protects ALL the current
+    champ's variant pages from cross-deletion. A non-"CoachBuild" page is
     NEVER touched (hard invariant). Fail-soft: a delete the LCU refuses (e.g.
     a currently-selected stale page) is skipped, never aborts the apply (it
     self-heals next cycle once it's no longer selected).
@@ -1499,10 +1504,11 @@ function Invoke-ApplyRunes {
     # NEVER deletes a non-CoachBuild page -- SelfTest-pinned (adversarial
     # 5-page, 0-CoachBuild fixture must produce zero DELETE calls).
     #
-    # v1.6.3 TWO-PAGE MODEL (user-reported "pro runes get reverted"): the WPA
+    # v1.6.3 TITLE-AGNOSTIC PAGE MODEL (user-reported "pro runes get reverted"): the WPA
     # auto-export writes "CoachBuild <champ> <role>" and the manual "Apply pro
     # runes" button writes "CoachBuild <champ> <role> Pro". Those two titles
-    # must coexist as TWO physical pages. The pre-1.6.3 handler edited the
+    # must coexist as TWO physical pages (a third OTP title rides the same
+    # mechanics since web v0.70.1). The pre-1.6.3 handler edited the
     # OLDEST "CoachBuild*"-prefixed page in place regardless of its exact
     # title, so the two writes overwrote/renamed one shared page (the revert).
     # New logic: (1) champ-scoped stale cleanup of OTHER champs' pages, then
@@ -4152,9 +4158,10 @@ function Invoke-SelfTest {
     $mockLcu.Sync.PagePutShouldFail = $false
     $mockLcu.Sync.MockPages = @()
 
-    # -- v1.6.3 TWO-PAGE MODEL: WPA "CoachBuild <champ> <role>" and Pro
-    # "CoachBuild <champ> <role> Pro" must COEXIST as two separate pages, and a
-    # champ change must clean up BOTH old-champ pages while leaving foreign
+    # -- v1.6.3 TITLE-AGNOSTIC PAGE MODEL: WPA "CoachBuild <champ> <role>" and Pro
+    # "CoachBuild <champ> <role> Pro" must COEXIST as two separate pages (plus
+    # the OTP variant, same mechanics), and a
+    # champ change must clean up EVERY old-champ variant page while leaving foreign
     # pages untouched. --------------------------------------------------------
     $wpaPerks = @(8005, 9111, 9104, 8014, 8017, 8009, 8017, 5008, 5008)
     $proPerks = @(8010, 8009, 9104, 8014, 8299, 8444, 8453, 5005, 5001)

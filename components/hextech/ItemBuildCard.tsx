@@ -54,10 +54,14 @@ interface ItemBuildCardProps {
   lane: LaneId;
   build: BuildResponse;
   ver: string;
+  /** True when the service worker served this build out of its cache while
+   *  offline (lib/buildCache.ts). Renders the quiet offline line below; the
+   *  server-stale line takes precedence when both are somehow true. */
+  servedOffline?: boolean;
   onItemClick: (id: number) => void;
 }
 
-export default function ItemBuildCard({ champ, lane, build, ver, onItemClick }: ItemBuildCardProps) {
+export default function ItemBuildCard({ champ, lane, build, ver, servedOffline, onItemClick }: ItemBuildCardProps) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 px-0.5">
@@ -70,6 +74,11 @@ export default function ItemBuildCard({ champ, lane, build, ver, onItemClick }: 
           {build.stale && (
             <p className="mt-1 text-[11px] text-accent-400/80" data-testid="build-stale-note">
               Cached copy from {formatAsOf(build.asOf)}; the stats source is not answering right now.
+            </p>
+          )}
+          {!build.stale && servedOffline && (
+            <p className="mt-1 text-[11px] text-accent-400/80" data-testid="build-offline-note">
+              Offline — showing your last cached copy. Reconnect to refresh.
             </p>
           )}
         </div>

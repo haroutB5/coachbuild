@@ -2,7 +2,12 @@
 
 // Global top bar rendered above <main> on every chrome-bearing route. The
 // search keeps the existing champion-search bus and keyboard navigation; the
-// center phase spine and right action are shell-only chrome.
+// center phase spine and right action are shell-only chrome. The live
+// champ-select chip (center-right, dot-only on mobile) is back as of
+// v0.123.0: the nocturne shell redesign replaced it with the desktop-only
+// phase spine and left the chip component orphaned — gotcha (cc)'s exact
+// failure mode, a behaviour stripped with no error because the old component
+// keeps compiling. Phones get the live dot; desktop gets dot + spine.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { usePathname, useRouter } from "next/navigation";
@@ -13,6 +18,7 @@ import { emitChampionSearch } from "../championSearchBus";
 import { openSearchFromPointer } from "../../searchOpenState";
 import { computeDropdownPosition, type DropdownCoords } from "../../dropdownPosition";
 import { matchChampions } from "../../championSearch";
+import ChampSelectChip from "./ChampSelectChip";
 import ApplyRunesButton from "./ApplyRunesButton";
 import { phaseSpineModel, PHASE_SPINE_STEPS } from "./phaseSpineModel";
 import { topBarChromeConfig } from "./topBarChrome";
@@ -356,14 +362,22 @@ function PhaseSpine() {
 export default function TopBar() {
   const pathname = usePathname();
   const { hideSearchOnMobile } = topBarChromeConfig(pathname);
+  // The champ-select chip reports its own visibility so the bar can collapse
+  // on mobile exactly when nothing in it is visible — the v0.63.4 "no empty
+  // bordered strip" rule, extended: on /history + /draft mobile the search is
+  // hidden, so the bar shows if and only if a live champ select is in
+  // progress. Starts false to match the server render (no hydration
+  // mismatch: the chip only ever appears after a client-side status poll).
+  const [chipVisible, setChipVisible] = useState(false);
 
   return (
     <div
-      className={`${hideSearchOnMobile ? "hidden lg:flex" : "flex"} relative z-30 h-14 flex-shrink-0 items-center overflow-x-clip border-b border-[rgba(233,233,237,0.08)] bg-bg px-3 sm:px-4 lg:px-5`}
+      className={`${hideSearchOnMobile && !chipVisible ? "hidden lg:flex" : "flex"} relative z-30 h-14 flex-shrink-0 items-center overflow-x-clip border-b border-[rgba(233,233,237,0.08)] bg-bg px-3 sm:px-4 lg:px-5`}
     >
       <div className="w-full min-w-0 flex-1 lg:w-[280px] lg:flex-none">
         <TopBarChampionSearch />
       </div>
+      <ChampSelectChip onVisibleChange={setChipVisible} />
       <div className="hidden min-w-0 flex-1 lg:block" />
       <PhaseSpine />
       <div className="hidden min-w-0 flex-1 lg:block" />

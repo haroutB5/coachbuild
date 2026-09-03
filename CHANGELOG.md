@@ -1,6 +1,55 @@
 # Changelog
 
-## 0.122.0 -- degrade instead of empty (2026-09-02)
+## 0.123.0 -- audit fixes: draft honesty, offline labels, chip rewire (2026-09-03)
+
+A third-party audit (15/20) produced eight findings; six ship
+here, one ships with the next desktop release, one needs a real game.
+
+- **Draft card honesty.** With no enemies entered THE CALL read "It holds up
+  well into popular enemy picks" beside the table's own "No enemies picked
+  yet" note -- a matchup claim with no matchup. `reasonForCandidate` now
+  takes `hasEnemyInfo` and suppresses that sentence without it (extracted to
+  `components/hextech/draft/draftReason.ts`, 5 tests). The featured card also
+  omitted the OFF-META tag its alternates and table row carry, so a 0.2% lane
+  pick headlined with no marker; it now renders the same `tagFor` chip
+  (`draftAssistantModel.ts`, 1 test). Display-only throughout: no reorder, no
+  re-score, defaults unchanged.
+- **Offline copies are labelled.** The SW used to replay a cached `/api/`
+  body while offline with nothing distinguishing it from fresh:
+  `lib/buildCache.ts` re-based its TTL on it and the card rendered it
+  silently. The SW now stamps `x-coachbuild-offline` on offline-served API
+  responses, the outcome carries `servedOffline` through BuildTabContent, and
+  the WPA card renders "Offline — showing your last cached copy" (yields to
+  the server-stale line when both hold). 2 tests.
+- **Icons retry before giving up.** `IconWithFallback` swapped to the glyph
+  on the first failed load, pinning it for the session (a Stormrazor step
+  rendered as "S" off one transient failure). 3 attempts per src now
+  (`ICON_MAX_ATTEMPTS`, 2 tests). The icon SW cache is FIFO-bounded at 1500
+  entries (was unbounded) so a broken-URL entry ages out.
+- **Champ-select chip rewired.** The nocturne shell redesign replaced the
+  TopBar chip with the desktop-only phase spine and left `ChampSelectChip`
+  (+ model + tests) orphaned -- the gotcha-(cc) failure mode, and the reason
+  phones had no live phase indicator. It renders in TopBar again (dot-only on
+  mobile, pill on sm+), and the bar's mobile collapse rule follows the chip's
+  own `onVisibleChange`, so /history + /draft mobile show the bar if and only
+  if champ select is live.
+- **Copy + docs drift.** `/live-setup` automation copy claimed the overlay
+  draws win-rate deltas over Situational icons (removed in desktop 1.0.23)
+  and omitted the For-this-game fifth line; both fixed. Rune comments said
+  "two pages" in `runeApplyBody.ts` and `companion.ps1` (three since v0.70.1;
+  the handler was always title-agnostic -- comment-only, no behavior change).
+  Movers mobile rows carry prev-to-now win rates; ShiftBar gains role + label
+  and its scale comment.
+- **Desktop (Core, ships with the next desktop release, NOT this deploy).**
+  `GameflowPoller` passed `browserAlive: true` literally, neutering the stale-
+  attach hard-kill: new `BrowserProcessProbe` (same name list + fail-open
+  contract as ps1's `Test-BrowserProcessRunning`), injected as an optional
+  probe evaluated once per champ-select tick. Core `SessionTokenStore` gains
+  the Desktop store's validation rule (corrupt file regenerates instead of
+  persisting). 15 new Core tests; Core 301/301, Desktop 295/295 green.
+- **Not in this lane.** Field verification (a real game on the gaming PC),
+  the ps1-vs-desktop token-shape skew (needs a release), and any scoring or
+  curated-table change (needs measurement + a second reader per HANDOFF).
 
 A 403, 5xx or timeout from the upstream coachless API used to be a 500 from
 `/api/build` and an empty Builds page. It is now the last known-good response

@@ -70,7 +70,7 @@ export default function AutomationToggles({
         title="Auto-add item builds on champ select"
         description={
           <>
-            One item set for your champion and role appears in the in-client shop, holding four build lines side by side — WPA build, Pro build, OTP build and Hidden gem — plus your starting items. Under those, a single Situational row carries the swaps worth considering, best first, with CoachBuild&apos;s overlay drawing each one&apos;s win-rate delta on top of its icon.
+            One item set for your champion and role appears in the in-client shop, holding the WPA build, Pro build, OTP build and Hidden gem lines side by side — plus your starting items and a Situational row of swaps worth considering, best first. Once the enemy team locks in, a For this game line answers their comp with at most two item swaps and the right boots.
           </>
         }
       />

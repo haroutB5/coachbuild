@@ -4,7 +4,7 @@ import { IconWithFallback } from "@/components/IconWithFallback";
 import type { ChampionIconEntry } from "@/components/proAssets";
 import {
   draftTierForCandidate,
-  isOffMetaLaneShare,
+  tagFor,
   type DraftAssistantCandidate,
   type DraftAssistantCard,
 } from "../draftAssistantModel";
@@ -100,13 +100,6 @@ function Tile({ entry, size, featured = false }: { entry: ChampionIconEntry; siz
   );
 }
 
-function tagFor(candidate: DraftAssistantCandidate): string {
-  if (candidate.personalOverall.games > 0) return "YOUR COMFORT";
-  if (candidate.floor !== null) return "SAFEST";
-  if (isOffMetaLaneShare(candidate.laneShare)) return "OFF-META";
-  return "RELIABLE";
-}
-
 function whyFor(candidate: DraftAssistantCandidate, laneOpponentName: string | null): string {
   if (laneOpponentName && typeof candidate.synergyDelta === "number" && candidate.synergyDelta > 0) return `Answers ${laneOpponentName} cleanly.`;
   if (candidate.floor !== null) return "Keeps a stable first-pick floor.";
@@ -192,6 +185,7 @@ export default function DraftRecommendation({
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <h2 className="text-[26px] font-semibold leading-none tracking-[-0.02em] text-txt">{entry.name}</h2>
               <span className="text-[11px] uppercase tracking-[0.1em] text-txt/[0.45]">{roleLabel}</span>
+              <span className="text-[9px] font-medium uppercase tracking-[0.12em] text-accent-400" title={tagFor(candidate) === "OFF-META" ? "A thin lane-share pick — one-trick territory, not a blind-safe default" : undefined}>{tagFor(candidate)}</span>
             </div>
             {verdictChip && (
               <span className="mt-2 inline-flex rounded-[5px] bg-good/[0.14] px-2 py-[3px] text-[10px] font-semibold uppercase tracking-[0.06em] text-good">

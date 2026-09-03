@@ -61,7 +61,7 @@ type FetchState =
    *  rows by reaching for it (see altKeystone.ts on why exposing a whole
    *  alternative page would surface lib/recommend.ts's `bestAboveFloor`
    *  fallback). */
-  | { status: "ok"; build: BuildResponse; altKeystone: AltKeystone | null }
+  | { status: "ok"; build: BuildResponse; altKeystone: AltKeystone | null; servedOffline: boolean }
   | { status: "empty" }
   /** `network` = the request never completed (fetch threw) — the user's
    *  connection genuinely might be the problem. `upstream` = the request
@@ -236,7 +236,7 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
     if (!hit) return null;
     if (hit.status === "empty") return { status: "empty" };
     if (hit.status === "error") return null;
-    return { status: "ok", build: hit.builds[0], altKeystone: resolveAltKeystone(hit.builds) };
+    return { status: "ok", build: hit.builds[0], altKeystone: resolveAltKeystone(hit.builds), servedOffline: hit.servedOffline === true };
   };
   const [state, setState] = useState<FetchState>(() => cachedState() ?? { status: "loading" });
   // Built by the shared helper, not inline: ChampionHero's action buttons read
@@ -353,7 +353,7 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
       // one unrendered. One fact is now salvaged from the tail — the
       // keystone, its WPA, its sample and its tree — and nothing else: the
       // pick, the ranking and every other slot on the card are untouched.
-      setState({ status: "ok", build: outcome.builds[0], altKeystone: resolveAltKeystone(outcome.builds) });
+      setState({ status: "ok", build: outcome.builds[0], altKeystone: resolveAltKeystone(outcome.builds), servedOffline: outcome.servedOffline === true });
       onPatchResolved?.(outcome.builds[0].patch);
     },
     [onPatchResolved]
@@ -531,6 +531,7 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
   }
 
   const { build, altKeystone } = state;
+  const servedOffline = state.servedOffline;
   const ver = versionFromPatch(build.patch);
 
   return (
@@ -575,7 +576,7 @@ export default function BuildTabContent({ champ, lane, rankBracket, rankHydrated
       >
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_372px]">
           <div className="min-w-0 space-y-4">
-            <ItemBuildCard champ={champ} lane={lane} build={build} ver={ver} onItemClick={openItemPopover} />
+            <ItemBuildCard champ={champ} lane={lane} build={build} ver={ver} servedOffline={servedOffline} onItemClick={openItemPopover} />
             <BuildSkillOrderPanel champId={champ.id} lane={lane} />
           </div>
           <div id="build-runes" className="min-w-0">

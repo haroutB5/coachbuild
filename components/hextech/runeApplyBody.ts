@@ -30,29 +30,32 @@ export interface RuneApplyBody {
    *  champScopedReplacePrefix): `"CoachBuild <champ> "` — the trailing space
    *  is load-bearing (stops `"CoachBuild Vi "` from also matching
    *  `"CoachBuild Viktor …"`). The companion uses it to delete OUR OWN rune
-   *  pages for OTHER champions on a champ change while keeping BOTH of the
-   *  current champion's pages — the WPA page (`"CoachBuild <champ> <role>"`)
-   *  and the Pro page (`"CoachBuild <champ> <role> Pro"`), which both start
-   *  with this prefix. Deliberately champ-only (not role- or Pro-scoped) so a
-   *  champ change catches the Pro page too. See public/companion.ps1's
+   *  pages for OTHER champions on a champ change while keeping ALL of the
+   *  current champion's pages — the WPA page (`"CoachBuild <champ> <role>"`),
+   *  the Pro page (`"CoachBuild <champ> <role> Pro"`) and the OTP page
+   *  (`"CoachBuild <champ> <role> OTP"`), which all start with this prefix.
+   *  Deliberately champ-only (not role- or variant-scoped) so a champ change
+   *  catches every variant page. See public/companion.ps1's
    *  Invoke-ApplyRunes. */
   replacePrefix: string;
 }
 
 const EXPECTED_PERK_COUNT = 9;
 
-/** Options for the two rune-page variants that share this builder:
+/** Options for the three rune-page variants that share this builder:
  *  - WPA recommendation (RunesSummonersCard / auto-export) — no `pageSuffix`,
  *    title `"CoachBuild <champ> <role>"`.
  *  - Pro consensus (ProConsensusCard's "Apply pro runes") — `pageSuffix:"Pro"`,
  *    title `"CoachBuild <champ> <role> Pro"`.
- *  The two titles are DELIBERATELY distinct so the companion writes them to
- *  two separate LCU rune pages that coexist — before this, both used the same
- *  `"CoachBuild <champ> <role>"` title, so the WPA auto-export and the manual
- *  pro apply fought over ONE physical page (any WPA re-apply reverted the
- *  pro runes the user just applied). The suffix goes AFTER champ/role so BOTH
+ *  - OTP consensus (the OTP card's "Apply OTP runes", web v0.70.1) —
+ *    `pageSuffix:"OTP"`, title `"CoachBuild <champ> <role> OTP"`.
+ *  The three titles are DELIBERATELY distinct so the companion writes them to
+ *  three separate LCU rune pages that coexist — before this, the WPA and Pro
+ *  variants used the same `"CoachBuild <champ> <role>"` title, so the WPA
+ *  auto-export and the manual pro apply fought over ONE physical page (any WPA
+ *  re-apply reverted the pro runes the user just applied). The suffix goes AFTER champ/role so ALL
  *  titles still start with the champ-scoped `replacePrefix` (`"CoachBuild
- *  <champ> "`) and the companion's champ-change stale-cleanup catches both. */
+ *  <champ> "`) and the companion's champ-change stale-cleanup catches every variant. */
 export interface RuneApplyBodyOptions {
   /** Appended after `"CoachBuild <champ> <role>"` (space-separated) to name a
    *  distinct variant page — e.g. `"Pro"` -> `"CoachBuild <champ> <role> Pro"`.
@@ -98,8 +101,8 @@ export function buildRuneApplyBody(
     selectedPerkIds,
     current: true,
     // Champ-scoped, NOT role- or variant-scoped — see RuneApplyBody.replacePrefix.
-    // Kept identical for the WPA and Pro variants of the same champion so the
-    // companion protects both pages and only prunes OTHER champions' pages.
+    // Kept identical for the WPA, Pro and OTP variants of the same champion so the
+    // companion protects every variant page and only prunes OTHER champions' pages.
     replacePrefix: `CoachBuild ${championName} `,
   };
 }

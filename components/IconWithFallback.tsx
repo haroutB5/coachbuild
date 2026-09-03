@@ -28,10 +28,18 @@ interface IconWithFallbackProps {
  * rendered," not "this failed"), this one swaps in a bordered glyph tile so
  * a failure is always visible. Used in GameDetailSheet + the detail popovers,
  * and both ImgWithFallback wrappers (ProGameCard, RunePage) delegate here.
+ *
+ * A single transient failure (flaky CDN edge, offline blip) must not pin the
+ * glyph for the session: the image is retried ICON_MAX_ATTEMPTS times before
+ * the fallback takes over. A genuinely broken URL costs at most
+ * ICON_MAX_ATTEMPTS - 1 extra failed requests, which is negligible next to a
+ * permanently wrong tile (2026-09-03: a Stormrazor step rendered as "S" for a
+ * whole session off one failed load).
  */
 export function IconWithFallback({ src, alt, className, fallbackGlyph, size }: IconWithFallbackProps) {
   const [failed, setFailed] = useState(false);
   const [failedSrc, setFailedSrc] = useState(src);
+  const [attempt, setAttempt] = useState(0);
 
   // Reset on every `src` change — this component's callers reuse the same
   // element across a changing id (e.g. a tile whose runeId prop updates),
@@ -41,7 +49,13 @@ export function IconWithFallback({ src, alt, className, fallbackGlyph, size }: I
   if (src !== failedSrc) {
     setFailedSrc(src);
     setFailed(false);
+    setAttempt(0);
   }
+
+  const handleError = () => {
+    if (shouldRetryIconLoad(attempt)) setAttempt(attempt + 1);
+    else setFailed(true);
+  };
 
   if (!src || failed) {
     const source = (fallbackGlyph || alt || "?").trim();
@@ -60,6 +74,7 @@ export function IconWithFallback({ src, alt, className, fallbackGlyph, size }: I
   return (
     /* eslint-disable-next-line @next/next/no-img-element -- This shared sink accepts arbitrary CDN/data-URI URLs and must retain its onError glyph fallback. */
     <img
+      key={`${src}#${attempt}`}
       src={src}
       alt={alt}
       className={className}
@@ -67,7 +82,16 @@ export function IconWithFallback({ src, alt, className, fallbackGlyph, size }: I
       height={size}
       loading="lazy"
       decoding="async"
-      onError={() => setFailed(true)}
+      onError={handleError}
     />
   );
+}
+
+/** Total load attempts per src before the glyph fallback takes over (the
+ *  initial load plus this many retries). Pure so the bound is unit-testable
+ *  without a DOM; the component above is the only caller. */
+export const ICON_MAX_ATTEMPTS = 3;
+
+export function shouldRetryIconLoad(failedAttempts: number): boolean {
+  return failedAttempts < ICON_MAX_ATTEMPTS - 1;
 }
