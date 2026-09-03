@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.125.0 -- the app's export log survives game start (2026-09-03)
+## 0.126.0 -- the baseline export says what it saw (2026-09-03)
+
+Follow-up to 0.125.0, motivated by a real log: the new forwarding worked,
+but a champ select whose comp never resolves records nothing at all — the
+trigger only sees re-exports, so "bots never appeared" and "no scenario
+fired" were indistinguishable silence. The baseline (first, ungated) export
+now records one line with the signal it went out with and the enemy count it
+saw (e.g. `904/top: baseline with signal none (enemies 0 of 5)`), forwarded
+to companion.log like every other decision. One line per champion and lane,
+no behavior change.
 
 The desktop app's window is torn down when the game starts, which destroys
 the browser console with it — so a "the second write never happened" report

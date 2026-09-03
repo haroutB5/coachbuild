@@ -184,6 +184,23 @@ export function getAutoExportDecisions(): string[] {
   return [...autoExportDecisions];
 }
 
+/** The one line the BASELINE (first, ungated) export records. The trigger
+ *  only ever sees re-exports, so without this a champ select whose comp
+ *  never resolves leaves no trace at all — no key, no enemy count, nothing
+ *  to distinguish "bots never appeared" from "no scenario fired". The
+ *  export's own success is recorded separately by the bridge
+ *  (`apply-itemsets: ok=…`), so this line carries the signal and the comp,
+ *  not the outcome. Pure, so the shape is unit-testable. */
+export function formatBaselineExportLine(args: {
+  championId: number;
+  laneId: string;
+  signalKey: string;
+  enemyCount: number;
+  minEnemies: number;
+}): string {
+  return `${args.championId}/${args.laneId}: baseline with signal ${args.signalKey} (enemies ${args.enemyCount} of ${args.minEnemies})`;
+}
+
 /** Called every poll tick with the current enemy list, to age the fallback
  *  stability window. Cheap and idempotent for an unchanged comp. */
 export function observeFinalCompTick(

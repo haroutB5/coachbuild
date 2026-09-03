@@ -48,9 +48,11 @@ import {
   decideFinalExport,
   noteFinalExportWritten,
   recordAutoExportDecision,
+  formatBaselineExportLine,
   hasWrittenFinalExport,
 } from "./champSelectFollowState";
 import { resolveForThisGamePlan, forThisGameKey } from "@/lib/enemyComp/forThisGame";
+import { MIN_ENEMIES_FOR_PLAN } from "@/lib/enemyComp/scenarios";
 import { normalizeDraftEnemyIds } from "./draftLiveSync";
 import {
   getStoredSession,
@@ -256,6 +258,19 @@ export default function AutoExporter() {
             if (kind === "items" && lastKey !== null && key !== lastKey) {
               noteFinalExportWritten();
               recordAutoExportDecision(`${championId}/${laneId}: wrote item set with signal ${key}`);
+            } else if (kind === "items" && lastKey === null) {
+              // The baseline is the one write the trigger never sees. Record
+              // what it went out with and what the comp looked like, or a
+              // missing second write is undiagnosable from companion.log.
+              recordAutoExportDecision(
+                formatBaselineExportLine({
+                  championId,
+                  laneId,
+                  signalKey: key,
+                  enemyCount: enemies.length,
+                  minEnemies: MIN_ENEMIES_FOR_PLAN,
+                })
+              );
             }
           },
           applyItemSets: autoApplyItemSetsIfEligible,

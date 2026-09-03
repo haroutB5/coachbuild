@@ -25,6 +25,7 @@ import {
   resetChampSelectFollowState,
   tryClaimAutoExportLock,
   resetAutoExportLockPrune,
+  formatBaselineExportLine,
 } from "../live/champSelectFollowState";
 import { isBuildForLane } from "../hextech/heroContracts";
 
@@ -454,5 +455,16 @@ describe("tryClaimAutoExportLock", () => {
     expect(tryClaimAutoExportLock("runes", 1, 103, "mid", "none")).toBe(true);
     expect(tryClaimAutoExportLock("runes", 2, 103, "mid", "none")).toBe(false);
     expect(tryClaimAutoExportLock("runes", 99, 103, "mid", "none")).toBe(false);
+  });
+});
+
+describe("baseline export line", () => {
+  it("names the signal and the comp the baseline went out with", () => {
+    expect(
+      formatBaselineExportLine({ championId: 904, laneId: "top", signalKey: "none", enemyCount: 0, minEnemies: 5 })
+    ).toBe("904/top: baseline with signal none (enemies 0 of 5)");
+    expect(
+      formatBaselineExportLine({ championId: 98, laneId: "mid", signalKey: "ftg:abc", enemyCount: 5, minEnemies: 5 })
+    ).toBe("98/mid: baseline with signal ftg:abc (enemies 5 of 5)");
   });
 });
