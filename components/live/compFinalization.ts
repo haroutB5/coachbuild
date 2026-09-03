@@ -29,6 +29,15 @@
 // clock, no storage. The production singleton wraps these in
 // champSelectFollowState.ts, so the policy can be tested without a browser and
 // the wiring can be tested without a policy.
+//
+// PRACTICE TOOL BOTS NEVER REACH THIS GATE (measured 2026-09-03). Bots are
+// configured on the LOBBY screen, but the practice-tool champ-select session
+// carries none of them: a full 5-bot lobby read `enemies 0 of 5` for the
+// entire select (companion.log: `baseline with signal none (enemies 0 of
+// 5)`), so no comp write can ever fire there and the baseline stands. That
+// is correct, not a miss — writing anti-heal for enemies the session cannot
+// see would be fabrication. To exercise the comp write, use a queue whose
+// enemies lock through champ select (draft, blind, co-op vs AI).
 // ---------------------------------------------------------------------------
 
 import { normalizeDraftEnemyIds } from "./draftLiveSync";
