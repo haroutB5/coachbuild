@@ -58,6 +58,7 @@ import { createContext, useContext, useEffect, useRef, useState, useSyncExternal
 import { usePathname } from "next/navigation";
 import {
   getStoredSession,
+  getStoredPort,
   setStoredSession,
   refreshStatus,
   followKindForRoute,
@@ -70,9 +71,11 @@ import {
 import {
   noteCompanionPhase,
   markCompanionDriven,
+  setAutoExportDecisionSink,
   setCurrentChampSelectChampionId,
   setCurrentEnemyChampionIds,
 } from "./champSelectFollowState";
+import { forwardDecisionToBridge } from "./bridgeLog";
 import { normalizeDraftEnemyIds } from "./draftLiveSync";
 import { resolveCurrentChampSelectChampionId } from "./champSelectFollow";
 import { isCompanionStatusFresh } from "./companionLiveness";
@@ -147,6 +150,17 @@ export default function CompanionProvider({ children }: { children: ReactNode })
   useEffect(() => {
     const id = setInterval(() => setStatusClock(Date.now()), COMPANION_STATUS_POLL_MS);
     return () => clearInterval(id);
+  }, []);
+
+  // Mirror the [autoExport] decision log into the companion's own log. The
+  // hosted window is torn down at game start, which destroys the console
+  // history with it — without this mirror a practice-tool-style "the second
+  // write never happened" report arrives with no evidence on either side.
+  // Mount-only: the sink reads the session/port live on every call, so a
+  // pairing that arrives after mount is picked up without re-wiring.
+  useEffect(() => {
+    setAutoExportDecisionSink((line) => forwardDecisionToBridge(line, getStoredSession(), getStoredPort()));
+    return () => setAutoExportDecisionSink(null);
   }, []);
 
   // A stale timestamp is itself a failed liveness signal. Clear the phase

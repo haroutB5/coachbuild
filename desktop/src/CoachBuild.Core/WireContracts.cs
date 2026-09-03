@@ -23,6 +23,14 @@ public static class CompanionRoutes
     public const string Me = "/me";
     public const string ApplyRunes = "/apply-runes";
     public const string ApplyItemSets = "/apply-itemsets";
+    /// <summary>
+    /// Web-to-log forwarder (desktop 1.0.25). The hosted page's decision log
+    /// ([autoExport] lines) dies with the WebView2 window at game start, so
+    /// the page POSTs the lines here and the bridge appends them to
+    /// companion.log. Additive + feature-detected (the page treats a 404 as
+    /// "older bridge, stay console-only"), never version-gated.
+    /// </summary>
+    public const string ClientLog = "/client-log";
 }
 
 public sealed record CompanionLastOpen(
@@ -86,6 +94,21 @@ public sealed record ApplyItemSetsRequest(
     /// default of Skip. Both directions are pinned by tests.</para>
     /// </summary>
     [property: JsonPropertyName("diagnostics")] JsonElement? Diagnostics = null);
+
+/// <summary>
+/// POST /client-log body: already-formatted decision lines from the hosted
+/// page. The bridge validates bounds (see <see cref="ClientLogService"/>) and
+/// appends them to companion.log prefixed with "web: ". It never influences,
+/// delays, or fails anything else — a logging call that could break an
+/// export would be worse than no logging.
+/// </summary>
+public sealed record ClientLogRequest(
+    [property: JsonPropertyName("lines")] IReadOnlyList<string?>? Lines);
+
+public sealed record ClientLogResult(
+    [property: JsonPropertyName("ok")] bool Ok,
+    [property: JsonPropertyName("accepted")] int Accepted,
+    [property: JsonPropertyName("reason")] string? Reason);
 
 /// <summary>
 /// Success and failure are intentionally separate records. This preserves the

@@ -15,6 +15,7 @@ public sealed class CompanionHttpServer : IAsyncDisposable
     private readonly LiveClientDataClient _live;
     private readonly RuneApplyService _runes;
     private readonly ItemSetApplyService _itemSets;
+    private readonly ClientLogService _clientLog;
     private readonly ISkillOrderProvider _skillOrders;
     private readonly RedactedLog _log;
     private readonly int[] _ports;
@@ -70,6 +71,7 @@ public sealed class CompanionHttpServer : IAsyncDisposable
         _runes = runes ?? new RuneApplyService(_lcu, state: _state, log: _log);
         _state.RegisterRuneApplyService(_runes);
         _itemSets = itemSets ?? new ItemSetApplyService(_lcu, _state, _log);
+        _clientLog = new ClientLogService(_log);
         if (skillOrders is null)
         {
             _skillOrders = new SkillOrderProvider();
@@ -285,6 +287,18 @@ public sealed class CompanionHttpServer : IAsyncDisposable
                 var result = await _itemSets.ApplyAsync(body, cancellationToken).ConfigureAwait(false);
                 await HttpResponseWriter.WriteJsonAsync(response, 200, result, cancellationToken).ConfigureAwait(false);
                 _log.Info($"apply-itemsets: ok={result.Ok}");
+                return;
+            }
+
+            if (string.Equals(path, CompanionRoutes.ClientLog, StringComparison.Ordinal) &&
+                string.Equals(request.HttpMethod, "POST", StringComparison.Ordinal))
+            {
+                // Web-to-log forwarder. No LCU credentials needed: this writes
+                // diagnostics, never touches the client. Bounds + throttle live
+                // in ClientLogService; this handler only parses and answers.
+                var body = await ReadJsonAsync<ClientLogRequest>(request, cancellationToken).ConfigureAwait(false);
+                var logged = _clientLog.Accept(body?.Lines);
+                await HttpResponseWriter.WriteJsonAsync(response, 200, logged, cancellationToken).ConfigureAwait(false);
                 return;
             }
 

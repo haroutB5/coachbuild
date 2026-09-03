@@ -154,6 +154,17 @@ let finalization: FinalizationState = initialFinalizationState;
 const AUTO_EXPORT_DECISION_LOG_MAX = 40;
 let autoExportDecisions: string[] = [];
 
+/** Optional mirror for the decision log. Set once, app-wide, by whoever owns
+ *  the bridge session (CompanionProvider) — this module must not import the
+ *  transport itself, or the pure decision state gains a network dependency.
+ *  The sink runs inside the same never-throw guarantee as the console mirror:
+ *  a logging failure must never break an export. */
+let autoExportDecisionSink: ((line: string) => void) | null = null;
+
+export function setAutoExportDecisionSink(sink: ((line: string) => void) | null): void {
+  autoExportDecisionSink = sink;
+}
+
 export function recordAutoExportDecision(line: string): void {
   autoExportDecisions.push(line);
   if (autoExportDecisions.length > AUTO_EXPORT_DECISION_LOG_MAX) autoExportDecisions.shift();
@@ -161,6 +172,11 @@ export function recordAutoExportDecision(line: string): void {
     console.info(`[autoExport] ${line}`);
   } catch {
     /* a stubbed console must never break an export */
+  }
+  try {
+    autoExportDecisionSink?.(line);
+  } catch {
+    /* a logging failure must never break an export */
   }
 }
 

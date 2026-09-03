@@ -1,6 +1,25 @@
 # Changelog
 
-## 0.124.0 -- second reader on the curated axes (2026-09-03)
+## 0.125.0 -- the app's export log survives game start (2026-09-03)
+
+The desktop app's window is torn down when the game starts, which destroys
+the browser console with it — so a "the second write never happened" report
+arrived with the [autoExport] reasons on neither side. The page now forwards
+those decision lines to the companion, which appends them to companion.log
+as `web: ...` lines: POST /client-log (desktop 1.0.25), bounded at 20 lines
+/ 512 chars / 4KB per request and one accepted batch per second, redacted
+like every other log line, and answered 200 either way so logging can never
+read as an export failure. Older bridges answer 404 and the page quietly
+stays console-only — additive and feature-detected, no version gate. How to
+use it: update the desktop app from the tray, reproduce the game, then open
+the log folder from the tray and send companion.log (or Send diagnostics).
+
+## Desktop 1.0.25 — decision lines land in companion.log (2026-09-03)
+
+Companion half of the above: the new POST /client-log endpoint (session- and
+origin-gated like the rest of the wire, no LCU credentials needed since it
+only writes diagnostics). Nothing else on the wire changed; the PowerShell
+bridge does not implement it (404 there, page stays console-only).
 
 Six kit-axis rows corrected after the measurement-backed second read the
 handoff asked for (user-confirmed per row, same day): Irelia, Illaoi, Tahm
