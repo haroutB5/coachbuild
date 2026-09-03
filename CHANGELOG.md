@@ -1,5 +1,25 @@
 # Changelog
 
+## Desktop 1.0.24 — a crashed browser stops suppressing your draft window (2026-09-03)
+
+Two small reliability fixes, no new features, nothing to reconfigure.
+
+**If your browser crashes (or is killed) mid-champ-select, the draft window
+now reopens correctly.** The companion suppresses opening a new window while
+one of its pages is already following champ select — but a crashed browser
+never says goodbye, so the old page's claim stayed valid for two and a half
+minutes and the window you were waiting for never opened. The desktop app now
+checks whether a browser is actually running before honoring that claim. A
+live browser behaves exactly as before.
+
+**A damaged session file no longer wedges pairing.** If the file holding the
+companion's session token is ever truncated or tampered with, the app mints a
+fresh one and you re-pair once, instead of running a session the bridge would
+never accept.
+
+Update arrives through the tray as usual and waits if you are in champ
+select or in game.
+
 ## 0.123.0 -- audit fixes: draft honesty, offline labels, chip rewire (2026-09-03)
 
 A third-party audit (15/20) produced eight findings; six ship
