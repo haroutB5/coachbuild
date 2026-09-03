@@ -107,7 +107,7 @@ export const CHAMPION_KIT_AXES: Readonly<Record<number, KitAxes>> = {
   36: { assassin: 0, heal: 3, shield: 0 },       // Dr. Mundo
   37: { assassin: 0, heal: 3, shield: 2 },       // Sona
   38: { assassin: 3, heal: 0, shield: 0 },       // Kassadin
-  39: { assassin: 2, heal: 2, shield: 0 },       // Irelia
+  39: { assassin: 2, heal: 0, shield: 0 },       // Irelia (no kit heal; BORK/diver lifesteal is item sustain, excluded like every marksman)
   40: { assassin: 0, heal: 2, shield: 3 },       // Janna
   41: { assassin: 0, heal: 0, shield: 0 },       // Gangplank
   42: { assassin: 0, heal: 0, shield: 0 },       // Corki
@@ -195,7 +195,7 @@ export const CHAMPION_KIT_AXES: Readonly<Record<number, KitAxes>> = {
   203: { assassin: 0, heal: 0, shield: 0 },      // Kindred
   221: { assassin: 0, heal: 0, shield: 0 },      // Zeri
   222: { assassin: 0, heal: 0, shield: 0 },      // Jinx
-  223: { assassin: 0, heal: 2, shield: 2 },      // Tahm Kench
+  223: { assassin: 0, heal: 0, shield: 2 },      // Tahm Kench (E is a shield, not a heal; devour saves, does not restore)
   233: { assassin: 2, heal: 2, shield: 0 },      // Briar
   234: { assassin: 2, heal: 2, shield: 0 },      // Viego
   235: { assassin: 0, heal: 2, shield: 0 },      // Senna
@@ -211,9 +211,9 @@ export const CHAMPION_KIT_AXES: Readonly<Record<number, KitAxes>> = {
   350: { assassin: 0, heal: 3, shield: 0 },      // Yuumi
   360: { assassin: 2, heal: 0, shield: 0 },      // Samira
   412: { assassin: 0, heal: 0, shield: 0 },      // Thresh
-  420: { assassin: 0, heal: 2, shield: 0 },      // Illaoi
+  420: { assassin: 0, heal: 0, shield: 0 },       // Illaoi (no kit heal; tentacle/sterak sustain is items, excluded)
   421: { assassin: 2, heal: 1, shield: 0 },      // Rek'Sai
-  427: { assassin: 0, heal: 2, shield: 2 },      // Ivern
+  427: { assassin: 0, heal: 2, shield: 2 },      // Ivern (heal counts E-shield + support-item sustain per user directive 2026-09-03; do not "fix" to 0 without re-asking)
   429: { assassin: 0, heal: 0, shield: 0 },      // Kalista
   432: { assassin: 0, heal: 0, shield: 0 },      // Bard
   497: { assassin: 0, heal: 0, shield: 2 },      // Rakan
@@ -222,7 +222,7 @@ export const CHAMPION_KIT_AXES: Readonly<Record<number, KitAxes>> = {
   517: { assassin: 2, heal: 3, shield: 0 },      // Sylas
   518: { assassin: 0, heal: 0, shield: 0 },      // Neeko
   523: { assassin: 0, heal: 0, shield: 0 },      // Aphelios
-  526: { assassin: 0, heal: 0, shield: 2 },      // Rell
+  526: { assassin: 0, heal: 0, shield: 0 },      // Rell (no shield in kit: Q/W/E/R are engage and resist-steal, user-confirmed 2026-09-03)
   555: { assassin: 3, heal: 1, shield: 0 },      // Pyke
   711: { assassin: 1, heal: 0, shield: 0 },      // Vex
   777: { assassin: 2, heal: 1, shield: 0 },      // Yone
@@ -231,8 +231,8 @@ export const CHAMPION_KIT_AXES: Readonly<Record<number, KitAxes>> = {
   804: { assassin: 0, heal: 0, shield: 0 },      // Yunara
   805: { assassin: 2, heal: 0, shield: 0 },      // Locke
   875: { assassin: 0, heal: 2, shield: 2 },      // Sett
-  876: { assassin: 2, heal: 0, shield: 0 },      // Lillia
-  887: { assassin: 1, heal: 2, shield: 0 },      // Gwen
+  876: { assassin: 1, heal: 0, shield: 0 },      // Lillia (sustained burn, no burst-delete window; user-confirmed 2026-09-03)
+  887: { assassin: 1, heal: 0, shield: 0 },      // Gwen (AP damage dealer; no kit heal, user-confirmed 2026-09-03)
   888: { assassin: 0, heal: 1, shield: 3 },      // Renata Glasc
   893: { assassin: 2, heal: 0, shield: 0 },      // Aurora
   895: { assassin: 2, heal: 0, shield: 1 },      // Nilah

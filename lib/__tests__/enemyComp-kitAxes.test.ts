@@ -110,6 +110,23 @@ describe("kitAxes.ts deliberate rows", () => {
     // invisible in champ select, and reading it off a champion id would be a
     // claim about a purchase this app has explicitly promised never to model.
     for (const id of [222, 51, 119, 429, 202]) expect(getKitAxes(id).heal).toBe(0);
+    // 2026-09-03 second read, user-confirmed per row: Irelia's BORK healing,
+    // Illaoi's diver sustain, Tahm's devour saves and Gwen's kit are all the
+    // same non-kit sustain — none of them counts toward the healers scenario.
+    for (const id of [39, 420, 223, 887]) expect(getKitAxes(id).heal).toBe(0);
+  });
+
+  it("Ivern counts shield-plus-support-item sustain as heal by user directive", () => {
+    // Deliberate exception to the rule above, kept because the owner asked
+    // for it on 2026-09-03 (Ivern E-shield + Redemption-style support items).
+    // Do not "fix" this to 0 without re-asking: the row comment says the same.
+    expect(getKitAxes(427).heal).toBe(2);
+    expect(getKitAxes(427).shield).toBe(2);
+  });
+
+  it("2026-09-03 second read: Lillia is sustained burn, Rell has no shield", () => {
+    expect(getKitAxes(876).assassin).toBe(1);
+    expect(getKitAxes(526).shield).toBe(0);
   });
 });
 

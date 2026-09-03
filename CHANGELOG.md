@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.124.0 -- second reader on the curated axes (2026-09-03)
+
+Six kit-axis rows corrected after the measurement-backed second read the
+handoff asked for (user-confirmed per row, same day): Irelia, Illaoi, Tahm
+Kench and Gwen no longer count as healers (BORK/diver/item sustain is
+invisible in champ select and was never supposed to count — the test that
+pins this for marksmen now pins it for them too), Lillia drops to assassin 1
+(sustained burn, no burst-delete window), Rell drops to shield 0. Ivern
+deliberately keeps heal 2 (E-shield plus support-item sustain, owner
+directive) and is pinned so no future reader "fixes" it. Net: the healer
+pool narrows by four, no code-shape change, no rescoring, Jax untouched.
+
 ## Desktop 1.0.24 — a crashed browser stops suppressing your draft window (2026-09-03)
 
 Two small reliability fixes, no new features, nothing to reconfigure.
