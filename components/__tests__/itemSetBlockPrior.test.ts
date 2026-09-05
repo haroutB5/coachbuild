@@ -378,7 +378,7 @@ describe("WPA per-slot prior — when neither source measured anything", () => {
         { itemId: STERAKS, share: 0.9 },
         { itemId: DEATHS_DANCE, share: 0.8 },
         { itemId: GUARDIAN_ANGEL, share: 0.7 },
-        { itemId: MAW, share: 0.6 },
+        { itemId: 7004, share: 0.6 }, // independent item: avoid a Lifeline conflict with Sterak's
         { itemId: RAVENOUS_HYDRA, share: 0.5 },
         { itemId: TRINITY_FORCE, share: 0.4 },
       ],

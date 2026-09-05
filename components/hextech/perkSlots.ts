@@ -46,6 +46,13 @@ export interface TreeSlots {
   minorRows: [number[], number[], number[]];
 }
 
+/** Current stat-mod slots, in the client's Offense / Flex / Defense order. */
+export const SHARD_ROWS: number[][] = [
+  [5008, 5005, 5007],
+  [5008, 5010, 5001],
+  [5011, 5013, 5001],
+];
+
 /** All 5 rune trees, keyed by Riot style id (lib/types.ts's TreeId). */
 export const PERK_TREES: Record<number, TreeSlots> = {
   8000: {

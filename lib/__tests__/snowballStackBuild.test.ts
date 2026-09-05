@@ -203,6 +203,52 @@ describe("the snowball-stack rule is WIRED into buildRecommendations, not just w
     vi.resetAllMocks();
   });
 
+  it("does not emit an incomplete primary page", async () => {
+    setupEngineMocks(ahriMidPools());
+    vi.mocked(getRunesForKeystoneAndTree).mockResolvedValue({ ...RUNE_ROWS, rowTwos: [] });
+    await expect(buildRecommendations(103, MID_ROLE)).rejects.toThrow(/no viable keystone/);
+  });
+
+  it("keeps incompatible legendaries out and fills from the next compatible ranked item", async () => {
+    setupEngineMocks(ahriMidPools({
+      leg1: [entry(3036, 3, 50000)],
+      leg2: [entry(3033, 4, 50000), entry(3089, 2, 30000)],
+      leg3: [entry(3156, 3, 40000)],
+      leg456: [entry(3053, 4, 30000), entry(3135, 3, 30000), entry(3137, 2, 30000), entry(3157, 1, 30000)],
+    }));
+    const [build] = await buildRecommendations(103, MID_ROLE);
+    expect([build.items.first.id, build.items.second.id, build.items.third.id,
+      ...build.items.fourthPlus.map((p) => p.id)]).toEqual([3036, 3089, 3156, 3135, 3157]);
+  });
+
+  it("does not promote sub-floor positive secondary spikes into alternatives", async () => {
+    setupEngineMocks(ahriMidPools());
+    vi.mocked(getRunesForKeystoneAndTree).mockImplementation(async (_c, _r, _p, main, tree) => {
+      if (main === tree || tree === 8300) return RUNE_ROWS;
+      return Object.fromEntries(Object.entries(RUNE_ROWS).map(([key, rows]) =>
+        [key, rows.map((r) => ({ ...r, occurrence: 100, wpaOverall: 9 }))]
+      )) as typeof RUNE_ROWS;
+    });
+    const builds = await buildRecommendations(103, MID_ROLE);
+    expect(builds).toHaveLength(1);
+    expect(builds[0].runes.secondaryTree.id).toBe(8300);
+  });
+
+  it("skips an incomplete secondary leader and keeps a complete negative-WPA fallback", async () => {
+    setupEngineMocks(ahriMidPools());
+    vi.mocked(getRunesForKeystoneAndTree).mockImplementation(async (_c, _r, _p, main, tree) => {
+      if (main === tree) return RUNE_ROWS;
+      if (tree === 8100) return { ...RUNE_ROWS, rowTwos: [], rowThrees: [] };
+      if (tree === 8300) return Object.fromEntries(Object.entries(RUNE_ROWS).map(([key, rows]) =>
+        [key, rows.map((r) => ({ ...r, wpaOverall: -1 }))]
+      )) as typeof RUNE_ROWS;
+      return { rowOnes: [], rowTwos: [], rowThrees: [] };
+    });
+    const [build] = await buildRecommendations(103, MID_ROLE);
+    expect(build.runes.secondaryTree.id).toBe(8300);
+    expect(build.runes.secondary).toHaveLength(2);
+  });
+
   it("keeps Mejai's out of EVERY completed slot, including the situational swaps", async () => {
     setupEngineMocks(ahriMidPools());
     const [top] = await buildRecommendations(103, MID_ROLE);

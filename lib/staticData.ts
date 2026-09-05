@@ -191,12 +191,22 @@ let summonersMap: SummonerDataEntry[] | null = null;
 
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
 
-async function fetchJson<T>(url: string): Promise<T> {
-  const res = await fetchWithTimeout(url, {
-    next: { revalidate: 86400 }, // cache 24 h
-  });
-  if (!res.ok) throw new Error(`staticData fetch ${url} → ${res.status}`);
-  return res.json() as Promise<T>;
+const pendingJson = new Map<string, Promise<unknown>>();
+
+function fetchJson<T>(url: string): Promise<T> {
+  const pending = pendingJson.get(url);
+  if (pending) return pending as Promise<T>;
+  // Converters resolve many icons concurrently on a cold build. Share the
+  // download and JSON parse, including outside React's request memoization.
+  const request = Promise.resolve().then(async () => {
+    const res = await fetchWithTimeout(url, {
+      next: { revalidate: 86400 },
+    });
+    if (!res.ok) throw new Error(`staticData fetch ${url} → ${res.status}`);
+    return res.json() as Promise<T>;
+  }).finally(() => pendingJson.delete(url));
+  pendingJson.set(url, request);
+  return request;
 }
 
 // ── Patch resolution ─────────────────────────────────────────────────────────

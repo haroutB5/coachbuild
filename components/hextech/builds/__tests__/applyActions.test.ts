@@ -33,7 +33,7 @@ function runes(): RunesBlock {
   return {
     keystone: pick(8112),
     primaryTree: { id: 8100, name: "Domination", icon: "dom.png" },
-    primary: [pick(8126), pick(8138), pick(8135)],
+    primary: [pick(8126), pick(8137), pick(8135)],
     secondaryTree: { id: 8200, name: "Sorcery", icon: "sorc.png" },
     secondary: [pick(8210), pick(8237)],
     shards: { offense: pick(5008), flex: pick(5008), defense: pick(5001) },
@@ -82,7 +82,7 @@ describe("applyRunesForBuild", () => {
     // SAME LCU body, not two things that merely look alike.
     expect(body).toEqual(buildRuneApplyBody(b.champion.name, b.roleLabel, b.runes));
     expect((body as { selectedPerkIds: number[] }).selectedPerkIds).toEqual([
-      8112, 8126, 8138, 8135, 8210, 8237, 5008, 5008, 5001,
+      8112, 8126, 8137, 8135, 8210, 8237, 5008, 5008, 5001,
     ]);
     expect((body as { name: string }).name).toBe("CoachBuild Viktor MIDDLE");
   });

@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.127.0 -- incompatible items and unreliable runes stop reaching builds (2026-09-05)
+
+Third-party audit pass (GPT), verified and shipped by the orchestrator. Five
+correctness fixes, all recommendation-side:
+
+- **Mutually exclusive items no longer share a build.** New
+  `lib/itemCompatibility.ts` encodes the client's purchase-restriction
+  families (Last Whisper, Lifeline, void penetration, Tear line) and the
+  recommendation core, item-set export lines, and For-this-game swaps all
+  filter through it. Previously a build could suggest e.g. two Lifeline
+  items the client will not let you own together.
+- **Rune alternatives respect the sample floor.** WPA-viable alternates and
+  ranked secondary trees now require the same minimum occurrence as primary
+  picks; a tree that cannot show two reliable secondaries is dropped rather
+  than ranked on noise, and a primary path that cannot fill all three minor
+  rows is skipped instead of exported short.
+- **Exports validate the whole rune page.** `buildRuneApplyBody` now rejects
+  same-tree primary/secondary, a keystone that does not belong to the primary
+  tree, minors out of row order, duplicate secondary rows, and shard ids that
+  are not in that shard row -- an invalid page throws instead of reaching the
+  client.
+- **Defense shards updated.** `SHARD_ROWS` in `perkSlots.ts` carries the
+  current Offense / Flex / Defense stat-mod ids, fixing outdated defense
+  shards and wrong highlighting in `BuildVisuals`.
+- **Static-data fetches dedupe in flight.** Concurrent icon/metadata lookups
+  for the same URL now share one download and parse (pending-promise map with
+  cleanup on settle), instead of issuing duplicate requests on a cold build.
+
+3817 tests pass (226 files, +3 new suites), typecheck and production build
+clean.
+
 ## 0.126.0 -- the baseline export says what it saw (2026-09-03)
 
 Follow-up to 0.125.0, motivated by a real log: the new forwarding worked,

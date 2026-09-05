@@ -39,6 +39,7 @@ import { DEFAULT_RANK_BRACKET, type RankBracket } from "./rankBrackets";
 import { capExtraFullItems } from "./buildSlotCap";
 import { collapseSupportFinalPools } from "./supportFinalGroup";
 import { isSnowballStackItem } from "./snowballStacks";
+import { conflictsWithItems } from "./itemCompatibility";
 import {
   getLatestPatch,
   getChampionById,
@@ -161,7 +162,7 @@ function bestItem(
   bar: number
 ): ItemEntry | null {
   const pool0 = exclude
-    ? entries.filter((e) => !exclude.has(e.itemId))
+    ? entries.filter((e) => !conflictsWithItems(e.itemId, exclude))
     : entries;
   if (pool0.length === 0) return null;
   const adopted = pool0.filter((e) => e.occurrence >= bar);
@@ -440,12 +441,14 @@ export async function buildRecommendations(
       usedItems.add(pick.itemId);
     }
   }
+  const tailStart = orderedLegendaries.length;
   for (const pick of topItems(
     leg456Data.filter((e) => !usedItems.has(e.itemId)),
-    4,
+    leg456Data.length,
     bar
   )) {
-    if (!usedItems.has(pick.itemId)) {
+    if (orderedLegendaries.length - tailStart >= 4) break;
+    if (!conflictsWithItems(pick.itemId, usedItems)) {
       orderedLegendaries.push({ entry: pick, pool: leg456Data });
       usedItems.add(pick.itemId);
     }
@@ -731,7 +734,7 @@ export async function buildRecommendations(
         const wpaRowPicks = rowPicks(rowArr, (r) => bestAboveFloor(r, noiseFloor));
         const byWpa = top2ByWpa(wpaRowPicks);
         const byWpaViable = top2ByWpa(
-          wpaRowPicks.filter((p) => p.entry.wpaOverall >= 0)
+          wpaRowPicks.filter((p) => p.entry.wpaOverall >= 0 && p.entry.occurrence >= noiseFloor)
         );
         return {
           treeId: treeToLoad,
@@ -746,7 +749,7 @@ export async function buildRecommendations(
         };
       })
     );
-    const ranked = cands.slice().sort((a, b) => {
+    const ranked = cands.filter((c) => displayReliable(c).length === 2).sort((a, b) => {
       const aOk = a.reliableCount >= 2 ? 1 : 0;
       const bOk = b.reliableCount >= 2 ? 1 : 0;
       if (aOk !== bOk) return bOk - aOk;
@@ -781,6 +784,7 @@ export async function buildRecommendations(
           [primRows.rowOnes, primRows.rowTwos, primRows.rowThrees],
           (r) => pickRecommended(r, bar)
         ).map((rp) => rp.entry);
+        if (primaryMinors.length !== 3) return null;
         const secondaries = await secondariesFor(treeId);
         if (secondaries.length === 0) return null;
         return { treeId, keystone, keystoneOcc: treePopularity, primaryMinors, secondaries };

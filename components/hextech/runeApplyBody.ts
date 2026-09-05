@@ -14,6 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { RunesBlock } from "@/lib/types";
+import { isKeystoneOf, primaryMinorRow, SHARD_ROWS } from "./perkSlots";
 
 export interface RuneApplyBody {
   name: string;
@@ -85,11 +86,25 @@ export function buildRuneApplyBody(
     runes.shards.defense.id,
   ];
 
-  if (selectedPerkIds.length !== EXPECTED_PERK_COUNT) {
+  if (selectedPerkIds.length !== EXPECTED_PERK_COUNT || runes.primary.length !== 3 || runes.secondary.length !== 2) {
     throw new Error(
       `buildRuneApplyBody: expected ${EXPECTED_PERK_COUNT} perk ids, got ${selectedPerkIds.length} ` +
         `(primary=${runes.primary.length}, secondary=${runes.secondary.length})`
     );
+  }
+
+  const primaryTree = runes.primaryTree.id;
+  const secondaryTree = runes.secondaryTree.id;
+  const secondaryRows = runes.secondary.map((p) => primaryMinorRow(secondaryTree, p.id));
+  if (
+    primaryTree === secondaryTree ||
+    !isKeystoneOf(primaryTree, runes.keystone.id) ||
+    runes.primary.some((p, index) => primaryMinorRow(primaryTree, p.id) !== index) ||
+    secondaryRows.some((row) => row === null) ||
+    new Set(secondaryRows).size !== 2 ||
+    selectedPerkIds.slice(6).some((id, index) => !SHARD_ROWS[index].includes(id))
+  ) {
+    throw new Error("buildRuneApplyBody: invalid rune tree or slot selection");
   }
 
   const baseName = `CoachBuild ${championName} ${roleLabel}`;

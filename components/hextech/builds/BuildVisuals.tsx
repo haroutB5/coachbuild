@@ -14,7 +14,7 @@ import { IconWithFallback } from "@/components/IconWithFallback";
 import DetailPopover from "@/components/DetailPopover";
 import type { AltKeystone } from "@/components/hextech/altKeystone";
 import { resolveRuneDisplay, shardIconUrl, shardName, spellIconUrl, spellName, treeIconUrl, treeName } from "@/components/proAssets";
-import { PERK_TREES, primaryMinorRow } from "../perkSlots";
+import { PERK_TREES, primaryMinorRow, SHARD_ROWS } from "../perkSlots";
 import {
   buildRecommendedSkillGrid,
   fetchSkillOrder,
@@ -214,11 +214,7 @@ export interface RunePageGridPage {
   unmapped?: readonly PickType[];
 }
 
-export const SHARD_ROWS: number[][] = [
-  [5005, 5008, 5007],
-  [5008, 5010, 5001],
-  [5002, 5003, 5011],
-];
+export { SHARD_ROWS } from "../perkSlots";
 
 function pickPlaceholder(id: number, icon = "", name = `Rune #${id}`): PickType {
   return { id, name, icon, wpa: 0, winrate: null, occurrence: 0 };
@@ -250,11 +246,13 @@ function runeRowsForTree(
     .filter((row) => !includeOnlySelectedRows || row.ids.some((id) => selectedIds.has(id)));
 }
 
-function shardRowsForBuild(shards: PickType[]): RuneRow[] {
-  const selectedIds = new Set(shards.map((pick) => pick.id));
+export function shardRowsForBuild(shards: PickType[]): RuneRow[] {
   const rows = SHARD_ROWS.map((row) => new Set(row));
   shards.forEach((pick, index) => rows[index]?.add(pick.id));
-  return rows.map((ids) => ({ ids: [...ids], selectedIds }));
+  return rows.map((ids, index) => ({
+    ids: [...ids],
+    selectedIds: new Set(shards[index] ? [shards[index].id] : []),
+  }));
 }
 
 function optionPick(
@@ -634,11 +632,13 @@ export function BuildRuneSidebar({
     [resolvedById, secondaryRows, selectedById],
   );
   const shardGridRows = useMemo(
-    () => shardRows.map((row) => ({
-      options: row.ids.map((id) => optionPick(id, selectedById, resolvedById, true)),
+    () => shardRows.map((row, index) => ({
+      options: row.ids.map((id) => id === shardPicks[index]?.id
+        ? shardPicks[index]
+        : pickPlaceholder(id, shardIconUrl(id), shardName(id))),
       selectedIds: row.selectedIds,
     })),
-    [resolvedById, selectedById, shardRows],
+    [shardPicks, shardRows],
   );
 
   return (

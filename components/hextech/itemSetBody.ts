@@ -148,6 +148,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { ChampionRef, BuildResponse, ItemsBlock, Pick as PickType } from "@/lib/types";
+import { conflictsWithItems } from "@/lib/itemCompatibility";
 import type { ItemDetail } from "@/components/itemDetail";
 import { flattenSituational, situationalShortlist } from "./situational";
 import {
@@ -1371,7 +1372,12 @@ function buildLine(
 ): Candidate[] {
   const dedup = dedupeById(primary);
   const primaryBoots = dedup.filter((c) => bootsIds.has(c.id));
-  let others = dedup.filter((c) => !bootsIds.has(c.id));
+  const compatible = new Set<number>();
+  let others = dedup.filter((c) => {
+    if (bootsIds.has(c.id) || conflictsWithItems(c.id, compatible)) return false;
+    compatible.add(c.id);
+    return true;
+  });
 
   let boots: Candidate | null = primaryBoots.length > 0 ? byScoreDesc(primaryBoots)[0] : null;
 
@@ -1387,8 +1393,9 @@ function buildLine(
     if (others.length >= target) break;
     for (const cand of pool) {
       if (others.length >= target) break;
-      if (used.has(cand.id) || bootsIds.has(cand.id)) continue;
+      if (used.has(cand.id) || bootsIds.has(cand.id) || conflictsWithItems(cand.id, compatible)) continue;
       used.add(cand.id);
+      compatible.add(cand.id);
       others.push(cand);
     }
   }

@@ -208,7 +208,7 @@ describe("a consensus block that DECLARES an order is not re-sorted by share", (
     ordered: true,
   };
 
-  it("ships the items in the order it was handed, share order or not", () => {
+  it("preserves purchase order while replacing an incompatible Lifeline item", () => {
     const sets = buildItemSets(CAMILLE, "Top", build(camilleItems()), orderedPro, CATALOG);
     const ids = idsOf(sets, "Pro build");
     expect(ids[1]).toBe(PLATED); // boots still land at BOOTS_LINE_INDEX
@@ -217,11 +217,9 @@ describe("a consensus block that DECLARES an order is not re-sorted by share", (
       RAVENOUS_HYDRA,
       DEATHS_DANCE,
       STERAKS,
-      MAW,
+      GUARDIAN_ANGEL,
     ]);
-    // Guardian Angel (0.06) outranks Maw (0.05) on SHARE and is behind it in
-    // purchase order — so this is the assertion a share re-sort would break.
-    expect(ids).not.toContain(GUARDIAN_ANGEL);
+    expect(ids).not.toContain(MAW);
   });
 
   it("still re-sorts by share when the source could not measure an order", () => {

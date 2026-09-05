@@ -19,7 +19,19 @@
  * v0.105.x CHANGELOG entry) and only the pure decision is unit-tested.
  */
 import { describe, it, expect } from "vitest";
-import { runeLabelColumns } from "@/components/hextech/builds/BuildVisuals";
+import { runeLabelColumns, shardRowsForBuild, SHARD_ROWS } from "@/components/hextech/builds/BuildVisuals";
+import type { Pick } from "@/lib/types";
+
+describe("stat shard grid", () => {
+  it("uses current client slots, including tenacity and scaling health in defense", () => {
+    expect(SHARD_ROWS).toEqual([[5008, 5005, 5007], [5008, 5010, 5001], [5011, 5013, 5001]]);
+  });
+
+  it("highlights only the selection in each row when adaptive force or health occurs elsewhere", () => {
+    const rows = shardRowsForBuild([5005, 5008, 5001].map((id) => ({ id } as Pick)));
+    expect(rows.map((r) => r.ids.filter((id) => r.selectedIds.has(id)))).toEqual([[5005], [5008], [5001]]);
+  });
+});
 
 describe("runeLabelColumns", () => {
   it("keeps a minor/shard row (3 options) on one line", () => {

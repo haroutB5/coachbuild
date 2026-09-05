@@ -321,7 +321,8 @@ describe("the exported rows, captured 2026-08-28", () => {
       "OTP build (same as Pro build)": [3190, 3009, 3876, 3109, 3222, 2524],
     },
     "81|3": {
-      "Pro build": [3078, 3158, 2517, 3161, 6694, 3036],
+      // Last Whisper items cannot coexist; promote the next compatible item.
+      "Pro build": [3078, 3158, 2517, 3161, 6694, 3026],
       "OTP build": [3078, 3047, 2517, 3161, 6694, 3110],
     },
     "24|0": {
@@ -329,7 +330,8 @@ describe("the exported rows, captured 2026-08-28", () => {
       "OTP build": [3078, 3111, 3157, 2510, 3146, 3153],
     },
     "164|0": {
-      "Pro build": [3078, 3047, 3074, 6333, 3053, 3156],
+      // Sterak's and Maw share Lifeline.
+      "Pro build": [3078, 3047, 3074, 6333, 3053, 3026],
       "OTP build": [3078, 3047, 3074, 6333, 3053, 3161],
     },
   };

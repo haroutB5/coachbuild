@@ -23,6 +23,25 @@ function baseRunes(overrides: Partial<RunesBlock> = {}): RunesBlock {
 }
 
 describe("buildRuneApplyBody", () => {
+  it("rejects a 2-primary / 3-secondary page even though it has nine ids", () => {
+    expect(() => buildRuneApplyBody("Viktor", "Mid", baseRunes({
+      primary: [pick(8226), pick(8210)],
+      secondary: [pick(8143), pick(8137), pick(8135)],
+    }))).toThrow(/expected 9 perk ids/);
+  });
+
+  it.each([
+    { primaryTree: tree(8100, "Domination") },
+    { secondaryTree: tree(8200, "Sorcery") },
+    { keystone: pick(8005) },
+    { primary: [pick(8226), pick(8224), pick(8237)] },
+    { secondary: [pick(8126), pick(8143)] },
+    { secondary: [pick(8143), pick(999999)] },
+    { shards: { offense: pick(5008), flex: pick(5008), defense: pick(5002) } },
+  ])("rejects invalid tree/slot combinations: %j", (overrides) => {
+    expect(() => buildRuneApplyBody("Viktor", "Mid", baseRunes(overrides))).toThrow(/invalid rune/);
+  });
+
   it("assembles the exact 9-id order: keystone, 3 primary, 2 secondary, shards offense->flex->defense", () => {
     const runes = baseRunes();
     const body = buildRuneApplyBody("Viktor", "Mid", runes);

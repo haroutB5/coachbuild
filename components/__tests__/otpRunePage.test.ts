@@ -7,12 +7,7 @@ import { describe, expect, it } from "vitest";
 import { buildFeaturedModel, type FeaturedMatchRow, type OtpRunePageSamples } from "../../lib/otp/featured";
 import { otpRunePage, slotGridSample } from "../hextech/otpRunePage";
 
-/** Mirrors BuildVisuals.tsx's SHARD_ROWS, which cannot be imported here (JSX). */
-const SHARD_ROWS: number[][] = [
-  [5005, 5008, 5007],
-  [5008, 5010, 5001],
-  [5002, 5003, 5011],
-];
+import { SHARD_ROWS } from "../hextech/perkSlots";
 
 const runeOf = (id: number) => ({ name: `R${id}`, icon: "" });
 

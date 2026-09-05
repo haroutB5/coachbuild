@@ -41,6 +41,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { ItemsBlock } from "@/lib/types";
+import { itemsConflict } from "@/lib/itemCompatibility";
 import type { LaneId } from "@/components/hextech/heroContracts";
 import { getDamageType } from "@/lib/enemyComp/damageType";
 import { resolveChampionItemClass, type ChampionItemClass } from "@/lib/enemyComp/championClass";
@@ -356,6 +357,7 @@ export function applyForThisGameLine(
 
   for (const pick of plan.items) {
     if (pick.itemId === boots) continue; // never a second pair of boots
+    if (swaps.some((swap) => swap.channel === "item" && itemsConflict(swap.itemId, pick.itemId))) continue;
     const target = SCENARIO_TARGET_POSITION[pick.scenario] ?? DEFAULT_TARGET_POSITION;
     const existing = others.indexOf(pick.itemId);
     let replacedId: number | null = null;
@@ -367,6 +369,10 @@ export function applyForThisGameLine(
       // for nothing.
       others.splice(existing, 1);
     } else {
+      const conflict = others.findIndex((id) => itemsConflict(id, pick.itemId));
+      if (conflict >= 0) {
+        replacedId = others.splice(conflict, 1)[0];
+      }
       // Full line: give up the last item, the one bought last. Short line: no
       // need, there is room.
       if (others.length >= capacity) replacedId = others.pop() ?? null;
