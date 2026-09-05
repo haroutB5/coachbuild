@@ -385,7 +385,14 @@ export default function DraftPage() {
     });
     if (!target) return;
     if (target.lane !== undefined && target.lane !== laneRef.current) setLane(target.lane);
-    if (!arraysEqual(target.enemies, enemyIdsRef.current)) setEnemyIds(target.enemies);
+    if (!arraysEqual(target.enemies, enemyIdsRef.current)) {
+      setEnemyIds(target.enemies);
+      // A lane-opponent tag survives live updates (it doesn't latch dirty),
+      // so drop it if its champion leaves the live enemy list — same guard
+      // handleRemoveEnemy applies to manual removal.
+      const laneOpp = laneOpponentIdRef.current;
+      if (laneOpp !== null && !target.enemies.includes(laneOpp)) setLaneOpponentId(null);
+    }
     if (target.hover !== hoverRef.current) setHover(target.hover);
   }, [companion.tick, companion.phase, companion.champSelect, companion.statusFresh, dirty]);
 
@@ -493,7 +500,10 @@ export default function DraftPage() {
   }
 
   function handleToggleLaneOpponent(id: number) {
-    setDirty(true);
+    // Deliberately does NOT latch `dirty`: live sync never writes
+    // laneOpponentId, so marking your lane opponent conflicts with nothing —
+    // latching here froze enemy auto-fill mid-champ-select (tag the lane opp
+    // at 3/5 enemies and picks 4-5 never arrive; live repro 2026-09-05).
     setLaneOpponentId((prev) => (prev === id ? null : id));
   }
 

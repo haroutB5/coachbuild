@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.128.0 -- marking your lane opponent no longer freezes live champ select (2026-09-06)
+
+Live repro from a real ranked champ select (2026-09-05): the user tagged
+Vladimir as lane opponent when 3 of 5 enemies had picked, and enemy picks 4
+and 5 never appeared on /draft -- THE CALL was computed against a 3-enemy
+comp while the companion itself had all five (its baseline export logged
+`enemies 5 of 5` and applied runes and item sets fine).
+
+Root cause: `handleToggleLaneOpponent` latched the manual-dirty flag, and a
+dirty page stops consuming ALL live updates until "Re-attach to live" or the
+next champ select. But live sync never writes the lane-opponent field, so
+the latch protected nothing -- marking your lane opponent is an annotation
+of live data, not an override of it.
+
+Fix: lane-opponent taps no longer latch dirty, so enemy auto-fill keeps
+flowing; and because the tag now survives live updates, the sync effect
+drops a tag whose champion leaves the live enemy list (the same guard
+manual removal already had). Structural tests pin the handler
+(`draftLaneOppDirty.test.ts`): re-adding `setDirty(true)` there fails the
+suite, with a control asserting the genuinely conflicting handlers (lane /
+enemies / hover) still latch.
+
+Silver lining from the same log: `apply-runes: ok=True` -- 0.127.0's rune
+page validation passed its first real-client apply.
+
 ## 0.127.0 -- incompatible items and unreliable runes stop reaching builds (2026-09-05)
 
 Third-party audit pass (GPT), verified and shipped by the orchestrator. Five
